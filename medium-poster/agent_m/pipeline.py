@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from agent_m.config import config
 from agent_m.gemini.imager import generate_header_image
 from agent_m.gemini.researcher import Topic, TopicResearcher
-from agent_m.gemini.writer import Article, write_article
+from agent_m.gemini.writer import Article, write_article_from_plan
 from agent_m.history import History
 from agent_m.images.uploader import upload_to_imgur
 from agent_m.medium.publisher import MediumClient
@@ -29,20 +29,43 @@ class PipelineResult:
 _lock = asyncio.Lock()
 
 
-async def run_pipeline(mode: str = "public") -> PipelineResult:
+async def run_pipeline(mode: str = "public", slug: str | None = None) -> PipelineResult:
     async with _lock:
-        return await _run(mode)
+        return await _run(mode, slug)
 
 
-async def _run(mode: str) -> PipelineResult:
+async def _run(mode: str, slug: str | None = None) -> PipelineResult:
     history = History(config.data_dir)
     researcher = TopicResearcher(config.data_dir)
 
-    previous_titles = await history.get_all_titles()
-    topic = await researcher.get_next_topic(previous_titles)
-    log.info("Selected topic: %s", topic.title)
+    if slug:
+        topic = await researcher.get_topic_by_slug(slug)
+        if not topic:
+            raise ValueError(f"Unknown topic slug: {slug}")
+    else:
+        previous_titles = await history.get_all_titles()
+        used_slugs = await history.get_used_slugs()
+        topic = await researcher.get_next_topic(previous_titles, used_slugs)
 
-    article = await write_article(topic)
+    log.info("Selected topic: %s [%s]", topic.title, topic.slug)
+
+    if topic.plan:
+        article = await write_article_from_plan(topic.plan)
+    else:
+        from agent_m.content_plan import ContentPlan
+        fallback_plan = ContentPlan(
+            slug=topic.slug,
+            title_hint=topic.title,
+            pillar="general",
+            funnel_stage="awareness",
+            seo_keyword=topic.title.lower(),
+            tags=topic.tags,
+            angle=topic.angle,
+            key_points=[topic.angle],
+            cta_target="DCA calculator",
+        )
+        article = await write_article_from_plan(fallback_plan)
+
     log.info("Generated article: %s (%d chars)", article.title, len(article.body))
 
     image_bytes: bytes | None = None
@@ -80,6 +103,7 @@ async def _run(mode: str) -> PipelineResult:
         mode=mode,
         tags=article.tags,
         tokens_used=today.get("total", 0),
+        slug=topic.slug,
     )
     await history.add(entry)
 

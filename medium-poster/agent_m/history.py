@@ -15,6 +15,7 @@ class HistoryEntry:
     published_at: str
     tags: list[str]
     tokens_used: int = 0
+    slug: str = ""
 
 
 class History:
@@ -35,6 +36,10 @@ class History:
     async def get_all_titles(self) -> list[str]:
         entries = await self.load()
         return [e.title for e in entries]
+
+    async def get_used_slugs(self) -> set[str]:
+        entries = await self.load()
+        return {e.slug for e in entries if e.slug}
 
     async def get_recent(self, n: int = 10) -> list[HistoryEntry]:
         entries = await self.load()
@@ -61,6 +66,7 @@ class History:
         mode: str,
         tags: list[str],
         tokens_used: int = 0,
+        slug: str = "",
     ) -> HistoryEntry:
         return HistoryEntry(
             title=title,
@@ -69,4 +75,5 @@ class History:
             published_at=datetime.now(timezone.utc).isoformat(),
             tags=tags,
             tokens_used=tokens_used,
+            slug=slug,
         )
