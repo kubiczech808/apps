@@ -13,10 +13,17 @@ class Config(BaseSettings):
     )
 
     gemini_api_key: str
-    medium_token: str
     telegram_bot_token: str
     telegram_admin_chat_id: int
     imgur_client_id: str
+
+    # GitHub Pages (for RSS feed hosting)
+    github_pat: str
+    github_pages_repo: str = "kubiczech808/apps"
+    github_pages_branch: str = "gh-pages"
+
+    # Medium (optional — leave empty if using IFTTT)
+    medium_token: str = ""
 
     publish_hour: int = 9
     publish_minute: int = 0
