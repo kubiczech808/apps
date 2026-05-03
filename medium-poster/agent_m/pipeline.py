@@ -73,9 +73,11 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
     image_url: str | None = None
     try:
         image_bytes = await generate_header_image(topic)
-        if mode != "preview":
+        if mode != "preview" and config.imgur_client_id:
             image_url = await upload_to_imgur(image_bytes)
             log.info("Uploaded image: %s", image_url)
+        elif mode != "preview":
+            log.info("Imgur not configured, skipping image upload")
     except Exception:
         log.warning("Image generation/upload failed, continuing without image", exc_info=True)
 

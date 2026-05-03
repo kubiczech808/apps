@@ -15,7 +15,9 @@ class Config(BaseSettings):
     gemini_api_key: str
     telegram_bot_token: str
     telegram_admin_chat_id: int
-    imgur_client_id: str
+
+    # Imgur (optional — skip image upload if empty)
+    imgur_client_id: str = ""
 
     # GitHub Pages (for RSS feed hosting)
     github_pat: str
