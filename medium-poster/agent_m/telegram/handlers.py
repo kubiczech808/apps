@@ -30,11 +30,23 @@ def admin_only(func):
 
 @admin_only
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    platforms = []
+    if config.devto_api_key:
+        platforms.append("Dev.to")
+    if config.hashnode_token:
+        platforms.append("Hashnode")
+    if config.medium_playwright:
+        platforms.append("Medium (Playwright)")
+    platforms.append("GitHub Pages (RSS)")
+    platforms_str = ", ".join(platforms)
+
     await update.message.reply_text(  # type: ignore[union-attr]
-        "Agent M ready.\n\n"
-        "/post [slug] — publish article (public)\n"
+        f"Agent M ready.\n"
+        f"Platforms: {platforms_str}\n\n"
+        "/post [slug] — publish to all platforms\n"
         "/draft [slug] — publish as draft\n"
         "/preview [slug] — generate without publishing\n"
+        "/medium_login — save Medium session (run once on RPi)\n"
         "/history — recent publications\n"
         "/topics — content plan status\n"
         "/status — token usage & schedule\n"
@@ -99,13 +111,17 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
         body_preview += "\n\n... (truncated)"
     await msg.reply_text(body_preview)
 
-    if result.post_url:
-        await msg.reply_text(f"Published ({mode}): {result.post_url}")
-    else:
+    if mode == "preview":
         await msg.reply_text(
             f"Preview complete — not published.\n"
-            f"Use /post {result.topic.slug} or /draft {result.topic.slug} to publish this article."
+            f"Use /post {result.topic.slug} or /draft {result.topic.slug} to publish."
         )
+    elif result.published_to:
+        platforms = ", ".join(result.published_to)
+        url_line = f"\n{result.post_url}" if result.post_url else ""
+        await msg.reply_text(f"Published to: {platforms}{url_line}")
+    else:
+        await msg.reply_text("Publishing failed on all platforms. Check logs.")
 
 
 @admin_only
@@ -157,6 +173,26 @@ async def topics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if len(text) > 4000:
         text = text[:3990] + "\n..."
     await msg.reply_text(text)
+
+
+@admin_only
+async def medium_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    await msg.reply_text(
+        "Opening Medium login browser on the host machine...\n"
+        "Log in to Medium, then close the browser window.\n"
+        "Cookies will be saved automatically."
+    )
+    try:
+        from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
+        pub = MediumPlaywrightPublisher()
+        await pub.login()
+        await msg.reply_text("Medium session saved. Future publishes will use this session.")
+    except Exception as e:
+        log.exception("Medium login failed")
+        await msg.reply_text(f"Medium login failed: {e}")
 
 
 @admin_only

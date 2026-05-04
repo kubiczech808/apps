@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from agent_m.config import config
 from agent_m.gemini.imager import generate_header_image
 from agent_m.gemini.researcher import Topic, TopicResearcher
 from agent_m.gemini.writer import Article, write_article_from_plan
 from agent_m.history import History
-from agent_m.images.uploader import upload_to_imgur
 from agent_m.publishers.github_pages import GitHubPagesPublisher
 from agent_m.publishers.rss_feed import generate_feed
 
@@ -25,6 +24,7 @@ class PipelineResult:
     post_url: str | None
     mode: str
     tokens_used: int
+    published_to: list[str] = field(default_factory=list)
 
 
 _lock = asyncio.Lock()
@@ -69,26 +69,58 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
 
     log.info("Generated article: %s (%d chars)", article.title, len(article.body))
 
+    # Image generation + upload
     image_bytes: bytes | None = None
     image_url: str | None = None
     try:
         image_bytes = await generate_header_image(topic)
         if mode != "preview" and config.imgur_client_id:
+            from agent_m.images.uploader import upload_to_imgur
             image_url = await upload_to_imgur(image_bytes)
             log.info("Uploaded image: %s", image_url)
-        elif mode != "preview":
-            log.info("Imgur not configured, skipping image upload")
     except Exception:
         log.warning("Image generation/upload failed, continuing without image", exc_info=True)
 
+    published_to: list[str] = []
     post_url: str | None = None
 
-    if mode != "preview":
-        post_url = await _publish_to_rss(history, topic, article, image_url)
+    if mode == "preview":
+        pass  # no publishing
+    else:
+        is_draft = mode == "draft"
 
-        if config.medium_token:
-            medium_url = await _publish_to_medium(article, image_url, mode)
+        # 1. GitHub Pages (RSS feed)
+        rss_url = await _publish_rss(history, topic, article, image_url)
+        if rss_url:
+            published_to.append("GitHub Pages")
+            post_url = rss_url
+
+        # 2. Dev.to
+        if config.devto_api_key:
+            devto_url = await _publish_devto(article, is_draft)
+            if devto_url:
+                published_to.append("Dev.to")
+                post_url = devto_url
+
+        # 3. Hashnode
+        if config.hashnode_token and config.hashnode_publication_id:
+            hn_url = await _publish_hashnode(article)
+            if hn_url:
+                published_to.append("Hashnode")
+                post_url = hn_url
+
+        # 4. Medium (Playwright)
+        if config.medium_playwright:
+            medium_url = await _publish_medium_playwright(article, not is_draft)
             if medium_url:
+                published_to.append("Medium")
+                post_url = medium_url
+
+        # 5. Medium (API — legacy, if token exists)
+        if config.medium_token and not config.medium_playwright:
+            medium_url = await _publish_medium_api(article, image_url, mode)
+            if medium_url:
+                published_to.append("Medium API")
                 post_url = medium_url
 
     from agent_m.gemini.client import get_tracker
@@ -112,15 +144,11 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         post_url=post_url,
         mode=mode,
         tokens_used=today.get("total", 0),
+        published_to=published_to,
     )
 
 
-async def _publish_to_rss(
-    history: History,
-    topic: Topic,
-    article: Article,
-    image_url: str | None,
-) -> str | None:
+async def _publish_rss(history, topic, article, image_url) -> str | None:
     try:
         entries = await history.load()
         feed_articles = [
@@ -148,13 +176,11 @@ async def _publish_to_rss(
 
         gh = GitHubPagesPublisher()
         try:
-            pages_url = await gh.publish_article_and_feed(
+            return await gh.publish_article_and_feed(
                 slug=topic.slug,
                 article_html=article_html,
                 feed_xml=feed_xml,
             )
-            log.info("Published to GitHub Pages: %s", pages_url)
-            return pages_url
         finally:
             await gh.close()
     except Exception:
@@ -162,11 +188,60 @@ async def _publish_to_rss(
         return None
 
 
-async def _publish_to_medium(
-    article: Article,
-    image_url: str | None,
-    mode: str,
-) -> str | None:
+async def _publish_devto(article: Article, draft: bool) -> str | None:
+    try:
+        from agent_m.publishers.devto import DevToPublisher
+        pub = DevToPublisher()
+        try:
+            result = await pub.publish(
+                title=article.title,
+                body_markdown=article.body,
+                tags=article.tags,
+                published=not draft,
+                canonical_url=config.site_url,
+            )
+            return result.get("url")
+        finally:
+            await pub.close()
+    except Exception:
+        log.warning("Dev.to publish failed", exc_info=True)
+        return None
+
+
+async def _publish_hashnode(article: Article) -> str | None:
+    try:
+        from agent_m.publishers.hashnode import HashnodePublisher
+        pub = HashnodePublisher()
+        try:
+            result = await pub.publish(
+                title=article.title,
+                body_markdown=article.body,
+                tags=article.tags,
+            )
+            return result.get("url")
+        finally:
+            await pub.close()
+    except Exception:
+        log.warning("Hashnode publish failed", exc_info=True)
+        return None
+
+
+async def _publish_medium_playwright(article: Article, publish: bool) -> str | None:
+    try:
+        from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
+        pub = MediumPlaywrightPublisher()
+        return await pub.publish(
+            title=article.title,
+            body_markdown=article.body,
+            tags=article.tags,
+            publish=publish,
+        )
+    except Exception:
+        log.warning("Medium Playwright publish failed", exc_info=True)
+        return None
+
+
+async def _publish_medium_api(article, image_url, mode) -> str | None:
     try:
         from agent_m.medium.publisher import MediumClient
         content = _assemble_markdown(article.title, article.body, image_url)
@@ -178,13 +253,11 @@ async def _publish_to_medium(
                 tags=article.tags,
                 publish_status=mode,
             )
-            url = result.get("data", {}).get("url")
-            log.info("Published to Medium: %s", url)
-            return url
+            return result.get("data", {}).get("url")
         finally:
             await medium.close()
     except Exception:
-        log.warning("Medium publish failed (token may be invalid)", exc_info=True)
+        log.warning("Medium API publish failed", exc_info=True)
         return None
 
 

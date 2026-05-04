@@ -16,16 +16,18 @@ class Config(BaseSettings):
     telegram_bot_token: str
     telegram_admin_chat_id: int
 
-    # Imgur (optional — skip image upload if empty)
-    imgur_client_id: str = ""
-
     # GitHub Pages (for RSS feed hosting)
     github_pat: str
     github_pages_repo: str = "kubiczech808/apps"
     github_pages_branch: str = "gh-pages"
 
-    # Medium (optional — leave empty if using IFTTT)
+    # Publishers (all optional — leave empty to skip)
+    devto_api_key: str = ""
+    hashnode_token: str = ""
+    hashnode_publication_id: str = ""
     medium_token: str = ""
+    medium_playwright: bool = True
+    imgur_client_id: str = ""
 
     publish_hour: int = 9
     publish_minute: int = 0
