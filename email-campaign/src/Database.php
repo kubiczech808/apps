@@ -37,6 +37,7 @@ final class Database
                 subject TEXT NOT NULL,
                 body_html TEXT NOT NULL,
                 daily_limit INTEGER NOT NULL DEFAULT 100,
+                batch_limit INTEGER NOT NULL DEFAULT 10,
                 status TEXT NOT NULL DEFAULT 'draft',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -55,5 +56,17 @@ final class Database
                 value TEXT NOT NULL
             );
         ");
+        $this->ensureColumn('campaigns', 'batch_limit', 'INTEGER NOT NULL DEFAULT 10');
+    }
+
+    private function ensureColumn(string $table, string $column, string $definition): void
+    {
+        $columns = $this->pdo->query('PRAGMA table_info(' . $table . ')')->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($columns as $existing) {
+            if ($existing['name'] === $column) {
+                return;
+            }
+        }
+        $this->pdo->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $definition);
     }
 }

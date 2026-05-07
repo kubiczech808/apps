@@ -93,15 +93,16 @@ function handlePost(PDO $pdo, array $config): ?string
             trim((string)$_POST['subject']),
             cleanHtml((string)$_POST['body_html']),
             max(1, min(500, (int)$_POST['daily_limit'])),
+            max(1, min(100, (int)$_POST['batch_limit'])),
             in_array($_POST['status'] ?? 'draft', ['draft', 'active', 'paused'], true) ? $_POST['status'] : 'draft',
             date('c'),
         ];
         if ($id > 0) {
-            $stmt = $pdo->prepare('UPDATE campaigns SET name=?, subject=?, body_html=?, daily_limit=?, status=?, updated_at=? WHERE id=?');
+            $stmt = $pdo->prepare('UPDATE campaigns SET name=?, subject=?, body_html=?, daily_limit=?, batch_limit=?, status=?, updated_at=? WHERE id=?');
             $stmt->execute([...$data, $id]);
             return 'Kampan ulozena.';
         }
-        $stmt = $pdo->prepare('INSERT INTO campaigns (name, subject, body_html, daily_limit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        $stmt = $pdo->prepare('INSERT INTO campaigns (name, subject, body_html, daily_limit, batch_limit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([...$data, date('c')]);
         return 'Kampan vytvorena.';
     }
@@ -164,7 +165,7 @@ function saveSetup(PDO $pdo): void
 
 function saveSettings(PDO $pdo): void
 {
-    $allowed = ['cron_token', 'from_email', 'from_name', 'smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_encryption'];
+    $allowed = ['from_email', 'from_name', 'smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_encryption'];
     $stmt = $pdo->prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
     foreach ($allowed as $key) {
         if ($key === 'smtp_password' && ($_POST[$key] ?? '') === '') {
@@ -224,6 +225,7 @@ function sendBatch(PDO $pdo, array $config, ?int $campaignId = null): string
     $sentStmt->execute([$campaign['id'], $today]);
     $sentToday = (int)$sentStmt->fetchColumn();
     $limit = max(0, (int)$campaign['daily_limit'] - $sentToday);
+    $limit = min($limit, max(1, (int)($campaign['batch_limit'] ?? 10)));
     if ($limit < 1) {
         return "Daily limit already reached.\n";
     }
@@ -297,7 +299,7 @@ function renderApp(PDO $pdo, ?array $flash): void
     $campaigns = $pdo->query('SELECT * FROM campaigns ORDER BY id DESC')->fetchAll(PDO::FETCH_ASSOC);
     $recipients = (int)$pdo->query('SELECT COUNT(*) FROM recipients WHERE status="active"')->fetchColumn();
     $logs = $pdo->query('SELECT l.*, c.name campaign FROM send_logs l LEFT JOIN campaigns c ON c.id=l.campaign_id ORDER BY l.id DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
-    $current = $campaigns[0] ?? ['id' => 0, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den {{name}},</p><p>...</p>', 'daily_limit' => 100, 'status' => 'draft'];
+    $current = $campaigns[0] ?? ['id' => 0, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den {{name}},</p><p>...</p>', 'daily_limit' => 100, 'batch_limit' => 10, 'status' => 'draft'];
     ?><!doctype html>
 <html lang="cs">
 <head>
@@ -329,6 +331,9 @@ function renderApp(PDO $pdo, ?array $flash): void
             <label>Predmet<input name="subject" value="<?= h($current['subject']) ?>" required></label>
             <div class="row">
                 <label>Denne max<input type="number" name="daily_limit" min="1" max="500" value="<?= h((string)$current['daily_limit']) ?>"></label>
+                <label>Na spusteni<input type="number" name="batch_limit" min="1" max="100" value="<?= h((string)($current['batch_limit'] ?? 10)) ?>"></label>
+            </div>
+            <div class="row">
                 <label>Stav<select name="status"><option value="draft" <?= $current['status']==='draft'?'selected':'' ?>>Koncept</option><option value="active" <?= $current['status']==='active'?'selected':'' ?>>Aktivni</option><option value="paused" <?= $current['status']==='paused'?'selected':'' ?>>Pozastaveno</option></select></label>
             </div>
             <div class="toolbar"><button type="button" data-cmd="bold">B</button><button type="button" data-cmd="italic">I</button><button type="button" data-cmd="insertUnorderedList">List</button><button type="button" data-link>Link</button></div>
@@ -348,7 +353,6 @@ function renderApp(PDO $pdo, ?array $flash): void
             <form method="post" class="panel">
                 <input type="hidden" name="action" value="save_settings">
                 <h2>Email ucet</h2>
-                <label>Cron token<input name="cron_token" value="<?= h($config['cron_token']) ?>" required></label>
                 <label>Odesilatel email<input type="email" name="from_email" value="<?= h($config['from_email']) ?>" required></label>
                 <label>Odesilatel jmeno<input name="from_name" value="<?= h($config['from_name']) ?>" required></label>
                 <label>SMTP server<input name="smtp_host" value="<?= h($config['smtp']['host']) ?>" required></label>

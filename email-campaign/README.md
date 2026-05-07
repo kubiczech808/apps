@@ -11,7 +11,8 @@ Jednoducha PHP aplikace pro postupne odesilani pripraveneho emailu na importovan
 - nastaveni SMTP uctu a test konektivity primo v administraci
 - testovaci odeslani na vybranou adresu
 - davkove odesilani s dennim limitem, typicky 100 emailu denne
-- cron endpoint pro automaticke spousteni
+- limit na jedno spusteni, aby slo rozesilku rozlozit do dne
+- interní cron endpoint pro automaticke spousteni
 - SQLite databaze bez nutnosti spravovat MySQL
 
 ## Instalace na hosting
@@ -36,6 +37,8 @@ Cron URL ma tvar:
 ```text
 https://osobnizkusenosti.cz/email-campaign/?cron=TVUJ_CRON_TOKEN
 ```
+
+Cron token se generuje automaticky pri prvnim nastaveni aplikace a neni bezna polozka v administraci.
 
 ## CSV import
 
