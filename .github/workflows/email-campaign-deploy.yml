@@ -24,7 +24,7 @@ jobs:
           username: ${{ secrets.HOSTING_FTP_USERNAME }}
           password: ${{ secrets.HOSTING_FTP_PASSWORD }}
           local-dir: ./email-campaign/
-          server-dir: ${{ secrets.HOSTING_FTP_DIR }}/email-campaign/
+          server-dir: ${{ secrets.HOSTING_FTP_DIR }}www/email-campaign/
           exclude: |
             **/.git*
             **/storage/app.sqlite
