@@ -4,10 +4,11 @@ Jednoducha PHP aplikace pro postupne odesilani pripraveneho emailu na importovan
 
 ## Funkce
 
-- prihlaseni jednim administracnim heslem
+- prvni nastaveni administracniho hesla v aplikaci
 - CSV import prijemcu
 - WYSIWYG editor obsahu emailu
 - promenne `{{name}}` a `{{email}}`
+- nastaveni SMTP uctu a test konektivity primo v administraci
 - testovaci odeslani na vybranou adresu
 - davkove odesilani s dennim limitem, typicky 100 emailu denne
 - cron endpoint pro automaticke spousteni
@@ -16,16 +17,10 @@ Jednoducha PHP aplikace pro postupne odesilani pripraveneho emailu na importovan
 ## Instalace na hosting
 
 1. Nahraj obsah slozky `email-campaign` na hosting, nebo pouzij GitHub Actions workflow `Deploy Email Campaign`.
-2. Pri rucnim nahrani zkopiruj `config.example.php` jako `config.php`.
-3. Vypln SMTP pristup, odesilatele, `cron_token` a `app_password_hash`.
+2. Otevri aplikaci v prohlizeci a vytvor prvni administracni heslo.
+3. Po prihlaseni nastav SMTP pristup a otestuj konektivitu.
 4. Over, ze hosting umi PHP 8.1+ a extension `pdo_sqlite`.
 5. Nastav zapis do slozky `storage`.
-
-Hash hesla vygeneruj lokalne:
-
-```bash
-php -r "echo password_hash('moje-heslo', PASSWORD_DEFAULT), PHP_EOL;"
-```
 
 ## GitHub secrets pro deploy
 
@@ -35,15 +30,6 @@ Workflow `.github/workflows/email-campaign-deploy.yml` ceka tyto secrets:
 - `HOSTING_FTP_USERNAME`
 - `HOSTING_FTP_PASSWORD`
 - `HOSTING_FTP_DIR`
-- `EMAIL_APP_PASSWORD_HASH`
-- `EMAIL_CRON_TOKEN`
-- `EMAIL_FROM_EMAIL`
-- `EMAIL_FROM_NAME`
-- `EMAIL_SMTP_HOST`
-- `EMAIL_SMTP_PORT`
-- `EMAIL_SMTP_USERNAME`
-- `EMAIL_SMTP_PASSWORD`
-- `EMAIL_SMTP_ENCRYPTION`
 
 Cron URL ma tvar:
 

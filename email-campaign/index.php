@@ -11,15 +11,32 @@ $baseConfig = file_exists($configPath) ? require $configPath : require __DIR__ .
 $db = new Database($baseConfig['database_path']);
 $pdo = $db->pdo();
 $config = effectiveConfig($pdo, $baseConfig);
-$flash = null;
+$flash = $_SESSION['flash'] ?? null;
+unset($_SESSION['flash']);
 
 if (isset($_GET['cron'])) {
     header('Content-Type: text/plain; charset=utf-8');
-    if (!hash_equals((string)$config['cron_token'], (string)$_GET['cron'])) {
+    if ($config['cron_token'] === '' || !hash_equals((string)$config['cron_token'], (string)$_GET['cron'])) {
         http_response_code(403);
         exit("Forbidden\n");
     }
     echo sendBatch($pdo, $config);
+    exit;
+}
+
+if (!isConfigured($config)) {
+    if (($_POST['action'] ?? '') === 'setup') {
+        try {
+            saveSetup($pdo);
+            $_SESSION['auth'] = true;
+            $_SESSION['flash'] = ['ok', 'Aplikace je pripravena.'];
+            header('Location: ./');
+            exit;
+        } catch (Throwable $e) {
+            $flash = ['error', $e->getMessage()];
+        }
+    }
+    renderSetup($flash);
     exit;
 }
 
@@ -45,26 +62,28 @@ if (empty($_SESSION['auth'])) {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['password'])) {
     try {
-        handlePost($pdo, $config);
-        header('Location: ./?ok=1');
+        $message = handlePost($pdo, $config);
+        $_SESSION['flash'] = ['ok', $message ?: 'Hotovo.'];
+        header('Location: ./');
         exit;
     } catch (Throwable $e) {
         $flash = ['error', $e->getMessage()];
     }
 }
 
-if (isset($_GET['ok'])) {
-    $flash = ['ok', 'Hotovo.'];
-}
-
 renderApp($pdo, $flash);
 
-function handlePost(PDO $pdo, array $config): void
+function handlePost(PDO $pdo, array $config): ?string
 {
     $action = $_POST['action'] ?? '';
     if ($action === 'save_settings') {
         saveSettings($pdo);
-        return;
+        return 'Nastaveni ulozeno.';
+    }
+
+    if ($action === 'test_smtp') {
+        (new SmtpMailer($config))->testConnection();
+        return 'SMTP pripojeni a prihlaseni funguje.';
     }
 
     if ($action === 'save_campaign') {
@@ -80,16 +99,16 @@ function handlePost(PDO $pdo, array $config): void
         if ($id > 0) {
             $stmt = $pdo->prepare('UPDATE campaigns SET name=?, subject=?, body_html=?, daily_limit=?, status=?, updated_at=? WHERE id=?');
             $stmt->execute([...$data, $id]);
-            return;
+            return 'Kampan ulozena.';
         }
         $stmt = $pdo->prepare('INSERT INTO campaigns (name, subject, body_html, daily_limit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([...$data, date('c')]);
-        return;
+        return 'Kampan vytvorena.';
     }
 
     if ($action === 'import_recipients') {
         importRecipients($pdo);
-        return;
+        return 'Prijemci importovani.';
     }
 
     if ($action === 'test_send') {
@@ -99,19 +118,20 @@ function handlePost(PDO $pdo, array $config): void
             throw new RuntimeException('Testovaci email neni platny.');
         }
         (new SmtpMailer($config))->send($email, '[TEST] ' . $campaign['subject'], $campaign['body_html'], ['email' => $email, 'name' => 'Test']);
-        return;
+        return 'Testovaci email odeslan.';
     }
 
     if ($action === 'send_batch') {
-        sendBatch($pdo, $config, (int)$_POST['campaign_id']);
-        return;
+        return trim(sendBatch($pdo, $config, (int)$_POST['campaign_id']));
     }
+
+    return null;
 }
 
 function effectiveConfig(PDO $pdo, array $config): array
 {
     $settings = $pdo->query('SELECT key, value FROM settings')->fetchAll(PDO::FETCH_KEY_PAIR);
-    foreach (['from_email', 'from_name'] as $key) {
+    foreach (['app_password_hash', 'cron_token', 'from_email', 'from_name'] as $key) {
         if (!empty($settings[$key])) {
             $config[$key] = $settings[$key];
         }
@@ -125,15 +145,39 @@ function effectiveConfig(PDO $pdo, array $config): array
     return $config;
 }
 
+function isConfigured(array $config): bool
+{
+    return (string)$config['app_password_hash'] !== '';
+}
+
+function saveSetup(PDO $pdo): void
+{
+    $password = (string)($_POST['new_password'] ?? '');
+    if (strlen($password) < 10) {
+        throw new RuntimeException('Heslo musi mit alespon 10 znaku.');
+    }
+    $token = bin2hex(random_bytes(24));
+    $stmt = $pdo->prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
+    $stmt->execute(['app_password_hash', password_hash($password, PASSWORD_DEFAULT)]);
+    $stmt->execute(['cron_token', $token]);
+}
+
 function saveSettings(PDO $pdo): void
 {
-    $allowed = ['from_email', 'from_name', 'smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_encryption'];
+    $allowed = ['cron_token', 'from_email', 'from_name', 'smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_encryption'];
     $stmt = $pdo->prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
     foreach ($allowed as $key) {
         if ($key === 'smtp_password' && ($_POST[$key] ?? '') === '') {
             continue;
         }
         $stmt->execute([$key, trim((string)($_POST[$key] ?? ''))]);
+    }
+    $newPassword = (string)($_POST['new_password'] ?? '');
+    if ($newPassword !== '') {
+        if (strlen($newPassword) < 10) {
+            throw new RuntimeException('Nove heslo musi mit alespon 10 znaku.');
+        }
+        $stmt->execute(['app_password_hash', password_hash($newPassword, PASSWORD_DEFAULT)]);
     }
 }
 
@@ -235,6 +279,11 @@ function renderLogin(?array $flash): void
     ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email rozesilac</title><link rel="stylesheet" href="assets/app.css"></head><body class="login"><main><form method="post" class="panel narrow"><h1>Email rozesilac</h1><?php renderFlash($flash); ?><label>Heslo<input type="password" name="password" autofocus required></label><button>Prihlasit</button></form></main></body></html><?php
 }
 
+function renderSetup(?array $flash): void
+{
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nastaveni aplikace</title><link rel="stylesheet" href="assets/app.css"></head><body class="login"><main><form method="post" class="panel narrow"><input type="hidden" name="action" value="setup"><h1>Nastaveni aplikace</h1><?php renderFlash($flash); ?><p>Vytvor prvni administracni heslo. Email ucet nastavis po prihlaseni.</p><label>Admin heslo<input type="password" name="new_password" minlength="10" autofocus required></label><button>Vytvorit administraci</button></form></main></body></html><?php
+}
+
 function renderFlash(?array $flash): void
 {
     if ($flash) {
@@ -299,6 +348,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <form method="post" class="panel">
                 <input type="hidden" name="action" value="save_settings">
                 <h2>Email ucet</h2>
+                <label>Cron token<input name="cron_token" value="<?= h($config['cron_token']) ?>" required></label>
                 <label>Odesilatel email<input type="email" name="from_email" value="<?= h($config['from_email']) ?>" required></label>
                 <label>Odesilatel jmeno<input name="from_name" value="<?= h($config['from_name']) ?>" required></label>
                 <label>SMTP server<input name="smtp_host" value="<?= h($config['smtp']['host']) ?>" required></label>
@@ -308,7 +358,15 @@ function renderApp(PDO $pdo, ?array $flash): void
                 </div>
                 <label>SMTP uzivatel<input name="smtp_username" value="<?= h($config['smtp']['username']) ?>" required></label>
                 <label>SMTP heslo<input type="password" name="smtp_password" placeholder="Nechat prazdne = nemenit"></label>
+                <label>Nove admin heslo<input type="password" name="new_password" minlength="10" placeholder="Nechat prazdne = nemenit"></label>
                 <button>Ulozit email</button>
+            </form>
+
+            <form method="post" class="panel">
+                <input type="hidden" name="action" value="test_smtp">
+                <h2>SMTP konektivita</h2>
+                <p>Overi pripojeni, STARTTLS/SSL a prihlaseni. Email neodesila.</p>
+                <button>Otestovat SMTP</button>
             </form>
 
             <form method="post" class="panel">

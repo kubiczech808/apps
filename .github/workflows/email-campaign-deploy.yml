@@ -17,46 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create production config
-        env:
-          EMAIL_APP_PASSWORD_HASH: ${{ secrets.EMAIL_APP_PASSWORD_HASH }}
-          EMAIL_CRON_TOKEN: ${{ secrets.EMAIL_CRON_TOKEN }}
-          EMAIL_FROM_EMAIL: ${{ secrets.EMAIL_FROM_EMAIL }}
-          EMAIL_FROM_NAME: ${{ secrets.EMAIL_FROM_NAME }}
-          EMAIL_SMTP_HOST: ${{ secrets.EMAIL_SMTP_HOST }}
-          EMAIL_SMTP_PORT: ${{ secrets.EMAIL_SMTP_PORT }}
-          EMAIL_SMTP_USERNAME: ${{ secrets.EMAIL_SMTP_USERNAME }}
-          EMAIL_SMTP_PASSWORD: ${{ secrets.EMAIL_SMTP_PASSWORD }}
-          EMAIL_SMTP_ENCRYPTION: ${{ secrets.EMAIL_SMTP_ENCRYPTION }}
-        run: |
-          python3 - <<'PY'
-          import os
-
-          def php_string(value):
-              return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
-
-          port = int(os.environ.get('EMAIL_SMTP_PORT') or '587')
-          config = f"""<?php
-
-          return [
-              'app_password_hash' => {php_string(os.environ['EMAIL_APP_PASSWORD_HASH'])},
-              'cron_token' => {php_string(os.environ['EMAIL_CRON_TOKEN'])},
-              'from_email' => {php_string(os.environ['EMAIL_FROM_EMAIL'])},
-              'from_name' => {php_string(os.environ['EMAIL_FROM_NAME'])},
-              'smtp' => [
-                  'host' => {php_string(os.environ['EMAIL_SMTP_HOST'])},
-                  'port' => {port},
-                  'username' => {php_string(os.environ['EMAIL_SMTP_USERNAME'])},
-                  'password' => {php_string(os.environ['EMAIL_SMTP_PASSWORD'])},
-                  'encryption' => {php_string(os.environ.get('EMAIL_SMTP_ENCRYPTION') or 'tls')},
-              ],
-              'database_path' => __DIR__ . '/storage/app.sqlite',
-          ];
-          """
-          with open('email-campaign/config.php', 'w', encoding='utf-8') as f:
-              f.write(config)
-          PY
-
       - name: Upload to hosting
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:

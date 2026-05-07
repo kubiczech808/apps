@@ -26,6 +26,24 @@ final class SmtpMailer
         $body .= "--$boundary\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n$html\r\n--$boundary--\r\n";
         $message = implode("\r\n", $headers) . "\r\n\r\n" . $body;
 
+        $socket = $this->connectAndAuthenticate();
+        $this->cmd($socket, 'MAIL FROM:<' . $fromEmail . '>', [250]);
+        $this->cmd($socket, 'RCPT TO:<' . $to . '>', [250, 251]);
+        $this->cmd($socket, 'DATA', [354]);
+        $this->cmd($socket, $message . "\r\n.", [250]);
+        $this->cmd($socket, 'QUIT', [221]);
+        fclose($socket);
+    }
+
+    public function testConnection(): void
+    {
+        $socket = $this->connectAndAuthenticate();
+        $this->cmd($socket, 'QUIT', [221]);
+        fclose($socket);
+    }
+
+    private function connectAndAuthenticate()
+    {
         $smtp = $this->config['smtp'];
         $host = $smtp['host'];
         $port = (int)$smtp['port'];
@@ -45,12 +63,8 @@ final class SmtpMailer
         $this->cmd($socket, 'AUTH LOGIN', [334]);
         $this->cmd($socket, base64_encode($smtp['username']), [334]);
         $this->cmd($socket, base64_encode($smtp['password']), [235]);
-        $this->cmd($socket, 'MAIL FROM:<' . $fromEmail . '>', [250]);
-        $this->cmd($socket, 'RCPT TO:<' . $to . '>', [250, 251]);
-        $this->cmd($socket, 'DATA', [354]);
-        $this->cmd($socket, $message . "\r\n.", [250]);
-        $this->cmd($socket, 'QUIT', [221]);
-        fclose($socket);
+
+        return $socket;
     }
 
     private function personalize(string $text, array $vars): string

@@ -1,8 +1,8 @@
 <?php
 
 return [
-    'app_password_hash' => '$2y$10$replace-with-password-hash',
-    'cron_token' => 'replace-with-long-random-token',
+    'app_password_hash' => '',
+    'cron_token' => '',
     'from_email' => 'newsletter@osobnizkusenosti.cz',
     'from_name' => 'Osobni zkusenosti',
     'smtp' => [
