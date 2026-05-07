@@ -48,9 +48,22 @@ final class Database
                 campaign_id INTEGER NOT NULL,
                 recipient_id INTEGER,
                 email TEXT NOT NULL,
+                tracking_token TEXT DEFAULT '',
                 status TEXT NOT NULL,
                 message TEXT DEFAULT '',
-                sent_at TEXT NOT NULL
+                sent_at TEXT NOT NULL,
+                opened_at TEXT DEFAULT '',
+                clicked_at TEXT DEFAULT '',
+                click_count INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS tracking_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                send_log_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                target_url TEXT DEFAULT '',
+                user_agent TEXT DEFAULT '',
+                ip_hash TEXT DEFAULT '',
+                created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
@@ -59,6 +72,10 @@ final class Database
         ");
         $this->ensureColumn('campaigns', 'batch_limit', 'INTEGER NOT NULL DEFAULT 10');
         $this->ensureColumn('campaigns', 'auto_daily_limit', 'INTEGER NOT NULL DEFAULT 1');
+        $this->ensureColumn('send_logs', 'tracking_token', "TEXT DEFAULT ''");
+        $this->ensureColumn('send_logs', 'opened_at', "TEXT DEFAULT ''");
+        $this->ensureColumn('send_logs', 'clicked_at', "TEXT DEFAULT ''");
+        $this->ensureColumn('send_logs', 'click_count', 'INTEGER NOT NULL DEFAULT 0');
     }
 
     private function ensureColumn(string $table, string $column, string $definition): void

@@ -13,6 +13,7 @@ Jednoducha PHP aplikace pro postupne odesilani pripraveneho emailu na importovan
 - davkove odesilani s dennim limitem, typicky 100 emailu denne
 - limit na jedno spusteni, aby slo rozesilku rozlozit do dne
 - automaticky denni limit podle odesilacich dnu a SMTP chyb
+- seznam kontaktu se stavem osloveni, otevreni a prokliku
 - interní cron endpoint pro automaticke spousteni
 - SQLite databaze bez nutnosti spravovat MySQL
 
@@ -59,3 +60,7 @@ Aplikace omezuje tempo podle denniho limitu kampane. Pro realnou dorucitelnost j
 Po zmene FTP webrootu staci znovu pushnout libovolnou zmenu v teto slozce a workflow provede novy upload.
 
 Automaticky rezim zacina u zahrate schranky na 100 emailech denne, po uspesnych odesilacich dnech zvysuje limit priblizne o 20 % a respektuje rucni maximum kampane. Pokud aplikace za posledni dny vidi zvysenou SMTP chybovost, limit drzi nebo snizi. Aplikace zatim nemeri otevreni, spam stiznosti ani reputaci u Gmail Postmaster Tools, proto je porad dulezite sledovat realne odpovedi, bouncy a kvalitu seznamu.
+
+## Tracking
+
+Stav `Osloven` znamena, ze nas SMTP server email prijal. Otevreni se meri pres 1x1 pixel a kliky pres prepsane odkazy, ktere se po zaznamu presmeruji na cilovou URL. Tyto metriky jsou orientacni, protoze nektere emailove aplikace obrazky blokuji nebo prednacitaji. Realne doruceni do inboxu vyzaduje bounce/webhook napojeni a odpovedi vyzaduji IMAP napojeni schranky.

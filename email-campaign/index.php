@@ -14,6 +14,16 @@ $config = effectiveConfig($pdo, $baseConfig);
 $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
 
+if (isset($_GET['open'])) {
+    trackOpen($pdo, (string)$_GET['open']);
+    exit;
+}
+
+if (isset($_GET['click'], $_GET['u'])) {
+    trackClick($pdo, (string)$_GET['click'], (string)$_GET['u']);
+    exit;
+}
+
 if (isset($_GET['cron'])) {
     header('Content-Type: text/plain; charset=utf-8');
     if ($config['cron_token'] === '' || !hash_equals((string)$config['cron_token'], (string)$_GET['cron'])) {
@@ -242,19 +252,114 @@ function sendBatch(PDO $pdo, array $config, ?int $campaignId = null): string
     $stmt->execute();
     $recipients = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $mailer = new SmtpMailer($config);
-    $log = $pdo->prepare('INSERT INTO send_logs (campaign_id, recipient_id, email, status, message, sent_at) VALUES (?, ?, ?, ?, ?, ?)');
+    $log = $pdo->prepare('INSERT INTO send_logs (campaign_id, recipient_id, email, tracking_token, status, message, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
     $sent = 0;
     foreach ($recipients as $recipient) {
+        $token = bin2hex(random_bytes(18));
         try {
-            $mailer->send($recipient['email'], $campaign['subject'], $campaign['body_html'], $recipient);
-            $log->execute([$campaign['id'], $recipient['id'], $recipient['email'], 'sent', '', date('c')]);
+            $trackedHtml = addTracking($campaign['body_html'], $token);
+            $mailer->send($recipient['email'], $campaign['subject'], $trackedHtml, $recipient);
+            $log->execute([$campaign['id'], $recipient['id'], $recipient['email'], $token, 'sent', '', date('c')]);
             $sent++;
             usleep(300000);
         } catch (Throwable $e) {
-            $log->execute([$campaign['id'], $recipient['id'], $recipient['email'], 'failed', substr($e->getMessage(), 0, 500), date('c')]);
+            $log->execute([$campaign['id'], $recipient['id'], $recipient['email'], $token, 'failed', substr($e->getMessage(), 0, 500), date('c')]);
         }
     }
     return "Sent $sent of " . count($recipients) . " selected recipients.\n";
+}
+
+function addTracking(string $html, string $token): string
+{
+    $base = appBaseUrl();
+    $html = preg_replace_callback('/href=(["\'])(.*?)\1/i', function (array $matches) use ($base, $token): string {
+        $url = html_entity_decode($matches[2], ENT_QUOTES, 'UTF-8');
+        if (!preg_match('/^https?:\/\//i', $url)) {
+            return $matches[0];
+        }
+        $encoded = rtrim(strtr(base64_encode($url), '+/', '-_'), '=');
+        return 'href=' . $matches[1] . h($base . '?click=' . $token . '&u=' . $encoded) . $matches[1];
+    }, $html) ?? $html;
+
+    $pixel = '<img src="' . h($base . '?open=' . $token) . '" width="1" height="1" alt="" style="display:none;border:0;width:1px;height:1px">';
+    if (stripos($html, '</body>') !== false) {
+        return str_ireplace('</body>', $pixel . '</body>', $html);
+    }
+    return $html . $pixel;
+}
+
+function appBaseUrl(): string
+{
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'www.osobnizkusenosti.cz';
+    $path = strtok($_SERVER['REQUEST_URI'] ?? '/email-campaign/', '?') ?: '/email-campaign/';
+    if (substr($path, -1) !== '/') {
+        $path = dirname($path) . '/';
+    }
+    return $scheme . '://' . $host . $path;
+}
+
+function trackOpen(PDO $pdo, string $token): void
+{
+    $log = findSendLogByToken($pdo, $token);
+    if ($log) {
+        $now = date('c');
+        $stmt = $pdo->prepare('UPDATE send_logs SET opened_at=CASE WHEN opened_at="" THEN ? ELSE opened_at END WHERE id=?');
+        $stmt->execute([$now, $log['id']]);
+        recordTrackingEvent($pdo, (int)$log['id'], 'open', '');
+    }
+    header('Content-Type: image/gif');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    echo base64_decode('R0lGODlhAQABAPAAAP///wAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==');
+}
+
+function trackClick(PDO $pdo, string $token, string $encodedUrl): void
+{
+    $url = base64UrlDecode($encodedUrl);
+    if (!preg_match('/^https?:\/\//i', $url)) {
+        http_response_code(400);
+        exit('Invalid URL');
+    }
+    $log = findSendLogByToken($pdo, $token);
+    if ($log) {
+        $now = date('c');
+        $stmt = $pdo->prepare('UPDATE send_logs SET clicked_at=CASE WHEN clicked_at="" THEN ? ELSE clicked_at END, click_count=click_count+1 WHERE id=?');
+        $stmt->execute([$now, $log['id']]);
+        recordTrackingEvent($pdo, (int)$log['id'], 'click', $url);
+    }
+    header('Location: ' . $url, true, 302);
+}
+
+function findSendLogByToken(PDO $pdo, string $token): ?array
+{
+    if (!preg_match('/^[a-f0-9]{36}$/', $token)) {
+        return null;
+    }
+    $stmt = $pdo->prepare('SELECT * FROM send_logs WHERE tracking_token=? LIMIT 1');
+    $stmt->execute([$token]);
+    $log = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $log ?: null;
+}
+
+function recordTrackingEvent(PDO $pdo, int $sendLogId, string $type, string $targetUrl): void
+{
+    $stmt = $pdo->prepare('INSERT INTO tracking_events (send_log_id, event_type, target_url, user_agent, ip_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '';
+    $stmt->execute([
+        $sendLogId,
+        $type,
+        substr($targetUrl, 0, 1000),
+        substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500),
+        $ip === '' ? '' : hash('sha256', $ip),
+        date('c'),
+    ]);
+}
+
+function base64UrlDecode(string $value): string
+{
+    $value = strtr($value, '-_', '+/');
+    $value .= str_repeat('=', (4 - strlen($value) % 4) % 4);
+    return base64_decode($value, true) ?: '';
 }
 
 function campaignDailyLimit(PDO $pdo, array $campaign): array
@@ -346,6 +451,7 @@ function renderApp(PDO $pdo, ?array $flash): void
     global $config;
     $campaigns = $pdo->query('SELECT * FROM campaigns ORDER BY id DESC')->fetchAll(PDO::FETCH_ASSOC);
     $recipients = (int)$pdo->query('SELECT COUNT(*) FROM recipients WHERE status="active"')->fetchColumn();
+    $recipientRows = recipientRows($pdo);
     $logs = $pdo->query('SELECT l.*, c.name campaign FROM send_logs l LEFT JOIN campaigns c ON c.id=l.campaign_id ORDER BY l.id DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
     $current = $campaigns[0] ?? ['id' => 0, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den {{name}},</p><p>...</p>', 'daily_limit' => 300, 'batch_limit' => 10, 'auto_daily_limit' => 1, 'status' => 'draft'];
     $pace = campaignDailyLimit($pdo, $current);
@@ -445,6 +551,29 @@ function renderApp(PDO $pdo, ?array $flash): void
     </section>
 
     <section class="panel">
+        <h2>Kontakty</h2>
+        <div class="note">
+            Osloven znamena, ze SMTP server email prijal. Otevreni merime pres pixel a kliky pres sledovane odkazy; nektere emailove aplikace obrazky blokuji nebo prednacitaji, proto jsou to orientacni metriky. Dalsi krok pro odpovedi je IMAP napojeni schranky.
+        </div>
+        <table>
+            <thead><tr><th>Email</th><th>Osloven</th><th>Doruceni</th><th>Otevrel</th><th>Kliknul</th><th>Odpovedel</th><th>Posledni aktivita</th></tr></thead>
+            <tbody>
+            <?php foreach ($recipientRows as $row): ?>
+                <tr>
+                    <td><?= h($row['email']) ?></td>
+                    <td><?= statusBadge((int)$row['sent_count'] > 0 ? 'ano' : 'ne') ?></td>
+                    <td><?= statusBadge((int)$row['sent_count'] > 0 ? 'smtp prijato' : 'nezjisteno') ?></td>
+                    <td><?= statusBadge($row['opened_at'] ? 'ano' : 'ne') ?></td>
+                    <td><?= statusBadge((int)$row['click_count'] > 0 ? ((int)$row['click_count'] . 'x') : 'ne') ?></td>
+                    <td><?= statusBadge('nenapojeno') ?></td>
+                    <td><?= h($row['last_activity'] ?: '') ?></td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="panel">
         <h2>Posledni odeslani</h2>
         <table><thead><tr><th>Kdy</th><th>Kampan</th><th>Email</th><th>Stav</th><th>Zprava</th></tr></thead><tbody>
         <?php foreach ($logs as $log): ?><tr><td><?= h($log['sent_at']) ?></td><td><?= h($log['campaign']) ?></td><td><?= h($log['email']) ?></td><td><?= h($log['status']) ?></td><td><?= h($log['message']) ?></td></tr><?php endforeach; ?>
@@ -453,4 +582,38 @@ function renderApp(PDO $pdo, ?array $flash): void
 </main>
 <script src="assets/app.js"></script>
 </body></html><?php
+}
+
+function recipientRows(PDO $pdo): array
+{
+    return $pdo->query('
+        SELECT r.email,
+               r.created_at,
+               COUNT(CASE WHEN l.status="sent" THEN 1 END) sent_count,
+               MAX(CASE WHEN l.status="sent" THEN l.sent_at ELSE "" END) sent_at,
+               MAX(l.opened_at) opened_at,
+               MAX(l.clicked_at) clicked_at,
+               SUM(COALESCE(l.click_count, 0)) click_count,
+               MAX(CASE
+                   WHEN l.clicked_at != "" THEN l.clicked_at
+                   WHEN l.opened_at != "" THEN l.opened_at
+                   WHEN l.status="sent" THEN l.sent_at
+                   ELSE ""
+               END) last_activity
+        FROM recipients r
+        LEFT JOIN send_logs l ON l.recipient_id=r.id
+        WHERE r.status="active"
+        GROUP BY r.id
+        ORDER BY last_activity DESC, r.id DESC
+        LIMIT 250
+    ')->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function statusBadge(string $text): string
+{
+    $class = in_array($text, ['ano', 'smtp prijato'], true) || str_ends_with($text, 'x') ? 'good' : 'muted';
+    if (in_array($text, ['nezjisteno', 'nenapojeno'], true)) {
+        $class = 'warn';
+    }
+    return '<span class="badge ' . $class . '">' . h($text) . '</span>';
 }

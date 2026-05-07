@@ -78,6 +78,18 @@ label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-
   font-size: 14px;
   line-height: 1.45;
 }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.badge.good { background: #dff5ea; color: #14532d; }
+.badge.muted { background: #eef1ef; color: #52615b; }
+.badge.warn { background: #fff3cd; color: #7a4d00; }
 input, select {
   width: 100%;
   border: 1px solid var(--line);
