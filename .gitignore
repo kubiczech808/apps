@@ -1,6 +1,8 @@
 # Credentials
 .env
 .env.local
+email-campaign/config.php
+email-campaign/storage/*.sqlite
 
 # Python
 __pycache__/

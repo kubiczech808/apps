@@ -1,0 +1,10 @@
+Options -Indexes
+
+<FilesMatch "^(config\.php|config\.example\.php)$">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^storage/ - [F,L]
+</IfModule>
