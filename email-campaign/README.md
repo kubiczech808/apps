@@ -52,3 +52,4 @@ Bez hlavicky aplikace bere prvni sloupec jako email a druhy jako jmeno.
 ## Dorucitelnost
 
 Aplikace omezuje tempo podle denniho limitu kampane. Pro realnou dorucitelnost je jeste potreba mit na domene spravne nastavene SPF, DKIM a DMARC zaznamy a posilat pres SMTP sluzbu s dobrou reputaci.
+Po zmene FTP webrootu staci znovu pushnout libovolnou zmenu v teto slozce a workflow provede novy upload.
