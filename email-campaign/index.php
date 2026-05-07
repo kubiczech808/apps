@@ -94,15 +94,16 @@ function handlePost(PDO $pdo, array $config): ?string
             cleanHtml((string)$_POST['body_html']),
             max(1, min(500, (int)$_POST['daily_limit'])),
             max(1, min(100, (int)$_POST['batch_limit'])),
+            isset($_POST['auto_daily_limit']) ? 1 : 0,
             in_array($_POST['status'] ?? 'draft', ['draft', 'active', 'paused'], true) ? $_POST['status'] : 'draft',
             date('c'),
         ];
         if ($id > 0) {
-            $stmt = $pdo->prepare('UPDATE campaigns SET name=?, subject=?, body_html=?, daily_limit=?, batch_limit=?, status=?, updated_at=? WHERE id=?');
+            $stmt = $pdo->prepare('UPDATE campaigns SET name=?, subject=?, body_html=?, daily_limit=?, batch_limit=?, auto_daily_limit=?, status=?, updated_at=? WHERE id=?');
             $stmt->execute([...$data, $id]);
             return 'Kampan ulozena.';
         }
-        $stmt = $pdo->prepare('INSERT INTO campaigns (name, subject, body_html, daily_limit, batch_limit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt = $pdo->prepare('INSERT INTO campaigns (name, subject, body_html, daily_limit, batch_limit, auto_daily_limit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([...$data, date('c')]);
         return 'Kampan vytvorena.';
     }
@@ -224,7 +225,8 @@ function sendBatch(PDO $pdo, array $config, ?int $campaignId = null): string
     $sentStmt = $pdo->prepare('SELECT COUNT(*) FROM send_logs WHERE campaign_id=? AND status="sent" AND substr(sent_at,1,10)=?');
     $sentStmt->execute([$campaign['id'], $today]);
     $sentToday = (int)$sentStmt->fetchColumn();
-    $limit = max(0, (int)$campaign['daily_limit'] - $sentToday);
+    $dailyLimit = campaignDailyLimit($pdo, $campaign)['limit'];
+    $limit = max(0, $dailyLimit - $sentToday);
     $limit = min($limit, max(1, (int)($campaign['batch_limit'] ?? 10)));
     if ($limit < 1) {
         return "Daily limit already reached.\n";
@@ -253,6 +255,52 @@ function sendBatch(PDO $pdo, array $config, ?int $campaignId = null): string
         }
     }
     return "Sent $sent of " . count($recipients) . " selected recipients.\n";
+}
+
+function campaignDailyLimit(PDO $pdo, array $campaign): array
+{
+    $manual = max(1, (int)$campaign['daily_limit']);
+    if ((int)($campaign['auto_daily_limit'] ?? 1) !== 1) {
+        return ['limit' => $manual, 'reason' => 'Rucni limit kampane.'];
+    }
+
+    $stmt = $pdo->prepare('
+        SELECT substr(sent_at,1,10) day,
+               SUM(CASE WHEN status="sent" THEN 1 ELSE 0 END) sent,
+               SUM(CASE WHEN status="failed" THEN 1 ELSE 0 END) failed
+        FROM send_logs
+        WHERE campaign_id=?
+        GROUP BY substr(sent_at,1,10)
+        ORDER BY day ASC
+    ');
+    $stmt->execute([(int)$campaign['id']]);
+    $days = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $sendingDays = count(array_filter($days, fn($day) => (int)$day['sent'] > 0));
+    $recent = array_slice($days, -3);
+    $recentSent = array_sum(array_map(fn($day) => (int)$day['sent'], $recent));
+    $recentFailed = array_sum(array_map(fn($day) => (int)$day['failed'], $recent));
+    $recentTotal = $recentSent + $recentFailed;
+    $failureRate = $recentTotal > 0 ? $recentFailed / $recentTotal : 0.0;
+
+    $limit = (int)round(100 * pow(1.2, max(0, $sendingDays - 1)));
+    $limit = min($limit, $manual, 300);
+    $reason = 'Auto: start 100/den, po uspesnych dnech rust cca 20 %, strop podle rucniho maxima.';
+
+    if ($recentTotal >= 20 && $failureRate >= 0.1) {
+        $limit = max(25, (int)floor($limit * 0.5));
+        $reason = 'Auto: vysoka chybovost za posledni dny, limit je docasne snizeny.';
+    } elseif ($recentTotal >= 20 && $failureRate >= 0.05) {
+        $limit = max(50, min($limit, 100));
+        $reason = 'Auto: zvysena chybovost za posledni dny, limit se drzi konzervativne.';
+    }
+
+    return [
+        'limit' => max(1, $limit),
+        'reason' => $reason,
+        'sending_days' => $sendingDays,
+        'failure_rate' => $failureRate,
+        'recent_total' => $recentTotal,
+    ];
 }
 
 function findCampaign(PDO $pdo, int $id): array
@@ -299,7 +347,8 @@ function renderApp(PDO $pdo, ?array $flash): void
     $campaigns = $pdo->query('SELECT * FROM campaigns ORDER BY id DESC')->fetchAll(PDO::FETCH_ASSOC);
     $recipients = (int)$pdo->query('SELECT COUNT(*) FROM recipients WHERE status="active"')->fetchColumn();
     $logs = $pdo->query('SELECT l.*, c.name campaign FROM send_logs l LEFT JOIN campaigns c ON c.id=l.campaign_id ORDER BY l.id DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
-    $current = $campaigns[0] ?? ['id' => 0, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den {{name}},</p><p>...</p>', 'daily_limit' => 100, 'batch_limit' => 10, 'status' => 'draft'];
+    $current = $campaigns[0] ?? ['id' => 0, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den {{name}},</p><p>...</p>', 'daily_limit' => 300, 'batch_limit' => 10, 'auto_daily_limit' => 1, 'status' => 'draft'];
+    $pace = campaignDailyLimit($pdo, $current);
     ?><!doctype html>
 <html lang="cs">
 <head>
@@ -318,7 +367,7 @@ function renderApp(PDO $pdo, ?array $flash): void
     <section class="stats">
         <div><span>Prijemci</span><strong><?= $recipients ?></strong></div>
         <div><span>Kampane</span><strong><?= count($campaigns) ?></strong></div>
-        <div><span>Dnes limit</span><strong><?= h((string)$current['daily_limit']) ?></strong></div>
+        <div><span>Dnes limit</span><strong><?= h((string)$pace['limit']) ?></strong></div>
     </section>
 
     <section class="grid">
@@ -330,8 +379,13 @@ function renderApp(PDO $pdo, ?array $flash): void
             <label>Nazev<input name="name" value="<?= h($current['name']) ?>" required></label>
             <label>Predmet<input name="subject" value="<?= h($current['subject']) ?>" required></label>
             <div class="row">
-                <label>Denne max<input type="number" name="daily_limit" min="1" max="500" value="<?= h((string)$current['daily_limit']) ?>"></label>
+                <label>Max denne<input type="number" name="daily_limit" min="1" max="500" value="<?= h((string)$current['daily_limit']) ?>"></label>
                 <label>Na spusteni<input type="number" name="batch_limit" min="1" max="100" value="<?= h((string)($current['batch_limit'] ?? 10)) ?>"></label>
+            </div>
+            <label class="check"><input type="checkbox" name="auto_daily_limit" value="1" <?= (int)($current['auto_daily_limit'] ?? 1) === 1 ? 'checked' : '' ?>> Automaticky ridit denni limit podle dorucitelnosti</label>
+            <div class="note">
+                Aktualni limit: <strong><?= h((string)$pace['limit']) ?>/den</strong>. <?= h($pace['reason']) ?>
+                Sleduji odesilaci dny a SMTP chyby; otevreni, spam stiznosti a reputaci schranky zatim aplikace neumi merit.
             </div>
             <div class="row">
                 <label>Stav<select name="status"><option value="draft" <?= $current['status']==='draft'?'selected':'' ?>>Koncept</option><option value="active" <?= $current['status']==='active'?'selected':'' ?>>Aktivni</option><option value="paused" <?= $current['status']==='paused'?'selected':'' ?>>Pozastaveno</option></select></label>

@@ -61,6 +61,23 @@ h2 { font-size: 18px; }
 }
 .side { display: grid; gap: 18px; }
 label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-size: 13px; }
+.check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text);
+}
+.check input { width: auto; }
+.note {
+  border: 1px solid #b8d8ce;
+  background: #eef8f4;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0 0 14px;
+  color: #21443b;
+  font-size: 14px;
+  line-height: 1.45;
+}
 input, select {
   width: 100%;
   border: 1px solid var(--line);

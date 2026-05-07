@@ -38,6 +38,7 @@ final class Database
                 body_html TEXT NOT NULL,
                 daily_limit INTEGER NOT NULL DEFAULT 100,
                 batch_limit INTEGER NOT NULL DEFAULT 10,
+                auto_daily_limit INTEGER NOT NULL DEFAULT 1,
                 status TEXT NOT NULL DEFAULT 'draft',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -57,6 +58,7 @@ final class Database
             );
         ");
         $this->ensureColumn('campaigns', 'batch_limit', 'INTEGER NOT NULL DEFAULT 10');
+        $this->ensureColumn('campaigns', 'auto_daily_limit', 'INTEGER NOT NULL DEFAULT 1');
     }
 
     private function ensureColumn(string $table, string $column, string $definition): void
