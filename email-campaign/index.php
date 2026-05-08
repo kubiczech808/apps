@@ -262,12 +262,13 @@ function copyRecipientsTable(PDO $source, PDO $target): array
     $rows = $source->query('SELECT * FROM recipients ORDER BY id ASC')->fetchAll(PDO::FETCH_ASSOC);
     $idMap = [];
     $emailMap = [];
-    $insert = $target->prepare('INSERT INTO recipients (id, list_id, email, subject_name, website, name, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    $insert = $target->prepare('INSERT INTO recipients (id, list_id, email, subject_name, website, address, name, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     $update = $target->prepare('
         UPDATE recipients
         SET list_id=?,
             subject_name=CASE WHEN ? != "" THEN ? ELSE subject_name END,
             website=CASE WHEN ? != "" THEN ? ELSE website END,
+            address=CASE WHEN ? != "" THEN ? ELSE address END,
             name=CASE WHEN ? != "" THEN ? ELSE name END,
             status=?
         WHERE id=?
@@ -285,9 +286,10 @@ function copyRecipientsTable(PDO $source, PDO $target): array
                 $row['id'],
                 $row['list_id'],
                 $row['email'],
-                $row['subject_name'],
-                $row['website'],
-                $row['name'],
+                $row['subject_name'] ?? '',
+                $row['website'] ?? '',
+                $row['address'] ?? '',
+                $row['name'] ?? '',
                 $row['status'],
                 $row['created_at'],
             ]);
@@ -302,6 +304,8 @@ function copyRecipientsTable(PDO $source, PDO $target): array
             $row['subject_name'],
             $row['website'],
             $row['website'],
+            $row['address'] ?? '',
+            $row['address'] ?? '',
             $row['name'],
             $row['name'],
             $row['status'],
@@ -495,6 +499,7 @@ function importRecipients(PDO $pdo): string
     $nameIndex = headerIndex($headers, ['name', 'jmeno', 'jméno']);
     $subjectIndex = headerIndex($headers, ['subject_name', 'subject', 'nazev', 'název', 'firma', 'subjekt', 'centrum', 'studio']);
     $websiteIndex = headerIndex($headers, ['website', 'web', 'url', 'www', 'webovka']);
+    $addressIndex = headerIndex($headers, ['address', 'adresa', 'ulice', 'sidlo']);
     $rows = $emailIndex === false ? [$first] : [];
     while (($row = fgetcsv($handle, 0, ',')) !== false) {
         $rows[] = $row;
@@ -502,9 +507,9 @@ function importRecipients(PDO $pdo): string
     fclose($handle);
 
     $listId = resolveContactList($pdo, trim((string)($_POST['list_name'] ?? '')));
-    $existingStmt = $pdo->prepare('SELECT list_id, subject_name, website, name FROM recipients WHERE email=?');
-    $insertStmt = $pdo->prepare('INSERT INTO recipients (list_id, email, subject_name, website, name, status, created_at) VALUES (?, ?, ?, ?, ?, "active", ?)');
-    $updateStmt = $pdo->prepare('UPDATE recipients SET list_id=?, subject_name=?, website=?, name=?, status="active" WHERE email=?');
+    $existingStmt = $pdo->prepare('SELECT list_id, subject_name, website, address, name FROM recipients WHERE email=?');
+    $insertStmt = $pdo->prepare('INSERT INTO recipients (list_id, email, subject_name, website, address, name, status, created_at) VALUES (?, ?, ?, ?, ?, ?, "active", ?)');
+    $updateStmt = $pdo->prepare('UPDATE recipients SET list_id=?, subject_name=?, website=?, address=?, name=?, status="active" WHERE email=?');
     $inserted = 0;
     $updated = 0;
     $skipped = 0;
@@ -515,6 +520,7 @@ function importRecipients(PDO $pdo): string
         $name = trim((string)($nameIndex === false ? '' : ($row[$nameIndex] ?? '')));
         $subjectName = trim((string)($row[$subjectIndex === false ? 1 : $subjectIndex] ?? ''));
         $website = normalizeWebsite(trim((string)($row[$websiteIndex === false ? 2 : $websiteIndex] ?? '')));
+        $address = trim((string)($row[$addressIndex === false ? 3 : $addressIndex] ?? ''));
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $skipped++;
             continue;
@@ -522,16 +528,17 @@ function importRecipients(PDO $pdo): string
         $existingStmt->execute([$email]);
         $existing = $existingStmt->fetch(PDO::FETCH_ASSOC);
         if (!$existing) {
-            $insertStmt->execute([$listId, $email, $subjectName, $website, $name, date('c')]);
+            $insertStmt->execute([$listId, $email, $subjectName, $website, $address, $name, date('c')]);
             $inserted++;
             continue;
         }
         $newSubject = $subjectName !== '' ? $subjectName : (string)$existing['subject_name'];
         $newWebsite = $website !== '' ? $website : (string)$existing['website'];
+        $newAddress = $address !== '' ? $address : (string)$existing['address'];
         $newName = $name !== '' ? $name : (string)$existing['name'];
-        $changed = (int)$existing['list_id'] !== $listId || $newSubject !== (string)$existing['subject_name'] || $newWebsite !== (string)$existing['website'] || $newName !== (string)$existing['name'];
+        $changed = (int)$existing['list_id'] !== $listId || $newSubject !== (string)$existing['subject_name'] || $newWebsite !== (string)$existing['website'] || $newAddress !== (string)$existing['address'] || $newName !== (string)$existing['name'];
         if ($changed) {
-            $updateStmt->execute([$listId, $newSubject, $newWebsite, $newName, $email]);
+            $updateStmt->execute([$listId, $newSubject, $newWebsite, $newAddress, $newName, $email]);
             $updated++;
         } else {
             $skipped++;
@@ -945,10 +952,10 @@ function renderApp(PDO $pdo, ?array $flash): void
             <h2>Import kontaktu</h2>
             <p>CSV muze mit hlavicku, nebo pevne poradi sloupcu bez hlavicky. Email je unikatni identifikator; duplicitni email se aktualizuje novymi udaji.</p>
             <div class="note">
-                <strong>Poradi bez hlavicky:</strong> 1. email, 2. nazev subjektu, 3. webovka.
-                <br><strong>Podporovane hlavicky:</strong> email/e-mail/mail, nazev/subjekt/firma/centrum/studio, website/web/url/www/webovka.
-                <pre>email,nazev,web
-info@studio.cz,Studio Klid,https://studio.cz</pre>
+                <strong>Poradi bez hlavicky:</strong> 1. email, 2. nazev subjektu, 3. webovka, 4. adresa.
+                <br><strong>Podporovane hlavicky:</strong> email/e-mail/mail, nazev/subjekt/firma/centrum/studio, website/web/url/www/webovka, address/adresa/ulice/sidlo.
+                <pre>email,nazev,web,adresa
+info@studio.cz,Studio Klid,https://studio.cz,"Aloise Hanuse 141, Jablonne nad Orlici"</pre>
             </div>
             <label>Seznam kontaktu<input name="list_name" value="Vychozi seznam" required></label>
             <input type="file" name="csv" accept=".csv,text/csv" required>
@@ -973,13 +980,14 @@ info@studio.cz,Studio Klid,https://studio.cz</pre>
             Osloven znamena, ze SMTP server email prijal. Otevreni merime pres pixel a kliky pres sledovane odkazy; nektere emailove aplikace obrazky blokuji nebo prednacitaji, proto jsou to orientacni metriky. Dalsi krok pro odpovedi je IMAP napojeni schranky.
         </div>
         <table>
-            <thead><tr><th>Email</th><th>Subjekt</th><th>Web</th><th>Seznam</th><th>Osloven</th><th>Doruceni</th><th>Otevrel</th><th>Kliknul</th><th>Odpovedel</th><th>Posledni aktivita</th></tr></thead>
+            <thead><tr><th>Email</th><th>Subjekt</th><th>Web</th><th>Adresa</th><th>Seznam</th><th>Osloven</th><th>Doruceni</th><th>Otevrel</th><th>Kliknul</th><th>Odpovedel</th><th>Posledni aktivita</th></tr></thead>
             <tbody>
             <?php foreach ($recipientRows as $row): ?>
                 <tr>
                     <td><?= h($row['email']) ?></td>
                     <td><?= h($row['subject_name']) ?></td>
                     <td><?php if ($row['website']): ?><a href="<?= h($row['website']) ?>" target="_blank" rel="noopener"><?= h($row['website']) ?></a><?php endif; ?></td>
+                    <td><?= h($row['address'] ?? '') ?></td>
                     <td><?= h($row['list_name'] ?: 'Vychozi seznam') ?></td>
                     <td><?= statusBadge((int)$row['sent_count'] > 0 ? 'ano' : 'ne') ?></td>
                     <td><?= statusBadge((int)$row['sent_count'] > 0 ? 'smtp prijato' : 'nezjisteno') ?></td>
@@ -1044,6 +1052,7 @@ function recipientRows(PDO $pdo): array
         SELECT r.email,
                r.subject_name,
                r.website,
+               r.address,
                cl.name list_name,
                r.created_at,
                COALESCE(logs.sent_count, 0) sent_count,

@@ -56,6 +56,7 @@ final class Database
         $this->ensureColumn('recipients', 'list_id', 'INTEGER NOT NULL DEFAULT 1');
         $this->ensureColumn('recipients', 'subject_name', $this->textColumn("''"));
         $this->ensureColumn('recipients', 'website', $this->textColumn("''"));
+        $this->ensureColumn('recipients', 'address', $this->textColumn("''"));
         $this->ensureColumn('campaigns', 'list_id', 'INTEGER NOT NULL DEFAULT 1');
         $this->ensureColumn('campaigns', 'batch_limit', 'INTEGER NOT NULL DEFAULT 10');
         $this->ensureColumn('campaigns', 'auto_daily_limit', 'INTEGER NOT NULL DEFAULT 1');
@@ -79,6 +80,7 @@ final class Database
                 email TEXT NOT NULL UNIQUE,
                 subject_name TEXT DEFAULT '',
                 website TEXT DEFAULT '',
+                address TEXT DEFAULT '',
                 name TEXT DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
                 created_at TEXT NOT NULL
@@ -150,6 +152,7 @@ final class Database
                 email VARCHAR(320) NOT NULL UNIQUE,
                 subject_name VARCHAR(255) NOT NULL DEFAULT '',
                 website VARCHAR(500) NOT NULL DEFAULT '',
+                address VARCHAR(500) NOT NULL DEFAULT '',
                 name VARCHAR(255) NOT NULL DEFAULT '',
                 status VARCHAR(40) NOT NULL DEFAULT 'active',
                 created_at VARCHAR(40) NOT NULL
