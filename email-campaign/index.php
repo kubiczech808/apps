@@ -198,9 +198,13 @@ function migrateSqliteDataToMysqlIfEmpty(PDO $mysql, string $sqlitePath): bool
         }
 
         copySettingsTable($sqlite, $mysql);
-        foreach (['contact_lists', 'recipients', 'import_runs', 'campaigns', 'send_logs', 'tracking_events'] as $table) {
+        copyWholeTable($sqlite, $mysql, 'contact_lists');
+        $recipientIdMap = copyRecipientsTable($sqlite, $mysql);
+        foreach (['import_runs', 'campaigns'] as $table) {
             copyWholeTable($sqlite, $mysql, $table);
         }
+        copySendLogsTable($sqlite, $mysql, $recipientIdMap);
+        copyWholeTable($sqlite, $mysql, 'tracking_events');
 
         $mysql->commit();
         return true;
@@ -249,6 +253,79 @@ function copyWholeTable(PDO $source, PDO $target, string $table): void
     $placeholders = implode(', ', array_fill(0, count($columns), '?'));
     $stmt = $target->prepare('INSERT INTO ' . $table . ' (' . $columnSql . ') VALUES (' . $placeholders . ')');
     foreach ($rows as $row) {
+        $stmt->execute(array_map(static fn($column) => $row[$column], $columns));
+    }
+}
+
+function copyRecipientsTable(PDO $source, PDO $target): array
+{
+    $rows = $source->query('SELECT * FROM recipients ORDER BY id ASC')->fetchAll(PDO::FETCH_ASSOC);
+    $idMap = [];
+    $emailMap = [];
+    $insert = $target->prepare('INSERT INTO recipients (id, list_id, email, subject_name, website, name, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    $update = $target->prepare('
+        UPDATE recipients
+        SET list_id=?,
+            subject_name=CASE WHEN ? != "" THEN ? ELSE subject_name END,
+            website=CASE WHEN ? != "" THEN ? ELSE website END,
+            name=CASE WHEN ? != "" THEN ? ELSE name END,
+            status=?
+        WHERE id=?
+    ');
+
+    foreach ($rows as $row) {
+        $emailKey = strtolower(trim((string)$row['email']));
+        if ($emailKey === '') {
+            continue;
+        }
+        if (!isset($emailMap[$emailKey])) {
+            $emailMap[$emailKey] = (int)$row['id'];
+            $idMap[(int)$row['id']] = (int)$row['id'];
+            $insert->execute([
+                $row['id'],
+                $row['list_id'],
+                $row['email'],
+                $row['subject_name'],
+                $row['website'],
+                $row['name'],
+                $row['status'],
+                $row['created_at'],
+            ]);
+            continue;
+        }
+
+        $keptId = $emailMap[$emailKey];
+        $idMap[(int)$row['id']] = $keptId;
+        $update->execute([
+            $row['list_id'],
+            $row['subject_name'],
+            $row['subject_name'],
+            $row['website'],
+            $row['website'],
+            $row['name'],
+            $row['name'],
+            $row['status'],
+            $keptId,
+        ]);
+    }
+
+    return $idMap;
+}
+
+function copySendLogsTable(PDO $source, PDO $target, array $recipientIdMap): void
+{
+    $rows = $source->query('SELECT * FROM send_logs')->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) {
+        return;
+    }
+    $columns = array_keys($rows[0]);
+    $columnSql = implode(', ', $columns);
+    $placeholders = implode(', ', array_fill(0, count($columns), '?'));
+    $stmt = $target->prepare('INSERT INTO send_logs (' . $columnSql . ') VALUES (' . $placeholders . ')');
+    foreach ($rows as $row) {
+        if (!empty($row['recipient_id'])) {
+            $row['recipient_id'] = $recipientIdMap[(int)$row['recipient_id']] ?? $row['recipient_id'];
+        }
         $stmt->execute(array_map(static fn($column) => $row[$column], $columns));
     }
 }
