@@ -512,9 +512,9 @@ function importRecipients(PDO $pdo): string
     foreach ($rows as $row) {
         $total++;
         $email = trim((string)($row[$emailIndex === false ? 0 : $emailIndex] ?? ''));
-        $name = trim((string)($row[$nameIndex === false ? 1 : $nameIndex] ?? ''));
-        $subjectName = trim((string)($row[$subjectIndex === false ? -1 : $subjectIndex] ?? ''));
-        $website = normalizeWebsite(trim((string)($row[$websiteIndex === false ? -1 : $websiteIndex] ?? '')));
+        $name = trim((string)($nameIndex === false ? '' : ($row[$nameIndex] ?? '')));
+        $subjectName = trim((string)($row[$subjectIndex === false ? 1 : $subjectIndex] ?? ''));
+        $website = normalizeWebsite(trim((string)($row[$websiteIndex === false ? 2 : $websiteIndex] ?? '')));
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
             $skipped++;
             continue;
@@ -943,7 +943,13 @@ function renderApp(PDO $pdo, ?array $flash): void
         <form method="post" enctype="multipart/form-data" class="panel">
             <input type="hidden" name="action" value="import_recipients">
             <h2>Import kontaktu</h2>
-            <p>CSV muze obsahovat jen emaily, nebo sloupce email, nazev/subjekt a web/website. Email je unikatni identifikator.</p>
+            <p>CSV muze mit hlavicku, nebo pevne poradi sloupcu bez hlavicky. Email je unikatni identifikator; duplicitni email se aktualizuje novymi udaji.</p>
+            <div class="note">
+                <strong>Poradi bez hlavicky:</strong> 1. email, 2. nazev subjektu, 3. webovka.
+                <br><strong>Podporovane hlavicky:</strong> email/e-mail/mail, nazev/subjekt/firma/centrum/studio, website/web/url/www/webovka.
+                <pre>email,nazev,web
+info@studio.cz,Studio Klid,https://studio.cz</pre>
+            </div>
             <label>Seznam kontaktu<input name="list_name" value="Vychozi seznam" required></label>
             <input type="file" name="csv" accept=".csv,text/csv" required>
             <button>Importovat</button>
