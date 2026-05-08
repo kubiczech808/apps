@@ -27,6 +27,21 @@ header {
   color: white;
 }
 header a { color: white; }
+.tabs {
+  display: flex;
+  gap: 6px;
+  padding: 10px 32px;
+  background: #ffffff;
+  border-bottom: 1px solid var(--line);
+}
+.tabs a {
+  color: var(--text);
+  text-decoration: none;
+  padding: 9px 12px;
+  border-radius: 6px;
+  font-weight: 700;
+}
+.tabs a.active { background: #dff2eb; color: var(--accent-dark); }
 main { max-width: 1180px; margin: 0 auto; padding: 28px; }
 h1, h2 { margin: 0 0 16px; letter-spacing: 0; }
 h1 { font-size: 28px; }
@@ -53,12 +68,14 @@ h2 { font-size: 18px; }
 }
 .stats span { display: block; color: var(--muted); font-size: 13px; }
 .stats strong { display: block; margin-top: 6px; font-size: 28px; }
+.stats small { display: block; margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
 .grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   gap: 18px;
   align-items: start;
 }
+.grid.two { grid-template-columns: 1fr 1fr; }
 .side { display: grid; gap: 18px; }
 label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-size: 13px; }
 .check {
@@ -150,6 +167,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
 
 @media (max-width: 860px) {
   header { padding: 0 18px; }
+  .tabs { padding: 8px 18px; overflow-x: auto; }
   main { padding: 18px; }
-  .stats, .grid, .row { grid-template-columns: 1fr; }
+  .stats, .grid, .grid.two, .row { grid-template-columns: 1fr; }
 }

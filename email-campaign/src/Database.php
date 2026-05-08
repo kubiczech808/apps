@@ -24,8 +24,14 @@ final class Database
     private function migrate(): void
     {
         $this->pdo->exec("
+            CREATE TABLE IF NOT EXISTS contact_lists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS recipients (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                list_id INTEGER NOT NULL DEFAULT 1,
                 email TEXT NOT NULL UNIQUE,
                 name TEXT DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
@@ -33,6 +39,7 @@ final class Database
             );
             CREATE TABLE IF NOT EXISTS campaigns (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                list_id INTEGER NOT NULL DEFAULT 1,
                 name TEXT NOT NULL,
                 subject TEXT NOT NULL,
                 body_html TEXT NOT NULL,
@@ -70,6 +77,9 @@ final class Database
                 value TEXT NOT NULL
             );
         ");
+        $this->pdo->exec("INSERT OR IGNORE INTO contact_lists (id, name, created_at) VALUES (1, 'Vychozi seznam', '" . date('c') . "')");
+        $this->ensureColumn('recipients', 'list_id', 'INTEGER NOT NULL DEFAULT 1');
+        $this->ensureColumn('campaigns', 'list_id', 'INTEGER NOT NULL DEFAULT 1');
         $this->ensureColumn('campaigns', 'batch_limit', 'INTEGER NOT NULL DEFAULT 10');
         $this->ensureColumn('campaigns', 'auto_daily_limit', 'INTEGER NOT NULL DEFAULT 1');
         $this->ensureColumn('send_logs', 'tracking_token', "TEXT DEFAULT ''");

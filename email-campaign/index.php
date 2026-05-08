@@ -74,7 +74,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['password'])) {
     try {
         $message = handlePost($pdo, $config);
         $_SESSION['flash'] = ['ok', $message ?: 'Hotovo.'];
-        header('Location: ./');
+        $returnView = in_array($_GET['view'] ?? '', ['overview', 'contacts', 'campaigns', 'config'], true) ? $_GET['view'] : 'overview';
+        header('Location: ./?view=' . $returnView);
         exit;
     } catch (Throwable $e) {
         $flash = ['error', $e->getMessage()];
@@ -96,9 +97,15 @@ function handlePost(PDO $pdo, array $config): ?string
         return 'SMTP pripojeni a prihlaseni funguje.';
     }
 
+    if ($action === 'test_imap') {
+        testImapConnection($config['imap']);
+        return 'IMAP pripojeni a prihlaseni funguje.';
+    }
+
     if ($action === 'save_campaign') {
         $id = (int)($_POST['id'] ?? 0);
         $data = [
+            max(1, (int)$_POST['list_id']),
             trim((string)$_POST['name']),
             trim((string)$_POST['subject']),
             cleanHtml((string)$_POST['body_html']),
@@ -109,11 +116,11 @@ function handlePost(PDO $pdo, array $config): ?string
             date('c'),
         ];
         if ($id > 0) {
-            $stmt = $pdo->prepare('UPDATE campaigns SET name=?, subject=?, body_html=?, daily_limit=?, batch_limit=?, auto_daily_limit=?, status=?, updated_at=? WHERE id=?');
+            $stmt = $pdo->prepare('UPDATE campaigns SET list_id=?, name=?, subject=?, body_html=?, daily_limit=?, batch_limit=?, auto_daily_limit=?, status=?, updated_at=? WHERE id=?');
             $stmt->execute([...$data, $id]);
             return 'Kampan ulozena.';
         }
-        $stmt = $pdo->prepare('INSERT INTO campaigns (name, subject, body_html, daily_limit, batch_limit, auto_daily_limit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt = $pdo->prepare('INSERT INTO campaigns (list_id, name, subject, body_html, daily_limit, batch_limit, auto_daily_limit, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([...$data, date('c')]);
         return 'Kampan vytvorena.';
     }
@@ -154,6 +161,13 @@ function effectiveConfig(PDO $pdo, array $config): array
             $config['smtp'][$key] = $key === 'port' ? (int)$settings[$settingKey] : $settings[$settingKey];
         }
     }
+    $config['imap'] = [
+        'host' => $settings['imap_host'] ?? '',
+        'port' => (int)($settings['imap_port'] ?? 993),
+        'username' => $settings['imap_username'] ?? '',
+        'password' => $settings['imap_password'] ?? '',
+        'encryption' => $settings['imap_encryption'] ?? 'ssl',
+    ];
     return $config;
 }
 
@@ -176,10 +190,10 @@ function saveSetup(PDO $pdo): void
 
 function saveSettings(PDO $pdo): void
 {
-    $allowed = ['from_email', 'from_name', 'smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_encryption'];
+    $allowed = ['from_email', 'from_name', 'smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_encryption', 'imap_host', 'imap_port', 'imap_username', 'imap_password', 'imap_encryption'];
     $stmt = $pdo->prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
     foreach ($allowed as $key) {
-        if ($key === 'smtp_password' && ($_POST[$key] ?? '') === '') {
+        if (in_array($key, ['smtp_password', 'imap_password'], true) && ($_POST[$key] ?? '') === '') {
             continue;
         }
         $stmt->execute([$key, trim((string)($_POST[$key] ?? ''))]);
@@ -190,6 +204,50 @@ function saveSettings(PDO $pdo): void
             throw new RuntimeException('Nove heslo musi mit alespon 10 znaku.');
         }
         $stmt->execute(['app_password_hash', password_hash($newPassword, PASSWORD_DEFAULT)]);
+    }
+}
+
+function testImapConnection(array $imap): void
+{
+    if (($imap['host'] ?? '') === '' || ($imap['username'] ?? '') === '' || ($imap['password'] ?? '') === '') {
+        throw new RuntimeException('IMAP neni vyplneny.');
+    }
+    $scheme = ($imap['encryption'] ?? 'ssl') === 'ssl' ? 'ssl://' : '';
+    $socket = stream_socket_client($scheme . $imap['host'] . ':' . (int)$imap['port'], $errno, $errstr, 30);
+    if (!$socket) {
+        throw new RuntimeException("IMAP connection failed: $errstr");
+    }
+    $hello = fgets($socket, 2048) ?: '';
+    if (!str_contains($hello, '* OK')) {
+        fclose($socket);
+        throw new RuntimeException('IMAP server nevratil OK pozdrav.');
+    }
+    if (($imap['encryption'] ?? 'ssl') === 'tls') {
+        fwrite($socket, "a0 STARTTLS\r\n");
+        $tlsResponse = '';
+        while (($line = fgets($socket, 2048)) !== false) {
+            $tlsResponse .= $line;
+            if (str_starts_with($line, 'a0 ')) {
+                break;
+            }
+        }
+        if (!str_contains($tlsResponse, 'a0 OK') || !stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+            fclose($socket);
+            throw new RuntimeException('IMAP STARTTLS se nezdarilo.');
+        }
+    }
+    fwrite($socket, "a1 LOGIN \"" . addcslashes($imap['username'], "\\\"") . "\" \"" . addcslashes($imap['password'], "\\\"") . "\"\r\n");
+    $response = '';
+    while (($line = fgets($socket, 2048)) !== false) {
+        $response .= $line;
+        if (str_starts_with($line, 'a1 ')) {
+            break;
+        }
+    }
+    fwrite($socket, "a2 LOGOUT\r\n");
+    fclose($socket);
+    if (!str_contains($response, 'a1 OK')) {
+        throw new RuntimeException('IMAP prihlaseni se nezdarilo.');
     }
 }
 
@@ -215,14 +273,25 @@ function importRecipients(PDO $pdo): void
     }
     fclose($handle);
 
-    $stmt = $pdo->prepare('INSERT INTO recipients (email, name, status, created_at) VALUES (?, ?, "active", ?) ON CONFLICT(email) DO UPDATE SET name=excluded.name, status="active"');
+    $listId = resolveContactList($pdo, trim((string)($_POST['list_name'] ?? '')));
+    $stmt = $pdo->prepare('INSERT INTO recipients (list_id, email, name, status, created_at) VALUES (?, ?, ?, "active", ?) ON CONFLICT(email) DO UPDATE SET list_id=excluded.list_id, name=excluded.name, status="active"');
     foreach ($rows as $row) {
         $email = trim((string)($row[$emailIndex === false ? 0 : $emailIndex] ?? ''));
         $name = trim((string)($row[$nameIndex === false ? 1 : $nameIndex] ?? ''));
         if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $stmt->execute([$email, $name, date('c')]);
+            $stmt->execute([$listId, $email, $name, date('c')]);
         }
     }
+}
+
+function resolveContactList(PDO $pdo, string $name): int
+{
+    $name = $name !== '' ? $name : 'Vychozi seznam';
+    $stmt = $pdo->prepare('INSERT OR IGNORE INTO contact_lists (name, created_at) VALUES (?, ?)');
+    $stmt->execute([$name, date('c')]);
+    $find = $pdo->prepare('SELECT id FROM contact_lists WHERE name=?');
+    $find->execute([$name]);
+    return (int)$find->fetchColumn();
 }
 
 function sendBatch(PDO $pdo, array $config, ?int $campaignId = null): string
@@ -244,11 +313,13 @@ function sendBatch(PDO $pdo, array $config, ?int $campaignId = null): string
     $stmt = $pdo->prepare('
         SELECT r.* FROM recipients r
         WHERE r.status="active"
+        AND r.list_id=?
         AND NOT EXISTS (SELECT 1 FROM send_logs l WHERE l.campaign_id=? AND l.recipient_id=r.id AND l.status="sent")
         ORDER BY r.id ASC LIMIT ?
     ');
-    $stmt->bindValue(1, (int)$campaign['id'], PDO::PARAM_INT);
-    $stmt->bindValue(2, $limit, PDO::PARAM_INT);
+    $stmt->bindValue(1, (int)($campaign['list_id'] ?? 1), PDO::PARAM_INT);
+    $stmt->bindValue(2, (int)$campaign['id'], PDO::PARAM_INT);
+    $stmt->bindValue(3, $limit, PDO::PARAM_INT);
     $stmt->execute();
     $recipients = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $mailer = new SmtpMailer($config);
@@ -453,8 +524,11 @@ function renderApp(PDO $pdo, ?array $flash): void
     $recipients = (int)$pdo->query('SELECT COUNT(*) FROM recipients WHERE status="active"')->fetchColumn();
     $recipientRows = recipientRows($pdo);
     $logs = $pdo->query('SELECT l.*, c.name campaign FROM send_logs l LEFT JOIN campaigns c ON c.id=l.campaign_id ORDER BY l.id DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
-    $current = $campaigns[0] ?? ['id' => 0, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den {{name}},</p><p>...</p>', 'daily_limit' => 300, 'batch_limit' => 10, 'auto_daily_limit' => 1, 'status' => 'draft'];
+    $lists = contactLists($pdo);
+    $current = $campaigns[0] ?? ['id' => 0, 'list_id' => 1, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den,</p><p>...</p>', 'daily_limit' => 300, 'batch_limit' => 10, 'auto_daily_limit' => 1, 'status' => 'draft'];
     $pace = campaignDailyLimit($pdo, $current);
+    $view = in_array($_GET['view'] ?? 'overview', ['overview', 'contacts', 'campaigns', 'config'], true) ? $_GET['view'] : 'overview';
+    $overview = overviewStats($pdo, $current, $pace, $config);
     ?><!doctype html>
 <html lang="cs">
 <head>
@@ -468,20 +542,43 @@ function renderApp(PDO $pdo, ?array $flash): void
     <strong>Email rozesilac</strong>
     <a href="?logout=1">Odhlasit</a>
 </header>
+<nav class="tabs">
+    <a class="<?= $view === 'overview' ? 'active' : '' ?>" href="?view=overview">Prehled</a>
+    <a class="<?= $view === 'contacts' ? 'active' : '' ?>" href="?view=contacts">Kontakty</a>
+    <a class="<?= $view === 'campaigns' ? 'active' : '' ?>" href="?view=campaigns">Kampane</a>
+    <a class="<?= $view === 'config' ? 'active' : '' ?>" href="?view=config">Konfigurace</a>
+</nav>
 <main>
     <?php renderFlash($flash); ?>
-    <section class="stats">
-        <div><span>Prijemci</span><strong><?= $recipients ?></strong></div>
-        <div><span>Kampane</span><strong><?= count($campaigns) ?></strong></div>
-        <div><span>Dnes limit</span><strong><?= h((string)$pace['limit']) ?></strong></div>
-    </section>
 
+    <?php if ($view === 'overview'): ?>
+    <section class="stats">
+        <div><span>Kontakty</span><strong><?= $recipients ?></strong></div>
+        <div><span>Osloveno</span><strong><?= h((string)$overview['contacted']) ?></strong></div>
+        <div><span>Otevreno</span><strong><?= h((string)$overview['opened']) ?></strong></div>
+        <div><span>Kliknuti</span><strong><?= h((string)$overview['clicks']) ?></strong></div>
+        <div><span>Dnes odeslano</span><strong><?= h((string)$overview['sent_today']) ?></strong><small><?= h($config['from_email']) ?></small></div>
+        <div><span>Dnes zbyva</span><strong><?= h((string)$overview['remaining_today']) ?></strong></div>
+        <div><span>Dnes limit</span><strong><?= h((string)$pace['limit']) ?></strong></div>
+        <div><span>Open rate</span><strong><?= h($overview['open_rate']) ?> %</strong></div>
+        <div><span>Click-through</span><strong><?= h($overview['ctr']) ?> %</strong></div>
+    </section>
+    <section class="panel">
+        <h2>Stav kampane</h2>
+        <table><thead><tr><th>Kampan</th><th>Stav</th><th>Seznam</th><th>Planovano</th><th>Osloveno</th><th>Otevreno</th><th>Kliky</th><th>Zbyva dnes</th></tr></thead><tbody>
+            <tr><td><?= h($current['name'] ?: 'Bez kampane') ?></td><td><?= h($current['status'] ?? 'draft') ?></td><td><?= h(listName($lists, (int)($current['list_id'] ?? 1))) ?></td><td><?= h((string)$overview['planned']) ?></td><td><?= h((string)$overview['campaign_sent']) ?></td><td><?= h((string)$overview['campaign_opened']) ?></td><td><?= h((string)$overview['campaign_clicks']) ?></td><td><?= h((string)$overview['remaining_today']) ?></td></tr>
+        </tbody></table>
+    </section>
+    <?php endif; ?>
+
+    <?php if ($view === 'campaigns'): ?>
     <section class="grid">
         <form method="post" class="panel campaign" id="campaignForm">
             <input type="hidden" name="action" value="save_campaign">
             <input type="hidden" name="id" value="<?= h((string)$current['id']) ?>">
             <input type="hidden" name="body_html" id="bodyHtml">
             <h2>Kampan</h2>
+            <label>Seznam kontaktu<select name="list_id"><?php foreach ($lists as $list) echo '<option value="'.h((string)$list['id']).'" '.((int)$current['list_id']===(int)$list['id']?'selected':'').'>'.h($list['name']).'</option>'; ?></select></label>
             <label>Nazev<input name="name" value="<?= h($current['name']) ?>" required></label>
             <label>Predmet<input name="subject" value="<?= h($current['subject']) ?>" required></label>
             <div class="row">
@@ -502,37 +599,6 @@ function renderApp(PDO $pdo, ?array $flash): void
         </form>
 
         <div class="side">
-            <form method="post" enctype="multipart/form-data" class="panel">
-                <input type="hidden" name="action" value="import_recipients">
-                <h2>Import prijemcu</h2>
-                <p>CSV sloupce: email, name. Bez hlavicky vezmu prvni sloupec jako email.</p>
-                <input type="file" name="csv" accept=".csv,text/csv" required>
-                <button>Importovat</button>
-            </form>
-
-            <form method="post" class="panel">
-                <input type="hidden" name="action" value="save_settings">
-                <h2>Email ucet</h2>
-                <label>Odesilatel email<input type="email" name="from_email" value="<?= h($config['from_email']) ?>" required></label>
-                <label>Odesilatel jmeno<input name="from_name" value="<?= h($config['from_name']) ?>" required></label>
-                <label>SMTP server<input name="smtp_host" value="<?= h($config['smtp']['host']) ?>" required></label>
-                <div class="row">
-                    <label>Port<input type="number" name="smtp_port" value="<?= h((string)$config['smtp']['port']) ?>" required></label>
-                    <label>Sifrovani<select name="smtp_encryption"><option value="tls" <?= $config['smtp']['encryption']==='tls'?'selected':'' ?>>TLS</option><option value="ssl" <?= $config['smtp']['encryption']==='ssl'?'selected':'' ?>>SSL</option><option value="" <?= $config['smtp']['encryption']===''?'selected':'' ?>>Bez</option></select></label>
-                </div>
-                <label>SMTP uzivatel<input name="smtp_username" value="<?= h($config['smtp']['username']) ?>" required></label>
-                <label>SMTP heslo<input type="password" name="smtp_password" placeholder="Nechat prazdne = nemenit"></label>
-                <label>Nove admin heslo<input type="password" name="new_password" minlength="10" placeholder="Nechat prazdne = nemenit"></label>
-                <button>Ulozit email</button>
-            </form>
-
-            <form method="post" class="panel">
-                <input type="hidden" name="action" value="test_smtp">
-                <h2>SMTP konektivita</h2>
-                <p>Overi pripojeni, STARTTLS/SSL a prihlaseni. Email neodesila.</p>
-                <button>Otestovat SMTP</button>
-            </form>
-
             <form method="post" class="panel">
                 <input type="hidden" name="action" value="test_send">
                 <h2>Test</h2>
@@ -549,18 +615,43 @@ function renderApp(PDO $pdo, ?array $flash): void
             </form>
         </div>
     </section>
+    <section class="panel">
+        <h2>Posledni odeslani</h2>
+        <table><thead><tr><th>Kdy</th><th>Kampan</th><th>Email</th><th>Stav</th><th>Zprava</th></tr></thead><tbody>
+        <?php foreach ($logs as $log): ?><tr><td><?= h($log['sent_at']) ?></td><td><?= h($log['campaign']) ?></td><td><?= h($log['email']) ?></td><td><?= h($log['status']) ?></td><td><?= h($log['message']) ?></td></tr><?php endforeach; ?>
+        </tbody></table>
+    </section>
+    <?php endif; ?>
 
+    <?php if ($view === 'contacts'): ?>
+    <section class="grid">
+        <form method="post" enctype="multipart/form-data" class="panel">
+            <input type="hidden" name="action" value="import_recipients">
+            <h2>Import kontaktu</h2>
+            <p>CSV muze obsahovat jen emaily. Jmeno neni potreba.</p>
+            <label>Seznam kontaktu<input name="list_name" value="Vychozi seznam" required></label>
+            <input type="file" name="csv" accept=".csv,text/csv" required>
+            <button>Importovat</button>
+        </form>
+        <section class="panel">
+            <h2>Seznamy</h2>
+            <table><thead><tr><th>Seznam</th><th>Kontakty</th></tr></thead><tbody>
+            <?php foreach ($lists as $list): ?><tr><td><?= h($list['name']) ?></td><td><?= h((string)$list['contacts']) ?></td></tr><?php endforeach; ?>
+            </tbody></table>
+        </section>
+    </section>
     <section class="panel">
         <h2>Kontakty</h2>
         <div class="note">
             Osloven znamena, ze SMTP server email prijal. Otevreni merime pres pixel a kliky pres sledovane odkazy; nektere emailove aplikace obrazky blokuji nebo prednacitaji, proto jsou to orientacni metriky. Dalsi krok pro odpovedi je IMAP napojeni schranky.
         </div>
         <table>
-            <thead><tr><th>Email</th><th>Osloven</th><th>Doruceni</th><th>Otevrel</th><th>Kliknul</th><th>Odpovedel</th><th>Posledni aktivita</th></tr></thead>
+            <thead><tr><th>Email</th><th>Seznam</th><th>Osloven</th><th>Doruceni</th><th>Otevrel</th><th>Kliknul</th><th>Odpovedel</th><th>Posledni aktivita</th></tr></thead>
             <tbody>
             <?php foreach ($recipientRows as $row): ?>
                 <tr>
                     <td><?= h($row['email']) ?></td>
+                    <td><?= h($row['list_name'] ?: 'Vychozi seznam') ?></td>
                     <td><?= statusBadge((int)$row['sent_count'] > 0 ? 'ano' : 'ne') ?></td>
                     <td><?= statusBadge((int)$row['sent_count'] > 0 ? 'smtp prijato' : 'nezjisteno') ?></td>
                     <td><?= statusBadge($row['opened_at'] ? 'ano' : 'ne') ?></td>
@@ -572,13 +663,47 @@ function renderApp(PDO $pdo, ?array $flash): void
             </tbody>
         </table>
     </section>
+    <?php endif; ?>
 
+    <?php if ($view === 'config'): ?>
     <section class="panel">
-        <h2>Posledni odeslani</h2>
-        <table><thead><tr><th>Kdy</th><th>Kampan</th><th>Email</th><th>Stav</th><th>Zprava</th></tr></thead><tbody>
-        <?php foreach ($logs as $log): ?><tr><td><?= h($log['sent_at']) ?></td><td><?= h($log['campaign']) ?></td><td><?= h($log['email']) ?></td><td><?= h($log['status']) ?></td><td><?= h($log['message']) ?></td></tr><?php endforeach; ?>
-        </tbody></table>
+        <form method="post">
+            <input type="hidden" name="action" value="save_settings">
+            <h2>Email a IMAP</h2>
+            <div class="grid two">
+                <div>
+                    <h2>SMTP odesilani</h2>
+                    <label>Odesilatel email<input type="email" name="from_email" value="<?= h($config['from_email']) ?>" required></label>
+                    <label>Odesilatel jmeno<input name="from_name" value="<?= h($config['from_name']) ?>" required></label>
+                    <label>SMTP server<input name="smtp_host" value="<?= h($config['smtp']['host']) ?>" required></label>
+                    <div class="row">
+                        <label>Port<input type="number" name="smtp_port" value="<?= h((string)$config['smtp']['port']) ?>" required></label>
+                        <label>Sifrovani<select name="smtp_encryption"><option value="tls" <?= $config['smtp']['encryption']==='tls'?'selected':'' ?>>TLS</option><option value="ssl" <?= $config['smtp']['encryption']==='ssl'?'selected':'' ?>>SSL</option><option value="" <?= $config['smtp']['encryption']===''?'selected':'' ?>>Bez</option></select></label>
+                    </div>
+                    <label>SMTP uzivatel<input name="smtp_username" value="<?= h($config['smtp']['username']) ?>" required></label>
+                    <label>SMTP heslo<input type="password" name="smtp_password" placeholder="Nechat prazdne = nemenit"></label>
+                </div>
+                <div>
+                    <h2>IMAP odpovedi</h2>
+                    <label>IMAP server<input name="imap_host" value="<?= h($config['imap']['host']) ?>"></label>
+                    <div class="row">
+                        <label>Port<input type="number" name="imap_port" value="<?= h((string)$config['imap']['port']) ?>"></label>
+                        <label>Sifrovani<select name="imap_encryption"><option value="ssl" <?= $config['imap']['encryption']==='ssl'?'selected':'' ?>>SSL</option><option value="tls" <?= $config['imap']['encryption']==='tls'?'selected':'' ?>>TLS/STARTTLS</option><option value="" <?= $config['imap']['encryption']===''?'selected':'' ?>>Bez</option></select></label>
+                    </div>
+                    <label>IMAP uzivatel<input name="imap_username" value="<?= h($config['imap']['username']) ?>"></label>
+                    <label>IMAP heslo<input type="password" name="imap_password" placeholder="Nechat prazdne = nemenit"></label>
+                    <div class="note">IMAP pouzijeme pro rozpoznavani odpovedi podle emailu odesilatele. Samotne parovani odpovedi bude dalsi krok po overeni pripojeni.</div>
+                </div>
+            </div>
+            <label>Nove admin heslo<input type="password" name="new_password" minlength="10" placeholder="Nechat prazdne = nemenit"></label>
+            <button>Ulozit konfiguraci</button>
+        </form>
     </section>
+    <section class="grid two">
+        <form method="post" class="panel"><input type="hidden" name="action" value="test_smtp"><h2>SMTP konektivita</h2><p>Overi pripojeni, STARTTLS/SSL a prihlaseni. Email neodesila.</p><button>Otestovat SMTP</button></form>
+        <form method="post" class="panel"><input type="hidden" name="action" value="test_imap"><h2>IMAP konektivita</h2><p>Overi pripojeni a prihlaseni do prijate posty.</p><button>Otestovat IMAP</button></form>
+    </section>
+    <?php endif; ?>
 </main>
 <script src="assets/app.js"></script>
 </body></html><?php
@@ -588,6 +713,7 @@ function recipientRows(PDO $pdo): array
 {
     return $pdo->query('
         SELECT r.email,
+               cl.name list_name,
                r.created_at,
                COUNT(CASE WHEN l.status="sent" THEN 1 END) sent_count,
                MAX(CASE WHEN l.status="sent" THEN l.sent_at ELSE "" END) sent_at,
@@ -601,12 +727,78 @@ function recipientRows(PDO $pdo): array
                    ELSE ""
                END) last_activity
         FROM recipients r
+        LEFT JOIN contact_lists cl ON cl.id=r.list_id
         LEFT JOIN send_logs l ON l.recipient_id=r.id
         WHERE r.status="active"
         GROUP BY r.id
         ORDER BY last_activity DESC, r.id DESC
         LIMIT 250
     ')->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function contactLists(PDO $pdo): array
+{
+    return $pdo->query('
+        SELECT cl.id, cl.name, COUNT(r.id) contacts
+        FROM contact_lists cl
+        LEFT JOIN recipients r ON r.list_id=cl.id AND r.status="active"
+        GROUP BY cl.id
+        ORDER BY cl.id ASC
+    ')->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function listName(array $lists, int $id): string
+{
+    foreach ($lists as $list) {
+        if ((int)$list['id'] === $id) {
+            return $list['name'];
+        }
+    }
+    return 'Vychozi seznam';
+}
+
+function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): array
+{
+    $total = (int)$pdo->query('SELECT COUNT(*) FROM recipients WHERE status="active"')->fetchColumn();
+    $contacted = (int)$pdo->query('SELECT COUNT(DISTINCT recipient_id) FROM send_logs WHERE status="sent" AND recipient_id IS NOT NULL')->fetchColumn();
+    $opened = (int)$pdo->query('SELECT COUNT(DISTINCT recipient_id) FROM send_logs WHERE opened_at!="" AND recipient_id IS NOT NULL')->fetchColumn();
+    $clickedContacts = (int)$pdo->query('SELECT COUNT(DISTINCT recipient_id) FROM send_logs WHERE click_count>0 AND recipient_id IS NOT NULL')->fetchColumn();
+    $clicks = (int)$pdo->query('SELECT COALESCE(SUM(click_count),0) FROM send_logs')->fetchColumn();
+    $today = date('Y-m-d');
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM send_logs WHERE status="sent" AND substr(sent_at,1,10)=?');
+    $stmt->execute([$today]);
+    $sentToday = (int)$stmt->fetchColumn();
+
+    $campaignId = (int)($campaign['id'] ?? 0);
+    $plannedStmt = $pdo->prepare('SELECT COUNT(*) FROM recipients WHERE status="active" AND list_id=?');
+    $plannedStmt->execute([(int)($campaign['list_id'] ?? 1)]);
+    $planned = (int)$plannedStmt->fetchColumn();
+
+    $campaignSent = $campaignOpened = $campaignClicks = 0;
+    if ($campaignId > 0) {
+        $metric = $pdo->prepare('SELECT COUNT(*) sent, COUNT(NULLIF(opened_at, "")) opened, COALESCE(SUM(click_count),0) clicks FROM send_logs WHERE campaign_id=? AND status="sent"');
+        $metric->execute([$campaignId]);
+        $row = $metric->fetch(PDO::FETCH_ASSOC) ?: [];
+        $campaignSent = (int)($row['sent'] ?? 0);
+        $campaignOpened = (int)($row['opened'] ?? 0);
+        $campaignClicks = (int)($row['clicks'] ?? 0);
+    }
+
+    return [
+        'total' => $total,
+        'contacted' => $contacted,
+        'opened' => $opened,
+        'clicked_contacts' => $clickedContacts,
+        'clicks' => $clicks,
+        'sent_today' => $sentToday,
+        'remaining_today' => max(0, (int)$pace['limit'] - $sentToday),
+        'planned' => $planned,
+        'campaign_sent' => $campaignSent,
+        'campaign_opened' => $campaignOpened,
+        'campaign_clicks' => $campaignClicks,
+        'open_rate' => $campaignSent > 0 ? number_format($campaignOpened / $campaignSent * 100, 1, '.', '') : '0.0',
+        'ctr' => $campaignSent > 0 ? number_format($campaignClicks / $campaignSent * 100, 1, '.', '') : '0.0',
+    ];
 }
 
 function statusBadge(string $text): string
