@@ -9,11 +9,20 @@ require __DIR__ . '/src/SmtpMailer.php';
 $configPath = __DIR__ . '/config.php';
 $baseConfig = file_exists($configPath) ? require $configPath : require __DIR__ . '/config.example.php';
 $databaseConfig = $baseConfig['database'] ?? ['driver' => 'sqlite', 'path' => $baseConfig['database_path'] ?? (__DIR__ . '/storage/app.sqlite')];
-$db = new Database($databaseConfig);
+$dbWarning = null;
+try {
+    $db = new Database($databaseConfig);
+} catch (Throwable $e) {
+    $dbWarning = 'MySQL pripojeni selhalo, aplikace docasne bezi nad SQLite. Detail: ' . $e->getMessage();
+    $db = new Database(['driver' => 'sqlite', 'path' => __DIR__ . '/storage/app.sqlite']);
+}
 $pdo = $db->pdo();
 $config = effectiveConfig($pdo, $baseConfig);
 $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
+if ($dbWarning && !$flash) {
+    $flash = ['error', $dbWarning];
+}
 
 if (isset($_GET['open'])) {
     trackOpen($pdo, (string)$_GET['open']);
@@ -54,7 +63,7 @@ if (!isConfigured($config)) {
 if (isset($_POST['password'])) {
     if (password_verify((string)$_POST['password'], (string)$config['app_password_hash'])) {
         $_SESSION['auth'] = true;
-        header('Location: dashboard');
+        header('Location: ./?route=dashboard');
         exit;
     }
     $flash = ['error', 'Nespravne heslo.'];
@@ -638,8 +647,8 @@ function currentView(): string
 
 function routeUrl(string $view): string
 {
-    $map = ['overview' => 'dashboard', 'contacts' => 'contacts', 'campaigns' => 'campaigns', 'config' => 'config'];
-    return $map[$view] ?? 'dashboard';
+    $map = ['overview' => './?route=dashboard', 'contacts' => './?route=contacts', 'campaigns' => './?route=campaigns', 'config' => './?route=config'];
+    return $map[$view] ?? './?route=dashboard';
 }
 
 function renderApp(PDO $pdo, ?array $flash): void
