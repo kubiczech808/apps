@@ -17,11 +17,23 @@ try {
     $db = new Database(['driver' => 'sqlite', 'path' => __DIR__ . '/storage/app.sqlite']);
 }
 $pdo = $db->pdo();
+$migrationNotice = null;
+if (($databaseConfig['driver'] ?? '') === 'mysql' && $dbWarning === null) {
+    try {
+        if (migrateSqliteDataToMysqlIfEmpty($pdo, __DIR__ . '/storage/app.sqlite')) {
+            $migrationNotice = 'Data byla prenesena z puvodni SQLite databaze do MySQL.';
+        }
+    } catch (Throwable $e) {
+        $dbWarning = 'MySQL bezi, ale migrace dat ze SQLite selhala: ' . $e->getMessage();
+    }
+}
 $config = effectiveConfig($pdo, $baseConfig);
 $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
 if ($dbWarning && !$flash) {
     $flash = ['error', $dbWarning];
+} elseif ($migrationNotice && !$flash) {
+    $flash = ['ok', $migrationNotice];
 }
 
 if (isset($_GET['open'])) {
@@ -158,6 +170,87 @@ function handlePost(PDO $pdo, array $config): ?string
     }
 
     return null;
+}
+
+function migrateSqliteDataToMysqlIfEmpty(PDO $mysql, string $sqlitePath): bool
+{
+    if (!file_exists($sqlitePath)) {
+        return false;
+    }
+
+    if (!databaseIsPortableTargetEmpty($mysql, 'mysql')) {
+        return false;
+    }
+
+    $sqlite = new PDO('sqlite:' . $sqlitePath);
+    $sqlite->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $sqlite->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+
+    if (databaseIsPortableTargetEmpty($sqlite, 'sqlite')) {
+        return false;
+    }
+
+    $tables = ['settings', 'contact_lists', 'recipients', 'import_runs', 'campaigns', 'send_logs', 'tracking_events'];
+    $mysql->beginTransaction();
+    try {
+        foreach (array_reverse($tables) as $table) {
+            $mysql->exec('DELETE FROM ' . $table);
+        }
+
+        copySettingsTable($sqlite, $mysql);
+        foreach (['contact_lists', 'recipients', 'import_runs', 'campaigns', 'send_logs', 'tracking_events'] as $table) {
+            copyWholeTable($sqlite, $mysql, $table);
+        }
+
+        $mysql->commit();
+        return true;
+    } catch (Throwable $e) {
+        $mysql->rollBack();
+        throw $e;
+    }
+}
+
+function databaseIsPortableTargetEmpty(PDO $pdo, string $driver): bool
+{
+    $settingsColumn = $driver === 'mysql' ? 'setting_key' : 'key';
+    $checks = [
+        "SELECT COUNT(*) FROM settings WHERE $settingsColumn IS NOT NULL",
+        'SELECT COUNT(*) FROM recipients',
+        'SELECT COUNT(*) FROM import_runs',
+        'SELECT COUNT(*) FROM campaigns',
+        'SELECT COUNT(*) FROM send_logs',
+        'SELECT COUNT(*) FROM tracking_events',
+    ];
+    foreach ($checks as $sql) {
+        if ((int)$pdo->query($sql)->fetchColumn() > 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function copySettingsTable(PDO $sqlite, PDO $mysql): void
+{
+    $rows = $sqlite->query('SELECT key, value FROM settings')->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $mysql->prepare('INSERT INTO settings (setting_key, value) VALUES (?, ?)');
+    foreach ($rows as $row) {
+        $stmt->execute([$row['key'], $row['value']]);
+    }
+}
+
+function copyWholeTable(PDO $source, PDO $target, string $table): void
+{
+    $rows = $source->query('SELECT * FROM ' . $table)->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) {
+        return;
+    }
+    $columns = array_keys($rows[0]);
+    $columnSql = implode(', ', $columns);
+    $placeholders = implode(', ', array_fill(0, count($columns), '?'));
+    $stmt = $target->prepare('INSERT INTO ' . $table . ' (' . $columnSql . ') VALUES (' . $placeholders . ')');
+    foreach ($rows as $row) {
+        $stmt->execute(array_map(static fn($column) => $row[$column], $columns));
+    }
 }
 
 function effectiveConfig(PDO $pdo, array $config): array
