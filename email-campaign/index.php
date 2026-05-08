@@ -864,31 +864,40 @@ function renderApp(PDO $pdo, ?array $flash): void
 
 function recipientRows(PDO $pdo): array
 {
-    return $pdo->query("
+    return $pdo->query('
         SELECT r.email,
                r.subject_name,
                r.website,
                cl.name list_name,
                r.created_at,
-               COUNT(CASE WHEN l.status=\"sent\" THEN 1 END) sent_count,
-               MAX(CASE WHEN l.status=\"sent\" THEN l.sent_at ELSE '' END) sent_at,
-               MAX(l.opened_at) opened_at,
-               MAX(l.clicked_at) clicked_at,
-               SUM(COALESCE(l.click_count, 0)) click_count,
-               MAX(CASE
-                   WHEN l.clicked_at != '' THEN l.clicked_at
-                   WHEN l.opened_at != '' THEN l.opened_at
-                   WHEN l.status=\"sent\" THEN l.sent_at
-                   ELSE ''
-               END) last_activity
+               COALESCE(logs.sent_count, 0) sent_count,
+               logs.sent_at,
+               logs.opened_at,
+               logs.clicked_at,
+               COALESCE(logs.click_count, 0) click_count,
+               COALESCE(logs.last_activity, "") last_activity
         FROM recipients r
         LEFT JOIN contact_lists cl ON cl.id=r.list_id
-        LEFT JOIN send_logs l ON l.recipient_id=r.id
-        WHERE r.status=\"active\"
-        GROUP BY r.id
+        LEFT JOIN (
+            SELECT recipient_id,
+                   SUM(CASE WHEN status="sent" THEN 1 ELSE 0 END) sent_count,
+                   MAX(CASE WHEN status="sent" THEN sent_at ELSE "" END) sent_at,
+                   MAX(opened_at) opened_at,
+                   MAX(clicked_at) clicked_at,
+                   SUM(COALESCE(click_count, 0)) click_count,
+                   MAX(CASE
+                       WHEN clicked_at != "" THEN clicked_at
+                       WHEN opened_at != "" THEN opened_at
+                       WHEN status="sent" THEN sent_at
+                       ELSE ""
+                   END) last_activity
+            FROM send_logs
+            GROUP BY recipient_id
+        ) logs ON logs.recipient_id=r.id
+        WHERE r.status="active"
         ORDER BY last_activity DESC, r.id DESC
         LIMIT 250
-    ")->fetchAll(PDO::FETCH_ASSOC);
+    ')->fetchAll(PDO::FETCH_ASSOC);
 }
 
 function importRows(PDO $pdo): array
