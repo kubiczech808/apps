@@ -14,6 +14,8 @@ Jednoducha PHP aplikace pro postupne odesilani pripraveneho emailu na importovan
 - limit na jedno spusteni, aby slo rozesilku rozlozit do dne
 - automaticky denni limit podle odesilacich dnu a SMTP chyb
 - seznam kontaktu se stavem osloveni, otevreni a prokliku
+- kontakty s nazvem subjektu a webem, email je unikatni identifikator
+- historie importu vcetne poctu vlozenych, aktualizovanych a preskocenych radku
 - interní cron endpoint pro automaticke spousteni
 - SQLite databaze bez nutnosti spravovat MySQL
 
@@ -47,12 +49,12 @@ Cron token se generuje automaticky pri prvnim nastaveni aplikace a neni bezna po
 Preferovany format:
 
 ```csv
-email,name
-jana@example.cz,Jana
-petr@example.cz,Petr
+email,subject_name,website
+jana@example.cz,Masazni studio Jana,https://example.cz
+petr@example.cz,Petr masaze,example.com
 ```
 
-Bez hlavicky aplikace bere prvni sloupec jako email a druhy jako jmeno.
+Bez hlavicky aplikace bere prvni sloupec jako email. Pokud importujes email, ktery uz v danem seznamu existuje, kontakt se aktualizuje novymi neprazdnymi udaji. Prazdny subjekt nebo web v CSV neprepisuje existujici hodnotu.
 
 ## Dorucitelnost
 

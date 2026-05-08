@@ -126,8 +126,7 @@ function handlePost(PDO $pdo, array $config): ?string
     }
 
     if ($action === 'import_recipients') {
-        importRecipients($pdo);
-        return 'Prijemci importovani.';
+        return importRecipients($pdo);
     }
 
     if ($action === 'test_send') {
@@ -251,7 +250,7 @@ function testImapConnection(array $imap): void
     }
 }
 
-function importRecipients(PDO $pdo): void
+function importRecipients(PDO $pdo): string
 {
     if (!isset($_FILES['csv']) || $_FILES['csv']['error'] !== UPLOAD_ERR_OK) {
         throw new RuntimeException('CSV soubor se nepodarilo nahrat.');
@@ -265,8 +264,10 @@ function importRecipients(PDO $pdo): void
         throw new RuntimeException('CSV je prazdne.');
     }
     $headers = array_map(fn($v) => strtolower(trim((string)$v)), $first);
-    $emailIndex = array_search('email', $headers, true);
-    $nameIndex = array_search('name', $headers, true);
+    $emailIndex = headerIndex($headers, ['email', 'e-mail', 'mail']);
+    $nameIndex = headerIndex($headers, ['name', 'jmeno', 'jméno']);
+    $subjectIndex = headerIndex($headers, ['subject_name', 'subject', 'nazev', 'název', 'firma', 'subjekt', 'centrum', 'studio']);
+    $websiteIndex = headerIndex($headers, ['website', 'web', 'url', 'www', 'webovka']);
     $rows = $emailIndex === false ? [$first] : [];
     while (($row = fgetcsv($handle, 0, ',')) !== false) {
         $rows[] = $row;
@@ -274,14 +275,66 @@ function importRecipients(PDO $pdo): void
     fclose($handle);
 
     $listId = resolveContactList($pdo, trim((string)($_POST['list_name'] ?? '')));
-    $stmt = $pdo->prepare('INSERT INTO recipients (list_id, email, name, status, created_at) VALUES (?, ?, ?, "active", ?) ON CONFLICT(email) DO UPDATE SET list_id=excluded.list_id, name=excluded.name, status="active"');
+    $existingStmt = $pdo->prepare('SELECT list_id, subject_name, website, name FROM recipients WHERE email=?');
+    $insertStmt = $pdo->prepare('INSERT INTO recipients (list_id, email, subject_name, website, name, status, created_at) VALUES (?, ?, ?, ?, ?, "active", ?)');
+    $updateStmt = $pdo->prepare('UPDATE recipients SET list_id=?, subject_name=?, website=?, name=?, status="active" WHERE email=?');
+    $inserted = 0;
+    $updated = 0;
+    $skipped = 0;
+    $total = 0;
     foreach ($rows as $row) {
+        $total++;
         $email = trim((string)($row[$emailIndex === false ? 0 : $emailIndex] ?? ''));
         $name = trim((string)($row[$nameIndex === false ? 1 : $nameIndex] ?? ''));
-        if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $stmt->execute([$listId, $email, $name, date('c')]);
+        $subjectName = trim((string)($row[$subjectIndex === false ? -1 : $subjectIndex] ?? ''));
+        $website = normalizeWebsite(trim((string)($row[$websiteIndex === false ? -1 : $websiteIndex] ?? '')));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $skipped++;
+            continue;
+        }
+        $existingStmt->execute([$email]);
+        $existing = $existingStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$existing) {
+            $insertStmt->execute([$listId, $email, $subjectName, $website, $name, date('c')]);
+            $inserted++;
+            continue;
+        }
+        $newSubject = $subjectName !== '' ? $subjectName : (string)$existing['subject_name'];
+        $newWebsite = $website !== '' ? $website : (string)$existing['website'];
+        $newName = $name !== '' ? $name : (string)$existing['name'];
+        $changed = (int)$existing['list_id'] !== $listId || $newSubject !== (string)$existing['subject_name'] || $newWebsite !== (string)$existing['website'] || $newName !== (string)$existing['name'];
+        if ($changed) {
+            $updateStmt->execute([$listId, $newSubject, $newWebsite, $newName, $email]);
+            $updated++;
+        } else {
+            $skipped++;
         }
     }
+    $log = $pdo->prepare('INSERT INTO import_runs (list_id, list_name, file_name, inserted_count, updated_count, skipped_count, total_rows, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    $log->execute([$listId, contactListName($pdo, $listId), $_FILES['csv']['name'] ?? '', $inserted, $updated, $skipped, $total, date('c')]);
+    return "Import hotov: vlozeno $inserted, aktualizovano $updated, preskoceno $skipped.";
+}
+
+function headerIndex(array $headers, array $names): int|false
+{
+    foreach ($names as $name) {
+        $idx = array_search($name, $headers, true);
+        if ($idx !== false) {
+            return $idx;
+        }
+    }
+    return false;
+}
+
+function normalizeWebsite(string $website): string
+{
+    if ($website === '') {
+        return '';
+    }
+    if (!preg_match('/^https?:\/\//i', $website)) {
+        return 'https://' . $website;
+    }
+    return $website;
 }
 
 function resolveContactList(PDO $pdo, string $name): int
@@ -292,6 +345,13 @@ function resolveContactList(PDO $pdo, string $name): int
     $find = $pdo->prepare('SELECT id FROM contact_lists WHERE name=?');
     $find->execute([$name]);
     return (int)$find->fetchColumn();
+}
+
+function contactListName(PDO $pdo, int $id): string
+{
+    $stmt = $pdo->prepare('SELECT name FROM contact_lists WHERE id=?');
+    $stmt->execute([$id]);
+    return (string)($stmt->fetchColumn() ?: 'Vychozi seznam');
 }
 
 function sendBatch(PDO $pdo, array $config, ?int $campaignId = null): string
@@ -523,6 +583,7 @@ function renderApp(PDO $pdo, ?array $flash): void
     $campaigns = $pdo->query('SELECT * FROM campaigns ORDER BY id DESC')->fetchAll(PDO::FETCH_ASSOC);
     $recipients = (int)$pdo->query('SELECT COUNT(*) FROM recipients WHERE status="active"')->fetchColumn();
     $recipientRows = recipientRows($pdo);
+    $importRows = importRows($pdo);
     $logs = $pdo->query('SELECT l.*, c.name campaign FROM send_logs l LEFT JOIN campaigns c ON c.id=l.campaign_id ORDER BY l.id DESC LIMIT 20')->fetchAll(PDO::FETCH_ASSOC);
     $lists = contactLists($pdo);
     $current = $campaigns[0] ?? ['id' => 0, 'list_id' => 1, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den,</p><p>...</p>', 'daily_limit' => 300, 'batch_limit' => 10, 'auto_daily_limit' => 1, 'status' => 'draft'];
@@ -628,7 +689,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         <form method="post" enctype="multipart/form-data" class="panel">
             <input type="hidden" name="action" value="import_recipients">
             <h2>Import kontaktu</h2>
-            <p>CSV muze obsahovat jen emaily. Jmeno neni potreba.</p>
+            <p>CSV muze obsahovat jen emaily, nebo sloupce email, nazev/subjekt a web/website. Email je unikatni identifikator.</p>
             <label>Seznam kontaktu<input name="list_name" value="Vychozi seznam" required></label>
             <input type="file" name="csv" accept=".csv,text/csv" required>
             <button>Importovat</button>
@@ -641,16 +702,24 @@ function renderApp(PDO $pdo, ?array $flash): void
         </section>
     </section>
     <section class="panel">
+        <h2>Historie importu</h2>
+        <table><thead><tr><th>Kdy</th><th>Seznam</th><th>Soubor</th><th>Radku</th><th>Vlozeno</th><th>Aktualizovano</th><th>Preskoceno</th></tr></thead><tbody>
+        <?php foreach ($importRows as $import): ?><tr><td><?= h($import['created_at']) ?></td><td><?= h($import['list_name']) ?></td><td><?= h($import['file_name']) ?></td><td><?= h((string)$import['total_rows']) ?></td><td><?= h((string)$import['inserted_count']) ?></td><td><?= h((string)$import['updated_count']) ?></td><td><?= h((string)$import['skipped_count']) ?></td></tr><?php endforeach; ?>
+        </tbody></table>
+    </section>
+    <section class="panel">
         <h2>Kontakty</h2>
         <div class="note">
             Osloven znamena, ze SMTP server email prijal. Otevreni merime pres pixel a kliky pres sledovane odkazy; nektere emailove aplikace obrazky blokuji nebo prednacitaji, proto jsou to orientacni metriky. Dalsi krok pro odpovedi je IMAP napojeni schranky.
         </div>
         <table>
-            <thead><tr><th>Email</th><th>Seznam</th><th>Osloven</th><th>Doruceni</th><th>Otevrel</th><th>Kliknul</th><th>Odpovedel</th><th>Posledni aktivita</th></tr></thead>
+            <thead><tr><th>Email</th><th>Subjekt</th><th>Web</th><th>Seznam</th><th>Osloven</th><th>Doruceni</th><th>Otevrel</th><th>Kliknul</th><th>Odpovedel</th><th>Posledni aktivita</th></tr></thead>
             <tbody>
             <?php foreach ($recipientRows as $row): ?>
                 <tr>
                     <td><?= h($row['email']) ?></td>
+                    <td><?= h($row['subject_name']) ?></td>
+                    <td><?php if ($row['website']): ?><a href="<?= h($row['website']) ?>" target="_blank" rel="noopener"><?= h($row['website']) ?></a><?php endif; ?></td>
                     <td><?= h($row['list_name'] ?: 'Vychozi seznam') ?></td>
                     <td><?= statusBadge((int)$row['sent_count'] > 0 ? 'ano' : 'ne') ?></td>
                     <td><?= statusBadge((int)$row['sent_count'] > 0 ? 'smtp prijato' : 'nezjisteno') ?></td>
@@ -713,6 +782,8 @@ function recipientRows(PDO $pdo): array
 {
     return $pdo->query('
         SELECT r.email,
+               r.subject_name,
+               r.website,
                cl.name list_name,
                r.created_at,
                COUNT(CASE WHEN l.status="sent" THEN 1 END) sent_count,
@@ -733,6 +804,16 @@ function recipientRows(PDO $pdo): array
         GROUP BY r.id
         ORDER BY last_activity DESC, r.id DESC
         LIMIT 250
+    ')->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function importRows(PDO $pdo): array
+{
+    return $pdo->query('
+        SELECT *
+        FROM import_runs
+        ORDER BY id DESC
+        LIMIT 30
     ')->fetchAll(PDO::FETCH_ASSOC);
 }
 

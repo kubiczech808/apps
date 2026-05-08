@@ -33,8 +33,21 @@ final class Database
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 list_id INTEGER NOT NULL DEFAULT 1,
                 email TEXT NOT NULL UNIQUE,
+                subject_name TEXT DEFAULT '',
+                website TEXT DEFAULT '',
                 name TEXT DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS import_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                list_id INTEGER NOT NULL,
+                list_name TEXT NOT NULL,
+                file_name TEXT DEFAULT '',
+                inserted_count INTEGER NOT NULL DEFAULT 0,
+                updated_count INTEGER NOT NULL DEFAULT 0,
+                skipped_count INTEGER NOT NULL DEFAULT 0,
+                total_rows INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS campaigns (
@@ -79,6 +92,8 @@ final class Database
         ");
         $this->pdo->exec("INSERT OR IGNORE INTO contact_lists (id, name, created_at) VALUES (1, 'Vychozi seznam', '" . date('c') . "')");
         $this->ensureColumn('recipients', 'list_id', 'INTEGER NOT NULL DEFAULT 1');
+        $this->ensureColumn('recipients', 'subject_name', "TEXT DEFAULT ''");
+        $this->ensureColumn('recipients', 'website', "TEXT DEFAULT ''");
         $this->ensureColumn('campaigns', 'list_id', 'INTEGER NOT NULL DEFAULT 1');
         $this->ensureColumn('campaigns', 'batch_limit', 'INTEGER NOT NULL DEFAULT 10');
         $this->ensureColumn('campaigns', 'auto_daily_limit', 'INTEGER NOT NULL DEFAULT 1');
