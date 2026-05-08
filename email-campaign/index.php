@@ -8,7 +8,8 @@ require __DIR__ . '/src/SmtpMailer.php';
 
 $configPath = __DIR__ . '/config.php';
 $baseConfig = file_exists($configPath) ? require $configPath : require __DIR__ . '/config.example.php';
-$db = new Database($baseConfig['database_path']);
+$databaseConfig = $baseConfig['database'] ?? ['driver' => 'sqlite', 'path' => $baseConfig['database_path'] ?? (__DIR__ . '/storage/app.sqlite')];
+$db = new Database($databaseConfig);
 $pdo = $db->pdo();
 $config = effectiveConfig($pdo, $baseConfig);
 $flash = $_SESSION['flash'] ?? null;
@@ -148,7 +149,7 @@ function handlePost(PDO $pdo, array $config): ?string
 
 function effectiveConfig(PDO $pdo, array $config): array
 {
-    $settings = $pdo->query('SELECT key, value FROM settings')->fetchAll(PDO::FETCH_KEY_PAIR);
+    $settings = $pdo->query('SELECT `key`, value FROM settings')->fetchAll(PDO::FETCH_KEY_PAIR);
     foreach (['app_password_hash', 'cron_token', 'from_email', 'from_name'] as $key) {
         if (!empty($settings[$key])) {
             $config[$key] = $settings[$key];
@@ -182,28 +183,37 @@ function saveSetup(PDO $pdo): void
         throw new RuntimeException('Heslo musi mit alespon 10 znaku.');
     }
     $token = bin2hex(random_bytes(24));
-    $stmt = $pdo->prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
-    $stmt->execute(['app_password_hash', password_hash($password, PASSWORD_DEFAULT)]);
-    $stmt->execute(['cron_token', $token]);
+    setSetting($pdo, 'app_password_hash', password_hash($password, PASSWORD_DEFAULT));
+    setSetting($pdo, 'cron_token', $token);
 }
 
 function saveSettings(PDO $pdo): void
 {
     $allowed = ['from_email', 'from_name', 'smtp_host', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_encryption', 'imap_host', 'imap_port', 'imap_username', 'imap_password', 'imap_encryption'];
-    $stmt = $pdo->prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
     foreach ($allowed as $key) {
         if (in_array($key, ['smtp_password', 'imap_password'], true) && ($_POST[$key] ?? '') === '') {
             continue;
         }
-        $stmt->execute([$key, trim((string)($_POST[$key] ?? ''))]);
+        setSetting($pdo, $key, trim((string)($_POST[$key] ?? '')));
     }
     $newPassword = (string)($_POST['new_password'] ?? '');
     if ($newPassword !== '') {
         if (strlen($newPassword) < 10) {
             throw new RuntimeException('Nove heslo musi mit alespon 10 znaku.');
         }
-        $stmt->execute(['app_password_hash', password_hash($newPassword, PASSWORD_DEFAULT)]);
+        setSetting($pdo, 'app_password_hash', password_hash($newPassword, PASSWORD_DEFAULT));
     }
+}
+
+function setSetting(PDO $pdo, string $key, string $value): void
+{
+    $stmt = $pdo->prepare('UPDATE settings SET value=? WHERE `key`=?');
+    $stmt->execute([$value, $key]);
+    if ($stmt->rowCount() > 0) {
+        return;
+    }
+    $insert = $pdo->prepare('INSERT INTO settings (`key`, value) VALUES (?, ?)');
+    $insert->execute([$key, $value]);
 }
 
 function testImapConnection(array $imap): void
@@ -340,11 +350,15 @@ function normalizeWebsite(string $website): string
 function resolveContactList(PDO $pdo, string $name): int
 {
     $name = $name !== '' ? $name : 'Vychozi seznam';
-    $stmt = $pdo->prepare('INSERT OR IGNORE INTO contact_lists (name, created_at) VALUES (?, ?)');
-    $stmt->execute([$name, date('c')]);
     $find = $pdo->prepare('SELECT id FROM contact_lists WHERE name=?');
     $find->execute([$name]);
-    return (int)$find->fetchColumn();
+    $existing = (int)$find->fetchColumn();
+    if ($existing > 0) {
+        return $existing;
+    }
+    $stmt = $pdo->prepare('INSERT INTO contact_lists (name, created_at) VALUES (?, ?)');
+    $stmt->execute([$name, date('c')]);
+    return (int)$pdo->lastInsertId();
 }
 
 function contactListName(PDO $pdo, int $id): string

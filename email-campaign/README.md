@@ -24,7 +24,7 @@ Jednoducha PHP aplikace pro postupne odesilani pripraveneho emailu na importovan
 1. Nahraj obsah slozky `email-campaign` na hosting, nebo pouzij GitHub Actions workflow `Deploy Email Campaign`.
 2. Otevri aplikaci v prohlizeci a vytvor prvni administracni heslo.
 3. Po prihlaseni nastav SMTP pristup a otestuj konektivitu.
-4. Over, ze hosting umi PHP 8.1+ a extension `pdo_sqlite`.
+4. Over, ze hosting umi PHP 7.4+ a bud `pdo_sqlite`, nebo `pdo_mysql`.
 5. Nastav zapis do slozky `storage`.
 
 ## GitHub secrets pro deploy
@@ -35,6 +35,17 @@ Workflow `.github/workflows/email-campaign-deploy.yml` ceka tyto secrets:
 - `HOSTING_FTP_USERNAME`
 - `HOSTING_FTP_PASSWORD`
 - `HOSTING_FTP_DIR`
+
+Volitelne MySQL/MariaDB secrets:
+
+- `APP_DATABASE_DRIVER` = `mysql`
+- `APP_DATABASE_HOST`
+- `APP_DATABASE_PORT`
+- `APP_DATABASE_NAME`
+- `APP_DATABASE_USERNAME`
+- `APP_DATABASE_PASSWORD`
+
+Pokud MySQL secrets nejsou vyplnene, aplikace bezi nad SQLite souborem `storage/app.sqlite`. SQLite je porad SQL databaze, ale pro dlouhodobejsi provoz a zalohy je lepsi MySQL/MariaDB od hostingu.
 
 Cron URL ma tvar:
 

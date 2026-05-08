@@ -12,5 +12,18 @@ return [
         'password' => 'smtp-password',
         'encryption' => 'tls',
     ],
-    'database_path' => __DIR__ . '/storage/app.sqlite',
+    'database' => [
+        'driver' => 'sqlite',
+        'path' => __DIR__ . '/storage/app.sqlite',
+    ],
+    // MySQL/MariaDB varianta:
+    // 'database' => [
+    //     'driver' => 'mysql',
+    //     'host' => 'localhost',
+    //     'port' => 3306,
+    //     'name' => 'database_name',
+    //     'username' => 'database_user',
+    //     'password' => 'database_password',
+    //     'charset' => 'utf8mb4',
+    // ],
 ];

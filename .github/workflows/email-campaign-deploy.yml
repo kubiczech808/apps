@@ -17,6 +17,55 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Create app config from secrets
+        env:
+          APP_DATABASE_DRIVER: ${{ secrets.APP_DATABASE_DRIVER }}
+          APP_DATABASE_HOST: ${{ secrets.APP_DATABASE_HOST }}
+          APP_DATABASE_PORT: ${{ secrets.APP_DATABASE_PORT }}
+          APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
+          APP_DATABASE_USERNAME: ${{ secrets.APP_DATABASE_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.APP_DATABASE_PASSWORD }}
+        run: |
+          if [ "$APP_DATABASE_DRIVER" != "mysql" ]; then
+            echo "No MySQL database secrets configured; using deployed fallback config."
+            exit 0
+          fi
+          python3 - <<'PY'
+          import os
+
+          def s(value):
+              return "'" + (value or "").replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+          port = int(os.environ.get("APP_DATABASE_PORT") or "3306")
+          content = f"""<?php
+
+          return [
+              'app_password_hash' => '',
+              'cron_token' => '',
+              'from_email' => 'newsletter@osobnizkusenosti.cz',
+              'from_name' => 'Osobni zkusenosti',
+              'smtp' => [
+                  'host' => 'smtp.example.com',
+                  'port' => 587,
+                  'username' => 'newsletter@osobnizkusenosti.cz',
+                  'password' => 'smtp-password',
+                  'encryption' => 'tls',
+              ],
+              'database' => [
+                  'driver' => 'mysql',
+                  'host' => {s(os.environ.get("APP_DATABASE_HOST"))},
+                  'port' => {port},
+                  'name' => {s(os.environ.get("APP_DATABASE_NAME"))},
+                  'username' => {s(os.environ.get("APP_DATABASE_USERNAME"))},
+                  'password' => {s(os.environ.get("APP_DATABASE_PASSWORD"))},
+                  'charset' => 'utf8mb4',
+              ],
+          ];
+          """
+          with open("email-campaign/config.php", "w", encoding="utf-8") as f:
+              f.write(content)
+          PY
+
       - name: Upload to hosting
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
