@@ -217,7 +217,7 @@ function testImapConnection(array $imap): void
         throw new RuntimeException("IMAP connection failed: $errstr");
     }
     $hello = fgets($socket, 2048) ?: '';
-    if (!str_contains($hello, '* OK')) {
+    if (strpos($hello, '* OK') === false) {
         fclose($socket);
         throw new RuntimeException('IMAP server nevratil OK pozdrav.');
     }
@@ -226,11 +226,11 @@ function testImapConnection(array $imap): void
         $tlsResponse = '';
         while (($line = fgets($socket, 2048)) !== false) {
             $tlsResponse .= $line;
-            if (str_starts_with($line, 'a0 ')) {
+            if (strpos($line, 'a0 ') === 0) {
                 break;
             }
         }
-        if (!str_contains($tlsResponse, 'a0 OK') || !stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+        if (strpos($tlsResponse, 'a0 OK') === false || !stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
             fclose($socket);
             throw new RuntimeException('IMAP STARTTLS se nezdarilo.');
         }
@@ -239,13 +239,13 @@ function testImapConnection(array $imap): void
     $response = '';
     while (($line = fgets($socket, 2048)) !== false) {
         $response .= $line;
-        if (str_starts_with($line, 'a1 ')) {
+        if (strpos($line, 'a1 ') === 0) {
             break;
         }
     }
     fwrite($socket, "a2 LOGOUT\r\n");
     fclose($socket);
-    if (!str_contains($response, 'a1 OK')) {
+    if (strpos($response, 'a1 OK') === false) {
         throw new RuntimeException('IMAP prihlaseni se nezdarilo.');
     }
 }
@@ -315,7 +315,7 @@ function importRecipients(PDO $pdo): string
     return "Import hotov: vlozeno $inserted, aktualizovano $updated, preskoceno $skipped.";
 }
 
-function headerIndex(array $headers, array $names): int|false
+function headerIndex(array $headers, array $names)
 {
     foreach ($names as $name) {
         $idx = array_search($name, $headers, true);
@@ -884,7 +884,7 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
 
 function statusBadge(string $text): string
 {
-    $class = in_array($text, ['ano', 'smtp prijato'], true) || str_ends_with($text, 'x') ? 'good' : 'muted';
+    $class = in_array($text, ['ano', 'smtp prijato'], true) || substr($text, -1) === 'x' ? 'good' : 'muted';
     if (in_array($text, ['nezjisteno', 'nenapojeno'], true)) {
         $class = 'warn';
     }
