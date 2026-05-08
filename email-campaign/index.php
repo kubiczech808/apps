@@ -92,7 +92,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['password'])) {
     }
 }
 
-renderApp($pdo, $flash);
+try {
+    renderApp($pdo, $flash);
+} catch (Throwable $e) {
+    renderFatal($e, $flash);
+}
 
 function handlePost(PDO $pdo, array $config): ?string
 {
@@ -492,7 +496,7 @@ function trackOpen(PDO $pdo, string $token): void
     $log = findSendLogByToken($pdo, $token);
     if ($log) {
         $now = date('c');
-        $stmt = $pdo->prepare('UPDATE send_logs SET opened_at=CASE WHEN opened_at="" THEN ? ELSE opened_at END WHERE id=?');
+        $stmt = $pdo->prepare("UPDATE send_logs SET opened_at=CASE WHEN opened_at='' THEN ? ELSE opened_at END WHERE id=?");
         $stmt->execute([$now, $log['id']]);
         recordTrackingEvent($pdo, (int)$log['id'], 'open', '');
     }
@@ -511,7 +515,7 @@ function trackClick(PDO $pdo, string $token, string $encodedUrl): void
     $log = findSendLogByToken($pdo, $token);
     if ($log) {
         $now = date('c');
-        $stmt = $pdo->prepare('UPDATE send_logs SET clicked_at=CASE WHEN clicked_at="" THEN ? ELSE clicked_at END, click_count=click_count+1 WHERE id=?');
+        $stmt = $pdo->prepare("UPDATE send_logs SET clicked_at=CASE WHEN clicked_at='' THEN ? ELSE clicked_at END, click_count=click_count+1 WHERE id=?");
         $stmt->execute([$now, $log['id']]);
         recordTrackingEvent($pdo, (int)$log['id'], 'click', $url);
     }
@@ -625,6 +629,12 @@ function renderLogin(?array $flash): void
 function renderSetup(?array $flash): void
 {
     ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nastaveni aplikace</title><link rel="stylesheet" href="assets/app.css"></head><body class="login"><main><form method="post" class="panel narrow"><input type="hidden" name="action" value="setup"><h1>Nastaveni aplikace</h1><?php renderFlash($flash); ?><p>Vytvor prvni administracni heslo. Email ucet nastavis po prihlaseni.</p><label>Admin heslo<input type="password" name="new_password" minlength="10" autofocus required></label><button>Vytvorit administraci</button></form></main></body></html><?php
+}
+
+function renderFatal(Throwable $e, ?array $flash): void
+{
+    $message = 'Administraci se nepodarilo nacist: ' . $e->getMessage();
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chyba aplikace</title><link rel="stylesheet" href="assets/app.css"></head><body><header><strong>Email rozesilac</strong><a href="?logout=1">Odhlasit</a></header><main><section class="panel narrow"><?php renderFlash($flash); ?><div class="flash error"><?= h($message) ?></div><p class="note">Aplikace zustala dostupna, ale pri nacitani prihlasene casti narazila na chybu. Tento text pomuze opravit konkretni misto bez obecne HTTP 500.</p><a class="button" href="./?route=dashboard">Zkusit znovu</a></section></main></body></html><?php
 }
 
 function renderFlash(?array $flash): void
@@ -854,31 +864,31 @@ function renderApp(PDO $pdo, ?array $flash): void
 
 function recipientRows(PDO $pdo): array
 {
-    return $pdo->query('
+    return $pdo->query("
         SELECT r.email,
                r.subject_name,
                r.website,
                cl.name list_name,
                r.created_at,
-               COUNT(CASE WHEN l.status="sent" THEN 1 END) sent_count,
-               MAX(CASE WHEN l.status="sent" THEN l.sent_at ELSE "" END) sent_at,
+               COUNT(CASE WHEN l.status=\"sent\" THEN 1 END) sent_count,
+               MAX(CASE WHEN l.status=\"sent\" THEN l.sent_at ELSE '' END) sent_at,
                MAX(l.opened_at) opened_at,
                MAX(l.clicked_at) clicked_at,
                SUM(COALESCE(l.click_count, 0)) click_count,
                MAX(CASE
-                   WHEN l.clicked_at != "" THEN l.clicked_at
-                   WHEN l.opened_at != "" THEN l.opened_at
-                   WHEN l.status="sent" THEN l.sent_at
-                   ELSE ""
+                   WHEN l.clicked_at != '' THEN l.clicked_at
+                   WHEN l.opened_at != '' THEN l.opened_at
+                   WHEN l.status=\"sent\" THEN l.sent_at
+                   ELSE ''
                END) last_activity
         FROM recipients r
         LEFT JOIN contact_lists cl ON cl.id=r.list_id
         LEFT JOIN send_logs l ON l.recipient_id=r.id
-        WHERE r.status="active"
+        WHERE r.status=\"active\"
         GROUP BY r.id
         ORDER BY last_activity DESC, r.id DESC
         LIMIT 250
-    ')->fetchAll(PDO::FETCH_ASSOC);
+    ")->fetchAll(PDO::FETCH_ASSOC);
 }
 
 function importRows(PDO $pdo): array
@@ -916,7 +926,7 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
 {
     $total = (int)$pdo->query('SELECT COUNT(*) FROM recipients WHERE status="active"')->fetchColumn();
     $contacted = (int)$pdo->query('SELECT COUNT(DISTINCT recipient_id) FROM send_logs WHERE status="sent" AND recipient_id IS NOT NULL')->fetchColumn();
-    $opened = (int)$pdo->query('SELECT COUNT(DISTINCT recipient_id) FROM send_logs WHERE opened_at!="" AND recipient_id IS NOT NULL')->fetchColumn();
+    $opened = (int)$pdo->query("SELECT COUNT(DISTINCT recipient_id) FROM send_logs WHERE opened_at!='' AND recipient_id IS NOT NULL")->fetchColumn();
     $clickedContacts = (int)$pdo->query('SELECT COUNT(DISTINCT recipient_id) FROM send_logs WHERE click_count>0 AND recipient_id IS NOT NULL')->fetchColumn();
     $clicks = (int)$pdo->query('SELECT COALESCE(SUM(click_count),0) FROM send_logs')->fetchColumn();
     $today = date('Y-m-d');
@@ -931,7 +941,7 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
 
     $campaignSent = $campaignOpened = $campaignClicks = 0;
     if ($campaignId > 0) {
-        $metric = $pdo->prepare('SELECT COUNT(*) sent, COUNT(NULLIF(opened_at, "")) opened, COALESCE(SUM(click_count),0) clicks FROM send_logs WHERE campaign_id=? AND status="sent"');
+        $metric = $pdo->prepare("SELECT COUNT(*) sent, COUNT(NULLIF(opened_at, '')) opened, COALESCE(SUM(click_count),0) clicks FROM send_logs WHERE campaign_id=? AND status=\"sent\"");
         $metric->execute([$campaignId]);
         $row = $metric->fetch(PDO::FETCH_ASSOC) ?: [];
         $campaignSent = (int)($row['sent'] ?? 0);
