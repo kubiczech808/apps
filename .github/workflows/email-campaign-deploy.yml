@@ -19,14 +19,14 @@ jobs:
 
       - name: Create app config from secrets
         env:
-          APP_DATABASE_DRIVER: ${{ secrets.APP_DATABASE_DRIVER }}
-          APP_DATABASE_HOST: ${{ secrets.APP_DATABASE_HOST }}
-          APP_DATABASE_PORT: ${{ secrets.APP_DATABASE_PORT }}
+          APP_DATABASE_DRIVER: mysql
+          APP_DATABASE_HOST: localhost
+          APP_DATABASE_PORT: 3306
           APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
           APP_DATABASE_USERNAME: ${{ secrets.APP_DATABASE_USERNAME }}
           APP_DATABASE_PASSWORD: ${{ secrets.APP_DATABASE_PASSWORD }}
         run: |
-          if [ "$APP_DATABASE_DRIVER" != "mysql" ]; then
+          if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
             echo "No MySQL database secrets configured; using deployed fallback config."
             exit 0
           fi

@@ -201,7 +201,7 @@ final class Database
                 created_at VARCHAR(40) NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             "CREATE TABLE IF NOT EXISTS settings (
-                `key` VARCHAR(191) PRIMARY KEY,
+                setting_key VARCHAR(191) PRIMARY KEY,
                 value TEXT NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
         ];

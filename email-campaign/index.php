@@ -54,7 +54,7 @@ if (!isConfigured($config)) {
 if (isset($_POST['password'])) {
     if (password_verify((string)$_POST['password'], (string)$config['app_password_hash'])) {
         $_SESSION['auth'] = true;
-        header('Location: ./');
+        header('Location: dashboard');
         exit;
     }
     $flash = ['error', 'Nespravne heslo.'];
@@ -75,8 +75,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['password'])) {
     try {
         $message = handlePost($pdo, $config);
         $_SESSION['flash'] = ['ok', $message ?: 'Hotovo.'];
-        $returnView = in_array($_GET['view'] ?? '', ['overview', 'contacts', 'campaigns', 'config'], true) ? $_GET['view'] : 'overview';
-        header('Location: ./?view=' . $returnView);
+        $returnView = currentView();
+        header('Location: ' . routeUrl($returnView));
         exit;
     } catch (Throwable $e) {
         $flash = ['error', $e->getMessage()];
@@ -149,7 +149,7 @@ function handlePost(PDO $pdo, array $config): ?string
 
 function effectiveConfig(PDO $pdo, array $config): array
 {
-    $settings = $pdo->query('SELECT `key`, value FROM settings')->fetchAll(PDO::FETCH_KEY_PAIR);
+    $settings = loadSettings($pdo);
     foreach (['app_password_hash', 'cron_token', 'from_email', 'from_name'] as $key) {
         if (!empty($settings[$key])) {
             $config[$key] = $settings[$key];
@@ -169,6 +169,22 @@ function effectiveConfig(PDO $pdo, array $config): array
         'encryption' => $settings['imap_encryption'] ?? 'ssl',
     ];
     return $config;
+}
+
+function loadSettings(PDO $pdo): array
+{
+    $settings = [];
+    $rows = $pdo->query('SELECT * FROM settings')->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as $row) {
+        $key = array_key_exists('key', $row) ? $row['key'] : ($row['KEY'] ?? null);
+        if ($key === null && array_key_exists('setting_key', $row)) {
+            $key = $row['setting_key'];
+        }
+        if ($key !== null) {
+            $settings[(string)$key] = (string)$row['value'];
+        }
+    }
+    return $settings;
 }
 
 function isConfigured(array $config): bool
@@ -207,13 +223,31 @@ function saveSettings(PDO $pdo): void
 
 function setSetting(PDO $pdo, string $key, string $value): void
 {
-    $stmt = $pdo->prepare('UPDATE settings SET value=? WHERE `key`=?');
-    $stmt->execute([$value, $key]);
-    if ($stmt->rowCount() > 0) {
+    $keyColumn = settingKeyColumn($pdo);
+    $exists = $pdo->prepare('SELECT COUNT(*) FROM settings WHERE ' . $keyColumn . '=?');
+    $exists->execute([$key]);
+    if ((int)$exists->fetchColumn() > 0) {
+        $stmt = $pdo->prepare('UPDATE settings SET value=? WHERE ' . $keyColumn . '=?');
+        $stmt->execute([$value, $key]);
         return;
     }
-    $insert = $pdo->prepare('INSERT INTO settings (`key`, value) VALUES (?, ?)');
+    $insert = $pdo->prepare('INSERT INTO settings (' . $keyColumn . ', value) VALUES (?, ?)');
     $insert->execute([$key, $value]);
+}
+
+function settingKeyColumn(PDO $pdo): string
+{
+    static $column = null;
+    if ($column !== null) {
+        return $column;
+    }
+    try {
+        $pdo->query('SELECT setting_key FROM settings LIMIT 1');
+        $column = 'setting_key';
+    } catch (Throwable $e) {
+        $column = 'key';
+    }
+    return $column;
 }
 
 function testImapConnection(array $imap): void
@@ -591,6 +625,23 @@ function renderFlash(?array $flash): void
     }
 }
 
+function currentView(): string
+{
+    $route = trim((string)($_GET['route'] ?? ''), '/');
+    $map = ['dashboard' => 'overview', 'contacts' => 'contacts', 'campaigns' => 'campaigns', 'config' => 'config'];
+    if (isset($map[$route])) {
+        return $map[$route];
+    }
+    $view = $_GET['view'] ?? 'overview';
+    return in_array($view, ['overview', 'contacts', 'campaigns', 'config'], true) ? $view : 'overview';
+}
+
+function routeUrl(string $view): string
+{
+    $map = ['overview' => 'dashboard', 'contacts' => 'contacts', 'campaigns' => 'campaigns', 'config' => 'config'];
+    return $map[$view] ?? 'dashboard';
+}
+
 function renderApp(PDO $pdo, ?array $flash): void
 {
     global $config;
@@ -602,7 +653,7 @@ function renderApp(PDO $pdo, ?array $flash): void
     $lists = contactLists($pdo);
     $current = $campaigns[0] ?? ['id' => 0, 'list_id' => 1, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den,</p><p>...</p>', 'daily_limit' => 300, 'batch_limit' => 10, 'auto_daily_limit' => 1, 'status' => 'draft'];
     $pace = campaignDailyLimit($pdo, $current);
-    $view = in_array($_GET['view'] ?? 'overview', ['overview', 'contacts', 'campaigns', 'config'], true) ? $_GET['view'] : 'overview';
+    $view = currentView();
     $overview = overviewStats($pdo, $current, $pace, $config);
     ?><!doctype html>
 <html lang="cs">
@@ -618,10 +669,10 @@ function renderApp(PDO $pdo, ?array $flash): void
     <a href="?logout=1">Odhlasit</a>
 </header>
 <nav class="tabs">
-    <a class="<?= $view === 'overview' ? 'active' : '' ?>" href="?view=overview">Prehled</a>
-    <a class="<?= $view === 'contacts' ? 'active' : '' ?>" href="?view=contacts">Kontakty</a>
-    <a class="<?= $view === 'campaigns' ? 'active' : '' ?>" href="?view=campaigns">Kampane</a>
-    <a class="<?= $view === 'config' ? 'active' : '' ?>" href="?view=config">Konfigurace</a>
+    <a class="<?= $view === 'overview' ? 'active' : '' ?>" href="<?= h(routeUrl('overview')) ?>">Prehled</a>
+    <a class="<?= $view === 'contacts' ? 'active' : '' ?>" href="<?= h(routeUrl('contacts')) ?>">Kontakty</a>
+    <a class="<?= $view === 'campaigns' ? 'active' : '' ?>" href="<?= h(routeUrl('campaigns')) ?>">Kampane</a>
+    <a class="<?= $view === 'config' ? 'active' : '' ?>" href="<?= h(routeUrl('config')) ?>">Konfigurace</a>
 </nav>
 <main>
     <?php renderFlash($flash); ?>

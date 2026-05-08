@@ -7,4 +7,5 @@ Options -Indexes
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteRule ^storage/ - [F,L]
+    RewriteRule ^(dashboard|contacts|campaigns|config)/?$ index.php?route=$1 [L,QSA]
 </IfModule>
