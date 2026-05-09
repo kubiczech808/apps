@@ -65,6 +65,7 @@ jobs:
             "LOG_LEVEL=INFO" > .env
           echo ".env created ($(wc -l < .env) lines)"
 
+      # Default mode for push trigger: draft
       - name: Run pipeline
         working-directory: medium-poster
         run: |
