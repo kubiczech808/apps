@@ -3,7 +3,7 @@ name: Agent M — Publish Article
 on:
   push:
     branches:
-      - claude/energy-consumption-app-Nf7bh
+      - main
     paths:
       - .github/workflows/agent-m-publish.yml
   schedule:
