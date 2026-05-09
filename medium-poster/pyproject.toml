@@ -12,5 +12,8 @@ dependencies = [
     "playwright>=1.40",
 ]
 
+[tool.setuptools.packages.find]
+include = ["agent_m*"]
+
 [project.scripts]
 agent-m = "agent_m.__main__:main"
