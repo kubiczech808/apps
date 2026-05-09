@@ -2,7 +2,6 @@ name: Agent M — Publish Article
 
 on:
   schedule:
-    # 12:58 CET (10:58 UTC)
     - cron: '58 10 * * *'
   workflow_dispatch:
     inputs:
@@ -16,16 +15,13 @@ on:
           - draft
           - preview
       slug:
-        description: 'Topic slug (optional — leave empty for next in plan)'
+        description: 'Topic slug (optional)'
         required: false
         default: ''
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: medium-poster
 
     steps:
       - uses: actions/checkout@v4
@@ -37,16 +33,24 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
+        working-directory: medium-poster
         run: pip install .
 
       - name: Create .env
+        working-directory: medium-poster
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_M }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.M_TELEGRAM_TOKEN }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.M_TELEGRAM_CHAT_ID }}
+          GITHUB_PAT: ${{ secrets.PAT_GITHUB_MEDIUM }}
+          DEVTO_API_KEY: ${{ secrets.DEVTO_API_KEY }}
         run: |
-          cat > .env << ENVEOF
-          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY_M }}
-          TELEGRAM_BOT_TOKEN=${{ secrets.M_TELEGRAM_TOKEN }}
-          TELEGRAM_ADMIN_CHAT_ID=${{ secrets.M_TELEGRAM_CHAT_ID }}
-          GITHUB_PAT=${{ secrets.PAT_GITHUB_MEDIUM }}
-          DEVTO_API_KEY=${{ secrets.DEVTO_API_KEY }}
+          cat > .env << 'EOF'
+          GEMINI_API_KEY=${GEMINI_API_KEY}
+          TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+          TELEGRAM_ADMIN_CHAT_ID=${TELEGRAM_ADMIN_CHAT_ID}
+          GITHUB_PAT=${GITHUB_PAT}
+          DEVTO_API_KEY=${DEVTO_API_KEY}
           HASHNODE_TOKEN=
           HASHNODE_PUBLICATION_ID=
           MEDIUM_PLAYWRIGHT=false
@@ -59,12 +63,15 @@ jobs:
           PUBLISH_HOUR=9
           PUBLISH_MINUTE=0
           LOG_LEVEL=INFO
-          ENVEOF
+          EOF
+          echo "Created .env with $(wc -l < .env) lines"
 
       - name: Run pipeline
+        working-directory: medium-poster
         run: |
           MODE="${{ github.event.inputs.mode || 'draft' }}"
           SLUG="${{ github.event.inputs.slug }}"
+          echo "Mode: $MODE, Slug: $SLUG"
           if [ -n "$SLUG" ]; then
             python -m agent_m.cli "$MODE" --slug "$SLUG"
           else
