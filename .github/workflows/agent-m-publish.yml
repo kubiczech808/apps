@@ -7,7 +7,7 @@ on:
     paths:
       - .github/workflows/agent-m-publish.yml
   schedule:
-    # Daily at 10:58 UTC (12:58 CET)
+    # Daily at 10:58 UTC
     - cron: '58 10 * * *'
   workflow_dispatch:
     inputs:
@@ -65,7 +65,6 @@ jobs:
             "LOG_LEVEL=INFO" > .env
           echo ".env created ($(wc -l < .env) lines)"
 
-      # Default mode for push trigger: draft
       - name: Run pipeline
         working-directory: medium-poster
         run: |
