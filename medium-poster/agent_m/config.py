@@ -12,12 +12,12 @@ class Config(BaseSettings):
         env_file_encoding="utf-8",
     )
 
-    gemini_api_key: str
-    telegram_bot_token: str
-    telegram_admin_chat_id: int
+    gemini_api_key: str = ""
+    telegram_bot_token: str = ""
+    telegram_admin_chat_id: int = 0
 
     # GitHub Pages (for RSS feed hosting)
-    github_pat: str
+    github_pat: str = ""
     github_pages_repo: str = "kubiczech808/apps"
     github_pages_branch: str = "gh-pages"
 

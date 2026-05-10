@@ -36,6 +36,16 @@ async def run_pipeline(mode: str = "public", slug: str | None = None) -> Pipelin
 
 
 async def _run(mode: str, slug: str | None = None) -> PipelineResult:
+    missing = []
+    if not config.gemini_api_key:
+        missing.append("GEMINI_API_KEY")
+    if not config.telegram_bot_token:
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not config.telegram_admin_chat_id:
+        missing.append("TELEGRAM_ADMIN_CHAT_ID")
+    if missing:
+        raise RuntimeError(f"Missing required config: {', '.join(missing)}")
+
     history = History(config.data_dir)
     researcher = TopicResearcher(config.data_dir)
 
