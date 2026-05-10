@@ -15,9 +15,10 @@ from agent_m.pipeline import run_pipeline
 
 async def send_telegram(text: str, image_bytes: bytes | None = None) -> None:
     url = f"https://api.telegram.org/bot{config.telegram_bot_token}"
+    log = logging.getLogger(__name__)
     async with httpx.AsyncClient(timeout=30.0) as client:
         if image_bytes:
-            await client.post(
+            resp = await client.post(
                 f"{url}/sendPhoto",
                 data={
                     "chat_id": config.telegram_admin_chat_id,
@@ -26,13 +27,15 @@ async def send_telegram(text: str, image_bytes: bytes | None = None) -> None:
                 files={"photo": ("image.jpg", io.BytesIO(image_bytes), "image/jpeg")},
             )
         else:
-            await client.post(
+            resp = await client.post(
                 f"{url}/sendMessage",
                 json={
                     "chat_id": config.telegram_admin_chat_id,
                     "text": text[:4096],
                 },
             )
+        if resp.status_code != 200:
+            log.error("Telegram API error %d: %s", resp.status_code, resp.text[:500])
 
 
 async def run(mode: str, slug: str | None) -> None:
