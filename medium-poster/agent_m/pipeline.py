@@ -46,6 +46,9 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
     if missing:
         raise RuntimeError(f"Missing required config: {', '.join(missing)}")
 
+    from agent_m.gemini.client import validate_api_key
+    await validate_api_key()
+
     history = History(config.data_dir)
     researcher = TopicResearcher(config.data_dir)
 
