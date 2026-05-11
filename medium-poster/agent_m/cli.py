@@ -77,6 +77,9 @@ def main() -> None:
         level=config.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Suppress httpx/httpcore request logs to avoid exposing tokens in URLs
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     asyncio.run(run(mode=args.mode, slug=args.slug))
 
 
