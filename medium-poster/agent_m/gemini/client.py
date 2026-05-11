@@ -11,7 +11,7 @@ from agent_m.token_tracker import TokenTracker
 
 log = logging.getLogger(__name__)
 
-_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+_MODELS = ["gemini-2.0-flash-001", "gemini-1.5-flash-001", "gemini-1.5-flash-8b-001"]
 
 _client: genai.Client | None = None
 _tracker: TokenTracker | None = None
@@ -44,6 +44,9 @@ async def generate_text(prompt: str, *, temperature: float = 0.8, max_tokens: in
                     config=types.GenerateContentConfig(
                         temperature=temperature,
                         max_output_tokens=max_tokens,
+                        automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                            disable=True,
+                        ),
                     ),
                 )
                 if response.usage_metadata:
@@ -56,14 +59,15 @@ async def generate_text(prompt: str, *, temperature: float = 0.8, max_tokens: in
                 return response.text or ""
             except Exception as e:
                 last_error = e
-                err_str = str(e).lower()
-                if "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str:
+                err_lower = str(e).lower()
+                is_rate_limit = any(k in err_lower for k in ("429", "resource_exhausted", "quota", "rate"))
+                log.warning("Gemini %s attempt %d/%d: %s", model, attempt + 1, 3, str(e)[:200])
+                if is_rate_limit and attempt < 2:
                     wait = 10 * (2 ** attempt)
-                    log.warning("Gemini %s 429/quota on attempt %d, waiting %ds", model, attempt + 1, wait)
+                    log.warning("Rate limited — waiting %ds before retry", wait)
                     await asyncio.sleep(wait)
                 else:
-                    log.error("Gemini %s error: %s", model, e)
-                    break  # non-rate-limit error, try next model
+                    break  # non-rate-limit or last attempt, try next model
 
     raise RuntimeError(f"All Gemini models failed. Last error: {last_error}")
 
