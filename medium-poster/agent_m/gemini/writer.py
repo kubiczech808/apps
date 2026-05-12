@@ -62,6 +62,7 @@ Funnel stage: {funnel_stage}
 - Markdown formatting with ## subheadings (NOT # — reserved for title)
 - 4-6 subheadings with at least 2 containing the SEO keyword naturally
 - Compelling hook in the first paragraph — start with a surprising stat, question, or scenario
+- The first or second paragraph MUST include a natural contextual link to {site_url} — e.g. "tools like [{site_name}]({site_url})" or "you can automate this at [{site_name}]({site_url})"
 - SEO keyword in: first paragraph, at least 2 subheadings, conclusion
 - End with a clear call-to-action pointing to {site_url} ({cta_target})
 - Include a one-line disclaimer: *This article is for educational purposes only and does not constitute financial advice.*
