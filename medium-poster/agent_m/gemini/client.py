@@ -12,7 +12,7 @@ from agent_m.token_tracker import TokenTracker
 
 log = logging.getLogger(__name__)
 
-_MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
+_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"]
 
 _client: genai.Client | None = None
 _tracker: TokenTracker | None = None
