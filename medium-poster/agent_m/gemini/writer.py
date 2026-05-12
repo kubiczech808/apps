@@ -88,6 +88,7 @@ async def write_article_from_plan(plan: ContentPlan) -> Article:
         funnel_stage=plan.funnel_stage,
         key_points=key_points_text,
         site_url=config.site_url,
+        site_name=config.site_name,
     )
     prompt = f"{system}\n\n---\n\n{user_prompt}"
     raw = await generate_text(prompt, temperature=0.7, max_tokens=8192, json_mode=True)
