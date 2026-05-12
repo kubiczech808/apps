@@ -42,6 +42,7 @@ async def run(mode: str, slug: str | None) -> None:
     try:
         result = await run_pipeline(mode=mode, slug=slug)
     except Exception as e:
+        logging.getLogger(__name__).error("Pipeline failed: %s", e, exc_info=True)
         await send_telegram(f"Agent M pipeline failed:\n{e}")
         sys.exit(1)
 
