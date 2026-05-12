@@ -68,7 +68,13 @@ async def _diagnose_429(model: str) -> str:
         return f"Diagnostic call failed: {e}"
 
 
-async def generate_text(prompt: str, *, temperature: float = 0.8, max_tokens: int = 4096) -> str:
+async def generate_text(
+    prompt: str,
+    *,
+    temperature: float = 0.8,
+    max_tokens: int = 4096,
+    json_mode: bool = False,
+) -> str:
     client = get_client()
     last_error: Exception | None = None
     diagnosed = False
@@ -76,13 +82,16 @@ async def generate_text(prompt: str, *, temperature: float = 0.8, max_tokens: in
     for model in _MODELS:
         for attempt in range(3):
             try:
+                cfg: dict = {
+                    "temperature": temperature,
+                    "max_output_tokens": max_tokens,
+                }
+                if json_mode:
+                    cfg["response_mime_type"] = "application/json"
                 response = await client.aio.models.generate_content(
                     model=model,
                     contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=temperature,
-                        max_output_tokens=max_tokens,
-                    ),
+                    config=types.GenerateContentConfig(**cfg),
                 )
                 if response.usage_metadata:
                     await get_tracker().track(

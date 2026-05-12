@@ -89,14 +89,17 @@ async def write_article_from_plan(plan: ContentPlan) -> Article:
         site_url=config.site_url,
     )
     prompt = f"{system}\n\n---\n\n{user_prompt}"
-    raw = await generate_text(prompt, temperature=0.7, max_tokens=8192)
+    raw = await generate_text(prompt, temperature=0.7, max_tokens=8192, json_mode=True)
 
     start = raw.find("{")
     end = raw.rfind("}") + 1
     if start == -1 or end == 0:
         raise RuntimeError(f"Failed to parse writer response: {raw[:200]}")
 
-    data = json.loads(raw[start:end])
+    try:
+        data = json.loads(raw[start:end])
+    except json.JSONDecodeError:
+        data = json.loads(raw)
     title = data["title"][:100]
     body = data["body"]
     tags = [t[:25] for t in data.get("tags", plan.tags)[:3]]
