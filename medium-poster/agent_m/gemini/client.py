@@ -12,7 +12,7 @@ from agent_m.token_tracker import TokenTracker
 
 log = logging.getLogger(__name__)
 
-_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+_MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite"]
 
 _client: genai.Client | None = None
 _tracker: TokenTracker | None = None
@@ -33,15 +33,16 @@ def get_tracker() -> TokenTracker:
 
 
 async def validate_api_key() -> None:
-    """Verify the API key by fetching model info (no generation quota used)."""
+    """Verify the API key by listing available models (no generation quota used)."""
     async with httpx.AsyncClient(timeout=10.0) as http:
         resp = await http.get(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash",
+            "https://generativelanguage.googleapis.com/v1beta/models",
             params={"key": config.gemini_api_key},
         )
     if resp.status_code == 200:
-        name = resp.json().get("displayName", "unknown")
-        log.info("Gemini API key valid — model: %s", name)
+        models = [m.get("name", "") for m in resp.json().get("models", [])]
+        flash_models = [m for m in models if "flash" in m]
+        log.info("Gemini API key valid. Available flash models: %s", flash_models)
         return
     body = resp.text[:500]
     if resp.status_code == 400:
