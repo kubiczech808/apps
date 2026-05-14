@@ -67,9 +67,17 @@ async def run(mode: str, slug: str | None) -> None:
         body_preview += "\n\n... (truncated)"
     await send_telegram(body_preview)
 
+    print("AGENT_M_RESULT_START")
+    print(f"Title: {result.article.title}")
     print(f"Published to: {platforms}")
     if result.post_url:
         print(f"URL: {result.post_url}")
+    if result.platform_errors:
+        print("Platform issues:")
+        for err in result.platform_errors[:6]:
+            print(f"- {err[:240]}")
+    print(f"Tokens: {result.tokens_used}")
+    print("AGENT_M_RESULT_END")
 
 
 def main() -> None:

@@ -95,7 +95,10 @@ jobs:
             const fs = require('fs');
             let log = 'No log';
             try { log = fs.readFileSync('/tmp/pipeline.log', 'utf8'); } catch(e) {}
-            const body = `**Run ${new Date().toISOString()} | outcome: ${{ steps.pipeline.outcome }}**\n\`\`\`\n${log.split('\n').slice(-80).join('\n').substring(0,3500)}\n\`\`\``;
+            const result = log.match(/AGENT_M_RESULT_START[\s\S]*?AGENT_M_RESULT_END/);
+            const summary = result ? result[0] : 'AGENT_M_RESULT not found';
+            const tail = log.split('\n').slice(-80).join('\n').substring(0,2500);
+            const body = `**Run ${new Date().toISOString()} | outcome: ${{ steps.pipeline.outcome }}**\n\nSummary:\n\`\`\`\n${summary}\n\`\`\`\n\nLog tail:\n\`\`\`\n${tail}\n\`\`\``;
             const issues = await github.rest.issues.listForRepo({owner:context.repo.owner,repo:context.repo.repo,labels:['agent-m-debug'],state:'open'});
             if (issues.data.length > 0) {
               await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:issues.data[0].number,body});

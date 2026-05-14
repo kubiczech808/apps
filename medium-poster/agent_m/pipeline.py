@@ -96,8 +96,8 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
             from agent_m.images.uploader import upload_to_imgur
             image_url = await upload_to_imgur(image_bytes)
             log.info("Uploaded image: %s", image_url)
-    except Exception:
-        log.warning("Image generation/upload failed, continuing without image", exc_info=True)
+    except Exception as exc:
+        log.warning("Image generation/upload failed, continuing without image: %s", exc)
 
     published_to: list[str] = []
     platform_errors: list[str] = []
@@ -184,8 +184,8 @@ async def _get_remote_article_slugs() -> set[str]:
     gh = GitHubPagesPublisher()
     try:
         return await gh.list_article_slugs()
-    except Exception:
-        log.warning("Could not read GitHub Pages article list", exc_info=True)
+    except Exception as exc:
+        log.warning("Could not read GitHub Pages article list: %s", exc)
         return set()
     finally:
         await gh.close()
@@ -226,8 +226,8 @@ async def _publish_rss(history, topic, article, image_url) -> str | None:
             )
         finally:
             await gh.close()
-    except Exception:
-        log.warning("GitHub Pages publish failed", exc_info=True)
+    except Exception as exc:
+        log.warning("GitHub Pages publish failed: %s", exc)
         return None
 
 
@@ -247,7 +247,7 @@ async def _publish_devto(article: Article, draft: bool, canonical_url: str | Non
         finally:
             await pub.close()
     except Exception as exc:
-        log.warning("Dev.to publish failed", exc_info=True)
+        log.warning("Dev.to publish failed: %s", exc)
         return None, str(exc)
 
 
@@ -266,7 +266,7 @@ async def _publish_hashnode(article: Article, canonical_url: str | None) -> tupl
         finally:
             await pub.close()
     except Exception as exc:
-        log.warning("Hashnode publish failed", exc_info=True)
+        log.warning("Hashnode publish failed: %s", exc)
         return None, str(exc)
 
 
@@ -280,8 +280,8 @@ async def _publish_medium_playwright(article: Article, publish: bool) -> str | N
             tags=article.tags,
             publish=publish,
         )
-    except Exception:
-        log.warning("Medium Playwright publish failed", exc_info=True)
+    except Exception as exc:
+        log.warning("Medium Playwright publish failed: %s", exc)
         return None
 
 
@@ -300,8 +300,8 @@ async def _publish_medium_api(article, image_url, mode) -> str | None:
             return result.get("data", {}).get("url")
         finally:
             await medium.close()
-    except Exception:
-        log.warning("Medium API publish failed", exc_info=True)
+    except Exception as exc:
+        log.warning("Medium API publish failed: %s", exc)
         return None
 
 
