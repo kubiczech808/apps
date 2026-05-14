@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 
@@ -29,7 +30,7 @@ class DevToPublisher:
         published: bool = True,
         canonical_url: str | None = None,
     ) -> dict:
-        tags_clean = [t.lower().replace(" ", "").replace("-", "")[:20] for t in tags[:4]]
+        tags_clean = normalize_tags(tags)
 
         payload: dict = {
             "article": {
@@ -53,3 +54,17 @@ class DevToPublisher:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+
+def normalize_tags(tags: list[str]) -> list[str]:
+    result: list[str] = []
+    for tag in tags:
+        cleaned = re.sub(r"[^a-z0-9]", "", tag.lower())[:20]
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
+    for fallback in ("bitcoin", "crypto", "investing", "beginners"):
+        if len(result) >= 4:
+            break
+        if fallback not in result:
+            result.append(fallback)
+    return result[:4]

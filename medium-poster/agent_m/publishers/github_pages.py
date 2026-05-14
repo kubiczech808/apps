@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 
 import httpx
 
@@ -70,6 +71,25 @@ class GitHubPagesPublisher:
 
         pages_url = f"https://{self._owner}.github.io/{self._repo}/articles/{slug}.html"
         return pages_url
+
+    async def list_article_slugs(self) -> set[str]:
+        url = f"{self.API_BASE}/repos/{self._owner}/{self._repo}/contents/articles"
+        resp = await self._client.get(url, params={"ref": self._branch})
+        if resp.status_code == 404:
+            return set()
+        if resp.status_code != 200:
+            log.warning("GitHub articles list failed %d: %s", resp.status_code, resp.text[:300])
+            return set()
+        data = resp.json()
+        if not isinstance(data, list):
+            return set()
+        slugs: set[str] = set()
+        for item in data:
+            name = str(item.get("name", ""))
+            match = re.fullmatch(r"(.+)\.html", name)
+            if match:
+                slugs.add(match.group(1))
+        return slugs
 
     async def _get_file_sha(self, url: str) -> str | None:
         resp = await self._client.get(url, params={"ref": self._branch})

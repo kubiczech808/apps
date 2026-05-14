@@ -25,6 +25,7 @@ class PipelineResult:
     mode: str
     tokens_used: int
     published_to: list[str] = field(default_factory=list)
+    platform_errors: list[str] = field(default_factory=list)
 
 
 _lock = asyncio.Lock()
@@ -59,6 +60,10 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
     else:
         previous_titles = await history.get_all_titles()
         used_slugs = await history.get_used_slugs()
+        remote_slugs = await _get_remote_article_slugs()
+        used_slugs |= remote_slugs
+        if remote_slugs:
+            log.info("Found %d existing GitHub Pages article slugs", len(remote_slugs))
         topic = await researcher.get_next_topic(previous_titles, used_slugs)
 
     log.info("Selected topic: %s [%s]", topic.title, topic.slug)
@@ -95,6 +100,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         log.warning("Image generation/upload failed, continuing without image", exc_info=True)
 
     published_to: list[str] = []
+    platform_errors: list[str] = []
     post_url: str | None = None
 
     if mode == "preview":
@@ -107,20 +113,30 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         if rss_url:
             published_to.append("GitHub Pages")
             post_url = rss_url
+        else:
+            platform_errors.append("GitHub Pages: publish failed")
 
         # 2. Dev.to
         if config.devto_api_key:
-            devto_url = await _publish_devto(article, is_draft)
+            devto_url, devto_error = await _publish_devto(article, is_draft, rss_url)
             if devto_url:
                 published_to.append("Dev.to")
                 post_url = devto_url
+            elif devto_error:
+                platform_errors.append(f"Dev.to: {devto_error}")
+        else:
+            platform_errors.append("Dev.to: DEVTO_API_KEY missing")
 
         # 3. Hashnode
         if config.hashnode_token and config.hashnode_publication_id:
-            hn_url = await _publish_hashnode(article)
+            hn_url, hn_error = await _publish_hashnode(article, rss_url)
             if hn_url:
                 published_to.append("Hashnode")
                 post_url = hn_url
+            elif hn_error:
+                platform_errors.append(f"Hashnode: {hn_error}")
+        else:
+            platform_errors.append("Hashnode: HASHNODE_TOKEN or HASHNODE_PUBLICATION_ID missing")
 
         # 4. Medium (Playwright)
         if config.medium_playwright:
@@ -158,7 +174,21 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         mode=mode,
         tokens_used=today.get("total", 0),
         published_to=published_to,
+        platform_errors=platform_errors,
     )
+
+
+async def _get_remote_article_slugs() -> set[str]:
+    if not config.github_pat:
+        return set()
+    gh = GitHubPagesPublisher()
+    try:
+        return await gh.list_article_slugs()
+    except Exception:
+        log.warning("Could not read GitHub Pages article list", exc_info=True)
+        return set()
+    finally:
+        await gh.close()
 
 
 async def _publish_rss(history, topic, article, image_url) -> str | None:
@@ -201,7 +231,7 @@ async def _publish_rss(history, topic, article, image_url) -> str | None:
         return None
 
 
-async def _publish_devto(article: Article, draft: bool) -> str | None:
+async def _publish_devto(article: Article, draft: bool, canonical_url: str | None) -> tuple[str | None, str | None]:
     try:
         from agent_m.publishers.devto import DevToPublisher
         pub = DevToPublisher()
@@ -211,17 +241,17 @@ async def _publish_devto(article: Article, draft: bool) -> str | None:
                 body_markdown=article.body,
                 tags=article.tags,
                 published=not draft,
-                canonical_url=config.site_url,
+                canonical_url=canonical_url,
             )
-            return result.get("url")
+            return result.get("url"), None
         finally:
             await pub.close()
-    except Exception:
+    except Exception as exc:
         log.warning("Dev.to publish failed", exc_info=True)
-        return None
+        return None, str(exc)
 
 
-async def _publish_hashnode(article: Article) -> str | None:
+async def _publish_hashnode(article: Article, canonical_url: str | None) -> tuple[str | None, str | None]:
     try:
         from agent_m.publishers.hashnode import HashnodePublisher
         pub = HashnodePublisher()
@@ -230,13 +260,14 @@ async def _publish_hashnode(article: Article) -> str | None:
                 title=article.title,
                 body_markdown=article.body,
                 tags=article.tags,
+                canonical_url=canonical_url,
             )
-            return result.get("url")
+            return result.get("url"), None
         finally:
             await pub.close()
-    except Exception:
+    except Exception as exc:
         log.warning("Hashnode publish failed", exc_info=True)
-        return None
+        return None, str(exc)
 
 
 async def _publish_medium_playwright(article: Article, publish: bool) -> str | None:

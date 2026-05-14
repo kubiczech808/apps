@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import re
 
 import httpx
 
@@ -41,7 +43,7 @@ class HashnodePublisher:
         tags: list[str],
         canonical_url: str | None = None,
     ) -> dict:
-        tag_objects = [{"slug": t.lower().replace(" ", "-"), "name": t} for t in tags[:5]]
+        tag_objects = [{"slug": normalize_tag_slug(t), "name": t[:32]} for t in tags[:5]]
 
         variables: dict = {
             "input": {
@@ -54,10 +56,7 @@ class HashnodePublisher:
         if canonical_url:
             variables["input"]["originalArticleURL"] = canonical_url
 
-        resp = await self._client.post(
-            self.API_URL,
-            json={"query": _PUBLISH_MUTATION, "variables": variables},
-        )
+        resp = await self._post_with_retry({"query": _PUBLISH_MUTATION, "variables": variables})
         if resp.status_code != 200:
             log.error("Hashnode API error %d: %s", resp.status_code, resp.text[:500])
             resp.raise_for_status()
@@ -74,3 +73,23 @@ class HashnodePublisher:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    async def _post_with_retry(self, payload: dict) -> httpx.Response:
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                resp = await self._client.post(self.API_URL, json=payload)
+                if resp.status_code not in (429, 500, 502, 503, 504):
+                    return resp
+                last_exc = RuntimeError(f"Hashnode HTTP {resp.status_code}: {resp.text[:200]}")
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+                last_exc = exc
+            await asyncio.sleep(2 * (attempt + 1))
+        assert last_exc is not None
+        raise last_exc
+
+
+def normalize_tag_slug(tag: str) -> str:
+    slug = re.sub(r"[^a-z0-9-]", "-", tag.lower().strip())
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug or "bitcoin"
