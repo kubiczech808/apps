@@ -45,8 +45,21 @@ class DevToPublisher:
 
         resp = await self._client.post(f"{self.API_BASE}/articles", json=payload)
         if resp.status_code not in (200, 201):
-            log.error("Dev.to API error %d: %s", resp.status_code, resp.text[:500])
-            resp.raise_for_status()
+            body = resp.text[:500]
+            log.error("Dev.to API error %d: %s", resp.status_code, body)
+            if (
+                resp.status_code == 422
+                and canonical_url
+                and "Canonical url has already been taken" in body
+            ):
+                existing = await self.find_by_canonical_url(canonical_url)
+                if existing:
+                    log.info("Dev.to article already exists: %s", existing.get("url"))
+                    return existing
+                raise RuntimeError(
+                    f"Dev.to canonical URL is already taken, but existing article was not found: {body}"
+                )
+            raise RuntimeError(f"Dev.to HTTP {resp.status_code}: {body}")
 
         data = resp.json()
         log.info("Published to Dev.to: %s", data.get("url"))
@@ -54,6 +67,19 @@ class DevToPublisher:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    async def find_by_canonical_url(self, canonical_url: str) -> dict | None:
+        resp = await self._client.get(
+            f"{self.API_BASE}/articles/me/all",
+            params={"page": 1, "per_page": 1000},
+        )
+        if resp.status_code != 200:
+            log.warning("Dev.to existing article lookup failed %d: %s", resp.status_code, resp.text[:300])
+            return None
+        for article in resp.json():
+            if article.get("canonical_url") == canonical_url:
+                return article
+        return None
 
 
 def normalize_tags(tags: list[str]) -> list[str]:

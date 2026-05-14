@@ -25,7 +25,7 @@ mutation PublishPost($input: PublishPostInput!) {
 
 
 class HashnodePublisher:
-    API_URL = "https://gql.hashnode.com"
+    API_URL = "https://gql.hashnode.com/"
 
     def __init__(self) -> None:
         self._client = httpx.AsyncClient(
@@ -58,8 +58,9 @@ class HashnodePublisher:
 
         resp = await self._post_with_retry({"query": _PUBLISH_MUTATION, "variables": variables})
         if resp.status_code != 200:
-            log.error("Hashnode API error %d: %s", resp.status_code, resp.text[:500])
-            resp.raise_for_status()
+            body = resp.text[:500]
+            log.error("Hashnode API error %d: %s", resp.status_code, body)
+            raise RuntimeError(f"Hashnode HTTP {resp.status_code}: {body}")
 
         data = resp.json()
         if "errors" in data:
