@@ -157,11 +157,11 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
                 published_to.append("Medium")
                 post_url = medium_url
 
-        # 5. Medium (API — legacy, if token exists)
+        # 5. Medium (API — integration token)
         if config.medium_token and not config.medium_playwright:
-            medium_url = await _publish_medium_api(article, image_url, mode)
+            medium_url = await _publish_medium_api(article, image_url, rss_url, is_draft)
             if medium_url:
-                published_to.append("Medium API")
+                published_to.append("Medium")
                 post_url = medium_url
 
     from agent_m.gemini.client import get_tracker
@@ -303,7 +303,9 @@ async def _publish_medium_playwright(article: Article, publish: bool) -> str | N
         return None
 
 
-async def _publish_medium_api(article, image_url, mode) -> str | None:
+async def _publish_medium_api(
+    article: Article, image_url: str | None, canonical_url: str | None, draft: bool
+) -> str | None:
     try:
         from agent_m.medium.publisher import MediumClient
         content = _assemble_markdown(article.title, article.body, image_url)
@@ -313,9 +315,12 @@ async def _publish_medium_api(article, image_url, mode) -> str | None:
                 title=article.title,
                 content_markdown=content,
                 tags=article.tags,
-                publish_status=mode,
+                publish_status="draft" if draft else "public",
+                canonical_url=canonical_url,
             )
-            return result.get("data", {}).get("url")
+            url = result.get("data", {}).get("url")
+            log.info("Published to Medium: %s", url)
+            return url
         finally:
             await medium.close()
     except Exception as exc:

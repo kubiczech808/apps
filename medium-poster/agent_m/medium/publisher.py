@@ -40,16 +40,19 @@ class MediumClient:
         title: str,
         content_markdown: str,
         tags: list[str],
-        publish_status: str = "draft",
+        publish_status: str = "public",
+        canonical_url: str | None = None,
     ) -> dict:
         author_id = await self.get_author_id()
-        payload = {
-            "title": title,
+        payload: dict = {
+            "title": title[:100],
             "contentFormat": "markdown",
             "content": content_markdown,
-            "tags": tags,
+            "tags": tags[:3],
             "publishStatus": publish_status,
         }
+        if canonical_url:
+            payload["canonicalUrl"] = canonical_url
         resp = await self._client.post(
             f"{self.BASE_URL}/users/{author_id}/posts",
             json=payload,

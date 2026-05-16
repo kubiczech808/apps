@@ -28,9 +28,11 @@ class HashnodePublisher:
     API_URL = "https://gql.hashnode.com"
 
     def __init__(self) -> None:
+        token = config.hashnode_token
+        auth_value = f"Bearer {token}" if not token.lower().startswith("bearer") else token
         self._client = httpx.AsyncClient(
             headers={
-                "Authorization": config.hashnode_token,
+                "Authorization": auth_value,
                 "Content-Type": "application/json",
             },
             timeout=30.0,
