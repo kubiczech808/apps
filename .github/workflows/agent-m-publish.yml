@@ -54,8 +54,8 @@ jobs:
             "TELEGRAM_ADMIN_CHAT_ID=${{ secrets.M_TELEGRAM_CHAT_ID }}" \
             "GITHUB_PAT=${{ secrets.PAT_GITHUB_MEDIUM }}" \
             "DEVTO_API_KEY=${{ secrets.DEVTO_API_KEY }}" \
-            "HASHNODE_TOKEN=${{ secrets.HASHNODE_TOKEN }}" \
-            "HASHNODE_PUBLICATION_ID=${{ secrets.HASHNODE_PUBLICATION_ID }}" \
+            "HASHNODE_TOKEN=" \
+            "HASHNODE_PUBLICATION_ID=" \
             "MEDIUM_PLAYWRIGHT=false" \
             "MEDIUM_TOKEN=" \
             "IMGUR_CLIENT_ID=" \
