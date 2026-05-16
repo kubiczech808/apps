@@ -106,11 +106,6 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
             caption=result.article.title[:200],
         )
 
-    body_preview = result.article.body[:3500]
-    if len(result.article.body) > 3500:
-        body_preview += "\n\n... (truncated)"
-    await msg.reply_text(body_preview)
-
     if mode == "preview":
         await msg.reply_text(
             f"Preview complete — not published.\n"
@@ -193,6 +188,26 @@ async def medium_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except Exception as e:
         log.exception("Medium login failed")
         await msg.reply_text(f"Medium login failed: {e}")
+
+
+@admin_only
+async def hashnode_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    await msg.reply_text(
+        "Opening Hashnode login browser on the host machine...\n"
+        "Log in to Hashnode, then close the browser window.\n"
+        "Cookies will be saved automatically."
+    )
+    try:
+        from agent_m.publishers.hashnode_playwright import HashnodePlaywrightPublisher
+        pub = HashnodePlaywrightPublisher()
+        await pub.login()
+        await msg.reply_text("Hashnode session saved. Future publishes will use this session.")
+    except Exception as e:
+        log.exception("Hashnode login failed")
+        await msg.reply_text(f"Hashnode login failed: {e}")
 
 
 @admin_only

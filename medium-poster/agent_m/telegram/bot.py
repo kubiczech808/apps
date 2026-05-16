@@ -69,4 +69,5 @@ def build_app():
     app.add_handler(CommandHandler("topics", handlers.topics_cmd))
     app.add_handler(CommandHandler("status", handlers.status_cmd))
     app.add_handler(CommandHandler("medium_login", handlers.medium_login_cmd))
+    app.add_handler(CommandHandler("hashnode_login", handlers.hashnode_login_cmd))
     return app

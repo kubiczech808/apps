@@ -62,11 +62,6 @@ async def run(mode: str, slug: str | None) -> None:
 
     await send_telegram(summary, result.image_bytes)
 
-    body_preview = result.article.body[:3500]
-    if len(result.article.body) > 3500:
-        body_preview += "\n\n... (truncated)"
-    await send_telegram(body_preview)
-
     print("AGENT_M_RESULT_START")
     print(f"Title: {result.article.title}")
     print(f"Published to: {platforms}")

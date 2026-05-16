@@ -140,7 +140,14 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
             platform_errors.append("Dev.to: DEVTO_API_KEY missing")
 
         # 3. Hashnode
-        if config.hashnode_token and config.hashnode_publication_id:
+        if config.hashnode_playwright:
+            hn_url, hn_error = await _publish_hashnode_playwright(article, rss_url, image_url)
+            if hn_url:
+                published_to.append("Hashnode")
+                post_url = hn_url
+            elif hn_error:
+                platform_errors.append(f"Hashnode: {hn_error}")
+        elif config.hashnode_token and config.hashnode_publication_id:
             hn_url, hn_error = await _publish_hashnode(article, rss_url, image_url)
             if hn_url:
                 published_to.append("Hashnode")
@@ -148,7 +155,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
             elif hn_error:
                 platform_errors.append(f"Hashnode: {hn_error}")
         else:
-            platform_errors.append("Hashnode: HASHNODE_TOKEN or HASHNODE_PUBLICATION_ID missing")
+            platform_errors.append("Hashnode: not configured (set HASHNODE_PLAYWRIGHT=true or API token)")
 
         # 4. Medium (Playwright)
         if config.medium_playwright:
@@ -263,6 +270,25 @@ async def _publish_devto(
             await pub.close()
     except Exception as exc:
         log.warning("Dev.to publish failed: %s", exc)
+        return None, str(exc)
+
+
+async def _publish_hashnode_playwright(
+    article: Article, canonical_url: str | None, cover_image: str | None = None,
+) -> tuple[str | None, str | None]:
+    try:
+        from agent_m.publishers.hashnode_playwright import HashnodePlaywrightPublisher
+        pub = HashnodePlaywrightPublisher()
+        result = await pub.publish(
+            title=article.title,
+            body_markdown=article.body,
+            tags=article.tags,
+            canonical_url=canonical_url,
+            cover_image_url=cover_image,
+        )
+        return result, None
+    except Exception as exc:
+        log.warning("Hashnode Playwright publish failed: %s", exc)
         return None, str(exc)
 
 

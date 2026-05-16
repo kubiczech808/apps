@@ -45,6 +45,17 @@ jobs:
         working-directory: medium-poster
         run: pip install .
 
+      - name: Install Playwright browser
+        working-directory: medium-poster
+        run: playwright install chromium --with-deps
+
+      - name: Restore Hashnode cookies
+        if: ${{ secrets.HASHNODE_COOKIES != '' }}
+        working-directory: medium-poster
+        run: |
+          mkdir -p data
+          printf '%s' "${{ secrets.HASHNODE_COOKIES }}" | base64 -d > data/hashnode_cookies.json
+
       - name: Create .env
         working-directory: medium-poster
         run: |
@@ -56,6 +67,7 @@ jobs:
             "DEVTO_API_KEY=${{ secrets.DEVTO_API_KEY }}" \
             "HASHNODE_TOKEN=${{ secrets.HASHNODE_TOKEN }}" \
             "HASHNODE_PUBLICATION_ID=${{ secrets.HASHNODE_PUBLICATION_ID }}" \
+            "HASHNODE_PLAYWRIGHT=true" \
             "MEDIUM_PLAYWRIGHT=false" \
             "MEDIUM_TOKEN=${{ secrets.MEDIUM_TOKEN }}" \
             "IMGUR_CLIENT_ID=" \
