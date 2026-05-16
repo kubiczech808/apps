@@ -147,7 +147,6 @@ async def generate_image(prompt: str) -> bytes:
 
 
 _IMAGE_MODELS = [
-    "gemini-2.0-flash",
     "gemini-2.5-flash-image",
     "gemini-3.1-flash-image-preview",
 ]

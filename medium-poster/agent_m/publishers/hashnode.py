@@ -25,7 +25,7 @@ mutation PublishPost($input: PublishPostInput!) {
 
 
 class HashnodePublisher:
-    API_URL = "https://gql.hashnode.com/"
+    API_URL = "https://gql.hashnode.com"
 
     def __init__(self) -> None:
         self._client = httpx.AsyncClient(
@@ -34,7 +34,6 @@ class HashnodePublisher:
                 "Content-Type": "application/json",
             },
             timeout=30.0,
-            follow_redirects=True,
         )
 
     async def publish(
