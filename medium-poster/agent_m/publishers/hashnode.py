@@ -82,7 +82,13 @@ class HashnodePublisher:
         last_exc: Exception | None = None
         for attempt in range(3):
             try:
-                resp = await self._client.post(self.API_URL, json=payload)
+                url = self.API_URL
+                resp = await self._client.post(url, json=payload)
+                if resp.status_code in (301, 302, 307, 308):
+                    location = resp.headers.get("location")
+                    if location:
+                        log.info("Hashnode redirect %d → %s", resp.status_code, location)
+                        resp = await self._client.post(location, json=payload)
                 if resp.status_code not in (429, 500, 502, 503, 504):
                     return resp
                 last_exc = RuntimeError(f"Hashnode HTTP {resp.status_code}: {resp.text[:200]}")
