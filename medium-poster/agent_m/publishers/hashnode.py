@@ -34,6 +34,7 @@ class HashnodePublisher:
                 "Content-Type": "application/json",
             },
             timeout=30.0,
+            follow_redirects=True,
         )
 
     async def publish(

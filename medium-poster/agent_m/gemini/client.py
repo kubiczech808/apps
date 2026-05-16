@@ -146,7 +146,11 @@ async def generate_image(prompt: str) -> bytes:
     return await asyncio.to_thread(_sync_generate)
 
 
-_IMAGE_MODELS = ["gemini-2.5-flash-image", "gemini-2.0-flash-exp", "gemini-2.0-flash"]
+_IMAGE_MODELS = [
+    "gemini-2.0-flash",
+    "gemini-2.5-flash-image",
+    "gemini-3.1-flash-image-preview",
+]
 
 
 async def generate_image_native(prompt: str) -> bytes:
