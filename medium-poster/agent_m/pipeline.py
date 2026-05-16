@@ -92,10 +92,22 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
     image_url: str | None = None
     try:
         image_bytes = await generate_header_image(topic)
-        if mode != "preview" and config.imgur_client_id:
-            from agent_m.images.uploader import upload_to_imgur
-            image_url = await upload_to_imgur(image_bytes)
-            log.info("Uploaded image: %s", image_url)
+        if mode != "preview" and image_bytes:
+            if config.imgur_client_id:
+                from agent_m.images.uploader import upload_to_imgur
+                image_url = await upload_to_imgur(image_bytes)
+            elif config.github_pat:
+                gh = GitHubPagesPublisher()
+                try:
+                    image_url = await gh.publish_binary_file(
+                        path=f"articles/images/{topic.slug}.jpg",
+                        data=image_bytes,
+                        message=f"Add header image: {topic.slug}",
+                    )
+                finally:
+                    await gh.close()
+            if image_url:
+                log.info("Uploaded image: %s", image_url)
     except Exception as exc:
         log.warning("Image generation/upload failed, continuing without image: %s", exc)
 
@@ -118,7 +130,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
 
         # 2. Dev.to
         if config.devto_api_key:
-            devto_url, devto_error = await _publish_devto(article, is_draft, rss_url)
+            devto_url, devto_error = await _publish_devto(article, is_draft, rss_url, image_url)
             if devto_url:
                 published_to.append("Dev.to")
                 post_url = devto_url
@@ -129,7 +141,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
 
         # 3. Hashnode
         if config.hashnode_token and config.hashnode_publication_id:
-            hn_url, hn_error = await _publish_hashnode(article, rss_url)
+            hn_url, hn_error = await _publish_hashnode(article, rss_url, image_url)
             if hn_url:
                 published_to.append("Hashnode")
                 post_url = hn_url
@@ -231,7 +243,9 @@ async def _publish_rss(history, topic, article, image_url) -> str | None:
         return None
 
 
-async def _publish_devto(article: Article, draft: bool, canonical_url: str | None) -> tuple[str | None, str | None]:
+async def _publish_devto(
+    article: Article, draft: bool, canonical_url: str | None, cover_image: str | None = None,
+) -> tuple[str | None, str | None]:
     try:
         from agent_m.publishers.devto import DevToPublisher
         pub = DevToPublisher()
@@ -242,6 +256,7 @@ async def _publish_devto(article: Article, draft: bool, canonical_url: str | Non
                 tags=article.tags,
                 published=not draft,
                 canonical_url=canonical_url,
+                main_image=cover_image,
             )
             return result.get("url"), None
         finally:
@@ -251,7 +266,9 @@ async def _publish_devto(article: Article, draft: bool, canonical_url: str | Non
         return None, str(exc)
 
 
-async def _publish_hashnode(article: Article, canonical_url: str | None) -> tuple[str | None, str | None]:
+async def _publish_hashnode(
+    article: Article, canonical_url: str | None, cover_image: str | None = None,
+) -> tuple[str | None, str | None]:
     try:
         from agent_m.publishers.hashnode import HashnodePublisher
         pub = HashnodePublisher()
@@ -261,6 +278,7 @@ async def _publish_hashnode(article: Article, canonical_url: str | None) -> tupl
                 body_markdown=article.body,
                 tags=article.tags,
                 canonical_url=canonical_url,
+                cover_image_url=cover_image,
             )
             return result.get("url"), None
         finally:

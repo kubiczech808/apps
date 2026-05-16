@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -77,15 +76,25 @@ class TopicResearcher:
             previous_titles=titles_text,
         )
         raw = await generate_text(prompt, temperature=0.9, max_tokens=1024)
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start == -1 or end == 0:
-            raise RuntimeError(f"Failed to parse topic response: {raw[:200]}")
-        data = json.loads(raw[start:end])
+
+        title = ""
+        angle = ""
+        tags: list[str] = []
+        for line in raw.splitlines():
+            if line.startswith("TITLE:"):
+                title = line[len("TITLE:"):].strip()
+            elif line.startswith("ANGLE:"):
+                angle = line[len("ANGLE:"):].strip()
+            elif line.startswith("TAGS:"):
+                tags = [t.strip() for t in line[len("TAGS:"):].strip().split(",") if t.strip()][:3]
+
+        if not title or not angle:
+            raise RuntimeError(f"Failed to parse topic response: {raw[:300]}")
+
         return Topic(
-            title=data["title"],
-            angle=data["angle"],
-            tags=data.get("tags", ["Bitcoin", "DCA", "Investing"])[:3],
+            title=title,
+            angle=angle,
+            tags=tags or ["Bitcoin", "DCA", "Investing"],
             slug=f"generated-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}",
         )
 
@@ -93,13 +102,16 @@ class TopicResearcher:
 _FALLBACK_PROMPT = """You are a Bitcoin DCA content strategist for {site_name}.
 Generate 1 unique, high-value blog topic about Bitcoin Dollar-Cost Averaging.
 
-Previously covered topics to AVOID:
+Previously covered topics to AVOID (must be substantially different in angle and content):
 {previous_titles}
 
 Requirements:
 - Must be genuinely useful and educational
+- Must be DIFFERENT from all previously covered topics — not just a rephrasing
 - Should naturally allow references to a Bitcoin DCA automation tool
 - Timely and relevant to current market conditions
 
-Respond ONLY with a JSON object:
-{{"title": "...", "angle": "...", "tags": ["tag1", "tag2", "tag3"]}}"""
+Respond using EXACTLY this format (plain text, no JSON):
+TITLE: <article title>
+ANGLE: <1-2 sentence description of the unique angle>
+TAGS: <tag1>, <tag2>, <tag3>"""

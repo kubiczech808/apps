@@ -127,8 +127,6 @@ async def generate_text(
 
 
 async def generate_image(prompt: str) -> bytes:
-    import asyncio
-
     client = get_client()
 
     def _sync_generate() -> bytes:
@@ -146,3 +144,32 @@ async def generate_image(prompt: str) -> bytes:
         return response.generated_images[0].image.image_bytes
 
     return await asyncio.to_thread(_sync_generate)
+
+
+_IMAGE_MODELS = ["gemini-2.0-flash-exp", "gemini-2.0-flash"]
+
+
+async def generate_image_native(prompt: str) -> bytes:
+    client = get_client()
+    last_error: Exception | None = None
+
+    for model in _IMAGE_MODELS:
+        try:
+            response = await client.aio.models.generate_content(
+                model=model,
+                contents=f"Generate an image: {prompt}",
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE", "TEXT"],
+                ),
+            )
+            if response.candidates:
+                for part in response.candidates[0].content.parts:
+                    if part.inline_data is not None:
+                        log.info("Generated image with %s (%d bytes)", model, len(part.inline_data.data))
+                        return part.inline_data.data
+            raise RuntimeError(f"No image data in {model} response")
+        except Exception as e:
+            last_error = e
+            log.warning("Native image gen %s failed: %s", model, str(e)[:200])
+
+    raise RuntimeError(f"All native image models failed. Last: {last_error}")

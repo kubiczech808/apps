@@ -51,6 +51,24 @@ class GitHubPagesPublisher:
         log.info("Published to GitHub: %s", html_url)
         return html_url
 
+    async def publish_binary_file(self, path: str, data: bytes, message: str) -> str:
+        url = f"{self.API_BASE}/repos/{self._owner}/{self._repo}/contents/{path}"
+        sha = await self._get_file_sha(url)
+        payload = {
+            "message": message,
+            "content": base64.b64encode(data).decode(),
+            "branch": self._branch,
+        }
+        if sha:
+            payload["sha"] = sha
+        resp = await self._client.put(url, json=payload)
+        if resp.status_code not in (200, 201):
+            log.error("GitHub binary upload error %d: %s", resp.status_code, resp.text[:500])
+            resp.raise_for_status()
+        pages_url = f"https://{self._owner}.github.io/{self._repo}/{path}"
+        log.info("Uploaded binary to GitHub Pages: %s", pages_url)
+        return pages_url
+
     async def publish_article_and_feed(
         self,
         slug: str,

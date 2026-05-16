@@ -2,7 +2,7 @@ name: Agent M — Publish Article
 
 on:
   schedule:
-    - cron: '58 10 * * *'
+    - cron: '0 15 * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -60,14 +60,14 @@ jobs:
             "SITE_NAME=btc-dca.com" \
             "PUBLISH_HOUR=9" \
             "PUBLISH_MINUTE=0" \
-            "LOG_LEVEL=WARNING" > .env
+            "LOG_LEVEL=INFO" > .env
 
       - name: Run pipeline
         id: pipeline
         working-directory: medium-poster
         continue-on-error: true
         run: |
-          MODE="${{ github.event.inputs.mode || 'draft' }}"
+          MODE="${{ github.event.inputs.mode || 'post' }}"
           SLUG="${{ github.event.inputs.slug }}"
           if [ -n "$SLUG" ]; then
             python -m agent_m.cli "$MODE" --slug "$SLUG" 2>&1 | tee /tmp/pipeline_raw.log

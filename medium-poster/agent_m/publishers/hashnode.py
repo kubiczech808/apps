@@ -42,6 +42,7 @@ class HashnodePublisher:
         body_markdown: str,
         tags: list[str],
         canonical_url: str | None = None,
+        cover_image_url: str | None = None,
     ) -> dict:
         tag_objects = [{"slug": normalize_tag_slug(t), "name": t[:32]} for t in tags[:5]]
 
@@ -55,6 +56,8 @@ class HashnodePublisher:
         }
         if canonical_url:
             variables["input"]["originalArticleURL"] = canonical_url
+        if cover_image_url:
+            variables["input"]["coverImageOptions"] = {"coverImageURL": cover_image_url}
 
         resp = await self._post_with_retry({"query": _PUBLISH_MUTATION, "variables": variables})
         if resp.status_code != 200:

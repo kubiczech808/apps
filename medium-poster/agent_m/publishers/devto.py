@@ -29,6 +29,7 @@ class DevToPublisher:
         tags: list[str],
         published: bool = True,
         canonical_url: str | None = None,
+        main_image: str | None = None,
     ) -> dict:
         tags_clean = normalize_tags(tags)
 
@@ -42,6 +43,8 @@ class DevToPublisher:
         }
         if canonical_url:
             payload["article"]["canonical_url"] = canonical_url
+        if main_image:
+            payload["article"]["main_image"] = main_image
 
         resp = await self._client.post(f"{self.API_BASE}/articles", json=payload)
         if resp.status_code not in (200, 201):

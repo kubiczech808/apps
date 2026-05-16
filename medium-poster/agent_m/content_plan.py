@@ -554,7 +554,19 @@ def get_plan() -> list[ContentPlan]:
 
 
 def get_available(used_slugs: set[str]) -> list[ContentPlan]:
-    return [p for p in CONTENT_PLAN if p.slug not in used_slugs]
+    available = [p for p in CONTENT_PLAN if p.slug not in used_slugs]
+    pillar_order = ["basics", "strategy", "data", "howto", "psychology", "advanced"]
+    used_per_pillar: dict[str, int] = {}
+    for p in CONTENT_PLAN:
+        if p.slug in used_slugs:
+            used_per_pillar[p.pillar] = used_per_pillar.get(p.pillar, 0) + 1
+
+    def _sort_key(plan: ContentPlan) -> tuple[int, int]:
+        used_count = used_per_pillar.get(plan.pillar, 0)
+        pillar_idx = pillar_order.index(plan.pillar) if plan.pillar in pillar_order else 99
+        return (used_count, pillar_idx)
+
+    return sorted(available, key=_sort_key)
 
 
 def get_by_slug(slug: str) -> ContentPlan | None:
