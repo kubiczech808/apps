@@ -10,6 +10,7 @@ from telegram.ext import ContextTypes
 
 from agent_m.config import config
 from agent_m.content_plan import get_plan
+from agent_m.feedback import add_feedback, get_all_feedback, clear_feedback
 from agent_m.gemini.client import get_tracker
 from agent_m.history import History
 from agent_m.pipeline import run_pipeline
@@ -46,7 +47,11 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/post [slug] — publish to all platforms\n"
         "/draft [slug] — publish as draft\n"
         "/preview [slug] — generate without publishing\n"
-        "/medium_login — save Medium session (run once on RPi)\n"
+        "/feedback <text> — add standing instruction for future articles\n"
+        "/feedback — show all active feedback\n"
+        "/feedback_clear — remove all feedback\n"
+        "/medium_login — save Medium session\n"
+        "/hashnode_login — save Hashnode session\n"
         "/history — recent publications\n"
         "/topics — content plan status\n"
         "/status — token usage & schedule\n"
@@ -208,6 +213,34 @@ async def hashnode_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         log.exception("Hashnode login failed")
         await msg.reply_text(f"Hashnode login failed: {e}")
+
+
+@admin_only
+async def feedback_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    text = " ".join(context.args) if context.args else ""
+    if not text:
+        items = get_all_feedback()
+        if not items:
+            await msg.reply_text("No feedback stored yet.\n\nUsage: /feedback <your instruction>")
+        else:
+            lines = [f"{i}. {item}" for i, item in enumerate(items, 1)]
+            await msg.reply_text("Active feedback:\n\n" + "\n".join(lines))
+        return
+
+    count = add_feedback(text)
+    await msg.reply_text(f"Feedback #{count} saved. Will be applied to all future articles.")
+
+
+@admin_only
+async def feedback_clear_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+    clear_feedback()
+    await msg.reply_text("All feedback cleared.")
 
 
 @admin_only

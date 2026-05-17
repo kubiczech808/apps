@@ -4,7 +4,9 @@ from dataclasses import dataclass
 
 from agent_m.config import config
 from agent_m.content_plan import ContentPlan
+from agent_m.feedback import get_feedback_for_prompt
 from agent_m.gemini.client import generate_text
+from agent_m.site_context import format_site_context_for_prompt, get_site_context
 
 
 @dataclass
@@ -86,6 +88,18 @@ async def write_article_from_plan(plan: ContentPlan) -> Article:
     system = _SYSTEM_CONTEXT.format(
         site_url=config.site_url,
     )
+
+    # Load site context (pages, affiliate links) and user feedback
+    site_ctx = await get_site_context()
+    site_section = format_site_context_for_prompt(site_ctx)
+    feedback_section = get_feedback_for_prompt()
+
+    extra_sections = ""
+    if site_section:
+        extra_sections += f"\n\n{site_section}"
+    if feedback_section:
+        extra_sections += f"\n\n{feedback_section}"
+
     key_points_text = "\n".join(f"- {p}" for p in plan.key_points)
     user_prompt = _ARTICLE_PROMPT.format(
         title_hint=plan.title_hint,
@@ -96,7 +110,7 @@ async def write_article_from_plan(plan: ContentPlan) -> Article:
         key_points=key_points_text,
         site_url=config.site_url,
     )
-    prompt = f"{system}\n\n---\n\n{user_prompt}"
+    prompt = f"{system}{extra_sections}\n\n---\n\n{user_prompt}"
     raw = await generate_text(prompt, temperature=0.7, max_tokens=8192, json_mode=False)
 
     title = ""

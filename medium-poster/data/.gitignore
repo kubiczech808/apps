@@ -1,0 +1,7 @@
+# Ignore sensitive files
+*_cookies.json
+*.png
+# Keep feedback and site context
+!feedback.json
+!site_context.json
+!.gitignore
