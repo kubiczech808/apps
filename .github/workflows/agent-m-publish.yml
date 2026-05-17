@@ -85,7 +85,7 @@ jobs:
         working-directory: medium-poster
         continue-on-error: true
         run: |
-          MODE="${{ github.event.inputs.mode || 'update-links' }}"
+          MODE="${{ github.event.inputs.mode || 'post' }}"
           SLUG="${{ github.event.inputs.slug }}"
           if [ -n "$SLUG" ]; then
             python -m agent_m.cli "$MODE" --slug "$SLUG" 2>&1 | tee /tmp/pipeline_raw.log
