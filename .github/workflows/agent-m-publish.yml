@@ -19,7 +19,6 @@ on:
           - post
           - draft
           - preview
-          - update-links
       slug:
         description: 'Topic slug (optional — leave empty for next in plan)'
         required: false
@@ -47,6 +46,7 @@ jobs:
         run: pip install .
 
       - name: Install Playwright browser
+        if: ${{ secrets.HASHNODE_COOKIES != '' || secrets.MEDIUM_COOKIES != '' }}
         working-directory: medium-poster
         run: playwright install chromium --with-deps
 
