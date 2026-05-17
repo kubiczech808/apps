@@ -71,13 +71,17 @@ async def _scrape_site() -> dict:
     if not pages:
         pages = _default_pages()
 
-    if not affiliate_links:
-        affiliate_links = _default_affiliate_links()
+    # Affiliate links are always the stored defaults — scraping may find extras
+    stored_affiliates = _default_affiliate_links()
+    seen_names = {a["name"].lower() for a in stored_affiliates}
+    for a in affiliate_links:
+        if a["name"].lower() not in seen_names:
+            stored_affiliates.append(a)
 
     return {
         "site_url": site_url,
         "pages": pages,
-        "affiliate_links": affiliate_links,
+        "affiliate_links": stored_affiliates,
     }
 
 
@@ -154,7 +158,15 @@ def _default_pages() -> list[dict]:
 
 
 def _default_affiliate_links() -> list[dict]:
-    return []
+    return [
+        {"url": "https://advanced.coinbase.com/join/RSCXAJL", "name": "Coinbase", "category": "exchange", "priority": "high"},
+        {"url": "https://accounts.binance.com/en/register?ref=ABP939VR", "name": "Binance", "category": "exchange", "priority": "high"},
+        {"url": "https://partner.bybit.eu/b/ZKUSENOSTI", "name": "Bybit", "category": "exchange", "priority": "high"},
+        {"url": "https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0", "name": "Coinmate", "category": "exchange", "priority": "high"},
+        {"url": "https://www.okx.com/join/65437822", "name": "OKX", "category": "exchange", "priority": "low"},
+        {"url": "https://partner.bybit.com/b/BTCDCA", "name": "Bybit Global", "category": "exchange", "priority": "low"},
+        {"url": "https://bit.ly/buy-trezor-t", "name": "Trezor", "category": "hardware_wallet", "priority": "high"},
+    ]
 
 
 def format_site_context_for_prompt(context: dict) -> str:
@@ -170,11 +182,21 @@ def format_site_context_for_prompt(context: dict) -> str:
         lines.append("")
 
     if context.get("affiliate_links"):
-        lines.append("Affiliate/referral links (use these when mentioning exchanges or wallets):")
-        for a in context["affiliate_links"]:
+        high = [a for a in context["affiliate_links"] if a.get("priority") != "low"]
+        low = [a for a in context["affiliate_links"] if a.get("priority") == "low"]
+        lines.append("Affiliate/referral links — USE THESE when mentioning exchanges or wallets:")
+        for a in high:
             lines.append(f"  - {a['name']}: {a['url']}")
+        if low:
+            lines.append("  Lower priority (use only if highly relevant):")
+            for a in low:
+                lines.append(f"  - {a['name']}: {a['url']}")
         lines.append("")
-        lines.append("IMPORTANT: When recommending an exchange or wallet, ALWAYS use the affiliate link above.")
-        lines.append("Weave them naturally into the text as helpful suggestions, not pushy ads.")
+        lines.append("RULES for affiliate links:")
+        lines.append("- When the article mentions buying Bitcoin, choosing an exchange, or self-custody,")
+        lines.append("  naturally include 1-3 affiliate links as helpful recommendations.")
+        lines.append("- Use keyword anchor text: e.g. [buy Bitcoin on Coinbase](affiliate_url)")
+        lines.append("- Do NOT list all exchanges — pick the 1-2 most relevant to the article's context.")
+        lines.append("- For hardware wallets / self-custody topics, always link Trezor.")
 
     return "\n".join(lines)
