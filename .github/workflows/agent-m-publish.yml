@@ -57,6 +57,13 @@ jobs:
           mkdir -p data
           printf '%s' "${{ secrets.HASHNODE_COOKIES }}" | base64 -d > data/hashnode_cookies.json
 
+      - name: Restore Medium cookies
+        if: ${{ secrets.MEDIUM_COOKIES != '' }}
+        working-directory: medium-poster
+        run: |
+          mkdir -p data
+          printf '%s' "${{ secrets.MEDIUM_COOKIES }}" | base64 -d > data/medium_cookies.json
+
       - name: Create .env
         working-directory: medium-poster
         run: |
@@ -69,7 +76,7 @@ jobs:
             "HASHNODE_TOKEN=${{ secrets.HASHNODE_TOKEN }}" \
             "HASHNODE_PUBLICATION_ID=${{ secrets.HASHNODE_PUBLICATION_ID }}" \
             "HASHNODE_PLAYWRIGHT=true" \
-            "MEDIUM_PLAYWRIGHT=false" \
+            "MEDIUM_PLAYWRIGHT=true" \
             "MEDIUM_TOKEN=${{ secrets.MEDIUM_TOKEN }}" \
             "IMGUR_CLIENT_ID=" \
             "GITHUB_PAGES_REPO=kubiczech808/apps" \
