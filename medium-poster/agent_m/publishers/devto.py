@@ -68,6 +68,37 @@ class DevToPublisher:
         log.info("Published to Dev.to: %s", data.get("url"))
         return data
 
+    async def list_my_articles(self) -> list[dict]:
+        articles = []
+        page = 1
+        while True:
+            resp = await self._client.get(
+                f"{self.API_BASE}/articles/me/published",
+                params={"page": page, "per_page": 30},
+            )
+            if resp.status_code != 200:
+                break
+            batch = resp.json()
+            if not batch:
+                break
+            articles.extend(batch)
+            page += 1
+        return articles
+
+    async def get_article(self, article_id: int) -> dict:
+        resp = await self._client.get(f"{self.API_BASE}/articles/{article_id}")
+        if resp.status_code != 200:
+            raise RuntimeError(f"Dev.to GET article {article_id} failed: {resp.status_code}")
+        return resp.json()
+
+    async def update_article(self, article_id: int, body_markdown: str) -> dict:
+        payload = {"article": {"body_markdown": body_markdown}}
+        resp = await self._client.put(f"{self.API_BASE}/articles/{article_id}", json=payload)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Dev.to PUT {article_id} failed {resp.status_code}: {resp.text[:300]}")
+        log.info("Updated Dev.to article %d", article_id)
+        return resp.json()
+
     async def close(self) -> None:
         await self._client.aclose()
 

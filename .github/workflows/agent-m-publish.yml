@@ -19,6 +19,7 @@ on:
           - post
           - draft
           - preview
+          - update-links
       slug:
         description: 'Topic slug (optional — leave empty for next in plan)'
         required: false

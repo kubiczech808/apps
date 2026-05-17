@@ -77,7 +77,7 @@ async def run(mode: str, slug: str | None) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Agent M — one-shot publish")
-    parser.add_argument("mode", choices=["post", "draft", "preview"], default="draft", nargs="?")
+    parser.add_argument("mode", choices=["post", "draft", "preview", "update-links"], default="draft", nargs="?")
     parser.add_argument("--slug", help="Specific topic slug from content plan")
     args = parser.parse_args()
 
@@ -85,10 +85,14 @@ def main() -> None:
         level=config.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    # Suppress httpx/httpcore request logs to avoid exposing tokens in URLs
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    asyncio.run(run(mode=args.mode, slug=args.slug))
+
+    if args.mode == "update-links":
+        from agent_m.update_links import main as update_main
+        update_main()
+    else:
+        asyncio.run(run(mode=args.mode, slug=args.slug))
 
 
 if __name__ == "__main__":
