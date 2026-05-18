@@ -31,14 +31,14 @@ async def generate_header_image(topic: Topic) -> bytes:
     prompt = (
         f"Blog header image: {topic.title}.{angle_hint} "
         f"Style: {style}, Bitcoin orange (#F7931A) accents. "
-        f"No text, no watermarks, no logos, no letters. 16:9 aspect ratio."
+        f"No text, no watermarks, no logos, no letters. Wide panoramic banner, aspect ratio 1000:420."
     )
     return await _generate_with_pollinations(prompt, seed=seed)
 
 
 async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> bytes:
     url = _POLLINATIONS_URL.format(prompt=quote(prompt))
-    params = {"width": 1200, "height": 630, "model": "klein", "nologo": "true"}
+    params = {"width": 1000, "height": 420, "model": "klein", "nologo": "true"}
     if seed is not None:
         params["seed"] = str(seed)
 
