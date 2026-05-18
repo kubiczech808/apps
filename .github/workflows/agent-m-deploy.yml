@@ -1,0 +1,41 @@
+name: Agent M — Deploy Bot to RPi
+
+on:
+  push:
+    branches:
+      - claude/multi-platform-auto-poster-p3uBn
+    paths:
+      - 'medium-poster/agent_m/**'
+      - 'medium-poster/pyproject.toml'
+      - 'medium-poster/data/feedback.json'
+      - 'scripts/agent-m-bot.sh'
+      - '.github/agent-m-deploy-trigger.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: claude/multi-platform-auto-poster-p3uBn
+
+      - name: Copy bot script
+        run: |
+          sudo cp scripts/agent-m-bot.sh /home/openclaw2/scripts/agent-m-bot.sh
+          sudo chmod +x /home/openclaw2/scripts/agent-m-bot.sh
+
+      - name: Sync code to deploy dir
+        run: |
+          sudo mkdir -p /home/openclaw2/apps/medium-poster
+          sudo rsync -a --delete \
+            medium-poster/ /home/openclaw2/apps/medium-poster/ \
+            --exclude '.venv' \
+            --exclude '__pycache__'
+
+      - name: Restart bot
+        run: |
+          sudo -u openclaw2 bash /home/openclaw2/scripts/agent-m-bot.sh
