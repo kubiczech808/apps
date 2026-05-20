@@ -159,10 +159,12 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
 
         # 4. Medium (Playwright)
         if config.medium_playwright:
-            medium_url = await _publish_medium_playwright(article, not is_draft)
+            medium_url, medium_error = await _publish_medium_playwright(article, not is_draft)
             if medium_url:
                 published_to.append("Medium")
                 post_url = medium_url
+            elif medium_error:
+                platform_errors.append(f"Medium: {medium_error}")
 
         # 5. Medium (API — integration token)
         if config.medium_token and not config.medium_playwright:
@@ -314,19 +316,20 @@ async def _publish_hashnode(
         return None, str(exc)
 
 
-async def _publish_medium_playwright(article: Article, publish: bool) -> str | None:
+async def _publish_medium_playwright(article: Article, publish: bool) -> tuple[str | None, str | None]:
     try:
         from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
         pub = MediumPlaywrightPublisher()
-        return await pub.publish(
+        result = await pub.publish(
             title=article.title,
             body_markdown=article.body,
             tags=article.tags,
             publish=publish,
         )
+        return result, None
     except Exception as exc:
         log.warning("Medium Playwright publish failed: %s", exc)
-        return None
+        return None, str(exc)
 
 
 async def _publish_medium_api(
