@@ -28,14 +28,16 @@ class MediumPlaywrightPublisher:
             page = await context.new_page()
 
             await page.goto("https://medium.com/m/signin")
-            log.info("Please log in to Medium in the browser window...")
-            log.info("After login, navigate to medium.com and press Enter in terminal.")
+            print("\n>>> Přihlaš se do Medium v prohlížeči.")
+            print(">>> Až budeš přihlášen/a a uvidíš svůj feed, stiskni Enter zde...")
 
-            await page.wait_for_url("**/medium.com/**", timeout=300_000)
-            await asyncio.sleep(3)
+            await asyncio.get_event_loop().run_in_executor(None, input)
 
+            await asyncio.sleep(2)
             cookies = await context.cookies()
+            _COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
             _COOKIES_FILE.write_text(json.dumps(cookies, indent=2))
+            print(f">>> Cookies uloženy: {_COOKIES_FILE}")
             log.info("Cookies saved to %s", _COOKIES_FILE)
 
             await browser.close()

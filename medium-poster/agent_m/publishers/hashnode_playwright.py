@@ -28,14 +28,16 @@ class HashnodePlaywrightPublisher:
             page = await context.new_page()
 
             await page.goto("https://hashnode.com")
-            log.info("Please log in to Hashnode in the browser window...")
+            print("\n>>> Přihlaš se do Hashnode v prohlížeči.")
+            print(">>> Až budeš přihlášen/a a uvidíš svůj dashboard, stiskni Enter zde...")
 
-            # Wait until the user is logged in (user menu appears)
-            await page.wait_for_selector('[aria-label="User menu"], [data-testid="user-menu"], .user-avatar', timeout=300_000)
+            await asyncio.get_event_loop().run_in_executor(None, input)
+
             await asyncio.sleep(2)
-
             cookies = await context.cookies()
+            _COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
             _COOKIES_FILE.write_text(json.dumps(cookies, indent=2))
+            print(f">>> Cookies uloženy: {_COOKIES_FILE}")
             log.info("Hashnode cookies saved to %s", _COOKIES_FILE)
             await browser.close()
 
