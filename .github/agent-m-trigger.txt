@@ -1,1 +1,1 @@
-trigger: manual-test-1
+trigger: manual-test-2
