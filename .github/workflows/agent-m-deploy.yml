@@ -26,23 +26,24 @@ jobs:
 
       - name: Copy bot script
         run: |
-          mkdir -p /home/openclaw2/scripts
-          cp scripts/agent-m-bot.sh /home/openclaw2/scripts/agent-m-bot.sh
-          chmod +x /home/openclaw2/scripts/agent-m-bot.sh
+          mkdir -p /home/jakub/scripts
+          cp scripts/agent-m-bot.sh /home/jakub/scripts/agent-m-bot.sh
+          chmod +x /home/jakub/scripts/agent-m-bot.sh
 
       - name: Sync code to deploy dir
         run: |
-          mkdir -p /home/openclaw2/apps/medium-poster
+          mkdir -p /home/jakub/apps/medium-poster
           rsync -a --delete \
-            medium-poster/ /home/openclaw2/apps/medium-poster/ \
+            medium-poster/ /home/jakub/apps/medium-poster/ \
             --exclude '.venv' \
-            --exclude '__pycache__'
+            --exclude '__pycache__' \
+            --exclude '.env'
 
       - name: Restart bot
         id: restart
         continue-on-error: true
         run: |
-          bash /home/openclaw2/scripts/agent-m-bot.sh 2>&1 | tee /tmp/deploy.log
+          bash /home/jakub/scripts/agent-m-bot.sh 2>&1 | tee /tmp/deploy.log
 
       - name: Write deploy result to debug issue
         if: always()

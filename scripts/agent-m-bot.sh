@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="/home/openclaw2/apps/medium-poster"
+REPO_DIR="/home/jakub/apps/medium-poster"
 VENV_DIR="$REPO_DIR/.venv"
 PIDFILE="/tmp/agent-m-bot.pid"
 LOG="/tmp/agent-m-bot.log"
