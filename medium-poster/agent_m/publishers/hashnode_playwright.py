@@ -99,10 +99,13 @@ class HashnodePlaywrightPublisher:
                 return url
             except Exception:
                 log.exception("Hashnode Playwright publish failed")
-                screenshot_path = config.data_dir / "hashnode_error.png"
-                await page.screenshot(path=str(screenshot_path))
-                log.error("Screenshot saved: %s", screenshot_path)
-                return None
+                try:
+                    screenshot_path = config.data_dir / "hashnode_error.png"
+                    await page.screenshot(path=str(screenshot_path))
+                    log.error("Screenshot saved: %s", screenshot_path)
+                except Exception:
+                    pass
+                raise
             finally:
                 await browser.close()
 

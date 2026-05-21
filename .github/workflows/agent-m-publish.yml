@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - claude/multi-platform-auto-poster-p3uBn
+      - claude/energy-consumption-app-Nf7bh
     paths:
       - '.github/agent-m-trigger.txt'
   schedule:

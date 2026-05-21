@@ -37,6 +37,15 @@ async def run_pipeline(mode: str = "public", slug: str | None = None) -> Pipelin
 
 
 async def _run(mode: str, slug: str | None = None) -> PipelineResult:
+    log.info(
+        "Config: hashnode_playwright=%s, medium_playwright=%s, "
+        "hashnode_token=%s, medium_token=%s, devto_api_key=%s",
+        config.hashnode_playwright,
+        config.medium_playwright,
+        bool(config.hashnode_token),
+        bool(config.medium_token),
+        bool(config.devto_api_key),
+    )
     missing = []
     if not config.gemini_api_key:
         missing.append("GEMINI_API_KEY")
