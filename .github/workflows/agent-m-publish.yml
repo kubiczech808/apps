@@ -3,10 +3,9 @@ name: Agent M — Publish Article
 on:
   push:
     branches:
-      - claude/multi-platform-auto-poster-p3uBn
       - claude/energy-consumption-app-Nf7bh
     paths:
-      - '.github/agent-m-trigger.txt'
+      - .github/agent-m-trigger.txt
   schedule:
     - cron: '59 15 * * *'
   workflow_dispatch:
@@ -47,23 +46,20 @@ jobs:
         run: pip install .
 
       - name: Install Playwright browser
-        if: ${{ secrets.HASHNODE_COOKIES != '' || secrets.MEDIUM_COOKIES != '' }}
         working-directory: medium-poster
         run: playwright install chromium --with-deps
 
       - name: Restore Hashnode cookies
-        if: ${{ secrets.HASHNODE_COOKIES != '' }}
         working-directory: medium-poster
         run: |
           mkdir -p data
-          printf '%s' "${{ secrets.HASHNODE_COOKIES }}" | base64 -d > data/hashnode_cookies.json
+          printf '%s' "${{ secrets.HASHNODE_COOKIES }}" | base64 -d > data/hashnode_cookies.json 2>/dev/null || true
 
       - name: Restore Medium cookies
-        if: ${{ secrets.MEDIUM_COOKIES != '' }}
         working-directory: medium-poster
         run: |
           mkdir -p data
-          printf '%s' "${{ secrets.MEDIUM_COOKIES }}" | base64 -d > data/medium_cookies.json
+          printf '%s' "${{ secrets.MEDIUM_COOKIES }}" | base64 -d > data/medium_cookies.json 2>/dev/null || true
 
       - name: Create .env
         working-directory: medium-poster
@@ -95,10 +91,15 @@ jobs:
         run: |
           MODE="${{ github.event.inputs.mode || 'post' }}"
           SLUG="${{ github.event.inputs.slug }}"
+          echo "=== Agent M Pipeline ===" > /tmp/pipeline_raw.log
+          echo "Mode: $MODE | Slug: $SLUG" >> /tmp/pipeline_raw.log
+          echo "Python: $(python --version)" >> /tmp/pipeline_raw.log
+          echo "Working dir: $(pwd)" >> /tmp/pipeline_raw.log
+          echo "---" >> /tmp/pipeline_raw.log
           if [ -n "$SLUG" ]; then
-            python -m agent_m.cli "$MODE" --slug "$SLUG" 2>&1 | tee /tmp/pipeline_raw.log
+            python -m agent_m.cli "$MODE" --slug "$SLUG" >> /tmp/pipeline_raw.log 2>&1
           else
-            python -m agent_m.cli "$MODE" 2>&1 | tee /tmp/pipeline_raw.log
+            python -m agent_m.cli "$MODE" >> /tmp/pipeline_raw.log 2>&1
           fi
 
       - name: Redact secrets from log
