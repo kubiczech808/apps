@@ -11,6 +11,13 @@ log = logging.getLogger(__name__)
 _COOKIES_FILE = config.data_dir / "hashnode_cookies.json"
 _WRITE_URL = "https://hashnode.com/draft"
 
+_STEALTH_SCRIPTS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+window.chrome = {runtime: {}};
+"""
+
 
 class HashnodePlaywrightPublisher:
     """Publishes articles to Hashnode via browser automation.
@@ -33,14 +40,12 @@ class HashnodePlaywrightPublisher:
             )
             context = await browser.new_context(
                 user_agent=(
-                    "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
                 ),
                 viewport={"width": 1280, "height": 800},
             )
-            await context.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
+            await context.add_init_script(_STEALTH_SCRIPTS)
             page = await context.new_page()
 
             await page.goto("https://hashnode.com")
@@ -78,17 +83,18 @@ class HashnodePlaywrightPublisher:
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
                 ],
             )
             context = await browser.new_context(
                 user_agent=(
-                    "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
                 ),
+                viewport={"width": 1280, "height": 800},
             )
-            await context.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
+            await context.add_init_script(_STEALTH_SCRIPTS)
 
             cookies = json.loads(_COOKIES_FILE.read_text())
             await context.add_cookies(cookies)
@@ -101,7 +107,7 @@ class HashnodePlaywrightPublisher:
                 log.exception("Hashnode Playwright publish failed")
                 try:
                     screenshot_path = config.data_dir / "hashnode_error.png"
-                    await page.screenshot(path=str(screenshot_path))
+                    await page.screenshot(path=str(screenshot_path), full_page=True)
                     log.error("Screenshot saved: %s", screenshot_path)
                 except Exception:
                     pass
@@ -119,12 +125,16 @@ class HashnodePlaywrightPublisher:
         cover_image_url: str | None,
     ) -> str | None:
         await page.goto(_WRITE_URL, wait_until="networkidle")
-        await asyncio.sleep(5)
 
-        log.info("Hashnode: page URL after nav: %s", page.url)
+        page_url = page.url
+        page_title = await page.title()
+        log.info("Hashnode: page URL after nav: %s", page_url)
+        log.info("Hashnode: page title: %s", page_title)
 
-        if "signin" in page.url.lower() or "login" in page.url.lower():
+        if "signin" in page_url.lower() or "login" in page_url.lower():
             raise RuntimeError("Hashnode session expired — run /hashnode_login again.")
+
+        await self._wait_for_editor(page)
 
         title_field = await self._find_title_field(page)
         await title_field.click()
@@ -191,6 +201,33 @@ class HashnodePlaywrightPublisher:
 
         return page.url
 
+    async def _wait_for_editor(self, page) -> None:
+        """Wait for the editor to fully load (SPA hydration)."""
+        editor_sel = '[contenteditable="true"], textarea, [role="textbox"], .ProseMirror'
+        try:
+            await page.wait_for_selector(editor_sel, state="visible", timeout=30000)
+            log.info("Hashnode: editor element detected after wait")
+        except Exception:
+            await self._dump_page_diagnostics(page, "editor_wait_timeout")
+            raise RuntimeError(
+                "Hashnode: editor did not load within 30s — page may be blocked or cookies expired"
+            )
+
+    async def _dump_page_diagnostics(self, page, context: str) -> None:
+        """Log page state for debugging."""
+        try:
+            log.error("Hashnode DIAG [%s]: URL = %s", context, page.url)
+            log.error("Hashnode DIAG [%s]: title = %s", context, await page.title())
+            html = await page.content()
+            for i in range(0, min(len(html), 6000), 2000):
+                chunk = html[i:i + 2000]
+                log.error("Hashnode DIAG [%s]: HTML[%d:%d] = %s", context, i, i + 2000, chunk)
+            screenshot_path = config.data_dir / f"hashnode_{context}.png"
+            await page.screenshot(path=str(screenshot_path), full_page=True)
+            log.error("Hashnode DIAG [%s]: screenshot saved: %s", context, screenshot_path)
+        except Exception as exc:
+            log.error("Hashnode DIAG [%s]: dump failed: %s", context, exc)
+
     async def _find_title_field(self, page):
         selectors = [
             'textarea[placeholder*="title" i]',
@@ -203,7 +240,7 @@ class HashnodePlaywrightPublisher:
         for sel in selectors:
             loc = page.locator(sel).first
             try:
-                if await loc.is_visible(timeout=1000):
+                if await loc.is_visible(timeout=3000):
                     log.info("Hashnode: title field found via %s", sel)
                     return loc
             except Exception:
@@ -215,8 +252,7 @@ class HashnodePlaywrightPublisher:
         if count > 0:
             return all_editable.first
 
-        html = await page.content()
-        log.error("Hashnode: no editable field found. Page snippet: %s", html[:2000])
+        await self._dump_page_diagnostics(page, "no_title_field")
         raise RuntimeError("Hashnode: no title field found on draft page")
 
     async def _add_tags(self, page, tags: list[str]) -> None:
@@ -230,7 +266,6 @@ class HashnodePlaywrightPublisher:
                 if await tag_input.is_visible(timeout=2000):
                     await tag_input.fill(tag)
                     await asyncio.sleep(0.5)
-                    # Accept suggestion or press Enter
                     suggestion = page.locator(f'[role="option"]:has-text("{tag}")').first
                     if await suggestion.is_visible(timeout=1000):
                         await suggestion.click()
@@ -242,7 +277,6 @@ class HashnodePlaywrightPublisher:
 
     async def _set_canonical_url(self, page, canonical_url: str) -> None:
         try:
-            # Look for a "SEO" or "Advanced" section toggle first
             for label in ["SEO", "Advanced", "seo"]:
                 toggle = page.locator(f'button:has-text("{label}"), [aria-label="{label}"]').first
                 if await toggle.is_visible(timeout=1000):
@@ -263,7 +297,6 @@ class HashnodePlaywrightPublisher:
 
     async def _set_cover_image(self, page, cover_image_url: str) -> None:
         try:
-            # Look for "Add cover" button or cover image section
             cover_btn = (
                 page.locator('button:has-text("Add cover")')
                 .or_(page.locator('button:has-text("Cover")')

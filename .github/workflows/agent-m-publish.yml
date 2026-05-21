@@ -114,6 +114,19 @@ jobs:
             echo "No log output" > /tmp/pipeline.log
           fi
 
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: |
+            medium-poster/data/*_error.png
+            medium-poster/data/*_timeout.png
+            medium-poster/data/*_no_title_field.png
+            medium-poster/data/*_editor_wait_timeout.png
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Write result to debug issue
         if: always()
         uses: actions/github-script@v7
@@ -124,7 +137,7 @@ jobs:
             try { log = fs.readFileSync('/tmp/pipeline.log', 'utf8'); } catch(e) {}
             const result = log.match(/AGENT_M_RESULT_START[\s\S]*?AGENT_M_RESULT_END/);
             const summary = result ? result[0] : 'AGENT_M_RESULT not found';
-            const tail = log.split('\n').slice(-80).join('\n').substring(0,2500);
+            const tail = log.split('\n').slice(-200).join('\n').substring(0,4000);
             const body = `**Run ${new Date().toISOString()} | outcome: ${{ steps.pipeline.outcome }}**\n\nSummary:\n\`\`\`\n${summary}\n\`\`\`\n\nLog tail:\n\`\`\`\n${tail}\n\`\`\``;
             const issues = await github.rest.issues.listForRepo({owner:context.repo.owner,repo:context.repo.repo,labels:['agent-m-debug'],state:'open'});
             if (issues.data.length > 0) {
