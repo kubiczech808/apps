@@ -135,6 +135,12 @@ class MediumPlaywrightPublisher:
         if "signin" in page_url.lower() or "login" in page_url.lower():
             raise RuntimeError("Session expired — cookies are invalid. Run /medium_login again.")
 
+        if "new-story" not in page_url.lower():
+            raise RuntimeError(
+                f"Medium cookies expired — redirected to {page_url} ('{page_title}'). "
+                "Run /medium_login to refresh cookies and update MEDIUM_COOKIES secret."
+            )
+
         await self._wait_for_editor(page)
 
         title_field = await self._find_title_field(page)

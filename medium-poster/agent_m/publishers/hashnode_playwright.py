@@ -134,6 +134,12 @@ class HashnodePlaywrightPublisher:
         if "signin" in page_url.lower() or "login" in page_url.lower():
             raise RuntimeError("Hashnode session expired — run /hashnode_login again.")
 
+        if "user not found" in page_title.lower() or page_url.rstrip("/") != _WRITE_URL.rstrip("/"):
+            raise RuntimeError(
+                f"Hashnode cookies expired — got '{page_title}' at {page_url}. "
+                "Run /hashnode_login to refresh cookies and update HASHNODE_COOKIES secret."
+            )
+
         await self._wait_for_editor(page)
 
         title_field = await self._find_title_field(page)
