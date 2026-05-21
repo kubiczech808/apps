@@ -120,19 +120,16 @@ class MediumPlaywrightPublisher:
         publish: bool,
     ) -> str | None:
         await page.goto("https://medium.com/new-story", wait_until="networkidle")
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
+
+        log.info("Medium: page URL after nav: %s", page.url)
 
         if "signin" in page.url.lower() or "login" in page.url.lower():
             raise RuntimeError("Session expired — cookies are invalid. Run /medium_login again.")
 
-        title_field = page.locator('[data-testid="title"]').or_(
-            page.locator('h3[data-contents="true"]')
-        ).or_(
-            page.locator('[role="textbox"]').first
-        )
-
+        title_field = await self._find_title_field(page)
         await title_field.click()
-        await title_field.fill("")
+        await asyncio.sleep(0.5)
         await page.keyboard.type(title, delay=20)
         await page.keyboard.press("Enter")
         await asyncio.sleep(1)
@@ -153,24 +150,25 @@ class MediumPlaywrightPublisher:
             return page.url
 
         publish_btn = page.locator('button:has-text("Publish")').first
-        if await publish_btn.is_visible():
+        if await publish_btn.is_visible(timeout=5000):
             await publish_btn.click()
             await asyncio.sleep(2)
 
             for tag in tags[:5]:
-                tag_input = page.locator('input[placeholder*="tag"]').or_(
-                    page.locator('input[placeholder*="Tag"]')
-                )
-                if await tag_input.is_visible():
-                    await tag_input.fill(tag)
-                    await asyncio.sleep(1)
-                    await page.keyboard.press("Enter")
-                    await asyncio.sleep(0.5)
+                tag_input = page.locator('input[placeholder*="tag" i]').first
+                try:
+                    if await tag_input.is_visible(timeout=2000):
+                        await tag_input.fill(tag)
+                        await asyncio.sleep(1)
+                        await page.keyboard.press("Enter")
+                        await asyncio.sleep(0.5)
+                except Exception:
+                    break
 
             final_publish = page.locator('button:has-text("Publish now")').or_(
                 page.locator('button:has-text("Publish")').last
             )
-            if await final_publish.is_visible():
+            if await final_publish.is_visible(timeout=5000):
                 await final_publish.click()
                 await asyncio.sleep(5)
 
@@ -179,6 +177,33 @@ class MediumPlaywrightPublisher:
 
         log.warning("Medium: publish button not found, draft saved")
         return page.url
+
+    async def _find_title_field(self, page):
+        selectors = [
+            '[data-testid="title"]',
+            'h3[data-contents="true"]',
+            'h4[data-contents="true"]',
+            'p[data-placeholder*="Title" i]',
+            'div[data-placeholder*="Title" i]',
+            '[role="textbox"][data-placeholder*="title" i]',
+            'h3[contenteditable="true"]',
+            'h4[contenteditable="true"]',
+        ]
+        for sel in selectors:
+            loc = page.locator(sel).first
+            if await loc.is_visible(timeout=1000):
+                log.info("Medium: title field found via %s", sel)
+                return loc
+
+        all_editable = page.locator('[contenteditable="true"]')
+        count = await all_editable.count()
+        log.info("Medium: no specific title selector matched, found %d contenteditable elements", count)
+        if count > 0:
+            return all_editable.first
+
+        html = await page.content()
+        log.error("Medium: no editable field found. Page snippet: %s", html[:2000])
+        raise RuntimeError("Medium: no title field found on new-story page")
 
     async def close(self) -> None:
         pass

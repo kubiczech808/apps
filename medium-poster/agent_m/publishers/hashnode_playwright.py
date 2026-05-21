@@ -119,25 +119,19 @@ class HashnodePlaywrightPublisher:
         cover_image_url: str | None,
     ) -> str | None:
         await page.goto(_WRITE_URL, wait_until="networkidle")
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
+
+        log.info("Hashnode: page URL after nav: %s", page.url)
 
         if "signin" in page.url.lower() or "login" in page.url.lower():
             raise RuntimeError("Hashnode session expired — run /hashnode_login again.")
 
-        # --- Title ---
-        title_field = (
-            page.locator('textarea[placeholder*="title" i]')
-            .or_(page.locator('div[contenteditable="true"][data-placeholder*="title" i]'))
-            .or_(page.locator('[data-testid="post-title"]'))
-            .first
-        )
+        title_field = await self._find_title_field(page)
         await title_field.click()
-        await title_field.fill("")
+        await asyncio.sleep(0.3)
         await page.keyboard.type(title, delay=20)
         await asyncio.sleep(0.5)
 
-        # --- Content ---
-        # Move focus to the editor body area (Tab or click below title)
         await page.keyboard.press("Tab")
         await asyncio.sleep(0.5)
 
@@ -146,7 +140,10 @@ class HashnodePlaywrightPublisher:
             .or_(page.locator('[role="textbox"]').last)
             .or_(page.locator('div[contenteditable="true"]').last)
         )
-        await editor.click()
+        try:
+            await editor.click(timeout=5000)
+        except Exception:
+            log.warning("Hashnode: editor click failed, typing anyway")
         await asyncio.sleep(0.5)
 
         for para in body_markdown.split("\n\n"):
@@ -160,7 +157,6 @@ class HashnodePlaywrightPublisher:
 
         await asyncio.sleep(2)
 
-        # --- Open publish/settings panel ---
         publish_btn = (
             page.locator('button:has-text("Publish")')
             .or_(page.locator('button[aria-label*="Publish" i]'))
@@ -172,18 +168,14 @@ class HashnodePlaywrightPublisher:
         else:
             log.warning("Hashnode: Publish button not found, trying to proceed anyway")
 
-        # --- Cover image ---
         if cover_image_url:
             await self._set_cover_image(page, cover_image_url)
 
-        # --- Tags ---
         await self._add_tags(page, tags)
 
-        # --- Canonical URL ---
         if canonical_url:
             await self._set_canonical_url(page, canonical_url)
 
-        # --- Final publish ---
         final_btn = (
             page.locator('button:has-text("Publish now")')
             .or_(page.locator('button:has-text("Publish post")'))
@@ -198,6 +190,34 @@ class HashnodePlaywrightPublisher:
             log.warning("Hashnode: final Publish button not found, draft may have been saved")
 
         return page.url
+
+    async def _find_title_field(self, page):
+        selectors = [
+            'textarea[placeholder*="title" i]',
+            'div[contenteditable="true"][data-placeholder*="title" i]',
+            '[data-testid="post-title"]',
+            'h1[contenteditable="true"]',
+            'input[placeholder*="title" i]',
+            '[data-placeholder*="title" i]',
+        ]
+        for sel in selectors:
+            loc = page.locator(sel).first
+            try:
+                if await loc.is_visible(timeout=1000):
+                    log.info("Hashnode: title field found via %s", sel)
+                    return loc
+            except Exception:
+                continue
+
+        all_editable = page.locator('[contenteditable="true"]')
+        count = await all_editable.count()
+        log.info("Hashnode: no specific title selector matched, found %d contenteditable elements", count)
+        if count > 0:
+            return all_editable.first
+
+        html = await page.content()
+        log.error("Hashnode: no editable field found. Page snippet: %s", html[:2000])
+        raise RuntimeError("Hashnode: no title field found on draft page")
 
     async def _add_tags(self, page, tags: list[str]) -> None:
         tag_input = (
