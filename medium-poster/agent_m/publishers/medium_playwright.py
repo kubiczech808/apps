@@ -101,6 +101,11 @@ class MediumPlaywrightPublisher:
             await context.add_cookies(cookies)
 
             page = await context.new_page()
+            try:
+                from playwright_stealth import stealth_async
+                await stealth_async(page)
+            except Exception as exc:
+                log.debug("playwright-stealth not available: %s", exc)
 
             try:
                 url = await self._create_story(page, title, body_markdown, tags, publish)

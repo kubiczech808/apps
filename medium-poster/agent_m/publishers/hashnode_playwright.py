@@ -101,6 +101,12 @@ class HashnodePlaywrightPublisher:
 
             page = await context.new_page()
             try:
+                from playwright_stealth import stealth_async
+                await stealth_async(page)
+            except Exception as exc:
+                log.debug("playwright-stealth not available: %s", exc)
+
+            try:
                 url = await self._create_post(page, title, body_markdown, tags, canonical_url, cover_image_url)
                 return url
             except Exception:
