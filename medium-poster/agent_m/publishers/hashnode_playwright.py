@@ -273,10 +273,23 @@ class HashnodePlaywrightPublisher:
         try:
             log.error("Hashnode DIAG [%s]: URL = %s", context, page.url)
             log.error("Hashnode DIAG [%s]: title = %s", context, await page.title())
+            # Count various element types for quick diagnosis
+            for sel in [
+                '[contenteditable]',
+                '[contenteditable="true"]',
+                '[contenteditable=""]',
+                '[data-lexical-editor]',
+                '.ProseMirror',
+                'textarea',
+                '[role="textbox"]',
+            ]:
+                try:
+                    n = await page.locator(sel).count()
+                    log.error("Hashnode DIAG [%s]: %s count=%d", context, sel, n)
+                except Exception:
+                    pass
             html = await page.content()
-            for i in range(0, min(len(html), 6000), 2000):
-                chunk = html[i:i + 2000]
-                log.error("Hashnode DIAG [%s]: HTML[%d:%d] = %s", context, i, i + 2000, chunk)
+            log.error("Hashnode DIAG [%s]: HTML[0:3000] = %s", context, html[:3000])
             screenshot_path = config.data_dir / f"hashnode_{context}.png"
             await page.screenshot(path=str(screenshot_path), full_page=True)
             log.error("Hashnode DIAG [%s]: screenshot saved: %s", context, screenshot_path)

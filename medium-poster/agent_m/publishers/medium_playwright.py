@@ -221,10 +221,22 @@ class MediumPlaywrightPublisher:
         try:
             log.error("Medium DIAG [%s]: URL = %s", context, page.url)
             log.error("Medium DIAG [%s]: title = %s", context, await page.title())
+            for sel in [
+                '[contenteditable]',
+                '[contenteditable="true"]',
+                '[contenteditable=""]',
+                '.ProseMirror',
+                'textarea',
+                '[role="textbox"]',
+                '[data-testid="title"]',
+            ]:
+                try:
+                    n = await page.locator(sel).count()
+                    log.error("Medium DIAG [%s]: %s count=%d", context, sel, n)
+                except Exception:
+                    pass
             html = await page.content()
-            for i in range(0, min(len(html), 6000), 2000):
-                chunk = html[i:i + 2000]
-                log.error("Medium DIAG [%s]: HTML[%d:%d] = %s", context, i, i + 2000, chunk)
+            log.error("Medium DIAG [%s]: HTML[0:3000] = %s", context, html[:3000])
             screenshot_path = config.data_dir / f"medium_{context}.png"
             await page.screenshot(path=str(screenshot_path), full_page=True)
             log.error("Medium DIAG [%s]: screenshot saved: %s", context, screenshot_path)
