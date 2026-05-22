@@ -181,18 +181,19 @@ async def medium_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not msg:
         return
     await msg.reply_text(
-        "Opening Medium login browser on the host machine...\n"
-        "Log in to Medium, then close the browser window.\n"
-        "Cookies will be saved automatically."
+        "Medium login vyžaduje interaktivní prohlížeč.\n\n"
+        "Spusť na RPi přes SSH:\n"
+        "```\n"
+        "cd /home/openclaw2/apps/medium-poster\n"
+        "source .venv/bin/activate\n"
+        "python -m agent_m.cli medium-login\n"
+        "```\n\n"
+        "Po přihlášení aktualizuj GitHub secret MEDIUM_COOKIES:\n"
+        "```\n"
+        "base64 -w0 data/medium_cookies.json\n"
+        "```",
+        parse_mode="Markdown",
     )
-    try:
-        from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
-        pub = MediumPlaywrightPublisher()
-        await pub.login()
-        await msg.reply_text("Medium session saved. Future publishes will use this session.")
-    except Exception as e:
-        log.exception("Medium login failed")
-        await msg.reply_text(f"Medium login failed: {e}")
 
 
 @admin_only
@@ -201,18 +202,19 @@ async def hashnode_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not msg:
         return
     await msg.reply_text(
-        "Opening Hashnode login browser on the host machine...\n"
-        "Log in to Hashnode, then close the browser window.\n"
-        "Cookies will be saved automatically."
+        "Hashnode login vyžaduje interaktivní prohlížeč.\n\n"
+        "Spusť na RPi přes SSH:\n"
+        "```\n"
+        "cd /home/openclaw2/apps/medium-poster\n"
+        "source .venv/bin/activate\n"
+        "python -m agent_m.cli hashnode-login\n"
+        "```\n\n"
+        "Po přihlášení aktualizuj GitHub secret HASHNODE_COOKIES:\n"
+        "```\n"
+        "base64 -w0 data/hashnode_cookies.json\n"
+        "```",
+        parse_mode="Markdown",
     )
-    try:
-        from agent_m.publishers.hashnode_playwright import HashnodePlaywrightPublisher
-        pub = HashnodePlaywrightPublisher()
-        await pub.login()
-        await msg.reply_text("Hashnode session saved. Future publishes will use this session.")
-    except Exception as e:
-        log.exception("Hashnode login failed")
-        await msg.reply_text(f"Hashnode login failed: {e}")
 
 
 @admin_only

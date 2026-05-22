@@ -77,7 +77,7 @@ async def run(mode: str, slug: str | None) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Agent M — one-shot publish")
-    parser.add_argument("mode", choices=["post", "draft", "preview", "update-links"], default="draft", nargs="?")
+    parser.add_argument("mode", choices=["post", "draft", "preview", "update-links", "medium-login", "hashnode-login"], default="draft", nargs="?")
     parser.add_argument("--slug", help="Specific topic slug from content plan")
     args = parser.parse_args()
 
@@ -91,6 +91,12 @@ def main() -> None:
     if args.mode == "update-links":
         from agent_m.update_links import main as update_main
         update_main()
+    elif args.mode == "medium-login":
+        from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
+        asyncio.run(MediumPlaywrightPublisher().login())
+    elif args.mode == "hashnode-login":
+        from agent_m.publishers.hashnode_playwright import HashnodePlaywrightPublisher
+        asyncio.run(HashnodePlaywrightPublisher().login())
     else:
         asyncio.run(run(mode=args.mode, slug=args.slug))
 
