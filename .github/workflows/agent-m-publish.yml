@@ -45,9 +45,11 @@ jobs:
         working-directory: medium-poster
         run: pip install .
 
-      - name: Install Playwright browser
+      - name: Install Playwright browsers
         working-directory: medium-poster
-        run: playwright install chromium --with-deps
+        run: |
+          playwright install chrome --with-deps
+          playwright install chromium --with-deps
 
       - name: Restore Hashnode cookies
         working-directory: medium-poster
@@ -60,6 +62,20 @@ jobs:
         run: |
           mkdir -p data
           printf '%s' "${{ secrets.MEDIUM_COOKIES }}" | base64 -d > data/medium_cookies.json 2>/dev/null || true
+
+      - name: Verify cookies
+        working-directory: medium-poster
+        run: |
+          echo "=== Cookie diagnostics ==="
+          for f in data/hashnode_cookies.json data/medium_cookies.json; do
+            if [ -f "$f" ]; then
+              SIZE=$(wc -c < "$f")
+              COUNT=$(python3 -c "import json; print(len(json.load(open('$f'))))" 2>/dev/null || echo "INVALID")
+              echo "$f: ${SIZE} bytes, ${COUNT} cookies"
+            else
+              echo "$f: NOT FOUND"
+            fi
+          done
 
       - name: Create .env
         working-directory: medium-poster

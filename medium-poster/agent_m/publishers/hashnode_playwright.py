@@ -9,7 +9,6 @@ from agent_m.config import config
 log = logging.getLogger(__name__)
 
 _COOKIES_FILE = config.data_dir / "hashnode_cookies.json"
-_WRITE_URL = "https://hashnode.com/draft"
 
 _STEALTH_SCRIPTS = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
@@ -20,11 +19,7 @@ window.chrome = {runtime: {}};
 
 
 class HashnodePlaywrightPublisher:
-    """Publishes articles to Hashnode via browser automation.
-
-    First run requires manual login — use login() to open a browser,
-    log in to Hashnode, then cookies are saved for future headless sessions.
-    """
+    """Publishes articles to Hashnode via browser automation."""
 
     async def login(self) -> None:
         from playwright.async_api import async_playwright
@@ -80,6 +75,7 @@ class HashnodePlaywrightPublisher:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
+                channel="chrome",
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
@@ -130,21 +126,19 @@ class HashnodePlaywrightPublisher:
         canonical_url: str | None,
         cover_image_url: str | None,
     ) -> str | None:
-        await page.goto(_WRITE_URL, wait_until="networkidle")
+        # Navigate to dashboard first, then open editor via Write button
+        await page.goto("https://hashnode.com", wait_until="networkidle")
 
         page_url = page.url
         page_title = await page.title()
-        log.info("Hashnode: page URL after nav: %s", page_url)
-        log.info("Hashnode: page title: %s", page_title)
+        log.info("Hashnode: dashboard URL: %s", page_url)
+        log.info("Hashnode: dashboard title: %s", page_title)
 
         if "signin" in page_url.lower() or "login" in page_url.lower():
             raise RuntimeError("Hashnode session expired — run /hashnode_login again.")
 
-        if "user not found" in page_title.lower() or page_url.rstrip("/") != _WRITE_URL.rstrip("/"):
-            raise RuntimeError(
-                f"Hashnode cookies expired — got '{page_title}' at {page_url}. "
-                "Run /hashnode_login to refresh cookies and update HASHNODE_COOKIES secret."
-            )
+        # Click Write / New Article button to open editor
+        await self._open_editor(page)
 
         await self._wait_for_editor(page)
 
@@ -212,6 +206,36 @@ class HashnodePlaywrightPublisher:
             log.warning("Hashnode: final Publish button not found, draft may have been saved")
 
         return page.url
+
+    async def _open_editor(self, page) -> None:
+        """Find and click the Write/New Article button on the dashboard."""
+        write_selectors = [
+            'a:has-text("Write")',
+            'button:has-text("Write")',
+            'a:has-text("New Article")',
+            'button:has-text("New Article")',
+            'a:has-text("New Post")',
+            'a[href*="/draft"]',
+            'a[href*="/edit"]',
+            'a[href*="/new"]',
+        ]
+        for sel in write_selectors:
+            loc = page.locator(sel).first
+            try:
+                if await loc.is_visible(timeout=2000):
+                    log.info("Hashnode: clicking Write button via %s", sel)
+                    await loc.click()
+                    await asyncio.sleep(3)
+                    log.info("Hashnode: editor page URL: %s", page.url)
+                    return
+            except Exception:
+                continue
+
+        await self._dump_page_diagnostics(page, "no_write_button")
+        raise RuntimeError(
+            "Hashnode: could not find Write/New Article button on dashboard. "
+            "Cookies may be expired or dashboard layout changed."
+        )
 
     async def _wait_for_editor(self, page) -> None:
         """Wait for the editor to fully load (SPA hydration)."""

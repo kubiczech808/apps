@@ -81,6 +81,7 @@ class MediumPlaywrightPublisher:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
+                channel="chrome",
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
