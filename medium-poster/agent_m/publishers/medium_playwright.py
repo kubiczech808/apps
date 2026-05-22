@@ -203,7 +203,10 @@ class MediumPlaywrightPublisher:
 
     async def _wait_for_editor(self, page) -> None:
         """Wait for the editor to fully load (SPA hydration)."""
-        editor_sel = '[contenteditable="true"], textarea, [role="textbox"], .ProseMirror'
+        editor_sel = (
+            '[contenteditable]:not([contenteditable="false"]), '
+            'textarea, [role="textbox"], .ProseMirror'
+        )
         try:
             await page.wait_for_selector(editor_sel, state="visible", timeout=60000)
             log.info("Medium: editor element detected after wait")
@@ -248,7 +251,7 @@ class MediumPlaywrightPublisher:
             except Exception:
                 continue
 
-        all_editable = page.locator('[contenteditable="true"]')
+        all_editable = page.locator('[contenteditable]:not([contenteditable="false"])')
         count = await all_editable.count()
         log.info("Medium: no specific title selector matched, found %d contenteditable elements", count)
         if count > 0:

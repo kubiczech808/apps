@@ -226,7 +226,7 @@ class HashnodePlaywrightPublisher:
                 if await loc.is_visible(timeout=2000):
                     log.info("Hashnode: clicking Write button via %s", sel)
                     await loc.click()
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(8)
                     log.info("Hashnode: editor page URL: %s", page.url)
                     return
             except Exception:
@@ -253,7 +253,12 @@ class HashnodePlaywrightPublisher:
 
     async def _wait_for_editor(self, page) -> None:
         """Wait for the editor to fully load (SPA hydration)."""
-        editor_sel = '[contenteditable="true"], textarea, [role="textbox"], .ProseMirror'
+        # Match any editable element: contenteditable="" (Lexical) or "true" (Draft.js)
+        editor_sel = (
+            '[contenteditable]:not([contenteditable="false"]), '
+            'textarea, [role="textbox"], .ProseMirror, '
+            '[data-lexical-editor], .ContentEditable__root'
+        )
         try:
             await page.wait_for_selector(editor_sel, state="visible", timeout=60000)
             log.info("Hashnode: editor element detected after wait")
@@ -281,11 +286,12 @@ class HashnodePlaywrightPublisher:
     async def _find_title_field(self, page):
         selectors = [
             'textarea[placeholder*="title" i]',
-            'div[contenteditable="true"][data-placeholder*="title" i]',
+            'div[contenteditable][data-placeholder*="title" i]',
             '[data-testid="post-title"]',
-            'h1[contenteditable="true"]',
+            'h1[contenteditable]',
             'input[placeholder*="title" i]',
             '[data-placeholder*="title" i]',
+            '[data-lexical-editor] + * h1',
         ]
         for sel in selectors:
             loc = page.locator(sel).first
@@ -296,7 +302,7 @@ class HashnodePlaywrightPublisher:
             except Exception:
                 continue
 
-        all_editable = page.locator('[contenteditable="true"]')
+        all_editable = page.locator('[contenteditable]:not([contenteditable="false"])')
         count = await all_editable.count()
         log.info("Hashnode: no specific title selector matched, found %d contenteditable elements", count)
         if count > 0:
