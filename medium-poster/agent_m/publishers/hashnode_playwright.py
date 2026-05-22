@@ -127,7 +127,8 @@ class HashnodePlaywrightPublisher:
         cover_image_url: str | None,
     ) -> str | None:
         # Navigate to dashboard first, then open editor via Write button
-        await page.goto("https://hashnode.com", wait_until="networkidle")
+        await page.goto("https://hashnode.com", wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(3)
 
         page_url = page.url
         page_title = await page.title()
@@ -231,6 +232,19 @@ class HashnodePlaywrightPublisher:
             except Exception:
                 continue
 
+        # Fallback: try direct new-post URL
+        log.warning("Hashnode: Write button not found, trying direct /new URL")
+        for direct_url in ["https://hashnode.com/new", "https://hashnode.com/post/draft/new"]:
+            try:
+                await page.goto(direct_url, wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(2)
+                current = page.url
+                log.info("Hashnode: direct URL %s → %s", direct_url, current)
+                if "signin" not in current.lower() and "login" not in current.lower():
+                    return
+            except Exception as exc:
+                log.debug("Hashnode: direct URL %s failed: %s", direct_url, exc)
+
         await self._dump_page_diagnostics(page, "no_write_button")
         raise RuntimeError(
             "Hashnode: could not find Write/New Article button on dashboard. "
@@ -241,12 +255,12 @@ class HashnodePlaywrightPublisher:
         """Wait for the editor to fully load (SPA hydration)."""
         editor_sel = '[contenteditable="true"], textarea, [role="textbox"], .ProseMirror'
         try:
-            await page.wait_for_selector(editor_sel, state="visible", timeout=30000)
+            await page.wait_for_selector(editor_sel, state="visible", timeout=60000)
             log.info("Hashnode: editor element detected after wait")
         except Exception:
             await self._dump_page_diagnostics(page, "editor_wait_timeout")
             raise RuntimeError(
-                "Hashnode: editor did not load within 30s — page may be blocked or cookies expired"
+                "Hashnode: editor did not load within 60s — page may be blocked or cookies expired"
             )
 
     async def _dump_page_diagnostics(self, page, context: str) -> None:

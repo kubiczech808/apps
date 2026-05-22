@@ -131,7 +131,8 @@ class MediumPlaywrightPublisher:
         tags: list[str],
         publish: bool,
     ) -> str | None:
-        await page.goto("https://medium.com/new-story", wait_until="networkidle")
+        await page.goto("https://medium.com/new-story", wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(3)
 
         page_url = page.url
         page_title = await page.title()
@@ -204,12 +205,12 @@ class MediumPlaywrightPublisher:
         """Wait for the editor to fully load (SPA hydration)."""
         editor_sel = '[contenteditable="true"], textarea, [role="textbox"], .ProseMirror'
         try:
-            await page.wait_for_selector(editor_sel, state="visible", timeout=30000)
+            await page.wait_for_selector(editor_sel, state="visible", timeout=60000)
             log.info("Medium: editor element detected after wait")
         except Exception:
             await self._dump_page_diagnostics(page, "editor_wait_timeout")
             raise RuntimeError(
-                "Medium: editor did not load within 30s — page may be blocked or cookies expired"
+                "Medium: editor did not load within 60s — page may be blocked or cookies expired"
             )
 
     async def _dump_page_diagnostics(self, page, context: str) -> None:
