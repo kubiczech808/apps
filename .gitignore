@@ -1,6 +1,7 @@
 # Credentials
 .env
 .env.local
+.claude/settings.local.json
 
 # Python
 __pycache__/
