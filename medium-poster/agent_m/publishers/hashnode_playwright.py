@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 
 from agent_m.config import config
@@ -118,6 +119,10 @@ class HashnodePlaywrightPublisher:
             finally:
                 await browser.close()
 
+    @staticmethod
+    async def _human_delay(min_s: float = 2, max_s: float = 5) -> None:
+        await asyncio.sleep(random.uniform(min_s, max_s))
+
     async def _create_post(
         self,
         page,
@@ -127,9 +132,8 @@ class HashnodePlaywrightPublisher:
         canonical_url: str | None,
         cover_image_url: str | None,
     ) -> str | None:
-        # Navigate to dashboard first, then open editor via Write button
         await page.goto("https://hashnode.com", wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(3)
+        await self._human_delay(3, 6)
 
         page_url = page.url
         page_title = await page.title()
@@ -139,19 +143,18 @@ class HashnodePlaywrightPublisher:
         if "signin" in page_url.lower() or "login" in page_url.lower():
             raise RuntimeError("Hashnode session expired — run /hashnode_login again.")
 
-        # Open a NEW draft (avoid reusing stale drafts)
         await self._open_new_draft(page)
-
         await self._wait_for_editor(page)
+        await self._human_delay(2, 4)
 
         title_field = await self._find_title_field(page)
         await title_field.click()
-        await asyncio.sleep(0.3)
-        await page.keyboard.type(title, delay=20)
-        await asyncio.sleep(0.5)
+        await self._human_delay(1, 2)
+        await page.keyboard.type(title, delay=random.randint(40, 80))
+        await self._human_delay(3, 6)
 
         await page.keyboard.press("Tab")
-        await asyncio.sleep(0.5)
+        await self._human_delay(1, 3)
 
         editor = (
             page.locator('.ProseMirror')
@@ -163,9 +166,8 @@ class HashnodePlaywrightPublisher:
         except Exception:
             log.warning("Hashnode: editor click failed, trying Tab")
             await page.keyboard.press("Tab")
-        await asyncio.sleep(0.5)
+        await self._human_delay(1, 2)
 
-        # Paste markdown via synthetic ClipboardEvent — editor parses pasted markdown
         pasted = await page.evaluate("""(text) => {
             const el = document.querySelector('.ProseMirror')
                 || document.querySelector('[contenteditable]:not([contenteditable="false"])')
@@ -186,14 +188,23 @@ class HashnodePlaywrightPublisher:
                 para = para.strip()
                 if not para:
                     continue
-                await page.keyboard.type(para, delay=2)
+                await page.keyboard.type(para, delay=random.randint(3, 8))
                 await page.keyboard.press("Enter")
                 await page.keyboard.press("Enter")
-                await asyncio.sleep(0.1)
+                await self._human_delay(0.3, 0.8)
 
-        await asyncio.sleep(3)
+        # Simulate reviewing the article before publishing
+        await self._human_delay(8, 15)
+        log.info("Hashnode: simulated review pause before publish")
 
-        # Click the Publish button (top bar) — exclude tab buttons
+        # Scroll through content like a human would review it
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+        await self._human_delay(3, 5)
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await self._human_delay(2, 4)
+        await page.evaluate("window.scrollTo(0, 0)")
+        await self._human_delay(2, 3)
+
         publish_btn = page.locator(
             'button:not([role="tab"]):has-text("Publish")'
         ).first
@@ -201,28 +212,30 @@ class HashnodePlaywrightPublisher:
             if await publish_btn.is_visible(timeout=5000):
                 log.info("Hashnode: clicking Publish button")
                 await publish_btn.click()
-                await asyncio.sleep(3)
+                await self._human_delay(3, 5)
             else:
                 log.warning("Hashnode: Publish button not visible, looking for alternatives")
-                # Try aria-label based selector
                 alt_btn = page.locator('[aria-label*="publish" i]').first
                 if await alt_btn.is_visible(timeout=3000):
                     await alt_btn.click()
-                    await asyncio.sleep(3)
+                    await self._human_delay(3, 5)
         except Exception as exc:
             log.warning("Hashnode: Publish button click failed: %s", exc)
 
         if cover_image_url:
             await self._set_cover_image(page, cover_image_url)
+            await self._human_delay(2, 4)
 
         await self._add_tags(page, tags)
+        await self._human_delay(2, 4)
 
         if canonical_url:
             await self._set_canonical_url(page, canonical_url)
+            await self._human_delay(1, 3)
 
         await self._select_publication(page)
+        await self._human_delay(2, 4)
 
-        # Click final "Publish" / "Publish now" / "Publish post" button
         final_selectors = [
             'button:not([role="tab"]):has-text("Publish now")',
             'button:not([role="tab"]):has-text("Publish post")',
@@ -235,7 +248,7 @@ class HashnodePlaywrightPublisher:
                 if await btn.is_visible(timeout=3000):
                     log.info("Hashnode: clicking final publish via %s", sel)
                     await btn.click()
-                    await asyncio.sleep(5)
+                    await self._human_delay(5, 8)
                     published = True
                     break
             except Exception:
@@ -247,7 +260,7 @@ class HashnodePlaywrightPublisher:
             log.info("Hashnode: found %d non-tab Publish buttons", count)
             if count > 0:
                 await all_publish.last.click()
-                await asyncio.sleep(5)
+                await self._human_delay(5, 8)
                 published = True
 
         if not published:

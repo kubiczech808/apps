@@ -52,12 +52,15 @@ async def run(mode: str, slug: str | None) -> None:
         f"Title: {result.article.title}\n"
         f"Platforms: {platforms}\n"
     )
-    if result.post_url:
+    if result.platform_urls:
+        for pname, purl in result.platform_urls.items():
+            summary += f"{pname}: {purl}\n"
+    elif result.post_url:
         summary += f"URL: {result.post_url}\n"
     if result.platform_errors:
-        summary += "\nPlatform issues:\n"
-        for err in result.platform_errors[:6]:
-            summary += f"- {err[:240]}\n"
+        summary += "\nIssues:\n"
+        for err in result.platform_errors[:4]:
+            summary += f"- {err[:200]}\n"
     summary += f"Tokens: {result.tokens_used}"
 
     await send_telegram(summary, result.image_bytes)
@@ -65,7 +68,10 @@ async def run(mode: str, slug: str | None) -> None:
     print("AGENT_M_RESULT_START")
     print(f"Title: {result.article.title}")
     print(f"Published to: {platforms}")
-    if result.post_url:
+    if result.platform_urls:
+        for pname, purl in result.platform_urls.items():
+            print(f"{pname}: {purl}")
+    elif result.post_url:
         print(f"URL: {result.post_url}")
     if result.platform_errors:
         print("Platform issues:")

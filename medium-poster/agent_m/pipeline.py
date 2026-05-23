@@ -26,6 +26,7 @@ class PipelineResult:
     tokens_used: int
     published_to: list[str] = field(default_factory=list)
     platform_errors: list[str] = field(default_factory=list)
+    platform_urls: dict[str, str] = field(default_factory=dict)
 
 
 _lock = asyncio.Lock()
@@ -122,6 +123,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
 
     published_to: list[str] = []
     platform_errors: list[str] = []
+    platform_urls: dict[str, str] = {}
     post_url: str | None = None
 
     if mode == "preview":
@@ -142,6 +144,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
             devto_url, devto_error = await _publish_devto(article, is_draft, rss_url, image_url)
             if devto_url:
                 published_to.append("Dev.to")
+                platform_urls["Dev.to"] = devto_url
                 post_url = devto_url
             elif devto_error:
                 platform_errors.append(f"Dev.to: {devto_error}")
@@ -153,6 +156,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
             hn_url, hn_error = await _publish_hashnode_playwright(article, rss_url, image_url)
             if hn_url:
                 published_to.append("Hashnode")
+                platform_urls["Hashnode"] = hn_url
                 post_url = hn_url
             elif hn_error:
                 platform_errors.append(f"Hashnode: {hn_error}")
@@ -160,6 +164,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
             hn_url, hn_error = await _publish_hashnode(article, rss_url, image_url)
             if hn_url:
                 published_to.append("Hashnode")
+                platform_urls["Hashnode"] = hn_url
                 post_url = hn_url
             elif hn_error:
                 platform_errors.append(f"Hashnode: {hn_error}")
@@ -171,6 +176,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
             medium_url, medium_error = await _publish_medium_playwright(article, not is_draft)
             if medium_url:
                 published_to.append("Medium")
+                platform_urls["Medium"] = medium_url
                 post_url = medium_url
             elif medium_error:
                 platform_errors.append(f"Medium: {medium_error}")
@@ -180,6 +186,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
             medium_url = await _publish_medium_api(article, image_url, rss_url, is_draft)
             if medium_url:
                 published_to.append("Medium")
+                platform_urls["Medium"] = medium_url
                 post_url = medium_url
 
     from agent_m.gemini.client import get_tracker
@@ -205,6 +212,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         tokens_used=today.get("total", 0),
         published_to=published_to,
         platform_errors=platform_errors,
+        platform_urls=platform_urls,
     )
 
 
