@@ -39,6 +39,27 @@ jobs:
             --exclude '__pycache__' \
             --exclude '.env'
 
+      - name: Create .env
+        run: |
+          printf '%s\n' \
+            "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY_M }}" \
+            "TELEGRAM_BOT_TOKEN=${{ secrets.M_TELEGRAM_TOKEN }}" \
+            "TELEGRAM_ADMIN_CHAT_ID=${{ secrets.M_TELEGRAM_CHAT_ID }}" \
+            "GITHUB_PAT=${{ secrets.PAT_GITHUB_MEDIUM }}" \
+            "DEVTO_API_KEY=${{ secrets.DEVTO_API_KEY }}" \
+            "HASHNODE_TOKEN=${{ secrets.HASHNODE_TOKEN }}" \
+            "HASHNODE_PUBLICATION_ID=${{ secrets.HASHNODE_PUBLICATION_ID }}" \
+            "HASHNODE_PLAYWRIGHT=false" \
+            "MEDIUM_PLAYWRIGHT=true" \
+            "MEDIUM_TOKEN=" \
+            "GITHUB_PAGES_REPO=kubiczech808/apps" \
+            "GITHUB_PAGES_BRANCH=gh-pages" \
+            "SITE_URL=https://btc-dca.com" \
+            "SITE_NAME=btc-dca.com" \
+            "PUBLISH_HOUR=9" \
+            "PUBLISH_MINUTE=0" \
+            "LOG_LEVEL=INFO" > /home/jakub/apps/medium-poster/.env
+
       - name: Restart bot
         id: restart
         continue-on-error: true
