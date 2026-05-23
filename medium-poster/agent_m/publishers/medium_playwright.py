@@ -184,12 +184,12 @@ class MediumPlaywrightPublisher:
             'textarea, [role="textbox"], .ProseMirror'
         )
         try:
-            await page.wait_for_selector(editor_sel, state="visible", timeout=60000)
+            await page.wait_for_selector(editor_sel, state="visible", timeout=15000)
             log.info("Medium: editor element detected after wait")
         except Exception:
             await self._dump_page_diagnostics(page, "editor_wait_timeout")
             raise RuntimeError(
-                "Medium: editor did not load within 60s — page may be blocked or cookies expired"
+                "Medium: editor did not load within 15s — headless browser likely blocked"
             )
 
     async def _dump_page_diagnostics(self, page, context: str) -> None:

@@ -26,6 +26,7 @@ class Config(BaseSettings):
     hashnode_token: str = ""
     hashnode_publication_id: str = ""
     hashnode_playwright: bool = False
+    hashnode_blog_domain: str = "btc-dca.hashnode.dev"
     medium_token: str = ""
     medium_playwright: bool = True
     imgur_client_id: str = ""

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 
 from agent_m.config import config
 
@@ -219,13 +220,15 @@ class HashnodePlaywrightPublisher:
         if canonical_url:
             await self._set_canonical_url(page, canonical_url)
 
+        await self._select_publication(page)
+
         # Click final "Publish" / "Publish now" / "Publish post" button
         final_selectors = [
             'button:not([role="tab"]):has-text("Publish now")',
             'button:not([role="tab"]):has-text("Publish post")',
             'button[type="submit"]:has-text("Publish")',
-            'button:not([role="tab"]):has-text("Publish"):not(:has-text("Publish")~*)',
         ]
+        published = False
         for sel in final_selectors:
             btn = page.locator(sel).first
             try:
@@ -233,23 +236,27 @@ class HashnodePlaywrightPublisher:
                     log.info("Hashnode: clicking final publish via %s", sel)
                     await btn.click()
                     await asyncio.sleep(5)
-                    log.info("Hashnode: published at %s", page.url)
-                    return page.url
+                    published = True
+                    break
             except Exception:
                 continue
 
-        # Last resort: find all non-tab Publish buttons and click the last one
-        all_publish = page.locator('button:not([role="tab"]):has-text("Publish")')
-        count = await all_publish.count()
-        log.info("Hashnode: found %d non-tab Publish buttons", count)
-        if count > 0:
-            await all_publish.last.click()
-            await asyncio.sleep(5)
-            log.info("Hashnode: published (last button) at %s", page.url)
+        if not published:
+            all_publish = page.locator('button:not([role="tab"]):has-text("Publish")')
+            count = await all_publish.count()
+            log.info("Hashnode: found %d non-tab Publish buttons", count)
+            if count > 0:
+                await all_publish.last.click()
+                await asyncio.sleep(5)
+                published = True
+
+        if not published:
+            log.warning("Hashnode: no Publish button found, draft saved at %s", page.url)
             return page.url
 
-        log.warning("Hashnode: no Publish button found, draft saved at %s", page.url)
-        return page.url
+        article_url = await self._extract_article_url(page, title)
+        log.info("Hashnode: published, article URL: %s", article_url)
+        return article_url
 
     async def _open_new_draft(self, page) -> None:
         """Create a new draft via Write button or direct URL navigation."""
@@ -420,6 +427,80 @@ class HashnodePlaywrightPublisher:
                 await asyncio.sleep(0.3)
         except Exception as exc:
             log.debug("Hashnode canonical URL set failed: %s", exc)
+
+    async def _select_publication(self, page) -> None:
+        """Select btc-dca blog publication in the publish dialog."""
+        try:
+            pub_selector = (
+                page.locator('button:has-text("btc-dca")')
+                .or_(page.locator('[data-testid*="publication" i]:has-text("btc-dca")'))
+                .or_(page.locator('label:has-text("btc-dca")'))
+                .or_(page.locator('div[role="radio"]:has-text("btc-dca")'))
+                .or_(page.locator('div[role="option"]:has-text("btc-dca")'))
+            )
+            if await pub_selector.first.is_visible(timeout=3000):
+                await pub_selector.first.click()
+                await asyncio.sleep(1)
+                log.info("Hashnode: selected btc-dca publication")
+                return
+
+            select_btn = (
+                page.locator('button:has-text("Select blog")')
+                .or_(page.locator('button:has-text("Select publication")'))
+                .or_(page.locator('[aria-label*="publication" i]'))
+            )
+            if await select_btn.first.is_visible(timeout=2000):
+                await select_btn.first.click()
+                await asyncio.sleep(1)
+                option = page.locator('[role="option"]:has-text("btc-dca")').or_(
+                    page.locator('li:has-text("btc-dca")')
+                )
+                if await option.first.is_visible(timeout=2000):
+                    await option.first.click()
+                    await asyncio.sleep(1)
+                    log.info("Hashnode: selected btc-dca publication via dropdown")
+                    return
+
+            log.debug("Hashnode: publication selector not found, using default")
+        except Exception as exc:
+            log.debug("Hashnode: publication selection failed: %s", exc)
+
+    async def _extract_article_url(self, page, title: str) -> str:
+        """Try to get the actual published article URL instead of the edit URL."""
+        current = page.url
+        if "/edit/" not in current and "/draft/" not in current:
+            return current
+
+        blog_domain = config.hashnode_blog_domain or "btc-dca.hashnode.dev"
+        try:
+            slug = await page.evaluate("""() => {
+                const meta = document.querySelector('meta[property="og:url"]');
+                if (meta) return meta.content;
+                const link = document.querySelector('link[rel="canonical"]');
+                if (link) return link.href;
+                return null;
+            }""")
+            if slug and blog_domain in str(slug):
+                return slug
+        except Exception:
+            pass
+
+        try:
+            view_link = page.locator('a:has-text("View post")').or_(
+                page.locator('a:has-text("View article")')
+            ).or_(page.locator('a[href*="' + blog_domain + '"]'))
+            if await view_link.first.is_visible(timeout=3000):
+                href = await view_link.first.get_attribute("href")
+                if href:
+                    log.info("Hashnode: found article link: %s", href)
+                    return href
+        except Exception:
+            pass
+
+        slug_text = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')[:80]
+        constructed = f"https://{blog_domain}/{slug_text}"
+        log.info("Hashnode: constructed article URL: %s", constructed)
+        return constructed
 
     async def _set_cover_image(self, page, cover_image_url: str) -> None:
         try:

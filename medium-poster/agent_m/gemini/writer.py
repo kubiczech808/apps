@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from agent_m.config import config
@@ -7,6 +8,39 @@ from agent_m.content_plan import ContentPlan
 from agent_m.feedback import get_feedback_for_prompt
 from agent_m.gemini.client import generate_text
 from agent_m.site_context import format_site_context_for_prompt, get_site_context
+
+_PROPER_CASE = {
+    "bitcoin": "Bitcoin", "btc": "BTC", "dca": "DCA", "etf": "ETF",
+    "hodl": "HODL", "fomo": "FOMO", "binance": "Binance", "coinmate": "Coinmate",
+    "okx": "OKX", "trezor": "Trezor", "ledger": "Ledger", "s&p": "S&P",
+    "fifo": "FIFO", "lifo": "LIFO", "cagr": "CAGR", "ath": "ATH",
+    "i": "I",
+}
+
+
+def _to_sentence_case(title: str) -> str:
+    parts = re.split(r'([.?!:]\s+)', title)
+    result = []
+    for part in parts:
+        if not part:
+            continue
+        if re.match(r'^[.?!:]\s+$', part):
+            result.append(part)
+            continue
+        lowered = part[0].upper() + part[1:].lower() if len(part) > 1 else part.upper()
+        words = lowered.split()
+        for j, word in enumerate(words):
+            if re.search(r'\d', word):
+                words[j] = re.sub(r'([0-9])([a-z])', lambda m: m.group(1) + m.group(2).upper(), word)
+                continue
+            clean = re.sub(r'[^a-z&]', '', word.lower())
+            if clean in _PROPER_CASE:
+                prefix = word[:len(word) - len(word.lstrip('("\''))]
+                suffix = word[len(word.rstrip('.,;:!?"\')')):]  if word.rstrip('.,;:!?"\')') != word else ""
+                core = _PROPER_CASE[clean]
+                words[j] = prefix + core + suffix
+        result.append(" ".join(words))
+    return "".join(result)
 
 
 @dataclass
@@ -114,7 +148,7 @@ async def write_article_from_plan(plan: ContentPlan) -> Article:
     body_start_idx = None
     for i, line in enumerate(lines):
         if not title and line.startswith("TITLE:"):
-            title = line[len("TITLE:"):].strip()[:100]
+            title = _to_sentence_case(line[len("TITLE:"):].strip()[:100])
         elif not tags and line.startswith("TAGS:"):
             raw_tags = line[len("TAGS:"):].strip()
             tags = [t.strip()[:25] for t in raw_tags.split(",") if t.strip()][:3]
@@ -123,7 +157,13 @@ async def write_article_from_plan(plan: ContentPlan) -> Article:
             break
 
     if body_start_idx is not None:
-        body = "\n".join(lines[body_start_idx:]).strip()
+        body_lines = lines[body_start_idx:]
+        for idx, bl in enumerate(body_lines):
+            if bl.startswith("## "):
+                body_lines[idx] = "## " + _to_sentence_case(bl[3:])
+            elif bl.startswith("### "):
+                body_lines[idx] = "### " + _to_sentence_case(bl[4:])
+        body = "\n".join(body_lines).strip()
 
     if not title or not body:
         raise RuntimeError(f"Failed to parse writer response (missing title or body): {raw[:300]}")
