@@ -18,6 +18,12 @@ fi
 
 cd "$REPO_DIR"
 
+# Ensure Xvfb is available (needed for Medium Playwright headed mode)
+if ! command -v Xvfb &>/dev/null; then
+    echo "Installing Xvfb..."
+    sudo apt-get install -y -qq xvfb 2>/dev/null || true
+fi
+
 # Create/update venv if needed
 if [ ! -d "$VENV_DIR" ]; then
     python3 -m venv "$VENV_DIR"

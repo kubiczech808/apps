@@ -45,9 +45,10 @@ jobs:
         working-directory: medium-poster
         run: pip install .
 
-      - name: Install Playwright browsers
+      - name: Install Xvfb and Playwright browsers
         working-directory: medium-poster
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
           playwright install chrome --with-deps
           playwright install chromium --with-deps
 
@@ -88,7 +89,7 @@ jobs:
             "DEVTO_API_KEY=${{ secrets.DEVTO_API_KEY }}" \
             "HASHNODE_TOKEN=${{ secrets.HASHNODE_TOKEN }}" \
             "HASHNODE_PUBLICATION_ID=${{ secrets.HASHNODE_PUBLICATION_ID }}" \
-            "HASHNODE_PLAYWRIGHT=true" \
+            "HASHNODE_PLAYWRIGHT=false" \
             "MEDIUM_PLAYWRIGHT=true" \
             "MEDIUM_TOKEN=${{ secrets.MEDIUM_TOKEN }}" \
             "IMGUR_CLIENT_ID=" \
