@@ -184,14 +184,11 @@ async def medium_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "Medium login vyžaduje interaktivní prohlížeč.\n\n"
         "Spusť na RPi přes SSH:\n"
         "```\n"
-        "cd /home/openclaw2/apps/medium-poster\n"
+        "cd /home/jakub/apps/medium-poster\n"
         "source .venv/bin/activate\n"
         "python -m agent_m.cli medium-login\n"
         "```\n\n"
-        "Po přihlášení aktualizuj GitHub secret MEDIUM_COOKIES:\n"
-        "```\n"
-        "base64 -w0 data/medium_cookies.json\n"
-        "```",
+        "Cookies se uloží automaticky do data/medium_cookies.json.",
         parse_mode="Markdown",
     )
 
@@ -205,14 +202,11 @@ async def hashnode_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "Hashnode login vyžaduje interaktivní prohlížeč.\n\n"
         "Spusť na RPi přes SSH:\n"
         "```\n"
-        "cd /home/openclaw2/apps/medium-poster\n"
+        "cd /home/jakub/apps/medium-poster\n"
         "source .venv/bin/activate\n"
         "python -m agent_m.cli hashnode-login\n"
         "```\n\n"
-        "Po přihlášení aktualizuj GitHub secret HASHNODE_COOKIES:\n"
-        "```\n"
-        "base64 -w0 data/hashnode_cookies.json\n"
-        "```",
+        "Cookies se uloží automaticky do data/hashnode_cookies.json.",
         parse_mode="Markdown",
     )
 
