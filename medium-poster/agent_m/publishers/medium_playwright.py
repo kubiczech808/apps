@@ -157,6 +157,8 @@ class MediumPlaywrightPublisher:
         if "signin" in page_url.lower() or "login" in page_url.lower():
             raise RuntimeError("Session expired — cookies are invalid. Run /medium_login again.")
 
+        await self._wait_for_cloudflare(page)
+
         write_btn = (
             page.locator('a:has-text("Write")')
             .or_(page.locator('button:has-text("Write")'))
@@ -186,6 +188,7 @@ class MediumPlaywrightPublisher:
         if "signin" in page_url.lower() or "login" in page_url.lower():
             raise RuntimeError("Session expired — cookies are invalid. Run /medium_login again.")
 
+        await self._wait_for_cloudflare(page)
         await self._wait_for_editor(page)
         await self._human_delay(1, 3)
 
@@ -267,6 +270,26 @@ class MediumPlaywrightPublisher:
 
         log.warning("Medium: publish button not found, draft saved")
         return page.url
+
+    async def _wait_for_cloudflare(self, page) -> None:
+        title = await page.title()
+        if "just a moment" not in title.lower():
+            return
+        log.info("Medium: Cloudflare challenge detected, waiting for resolution...")
+        for i in range(12):
+            await asyncio.sleep(5)
+            title = await page.title()
+            log.info("Medium: CF check %d/12 — title: %s", i + 1, title)
+            if "just a moment" not in title.lower():
+                log.info("Medium: Cloudflare challenge resolved")
+                await self._human_delay(2, 4)
+                return
+        await self._dump_page_diagnostics(page, "cloudflare_stuck")
+        raise RuntimeError(
+            "Medium: Cloudflare challenge did not resolve within 60s. "
+            "The challenge may require CAPTCHA — try running /medium_login "
+            "from the same IP as the CI runner."
+        )
 
     async def _wait_for_editor(self, page) -> None:
         editor_sel = (
