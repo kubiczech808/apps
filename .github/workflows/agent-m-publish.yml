@@ -45,12 +45,9 @@ jobs:
         working-directory: medium-poster
         run: pip install .
 
-      - name: Install Xvfb and Playwright browsers
+      - name: Install Playwright browsers
         working-directory: medium-poster
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
-          playwright install firefox --with-deps
-          playwright install chrome --with-deps
+        run: playwright install chrome --with-deps
 
       - name: Restore Hashnode cookies
         working-directory: medium-poster
@@ -90,7 +87,7 @@ jobs:
             "HASHNODE_TOKEN=${{ secrets.HASHNODE_TOKEN }}" \
             "HASHNODE_PUBLICATION_ID=${{ secrets.HASHNODE_PUBLICATION_ID }}" \
             "HASHNODE_PLAYWRIGHT=false" \
-            "MEDIUM_PLAYWRIGHT=true" \
+            "MEDIUM_PLAYWRIGHT=false" \
             "MEDIUM_TOKEN=${{ secrets.MEDIUM_TOKEN }}" \
             "IMGUR_CLIENT_ID=" \
             "GITHUB_PAGES_REPO=kubiczech808/apps" \

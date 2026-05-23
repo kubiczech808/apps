@@ -31,6 +31,9 @@ fi
 source "$VENV_DIR/bin/activate"
 pip install -q .
 
+# Install Firefox for Medium Playwright (auto-starts Xvfb for headed mode)
+playwright install firefox 2>/dev/null || true
+
 # Start bot in background
 nohup python -m agent_m >> "$LOG" 2>&1 &
 echo $! > "$PIDFILE"
