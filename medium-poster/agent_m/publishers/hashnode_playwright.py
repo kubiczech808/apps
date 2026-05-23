@@ -138,8 +138,8 @@ class HashnodePlaywrightPublisher:
         if "signin" in page_url.lower() or "login" in page_url.lower():
             raise RuntimeError("Hashnode session expired — run /hashnode_login again.")
 
-        # Click Write / New Article button to open editor
-        await self._open_editor(page)
+        # Open a NEW draft (avoid reusing stale drafts)
+        await self._open_new_draft(page)
 
         await self._wait_for_editor(page)
 
@@ -154,8 +154,8 @@ class HashnodePlaywrightPublisher:
 
         editor = (
             page.locator('.ProseMirror')
+            .or_(page.locator('[contenteditable]:not([contenteditable="false"])').last)
             .or_(page.locator('[role="textbox"]').last)
-            .or_(page.locator('div[contenteditable="true"]').last)
         )
         try:
             await editor.click(timeout=5000)
@@ -174,16 +174,24 @@ class HashnodePlaywrightPublisher:
 
         await asyncio.sleep(2)
 
-        publish_btn = (
-            page.locator('button:has-text("Publish")')
-            .or_(page.locator('button[aria-label*="Publish" i]'))
-            .first
-        )
-        if await publish_btn.is_visible(timeout=5000):
-            await publish_btn.click()
-            await asyncio.sleep(2)
-        else:
-            log.warning("Hashnode: Publish button not found, trying to proceed anyway")
+        # Click the Publish button (top bar) — exclude tab buttons
+        publish_btn = page.locator(
+            'button:not([role="tab"]):has-text("Publish")'
+        ).first
+        try:
+            if await publish_btn.is_visible(timeout=5000):
+                log.info("Hashnode: clicking Publish button")
+                await publish_btn.click()
+                await asyncio.sleep(3)
+            else:
+                log.warning("Hashnode: Publish button not visible, looking for alternatives")
+                # Try aria-label based selector
+                alt_btn = page.locator('[aria-label*="publish" i]').first
+                if await alt_btn.is_visible(timeout=3000):
+                    await alt_btn.click()
+                    await asyncio.sleep(3)
+        except Exception as exc:
+            log.warning("Hashnode: Publish button click failed: %s", exc)
 
         if cover_image_url:
             await self._set_cover_image(page, cover_image_url)
@@ -193,51 +201,83 @@ class HashnodePlaywrightPublisher:
         if canonical_url:
             await self._set_canonical_url(page, canonical_url)
 
-        final_btn = (
-            page.locator('button:has-text("Publish now")')
-            .or_(page.locator('button:has-text("Publish post")'))
-            .or_(page.locator('button[type="submit"]:has-text("Publish")'))
-            .first
-        )
-        if await final_btn.is_visible(timeout=5000):
-            await final_btn.click()
-            await asyncio.sleep(5)
-            log.info("Hashnode: published at %s", page.url)
-        else:
-            log.warning("Hashnode: final Publish button not found, draft may have been saved")
+        # Click final "Publish" / "Publish now" / "Publish post" button
+        final_selectors = [
+            'button:not([role="tab"]):has-text("Publish now")',
+            'button:not([role="tab"]):has-text("Publish post")',
+            'button[type="submit"]:has-text("Publish")',
+            'button:not([role="tab"]):has-text("Publish"):not(:has-text("Publish")~*)',
+        ]
+        for sel in final_selectors:
+            btn = page.locator(sel).first
+            try:
+                if await btn.is_visible(timeout=3000):
+                    log.info("Hashnode: clicking final publish via %s", sel)
+                    await btn.click()
+                    await asyncio.sleep(5)
+                    log.info("Hashnode: published at %s", page.url)
+                    return page.url
+            except Exception:
+                continue
 
+        # Last resort: find all non-tab Publish buttons and click the last one
+        all_publish = page.locator('button:not([role="tab"]):has-text("Publish")')
+        count = await all_publish.count()
+        log.info("Hashnode: found %d non-tab Publish buttons", count)
+        if count > 0:
+            await all_publish.last.click()
+            await asyncio.sleep(5)
+            log.info("Hashnode: published (last button) at %s", page.url)
+            return page.url
+
+        log.warning("Hashnode: no Publish button found, draft saved at %s", page.url)
         return page.url
 
-    async def _open_editor(self, page) -> None:
-        """Find and click the Write/New Article button on the dashboard."""
-        write_selectors = [
+    async def _open_new_draft(self, page) -> None:
+        """Create a new draft via Write button or direct URL navigation."""
+        # First try: click Write/New Article link to create a NEW post
+        new_post_selectors = [
             'a:has-text("Write")',
             'button:has-text("Write")',
             'a:has-text("New Article")',
             'button:has-text("New Article")',
             'a:has-text("New Post")',
-            'a[href*="/draft"]',
-            'a[href*="/edit"]',
-            'a[href*="/new"]',
         ]
-        for sel in write_selectors:
+        for sel in new_post_selectors:
             loc = page.locator(sel).first
             try:
                 if await loc.is_visible(timeout=2000):
-                    log.info("Hashnode: clicking Write button via %s", sel)
+                    href = await loc.get_attribute("href")
+                    log.info("Hashnode: found Write button via %s (href=%s)", sel, href)
                     await loc.click()
-                    await asyncio.sleep(8)
-                    log.info("Hashnode: editor page URL: %s", page.url)
+                    await asyncio.sleep(5)
+                    current = page.url
+                    log.info("Hashnode: after Write click: %s", current)
+                    if "draft" in current:
+                        # If we landed on an existing draft, clear title to check
+                        title_elem = page.locator('textarea[placeholder*="title" i]').first
+                        try:
+                            if await title_elem.is_visible(timeout=5000):
+                                existing = await title_elem.input_value()
+                                if existing.strip():
+                                    log.info("Hashnode: existing draft has title '%s', creating new one", existing[:50])
+                                    # Navigate to create a truly new draft
+                                    await page.goto("https://hashnode.com/draft/new", wait_until="domcontentloaded", timeout=30000)
+                                    await asyncio.sleep(5)
+                                    log.info("Hashnode: new draft URL: %s", page.url)
+                                    return
+                        except Exception:
+                            pass
                     return
             except Exception:
                 continue
 
-        # Fallback: try direct new-post URL
-        log.warning("Hashnode: Write button not found, trying direct /new URL")
-        for direct_url in ["https://hashnode.com/new", "https://hashnode.com/post/draft/new"]:
+        # Fallback: direct new-draft URL
+        log.warning("Hashnode: Write button not found, trying direct URLs")
+        for direct_url in ["https://hashnode.com/draft/new", "https://hashnode.com/new"]:
             try:
                 await page.goto(direct_url, wait_until="domcontentloaded", timeout=30000)
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
                 current = page.url
                 log.info("Hashnode: direct URL %s → %s", direct_url, current)
                 if "signin" not in current.lower() and "login" not in current.lower():
@@ -247,8 +287,7 @@ class HashnodePlaywrightPublisher:
 
         await self._dump_page_diagnostics(page, "no_write_button")
         raise RuntimeError(
-            "Hashnode: could not find Write/New Article button on dashboard. "
-            "Cookies may be expired or dashboard layout changed."
+            "Hashnode: could not open new draft — Write button not found, direct URLs failed."
         )
 
     async def _wait_for_editor(self, page) -> None:
