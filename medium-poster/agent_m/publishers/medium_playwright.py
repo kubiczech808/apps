@@ -14,13 +14,6 @@ log = logging.getLogger(__name__)
 
 _COOKIES_FILE = config.data_dir / "medium_cookies.json"
 
-_STEALTH_SCRIPTS = """
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-window.chrome = {runtime: {}};
-"""
-
 
 class MediumPlaywrightPublisher:
     _xvfb_proc: subprocess.Popen | None = None
@@ -30,19 +23,10 @@ class MediumPlaywrightPublisher:
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=False,
-                channel="chrome",
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-infobars",
-                ],
-            )
+            browser = await p.firefox.launch(headless=False)
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 800},
             )
-            await context.add_init_script(_STEALTH_SCRIPTS)
             page = await context.new_page()
 
             await page.goto("https://medium.com/m/signin")
@@ -83,35 +67,19 @@ class MediumPlaywrightPublisher:
                 if use_headless:
                     log.warning("Medium: no DISPLAY, using headless mode (editor may not load)")
 
-                browser = await p.chromium.launch(
-                    headless=use_headless,
-                    channel="chrome",
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu",
-                        "--disable-infobars",
-                    ],
-                )
+                browser = await p.firefox.launch(headless=use_headless)
                 context = await browser.new_context(
                     user_agent=(
-                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+                        "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) "
+                        "Gecko/20100101 Firefox/131.0"
                     ),
                     viewport={"width": 1280, "height": 800},
                 )
-                await context.add_init_script(_STEALTH_SCRIPTS)
 
                 cookies = json.loads(_COOKIES_FILE.read_text())
                 await context.add_cookies(cookies)
 
                 page = await context.new_page()
-                try:
-                    from playwright_stealth import stealth_async
-                    await stealth_async(page)
-                except Exception as exc:
-                    log.debug("playwright-stealth not available: %s", exc)
 
                 try:
                     url = await self._create_story(page, title, body_markdown, tags, publish)
