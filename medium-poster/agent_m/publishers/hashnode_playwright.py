@@ -160,19 +160,37 @@ class HashnodePlaywrightPublisher:
         try:
             await editor.click(timeout=5000)
         except Exception:
-            log.warning("Hashnode: editor click failed, typing anyway")
+            log.warning("Hashnode: editor click failed, trying Tab")
+            await page.keyboard.press("Tab")
         await asyncio.sleep(0.5)
 
-        for para in body_markdown.split("\n\n"):
-            para = para.strip()
-            if not para:
-                continue
-            await page.keyboard.type(para, delay=2)
-            await page.keyboard.press("Enter")
-            await page.keyboard.press("Enter")
-            await asyncio.sleep(0.1)
+        # Paste markdown via synthetic ClipboardEvent — editor parses pasted markdown
+        pasted = await page.evaluate("""(text) => {
+            const el = document.querySelector('.ProseMirror')
+                || document.querySelector('[contenteditable]:not([contenteditable="false"])')
+                || document.activeElement;
+            if (!el) return false;
+            const dt = new DataTransfer();
+            dt.setData('text/plain', text);
+            const ev = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
+            el.dispatchEvent(ev);
+            return true;
+        }""", body_markdown)
 
-        await asyncio.sleep(2)
+        if pasted:
+            log.info("Hashnode: pasted %d chars via ClipboardEvent", len(body_markdown))
+        else:
+            log.warning("Hashnode: ClipboardEvent paste failed, falling back to keyboard typing")
+            for para in body_markdown.split("\n\n"):
+                para = para.strip()
+                if not para:
+                    continue
+                await page.keyboard.type(para, delay=2)
+                await page.keyboard.press("Enter")
+                await page.keyboard.press("Enter")
+                await asyncio.sleep(0.1)
+
+        await asyncio.sleep(3)
 
         # Click the Publish button (top bar) — exclude tab buttons
         publish_btn = page.locator(
