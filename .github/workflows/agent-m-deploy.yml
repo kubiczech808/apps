@@ -79,14 +79,16 @@ jobs:
           echo "=== .env keys (masked) ===" >> /tmp/diag.log
           sed 's/=.*/=***/' /home/jakub/apps/medium-poster/.env >> /tmp/diag.log 2>&1 || echo "No .env" >> /tmp/diag.log
           echo "" >> /tmp/diag.log
-          echo "=== CHAT_ID check ===" >> /tmp/diag.log
-          CHAT_ID=$(grep TELEGRAM_ADMIN_CHAT_ID /home/jakub/apps/medium-poster/.env | cut -d= -f2)
-          echo "Length: ${#CHAT_ID}, starts with: ${CHAT_ID:0:3}..." >> /tmp/diag.log
+          echo "=== Telegram API test ===" >> /tmp/diag.log
+          RESP=$(curl -s "https://api.telegram.org/bot${{ secrets.M_TELEGRAM_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.M_TELEGRAM_CHAT_ID }}" \
+            -d text="Agent M deploy diagnostics OK $(date)")
+          echo "$RESP" >> /tmp/diag.log
           echo "" >> /tmp/diag.log
-          echo "=== Bot log (size + last 80 lines) ===" >> /tmp/diag.log
+          echo "=== Bot log (wait 5s, size + last 40 lines) ===" >> /tmp/diag.log
+          sleep 5
           wc -l /tmp/agent-m-bot.log >> /tmp/diag.log 2>&1 || echo "No bot log" >> /tmp/diag.log
-          sleep 3
-          tail -80 /tmp/agent-m-bot.log >> /tmp/diag.log 2>&1 || echo "No bot log" >> /tmp/diag.log
+          tail -40 /tmp/agent-m-bot.log >> /tmp/diag.log 2>&1 || echo "No bot log" >> /tmp/diag.log
           echo "" >> /tmp/diag.log
           echo "=== Medium cookies ===" >> /tmp/diag.log
           if [ -f /home/jakub/apps/medium-poster/data/medium_cookies.json ]; then
