@@ -85,10 +85,10 @@ jobs:
             -d text="Agent M deploy diagnostics OK $(date)")
           echo "$RESP" >> /tmp/diag.log
           echo "" >> /tmp/diag.log
-          echo "=== Bot log (wait 5s, last 20 lines) ===" >> /tmp/diag.log
-          sleep 5
+          echo "=== Bot log (wait 8s, last 60 lines) ===" >> /tmp/diag.log
+          sleep 8
           wc -l /tmp/agent-m-bot.log >> /tmp/diag.log 2>&1 || echo "No bot log" >> /tmp/diag.log
-          tail -20 /tmp/agent-m-bot.log | cut -c1-200 >> /tmp/diag.log 2>&1 || echo "No bot log" >> /tmp/diag.log
+          tail -60 /tmp/agent-m-bot.log | cut -c1-300 >> /tmp/diag.log 2>&1 || echo "No bot log" >> /tmp/diag.log
           echo "" >> /tmp/diag.log
           echo "=== Medium cookies ===" >> /tmp/diag.log
           if [ -f /home/jakub/apps/medium-poster/data/medium_cookies.json ]; then

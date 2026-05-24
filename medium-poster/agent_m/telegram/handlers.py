@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 from functools import wraps
@@ -99,7 +100,14 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
     await msg.reply_text(f"Generating article {label}...")
 
     try:
-        result = await run_pipeline(mode=mode, slug=slug)
+        result = await asyncio.wait_for(
+            run_pipeline(mode=mode, slug=slug),
+            timeout=600,
+        )
+    except asyncio.TimeoutError:
+        log.error("Pipeline timed out after 600s")
+        await msg.reply_text("Pipeline timed out after 10 minutes. Check logs for details.")
+        return
     except Exception as e:
         log.exception("Pipeline failed")
         await msg.reply_text(f"Failed: {e}")

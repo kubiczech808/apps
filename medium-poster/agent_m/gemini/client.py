@@ -88,10 +88,13 @@ async def generate_text(
                 }
                 if json_mode:
                     cfg["response_mime_type"] = "application/json"
-                response = await client.aio.models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(**cfg),
+                response = await asyncio.wait_for(
+                    client.aio.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(**cfg),
+                    ),
+                    timeout=120,
                 )
                 if response.usage_metadata:
                     await get_tracker().track(
@@ -105,6 +108,9 @@ async def generate_text(
                 last_error = e
                 err_lower = str(e).lower()
                 is_rate_limit = any(k in err_lower for k in ("429", "resource_exhausted", "quota", "rate"))
+                if isinstance(e, asyncio.TimeoutError):
+                    log.warning("Gemini %s attempt %d/%d timed out (120s)", model, attempt + 1, 3)
+                    break
                 log.warning(
                     "Gemini %s attempt %d/%d [%s]: %s",
                     model, attempt + 1, 3, type(e).__name__, str(e)[:300],

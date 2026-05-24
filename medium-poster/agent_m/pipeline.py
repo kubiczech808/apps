@@ -58,11 +58,13 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         raise RuntimeError(f"Missing required config: {', '.join(missing)}")
 
     from agent_m.gemini.client import validate_api_key
+    log.info("[pipeline] Step 1/7: Validating Gemini API key")
     await validate_api_key()
 
     history = History(config.data_dir)
     researcher = TopicResearcher(config.data_dir)
 
+    log.info("[pipeline] Step 2/7: Selecting topic")
     if slug:
         topic = await researcher.get_topic_by_slug(slug)
         if not topic:
@@ -70,14 +72,17 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
     else:
         previous_titles = await history.get_all_titles()
         used_slugs = await history.get_used_slugs()
+        log.info("[pipeline] Fetching remote article slugs from GitHub Pages")
         remote_slugs = await _get_remote_article_slugs()
         used_slugs |= remote_slugs
         if remote_slugs:
             log.info("Found %d existing GitHub Pages article slugs", len(remote_slugs))
+        log.info("[pipeline] Getting next topic (used_slugs=%d)", len(used_slugs))
         topic = await researcher.get_next_topic(previous_titles, used_slugs)
 
-    log.info("Selected topic: %s [%s]", topic.title, topic.slug)
+    log.info("[pipeline] Selected topic: %s [%s]", topic.title, topic.slug)
 
+    log.info("[pipeline] Step 3/7: Writing article via Gemini")
     if topic.plan:
         article = await write_article_from_plan(topic.plan)
     else:
@@ -95,9 +100,9 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         )
         article = await write_article_from_plan(fallback_plan)
 
-    log.info("Generated article: %s (%d chars)", article.title, len(article.body))
+    log.info("[pipeline] Step 4/7: Article generated: %s (%d chars)", article.title, len(article.body))
 
-    # Image generation + upload
+    log.info("[pipeline] Step 5/7: Generating header image")
     image_bytes: bytes | None = None
     image_url: str | None = None
     try:
@@ -126,6 +131,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
     platform_urls: dict[str, str] = {}
     post_url: str | None = None
 
+    log.info("[pipeline] Step 6/7: Publishing (mode=%s)", mode)
     if mode == "preview":
         pass  # no publishing
     else:
@@ -189,6 +195,8 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
                 platform_urls["Medium"] = medium_url
                 post_url = medium_url
 
+    log.info("[pipeline] Step 7/7: Saving to history (published_to=%s, errors=%s)",
+             published_to, platform_errors)
     from agent_m.gemini.client import get_tracker
     today = await get_tracker().get_today()
 
