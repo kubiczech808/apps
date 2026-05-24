@@ -337,13 +337,19 @@ async def _publish_medium_playwright(article: Article, publish: bool) -> tuple[s
     try:
         from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
         pub = MediumPlaywrightPublisher()
-        result = await pub.publish(
-            title=article.title,
-            body_markdown=article.body,
-            tags=article.tags,
-            publish=publish,
+        result = await asyncio.wait_for(
+            pub.publish(
+                title=article.title,
+                body_markdown=article.body,
+                tags=article.tags,
+                publish=publish,
+            ),
+            timeout=180,
         )
         return result, None
+    except asyncio.TimeoutError:
+        log.warning("Medium Playwright publish timed out after 180s")
+        return None, "Medium Playwright timed out after 180s"
     except Exception as exc:
         log.warning("Medium Playwright publish failed: %s", exc)
         return None, str(exc)
