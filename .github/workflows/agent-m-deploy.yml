@@ -66,6 +66,28 @@ jobs:
         run: |
           bash /home/jakub/scripts/agent-m-bot.sh 2>&1 | tee /tmp/deploy.log
 
+      - name: Diagnostics
+        id: diag
+        if: always()
+        run: |
+          echo "=== Bot process ===" > /tmp/diag.log
+          ps aux | grep agent_m | grep -v grep >> /tmp/diag.log 2>&1 || echo "No agent_m process" >> /tmp/diag.log
+          echo "" >> /tmp/diag.log
+          echo "=== .env keys (masked) ===" >> /tmp/diag.log
+          sed 's/=.*/=***/' /home/jakub/apps/medium-poster/.env >> /tmp/diag.log 2>&1 || echo "No .env" >> /tmp/diag.log
+          echo "" >> /tmp/diag.log
+          echo "=== Bot log (last 40 lines) ===" >> /tmp/diag.log
+          tail -40 /tmp/agent-m-bot.log >> /tmp/diag.log 2>&1 || echo "No bot log" >> /tmp/diag.log
+          echo "" >> /tmp/diag.log
+          echo "=== Medium cookies ===" >> /tmp/diag.log
+          if [ -f /home/jakub/apps/medium-poster/data/medium_cookies.json ]; then
+            SIZE=$(wc -c < /home/jakub/apps/medium-poster/data/medium_cookies.json)
+            COUNT=$(python3 -c "import json; print(len(json.load(open('/home/jakub/apps/medium-poster/data/medium_cookies.json'))))" 2>/dev/null || echo "INVALID")
+            echo "medium_cookies.json: ${SIZE} bytes, ${COUNT} cookies" >> /tmp/diag.log
+          else
+            echo "medium_cookies.json: NOT FOUND" >> /tmp/diag.log
+          fi
+
       - name: Write deploy result to debug issue
         if: always()
         uses: actions/github-script@v7
@@ -74,8 +96,10 @@ jobs:
             const fs = require('fs');
             let log = 'No log';
             try { log = fs.readFileSync('/tmp/deploy.log', 'utf8'); } catch(e) {}
+            let diag = '';
+            try { diag = fs.readFileSync('/tmp/diag.log', 'utf8'); } catch(e) {}
             const tail = log.split('\n').slice(-30).join('\n').substring(0,2000);
-            const body = `**Deploy ${new Date().toISOString()} | outcome: ${{ steps.restart.outcome }}**\n\nLog:\n\`\`\`\n${tail}\n\`\`\``;
+            const body = `**Deploy ${new Date().toISOString()} | outcome: ${{ steps.restart.outcome }}**\n\nLog:\n\`\`\`\n${tail}\n\`\`\`\n\nDiagnostics:\n\`\`\`\n${diag.substring(0,3000)}\n\`\`\``;
             const issues = await github.rest.issues.listForRepo({owner:context.repo.owner,repo:context.repo.repo,labels:['agent-m-debug'],state:'open'});
             if (issues.data.length > 0) {
               await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:issues.data[0].number,body});
