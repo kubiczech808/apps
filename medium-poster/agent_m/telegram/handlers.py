@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 from functools import wraps
 
@@ -51,7 +52,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/feedback <text> — add standing instruction for future articles\n"
         "/feedback — show all active feedback\n"
         "/feedback_clear — remove all feedback\n"
-        "/medium_login — save Medium session\n"
+        "/medium_login — jak nastavit Medium session (+ přijímám JSON soubor z Cookie-Editor)\n"
         "/hashnode_login — save Hashnode session\n"
         "/history — recent publications\n"
         "/topics — content plan status\n"
@@ -192,15 +193,77 @@ async def medium_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not msg:
         return
     await msg.reply_text(
-        "Medium login vyžaduje interaktivní prohlížeč.\n\n"
-        "Spusť na RPi přes SSH:\n"
+        "Medium cookies — 2 možnosti:\n\n"
+        "*Možnost 1 — Cookie-Editor (doporučeno):*\n"
+        "1. V Chrome/Firefox nainstaluj rozšíření Cookie-Editor\n"
+        "2. Přihlaš se na medium.com\n"
+        "3. Klikni na Cookie-Editor → Export → Export as JSON\n"
+        "4. Ulož jako soubor a pošli mi ho sem jako přílohu\n\n"
+        "*Možnost 2 — SSH na RPi:*\n"
         "```\n"
         "cd /home/jakub/apps/medium-poster\n"
         "source .venv/bin/activate\n"
         "python -m agent_m.cli medium-login\n"
-        "```\n\n"
-        "Cookies se uloží automaticky do data/medium_cookies.json.",
+        "```",
         parse_mode="Markdown",
+    )
+
+
+@admin_only
+async def medium_cookies_document_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg or not msg.document:
+        return
+    doc = msg.document
+    if not doc.file_name or not doc.file_name.lower().endswith(".json"):
+        await msg.reply_text("Pošli soubor s příponou .json (export z Cookie-Editor).")
+        return
+
+    try:
+        file = await context.bot.get_file(doc.file_id)
+        buf = io.BytesIO()
+        await file.download_to_memory(buf)
+        raw = json.loads(buf.getvalue())
+    except Exception as e:
+        await msg.reply_text(f"Chyba při čtení souboru: {e}")
+        return
+
+    if not isinstance(raw, list) or not raw:
+        await msg.reply_text("Neplatný formát — očekáváno JSON pole cookies.")
+        return
+
+    # Convert Cookie-Editor format → Playwright format
+    pw_cookies = []
+    for c in raw:
+        if not isinstance(c, dict) or "name" not in c or "value" not in c:
+            continue
+        pc: dict = {
+            "name": c["name"],
+            "value": c["value"],
+            "domain": c.get("domain", ".medium.com"),
+            "path": c.get("path", "/"),
+            "httpOnly": c.get("httpOnly", False),
+            "secure": c.get("secure", True),
+        }
+        expires = c.get("expirationDate") or c.get("expires")
+        if expires:
+            pc["expires"] = int(expires)
+        same_site = c.get("sameSite", "None")
+        mapping = {"no_restriction": "None", "lax": "Lax", "strict": "Strict"}
+        pc["sameSite"] = mapping.get(same_site, same_site)
+        pw_cookies.append(pc)
+
+    if not pw_cookies:
+        await msg.reply_text("Nebyly nalezeny žádné platné cookies.")
+        return
+
+    cookies_path = config.data_dir / "medium_cookies.json"
+    cookies_path.parent.mkdir(parents=True, exist_ok=True)
+    cookies_path.write_text(json.dumps(pw_cookies, indent=2))
+    log.info("Medium cookies saved: %d cookies to %s", len(pw_cookies), cookies_path)
+    await msg.reply_text(
+        f"✓ Uloženo {len(pw_cookies)} Medium cookies.\n"
+        "Nyní zkus /draft pro otestování publikace na Medium."
     )
 
 

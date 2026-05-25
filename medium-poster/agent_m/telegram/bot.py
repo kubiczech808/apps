@@ -4,7 +4,7 @@ import datetime
 import io
 import logging
 
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 from agent_m.config import config
 from agent_m.pipeline import run_pipeline
@@ -72,4 +72,8 @@ def build_app():
     app.add_handler(CommandHandler("feedback_clear", handlers.feedback_clear_cmd))
     app.add_handler(CommandHandler("medium_login", handlers.medium_login_cmd))
     app.add_handler(CommandHandler("hashnode_login", handlers.hashnode_login_cmd))
+    app.add_handler(MessageHandler(
+        filters.Document.JSON & filters.ChatType.PRIVATE,
+        handlers.medium_cookies_document_cmd,
+    ))
     return app
