@@ -73,7 +73,7 @@ def build_app():
     app.add_handler(CommandHandler("medium_login", handlers.medium_login_cmd))
     app.add_handler(CommandHandler("hashnode_login", handlers.hashnode_login_cmd))
     app.add_handler(MessageHandler(
-        filters.Document.JSON & filters.ChatType.PRIVATE,
+        filters.Document.ALL & filters.ChatType.PRIVATE,
         handlers.medium_cookies_document_cmd,
     ))
     return app
