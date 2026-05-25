@@ -88,7 +88,7 @@ jobs:
           echo "=== Previous bot log (last 120 lines before restart) ===" >> /tmp/diag.log
           if [ -f /tmp/agent-m-bot.log.prev ]; then
             wc -l /tmp/agent-m-bot.log.prev >> /tmp/diag.log 2>&1
-            tail -120 /tmp/agent-m-bot.log.prev | cut -c1-300 >> /tmp/diag.log 2>&1
+            tail -120 /tmp/agent-m-bot.log.prev | cut -c1-300 | sed 's/key=[A-Za-z0-9_-]\{20,\}/key=***/g' | sed 's/bot[0-9]\{8,\}:[A-Za-z0-9_-]\{30,\}/bot***:.***/g' >> /tmp/diag.log 2>&1
           else
             echo "No previous log" >> /tmp/diag.log
           fi
@@ -96,7 +96,7 @@ jobs:
           echo "=== Current bot log (wait 10s, last 30 lines) ===" >> /tmp/diag.log
           sleep 10
           wc -l /tmp/agent-m-bot.log >> /tmp/diag.log 2>&1 || echo "No bot log" >> /tmp/diag.log
-          tail -30 /tmp/agent-m-bot.log | cut -c1-300 >> /tmp/diag.log 2>&1 || echo "No bot log" >> /tmp/diag.log
+          tail -30 /tmp/agent-m-bot.log | cut -c1-300 | sed 's/key=[A-Za-z0-9_-]\{20,\}/key=***/g' | sed 's/bot[0-9]\{8,\}:[A-Za-z0-9_-]\{30,\}/bot***:.***/g' >> /tmp/diag.log 2>&1 || echo "No bot log" >> /tmp/diag.log
           echo "" >> /tmp/diag.log
           echo "=== Medium cookies ===" >> /tmp/diag.log
           if [ -f /home/jakub/apps/medium-poster/data/medium_cookies.json ]; then
