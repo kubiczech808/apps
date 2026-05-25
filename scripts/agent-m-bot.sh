@@ -16,6 +16,12 @@ if [ -f "$PIDFILE" ]; then
     rm -f "$PIDFILE"
 fi
 
+# Preserve previous log for diagnostics
+if [ -f "$LOG" ]; then
+    cp "$LOG" "${LOG}.prev"
+    > "$LOG"
+fi
+
 cd "$REPO_DIR"
 
 # Ensure Xvfb is available (needed for Medium Playwright headed mode)
