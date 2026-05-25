@@ -24,6 +24,7 @@ class PipelineResult:
     post_url: str | None
     mode: str
     tokens_used: int
+    image_model: str | None = None
     published_to: list[str] = field(default_factory=list)
     platform_errors: list[str] = field(default_factory=list)
     platform_urls: dict[str, str] = field(default_factory=dict)
@@ -105,8 +106,9 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
     log.info("[pipeline] Step 5/7: Generating header image")
     image_bytes: bytes | None = None
     image_url: str | None = None
+    image_model: str | None = None
     try:
-        image_bytes = await generate_header_image(topic)
+        image_bytes, image_model = await generate_header_image(topic)
         if mode != "preview" and image_bytes:
             if config.imgur_client_id:
                 from agent_m.images.uploader import upload_to_imgur
@@ -218,6 +220,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         post_url=post_url,
         mode=mode,
         tokens_used=today.get("total", 0),
+        image_model=image_model,
         published_to=published_to,
         platform_errors=platform_errors,
         platform_urls=platform_urls,

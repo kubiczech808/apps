@@ -61,6 +61,8 @@ async def run(mode: str, slug: str | None) -> None:
         summary += "\nIssues:\n"
         for err in result.platform_errors[:4]:
             summary += f"- {err[:200]}\n"
+    if result.image_model:
+        summary += f"Image: {result.image_model}\n"
     summary += f"Tokens: {result.tokens_used}"
 
     await send_telegram(summary, result.image_bytes)

@@ -114,9 +114,12 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
         return
 
     if result.image_bytes:
+        caption = result.article.title[:180]
+        if result.image_model:
+            caption += f"\n🎨 {result.image_model}"
         await msg.reply_photo(
             photo=io.BytesIO(result.image_bytes),
-            caption=result.article.title[:200],
+            caption=caption,
         )
 
     if mode == "preview":
