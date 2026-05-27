@@ -1,0 +1,88 @@
+name: Agent M - One-off RPi Medium Publish
+
+on:
+  push:
+    branches:
+      - codex/rpi-medium-publish
+    paths:
+      - '.github/agent-m-rpi-medium-once.txt'
+      - '.github/workflows/agent-m-rpi-medium-once.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish-medium:
+    runs-on: self-hosted
+    timeout-minutes: 12
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/rpi-medium-publish
+
+      - name: Publish article from RPi Medium cookies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /home/jakub/apps/medium-poster
+          source .venv/bin/activate
+          ARTICLE_FILE="$GITHUB_WORKSPACE/.github/agent-m-rpi-medium-once.txt" python - <<'PY'
+          import asyncio
+          import os
+          from pathlib import Path
+
+          import httpx
+          from dotenv import load_dotenv
+
+          from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
+
+          load_dotenv("/home/jakub/apps/medium-poster/.env")
+
+          article_text = Path(os.environ["ARTICLE_FILE"]).read_text(encoding="utf-8")
+          title = article_text.splitlines()[0].replace("TITLE: ", "").strip()
+          body = article_text.split("BODY:\n", 1)[1].strip()
+          tags = ["Bitcoin", "DCA", "Investing"]
+
+          async def send_telegram(message: str) -> None:
+              token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+              chat_id = os.environ.get("TELEGRAM_ADMIN_CHAT_ID", "")
+              if not token or not chat_id:
+                  print("Telegram credentials missing")
+                  return
+              async with httpx.AsyncClient(timeout=30.0) as client:
+                  resp = await client.post(
+                      f"https://api.telegram.org/bot{token}/sendMessage",
+                      json={"chat_id": chat_id, "text": message[:4096]},
+                  )
+              print(f"Telegram status: {resp.status_code}")
+
+          async def main() -> None:
+              cookies = Path("/home/jakub/apps/medium-poster/data/medium_cookies.json")
+              if not cookies.exists():
+                  message = "Medium publish failed: medium_cookies.json is missing on RPi."
+                  await send_telegram(message)
+                  raise RuntimeError(message)
+
+              try:
+                  url = await asyncio.wait_for(
+                      MediumPlaywrightPublisher().publish(title, body, tags, publish=True),
+                      timeout=240,
+                  )
+              except Exception as exc:
+                  await send_telegram(f"Medium publish failed:\n{type(exc).__name__}: {exc}")
+                  raise
+
+              if not url:
+                  message = "Medium publish failed: no URL returned. Check RPi screenshots/logs."
+                  await send_telegram(message)
+                  raise RuntimeError(message)
+
+              await send_telegram(f"Published on Medium:\n{title}\n{url}")
+              print("AGENT_M_MEDIUM_URL_START")
+              print(url)
+              print("AGENT_M_MEDIUM_URL_END")
+
+          asyncio.run(main())
+          PY
