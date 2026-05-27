@@ -130,10 +130,23 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
         )
     elif result.published_to:
         platforms = ", ".join(result.published_to)
-        url_line = f"\n{result.post_url}" if result.post_url else ""
-        await msg.reply_text(f"Published to: {platforms}{url_line}")
+        url_lines = [f"{name}: {url}" for name, url in result.platform_urls.items()]
+        if result.post_url and not url_lines:
+            url_lines.append(result.post_url)
+        error_lines = [f"- {err}" for err in result.platform_errors]
+
+        text = f"Published to: {platforms}"
+        if url_lines:
+            text += "\n\n" + "\n".join(url_lines)
+        if error_lines:
+            text += "\n\nErrors:\n" + "\n".join(error_lines)
+        await msg.reply_text(text[:4000])
     else:
-        await msg.reply_text("Publishing failed on all platforms. Check logs.")
+        error_lines = [f"- {err}" for err in result.platform_errors]
+        text = "Publishing failed on all platforms. Check logs."
+        if error_lines:
+            text += "\n\nErrors:\n" + "\n".join(error_lines)
+        await msg.reply_text(text[:4000])
 
 
 @admin_only

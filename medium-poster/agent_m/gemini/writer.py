@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from dataclasses import dataclass
 
@@ -8,6 +10,8 @@ from agent_m.content_plan import ContentPlan
 from agent_m.feedback import get_feedback_for_prompt
 from agent_m.gemini.client import generate_text
 from agent_m.site_context import format_site_context_for_prompt, get_site_context
+
+log = logging.getLogger(__name__)
 
 _PROPER_CASE = {
     "bitcoin": "Bitcoin", "btc": "BTC", "dca": "DCA", "etf": "ETF",
@@ -116,8 +120,16 @@ async def write_article_from_plan(plan: ContentPlan) -> Article:
         site_url=config.site_url,
     )
 
-    # Load site context (pages, affiliate links) and user feedback
-    site_ctx = await get_site_context()
+    log.info("Writer: loading site context")
+    try:
+        site_ctx = await asyncio.wait_for(get_site_context(), timeout=20)
+    except asyncio.TimeoutError:
+        log.warning("Writer: site context timed out after 20s, using no scraped context")
+        site_ctx = {
+            "site_url": config.site_url.rstrip("/"),
+            "pages": [],
+            "affiliate_links": [],
+        }
     site_section = format_site_context_for_prompt(site_ctx)
     feedback_section = get_feedback_for_prompt()
 
@@ -138,8 +150,44 @@ async def write_article_from_plan(plan: ContentPlan) -> Article:
         site_url=config.site_url,
     )
     prompt = f"{system}{extra_sections}\n\n---\n\n{user_prompt}"
-    raw = await generate_text(prompt, temperature=0.7, max_tokens=8192, json_mode=False)
 
+    article: Article | None = None
+    last_raw = ""
+    for attempt in range(3):
+        extra = "" if attempt == 0 else (
+            "\n\nIMPORTANT: Use exactly this plain text structure, with TITLE, TAGS, and BODY labels. "
+            "Do not wrap the response in markdown fences."
+        )
+        temperature = 0.7 if attempt == 0 else 0.35
+        log.info("Writer: Gemini article generation attempt %d/3", attempt + 1)
+        raw = await generate_text(prompt + extra, temperature=temperature, max_tokens=8192, json_mode=False)
+        last_raw = raw
+        article = _parse_writer_response(raw, plan)
+        if article:
+            break
+        log.warning("Writer: parse failed on attempt %d/3. Response head: %s", attempt + 1, raw[:300])
+
+    if not article:
+        raise RuntimeError(f"Failed to parse writer response after retries: {last_raw[:300]}")
+
+    title = article.title
+    body = article.body
+    tags = article.tags
+
+    if not tags:
+        tags = [t[:25] for t in plan.tags[:3]]
+
+    if config.site_url not in body:
+        body += (
+            f"\n\nIf you want to take the manual work out of DCA, I built "
+            f"[a free tool that automates the whole process]({config.site_url}) "
+            f"— connects to your exchange, buys on schedule, withdraws to your wallet."
+        )
+
+    return Article(title=title, body=body, tags=tags)
+
+
+def _parse_writer_response(raw: str, plan: ContentPlan) -> Article | None:
     title = ""
     tags: list[str] = []
     body = ""
@@ -166,16 +214,9 @@ async def write_article_from_plan(plan: ContentPlan) -> Article:
         body = "\n".join(body_lines).strip()
 
     if not title or not body:
-        raise RuntimeError(f"Failed to parse writer response (missing title or body): {raw[:300]}")
+        return None
 
     if not tags:
         tags = [t[:25] for t in plan.tags[:3]]
-
-    if config.site_url not in body:
-        body += (
-            f"\n\nIf you want to take the manual work out of DCA, I built "
-            f"[a free tool that automates the whole process]({config.site_url}) "
-            f"— connects to your exchange, buys on schedule, withdraws to your wallet."
-        )
 
     return Article(title=title, body=body, tags=tags)
