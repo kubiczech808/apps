@@ -29,6 +29,10 @@ permissions:
   contents: read
   issues: write
 
+concurrency:
+  group: agent-m-publish
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest

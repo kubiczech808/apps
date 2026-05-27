@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 import httpx
 from google import genai
@@ -12,10 +13,20 @@ from agent_m.token_tracker import TokenTracker
 
 log = logging.getLogger(__name__)
 
-_MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"]
+_MODELS = [
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash-lite",
+]
 
 _client: genai.Client | None = None
 _tracker: TokenTracker | None = None
+
+
+class GeminiDailyQuotaError(RuntimeError):
+    pass
 
 
 def get_client() -> genai.Client:
@@ -48,7 +59,7 @@ async def validate_api_key() -> None:
     if resp.status_code == 400:
         raise RuntimeError(f"Gemini API key is invalid (HTTP 400): {body}")
     if resp.status_code == 403:
-        raise RuntimeError(f"Gemini API key forbidden — API may not be enabled (HTTP 403): {body}")
+        raise RuntimeError(f"Gemini API key forbidden - API may not be enabled (HTTP 403): {body}")
     raise RuntimeError(f"Gemini API key check failed (HTTP {resp.status_code}): {body}")
 
 
@@ -62,10 +73,37 @@ async def _diagnose_429(model: str) -> str:
                 json={"contents": [{"parts": [{"text": "Say hi"}]}]},
             )
             if resp.status_code == 200:
-                return "Diagnostic call succeeded — rate limit was transient"
+                return "Diagnostic call succeeded - rate limit was transient"
             return f"HTTP {resp.status_code}: {resp.text[:800]}"
     except Exception as e:
         return f"Diagnostic call failed: {e}"
+
+
+def _extract_retry_delay_seconds(text: str) -> int | None:
+    patterns = [
+        r"retryDelay['\"]?\s*:\s*['\"]?([0-9]+(?:\.[0-9]+)?)s",
+        r"Please retry in ([0-9]+(?:\.[0-9]+)?)s",
+        r"retry after ([0-9]+(?:\.[0-9]+)?)s",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return max(1, int(float(match.group(1))) + 5)
+    return None
+
+
+def _looks_like_daily_quota(text: str) -> bool:
+    lowered = text.lower()
+    daily_markers = (
+        "perday",
+        "per day",
+        "requestsperday",
+        "requests per day",
+        "generatecontentrequestsperday",
+        "rpd",
+        "_per_day",
+    )
+    return any(marker in lowered for marker in daily_markers)
 
 
 async def generate_text(
@@ -116,13 +154,20 @@ async def generate_text(
                     model, attempt + 1, 3, type(e).__name__, str(e)[:300],
                 )
                 if is_rate_limit:
+                    error_text = str(e)
                     if not diagnosed:
                         diagnosed = True
                         diag = await _diagnose_429(model)
                         log.warning("429 diagnostics: %s", diag)
+                        error_text = f"{error_text}\n{diag}"
+                    if _looks_like_daily_quota(error_text):
+                        raise GeminiDailyQuotaError(
+                            "Gemini daily quota appears exhausted; retry after the daily quota reset."
+                        ) from e
                     if attempt < 2:
-                        wait = 10 * (2 ** attempt)
-                        log.warning("Rate limited — waiting %ds before retry", wait)
+                        wait = _extract_retry_delay_seconds(error_text) or 10 * (2 ** attempt)
+                        wait = min(wait, 180)
+                        log.warning("Rate limited; waiting %ds before retry", wait)
                         await asyncio.sleep(wait)
                     else:
                         break
