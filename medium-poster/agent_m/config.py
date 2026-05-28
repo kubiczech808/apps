@@ -31,8 +31,8 @@ class Config(BaseSettings):
     medium_playwright: bool = True
     imgur_client_id: str = ""
 
-    publish_hour: int = 9
-    publish_minute: int = 0
+    publish_hour: int = 4
+    publish_minute: int = 25
 
     site_url: str = "https://btc-dca.com"
     site_name: str = "btc-dca.com"

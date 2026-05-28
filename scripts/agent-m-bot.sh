@@ -37,8 +37,8 @@ fi
 source "$VENV_DIR/bin/activate"
 pip install -q .
 
-# Install Firefox for Medium Playwright (auto-starts Xvfb for headed mode)
-playwright install firefox 2>/dev/null || true
+# Install Chromium for Medium Playwright (auto-starts Xvfb for headed mode)
+playwright install chromium 2>/dev/null || true
 
 # Start bot in background (unbuffered output)
 nohup python -u -m agent_m >> "$LOG" 2>&1 &

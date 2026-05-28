@@ -7,6 +7,7 @@ import os
 import random
 import subprocess
 import time
+from pathlib import Path
 
 from agent_m.config import config
 
@@ -21,28 +22,43 @@ class MediumPlaywrightPublisher:
 
     async def login(self) -> None:
         from playwright.async_api import async_playwright
+        from playwright_stealth import Stealth
 
-        async with async_playwright() as p:
-            browser = await p.firefox.launch(headless=False)
-            context = await browser.new_context(
-                viewport={"width": 1280, "height": 800},
-            )
-            page = await context.new_page()
+        self._ensure_display()
+        stealth = self._make_stealth()
 
-            await page.goto("https://medium.com/m/signin")
-            print("\n>>> Přihlaš se do Medium v prohlížeči.")
-            print(">>> Až budeš přihlášen/a a uvidíš svůj feed, stiskni Enter zde...")
+        try:
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(
+                    headless=False,
+                    args=self._browser_args(),
+                )
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 800},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                page = await context.new_page()
 
-            await asyncio.get_event_loop().run_in_executor(None, input)
+                await page.goto("https://medium.com/m/signin", wait_until="domcontentloaded")
+                print("\n>>> Prihlas se do Medium v prohlizeci.")
+                print(">>> Az bude prihlaseni hotove a uvidis feed, stiskni Enter zde...")
 
-            await asyncio.sleep(2)
-            cookies = await context.cookies()
-            _COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _COOKIES_FILE.write_text(json.dumps(cookies, indent=2))
-            print(f">>> Cookies uloženy: {_COOKIES_FILE}")
-            log.info("Cookies saved to %s", _COOKIES_FILE)
+                await asyncio.get_event_loop().run_in_executor(None, input)
+                await asyncio.sleep(2)
 
-            await browser.close()
+                cookies = await context.cookies()
+                _COOKIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+                _COOKIES_FILE.write_text(json.dumps(self._normalize_cookies(cookies), indent=2))
+                log.info("Cookies saved to %s", _COOKIES_FILE)
+                print(f">>> Cookies ulozeny: {_COOKIES_FILE}")
+
+                await browser.close()
+        finally:
+            self._cleanup_display()
 
     async def publish(
         self,
@@ -53,8 +69,7 @@ class MediumPlaywrightPublisher:
     ) -> str | None:
         if not _COOKIES_FILE.exists():
             raise RuntimeError(
-                "No Medium cookies found. Run the bot with /medium_login first "
-                "to save your session."
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
             )
 
         self._ensure_display()
@@ -62,48 +77,73 @@ class MediumPlaywrightPublisher:
         from playwright.async_api import async_playwright
 
         try:
-            async with async_playwright() as p:
-                use_headless = not os.environ.get("DISPLAY")
-                if use_headless:
-                    log.warning("Medium: no DISPLAY, using headless mode (editor may not load)")
+            from playwright_stealth import Stealth
 
-                browser = await p.firefox.launch(headless=use_headless)
-                context = await browser.new_context(
-                    user_agent=(
-                        "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) "
-                        "Gecko/20100101 Firefox/131.0"
-                    ),
-                    viewport={"width": 1280, "height": 800},
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(
+                    headless=False,
+                    args=self._browser_args(),
                 )
-
-                cookies = json.loads(_COOKIES_FILE.read_text())
-                await context.add_cookies(cookies)
-
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 800},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
                 page = await context.new_page()
 
                 try:
-                    url = await self._create_story(page, title, body_markdown, tags, publish)
-                    return url
+                    return await self._create_story(page, title, body_markdown, tags, publish)
                 except Exception:
                     log.exception("Medium Playwright publish failed")
-                    try:
-                        screenshot_path = config.data_dir / "medium_error.png"
-                        await page.screenshot(path=str(screenshot_path), full_page=True)
-                        log.error("Screenshot saved: %s", screenshot_path)
-                    except Exception:
-                        pass
+                    await self._safe_screenshot(page, "medium_error.png")
                     raise
                 finally:
+                    try:
+                        await context.storage_state(path=str(config.data_dir / "medium_storage_state.json"))
+                    except Exception:
+                        pass
                     await browser.close()
         finally:
             self._cleanup_display()
+
+    @staticmethod
+    def _user_agent() -> str:
+        return (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        )
+
+    @classmethod
+    def _make_stealth(cls):
+        from playwright_stealth import Stealth
+
+        return Stealth(
+            navigator_user_agent_override=cls._user_agent(),
+            navigator_platform_override="Linux x86_64",
+            navigator_vendor_override="Google Inc.",
+        )
+
+    @staticmethod
+    def _browser_args() -> list[str]:
+        return [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-web-security",
+            "--window-size=1280,800",
+        ]
 
     @staticmethod
     async def _human_delay(min_s: float = 2, max_s: float = 5) -> None:
         await asyncio.sleep(random.uniform(min_s, max_s))
 
     @classmethod
-    def _ensure_display(cls):
+    def _ensure_display(cls) -> None:
         if os.environ.get("DISPLAY"):
             return
         for display_num in range(99, 110):
@@ -122,13 +162,13 @@ class MediumPlaywrightPublisher:
                     log.info("Started Xvfb on display %s (PID %d)", display, proc.pid)
                     return
             except FileNotFoundError:
-                log.warning("Xvfb not found — install with: sudo apt install xvfb")
+                log.warning("Xvfb not found - install with: sudo apt install xvfb")
                 return
             except Exception:
                 continue
 
     @classmethod
-    def _cleanup_display(cls):
+    def _cleanup_display(cls) -> None:
         if cls._xvfb_proc:
             cls._xvfb_proc.terminate()
             try:
@@ -140,6 +180,34 @@ class MediumPlaywrightPublisher:
                 del os.environ["DISPLAY"]
             cls._xvfb_display = None
 
+    @classmethod
+    def _load_cookies(cls) -> list[dict]:
+        cookies = json.loads(_COOKIES_FILE.read_text())
+        normalized = cls._normalize_cookies(cookies)
+        if normalized != cookies:
+            _COOKIES_FILE.write_text(json.dumps(normalized, indent=2))
+            log.info("Normalized Medium cookies for Playwright")
+        return normalized
+
+    @staticmethod
+    def _normalize_cookies(cookies: list[dict]) -> list[dict]:
+        mapping = {
+            "no_restriction": "None",
+            "none": "None",
+            "unspecified": "None",
+            "lax": "Lax",
+            "strict": "Strict",
+        }
+        result: list[dict] = []
+        for cookie in cookies:
+            c = dict(cookie)
+            raw_same_site = str(c.get("sameSite", "None")).strip().lower()
+            c["sameSite"] = mapping.get(raw_same_site, c.get("sameSite", "None"))
+            if c["sameSite"] not in {"Strict", "Lax", "None"}:
+                c["sameSite"] = "None"
+            result.append(c)
+        return result
+
     async def _create_story(
         self,
         page,
@@ -149,68 +217,41 @@ class MediumPlaywrightPublisher:
         publish: bool,
     ) -> str | None:
         await page.goto("https://medium.com", wait_until="domcontentloaded", timeout=60000)
-        await self._human_delay(3, 6)
+        await self._human_delay(4, 7)
+        await self._wait_for_cloudflare(page, "home")
+        log.info("Medium: homepage URL: %s title=%s", page.url, await page.title())
 
-        page_url = page.url
-        log.info("Medium: homepage URL: %s", page_url)
+        if "signin" in page.url.lower() or "login" in page.url.lower():
+            raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
 
-        if "signin" in page_url.lower() or "login" in page_url.lower():
-            raise RuntimeError("Session expired — cookies are invalid. Run /medium_login again.")
+        await page.goto("https://medium.com/new-story", wait_until="domcontentloaded", timeout=60000)
+        await self._human_delay(6, 10)
+        await self._wait_for_cloudflare(page, "new_story")
+        log.info("Medium: editor URL: %s title=%s", page.url, await page.title())
 
-        await self._wait_for_cloudflare(page)
-
-        write_btn = (
-            page.locator('a:has-text("Write")')
-            .or_(page.locator('button:has-text("Write")'))
-            .or_(page.locator('a[href*="new-story"]'))
-        )
-        try:
-            if await write_btn.first.is_visible(timeout=5000):
-                log.info("Medium: clicking Write button")
-                await write_btn.first.click()
-                await self._human_delay(3, 6)
-            else:
-                raise Exception("Write button not visible")
-        except Exception:
-            log.info("Medium: Write button not found, navigating directly to new-story")
-            await page.goto(
-                "https://medium.com/new-story",
-                wait_until="domcontentloaded",
-                timeout=60000,
-            )
-            await self._human_delay(3, 6)
-
-        page_url = page.url
-        page_title = await page.title()
-        log.info("Medium: editor page URL: %s", page_url)
-        log.info("Medium: editor page title: %s", page_title)
-
-        if "signin" in page_url.lower() or "login" in page_url.lower():
-            raise RuntimeError("Session expired — cookies are invalid. Run /medium_login again.")
-
-        await self._wait_for_cloudflare(page)
-        await self._wait_for_editor(page)
-        await self._human_delay(1, 3)
+        if "signin" in page.url.lower() or "login" in page.url.lower():
+            raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
 
         title_field = await self._find_title_field(page)
         await title_field.click()
-        await self._human_delay(1, 2)
-        await page.keyboard.type(title, delay=random.randint(40, 80))
-        await self._human_delay(2, 4)
+        await page.keyboard.type(title, delay=random.randint(35, 70))
         await page.keyboard.press("Enter")
         await self._human_delay(1, 2)
 
-        pasted = await page.evaluate("""(text) => {
-            const el = document.querySelector('.ProseMirror')
-                || document.querySelector('[contenteditable]:not([contenteditable="false"])')
-                || document.activeElement;
-            if (!el) return false;
-            const dt = new DataTransfer();
-            dt.setData('text/plain', text);
-            const ev = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
-            el.dispatchEvent(ev);
-            return true;
-        }""", body_markdown)
+        pasted = await page.evaluate(
+            """(text) => {
+                const el = document.querySelector('.ProseMirror')
+                    || document.querySelector('[contenteditable]:not([contenteditable="false"])')
+                    || document.activeElement;
+                if (!el) return false;
+                const dt = new DataTransfer();
+                dt.setData('text/plain', text);
+                const ev = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
+                el.dispatchEvent(ev);
+                return true;
+            }""",
+            body_markdown,
+        )
 
         if pasted:
             log.info("Medium: pasted %d chars via ClipboardEvent", len(body_markdown))
@@ -225,86 +266,91 @@ class MediumPlaywrightPublisher:
                 await page.keyboard.press("Enter")
                 await self._human_delay(0.3, 0.8)
 
-        await self._human_delay(8, 15)
-        log.info("Medium: review pause before publish")
-
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-        await self._human_delay(2, 4)
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await self._human_delay(2, 3)
-        await page.evaluate("window.scrollTo(0, 0)")
-        await self._human_delay(2, 3)
+        await self._human_delay(8, 12)
 
         if not publish:
-            log.info("Medium: draft saved (not published)")
+            log.info("Medium: draft saved")
             return page.url
 
         publish_btn = page.locator('button:has-text("Publish")').first
-        try:
-            if await publish_btn.is_visible(timeout=5000):
-                await publish_btn.click()
-                await self._human_delay(3, 5)
+        if not await publish_btn.is_visible(timeout=10000):
+            await self._safe_screenshot(page, "medium_no_publish.png")
+            raise RuntimeError("Medium: publish button not visible")
 
-                for tag in tags[:5]:
-                    tag_input = page.locator('input[placeholder*="tag" i]').first
-                    try:
-                        if await tag_input.is_visible(timeout=2000):
-                            await tag_input.fill(tag)
-                            await self._human_delay(1, 2)
-                            await page.keyboard.press("Enter")
-                            await self._human_delay(0.5, 1)
-                    except Exception:
-                        break
+        await publish_btn.click()
+        await self._human_delay(3, 5)
 
-                final_publish = page.locator('button:has-text("Publish now")').or_(
-                    page.locator('button:has-text("Publish")').last
-                )
-                if await final_publish.is_visible(timeout=5000):
-                    await final_publish.click()
-                    await self._human_delay(5, 8)
+        tag_input = page.locator('input[placeholder*="tag" i]').first
+        for tag in tags[:5]:
+            try:
+                if await tag_input.is_visible(timeout=3000):
+                    await tag_input.fill(tag)
+                    await page.keyboard.press("Enter")
+                    await self._human_delay(0.7, 1.2)
+            except Exception:
+                break
 
-                log.info("Medium: published at %s", page.url)
-                return page.url
-        except Exception as exc:
-            log.warning("Medium: publish flow failed: %s", exc)
+        final_publish = page.locator('button:has-text("Publish now")').or_(
+            page.locator('button:has-text("Publish")').last
+        )
+        if await final_publish.is_visible(timeout=10000):
+            await final_publish.click()
+            await self._human_delay(6, 9)
+        else:
+            await self._safe_screenshot(page, "medium_no_publish_now.png")
+            raise RuntimeError("Medium: final publish button not visible")
 
-        log.warning("Medium: publish button not found, draft saved")
+        log.info("Medium: published at %s", page.url)
         return page.url
 
-    async def _wait_for_cloudflare(self, page) -> None:
+    async def _wait_for_cloudflare(self, page, label: str) -> None:
         title = await page.title()
         if "just a moment" not in title.lower():
             return
-        log.info("Medium: Cloudflare challenge detected, waiting for resolution...")
-        for i in range(12):
+
+        log.info("Medium: Cloudflare challenge detected on %s", label)
+        for i in range(36):
             await asyncio.sleep(5)
             title = await page.title()
-            log.info("Medium: CF check %d/12 — title: %s", i + 1, title)
+            log.info("Medium: CF check %d/36 on %s - title: %s", i + 1, label, title)
             if "just a moment" not in title.lower():
-                log.info("Medium: Cloudflare challenge resolved")
+                log.info("Medium: Cloudflare challenge resolved on %s", label)
                 await self._human_delay(2, 4)
                 return
-        await self._dump_page_diagnostics(page, "cloudflare_stuck")
+
+        await self._dump_page_diagnostics(page, f"{label}_cloudflare_stuck")
         raise RuntimeError(
-            "Medium: Cloudflare challenge did not resolve within 60s. "
-            "The challenge may require CAPTCHA — try running /medium_login "
-            "from the same IP as the CI runner."
+            "Medium: Cloudflare challenge did not resolve. Upload fresh cookies "
+            "from the same network or solve login on the RPi browser."
         )
 
-    async def _wait_for_editor(self, page) -> None:
-        editor_sel = (
-            '[contenteditable]:not([contenteditable="false"]), '
-            'textarea, [role="textbox"], .ProseMirror'
-        )
+    async def _find_title_field(self, page):
+        selectors = [
+            'p[data-placeholder*="Title" i]',
+            'div[data-placeholder*="Title" i]',
+            '[data-testid="title"]',
+            '[role="textbox"]',
+            '[contenteditable]:not([contenteditable="false"])',
+        ]
+        for selector in selectors:
+            locator = page.locator(selector).first
+            try:
+                if await locator.is_visible(timeout=10000):
+                    log.info("Medium: title field found via %s", selector)
+                    return locator
+            except Exception:
+                continue
+
+        await self._dump_page_diagnostics(page, "no_title_field")
+        raise RuntimeError("Medium: no title field found on new-story page")
+
+    async def _safe_screenshot(self, page, name: str) -> None:
         try:
-            await page.wait_for_selector(editor_sel, state="visible", timeout=60000)
-            log.info("Medium: editor element detected")
+            path = config.data_dir / name
+            await page.screenshot(path=str(path), full_page=True)
+            log.error("Medium screenshot saved: %s", path)
         except Exception:
-            await self._dump_page_diagnostics(page, "editor_wait_timeout")
-            raise RuntimeError(
-                "Medium: editor did not load within 60s — "
-                "page may be blocked or cookies expired."
-            )
+            pass
 
     async def _dump_page_diagnostics(self, page, context: str) -> None:
         try:
@@ -312,12 +358,11 @@ class MediumPlaywrightPublisher:
             log.error("Medium DIAG [%s]: title = %s", context, await page.title())
             for sel in [
                 '[contenteditable]',
-                '[contenteditable="true"]',
-                '[contenteditable=""]',
                 '.ProseMirror',
                 'textarea',
                 '[role="textbox"]',
                 '[data-testid="title"]',
+                'button:has-text("Publish")',
             ]:
                 try:
                     n = await page.locator(sel).count()
@@ -326,40 +371,9 @@ class MediumPlaywrightPublisher:
                     pass
             html = await page.content()
             log.error("Medium DIAG [%s]: HTML[0:3000] = %s", context, html[:3000])
-            screenshot_path = config.data_dir / f"medium_{context}.png"
-            await page.screenshot(path=str(screenshot_path), full_page=True)
-            log.error("Medium DIAG [%s]: screenshot saved: %s", context, screenshot_path)
+            await self._safe_screenshot(page, f"medium_{context}.png")
         except Exception as exc:
             log.error("Medium DIAG [%s]: dump failed: %s", context, exc)
-
-    async def _find_title_field(self, page):
-        selectors = [
-            'p[data-placeholder*="Title" i]',
-            'div[data-placeholder*="Title" i]',
-            '[data-testid="title"]',
-            'h3[data-contents="true"]',
-            'h4[data-contents="true"]',
-            '[role="textbox"][data-placeholder*="title" i]',
-            'h3[contenteditable="true"]',
-            'h4[contenteditable="true"]',
-        ]
-        for sel in selectors:
-            loc = page.locator(sel).first
-            try:
-                if await loc.is_visible(timeout=3000):
-                    log.info("Medium: title field found via %s", sel)
-                    return loc
-            except Exception:
-                continue
-
-        all_editable = page.locator('[contenteditable]:not([contenteditable="false"])')
-        count = await all_editable.count()
-        log.info("Medium: no specific title selector matched, found %d contenteditable elements", count)
-        if count > 0:
-            return all_editable.first
-
-        await self._dump_page_diagnostics(page, "no_title_field")
-        raise RuntimeError("Medium: no title field found on new-story page")
 
     async def close(self) -> None:
         pass
