@@ -59,7 +59,7 @@ jobs:
             "GITHUB_PAGES_BRANCH=gh-pages" \
             "SITE_URL=https://btc-dca.com" \
             "SITE_NAME=btc-dca.com" \
-            "PUBLISH_HOUR=4" \
+            "PUBLISH_HOUR=6" \
             "PUBLISH_MINUTE=25" \
             "LOG_LEVEL=INFO" > /home/jakub/apps/medium-poster/.env
 

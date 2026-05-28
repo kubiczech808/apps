@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import io
 import logging
+from zoneinfo import ZoneInfo
 
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -15,6 +16,7 @@ log = logging.getLogger(__name__)
 
 async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
+        log.info("Scheduled publish started")
         result = await run_pipeline(mode="public")
         caption = f"Published: {result.article.title}"
         if result.post_url:
@@ -40,17 +42,22 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _post_init(application) -> None:
+    tz = ZoneInfo("Europe/Prague")
     target_time = datetime.time(
         hour=config.publish_hour,
         minute=config.publish_minute,
-        tzinfo=datetime.timezone.utc,
+        tzinfo=tz,
     )
-    application.job_queue.run_daily(
+    job = application.job_queue.run_daily(
         callback=_scheduled_publish,
         time=target_time,
         name="daily_publish",
     )
-    log.info("Scheduled daily publish at %s UTC", target_time.strftime("%H:%M"))
+    log.info(
+        "Scheduled daily publish at %s Europe/Prague (next=%s)",
+        target_time.strftime("%H:%M"),
+        job.next_t if job else "unknown",
+    )
 
 
 def build_app():
