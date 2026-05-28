@@ -48,15 +48,14 @@ async def _post_init(application) -> None:
         minute=config.publish_minute,
         tzinfo=tz,
     )
-    job = application.job_queue.run_daily(
+    application.job_queue.run_daily(
         callback=_scheduled_publish,
         time=target_time,
         name="daily_publish",
     )
     log.info(
-        "Scheduled daily publish at %s Europe/Prague (next=%s)",
+        "Scheduled daily publish at %s Europe/Prague",
         target_time.strftime("%H:%M"),
-        job.next_t if job else "unknown",
     )
 
 
