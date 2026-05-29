@@ -80,9 +80,7 @@ jobs:
           sed 's/=.*/=***/' /home/jakub/apps/medium-poster/.env >> /tmp/diag.log 2>&1 || echo "No .env" >> /tmp/diag.log
           echo "" >> /tmp/diag.log
           echo "=== Telegram API test ===" >> /tmp/diag.log
-          RESP=$(curl -s "https://api.telegram.org/bot${{ secrets.M_TELEGRAM_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.M_TELEGRAM_CHAT_ID }}" \
-            -d text="Agent M deploy diagnostics OK $(date)")
+          RESP=$(curl -s "https://api.telegram.org/bot${{ secrets.M_TELEGRAM_TOKEN }}/getMe")
           echo "$RESP" >> /tmp/diag.log
           echo "" >> /tmp/diag.log
           echo "=== Previous bot log (last 120 lines before restart) ===" >> /tmp/diag.log
