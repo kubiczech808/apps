@@ -181,7 +181,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
 
         # 4. Medium (Playwright)
         if config.medium_playwright:
-            medium_url, medium_error = await _publish_medium_playwright(article, not is_draft)
+            medium_url, medium_error = await _publish_medium_playwright(article, not is_draft, image_url)
             if medium_url:
                 published_to.append("Medium")
                 platform_urls["Medium"] = medium_url
@@ -344,14 +344,19 @@ async def _publish_hashnode(
         return None, str(exc)
 
 
-async def _publish_medium_playwright(article: Article, publish: bool) -> tuple[str | None, str | None]:
+async def _publish_medium_playwright(
+    article: Article, publish: bool, image_url: str | None = None,
+) -> tuple[str | None, str | None]:
     try:
         from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
+        body = article.body
+        if image_url:
+            body = f"![{article.title}]({image_url})\n\n{body}"
         pub = MediumPlaywrightPublisher()
         result = await asyncio.wait_for(
             pub.publish(
                 title=article.title,
-                body_markdown=article.body,
+                body_markdown=body,
                 tags=article.tags,
                 publish=publish,
             ),
