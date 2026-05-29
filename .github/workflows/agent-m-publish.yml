@@ -1,12 +1,6 @@
 name: Agent M — Publish Article
 
 on:
-  push:
-    branches:
-      - claude/energy-consumption-app-Nf7bh
-      - claude/multi-platform-auto-poster-p3uBn
-    paths:
-      - .github/agent-m-trigger.txt
   workflow_dispatch:
     inputs:
       mode:
