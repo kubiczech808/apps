@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import random
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -238,23 +239,25 @@ class MediumPlaywrightPublisher:
         await page.keyboard.press("Enter")
         await self._human_delay(1, 2)
 
+        body_html = self._markdown_to_html(body_markdown)
         pasted = await page.evaluate(
-            """(text) => {
+            """([html, plain]) => {
                 const el = document.querySelector('.ProseMirror')
                     || document.querySelector('[contenteditable]:not([contenteditable="false"])')
                     || document.activeElement;
                 if (!el) return false;
                 const dt = new DataTransfer();
-                dt.setData('text/plain', text);
+                dt.setData('text/html', html);
+                dt.setData('text/plain', plain);
                 const ev = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
                 el.dispatchEvent(ev);
                 return true;
             }""",
-            body_markdown,
+            [body_html, body_markdown],
         )
 
         if pasted:
-            log.info("Medium: pasted %d chars via ClipboardEvent", len(body_markdown))
+            log.info("Medium: pasted %d chars as HTML via ClipboardEvent", len(body_markdown))
         else:
             log.warning("Medium: ClipboardEvent paste failed, falling back to keyboard typing")
             for para in body_markdown.split("\n\n"):
@@ -374,6 +377,49 @@ class MediumPlaywrightPublisher:
             await self._safe_screenshot(page, f"medium_{context}.png")
         except Exception as exc:
             log.error("Medium DIAG [%s]: dump failed: %s", context, exc)
+
+    @staticmethod
+    def _markdown_to_html(md: str) -> str:
+        def _inline(text: str) -> str:
+            text = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', r'<img src="\2" alt="\1"/>', text)
+            text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
+            text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
+            text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
+            return text
+
+        lines = md.split("\n")
+        html_parts: list[str] = []
+        in_list = False
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                if in_list:
+                    html_parts.append("</ul>")
+                    in_list = False
+                continue
+
+            if stripped.startswith("### "):
+                html_parts.append(f"<h3>{_inline(stripped[4:])}</h3>")
+            elif stripped.startswith("## "):
+                html_parts.append(f"<h2>{_inline(stripped[3:])}</h2>")
+            elif stripped.startswith("# "):
+                html_parts.append(f"<h1>{_inline(stripped[2:])}</h1>")
+            elif stripped.startswith("- ") or stripped.startswith("* "):
+                if not in_list:
+                    html_parts.append("<ul>")
+                    in_list = True
+                html_parts.append(f"<li>{_inline(stripped[2:])}</li>")
+            elif stripped.startswith("---"):
+                html_parts.append("<hr/>")
+            elif stripped.startswith("!["):
+                html_parts.append(f"<p>{_inline(stripped)}</p>")
+            else:
+                html_parts.append(f"<p>{_inline(stripped)}</p>")
+
+        if in_list:
+            html_parts.append("</ul>")
+        return "\n".join(html_parts)
 
     async def close(self) -> None:
         pass
