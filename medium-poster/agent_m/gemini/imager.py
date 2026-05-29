@@ -36,7 +36,9 @@ async def generate_header_image(topic: Topic) -> tuple[bytes, str]:
     prompt = (
         f"Blog header image: {topic.title}.{angle_hint} "
         f"Style: {style}, Bitcoin orange (#F7931A) accents. "
-        f"No text, no watermarks, no logos, no letters. Wide banner, 1200x630."
+        f"Purely visual, absolutely no text, no words, no letters, no numbers, "
+        f"no writing, no captions, no titles, no watermarks, no logos, no signatures, "
+        f"no typography of any kind. Wide banner, 1200x630."
     )
     return await _generate_with_pollinations(prompt, seed=seed)
 
@@ -51,6 +53,11 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
             "height": 630,
             "model": model_info["param"],
             "nologo": "true",
+            "negative_prompt": (
+                "text, words, letters, numbers, writing, caption, title, "
+                "watermark, logo, signature, typography, label, inscription, "
+                "stamp, banner text, overlay text, font, handwriting"
+            ),
         }
         if seed is not None:
             params["seed"] = str(seed)
