@@ -5,47 +5,71 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 25 May 2026 17:40:30 +0000</lastBuildDate>
+    <lastBuildDate>Fri, 29 May 2026 17:06:35 +0000</lastBuildDate>
     <item>
-      <title>The stoic investor: Finding calm in bitcoin's chaos</title>
-      <link>https://btc-dca.com/blog/generated-202605251740</link>
-      <guid isPermaLink="false">generated-202605251740</guid>
-      <pubDate>Mon, 25 May 2026 17:40:30 +0000</pubDate>
+      <title>Is daily DCA still king after the etfs?</title>
+      <link>https://btc-dca.com/blog/generated-202605291706</link>
+      <guid isPermaLink="false">generated-202605291706</guid>
+      <pubDate>Fri, 29 May 2026 17:06:35 +0000</pubDate>
       <category>bitcoin</category>
-      <category>dca</category>
-      <category>stoicism</category>
-      <content:encoded>&lt;p&gt;i remember sitting at my desk in november 2021, watching bitcoin hover around its all-time high. my portfolio looked great on paper, but i felt this weird knot of anxiety in my stomach. it wasn't the thrill of gains; it was the dread of the inevitable dip. i knew it was coming, because bitcoin always dips, but the idea of seeing those numbers fall kept me glued to the screen, refreshing my exchange every few minutes. it was exhausting, and frankly, not very enjoyable. that feeling was a big part of why i leaned so hard into dollar-cost averaging (dca) and eventually built my own tool around it. i wanted to be a more stoic investor, to find some emotional resilience in bitcoin's notoriously volatile markets.&lt;/p&gt;
+      <category>dollar cost averaging</category>
+      <category>investing strategies</category>
+      <content:encoded>&lt;p&gt;Last Tuesday at exactly 3:45 PM, I watched Bitcoin drop $1,200 in about ten minutes, only to claw most of it back by the time the stock market closed. A few years ago, this kind of sudden, highly coordinated volatility usually happened in the middle of the night on a Saturday, driven by leverage liquidations on offshore exchanges.&lt;/p&gt;
 
-&lt;h2&gt;The emotional rollercoaster of speculation&lt;/h2&gt;
+&lt;p&gt;But things are different now. Wall Street has entered the chat.&lt;/p&gt;
 
-&lt;p&gt;most people come to bitcoin because they hear about the incredible returns, the parabolic pumps. and who can blame them? it's exciting. but that excitement often comes with a dark side: the constant fear of missing out (fomo) when it's going up, and the gut-wrenching fear, uncertainty, and doubt (fud) when it's crashing down. i've been there. i've almost tried to "time the market" more times than i care to admit, convinced i could sell at the top and buy back lower. every single time i considered it, i either missed the boat entirely or, worse, sold low and watched it pump without me. it's a terrible way to invest, not just for your wallet, but for your mental health.&lt;/p&gt;
+&lt;p&gt;Ever since the spot ETFs launched, the way Bitcoin moves throughout the week has fundamentally changed. We now have distinct "market hours" where massive institutional volume flows in and out, mostly between Monday and Friday.&lt;/p&gt;
 
-&lt;p&gt;the truth is, trying to predict bitcoin's short-term movements is a fool's errand. there are thousands of smart people, with far more resources than me, who still get it wrong constantly. so why did i think i could do better? it was pure ego, fueled by the hope of quick gains. it's a mistake i've learned from the hard way, and it taught me that my emotions were my biggest enemy in this game.&lt;/p&gt;
+&lt;p&gt;Lately, I've been seeing this question pop up in my inbox and on forums: is daily dca still king? analyzing frequency performance in the post-etf era is something we need to talk about because the market structure has fundamentally shifted. If you are still buying Bitcoin the same way you did in 2021, you might be leaving money on the table.&lt;/p&gt;
 
-&lt;h2&gt;DCA as a psychological shield&lt;/h2&gt;
+&lt;h2&gt;The new wall street weekday rhythm&lt;/h2&gt;
 
-&lt;p&gt;this is where dca shines, especially for someone trying to cultivate the mindset of a stoic investor. by committing to regularly buying a fixed amount of bitcoin, regardless of price, you essentially remove your emotions from the equation. you're no longer trying to predict; you're simply executing a plan.&lt;/p&gt;
+&lt;p&gt;Before the ETFs, Bitcoin was a 24/7 wild west. It did not care about bank holidays, the New York Stock Exchange opening bell, or Friday afternoon liquidity drains.&lt;/p&gt;
 
-&lt;p&gt;for me, this shift was profound. instead of dreading a price drop, i started seeing it as an opportunity to acquire more bitcoin for the same amount of fiat. when bitcoin dipped from $69k all the way down to $15k, my automated dca continued buying week after week. it wasn't fun to see my portfolio value shrink, but i knew my strategy was sound. i wasn't making emotional decisions; i was following my plan. that consistency is the bedrock of building emotional resilience in volatile markets.&lt;/p&gt;
+&lt;p&gt;Today, things are much more structured. We have a massive concentration of trading volume during US market hours. Weekends have actually become surprisingly quiet, often characterized by low-volume drifting. Then Monday morning hits, the ETF desks open, and the roller coaster starts all over again.&lt;/p&gt;
 
-&lt;p&gt;i actually built &lt;a href="https://btc-dca.com"&gt;my dca automation tool&lt;/a&gt; partly because i needed this kind of discipline myself. it connects to exchanges like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;binance&lt;/a&gt; or &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;coinmate&lt;/a&gt; (and others like okx) and just handles the recurring buys. out of sight, out of mind. this is crucial because it stops me from constantly checking the price and second-guessing myself.&lt;/p&gt;
+&lt;p&gt;This creates a specific kind of weekday volatility. We often see mid-week dips as traders reposition, followed by weekend lulls.&lt;/p&gt;
 
-&lt;h2&gt;Embracing what you can control&lt;/h2&gt;
+&lt;p&gt;If you are only buying once a month, you are highly exposed to a single point of time. I used to make this mistake myself. I had a recurring reminder to manually buy my Bitcoin on the 1st of every month right after my paycheck hit. But so did everyone else. I noticed I was consistently buying the local monthly peak because of that concentrated buying pressure at the start of the month.&lt;/p&gt;
 
-&lt;p&gt;stoicism, at its core, is about distinguishing between what you can control and what you cannot. you cannot control the price of bitcoin. you cannot control macro-economic events. you cannot control what elon musk tweets. but you &lt;em&gt;can&lt;/em&gt; control your actions: your savings rate, your investment strategy, and your emotional response to market fluctuations.&lt;/p&gt;
+&lt;p&gt;By spreading those purchases out, you stop trying to guess whether Tuesday morning or Thursday afternoon is the "best" time to buy.&lt;/p&gt;
 
-&lt;p&gt;dca aligns perfectly with this. it tells you: focus on your regular contribution. focus on accumulating. focus on the long-term vision. everything else is noise. one piece of mainstream crypto advice i've always mildly disagreed with is the constant emphasis on "technical analysis" for long-term investors. while it has its place for traders, for someone like me who's just accumulating bitcoin for decades, over-analyzing charts can actually &lt;em&gt;undermine&lt;/em&gt; your stoic resolve by drawing you back into the unpredictable short-term game. it's a distraction from the simple, effective strategy of consistent accumulation.&lt;/p&gt;
+&lt;h2&gt;Comparing the math: Daily versus monthly&lt;/h2&gt;
 
-&lt;p&gt;another feature i integrated into my tool to help with this is tracking progress by "life goal." instead of just seeing a total sum, i can see how much bitcoin i've accumulated towards my retirement fund, or a future house down payment. this keeps my focus on the &lt;em&gt;purpose&lt;/em&gt; of my investment, not just the fluctuating dollar value. it's a powerful reminder of why i started this journey in the first place, helping to anchor me when the market goes wild.&lt;/p&gt;
+&lt;p&gt;So, does daily buying actually beat weekly or monthly over time in this new environment?&lt;/p&gt;
 
-&lt;p&gt;i also built a &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware dca calculator&lt;/a&gt; into the site. it's not about predicting future prices, but about modeling how diminishing returns might affect future cycles. understanding that those parabolic 100x gains might become 5x or 10x gains in later cycles helps temper unrealistic expectations, which is another form of emotional resilience. it means you're less likely to be disappointed if bitcoin doesn't hit some arbitrary, sky-high target in the next bull run.&lt;/p&gt;
+&lt;p&gt;If you look at the raw data from the past year, the difference in pure percentage returns between a daily, weekly, and monthly DCA isn't always massive—usually a few percentage points here and there. But those small percentages compound over a multi-year cycle.&lt;/p&gt;
 
-&lt;p&gt;and for true peace of mind, there's the auto-withdrawal feature. once my dca buys hit a certain threshold on the exchange, the tool automatically sends them to my hardware wallet, like a &lt;a href="https://bit.ly/buy-trezor-t"&gt;trezor&lt;/a&gt;. this is perhaps the ultimate stoic move: taking self-custody removes the risk of exchange hacks or regulatory issues, risks i have no control over if my bitcoin is sitting on a third-party platform. it's about taking responsibility and securing what's yours, further insulating your investment from external factors.&lt;/p&gt;
+&lt;p&gt;I actually built &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the calculator I use to model these cycles&lt;/a&gt; to see how different buy frequencies hold up when you account for diminishing returns and halving cycles. What the data shows is that daily buying acts as a volatility dampener.&lt;/p&gt;
 
-&lt;p&gt;obviously, i'm not your financial advisor, and this is just my personal experience. you should always do your own research and understand the risks involved before investing.&lt;/p&gt;
+&lt;p&gt;When Wall Street decides to dump billions of dollars of paper Bitcoin on a Wednesday afternoon, a daily DCA catches that dip automatically. If you only buy once a month, you might completely miss that window and buy two weeks later when the price has fully recovered.&lt;/p&gt;
 
-&lt;p&gt;ultimately, dca isn't just an investment strategy; it's a psychological tool. it's how i've learned to navigate the wild, unpredictable world of bitcoin with a greater sense of calm and control. it's how i've become, or at least aspire to be, a more stoic investor.&lt;/p&gt;</content:encoded>
-      <description>i remember sitting at my desk in november 2021, watching bitcoin hover around its all-time high. my portfolio looked great on paper, but i felt this weird knot of anxiety in my stomach. it wasn't the thrill of gains; it was the dread of the inevitable dip. i knew it was coming, because bitcoin alway...</description>
+&lt;p&gt;So here's the thing: daily DCA isn't about magically guessing the absolute bottom every day. It is about reducing your variance. It turns a jagged, stressful price chart into a smooth average. For me, the peace of mind of knowing I bought the dip on Tuesday, even if the price went back up by Friday, is worth it.&lt;/p&gt;
+
+&lt;h2&gt;How to beat the fee trap&lt;/h2&gt;
+
+&lt;p&gt;But here is the catch, and it is a big one. The biggest argument against daily DCA has always been fees.&lt;/p&gt;
+
+&lt;p&gt;If you go to a standard retail app and buy $10 worth of Bitcoin every day, they will absolutely gut you with flat fees. Paying $0.99 on a $10 purchase is a 10% fee. That is financial suicide. You are starting 10% in the red every single day.&lt;/p&gt;
+
+&lt;p&gt;To make daily DCA work, you have to use advanced trading platforms with percentage-based fees. For example, if you &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt; or use other professional order books, the maker/taker fees are usually under 0.5% (often as low as 0.1%). On a $10 purchase, a 0.1% fee is literally one penny. That makes daily buying completely viable.&lt;/p&gt;
+
+&lt;p&gt;The problem is that manually logging into an exchange every single morning at 8:00 AM to buy $10 of Bitcoin is a chore. Nobody actually does that for more than two weeks before giving up.&lt;/p&gt;
+
+&lt;p&gt;That is the exact reason I built a tool to &lt;a href="https://www.btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; directly through exchange APIs. It connects to your exchange account, executes the tiny daily purchases automatically using your pre-deposited fiat balance, and keeps your fees to a absolute minimum.&lt;/p&gt;
+
+&lt;p&gt;But buying is only half the battle. You also have to think about self-custody.&lt;/p&gt;
+
+&lt;p&gt;If you withdraw $10 of Bitcoin to your personal wallet every single day, you will end up with hundreds of tiny UTXOs (unspent transaction outputs). When you eventually want to spend or move that Bitcoin later, the network transaction fees will be incredibly high because your transaction will be physically large in terms of data.&lt;/p&gt;
+
+&lt;p&gt;My rule of thumb is to let the daily buys accumulate on the exchange for a few weeks or a month, and then do a single withdrawal to cold storage once the balance reaches a meaningful size (like $500 or $1,000). And when you do withdraw, make sure you are using a secure hardware wallet. I personally &lt;a href="https://bit.ly/buy-trezor-t"&gt;keep my stack on a Trezor&lt;/a&gt; because leaving your life savings on an exchange is a risk you just don't need to take.&lt;/p&gt;
+
+&lt;p&gt;Obviously, I am not your financial advisor. I’m just a guy who likes writing code and stacking sats. You should always do your own research and figure out what fits your personal budget and risk tolerance.&lt;/p&gt;
+
+&lt;p&gt;At the end of the day, the "best" DCA frequency is the one you can actually stick to without losing sleep. For me, letting an automated script buy a few dollars of Bitcoin every single day while I work, sleep, and live my life is the ultimate set-and-forget strategy. It takes the emotion completely out of the equation, and in a market as wild as this one, emotion is the ultimate portfolio killer.&lt;/p&gt;
+
+&lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
+      <description>Last Tuesday at exactly 3:45 PM, I watched Bitcoin drop $1,200 in about ten minutes, only to claw most of it back by the time the stock market closed. A few years ago, this kind of sudden, highly coordinated volatility usually happened in the middle of the night on a Saturday, driven by leverage liq...</description>
     </item>
   </channel>
 </rss>
