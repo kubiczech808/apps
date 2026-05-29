@@ -5,7 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Fri, 29 May 2026 17:29:12 +0000</lastBuildDate>
+    <lastBuildDate>Fri, 29 May 2026 17:43:46 +0000</lastBuildDate>
     <item>
       <title>Is daily DCA still king after the etfs?</title>
       <link>https://btc-dca.com/blog/generated-202605291706</link>
@@ -21,56 +21,81 @@
       <title>Why my ten dollar weekly Bitcoin buy was actually a trap</title>
       <link>https://btc-dca.com/blog/generated-202605291728</link>
       <guid isPermaLink="false">generated-202605291728</guid>
-      <pubDate>Fri, 29 May 2026 17:29:12 +0000</pubDate>
+      <pubDate>Fri, 29 May 2026 17:30:00 +0000</pubDate>
       <category>bitcoin</category>
       <category>dca</category>
       <category>cold-storage</category>
-      <content:encoded>&lt;p&gt;Back in 2021, I was incredibly proud of my disciplined $15-a-week Bitcoin habit. I had a neat little automation set up: every Sunday night, the system bought my fraction of a coin, and every Monday morning, it swept those fresh satoshis straight to my hardware wallet. I felt like a security genius. "Not your keys, not your coins," right? I was doing everything by the book.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Surviving the post-halving sideways grind</title>
+      <link>https://btc-dca.com/blog/generated-202605291743</link>
+      <guid isPermaLink="false">generated-202605291743</guid>
+      <pubDate>Fri, 29 May 2026 17:43:46 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>investing strategy</category>
+      <content:encoded>&lt;p&gt;Back in June 2020, about a month after the third Bitcoin halving, I stared at my portfolio spreadsheet and felt incredibly let down. Bitcoin was stuck wobbling between $9,000 and $9,500. Day after day. Week after week.&lt;/p&gt;
 
-&lt;p&gt;Then came the next bull run, and network fees spiked. I decided I wanted to consolidate some of my smaller holdings and move them to a new address. When I opened my wallet and put in the transaction, my jaw dropped. The estimated network fee to move about $300 worth of Bitcoin was almost $80.&lt;/p&gt;
+&lt;p&gt;All the hype on my Twitter feed leading up to the halving had promised immediate fireworks. Instead, we got a flatline. I remember thinking, "Is this it? Did I buy into a dead narrative?" I actually paused my manual weekly buys for a month because I was convinced the price was going to drop back to $5,000.&lt;/p&gt;
 
-&lt;p&gt;I thought it was a mistake. It wasn't. I had fallen into a technical trap that a lot of retail investors don't find out about until it's too late. It turns out that withdrawing tiny amounts of Bitcoin to your own wallet over and over again creates a massive headache down the road.&lt;/p&gt;
+&lt;p&gt;That was one of the biggest financial mistakes of my life.&lt;/p&gt;
 
-&lt;h2&gt;What the heck is a utxo and why does it cost so much?&lt;/h2&gt;
+&lt;p&gt;If I had just kept my head down and kept buying, I would have loaded up on cheap satoshis right before the massive run-to-$60k started later that year. But I didn't, because human brains are terrible at dealing with boredom.&lt;/p&gt;
 
-&lt;p&gt;To understand why this happens, you have to look under the hood of how Bitcoin actually works. Bitcoin doesn't use an account balance system like your bank does. Instead, it uses something called UTXOs, which stands for Unspent Transaction Outputs.&lt;/p&gt;
+&lt;p&gt;If you are watching the charts right now and feeling that same heavy, uninspired drag, you are experiencing history repeating itself. To me, surviving the "halving hangover": why the post-halving sideways grind is the ultimate dca golden hour is the single most important concept to grasp if you want to make it in this space.&lt;/p&gt;
 
-&lt;p&gt;Think of UTXOs like physical cash in your pocket. If you have $100 in your wallet, you don't just have a digital number saying "100". You might have five $20 bills, or ten $10 bills, or a hundred $1 bills.&lt;/p&gt;
+&lt;h2&gt;The boring reality of post-halving cycles&lt;/h2&gt;
 
-&lt;p&gt;Every single time you withdraw Bitcoin from an exchange to your personal wallet, you are receiving a new "bill" (a UTXO) of that exact size. If you withdraw $10 every week for a year, you don't have one big lump sum of $520. You have 52 individual $10 bills sitting in your digital vault.&lt;/p&gt;
+&lt;p&gt;Everyone loves the pre-halving anticipation. The countdown clocks, the memes, the speculative articles predicting million-dollar coins by Tuesday. But nobody likes to talk about the hangover.&lt;/p&gt;
 
-&lt;p&gt;Here is the kicker: when you want to spend or move that Bitcoin later, you have to sign a transaction that bundles those bills back together. In the physical world, handing a cashier fifty $1 bills takes a lot longer than handing them a single $50 bill. In the Bitcoin world, bundling 52 UTXOs requires a lot more data. Since Bitcoin network fees are based on the size of the data your transaction takes up on the blockchain—not the dollar value of the transaction—sending those 52 tiny UTXOs is incredibly expensive.&lt;/p&gt;
+&lt;p&gt;After the halving actually happens, the hype dies down. The media stops covering it. The immediate supply shock isn't actually a shock—it’s a slow-burning fuse. It takes months for the reduced issuance of new Bitcoin to actually impact the market's liquid supply.&lt;/p&gt;
 
-&lt;p&gt;I call this the silent tax on micro-dca: how to prevent bitcoin transaction fees from eating your satoshis became my main focus when designing my own investment setup.&lt;/p&gt;
+&lt;p&gt;During this time, miners are adjusting to their cut-in-half revenues. Some of them have to sell off treasury holdings to keep the lights on, which creates a temporary ceiling on the price.&lt;/p&gt;
 
-&lt;h2&gt;The math of how small transfers destroy your savings&lt;/h2&gt;
+&lt;p&gt;So the price goes sideways. It chops. It drops 10%, goes back up 8%, and does absolutely nothing exciting for months.&lt;/p&gt;
 
-&lt;p&gt;Let's look at some real numbers, because this is where it gets scary.&lt;/p&gt;
+&lt;p&gt;Mainstream crypto influencers will tell you to trade the ranges or buy "breakout confirmations." I think that is terrible advice for 99% of people. Trying to trade this chop is a great way to turn your hard-earned cash into trading fees for exchanges.&lt;/p&gt;
 
-&lt;p&gt;Imagine you buy $10 of Bitcoin every week. If you withdraw to your hardware wallet every single week, after two years you will have 104 UTXOs.&lt;/p&gt;
+&lt;p&gt;Instead, this dull, frustrating phase is actually the quietest, safest window to build your position.&lt;/p&gt;
 
-&lt;p&gt;If the Bitcoin network is quiet and fees are low (say, 10 satoshis per vByte), consolidating those 104 UTXOs into one address might cost you around $10 to $15. That is annoying, but manageable. But during a bull market when everyone is scrambling to transact, fees can easily jump to 100 sat/vByte or higher. At those rates, moving your $1,040 worth of Bitcoin could cost you $150 or more in transaction fees just to make a single transfer. You are essentially giving up 15% of your hard-earned savings to the miners.&lt;/p&gt;
+&lt;h2&gt;How I almost ruined my stack by getting bored&lt;/h2&gt;
 
-&lt;p&gt;This is where I strongly disagree with the dogmatic "withdraw to cold storage instantly" advice that gets repeated constantly on Reddit and Twitter. Yes, keeping your coins on an exchange has risks. But blindly withdrawing $10 or $20 chunks every week is a guaranteed way to bleed your savings to fees later on. There has to be a balance.&lt;/p&gt;
+&lt;p&gt;When things are going up, buying is easy. You feel like a genius. When things are crashing, buying is scary, but at least there is adrenaline.&lt;/p&gt;
 
-&lt;p&gt;Obviously, I am not your financial advisor—do your own research and run your own numbers. But for my own money, I realized I had to change my strategy.&lt;/p&gt;
+&lt;p&gt;But when things are flat? That is when the real danger sets in. You start thinking about other assets. You start looking at flashy new tech stocks or whatever hyped-up meme coin is trending on TikTok.&lt;/p&gt;
 
-&lt;h2&gt;My strategy for smart withdrawals&lt;/h2&gt;
+&lt;p&gt;During the 2016 post-halving lull, I did exactly that. I got so bored of Bitcoin doing nothing around $600 that I ended up selling a portion of my stack to buy some random altcoins that promised "faster transactions." Most of those projects don't even exist anymore, and the ones that do are down 95% against Bitcoin.&lt;/p&gt;
 
-&lt;p&gt;Once I realized how badly I was hurting my future self, I changed how I handle my DCA. I still buy Bitcoin frequently because I want to average my entry price, but I do not withdraw it frequently anymore.&lt;/p&gt;
+&lt;p&gt;I learned the hard way that the best time to buy is when nobody is talking about it.&lt;/p&gt;
 
-&lt;p&gt;Instead, I buy on an exchange with low trading fees, let the balance accumulate there, and only withdraw to my cold storage once the balance reaches a specific threshold. For me, that threshold is around $500 to $1,000. This ensures that every UTXO on my hardware wallet is large enough that future transaction fees will only represent a tiny fraction of its value.&lt;/p&gt;
+&lt;p&gt;When I was building &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the cycle-aware DCA calculator&lt;/a&gt; for my project, I wanted to model this exact behavior. If you run the historical numbers, the absolute best performance doesn't come from buying the absolute bottoms (which is almost impossible to time anyway). It comes from consistently accumulating during these multi-month post-halving flat zones. Your average cost basis gets incredibly solid, giving you a massive cushion when the real supply squeeze finally kicks in.&lt;/p&gt;
 
-&lt;p&gt;To make this easier for myself, I actually built a system to handle it. I created a tool that connects to exchanges like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; or &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; via API. It automates the daily or weekly buys so I don't have to think about them, but it keeps the coins on the exchange until they hit a target amount that I choose. Once that limit is hit, it automatically triggers a single, clean withdrawal to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;.&lt;/p&gt;
+&lt;h2&gt;Why sideways is actually the golden hour&lt;/h2&gt;
 
-&lt;p&gt;If you want to see how this works, you can check out the &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;automated DCA features&lt;/a&gt; on the platform I built. It is completely free to use because I monetize it through affiliate links rather than charging users subscription fees.&lt;/p&gt;
+&lt;p&gt;When the market is moving fast, your dollar-cost averaging (DCA) is a bit of a rollercoaster. One week you buy at $60k, the next at $50k, then at $65k.&lt;/p&gt;
 
-&lt;p&gt;I also ended up building a &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware DCA calculator&lt;/a&gt; to help model how different buying frequencies and withdrawal thresholds affect your long-term returns, especially when accounting for the diminishing returns of each halving cycle.&lt;/p&gt;
+&lt;p&gt;But during a sideways grind, you get to build a massive foundation at a stable price. It is the closest thing to a "safe zone" you will ever get in crypto.&lt;/p&gt;
 
-&lt;p&gt;The lesson I learned the hard way is that automation is great, but blind automation can be costly. If you are doing micro-buys, take a look at your wallet structure. You might want to let those satoshis pile up a bit on the exchange before you sweep them to safety. Your future self will thank you when it comes time to actually use your Bitcoin.&lt;/p&gt;
+&lt;p&gt;Here is how I handle this phase now to make sure I don't repeat my past mistakes:&lt;/p&gt;
+
+&lt;p&gt;First, I took my own emotions out of the equation. I don't buy manually anymore. I built a tool that connects to my exchange accounts via API keys. Every week, it automatically executes my purchase. If you want to do the same, you can &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;explore the automation features&lt;/a&gt; I set up to make this process completely hands-off.&lt;/p&gt;
+
+&lt;p&gt;Second, I don't leave my coins on exchanges. It is easy to get tempted to trade when your balance is sitting right there on an exchange interface. I set up my automated buys so that once they reach a certain threshold, they are automatically swept to my own self-custody. I personally use and recommend &lt;a href="https://bit.ly/buy-trezor-t"&gt;a secure hardware wallet like a Trezor&lt;/a&gt; for this. If it is in cold storage, I am far less likely to do something stupid with it.&lt;/p&gt;
+
+&lt;p&gt;Third, I stopped looking at the daily charts. Seriously, close the tabs. If you are committed to a multi-year horizon, what the price does on a random Tuesday in the middle of a post-halving summer does not matter.&lt;/p&gt;
+
+&lt;p&gt;I usually set up my recurring buys on an exchange with low fees, like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buying on Binance&lt;/a&gt;, and then I just let the system run in the background while I go live my life.&lt;/p&gt;
+
+&lt;p&gt;Just to be totally clear: I’m obviously not your financial advisor. I’m just a guy who has made enough mistakes in this space to finally realize that patience and automation win the game. Do your own research, look at the historical cycles, and decide what fits your own risk tolerance.&lt;/p&gt;
+
+&lt;p&gt;The "halving hangover" is a psychological test. The market is trying to bore you out of your position before the real supply shock takes hold. Personally, I’m happy to sit back, let my automated buys do their thing, and enjoy the quiet while it lasts.&lt;/p&gt;
 
 &lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
-      <description>Back in 2021, I was incredibly proud of my disciplined $15-a-week Bitcoin habit. I had a neat little automation set up: every Sunday night, the system bought my fraction of a coin, and every Monday morning, it swept those fresh satoshis straight to my hardware wallet. I felt like a security genius. ...</description>
+      <description>Back in June 2020, about a month after the third Bitcoin halving, I stared at my portfolio spreadsheet and felt incredibly let down. Bitcoin was stuck wobbling between $9,000 and $9,500. Day after day. Week after week. 
+
+All the hype on my Twitter feed leading up to the halving had promised immediat...</description>
     </item>
   </channel>
 </rss>
