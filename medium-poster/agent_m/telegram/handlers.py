@@ -114,16 +114,15 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
         await msg.reply_text(f"Failed: {e}")
         return
 
-    if result.image_bytes:
-        caption = result.article.title[:180]
-        if result.image_model:
-            caption += f"\n🎨 {result.image_model}"
-        await msg.reply_photo(
-            photo=io.BytesIO(result.image_bytes),
-            caption=caption,
-        )
-
     if mode == "preview":
+        if result.image_bytes:
+            caption = result.article.title[:180]
+            if result.image_model:
+                caption += f"\n🎨 {result.image_model}"
+            await msg.reply_photo(
+                photo=io.BytesIO(result.image_bytes),
+                caption=caption,
+            )
         await msg.reply_text(
             f"Preview complete — not published.\n"
             f"Use /post {result.topic.slug} or /draft {result.topic.slug} to publish."
@@ -138,9 +137,18 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
         text = f"Published to: {platforms}"
         if url_lines:
             text += "\n\n" + "\n".join(url_lines)
+        if result.image_model:
+            text += f"\n\n🎨 {result.image_model}"
         if error_lines:
             text += "\n\nErrors:\n" + "\n".join(error_lines)
-        await msg.reply_text(text[:4000])
+
+        if result.image_bytes:
+            await msg.reply_photo(
+                photo=io.BytesIO(result.image_bytes),
+                caption=text[:1024],
+            )
+        else:
+            await msg.reply_text(text[:4000])
     else:
         error_lines = [f"- {err}" for err in result.platform_errors]
         text = "Publishing failed on all platforms. Check logs."

@@ -32,6 +32,8 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
         caption = f"Published: {result.article.title}"
         if result.post_url:
             caption += f"\n{result.post_url}"
+        if result.image_model:
+            caption += f"\n🎨 {result.image_model}"
 
         if result.image_bytes:
             await context.bot.send_photo(
