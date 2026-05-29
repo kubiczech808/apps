@@ -308,13 +308,27 @@ class MediumPlaywrightPublisher:
         )
         if await final_publish.is_visible(timeout=10000):
             await final_publish.click()
-            await self._human_delay(6, 9)
+            await self._human_delay(3, 5)
         else:
             await self._safe_screenshot(page, "medium_no_publish_now.png")
             raise RuntimeError("Medium: final publish button not visible")
 
-        log.info("Medium: published at %s", page.url)
-        return page.url
+        published_url = await self._wait_for_published_url(page)
+        log.info("Medium: published at %s", published_url)
+        return published_url
+
+    async def _wait_for_published_url(self, page, timeout_s: int = 30) -> str:
+        editor_patterns = ("new-story", "/edit", "/p/")
+        for _ in range(timeout_s * 2):
+            url = page.url
+            if url and not any(p in url for p in editor_patterns) and "medium.com" in url:
+                return url
+            await asyncio.sleep(0.5)
+            log.debug("Medium: waiting for published URL, current: %s", page.url)
+
+        url = page.url
+        log.warning("Medium: timed out waiting for published URL, returning: %s", url)
+        return url
 
     async def _wait_for_cloudflare(self, page, label: str) -> None:
         title = await page.title()
