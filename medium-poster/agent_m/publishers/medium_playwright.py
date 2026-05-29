@@ -94,6 +94,10 @@ class MediumPlaywrightPublisher:
                     extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
                 )
                 await stealth.apply_stealth_async(context)
+                await context.grant_permissions(
+                    ["clipboard-read", "clipboard-write"],
+                    origin="https://medium.com",
+                )
                 await context.add_cookies(self._load_cookies())
                 page = await context.new_page()
 
@@ -240,26 +244,32 @@ class MediumPlaywrightPublisher:
         await self._human_delay(1, 2)
 
         body_html = self._markdown_to_html(body_markdown)
-        pasted = await page.evaluate(
-            """([html, plain]) => {
-                const el = document.querySelector('.ProseMirror')
-                    || document.querySelector('[contenteditable]:not([contenteditable="false"])')
-                    || document.activeElement;
-                if (!el) return false;
-                const dt = new DataTransfer();
-                dt.setData('text/html', html);
-                dt.setData('text/plain', plain);
-                const ev = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
-                el.dispatchEvent(ev);
-                return true;
+        log.info("Medium: HTML body length: %d chars", len(body_html))
+
+        clipboard_ok = await page.evaluate(
+            """async ([html, plain]) => {
+                try {
+                    const htmlBlob = new Blob([html], {type: 'text/html'});
+                    const textBlob = new Blob([plain], {type: 'text/plain'});
+                    await navigator.clipboard.write([
+                        new ClipboardItem({
+                            'text/html': htmlBlob,
+                            'text/plain': textBlob,
+                        })
+                    ]);
+                    return true;
+                } catch(e) {
+                    return false;
+                }
             }""",
             [body_html, body_markdown],
         )
 
-        if pasted:
-            log.info("Medium: pasted %d chars as HTML via ClipboardEvent", len(body_markdown))
+        if clipboard_ok:
+            await page.keyboard.press("Control+v")
+            log.info("Medium: pasted %d chars as HTML via clipboard API + Ctrl+V", len(body_markdown))
         else:
-            log.warning("Medium: ClipboardEvent paste failed, falling back to keyboard typing")
+            log.warning("Medium: clipboard API failed, falling back to keyboard typing")
             for para in body_markdown.split("\n\n"):
                 para = para.strip()
                 if not para:
@@ -381,7 +391,6 @@ class MediumPlaywrightPublisher:
     @staticmethod
     def _markdown_to_html(md: str) -> str:
         def _inline(text: str) -> str:
-            text = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', r'<img src="\2" alt="\1"/>', text)
             text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
             text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
             text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
@@ -389,36 +398,77 @@ class MediumPlaywrightPublisher:
 
         lines = md.split("\n")
         html_parts: list[str] = []
-        in_list = False
+        list_tag: str | None = None
+        paragraph_lines: list[str] = []
+
+        def flush_paragraph():
+            if paragraph_lines:
+                text = " ".join(paragraph_lines)
+                html_parts.append(f"<p>{_inline(text)}</p>")
+                paragraph_lines.clear()
+
+        def close_list():
+            nonlocal list_tag
+            if list_tag:
+                html_parts.append(f"</{list_tag}>")
+                list_tag = None
+
+        def open_list(tag: str):
+            nonlocal list_tag
+            if list_tag != tag:
+                close_list()
+                html_parts.append(f"<{tag}>")
+                list_tag = tag
 
         for line in lines:
             stripped = line.strip()
             if not stripped:
-                if in_list:
-                    html_parts.append("</ul>")
-                    in_list = False
+                flush_paragraph()
+                close_list()
                 continue
 
-            if stripped.startswith("### "):
+            if re.match(r'^!\[.*\]\(.*\)$', stripped):
+                flush_paragraph()
+                close_list()
+                m = re.match(r'^!\[([^\]]*)\]\(([^)]+)\)$', stripped)
+                if m:
+                    html_parts.append(
+                        f'<figure><img src="{m.group(2)}" alt="{m.group(1)}"/></figure>'
+                    )
+            elif stripped.startswith("#### "):
+                flush_paragraph()
+                close_list()
+                html_parts.append(f"<h4>{_inline(stripped[5:])}</h4>")
+            elif stripped.startswith("### "):
+                flush_paragraph()
+                close_list()
                 html_parts.append(f"<h3>{_inline(stripped[4:])}</h3>")
             elif stripped.startswith("## "):
+                flush_paragraph()
+                close_list()
                 html_parts.append(f"<h2>{_inline(stripped[3:])}</h2>")
             elif stripped.startswith("# "):
+                flush_paragraph()
+                close_list()
                 html_parts.append(f"<h1>{_inline(stripped[2:])}</h1>")
             elif stripped.startswith("- ") or stripped.startswith("* "):
-                if not in_list:
-                    html_parts.append("<ul>")
-                    in_list = True
+                flush_paragraph()
+                open_list("ul")
                 html_parts.append(f"<li>{_inline(stripped[2:])}</li>")
             elif stripped.startswith("---"):
+                flush_paragraph()
+                close_list()
                 html_parts.append("<hr/>")
-            elif stripped.startswith("!["):
-                html_parts.append(f"<p>{_inline(stripped)}</p>")
+            elif re.match(r'^\d+\.\s', stripped):
+                flush_paragraph()
+                open_list("ol")
+                text = re.sub(r'^\d+\.\s', '', stripped)
+                html_parts.append(f"<li>{_inline(text)}</li>")
             else:
-                html_parts.append(f"<p>{_inline(stripped)}</p>")
+                paragraph_lines.append(stripped)
 
-        if in_list:
-            html_parts.append("</ul>")
+        flush_paragraph()
+        close_list()
         return "\n".join(html_parts)
 
     async def close(self) -> None:
