@@ -14,9 +14,20 @@ from agent_m.telegram import handlers
 log = logging.getLogger(__name__)
 
 
+_QUOTA_KEYWORDS = ("quota", "resource_exhausted", "429", "rate")
+_MAX_RETRIES = 3
+_RETRY_DELAY_S = 3600  # 1 hour
+
+
+def _is_quota_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    return any(k in msg for k in _QUOTA_KEYWORDS)
+
+
 async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
+    attempt = context.job.data or 0
     try:
-        log.info("Scheduled publish started")
+        log.info("Scheduled publish started (attempt %d)", attempt + 1)
         result = await run_pipeline(mode="public")
         caption = f"Published: {result.article.title}"
         if result.post_url:
@@ -34,11 +45,26 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
                 text=caption,
             )
     except Exception as e:
-        log.exception("Scheduled publish failed")
-        await context.bot.send_message(
-            chat_id=config.telegram_admin_chat_id,
-            text=f"Scheduled publish failed:\n{e}",
-        )
+        log.exception("Scheduled publish failed (attempt %d)", attempt + 1)
+        if _is_quota_error(e) and attempt < _MAX_RETRIES:
+            next_attempt = attempt + 1
+            delay = _RETRY_DELAY_S * next_attempt
+            context.job_queue.run_once(
+                _scheduled_publish,
+                when=delay,
+                name=f"quota_retry_{next_attempt}",
+                data=next_attempt,
+            )
+            log.info("Gemini quota exhausted — retry #%d in %d min", next_attempt, delay // 60)
+            await context.bot.send_message(
+                chat_id=config.telegram_admin_chat_id,
+                text=f"Gemini quota exhausted — retry #{next_attempt} za {delay // 60} min.",
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=config.telegram_admin_chat_id,
+                text=f"Scheduled publish failed:\n{e}",
+            )
 
 
 async def _post_init(application) -> None:
