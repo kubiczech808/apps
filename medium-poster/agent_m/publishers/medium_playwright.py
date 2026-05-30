@@ -94,10 +94,6 @@ class MediumPlaywrightPublisher:
                     extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
                 )
                 await stealth.apply_stealth_async(context)
-                await context.grant_permissions(
-                    ["clipboard-read", "clipboard-write"],
-                    origin="https://medium.com",
-                )
                 await context.add_cookies(self._load_cookies())
                 page = await context.new_page()
 
@@ -115,6 +111,301 @@ class MediumPlaywrightPublisher:
                     await browser.close()
         finally:
             self._cleanup_display()
+
+    # ── Editor interaction ──────────────────────────────────────────
+
+    async def _create_story(
+        self,
+        page,
+        title: str,
+        body_markdown: str,
+        tags: list[str],
+        publish: bool,
+    ) -> str | None:
+        await page.goto("https://medium.com", wait_until="domcontentloaded", timeout=60000)
+        await self._human_delay(4, 7)
+        await self._wait_for_cloudflare(page, "home")
+        log.info("Medium: homepage URL: %s title=%s", page.url, await page.title())
+
+        if "signin" in page.url.lower() or "login" in page.url.lower():
+            raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
+
+        await page.goto("https://medium.com/new-story", wait_until="domcontentloaded", timeout=60000)
+        await self._human_delay(6, 10)
+        await self._wait_for_cloudflare(page, "new_story")
+        log.info("Medium: editor URL: %s title=%s", page.url, await page.title())
+
+        if "signin" in page.url.lower() or "login" in page.url.lower():
+            raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
+
+        title_field = await self._find_title_field(page)
+        await title_field.click()
+        await page.keyboard.type(title, delay=random.randint(35, 70))
+        await page.keyboard.press("Enter")
+        await self._human_delay(1, 2)
+
+        blocks = self._parse_markdown_blocks(body_markdown)
+        log.info("Medium: typing %d blocks with native formatting", len(blocks))
+
+        for block in blocks:
+            btype = block["type"]
+            if btype == "heading":
+                await self._type_heading(page, block["text"], block["level"])
+            elif btype == "paragraph":
+                await self._type_formatted_text(page, block["text"])
+                await page.keyboard.press("Enter")
+                await page.keyboard.press("Enter")
+                await self._human_delay(0.2, 0.5)
+            elif btype == "list_item":
+                await page.keyboard.type("• ", delay=5)
+                await self._type_formatted_text(page, block["text"])
+                await page.keyboard.press("Enter")
+                await self._human_delay(0.1, 0.3)
+            elif btype == "hr":
+                await page.keyboard.press("Enter")
+
+        await self._human_delay(5, 8)
+
+        if not publish:
+            log.info("Medium: draft saved")
+            return page.url
+
+        publish_btn = page.locator('button:has-text("Publish")').first
+        if not await publish_btn.is_visible(timeout=10000):
+            await self._safe_screenshot(page, "medium_no_publish.png")
+            raise RuntimeError("Medium: publish button not visible")
+
+        await publish_btn.click()
+        await self._human_delay(3, 5)
+
+        tag_input = page.locator('input[placeholder*="tag" i]').first
+        for tag in tags[:5]:
+            try:
+                if await tag_input.is_visible(timeout=3000):
+                    await tag_input.fill(tag)
+                    await page.keyboard.press("Enter")
+                    await self._human_delay(0.7, 1.2)
+            except Exception:
+                break
+
+        final_publish = page.locator('button:has-text("Publish now")').or_(
+            page.locator('button:has-text("Publish")').last
+        )
+        if await final_publish.is_visible(timeout=10000):
+            await final_publish.click()
+            await self._human_delay(3, 5)
+        else:
+            await self._safe_screenshot(page, "medium_no_publish_now.png")
+            raise RuntimeError("Medium: final publish button not visible")
+
+        published_url = await self._wait_for_published_url(page)
+        log.info("Medium: published at %s", published_url)
+        return published_url
+
+    # ── Native formatting helpers ───────────────────────────────────
+
+    async def _type_formatted_text(self, page, text: str) -> None:
+        segments = self._parse_inline_segments(text)
+        for seg in segments:
+            seg_text = seg["text"]
+            await page.keyboard.type(seg_text, delay=random.randint(3, 8))
+
+            if seg["type"] == "link":
+                await self._select_chars_backward(page, len(seg_text))
+                await self._human_delay(0.3, 0.5)
+                await page.keyboard.press("Control+k")
+                await self._human_delay(0.8, 1.5)
+                await page.keyboard.type(seg["url"], delay=random.randint(2, 5))
+                await page.keyboard.press("Enter")
+                await self._human_delay(0.3, 0.5)
+                await page.keyboard.press("ArrowRight")
+
+            elif seg["type"] == "bold":
+                await self._select_chars_backward(page, len(seg_text))
+                await page.keyboard.press("Control+b")
+                await page.keyboard.press("ArrowRight")
+
+            elif seg["type"] == "italic":
+                await self._select_chars_backward(page, len(seg_text))
+                await page.keyboard.press("Control+i")
+                await page.keyboard.press("ArrowRight")
+
+    async def _type_heading(self, page, text: str, level: int) -> None:
+        await self._type_formatted_text(page, text)
+
+        await page.keyboard.press("Home")
+        await page.keyboard.press("Shift+End")
+        await self._human_delay(0.5, 1)
+
+        applied = await page.evaluate("""(level) => {
+            const sel = window.getSelection();
+            if (!sel.rangeCount) return false;
+            const node = sel.anchorNode?.parentElement?.closest?.('[contenteditable]')
+                      || document.querySelector('.ProseMirror');
+            if (!node) return false;
+
+            // Try 1: find visible toolbar heading buttons by title/aria-label
+            const keywords = level <= 2
+                ? ['big', 'large', 'heading 1', 'heading 2', 'h2', 'section']
+                : ['small', 'heading 3', 'heading 4', 'h3', 'subtitle'];
+            const allBtns = document.querySelectorAll('button');
+            for (const btn of allBtns) {
+                if (btn.offsetParent === null) continue;
+                const t = ((btn.title || '') + ' ' + (btn.ariaLabel || '')).toLowerCase();
+                if (keywords.some(k => t.includes(k))) {
+                    btn.click();
+                    return true;
+                }
+            }
+
+            // Try 2: find floating toolbar, click T button by position
+            for (const sel_q of ['[class*="toolbar" i]', '[class*="popover" i]', '[role="toolbar"]']) {
+                const bar = document.querySelector(sel_q);
+                if (!bar || bar.offsetParent === null) continue;
+                const btns = bar.querySelectorAll('button');
+                const idx = level <= 2 ? 3 : 4;
+                if (btns.length > idx) {
+                    btns[idx].click();
+                    return true;
+                }
+            }
+
+            // Try 3: execCommand formatBlock
+            const tag = level <= 2 ? 'H3' : 'H4';
+            return document.execCommand('formatBlock', false, tag);
+        }""", level)
+
+        log.info("Medium: heading level %d applied=%s", level, applied)
+
+        await page.keyboard.press("End")
+        await page.keyboard.press("Enter")
+        await self._human_delay(0.3, 0.5)
+
+    async def _select_chars_backward(self, page, count: int) -> None:
+        await page.evaluate("""(n) => {
+            const sel = window.getSelection();
+            for (let i = 0; i < n; i++) {
+                sel.modify('extend', 'backward', 'character');
+            }
+        }""", count)
+
+    # ── Markdown parsing ────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_markdown_blocks(md: str) -> list[dict]:
+        blocks: list[dict] = []
+        lines = md.split("\n")
+        para_lines: list[str] = []
+
+        def flush():
+            if para_lines:
+                blocks.append({"type": "paragraph", "text": " ".join(para_lines)})
+                para_lines.clear()
+
+        for line in lines:
+            s = line.strip()
+            if not s:
+                flush()
+                continue
+            if re.match(r"^!\[.*\]\(.*\)$", s):
+                flush()
+                continue
+            if re.match(r"^#{1,4}\s", s):
+                flush()
+                m = re.match(r"^(#{1,4})\s+(.*)", s)
+                blocks.append({"type": "heading", "level": len(m.group(1)), "text": m.group(2)})
+            elif s.startswith("---"):
+                flush()
+                blocks.append({"type": "hr"})
+            elif s.startswith("- ") or s.startswith("* "):
+                flush()
+                blocks.append({"type": "list_item", "text": s[2:]})
+            elif re.match(r"^\d+\.\s", s):
+                flush()
+                blocks.append({"type": "list_item", "text": re.sub(r"^\d+\.\s", "", s)})
+            else:
+                para_lines.append(s)
+
+        flush()
+        return blocks
+
+    @staticmethod
+    def _parse_inline_segments(text: str) -> list[dict]:
+        segments: list[dict] = []
+        pattern = r"(\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))"
+        for part in re.split(pattern, text):
+            if not part:
+                continue
+            if part.startswith("**") and part.endswith("**"):
+                segments.append({"type": "bold", "text": part[2:-2]})
+            elif part.startswith("*") and part.endswith("*"):
+                segments.append({"type": "italic", "text": part[1:-1]})
+            elif part.startswith("["):
+                m = re.match(r"\[([^\]]+)\]\(([^)]+)\)", part)
+                if m:
+                    segments.append({"type": "link", "text": m.group(1), "url": m.group(2)})
+                else:
+                    segments.append({"type": "text", "text": part})
+            else:
+                segments.append({"type": "text", "text": part})
+        return segments
+
+    # ── Navigation helpers ──────────────────────────────────────────
+
+    async def _wait_for_published_url(self, page, timeout_s: int = 30) -> str:
+        editor_patterns = ("new-story", "/edit", "/p/")
+        for _ in range(timeout_s * 2):
+            url = page.url
+            if url and not any(p in url for p in editor_patterns) and "medium.com" in url:
+                return url
+            await asyncio.sleep(0.5)
+
+        url = page.url
+        log.warning("Medium: timed out waiting for published URL, returning: %s", url)
+        return url
+
+    async def _wait_for_cloudflare(self, page, label: str) -> None:
+        title = await page.title()
+        if "just a moment" not in title.lower():
+            return
+
+        log.info("Medium: Cloudflare challenge detected on %s", label)
+        for i in range(36):
+            await asyncio.sleep(5)
+            title = await page.title()
+            log.info("Medium: CF check %d/36 on %s - title: %s", i + 1, label, title)
+            if "just a moment" not in title.lower():
+                log.info("Medium: Cloudflare challenge resolved on %s", label)
+                await self._human_delay(2, 4)
+                return
+
+        await self._dump_page_diagnostics(page, f"{label}_cloudflare_stuck")
+        raise RuntimeError(
+            "Medium: Cloudflare challenge did not resolve. Upload fresh cookies "
+            "from the same network or solve login on the RPi browser."
+        )
+
+    async def _find_title_field(self, page):
+        selectors = [
+            'p[data-placeholder*="Title" i]',
+            'div[data-placeholder*="Title" i]',
+            '[data-testid="title"]',
+            '[role="textbox"]',
+            '[contenteditable]:not([contenteditable="false"])',
+        ]
+        for selector in selectors:
+            locator = page.locator(selector).first
+            try:
+                if await locator.is_visible(timeout=10000):
+                    log.info("Medium: title field found via %s", selector)
+                    return locator
+            except Exception:
+                continue
+
+        await self._dump_page_diagnostics(page, "no_title_field")
+        raise RuntimeError("Medium: no title field found on new-story page")
+
+    # ── Browser / display helpers ───────────────────────────────────
 
     @staticmethod
     def _user_agent() -> str:
@@ -213,163 +504,7 @@ class MediumPlaywrightPublisher:
             result.append(c)
         return result
 
-    async def _create_story(
-        self,
-        page,
-        title: str,
-        body_markdown: str,
-        tags: list[str],
-        publish: bool,
-    ) -> str | None:
-        await page.goto("https://medium.com", wait_until="domcontentloaded", timeout=60000)
-        await self._human_delay(4, 7)
-        await self._wait_for_cloudflare(page, "home")
-        log.info("Medium: homepage URL: %s title=%s", page.url, await page.title())
-
-        if "signin" in page.url.lower() or "login" in page.url.lower():
-            raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
-
-        await page.goto("https://medium.com/new-story", wait_until="domcontentloaded", timeout=60000)
-        await self._human_delay(6, 10)
-        await self._wait_for_cloudflare(page, "new_story")
-        log.info("Medium: editor URL: %s title=%s", page.url, await page.title())
-
-        if "signin" in page.url.lower() or "login" in page.url.lower():
-            raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
-
-        title_field = await self._find_title_field(page)
-        await title_field.click()
-        await page.keyboard.type(title, delay=random.randint(35, 70))
-        await page.keyboard.press("Enter")
-        await self._human_delay(1, 2)
-
-        body_html = self._markdown_to_html(body_markdown)
-        log.info("Medium: HTML body length: %d chars", len(body_html))
-
-        clipboard_ok = await page.evaluate(
-            """async ([html, plain]) => {
-                try {
-                    const htmlBlob = new Blob([html], {type: 'text/html'});
-                    const textBlob = new Blob([plain], {type: 'text/plain'});
-                    await navigator.clipboard.write([
-                        new ClipboardItem({
-                            'text/html': htmlBlob,
-                            'text/plain': textBlob,
-                        })
-                    ]);
-                    return true;
-                } catch(e) {
-                    return false;
-                }
-            }""",
-            [body_html, body_markdown],
-        )
-
-        if clipboard_ok:
-            await page.keyboard.press("Control+v")
-            log.info("Medium: pasted %d chars as HTML via clipboard API + Ctrl+V", len(body_markdown))
-        else:
-            log.warning("Medium: clipboard API failed, falling back to keyboard typing")
-            for para in body_markdown.split("\n\n"):
-                para = para.strip()
-                if not para:
-                    continue
-                await page.keyboard.type(para, delay=random.randint(3, 8))
-                await page.keyboard.press("Enter")
-                await page.keyboard.press("Enter")
-                await self._human_delay(0.3, 0.8)
-
-        await self._human_delay(8, 12)
-
-        if not publish:
-            log.info("Medium: draft saved")
-            return page.url
-
-        publish_btn = page.locator('button:has-text("Publish")').first
-        if not await publish_btn.is_visible(timeout=10000):
-            await self._safe_screenshot(page, "medium_no_publish.png")
-            raise RuntimeError("Medium: publish button not visible")
-
-        await publish_btn.click()
-        await self._human_delay(3, 5)
-
-        tag_input = page.locator('input[placeholder*="tag" i]').first
-        for tag in tags[:5]:
-            try:
-                if await tag_input.is_visible(timeout=3000):
-                    await tag_input.fill(tag)
-                    await page.keyboard.press("Enter")
-                    await self._human_delay(0.7, 1.2)
-            except Exception:
-                break
-
-        final_publish = page.locator('button:has-text("Publish now")').or_(
-            page.locator('button:has-text("Publish")').last
-        )
-        if await final_publish.is_visible(timeout=10000):
-            await final_publish.click()
-            await self._human_delay(3, 5)
-        else:
-            await self._safe_screenshot(page, "medium_no_publish_now.png")
-            raise RuntimeError("Medium: final publish button not visible")
-
-        published_url = await self._wait_for_published_url(page)
-        log.info("Medium: published at %s", published_url)
-        return published_url
-
-    async def _wait_for_published_url(self, page, timeout_s: int = 30) -> str:
-        editor_patterns = ("new-story", "/edit", "/p/")
-        for _ in range(timeout_s * 2):
-            url = page.url
-            if url and not any(p in url for p in editor_patterns) and "medium.com" in url:
-                return url
-            await asyncio.sleep(0.5)
-            log.debug("Medium: waiting for published URL, current: %s", page.url)
-
-        url = page.url
-        log.warning("Medium: timed out waiting for published URL, returning: %s", url)
-        return url
-
-    async def _wait_for_cloudflare(self, page, label: str) -> None:
-        title = await page.title()
-        if "just a moment" not in title.lower():
-            return
-
-        log.info("Medium: Cloudflare challenge detected on %s", label)
-        for i in range(36):
-            await asyncio.sleep(5)
-            title = await page.title()
-            log.info("Medium: CF check %d/36 on %s - title: %s", i + 1, label, title)
-            if "just a moment" not in title.lower():
-                log.info("Medium: Cloudflare challenge resolved on %s", label)
-                await self._human_delay(2, 4)
-                return
-
-        await self._dump_page_diagnostics(page, f"{label}_cloudflare_stuck")
-        raise RuntimeError(
-            "Medium: Cloudflare challenge did not resolve. Upload fresh cookies "
-            "from the same network or solve login on the RPi browser."
-        )
-
-    async def _find_title_field(self, page):
-        selectors = [
-            'p[data-placeholder*="Title" i]',
-            'div[data-placeholder*="Title" i]',
-            '[data-testid="title"]',
-            '[role="textbox"]',
-            '[contenteditable]:not([contenteditable="false"])',
-        ]
-        for selector in selectors:
-            locator = page.locator(selector).first
-            try:
-                if await locator.is_visible(timeout=10000):
-                    log.info("Medium: title field found via %s", selector)
-                    return locator
-            except Exception:
-                continue
-
-        await self._dump_page_diagnostics(page, "no_title_field")
-        raise RuntimeError("Medium: no title field found on new-story page")
+    # ── Diagnostics ─────────────────────────────────────────────────
 
     async def _safe_screenshot(self, page, name: str) -> None:
         try:
@@ -401,89 +536,6 @@ class MediumPlaywrightPublisher:
             await self._safe_screenshot(page, f"medium_{context}.png")
         except Exception as exc:
             log.error("Medium DIAG [%s]: dump failed: %s", context, exc)
-
-    @staticmethod
-    def _markdown_to_html(md: str) -> str:
-        def _inline(text: str) -> str:
-            text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
-            text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
-            text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
-            return text
-
-        lines = md.split("\n")
-        html_parts: list[str] = []
-        list_tag: str | None = None
-        paragraph_lines: list[str] = []
-
-        def flush_paragraph():
-            if paragraph_lines:
-                text = " ".join(paragraph_lines)
-                html_parts.append(f"<p>{_inline(text)}</p>")
-                paragraph_lines.clear()
-
-        def close_list():
-            nonlocal list_tag
-            if list_tag:
-                html_parts.append(f"</{list_tag}>")
-                list_tag = None
-
-        def open_list(tag: str):
-            nonlocal list_tag
-            if list_tag != tag:
-                close_list()
-                html_parts.append(f"<{tag}>")
-                list_tag = tag
-
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                flush_paragraph()
-                close_list()
-                continue
-
-            if re.match(r'^!\[.*\]\(.*\)$', stripped):
-                flush_paragraph()
-                close_list()
-                m = re.match(r'^!\[([^\]]*)\]\(([^)]+)\)$', stripped)
-                if m:
-                    html_parts.append(
-                        f'<figure><img src="{m.group(2)}" alt="{m.group(1)}"/></figure>'
-                    )
-            elif stripped.startswith("#### "):
-                flush_paragraph()
-                close_list()
-                html_parts.append(f"<h4>{_inline(stripped[5:])}</h4>")
-            elif stripped.startswith("### "):
-                flush_paragraph()
-                close_list()
-                html_parts.append(f"<h3>{_inline(stripped[4:])}</h3>")
-            elif stripped.startswith("## "):
-                flush_paragraph()
-                close_list()
-                html_parts.append(f"<h2>{_inline(stripped[3:])}</h2>")
-            elif stripped.startswith("# "):
-                flush_paragraph()
-                close_list()
-                html_parts.append(f"<h1>{_inline(stripped[2:])}</h1>")
-            elif stripped.startswith("- ") or stripped.startswith("* "):
-                flush_paragraph()
-                open_list("ul")
-                html_parts.append(f"<li>{_inline(stripped[2:])}</li>")
-            elif stripped.startswith("---"):
-                flush_paragraph()
-                close_list()
-                html_parts.append("<hr/>")
-            elif re.match(r'^\d+\.\s', stripped):
-                flush_paragraph()
-                open_list("ol")
-                text = re.sub(r'^\d+\.\s', '', stripped)
-                html_parts.append(f"<li>{_inline(text)}</li>")
-            else:
-                paragraph_lines.append(stripped)
-
-        flush_paragraph()
-        close_list()
-        return "\n".join(html_parts)
 
     async def close(self) -> None:
         pass

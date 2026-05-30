@@ -349,14 +349,11 @@ async def _publish_medium_playwright(
 ) -> tuple[str | None, str | None]:
     try:
         from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
-        body = article.body
-        if image_url:
-            body = f"![{article.title}]({image_url})\n\n{body}"
         pub = MediumPlaywrightPublisher()
         result = await asyncio.wait_for(
             pub.publish(
                 title=article.title,
-                body_markdown=body,
+                body_markdown=article.body,
                 tags=article.tags,
                 publish=publish,
             ),
