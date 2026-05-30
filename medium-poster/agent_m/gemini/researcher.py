@@ -81,12 +81,13 @@ class TopicResearcher:
         angle = ""
         tags: list[str] = []
         for line in raw.splitlines():
-            if line.startswith("TITLE:"):
-                title = line[len("TITLE:"):].strip()
-            elif line.startswith("ANGLE:"):
-                angle = line[len("ANGLE:"):].strip()
-            elif line.startswith("TAGS:"):
-                tags = [t.strip() for t in line[len("TAGS:"):].strip().split(",") if t.strip()][:3]
+            cleaned = line.strip().lstrip("*-• ").strip()
+            if cleaned.lower().startswith("title:"):
+                title = cleaned[len("title:"):].strip().strip('"').strip("*").strip()
+            elif cleaned.lower().startswith("angle:"):
+                angle = cleaned[len("angle:"):].strip().strip('"').strip("*").strip()
+            elif cleaned.lower().startswith("tags:"):
+                tags = [t.strip().strip('"*') for t in cleaned[len("tags:"):].strip().split(",") if t.strip()][:3]
 
         if not title or not angle:
             raise RuntimeError(f"Failed to parse topic response: {raw[:300]}")
