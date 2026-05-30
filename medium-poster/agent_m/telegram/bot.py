@@ -32,16 +32,14 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         platforms = ", ".join(result.published_to) if result.published_to else "none"
         caption = f"Published to: {platforms}\n{result.article.title}"
+        errors = [e for e in result.platform_errors if "not configured" not in e.lower()]
+        if errors:
+            caption += "\n\nIssues:\n" + "\n".join(f"- {e}" for e in errors)
         if result.platform_urls:
             for name, url in result.platform_urls.items():
                 caption += f"\n{name}: {url}"
         elif result.post_url:
             caption += f"\n{result.post_url}"
-        if result.image_model:
-            caption += f"\n🎨 {result.image_model}"
-        errors = [e for e in result.platform_errors if "not configured" not in e.lower()]
-        if errors:
-            caption += "\n\nIssues:\n" + "\n".join(f"- {e}" for e in errors)
 
         if result.image_bytes:
             await context.bot.send_photo(

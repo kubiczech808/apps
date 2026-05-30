@@ -135,12 +135,10 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
         error_lines = [f"- {err}" for err in result.platform_errors]
 
         text = f"Published to: {platforms}"
+        if error_lines:
+            text += "\n\nIssues:\n" + "\n".join(error_lines)
         if url_lines:
             text += "\n\n" + "\n".join(url_lines)
-        if result.image_model:
-            text += f"\n\n🎨 {result.image_model}"
-        if error_lines:
-            text += "\n\nErrors:\n" + "\n".join(error_lines)
 
         if result.image_bytes:
             await msg.reply_photo(

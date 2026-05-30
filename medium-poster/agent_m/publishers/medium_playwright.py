@@ -105,7 +105,11 @@ class MediumPlaywrightPublisher:
                     raise
                 finally:
                     try:
-                        await context.storage_state(path=str(config.data_dir / "medium_storage_state.json"))
+                        cookies = await context.cookies()
+                        if cookies:
+                            normalized = self._normalize_cookies(cookies)
+                            _COOKIES_FILE.write_text(json.dumps(normalized, indent=2))
+                            log.info("Saved %d refreshed cookies to %s", len(normalized), _COOKIES_FILE)
                     except Exception:
                         pass
                     await browser.close()
@@ -364,6 +368,7 @@ class MediumPlaywrightPublisher:
 
         log.info("Medium: Cloudflare challenge detected on %s", label)
         for i in range(36):
+            await self._try_click_turnstile(page)
             await asyncio.sleep(5)
             title = await page.title()
             log.info("Medium: CF check %d/36 on %s - title: %s", i + 1, label, title)
@@ -377,6 +382,33 @@ class MediumPlaywrightPublisher:
             "Medium: Cloudflare challenge did not resolve. Upload fresh cookies "
             "from the same network or solve login on the RPi browser."
         )
+
+    async def _try_click_turnstile(self, page) -> None:
+        try:
+            for frame in page.frames:
+                if "challenges.cloudflare.com" in (frame.url or ""):
+                    checkbox = frame.locator('input[type="checkbox"]').or_(
+                        frame.locator('[role="checkbox"]')
+                    ).or_(
+                        frame.locator(".cb-i")
+                    )
+                    if await checkbox.count() > 0 and await checkbox.first.is_visible(timeout=1000):
+                        await checkbox.first.click()
+                        log.info("Medium: clicked Turnstile checkbox")
+                        await self._human_delay(2, 4)
+                        return
+            turnstile = page.locator('iframe[src*="challenges.cloudflare"]').first
+            if await turnstile.is_visible(timeout=1000):
+                box = await turnstile.bounding_box()
+                if box:
+                    await page.mouse.click(
+                        box["x"] + box["width"] / 2,
+                        box["y"] + box["height"] / 2,
+                    )
+                    log.info("Medium: clicked Turnstile iframe center")
+                    await self._human_delay(2, 4)
+        except Exception:
+            pass
 
     async def _find_title_field(self, page):
         selectors = [
