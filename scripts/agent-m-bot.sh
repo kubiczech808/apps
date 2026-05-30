@@ -10,13 +10,20 @@ LOG="/tmp/agent-m-bot.log"
 if [ -f "$PIDFILE" ]; then
     OLD_PID=$(cat "$PIDFILE" 2>/dev/null || true)
     if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-        kill "$OLD_PID" 2>/dev/null || true
+        kill -9 "$OLD_PID" 2>/dev/null || true
     fi
     rm -f "$PIDFILE"
 fi
-# Kill any remaining agent_m processes (catches orphans from previous deploys)
-pkill -f "python.*agent_m" 2>/dev/null || true
+# Kill any remaining agent_m processes with SIGKILL (SIGTERM ignored by zombie processes)
+pkill -9 -f "python.*agent_m" 2>/dev/null || true
 sleep 3
+# Verify all killed
+if pgrep -f "python.*agent_m" >/dev/null 2>&1; then
+    echo "WARNING: agent_m processes still running after kill:"
+    ps aux | grep "agent_m" | grep -v grep
+    pkill -9 -f "python.*agent_m" 2>/dev/null || true
+    sleep 2
+fi
 
 # Preserve previous log for diagnostics
 if [ -f "$LOG" ]; then
