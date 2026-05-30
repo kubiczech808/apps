@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,20 +78,25 @@ class TopicResearcher:
         )
         raw = await generate_text(prompt, temperature=0.9, max_tokens=1024)
 
-        title = ""
-        angle = ""
-        tags: list[str] = []
-        for line in raw.splitlines():
-            cleaned = line.strip().lstrip("*-• ").strip()
-            if cleaned.lower().startswith("title:"):
-                title = cleaned[len("title:"):].strip().strip('"').strip("*").strip()
-            elif cleaned.lower().startswith("angle:"):
-                angle = cleaned[len("angle:"):].strip().strip('"').strip("*").strip()
-            elif cleaned.lower().startswith("tags:"):
-                tags = [t.strip().strip('"*') for t in cleaned[len("tags:"):].strip().split(",") if t.strip()][:3]
+        title = _extract_field(raw, "title")
+        angle = _extract_field(raw, "angle")
+        tags_raw = _extract_field(raw, "tags")
+        tags = [t.strip().strip("*\"'`") for t in tags_raw.split(",") if t.strip()][:3]
 
-        if not title or not angle:
+        # Fallback: if structured prefixes are missing, use the first
+        # substantial line as the title rather than crashing.
+        if not title:
+            for line in raw.splitlines():
+                candidate = _strip_markdown(line)
+                if len(candidate) > 20:
+                    title = candidate
+                    break
+
+        if not title:
             raise RuntimeError(f"Failed to parse topic response: {raw[:300]}")
+
+        if not angle:
+            angle = title
 
         return Topic(
             title=title,
@@ -98,6 +104,24 @@ class TopicResearcher:
             tags=tags or ["Bitcoin", "DCA", "Investing"],
             slug=f"generated-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}",
         )
+
+
+def _strip_markdown(text: str) -> str:
+    """Remove leading bullets/markers and surrounding markdown/quote characters."""
+    cleaned = text.strip()
+    cleaned = re.sub(r"^[\s>*#\-•\d.]+", "", cleaned)  # leading bullets, numbering, headers
+    cleaned = cleaned.strip("*_`\"'“”‘’ ").strip()
+    return cleaned
+
+
+def _extract_field(raw: str, field: str) -> str:
+    """Find a labelled field (TITLE/ANGLE/TAGS) regardless of markdown wrapping."""
+    pattern = re.compile(rf"{field}\s*[:：]\s*(.+)", re.IGNORECASE)
+    for line in raw.splitlines():
+        m = pattern.search(line)
+        if m:
+            return _strip_markdown(m.group(1))
+    return ""
 
 
 _FALLBACK_PROMPT = """You are a Bitcoin DCA content strategist for {site_name}.
@@ -112,7 +136,9 @@ Requirements:
 - Should naturally allow references to a Bitcoin DCA automation tool
 - Timely and relevant to current market conditions
 
-Respond using EXACTLY this format (plain text, no JSON):
+Respond with ONLY these three lines, nothing before or after.
+Do NOT use Markdown, asterisks, quotes, bullets, or any intro text.
+Plain text only, in EXACTLY this format:
 TITLE: <article title>
 ANGLE: <1-2 sentence description of the unique angle>
 TAGS: <tag1>, <tag2>, <tag3>"""
