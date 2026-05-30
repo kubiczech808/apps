@@ -45,6 +45,7 @@ class DevToPublisher:
             payload["article"]["canonical_url"] = canonical_url
         if main_image:
             payload["article"]["main_image"] = main_image
+            log.info("Dev.to: setting main_image=%s", main_image)
 
         resp = await self._client.post(f"{self.API_BASE}/articles", json=payload)
         if resp.status_code not in (200, 201):

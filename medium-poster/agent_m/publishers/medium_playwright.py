@@ -7,6 +7,7 @@ import os
 import random
 import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -67,6 +68,7 @@ class MediumPlaywrightPublisher:
         body_markdown: str,
         tags: list[str],
         publish: bool = True,
+        image_bytes: bytes | None = None,
     ) -> str | None:
         if not _COOKIES_FILE.exists():
             raise RuntimeError(
@@ -98,7 +100,7 @@ class MediumPlaywrightPublisher:
                 page = await context.new_page()
 
                 try:
-                    return await self._create_story(page, title, body_markdown, tags, publish)
+                    return await self._create_story(page, title, body_markdown, tags, publish, image_bytes)
                 except Exception:
                     log.exception("Medium Playwright publish failed")
                     await self._safe_screenshot(page, "medium_error.png")
@@ -125,6 +127,7 @@ class MediumPlaywrightPublisher:
         body_markdown: str,
         tags: list[str],
         publish: bool,
+        image_bytes: bytes | None = None,
     ) -> str | None:
         # Go directly to new-story — skipping homepage avoids Cloudflare challenge
         await page.goto("https://medium.com/new-story", wait_until="domcontentloaded", timeout=60000)
@@ -134,6 +137,9 @@ class MediumPlaywrightPublisher:
 
         if "signin" in page.url.lower() or "login" in page.url.lower():
             raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
+
+        if image_bytes:
+            await self._upload_cover_image(page, image_bytes)
 
         title_field = await self._find_title_field(page)
         await title_field.click()
@@ -198,6 +204,64 @@ class MediumPlaywrightPublisher:
         published_url = await self._wait_for_published_url(page)
         log.info("Medium: published at %s", published_url)
         return published_url
+
+    async def _upload_cover_image(self, page, image_bytes: bytes) -> None:
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+                f.write(image_bytes)
+                tmp_path = f.name
+
+            # Medium has a hidden file input for image uploads
+            file_input = page.locator('input[type="file"][accept*="image"]').first
+            if await file_input.count() > 0:
+                await file_input.set_input_files(tmp_path)
+                log.info("Medium: cover image uploaded via file input")
+                await self._human_delay(3, 5)
+                return
+
+            # Fallback: click the "Add a feature image" area and handle file chooser
+            cover_selectors = [
+                'button:has-text("feature image")',
+                'button:has-text("cover image")',
+                'button:has-text("Add image")',
+                '[data-testid="headerImage"]',
+                '[class*="headerImage" i]',
+                '[class*="cover" i][role="button"]',
+                'figure[class*="graf--leading"]',
+            ]
+            for sel in cover_selectors:
+                loc = page.locator(sel).first
+                try:
+                    if await loc.is_visible(timeout=2000):
+                        async with page.expect_file_chooser(timeout=5000) as fc_info:
+                            await loc.click()
+                        file_chooser = await fc_info.value
+                        await file_chooser.set_files(tmp_path)
+                        log.info("Medium: cover image uploaded via file chooser (%s)", sel)
+                        await self._human_delay(3, 5)
+                        return
+                except Exception:
+                    continue
+
+            # Last resort: find any file input on the page
+            all_inputs = page.locator('input[type="file"]')
+            count = await all_inputs.count()
+            if count > 0:
+                await all_inputs.first.set_input_files(tmp_path)
+                log.info("Medium: cover image uploaded via generic file input")
+                await self._human_delay(3, 5)
+                return
+
+            log.warning("Medium: no cover image upload element found, skipping cover image")
+        except Exception as exc:
+            log.warning("Medium: cover image upload failed: %s", exc)
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     # ── Native formatting helpers ───────────────────────────────────
 

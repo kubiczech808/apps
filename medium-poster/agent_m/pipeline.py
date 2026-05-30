@@ -149,6 +149,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
 
         # 2. Dev.to
         if config.devto_api_key:
+            log.info("[pipeline] Publishing to Dev.to (cover_image=%s)", image_url)
             devto_url, devto_error = await _publish_devto(article, is_draft, rss_url, image_url)
             if devto_url:
                 published_to.append("Dev.to")
@@ -181,7 +182,9 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
 
         # 4. Medium (Playwright)
         if config.medium_playwright:
-            medium_url, medium_error = await _publish_medium_playwright(article, not is_draft, image_url)
+            medium_url, medium_error = await _publish_medium_playwright(
+                article, not is_draft, image_url, image_bytes
+            )
             if medium_url:
                 published_to.append("Medium")
                 platform_urls["Medium"] = medium_url
@@ -346,6 +349,7 @@ async def _publish_hashnode(
 
 async def _publish_medium_playwright(
     article: Article, publish: bool, image_url: str | None = None,
+    image_bytes: bytes | None = None,
 ) -> tuple[str | None, str | None]:
     try:
         from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
@@ -356,6 +360,7 @@ async def _publish_medium_playwright(
                 body_markdown=article.body,
                 tags=article.tags,
                 publish=publish,
+                image_bytes=image_bytes,
             ),
             timeout=300,
         )
