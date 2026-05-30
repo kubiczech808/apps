@@ -357,12 +357,12 @@ async def _publish_medium_playwright(
                 tags=article.tags,
                 publish=publish,
             ),
-            timeout=180,
+            timeout=300,
         )
         return result, None
     except asyncio.TimeoutError:
-        log.warning("Medium Playwright publish timed out after 180s")
-        return None, "Medium Playwright timed out after 180s"
+        log.warning("Medium Playwright publish timed out after 300s")
+        return None, "Medium Playwright timed out after 300s"
     except Exception as exc:
         log.warning("Medium Playwright publish failed: %s", exc)
         return None, str(exc)

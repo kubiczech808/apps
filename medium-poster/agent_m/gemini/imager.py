@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 from urllib.parse import quote
 
 import httpx
@@ -28,17 +29,35 @@ _STYLES = [
     "paper-cut layered artwork with depth shadows",
 ]
 
+_STOP_WORDS = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "to", "for", "of", "in",
+    "on", "at", "by", "with", "and", "or", "but", "not", "how", "why",
+    "what", "when", "i", "my", "your", "you", "it", "its", "that", "this",
+    "do", "does", "can", "will", "should", "could", "would", "here",
+    "still", "just", "also", "even", "than", "from", "into", "about",
+})
+
+
+def _extract_overlay_text(topic: Topic) -> str:
+    if topic.plan and topic.plan.seo_keyword:
+        words = topic.plan.seo_keyword.upper().split()
+        return " ".join(words[:3])
+    words = [w for w in re.split(r"\s+", topic.title) if w.lower() not in _STOP_WORDS]
+    return " ".join(words[:3]).upper()
+
 
 async def generate_header_image(topic: Topic) -> tuple[bytes, str]:
     style = random.choice(_STYLES)
     seed = random.randint(1, 999_999)
     angle_hint = f" Angle: {topic.angle}." if topic.angle else ""
+    overlay = _extract_overlay_text(topic)
+
     prompt = (
         f"Blog header image: {topic.title}.{angle_hint} "
         f"Style: {style}, Bitcoin orange (#F7931A) accents. "
-        f"Purely visual, absolutely no text, no words, no letters, no numbers, "
-        f"no writing, no captions, no titles, no watermarks, no logos, no signatures, "
-        f"no typography of any kind. Wide banner, 1200x630."
+        f"Include the text \"{overlay}\" in clean, bold, easily readable "
+        f"large typography as a prominent design element. "
+        f"No other text, no watermarks, no logos. Wide banner, 1200x630."
     )
     return await _generate_with_pollinations(prompt, seed=seed)
 
@@ -54,9 +73,9 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
             "model": model_info["param"],
             "nologo": "true",
             "negative_prompt": (
-                "text, words, letters, numbers, writing, caption, title, "
-                "watermark, logo, signature, typography, label, inscription, "
-                "stamp, banner text, overlay text, font, handwriting"
+                "garbled text, illegible text, misspelled words, random letters, "
+                "gibberish, distorted text, blurry text, watermark, logo, signature, "
+                "multiple overlapping text layers, small unreadable text"
             ),
         }
         if seed is not None:
