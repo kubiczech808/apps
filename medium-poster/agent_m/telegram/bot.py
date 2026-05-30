@@ -5,6 +5,7 @@ import io
 import logging
 from zoneinfo import ZoneInfo
 
+from telegram import BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
 from agent_m.config import config
@@ -75,7 +76,25 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
 
 
+_BOT_COMMANDS = [
+    BotCommand("post", "Publikovat na všechny platformy"),
+    BotCommand("draft", "Publikovat jako koncept"),
+    BotCommand("preview", "Vygenerovat bez publikace"),
+    BotCommand("feedback", "Přidat/zobrazit trvalé instrukce"),
+    BotCommand("feedback_clear", "Smazat všechny instrukce"),
+    BotCommand("medium_login", "Nastavit Medium session (cookies)"),
+    BotCommand("hashnode_login", "Nastavit Hashnode session"),
+    BotCommand("history", "Poslední publikace"),
+    BotCommand("topics", "Stav obsahového plánu"),
+    BotCommand("status", "Využití tokenů a rozvrh"),
+    BotCommand("help", "Nápověda"),
+]
+
+
 async def _post_init(application) -> None:
+    await application.bot.set_my_commands(_BOT_COMMANDS)
+    log.info("Registered %d bot commands in Telegram menu", len(_BOT_COMMANDS))
+
     tz = ZoneInfo("Europe/Prague")
     target_time = datetime.time(
         hour=config.publish_hour,
