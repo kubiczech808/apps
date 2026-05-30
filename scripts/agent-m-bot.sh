@@ -6,15 +6,17 @@ VENV_DIR="$REPO_DIR/.venv"
 PIDFILE="/tmp/agent-m-bot.pid"
 LOG="/tmp/agent-m-bot.log"
 
-# Kill previous instance if running
+# Kill ALL previous agent_m instances (not just pidfile — orphans cause 409 Conflict)
 if [ -f "$PIDFILE" ]; then
     OLD_PID=$(cat "$PIDFILE" 2>/dev/null || true)
     if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
         kill "$OLD_PID" 2>/dev/null || true
-        sleep 2
     fi
     rm -f "$PIDFILE"
 fi
+# Kill any remaining agent_m processes (catches orphans from previous deploys)
+pkill -f "python.*agent_m" 2>/dev/null || true
+sleep 3
 
 # Preserve previous log for diagnostics
 if [ -f "$LOG" ]; then

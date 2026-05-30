@@ -122,14 +122,7 @@ class MediumPlaywrightPublisher:
         tags: list[str],
         publish: bool,
     ) -> str | None:
-        await page.goto("https://medium.com", wait_until="domcontentloaded", timeout=60000)
-        await self._human_delay(4, 7)
-        await self._wait_for_cloudflare(page, "home")
-        log.info("Medium: homepage URL: %s title=%s", page.url, await page.title())
-
-        if "signin" in page.url.lower() or "login" in page.url.lower():
-            raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
-
+        # Go directly to new-story — skipping homepage avoids Cloudflare challenge
         await page.goto("https://medium.com/new-story", wait_until="domcontentloaded", timeout=60000)
         await self._human_delay(6, 10)
         await self._wait_for_cloudflare(page, "new_story")
