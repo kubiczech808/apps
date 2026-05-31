@@ -5,51 +5,103 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Sat, 30 May 2026 16:58:56 +0000</lastBuildDate>
+    <lastBuildDate>Sun, 31 May 2026 05:55:46 +0000</lastBuildDate>
     <item>
-      <title>Daily vs. Weekly Bitcoin DCA: Optimizing against volatility</title>
-      <link>https://btc-dca.com/blog/generated-202605301658</link>
-      <guid isPermaLink="false">generated-202605301658</guid>
-      <pubDate>Sat, 30 May 2026 16:58:56 +0000</pubDate>
+      <title>Is daily DCA still king after the etfs?</title>
+      <link>https://btc-dca.com/blog/generated-202605291706</link>
+      <guid isPermaLink="false">generated-202605291706</guid>
+      <pubDate>Fri, 29 May 2026 17:09:35 +0000</pubDate>
       <category>bitcoin</category>
       <category>dollar cost averaging</category>
-      <category>crypto investing</category>
-      <content:encoded>&lt;p&gt;I remember staring at my spreadsheet back in 2021, wondering if buying $10 of Bitcoin every single morning was actually better than just doing $70 every Sunday. I wanted to see if &lt;strong&gt;daily vs. weekly bitcoin dca: mathematically optimizing your stack against volatility&lt;/strong&gt; was a real strategy or just over-engineered hype. It turns out, when you look at the actual math behind Bitcoin's wild price swings, frequency changes things more than you might think.&lt;/p&gt;
+      <category>investing strategies</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why my ten dollar weekly Bitcoin buy was actually a trap</title>
+      <link>https://btc-dca.com/blog/generated-202605291728</link>
+      <guid isPermaLink="false">generated-202605291728</guid>
+      <pubDate>Fri, 29 May 2026 17:30:00 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>cold-storage</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Surviving the post-halving sideways grind</title>
+      <link>https://btc-dca.com/blog/generated-202605291743</link>
+      <guid isPermaLink="false">generated-202605291743</guid>
+      <pubDate>Fri, 29 May 2026 17:44:35 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>investing strategy</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why I buy Bitcoin at all-time highs</title>
+      <link>https://btc-dca.com/blog/generated-202605300425</link>
+      <guid isPermaLink="false">generated-202605300425</guid>
+      <pubDate>Sat, 30 May 2026 04:26:19 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>investing</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>The utxo-optimized DCA: How to accumulate Bitcoin without paying half your stack in future fees</title>
+      <link>https://btc-dca.com/blog/generated-202605310555</link>
+      <guid isPermaLink="false">generated-202605310555</guid>
+      <pubDate>Sun, 31 May 2026 05:55:46 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>utxo</category>
+      <content:encoded>&lt;p&gt;I recently paid $42 in network fees just to move $150 worth of Bitcoin, a painful lesson that forced me to rethink my entire stacking strategy. That mistake led me to design &lt;strong&gt;the utxo-optimized dca: how to accumulate bitcoin without paying half your stack in future fees&lt;/strong&gt; without losing the benefits of automated buying.&lt;/p&gt;
 
-&lt;p&gt;Most financial advisors who cut their teeth on traditional stocks will tell you that monthly investing is perfectly fine. I strongly disagree with this when it comes to crypto. Bitcoin doesn't behave like an index fund. It can crash 20% on a Tuesday morning and recover by Thursday afternoon. If you only buy once a month, you are highly likely to miss those fleeting, deep-value dips.&lt;/p&gt;
+&lt;p&gt;For years, I was the guy who had a weekly recurring buy set up, and the moment the coins hit my exchange account, I swept them straight to my cold storage. It felt great. I felt like a security mastermind.&lt;/p&gt;
 
-&lt;p&gt;So here's the thing: I wanted to find the sweet spot between capturing those dips and keeping my sanity.&lt;/p&gt;
+&lt;p&gt;But then the mempool congested, transaction fees spiked to over 100 sat/vB, and I realized my mistake. By withdrawing tiny amounts every single week, I had created dozens of tiny "dust" inputs. When I finally wanted to move those funds, my wallet had to piece together all those tiny inputs, resulting in a massive transaction size and an eye-watering fee.&lt;/p&gt;
 
-&lt;h2&gt;The reality of daily vs. Weekly Bitcoin DCA: Mathematically optimizing your stack against volatility&lt;/h2&gt;
+&lt;h2&gt;Why the utxo-optimized DCA: How to accumulate Bitcoin without paying half your stack in future fees matters&lt;/h2&gt;
 
-&lt;p&gt;When we talk about daily vs. weekly bitcoin dca: mathematically optimizing your stack against volatility, we are really talking about variance reduction. In a highly volatile asset like Bitcoin, a major drop can happen in a matter of hours.&lt;/p&gt;
+&lt;p&gt;To understand why this happens, you have to understand UTXOs (Unspent Transaction Outputs). Think of Bitcoin like physical cash. If you want to buy a $100 jacket, you can pay with a single $100 bill, or you can dump 10,000 pennies on the counter. Both equal $100, but the pennies are incredibly heavy and take forever to count.&lt;/p&gt;
 
-&lt;p&gt;If you are buying weekly, you have 52 entry points a year. If you buy daily, you have 365 entry points. By spreading your purchases across daily increments, you drastically reduce the risk of buying a local peak right before a weekend sell-off. Mathematically, daily buying smooths out the cost basis curve much closer to the actual moving average of the asset.&lt;/p&gt;
+&lt;p&gt;In the Bitcoin network, weight equals transaction size in bytes, and you pay fees based on that weight, not the dollar value of the transaction.&lt;/p&gt;
 
-&lt;p&gt;I actually made the mistake of trying to do this manually a few years ago. I set an alarm for 8:00 AM every day to log into my exchange and buy. It was a disaster. I missed days because I slept in, I hesitated when the market was crashing because of fear, and I ended up FOMO-buying extra when green candles appeared. Human emotion is the ultimate portfolio killer.&lt;/p&gt;
+&lt;p&gt;If you DCA $20 every week and withdraw it immediately, you are creating a new "penny" in your wallet every single week. When you eventually want to spend $1,000 worth of Bitcoin during a bull market, your wallet has to bundle 50 of those tiny pennies together. The network fee for that transaction will be astronomical because of the heavy data load.&lt;/p&gt;
 
-&lt;p&gt;But here's the catch: if you buy daily, you need to make sure you aren't getting eaten alive by trading fees. If your exchange charges a flat fee per transaction, daily buying will destroy your returns. You must use exchanges with low percentage-based maker/taker fees, like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; or &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt;, to make micro-dosing viable.&lt;/p&gt;
+&lt;p&gt;This is exactly why I transitioned my personal portfolio to the utxo-optimized dca: how to accumulate bitcoin without paying half your stack in future fees. By changing how and when we withdraw, we can keep our future transaction fees as low as possible.&lt;/p&gt;
 
-&lt;h2&gt;The human element and execution drag&lt;/h2&gt;
+&lt;h2&gt;The problem with the "withdraw immediately" dogmatism&lt;/h2&gt;
 
-&lt;p&gt;To make daily buying work, you need automation. If you have to think about it, you will eventually mess it up. That is actually the main reason I built my own &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;automated DCA tool&lt;/a&gt;. I wanted a system that would connect to my exchange via API, execute my micro-buys every day without me looking at a chart, and then automatically sweep those funds to my personal custody once a month.&lt;/p&gt;
+&lt;p&gt;If you spend any time on Bitcoin Twitter or Reddit, the loudest piece of advice you will hear is: "Not your keys, not your coins. Withdraw to cold storage immediately!"&lt;/p&gt;
 
-&lt;p&gt;Just a quick heads-up: I'm just a guy who likes math and Bitcoin. I'm not your financial advisor, so do your own research and run your own numbers before committing your hard-earned cash.&lt;/p&gt;
+&lt;p&gt;I used to preach this myself. But honestly, I think this dogmatic advice does a massive disservice to people who are just starting out with small amounts. If you are buying $10 or $20 of Bitcoin a week, withdrawing to your own wallet every time is actually a terrible financial decision. You are essentially burning your future purchasing power.&lt;/p&gt;
 
-&lt;p&gt;If you want to play around with these numbers yourself based on different market cycles, I highly recommend checking out the &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware DCA calculator&lt;/a&gt; that I built. It helps visualize how daily vs. weekly bitcoin dca: mathematically optimizing your stack against volatility actually plays out over multi-year horizons, especially when you factor in the diminishing returns of each halving cycle.&lt;/p&gt;
+&lt;p&gt;So here's my controversial opinion: it is perfectly fine to leave your automated buys on a reputable exchange until you reach a meaningful threshold.&lt;/p&gt;
 
-&lt;p&gt;In my experience, the peace of mind that comes with daily automation is worth more than the slight mathematical edge itself. When the market drops 15% overnight, I don't panic. In fact, I smile a little because I know my automated script bought the bottom of that dip at 8:00 AM while I was still drinking my coffee.&lt;/p&gt;
+&lt;p&gt;For my own stack, I decided that $500 to $1,000 is the sweet spot. It is a large enough amount to justify a single UTXO, but not so large that I lie awake at night worrying about exchange insolvency.&lt;/p&gt;
 
-&lt;h2&gt;How to structure your automated stack safely&lt;/h2&gt;
+&lt;p&gt;If you are using a trusted platform, you can set up your recurring purchases and let them pool. For instance, you can safely &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt; or, if you are in Europe like me, &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;use Coinmate&lt;/a&gt; to handle the daily or weekly accumulation. Just don't hit that withdraw button until your balance justifies the UTXO size.&lt;/p&gt;
 
-&lt;p&gt;If you decide to go the daily route, you need a solid custody strategy. Keeping your daily buys on an exchange long-term is a bad idea.&lt;/p&gt;
+&lt;h2&gt;How to set up your threshold strategy&lt;/h2&gt;
 
-&lt;p&gt;My personal rule of thumb is to let my daily buys accumulate on the exchange until they reach a meaningful amount—say, $500 or $1,000—and then withdraw them to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;. This keeps withdrawal fees low while ensuring I don't leave too much counterparty risk on the table.&lt;/p&gt;
+&lt;p&gt;Implementing the utxo-optimized dca: how to accumulate bitcoin without paying half your stack in future fees doesn't mean you have to do everything manually. No one wants to log into an exchange every week, execute a trade, and manually calculate when they have accumulated enough to withdraw.&lt;/p&gt;
 
-&lt;p&gt;Ultimately, whether you choose daily or weekly, the most important factor is consistency. But if you want to squeeze every bit of efficiency out of your plan, daily micro-dosing is the cleanest way to neutralize the emotional rollercoaster of Bitcoin's market cycles.&lt;/p&gt;
+&lt;p&gt;That is actually the main reason I built my own tool. I wanted to combine the hands-off convenience of automated buying with smart UTXO management.&lt;/p&gt;
+
+&lt;p&gt;The platform connects directly to your exchange via API keys and automates the buying process based on basic &lt;a href="https://www.btc-dca.com/dollar-cost-averaging"&gt;dollar-cost averaging principles&lt;/a&gt;. But the real magic is in the &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;smart auto-withdrawal features&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Instead of withdrawing every time a buy executes, you can set a custom threshold—say, 0.01 BTC or $500. The tool monitors your exchange balance, and only when you cross that specific threshold does it trigger a single, clean withdrawal to your &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;This keeps your cold storage clean, minimizes the number of UTXOs you hold, and ensures that you won't lose a significant portion of your stack to network fees when you eventually want to use your Bitcoin.&lt;/p&gt;
+
+&lt;p&gt;Obviously, I'm not your financial advisor, and you should always do your own research before connecting API keys or choosing how to custody your funds. But for me, finding this balance between security and fee efficiency has completely changed how I look at long-term accumulation.&lt;/p&gt;
 
 &lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
-      <description>I remember staring at my spreadsheet back in 2021, wondering if buying $10 of Bitcoin every single morning was actually better than just doing $70 every Sunday. I wanted to see if **daily vs. weekly bitcoin dca: mathematically optimizing your stack against volatility** was a real strategy or just ov...</description>
+      <description>I recently paid $42 in network fees just to move $150 worth of Bitcoin, a painful lesson that forced me to rethink my entire stacking strategy. That mistake led me to design **the utxo-optimized dca: how to accumulate bitcoin without paying half your stack in future fees** without losing the benefit...</description>
     </item>
   </channel>
 </rss>
