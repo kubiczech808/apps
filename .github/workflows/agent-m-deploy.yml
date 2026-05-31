@@ -9,6 +9,7 @@ on:
       - 'medium-poster/pyproject.toml'
       - 'medium-poster/data/feedback.json'
       - 'scripts/agent-m-bot.sh'
+      - 'scripts/agent-m-bot.service'
       - '.github/agent-m-deploy-trigger.txt'
 
 permissions:
@@ -24,10 +25,11 @@ jobs:
         with:
           ref: claude/multi-platform-auto-poster-p3uBn
 
-      - name: Copy bot script
+      - name: Copy bot script and service
         run: |
           mkdir -p /home/jakub/scripts
           cp scripts/agent-m-bot.sh /home/jakub/scripts/agent-m-bot.sh
+          cp scripts/agent-m-bot.service /home/jakub/scripts/agent-m-bot.service
           chmod +x /home/jakub/scripts/agent-m-bot.sh
 
       - name: Sync code to deploy dir
@@ -73,7 +75,10 @@ jobs:
         id: diag
         if: always()
         run: |
-          echo "=== Bot process ===" > /tmp/diag.log
+          echo "=== Systemd service ===" > /tmp/diag.log
+          systemctl status agent-m-bot --no-pager >> /tmp/diag.log 2>&1 || echo "Service not installed" >> /tmp/diag.log
+          echo "" >> /tmp/diag.log
+          echo "=== Bot process ===" >> /tmp/diag.log
           ps aux | grep agent_m | grep -v grep >> /tmp/diag.log 2>&1 || echo "No agent_m process" >> /tmp/diag.log
           echo "" >> /tmp/diag.log
           echo "=== .env keys (masked) ===" >> /tmp/diag.log
