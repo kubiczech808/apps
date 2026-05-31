@@ -8,11 +8,9 @@ Type=simple
 User=jakub
 WorkingDirectory=/home/jakub/apps/medium-poster
 EnvironmentFile=/home/jakub/apps/medium-poster/.env
-ExecStart=/home/jakub/apps/medium-poster/.venv/bin/python -u -m agent_m
+ExecStart=/bin/bash -c 'exec /home/jakub/apps/medium-poster/.venv/bin/python -u -m agent_m >> /tmp/agent-m-bot.log 2>&1'
 Restart=always
 RestartSec=10
-StandardOutput=append:/tmp/agent-m-bot.log
-StandardError=append:/tmp/agent-m-bot.log
 
 [Install]
 WantedBy=multi-user.target
