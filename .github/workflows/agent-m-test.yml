@@ -1,0 +1,82 @@
+name: Agent M — Test Pipeline (self-hosted)
+
+on:
+  push:
+    branches:
+      - claude/multi-platform-auto-poster-p3uBn
+    paths:
+      - '.github/agent-m-test-trigger.txt'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  test:
+    runs-on: self-hosted
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: claude/multi-platform-auto-poster-p3uBn
+
+      - name: Run pipeline (draft mode)
+        id: pipeline
+        continue-on-error: true
+        run: |
+          cd /home/jakub/apps/medium-poster
+          source .venv/bin/activate
+
+          # Stop bot temporarily to avoid conflicts
+          sudo systemctl stop agent-m-bot 2>/dev/null || true
+          sleep 3
+
+          # Run pipeline directly in draft mode
+          python -u -c "
+          import asyncio, logging, json
+          logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+          from agent_m.pipeline import run_pipeline
+
+          async def main():
+              result = await run_pipeline(mode='draft')
+              print()
+              print('PIPELINE_RESULT_START')
+              print(f'Title: {result.article.title}')
+              print(f'Published to: {\", \".join(result.published_to) or \"none\"}')
+              for name, url in result.platform_urls.items():
+                  print(f'{name}: {url}')
+              if result.image_url:
+                  print(f'Cover image: {result.image_url}')
+              if result.image_bytes:
+                  print(f'Image size: {len(result.image_bytes)} bytes')
+              if result.platform_errors:
+                  print('Errors:')
+                  for e in result.platform_errors:
+                      print(f'  - {e}')
+              print('PIPELINE_RESULT_END')
+
+          asyncio.run(main())
+          " 2>&1 | tee /tmp/agent-m-test.log
+
+      - name: Restart bot
+        if: always()
+        run: |
+          sudo systemctl start agent-m-bot
+          sleep 3
+          systemctl is-active agent-m-bot && echo "Bot restarted OK" || echo "Bot restart FAILED"
+
+      - name: Write test result to debug issue
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = 'No log';
+            try { log = fs.readFileSync('/tmp/agent-m-test.log', 'utf8'); } catch(e) {}
+            const tail = log.split('\n').slice(-80).join('\n').substring(0,8000);
+            const body = `**TEST ${new Date().toISOString()} | outcome: ${{ steps.pipeline.outcome }}**\n\n\`\`\`\n${tail}\n\`\`\``;
+            const issues = await github.rest.issues.listForRepo({owner:context.repo.owner,repo:context.repo.repo,labels:['agent-m-debug'],state:'open'});
+            if (issues.data.length > 0) {
+              await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:issues.data[0].number,body});
+            }
