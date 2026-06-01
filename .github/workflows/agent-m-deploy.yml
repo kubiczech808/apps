@@ -151,15 +151,20 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const mask = s => s
+              .replace(/key=[A-Za-z0-9_-]{20,}/g, 'key=***')
+              .replace(/bot\d{8,}:[A-Za-z0-9_-]{30,}/g, 'bot***:***')
+              .replace(/token=[A-Za-z0-9_-]{20,}/g, 'token=***')
+              .replace(/AIzaSy[A-Za-z0-9_-]{30,}/g, '***');
             let log = 'No log';
             try { log = fs.readFileSync('/tmp/deploy.log', 'utf8'); } catch(e) {}
             let diag = '';
             try { diag = fs.readFileSync('/tmp/diag.log', 'utf8'); } catch(e) {}
-            const tail = log.split('\n').slice(-30).join('\n').substring(0,2000);
+            const tail = mask(log.split('\n').slice(-30).join('\n').substring(0,2000));
             let testLog = '';
             try { testLog = fs.readFileSync('/tmp/agent-m-test.log', 'utf8'); } catch(e) {}
-            const testTail = testLog ? `\n\nPipeline test:\n\`\`\`\n${testLog.split('\n').slice(-50).join('\n').substring(0,4000)}\n\`\`\`` : '';
-            const body = `**Deploy ${new Date().toISOString()} | outcome: ${{ steps.restart.outcome }} | test: ${{ steps.test_pipeline.outcome || 'skipped' }}**\n\nLog:\n\`\`\`\n${tail}\n\`\`\`${testTail}\n\nDiagnostics:\n\`\`\`\n${diag.substring(0,4000)}\n\`\`\``;
+            const testTail = testLog ? `\n\nPipeline test:\n\`\`\`\n${mask(testLog.split('\n').slice(-50).join('\n').substring(0,4000))}\n\`\`\`` : '';
+            const body = `**Deploy ${new Date().toISOString()} | outcome: ${{ steps.restart.outcome }} | test: ${{ steps.test_pipeline.outcome || 'skipped' }}**\n\nLog:\n\`\`\`\n${tail}\n\`\`\`${testTail}\n\nDiagnostics:\n\`\`\`\n${mask(diag.substring(0,4000))}\n\`\`\``;
             const issues = await github.rest.issues.listForRepo({owner:context.repo.owner,repo:context.repo.repo,labels:['agent-m-debug'],state:'open'});
             if (issues.data.length > 0) {
               await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:issues.data[0].number,body});
