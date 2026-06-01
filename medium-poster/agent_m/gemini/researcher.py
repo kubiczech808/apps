@@ -76,24 +76,38 @@ class TopicResearcher:
             site_name=config.site_name,
             previous_titles=titles_text,
         )
-        raw = await generate_text(prompt, temperature=0.9, max_tokens=1024)
 
-        title = _extract_field(raw, "title")
-        angle = _extract_field(raw, "angle")
-        tags_raw = _extract_field(raw, "tags")
-        tags = [t.strip().strip("*\"'`") for t in tags_raw.split(",") if t.strip()][:3]
+        title = angle = ""
+        tags: list[str] = []
+        raw = ""
+        # Gemini occasionally returns an empty body (503 fallback, safety filter).
+        # Retry a few times before giving up.
+        for attempt in range(3):
+            raw = await generate_text(prompt, temperature=0.9, max_tokens=1024)
+            if not raw or not raw.strip():
+                log.warning("Topic generation attempt %d/3 returned empty, retrying", attempt + 1)
+                continue
 
-        # Fallback: if structured prefixes are missing, use the first
-        # substantial line as the title rather than crashing.
+            title = _extract_field(raw, "title")
+            angle = _extract_field(raw, "angle")
+            tags_raw = _extract_field(raw, "tags")
+            tags = [t.strip().strip("*\"'`") for t in tags_raw.split(",") if t.strip()][:3]
+
+            # Fallback: if structured prefixes are missing, use the first
+            # substantial line as the title rather than crashing.
+            if not title:
+                for line in raw.splitlines():
+                    candidate = _strip_markdown(line)
+                    if len(candidate) > 20:
+                        title = candidate
+                        break
+
+            if title:
+                break
+            log.warning("Topic generation attempt %d/3 unparseable, retrying", attempt + 1)
+
         if not title:
-            for line in raw.splitlines():
-                candidate = _strip_markdown(line)
-                if len(candidate) > 20:
-                    title = candidate
-                    break
-
-        if not title:
-            raise RuntimeError(f"Failed to parse topic response: {raw[:300]}")
+            raise RuntimeError(f"Failed to parse topic response: {raw[:300]!r}")
 
         if not angle:
             angle = title
