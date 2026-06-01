@@ -5,7 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 01 Jun 2026 20:19:22 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 01 Jun 2026 20:39:14 +0000</lastBuildDate>
     <item>
       <title>Is daily DCA still king after the etfs?</title>
       <link>https://btc-dca.com/blog/generated-202605291706</link>
@@ -164,52 +164,49 @@
       <title>Bypassing the checking account: How to setup a direct from payroll Bitcoin DCA</title>
       <link>https://btc-dca.com/blog/generated-202606012018</link>
       <guid isPermaLink="false">generated-202606012018</guid>
-      <pubDate>Mon, 01 Jun 2026 20:19:22 +0000</pubDate>
+      <pubDate>Mon, 01 Jun 2026 20:24:22 +0000</pubDate>
       <category>bitcoin</category>
       <category>dollar cost averaging</category>
       <category>personal finance</category>
-      <content:encoded>&lt;p&gt;Last Friday, my paycheck hit my bank account, and within three hours, half of it was already gone to pay my mortgage, utility bills, and a slightly too expensive dinner. For years, I struggled with manual saving because seeing a high balance on payday gave me a false sense of wealth. That is why I became obsessed with &lt;strong&gt;bypassing the checking account how to setup a direct from payroll bitcoin dca&lt;/strong&gt; as the ultimate way to build long-term wealth before my own bad spending habits could get in the way.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>How to survive a bear market with a DCA stress test</title>
+      <link>https://btc-dca.com/blog/generated-202606012038</link>
+      <guid isPermaLink="false">generated-202606012038</guid>
+      <pubDate>Mon, 01 Jun 2026 20:39:14 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>investing</category>
+      <content:encoded>&lt;p&gt;I remember staring at my portfolio in late 2022, watching the numbers bleed out day after day. It’s easy to talk about long-term conviction when the chart is going up, but when you’re down 60% and life throws you a curveball, that conviction gets tested. This is exactly why I started looking into &lt;strong&gt;the dca stress test: calculating your bitcoin survivability ratio during multi-year drawdowns&lt;/strong&gt;. It’s not just about math; it’s about making sure you don't panic-sell when the market gets ugly.&lt;/p&gt;
 
-&lt;p&gt;So here's the thing: if the money never touches your main checking account, you never have the chance to spend it on things you don't need. It is the classic "pay yourself first" mentality, but automated for the digital age.&lt;/p&gt;
+&lt;p&gt;Most people treat Bitcoin like a savings account that only grows. They set up an auto-buy and forget about it. But if you haven't modeled what happens when your purchasing power drops significantly, you aren't really prepared. When I first started, I almost fell into the trap of over-leveraging my monthly budget, assuming the bull run would last forever. I had to pull back and re-calculate how much I could actually afford to lose if the price stayed depressed for two years.&lt;/p&gt;
 
-&lt;p&gt;Over the last couple of years, I have tried various ways to streamline my stacking. I used to manually transfer money to an exchange every Monday, login, place a market order, and then transfer the coins to my wallet. It was tedious, and honestly, I skipped a few weeks when the market was crashing because I let fear get the best of me. That was a mistake. Now, I want zero friction and zero emotion involved in my savings.&lt;/p&gt;
+&lt;h2&gt;Why the DCA stress test: Calculating your Bitcoin survivability ratio during multi-year drawdowns matters&lt;/h2&gt;
 
-&lt;h2&gt;Why I wanted to bypass my bank entirely&lt;/h2&gt;
+&lt;p&gt;The core idea here is simple: can you maintain your accumulation schedule if Bitcoin drops 80% and stays there for 24 months? If the answer is no, your current strategy is a liability. You need to know your "survivability ratio." This is the point where your life expenses, your job stability, and your Bitcoin buys intersect. If you lose your job or an emergency pops up during a bear market, do you have enough cash to cover it without selling your stack?&lt;/p&gt;
 
-&lt;p&gt;Every time my salary landed in my traditional bank account, it felt like a countdown timer started. Subscriptions, bills, and impulse buys immediately started chipping away at it. Even if I had the best intentions to buy Bitcoin at the end of the month, there was rarely enough left over to make a meaningful dent.&lt;/p&gt;
+&lt;p&gt;I actually built a tool to help with this. You can use &lt;a href="https://btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; to see how different market cycles would have played out for your specific budget. It helps you visualize that, even in a brutal drawdown, your total cost basis eventually flattens out if you keep buying.&lt;/p&gt;
 
-&lt;p&gt;Most traditional finance advice tells you to set up a recurring transfer from your checking account to a savings account. But let's be honest, traditional savings accounts are a melting ice cube. I wanted my savings in hard money.&lt;/p&gt;
+&lt;p&gt;A lot of the mainstream advice tells you to "buy the dip," but that’s dangerous advice if you don't have a defined limit. I disagree with the idea that you should always be "all in." If you aren't holding a significant cash buffer, you aren't investing; you're gambling on your own future income.&lt;/p&gt;
 
-&lt;p&gt;By routing a portion of my income directly from my employer to my investment setup, I treat my Bitcoin allocation exactly like a retirement contribution. It becomes non-negotiable. I do not have to think about it, log into my bank, or make a conscious decision to save. It just happens.&lt;/p&gt;
+&lt;h2&gt;How to run the DCA stress test: Calculating your Bitcoin survivability ratio during multi-year drawdowns&lt;/h2&gt;
 
-&lt;p&gt;To figure out how much I could actually afford to lock away long-term without hurting my day-to-day life, I spent some time using a &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware calculator to model my savings&lt;/a&gt;. It helped me realize that even a modest 5% of my paycheck, consistently stashed away over a multi-year horizon, could build a serious foundation.&lt;/p&gt;
+&lt;p&gt;To run your own version of this, you need to look at your monthly surplus. Let’s say you’re buying $500 of Bitcoin every month. If the price drops by 70%, that $500 buys you a lot more sats, but it also means your portfolio value looks terrible on paper. Does that paper loss make you want to stop buying? If so, you need to lower your DCA amount until you reach a level of "emotional indifference."&lt;/p&gt;
 
-&lt;h2&gt;Bypassing the checking account how to setup a direct from payroll Bitcoin DCA in practice&lt;/h2&gt;
+&lt;p&gt;When I realized I needed a more automated approach to keep my emotions out of it, I decided to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; using an API connection. This way, the buy happens regardless of whether the price is up 10% or down 50%. It removes the temptation to "time" the market, which is usually where people make their biggest mistakes. If you’re looking for a reliable place to set this up, &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt; or use a platform like &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; if you’re in Europe.&lt;/p&gt;
 
-&lt;p&gt;To get this working, you need to connect three distinct pieces: your employer's payroll system, a fiat gateway on a reliable exchange, and an automation tool to execute the buys.&lt;/p&gt;
+&lt;p&gt;Remember that &lt;strong&gt;the dca stress test: calculating your bitcoin survivability ratio during multi-year drawdowns&lt;/strong&gt; is not a one-time exercise. Your income changes, your life goals change, and the market environment shifts. I revisit my numbers every six months. If I get a raise, I might increase my DCA, but only after I’ve padded my emergency fund.&lt;/p&gt;
 
-&lt;p&gt;First, you need to check if your employer uses a modern payroll portal like ADP, Gusto, or Workday. Most of these platforms allow you to split your direct deposit into multiple bank accounts. Instead of sending 100% of your salary to your primary checking account, you can allocate a flat dollar amount or a percentage (say, 5% or 10%) to a secondary account.&lt;/p&gt;
+&lt;h2&gt;Moving beyond the numbers&lt;/h2&gt;
 
-&lt;p&gt;Next, you need to destination for those funds. You can set up a deposit account with an exchange that provides you with a unique routing and account number for incoming bank transfers. For example, you can set up USD direct deposits to &lt;a href="https://advanced.coinbase.com/join/RSCXAJL"&gt;your Coinbase account&lt;/a&gt; or use SEPA transfers to &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;your Binance account&lt;/a&gt; if you are in Europe.&lt;/p&gt;
+&lt;p&gt;Obviously I'm not your financial advisor — do your own research. Bitcoin is volatile, and no amount of modeling can predict the future. The goal of this process isn't to be a wizard who predicts the bottom; it’s to build a system that allows you to sleep at night.&lt;/p&gt;
 
-&lt;p&gt;Once your payroll system is configured to send a portion of your check to your exchange account on payday, you need a way to buy Bitcoin automatically as soon as the cash lands. This is exactly why I built &lt;a href="https://www.btc-dca.com"&gt;the free tool I use to automate buys&lt;/a&gt;. It connects directly to your exchange via API keys, monitors your balance, and executes your purchases on a schedule that matches your pay cycle.&lt;/p&gt;
+&lt;p&gt;When you do eventually accumulate a decent amount, please don't leave it on an exchange. I learned the hard way that "not your keys, not your coins" is the most important rule in this space. Once my DCA reaches a certain threshold, I move everything to cold storage. I personally use a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; for this. It’s a small cost for peace of mind.&lt;/p&gt;
 
-&lt;p&gt;If you are figuring out bypassing the checking account how to setup a direct from payroll bitcoin dca, the easiest way is to set your payroll split to land on a Friday, and schedule your automated tool to buy the Bitcoin early Saturday morning once the deposit has cleared.&lt;/p&gt;
-
-&lt;h2&gt;Keeping your automated stack safe&lt;/h2&gt;
-
-&lt;p&gt;One of the biggest mistakes I see people make when they automate their savings is leaving their funds on the exchange. I almost made this mistake myself during my first year of serious stacking. I had a decent amount of coins sitting on an exchange because I was too lazy to manually withdraw them every week.&lt;/p&gt;
-
-&lt;p&gt;Leaving your coins on an exchange means you do not actually own them. If the exchange goes down, your savings go down with it.&lt;/p&gt;
-
-&lt;p&gt;To solve this, my automated setup does not just buy the Bitcoin; it also schedules automatic withdrawals directly to my own custody. I highly recommend using a dedicated hardware wallet for this. Personally, I prefer to &lt;a href="https://bit.ly/buy-trezor-t"&gt;store my coins on a Trezor&lt;/a&gt; because it keeps my private keys completely offline and away from internet-facing vulnerabilities.&lt;/p&gt;
-
-&lt;p&gt;Obviously, I am not your financial advisor—do your own research and make sure you are comfortable managing your own private keys before you start sending your hard-earned salary directly into self-custody.&lt;/p&gt;
-
-&lt;p&gt;Setting up this pipeline takes about an hour of upfront effort, but once it is running, it is incredibly liberating. You stop watching the daily price charts, you stop worrying about whether it is a good time to buy, and you quietly accumulate real wealth in the background while you get on with living your life.&lt;/p&gt;
-
-&lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
-      <description>Last Friday, my paycheck hit my bank account, and within three hours, half of it was already gone to pay my mortgage, utility bills, and a slightly too expensive dinner. For years, I struggled with manual saving because seeing a high balance on payday gave me a false sense of wealth. That is why I b...</description>
+&lt;p&gt;At the end of the day, you’re playing a long game. Whether you’re saving for a house or just building a retirement nest egg, the mechanics of how you buy matter less than your ability to stay in the game when things get quiet and the price is in the basement. Keep your head down, keep your stack safe, and don't let the volatility shake you out of your plan.&lt;/p&gt;</content:encoded>
+      <description>I remember staring at my portfolio in late 2022, watching the numbers bleed out day after day. It’s easy to talk about long-term conviction when the chart is going up, but when you’re down 60% and life throws you a curveball, that conviction gets tested. This is exactly why I started looking into **...</description>
     </item>
   </channel>
 </rss>
