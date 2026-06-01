@@ -9,7 +9,6 @@ import re
 import subprocess
 import tempfile
 import time
-import base64
 from pathlib import Path
 
 from agent_m.config import config
@@ -139,27 +138,14 @@ class MediumPlaywrightPublisher:
         if "signin" in page.url.lower() or "login" in page.url.lower():
             raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
 
-        # Click title to activate editor UI before cover image attempt
         title_field = await self._find_title_field(page)
         await title_field.click()
-        await self._human_delay(1, 2)
-
-        cover_ok = False
-        if image_bytes:
-            cover_ok = await self._upload_cover_image(page, image_bytes)
-            if cover_ok:
-                title_field = await self._find_title_field(page)
-                await title_field.click()
-                await self._human_delay(0.5, 1)
-
         await page.keyboard.type(title, delay=random.randint(35, 70))
         await page.keyboard.press("Enter")
         await self._human_delay(1, 2)
 
-        if image_bytes and not cover_ok:
-            if await self._try_plus_menu_image(page, image_bytes):
-                await page.keyboard.press("Enter")
-                await self._human_delay(0.5, 1)
+        if image_bytes:
+            await self._insert_cover_image(page, image_bytes)
 
         blocks = self._parse_markdown_blocks(body_markdown)
         log.info("Medium: typing %d blocks with native formatting", len(blocks))
@@ -294,8 +280,8 @@ class MediumPlaywrightPublisher:
 
         return False
 
-    async def _upload_cover_image(self, page, image_bytes: bytes) -> bool:
-        """Try to upload a cover/feature image above the title. Returns True on success."""
+    async def _insert_cover_image(self, page, image_bytes: bytes) -> None:
+        """Insert image as first body element via Medium's 'Add an image' button."""
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
@@ -305,235 +291,54 @@ class MediumPlaywrightPublisher:
             diag = await page.evaluate("""() => {
                 const r = [];
                 document.querySelectorAll('input[type="file"]').forEach((el, i) =>
-                    r.push('file_input[' + i + '] accept=' + el.accept + ' vis=' + (el.offsetParent !== null)));
+                    r.push('file[' + i + '] accept=' + el.accept));
                 document.querySelectorAll('button, [role="button"]').forEach(b => {
-                    const t = (b.textContent || '').trim();
                     const a = b.getAttribute('aria-label') || '';
-                    const cls = (b.className || '').toString();
-                    if (/image|photo|cover|feature|camera|upload/i.test(t + a + b.title + cls))
-                        r.push('btn: "' + t.substring(0,50) + '" aria="' + a + '" cls="' + cls.substring(0,60) + '" vis=' + (b.offsetParent !== null));
+                    if (/image|photo|cover|upload/i.test(a))
+                        r.push('btn aria="' + a + '" vis=' + (b.offsetParent !== null));
                 });
-                const title = document.querySelector('[data-placeholder*="itle"]');
-                if (title) {
-                    const rect = title.getBoundingClientRect();
-                    r.push('title: top=' + Math.round(rect.top) + ' left=' + Math.round(rect.left));
-                }
-                r.push('pm: ' + (document.querySelector('.ProseMirror') ? 'yes' : 'no'));
-                return r.join('\\n');
+                return r.join('\\n') || 'no image-related elements';
             }""")
-            log.info("Medium cover image scan:\n%s", diag)
+            log.info("Medium image elements:\n%s", diag)
 
-            initial_input_count = await page.locator('input[type="file"]').count()
-
-            # Strategy 1: existing file input
-            if initial_input_count > 0:
-                await page.locator('input[type="file"]').first.set_input_files(tmp_path)
-                log.info("Medium: cover image via existing file input")
-                await self._human_delay(3, 5)
-                return True
-
-            # Strategy 2: click known cover/feature image selectors + file chooser
-            cover_selectors = [
-                'button[aria-label*="image" i]',
-                'button[aria-label*="cover" i]',
-                'button[aria-label*="feature" i]',
-                'button[title*="image" i]',
-                'button:has-text("feature image")',
-                'button:has-text("Add image")',
-                '[data-testid*="coverImage" i]',
-                '[data-testid*="headerImage" i]',
-                '[class*="coverImage" i]',
-                '[class*="headerImage" i]',
-            ]
-            for sel in cover_selectors:
+            # Primary: click the "Add an image" button (exact aria-label)
+            img_btn = page.locator('button[aria-label="Add an image"]').first
+            if not await img_btn.is_visible(timeout=3000):
+                plus_btn = page.locator(
+                    'button[aria-label*="Add an image, video"]'
+                ).first
                 try:
-                    loc = page.locator(sel).first
-                    if await loc.is_visible(timeout=1500):
-                        async with page.expect_file_chooser(timeout=5000) as fc:
-                            await loc.click()
-                        chooser = await fc.value
-                        await chooser.set_files(tmp_path)
-                        log.info("Medium: cover image via %s", sel)
-                        await self._human_delay(3, 5)
-                        return True
+                    if await plus_btn.is_visible(timeout=2000):
+                        await plus_btn.click()
+                        log.info("Medium: clicked '+' menu to reveal image button")
+                        await self._human_delay(1, 2)
                 except Exception:
-                    continue
-
-            # Strategy 3: click/hover above the title field to trigger cover image UI
-            title_el = page.locator('[data-placeholder*="itle"]').first
-            try:
-                box = await title_el.bounding_box()
-                if box and box["y"] > 60:
-                    cx = box["x"] + box["width"] / 2
-                    cy = box["y"] - 40
-                    await page.mouse.move(cx, cy)
-                    await self._human_delay(0.5, 1)
-
-                    new_count = await page.locator('input[type="file"]').count()
-                    if new_count > initial_input_count:
-                        await page.locator('input[type="file"]').last.set_input_files(tmp_path)
-                        log.info("Medium: cover image via hover-above-title")
-                        await self._human_delay(3, 5)
-                        return True
-
-                    try:
-                        async with page.expect_file_chooser(timeout=5000) as fc:
-                            await page.mouse.click(cx, cy)
-                        chooser = await fc.value
-                        await chooser.set_files(tmp_path)
-                        log.info("Medium: cover image via click-above-title")
-                        await self._human_delay(3, 5)
-                        return True
-                    except Exception:
-                        pass
-
-                    await self._human_delay(1, 2)
-                    new_count2 = await page.locator('input[type="file"]').count()
-                    if new_count2 > initial_input_count:
-                        await page.locator('input[type="file"]').last.set_input_files(tmp_path)
-                        log.info("Medium: cover image via click-above-title + new input")
-                        await self._human_delay(3, 5)
-                        return True
-
-                    for sel in ['button:has-text("image")', 'button:has-text("Add")', '[role="button"]:has-text("image")']:
-                        try:
-                            loc = page.locator(sel).first
-                            if await loc.is_visible(timeout=1500):
-                                async with page.expect_file_chooser(timeout=5000) as fc:
-                                    await loc.click()
-                                chooser = await fc.value
-                                await chooser.set_files(tmp_path)
-                                log.info("Medium: cover image via revealed %s", sel)
-                                await self._human_delay(3, 5)
-                                return True
-                        except Exception:
-                            continue
-            except Exception as e:
-                log.debug("Medium: above-title strategy error: %s", e)
-
-            # Strategy 4: synthetic drag-and-drop on ProseMirror editor
-            b64 = base64.b64encode(image_bytes).decode()
-            drop_ok = await page.evaluate("""(b64) => {
-                try {
-                    const editor = document.querySelector('.ProseMirror') ||
-                                   document.querySelector('[contenteditable="true"]');
-                    if (!editor) return 'no_editor';
-                    const binary = atob(b64);
-                    const bytes = new Uint8Array(binary.length);
-                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                    const file = new File([bytes], 'cover.jpg', {type: 'image/jpeg'});
-                    const dt = new DataTransfer();
-                    dt.items.add(file);
-                    const rect = editor.getBoundingClientRect();
-                    const opts = {bubbles: true, cancelable: true, dataTransfer: dt,
-                        clientX: rect.left + rect.width / 2, clientY: rect.top + 20};
-                    editor.dispatchEvent(new DragEvent('dragenter', opts));
-                    editor.dispatchEvent(new DragEvent('dragover', opts));
-                    editor.dispatchEvent(new DragEvent('drop', opts));
-                    return 'ok';
-                } catch (e) { return 'err:' + e.message; }
-            }""", b64)
-            if drop_ok == 'ok':
-                await self._human_delay(3, 5)
-                imgs = await page.locator('figure img, .ProseMirror img').count()
-                if imgs > 0:
-                    log.info("Medium: cover image via drag-drop")
-                    return True
-                log.info("Medium: drag-drop dispatched but no image appeared")
-            else:
-                log.debug("Medium: drag-drop result: %s", drop_ok)
-
-            log.warning("Medium: all cover image strategies failed")
-            return False
-        except Exception as exc:
-            log.warning("Medium: cover image error: %s", exc)
-            return False
-        finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
                     pass
 
-    async def _try_plus_menu_image(self, page, image_bytes: bytes) -> bool:
-        """Insert image via Medium's '+' floating menu on the current empty paragraph."""
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
-                f.write(image_bytes)
-                tmp_path = f.name
-
-            cursor_pos = await page.evaluate("""() => {
-                const s = window.getSelection();
-                if (!s || !s.focusNode) return null;
-                const el = s.focusNode.nodeType === 3 ? s.focusNode.parentElement : s.focusNode;
-                if (!el) return null;
-                const rect = el.getBoundingClientRect();
-                return {x: rect.left - 40, y: rect.top + rect.height / 2};
-            }""")
-            if cursor_pos:
-                await page.mouse.move(cursor_pos['x'], cursor_pos['y'])
+            if await img_btn.is_visible(timeout=3000):
+                async with page.expect_file_chooser(timeout=10000) as fc:
+                    await img_btn.click()
+                chooser = await fc.value
+                await chooser.set_files(tmp_path)
+                log.info("Medium: cover image inserted via 'Add an image' button")
+                await self._human_delay(5, 8)
+                await page.keyboard.press("Enter")
                 await self._human_delay(0.5, 1)
+                return
 
-            plus_found = await page.evaluate("""() => {
-                const btns = document.querySelectorAll('button, [role="button"]');
-                for (const b of btns) {
-                    if (b.offsetParent === null) continue;
-                    const rect = b.getBoundingClientRect();
-                    if (rect.width > 60 || rect.height > 60) continue;
-                    const t = (b.textContent || '').trim();
-                    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                    const cls = (b.className || '').toString().toLowerCase();
-                    if (t === '+' || /add|plus|insert/i.test(aria) || /addbutton|inlinetool|sidemenu|sidebutton/i.test(cls)) {
-                        b.click();
-                        return 'text=' + t + ' cls=' + cls.substring(0,60);
-                    }
-                }
-                return '';
-            }""")
+            # Fallback: any file input that appeared
+            file_inputs = page.locator('input[type="file"]')
+            if await file_inputs.count() > 0:
+                await file_inputs.first.set_input_files(tmp_path)
+                log.info("Medium: cover image via file input fallback")
+                await self._human_delay(5, 8)
+                await page.keyboard.press("Enter")
+                await self._human_delay(0.5, 1)
+                return
 
-            if not plus_found:
-                log.info("Medium: '+' button not found for image insert")
-                return False
-
-            log.info("Medium: clicked '+' menu (%s)", plus_found)
-            await self._human_delay(1, 2)
-
-            for sel in [
-                'button[aria-label*="image" i]', 'button[title*="image" i]',
-                'button[data-action*="image" i]', '[role="menuitem"]:has-text("Image")',
-                'button:has-text("Image")', 'input[type="file"][accept*="image"]',
-                'input[type="file"]',
-            ]:
-                try:
-                    loc = page.locator(sel).first
-                    if not await loc.is_visible(timeout=1500):
-                        continue
-                    tag = await loc.evaluate("el => el.tagName")
-                    if tag == "INPUT":
-                        await loc.set_input_files(tmp_path)
-                    else:
-                        async with page.expect_file_chooser(timeout=5000) as fc:
-                            await loc.click()
-                        chooser = await fc.value
-                        await chooser.set_files(tmp_path)
-                    log.info("Medium: image inserted via '+' menu → %s", sel)
-                    await self._human_delay(5, 8)
-                    return True
-                except Exception:
-                    continue
-
-            await page.keyboard.press("Escape")
-            await self._human_delay(0.5, 1)
-            log.info("Medium: '+' menu opened but image option not found")
-            return False
+            log.warning("Medium: 'Add an image' button not found, skipping cover image")
         except Exception as exc:
-            log.warning("Medium: '+' menu image error: %s", exc)
-            try:
-                await page.keyboard.press("Escape")
-            except Exception:
-                pass
-            return False
+            log.warning("Medium: cover image insert failed: %s", exc)
         finally:
             if tmp_path:
                 try:
