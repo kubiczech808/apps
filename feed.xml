@@ -5,7 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 01 Jun 2026 06:31:36 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 01 Jun 2026 06:33:53 +0000</lastBuildDate>
     <item>
       <title>Is daily DCA still king after the etfs?</title>
       <link>https://btc-dca.com/blog/generated-202605291706</link>
@@ -76,36 +76,57 @@
       <title>Why your static 100 dollar DCA is shrinking and how to inflation-proof your accumulation</title>
       <link>https://btc-dca.com/blog/generated-202606010631</link>
       <guid isPermaLink="false">generated-202606010631</guid>
-      <pubDate>Mon, 01 Jun 2026 06:31:36 +0000</pubDate>
+      <pubDate>Mon, 01 Jun 2026 06:33:01 +0000</pubDate>
       <category>bitcoin</category>
       <category>dca</category>
       <category>inflation</category>
-      <content:encoded>&lt;p&gt;I looked at my bank statement last week and realized that the $100 I set aside for Bitcoin every Friday simply doesn't buy what it used to. It’s a quiet, annoying realization that hit me when I saw my weekly satoshi count dropping despite keeping my contribution the same. If you have been wondering &lt;strong&gt;why your static 100 dollar dca is shrinking and how to inflation-proof your accumulation&lt;/strong&gt;, you aren't just imagining things; the purchasing power of your fiat is being eroded, and your strategy needs an update to keep up.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>How to build a corporate Bitcoin reserve: The smb guide to automated treasury DCA</title>
+      <link>https://btc-dca.com/blog/generated-202606010633</link>
+      <guid isPermaLink="false">generated-202606010633</guid>
+      <pubDate>Mon, 01 Jun 2026 06:33:53 +0000</pubDate>
+      <category>bitcoin treasury</category>
+      <category>corporate dca</category>
+      <category>business bitcoin</category>
+      <content:encoded>&lt;p&gt;My business bank account was earning a pathetic 0.5% interest last year while inflation quietly ate away our working capital. That was the exact moment I started looking into &lt;strong&gt;how to build a corporate bitcoin reserve: the smb guide to automated treasury dca&lt;/strong&gt; because I realized small businesses don't need a MicroStrategy-sized budget to protect their balance sheets.&lt;/p&gt;
 
-&lt;p&gt;Back when I started, $100 felt like a solid chunk of my paycheck. Today, between the rising cost of rent and the price of groceries, that same $100 feels like a rounding error. If you keep your investment amount fixed while the world around you gets more expensive, you are effectively reducing your exposure to Bitcoin over time.&lt;/p&gt;
+&lt;p&gt;For years, holding digital assets was a headache reserved only for tech giants with massive accounting departments. But things have changed dramatically, and the tools available to regular business owners now make it incredibly simple to accumulate Bitcoin directly through company operations.&lt;/p&gt;
 
-&lt;h2&gt;Understanding why your static 100 dollar DCA is shrinking and how to inflation-proof your accumulation&lt;/h2&gt;
+&lt;p&gt;Obviously, I'm not your CPA or financial advisor, and putting corporate cash into volatile assets carries real risk, so do your own research before moving company funds. But if you are tired of watching your hard-earned business reserves melt away in a traditional bank account, here is how I set up my own company's strategy.&lt;/p&gt;
 
-&lt;p&gt;The trap here is the comfort of automation. We set up an exchange integration, forget about it, and feel good because we are "doing the work." But life moves forward, and if your income grows while your DCA stays flat, you are actually becoming less invested in your future. I learned this the hard way when I realized that, in real terms, I was actually buying less Bitcoin than I was two years ago.&lt;/p&gt;
+&lt;h2&gt;The game-changing shift in corporate crypto accounting&lt;/h2&gt;
 
-&lt;p&gt;To fix this, I had to stop treating my DCA as a "set and forget" chore. I started adjusting my buy amount by a small percentage every time I got a raise or even when I managed to cut a recurring subscription I didn't need. It’s not about finding massive amounts of extra cash; it’s about aligning your investment growth with your life growth. If you are using a tool to manage this, you might want to look at a &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware dca calculator&lt;/a&gt; to see how different accumulation rates change your long-term outlook.&lt;/p&gt;
+&lt;p&gt;Historically, the biggest roadblock for any small or medium business wanting to hold Bitcoin was the archaic accounting rules. Under the old rules, Bitcoin was treated as an intangible asset. If the price dropped, you had to write down the value on your books as an impairment loss. But if the price went up, you couldn't record those gains until you actually sold. It was a lose-lose situation that made company balance sheets look artificially weak.&lt;/p&gt;
 
-&lt;h2&gt;Moving beyond fixed amounts&lt;/h2&gt;
+&lt;p&gt;Thankfully, the Financial Accounting Standards Board (FASB) finally updated these rules to fair-value accounting. Now, businesses can report Bitcoin at its current market value. This means your balance sheet actually reflects reality, making it much more attractive for small businesses to hold Bitcoin as a treasury asset.&lt;/p&gt;
 
-&lt;p&gt;Most mainstream financial advice tells you to pick a number and stick to it until you retire. I think that is a mistake. If your salary increases by 5% but your investment stays flat, you are losing. I’ve started treating my Bitcoin buys like a tax on my own lifestyle. When I get a bonus, a portion goes straight into my stack.&lt;/p&gt;
+&lt;p&gt;When I first realized this shift was happening, I almost made a massive mistake. I contacted a corporate treasury consulting firm that wanted to charge me a $5,000 setup fee plus 1% of our annual purchase volume just to manage our buying schedule. I realized very quickly that they were just manually executing trades that I could easily automate myself for free.&lt;/p&gt;
 
-&lt;p&gt;I know some people get nervous about automating more money into an asset that fluctuates so wildly. That’s why I built a tool to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; directly through API keys on exchanges like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt;. It takes the emotion out of it. If the price is high, I buy a little less; if it’s low, I get more. But the key is that the &lt;em&gt;dollar amount&lt;/em&gt; grows with my capacity to earn.&lt;/p&gt;
+&lt;h2&gt;Why learning how to build a corporate Bitcoin reserve: The smb guide to automated treasury DCA is easier than you think&lt;/h2&gt;
 
-&lt;p&gt;Obviously, I am not your financial advisor, and you should definitely do your own research before moving your money around. Crypto is volatile, and you should only invest what you are comfortable losing. I personally keep most of my holdings on a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; because I don't like leaving funds on exchanges once the purchase is made.&lt;/p&gt;
+&lt;p&gt;If you are researching how to build a corporate bitcoin reserve: the smb guide to automated treasury dca, the single biggest hurdle isn't the technology—it's the internal policy. You need to decide how much of your monthly free cash flow you can afford to lock away for the long term.&lt;/p&gt;
 
-&lt;h2&gt;The inflation factor&lt;/h2&gt;
+&lt;p&gt;I disagree with the mainstream advice that says businesses should keep 100% of their cash in fiat. If your business has predictable monthly recurring revenue, keeping a 3-to-6 month operational runway in cash is smart, but anything beyond that is actively losing purchasing power.&lt;/p&gt;
 
-&lt;p&gt;The reason why your static 100 dollar dca is shrinking and how to inflation-proof your accumulation ultimately comes down to acknowledging that fiat currency is a leaky bucket. When you hold dollars, you are holding a depreciating asset. When you trade them for Bitcoin, you are opting out of that system.&lt;/p&gt;
+&lt;p&gt;Instead of making lump-sum purchases, which can introduce massive volatility to your balance sheet, the smartest approach is dollar-cost averaging. You can use &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;our cycle-aware calculator&lt;/a&gt; to model how different allocation strategies would have performed over past market cycles, taking into account the diminishing returns of each halving. This helps you set realistic expectations for your board or your business partners.&lt;/p&gt;
 
-&lt;p&gt;If you aren't increasing your DCA, you are effectively accepting that your wealth will be diluted by the same monetary expansion that makes your $100 buy less today than it did yesterday. It’s a subtle shift in mindset, but it’s the difference between just "buying crypto" and actually building a long-term position that survives the inevitable debasement of the dollar.&lt;/p&gt;
+&lt;p&gt;I also strongly disagree with the enterprise-level advice that claims small businesses need complex, expensive multi-signature custody setups like Fireblocks or Anchorage. If you are managing a reserve under a few hundred thousand dollars, you don't need to pay thousands in monthly custody fees. A dedicated corporate account on a trusted exchange combined with a secure hardware wallet is more than enough.&lt;/p&gt;
 
-&lt;p&gt;I’ve made plenty of mistakes, like trying to time the market during the last cycle instead of just keeping my accumulation steady. I almost stopped my DCA entirely when the price dipped, which would have been a disaster for my average cost. Now, I just let the automation handle the heavy lifting. It’s much easier to sleep at night when you know your strategy is designed to scale with your life, rather than being stuck in a static loop that loses its edge as the years go by.&lt;/p&gt;</content:encoded>
-      <description>I looked at my bank statement last week and realized that the $100 I set aside for Bitcoin every Friday simply doesn't buy what it used to. It’s a quiet, annoying realization that hit me when I saw my weekly satoshi count dropping despite keeping my contribution the same. If you have been wondering ...</description>
+&lt;h2&gt;Putting the corporate DCA plan on autopilot&lt;/h2&gt;
+
+&lt;p&gt;To get started, you will need to open a corporate account with an exchange that supports business entities. I recommend setting up a &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance corporate account&lt;/a&gt; or, if you are operating in Europe, a &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate business account&lt;/a&gt;. These platforms allow you to complete verification using your company’s registration documents.&lt;/p&gt;
+
+&lt;p&gt;Once your business account is verified and funded with your target treasury allocation, you want to automate the buying process so you aren't manually logging in every week. This is exactly why I built my own tool to &lt;a href="https://www.btc-dca.com"&gt;automate my corporate DCA buys&lt;/a&gt;. It connects directly to your exchange via API keys, executes your scheduled purchases, and can even automate withdrawals to your secure custody.&lt;/p&gt;
+
+&lt;p&gt;For custody, you should never leave your company's long-term reserves sitting on an exchange. We use a dedicated &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; kept in a secure physical location. The beauty of automating this is that your exchange account only holds cash or Bitcoin for a few days before it is safely swept into your offline storage.&lt;/p&gt;
+
+&lt;p&gt;Ultimately, figuring out how to build a corporate bitcoin reserve: the smb guide to automated treasury dca comes down to consistency rather than trying to time the market. By setting up a recurring, automated buy directly from your business cash flow, you can build a meaningful sovereign reserve that protects your company's purchasing power for the decade ahead.&lt;/p&gt;
+
+&lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
+      <description>My business bank account was earning a pathetic 0.5% interest last year while inflation quietly ate away our working capital. That was the exact moment I started looking into **how to build a corporate bitcoin reserve: the smb guide to automated treasury dca** because I realized small businesses don...</description>
     </item>
   </channel>
 </rss>
