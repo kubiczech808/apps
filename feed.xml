@@ -5,7 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 01 Jun 2026 04:25:55 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 01 Jun 2026 06:31:36 +0000</lastBuildDate>
     <item>
       <title>Is daily DCA still king after the etfs?</title>
       <link>https://btc-dca.com/blog/generated-202605291706</link>
@@ -65,46 +65,47 @@
       <title>The dynamic DCA: How to adjust buys on fear and greed</title>
       <link>https://btc-dca.com/blog/generated-202606010425</link>
       <guid isPermaLink="false">generated-202606010425</guid>
-      <pubDate>Mon, 01 Jun 2026 04:25:55 +0000</pubDate>
+      <pubDate>Mon, 01 Jun 2026 04:27:34 +0000</pubDate>
       <category>bitcoin</category>
       <category>dollar cost averaging</category>
       <category>investing strategy</category>
-      <content:encoded>&lt;p&gt;Last November, when Bitcoin was sitting around $16,000 and the media was screaming about the death of crypto, I had a mini-panic attack. I was doing my usual $50 weekly buy, but a voice in my head kept saying I should be buying more. That’s when I started researching &lt;strong&gt;the dynamic dca: how to automatically adjust your bitcoin buys based on market fear and greed&lt;/strong&gt; to maximize my accumulation during deep discounts.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why your static 100 dollar DCA is shrinking and how to inflation-proof your accumulation</title>
+      <link>https://btc-dca.com/blog/generated-202606010631</link>
+      <guid isPermaLink="false">generated-202606010631</guid>
+      <pubDate>Mon, 01 Jun 2026 06:31:36 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>inflation</category>
+      <content:encoded>&lt;p&gt;I looked at my bank statement last week and realized that the $100 I set aside for Bitcoin every Friday simply doesn't buy what it used to. It’s a quiet, annoying realization that hit me when I saw my weekly satoshi count dropping despite keeping my contribution the same. If you have been wondering &lt;strong&gt;why your static 100 dollar dca is shrinking and how to inflation-proof your accumulation&lt;/strong&gt;, you aren't just imagining things; the purchasing power of your fiat is being eroded, and your strategy needs an update to keep up.&lt;/p&gt;
 
-&lt;p&gt;I realized that flat weekly purchases are great for peace of mind, but they leave a lot of satoshis on the table. When the market is bleeding and everyone is terrified, that is precisely when you want to back up the truck.&lt;/p&gt;
+&lt;p&gt;Back when I started, $100 felt like a solid chunk of my paycheck. Today, between the rising cost of rent and the price of groceries, that same $100 feels like a rounding error. If you keep your investment amount fixed while the world around you gets more expensive, you are effectively reducing your exposure to Bitcoin over time.&lt;/p&gt;
 
-&lt;h2&gt;Why I moved to the dynamic DCA: How to automatically adjust your Bitcoin buys based on market fear and greed&lt;/h2&gt;
+&lt;h2&gt;Understanding why your static 100 dollar DCA is shrinking and how to inflation-proof your accumulation&lt;/h2&gt;
 
-&lt;p&gt;So here's the thing: standard dollar cost averaging is passive. You set it, you forget it, and you buy the same dollar amount whether Bitcoin is at an all-time high or crashing through the floor. It is a solid strategy, and it is infinitely better than trying to trade.&lt;/p&gt;
+&lt;p&gt;The trap here is the comfort of automation. We set up an exchange integration, forget about it, and feel good because we are "doing the work." But life moves forward, and if your income grows while your DCA stays flat, you are actually becoming less invested in your future. I learned this the hard way when I realized that, in real terms, I was actually buying less Bitcoin than I was two years ago.&lt;/p&gt;
 
-&lt;p&gt;But I wanted to optimize. I wanted to buy more when the Fear and Greed Index was in the single digits, and scale back when my Uber driver started asking me about altcoins. That is the core idea behind the dynamic dca: how to automatically adjust your bitcoin buys based on market fear and greed.&lt;/p&gt;
+&lt;p&gt;To fix this, I had to stop treating my DCA as a "set and forget" chore. I started adjusting my buy amount by a small percentage every time I got a raise or even when I managed to cut a recurring subscription I didn't need. It’s not about finding massive amounts of extra cash; it’s about aligning your investment growth with your life growth. If you are using a tool to manage this, you might want to look at a &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware dca calculator&lt;/a&gt; to see how different accumulation rates change your long-term outlook.&lt;/p&gt;
 
-&lt;p&gt;I made a huge mistake back in 2021 trying to do this manually. I paused my buys because I thought the market was too hot, then got impatient, FOMO’d back in near the top, and ended up with a much higher average cost than if I had just done nothing. It taught me that if I don't automate the process, my emotions will ruin it.&lt;/p&gt;
+&lt;h2&gt;Moving beyond fixed amounts&lt;/h2&gt;
 
-&lt;p&gt;That experience is actually why I ended up building my own tool. I wanted a way to hook up my exchange accounts—like when I &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt;—and let a script handle the heavy lifting. You can check out &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;how the automation features work&lt;/a&gt; if you want to see how I set up my own rules to scale my buys.&lt;/p&gt;
+&lt;p&gt;Most mainstream financial advice tells you to pick a number and stick to it until you retire. I think that is a mistake. If your salary increases by 5% but your investment stays flat, you are losing. I’ve started treating my Bitcoin buys like a tax on my own lifestyle. When I get a bonus, a portion goes straight into my stack.&lt;/p&gt;
 
-&lt;h2&gt;Setting up the rules without losing your mind&lt;/h2&gt;
+&lt;p&gt;I know some people get nervous about automating more money into an asset that fluctuates so wildly. That’s why I built a tool to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; directly through API keys on exchanges like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt;. It takes the emotion out of it. If the price is high, I buy a little less; if it’s low, I get more. But the key is that the &lt;em&gt;dollar amount&lt;/em&gt; grows with my capacity to earn.&lt;/p&gt;
 
-&lt;p&gt;When you transition to a dynamic model, you need a clear framework. Most people use the Crypto Fear &amp; Greed Index as their compass.&lt;/p&gt;
+&lt;p&gt;Obviously, I am not your financial advisor, and you should definitely do your own research before moving your money around. Crypto is volatile, and you should only invest what you are comfortable losing. I personally keep most of my holdings on a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; because I don't like leaving funds on exchanges once the purchase is made.&lt;/p&gt;
 
-&lt;p&gt;My personal setup is pretty straightforward. If the index is under 30 (fear), I double my weekly buy. If it is between 30 and 70 (neutral), I stick to my baseline. If it goes above 70 (greed), I cut my buy in half.&lt;/p&gt;
+&lt;h2&gt;The inflation factor&lt;/h2&gt;
 
-&lt;p&gt;Now, here is my contrarian take: some people advocate for stopping your buys entirely during extreme greed. I think that is a terrible idea. Bitcoin has a habit of staying in "extreme greed" for months during a bull run while the price doubles or triples. If you set your buy to zero, you miss out on massive momentum. Always keep a baseline buy going.&lt;/p&gt;
+&lt;p&gt;The reason why your static 100 dollar dca is shrinking and how to inflation-proof your accumulation ultimately comes down to acknowledging that fiat currency is a leaky bucket. When you hold dollars, you are holding a depreciating asset. When you trade them for Bitcoin, you are opting out of that system.&lt;/p&gt;
 
-&lt;p&gt;If you want to play around with the math yourself, I put together a &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;dollar cost averaging calculator&lt;/a&gt; that lets you model different scenarios, including how diminishing returns across halvings affect your long-term stack. It really helped me visualize why buying the deep dips is so mathematically powerful over a four-year cycle.&lt;/p&gt;
+&lt;p&gt;If you aren't increasing your DCA, you are effectively accepting that your wealth will be diluted by the same monetary expansion that makes your $100 buy less today than it did yesterday. It’s a subtle shift in mindset, but it’s the difference between just "buying crypto" and actually building a long-term position that survives the inevitable debasement of the dollar.&lt;/p&gt;
 
-&lt;h2&gt;Keeping your coins safe once you buy&lt;/h2&gt;
-
-&lt;p&gt;Automating the purchases is only half the battle. If you are using the dynamic dca: how to automatically adjust your bitcoin buys based on market fear and greed, you are going to accumulate a significant amount of coins during the panic phases.&lt;/p&gt;
-
-&lt;p&gt;Leaving those coins on an exchange is just asking for trouble. I learned this the hard way when a smaller platform I used years ago froze withdrawals. Now, as soon as my automated buys hit a certain threshold, they get pushed straight to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;My tool actually handles this automatically. It connects to exchanges like Binance or &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; via API, executes the adjusted buy, and then triggers a withdrawal to your own cold storage. No manual intervention, no temptation to trade, and no exchange custody risk.&lt;/p&gt;
-
-&lt;p&gt;Obviously, I'm not your financial advisor—do your own research and figure out what risk level works for your own life goals. But for me, taking the emotion out of the dips has made sleeping at night a whole lot easier.&lt;/p&gt;
-
-&lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
-      <description>Last November, when Bitcoin was sitting around $16,000 and the media was screaming about the death of crypto, I had a mini-panic attack. I was doing my usual $50 weekly buy, but a voice in my head kept saying I should be buying more. That’s when I started researching **the dynamic dca: how to automa...</description>
+&lt;p&gt;I’ve made plenty of mistakes, like trying to time the market during the last cycle instead of just keeping my accumulation steady. I almost stopped my DCA entirely when the price dipped, which would have been a disaster for my average cost. Now, I just let the automation handle the heavy lifting. It’s much easier to sleep at night when you know your strategy is designed to scale with your life, rather than being stuck in a static loop that loses its edge as the years go by.&lt;/p&gt;</content:encoded>
+      <description>I looked at my bank statement last week and realized that the $100 I set aside for Bitcoin every Friday simply doesn't buy what it used to. It’s a quiet, annoying realization that hit me when I saw my weekly satoshi count dropping despite keeping my contribution the same. If you have been wondering ...</description>
     </item>
   </channel>
 </rss>
