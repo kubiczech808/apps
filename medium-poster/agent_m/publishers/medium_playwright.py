@@ -173,6 +173,11 @@ class MediumPlaywrightPublisher:
             log.info("Medium: draft saved")
             return page.url
 
+        # Wait for Medium to finish auto-saving — clicking Publish while the
+        # top-right button still says "Saving..." is a no-op and the prepublish
+        # dialog never opens.
+        await self._wait_for_save_complete(page)
+
         # Open the publish dialog (top-right "Publish" button)
         if not await self._click_initial_publish(page):
             await self._dump_page_diagnostics(page, "no_publish_button")
@@ -204,6 +209,25 @@ class MediumPlaywrightPublisher:
         published_url = await self._wait_for_published_url(page)
         log.info("Medium: published at %s", published_url)
         return published_url
+
+    async def _wait_for_save_complete(self, page, timeout_s: int = 45) -> None:
+        """Wait until Medium's auto-save finishes.
+
+        The top-right button shows 'Saving...' while a save is in flight and
+        switches to 'Publish'/'Saved' once done. Clicking it mid-save does
+        nothing, so the prepublish dialog never opens.
+        """
+        for i in range(timeout_s):
+            text = await page.evaluate("""() => {
+                const btn = document.querySelector('button[data-action="show-prepublish"]');
+                return btn ? (btn.textContent || '').trim().toLowerCase() : 'none';
+            }""")
+            if text != "none" and "saving" not in text:
+                log.info("Medium: auto-save complete after %ds (button: '%s')", i, text)
+                await self._human_delay(0.5, 1)
+                return
+            await asyncio.sleep(1)
+        log.warning("Medium: auto-save still in progress after %ds, continuing", timeout_s)
 
     async def _click_initial_publish(self, page) -> bool:
         """Click the top-right Publish button that opens the publish dialog."""
@@ -289,8 +313,10 @@ class MediumPlaywrightPublisher:
                 log.info("Medium: clicked final publish via JS (%s)", clicked)
                 return True
 
-            # Not found yet — the dialog may still be rendering. Re-open and wait.
+            # Not found yet — the prepublish dialog may not have opened because
+            # the draft was still saving. Wait for save, re-open, and retry.
             log.info("Medium: final publish not found (attempt %d/3), retrying", attempt + 1)
+            await self._wait_for_save_complete(page)
             await self._click_initial_publish(page)
             await self._wait_for_publish_dialog(page)
             await self._human_delay(1, 2)
