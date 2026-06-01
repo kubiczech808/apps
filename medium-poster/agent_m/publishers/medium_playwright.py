@@ -210,6 +210,7 @@ class MediumPlaywrightPublisher:
         selectors = [
             'button[data-action="show-prepublish"]',
             'button[data-testid="publishButton"]',
+            'button[aria-label*="Publish" i]',
             'button:has-text("Publish")',
             '[role="button"]:has-text("Publish")',
         ]
@@ -224,59 +225,75 @@ class MediumPlaywrightPublisher:
                 continue
         return False
 
-    async def _wait_for_publish_dialog(self, page) -> None:
-        """Wait until the prepublish dialog (with tags + final publish) appears."""
-        for _ in range(20):
+    async def _wait_for_publish_dialog(self, page) -> bool:
+        """Wait until the prepublish dialog (with tags + 'Publish now') appears.
+
+        Looks specifically for the 'Publish now' button or the topics/tags
+        input — NOT a generic 'Publish' button, which stays in the DOM and
+        would cause a false positive while the dialog is still rendering.
+        """
+        for i in range(40):
             found = await page.evaluate("""() => {
-                const btns = Array.from(document.querySelectorAll('button'));
-                return btns.some(b => {
+                const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+                const hasPublishNow = btns.some(b => {
                     const t = (b.textContent || '').trim().toLowerCase();
-                    return (t === 'publish now' || t === 'publish' || t.includes('publish now'))
-                           && b.offsetParent !== null;
+                    return t.includes('publish now') && b.offsetParent !== null;
                 });
+                const hasTagInput = !!document.querySelector(
+                    'input[placeholder*="tag" i], input[placeholder*="topic" i]');
+                return hasPublishNow || hasTagInput;
             }""")
             if found:
-                log.info("Medium: publish dialog ready")
-                await self._human_delay(0.5, 1)
-                return
+                log.info("Medium: publish dialog ready (after %.1fs)", i * 0.5)
+                await self._human_delay(0.8, 1.5)
+                return True
             await asyncio.sleep(0.5)
-        log.warning("Medium: publish dialog wait timed out, continuing anyway")
+        log.warning("Medium: publish dialog wait timed out after 20s")
+        return False
 
     async def _click_final_publish(self, page) -> bool:
         """Click the final 'Publish now' confirmation button using several strategies."""
-        # Strategy 1: explicit Playwright selectors
-        selectors = [
-            'button[data-testid="publishConfirmButton"]',
-            'button[data-action="publish"]',
-            'button:has-text("Publish now")',
-        ]
-        for sel in selectors:
-            try:
-                loc = page.locator(sel).first
-                if await loc.is_visible(timeout=4000):
-                    await loc.scroll_into_view_if_needed(timeout=3000)
-                    await loc.click()
-                    log.info("Medium: clicked final publish via %s", sel)
-                    return True
-            except Exception:
-                continue
+        for attempt in range(3):
+            # Strategy 1: explicit Playwright selectors
+            selectors = [
+                'button[data-testid="publishConfirmButton"]',
+                'button[data-action="publish"]',
+                'button[data-testid="publish-button"]',
+                'button:has-text("Publish now")',
+            ]
+            for sel in selectors:
+                try:
+                    loc = page.locator(sel).first
+                    if await loc.is_visible(timeout=3000):
+                        await loc.scroll_into_view_if_needed(timeout=3000)
+                        await loc.click()
+                        log.info("Medium: clicked final publish via %s", sel)
+                        return True
+                except Exception:
+                    continue
 
-        # Strategy 2: JS scan for a visible button whose text is exactly "Publish now"
-        clicked = await page.evaluate("""() => {
-            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-            const exact = btns.find(b =>
-                (b.textContent || '').trim().toLowerCase() === 'publish now'
-                && b.offsetParent !== null);
-            if (exact) { exact.click(); return 'exact'; }
-            const partial = btns.find(b =>
-                (b.textContent || '').trim().toLowerCase().includes('publish now')
-                && b.offsetParent !== null);
-            if (partial) { partial.click(); return 'partial'; }
-            return '';
-        }""")
-        if clicked:
-            log.info("Medium: clicked final publish via JS (%s)", clicked)
-            return True
+            # Strategy 2: JS scan for a visible button whose text is "Publish now"
+            clicked = await page.evaluate("""() => {
+                const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+                const exact = btns.find(b =>
+                    (b.textContent || '').trim().toLowerCase() === 'publish now'
+                    && b.offsetParent !== null);
+                if (exact) { exact.click(); return 'exact'; }
+                const partial = btns.find(b =>
+                    (b.textContent || '').trim().toLowerCase().includes('publish now')
+                    && b.offsetParent !== null);
+                if (partial) { partial.click(); return 'partial'; }
+                return '';
+            }""")
+            if clicked:
+                log.info("Medium: clicked final publish via JS (%s)", clicked)
+                return True
+
+            # Not found yet — the dialog may still be rendering. Re-open and wait.
+            log.info("Medium: final publish not found (attempt %d/3), retrying", attempt + 1)
+            await self._click_initial_publish(page)
+            await self._wait_for_publish_dialog(page)
+            await self._human_delay(1, 2)
 
         return False
 
@@ -690,21 +707,21 @@ class MediumPlaywrightPublisher:
         try:
             log.error("Medium DIAG [%s]: URL = %s", context, page.url)
             log.error("Medium DIAG [%s]: title = %s", context, await page.title())
-            for sel in [
-                '[contenteditable]',
-                '.ProseMirror',
-                'textarea',
-                '[role="textbox"]',
-                '[data-testid="title"]',
-                'button:has-text("Publish")',
-            ]:
-                try:
-                    n = await page.locator(sel).count()
-                    log.error("Medium DIAG [%s]: %s count=%d", context, sel, n)
-                except Exception:
-                    pass
-            html = await page.content()
-            log.error("Medium DIAG [%s]: HTML[0:3000] = %s", context, html[:3000])
+            # List every visible button/role=button with its text + aria-label,
+            # so we can see exactly what the publish dialog offers.
+            buttons = await page.evaluate("""() => {
+                const out = [];
+                document.querySelectorAll('button, [role="button"]').forEach(b => {
+                    if (b.offsetParent === null) return;
+                    const t = (b.textContent || '').trim().substring(0, 40);
+                    const a = b.getAttribute('aria-label') || '';
+                    const d = b.getAttribute('data-testid') || b.getAttribute('data-action') || '';
+                    out.push(`"${t}" aria="${a}" data="${d}"`);
+                });
+                return out;
+            }""")
+            log.error("Medium DIAG [%s]: %d visible buttons:\n%s",
+                      context, len(buttons), "\n".join(buttons[:40]))
             await self._safe_screenshot(page, f"medium_{context}.png")
         except Exception as exc:
             log.error("Medium DIAG [%s]: dump failed: %s", context, exc)
