@@ -5,204 +5,35 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 01 Jun 2026 19:38:17 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 01 Jun 2026 20:15:38 +0000</lastBuildDate>
     <item>
-      <title>Is daily DCA still king after the etfs?</title>
-      <link>https://btc-dca.com/blog/generated-202605291706</link>
-      <guid isPermaLink="false">generated-202605291706</guid>
-      <pubDate>Fri, 29 May 2026 17:09:35 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dollar cost averaging</category>
-      <category>investing strategies</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>Why my ten dollar weekly Bitcoin buy was actually a trap</title>
-      <link>https://btc-dca.com/blog/generated-202605291728</link>
-      <guid isPermaLink="false">generated-202605291728</guid>
-      <pubDate>Fri, 29 May 2026 17:30:00 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dca</category>
-      <category>cold-storage</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>Surviving the post-halving sideways grind</title>
-      <link>https://btc-dca.com/blog/generated-202605291743</link>
-      <guid isPermaLink="false">generated-202605291743</guid>
-      <pubDate>Fri, 29 May 2026 17:44:35 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dollar cost averaging</category>
-      <category>investing strategy</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>Why I buy Bitcoin at all-time highs</title>
-      <link>https://btc-dca.com/blog/generated-202605300425</link>
-      <guid isPermaLink="false">generated-202605300425</guid>
-      <pubDate>Sat, 30 May 2026 04:26:19 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dca</category>
-      <category>investing</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>The utxo-optimized DCA: How to accumulate Bitcoin without paying half your stack in future fees</title>
-      <link>https://btc-dca.com/blog/generated-202605310555</link>
-      <guid isPermaLink="false">generated-202605310555</guid>
-      <pubDate>Sun, 31 May 2026 05:57:28 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dollar cost averaging</category>
-      <category>utxo</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>The dynamic DCA: How to adjust buys on fear and greed</title>
-      <link>https://btc-dca.com/blog/generated-202606010425</link>
-      <guid isPermaLink="false">generated-202606010425</guid>
-      <pubDate>Mon, 01 Jun 2026 04:27:34 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dollar cost averaging</category>
-      <category>investing strategy</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>Why your static 100 dollar DCA is shrinking and how to inflation-proof your accumulation</title>
-      <link>https://btc-dca.com/blog/generated-202606010631</link>
-      <guid isPermaLink="false">generated-202606010631</guid>
-      <pubDate>Mon, 01 Jun 2026 06:33:01 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dca</category>
-      <category>inflation</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>How to build a corporate Bitcoin reserve: The smb guide to automated treasury DCA</title>
-      <link>https://btc-dca.com/blog/generated-202606010633</link>
-      <guid isPermaLink="false">generated-202606010633</guid>
-      <pubDate>Mon, 01 Jun 2026 06:35:34 +0000</pubDate>
-      <category>bitcoin treasury</category>
-      <category>corporate dca</category>
-      <category>business bitcoin</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>The reverse DCA: How to programmatically take profits without emotional regret</title>
-      <link>https://btc-dca.com/blog/generated-202606010636</link>
-      <guid isPermaLink="false">generated-202606010636</guid>
-      <pubDate>Mon, 01 Jun 2026 06:38:24 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>profit taking</category>
-      <category>exit strategy</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>How to automate a multisig Bitcoin DCA</title>
-      <link>https://btc-dca.com/blog/generated-202606010649</link>
-      <guid isPermaLink="false">generated-202606010649</guid>
-      <pubDate>Mon, 01 Jun 2026 06:51:38 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>multisig</category>
-      <category>dollar cost averaging</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>Why I focus on tax optimization, Bitcoin DCA, portfolio tracking</title>
-      <link>https://btc-dca.com/blog/generated-202606010652</link>
-      <guid isPermaLink="false">generated-202606010652</guid>
-      <pubDate>Mon, 01 Jun 2026 06:53:53 +0000</pubDate>
-      <category>Tax Optimization</category>
-      <category>Bitcoin DCA</category>
-      <category>Portfolio Tracking</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>The hidden cost of convenience how exchange spreads quietly devour your Bitcoin DCA and how to audit</title>
-      <link>https://btc-dca.com/blog/generated-202606011928</link>
-      <guid isPermaLink="false">generated-202606011928</guid>
-      <pubDate>Mon, 01 Jun 2026 19:31:49 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dca</category>
-      <category>exchanges</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>My journey through the DCA maturity model: Graduating from manual buys to sovereign infrastructure</title>
-      <link>https://btc-dca.com/blog/generated-202606011932</link>
-      <guid isPermaLink="false">generated-202606011932</guid>
-      <pubDate>Mon, 01 Jun 2026 19:34:36 +0000</pubDate>
+      <title>Why your DCA frequency is eating your Bitcoin</title>
+      <link>https://btc-dca.com/blog/generated-202606012014</link>
+      <guid isPermaLink="false">generated-202606012014</guid>
+      <pubDate>Mon, 01 Jun 2026 20:15:38 +0000</pubDate>
       <category>bitcoin</category>
       <category>dca</category>
       <category>self-custody</category>
-      <content:encoded />
-      <description />
-    </item>
-    <item>
-      <title>The multi-cycle DCA: Calibrating your buy frequency to your Bitcoin time horizon</title>
-      <link>https://btc-dca.com/blog/generated-202606011937</link>
-      <guid isPermaLink="false">generated-202606011937</guid>
-      <pubDate>Mon, 01 Jun 2026 19:38:17 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dollar cost averaging</category>
-      <category>personal finance</category>
-      <content:encoded>&lt;p&gt;Back in 2021, during the peak of the bull run, I was buying Bitcoin every single day until a broken car alternator completely ruined my cash flow. I was so obsessed with catching every minor price dip that I kept my bank account drained to near zero, funnelling every spare dollar into hourly and daily buys. When that $800 repair bill hit, I had no choice but to sell a chunk of my hard-earned sats at a temporary loss just to get my car back on the road.&lt;/p&gt;
+      <content:encoded>&lt;p&gt;I spent three hours last night cleaning up my wallet addresses because I finally realized I had created a massive headache for my future self. If you want to understand &lt;strong&gt;the cost of convenience: how dca frequency and utxos impact your long-term bitcoin yield&lt;/strong&gt;, you have to look past the price of the asset and into the mechanics of the blockchain itself. I used to think that buying small amounts of Bitcoin every single day was the smartest way to stack, but I was ignoring the technical reality of how those transactions actually live on the network.&lt;/p&gt;
 
-&lt;p&gt;This painful lesson forced me to rethink my entire accumulation strategy and adopt what I now call &lt;strong&gt;the multi-cycle dca: calibrating your buy frequency to your bitcoin time horizon&lt;/strong&gt;.&lt;/p&gt;
+&lt;p&gt;When you buy small amounts of Bitcoin, you are creating what we call unspent transaction outputs, or UTXOs. If you buy a tiny bit of Bitcoin every day and withdraw it to your hardware wallet frequently, you end up with hundreds of tiny "dust" inputs. Years from now, when you actually want to move that Bitcoin, you’ll find that the transaction fee is calculated based on the size of the data—not the value of the Bitcoin. If you have 500 tiny inputs, your transaction size will be huge, and you could end up paying a massive percentage of your stack just to move it. That is the hidden reality of the cost of convenience: how dca frequency and utxos impact your long-term bitcoin yield, and it’s a trap most beginners fall into.&lt;/p&gt;
 
-&lt;p&gt;Mainstream crypto influencers love to preach daily or even hourly buys. They show you backtested charts proving that buying every hour slightly edges out weekly buys over a six-month period. But what they don't tell you is how exhausting that is to manage, how it wrecks your short-term liquidity, and how it can absolutely ruin your wallet structure when it comes to transaction fees.&lt;/p&gt;
+&lt;h2&gt;Balancing frequency and network fees&lt;/h2&gt;
 
-&lt;h2&gt;How to implement the multi-cycle DCA: Calibrating your buy frequency to your Bitcoin time horizon&lt;/h2&gt;
+&lt;p&gt;I almost made the mistake of setting my automation to buy every six hours back when I first started. It felt great to see my balance tick up constantly, but I didn't think about the consolidation costs. If you are serious about long-term holding, you need to find a middle ground. I eventually moved to a weekly schedule and, more importantly, I adjusted my withdrawal threshold.&lt;/p&gt;
 
-&lt;p&gt;When we talk about the multi-cycle dca: calibrating your buy frequency to your bitcoin time horizon, we are really talking about survival. Bitcoin is a multi-cycle asset. If your plan is to hold for ten years, sweating over whether you buy on a Tuesday morning or a Thursday afternoon is a complete waste of mental energy.&lt;/p&gt;
+&lt;p&gt;Instead of withdrawing every single tiny buy, I let the Bitcoin sit on the exchange for a bit longer until it reaches a meaningful amount. If you are looking for a way to model how these fees might affect your strategy, I’d suggest playing around with &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; to see how different timeframes change your accumulation math. It really helped me visualize that you don't need to buy every hour to get the benefits of dollar cost averaging.&lt;/p&gt;
 
-&lt;p&gt;To prove this to myself, I spent hours playing around with the &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware DCA calculator&lt;/a&gt; that I ended up building for my site. I modeled different scenarios over the last two halving cycles. What I found was eye-opening: over a four-year period, the difference in average entry price between a daily buyer and a monthly buyer was less than 1.5%.&lt;/p&gt;
+&lt;p&gt;For those who want to automate this without getting buried in fees, I built a tool to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; that allows you to set specific withdrawal thresholds. This way, you can keep your UTXO count low while still benefiting from the strategy. I personally use &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; for my own buys because the API integration is solid, but the key isn't the exchange—it’s the discipline of keeping your UTXOs clean.&lt;/p&gt;
 
-&lt;p&gt;So why do we stress ourselves out trying to buy every single day?&lt;/p&gt;
+&lt;h2&gt;Rethinking the cost of convenience: How DCA frequency and utxos impact your long-term Bitcoin yield&lt;/h2&gt;
 
-&lt;p&gt;If your time horizon is five to ten years, a weekly or bi-weekly buy frequency is usually the sweet spot. It gives your bank account time to breathe, aligns perfectly with most paycheck cycles, and keeps you from having to constantly monitor your liquidity.&lt;/p&gt;
+&lt;p&gt;Most people will tell you that the more often you buy, the better, because it smooths out the volatility. While that’s mathematically true for the price, it ignores the cost of convenience: how dca frequency and utxos impact your long-term bitcoin yield. If you treat your Bitcoin like a savings account that you never plan to move, maybe it doesn't matter. But if you ever want to spend it or move it to a new cold storage setup, you’ll regret having thousands of tiny inputs.&lt;/p&gt;
 
-&lt;h2&gt;Matching your buy frequency to your real-life cash flow&lt;/h2&gt;
+&lt;p&gt;I think the mainstream advice to "stack every day" is a bit short-sighted. It encourages a behavior that makes the network more congested and makes your personal wallet management a nightmare. I’ve shifted to a weekly buy and a monthly withdrawal. It’s enough to keep my average entry price stable, but it keeps my UTXO count manageable.&lt;/p&gt;
 
-&lt;p&gt;Here is my personal rule of thumb: your DCA frequency should match how often you get paid, minus a healthy buffer for real-world emergencies.&lt;/p&gt;
-
-&lt;p&gt;If you get paid monthly, setting up a daily buy means you are front-loading your investment and slowly draining your cash balance over thirty days. If an unexpected bill pops up on day twenty-five, you are stuck. You might have to sell some Bitcoin, which defeats the entire purpose of long-term holding.&lt;/p&gt;
-
-&lt;p&gt;When I built my &lt;a href="https://www.btc-dca.com"&gt;free Bitcoin DCA tool&lt;/a&gt;, I made sure to include features that let users track their progress based on specific life goals, like retirement or an emergency fund. This helps you visualize your stack not as a single pile of money, but as different buckets with different timelines.&lt;/p&gt;
-
-&lt;p&gt;For my long-term retirement bucket, I use a relaxed weekly buy. For my shorter-term goals, I keep the frequency monthly and the amounts smaller. This keeps me from overextending.&lt;/p&gt;
-
-&lt;p&gt;Obviously I'm not your financial advisor — do your own research and look at your own bank account before locking up your cash. But from my experience, keeping a cash buffer is the only way to survive a multi-year bear market without panic selling.&lt;/p&gt;
-
-&lt;h2&gt;Managing the utxo problem over multiple cycles&lt;/h2&gt;
-
-&lt;p&gt;There is another massive downside to high-frequency buying that almost nobody talks about: the UTXO (Unspent Transaction Output) problem.&lt;/p&gt;
-
-&lt;p&gt;Every time you buy Bitcoin and withdraw it to your own custody, you create a UTXO. Think of UTXOs like physical coins in your pocket. If you buy $10 worth of Bitcoin every day and withdraw it daily to your &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;, you will end up with hundreds of tiny "coins" in your digital wallet.&lt;/p&gt;
-
-&lt;p&gt;When you eventually want to spend or sell that Bitcoin years down the road, your wallet has to bundle all those tiny UTXOs together into one transaction. Because Bitcoin transaction fees are based on the size of the transaction data, a transaction with fifty inputs will cost a fortune in network fees. During a high-fee environment, it could easily cost you $100 or more just to move $500 worth of Bitcoin.&lt;/p&gt;
-
-&lt;p&gt;I made this exact mistake early on. I had dozens of tiny withdrawals sitting on my hardware wallet, and it cost me a ridiculous amount of money to consolidate them later.&lt;/p&gt;
-
-&lt;p&gt;To avoid this, I now recommend buying on reliable, low-fee &lt;a href="https://www.btc-dca.com/crypto-exchanges"&gt;supported crypto exchanges&lt;/a&gt; like Binance, but letting the balance build up there temporarily. Once the balance reaches a meaningful threshold—say, $500 or $1,000—that is when you trigger the withdrawal to cold storage.&lt;/p&gt;
-
-&lt;p&gt;If you want to set this up automatically, you can use API keys to connect your account on &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; to an automation tool that buys weekly but only withdraws to your hardware wallet once you hit a specific target amount. This gives you the peace of mind of automated buying without the UTXO headache.&lt;/p&gt;
-
-&lt;p&gt;Ultimately, the multi-cycle dca: calibrating your buy frequency to your bitcoin time horizon is about making the machine work for you, not against you. Once you stop treating Bitcoin like a daily video game and start treating it like a multi-year savings account, the volatility stops keeping you awake at night.&lt;/p&gt;
-
-&lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
-      <description>Back in 2021, during the peak of the bull run, I was buying Bitcoin every single day until a broken car alternator completely ruined my cash flow. I was so obsessed with catching every minor price dip that I kept my bank account drained to near zero, funnelling every spare dollar into hourly and dai...</description>
+&lt;p&gt;If you are just getting started, don't feel pressured to over-complicate things. You don't need to be a developer to manage your keys properly. If you do go the self-custody route—which I highly recommend—make sure you grab a reliable device. I still swear by my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor&lt;/a&gt; for keeping my keys offline. Just remember, I’m not a financial advisor. This is just how I’ve learned to manage my own stack after making the mistake of creating too many tiny, expensive-to-move transactions. Do your own research, and keep your UTXO management in mind before you set your automation to "buy every minute." It’s your money, and you don’t want to hand it over to the miners in transaction fees when you finally decide to cash out or move your holdings.&lt;/p&gt;</content:encoded>
+      <description>I spent three hours last night cleaning up my wallet addresses because I finally realized I had created a massive headache for my future self. If you want to understand **the cost of convenience: how dca frequency and utxos impact your long-term bitcoin yield**, you have to look past the price of th...</description>
     </item>
   </channel>
 </rss>
