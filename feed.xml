@@ -5,7 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 01 Jun 2026 06:33:53 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 01 Jun 2026 06:36:43 +0000</lastBuildDate>
     <item>
       <title>Is daily DCA still king after the etfs?</title>
       <link>https://btc-dca.com/blog/generated-202605291706</link>
@@ -87,46 +87,62 @@
       <title>How to build a corporate Bitcoin reserve: The smb guide to automated treasury DCA</title>
       <link>https://btc-dca.com/blog/generated-202606010633</link>
       <guid isPermaLink="false">generated-202606010633</guid>
-      <pubDate>Mon, 01 Jun 2026 06:33:53 +0000</pubDate>
+      <pubDate>Mon, 01 Jun 2026 06:35:34 +0000</pubDate>
       <category>bitcoin treasury</category>
       <category>corporate dca</category>
       <category>business bitcoin</category>
-      <content:encoded>&lt;p&gt;My business bank account was earning a pathetic 0.5% interest last year while inflation quietly ate away our working capital. That was the exact moment I started looking into &lt;strong&gt;how to build a corporate bitcoin reserve: the smb guide to automated treasury dca&lt;/strong&gt; because I realized small businesses don't need a MicroStrategy-sized budget to protect their balance sheets.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>The reverse DCA: How to programmatically take profits without emotional regret</title>
+      <link>https://btc-dca.com/blog/generated-202606010636</link>
+      <guid isPermaLink="false">generated-202606010636</guid>
+      <pubDate>Mon, 01 Jun 2026 06:36:43 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>profit taking</category>
+      <category>exit strategy</category>
+      <content:encoded>&lt;p&gt;I still remember the exact moment in November 2021 when my portfolio tracker flashed a net worth that could have paid off my mortgage. I stared at the screen, heart hammering, and did absolutely nothing. I was utterly convinced Bitcoin was going to $100,000 in a matter of weeks because everyone on my Twitter feed said it was inevitable. Instead, I rode the entire bear market back down, watching my paper gains evaporate. That painful mistake forced me to design a system for &lt;strong&gt;the reverse dca: how to programmatically take profits without emotional regret&lt;/strong&gt; so I wouldn't freeze up during the next market peak.&lt;/p&gt;
 
-&lt;p&gt;For years, holding digital assets was a headache reserved only for tech giants with massive accounting departments. But things have changed dramatically, and the tools available to regular business owners now make it incredibly simple to accumulate Bitcoin directly through company operations.&lt;/p&gt;
+&lt;p&gt;Buying Bitcoin is easy. You set up a recurring buy, close your eyes, and let time do the work. But selling? Selling is a psychological minefield. When the market is pumping, greed whispers that you're selling too early. When it's dumping, fear convinces you that you're selling at the bottom.&lt;/p&gt;
 
-&lt;p&gt;Obviously, I'm not your CPA or financial advisor, and putting corporate cash into volatile assets carries real risk, so do your own research before moving company funds. But if you are tired of watching your hard-earned business reserves melt away in a traditional bank account, here is how I set up my own company's strategy.&lt;/p&gt;
+&lt;p&gt;Without a rules-based system, you are practically guaranteed to make an emotional decision you will regret later.&lt;/p&gt;
 
-&lt;h2&gt;The game-changing shift in corporate crypto accounting&lt;/h2&gt;
+&lt;h2&gt;Why taking profits is harder than buying the dip&lt;/h2&gt;
 
-&lt;p&gt;Historically, the biggest roadblock for any small or medium business wanting to hold Bitcoin was the archaic accounting rules. Under the old rules, Bitcoin was treated as an intangible asset. If the price dropped, you had to write down the value on your books as an impairment loss. But if the price went up, you couldn't record those gains until you actually sold. It was a lose-lose situation that made company balance sheets look artificially weak.&lt;/p&gt;
+&lt;p&gt;The mainstream crypto narrative is dominated by the "HODL to infinity" meme. We are told that selling any Bitcoin is a cardinal sin, a sign of weak hands. I used to subscribe to this cult-like mentality. But let's be realistic: unless you plan to take your private keys to the grave, the entire point of investing is to eventually improve your real-world life. Whether that's buying a house, securing retirement, or just building a safety net, you will eventually need to convert some of that digital wealth.&lt;/p&gt;
 
-&lt;p&gt;Thankfully, the Financial Accounting Standards Board (FASB) finally updated these rules to fair-value accounting. Now, businesses can report Bitcoin at its current market value. This means your balance sheet actually reflects reality, making it much more attractive for small businesses to hold Bitcoin as a treasury asset.&lt;/p&gt;
+&lt;p&gt;The problem is that our brains are poorly wired for parabolic markets. When Bitcoin starts putting in massive green daily candles, your dopamine-fueled brain completely loses its ability to make rational decisions. You start calculating how much you'll have if it doubles again, rather than securing what you already have.&lt;/p&gt;
 
-&lt;p&gt;When I first realized this shift was happening, I almost made a massive mistake. I contacted a corporate treasury consulting firm that wanted to charge me a $5,000 setup fee plus 1% of our annual purchase volume just to manage our buying schedule. I realized very quickly that they were just manually executing trades that I could easily automate myself for free.&lt;/p&gt;
+&lt;p&gt;That's why manual selling fails for almost every retail investor. You need a system that removes your brain from the equation entirely, just like standard dollar-cost averaging does on the way down.&lt;/p&gt;
 
-&lt;h2&gt;Why learning how to build a corporate Bitcoin reserve: The smb guide to automated treasury DCA is easier than you think&lt;/h2&gt;
+&lt;h2&gt;Setting up the reverse DCA: How to programmatically take profits without emotional regret&lt;/h2&gt;
 
-&lt;p&gt;If you are researching how to build a corporate bitcoin reserve: the smb guide to automated treasury dca, the single biggest hurdle isn't the technology—it's the internal policy. You need to decide how much of your monthly free cash flow you can afford to lock away for the long term.&lt;/p&gt;
+&lt;p&gt;So, how does a reverse DCA actually work in practice? Instead of buying a fixed dollar amount of Bitcoin every week, you sell a predetermined percentage of your stack at regular intervals once certain price milestones are met. The key is to write this plan down &lt;em&gt;before&lt;/em&gt; the bull market madness begins.&lt;/p&gt;
 
-&lt;p&gt;I disagree with the mainstream advice that says businesses should keep 100% of their cash in fiat. If your business has predictable monthly recurring revenue, keeping a 3-to-6 month operational runway in cash is smart, but anything beyond that is actively losing purchasing power.&lt;/p&gt;
+&lt;p&gt;To design my own strategy, I spent a lot of time playing around with the &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware DCA calculator&lt;/a&gt; I built. I wanted to model how diminishing returns in each halving cycle should affect my exit points. What I realized is that you can't just pick a single "top" price and hope to hit it. You have to scale out gradually.&lt;/p&gt;
 
-&lt;p&gt;Instead of making lump-sum purchases, which can introduce massive volatility to your balance sheet, the smartest approach is dollar-cost averaging. You can use &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;our cycle-aware calculator&lt;/a&gt; to model how different allocation strategies would have performed over past market cycles, taking into account the diminishing returns of each halving. This helps you set realistic expectations for your board or your business partners.&lt;/p&gt;
+&lt;p&gt;Here is how I structure my personal plan:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;**Define the trigger price:** This is the price level where my profit-taking phase begins. For this cycle, I've set my first trigger significantly above the previous cycle's all-time high.&lt;/li&gt;
+&lt;li&gt;**Set the interval and amount:** Once the trigger is hit, I programmatically sell a small, fixed percentage of my portfolio (say, 2% to 5%) every single week.&lt;/li&gt;
+&lt;li&gt;**Use a sliding scale:** If the price continues to skyrocket, I slightly increase the weekly sell percentage. If the price drops back below my trigger, the selling stops, and I return to accumulation mode.&lt;/li&gt;
+&lt;/ul&gt;
 
-&lt;p&gt;I also strongly disagree with the enterprise-level advice that claims small businesses need complex, expensive multi-signature custody setups like Fireblocks or Anchorage. If you are managing a reserve under a few hundred thousand dollars, you don't need to pay thousands in monthly custody fees. A dedicated corporate account on a trusted exchange combined with a secure hardware wallet is more than enough.&lt;/p&gt;
+&lt;p&gt;This systematic approach is the core of the reverse dca: how to programmatically take profits without emotional regret. It ensures that you capture some gains near the top, even if you don't nail the exact peak. More importantly, it gives you peace of mind. If the price goes up after you sell, you're happy because your remaining stack is worth more. If the price goes down, you're happy because you locked in profits at a higher price.&lt;/p&gt;
 
-&lt;h2&gt;Putting the corporate DCA plan on autopilot&lt;/h2&gt;
+&lt;h2&gt;My personal exit blueprint for the next peak&lt;/h2&gt;
 
-&lt;p&gt;To get started, you will need to open a corporate account with an exchange that supports business entities. I recommend setting up a &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance corporate account&lt;/a&gt; or, if you are operating in Europe, a &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate business account&lt;/a&gt;. These platforms allow you to complete verification using your company’s registration documents.&lt;/p&gt;
+&lt;p&gt;To execute this plan without letting my emotions get in the way, I rely on automated tools. While I built my own platform to help me &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; and manage my accumulation phase, taking profits requires a slightly different custody setup.&lt;/p&gt;
 
-&lt;p&gt;Once your business account is verified and funded with your target treasury allocation, you want to automate the buying process so you aren't manually logging in every week. This is exactly why I built my own tool to &lt;a href="https://www.btc-dca.com"&gt;automate my corporate DCA buys&lt;/a&gt;. It connects directly to your exchange via API keys, executes your scheduled purchases, and can even automate withdrawals to your secure custody.&lt;/p&gt;
+&lt;p&gt;I keep the vast majority of my stack stored safely on my offline &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;. I never keep large amounts of funds on exchanges. However, when my target zones approach, I will transfer a specific, predetermined portion of my holdings to an exchange with deep liquidity.&lt;/p&gt;
 
-&lt;p&gt;For custody, you should never leave your company's long-term reserves sitting on an exchange. We use a dedicated &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; kept in a secure physical location. The beauty of automating this is that your exchange account only holds cash or Bitcoin for a few days before it is safely swept into your offline storage.&lt;/p&gt;
+&lt;p&gt;I personally prefer to use &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; or &lt;a href="https://advanced.coinbase.com/join/RSCXAJL"&gt;Coinbase&lt;/a&gt; for this, as they handle large volume easily and allow me to set up the necessary limit orders in advance. Once the fiat cash hits my exchange account, I immediately route it back to my traditional bank account to fund specific life goals, like paying off debt or building a cash reserve.&lt;/p&gt;
 
-&lt;p&gt;Ultimately, figuring out how to build a corporate bitcoin reserve: the smb guide to automated treasury dca comes down to consistency rather than trying to time the market. By setting up a recurring, automated buy directly from your business cash flow, you can build a meaningful sovereign reserve that protects your company's purchasing power for the decade ahead.&lt;/p&gt;
+&lt;p&gt;One mistake I almost made during the last run was trying to time the exact day of the cycle peak based on on-chain metrics. I spent hours staring at charts, convinced I could outsmart the market. It was exhausting and ultimately useless. This time around, I am strictly adhering to the reverse dca: how to programmatically take profits without emotional regret. It's boring, it's predictable, and it works.&lt;/p&gt;
 
-&lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
-      <description>My business bank account was earning a pathetic 0.5% interest last year while inflation quietly ate away our working capital. That was the exact moment I started looking into **how to build a corporate bitcoin reserve: the smb guide to automated treasury dca** because I realized small businesses don...</description>
+&lt;p&gt;Obviously, I'm not your financial advisor—this is just what works for my personal risk tolerance and long-term goals. You have to decide what makes sense for your own financial situation. But if you don't have a plan for how you're going to exit, the market will eventually make that decision for you, and you probably won't like the outcome.&lt;/p&gt;</content:encoded>
+      <description>I still remember the exact moment in November 2021 when my portfolio tracker flashed a net worth that could have paid off my mortgage. I stared at the screen, heart hammering, and did absolutely nothing. I was utterly convinced Bitcoin was going to $100,000 in a matter of weeks because everyone on m...</description>
     </item>
   </channel>
 </rss>
