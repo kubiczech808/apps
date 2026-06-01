@@ -5,35 +5,211 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Mon, 01 Jun 2026 20:15:38 +0000</lastBuildDate>
+    <lastBuildDate>Mon, 01 Jun 2026 20:19:22 +0000</lastBuildDate>
     <item>
-      <title>Why your DCA frequency is eating your Bitcoin</title>
-      <link>https://btc-dca.com/blog/generated-202606012014</link>
-      <guid isPermaLink="false">generated-202606012014</guid>
-      <pubDate>Mon, 01 Jun 2026 20:15:38 +0000</pubDate>
+      <title>Is daily DCA still king after the etfs?</title>
+      <link>https://btc-dca.com/blog/generated-202605291706</link>
+      <guid isPermaLink="false">generated-202605291706</guid>
+      <pubDate>Fri, 29 May 2026 17:09:35 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>investing strategies</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why my ten dollar weekly Bitcoin buy was actually a trap</title>
+      <link>https://btc-dca.com/blog/generated-202605291728</link>
+      <guid isPermaLink="false">generated-202605291728</guid>
+      <pubDate>Fri, 29 May 2026 17:30:00 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>cold-storage</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Surviving the post-halving sideways grind</title>
+      <link>https://btc-dca.com/blog/generated-202605291743</link>
+      <guid isPermaLink="false">generated-202605291743</guid>
+      <pubDate>Fri, 29 May 2026 17:44:35 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>investing strategy</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why I buy Bitcoin at all-time highs</title>
+      <link>https://btc-dca.com/blog/generated-202605300425</link>
+      <guid isPermaLink="false">generated-202605300425</guid>
+      <pubDate>Sat, 30 May 2026 04:26:19 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>investing</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>The utxo-optimized DCA: How to accumulate Bitcoin without paying half your stack in future fees</title>
+      <link>https://btc-dca.com/blog/generated-202605310555</link>
+      <guid isPermaLink="false">generated-202605310555</guid>
+      <pubDate>Sun, 31 May 2026 05:57:28 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>utxo</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>The dynamic DCA: How to adjust buys on fear and greed</title>
+      <link>https://btc-dca.com/blog/generated-202606010425</link>
+      <guid isPermaLink="false">generated-202606010425</guid>
+      <pubDate>Mon, 01 Jun 2026 04:27:34 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>investing strategy</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why your static 100 dollar DCA is shrinking and how to inflation-proof your accumulation</title>
+      <link>https://btc-dca.com/blog/generated-202606010631</link>
+      <guid isPermaLink="false">generated-202606010631</guid>
+      <pubDate>Mon, 01 Jun 2026 06:33:01 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>inflation</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>How to build a corporate Bitcoin reserve: The smb guide to automated treasury DCA</title>
+      <link>https://btc-dca.com/blog/generated-202606010633</link>
+      <guid isPermaLink="false">generated-202606010633</guid>
+      <pubDate>Mon, 01 Jun 2026 06:35:34 +0000</pubDate>
+      <category>bitcoin treasury</category>
+      <category>corporate dca</category>
+      <category>business bitcoin</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>The reverse DCA: How to programmatically take profits without emotional regret</title>
+      <link>https://btc-dca.com/blog/generated-202606010636</link>
+      <guid isPermaLink="false">generated-202606010636</guid>
+      <pubDate>Mon, 01 Jun 2026 06:38:24 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>profit taking</category>
+      <category>exit strategy</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>How to automate a multisig Bitcoin DCA</title>
+      <link>https://btc-dca.com/blog/generated-202606010649</link>
+      <guid isPermaLink="false">generated-202606010649</guid>
+      <pubDate>Mon, 01 Jun 2026 06:51:38 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>multisig</category>
+      <category>dollar cost averaging</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why I focus on tax optimization, Bitcoin DCA, portfolio tracking</title>
+      <link>https://btc-dca.com/blog/generated-202606010652</link>
+      <guid isPermaLink="false">generated-202606010652</guid>
+      <pubDate>Mon, 01 Jun 2026 06:53:53 +0000</pubDate>
+      <category>Tax Optimization</category>
+      <category>Bitcoin DCA</category>
+      <category>Portfolio Tracking</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>The hidden cost of convenience how exchange spreads quietly devour your Bitcoin DCA and how to audit</title>
+      <link>https://btc-dca.com/blog/generated-202606011928</link>
+      <guid isPermaLink="false">generated-202606011928</guid>
+      <pubDate>Mon, 01 Jun 2026 19:31:49 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>exchanges</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>My journey through the DCA maturity model: Graduating from manual buys to sovereign infrastructure</title>
+      <link>https://btc-dca.com/blog/generated-202606011932</link>
+      <guid isPermaLink="false">generated-202606011932</guid>
+      <pubDate>Mon, 01 Jun 2026 19:34:36 +0000</pubDate>
       <category>bitcoin</category>
       <category>dca</category>
       <category>self-custody</category>
-      <content:encoded>&lt;p&gt;I spent three hours last night cleaning up my wallet addresses because I finally realized I had created a massive headache for my future self. If you want to understand &lt;strong&gt;the cost of convenience: how dca frequency and utxos impact your long-term bitcoin yield&lt;/strong&gt;, you have to look past the price of the asset and into the mechanics of the blockchain itself. I used to think that buying small amounts of Bitcoin every single day was the smartest way to stack, but I was ignoring the technical reality of how those transactions actually live on the network.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>The multi-cycle DCA: Calibrating your buy frequency to your Bitcoin time horizon</title>
+      <link>https://btc-dca.com/blog/generated-202606011937</link>
+      <guid isPermaLink="false">generated-202606011937</guid>
+      <pubDate>Mon, 01 Jun 2026 19:40:26 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>personal finance</category>
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Bypassing the checking account: How to setup a direct from payroll Bitcoin DCA</title>
+      <link>https://btc-dca.com/blog/generated-202606012018</link>
+      <guid isPermaLink="false">generated-202606012018</guid>
+      <pubDate>Mon, 01 Jun 2026 20:19:22 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>personal finance</category>
+      <content:encoded>&lt;p&gt;Last Friday, my paycheck hit my bank account, and within three hours, half of it was already gone to pay my mortgage, utility bills, and a slightly too expensive dinner. For years, I struggled with manual saving because seeing a high balance on payday gave me a false sense of wealth. That is why I became obsessed with &lt;strong&gt;bypassing the checking account how to setup a direct from payroll bitcoin dca&lt;/strong&gt; as the ultimate way to build long-term wealth before my own bad spending habits could get in the way.&lt;/p&gt;
 
-&lt;p&gt;When you buy small amounts of Bitcoin, you are creating what we call unspent transaction outputs, or UTXOs. If you buy a tiny bit of Bitcoin every day and withdraw it to your hardware wallet frequently, you end up with hundreds of tiny "dust" inputs. Years from now, when you actually want to move that Bitcoin, you’ll find that the transaction fee is calculated based on the size of the data—not the value of the Bitcoin. If you have 500 tiny inputs, your transaction size will be huge, and you could end up paying a massive percentage of your stack just to move it. That is the hidden reality of the cost of convenience: how dca frequency and utxos impact your long-term bitcoin yield, and it’s a trap most beginners fall into.&lt;/p&gt;
+&lt;p&gt;So here's the thing: if the money never touches your main checking account, you never have the chance to spend it on things you don't need. It is the classic "pay yourself first" mentality, but automated for the digital age.&lt;/p&gt;
 
-&lt;h2&gt;Balancing frequency and network fees&lt;/h2&gt;
+&lt;p&gt;Over the last couple of years, I have tried various ways to streamline my stacking. I used to manually transfer money to an exchange every Monday, login, place a market order, and then transfer the coins to my wallet. It was tedious, and honestly, I skipped a few weeks when the market was crashing because I let fear get the best of me. That was a mistake. Now, I want zero friction and zero emotion involved in my savings.&lt;/p&gt;
 
-&lt;p&gt;I almost made the mistake of setting my automation to buy every six hours back when I first started. It felt great to see my balance tick up constantly, but I didn't think about the consolidation costs. If you are serious about long-term holding, you need to find a middle ground. I eventually moved to a weekly schedule and, more importantly, I adjusted my withdrawal threshold.&lt;/p&gt;
+&lt;h2&gt;Why I wanted to bypass my bank entirely&lt;/h2&gt;
 
-&lt;p&gt;Instead of withdrawing every single tiny buy, I let the Bitcoin sit on the exchange for a bit longer until it reaches a meaningful amount. If you are looking for a way to model how these fees might affect your strategy, I’d suggest playing around with &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; to see how different timeframes change your accumulation math. It really helped me visualize that you don't need to buy every hour to get the benefits of dollar cost averaging.&lt;/p&gt;
+&lt;p&gt;Every time my salary landed in my traditional bank account, it felt like a countdown timer started. Subscriptions, bills, and impulse buys immediately started chipping away at it. Even if I had the best intentions to buy Bitcoin at the end of the month, there was rarely enough left over to make a meaningful dent.&lt;/p&gt;
 
-&lt;p&gt;For those who want to automate this without getting buried in fees, I built a tool to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; that allows you to set specific withdrawal thresholds. This way, you can keep your UTXO count low while still benefiting from the strategy. I personally use &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; for my own buys because the API integration is solid, but the key isn't the exchange—it’s the discipline of keeping your UTXOs clean.&lt;/p&gt;
+&lt;p&gt;Most traditional finance advice tells you to set up a recurring transfer from your checking account to a savings account. But let's be honest, traditional savings accounts are a melting ice cube. I wanted my savings in hard money.&lt;/p&gt;
 
-&lt;h2&gt;Rethinking the cost of convenience: How DCA frequency and utxos impact your long-term Bitcoin yield&lt;/h2&gt;
+&lt;p&gt;By routing a portion of my income directly from my employer to my investment setup, I treat my Bitcoin allocation exactly like a retirement contribution. It becomes non-negotiable. I do not have to think about it, log into my bank, or make a conscious decision to save. It just happens.&lt;/p&gt;
 
-&lt;p&gt;Most people will tell you that the more often you buy, the better, because it smooths out the volatility. While that’s mathematically true for the price, it ignores the cost of convenience: how dca frequency and utxos impact your long-term bitcoin yield. If you treat your Bitcoin like a savings account that you never plan to move, maybe it doesn't matter. But if you ever want to spend it or move it to a new cold storage setup, you’ll regret having thousands of tiny inputs.&lt;/p&gt;
+&lt;p&gt;To figure out how much I could actually afford to lock away long-term without hurting my day-to-day life, I spent some time using a &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware calculator to model my savings&lt;/a&gt;. It helped me realize that even a modest 5% of my paycheck, consistently stashed away over a multi-year horizon, could build a serious foundation.&lt;/p&gt;
 
-&lt;p&gt;I think the mainstream advice to "stack every day" is a bit short-sighted. It encourages a behavior that makes the network more congested and makes your personal wallet management a nightmare. I’ve shifted to a weekly buy and a monthly withdrawal. It’s enough to keep my average entry price stable, but it keeps my UTXO count manageable.&lt;/p&gt;
+&lt;h2&gt;Bypassing the checking account how to setup a direct from payroll Bitcoin DCA in practice&lt;/h2&gt;
 
-&lt;p&gt;If you are just getting started, don't feel pressured to over-complicate things. You don't need to be a developer to manage your keys properly. If you do go the self-custody route—which I highly recommend—make sure you grab a reliable device. I still swear by my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor&lt;/a&gt; for keeping my keys offline. Just remember, I’m not a financial advisor. This is just how I’ve learned to manage my own stack after making the mistake of creating too many tiny, expensive-to-move transactions. Do your own research, and keep your UTXO management in mind before you set your automation to "buy every minute." It’s your money, and you don’t want to hand it over to the miners in transaction fees when you finally decide to cash out or move your holdings.&lt;/p&gt;</content:encoded>
-      <description>I spent three hours last night cleaning up my wallet addresses because I finally realized I had created a massive headache for my future self. If you want to understand **the cost of convenience: how dca frequency and utxos impact your long-term bitcoin yield**, you have to look past the price of th...</description>
+&lt;p&gt;To get this working, you need to connect three distinct pieces: your employer's payroll system, a fiat gateway on a reliable exchange, and an automation tool to execute the buys.&lt;/p&gt;
+
+&lt;p&gt;First, you need to check if your employer uses a modern payroll portal like ADP, Gusto, or Workday. Most of these platforms allow you to split your direct deposit into multiple bank accounts. Instead of sending 100% of your salary to your primary checking account, you can allocate a flat dollar amount or a percentage (say, 5% or 10%) to a secondary account.&lt;/p&gt;
+
+&lt;p&gt;Next, you need to destination for those funds. You can set up a deposit account with an exchange that provides you with a unique routing and account number for incoming bank transfers. For example, you can set up USD direct deposits to &lt;a href="https://advanced.coinbase.com/join/RSCXAJL"&gt;your Coinbase account&lt;/a&gt; or use SEPA transfers to &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;your Binance account&lt;/a&gt; if you are in Europe.&lt;/p&gt;
+
+&lt;p&gt;Once your payroll system is configured to send a portion of your check to your exchange account on payday, you need a way to buy Bitcoin automatically as soon as the cash lands. This is exactly why I built &lt;a href="https://www.btc-dca.com"&gt;the free tool I use to automate buys&lt;/a&gt;. It connects directly to your exchange via API keys, monitors your balance, and executes your purchases on a schedule that matches your pay cycle.&lt;/p&gt;
+
+&lt;p&gt;If you are figuring out bypassing the checking account how to setup a direct from payroll bitcoin dca, the easiest way is to set your payroll split to land on a Friday, and schedule your automated tool to buy the Bitcoin early Saturday morning once the deposit has cleared.&lt;/p&gt;
+
+&lt;h2&gt;Keeping your automated stack safe&lt;/h2&gt;
+
+&lt;p&gt;One of the biggest mistakes I see people make when they automate their savings is leaving their funds on the exchange. I almost made this mistake myself during my first year of serious stacking. I had a decent amount of coins sitting on an exchange because I was too lazy to manually withdraw them every week.&lt;/p&gt;
+
+&lt;p&gt;Leaving your coins on an exchange means you do not actually own them. If the exchange goes down, your savings go down with it.&lt;/p&gt;
+
+&lt;p&gt;To solve this, my automated setup does not just buy the Bitcoin; it also schedules automatic withdrawals directly to my own custody. I highly recommend using a dedicated hardware wallet for this. Personally, I prefer to &lt;a href="https://bit.ly/buy-trezor-t"&gt;store my coins on a Trezor&lt;/a&gt; because it keeps my private keys completely offline and away from internet-facing vulnerabilities.&lt;/p&gt;
+
+&lt;p&gt;Obviously, I am not your financial advisor—do your own research and make sure you are comfortable managing your own private keys before you start sending your hard-earned salary directly into self-custody.&lt;/p&gt;
+
+&lt;p&gt;Setting up this pipeline takes about an hour of upfront effort, but once it is running, it is incredibly liberating. You stop watching the daily price charts, you stop worrying about whether it is a good time to buy, and you quietly accumulate real wealth in the background while you get on with living your life.&lt;/p&gt;
+
+&lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
+      <description>Last Friday, my paycheck hit my bank account, and within three hours, half of it was already gone to pay my mortgage, utility bills, and a slightly too expensive dinner. For years, I struggled with manual saving because seeing a high balance on payday gave me a false sense of wealth. That is why I b...</description>
     </item>
   </channel>
 </rss>
