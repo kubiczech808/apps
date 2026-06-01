@@ -71,6 +71,41 @@ jobs:
         run: |
           bash /home/jakub/scripts/agent-m-bot.sh 2>&1 | tee /tmp/deploy.log
 
+      - name: Run pipeline test (draft)
+        id: test_pipeline
+        if: hashFiles('.github/agent-m-test-trigger.txt') != ''
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          cd /home/jakub/apps/medium-poster
+          source .venv/bin/activate
+          sudo systemctl stop agent-m-bot 2>/dev/null || true
+          sleep 3
+          python -u -c "
+          import asyncio, logging
+          logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+          from agent_m.pipeline import run_pipeline
+          async def main():
+              result = await run_pipeline(mode='draft')
+              print()
+              print('=== PIPELINE TEST RESULT ===')
+              print(f'Title: {result.article.title}')
+              print(f'Published to: {\", \".join(result.published_to) or \"none\"}')
+              for name, url in result.platform_urls.items():
+                  print(f'{name}: {url}')
+              if result.image_url:
+                  print(f'Cover image: {result.image_url}')
+              if result.image_bytes:
+                  print(f'Image size: {len(result.image_bytes)} bytes')
+              if result.platform_errors:
+                  print('Errors:')
+                  for e in result.platform_errors:
+                      print(f'  - {e}')
+              print('=== END ===')
+          asyncio.run(main())
+          " 2>&1 | tee /tmp/agent-m-test.log
+          sudo systemctl start agent-m-bot
+
       - name: Diagnostics
         id: diag
         if: always()
@@ -121,7 +156,10 @@ jobs:
             let diag = '';
             try { diag = fs.readFileSync('/tmp/diag.log', 'utf8'); } catch(e) {}
             const tail = log.split('\n').slice(-30).join('\n').substring(0,2000);
-            const body = `**Deploy ${new Date().toISOString()} | outcome: ${{ steps.restart.outcome }}**\n\nLog:\n\`\`\`\n${tail}\n\`\`\`\n\nDiagnostics:\n\`\`\`\n${diag.substring(0,6000)}\n\`\`\``;
+            let testLog = '';
+            try { testLog = fs.readFileSync('/tmp/agent-m-test.log', 'utf8'); } catch(e) {}
+            const testTail = testLog ? `\n\nPipeline test:\n\`\`\`\n${testLog.split('\n').slice(-50).join('\n').substring(0,4000)}\n\`\`\`` : '';
+            const body = `**Deploy ${new Date().toISOString()} | outcome: ${{ steps.restart.outcome }} | test: ${{ steps.test_pipeline.outcome || 'skipped' }}**\n\nLog:\n\`\`\`\n${tail}\n\`\`\`${testTail}\n\nDiagnostics:\n\`\`\`\n${diag.substring(0,4000)}\n\`\`\``;
             const issues = await github.rest.issues.listForRepo({owner:context.repo.owner,repo:context.repo.repo,labels:['agent-m-debug'],state:'open'});
             if (issues.data.length > 0) {
               await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:issues.data[0].number,body});
