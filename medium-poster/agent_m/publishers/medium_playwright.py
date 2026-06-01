@@ -173,15 +173,19 @@ class MediumPlaywrightPublisher:
             log.info("Medium: draft saved")
             return page.url
 
-        publish_btn = page.locator('button:has-text("Publish")').first
-        if not await publish_btn.is_visible(timeout=10000):
-            await self._safe_screenshot(page, "medium_no_publish.png")
+        # Open the publish dialog (top-right "Publish" button)
+        if not await self._click_initial_publish(page):
+            await self._dump_page_diagnostics(page, "no_publish_button")
             raise RuntimeError("Medium: publish button not visible")
-
-        await publish_btn.click()
         await self._human_delay(3, 5)
 
-        tag_input = page.locator('input[placeholder*="tag" i]').first
+        # Wait for the publish settings dialog to render
+        await self._wait_for_publish_dialog(page)
+
+        # Add topics/tags
+        tag_input = page.locator('input[placeholder*="tag" i]').or_(
+            page.locator('input[placeholder*="topic" i]')
+        ).first
         for tag in tags[:5]:
             try:
                 if await tag_input.is_visible(timeout=3000):
@@ -191,19 +195,90 @@ class MediumPlaywrightPublisher:
             except Exception:
                 break
 
-        final_publish = page.locator('button:has-text("Publish now")').or_(
-            page.locator('button:has-text("Publish")').last
-        )
-        if await final_publish.is_visible(timeout=10000):
-            await final_publish.click()
-            await self._human_delay(3, 5)
-        else:
-            await self._safe_screenshot(page, "medium_no_publish_now.png")
+        # Click the final "Publish now" button (robust, multi-strategy)
+        if not await self._click_final_publish(page):
+            await self._dump_page_diagnostics(page, "no_publish_now")
             raise RuntimeError("Medium: final publish button not visible")
+        await self._human_delay(3, 5)
 
         published_url = await self._wait_for_published_url(page)
         log.info("Medium: published at %s", published_url)
         return published_url
+
+    async def _click_initial_publish(self, page) -> bool:
+        """Click the top-right Publish button that opens the publish dialog."""
+        selectors = [
+            'button[data-action="show-prepublish"]',
+            'button[data-testid="publishButton"]',
+            'button:has-text("Publish")',
+            '[role="button"]:has-text("Publish")',
+        ]
+        for sel in selectors:
+            try:
+                loc = page.locator(sel).first
+                if await loc.is_visible(timeout=5000):
+                    await loc.click()
+                    log.info("Medium: clicked initial publish via %s", sel)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _wait_for_publish_dialog(self, page) -> None:
+        """Wait until the prepublish dialog (with tags + final publish) appears."""
+        for _ in range(20):
+            found = await page.evaluate("""() => {
+                const btns = Array.from(document.querySelectorAll('button'));
+                return btns.some(b => {
+                    const t = (b.textContent || '').trim().toLowerCase();
+                    return (t === 'publish now' || t === 'publish' || t.includes('publish now'))
+                           && b.offsetParent !== null;
+                });
+            }""")
+            if found:
+                log.info("Medium: publish dialog ready")
+                await self._human_delay(0.5, 1)
+                return
+            await asyncio.sleep(0.5)
+        log.warning("Medium: publish dialog wait timed out, continuing anyway")
+
+    async def _click_final_publish(self, page) -> bool:
+        """Click the final 'Publish now' confirmation button using several strategies."""
+        # Strategy 1: explicit Playwright selectors
+        selectors = [
+            'button[data-testid="publishConfirmButton"]',
+            'button[data-action="publish"]',
+            'button:has-text("Publish now")',
+        ]
+        for sel in selectors:
+            try:
+                loc = page.locator(sel).first
+                if await loc.is_visible(timeout=4000):
+                    await loc.scroll_into_view_if_needed(timeout=3000)
+                    await loc.click()
+                    log.info("Medium: clicked final publish via %s", sel)
+                    return True
+            except Exception:
+                continue
+
+        # Strategy 2: JS scan for a visible button whose text is exactly "Publish now"
+        clicked = await page.evaluate("""() => {
+            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+            const exact = btns.find(b =>
+                (b.textContent || '').trim().toLowerCase() === 'publish now'
+                && b.offsetParent !== null);
+            if (exact) { exact.click(); return 'exact'; }
+            const partial = btns.find(b =>
+                (b.textContent || '').trim().toLowerCase().includes('publish now')
+                && b.offsetParent !== null);
+            if (partial) { partial.click(); return 'partial'; }
+            return '';
+        }""")
+        if clicked:
+            log.info("Medium: clicked final publish via JS (%s)", clicked)
+            return True
+
+        return False
 
     async def _upload_cover_image(self, page, image_bytes: bytes) -> None:
         tmp_path = None
