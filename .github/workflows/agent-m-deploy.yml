@@ -84,6 +84,8 @@ jobs:
           python -u -c "
           import asyncio, logging
           logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+          logging.getLogger('httpx').setLevel(logging.WARNING)
+          logging.getLogger('httpcore').setLevel(logging.WARNING)
           from agent_m.pipeline import run_pipeline
           async def main():
               result = await run_pipeline(mode='draft')

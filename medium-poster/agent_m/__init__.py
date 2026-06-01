@@ -6,9 +6,10 @@ __version__ = "0.1.0"
 
 class _SecretFilter(logging.Filter):
     _patterns = [
-        re.compile(r"(key=)[A-Za-z0-9_-]{20,}"),
-        re.compile(r"(bot)\d{8,}:[A-Za-z0-9_-]{30,}"),
-        re.compile(r"(token=)[A-Za-z0-9_-]{20,}"),
+        (re.compile(r"(key=)[A-Za-z0-9_-]{20,}"), r"\1***"),
+        (re.compile(r"(bot)\d{8,}:[A-Za-z0-9_-]{30,}"), r"\1***:***"),
+        (re.compile(r"(token=)[A-Za-z0-9_-]{20,}"), r"\1***"),
+        (re.compile(r"AIzaSy[A-Za-z0-9_-]{30,}"), "***"),
     ]
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -29,8 +30,8 @@ class _SecretFilter(logging.Filter):
     def _mask(self, v):
         if not isinstance(v, str):
             return v
-        for p in self._patterns:
-            v = p.sub(r"\1***", v)
+        for pattern, repl in self._patterns:
+            v = pattern.sub(repl, v)
         return v
 
 
