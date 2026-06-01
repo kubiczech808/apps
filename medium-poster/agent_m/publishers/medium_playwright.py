@@ -178,14 +178,12 @@ class MediumPlaywrightPublisher:
         # dialog never opens.
         await self._wait_for_save_complete(page)
 
-        # Open the publish dialog (top-right "Publish" button)
+        # Open the prepublish dialog. _click_initial_publish escalates click
+        # methods and waits for the dialog to actually render.
         if not await self._click_initial_publish(page):
-            await self._dump_page_diagnostics(page, "no_publish_button")
-            raise RuntimeError("Medium: publish button not visible")
-        await self._human_delay(3, 5)
-
-        # Wait for the publish settings dialog to render
-        await self._wait_for_publish_dialog(page)
+            await self._dump_page_diagnostics(page, "no_publish_dialog")
+            raise RuntimeError("Medium: prepublish dialog did not open")
+        await self._human_delay(1, 2)
 
         # Add topics/tags
         tag_input = page.locator('input[placeholder*="tag" i]').or_(
@@ -230,33 +228,57 @@ class MediumPlaywrightPublisher:
         log.warning("Medium: auto-save still in progress after %ds, continuing", timeout_s)
 
     async def _click_initial_publish(self, page) -> bool:
-        """Click the top-right Publish button that opens the publish dialog."""
-        selectors = [
-            'button[data-action="show-prepublish"]',
-            'button[data-testid="publishButton"]',
-            'button[aria-label*="Publish" i]',
-            'button:has-text("Publish")',
-            '[role="button"]:has-text("Publish")',
-        ]
-        for sel in selectors:
+        """Click the top-right Publish button that opens the prepublish dialog.
+
+        Medium is a React SPA; a plain Playwright click sometimes doesn't
+        trigger the handler. We click, then verify the dialog actually opened,
+        escalating through real-click → JS click → force click.
+        """
+        sel = 'button[data-action="show-prepublish"]'
+        loc = page.locator(sel).first
+        try:
+            if not await loc.is_visible(timeout=5000):
+                # Fall back to looser selectors if the data-action one is gone
+                for alt in ['button[data-testid="publishButton"]',
+                            'button[aria-label*="Publish" i]',
+                            'button:has-text("Publish")']:
+                    loc = page.locator(alt).first
+                    if await loc.is_visible(timeout=3000):
+                        sel = alt
+                        break
+                else:
+                    return False
+        except Exception:
+            return False
+
+        # Try several click methods, verifying the dialog opens after each.
+        for method in ("real", "js", "force"):
             try:
-                loc = page.locator(sel).first
-                if await loc.is_visible(timeout=5000):
-                    await loc.click()
-                    log.info("Medium: clicked initial publish via %s", sel)
-                    return True
-            except Exception:
+                if method == "real":
+                    await loc.click(timeout=5000)
+                elif method == "js":
+                    await loc.evaluate("el => el.click()")
+                else:
+                    await loc.click(force=True, timeout=5000)
+                log.info("Medium: clicked initial publish via %s (%s)", sel, method)
+            except Exception as e:
+                log.info("Medium: initial publish %s click failed: %s", method, e)
                 continue
+
+            if await self._wait_for_publish_dialog(page, timeout_s=12):
+                return True
+            log.info("Medium: dialog didn't open after %s click, escalating", method)
+
         return False
 
-    async def _wait_for_publish_dialog(self, page) -> bool:
+    async def _wait_for_publish_dialog(self, page, timeout_s: int = 20) -> bool:
         """Wait until the prepublish dialog (with tags + 'Publish now') appears.
 
         Looks specifically for the 'Publish now' button or the topics/tags
         input — NOT a generic 'Publish' button, which stays in the DOM and
         would cause a false positive while the dialog is still rendering.
         """
-        for i in range(40):
+        for i in range(timeout_s * 2):
             found = await page.evaluate("""() => {
                 const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
                 const hasPublishNow = btns.some(b => {
@@ -272,7 +294,6 @@ class MediumPlaywrightPublisher:
                 await self._human_delay(0.8, 1.5)
                 return True
             await asyncio.sleep(0.5)
-        log.warning("Medium: publish dialog wait timed out after 20s")
         return False
 
     async def _click_final_publish(self, page) -> bool:
