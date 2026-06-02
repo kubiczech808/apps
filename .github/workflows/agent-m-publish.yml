@@ -42,12 +42,6 @@ jobs:
         working-directory: medium-poster
         run: playwright install chrome --with-deps
 
-      - name: Restore Hashnode cookies
-        working-directory: medium-poster
-        run: |
-          mkdir -p data
-          printf '%s' "${{ secrets.HASHNODE_COOKIES }}" | base64 -d > data/hashnode_cookies.json 2>/dev/null || true
-
       - name: Restore Medium cookies
         working-directory: medium-poster
         run: |
@@ -58,7 +52,7 @@ jobs:
         working-directory: medium-poster
         run: |
           echo "=== Cookie diagnostics ==="
-          for f in data/hashnode_cookies.json data/medium_cookies.json; do
+          for f in data/medium_cookies.json; do
             if [ -f "$f" ]; then
               SIZE=$(wc -c < "$f")
               COUNT=$(python3 -c "import json; print(len(json.load(open('$f'))))" 2>/dev/null || echo "INVALID")
@@ -77,9 +71,6 @@ jobs:
             "TELEGRAM_ADMIN_CHAT_ID=${{ secrets.M_TELEGRAM_CHAT_ID }}" \
             "GITHUB_PAT=${{ secrets.PAT_GITHUB_MEDIUM }}" \
             "DEVTO_API_KEY=${{ secrets.DEVTO_API_KEY }}" \
-            "HASHNODE_TOKEN=" \
-            "HASHNODE_PUBLICATION_ID=" \
-            "HASHNODE_PLAYWRIGHT=false" \
             "MEDIUM_PLAYWRIGHT=false" \
             "MEDIUM_TOKEN=${{ secrets.MEDIUM_TOKEN }}" \
             "IMGUR_CLIENT_ID=" \

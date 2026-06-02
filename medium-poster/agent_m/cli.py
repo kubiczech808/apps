@@ -133,7 +133,7 @@ def _import_medium_cookies() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Agent M — one-shot publish")
-    parser.add_argument("mode", choices=["post", "draft", "preview", "update-links", "medium-login", "medium-import-cookies", "hashnode-login"], default="draft", nargs="?")
+    parser.add_argument("mode", choices=["post", "draft", "preview", "update-links", "medium-login", "medium-import-cookies"], default="draft", nargs="?")
     parser.add_argument("--slug", help="Specific topic slug from content plan")
     args = parser.parse_args()
 
@@ -152,9 +152,6 @@ def main() -> None:
         asyncio.run(MediumPlaywrightPublisher().login())
     elif args.mode == "medium-import-cookies":
         _import_medium_cookies()
-    elif args.mode == "hashnode-login":
-        from agent_m.publishers.hashnode_playwright import HashnodePlaywrightPublisher
-        asyncio.run(HashnodePlaywrightPublisher().login())
     else:
         asyncio.run(run(mode=args.mode, slug=args.slug))
 

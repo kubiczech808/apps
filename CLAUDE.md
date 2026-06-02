@@ -8,9 +8,9 @@
 ## Architecture
 - Gemini 2.5 Flash for text generation
 - Pollinations API (model: klein) for header images (random seed + style rotation)
-- Publishing: GitHub Pages (RSS), Dev.to, Hashnode (Playwright), Medium (Playwright)
+- Publishing: GitHub Pages (RSS), Dev.to, Medium (Playwright)
 - Telegram bot for notifications (link + image only, no article body)
-- Telegram bot commands: /post, /draft, /preview, /feedback, /feedback_clear, /history, /topics, /status, /medium_login, /hashnode_login
+- Telegram bot commands: /post, /draft, /preview, /feedback, /feedback_clear, /history, /topics, /status, /medium_login
 - GitHub Actions workflow: daily at 15:00 UTC (17:00 CEST)
 - Content plan with pillar rotation for topic diversity
 - Feedback system: persistent standing instructions in `data/feedback.json`

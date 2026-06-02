@@ -83,7 +83,6 @@ _BOT_COMMANDS = [
     BotCommand("feedback", "Přidat/zobrazit trvalé instrukce"),
     BotCommand("feedback_clear", "Smazat všechny instrukce"),
     BotCommand("medium_login", "Nastavit Medium session (cookies)"),
-    BotCommand("hashnode_login", "Nastavit Hashnode session"),
     BotCommand("history", "Poslední publikace"),
     BotCommand("topics", "Stav obsahového plánu"),
     BotCommand("status", "Využití tokenů a rozvrh"),
@@ -130,7 +129,6 @@ def build_app():
     app.add_handler(CommandHandler("feedback", handlers.feedback_cmd))
     app.add_handler(CommandHandler("feedback_clear", handlers.feedback_clear_cmd))
     app.add_handler(CommandHandler("medium_login", handlers.medium_login_cmd))
-    app.add_handler(CommandHandler("hashnode_login", handlers.hashnode_login_cmd))
     app.add_handler(MessageHandler(
         filters.Document.ALL & filters.ChatType.PRIVATE,
         handlers.medium_cookies_document_cmd,

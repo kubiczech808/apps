@@ -40,11 +40,8 @@ async def run_pipeline(mode: str = "public", slug: str | None = None) -> Pipelin
 
 async def _run(mode: str, slug: str | None = None) -> PipelineResult:
     log.info(
-        "Config: hashnode_playwright=%s, medium_playwright=%s, "
-        "hashnode_token=%s, medium_token=%s, devto_api_key=%s",
-        config.hashnode_playwright,
+        "Config: medium_playwright=%s, medium_token=%s, devto_api_key=%s",
         config.medium_playwright,
-        bool(config.hashnode_token),
         bool(config.medium_token),
         bool(config.devto_api_key),
     )
@@ -160,27 +157,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         else:
             platform_errors.append("Dev.to: DEVTO_API_KEY missing")
 
-        # 3. Hashnode
-        if config.hashnode_playwright:
-            hn_url, hn_error = await _publish_hashnode_playwright(article, rss_url, image_url)
-            if hn_url:
-                published_to.append("Hashnode")
-                platform_urls["Hashnode"] = hn_url
-                post_url = hn_url
-            elif hn_error:
-                platform_errors.append(f"Hashnode: {hn_error}")
-        elif config.hashnode_token and config.hashnode_publication_id:
-            hn_url, hn_error = await _publish_hashnode(article, rss_url, image_url)
-            if hn_url:
-                published_to.append("Hashnode")
-                platform_urls["Hashnode"] = hn_url
-                post_url = hn_url
-            elif hn_error:
-                platform_errors.append(f"Hashnode: {hn_error}")
-        else:
-            platform_errors.append("Hashnode: not configured (set HASHNODE_PLAYWRIGHT=true or API token)")
-
-        # 4. Medium (Playwright)
+        # 3. Medium (Playwright)
         if config.medium_playwright:
             medium_url, medium_error = await _publish_medium_playwright(
                 article, not is_draft, image_url, image_bytes
@@ -192,7 +169,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
             elif medium_error:
                 platform_errors.append(f"Medium: {medium_error}")
 
-        # 5. Medium (API — integration token)
+        # 4. Medium (API — integration token)
         if config.medium_token and not config.medium_playwright:
             medium_url = await _publish_medium_api(article, image_url, rss_url, is_draft)
             if medium_url:
@@ -303,47 +280,6 @@ async def _publish_devto(
             await pub.close()
     except Exception as exc:
         log.warning("Dev.to publish failed: %s", exc)
-        return None, str(exc)
-
-
-async def _publish_hashnode_playwright(
-    article: Article, canonical_url: str | None, cover_image: str | None = None,
-) -> tuple[str | None, str | None]:
-    try:
-        from agent_m.publishers.hashnode_playwright import HashnodePlaywrightPublisher
-        pub = HashnodePlaywrightPublisher()
-        result = await pub.publish(
-            title=article.title,
-            body_markdown=article.body,
-            tags=article.tags,
-            canonical_url=canonical_url,
-            cover_image_url=cover_image,
-        )
-        return result, None
-    except Exception as exc:
-        log.warning("Hashnode Playwright publish failed: %s", exc)
-        return None, str(exc)
-
-
-async def _publish_hashnode(
-    article: Article, canonical_url: str | None, cover_image: str | None = None,
-) -> tuple[str | None, str | None]:
-    try:
-        from agent_m.publishers.hashnode import HashnodePublisher
-        pub = HashnodePublisher()
-        try:
-            result = await pub.publish(
-                title=article.title,
-                body_markdown=article.body,
-                tags=article.tags,
-                canonical_url=canonical_url,
-                cover_image_url=cover_image,
-            )
-            return result.get("url"), None
-        finally:
-            await pub.close()
-    except Exception as exc:
-        log.warning("Hashnode publish failed: %s", exc)
         return None, str(exc)
 
 

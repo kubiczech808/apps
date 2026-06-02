@@ -36,8 +36,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     platforms = []
     if config.devto_api_key:
         platforms.append("Dev.to")
-    if config.hashnode_token:
-        platforms.append("Hashnode")
     if config.medium_playwright:
         platforms.append("Medium (Playwright)")
     platforms.append("GitHub Pages (RSS)")
@@ -53,7 +51,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/feedback — show all active feedback\n"
         "/feedback_clear — remove all feedback\n"
         "/medium_login — jak nastavit Medium session (+ přijímám JSON soubor z Cookie-Editor)\n"
-        "/hashnode_login — save Hashnode session\n"
         "/history — recent publications\n"
         "/topics — content plan status\n"
         "/status — token usage & schedule\n"
@@ -283,24 +280,6 @@ async def medium_cookies_document_cmd(update: Update, context: ContextTypes.DEFA
     await msg.reply_text(
         f"✓ Uloženo {len(pw_cookies)} Medium cookies.\n"
         "Nyní zkus /draft pro otestování publikace na Medium."
-    )
-
-
-@admin_only
-async def hashnode_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = update.message
-    if not msg:
-        return
-    await msg.reply_text(
-        "Hashnode login vyžaduje interaktivní prohlížeč.\n\n"
-        "Spusť na RPi přes SSH:\n"
-        "```\n"
-        "cd /home/jakub/apps/medium-poster\n"
-        "source .venv/bin/activate\n"
-        "python -m agent_m.cli hashnode-login\n"
-        "```\n\n"
-        "Cookies se uloží automaticky do data/hashnode_cookies.json.",
-        parse_mode="Markdown",
     )
 
 

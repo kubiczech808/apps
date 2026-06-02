@@ -6,7 +6,6 @@ Telegram bot that generates Bitcoin DCA articles via Google Gemini, creates head
 
 ```
 Gemini → Article + Image → GitHub Pages (RSS feed) → IFTTT → Medium
-                                                    ↘ (later) Hashnode API
 ```
 
 ## Setup
