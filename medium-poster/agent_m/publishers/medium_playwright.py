@@ -178,6 +178,10 @@ class MediumPlaywrightPublisher:
         # dialog never opens.
         await self._wait_for_save_complete(page)
 
+        # Extra settle time: Medium's React SPA re-renders after save completes
+        # and the button may not be wired to its click handler immediately.
+        await self._human_delay(3, 5)
+
         # Open the prepublish dialog. _click_initial_publish escalates click
         # methods and waits for the dialog to actually render.
         if not await self._click_initial_publish(page):
@@ -230,15 +234,21 @@ class MediumPlaywrightPublisher:
     async def _click_initial_publish(self, page) -> bool:
         """Click the top-right Publish button that opens the prepublish dialog.
 
-        Medium is a React SPA; a plain Playwright click sometimes doesn't
-        trigger the handler. We click, then verify the dialog actually opened,
-        escalating through real-click → JS click → force click.
+        Medium is a React SPA whose event handlers are attached via React's
+        synthetic event system.  A plain Playwright `.click()` or JS `.click()`
+        sometimes does NOT trigger the React handler — the native DOM event
+        fires but React never sees it.
+
+        We escalate through increasingly aggressive strategies:
+        1. page.mouse.click at exact bounding-box coordinates (trusted OS event)
+        2. Focus the button + keyboard Enter (bypasses click entirely)
+        3. Full native MouseEvent dispatch sequence (mousedown→mouseup→click)
+        4. Playwright .click() and JS .click() as last resorts
         """
         sel = 'button[data-action="show-prepublish"]'
         loc = page.locator(sel).first
         try:
             if not await loc.is_visible(timeout=5000):
-                # Fall back to looser selectors if the data-action one is gone
                 for alt in ['button[data-testid="publishButton"]',
                             'button[aria-label*="Publish" i]',
                             'button:has-text("Publish")']:
@@ -251,25 +261,87 @@ class MediumPlaywrightPublisher:
         except Exception:
             return False
 
-        # Try several click methods, verifying the dialog opens after each.
-        for method in ("real", "js", "force"):
+        # Pre-click: scroll into view and log button state
+        try:
+            await loc.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+        await self._human_delay(0.5, 1)
+
+        diag = await page.evaluate("""(selector) => {
+            const btn = document.querySelector(selector);
+            if (!btn) return 'not found';
+            const r = btn.getBoundingClientRect();
+            return JSON.stringify({
+                text: (btn.textContent || '').trim(),
+                disabled: btn.disabled,
+                ariaDisabled: btn.getAttribute('aria-disabled'),
+                rect: {x: r.x, y: r.y, w: r.width, h: r.height},
+                visible: btn.offsetParent !== null,
+                pointerEvents: getComputedStyle(btn).pointerEvents,
+            });
+        }""", sel)
+        log.info("Medium: publish button state before click: %s", diag)
+
+        strategies = [
+            ("mouse_coords", self._click_via_mouse_coords),
+            ("keyboard_enter", self._click_via_keyboard),
+            ("dispatch_events", self._click_via_dispatch_events),
+            ("playwright_click", self._click_via_playwright),
+            ("js_click", self._click_via_js),
+        ]
+
+        for name, fn in strategies:
             try:
-                if method == "real":
-                    await loc.click(timeout=5000)
-                elif method == "js":
-                    await loc.evaluate("el => el.click()")
-                else:
-                    await loc.click(force=True, timeout=5000)
-                log.info("Medium: clicked initial publish via %s (%s)", sel, method)
+                await fn(page, loc, sel)
+                log.info("Medium: clicked initial publish via %s", name)
             except Exception as e:
-                log.info("Medium: initial publish %s click failed: %s", method, e)
+                log.info("Medium: initial publish %s failed: %s", name, e)
                 continue
 
             if await self._wait_for_publish_dialog(page, timeout_s=12):
                 return True
-            log.info("Medium: dialog didn't open after %s click, escalating", method)
+            log.info("Medium: dialog didn't open after %s, escalating", name)
 
         return False
+
+    async def _click_via_mouse_coords(self, page, loc, sel) -> None:
+        box = await loc.bounding_box()
+        if not box:
+            raise RuntimeError("no bounding box")
+        x = box["x"] + box["width"] / 2
+        y = box["y"] + box["height"] / 2
+        await page.mouse.click(x, y)
+
+    async def _click_via_keyboard(self, page, loc, sel) -> None:
+        await loc.focus()
+        await self._human_delay(0.3, 0.5)
+        await page.keyboard.press("Enter")
+        await self._human_delay(1, 2)
+        await loc.focus()
+        await page.keyboard.press("Space")
+
+    async def _click_via_dispatch_events(self, page, loc, sel) -> None:
+        await page.evaluate("""(selector) => {
+            const btn = document.querySelector(selector);
+            if (!btn) return;
+            const opts = {bubbles: true, cancelable: true, view: window,
+                          button: 0, buttons: 1, clientX: 0, clientY: 0};
+            const r = btn.getBoundingClientRect();
+            opts.clientX = r.x + r.width / 2;
+            opts.clientY = r.y + r.height / 2;
+            btn.dispatchEvent(new PointerEvent('pointerdown', {...opts, pointerId: 1}));
+            btn.dispatchEvent(new MouseEvent('mousedown', opts));
+            btn.dispatchEvent(new PointerEvent('pointerup', {...opts, pointerId: 1}));
+            btn.dispatchEvent(new MouseEvent('mouseup', opts));
+            btn.dispatchEvent(new MouseEvent('click', opts));
+        }""", sel)
+
+    async def _click_via_playwright(self, page, loc, sel) -> None:
+        await loc.click(timeout=5000)
+
+    async def _click_via_js(self, page, loc, sel) -> None:
+        await loc.evaluate("el => el.click()")
 
     async def _wait_for_publish_dialog(self, page, timeout_s: int = 20) -> bool:
         """Wait until the prepublish dialog (with tags + 'Publish now') appears.
