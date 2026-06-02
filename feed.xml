@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Tue, 02 Jun 2026 06:11:12 +0000</lastBuildDate>
-    <item>
-      <title>Is daily DCA still king after the etfs?</title>
-      <link>https://btc-dca.com/blog/generated-202605291706</link>
-      <guid isPermaLink="false">generated-202605291706</guid>
-      <pubDate>Fri, 29 May 2026 17:09:35 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dollar cost averaging</category>
-      <category>investing strategies</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Tue, 02 Jun 2026 06:32:10 +0000</lastBuildDate>
     <item>
       <title>Why my ten dollar weekly Bitcoin buy was actually a trap</title>
       <link>https://btc-dca.com/blog/generated-202605291728</link>
@@ -230,38 +219,49 @@
       <title>Managing my Bitcoin stack with the DCA liquidity ladder</title>
       <link>https://btc-dca.com/blog/generated-202606020609</link>
       <guid isPermaLink="false">generated-202606020609</guid>
-      <pubDate>Tue, 02 Jun 2026 06:11:12 +0000</pubDate>
+      <pubDate>Tue, 02 Jun 2026 06:14:07 +0000</pubDate>
       <category>bitcoin</category>
       <category>dca</category>
       <category>personal finance</category>
-      <content:encoded>&lt;p&gt;Last Tuesday, my water heater decided to quit, costing me an unexpected $1,200 right when I had planned to increase my monthly buy. It’s exactly these moments that led me to develop &lt;strong&gt;the dca liquidity ladder: balancing bitcoin accumulation with emergency fund volatility&lt;/strong&gt; as a way to keep my sanity intact. I realized early on that if I just set a static amount to buy Bitcoin every month, a single home repair or car issue would force me to sell my stack just to cover the bill. That is the quickest way to ruin your long-term success.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why I look at the DCA asymmetry arbitrage: Leveraging Bitcoin yield to offset accumulation costs</title>
+      <link>https://btc-dca.com/blog/generated-202606020629</link>
+      <guid isPermaLink="false">generated-202606020629</guid>
+      <pubDate>Tue, 02 Jun 2026 06:32:10 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>yield</category>
+      <content:encoded>&lt;p&gt;I spent most of last Sunday staring at a spreadsheet, trying to figure out if the fees I pay on my recurring buys were actually eating my long-term gains. It’s easy to ignore a 0.1% or 0.2% fee when you’re just stacking, but over five years, those pennies add up to a significant amount of sats. That’s when I started obsessing over &lt;strong&gt;the dca asymmetry arbitrage: leveraging bitcoin yield to offset accumulation costs&lt;/strong&gt;.&lt;/p&gt;
 
-&lt;p&gt;So, I started looking at my stack differently. Instead of viewing my savings and my Bitcoin buys as two separate silos, I began treating them as a connected system. By using &lt;a href="https://btc-dca.com"&gt;the dca liquidity ladder: balancing bitcoin accumulation with emergency fund volatility&lt;/a&gt;, I essentially created a buffer that scales my purchases based on my actual cash flow rather than some arbitrary number I picked six months ago.&lt;/p&gt;
+&lt;p&gt;The premise is simple: most people just buy Bitcoin and let it sit on an exchange or move it to a cold wallet. But if you’re already committed to a long-term strategy, you might be missing out on a way to turn your stack into a self-funding machine. By finding ways to generate even a small amount of yield in a non-custodial way, you can effectively wash out the transaction costs of your recurring buys.&lt;/p&gt;
 
-&lt;h2&gt;Why I stopped using static monthly buys&lt;/h2&gt;
+&lt;h2&gt;Exploring the DCA asymmetry arbitrage: Leveraging Bitcoin yield to offset accumulation costs&lt;/h2&gt;
 
-&lt;p&gt;The mainstream advice is always "buy the same amount every month regardless of price." While that’s fine for people with perfectly predictable lives, I’ve found that reality is rarely that clean. I remember back in 2022, I was aggressively buying into a dip, only to have my hours cut at work. I panicked. I had to stop my buys entirely and ended up selling a small portion of my stack at a loss just to pay rent. That was a brutal lesson.&lt;/p&gt;
+&lt;p&gt;The concept of the dca asymmetry arbitrage: leveraging bitcoin yield to offset accumulation costs isn't about chasing high-risk DeFi yields that inevitably blow up. I’ve been burned by that before—back in 2021, I parked some funds in a lending protocol that looked "safe" until it wasn't. Lesson learned: if it sounds too good to be true, your Bitcoin is probably already gone.&lt;/p&gt;
 
-&lt;p&gt;That mistake is exactly why I built &lt;a href="https://btc-dca.com"&gt;a tool to automate my DCA buys&lt;/a&gt; in a way that respects my emergency fund. If my high-yield savings account dips below a certain threshold, I know I need to throttle back my buying intensity. Conversely, when my cash buffer is overflowing, I can afford to be more aggressive. It’s not about timing the market; it’s about timing my own financial stability.&lt;/p&gt;
+&lt;p&gt;Instead, I’m talking about using the tools available to us to keep our stack moving while keeping keys in our own hands. When I first started my journey, I didn't even know how to set up an automated system. I was manually logging into &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; every Friday, hoping I wouldn't forget. That’s why I eventually sat down and built a tool to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; so I could stop thinking about the price and start focusing on the long-term accumulation.&lt;/p&gt;
 
-&lt;p&gt;To make this work, I keep my Bitcoin on a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; so I’m never tempted to touch it during a minor inconvenience. I prefer to &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt; because the API integration is solid, allowing me to set these rules once and let the automation handle the heavy lifting.&lt;/p&gt;
+&lt;p&gt;The real power comes when you combine that automation with a yield strategy that doesn't involve giving away your private keys. I’m currently experimenting with protocols that allow for decentralized lending or liquidity provision, but I’m doing it with a tiny portion of my stack. I still keep the bulk of my coins on a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor&lt;/a&gt; because, at the end of the day, if you don't hold the keys, it isn't your Bitcoin.&lt;/p&gt;
 
-&lt;h2&gt;Scaling your strategy with the DCA liquidity ladder&lt;/h2&gt;
+&lt;h2&gt;Why stacking is more than just buying&lt;/h2&gt;
 
-&lt;p&gt;When you start implementing &lt;strong&gt;the dca liquidity ladder: balancing bitcoin accumulation with emergency fund volatility&lt;/strong&gt;, you have to be honest about your own risk tolerance. I don't think you should ever buy Bitcoin with money you might need in the next six months. That’s just gambling, not investing.&lt;/p&gt;
+&lt;p&gt;Most of the "pro" advice you read online tells you to just buy and forget. While that’s solid advice for beginners, it’s a bit lazy for those of us who want to optimize our stack. If you use a &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;dca calculator&lt;/a&gt; to look at your projections, you’ll see how much the compounding effect changes your outcome. Now, imagine if you added a 1-2% yield on top of that through careful, self-sovereign management. It isn’t going to make you a billionaire overnight, but it does change the math on your cost basis over a decade.&lt;/p&gt;
 
-&lt;p&gt;I use &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; to look at how different accumulation rates perform over time, but I always temper that with the reality of my bank balance. If your emergency fund is thin, your DCA size should be smaller. If your fund is robust, you can increase your buys. The goal is to reach a point where you never have to hit the "sell" button because life got in the way.&lt;/p&gt;
+&lt;p&gt;I actually made a mistake early on by trying to optimize for yield on too many different platforms. I ended up with dust in ten different wallets and lost more in transaction fees moving the assets around than I ever earned in interest. Now, I keep it simple. I automate, I withdraw to cold storage, and only then do I consider if a fraction of that can be put to work.&lt;/p&gt;
 
-&lt;p&gt;Some people argue that this is "market timing," but I disagree. It’s just responsible cash flow management. If you are constantly selling your Bitcoin to pay for minor emergencies, you aren’t building wealth; you’re just paying transaction fees and taxes for the privilege of being stressed out.&lt;/p&gt;
+&lt;p&gt;Obviously, I'm not your financial advisor—I'm just a guy who writes code and stacks sats. You should definitely do your own research before locking your Bitcoin into any protocol, no matter how "non-custodial" they claim to be. The space moves fast, and the risks of smart contract bugs are real.&lt;/p&gt;
 
-&lt;p&gt;Obviously, I'm not your financial advisor, and you should definitely do your own research before locking up your capital in any asset. Everyone’s situation is different, and what works for me might not work for you. Just remember that the best strategy is the one you can actually stick to for the next five or ten years without losing sleep.&lt;/p&gt;
+&lt;h2&gt;Finding the right balance&lt;/h2&gt;
 
-&lt;h2&gt;Finding balance in your accumulation&lt;/h2&gt;
+&lt;p&gt;When you look at the dca asymmetry arbitrage: leveraging bitcoin yield to offset accumulation costs, you have to remember that your time is also a currency. If you spend five hours a week managing your yield positions to earn an extra $5 of Bitcoin, you’ve actually lost money. The best strategy is one that runs in the background.&lt;/p&gt;
 
-&lt;p&gt;The beauty of using an automated system is that it removes the emotional weight from the decision. When I see the price drop, I don't have to decide if I have enough cash to buy more; my pre-set rules already know the answer. By layering my liquidity, I’ve managed to keep my stack growing even through months where my income was lower than usual.&lt;/p&gt;
+&lt;p&gt;I find that using a &lt;a href="https://www.btc-dca.com/how-to-set-up-api-key.php"&gt;guide to set up API keys&lt;/a&gt; to connect my exchange accounts to my automation tool has been the biggest game-changer. It removes the emotional component of buying. If you’re looking to get started, you don't need to overcomplicate it. Just start by automating your buys, keep your custody secure, and then look for ways to optimize once you’ve built a solid foundation.&lt;/p&gt;
 
-&lt;p&gt;I’ve found that by focusing on &lt;strong&gt;the dca liquidity ladder: balancing bitcoin accumulation with emergency fund volatility&lt;/strong&gt;, I’ve become much more patient. I’m no longer worried about the daily fluctuations because I know my "real life" is covered by my cash buffer, and my "future life" is being built through my automated, consistent buys. It’s a boring way to invest, but in my experience, boring is exactly what you want when you’re playing the long game with your savings.&lt;/p&gt;</content:encoded>
-      <description>Last Tuesday, my water heater decided to quit, costing me an unexpected $1,200 right when I had planned to increase my monthly buy. It’s exactly these moments that led me to develop **the dca liquidity ladder: balancing bitcoin accumulation with emergency fund volatility** as a way to keep my sanity...</description>
+&lt;p&gt;I’m still refining my own process. There’s something deeply satisfying about knowing my stack is growing not just through my contributions, but through the inherent properties of the network itself. It’s a marathon, not a sprint, and I’m just happy to be in the race.&lt;/p&gt;</content:encoded>
+      <description>I spent most of last Sunday staring at a spreadsheet, trying to figure out if the fees I pay on my recurring buys were actually eating my long-term gains. It’s easy to ignore a 0.1% or 0.2% fee when you’re just stacking, but over five years, those pennies add up to a significant amount of sats. That...</description>
     </item>
   </channel>
 </rss>
