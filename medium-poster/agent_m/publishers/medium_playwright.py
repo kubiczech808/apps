@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -147,6 +148,8 @@ class MediumPlaywrightPublisher:
         if image_bytes:
             await self._insert_cover_image(page, image_bytes)
 
+        await self._paste_markdown_body(page, body_markdown)
+        body_markdown = ""
         blocks = self._parse_markdown_blocks(body_markdown)
         log.info("Medium: typing %d blocks with native formatting", len(blocks))
 
@@ -443,7 +446,7 @@ class MediumPlaywrightPublisher:
             raise RuntimeError("Medium: final publish button not visible")
         await self._human_delay(3, 5)
 
-        published_url = await self._wait_for_published_url(page)
+        published_url = await self._wait_for_published_url(page, timeout_s=90)
         log.info("Medium: published at %s", published_url)
         return published_url
 
@@ -509,8 +512,7 @@ class MediumPlaywrightPublisher:
         try:
             if not await loc.is_visible(timeout=5000):
                 for alt in ['button[data-testid="publishButton"]',
-                            'button[aria-label*="Publish" i]',
-                            'button:has-text("Publish")']:
+                            'button[aria-label*="Publish" i]']:
                     loc = page.locator(alt).first
                     if await loc.is_visible(timeout=3000):
                         sel = alt
@@ -578,7 +580,7 @@ class MediumPlaywrightPublisher:
                 pass
             await self._human_delay(1, 2)
 
-            if await self._wait_for_publish_dialog(page, timeout_s=15):
+            if await self._wait_for_publish_dialog(page, timeout_s=60):
                 return True
             log.info("Medium: dialog didn't open after %s, escalating", name)
 
@@ -634,6 +636,16 @@ class MediumPlaywrightPublisher:
         """
         for i in range(timeout_s * 2):
             try:
+                if "/submission" in page.url:
+                    title = await page.title()
+                    if "service unavailable" in title.lower() or "gateway" in title.lower():
+                        log.info("Medium: submission returned %s, reloading", title)
+                        await asyncio.sleep(5)
+                        try:
+                            await page.reload(wait_until="domcontentloaded", timeout=60000)
+                        except Exception:
+                            pass
+                        continue
                 found = await page.evaluate("""() => {
                     const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
                     const hasPublishNow = btns.some(b => {
@@ -670,6 +682,7 @@ class MediumPlaywrightPublisher:
                 'button[data-action="publish"]',
                 'button[data-testid="publish-button"]',
                 'button:has-text("Publish now")',
+                'button:has-text("Publish")',
             ]
             for sel in selectors:
                 try:
@@ -685,12 +698,15 @@ class MediumPlaywrightPublisher:
             # Strategy 2: JS scan for a visible button whose text is "Publish now"
             clicked = await page.evaluate("""() => {
                 const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+                const expected = window.location.href.includes('/submission')
+                    ? ['publish now', 'publish']
+                    : ['publish now'];
                 const exact = btns.find(b =>
-                    (b.textContent || '').trim().toLowerCase() === 'publish now'
+                    expected.includes((b.textContent || '').trim().toLowerCase())
                     && b.offsetParent !== null);
                 if (exact) { exact.click(); return 'exact'; }
                 const partial = btns.find(b =>
-                    (b.textContent || '').trim().toLowerCase().includes('publish now')
+                    expected.some(t => (b.textContent || '').trim().toLowerCase().includes(t))
                     && b.offsetParent !== null);
                 if (partial) { partial.click(); return 'partial'; }
                 return '';
@@ -774,6 +790,91 @@ class MediumPlaywrightPublisher:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+
+    async def _paste_markdown_body(self, page, body_markdown: str) -> None:
+        blocks = self._parse_markdown_blocks(body_markdown)
+        body_html = self._blocks_to_html(blocks)
+        body_text = self._blocks_to_plain_text(blocks)
+        log.info("Medium: pasting %d blocks as HTML", len(blocks))
+        pasted = await page.evaluate("""({html, text}) => {
+            const target = document.activeElement
+                || document.querySelector('[contenteditable="true"]');
+            if (!target) return false;
+            const dt = new DataTransfer();
+            dt.setData('text/html', html);
+            dt.setData('text/plain', text);
+            const ev = new ClipboardEvent('paste', {
+                clipboardData: dt,
+                bubbles: true,
+                cancelable: true,
+            });
+            target.dispatchEvent(ev);
+            return true;
+        }""", {"html": body_html, "text": body_text})
+        if not pasted:
+            raise RuntimeError("Medium: body editor not focused for paste")
+        await self._human_delay(6, 9)
+
+    @classmethod
+    def _blocks_to_html(cls, blocks: list[dict]) -> str:
+        parts: list[str] = []
+        list_items: list[str] = []
+
+        def flush_list() -> None:
+            nonlocal list_items
+            if list_items:
+                parts.append("<ul>" + "".join(list_items) + "</ul>")
+                list_items = []
+
+        for block in blocks:
+            btype = block["type"]
+            if btype != "list_item":
+                flush_list()
+            if btype == "heading":
+                level = 2 if block.get("level", 2) <= 2 else 3
+                parts.append(f"<h{level}>{cls._inline_markdown_to_html(block['text'])}</h{level}>")
+            elif btype == "paragraph":
+                parts.append(f"<p>{cls._inline_markdown_to_html(block['text'])}</p>")
+            elif btype == "list_item":
+                list_items.append(f"<li>{cls._inline_markdown_to_html(block['text'])}</li>")
+            elif btype == "hr":
+                parts.append("<hr>")
+        flush_list()
+        return "\n".join(parts)
+
+    @classmethod
+    def _blocks_to_plain_text(cls, blocks: list[dict]) -> str:
+        lines: list[str] = []
+        for block in blocks:
+            text = cls._strip_inline_markdown(block.get("text", ""))
+            if block["type"] == "list_item":
+                lines.append(f"- {text}")
+            elif block["type"] == "hr":
+                lines.append("---")
+            else:
+                lines.append(text)
+        return "\n\n".join(lines)
+
+    @classmethod
+    def _inline_markdown_to_html(cls, text: str) -> str:
+        segments = cls._parse_inline_segments(text)
+        rendered: list[str] = []
+        for seg in segments:
+            escaped = html.escape(seg["text"])
+            if seg["type"] == "link":
+                href = html.escape(seg["url"], quote=True)
+                rendered.append(f'<a href="{href}">{escaped}</a>')
+            elif seg["type"] == "bold":
+                rendered.append(f"<strong>{escaped}</strong>")
+            elif seg["type"] == "italic":
+                rendered.append(f"<em>{escaped}</em>")
+            else:
+                rendered.append(escaped)
+        return "".join(rendered)
+
+    @classmethod
+    def _strip_inline_markdown(cls, text: str) -> str:
+        return "".join(seg["text"] for seg in cls._parse_inline_segments(text))
 
     # ── Native formatting helpers ───────────────────────────────────
 
@@ -926,10 +1027,22 @@ class MediumPlaywrightPublisher:
     # ── Navigation helpers ──────────────────────────────────────────
 
     async def _wait_for_published_url(self, page, timeout_s: int = 30) -> str:
-        editor_patterns = ("new-story", "/edit", "/p/")
         for _ in range(timeout_s * 2):
             url = page.url
-            if url and not any(p in url for p in editor_patterns) and "medium.com" in url:
+            title = ""
+            try:
+                title = await page.title()
+            except Exception:
+                pass
+            if "/submission" in url:
+                if "service unavailable" in title.lower() or "gateway" in title.lower():
+                    try:
+                        await page.reload(wait_until="domcontentloaded", timeout=60000)
+                    except Exception:
+                        pass
+                await asyncio.sleep(1)
+                continue
+            if url and "medium.com" in url and "new-story" not in url and "/edit" not in url:
                 return url
             await asyncio.sleep(0.5)
 
