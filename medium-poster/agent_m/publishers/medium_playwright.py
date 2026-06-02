@@ -180,7 +180,9 @@ class MediumPlaywrightPublisher:
 
         # Extra settle time: Medium's React SPA re-renders after save completes
         # and the button may not be wired to its click handler immediately.
-        await self._human_delay(3, 5)
+        # Medium can also queue additional background saves, so we give it
+        # generous time to fully stabilize.
+        await self._human_delay(8, 12)
 
         # Open the prepublish dialog. _click_initial_publish escalates click
         # methods and waits for the dialog to actually render.
@@ -212,24 +214,48 @@ class MediumPlaywrightPublisher:
         log.info("Medium: published at %s", published_url)
         return published_url
 
-    async def _wait_for_save_complete(self, page, timeout_s: int = 45) -> None:
-        """Wait until Medium's auto-save finishes.
+    async def _wait_for_save_complete(self, page, timeout_s: int = 60, stable_s: int = 5) -> None:
+        """Wait until Medium's auto-save truly finishes.
 
-        The top-right button shows 'Saving...' while a save is in flight and
-        switches to 'Publish'/'Saved' once done. Clicking it mid-save does
-        nothing, so the prepublish dialog never opens.
+        The button shows 'Saving...' while a save is in flight and switches
+        to 'Publish' once done. But Medium can flip back to 'Saving...' if
+        it queues another save. We require the button to be in a stable
+        ready state (text != 'saving' AND not disabled) for stable_s
+        consecutive seconds before returning.
         """
+        stable_count = 0
         for i in range(timeout_s):
-            text = await page.evaluate("""() => {
-                const btn = document.querySelector('button[data-action="show-prepublish"]');
-                return btn ? (btn.textContent || '').trim().toLowerCase() : 'none';
-            }""")
-            if text != "none" and "saving" not in text:
-                log.info("Medium: auto-save complete after %ds (button: '%s')", i, text)
-                await self._human_delay(0.5, 1)
-                return
+            try:
+                state = await page.evaluate("""() => {
+                    const btn = document.querySelector('button[data-action="show-prepublish"]');
+                    if (!btn) return {text: 'none', disabled: true};
+                    return {
+                        text: (btn.textContent || '').trim().toLowerCase(),
+                        disabled: btn.disabled || btn.getAttribute('aria-disabled') === 'true',
+                    };
+                }""")
+            except Exception:
+                stable_count = 0
+                await asyncio.sleep(1)
+                continue
+
+            text = state.get("text", "none")
+            disabled = state.get("disabled", True)
+
+            if text != "none" and "saving" not in text and not disabled:
+                stable_count += 1
+                if stable_count >= stable_s:
+                    log.info(
+                        "Medium: auto-save complete after %ds, stable for %ds (button: '%s')",
+                        i, stable_s, text,
+                    )
+                    return
+            else:
+                if stable_count > 0:
+                    log.info("Medium: save state reset at %ds (text='%s', disabled=%s)", i, text, disabled)
+                stable_count = 0
             await asyncio.sleep(1)
-        log.warning("Medium: auto-save still in progress after %ds, continuing", timeout_s)
+        log.warning("Medium: auto-save not stable after %ds, continuing anyway", timeout_s)
 
     async def _click_initial_publish(self, page) -> bool:
         """Click the top-right Publish button that opens the prepublish dialog.
@@ -291,7 +317,19 @@ class MediumPlaywrightPublisher:
             ("js_click", self._click_via_js),
         ]
 
-        for name, fn in strategies:
+        for idx, (name, fn) in enumerate(strategies):
+            # Before each strategy (except the first), re-wait for save to
+            # complete — the previous click may have triggered a new save cycle.
+            if idx > 0:
+                await self._wait_for_save_complete(page, timeout_s=30, stable_s=5)
+                # Re-acquire locator state after waiting
+                try:
+                    if not await loc.is_visible(timeout=3000):
+                        log.info("Medium: publish button lost after save wait, aborting")
+                        return False
+                except Exception:
+                    return False
+
             try:
                 await fn(page, loc, sel)
                 log.info("Medium: clicked initial publish via %s", name)
