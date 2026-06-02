@@ -93,6 +93,10 @@ def _extract_retry_delay_seconds(text: str) -> int | None:
 
 
 def _looks_like_daily_quota(text: str) -> bool:
+    retry_delay = _extract_retry_delay_seconds(text)
+    if retry_delay is not None and retry_delay < 3600:
+        return False
+
     lowered = text.lower()
     daily_markers = (
         "perday",
