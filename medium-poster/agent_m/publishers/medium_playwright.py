@@ -173,25 +173,259 @@ class MediumPlaywrightPublisher:
             log.info("Medium: draft saved")
             return page.url
 
-        # Wait for Medium to finish auto-saving — clicking Publish while the
-        # top-right button still says "Saving..." is a no-op and the prepublish
-        # dialog never opens.
         await self._wait_for_save_complete(page)
 
-        # Extra settle time: Medium's React SPA re-renders after save completes
-        # and the button may not be wired to its click handler immediately.
-        # Medium can also queue additional background saves, so we give it
-        # generous time to fully stabilize.
-        await self._human_delay(8, 12)
+        # Extract post ID from URL (e.g. /p/abc123def/edit → abc123def)
+        post_id = await page.evaluate("""() => {
+            const m = location.pathname.match(/\\/p\\/([a-f0-9]+)/);
+            return m ? m[1] : null;
+        }""")
+        log.info("Medium: draft saved, post_id=%s, URL=%s", post_id, page.url)
 
-        # Open the prepublish dialog. _click_initial_publish escalates click
-        # methods and waits for the dialog to actually render.
+        if not post_id:
+            log.warning("Medium: could not extract post ID from URL, trying UI publish")
+            return await self._publish_via_ui(page, tags)
+
+        # Strategy 1: publish via Medium's internal API
+        published_url = await self._publish_via_api(page, post_id, tags)
+        if published_url:
+            return published_url
+
+        # Strategy 2: publish from the drafts page
+        published_url = await self._publish_from_drafts_page(page, post_id, tags)
+        if published_url:
+            return published_url
+
+        # Strategy 3: fall back to UI dialog (may fail but worth trying)
+        log.info("Medium: API and drafts page failed, falling back to UI dialog")
+        return await self._publish_via_ui(page, tags)
+
+    async def _publish_via_api(self, page, post_id: str, tags: list[str]) -> str | None:
+        """Publish draft directly via Medium's internal API (no UI interaction)."""
+        log.info("Medium: attempting direct API publish for post %s", post_id)
+
+        result = await page.evaluate("""async (args) => {
+            const {postId, tags} = args;
+            const errors = [];
+
+            // Get XSRF token from cookie
+            const xsrf = (document.cookie.match(/(?:^|;)\\s*xsrf=([^;]*)/) || [])[1] || '';
+
+            // Strategy 1: Medium's internal post update API
+            for (const endpoint of [
+                `https://medium.com/_/api/posts/${postId}`,
+                `https://medium.com/api/posts/${postId}`,
+            ]) {
+                for (const payload of [
+                    {publishStatus: 'public', tags: tags},
+                    {publishStatus: 'public'},
+                ]) {
+                    try {
+                        const resp = await fetch(endpoint, {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/json',
+                                'X-XSRF-Token': xsrf,
+                                'x-xsrf-token': xsrf,
+                            },
+                            credentials: 'same-origin',
+                            body: JSON.stringify(payload),
+                        });
+                        const text = await resp.text();
+                        if (resp.ok || resp.status === 200 || resp.status === 201) {
+                            return {success: true, method: 'PUT ' + endpoint, body: text.substring(0, 500)};
+                        }
+                        errors.push(`PUT ${endpoint} ${resp.status}: ${text.substring(0, 200)}`);
+                    } catch(e) {
+                        errors.push(`PUT ${endpoint}: ${e.message}`);
+                    }
+                }
+            }
+
+            // Strategy 2: GraphQL mutation
+            for (const opName of ['publishPost', 'PublishPost', 'updatePost']) {
+                try {
+                    const resp = await fetch('https://medium.com/_/graphql', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                            'X-XSRF-Token': xsrf,
+                            'x-xsrf-token': xsrf,
+                        },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({
+                            operationName: opName,
+                            variables: {id: postId, postId: postId, input: {
+                                id: postId,
+                                publishStatus: 'PUBLIC',
+                                tags: tags.map(t => ({tag: t})),
+                            }},
+                            query: `mutation ${opName}($input: PublishPostInput!) { ${opName}(input: $input) { post { id mediumUrl uniqueSlug } } }`,
+                        }),
+                    });
+                    const text = await resp.text();
+                    if (resp.ok) {
+                        try {
+                            const data = JSON.parse(text);
+                            if (data.data && !data.errors) {
+                                return {success: true, method: 'graphql:' + opName, body: text.substring(0, 500)};
+                            }
+                        } catch(e) {}
+                    }
+                    errors.push(`GQL ${opName} ${resp.status}: ${text.substring(0, 200)}`);
+                } catch(e) {
+                    errors.push(`GQL ${opName}: ${e.message}`);
+                }
+            }
+
+            return {success: false, errors: errors};
+        }""", {"postId": post_id, "tags": tags[:5]})
+
+        if result.get("success"):
+            method = result.get("method", "unknown")
+            log.info("Medium: published via API (%s): %s", method, result.get("body", "")[:200])
+            await self._human_delay(2, 4)
+            # Navigate to the published post to get the canonical URL
+            await page.goto(f"https://medium.com/p/{post_id}", wait_until="domcontentloaded", timeout=30000)
+            await self._human_delay(2, 3)
+            return page.url
+
+        errors = result.get("errors", [])
+        for e in errors[:8]:
+            log.info("Medium API attempt: %s", e)
+        log.warning("Medium: all API publish strategies failed")
+        return None
+
+    async def _publish_from_drafts_page(self, page, post_id: str, tags: list[str]) -> str | None:
+        """Navigate to drafts page and publish from there (different UI than editor)."""
+        log.info("Medium: attempting publish from drafts page")
+        try:
+            await page.goto("https://medium.com/me/stories/drafts", wait_until="domcontentloaded", timeout=30000)
+            await self._human_delay(3, 5)
+
+            # Find the draft row with our post ID and click its menu
+            clicked = await page.evaluate("""(postId) => {
+                // Look for links containing the post ID
+                const links = document.querySelectorAll('a[href*="' + postId + '"]');
+                if (links.length === 0) return 'not_found';
+
+                // Find the parent row/card and look for a menu button
+                for (const link of links) {
+                    const row = link.closest('[class*="story"]') || link.closest('tr') || link.parentElement?.parentElement;
+                    if (!row) continue;
+                    const menuBtn = row.querySelector('button[aria-label*="more" i], button[aria-label*="menu" i], button[data-action*="menu" i], button[class*="menu" i]');
+                    if (menuBtn) {
+                        menuBtn.click();
+                        return 'menu_clicked';
+                    }
+                }
+
+                // Fallback: click any 3-dot/more button near the first link
+                const firstLink = links[0];
+                const allBtns = document.querySelectorAll('button');
+                for (const btn of allBtns) {
+                    const text = (btn.textContent || '').trim();
+                    const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+                    if ((text === '...' || text === '⋮' || aria.includes('more') || aria.includes('option')) && btn.offsetParent !== null) {
+                        btn.click();
+                        return 'fallback_menu_clicked';
+                    }
+                }
+                return 'no_menu_button';
+            }""", post_id)
+
+            log.info("Medium drafts page: %s", clicked)
+
+            if clicked in ("menu_clicked", "fallback_menu_clicked"):
+                await self._human_delay(1, 2)
+                # Look for "Publish" option in the dropdown
+                publish_clicked = await page.evaluate("""() => {
+                    const items = document.querySelectorAll('[role="menuitem"], [role="option"], button, a');
+                    for (const el of items) {
+                        const text = (el.textContent || '').trim().toLowerCase();
+                        if (text === 'publish' || text === 'publish story') {
+                            el.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }""")
+
+                if publish_clicked:
+                    log.info("Medium: clicked 'Publish' from drafts menu")
+                    await self._human_delay(2, 4)
+
+                    # Handle any publish confirmation dialog
+                    confirmed = await self._confirm_publish_dialog(page)
+                    if confirmed:
+                        await self._human_delay(3, 5)
+                        url = page.url
+                        if post_id in url and "/edit" not in url:
+                            log.info("Medium: published from drafts page: %s", url)
+                            return url
+                        # Navigate to the post to get the canonical URL
+                        await page.goto(f"https://medium.com/p/{post_id}", wait_until="domcontentloaded", timeout=30000)
+                        await self._human_delay(2, 3)
+                        return page.url
+
+        except Exception as exc:
+            log.warning("Medium: drafts page publish failed: %s", exc)
+        return None
+
+    async def _confirm_publish_dialog(self, page) -> bool:
+        """Handle any confirmation dialog that appears after clicking Publish."""
+        for _ in range(20):
+            found = await page.evaluate("""() => {
+                const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+                for (const b of btns) {
+                    const t = (b.textContent || '').trim().toLowerCase();
+                    if ((t === 'publish now' || t === 'publish' || t === 'confirm')
+                        && b.offsetParent !== null
+                        && !b.disabled) {
+                        b.click();
+                        return 'clicked:' + t;
+                    }
+                }
+                // Also check for tag/topic input (prepublish dialog)
+                const tagInput = document.querySelector('input[placeholder*="tag" i], input[placeholder*="topic" i]');
+                if (tagInput) return 'has_tag_input';
+                return '';
+            }""")
+            if found.startswith("clicked:"):
+                log.info("Medium: confirmed publish dialog (%s)", found)
+                return True
+            if found == "has_tag_input":
+                # Prepublish dialog appeared — click "Publish now" directly
+                await self._human_delay(1, 2)
+                publish_btn = await page.evaluate("""() => {
+                    const btns = document.querySelectorAll('button');
+                    for (const b of btns) {
+                        const t = (b.textContent || '').trim().toLowerCase();
+                        if (t.includes('publish now') && b.offsetParent !== null) {
+                            b.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }""")
+                if publish_btn:
+                    log.info("Medium: clicked 'Publish now' in prepublish dialog")
+                    return True
+            await asyncio.sleep(0.5)
+        return False
+
+    async def _publish_via_ui(self, page, tags: list[str]) -> str | None:
+        """Fall back to the original UI dialog approach (editor Publish button)."""
+        await self._wait_for_save_complete(page)
+        await self._human_delay(3, 5)
+
         if not await self._click_initial_publish(page):
             await self._dump_page_diagnostics(page, "no_publish_dialog")
             raise RuntimeError("Medium: prepublish dialog did not open")
         await self._human_delay(1, 2)
 
-        # Add topics/tags
         tag_input = page.locator('input[placeholder*="tag" i]').or_(
             page.locator('input[placeholder*="topic" i]')
         ).first
@@ -204,7 +438,6 @@ class MediumPlaywrightPublisher:
             except Exception:
                 break
 
-        # Click the final "Publish now" button (robust, multi-strategy)
         if not await self._click_final_publish(page):
             await self._dump_page_diagnostics(page, "no_publish_now")
             raise RuntimeError("Medium: final publish button not visible")
