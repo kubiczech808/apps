@@ -299,7 +299,15 @@ class MediumPlaywrightPublisher:
                 log.info("Medium: initial publish %s failed: %s", name, e)
                 continue
 
-            if await self._wait_for_publish_dialog(page, timeout_s=12):
+            # The click may trigger a navigation (Medium SPA route change).
+            # Wait for the page to stabilize before probing for the dialog.
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=8000)
+            except Exception:
+                pass
+            await self._human_delay(1, 2)
+
+            if await self._wait_for_publish_dialog(page, timeout_s=15):
                 return True
             log.info("Medium: dialog didn't open after %s, escalating", name)
 
@@ -349,18 +357,32 @@ class MediumPlaywrightPublisher:
         Looks specifically for the 'Publish now' button or the topics/tags
         input — NOT a generic 'Publish' button, which stays in the DOM and
         would cause a false positive while the dialog is still rendering.
+
+        Handles 'execution context destroyed' errors that occur when Medium
+        navigates (SPA route change) after clicking the publish button.
         """
         for i in range(timeout_s * 2):
-            found = await page.evaluate("""() => {
-                const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-                const hasPublishNow = btns.some(b => {
-                    const t = (b.textContent || '').trim().toLowerCase();
-                    return t.includes('publish now') && b.offsetParent !== null;
-                });
-                const hasTagInput = !!document.querySelector(
-                    'input[placeholder*="tag" i], input[placeholder*="topic" i]');
-                return hasPublishNow || hasTagInput;
-            }""")
+            try:
+                found = await page.evaluate("""() => {
+                    const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+                    const hasPublishNow = btns.some(b => {
+                        const t = (b.textContent || '').trim().toLowerCase();
+                        return t.includes('publish now') && b.offsetParent !== null;
+                    });
+                    const hasTagInput = !!document.querySelector(
+                        'input[placeholder*="tag" i], input[placeholder*="topic" i]');
+                    return hasPublishNow || hasTagInput;
+                }""")
+            except Exception as e:
+                if "context was destroyed" in str(e) or "navigation" in str(e).lower():
+                    log.info("Medium: navigation detected while waiting for dialog (iter %d), waiting...", i)
+                    try:
+                        await page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1)
+                    continue
+                raise
             if found:
                 log.info("Medium: publish dialog ready (after %.1fs)", i * 0.5)
                 await self._human_delay(0.8, 1.5)
