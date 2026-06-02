@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Tue, 02 Jun 2026 06:38:13 +0000</lastBuildDate>
-    <item>
-      <title>Surviving the post-halving sideways grind</title>
-      <link>https://btc-dca.com/blog/generated-202605291743</link>
-      <guid isPermaLink="false">generated-202605291743</guid>
-      <pubDate>Fri, 29 May 2026 17:44:35 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dollar cost averaging</category>
-      <category>investing strategy</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Tue, 02 Jun 2026 06:43:11 +0000</lastBuildDate>
     <item>
       <title>Why I buy Bitcoin at all-time highs</title>
       <link>https://btc-dca.com/blog/generated-202605300425</link>
@@ -230,36 +219,47 @@
       <title>How to master the DCA recalibration: Aligning your buy schedule with epoch-based income shifts</title>
       <link>https://btc-dca.com/blog/generated-202606020636</link>
       <guid isPermaLink="false">generated-202606020636</guid>
-      <pubDate>Tue, 02 Jun 2026 06:38:13 +0000</pubDate>
+      <pubDate>Tue, 02 Jun 2026 06:39:00 +0000</pubDate>
       <category>bitcoin</category>
       <category>dca</category>
       <category>personal finance</category>
-      <content:encoded>&lt;p&gt;Last march, I sat down to look at my bank statement and realized my "automated" bitcoin strategy was actually working against me. I had set up a fixed weekly buy, but my income is anything but consistent. I’m a freelancer, so some months are feast, and others are strictly famine. I realized that if I wanted to get serious, I needed to master &lt;strong&gt;the dca recalibration: aligning your buy schedule with epoch-based income shifts&lt;/strong&gt; to make sure I wasn't leaving liquidity on the table when I actually had the cash to deploy.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why I use the DCA consolidation strategy: Managing dust and optimizing future settlement costs</title>
+      <link>https://btc-dca.com/blog/generated-202606020641</link>
+      <guid isPermaLink="false">generated-202606020641</guid>
+      <pubDate>Tue, 02 Jun 2026 06:43:11 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>self-custody</category>
+      <content:encoded>&lt;p&gt;I woke up last Tuesday to a realization that I was basically throwing money away on Bitcoin network fees. I’ve been stacking small amounts every single day for the past two years, but when I looked at my hardware wallet, it was filled with tiny, fragmented UTXOs (unspent transaction outputs). If I ever wanted to move that stack in a hurry during a bull market, the fee nightmare would be real. That’s why I finally sat down to refine &lt;strong&gt;the dca consolidation strategy: managing dust and optimizing future settlement costs&lt;/strong&gt; to keep my stack efficient.&lt;/p&gt;
 
-&lt;p&gt;Most people treat dollar cost averaging like a "set it and forget it" chore, but that’s a mistake. If you have an annual bonus or quarterly dividends hitting your account, keeping your buy schedule static is just lazy. I spent a few weeks tinkering with my own setup, and eventually, I built a tool to help me &lt;a href="https://btc-dca.com/btc-dca-features"&gt;automate my DCA buys&lt;/a&gt; based on when the money actually lands, rather than just blindly firing off trades every Tuesday.&lt;/p&gt;
+&lt;p&gt;Most people talk about DCA as a "set it and forget it" game, but they rarely mention the mess it creates on the blockchain. If you buy five dollars of Bitcoin every day, you end up with hundreds of tiny inputs. When you eventually try to send that Bitcoin, you’re asking the network to process a massive number of inputs, which balloons your transaction fee. It’s like trying to pay for a house with a dump truck full of pennies.&lt;/p&gt;
 
-&lt;h2&gt;Why the DCA recalibration: Aligning your buy schedule with epoch-based income shifts matters&lt;/h2&gt;
+&lt;h2&gt;How I handle the DCA consolidation strategy: Managing dust and optimizing future settlement costs&lt;/h2&gt;
 
-&lt;p&gt;The mainstream advice is always "buy the same amount every week." It’s safe, it’s simple, and it keeps you from trying to time the market. But it ignores the reality of modern income. If you get a large performance bonus in December, why wait for the following twelve months to drip-feed that capital into the market? You’re essentially sitting on cash that could be working for you.&lt;/p&gt;
+&lt;p&gt;The solution isn't to stop buying—it's to change how you settle. I still keep my daily accumulation automated because I don't want to rely on my own willpower to time the market. I use a tool to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; so the heavy lifting happens in the background, but I’ve adjusted my withdrawal frequency. Instead of auto-withdrawing every single buy immediately, I let the balance grow on the exchange to a meaningful amount before triggering a single, larger transfer to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor&lt;/a&gt;.&lt;/p&gt;
 
-&lt;p&gt;I’m not saying you should try to catch the absolute bottom—that’s a fool’s errand. I’m saying that the dca recalibration: aligning your buy schedule with epoch-based income shifts allows you to adjust your velocity based on your personal liquidity. When I have a high-income month, I bump my frequency. When things get lean, I dial it back. It’s not about timing the market; it’s about timing your own wallet.&lt;/p&gt;
+&lt;p&gt;This is the core of the dca consolidation strategy: managing dust and optimizing future settlement costs. By batching my withdrawals, I’m essentially "consolidating" my buys before they ever touch my cold storage. It keeps my wallet clean, makes future spends cheaper, and honestly, it’s a bit better for my privacy, too. You aren't creating a public trail of hundreds of tiny, identical transactions.&lt;/p&gt;
 
-&lt;p&gt;I almost made the mistake of over-leveraging during a high-income month last year. I got excited, pushed too much into a single buy, and then had to sell some to cover a surprise car repair bill. That was a painful lesson in why you need to keep your "buy" schedule flexible but sustainable. If you aren't sure how much you should be putting away, you might find &lt;a href="https://btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; helpful for visualizing how different contribution levels affect your long-term stack.&lt;/p&gt;
+&lt;h2&gt;Balancing automation and control&lt;/h2&gt;
 
-&lt;h2&gt;Setting up your own system&lt;/h2&gt;
+&lt;p&gt;I know what some of the purists say: "not your keys, not your coins," and they’re right. Leaving Bitcoin on an exchange for even a week carries counterparty risk. This is where I disagree slightly with the ultra-paranoid crowd. I think there is a middle ground. I use &lt;a href="https://btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; to figure out exactly how much I’m comfortable leaving on an exchange versus the cost of on-chain fees. It’s a trade-off.&lt;/p&gt;
 
-&lt;p&gt;To get this right, you have to look at your income as "epochs." Maybe you get a quarterly bonus, or maybe you have seasonal commission spikes. Whatever it is, your DCA strategy should reflect that. I personally use &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; for the actual execution because the API is reliable, but the key isn't the exchange—it's the logic behind the buy.&lt;/p&gt;
+&lt;p&gt;If you’re just starting, don’t stress about the UTXO set. Just focus on the habit. But once your stack hits a certain size, you need a plan. I’ve made the mistake of sending tiny amounts to my wallet when fees were high, only to realize I’d spent nearly 10% of the transaction value just to move it. Don't be like me.&lt;/p&gt;
 
-&lt;p&gt;When I plan my next "epoch," I check my projected income and decide how much of that surplus I want to stack. I’ve stopped looking at Bitcoin as a monthly expense and started looking at it as an allocation of my total seasonal earnings. This mindset shift has made me much more disciplined. Instead of feeling guilty about missing a weekly buy during a slow month, I just adjust my expectations for the next cycle.&lt;/p&gt;
+&lt;p&gt;If you're looking for a place to start, I usually point people toward &lt;a href="https://www.btc-dca.com/crypto-exchanges"&gt;exchanges that support automated withdrawals&lt;/a&gt; because it saves you from having to do this manually every month. I personally use &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; for the liquidity, but the principle stays the same regardless of where you trade.&lt;/p&gt;
 
-&lt;h2&gt;A note on self-custody&lt;/h2&gt;
+&lt;h2&gt;Is your wallet ready for a bull market?&lt;/h2&gt;
 
-&lt;p&gt;If you’re going to automate your buys, please don’t leave your coins sitting on an exchange. I’ve seen too many people lose sleep over exchange hacks. Once my buys hit a certain threshold, I move them to cold storage. I’ve been using a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor&lt;/a&gt; for years, and it’s the only way I can actually sleep at night.&lt;/p&gt;
+&lt;p&gt;The real benefit of the dca consolidation strategy: managing dust and optimizing future settlement costs isn't just about saving a few dollars today. It’s about being prepared for when the network gets congested. When Bitcoin fees hit twenty or thirty dollars per transaction, those tiny "dust" inputs become impossible to move without losing a huge chunk of your value.&lt;/p&gt;
 
-&lt;p&gt;Obviously, I’m not a financial advisor, and this is just how I’ve decided to manage my own risk. You really need to do your own research before locking your money into any specific plan. Bitcoin is volatile, and no amount of fancy scheduling is going to change the fact that the price can drop 30% in a week.&lt;/p&gt;
+&lt;p&gt;I’m not a financial advisor, and I’m definitely not a professional developer—I just build tools that solve my own problems because I hate manual work. Always do your own research before trusting a script or a platform with your keys.&lt;/p&gt;
 
-&lt;p&gt;The dca recalibration: aligning your buy schedule with epoch-based income shifts has been a game-changer for my mental state. It turned a rigid, stressful chore into a fluid part of my financial life. I don't obsess over the daily price anymore; I just wait for the next income epoch to arrive, execute my plan, and get back to living my life. At the end of the day, that’s the only way to stay in the game for the long haul.&lt;/p&gt;</content:encoded>
-      <description>Last march, I sat down to look at my bank statement and realized my "automated" bitcoin strategy was actually working against me. I had set up a fixed weekly buy, but my income is anything but consistent. I’m a freelancer, so some months are feast, and others are strictly famine. I realized that if ...</description>
+&lt;p&gt;At the end of the day, Bitcoin is about sovereignty. If you’re building a long-term position, your strategy needs to evolve alongside your stack. Don't let your "set it and forget it" plan turn into a "set it and lose it to fees" disaster. Keep your wallet clean, keep your withdrawals batched, and stay patient.&lt;/p&gt;</content:encoded>
+      <description>I woke up last Tuesday to a realization that I was basically throwing money away on Bitcoin network fees. I’ve been stacking small amounts every single day for the past two years, but when I looked at my hardware wallet, it was filled with tiny, fragmented UTXOs (unspent transaction outputs). If I e...</description>
     </item>
   </channel>
 </rss>
