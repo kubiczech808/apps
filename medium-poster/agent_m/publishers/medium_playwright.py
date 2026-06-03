@@ -19,6 +19,10 @@ log = logging.getLogger(__name__)
 _COOKIES_FILE = config.data_dir / "medium_cookies.json"
 
 
+class MediumPublishLimitError(RuntimeError):
+    pass
+
+
 class MediumPlaywrightPublisher:
     _xvfb_proc: subprocess.Popen | None = None
     _xvfb_display: str | None = None
@@ -116,6 +120,113 @@ class MediumPlaywrightPublisher:
                     except Exception:
                         pass
                     await browser.close()
+        finally:
+            self._cleanup_display()
+
+    async def list_published_posts(self) -> list[dict]:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                await page.goto(
+                    "https://medium.com/me/stories?tab=posts-published",
+                    wait_until="domcontentloaded",
+                    timeout=60000,
+                )
+                await self._human_delay(5, 8)
+                for _ in range(5):
+                    await page.mouse.wheel(0, 1400)
+                    await asyncio.sleep(1)
+                posts = await page.evaluate("""() => {
+                    const anchors = Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="@"]'));
+                    const seen = new Set();
+                    const posts = [];
+                    for (const a of anchors) {
+                        const href = a.href || '';
+                        const idMatch = href.match(/\\/p\\/([a-f0-9]{8,})|([a-f0-9]{8,})(?:\\?|$)/);
+                        if (!idMatch) continue;
+                        const postId = idMatch[1] || idMatch[2];
+                        if (!postId || seen.has(postId)) continue;
+                        const card = a.closest('article, div[class]') || a.parentElement;
+                        const text = (card?.innerText || a.innerText || '').trim();
+                        const title = (a.innerText || text.split('\\n').find(x => x.trim().length > 20) || '').trim();
+                        const images = Array.from((card || document).querySelectorAll('img')).map(img => ({
+                            src: img.currentSrc || img.src || '',
+                            alt: img.alt || '',
+                            w: img.naturalWidth || img.width || 0,
+                            h: img.naturalHeight || img.height || 0,
+                        })).filter(img => img.src);
+                        if (!title && !text) continue;
+                        seen.add(postId);
+                        posts.push({postId, title, href, images});
+                    }
+                    return posts;
+                }""")
+                await browser.close()
+                return posts
+        finally:
+            self._cleanup_display()
+
+    async def add_featured_image_to_post(
+        self,
+        post_id: str,
+        image_bytes: bytes,
+    ) -> str:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                try:
+                    result = await self._add_featured_image_to_post_page(
+                        page, post_id, image_bytes
+                    )
+                except Exception:
+                    log.exception("Medium featured image backfill failed")
+                    await self._safe_screenshot(page, "medium_featured_image_error.png")
+                    raise
+                finally:
+                    cookies = await context.cookies()
+                    if cookies:
+                        normalized = self._normalize_cookies(cookies)
+                        _COOKIES_FILE.write_text(json.dumps(normalized, indent=2))
+                await browser.close()
+                return result
         finally:
             self._cleanup_display()
 
@@ -303,6 +414,117 @@ class MediumPlaywrightPublisher:
             log.info("Medium API attempt: %s", e)
         log.warning("Medium: all API publish strategies failed")
         return None
+
+    async def _add_featured_image_to_post_page(
+        self,
+        page,
+        post_id: str,
+        image_bytes: bytes,
+    ) -> str:
+        await page.goto(f"https://medium.com/p/{post_id}/edit", wait_until="domcontentloaded", timeout=60000)
+        await self._human_delay(6, 10)
+        await self._wait_for_cloudflare(page, "featured_edit")
+
+        if "signin" in page.url.lower() or "login" in page.url.lower():
+            raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
+
+        if await self._article_has_image(page):
+            log.info("Medium: post %s already has an image; skipping insert", post_id)
+            return await self._canonical_post_url(page, post_id)
+
+        title_text = await self._focus_after_title(page)
+        log.info("Medium: inserting featured image after title: %s", title_text[:120])
+        await self._insert_cover_image(page, image_bytes)
+        await self._wait_for_save_complete(page, timeout_s=90, stable_s=5)
+        await self._save_and_publish_update(page)
+
+        url = await self._canonical_post_url(page, post_id)
+        log.info("Medium: featured image backfilled for %s at %s", post_id, url)
+        return url
+
+    async def _article_has_image(self, page) -> bool:
+        try:
+            return await page.evaluate("""() => {
+                const editor = document.querySelector('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
+                if (!editor) return false;
+                return editor.querySelectorAll('img').length > 0;
+            }""")
+        except Exception:
+            return False
+
+    async def _focus_after_title(self, page) -> str:
+        for attempt in range(3):
+            title = await page.evaluate("""() => {
+                const editor = document.querySelector('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
+                if (!editor) return '';
+                const titleEl = editor.querySelector('.graf--leading, h1, h2, h3');
+                if (!titleEl) return '';
+                editor.focus();
+                const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(titleEl);
+                range.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(range);
+                return (titleEl.textContent || '').trim();
+            }""")
+            if title:
+                await self._human_delay(0.5, 1)
+                await page.keyboard.press("Enter")
+                await self._human_delay(0.8, 1.5)
+                return title
+            log.info("Medium: waiting for editable title before featured image insert")
+            await self._human_delay(3, 5)
+
+        await self._dump_page_diagnostics(page, "no_edit_title_for_featured_image")
+        raise RuntimeError("Medium: could not focus after title for featured image insert")
+
+    async def _save_and_publish_update(self, page) -> None:
+        clicked = await self._click_visible_button_by_text(
+            page,
+            ["save and publish", "publish changes", "save changes", "save and update"],
+        )
+        if not clicked:
+            await self._dump_page_diagnostics(page, "no_save_and_publish")
+            raise RuntimeError("Medium: Save and publish button not visible")
+
+        await self._human_delay(4, 7)
+        if "/submission" in page.url:
+            if not await self._click_final_publish(page):
+                await self._dump_page_diagnostics(page, "no_update_publish")
+                raise RuntimeError("Medium: update publish button not visible")
+            await self._human_delay(4, 7)
+            await self._raise_if_publish_limit(page)
+        else:
+            await self._raise_if_publish_limit(page)
+
+    async def _click_visible_button_by_text(self, page, texts: list[str]) -> bool:
+        target = await page.evaluate("""(texts) => {
+            const expected = texts.map(t => t.toLowerCase());
+            const els = Array.from(document.querySelectorAll('button, [role="button"], a'));
+            for (const el of els) {
+                const text = (el.textContent || '').trim().toLowerCase();
+                const aria = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+                if (!expected.some(t => text.includes(t) || aria.includes(t))) continue;
+                if (el.offsetParent === null || el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+                const r = el.getBoundingClientRect();
+                return {x: r.x + r.width / 2, y: r.y + r.height / 2, text, aria};
+            }
+            return null;
+        }""", texts)
+        if not target:
+            return False
+        await page.mouse.click(target["x"], target["y"])
+        log.info("Medium: clicked button text='%s' aria='%s'", target.get("text"), target.get("aria"))
+        return True
+
+    async def _canonical_post_url(self, page, post_id: str) -> str:
+        await page.goto(f"https://medium.com/p/{post_id}", wait_until="domcontentloaded", timeout=60000)
+        await self._human_delay(5, 8)
+        url = page.url
+        if "medium.com" in url and post_id in url:
+            return url
+        return f"https://medium.com/p/{post_id}"
 
     async def _publish_from_drafts_page(self, page, post_id: str, tags: list[str]) -> str | None:
         """Navigate to drafts page and publish from there (different UI than editor)."""

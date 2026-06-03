@@ -35,9 +35,11 @@ async def generate_header_image(topic: Topic) -> tuple[bytes, str]:
 
     prompt = (
         f"Blog header image: {topic.title}.{angle_hint} "
-        f"Style: {style}, Bitcoin orange (#F7931A) accents. "
-        f"Purely visual, NO text, NO letters, NO words, NO numbers, "
-        f"NO typography, NO watermarks, NO logos. Wide banner, 1200x630."
+        f"Style: {style}, Bitcoin orange (#F7931A) accents, "
+        f"Bitcoin coin symbol, recurring purchase rhythm, calm automated investing, "
+        f"dollar-cost averaging visual metaphor. Purely visual, NO text, NO letters, "
+        f"NO words, NO numbers, NO typography, NO watermarks, NO company logos. "
+        f"Wide editorial banner, high quality, 1200x630."
     )
     return await _generate_with_pollinations(prompt, seed=seed)
 
@@ -80,5 +82,9 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
         except Exception as exc:
             last_error = exc
             log.warning("Pollinations [%s] failed: %s", model_info["name"], exc)
+            if "queue full" in str(exc).lower():
+                raise RuntimeError(
+                    "Pollinations queue is full for this IP; retry later with a wider interval."
+                ) from exc
 
     raise RuntimeError(f"All Pollinations models failed. Last: {last_error}")
