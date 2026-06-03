@@ -143,6 +143,7 @@ def main() -> None:
             "medium-login",
             "medium-import-cookies",
             "medium-featured-image",
+            "medium-draft-schedule",
         ],
         default="draft",
         nargs="?",
@@ -168,6 +169,9 @@ def main() -> None:
     elif args.mode == "medium-featured-image":
         from agent_m.medium_featured_images import main as featured_main
         featured_main()
+    elif args.mode == "medium-draft-schedule":
+        from agent_m.medium_draft_scheduler import main as draft_schedule_main
+        draft_schedule_main()
     else:
         asyncio.run(run(mode=args.mode, slug=args.slug))
 

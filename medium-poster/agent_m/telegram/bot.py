@@ -76,6 +76,26 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
 
 
+async def _scheduled_medium_draft_review(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not config.medium_draft_scheduler:
+        return
+    try:
+        log.info("Medium draft scheduler started")
+        from agent_m.medium_draft_scheduler import format_result, run_once
+
+        result = await run_once(send_status=False)
+        await context.bot.send_message(
+            chat_id=config.telegram_admin_chat_id,
+            text=format_result(result)[:4096],
+        )
+    except Exception as e:
+        log.exception("Medium draft scheduler failed")
+        await context.bot.send_message(
+            chat_id=config.telegram_admin_chat_id,
+            text=f"Medium draft scheduler failed:\n{e}",
+        )
+
+
 _BOT_COMMANDS = [
     BotCommand("post", "Publikovat na všechny platformy"),
     BotCommand("draft", "Publikovat jako koncept"),
@@ -109,6 +129,22 @@ async def _post_init(application) -> None:
         "Scheduled daily publish at %s Europe/Prague",
         target_time.strftime("%H:%M"),
     )
+
+    if config.medium_draft_scheduler:
+        draft_target_time = datetime.time(
+            hour=config.medium_draft_schedule_check_hour,
+            minute=config.medium_draft_schedule_check_minute,
+            tzinfo=tz,
+        )
+        application.job_queue.run_daily(
+            callback=_scheduled_medium_draft_review,
+            time=draft_target_time,
+            name="medium_draft_scheduler",
+        )
+        log.info(
+            "Scheduled Medium draft review at %s Europe/Prague",
+            draft_target_time.strftime("%H:%M"),
+        )
 
 
 def build_app():

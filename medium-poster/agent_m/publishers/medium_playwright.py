@@ -10,6 +10,7 @@ import re
 import subprocess
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 from agent_m.config import config
@@ -185,6 +186,59 @@ class MediumPlaywrightPublisher:
         finally:
             self._cleanup_display()
 
+    async def list_drafts(self) -> list[dict]:
+        return await self._list_stories("https://medium.com/me/stories/drafts", inspect_edit=True)
+
+    async def list_scheduled_posts(self) -> list[dict]:
+        return await self._list_stories("https://medium.com/me/stories?tab=posts-scheduled")
+
+    async def schedule_draft_for_later(
+        self,
+        post_id: str,
+        scheduled_at: datetime,
+        tags: list[str] | None = None,
+        preview_image_bytes: bytes | None = None,
+    ) -> dict:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                try:
+                    result = await self._schedule_draft_page(
+                        page, post_id, scheduled_at, tags or [], preview_image_bytes
+                    )
+                except Exception:
+                    log.exception("Medium draft scheduling failed")
+                    await self._safe_screenshot(page, "medium_draft_schedule_error.png")
+                    raise
+                finally:
+                    cookies = await context.cookies()
+                    if cookies:
+                        normalized = self._normalize_cookies(cookies)
+                        _COOKIES_FILE.write_text(json.dumps(normalized, indent=2))
+                await browser.close()
+                return result
+        finally:
+            self._cleanup_display()
+
     async def add_featured_image_to_post(
         self,
         post_id: str,
@@ -231,6 +285,292 @@ class MediumPlaywrightPublisher:
             self._cleanup_display()
 
     # ── Editor interaction ──────────────────────────────────────────
+
+    async def _list_stories(self, url: str, inspect_edit: bool = False) -> list[dict]:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                await self._human_delay(5, 8)
+                for _ in range(8 if inspect_edit else 4):
+                    await page.mouse.wheel(0, 1400)
+                    await asyncio.sleep(0.8)
+
+                stories = await page.evaluate("""() => {
+                    const anchors = Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="@"]'));
+                    const seen = new Set();
+                    const stories = [];
+                    for (const a of anchors) {
+                        const href = a.href || '';
+                        const idMatch = href.match(/\\/p\\/([a-f0-9]{8,})|([a-f0-9]{8,})(?:\\?|$)/);
+                        if (!idMatch) continue;
+                        const postId = idMatch[1] || idMatch[2];
+                        if (!postId || seen.has(postId)) continue;
+                        const card = a.closest('article, div[class]') || a.parentElement;
+                        const text = (card?.innerText || a.innerText || '').trim();
+                        const title = (a.innerText || text.split('\\n').find(x => x.trim().length > 20) || '').trim();
+                        const images = Array.from((card || document).querySelectorAll('img')).map(img => ({
+                            src: img.currentSrc || img.src || '',
+                            alt: img.alt || '',
+                            w: img.naturalWidth || img.width || 0,
+                            h: img.naturalHeight || img.height || 0,
+                        })).filter(img => img.src);
+                        if (!title && !text) continue;
+                        seen.add(postId);
+                        stories.push({postId, title, href, listText: text.slice(0, 900), images});
+                    }
+                    return stories;
+                }""")
+
+                if inspect_edit:
+                    inspected = []
+                    for story in stories:
+                        post_id = story.get("postId")
+                        if not post_id:
+                            continue
+                        await page.goto(
+                            f"https://medium.com/p/{post_id}/edit",
+                            wait_until="domcontentloaded",
+                            timeout=60000,
+                        )
+                        await self._human_delay(5, 8)
+                        details = await self._inspect_edit_page(page)
+                        inspected.append({**story, **details})
+                    stories = inspected
+
+                await browser.close()
+                return stories
+        finally:
+            self._cleanup_display()
+
+    async def _inspect_edit_page(self, page) -> dict:
+        return await page.evaluate("""() => {
+            const editor = document.querySelector('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
+            const text = (editor?.innerText || document.body.innerText || '').trim();
+            const titleEl = editor?.querySelector('.graf--leading, h1, h2, h3');
+            const title = (titleEl?.textContent || '').trim();
+            const links = Array.from((editor || document).querySelectorAll('a[href]')).map(a => ({
+                text: (a.textContent || '').trim(),
+                href: a.href || '',
+            }));
+            const images = Array.from((editor || document).querySelectorAll('img')).map(img => ({
+                src: img.currentSrc || img.src || '',
+                alt: img.alt || '',
+                w: img.naturalWidth || img.width || 0,
+                h: img.naturalHeight || img.height || 0,
+            })).filter(img => img.src);
+            return {
+                url: location.href,
+                title,
+                text: text.slice(0, 12000),
+                wordCount: text.split(/\\s+/).filter(Boolean).length,
+                links,
+                images,
+                linkCount: links.length,
+                imageCount: images.length,
+            };
+        }""")
+
+    async def _schedule_draft_page(
+        self,
+        page,
+        post_id: str,
+        scheduled_at: datetime,
+        tags: list[str],
+        preview_image_bytes: bytes | None,
+    ) -> dict:
+        await page.goto(f"https://medium.com/p/{post_id}/edit", wait_until="domcontentloaded", timeout=60000)
+        await self._human_delay(6, 10)
+        await self._wait_for_cloudflare(page, "schedule_edit")
+
+        if "signin" in page.url.lower() or "login" in page.url.lower():
+            raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
+
+        details = await self._inspect_edit_page(page)
+        await self._wait_for_save_complete(page, timeout_s=90, stable_s=5)
+        if not await self._click_initial_publish(page):
+            await self._dump_page_diagnostics(page, "schedule_no_publish_dialog")
+            raise RuntimeError("Medium: prepublish dialog did not open for scheduling")
+
+        if preview_image_bytes:
+            await self._change_submission_preview_image(page, preview_image_bytes)
+
+        await self._add_topics_on_submission(page, tags)
+        if not await self._click_visible_button_by_text(page, ["schedule for later"]):
+            await self._dump_page_diagnostics(page, "schedule_button_missing")
+            raise RuntimeError("Medium: Schedule for later button not visible")
+        await self._human_delay(2, 3)
+
+        await self._open_schedule_picker(page)
+        await self._select_schedule_datetime(page, scheduled_at)
+        await self._human_delay(1, 2)
+
+        if not await self._click_visible_button_by_text(page, ["schedule to publish"]):
+            await self._dump_page_diagnostics(page, "schedule_confirm_missing")
+            raise RuntimeError("Medium: Schedule to publish button not visible")
+        await self._human_delay(5, 8)
+        await self._raise_if_publish_limit(page)
+
+        scheduled = await self._verify_scheduled_post(page, post_id)
+        if not scheduled:
+            await self._dump_page_diagnostics(page, "schedule_verify_missing")
+            raise RuntimeError("Medium: scheduled post was not visible in Scheduled tab")
+
+        return {
+            "post_id": post_id,
+            "title": details.get("title") or scheduled.get("title") or post_id,
+            "scheduled_at": scheduled_at.isoformat(),
+            "scheduled_text": scheduled.get("listText") or "",
+            "url": scheduled.get("href") or f"https://medium.com/p/{post_id}",
+        }
+
+    async def _change_submission_preview_image(self, page, image_bytes: bytes) -> None:
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+                f.write(image_bytes)
+                tmp_path = f.name
+
+            button = page.locator('button:has-text("Change preview image")').first
+            if await button.is_visible(timeout=5000):
+                try:
+                    async with page.expect_file_chooser(timeout=10000) as fc:
+                        await button.click()
+                    chooser = await fc.value
+                    await chooser.set_files(tmp_path)
+                    log.info("Medium: submission preview image changed via file chooser")
+                    await self._human_delay(5, 8)
+                    return
+                except Exception as exc:
+                    log.info("Medium: preview image file chooser path failed: %s", exc)
+
+            file_inputs = page.locator('input[type="file"]')
+            if await file_inputs.count() > 0:
+                await file_inputs.first.set_input_files(tmp_path)
+                log.info("Medium: submission preview image changed via file input fallback")
+                await self._human_delay(5, 8)
+                return
+
+            await self._dump_page_diagnostics(page, "preview_image_upload_missing")
+            raise RuntimeError("Medium: Change preview image upload control not available")
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    async def _add_topics_on_submission(self, page, tags: list[str]) -> None:
+        if not tags:
+            return
+        tag_input = page.locator('input[placeholder*="topic" i], input[placeholder*="tag" i]').first
+        for tag in tags[:5]:
+            try:
+                if await tag_input.is_visible(timeout=2500):
+                    await tag_input.fill(tag)
+                    await page.keyboard.press("Enter")
+                    await self._human_delay(0.5, 0.9)
+            except Exception:
+                break
+
+    async def _open_schedule_picker(self, page) -> None:
+        clicked = await page.evaluate("""() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const btn = buttons.find(b =>
+                /GMT|AM|PM|\\d{1,2}\\/\\d{1,2}\\/\\d{4}/.test((b.textContent || '').trim())
+                && b.offsetParent !== null
+            );
+            if (!btn) return false;
+            btn.click();
+            return true;
+        }""")
+        if not clicked:
+            await self._dump_page_diagnostics(page, "schedule_picker_missing")
+            raise RuntimeError("Medium: schedule date/time picker did not open")
+        await self._human_delay(1.5, 2.5)
+
+    async def _select_schedule_datetime(self, page, scheduled_at: datetime) -> None:
+        selectors = [
+            ("date", str(scheduled_at.day)),
+            ("hour", f"{scheduled_at.hour:02d}"),
+            ("minute", f"{scheduled_at.minute:02d}"),
+        ]
+        for kind, value in selectors:
+            clicked = await page.evaluate("""({kind, value}) => {
+                const btns = Array.from(document.querySelectorAll('button'));
+                const candidates = btns.map(btn => {
+                    const r = btn.getBoundingClientRect();
+                    return {
+                        btn,
+                        text: (btn.textContent || '').trim(),
+                        disabled: btn.disabled || btn.getAttribute('aria-disabled') === 'true',
+                        x: r.x,
+                        y: r.y,
+                        w: r.width,
+                        h: r.height,
+                    };
+                }).filter(item => item.text === value && !item.disabled && item.w > 0 && item.h > 0);
+
+                let filtered = candidates;
+                if (kind === 'date') {
+                    filtered = candidates.filter(item => item.x >= 680 && item.x < 1000 && item.y >= 240 && item.y < 520);
+                } else if (kind === 'hour') {
+                    filtered = candidates.filter(item => item.x >= 990 && item.x < 1045);
+                } else if (kind === 'minute') {
+                    filtered = candidates.filter(item => item.x >= 1040 && item.x < 1095);
+                }
+                const target = filtered.sort((a, b) => Math.abs(a.y - 360) - Math.abs(b.y - 360))[0];
+                if (!target) return false;
+                target.btn.scrollIntoView({block: 'center', inline: 'nearest'});
+                target.btn.click();
+                return true;
+            }""", {"kind": kind, "value": value})
+            if not clicked:
+                await self._dump_page_diagnostics(page, f"schedule_select_{kind}_{value}")
+                raise RuntimeError(f"Medium: could not select schedule {kind}={value}")
+            await self._human_delay(0.6, 1.1)
+
+    async def _verify_scheduled_post(self, page, post_id: str) -> dict | None:
+        await page.goto("https://medium.com/me/stories?tab=posts-scheduled", wait_until="domcontentloaded", timeout=60000)
+        await self._human_delay(6, 9)
+        stories = await page.evaluate("""(postId) => {
+            const anchors = Array.from(document.querySelectorAll('a[href*="/p/"], a[href*="@"]'));
+            const seen = new Set();
+            const stories = [];
+            for (const a of anchors) {
+                const href = a.href || '';
+                const idMatch = href.match(/\\/p\\/([a-f0-9]{8,})|([a-f0-9]{8,})(?:\\?|$)/);
+                if (!idMatch) continue;
+                const id = idMatch[1] || idMatch[2];
+                if (!id || seen.has(id)) continue;
+                const card = a.closest('article, div[class]') || a.parentElement;
+                const text = (card?.innerText || a.innerText || '').trim();
+                const title = (a.innerText || text.split('\\n').find(x => x.trim().length > 20) || '').trim();
+                seen.add(id);
+                stories.push({postId: id, title, href, listText: text.slice(0, 900)});
+            }
+            return stories.filter(story => story.postId === postId);
+        }""", post_id)
+        return stories[0] if stories else None
 
     async def _create_story(
         self,
