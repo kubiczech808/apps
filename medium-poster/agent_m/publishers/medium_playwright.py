@@ -407,18 +407,18 @@ class MediumPlaywrightPublisher:
 
         details = await self._inspect_edit_page(page)
         await self._wait_for_save_complete(page, timeout_s=90, stable_s=5)
+        if preview_image_bytes:
+            await self._replace_article_cover_image(page, preview_image_bytes)
+            await self._wait_for_save_complete(page, timeout_s=90, stable_s=5)
+
         if not await self._click_initial_publish(page):
             await self._dump_page_diagnostics(page, "schedule_no_publish_dialog")
             raise RuntimeError("Medium: prepublish dialog did not open for scheduling")
 
-        if preview_image_bytes:
-            await self._change_submission_preview_image(page, preview_image_bytes)
-
         await self._add_topics_on_submission(page, tags)
-        if not await self._click_visible_button_by_text(page, ["schedule for later"]):
+        if not await self._click_schedule_for_later(page):
             await self._dump_page_diagnostics(page, "schedule_button_missing")
             raise RuntimeError("Medium: Schedule for later button not visible")
-        await self._human_delay(2, 3)
 
         await self._open_schedule_picker(page)
         await self._select_schedule_datetime(page, scheduled_at)
@@ -443,10 +443,39 @@ class MediumPlaywrightPublisher:
             "url": scheduled.get("href") or f"https://medium.com/p/{post_id}",
         }
 
+    async def _replace_article_cover_image(self, page, image_bytes: bytes) -> None:
+        removed = await page.evaluate("""() => {
+            const editor = document.querySelector('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
+            if (!editor) return 0;
+            const images = Array.from(editor.querySelectorAll('img'));
+            let count = 0;
+            for (const img of images) {
+                const block = img.closest('figure, section, div') || img.parentElement;
+                if (block && block !== editor) {
+                    block.remove();
+                    count++;
+                } else {
+                    img.remove();
+                    count++;
+                }
+            }
+            editor.dispatchEvent(new InputEvent('input', {
+                bubbles: true,
+                inputType: 'deleteContentBackward',
+                data: null,
+            }));
+            return count;
+        }""")
+        log.info("Medium: removed %d existing article image(s) before scheduling", removed)
+        await self._human_delay(1, 2)
+        title = await self._focus_after_title(page)
+        log.info("Medium: inserting replacement article cover after title: %s", title[:120])
+        await self._insert_cover_image(page, image_bytes)
+
     async def _change_submission_preview_image(self, page, image_bytes: bytes) -> None:
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            with tempfile.NamedTemporaryFile(suffix=self._image_suffix(image_bytes), delete=False) as f:
                 f.write(image_bytes)
                 tmp_path = f.name
 
@@ -462,6 +491,11 @@ class MediumPlaywrightPublisher:
                     return
                 except Exception as exc:
                     log.info("Medium: preview image file chooser path failed: %s", exc)
+                    try:
+                        await self._upload_preview_image_from_modal(page, tmp_path)
+                        return
+                    except Exception as modal_exc:
+                        log.info("Medium: preview image modal upload path failed: %s", modal_exc)
 
             file_inputs = page.locator('input[type="file"]')
             if await file_inputs.count() > 0:
@@ -478,6 +512,35 @@ class MediumPlaywrightPublisher:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+
+    async def _upload_preview_image_from_modal(self, page, tmp_path: str) -> None:
+        await self._human_delay(1, 2)
+        image_selectors = [
+            'img[src*="cdn-images"]',
+            'img',
+            '[role="button"] img',
+            'button img',
+        ]
+        last_error: Exception | None = None
+        for selector in image_selectors:
+            locator = page.locator(selector).first
+            try:
+                if not await locator.is_visible(timeout=2000):
+                    continue
+                async with page.expect_file_chooser(timeout=10000) as fc:
+                    await locator.click()
+                chooser = await fc.value
+                await chooser.set_files(tmp_path)
+                log.info("Medium: submission preview image changed via modal thumbnail")
+                await self._human_delay(5, 8)
+                if not await self._click_visible_button_by_text(page, ["done"]):
+                    log.info("Medium: preview modal Done button not visible after upload")
+                await self._human_delay(2, 3)
+                return
+            except Exception as exc:
+                last_error = exc
+                continue
+        raise RuntimeError(f"Medium preview modal image chooser not found: {last_error}")
 
     async def _add_topics_on_submission(self, page, tags: list[str]) -> None:
         if not tags:
@@ -507,6 +570,65 @@ class MediumPlaywrightPublisher:
             await self._dump_page_diagnostics(page, "schedule_picker_missing")
             raise RuntimeError("Medium: schedule date/time picker did not open")
         await self._human_delay(1.5, 2.5)
+
+    async def _click_schedule_for_later(self, page) -> bool:
+        selectors = [
+            'button:has-text("Schedule for later")',
+            '[role="button"]:has-text("Schedule for later")',
+        ]
+        for attempt in range(4):
+            for selector in selectors:
+                loc = page.locator(selector).first
+                try:
+                    if not await loc.is_visible(timeout=2500):
+                        continue
+                    await loc.scroll_into_view_if_needed(timeout=3000)
+                    if attempt == 0:
+                        await loc.click(timeout=5000)
+                    elif attempt == 1:
+                        box = await loc.bounding_box()
+                        if not box:
+                            continue
+                        await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                    elif attempt == 2:
+                        await loc.focus()
+                        await page.keyboard.press("Enter")
+                    else:
+                        await loc.evaluate("""el => {
+                            const r = el.getBoundingClientRect();
+                            const opts = {bubbles: true, cancelable: true, view: window,
+                                button: 0, buttons: 1, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2};
+                            el.dispatchEvent(new PointerEvent('pointerdown', {...opts, pointerId: 1}));
+                            el.dispatchEvent(new MouseEvent('mousedown', opts));
+                            el.dispatchEvent(new PointerEvent('pointerup', {...opts, pointerId: 1}));
+                            el.dispatchEvent(new MouseEvent('mouseup', opts));
+                            el.dispatchEvent(new MouseEvent('click', opts));
+                        }""")
+                    log.info("Medium: clicked Schedule for later via %s attempt %d", selector, attempt + 1)
+                    if await self._wait_for_schedule_mode(page):
+                        return True
+                except Exception as exc:
+                    log.info("Medium: Schedule for later click attempt %d failed: %s", attempt + 1, exc)
+            await self._human_delay(1, 2)
+        return False
+
+    async def _wait_for_schedule_mode(self, page, timeout_s: int = 12) -> bool:
+        for _ in range(timeout_s * 2):
+            try:
+                active = await page.evaluate("""() => {
+                    const body = document.body.innerText || '';
+                    if (body.includes('Schedule a time to publish')) return true;
+                    return Array.from(document.querySelectorAll('button')).some(btn =>
+                        /GMT|AM|PM|\\d{1,2}\\/\\d{1,2}\\/\\d{4}/.test((btn.textContent || '').trim())
+                    );
+                }""")
+                if active:
+                    await self._human_delay(0.8, 1.5)
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+        return False
 
     async def _select_schedule_datetime(self, page, scheduled_at: datetime) -> None:
         selectors = [
@@ -1306,7 +1428,7 @@ class MediumPlaywrightPublisher:
         """Insert image as first body element via Medium's 'Add an image' button."""
         tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+            with tempfile.NamedTemporaryFile(suffix=self._image_suffix(image_bytes), delete=False) as f:
                 f.write(image_bytes)
                 tmp_path = f.name
 
@@ -1367,6 +1489,16 @@ class MediumPlaywrightPublisher:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+
+    @staticmethod
+    def _image_suffix(image_bytes: bytes) -> str:
+        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return ".png"
+        if image_bytes.startswith(b"\xff\xd8"):
+            return ".jpg"
+        if image_bytes.lstrip().startswith(b"<svg"):
+            return ".svg"
+        return ".jpg"
 
     async def _paste_markdown_body(self, page, body_markdown: str) -> None:
         blocks = self._parse_markdown_blocks(body_markdown)
