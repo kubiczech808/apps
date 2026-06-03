@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Tue, 02 Jun 2026 06:43:11 +0000</lastBuildDate>
-    <item>
-      <title>Why I buy Bitcoin at all-time highs</title>
-      <link>https://btc-dca.com/blog/generated-202605300425</link>
-      <guid isPermaLink="false">generated-202605300425</guid>
-      <pubDate>Sat, 30 May 2026 04:26:19 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dca</category>
-      <category>investing</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Wed, 03 Jun 2026 03:25:40 +0000</lastBuildDate>
     <item>
       <title>The utxo-optimized DCA: How to accumulate Bitcoin without paying half your stack in future fees</title>
       <link>https://btc-dca.com/blog/generated-202605310555</link>
@@ -230,36 +219,71 @@
       <title>Why I use the DCA consolidation strategy: Managing dust and optimizing future settlement costs</title>
       <link>https://btc-dca.com/blog/generated-202606020641</link>
       <guid isPermaLink="false">generated-202606020641</guid>
-      <pubDate>Tue, 02 Jun 2026 06:43:11 +0000</pubDate>
+      <pubDate>Tue, 02 Jun 2026 06:43:55 +0000</pubDate>
       <category>bitcoin</category>
       <category>dca</category>
       <category>self-custody</category>
-      <content:encoded>&lt;p&gt;I woke up last Tuesday to a realization that I was basically throwing money away on Bitcoin network fees. I’ve been stacking small amounts every single day for the past two years, but when I looked at my hardware wallet, it was filled with tiny, fragmented UTXOs (unspent transaction outputs). If I ever wanted to move that stack in a hurry during a bull market, the fee nightmare would be real. That’s why I finally sat down to refine &lt;strong&gt;the dca consolidation strategy: managing dust and optimizing future settlement costs&lt;/strong&gt; to keep my stack efficient.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>The inflow rebalancing strategy how to maintain your target asset allocation using only your Bitcoin</title>
+      <link>https://btc-dca.com/blog/generated-202606030325</link>
+      <guid isPermaLink="false">generated-202606030325</guid>
+      <pubDate>Wed, 03 Jun 2026 03:25:40 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>portfolio management</category>
+      <content:encoded>&lt;p&gt;Last month, I looked at my portfolio and realized my Bitcoin allocation had drifted from my target 20% to almost 45% because of the recent price action. To fix this without triggering a massive tax bill, I started using &lt;strong&gt;the inflow rebalancing strategy how to maintain your target asset allocation using only your bitcoin dca&lt;/strong&gt; to adjust my holdings. It's a simple approach that saves me thousands in potential capital gains taxes while keeping my risk profile exactly where I want it.&lt;/p&gt;
 
-&lt;p&gt;Most people talk about DCA as a "set it and forget it" game, but they rarely mention the mess it creates on the blockchain. If you buy five dollars of Bitcoin every day, you end up with hundreds of tiny inputs. When you eventually try to send that Bitcoin, you’re asking the network to process a massive number of inputs, which balloons your transaction fee. It’s like trying to pay for a house with a dump truck full of pennies.&lt;/p&gt;
+&lt;p&gt;I think a lot of people face this exact issue during bull runs. You set up a plan, you promise yourself you'll keep a balanced portfolio of stocks, bonds, and crypto, and then Bitcoin does what Bitcoin does. Suddenly, your conservative 80/20 portfolio looks like a highly speculative hedge fund.&lt;/p&gt;
 
-&lt;h2&gt;How I handle the DCA consolidation strategy: Managing dust and optimizing future settlement costs&lt;/h2&gt;
+&lt;p&gt;I almost made a huge mistake last year. I actually logged into my brokerage account, calculated the exact amount of Bitcoin I needed to sell to buy more index funds, and had the sell order ready to go. Then I paused. I realized that selling that Bitcoin would trigger a 15% capital gains tax on my profits. I would literally be handing over hard-earned cash to the government just to move my own money from one asset class to another. It felt incredibly counterproductive.&lt;/p&gt;
 
-&lt;p&gt;The solution isn't to stop buying—it's to change how you settle. I still keep my daily accumulation automated because I don't want to rely on my own willpower to time the market. I use a tool to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; so the heavy lifting happens in the background, but I’ve adjusted my withdrawal frequency. Instead of auto-withdrawing every single buy immediately, I let the balance grow on the exchange to a meaningful amount before triggering a single, larger transfer to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor&lt;/a&gt;.&lt;/p&gt;
+&lt;h2&gt;The problem with traditional portfolio rebalancing&lt;/h2&gt;
 
-&lt;p&gt;This is the core of the dca consolidation strategy: managing dust and optimizing future settlement costs. By batching my withdrawals, I’m essentially "consolidating" my buys before they ever touch my cold storage. It keeps my wallet clean, makes future spends cheaper, and honestly, it’s a bit better for my privacy, too. You aren't creating a public trail of hundreds of tiny, identical transactions.&lt;/p&gt;
+&lt;p&gt;If you read traditional personal finance blogs or listen to mainstream advisors, they always tell you to rebalance your portfolio on a set schedule. They recommend checking your allocations every quarter or every year, selling the assets that did well, and using that cash to buy the assets that underperformed.&lt;/p&gt;
 
-&lt;h2&gt;Balancing automation and control&lt;/h2&gt;
+&lt;p&gt;On paper, this sounds logical. It forces you to buy low and sell high. But in reality, it has two massive flaws.&lt;/p&gt;
 
-&lt;p&gt;I know what some of the purists say: "not your keys, not your coins," and they’re right. Leaving Bitcoin on an exchange for even a week carries counterparty risk. This is where I disagree slightly with the ultra-paranoid crowd. I think there is a middle ground. I use &lt;a href="https://btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; to figure out exactly how much I’m comfortable leaving on an exchange versus the cost of on-chain fees. It’s a trade-off.&lt;/p&gt;
+&lt;p&gt;First, it triggers taxable events. In many jurisdictions, every single time you sell crypto for fiat or even swap it for another asset, you owe taxes on the gains. If you've been holding Bitcoin for a while, those gains can be substantial. You end up losing a chunk of your compounding power to taxes.&lt;/p&gt;
 
-&lt;p&gt;If you’re just starting, don’t stress about the UTXO set. Just focus on the habit. But once your stack hits a certain size, you need a plan. I’ve made the mistake of sending tiny amounts to my wallet when fees were high, only to realize I’d spent nearly 10% of the transaction value just to move it. Don't be like me.&lt;/p&gt;
+&lt;p&gt;Second, it often forces you to sell your best-performing asset prematurely. Bitcoin is a generational asset. Personally, I don't want to sell my hardest money just because some arbitrary spreadsheet rule says my stock portfolio is lagging behind.&lt;/p&gt;
 
-&lt;p&gt;If you're looking for a place to start, I usually point people toward &lt;a href="https://www.btc-dca.com/crypto-exchanges"&gt;exchanges that support automated withdrawals&lt;/a&gt; because it saves you from having to do this manually every month. I personally use &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; for the liquidity, but the principle stays the same regardless of where you trade.&lt;/p&gt;
+&lt;h2&gt;Why I use the inflow rebalancing strategy how to maintain your target asset allocation using only your Bitcoin DCA&lt;/h2&gt;
 
-&lt;h2&gt;Is your wallet ready for a bull market?&lt;/h2&gt;
+&lt;p&gt;Instead of selling my winners, I prefer to use my monthly savings to smooth things out. This is where the inflow rebalancing strategy how to maintain your target asset allocation using only your bitcoin dca shines. Instead of selling Bitcoin to buy stocks, you simply direct more of your new cash into stocks and less into Bitcoin until your target ratios line up again.&lt;/p&gt;
 
-&lt;p&gt;The real benefit of the dca consolidation strategy: managing dust and optimizing future settlement costs isn't just about saving a few dollars today. It’s about being prepared for when the network gets congested. When Bitcoin fees hit twenty or thirty dollars per transaction, those tiny "dust" inputs become impossible to move without losing a huge chunk of your value.&lt;/p&gt;
+&lt;p&gt;Here is how I manage this in practice. I have a set amount of money I save every month from my day job. When Bitcoin is riding high and represents too large a share of my net worth, I don't touch my existing cold storage. I just log into my account and temporarily lower my weekly purchase amount.&lt;/p&gt;
 
-&lt;p&gt;I’m not a financial advisor, and I’m definitely not a professional developer—I just build tools that solve my own problems because I hate manual work. Always do your own research before trusting a script or a platform with your keys.&lt;/p&gt;
+&lt;p&gt;Because I built my own &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;automated DCA tool features&lt;/a&gt; to manage my buys, I can easily tweak my settings without paying any platform fees. If I am using an exchange like Binance, I can set up my API keys and adjust my recurring fiat-to-BTC ratio in about two minutes. For example, when I want to &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt; during a market dip, I might ramp up my automation. During a massive pump, I dial it back and let my stock market contributions do the heavy lifting.&lt;/p&gt;
 
-&lt;p&gt;At the end of the day, Bitcoin is about sovereignty. If you’re building a long-term position, your strategy needs to evolve alongside your stack. Don't let your "set it and forget it" plan turn into a "set it and lose it to fees" disaster. Keep your wallet clean, keep your withdrawals batched, and stay patient.&lt;/p&gt;</content:encoded>
-      <description>I woke up last Tuesday to a realization that I was basically throwing money away on Bitcoin network fees. I’ve been stacking small amounts every single day for the past two years, but when I looked at my hardware wallet, it was filled with tiny, fragmented UTXOs (unspent transaction outputs). If I e...</description>
+&lt;h2&gt;How to calculate your adjusted DCA amounts&lt;/h2&gt;
+
+&lt;p&gt;To make this work, you need to know your numbers. You don't want to just guess how much to adjust your buys. I usually run my numbers through the &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware DCA calculator&lt;/a&gt; I hosted on my site to see how different buy sizes affect my long-term accumulation.&lt;/p&gt;
+
+&lt;p&gt;Let's look at a concrete example. Say you invest $1,000 every month. Your target is 80% global index funds ($800) and 20% Bitcoin ($200).&lt;/p&gt;
+
+&lt;p&gt;If Bitcoin doubles, your portfolio might shift to 65% stocks and 35% Bitcoin. To bring it back toward 80/20 without selling, you could shift your monthly inflows. For the next six months, you allocate $950 to stocks and only $50 to Bitcoin. Over time, your stock allocation climbs back up, and your Bitcoin allocation cools down relative to the rest of your wealth.&lt;/p&gt;
+
+&lt;p&gt;This keeps you constantly investing without ever paying a dime in capital gains tax. And since I automate my buys to go straight to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;, I don't have to worry about leaving funds on exchanges while I wait for my allocations to balance out.&lt;/p&gt;
+
+&lt;h2&gt;The limitations of using cash flow to rebalance&lt;/h2&gt;
+
+&lt;p&gt;Now, I have to be honest here. This strategy isn't a magic bullet, and it has one major limitation. It only works if your monthly inflows are large enough relative to your total portfolio size to actually move the needle.&lt;/p&gt;
+
+&lt;p&gt;If you have a $500,000 portfolio and you are only investing $500 a month, shifting your DCA amounts isn't going to fix a massive 15% allocation drift. The market moves will completely overwhelm your monthly savings.&lt;/p&gt;
+
+&lt;p&gt;But for most people who are still in the early to middle stages of building their wealth, the inflow rebalancing strategy how to maintain your target asset allocation using only your bitcoin dca works beautifully. It keeps you on track for years before your portfolio gets so large that cash flow can't keep up.&lt;/p&gt;
+
+&lt;p&gt;Even if your portfolio does grow past that point, I still think it's often better to just let your winners run rather than paying massive tax bills to force an arbitrary balance. I'm totally comfortable letting my Bitcoin allocation drift higher during a bull run, knowing things will likely cool off during the next bear market anyway.&lt;/p&gt;
+
+&lt;p&gt;Obviously, I'm not your financial advisor. You have to look at your own tax bracket, your own risk tolerance, and decide what works for you. This is just how I manage my own portfolio to keep my tax bill as close to zero as possible while still stacking sats.&lt;/p&gt;
+
+&lt;p&gt;At the end of the day, the best strategy is the one you can actually stick to without stressing out. For me, keeping my hands off my sell button and letting my automated weekly buys do the work is the easiest way to sleep at night.&lt;/p&gt;
+
+&lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
+      <description>Last month, I looked at my portfolio and realized my Bitcoin allocation had drifted from my target 20% to almost 45% because of the recent price action. To fix this without triggering a massive tax bill, I started using **the inflow rebalancing strategy how to maintain your target asset allocation u...</description>
     </item>
   </channel>
 </rss>
