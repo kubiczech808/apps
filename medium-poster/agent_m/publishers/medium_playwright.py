@@ -201,6 +201,9 @@ class MediumPlaywrightPublisher:
 
         # Strategy 3: fall back to UI dialog (may fail but worth trying)
         log.info("Medium: API and drafts page failed, falling back to UI dialog")
+        await page.goto(f"https://medium.com/p/{post_id}/edit", wait_until="domcontentloaded", timeout=60000)
+        await self._human_delay(5, 8)
+        await self._wait_for_cloudflare(page, "fallback_edit")
         return await self._publish_via_ui(page, tags)
 
     async def _publish_via_api(self, page, post_id: str, tags: list[str]) -> str | None:
@@ -445,10 +448,22 @@ class MediumPlaywrightPublisher:
             await self._dump_page_diagnostics(page, "no_publish_now")
             raise RuntimeError("Medium: final publish button not visible")
         await self._human_delay(3, 5)
+        await self._raise_if_publish_limit(page)
 
         published_url = await self._wait_for_published_url(page, timeout_s=90)
         log.info("Medium: published at %s", published_url)
         return published_url
+
+    async def _raise_if_publish_limit(self, page) -> None:
+        try:
+            body = (await page.locator("body").inner_text(timeout=5000)).lower()
+        except Exception:
+            return
+        if "maximum of two stories" in body and "past 24 hours" in body:
+            raise RuntimeError(
+                "Medium publish limit reached: maximum of two stories in the past 24 hours. "
+                "Retry after the Medium 24h publishing window resets."
+            )
 
     async def _wait_for_save_complete(self, page, timeout_s: int = 60, stable_s: int = 5) -> None:
         """Wait until Medium's auto-save truly finishes.
@@ -1035,6 +1050,7 @@ class MediumPlaywrightPublisher:
             except Exception:
                 pass
             if "/submission" in url:
+                await self._raise_if_publish_limit(page)
                 if "service unavailable" in title.lower() or "gateway" in title.lower():
                     try:
                         await page.reload(wait_until="domcontentloaded", timeout=60000)
@@ -1047,7 +1063,9 @@ class MediumPlaywrightPublisher:
             await asyncio.sleep(0.5)
 
         url = page.url
-        log.warning("Medium: timed out waiting for published URL, returning: %s", url)
+        log.warning("Medium: timed out waiting for published URL: %s", url)
+        if "/submission" in url or "/edit" in url or "new-story" in url:
+            raise RuntimeError(f"Medium publish did not complete; still on {url}")
         return url
 
     async def _wait_for_cloudflare(self, page, label: str) -> None:
@@ -1104,17 +1122,50 @@ class MediumPlaywrightPublisher:
             'p[data-placeholder*="Title" i]',
             'div[data-placeholder*="Title" i]',
             '[data-testid="title"]',
+            '[data-default-value*="Title"]',
             '[role="textbox"]',
             '[contenteditable]:not([contenteditable="false"])',
         ]
-        for selector in selectors:
-            locator = page.locator(selector).first
-            try:
-                if await locator.is_visible(timeout=10000):
-                    log.info("Medium: title field found via %s", selector)
-                    return locator
-            except Exception:
-                continue
+        for attempt in range(3):
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                for selector in selectors:
+                    locator = page.locator(selector).first
+                    try:
+                        if await locator.is_visible(timeout=2000):
+                            log.info(
+                                "Medium: title field found via %s (attempt %d)",
+                                selector,
+                                attempt + 1,
+                            )
+                            return locator
+                    except Exception:
+                        continue
+
+                try:
+                    state = await page.evaluate("""() => ({
+                        url: location.href,
+                        title: document.title,
+                        body: (document.body?.innerText || '').slice(0, 180),
+                        fields: document.querySelectorAll(
+                            '[contenteditable], [role="textbox"], textarea, input'
+                        ).length,
+                    })""")
+                    log.info("Medium: waiting for title field: %s", state)
+                except Exception:
+                    pass
+
+                try:
+                    await page.mouse.click(640, 260)
+                except Exception:
+                    pass
+                await asyncio.sleep(3)
+
+            if attempt < 2:
+                log.info("Medium: title field not ready, reloading new-story (attempt %d)", attempt + 1)
+                await page.goto("https://medium.com/new-story", wait_until="domcontentloaded", timeout=60000)
+                await self._human_delay(8, 12)
+                await self._wait_for_cloudflare(page, f"new_story_reload_{attempt + 1}")
 
         await self._dump_page_diagnostics(page, "no_title_field")
         raise RuntimeError("Medium: no title field found on new-story page")
