@@ -89,12 +89,29 @@ async def run_once(send_status: bool = True) -> dict:
             return result
 
     scheduled_at = _next_schedule_time()
-    result = await publisher.schedule_draft_for_later(
-        draft["postId"],
-        scheduled_at,
-        tags=_DEFAULT_TAGS,
-        preview_image_bytes=preview_image_bytes,
-    )
+    try:
+        result = await publisher.schedule_draft_for_later(
+            draft["postId"],
+            scheduled_at,
+            tags=_DEFAULT_TAGS,
+            preview_image_bytes=preview_image_bytes,
+        )
+    except Exception as exc:
+        reason = str(exc)
+        if "maximum of two stories" in reason.lower() and draft.get("needs_preview_image"):
+            image_review_ok.add(draft["postId"])
+            state["image_review_ok"] = sorted(image_review_ok)
+        result = {
+            "status": "retry_later",
+            "post_id": draft.get("postId"),
+            "title": draft.get("title"),
+            "reason": reason,
+            "image_model": image_model,
+        }
+        state["last_run_at"] = datetime.now(timezone.utc).isoformat()
+        _write_state(_STATE_FILE, state)
+        await _maybe_send_status(result, send_status)
+        return result
 
     scheduled_done[draft["postId"]] = {
         "status": "scheduled",

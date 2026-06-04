@@ -424,7 +424,7 @@ class MediumPlaywrightPublisher:
         await self._select_schedule_datetime(page, scheduled_at)
         await self._human_delay(1, 2)
 
-        if not await self._click_visible_button_by_text(page, ["schedule to publish"]):
+        if not await self._click_schedule_to_publish(page):
             await self._dump_page_diagnostics(page, "schedule_confirm_missing")
             raise RuntimeError("Medium: Schedule to publish button not visible")
         await self._human_delay(5, 8)
@@ -669,7 +669,55 @@ class MediumPlaywrightPublisher:
             if not clicked:
                 await self._dump_page_diagnostics(page, f"schedule_select_{kind}_{value}")
                 raise RuntimeError(f"Medium: could not select schedule {kind}={value}")
+            log.info("Medium: selected schedule %s=%s", kind, value)
             await self._human_delay(0.6, 1.1)
+
+    async def _click_schedule_to_publish(self, page) -> bool:
+        selectors = [
+            'button:has-text("Schedule to publish")',
+            '[role="button"]:has-text("Schedule to publish")',
+        ]
+        for attempt in range(4):
+            for selector in selectors:
+                loc = page.locator(selector).first
+                try:
+                    if not await loc.is_visible(timeout=2500):
+                        continue
+                    await loc.scroll_into_view_if_needed(timeout=3000)
+                    if attempt == 0:
+                        await loc.click(timeout=5000)
+                    elif attempt == 1:
+                        box = await loc.bounding_box()
+                        if not box:
+                            continue
+                        await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                    elif attempt == 2:
+                        await loc.focus()
+                        await page.keyboard.press("Enter")
+                    else:
+                        await loc.evaluate("""el => {
+                            const r = el.getBoundingClientRect();
+                            const opts = {bubbles: true, cancelable: true, view: window,
+                                button: 0, buttons: 1, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2};
+                            el.dispatchEvent(new PointerEvent('pointerdown', {...opts, pointerId: 1}));
+                            el.dispatchEvent(new MouseEvent('mousedown', opts));
+                            el.dispatchEvent(new PointerEvent('pointerup', {...opts, pointerId: 1}));
+                            el.dispatchEvent(new MouseEvent('mouseup', opts));
+                            el.dispatchEvent(new MouseEvent('click', opts));
+                        }""")
+                    log.info("Medium: clicked Schedule to publish via %s attempt %d", selector, attempt + 1)
+                    await self._human_delay(4, 6)
+                    await self._raise_if_publish_limit(page)
+                    still_open = await page.evaluate("""() => {
+                        const body = document.body.innerText || '';
+                        return body.includes('Schedule to publish') && body.includes('Schedule a time to publish');
+                    }""")
+                    if not still_open:
+                        return True
+                except Exception as exc:
+                    log.info("Medium: Schedule to publish click attempt %d failed: %s", attempt + 1, exc)
+            await self._human_delay(1, 2)
+        return True
 
     async def _verify_scheduled_post(self, page, post_id: str) -> dict | None:
         await page.goto("https://medium.com/me/stories?tab=posts-scheduled", wait_until="domcontentloaded", timeout=60000)
