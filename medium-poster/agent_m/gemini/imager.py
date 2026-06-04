@@ -6,11 +6,12 @@ from urllib.parse import quote
 
 import httpx
 
+from agent_m.config import config
 from agent_m.gemini.researcher import Topic
 
 log = logging.getLogger(__name__)
 
-_POLLINATIONS_URL = "https://image.pollinations.ai/prompt/{prompt}"
+_POLLINATIONS_URL = "https://gen.pollinations.ai/image/{prompt}"
 
 _IMAGE_MODELS = [
     {"param": "klein", "name": "FLUX.2 Klein 4B"},
@@ -46,7 +47,13 @@ async def generate_header_image(topic: Topic) -> tuple[bytes, str]:
 
 
 async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> tuple[bytes, str]:
-    url = _POLLINATIONS_URL.format(prompt=quote(prompt))
+    if not config.pollinations_api_key:
+        raise RuntimeError(
+            "Pollinations Klein requires POLLINATIONS_API_KEY; "
+            "the current Pollinations API rejects unauthenticated Klein image requests"
+        )
+
+    url = _POLLINATIONS_URL.format(prompt=quote(prompt, safe=""))
     last_error: Exception | None = None
 
     model_info = _IMAGE_MODELS[0]
@@ -64,11 +71,13 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
     }
     if seed is not None:
         params["seed"] = str(seed)
+    params["key"] = config.pollinations_api_key
+    headers = {"Authorization": f"Bearer {config.pollinations_api_key}"}
 
     for attempt in range(1, _POLLINATIONS_ATTEMPTS + 1):
         try:
             async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
-                resp = await client.get(url, params=params)
+                resp = await client.get(url, params=params, headers=headers)
                 if resp.status_code != 200:
                     raise RuntimeError(f"Pollinations HTTP {resp.status_code}: {resp.text[:200]}")
 

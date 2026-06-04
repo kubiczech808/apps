@@ -88,6 +88,7 @@ python -m agent_m
 
 ```
 GEMINI_API_KEY=              # Google AI Studio
+POLLINATIONS_API_KEY=        # Pollinations key for Medium Klein cover images
 TELEGRAM_BOT_TOKEN=          # @BotFather
 TELEGRAM_ADMIN_CHAT_ID=      # your Telegram chat ID
 IMGUR_CLIENT_ID=             # Imgur app registration
@@ -108,6 +109,7 @@ LOG_LEVEL=INFO
 | .env variable            | GitHub Secret Name   |
 |--------------------------|----------------------|
 | `GEMINI_API_KEY`         | `GEMINI_API_KEY_M`   |
+| `POLLINATIONS_API_KEY`   | `POLLINATIONS_API_KEY_M` |
 | `TELEGRAM_BOT_TOKEN`     | `M_TELEGRAM_TOKEN`   |
 | `TELEGRAM_ADMIN_CHAT_ID` | `M_TELEGRAM_CHAT_ID` |
 

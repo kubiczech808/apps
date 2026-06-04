@@ -13,6 +13,7 @@ class Config(BaseSettings):
     )
 
     gemini_api_key: str = ""
+    pollinations_api_key: str = ""
     telegram_bot_token: str = ""
     telegram_admin_chat_id: int = 0
 
