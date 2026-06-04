@@ -109,7 +109,7 @@ LOG_LEVEL=INFO
 | .env variable            | GitHub Secret Name   |
 |--------------------------|----------------------|
 | `GEMINI_API_KEY`         | `GEMINI_API_KEY_M`   |
-| `POLLINATIONS_API_KEY`   | `POLLINATIONS_API_KEY_M` |
+| `POLLINATIONS_API_KEY`   | `M_AGENT_POLLINATIONS_API` |
 | `TELEGRAM_BOT_TOKEN`     | `M_TELEGRAM_TOKEN`   |
 | `TELEGRAM_ADMIN_CHAT_ID` | `M_TELEGRAM_CHAT_ID` |
 
