@@ -24,6 +24,7 @@ _VISUAL_IMAGE_BLOCKS = {
     "41804b8ee387": "cover contains pseudo text around the Bitcoin coin",
     "6a4a28d983da": "cover contains pseudo UI/text artifacts in the orange dashboard image",
 }
+_FORCE_IMAGE_REVIEW = {"41804b8ee387"}
 
 
 async def run_once(send_status: bool = True) -> dict:
@@ -52,7 +53,7 @@ async def run_once(send_status: bool = True) -> dict:
             continue
         reasons = _quality_reasons(draft)
         image_block = _VISUAL_IMAGE_BLOCKS.get(post_id)
-        if image_block and post_id not in image_review_ok:
+        if image_block and (post_id not in image_review_ok or post_id in _FORCE_IMAGE_REVIEW):
             draft["needs_preview_image"] = image_block
         if reasons:
             rejected.append(_reject(draft, "; ".join(reasons)))
@@ -98,7 +99,11 @@ async def run_once(send_status: bool = True) -> dict:
         )
     except Exception as exc:
         reason = str(exc)
-        if "maximum of two stories" in reason.lower() and draft.get("needs_preview_image"):
+        if (
+            "maximum of two stories" in reason.lower()
+            and draft.get("needs_preview_image")
+            and image_model == "FLUX.2 Klein 4B"
+        ):
             image_review_ok.add(draft["postId"])
             state["image_review_ok"] = sorted(image_review_ok)
         result = {
