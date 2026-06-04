@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,7 +14,10 @@ class Config(BaseSettings):
     )
 
     gemini_api_key: str = ""
-    pollinations_api_key: str = ""
+    pollinations_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("POLLINATIONS_API_KEY", "M_AGENT_POLLINATIONS_API"),
+    )
     telegram_bot_token: str = ""
     telegram_admin_chat_id: int = 0
 
