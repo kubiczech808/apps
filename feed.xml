@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Thu, 04 Jun 2026 03:25:40 +0000</lastBuildDate>
-    <item>
-      <title>The dynamic DCA: How to adjust buys on fear and greed</title>
-      <link>https://btc-dca.com/blog/generated-202606010425</link>
-      <guid isPermaLink="false">generated-202606010425</guid>
-      <pubDate>Mon, 01 Jun 2026 04:27:34 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dollar cost averaging</category>
-      <category>investing strategy</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Fri, 05 Jun 2026 03:25:26 +0000</lastBuildDate>
     <item>
       <title>Why your static 100 dollar DCA is shrinking and how to inflation-proof your accumulation</title>
       <link>https://btc-dca.com/blog/generated-202606010631</link>
@@ -230,40 +219,68 @@
       <title>Why my modest stack keeps me safe from lifestyle creep</title>
       <link>https://btc-dca.com/blog/generated-202606040325</link>
       <guid isPermaLink="false">generated-202606040325</guid>
-      <pubDate>Thu, 04 Jun 2026 03:25:40 +0000</pubDate>
+      <pubDate>Thu, 04 Jun 2026 03:27:29 +0000</pubDate>
       <category>bitcoin</category>
       <category>personal finance</category>
       <category>dollar cost averaging</category>
-      <content:encoded>&lt;p&gt;Last Tuesday, my friend Sarah called me in a panic because she was trying to calculate her cash drag and figure out if she needed a liquidity ladder for her crypto. She was stressing over a massive list of terms she read on Twitter, trying to manage what she called a &lt;strong&gt;not large stack/lifestyle creep/inheritance/cash drag/liquidity ladder/yield arb/recalibration/dust consolidation/inflow rebalancing.&lt;/strong&gt; It made me realize how much energy we waste trying to play Wall Street with our modest savings.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>How to build a value averaging Bitcoin engine</title>
+      <link>https://btc-dca.com/blog/generated-202606050325</link>
+      <guid isPermaLink="false">generated-202606050325</guid>
+      <pubDate>Fri, 05 Jun 2026 03:25:26 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar-cost-averaging</category>
+      <category>value-averaging</category>
+      <content:encoded>&lt;p&gt;I spent most of 2021 putting exactly $100 a week into Bitcoin, watching blindly as my hard-earned cash bought tiny fractions of a coin at $64,000, only to buy the exact same dollar amount when we crashed to $16,000. It felt incredibly inefficient to treat those two wildly different price points with the exact same level of aggression. That frustration is what drove me to research &lt;strong&gt;how to build a value averaging bitcoin engine: dynamic dca for the disciplined accumulator&lt;/strong&gt; so I could automatically buy more when the market was bleeding and scale back when everyone else was euphoric.&lt;/p&gt;
 
-&lt;p&gt;So here's the thing: most of us aren't managing multi-million dollar hedge funds. We are just regular people trying to build a better future. When you try to force complex financial engineering onto a simple savings plan, you usually just end up making mistakes and losing sleep.&lt;/p&gt;
+&lt;p&gt;The standard advice in the crypto space is to just set a flat recurring buy and forget about it. While that is infinitely better than trading, it ignores the massive cyclicality of Bitcoin. If you have a stable income and some cash reserves, you can do better than a static plan.&lt;/p&gt;
 
-&lt;p&gt;I know this because I've been there.&lt;/p&gt;
+&lt;p&gt;So here's the thing: value averaging is not about timing the market perfectly. It is about building a system that reacts to market realities without requiring your daily emotional input.&lt;/p&gt;
 
-&lt;h2&gt;Why a modest stack beats overcomplicating your liquidity ladder&lt;/h2&gt;
+&lt;h2&gt;Why standard dollar cost averaging left me wanting more&lt;/h2&gt;
 
-&lt;p&gt;A few years ago, I almost made a massive mistake. I was obsessed with maximizing my returns, so I decided to try my hand at yield arbitrage. I moved a chunk of my Bitcoin onto a popular lending platform to earn a 6% yield. It felt like a genius move until the platform started showing warning signs of insolvency. I barely managed to pull my funds out before they froze withdrawals.&lt;/p&gt;
+&lt;p&gt;When I first started my accumulation journey, I set up a basic recurring buy on a major exchange. It was easy, but during the depths of the 2022 bear market, I realized I was sitting on extra cash that I wanted to deploy. My gut told me to buy more, but my gut is also prone to panic. I ended up making a classic mistake: I manually doubled my buy size right before another leg down, ran out of dry powder, and then stared blankly at the actual bottom without any cash left to invest.&lt;/p&gt;
 
-&lt;p&gt;That was my wake-up call. If you spend all your time worrying about a not large stack/lifestyle creep/inheritance/cash drag/liquidity ladder/yield arb/recalibration/dust consolidation/inflow rebalancing plan, you miss the forest for the trees. You expose yourself to counterparty risk just to squeeze out an extra fraction of a percent.&lt;/p&gt;
+&lt;p&gt;That was the moment I realized I needed a system.&lt;/p&gt;
 
-&lt;p&gt;Now, I keep it incredibly simple. I don't worry about cash drag because I don't keep large amounts of fiat waiting for a dip. I don't worry about yield arbitrage because the risk of losing my principal is never worth the tiny payout.&lt;/p&gt;
+&lt;p&gt;If you want to understand how to build a value averaging bitcoin engine: dynamic dca for the disciplined accumulator, you have to understand the difference between static and dynamic allocation. Instead of investing a fixed $100 every week, a dynamic engine adjusts your purchase amount based on a value metric. If Bitcoin is cheap relative to its historical trend, the engine automatically bumps your buy to $150 or $200. If it is overextended and pushing new all-time highs, the engine scales your buy down to $50 or even pauses it entirely.&lt;/p&gt;
 
-&lt;p&gt;Instead, I focus on what actually works: buying a set amount of Bitcoin at regular intervals and moving it straight to cold storage.&lt;/p&gt;
+&lt;p&gt;This approach keeps you from blowing your cash reserves too early. It forces you to buy the fear and sell (or at least stop buying) the greed.&lt;/p&gt;
 
-&lt;h2&gt;Keeping it simple with automation&lt;/h2&gt;
+&lt;h2&gt;How to build a value averaging Bitcoin engine in practice&lt;/h2&gt;
 
-&lt;p&gt;Once you stop trying to time the market or optimize every single satoshi, a weird thing happens. You get your life back. You stop checking charts every ten minutes.&lt;/p&gt;
+&lt;p&gt;You do not need a complex coding background to set this up, though a basic spreadsheet or an automation tool helps. The core of any dynamic DCA engine is choosing your "signal."&lt;/p&gt;
 
-&lt;p&gt;To make this easy for myself, I actually built a tool to &lt;a href="https://www.btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; directly through exchange APIs. It connects to platforms like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; or &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; and automatically buys Bitcoin on my schedule, then sends it straight to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;Some people use the Mayer Multiple (the ratio of Bitcoin's current price to its 200-day moving average). Others use simple distance-from-all-time-high percentages. I personally prefer looking at diminishing returns and halving cycles. I actually built a &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware DCA calculator&lt;/a&gt; to help model how these different parameters play out over multi-year horizons.&lt;/p&gt;
 
-&lt;p&gt;If you want to see how different buying frequencies affect your savings over time without the headache, you can play around with &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt;. It even models diminishing returns per halving cycle, which helps keep expectations realistic.&lt;/p&gt;
+&lt;p&gt;Once you have your signal, you define your buying bands. For example:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;If Bitcoin is more than 20% below its 200-day moving average, buy 1.5x your base amount.&lt;/li&gt;
+&lt;li&gt;If it is within 10% of the moving average, buy your 1.0x base amount.&lt;/li&gt;
+&lt;li&gt;If it is 30% or more above the moving average, cut your buy to 0.5x.&lt;/li&gt;
+&lt;/ul&gt;
 
-&lt;p&gt;Obviously I'm not your financial advisor—do your own research and figure out what works for your personal situation. But for me, cutting out the noise has been the best decision I've made.&lt;/p&gt;
+&lt;p&gt;To actually execute this without losing your mind, you need to connect your logic to an exchange. I used to do this manually every Monday morning, but life got in the way and I would miss days or let my emotions convince me to skip a buy. That is why I built my own tool to handle &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;automated buying features&lt;/a&gt; directly through API keys, letting me automate the boring parts while keeping custody of my funds.&lt;/p&gt;
 
-&lt;p&gt;I don't need a complex not large stack/lifestyle creep/inheritance/cash drag/liquidity ladder/yield arb/recalibration/dust consolidation/inflow rebalancing strategy when a simple weekly buy does the job. I would rather spend my weekends away from the screen, knowing my savings plan is running quietly in the background.&lt;/p&gt;
+&lt;p&gt;If you are looking for a reliable exchange with deep liquidity to plug into an engine like this, you can easily &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt; or use a platform like Coinbase Advanced. The key is using an exchange that offers low maker fees, because dynamic buying means you will be making frequent transactions over several years.&lt;/p&gt;
+
+&lt;h2&gt;The psychological trap of dynamic accumulation&lt;/h2&gt;
+
+&lt;p&gt;Here is my unpopular opinion: most people who try to run a dynamic DCA plan fail because they get greedy when the engine tells them to scale back.&lt;/p&gt;
+
+&lt;p&gt;When Bitcoin is ripping up 10% a day and the internet is flooded with laser-eye memes, your dynamic engine is going to tell you to cut your buy size in half. Every bone in your body will want to override the system and buy more because of FOMO. I have fallen into this trap myself, thinking "this time is different" and overriding my own code, only to regret it three months later when the correction hit.&lt;/p&gt;
+
+&lt;p&gt;If you are going to learn how to build a value averaging bitcoin engine: dynamic dca for the disciplined accumulator, you have to commit to the math. You have to let the system buy less when it feels like the party will never end, and you have to let it buy significantly more when the media is declaring Bitcoin dead for the hundredth time.&lt;/p&gt;
+
+&lt;p&gt;Once those automated buys execute, the final step is getting those coins off the exchange. No matter how much I trust the platforms I use, I never leave a significant balance on them. I make sure my automated setups eventually route everything to cold storage, and I highly recommend &lt;a href="https://bit.ly/buy-trezor-t"&gt;securing your coins on a Trezor&lt;/a&gt; to ensure you actually own what you are buying.&lt;/p&gt;
+
+&lt;p&gt;Obviously, I am not a financial advisor and this is just my personal diary of how I manage my own portfolio. Do your own research, test your parameters in a spreadsheet first, and only risk what you can afford to lose. But if you are tired of the blunt instrument that is standard DCA, building a bit of dynamic logic into your stacking routine might be the upgrade you are looking for.&lt;/p&gt;
 
 &lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
-      <description>Last Tuesday, my friend Sarah called me in a panic because she was trying to calculate her cash drag and figure out if she needed a liquidity ladder for her crypto. She was stressing over a massive list of terms she read on Twitter, trying to manage what she called a **not large stack/lifestyle cree...</description>
+      <description>I spent most of 2021 putting exactly $100 a week into Bitcoin, watching blindly as my hard-earned cash bought tiny fractions of a coin at $64,000, only to buy the exact same dollar amount when we crashed to $16,000. It felt incredibly inefficient to treat those two wildly different price points with...</description>
     </item>
   </channel>
 </rss>
