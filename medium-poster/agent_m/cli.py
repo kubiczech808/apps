@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import sys
+from pathlib import Path
 
 import httpx
 
@@ -145,11 +146,14 @@ def main() -> None:
             "medium-featured-image",
             "medium-draft-schedule",
             "medium-image-maintenance",
+            "medium-replace-image",
         ],
         default="draft",
         nargs="?",
     )
     parser.add_argument("--slug", help="Specific topic slug from content plan")
+    parser.add_argument("--post-id", help="Medium post ID for targeted maintenance actions")
+    parser.add_argument("--image-path", help="Local image path for targeted Medium image replacement")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -176,6 +180,23 @@ def main() -> None:
     elif args.mode == "medium-image-maintenance":
         from agent_m.medium_image_maintenance import main as image_maintenance_main
         image_maintenance_main()
+    elif args.mode == "medium-replace-image":
+        if not args.post_id:
+            raise SystemExit("--post-id is required for medium-replace-image")
+        if not args.image_path:
+            raise SystemExit("--image-path is required for medium-replace-image")
+        from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
+        image_path = Path(args.image_path)
+        if not image_path.exists():
+            raise SystemExit(f"Image path not found: {image_path}")
+        url = asyncio.run(
+            MediumPlaywrightPublisher().add_featured_image_to_post(
+                args.post_id,
+                image_path.read_bytes(),
+                replace_existing=True,
+            )
+        )
+        print(f"MEDIUM_REPLACE_IMAGE_URL={url}")
     else:
         asyncio.run(run(mode=args.mode, slug=args.slug))
 

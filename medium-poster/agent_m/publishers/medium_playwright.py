@@ -243,6 +243,7 @@ class MediumPlaywrightPublisher:
         self,
         post_id: str,
         image_bytes: bytes,
+        replace_existing: bool = False,
     ) -> str:
         if not _COOKIES_FILE.exists():
             raise RuntimeError(
@@ -268,7 +269,7 @@ class MediumPlaywrightPublisher:
                 page = await context.new_page()
                 try:
                     result = await self._add_featured_image_to_post_page(
-                        page, post_id, image_bytes
+                        page, post_id, image_bytes, replace_existing=replace_existing
                     )
                 except Exception:
                     log.exception("Medium featured image backfill failed")
@@ -447,26 +448,22 @@ class MediumPlaywrightPublisher:
         removed = await page.evaluate("""() => {
             const editor = document.querySelector('[role="textbox"][contenteditable="true"], [contenteditable="true"]');
             if (!editor) return 0;
-            const images = Array.from(editor.querySelectorAll('img'));
-            let count = 0;
-            for (const img of images) {
-                const block = img.closest('figure, section, div') || img.parentElement;
-                if (block && block !== editor) {
-                    block.remove();
-                    count++;
-                } else {
-                    img.remove();
-                    count++;
-                }
+            const img = editor.querySelector('img');
+            if (!img) return 0;
+            const block = img.closest('figure, section, div') || img.parentElement;
+            if (block && block !== editor) {
+                block.remove();
+            } else {
+                img.remove();
             }
             editor.dispatchEvent(new InputEvent('input', {
                 bubbles: true,
                 inputType: 'deleteContentBackward',
                 data: null,
             }));
-            return count;
+            return 1;
         }""")
-        log.info("Medium: removed %d existing article image(s) before scheduling", removed)
+        log.info("Medium: removed %d existing article cover image(s)", removed)
         await self._human_delay(1, 2)
         title = await self._focus_after_title(page)
         log.info("Medium: inserting replacement article cover after title: %s", title[:120])
@@ -930,6 +927,7 @@ class MediumPlaywrightPublisher:
         page,
         post_id: str,
         image_bytes: bytes,
+        replace_existing: bool = False,
     ) -> str:
         await page.goto(f"https://medium.com/p/{post_id}/edit", wait_until="domcontentloaded", timeout=60000)
         await self._human_delay(6, 10)
@@ -939,6 +937,13 @@ class MediumPlaywrightPublisher:
             raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
 
         if await self._article_has_image(page):
+            if replace_existing:
+                await self._replace_article_cover_image(page, image_bytes)
+                await self._wait_for_save_complete(page, timeout_s=90, stable_s=5)
+                await self._save_and_publish_update(page)
+                url = await self._canonical_post_url(page, post_id)
+                log.info("Medium: featured image replaced for %s at %s", post_id, url)
+                return url
             log.info("Medium: post %s already has an image; skipping insert", post_id)
             return await self._canonical_post_url(page, post_id)
 
