@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 from urllib.parse import quote
@@ -17,7 +18,8 @@ _IMAGE_MODELS = [
     {"param": "klein", "name": "FLUX.2 Klein 4B"},
 ]
 
-_POLLINATIONS_ATTEMPTS = 1
+_POLLINATIONS_ATTEMPTS = 3
+_POLLINATIONS_RETRY_DELAY_S = 20
 
 _STYLES = [
     "clean modern flat illustration with geometric shapes",
@@ -71,7 +73,6 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
     }
     if seed is not None:
         params["seed"] = str(seed)
-    params["key"] = config.pollinations_api_key
     headers = {"Authorization": f"Bearer {config.pollinations_api_key}"}
 
     for attempt in range(1, _POLLINATIONS_ATTEMPTS + 1):
@@ -79,7 +80,10 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
             async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
                 resp = await client.get(url, params=params, headers=headers)
                 if resp.status_code != 200:
-                    raise RuntimeError(f"Pollinations HTTP {resp.status_code}: {resp.text[:200]}")
+                    message = f"Pollinations HTTP {resp.status_code}: {resp.text[:200]}"
+                    if resp.status_code == 402 and "PAYMENT_REQUIRED" in resp.text:
+                        raise RuntimeError(f"{message} (non-retryable until balance increases)")
+                    raise RuntimeError(message)
 
                 content_type = resp.headers.get("content-type", "")
                 if "image" not in content_type and len(resp.content) < 1000:
@@ -97,6 +101,10 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
                 "Pollinations [%s] attempt %d/%d failed: %s",
                 model_info["name"], attempt, _POLLINATIONS_ATTEMPTS, exc,
             )
+            if "non-retryable until balance increases" in str(exc):
+                break
+            if attempt < _POLLINATIONS_ATTEMPTS:
+                await asyncio.sleep(_POLLINATIONS_RETRY_DELAY_S)
 
     raise RuntimeError(
         "Pollinations Klein image generation failed; retry later rather than using a low-quality fallback. "

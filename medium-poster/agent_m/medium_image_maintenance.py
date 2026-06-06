@@ -15,22 +15,32 @@ log = logging.getLogger(__name__)
 
 
 async def run_once(send_status: bool = True) -> dict:
-    draft = await run_draft_scheduler_once(send_status=False)
-    draft_status = draft.get("status")
+    featured = await run_featured_image_once()
+    featured_status = featured.get("status")
 
-    if draft_status in {"scheduled", "retry_later"}:
+    if featured_status in {"updated", "retry_later"}:
         result = {
-            "status": "draft_priority",
-            "draft": draft,
-            "featured": {
+            "status": "featured_priority",
+            "draft": {
                 "status": "skipped",
-                "reason": "draft scheduler used or attempted the hourly image-generation slot",
+                "reason": "featured image backfill used or attempted the hourly image-generation slot",
             },
+            "featured": featured,
         }
         await _maybe_send_status(result, send_status)
         return result
 
-    featured = await run_featured_image_once()
+    draft = await run_draft_scheduler_once(send_status=False)
+    draft_status = draft.get("status")
+    if draft_status in {"scheduled", "retry_later"}:
+        result = {
+            "status": "draft_priority",
+            "draft": draft,
+            "featured": featured,
+        }
+        await _maybe_send_status(result, send_status)
+        return result
+
     result = {
         "status": "combined",
         "draft": draft,
@@ -46,7 +56,11 @@ def format_result(result: dict) -> str:
     lines = ["Medium image maintenance"]
 
     lines.append("")
-    lines.append(format_draft_result(draft))
+    if draft.get("status") == "skipped":
+        lines.append("Medium draft scheduler: skipped")
+        lines.append(f"Reason: {draft.get('reason')}")
+    else:
+        lines.append(format_draft_result(draft))
 
     lines.append("")
     featured_status = featured.get("status")
