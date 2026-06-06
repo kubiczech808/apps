@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Fri, 05 Jun 2026 03:25:26 +0000</lastBuildDate>
-    <item>
-      <title>Why your static 100 dollar DCA is shrinking and how to inflation-proof your accumulation</title>
-      <link>https://btc-dca.com/blog/generated-202606010631</link>
-      <guid isPermaLink="false">generated-202606010631</guid>
-      <pubDate>Mon, 01 Jun 2026 06:33:01 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dca</category>
-      <category>inflation</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Sat, 06 Jun 2026 03:25:39 +0000</lastBuildDate>
     <item>
       <title>How to build a corporate Bitcoin reserve: The smb guide to automated treasury DCA</title>
       <link>https://btc-dca.com/blog/generated-202606010633</link>
@@ -230,57 +219,65 @@
       <title>How to build a value averaging Bitcoin engine</title>
       <link>https://btc-dca.com/blog/generated-202606050325</link>
       <guid isPermaLink="false">generated-202606050325</guid>
-      <pubDate>Fri, 05 Jun 2026 03:25:26 +0000</pubDate>
+      <pubDate>Fri, 05 Jun 2026 03:27:16 +0000</pubDate>
       <category>bitcoin</category>
       <category>dollar-cost-averaging</category>
       <category>value-averaging</category>
-      <content:encoded>&lt;p&gt;I spent most of 2021 putting exactly $100 a week into Bitcoin, watching blindly as my hard-earned cash bought tiny fractions of a coin at $64,000, only to buy the exact same dollar amount when we crashed to $16,000. It felt incredibly inefficient to treat those two wildly different price points with the exact same level of aggression. That frustration is what drove me to research &lt;strong&gt;how to build a value averaging bitcoin engine: dynamic dca for the disciplined accumulator&lt;/strong&gt; so I could automatically buy more when the market was bleeding and scale back when everyone else was euphoric.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Timing the sunday dip to optimize your DCA</title>
+      <link>https://btc-dca.com/blog/generated-202606060325</link>
+      <guid isPermaLink="false">generated-202606060325</guid>
+      <pubDate>Sat, 06 Jun 2026 03:25:39 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar-cost-averaging</category>
+      <category>investment-strategy</category>
+      <content:encoded>&lt;p&gt;I used to think buying Bitcoin at the exact same time every week was the ultimate set-and-forget strategy, until I started looking closely at the weekend data. I spent a few nights analyzing order book depth and exchange volume to see if &lt;strong&gt;timing the sunday dip: analyzing weekly liquidity windows to optimize your automated dca schedule&lt;/strong&gt; could actually boost my long-term stack.&lt;/p&gt;
 
-&lt;p&gt;The standard advice in the crypto space is to just set a flat recurring buy and forget about it. While that is infinitely better than trading, it ignores the massive cyclicality of Bitcoin. If you have a stable income and some cash reserves, you can do better than a static plan.&lt;/p&gt;
+&lt;p&gt;It turns out, those quiet weekend hours when traditional markets are closed present some really interesting opportunities for retail stackers like us.&lt;/p&gt;
 
-&lt;p&gt;So here's the thing: value averaging is not about timing the market perfectly. It is about building a system that reacts to market realities without requiring your daily emotional input.&lt;/p&gt;
+&lt;p&gt;For years, I made the classic mistake of running my automated buys on Wednesday mornings. I chose Wednesdays simply because that was the middle of the week, and it felt safe. But after tracking my execution prices over several months, I noticed a pattern. My manual limit orders on Sunday evenings were almost always hitting at slightly better prices than my automated mid-week buys.&lt;/p&gt;
 
-&lt;h2&gt;Why standard dollar cost averaging left me wanting more&lt;/h2&gt;
+&lt;p&gt;So here's the thing: crypto markets never sleep, but the people who move the most money do.&lt;/p&gt;
 
-&lt;p&gt;When I first started my accumulation journey, I set up a basic recurring buy on a major exchange. It was easy, but during the depths of the 2022 bear market, I realized I was sitting on extra cash that I wanted to deploy. My gut told me to buy more, but my gut is also prone to panic. I ended up making a classic mistake: I manually doubled my buy size right before another leg down, ran out of dry powder, and then stared blankly at the actual bottom without any cash left to invest.&lt;/p&gt;
+&lt;h2&gt;Why timing the sunday dip to optimize your DCA schedule actually works&lt;/h2&gt;
 
-&lt;p&gt;That was the moment I realized I needed a system.&lt;/p&gt;
+&lt;p&gt;If you have ever looked at exchange order books on a Saturday or Sunday, you probably noticed they get incredibly thin. When we talk about timing the sunday dip: analyzing weekly liquidity windows to optimize your automated dca schedule, we are basically exploiting this recurring drop in market activity.&lt;/p&gt;
 
-&lt;p&gt;If you want to understand how to build a value averaging bitcoin engine: dynamic dca for the disciplined accumulator, you have to understand the difference between static and dynamic allocation. Instead of investing a fixed $100 every week, a dynamic engine adjusts your purchase amount based on a value metric. If Bitcoin is cheap relative to its historical trend, the engine automatically bumps your buy to $150 or $200. If it is overextended and pushing new all-time highs, the engine scales your buy down to $50 or even pauses it entirely.&lt;/p&gt;
+&lt;p&gt;During the week, institutional players, algorithmic trading desks, and market makers are highly active. This keeps liquidity high and spreads tight on major platforms like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; or Coinbase. But as Friday evening rolls around in the US, institutional liquidity dries up.&lt;/p&gt;
 
-&lt;p&gt;This approach keeps you from blowing your cash reserves too early. It forces you to buy the fear and sell (or at least stop buying) the greed.&lt;/p&gt;
+&lt;p&gt;Without these market makers providing a thick cushion of buy and sell orders, it takes far less trading volume to move the price. If a few retail traders decide to sell off some assets on a Sunday afternoon, the price can slide down much faster than it would during a busy Tuesday afternoon.&lt;/p&gt;
 
-&lt;h2&gt;How to build a value averaging Bitcoin engine in practice&lt;/h2&gt;
+&lt;p&gt;My personal experiment with timing the sunday dip: analyzing weekly liquidity windows to optimize your automated dca schedule taught me that Sunday evenings, right before the weekly candle close, often offer a brief window where prices are temporarily depressed. Once the Asian markets open on Monday morning, liquidity rushes back in, and the price frequently recovers.&lt;/p&gt;
 
-&lt;p&gt;You do not need a complex coding background to set this up, though a basic spreadsheet or an automation tool helps. The core of any dynamic DCA engine is choosing your "signal."&lt;/p&gt;
+&lt;h2&gt;My setup for automated weekend buys&lt;/h2&gt;
 
-&lt;p&gt;Some people use the Mayer Multiple (the ratio of Bitcoin's current price to its 200-day moving average). Others use simple distance-from-all-time-high percentages. I personally prefer looking at diminishing returns and halving cycles. I actually built a &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware DCA calculator&lt;/a&gt; to help model how these different parameters play out over multi-year horizons.&lt;/p&gt;
+&lt;p&gt;I do not have the time or the discipline to sit at my computer every Sunday evening waiting to click the buy button. I value my weekends too much for that. Instead, I built a tool that handles the heavy lifting for me.&lt;/p&gt;
 
-&lt;p&gt;Once you have your signal, you define your buying bands. For example:&lt;/p&gt;
-&lt;ul&gt;
-&lt;li&gt;If Bitcoin is more than 20% below its 200-day moving average, buy 1.5x your base amount.&lt;/li&gt;
-&lt;li&gt;If it is within 10% of the moving average, buy your 1.0x base amount.&lt;/li&gt;
-&lt;li&gt;If it is 30% or more above the moving average, cut your buy to 0.5x.&lt;/li&gt;
-&lt;/ul&gt;
+&lt;p&gt;I set up my API keys to connect to &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; and scheduled my buys for Sunday at 10:00 PM UTC. By using &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;automated recurring buys&lt;/a&gt;, I get the benefit of the lower weekend prices without having to think about it.&lt;/p&gt;
 
-&lt;p&gt;To actually execute this without losing your mind, you need to connect your logic to an exchange. I used to do this manually every Monday morning, but life got in the way and I would miss days or let my emotions convince me to skip a buy. That is why I built my own tool to handle &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;automated buying features&lt;/a&gt; directly through API keys, letting me automate the boring parts while keeping custody of my funds.&lt;/p&gt;
+&lt;p&gt;To see if this extra effort was actually worth it, I plugged my historical trade data into &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;this cycle-aware calculator&lt;/a&gt;. I wanted to see how a consistent 1% to 1.5% price improvement on my weekly buys would compound over a ten-year period.&lt;/p&gt;
 
-&lt;p&gt;If you are looking for a reliable exchange with deep liquidity to plug into an engine like this, you can easily &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt; or use a platform like Coinbase Advanced. The key is using an exchange that offers low maker fees, because dynamic buying means you will be making frequent transactions over several years.&lt;/p&gt;
+&lt;p&gt;The results surprised me. While a 1% difference feels like pennies on a fifty-dollar weekly buy, over a full four-year halving cycle, those extra satoshis accumulate. It represents a meaningful increase in your total purchasing power, purely by changing the day of the week your order executes.&lt;/p&gt;
 
-&lt;h2&gt;The psychological trap of dynamic accumulation&lt;/h2&gt;
+&lt;h2&gt;The potential downsides of weekend execution&lt;/h2&gt;
 
-&lt;p&gt;Here is my unpopular opinion: most people who try to run a dynamic DCA plan fail because they get greedy when the engine tells them to scale back.&lt;/p&gt;
+&lt;p&gt;Now, I want to be completely honest here because there is no such thing as a perfect strategy in crypto. While the Sunday dip is a statistically observable phenomenon over long timeframes, it is not a guarantee every single week.&lt;/p&gt;
 
-&lt;p&gt;When Bitcoin is ripping up 10% a day and the internet is flooded with laser-eye memes, your dynamic engine is going to tell you to cut your buy size in half. Every bone in your body will want to override the system and buy more because of FOMO. I have fallen into this trap myself, thinking "this time is different" and overriding my own code, only to regret it three months later when the correction hit.&lt;/p&gt;
+&lt;p&gt;Sometimes, massive bullish news drops on a Saturday, and the price pumps straight through the weekend. In those cases, waiting for Sunday night means you end up buying higher than if you had bought on Friday. But over the course of fifty-two weeks in a year, the averages tend to work in your favor.&lt;/p&gt;
 
-&lt;p&gt;If you are going to learn how to build a value averaging bitcoin engine: dynamic dca for the disciplined accumulator, you have to commit to the math. You have to let the system buy less when it feels like the party will never end, and you have to let it buy significantly more when the media is declaring Bitcoin dead for the hundredth time.&lt;/p&gt;
+&lt;p&gt;Another thing to keep in mind is self-custody. Because weekend liquidity is lower, spreads can occasionally be wider on smaller exchanges. I recommend sticking to highly liquid platforms for your automated buys.&lt;/p&gt;
 
-&lt;p&gt;Once those automated buys execute, the final step is getting those coins off the exchange. No matter how much I trust the platforms I use, I never leave a significant balance on them. I make sure my automated setups eventually route everything to cold storage, and I highly recommend &lt;a href="https://bit.ly/buy-trezor-t"&gt;securing your coins on a Trezor&lt;/a&gt; to ensure you actually own what you are buying.&lt;/p&gt;
+&lt;p&gt;Once my Sunday orders execute and the funds settle, I do not leave them sitting on the exchange. My automation tool is configured to automatically sweep my accumulated Bitcoin directly to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; once the balance crosses a specific threshold.&lt;/p&gt;
 
-&lt;p&gt;Obviously, I am not a financial advisor and this is just my personal diary of how I manage my own portfolio. Do your own research, test your parameters in a spreadsheet first, and only risk what you can afford to lose. But if you are tired of the blunt instrument that is standard DCA, building a bit of dynamic logic into your stacking routine might be the upgrade you are looking for.&lt;/p&gt;
+&lt;p&gt;Obviously, I am not your financial advisor, and this is just my personal diary of trying to optimize my own portfolio. Do your own research and look at the data yourself before changing your investment habits.&lt;/p&gt;
+
+&lt;p&gt;At the end of the day, the most important part of dollar-cost averaging is simply staying consistent. Whether you buy on Sundays, Wednesdays, or daily, the simple act of removing emotion from your investing is what will get you across the finish line. Optimizing the exact hour of your buy is just the icing on the cake.&lt;/p&gt;
 
 &lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
-      <description>I spent most of 2021 putting exactly $100 a week into Bitcoin, watching blindly as my hard-earned cash bought tiny fractions of a coin at $64,000, only to buy the exact same dollar amount when we crashed to $16,000. It felt incredibly inefficient to treat those two wildly different price points with...</description>
+      <description>I used to think buying Bitcoin at the exact same time every week was the ultimate set-and-forget strategy, until I started looking closely at the weekend data. I spent a few nights analyzing order book depth and exchange volume to see if **timing the sunday dip: analyzing weekly liquidity windows to...</description>
     </item>
   </channel>
 </rss>
