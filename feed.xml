@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Sat, 06 Jun 2026 03:25:39 +0000</lastBuildDate>
-    <item>
-      <title>How to build a corporate Bitcoin reserve: The smb guide to automated treasury DCA</title>
-      <link>https://btc-dca.com/blog/generated-202606010633</link>
-      <guid isPermaLink="false">generated-202606010633</guid>
-      <pubDate>Mon, 01 Jun 2026 06:35:34 +0000</pubDate>
-      <category>bitcoin treasury</category>
-      <category>corporate dca</category>
-      <category>business bitcoin</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Sun, 07 Jun 2026 03:25:28 +0000</lastBuildDate>
     <item>
       <title>The reverse DCA: How to programmatically take profits without emotional regret</title>
       <link>https://btc-dca.com/blog/generated-202606010636</link>
@@ -230,54 +219,51 @@
       <title>Timing the sunday dip to optimize your DCA</title>
       <link>https://btc-dca.com/blog/generated-202606060325</link>
       <guid isPermaLink="false">generated-202606060325</guid>
-      <pubDate>Sat, 06 Jun 2026 03:25:39 +0000</pubDate>
+      <pubDate>Sat, 06 Jun 2026 03:27:24 +0000</pubDate>
       <category>bitcoin</category>
       <category>dollar-cost-averaging</category>
       <category>investment-strategy</category>
-      <content:encoded>&lt;p&gt;I used to think buying Bitcoin at the exact same time every week was the ultimate set-and-forget strategy, until I started looking closely at the weekend data. I spent a few nights analyzing order book depth and exchange volume to see if &lt;strong&gt;timing the sunday dip: analyzing weekly liquidity windows to optimize your automated dca schedule&lt;/strong&gt; could actually boost my long-term stack.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Building a sovereign business reserve with Bitcoin DCA</title>
+      <link>https://btc-dca.com/blog/generated-202606070325</link>
+      <guid isPermaLink="false">generated-202606070325</guid>
+      <pubDate>Sun, 07 Jun 2026 03:25:28 +0000</pubDate>
+      <category>freelancing</category>
+      <category>bitcoin dca</category>
+      <category>business treasury</category>
+      <content:encoded>&lt;p&gt;Last year, my business bank account earned a whopping 0.1% interest while my actual cost of living and software subscriptions jumped by nearly 15%. That was the moment I realized I needed a better plan for my business savings, which led me to design &lt;strong&gt;the freelancers treasury how to build a sovereign business reserve using automated bitcoin dca&lt;/strong&gt;. As a solo software developer, I cannot afford to let my hard-earned cash melt away to inflation while sitting in a traditional bank account.&lt;/p&gt;
 
-&lt;p&gt;It turns out, those quiet weekend hours when traditional markets are closed present some really interesting opportunities for retail stackers like us.&lt;/p&gt;
+&lt;p&gt;For years, mainstream financial advisors have told freelancers to keep six to twelve months of operating expenses in cash. I think that is terrible advice for the modern solo business owner. While you absolutely need a liquid cash cushion for next month's tax bill and immediate software subscriptions, holding large amounts of fiat currency long-term is a slow transfer of your wealth to the banks.&lt;/p&gt;
 
-&lt;p&gt;For years, I made the classic mistake of running my automated buys on Wednesday mornings. I chose Wednesdays simply because that was the middle of the week, and it felt safe. But after tracking my execution prices over several months, I noticed a pattern. My manual limit orders on Sunday evenings were almost always hitting at slightly better prices than my automated mid-week buys.&lt;/p&gt;
+&lt;p&gt;I almost learned this lesson the hard way. Back in 2021, I had a decent chunk of business savings sitting in cash. I got greedy and almost deposited it into a centralized "crypto lending" platform promising 8% yield. Thankfully, my gut told me it was too risky, and I backed out just months before those platforms collapsed. That near-miss taught me that the only safe way for a business to hold digital assets is through direct ownership and cold storage.&lt;/p&gt;
 
-&lt;p&gt;So here's the thing: crypto markets never sleep, but the people who move the most money do.&lt;/p&gt;
+&lt;h2&gt;Implementing the freelancers treasury how to build a sovereign business reserve using automated Bitcoin DCA&lt;/h2&gt;
 
-&lt;h2&gt;Why timing the sunday dip to optimize your DCA schedule actually works&lt;/h2&gt;
+&lt;p&gt;So here is how I handle my business reserve now. Every time a client pays an invoice, I route a fixed percentage—usually 10%—directly into Bitcoin. I do not try to time the market, and I do not wait for a dip. I treat it exactly like a business expense, like paying for web hosting or accounting software.&lt;/p&gt;
 
-&lt;p&gt;If you have ever looked at exchange order books on a Saturday or Sunday, you probably noticed they get incredibly thin. When we talk about timing the sunday dip: analyzing weekly liquidity windows to optimize your automated dca schedule, we are basically exploiting this recurring drop in market activity.&lt;/p&gt;
+&lt;p&gt;When you set up the freelancers treasury how to build a sovereign business reserve using automated bitcoin dca, you are essentially taking emotion out of the equation. If you try to buy manually, you will find yourself staring at charts, waiting for a lower price, and ultimately doing nothing.&lt;/p&gt;
 
-&lt;p&gt;During the week, institutional players, algorithmic trading desks, and market makers are highly active. This keeps liquidity high and spreads tight on major platforms like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; or Coinbase. But as Friday evening rolls around in the US, institutional liquidity dries up.&lt;/p&gt;
+&lt;p&gt;To make this work without turning it into a part-time job, I use an API-driven approach. I set up a system that connects directly to my exchange account to execute these buys automatically. I prefer using &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;low-fee trading on Binance&lt;/a&gt; or &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate for European accounts&lt;/a&gt; because their API fees are a fraction of what you would pay on standard retail apps.&lt;/p&gt;
 
-&lt;p&gt;Without these market makers providing a thick cushion of buy and sell orders, it takes far less trading volume to move the price. If a few retail traders decide to sell off some assets on a Sunday afternoon, the price can slide down much faster than it would during a busy Tuesday afternoon.&lt;/p&gt;
+&lt;p&gt;Before committing any actual capital, I spent a lot of time modeling how this would look over a multi-year business cycle. I actually built &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the cycle-aware DCA calculator&lt;/a&gt; to help visualize this. It accounts for the diminishing returns of each halving cycle, which gave me a much more realistic expectation of what my business treasury might look like in five years compared to just leaving that cash in a low-yield business checking account.&lt;/p&gt;
 
-&lt;p&gt;My personal experiment with timing the sunday dip: analyzing weekly liquidity windows to optimize your automated dca schedule taught me that Sunday evenings, right before the weekly candle close, often offer a brief window where prices are temporarily depressed. Once the Asian markets open on Monday morning, liquidity rushes back in, and the price frequently recovers.&lt;/p&gt;
+&lt;h2&gt;Why automation and self-custody are non-negotiable&lt;/h2&gt;
 
-&lt;h2&gt;My setup for automated weekend buys&lt;/h2&gt;
+&lt;p&gt;As a freelancer, your time is your most valuable asset. If you are spending hours every week logging into exchanges, calculating purchase sizes, and worrying about market volatility, your treasury system is broken.&lt;/p&gt;
 
-&lt;p&gt;I do not have the time or the discipline to sit at my computer every Sunday evening waiting to click the buy button. I value my weekends too much for that. Instead, I built a tool that handles the heavy lifting for me.&lt;/p&gt;
+&lt;p&gt;That is why I ended up building my own tool to &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;automate my DCA buys&lt;/a&gt;. I wanted something that would execute the trades directly on my exchange accounts via API and, most importantly, automatically withdraw the coins to my own custody.&lt;/p&gt;
 
-&lt;p&gt;I set up my API keys to connect to &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; and scheduled my buys for Sunday at 10:00 PM UTC. By using &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;automated recurring buys&lt;/a&gt;, I get the benefit of the lower weekend prices without having to think about it.&lt;/p&gt;
+&lt;p&gt;Leaving your business reserve on an exchange is a massive single point of failure. If the exchange pauses withdrawals, your business liquidity vanishes. Now, my automated setup buys the Bitcoin and immediately sends it to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;. I own the keys, which means I own the reserve. No middlemen, no counterparty risk.&lt;/p&gt;
 
-&lt;p&gt;To see if this extra effort was actually worth it, I plugged my historical trade data into &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;this cycle-aware calculator&lt;/a&gt;. I wanted to see how a consistent 1% to 1.5% price improvement on my weekly buys would compound over a ten-year period.&lt;/p&gt;
+&lt;p&gt;Obviously, I am not your financial advisor or your accountant. Running a freelance business involves real risks, and you should never allocate money to Bitcoin that you might need to pay your rent next month. Do your own research and make sure you have your short-term fiat needs covered first.&lt;/p&gt;
 
-&lt;p&gt;The results surprised me. While a 1% difference feels like pennies on a fifty-dollar weekly buy, over a full four-year halving cycle, those extra satoshis accumulate. It represents a meaningful increase in your total purchasing power, purely by changing the day of the week your order executes.&lt;/p&gt;
-
-&lt;h2&gt;The potential downsides of weekend execution&lt;/h2&gt;
-
-&lt;p&gt;Now, I want to be completely honest here because there is no such thing as a perfect strategy in crypto. While the Sunday dip is a statistically observable phenomenon over long timeframes, it is not a guarantee every single week.&lt;/p&gt;
-
-&lt;p&gt;Sometimes, massive bullish news drops on a Saturday, and the price pumps straight through the weekend. In those cases, waiting for Sunday night means you end up buying higher than if you had bought on Friday. But over the course of fifty-two weeks in a year, the averages tend to work in your favor.&lt;/p&gt;
-
-&lt;p&gt;Another thing to keep in mind is self-custody. Because weekend liquidity is lower, spreads can occasionally be wider on smaller exchanges. I recommend sticking to highly liquid platforms for your automated buys.&lt;/p&gt;
-
-&lt;p&gt;Once my Sunday orders execute and the funds settle, I do not leave them sitting on the exchange. My automation tool is configured to automatically sweep my accumulated Bitcoin directly to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; once the balance crosses a specific threshold.&lt;/p&gt;
-
-&lt;p&gt;Obviously, I am not your financial advisor, and this is just my personal diary of trying to optimize my own portfolio. Do your own research and look at the data yourself before changing your investment habits.&lt;/p&gt;
-
-&lt;p&gt;At the end of the day, the most important part of dollar-cost averaging is simply staying consistent. Whether you buy on Sundays, Wednesdays, or daily, the simple act of removing emotion from your investing is what will get you across the finish line. Optimizing the exact hour of your buy is just the icing on the cake.&lt;/p&gt;
+&lt;p&gt;Ultimately, establishing the freelancers treasury how to build a sovereign business reserve using automated bitcoin dca isn't about getting rich overnight. It is about building a long-term economic moat around your independent business. By converting a small slice of your daily labor into the hardest money on earth, you are ensuring that the profit you generate today still has purchasing power five or ten years down the road.&lt;/p&gt;
 
 &lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
-      <description>I used to think buying Bitcoin at the exact same time every week was the ultimate set-and-forget strategy, until I started looking closely at the weekend data. I spent a few nights analyzing order book depth and exchange volume to see if **timing the sunday dip: analyzing weekly liquidity windows to...</description>
+      <description>Last year, my business bank account earned a whopping 0.1% interest while my actual cost of living and software subscriptions jumped by nearly 15%. That was the moment I realized I needed a better plan for my business savings, which led me to design **the freelancers treasury how to build a sovereig...</description>
     </item>
   </channel>
 </rss>
