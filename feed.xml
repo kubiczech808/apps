@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Sun, 07 Jun 2026 03:25:28 +0000</lastBuildDate>
-    <item>
-      <title>The reverse DCA: How to programmatically take profits without emotional regret</title>
-      <link>https://btc-dca.com/blog/generated-202606010636</link>
-      <guid isPermaLink="false">generated-202606010636</guid>
-      <pubDate>Mon, 01 Jun 2026 06:38:24 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>profit taking</category>
-      <category>exit strategy</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Mon, 08 Jun 2026 03:25:39 +0000</lastBuildDate>
     <item>
       <title>How to automate a multisig Bitcoin DCA</title>
       <link>https://btc-dca.com/blog/generated-202606010649</link>
@@ -230,40 +219,49 @@
       <title>Building a sovereign business reserve with Bitcoin DCA</title>
       <link>https://btc-dca.com/blog/generated-202606070325</link>
       <guid isPermaLink="false">generated-202606070325</guid>
-      <pubDate>Sun, 07 Jun 2026 03:25:28 +0000</pubDate>
+      <pubDate>Sun, 07 Jun 2026 03:27:16 +0000</pubDate>
       <category>freelancing</category>
       <category>bitcoin dca</category>
       <category>business treasury</category>
-      <content:encoded>&lt;p&gt;Last year, my business bank account earned a whopping 0.1% interest while my actual cost of living and software subscriptions jumped by nearly 15%. That was the moment I realized I needed a better plan for my business savings, which led me to design &lt;strong&gt;the freelancers treasury how to build a sovereign business reserve using automated bitcoin dca&lt;/strong&gt;. As a solo software developer, I cannot afford to let my hard-earned cash melt away to inflation while sitting in a traditional bank account.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Surviving the mania with my DCA plan</title>
+      <link>https://btc-dca.com/blog/generated-202606080325</link>
+      <guid isPermaLink="false">generated-202606080325</guid>
+      <pubDate>Mon, 08 Jun 2026 03:25:39 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dca</category>
+      <category>psychology</category>
+      <content:encoded>&lt;p&gt;Last Tuesday, I watched my phone screen light up with price alerts that made my stomach churn. Bitcoin was ripping upward, and for a split second, I felt that familiar, itchy impulse to throw a lump sum at it. But then I remembered &lt;strong&gt;the no-fomo framework: how to maintain a programmatic dca during parabolic price discovery&lt;/strong&gt; that keeps me sane when the market goes vertical.&lt;/p&gt;
 
-&lt;p&gt;For years, mainstream financial advisors have told freelancers to keep six to twelve months of operating expenses in cash. I think that is terrible advice for the modern solo business owner. While you absolutely need a liquid cash cushion for next month's tax bill and immediate software subscriptions, holding large amounts of fiat currency long-term is a slow transfer of your wealth to the banks.&lt;/p&gt;
+&lt;p&gt;If you have been in this space for more than a cycle, you know the feeling. When prices are quiet, it is easy to be a disciplined investor. You set your buys, you go about your life, and you feel like a genius. But when the charts start looking like a cliff face being climbed by a rocket ship, the math starts to feel secondary to the greed. I almost broke my own rules back in 2021 when I tried to time a "dip" that never came, leaving me with less exposure than I planned. That was the last time I let my gut override my logic.&lt;/p&gt;
 
-&lt;p&gt;I almost learned this lesson the hard way. Back in 2021, I had a decent chunk of business savings sitting in cash. I got greedy and almost deposited it into a centralized "crypto lending" platform promising 8% yield. Thankfully, my gut told me it was too risky, and I backed out just months before those platforms collapsed. That near-miss taught me that the only safe way for a business to hold digital assets is through direct ownership and cold storage.&lt;/p&gt;
+&lt;h2&gt;Why the no-fomo framework: How to maintain a programmatic DCA during parabolic price discovery matters&lt;/h2&gt;
 
-&lt;h2&gt;Implementing the freelancers treasury how to build a sovereign business reserve using automated Bitcoin DCA&lt;/h2&gt;
+&lt;p&gt;The core of my strategy isn't about hitting the bottom; it is about removing the decision-making process entirely. By using &lt;a href="https://btc-dca.com"&gt;a tool to automate my DCA buys&lt;/a&gt;, I don't have to wake up and decide if today is a good day to buy. The automation doesn't care if the price is up 10% or down 10%. It just executes.&lt;/p&gt;
 
-&lt;p&gt;So here is how I handle my business reserve now. Every time a client pays an invoice, I route a fixed percentage—usually 10%—directly into Bitcoin. I do not try to time the market, and I do not wait for a dip. I treat it exactly like a business expense, like paying for web hosting or accounting software.&lt;/p&gt;
+&lt;p&gt;This is what I call the no-fomo framework: how to maintain a programmatic dca during parabolic price discovery. It relies on the understanding that I am terrible at predicting short-term movements. Most people think they need to adjust their buys when volatility spikes. I actually think the opposite. When the market is in full-blown parabolic mode, the only way to avoid buying the local top is to keep your buy size exactly the same, or perhaps even smaller if you are worried about the exhaustion phase.&lt;/p&gt;
 
-&lt;p&gt;When you set up the freelancers treasury how to build a sovereign business reserve using automated bitcoin dca, you are essentially taking emotion out of the equation. If you try to buy manually, you will find yourself staring at charts, waiting for a lower price, and ultimately doing nothing.&lt;/p&gt;
+&lt;p&gt;I see a lot of "experts" online telling people to front-run the next leg up or to pause their buying until a correction happens. I disagree. If you stop buying because you think the price is "too high," you are just guessing. And if you are wrong, you end up buying back in at an even higher price when the FOMO finally becomes unbearable.&lt;/p&gt;
 
-&lt;p&gt;To make this work without turning it into a part-time job, I use an API-driven approach. I set up a system that connects directly to my exchange account to execute these buys automatically. I prefer using &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;low-fee trading on Binance&lt;/a&gt; or &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate for European accounts&lt;/a&gt; because their API fees are a fraction of what you would pay on standard retail apps.&lt;/p&gt;
+&lt;h2&gt;Using math to stay grounded&lt;/h2&gt;
 
-&lt;p&gt;Before committing any actual capital, I spent a lot of time modeling how this would look over a multi-year business cycle. I actually built &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the cycle-aware DCA calculator&lt;/a&gt; to help visualize this. It accounts for the diminishing returns of each halving cycle, which gave me a much more realistic expectation of what my business treasury might look like in five years compared to just leaving that cash in a low-yield business checking account.&lt;/p&gt;
+&lt;p&gt;When I am feeling the pressure, I often run some numbers through &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt;. It helps me see how diminishing returns might play out over the coming months. It isn't about being perfectly accurate; it is about looking at the reality of how Bitcoin moves. It reminds me that my goal isn't to get rich this month—it is to accumulate enough sats to reach my life goals, whether that is a house deposit or a retirement fund.&lt;/p&gt;
 
-&lt;h2&gt;Why automation and self-custody are non-negotiable&lt;/h2&gt;
+&lt;p&gt;I have found that the biggest mistake people make is looking at their portfolio value every hour. When you see those big green candles, your brain starts doing dangerous math. You think, "if I add another thousand dollars now, I'll have way more when it hits the next milestone." That is how you get rekt. You end up over-leveraging or deploying capital meant for other things.&lt;/p&gt;
 
-&lt;p&gt;As a freelancer, your time is your most valuable asset. If you are spending hours every week logging into exchanges, calculating purchase sizes, and worrying about market volatility, your treasury system is broken.&lt;/p&gt;
+&lt;h2&gt;Keeping it simple with self-custody&lt;/h2&gt;
 
-&lt;p&gt;That is why I ended up building my own tool to &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;automate my DCA buys&lt;/a&gt;. I wanted something that would execute the trades directly on my exchange accounts via API and, most importantly, automatically withdraw the coins to my own custody.&lt;/p&gt;
+&lt;p&gt;Part of my routine involves auto-withdrawing to a hardware wallet. If you are looking for a reliable way to keep your keys safe, I’ve always found it best to &lt;a href="https://bit.ly/buy-trezor-t"&gt;buy a Trezor hardware wallet&lt;/a&gt; and move your coins off the exchange as soon as they hit your threshold. It adds a layer of friction that actually helps with the psychological side of things. If the coins are in my pocket, I am less likely to trade them in a moment of panic.&lt;/p&gt;
 
-&lt;p&gt;Leaving your business reserve on an exchange is a massive single point of failure. If the exchange pauses withdrawals, your business liquidity vanishes. Now, my automated setup buys the Bitcoin and immediately sends it to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;. I own the keys, which means I own the reserve. No middlemen, no counterparty risk.&lt;/p&gt;
+&lt;p&gt;When I look at the current market, I see a lot of noise. People are arguing about macro factors, regulatory news, and whatever flavor-of-the-month altcoin is pumping. I just keep my head down. My system is simple: I use &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;an automated DCA platform&lt;/a&gt; to handle the heavy lifting. I don't try to be a trader. I don't try to be a genius. I just try to be consistent.&lt;/p&gt;
 
-&lt;p&gt;Obviously, I am not your financial advisor or your accountant. Running a freelance business involves real risks, and you should never allocate money to Bitcoin that you might need to pay your rent next month. Do your own research and make sure you have your short-term fiat needs covered first.&lt;/p&gt;
+&lt;p&gt;Obviously, I am not your financial advisor—this is just how I handle my own stack. You need to look at your own financial situation and risk tolerance. If you are losing sleep over the price action, you are likely over-exposed. The beauty of a programmatic approach is that it forces you to acknowledge your limits.&lt;/p&gt;
 
-&lt;p&gt;Ultimately, establishing the freelancers treasury how to build a sovereign business reserve using automated bitcoin dca isn't about getting rich overnight. It is about building a long-term economic moat around your independent business. By converting a small slice of your daily labor into the hardest money on earth, you are ensuring that the profit you generate today still has purchasing power five or ten years down the road.&lt;/p&gt;
-
-&lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
-      <description>Last year, my business bank account earned a whopping 0.1% interest while my actual cost of living and software subscriptions jumped by nearly 15%. That was the moment I realized I needed a better plan for my business savings, which led me to design **the freelancers treasury how to build a sovereig...</description>
+&lt;p&gt;Ultimately, the goal of the no-fomo framework: how to maintain a programmatic dca during parabolic price discovery is to ensure you are still in the game when the inevitable cycle shift happens. You don't win by catching the top; you win by making sure you haven't sold your soul or your sanity to get there. Just keep stacking, keep your keys safe, and try to spend less time staring at the ticker. Your future self will thank you for the boredom.&lt;/p&gt;</content:encoded>
+      <description>Last Tuesday, I watched my phone screen light up with price alerts that made my stomach churn. Bitcoin was ripping upward, and for a split second, I felt that familiar, itchy impulse to throw a lump sum at it. But then I remembered **the no-fomo framework: how to maintain a programmatic dca during p...</description>
     </item>
   </channel>
 </rss>
