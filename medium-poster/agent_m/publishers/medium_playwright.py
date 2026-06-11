@@ -287,6 +287,123 @@ class MediumPlaywrightPublisher:
 
     # ── Editor interaction ──────────────────────────────────────────
 
+    async def publish_draft_now(self, post_id: str, tags: list[str] | None = None) -> str:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                try:
+                    result = await self._publish_draft_now_page(page, post_id, tags or [])
+                except Exception:
+                    log.exception("Medium draft publish failed")
+                    await self._safe_screenshot(page, "medium_draft_publish_error.png")
+                    raise
+                finally:
+                    cookies = await context.cookies()
+                    if cookies:
+                        normalized = self._normalize_cookies(cookies)
+                        _COOKIES_FILE.write_text(json.dumps(normalized, indent=2))
+                await browser.close()
+                return result
+        finally:
+            self._cleanup_display()
+
+    async def replace_draft_cover_image(self, post_id: str, image_bytes: bytes) -> str:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                try:
+                    result = await self._replace_draft_cover_image_page(page, post_id, image_bytes)
+                except Exception:
+                    log.exception("Medium draft cover replacement failed")
+                    await self._safe_screenshot(page, "medium_draft_cover_replace_error.png")
+                    raise
+                finally:
+                    cookies = await context.cookies()
+                    if cookies:
+                        normalized = self._normalize_cookies(cookies)
+                        _COOKIES_FILE.write_text(json.dumps(normalized, indent=2))
+                await browser.close()
+                return result
+        finally:
+            self._cleanup_display()
+
+    async def delete_draft(self, post_id: str) -> bool:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                try:
+                    result = await self._delete_draft_page(page, post_id)
+                except Exception:
+                    log.exception("Medium draft delete failed")
+                    await self._safe_screenshot(page, "medium_draft_delete_error.png")
+                    raise
+                finally:
+                    cookies = await context.cookies()
+                    if cookies:
+                        normalized = self._normalize_cookies(cookies)
+                        _COOKIES_FILE.write_text(json.dumps(normalized, indent=2))
+                await browser.close()
+                return result
+        finally:
+            self._cleanup_display()
+
     async def _list_stories(self, url: str, inspect_edit: bool = False) -> list[dict]:
         if not _COOKIES_FILE.exists():
             raise RuntimeError(
@@ -390,6 +507,79 @@ class MediumPlaywrightPublisher:
                 imageCount: images.length,
             };
         }""")
+
+    async def _open_edit_page(self, page, post_id: str, context: str) -> None:
+        await page.goto(f"https://medium.com/p/{post_id}/edit", wait_until="domcontentloaded", timeout=60000)
+        await self._human_delay(6, 10)
+        await self._wait_for_cloudflare(page, context)
+
+        if "signin" in page.url.lower() or "login" in page.url.lower():
+            raise RuntimeError("Session expired - cookies are invalid. Upload fresh Medium cookies.")
+
+    async def _publish_draft_now_page(self, page, post_id: str, tags: list[str]) -> str:
+        await self._open_edit_page(page, post_id, "draft_publish_edit")
+        await self._wait_for_save_complete(page, timeout_s=90, stable_s=5)
+
+        published_url = await self._publish_via_api(page, post_id, tags)
+        if published_url:
+            return published_url
+
+        published_url = await self._publish_from_drafts_page(page, post_id, tags)
+        if published_url:
+            return published_url
+
+        await self._open_edit_page(page, post_id, "draft_publish_ui_edit")
+        published_url = await self._publish_via_ui(page, tags)
+        if not published_url:
+            raise RuntimeError("Medium: draft publish did not return a published URL")
+        return published_url
+
+    async def _replace_draft_cover_image_page(self, page, post_id: str, image_bytes: bytes) -> str:
+        await self._open_edit_page(page, post_id, "draft_cover_replace_edit")
+        await self._wait_for_save_complete(page, timeout_s=90, stable_s=5)
+        await self._replace_article_cover_image(page, image_bytes)
+        await self._wait_for_save_complete(page, timeout_s=90, stable_s=5)
+        url = page.url
+        log.info("Medium: draft cover image replaced for %s at %s", post_id, url)
+        return url
+
+    async def _delete_draft_page(self, page, post_id: str) -> bool:
+        await self._open_edit_page(page, post_id, "draft_delete_edit")
+        result = await page.evaluate("""async (postId) => {
+            const xsrf = (document.cookie.match(/(?:^|;)\\s*xsrf=([^;]*)/) || [])[1] || '';
+            const errors = [];
+            for (const endpoint of [
+                `https://medium.com/_/api/posts/${postId}`,
+                `https://medium.com/api/posts/${postId}`,
+            ]) {
+                try {
+                    const resp = await fetch(endpoint, {
+                        method: 'DELETE',
+                        headers: {
+                            'Accept': 'application/json',
+                            'X-XSRF-Token': xsrf,
+                            'x-xsrf-token': xsrf,
+                        },
+                        credentials: 'same-origin',
+                    });
+                    const text = await resp.text();
+                    if (resp.ok || resp.status === 200 || resp.status === 204) {
+                        return {success: true, endpoint, body: text.substring(0, 200)};
+                    }
+                    errors.push(`${endpoint} ${resp.status}: ${text.substring(0, 200)}`);
+                } catch (e) {
+                    errors.push(`${endpoint}: ${e.message}`);
+                }
+            }
+            return {success: false, errors};
+        }""", post_id)
+        if result.get("success"):
+            log.info("Medium: draft %s deleted via %s", post_id, result.get("endpoint"))
+            return True
+        errors = result.get("errors", [])
+        for error in errors[:4]:
+            log.info("Medium draft delete attempt: %s", error)
+        return False
 
     async def _schedule_draft_page(
         self,

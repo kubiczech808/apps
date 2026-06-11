@@ -4,9 +4,12 @@ import asyncio
 import io
 import json
 import logging
+import re
+import uuid
+from datetime import datetime, timezone
 from functools import wraps
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
@@ -14,10 +17,17 @@ from agent_m.config import config
 from agent_m.content_plan import get_plan
 from agent_m.feedback import add_feedback, get_all_feedback, clear_feedback
 from agent_m.gemini.client import get_tracker
+from agent_m.gemini.imager import generate_header_image
+from agent_m.gemini.researcher import Topic
 from agent_m.history import History
 from agent_m.pipeline import run_pipeline
+from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
 
 log = logging.getLogger(__name__)
+
+_DRAFT_ACTIONS_FILE = config.data_dir / "telegram_draft_actions.json"
+_MEDIUM_POST_RE = re.compile(r"/p/([a-f0-9]{8,})(?:/|$|[?#])", re.IGNORECASE)
+_draft_action_lock = asyncio.Lock()
 
 
 def admin_only(func):
@@ -86,6 +96,101 @@ def _extract_slug(context: ContextTypes.DEFAULT_TYPE) -> str | None:
     return None
 
 
+def _load_draft_actions() -> dict:
+    if not _DRAFT_ACTIONS_FILE.exists():
+        return {"actions": {}}
+    try:
+        data = json.loads(_DRAFT_ACTIONS_FILE.read_text())
+    except Exception:
+        log.exception("Could not read draft action state")
+        return {"actions": {}}
+    if not isinstance(data, dict):
+        return {"actions": {}}
+    actions = data.get("actions")
+    if not isinstance(actions, dict):
+        data["actions"] = {}
+    return data
+
+
+def _save_draft_actions(data: dict) -> None:
+    _DRAFT_ACTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _DRAFT_ACTIONS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def _extract_medium_post_id(url: str | None) -> str | None:
+    if not url:
+        return None
+    match = _MEDIUM_POST_RE.search(url)
+    return match.group(1) if match else None
+
+
+def _register_draft_action(result) -> str | None:
+    medium_url = result.platform_urls.get("Medium")
+    post_id = _extract_medium_post_id(medium_url)
+    if not post_id:
+        return None
+
+    action_id = uuid.uuid4().hex[:12]
+    data = _load_draft_actions()
+    data["actions"][action_id] = {
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "medium_post_id": post_id,
+        "medium_url": medium_url,
+        "title": result.article.title,
+        "article_tags": result.article.tags,
+        "image_model": result.image_model,
+        "topic": {
+            "title": result.topic.title,
+            "angle": result.topic.angle,
+            "tags": result.topic.tags,
+            "slug": result.topic.slug,
+        },
+    }
+    _save_draft_actions(data)
+    return action_id
+
+
+def _draft_action_keyboard(action_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("zveřejnit", callback_data=f"mdraft:publish:{action_id}"),
+            InlineKeyboardButton("zahodit", callback_data=f"mdraft:discard:{action_id}"),
+        ],
+        [
+            InlineKeyboardButton("jiný obrázek", callback_data=f"mdraft:image:{action_id}"),
+        ],
+    ])
+
+
+def _get_draft_action(action_id: str) -> tuple[dict, dict | None]:
+    data = _load_draft_actions()
+    action = data.get("actions", {}).get(action_id)
+    return data, action if isinstance(action, dict) else None
+
+
+def _mark_draft_action(action_id: str, status: str, **updates) -> None:
+    data, action = _get_draft_action(action_id)
+    if action is None:
+        return
+    action.update({
+        "status": status,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        **updates,
+    })
+    _save_draft_actions(data)
+
+
+def _topic_from_draft_action(action: dict) -> Topic:
+    topic = action.get("topic") or {}
+    return Topic(
+        title=topic.get("title") or action.get("title") or "Bitcoin DCA",
+        angle=topic.get("angle") or "",
+        tags=topic.get("tags") or action.get("article_tags") or ["Bitcoin", "DCA", "Investing"],
+        slug=topic.get("slug") or "",
+    )
+
+
 async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
     msg = update.message
     if not msg:
@@ -139,19 +244,120 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
         if url_lines:
             text += "\n\n" + "\n".join(url_lines)
 
+        reply_markup = None
+        if mode == "draft" and "Medium" in result.platform_urls:
+            action_id = _register_draft_action(result)
+            if action_id:
+                reply_markup = _draft_action_keyboard(action_id)
+
         if result.image_bytes:
             await msg.reply_photo(
                 photo=io.BytesIO(result.image_bytes),
                 caption=text[:1024],
+                reply_markup=reply_markup,
             )
         else:
-            await msg.reply_text(text[:4000])
+            await msg.reply_text(text[:4000], reply_markup=reply_markup)
     else:
         error_lines = [f"- {err}" for err in result.platform_errors]
         text = "Publishing failed on all platforms. Check logs."
         if error_lines:
             text += "\n\nErrors:\n" + "\n".join(error_lines)
         await msg.reply_text(text[:4000])
+
+
+@admin_only
+async def draft_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    message = query.message
+    await query.answer()
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        log.info("Could not remove draft action keyboard", exc_info=True)
+
+    parts = query.data.split(":")
+    if len(parts) != 3 or parts[0] != "mdraft":
+        return
+    action_name, action_id = parts[1], parts[2]
+
+    if not message:
+        return
+
+    async with _draft_action_lock:
+        data, action = _get_draft_action(action_id)
+        if not action:
+            await message.reply_text("Draft action expired or was not found.")
+            return
+
+        if action.get("status") != "pending":
+            await message.reply_text(f"Draft action already processed: {action.get('status')}.")
+            return
+
+        post_id = action.get("medium_post_id")
+        if not post_id:
+            _mark_draft_action(action_id, "failed", error="missing Medium post ID")
+            await message.reply_text("Medium draft action failed: missing post ID.")
+            return
+
+        publisher = MediumPlaywrightPublisher()
+        if action_name == "publish":
+            await message.reply_text(f"Publishing Medium draft:\n{action.get('title') or post_id}")
+            try:
+                url = await publisher.publish_draft_now(post_id, action.get("article_tags") or [])
+            except Exception as exc:
+                _mark_draft_action(action_id, "failed", error=str(exc))
+                await message.reply_text(f"Medium draft publish failed:\n{exc}")
+                return
+            _mark_draft_action(action_id, "published", published_url=url)
+            await message.reply_text(f"Medium draft published:\n{url}")
+            return
+
+        if action_name == "discard":
+            await message.reply_text(f"Discarding Medium draft:\n{action.get('title') or post_id}")
+            try:
+                deleted = await publisher.delete_draft(post_id)
+            except Exception as exc:
+                _mark_draft_action(action_id, "discard_failed", error=str(exc))
+                await message.reply_text(
+                    "Medium draft discard failed. Buttons were removed, but the draft may still exist on Medium.\n"
+                    f"{exc}"
+                )
+                return
+            _mark_draft_action(action_id, "discarded", medium_deleted=deleted)
+            if deleted:
+                await message.reply_text("Medium draft discarded.")
+            else:
+                await message.reply_text(
+                    "Draft action discarded locally, but Medium did not confirm deletion. "
+                    "Check Medium drafts before assuming it is gone."
+                )
+            return
+
+        if action_name == "image":
+            await message.reply_text(f"Generating another Medium draft image:\n{action.get('title') or post_id}")
+            try:
+                image_bytes, image_model = await generate_header_image(_topic_from_draft_action(action))
+                url = await publisher.replace_draft_cover_image(post_id, image_bytes)
+            except Exception as exc:
+                _mark_draft_action(action_id, "image_failed", error=str(exc))
+                await message.reply_text(f"Medium draft image regeneration failed:\n{exc}")
+                return
+            _mark_draft_action(
+                action_id,
+                "image_replaced",
+                image_model=image_model,
+                medium_url=url,
+            )
+            await message.reply_photo(
+                photo=io.BytesIO(image_bytes),
+                caption=f"New Medium draft image inserted.\nImage: {image_model}\n{url}"[:1024],
+            )
+            return
+
+        await message.reply_text("Unknown draft action.")
 
 
 @admin_only

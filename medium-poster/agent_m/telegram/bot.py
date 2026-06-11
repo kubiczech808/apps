@@ -6,7 +6,7 @@ import logging
 from zoneinfo import ZoneInfo
 
 from telegram import BotCommand
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from agent_m.config import config
 from agent_m.pipeline import run_pipeline
@@ -167,6 +167,7 @@ def build_app():
     app.add_handler(CommandHandler("feedback", handlers.feedback_cmd))
     app.add_handler(CommandHandler("feedback_clear", handlers.feedback_clear_cmd))
     app.add_handler(CommandHandler("medium_login", handlers.medium_login_cmd))
+    app.add_handler(CallbackQueryHandler(handlers.draft_action_callback, pattern=r"^mdraft:"))
     app.add_handler(MessageHandler(
         filters.Document.ALL & filters.ChatType.PRIVATE,
         handlers.medium_cookies_document_cmd,
