@@ -16,9 +16,12 @@ _POLLINATIONS_URL = "https://gen.pollinations.ai/image/{prompt}"
 
 _IMAGE_MODELS = [
     {"param": "klein", "name": "FLUX.2 Klein 4B"},
+    {"param": "gptimage", "name": "GPT Image"},
+    {"param": "flux", "name": "FLUX"},
+    {"param": "zimage", "name": "Z-Image"},
 ]
 
-_POLLINATIONS_ATTEMPTS = 3
+_POLLINATIONS_ATTEMPTS = 2
 _POLLINATIONS_RETRY_DELAY_S = 20
 
 _STYLES = [
@@ -58,11 +61,9 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
     url = _POLLINATIONS_URL.format(prompt=quote(prompt, safe=""))
     last_error: Exception | None = None
 
-    model_info = _IMAGE_MODELS[0]
-    params = {
+    base_params = {
         "width": 930,
         "height": 576,
-        "model": model_info["param"],
         "nologo": "true",
         "enhance": "false",
         "safe": "true",
@@ -74,48 +75,50 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
         ),
     }
     if seed is not None:
-        params["seed"] = str(seed)
-    params["key"] = config.pollinations_api_key
+        base_params["seed"] = str(seed)
+    base_params["key"] = config.pollinations_api_key
     headers = {
         "Accept": "image/*",
         "User-Agent": "agent-m-medium-poster/0.1",
     }
 
-    for attempt in range(1, _POLLINATIONS_ATTEMPTS + 1):
-        try:
-            async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
-                resp = await client.get(url, params=params, headers=headers)
-                if resp.status_code != 200:
-                    message = f"Pollinations HTTP {resp.status_code}: {resp.text[:200]}"
-                    if resp.status_code == 402 and "PAYMENT_REQUIRED" in resp.text:
-                        raise RuntimeError(f"{message} (non-retryable until balance increases)")
-                    raise RuntimeError(message)
+    for model_info in _IMAGE_MODELS:
+        params = {**base_params, "model": model_info["param"]}
+        for attempt in range(1, _POLLINATIONS_ATTEMPTS + 1):
+            try:
+                async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
+                    resp = await client.get(url, params=params, headers=headers)
+                    if resp.status_code != 200:
+                        message = f"Pollinations HTTP {resp.status_code}: {resp.text[:200]}"
+                        if resp.status_code == 402 and "PAYMENT_REQUIRED" in resp.text:
+                            raise RuntimeError(f"{message} (model balance unavailable)")
+                        raise RuntimeError(message)
 
-                content_type = (resp.headers.get("content-type") or "").lower()
-                if not content_type.startswith("image/"):
-                    snippet = resp.text[:200] if resp.text else ""
-                    raise RuntimeError(f"Pollinations returned non-image: {content_type} {snippet}")
-                if len(resp.content) < 1000:
-                    raise RuntimeError(f"Pollinations returned too few bytes: {len(resp.content)}")
+                    content_type = (resp.headers.get("content-type") or "").lower()
+                    if not content_type.startswith("image/"):
+                        snippet = resp.text[:200] if resp.text else ""
+                        raise RuntimeError(f"Pollinations returned non-image: {content_type} {snippet}")
+                    if len(resp.content) < 1000:
+                        raise RuntimeError(f"Pollinations returned too few bytes: {len(resp.content)}")
 
-                model_name = model_info["name"]
-                log.info(
-                    "Generated image via Pollinations [%s] (%d bytes, seed=%s, attempt=%d)",
-                    model_name, len(resp.content), seed, attempt,
+                    model_name = model_info["name"]
+                    log.info(
+                        "Generated image via Pollinations [%s] (%d bytes, seed=%s, attempt=%d)",
+                        model_name, len(resp.content), seed, attempt,
+                    )
+                    return resp.content, model_name
+            except Exception as exc:
+                last_error = exc
+                log.warning(
+                    "Pollinations [%s] attempt %d/%d failed: %s",
+                    model_info["name"], attempt, _POLLINATIONS_ATTEMPTS, exc,
                 )
-                return resp.content, model_name
-        except Exception as exc:
-            last_error = exc
-            log.warning(
-                "Pollinations [%s] attempt %d/%d failed: %s",
-                model_info["name"], attempt, _POLLINATIONS_ATTEMPTS, exc,
-            )
-            if "non-retryable until balance increases" in str(exc):
-                break
-            if attempt < _POLLINATIONS_ATTEMPTS:
-                await asyncio.sleep(_POLLINATIONS_RETRY_DELAY_S)
+                if "model balance unavailable" in str(exc):
+                    break
+                if attempt < _POLLINATIONS_ATTEMPTS:
+                    await asyncio.sleep(_POLLINATIONS_RETRY_DELAY_S)
 
     raise RuntimeError(
-        "Pollinations Klein image generation failed; retry later rather than using a low-quality fallback. "
+        "Pollinations image generation failed across allowed models; retry later rather than using a low-quality fallback. "
         f"Last: {last_error}"
     )
