@@ -43,7 +43,7 @@ async def generate_header_image(topic: Topic) -> tuple[bytes, str]:
         f"Bitcoin coin symbol, recurring purchase rhythm, calm automated investing, "
         f"dollar-cost averaging visual metaphor. Purely visual, NO text, NO letters, "
         f"NO words, NO numbers, NO typography, NO watermarks, NO company logos. "
-        f"Wide editorial banner, high quality, 1200x630."
+        f"Wide editorial banner, high quality, 930x576."
     )
     return await _generate_with_pollinations(prompt, seed=seed)
 
@@ -60,10 +60,12 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
 
     model_info = _IMAGE_MODELS[0]
     params = {
-        "width": 1200,
-        "height": 630,
+        "width": 930,
+        "height": 576,
         "model": model_info["param"],
         "nologo": "true",
+        "enhance": "false",
+        "safe": "true",
         "negative_prompt": (
             "text, letters, words, numbers, typography, writing, caption, "
             "title, label, watermark, logo, signature, stamp, badge, "
@@ -73,7 +75,11 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
     }
     if seed is not None:
         params["seed"] = str(seed)
-    headers = {"Authorization": f"Bearer {config.pollinations_api_key}"}
+    params["key"] = config.pollinations_api_key
+    headers = {
+        "Accept": "image/*",
+        "User-Agent": "agent-m-medium-poster/0.1",
+    }
 
     for attempt in range(1, _POLLINATIONS_ATTEMPTS + 1):
         try:
@@ -85,9 +91,12 @@ async def _generate_with_pollinations(prompt: str, seed: int | None = None) -> t
                         raise RuntimeError(f"{message} (non-retryable until balance increases)")
                     raise RuntimeError(message)
 
-                content_type = resp.headers.get("content-type", "")
-                if "image" not in content_type and len(resp.content) < 1000:
-                    raise RuntimeError(f"Pollinations returned non-image: {content_type}")
+                content_type = (resp.headers.get("content-type") or "").lower()
+                if not content_type.startswith("image/"):
+                    snippet = resp.text[:200] if resp.text else ""
+                    raise RuntimeError(f"Pollinations returned non-image: {content_type} {snippet}")
+                if len(resp.content) < 1000:
+                    raise RuntimeError(f"Pollinations returned too few bytes: {len(resp.content)}")
 
                 model_name = model_info["name"]
                 log.info(
