@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Thu, 11 Jun 2026 03:26:00 +0000</lastBuildDate>
-    <item>
-      <title>My journey through the DCA maturity model: Graduating from manual buys to sovereign infrastructure</title>
-      <link>https://btc-dca.com/blog/generated-202606011932</link>
-      <guid isPermaLink="false">generated-202606011932</guid>
-      <pubDate>Mon, 01 Jun 2026 19:34:36 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dca</category>
-      <category>self-custody</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Thu, 11 Jun 2026 11:20:08 +0000</lastBuildDate>
     <item>
       <title>The multi-cycle DCA: Calibrating your buy frequency to your Bitcoin time horizon</title>
       <link>https://btc-dca.com/blog/generated-202606011937</link>
@@ -230,32 +219,59 @@
       <title>Why waiting for the dip is a losing game</title>
       <link>https://btc-dca.com/blog/generated-202606110325</link>
       <guid isPermaLink="false">generated-202606110325</guid>
-      <pubDate>Thu, 11 Jun 2026 03:26:00 +0000</pubDate>
+      <pubDate>Thu, 11 Jun 2026 03:27:46 +0000</pubDate>
       <category>bitcoin</category>
       <category>dca</category>
       <category>investing</category>
-      <content:encoded>&lt;p&gt;Last Tuesday, I sat staring at a chart, convinced that Bitcoin was going to pull back another five percent. I had a few hundred dollars sitting in my bank account, and I was genuinely tempted to skip my scheduled buy to catch that "better entry." It’s a classic trap, and thinking about &lt;strong&gt;the opportunity cost of dry powder: why waiting for the dip underperforms automated dca&lt;/strong&gt; is exactly what kept me from making a mistake I’ve made too many times before.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>How a Bitcoin DCA velocity multiplier scales my stack</title>
+      <link>https://btc-dca.com/blog/generated-202606111118</link>
+      <guid isPermaLink="false">generated-202606111118</guid>
+      <pubDate>Thu, 11 Jun 2026 11:20:08 +0000</pubDate>
+      <category>dollar cost averaging</category>
+      <category>bitcoin mining</category>
+      <category>investment strategy</category>
+      <content:encoded>&lt;p&gt;Last week, I saw the Bitcoin hashrate hit a mind-boggling 700 exahashes per second and realized my flat weekly buy was getting left in the dust. I needed a dynamic way to scale my purchases, which led me to develop &lt;strong&gt;the bitcoin dca velocity multiplier: scaling your accumulation based on network hashrate growth&lt;/strong&gt; to keep my stacking speed aligned with the network's actual security. It sounds complex, but it's just a way to make sure I'm buying more when the network gets stronger.&lt;/p&gt;
 
-&lt;p&gt;I’ve learned the hard way that trying to outsmart the market is usually just a way to keep yourself on the sidelines while the price keeps climbing. When we talk about the opportunity cost of dry powder: why waiting for the dip underperforms automated dca, we’re really talking about the psychological comfort of holding cash versus the reality of mathematical growth. Every time I’ve tried to time a local bottom, I’ve either ended up buying higher than where I started or, worse, missing the move entirely.&lt;/p&gt;
+&lt;p&gt;Most people will tell you to just set a fixed fiat amount and never look at it again. While that is fine for beginners, I think it ignores a fundamental truth about Bitcoin: it is an expanding, living network. If you are buying the exact same fifty bucks of Bitcoin today as you were three years ago, your relative share of the network's security budget is shrinking.&lt;/p&gt;
 
-&lt;h2&gt;Dealing with the opportunity cost of dry powder: Why waiting for the dip underperforms automated DCA&lt;/h2&gt;
+&lt;p&gt;I learned this the hard way back in 2021. I tried to manually time my buys based on difficulty adjustments, thinking a mining capitulation was coming. I ended up sitting on cash while the hashrate recovered and the price left me behind. That's when I realized I needed a systematic approach rather than emotional guessing.&lt;/p&gt;
 
-&lt;p&gt;The problem with keeping "dry powder" is that it’s rarely as productive as you think. You tell yourself it’s for a rainy day or a market crash, but usually, it just sits there losing value to inflation. When I built &lt;a href="https://btc-dca.com/btc-dca-features"&gt;the tool I use to automate my DCA buys&lt;/a&gt;, it wasn't just to save time; it was to save me from my own brain.&lt;/p&gt;
+&lt;h2&gt;Why flat dollar cost averaging might be diluting your stack&lt;/h2&gt;
 
-&lt;p&gt;I’ve run the numbers through &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the cycle-aware DCA calculator&lt;/a&gt; I put together, and it’s sobering. The historical data consistently shows that even if you catch a few dips perfectly, you rarely beat the performance of a boring, consistent schedule. The opportunity cost of dry powder: why waiting for the dip underperforms automated dca is that you are essentially betting against the long-term upward trend of the network. You’re paying a premium in stress and missed accumulation for a chance at a marginal gain that rarely materializes.&lt;/p&gt;
+&lt;p&gt;When we talk about dollar cost averaging, we usually focus entirely on price. We buy more when the price is low and less when it's high. But price is a lagging indicator of sentiment. Hashrate, on the other hand, represents real-world capital expenditure. It is the physical energy and hardware committed to securing the blockchain.&lt;/p&gt;
 
-&lt;h2&gt;Why I stopped trying to time the market&lt;/h2&gt;
+&lt;p&gt;If the hashrate doubles, it means the network is twice as secure, competition is fiercer, and the underlying asset is fundamentally more robust. If your monthly investment stays flat while the hashrate goes vertical, your purchasing power is essentially diluting relative to the growth of the network's infrastructure. You are contributing the same amount of fiat to a system that has grown exponentially more secure and resource-intensive.&lt;/p&gt;
 
-&lt;p&gt;Early on, I thought I was a genius because I bought a dip and it immediately rebounded. That was pure luck, and it convinced me that I had a "feel" for the market. A few months later, I waited for a dip that never came, and by the time I finally gave up and bought, I was paying significantly more for the same amount of sats. That was my most expensive lesson.&lt;/p&gt;
+&lt;p&gt;To visualize how this looks over longer periods, I often use &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;our advanced DCA calculator&lt;/a&gt; to model different scenarios. Standard calculators assume your fiat input remains completely static forever, which doesn't make sense if you expect your income to grow or the network to mature.&lt;/p&gt;
 
-&lt;p&gt;If you’re struggling with the same temptation, I recommend checking out the &lt;a href="https://www.btc-dca.com/learn-center"&gt;learn center&lt;/a&gt; to see how different accumulation strategies hold up over long timeframes. It’s much easier to sleep at night when you know your strategy is running on autopilot, regardless of whether the price is up or down that day.&lt;/p&gt;
+&lt;h2&gt;How the Bitcoin DCA velocity multiplier: Scaling your accumulation based on network hashrate growth actually works&lt;/h2&gt;
 
-&lt;p&gt;If you're looking for a place to execute these recurring trades, I usually suggest that beginners &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt; because of the liquidity, or use a platform like &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; if you're in a region where they’re strong. Once you’ve got the flow down, the most important part of the process is moving those coins off the exchange to a &lt;a href="https://bit.ly/buy-trezor-t"&gt;hardware wallet like a Trezor&lt;/a&gt;. You don't want to be the person who perfectly timed their DCA strategy only to leave the keys on a centralized platform.&lt;/p&gt;
+&lt;p&gt;The core idea behind the bitcoin dca velocity multiplier: scaling your accumulation based on network hashrate growth is simple. You establish a baseline DCA amount and a baseline hashrate. As the hashrate increases, you scale up your DCA amount proportionally using a multiplier.&lt;/p&gt;
 
-&lt;p&gt;Look, I’m just a guy who likes math and Bitcoin, not a financial advisor. I’ve made plenty of mistakes and I’m sure I’ll make more. You should definitely do your own research before committing any capital. But in my experience, the peace of mind that comes from setting a schedule and walking away is worth more than the potential (and elusive) extra percentage point you might get from trying to time the market.&lt;/p&gt;
+&lt;p&gt;For example, if your baseline buy is $50 a week at a hashrate of 500 EH/s, and the hashrate climbs to 600 EH/s, your multiplier becomes 1.2. Your new weekly buy automatically adjusts to $60.&lt;/p&gt;
 
-&lt;p&gt;Ultimately, the market doesn't care about your "dry powder." It just keeps moving. The best way to handle the volatility is to stop treating it like a game of poker and start treating it like a savings plan. Automating the process removes the emotion, and once the emotion is gone, you stop worrying about the dips and start focusing on the long-term accumulation.&lt;/p&gt;</content:encoded>
-      <description>Last Tuesday, I sat staring at a chart, convinced that Bitcoin was going to pull back another five percent. I had a few hundred dollars sitting in my bank account, and I was genuinely tempted to skip my scheduled buy to catch that "better entry." It’s a classic trap, and thinking about **the opportu...</description>
+&lt;p&gt;When you implement the bitcoin dca velocity multiplier: scaling your accumulation based on network hashrate growth, you are essentially matching your capital allocation to the security budget of the network. You are buying more aggressively when the fundamental network security is at its strongest.&lt;/p&gt;
+
+&lt;p&gt;Obviously, hashrate can fluctuate wildly week-to-week due to variance in block discovery, so I don't recommend adjusting your buys daily. I prefer looking at the 30-day moving average of the hashrate and updating my multiplier quarterly. This keeps things smooth and prevents short-term mining variance from messing with my budget.&lt;/p&gt;
+
+&lt;h2&gt;Automating your hashrate-adjusted buys without the headache&lt;/h2&gt;
+
+&lt;p&gt;If you want to try the bitcoin dca velocity multiplier: scaling your accumulation based on network hashrate growth, you don't have to calculate this manually every week. I got so tired of logging into exchanges to adjust my orders that I built a tool to handle it.&lt;/p&gt;
+
+&lt;p&gt;You can use our platform to &lt;a href="https://www.btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; directly through API connections. I personally connect my account to &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; because of their deep liquidity, but if you're operating within Europe, &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; is an incredibly reliable option.&lt;/p&gt;
+
+&lt;p&gt;Setting this up is straightforward. You just need to generate an API key from your exchange—making sure to disable withdrawal permissions for safety—and plug it into our system. If you've never done this before, we have a step-by-step &lt;a href="https://www.btc-dca.com/how-to-set-up-api-key.php"&gt;API setup guide&lt;/a&gt; that walks you through the process.&lt;/p&gt;
+
+&lt;p&gt;Once it's running, the system executes your buys on your schedule. I have mine set up to automatically buy and then periodically sweep the coins directly to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor safe wallet&lt;/a&gt; for cold storage. Keeping your coins on an exchange defeats the purpose of securing your wealth, so self-custody is a must.&lt;/p&gt;
+
+&lt;p&gt;Look, I'm just a guy typing on a blog, not your financial advisor. Stacking Bitcoin involves real financial risk, and hashrate metrics can be highly volatile, so always do your own research before changing your investment strategy. But for me, linking my accumulation velocity to the physical growth of the network has completely changed how I view my long-term stack.&lt;/p&gt;
+
+&lt;p&gt;If you want to take the manual work out of DCA, I built &lt;a href="https://btc-dca.com"&gt;a free tool that automates the whole process&lt;/a&gt; — connects to your exchange, buys on schedule, withdraws to your wallet.&lt;/p&gt;</content:encoded>
+      <description>Last week, I saw the Bitcoin hashrate hit a mind-boggling 700 exahashes per second and realized my flat weekly buy was getting left in the dust. I needed a dynamic way to scale my purchases, which led me to develop **the bitcoin dca velocity multiplier: scaling your accumulation based on network has...</description>
     </item>
   </channel>
 </rss>
