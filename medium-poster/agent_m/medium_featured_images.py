@@ -22,9 +22,13 @@ async def run_once() -> dict:
 
     publisher = MediumPlaywrightPublisher()
     posts = await publisher.list_published_posts()
+    completed_statuses = {"done", "already_had_image"}
     pending = [
         post for post in posts
-        if not post.get("images") and processed.get(post.get("postId"), {}).get("status") != "done"
+        if (
+            not post.get("images")
+            and processed.get(post.get("postId"), {}).get("status") not in completed_statuses
+        )
     ]
 
     if not pending:
