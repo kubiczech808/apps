@@ -132,6 +132,8 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
         error_lines = [f"- {err}" for err in result.platform_errors]
 
         text = f"Published to: {platforms}"
+        if result.image_model:
+            text += f"\nImage: {result.image_model}"
         if error_lines:
             text += "\n\nIssues:\n" + "\n".join(error_lines)
         if url_lines:

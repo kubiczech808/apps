@@ -66,6 +66,7 @@ def format_result(result: dict) -> str:
     featured_status = featured.get("status")
     if featured_status == "updated":
         lines.append("Featured image backfill: updated")
+        lines.append(f"Image: {featured.get('image_model') or 'unknown'}")
         lines.append(f"Post: {featured.get('url')}")
         lines.append(f"Remaining: {featured.get('remaining')}")
     elif featured_status == "retry_later":

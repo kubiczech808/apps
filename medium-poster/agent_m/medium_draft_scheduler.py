@@ -150,11 +150,14 @@ def format_result(result: dict) -> str:
             f"Post: {result.get('url')}"
         )
     if status == "retry_later":
-        return (
-            "Medium draft scheduler: retry later\n"
-            f"Title: {result.get('title')}\n"
-            f"Reason: {result.get('reason')}"
-        )
+        lines = [
+            "Medium draft scheduler: retry later",
+            f"Title: {result.get('title')}",
+        ]
+        if result.get("image_model"):
+            lines.append(f"Image: {result.get('image_model')}")
+        lines.append(f"Reason: {result.get('reason')}")
+        return "\n".join(lines)
     if status == "already_scheduled":
         lines = [
             f"Medium draft scheduler: already has {result.get('scheduled_count')} scheduled story.",

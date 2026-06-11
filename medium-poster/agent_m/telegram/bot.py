@@ -33,6 +33,8 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
 
         platforms = ", ".join(result.published_to) if result.published_to else "none"
         caption = f"Published to: {platforms}\n{result.article.title}"
+        if result.image_model:
+            caption += f"\nImage: {result.image_model}"
         errors = [e for e in result.platform_errors if "not configured" not in e.lower()]
         if errors:
             caption += "\n\nIssues:\n" + "\n".join(f"- {e}" for e in errors)
