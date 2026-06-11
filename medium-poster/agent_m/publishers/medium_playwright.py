@@ -404,6 +404,45 @@ class MediumPlaywrightPublisher:
         finally:
             self._cleanup_display()
 
+    async def post_has_article_image(self, post_id: str) -> bool:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                try:
+                    result = await self._post_has_article_image_page(page, post_id)
+                except Exception:
+                    log.exception("Medium post image inspection failed")
+                    await self._safe_screenshot(page, "medium_post_image_inspection_error.png")
+                    raise
+                finally:
+                    cookies = await context.cookies()
+                    if cookies:
+                        normalized = self._normalize_cookies(cookies)
+                        _COOKIES_FILE.write_text(json.dumps(normalized, indent=2))
+                await browser.close()
+                return result
+        finally:
+            self._cleanup_display()
+
     async def _list_stories(self, url: str, inspect_edit: bool = False) -> list[dict]:
         if not _COOKIES_FILE.exists():
             raise RuntimeError(
@@ -580,6 +619,10 @@ class MediumPlaywrightPublisher:
         for error in errors[:4]:
             log.info("Medium draft delete attempt: %s", error)
         return False
+
+    async def _post_has_article_image_page(self, page, post_id: str) -> bool:
+        await self._open_edit_page(page, post_id, "post_image_inspection_edit")
+        return await self._article_has_image(page)
 
     async def _schedule_draft_page(
         self,

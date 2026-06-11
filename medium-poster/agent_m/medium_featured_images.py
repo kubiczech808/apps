@@ -36,62 +36,89 @@ async def run_once() -> dict:
         log.info("Medium featured image backfill: %s", result)
         return result
 
-    post = pending[0]
-    post_id = post["postId"]
-    title = _clean_title(post.get("title") or post_id)
-    log.info("Medium featured image backfill: processing %s: %s", post_id, title)
+    skipped_existing = 0
+    for index, post in enumerate(pending):
+        post_id = post["postId"]
+        title = _clean_title(post.get("title") or post_id)
+        log.info("Medium featured image backfill: processing %s: %s", post_id, title)
 
-    topic = Topic(
-        title=title,
-        angle=(
-            "Create a calm editorial hero image for a Bitcoin DCA article. "
-            "Show automated recurring purchases, portfolio balance, and long-term investing discipline."
-        ),
-        tags=["Bitcoin", "DCA", "Investing"],
-        slug=f"medium-{post_id}",
-    )
-    try:
-        image_bytes, image_model = await generate_header_image(topic)
-    except Exception as exc:
+        try:
+            if await publisher.post_has_article_image(post_id):
+                processed[post_id] = {
+                    "status": "already_had_image",
+                    "title": title,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                skipped_existing += 1
+                log.info("Medium featured image backfill: %s already has image in editor", post_id)
+                continue
+        except Exception as exc:
+            log.warning("Medium featured image preflight failed for %s; continuing with generation: %s", post_id, exc)
+
+        topic = Topic(
+            title=title,
+            angle=(
+                "Create a calm editorial hero image for a Bitcoin DCA article. "
+                "Show automated recurring purchases, portfolio balance, and long-term investing discipline."
+            ),
+            tags=["Bitcoin", "DCA", "Investing"],
+            slug=f"medium-{post_id}",
+        )
+        try:
+            image_bytes, image_model = await generate_header_image(topic)
+        except Exception as exc:
+            processed[post_id] = {
+                "status": "retry_later",
+                "title": title,
+                "error": str(exc),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            state["last_run_at"] = datetime.now(timezone.utc).isoformat()
+            _write_state(_STATE_FILE, state)
+            result = {
+                "status": "retry_later",
+                "post_id": post_id,
+                "title": title,
+                "error": str(exc),
+                "remaining": len(pending) - index,
+                "skipped_existing_images": skipped_existing,
+            }
+            log.warning("Medium featured image backfill deferred: %s", result)
+            return result
+
+        url = await publisher.add_featured_image_to_post(post_id, image_bytes)
+
         processed[post_id] = {
-            "status": "retry_later",
+            "status": "done",
             "title": title,
-            "error": str(exc),
+            "url": url,
+            "image_model": image_model,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         state["last_run_at"] = datetime.now(timezone.utc).isoformat()
         _write_state(_STATE_FILE, state)
+
         result = {
-            "status": "retry_later",
+            "status": "updated",
             "post_id": post_id,
             "title": title,
-            "error": str(exc),
-            "remaining": len(pending),
+            "url": url,
+            "image_model": image_model,
+            "remaining": max(0, len(pending) - index - 1),
+            "skipped_existing_images": skipped_existing,
         }
-        log.warning("Medium featured image backfill deferred: %s", result)
+        log.info("Medium featured image backfill result: %s", result)
         return result
 
-    url = await publisher.add_featured_image_to_post(post_id, image_bytes)
-
-    processed[post_id] = {
-        "status": "done",
-        "title": title,
-        "url": url,
-        "image_model": image_model,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
     state["last_run_at"] = datetime.now(timezone.utc).isoformat()
     _write_state(_STATE_FILE, state)
-
     result = {
-        "status": "updated",
-        "post_id": post_id,
-        "title": title,
-        "url": url,
-        "image_model": image_model,
-        "remaining": max(0, len(pending) - 1),
+        "status": "nothing_to_do",
+        "total_posts": len(posts),
+        "processed": len(processed),
+        "skipped_existing_images": skipped_existing,
     }
-    log.info("Medium featured image backfill result: %s", result)
+    log.info("Medium featured image backfill: %s", result)
     return result
 
 
