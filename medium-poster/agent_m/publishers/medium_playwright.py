@@ -622,7 +622,26 @@ class MediumPlaywrightPublisher:
 
     async def _post_has_article_image_page(self, page, post_id: str) -> bool:
         await self._open_edit_page(page, post_id, "post_image_inspection_edit")
-        return await self._article_has_image(page)
+        for attempt in range(8):
+            try:
+                details = await self._inspect_edit_page(page)
+                if details.get("imageCount", 0) > 0:
+                    log.info(
+                        "Medium: post %s already has %d editor image(s) on preflight attempt %d",
+                        post_id,
+                        details.get("imageCount", 0),
+                        attempt + 1,
+                    )
+                    return True
+            except Exception as exc:
+                log.info("Medium: image preflight inspection attempt %d failed: %s", attempt + 1, exc)
+
+            if await self._article_has_image(page):
+                log.info("Medium: post %s already has an editor image on preflight attempt %d", post_id, attempt + 1)
+                return True
+
+            await asyncio.sleep(1.5)
+        return False
 
     async def _schedule_draft_page(
         self,
