@@ -10,6 +10,7 @@ on:
       - 'medium-poster/data/feedback.json'
       - 'scripts/agent-m-bot.sh'
       - 'scripts/agent-m-bot.service'
+      - '.github/workflows/agent-m-deploy.yml'
       - '.github/agent-m-deploy-trigger.txt'
 
 permissions:
@@ -41,7 +42,13 @@ jobs:
             --exclude '__pycache__' \
             --exclude '.env' \
             --exclude 'data/medium_cookies.json' \
-            --exclude 'data/history.json'
+            --exclude 'data/history.json' \
+            --exclude 'data/medium_featured_images.json' \
+            --exclude 'data/medium_draft_scheduler.json' \
+            --exclude 'data/telegram_draft_actions.json' \
+            --exclude 'data/token_usage.json' \
+            --exclude 'data/topics_cache.json' \
+            --exclude 'data/site_context.json'
 
       - name: Create .env
         run: |
