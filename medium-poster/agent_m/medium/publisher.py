@@ -48,7 +48,7 @@ class MediumClient:
             "title": title[:100],
             "contentFormat": "markdown",
             "content": content_markdown,
-            "tags": tags[:3],
+            "tags": tags[:5],
             "publishStatus": publish_status,
         }
         if canonical_url:

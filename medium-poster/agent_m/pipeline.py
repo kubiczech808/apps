@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
+import re
 from dataclasses import dataclass, field
 
 from agent_m.config import config
@@ -243,16 +245,18 @@ async def _publish_rss(history, topic, article, image_url) -> str | None:
             "body": article.body,
         })
 
-        article_html = _assemble_html(article.title, article.body, image_url)
+        article_url = _site_article_url(topic.slug)
+        article_html = _assemble_html(article.title, article.body, image_url, article_url)
         feed_xml = generate_feed(feed_articles)
 
         gh = GitHubPagesPublisher()
         try:
-            return await gh.publish_article_and_feed(
+            await gh.publish_article_and_feed(
                 slug=topic.slug,
                 article_html=article_html,
                 feed_xml=feed_xml,
             )
+            return article_url
         finally:
             await gh.close()
     except Exception as exc:
@@ -343,28 +347,48 @@ def _assemble_markdown(title: str, body: str, image_url: str | None) -> str:
     return "\n".join(parts)
 
 
-def _assemble_html(title: str, body: str, image_url: str | None) -> str:
+def _assemble_html(title: str, body: str, image_url: str | None, canonical_url: str | None = None) -> str:
     from agent_m.publishers.rss_feed import _markdown_to_basic_html
 
     img_tag = ""
     if image_url:
-        img_tag = f'<img src="{image_url}" alt="{title}" style="max-width:100%"/>'
+        img_tag = f'<img src="{html.escape(image_url)}" alt="{html.escape(title)}" style="max-width:100%"/>'
 
     body_html = _markdown_to_basic_html(body)
+    canonical_url = canonical_url or config.site_url
+    description = _meta_description(body)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>{title}</title>
-<link rel="canonical" href="{config.site_url}"/>
+<title>{html.escape(title)}</title>
+<meta name="description" content="{html.escape(description)}"/>
+<meta property="og:title" content="{html.escape(title)}"/>
+<meta property="og:description" content="{html.escape(description)}"/>
+<meta property="og:type" content="article"/>
+<link rel="canonical" href="{html.escape(canonical_url)}"/>
 </head>
 <body>
 <article>
-<h1>{title}</h1>
+<h1>{html.escape(title)}</h1>
 {img_tag}
 {body_html}
 </article>
 </body>
 </html>"""
+
+
+def _site_article_url(slug: str) -> str:
+    return f"{config.site_url.rstrip('/')}/articles/{slug}.html"
+
+
+def _meta_description(markdown: str) -> str:
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", markdown)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"[*_`>#-]+", " ", text)
+    text = " ".join(text.split())
+    if len(text) <= 155:
+        return text
+    return text[:152].rsplit(" ", 1)[0].rstrip(".,;:") + "..."

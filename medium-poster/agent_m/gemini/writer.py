@@ -18,6 +18,8 @@ _PROPER_CASE = {
     "hodl": "HODL", "fomo": "FOMO", "binance": "Binance", "coinmate": "Coinmate",
     "okx": "OKX", "trezor": "Trezor", "ledger": "Ledger", "s&p": "S&P",
     "fifo": "FIFO", "lifo": "LIFO", "cagr": "CAGR", "ath": "ATH",
+    "monday": "Monday", "tuesday": "Tuesday", "wednesday": "Wednesday",
+    "thursday": "Thursday", "friday": "Friday", "saturday": "Saturday", "sunday": "Sunday",
     "i": "I",
 }
 
@@ -63,6 +65,14 @@ _SYSTEM_CONTEXT = """You are a real person who invests in Bitcoin using DCA and 
 - Includes a cycle-aware DCA calculator (models diminishing returns per halving)
 - You monetize through affiliate links, not fees
 
+=== MEDIUM ENGAGEMENT ===
+- Write for Medium readers who do not know you yet: the title and first 5 lines must carry the article
+- Titles must be searchable AND clickable: specific, slightly opinionated, no vague diary titles
+- Good title shape: "Bitcoin DCA in a bull market: the rule I use" or "Why I stopped waiting for Bitcoin dips"
+- First 120 words must establish tension: what most people do, what you do differently, and why it matters
+- Include at least one concrete rule, threshold, checklist, or example that readers can argue with or save
+- End with a short reflective question that can invite comments, not a sales CTA
+
 === WRITING STYLE (CRITICAL — your posts MUST read like a real person wrote them) ===
 - Write like a blog post, not an article. Use "I", share opinions, admit uncertainty
 - Sentence case everywhere — only capitalize the first word and proper nouns (Bitcoin, Binance, etc.)
@@ -103,6 +113,13 @@ Keyword to include naturally: "{seo_keyword}"
 === POINTS TO TOUCH ON ===
 {key_points}
 
+=== MEDIUM FORMAT OVERRIDES ===
+- Around 900-1300 words; prioritize density over length
+- The title should be specific enough for search and interesting enough for Medium readers (45-75 chars)
+- The first 2-3 lines must create a reason to keep reading: tension, mistake, contrarian angle, or practical payoff
+- Include one concrete rule, threshold, example, or mini-checklist that a reader could save
+- End with one short discussion question related to the article's tradeoff or strategy
+
 === FORMAT ===
 - Around 1000-1500 words — don't pad it
 - Markdown with ## subheadings in sentence case (max 3-4 subheadings)
@@ -123,7 +140,7 @@ Do NOT use Title Case for subheadings.
 
 Respond using EXACTLY this format:
 TITLE: <short sentence-case title>
-TAGS: <tag1>, <tag2>, <tag3>
+TAGS: <tag1>, <tag2>, <tag3>, <tag4>, <tag5>
 BODY:
 <the blog post in markdown>"""
 
@@ -185,16 +202,12 @@ async def write_article_from_plan(plan: ContentPlan) -> Article:
 
     title = article.title
     body = article.body
-    tags = article.tags
-
-    if not tags:
-        tags = [t[:25] for t in plan.tags[:3]]
+    tags = _finalize_tags(article.tags, plan)
 
     if config.site_url not in body:
         body += (
-            f"\n\nIf you want to take the manual work out of DCA, I built "
-            f"[a free tool that automates the whole process]({config.site_url}) "
-            f"— connects to your exchange, buys on schedule, withdraws to your wallet."
+            f"\n\nThis is also why I keep improving "
+            f"[my Bitcoin DCA automation setup]({config.site_url}) instead of trying to make every buy decision manually."
         )
 
     return Article(title=title, body=body, tags=tags)
@@ -212,7 +225,7 @@ def _parse_writer_response(raw: str, plan: ContentPlan) -> Article | None:
             title = _to_sentence_case(line[len("TITLE:"):].strip()[:100])
         elif not tags and line.startswith("TAGS:"):
             raw_tags = line[len("TAGS:"):].strip()
-            tags = [t.strip()[:25] for t in raw_tags.split(",") if t.strip()][:3]
+            tags = [t.strip()[:25] for t in raw_tags.split(",") if t.strip()][:5]
         elif line.strip() == "BODY:":
             body_start_idx = i + 1
             break
@@ -229,7 +242,20 @@ def _parse_writer_response(raw: str, plan: ContentPlan) -> Article | None:
     if not title or not body:
         return None
 
-    if not tags:
-        tags = [t[:25] for t in plan.tags[:3]]
+    tags = _finalize_tags(tags, plan)
 
     return Article(title=title, body=body, tags=tags)
+
+
+def _finalize_tags(tags: list[str], plan: ContentPlan) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for tag in [*tags, *plan.tags, "Bitcoin", "DCA", "Investing", "Personal Finance"]:
+        cleaned = " ".join(tag.strip().split())[:25]
+        key = cleaned.lower()
+        if cleaned and key not in seen:
+            result.append(cleaned)
+            seen.add(key)
+        if len(result) >= 5:
+            break
+    return result
