@@ -1,9 +1,11 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-06-15T08:49:32Z
+checked_at_utc=2026-06-15T12:39:53Z
 playwright_install=ok
 gmail_oauth_token_present= True
 gmail_oauth_secret_kind= json_refresh_token
 gmail_address= mailto.jakub.elias@gmail.com
 gmail_poll_seconds= 7200
+[2026-06-15 14:40:00] Gemini response model=gemini-2.5-flash
+[2026-06-15 14:40:01] Email processed and replied: from=jakub.elias88@gmail.com trusted=True subject=Re: Fwd: NadchÃƒÂ¡dzajÃƒÂºca kampaÃ…Âˆ XTB Free Stock
 gmail_setup_poll=ok
 virtual_assistant_service=active
