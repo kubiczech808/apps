@@ -5,5 +5,5 @@ gmail_oauth_token_present= True
 gmail_oauth_secret_kind= json_refresh_token
 gmail_address= mailto.jakub.elias@gmail.com
 gmail_poll_seconds= 7200
-gmail_setup_poll=failed:NameError
+gmail_setup_poll=pending_recheck
 virtual_assistant_service=active
