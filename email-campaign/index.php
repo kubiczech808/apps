@@ -73,6 +73,26 @@ if ($dbWarning && !$flash) {
     $flash = ['ok', $migrationNotice];
 }
 
+if (($_GET['auth'] ?? '') === 'google') {
+    try {
+        startGoogleAuth($config);
+    } catch (Throwable $e) {
+        $_SESSION['flash'] = ['error', $e->getMessage()];
+        header('Location: ./');
+    }
+    exit;
+}
+
+if (($_GET['auth'] ?? '') === 'google_callback') {
+    try {
+        handleGoogleAuthCallback($pdo, $config);
+    } catch (Throwable $e) {
+        $_SESSION['flash'] = ['error', $e->getMessage()];
+        header('Location: ./');
+    }
+    exit;
+}
+
 if (isset($_GET['open'])) {
     trackOpen($pdo, (string)$_GET['open']);
     exit;
@@ -143,6 +163,7 @@ if (!isConfigured($config)) {
             saveSetup($pdo);
             $_SESSION['auth'] = true;
             $_SESSION['auth_email'] = strtolower(trim((string)$_POST['admin_email']));
+            $_SESSION['auth_provider'] = 'password';
             $_SESSION['flash'] = ['ok', 'Aplikace je pripravena.'];
             header('Location: ./');
             exit;
@@ -150,7 +171,7 @@ if (!isConfigured($config)) {
             $flash = ['error', $e->getMessage()];
         }
     }
-    renderSetup($flash);
+    renderSetup($flash, $config);
     exit;
 }
 
@@ -160,6 +181,7 @@ if (($_POST['action'] ?? '') === 'login') {
     if ($loginEmail !== '' && $adminEmail !== '' && hash_equals($adminEmail, $loginEmail) && password_verify((string)$_POST['password'], (string)$config['app_password_hash'])) {
         $_SESSION['auth'] = true;
         $_SESSION['auth_email'] = $adminEmail;
+        $_SESSION['auth_provider'] = 'password';
         header('Location: ./?route=dashboard');
         exit;
     }
@@ -173,7 +195,7 @@ if (isset($_GET['logout'])) {
 }
 
 if (empty($_SESSION['auth'])) {
-    renderLogin($flash);
+    renderLogin($flash, $config);
     exit;
 }
 
@@ -490,6 +512,225 @@ function isConfigured(array $config): bool
     return (string)$config['app_password_hash'] !== '' && trim((string)($config['admin_email'] ?? '')) !== '';
 }
 
+function googleAuthConfig(array $config): array
+{
+    $google = is_array($config['google'] ?? null) ? $config['google'] : [];
+    $clientId = trim((string)($google['client_id'] ?? ''));
+    $clientSecret = trim((string)($google['client_secret'] ?? ''));
+    $authSecret = trim((string)($google['auth_secret'] ?? ''));
+    $redirectUri = trim((string)($google['redirect_uri'] ?? ''));
+    $appUrl = trim((string)($google['app_url'] ?? ''));
+    return [
+        'client_id' => $clientId !== '' ? $clientId : trim((string)(getenv('BTCDCA_GOOGLE_CLIENT_ID') ?: '')),
+        'client_secret' => $clientSecret !== '' ? $clientSecret : trim((string)(getenv('BTCDCA_GOOGLE_SECRET') ?: '')),
+        'auth_secret' => $authSecret !== '' ? $authSecret : trim((string)(getenv('BTCDCA_AUTH_SECRET') ?: '')),
+        'redirect_uri' => $redirectUri !== '' ? $redirectUri : 'https://www.btc-dca.com/app/auth/google/callback',
+        'app_url' => rtrim($appUrl !== '' ? $appUrl : 'https://www.btc-dca.com', '/'),
+    ];
+}
+
+function googleAuthEnabled(array $config): bool
+{
+    $google = googleAuthConfig($config);
+    return $google['client_id'] !== '' && $google['client_secret'] !== '' && $google['auth_secret'] !== '';
+}
+
+function requireGoogleAuthConfig(array $config): array
+{
+    $google = googleAuthConfig($config);
+    foreach (['client_id', 'client_secret', 'auth_secret', 'redirect_uri'] as $key) {
+        if ($google[$key] === '') {
+            throw new RuntimeException('Google prihlaseni neni nakonfigurovane.');
+        }
+    }
+    return $google;
+}
+
+function startGoogleAuth(array $config): void
+{
+    $google = requireGoogleAuthConfig($config);
+    $intent = isConfigured($config) ? 'login' : 'setup';
+    $nonce = bin2hex(random_bytes(16));
+    $_SESSION['google_oauth_nonce'] = $nonce;
+    $_SESSION['google_oauth_intent'] = $intent;
+    $state = signGoogleState([
+        'nonce' => $nonce,
+        'intent' => $intent,
+        'iat' => time(),
+    ], $google['auth_secret']);
+    $params = [
+        'client_id' => $google['client_id'],
+        'redirect_uri' => $google['redirect_uri'],
+        'response_type' => 'code',
+        'scope' => 'openid email profile',
+        'state' => $state,
+        'prompt' => 'select_account',
+    ];
+    header('Location: https://accounts.google.com/o/oauth2/v2/auth?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986));
+}
+
+function handleGoogleAuthCallback(PDO $pdo, array $config): void
+{
+    $google = requireGoogleAuthConfig($config);
+    if (($_GET['error'] ?? '') !== '') {
+        throw new RuntimeException('Google prihlaseni bylo zruseno nebo odmitnuto.');
+    }
+    $state = verifyGoogleState((string)($_GET['state'] ?? ''), $google['auth_secret']);
+    $sessionNonce = (string)($_SESSION['google_oauth_nonce'] ?? '');
+    unset($_SESSION['google_oauth_nonce'], $_SESSION['google_oauth_intent']);
+    if ($sessionNonce === '' || !hash_equals($sessionNonce, (string)($state['nonce'] ?? ''))) {
+        throw new RuntimeException('Google prihlaseni vyprselo. Zkus to prosim znovu.');
+    }
+    $code = (string)($_GET['code'] ?? '');
+    if ($code === '') {
+        throw new RuntimeException('Google nevratil autorizacni kod.');
+    }
+    $tokens = googleHttpPostJson('https://oauth2.googleapis.com/token', [
+        'code' => $code,
+        'client_id' => $google['client_id'],
+        'client_secret' => $google['client_secret'],
+        'redirect_uri' => $google['redirect_uri'],
+        'grant_type' => 'authorization_code',
+    ]);
+    $accessToken = (string)($tokens['access_token'] ?? '');
+    if ($accessToken === '') {
+        throw new RuntimeException('Google nevratil access token.');
+    }
+    $profile = googleHttpGetJson('https://openidconnect.googleapis.com/v1/userinfo', [
+        'Authorization: Bearer ' . $accessToken,
+    ]);
+    $email = strtolower(trim((string)($profile['email'] ?? '')));
+    $verified = $profile['email_verified'] ?? false;
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL) || !($verified === true || $verified === 'true' || $verified === 1 || $verified === '1')) {
+        throw new RuntimeException('Google ucet nema overeny email.');
+    }
+
+    if (!isConfigured($config)) {
+        setSetting($pdo, 'admin_email', $email);
+        setSetting($pdo, 'app_password_hash', password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT));
+        if (trim((string)($config['cron_token'] ?? '')) === '') {
+            setSetting($pdo, 'cron_token', bin2hex(random_bytes(24)));
+        }
+        $_SESSION['auth'] = true;
+        $_SESSION['auth_email'] = $email;
+        $_SESSION['auth_provider'] = 'google';
+        $_SESSION['flash'] = ['ok', 'Administrace byla vytvorena pres Google ucet. Heslo muzes nastavit v konfiguraci.'];
+        header('Location: ./?route=dashboard');
+        return;
+    }
+
+    $adminEmail = strtolower(trim((string)($config['admin_email'] ?? '')));
+    if ($adminEmail === '' || !hash_equals($adminEmail, $email)) {
+        throw new RuntimeException('Google ucet ' . $email . ' neni povoleny pro tuto administraci.');
+    }
+    $_SESSION['auth'] = true;
+    $_SESSION['auth_email'] = $adminEmail;
+    $_SESSION['auth_provider'] = 'google';
+    header('Location: ./?route=dashboard');
+}
+
+function signGoogleState(array $payload, string $secret): string
+{
+    $body = googleBase64UrlEncode(json_encode($payload, JSON_UNESCAPED_SLASHES) ?: '{}');
+    $signature = googleBase64UrlEncode(hash_hmac('sha256', $body, $secret, true));
+    return $body . '.' . $signature;
+}
+
+function verifyGoogleState(string $state, string $secret): array
+{
+    $parts = explode('.', $state, 2);
+    if (count($parts) !== 2) {
+        throw new RuntimeException('Neplatny Google OAuth state.');
+    }
+    [$body, $signature] = $parts;
+    $expected = googleBase64UrlEncode(hash_hmac('sha256', $body, $secret, true));
+    if (!hash_equals($expected, $signature)) {
+        throw new RuntimeException('Neplatny podpis Google OAuth state.');
+    }
+    $payload = json_decode(googleBase64UrlDecode($body), true);
+    if (!is_array($payload) || time() - (int)($payload['iat'] ?? 0) > 600) {
+        throw new RuntimeException('Google prihlaseni vyprselo. Zkus to prosim znovu.');
+    }
+    return $payload;
+}
+
+function googleBase64UrlEncode(string $value): string
+{
+    return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+}
+
+function googleBase64UrlDecode(string $value): string
+{
+    $padding = strlen($value) % 4;
+    if ($padding > 0) {
+        $value .= str_repeat('=', 4 - $padding);
+    }
+    return base64_decode(strtr($value, '-_', '+/')) ?: '';
+}
+
+function googleHttpPostJson(string $url, array $fields): array
+{
+    return googleHttpJson($url, 'POST', [
+        'Content-Type: application/x-www-form-urlencoded',
+    ], http_build_query($fields, '', '&', PHP_QUERY_RFC3986));
+}
+
+function googleHttpGetJson(string $url, array $headers): array
+{
+    return googleHttpJson($url, 'GET', $headers, null);
+}
+
+function googleHttpJson(string $url, string $method, array $headers, ?string $body): array
+{
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        if ($method === 'POST') {
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        }
+        $response = curl_exec($ch);
+        $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+        if ($response === false) {
+            throw new RuntimeException('Google OAuth request selhal: ' . $error);
+        }
+    } else {
+        $context = stream_context_create([
+            'http' => [
+                'method' => $method,
+                'header' => implode("\r\n", $headers),
+                'content' => $body ?? '',
+                'timeout' => 15,
+                'ignore_errors' => true,
+            ],
+        ]);
+        $response = file_get_contents($url, false, $context);
+        $status = 0;
+        foreach ($http_response_header ?? [] as $header) {
+            if (preg_match('#^HTTP/\S+\s+(\d+)#', $header, $matches)) {
+                $status = (int)$matches[1];
+                break;
+            }
+        }
+        if ($response === false) {
+            throw new RuntimeException('Google OAuth request selhal.');
+        }
+    }
+    $json = json_decode((string)$response, true);
+    if (!is_array($json)) {
+        throw new RuntimeException('Google vratil necitelnou odpoved.');
+    }
+    if ($status < 200 || $status >= 300) {
+        $message = (string)($json['error_description'] ?? $json['error'] ?? 'Google OAuth request selhal.');
+        throw new RuntimeException($message);
+    }
+    return $json;
+}
+
 function saveSetup(PDO $pdo): void
 {
     $email = strtolower(trim((string)($_POST['admin_email'] ?? '')));
@@ -669,7 +910,10 @@ function saveAccountSettings(PDO $pdo, array $config): void
             throw new RuntimeException('Admin email neni platny.');
         }
         $currentPassword = (string)($_POST['current_password'] ?? '');
-        if (!password_verify($currentPassword, (string)($config['app_password_hash'] ?? ''))) {
+        $googleSession = !empty($_SESSION['auth'])
+            && (string)($_SESSION['auth_provider'] ?? '') === 'google'
+            && hash_equals($currentAdminEmail, strtolower(trim((string)($_SESSION['auth_email'] ?? ''))));
+        if (!$googleSession && !password_verify($currentPassword, (string)($config['app_password_hash'] ?? ''))) {
             throw new RuntimeException('Pro zmenu prihlasovacich udaju zadej soucasne heslo.');
         }
         if ($newPassword !== '' && strlen($newPassword) < 10) {
@@ -5214,14 +5458,16 @@ function formatDateTime(string $value): string
     return $time ? date('d.m.Y H:i', $time) : $value;
 }
 
-function renderLogin(?array $flash): void
+function renderLogin(?array $flash, array $config): void
 {
-    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email rozesilac</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body class="login"><main><form method="post" class="panel narrow"><input type="hidden" name="action" value="login"><h1>Email rozesilac</h1><?php renderFlash($flash); ?><label>Email<input type="email" name="email" autocomplete="username" autofocus required></label><label>Heslo<input type="password" name="password" autocomplete="current-password" required></label><button>Prihlasit</button><p class="version">Verze <?= h(APP_VERSION) ?></p></form></main></body></html><?php
+    $googleEnabled = googleAuthEnabled($config);
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email rozesilac</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body class="login"><main><form method="post" class="panel narrow login-panel"><input type="hidden" name="action" value="login"><h1>Email rozesilac</h1><?php renderFlash($flash); ?><?php if ($googleEnabled): ?><a class="button google-button" href="?auth=google">Pokracovat pres Google</a><div class="auth-divider"><span>nebo</span></div><?php endif; ?><label>Email<input type="email" name="email" autocomplete="username" autofocus required></label><label>Heslo<input type="password" name="password" autocomplete="current-password" required></label><button>Prihlasit</button><p class="version">Verze <?= h(APP_VERSION) ?></p></form></main></body></html><?php
 }
 
-function renderSetup(?array $flash): void
+function renderSetup(?array $flash, array $config): void
 {
-    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nastaveni aplikace</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body class="login"><main><form method="post" class="panel narrow"><input type="hidden" name="action" value="setup"><h1>Nastaveni aplikace</h1><?php renderFlash($flash); ?><p>Vytvor prvni administracni ucet. Emailove pripojeni nastavis po prihlaseni.</p><label>Admin email<input type="email" name="admin_email" autocomplete="username" autofocus required></label><label>Admin heslo<input type="password" name="new_password" minlength="10" autocomplete="new-password" required></label><button>Vytvorit administraci</button></form></main></body></html><?php
+    $googleEnabled = googleAuthEnabled($config);
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nastaveni aplikace</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body class="login"><main><form method="post" class="panel narrow login-panel"><input type="hidden" name="action" value="setup"><h1>Nastaveni aplikace</h1><?php renderFlash($flash); ?><p>Vytvor prvni administracni ucet. Emailove pripojeni nastavis po prihlaseni.</p><?php if ($googleEnabled): ?><a class="button google-button" href="?auth=google">Vytvorit pres Google</a><div class="auth-divider"><span>nebo</span></div><?php endif; ?><label>Admin email<input type="email" name="admin_email" autocomplete="username" autofocus required></label><label>Admin heslo<input type="password" name="new_password" minlength="10" autocomplete="new-password" required></label><button>Vytvorit administraci</button></form></main></body></html><?php
 }
 
 function renderFatal(Throwable $e, ?array $flash): void

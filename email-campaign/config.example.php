@@ -15,6 +15,13 @@ return [
         'password' => 'smtp-password',
         'encryption' => 'tls',
     ],
+    'google' => [
+        'client_id' => '',
+        'client_secret' => '',
+        'auth_secret' => '',
+        'redirect_uri' => 'https://www.btc-dca.com/app/auth/google/callback',
+        'app_url' => 'https://www.btc-dca.com',
+    ],
     'database' => [
         'driver' => 'mysql',
         'host' => 'localhost',

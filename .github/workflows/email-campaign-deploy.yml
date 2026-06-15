@@ -27,6 +27,9 @@ jobs:
           APP_DATABASE_PASSWORD: ${{ secrets.APP_DATABASE_PASSWORD }}
           CAMPAIGN_CRON_INTERVAL_MINUTES: 5
           CAMPAIGN_SEND_DELAY_SECONDS: 2
+          BTCDCA_GOOGLE_CLIENT_ID: ${{ secrets.BTCDCA_GOOGLE_CLIENT_ID }}
+          BTCDCA_GOOGLE_SECRET: ${{ secrets.BTCDCA_GOOGLE_SECRET }}
+          BTCDCA_AUTH_SECRET: ${{ secrets.BTCDCA_AUTH_SECRET }}
         run: |
           if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
             echo "MySQL database secrets are required for email-campaign deploy."
@@ -57,6 +60,13 @@ jobs:
                   'username' => 'newsletter@osobnizkusenosti.cz',
                   'password' => 'smtp-password',
                   'encryption' => 'tls',
+              ],
+              'google' => [
+                  'client_id' => {s(os.environ.get("BTCDCA_GOOGLE_CLIENT_ID"))},
+                  'client_secret' => {s(os.environ.get("BTCDCA_GOOGLE_SECRET"))},
+                  'auth_secret' => {s(os.environ.get("BTCDCA_AUTH_SECRET"))},
+                  'redirect_uri' => 'https://www.btc-dca.com/app/auth/google/callback',
+                  'app_url' => 'https://www.btc-dca.com',
               ],
               'database' => [
                   'driver' => 'mysql',
