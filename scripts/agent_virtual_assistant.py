@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import base64
+import email.header
 import datetime as dt
 import email.utils
 import json
@@ -977,6 +978,41 @@ def header_value(message: dict[str, Any], name: str) -> str:
     return ""
 
 
+def clean_header_text(value: str) -> str:
+    return re.sub(r"[\r\n]+", " ", value).strip()
+
+
+def repair_mojibake(value: str) -> str:
+    text = value
+    for _ in range(3):
+        if not any(marker in text for marker in ("Ã", "Â", "Å")):
+            break
+        try:
+            fixed = text.encode("latin1").decode("utf-8")
+        except UnicodeError:
+            break
+        if fixed == text:
+            break
+        text = fixed
+    return text
+
+
+def decoded_header_value(message: dict[str, Any], name: str) -> str:
+    raw = header_value(message, name)
+    if not raw:
+        return ""
+    try:
+        decoded = str(email.header.make_header(email.header.decode_header(raw)))
+    except Exception:
+        decoded = raw
+    return repair_mojibake(clean_header_text(decoded))
+
+
+def encoded_subject_header(subject: str) -> str:
+    clean = repair_mojibake(clean_header_text(subject))
+    return email.header.Header(clean, "utf-8").encode()
+
+
 def decode_gmail_body(payload: dict[str, Any]) -> str:
     chunks: list[str] = []
 
@@ -1013,17 +1049,17 @@ def trusted_email_sender(sender: str, config: dict[str, str]) -> bool:
 
 def gmail_send(access_token: str, to_addr: str, from_addr: str, subject: str, body: str, thread_id: str = "", reply_to_message_id: str = "", references: str = "") -> None:
     headers = [
-        f"From: {from_addr}",
-        f"To: {to_addr}",
-        f"Subject: {subject}",
+        f"From: {clean_header_text(from_addr)}",
+        f"To: {clean_header_text(to_addr)}",
+        f"Subject: {encoded_subject_header(subject)}",
         "MIME-Version: 1.0",
         'Content-Type: text/plain; charset="UTF-8"',
         "Content-Transfer-Encoding: 8bit",
     ]
     if reply_to_message_id:
-        headers.append(f"In-Reply-To: {reply_to_message_id}")
+        headers.append(f"In-Reply-To: {clean_header_text(reply_to_message_id)}")
     if references or reply_to_message_id:
-        headers.append(f"References: {(references + ' ' + reply_to_message_id).strip()}")
+        headers.append(f"References: {clean_header_text((references + ' ' + reply_to_message_id).strip())}")
     raw = "\r\n".join(headers) + "\r\n\r\n" + body
     encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
     payload: dict[str, Any] = {"raw": encoded}
@@ -1034,7 +1070,7 @@ def gmail_send(access_token: str, to_addr: str, from_addr: str, subject: str, bo
 
 def build_email_instruction(message: dict[str, Any], body: str, trusted: bool) -> str:
     sender = header_value(message, "From")
-    subject = header_value(message, "Subject") or "(bez predmetu)"
+    subject = decoded_header_value(message, "Subject") or "(bez predmetu)"
     date = header_value(message, "Date")
     trust_line = "Odesilatel je duveryhodny Jakubuv kanal." if trusted else "Odesilatel neni v duveryhodnem seznamu; necin zavazky a neodpovidej tretim stranam bez schvaleni."
     return "\n".join([
@@ -1058,7 +1094,7 @@ def process_gmail_message(access_token: str, message_id: str, config: dict[str, 
     if not sender or not body:
         return
     trusted = trusted_email_sender(sender_header, config)
-    subject = header_value(message, "Subject") or "(bez predmetu)"
+    subject = decoded_header_value(message, "Subject") or "(bez predmetu)"
     history = g.load_json(g.HISTORY_FILE, [])
     if not isinstance(history, list):
         history = []
