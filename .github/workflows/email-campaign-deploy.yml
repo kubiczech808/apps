@@ -1,0 +1,90 @@
+name: Deploy Email Campaign
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - 'email-campaign/**'
+      - '.github/workflows/email-campaign-deploy.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create app config from secrets
+        env:
+          APP_DATABASE_DRIVER: mysql
+          APP_DATABASE_HOST: localhost
+          APP_DATABASE_PORT: 3306
+          APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
+          APP_DATABASE_USERNAME: ${{ secrets.APP_DATABASE_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.APP_DATABASE_PASSWORD }}
+          CAMPAIGN_CRON_INTERVAL_MINUTES: 5
+          CAMPAIGN_SEND_DELAY_SECONDS: 2
+        run: |
+          if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
+            echo "MySQL database secrets are required for email-campaign deploy."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import hashlib
+          import os
+
+          def s(value):
+              return "'" + (value or "").replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+          port = int(os.environ.get("APP_DATABASE_PORT") or "3306")
+          cron_material = "email-campaign-cron:" + os.environ.get("APP_DATABASE_NAME", "") + ":" + os.environ.get("APP_DATABASE_USERNAME", "") + ":" + os.environ.get("APP_DATABASE_PASSWORD", "")
+          cron_token = hashlib.sha256(cron_material.encode("utf-8")).hexdigest()
+          content = f"""<?php
+
+          return [
+              'app_password_hash' => '',
+              'cron_token' => {s(cron_token)},
+              'campaign_cron_interval_minutes' => {int(os.environ.get("CAMPAIGN_CRON_INTERVAL_MINUTES") or "5")},
+              'campaign_send_delay_seconds' => {int(os.environ.get("CAMPAIGN_SEND_DELAY_SECONDS") or "2")},
+              'from_email' => 'newsletter@osobnizkusenosti.cz',
+              'from_name' => 'Osobni zkusenosti',
+              'smtp' => [
+                  'host' => 'smtp.example.com',
+                  'port' => 587,
+                  'username' => 'newsletter@osobnizkusenosti.cz',
+                  'password' => 'smtp-password',
+                  'encryption' => 'tls',
+              ],
+              'database' => [
+                  'driver' => 'mysql',
+                  'host' => {s(os.environ.get("APP_DATABASE_HOST"))},
+                  'port' => {port},
+                  'name' => {s(os.environ.get("APP_DATABASE_NAME"))},
+                  'username' => {s(os.environ.get("APP_DATABASE_USERNAME"))},
+                  'password' => {s(os.environ.get("APP_DATABASE_PASSWORD"))},
+                  'charset' => 'utf8mb4',
+              ],
+          ];
+          """
+          with open("email-campaign/config.php", "w", encoding="utf-8") as f:
+              f.write(content)
+          PY
+
+      - name: Lint PHP files
+        run: |
+          php -v
+          find email-campaign -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Upload to hosting
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.HOSTING_FTP_SERVER }}
+          username: ${{ secrets.HOSTING_FTP_USERNAME }}
+          password: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          local-dir: ./email-campaign/
+          server-dir: /www/email-campaign/
+          exclude: |
+            **/.git*

@@ -1,0 +1,51 @@
+name: Email Campaign Cron
+
+on:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - '.github/workflows/email-campaign-cron.yml'
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_run:
+    workflows:
+      - Deploy Email Campaign
+    types:
+      - completed
+  workflow_dispatch:
+
+concurrency:
+  group: email-campaign-cron
+  cancel-in-progress: true
+
+jobs:
+  cron:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call application cron endpoint
+        env:
+          APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
+          APP_DATABASE_USERNAME: ${{ secrets.APP_DATABASE_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.APP_DATABASE_PASSWORD }}
+        run: |
+          if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
+            echo "Missing database secrets; cannot derive cron token."
+            exit 1
+          fi
+          TOKEN=$(python3 - <<'PY'
+          import hashlib
+          import os
+
+          material = "email-campaign-cron:" + os.environ["APP_DATABASE_NAME"] + ":" + os.environ["APP_DATABASE_USERNAME"] + ":" + os.environ["APP_DATABASE_PASSWORD"]
+          print(hashlib.sha256(material.encode("utf-8")).hexdigest())
+          PY
+          )
+          call_cron() {
+            http_code=$(curl --show-error --silent --max-time 180 --output /tmp/email-campaign-cron-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}")
+            echo "HTTP ${http_code}"
+            cat /tmp/email-campaign-cron-body.txt
+            test "$http_code" -ge 200 -a "$http_code" -lt 400
+          }
+          call_cron

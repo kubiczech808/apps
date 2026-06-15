@@ -1,0 +1,133 @@
+name: Agent M — Publish Article
+
+on:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - .github/agent-m-trigger.txt
+  schedule:
+    - cron: '59 15 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Publish mode'
+        required: true
+        default: 'draft'
+        type: choice
+        options:
+          - post
+          - draft
+          - preview
+      slug:
+        description: 'Topic slug (optional — leave empty for next in plan)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: claude/multi-platform-auto-poster-p3uBn
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: medium-poster
+        run: pip install .
+
+      - name: Install Playwright browsers
+        working-directory: medium-poster
+        run: playwright install chrome --with-deps
+
+      - name: Create .env
+        working-directory: medium-poster
+        run: |
+          printf '%s\n' \
+            "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY_M }}" \
+            "TELEGRAM_BOT_TOKEN=${{ secrets.M_TELEGRAM_TOKEN }}" \
+            "TELEGRAM_ADMIN_CHAT_ID=${{ secrets.M_TELEGRAM_CHAT_ID }}" \
+            "GITHUB_PAT=${{ secrets.PAT_GITHUB_MEDIUM }}" \
+            "DEVTO_API_KEY=${{ secrets.DEVTO_API_KEY }}" \
+            "HASHNODE_PLAYWRIGHT=false" \
+            "MEDIUM_PLAYWRIGHT=false" \
+            "MEDIUM_TOKEN=" \
+            "IMGUR_CLIENT_ID=" \
+            "GITHUB_PAGES_REPO=kubiczech808/apps" \
+            "GITHUB_PAGES_BRANCH=gh-pages" \
+            "SITE_URL=https://btc-dca.com" \
+            "SITE_NAME=btc-dca.com" \
+            "PUBLISH_HOUR=9" \
+            "PUBLISH_MINUTE=0" \
+            "LOG_LEVEL=INFO" > .env
+
+      - name: Run pipeline
+        id: pipeline
+        working-directory: medium-poster
+        continue-on-error: true
+        run: |
+          MODE="${{ github.event.inputs.mode || 'post' }}"
+          SLUG="${{ github.event.inputs.slug }}"
+          echo "=== Agent M Pipeline ===" > /tmp/pipeline_raw.log
+          echo "Mode: $MODE | Slug: $SLUG" >> /tmp/pipeline_raw.log
+          echo "Python: $(python --version)" >> /tmp/pipeline_raw.log
+          echo "Working dir: $(pwd)" >> /tmp/pipeline_raw.log
+          echo "---" >> /tmp/pipeline_raw.log
+          if [ -n "$SLUG" ]; then
+            python -m agent_m.cli "$MODE" --slug "$SLUG" >> /tmp/pipeline_raw.log 2>&1
+          else
+            python -m agent_m.cli "$MODE" >> /tmp/pipeline_raw.log 2>&1
+          fi
+
+      - name: Redact secrets from log
+        if: always()
+        run: |
+          if [ -f /tmp/pipeline_raw.log ]; then
+            sed -E \
+              -e 's|api\.telegram\.org/bot[A-Za-z0-9:_-]+|api.telegram.org/bot***REDACTED***|g' \
+              -e 's|key=[A-Za-z0-9_-]{20,}|key=***REDACTED***|g' \
+              /tmp/pipeline_raw.log > /tmp/pipeline.log
+          else
+            echo "No log output" > /tmp/pipeline.log
+          fi
+
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: |
+            medium-poster/data/*_error.png
+            medium-poster/data/*_timeout.png
+            medium-poster/data/*_no_title_field.png
+            medium-poster/data/*_editor_wait_timeout.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Write result to debug issue
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = 'No log';
+            try { log = fs.readFileSync('/tmp/pipeline.log', 'utf8'); } catch(e) {}
+            const result = log.match(/AGENT_M_RESULT_START[\s\S]*?AGENT_M_RESULT_END/);
+            const summary = result ? result[0] : 'AGENT_M_RESULT not found';
+            const tail = log.split('\n').slice(-200).join('\n').substring(0,4000);
+            const body = `**Run ${new Date().toISOString()} | outcome: ${{ steps.pipeline.outcome }}**\n\nSummary:\n\`\`\`\n${summary}\n\`\`\`\n\nLog tail:\n\`\`\`\n${tail}\n\`\`\``;
+            const issues = await github.rest.issues.listForRepo({owner:context.repo.owner,repo:context.repo.repo,labels:['agent-m-debug'],state:'open'});
+            if (issues.data.length > 0) {
+              await github.rest.issues.createComment({owner:context.repo.owner,repo:context.repo.repo,issue_number:issues.data[0].number,body});
+            } else {
+              await github.rest.issues.create({owner:context.repo.owner,repo:context.repo.repo,title:'Agent M Debug',body,labels:['agent-m-debug']});
+            }

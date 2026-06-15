@@ -1,0 +1,174 @@
+name: Agent C - WordPress Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to run"
+        required: true
+        default: "complete-current"
+        type: choice
+        options:
+          - complete-current
+          - verify-only
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - .github/agent-c-trigger.txt
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-c-wp-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: self-hosted
+    timeout-minutes: 45
+    env:
+      WP_SITE_URL: https://www.btc-dca.com
+      WP_USERNAME_SECRET: ${{ secrets.WP_BTCDCA_USERNAME }}
+      WP_PASSWORD_SECRET: ${{ secrets.BTCDCA_WP_PASSWORD }}
+      AGENT_C_CONFIG: /home/openclaw2/.openclaw/btc-dca-blogger-config.json
+      AGENT_C_STATE: /home/openclaw2/.openclaw/btc-dca-blogger-state.json
+      AGENT_C_SCRIPT: /home/jakub/btc-dca-blogger.py
+      MODE: ${{ github.event.inputs.mode || 'complete-current' }}
+
+    steps:
+      - name: Safe input audit
+        run: |
+          set -euo pipefail
+          test -n "$WP_USERNAME_SECRET"
+          test -n "$WP_PASSWORD_SECRET"
+          test -f "$AGENT_C_SCRIPT"
+          echo "Agent C script: present"
+          echo "WP username secret: present"
+          echo "WP password secret: present"
+          echo "Mode: $MODE"
+
+      - name: Install WordPress credentials into Agent C config
+        run: |
+          set -euo pipefail
+          sudo --preserve-env=WP_SITE_URL,WP_USERNAME_SECRET,WP_PASSWORD_SECRET,AGENT_C_CONFIG python3 - <<'PY'
+          import json
+          import os
+          import pwd
+          import grp
+          from pathlib import Path
+
+          p = Path(os.environ["AGENT_C_CONFIG"])
+          p.parent.mkdir(parents=True, exist_ok=True)
+          cfg = json.loads(p.read_text()) if p.exists() else {}
+          cfg["WP_SITE_URL"] = os.environ["WP_SITE_URL"].rstrip("/")
+          cfg["WP_USERNAME"] = os.environ["WP_USERNAME_SECRET"]
+          cfg["WP_APP_PASSWORD"] = os.environ["WP_PASSWORD_SECRET"]
+
+          p.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+          user = pwd.getpwnam("openclaw2")
+          group = grp.getgrnam("openclaw2")
+          os.chown(p, user.pw_uid, group.gr_gid)
+          os.chmod(p, 0o600)
+          print("Agent C WP config updated: url/user/password present")
+          PY
+
+      - name: Prefer learn-center category if it exists
+        run: |
+          set -euo pipefail
+          sudo --preserve-env=AGENT_C_CONFIG python3 - <<'PY'
+          import json
+          import urllib.request
+          from pathlib import Path
+          import os
+
+          p = Path(os.environ["AGENT_C_CONFIG"])
+          cfg = json.loads(p.read_text())
+          site = cfg["WP_SITE_URL"].rstrip("/")
+          try:
+              with urllib.request.urlopen(f"{site}/wp-json/wp/v2/categories?slug=learn-center", timeout=20) as r:
+                  cats = json.loads(r.read())
+              if cats:
+                  cfg["categories"] = [int(cats[0]["id"])]
+                  p.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+                  print("Learn Center category found and configured")
+              else:
+                  print("Learn Center category not found; keeping existing categories")
+          except Exception as exc:
+              print(f"Category lookup skipped: {type(exc).__name__}")
+          PY
+
+      - name: Verify WordPress REST authentication
+        run: |
+          set -euo pipefail
+          sudo -u openclaw2 python3 - <<'PY'
+          import base64
+          import json
+          import urllib.request
+          from pathlib import Path
+
+          cfg = json.loads(Path("/home/openclaw2/.openclaw/btc-dca-blogger-config.json").read_text())
+          creds = base64.b64encode(f"{cfg['WP_USERNAME']}:{cfg['WP_APP_PASSWORD']}".encode()).decode()
+          req = urllib.request.Request(
+              f"{cfg['WP_SITE_URL'].rstrip('/')}/wp-json/wp/v2/users/me?context=edit",
+              headers={"Authorization": f"Basic {creds}"},
+          )
+          with urllib.request.urlopen(req, timeout=30) as r:
+              data = json.loads(r.read())
+          if not data.get("id"):
+              raise RuntimeError("WordPress auth did not return a user id")
+          print("WordPress REST auth OK")
+          PY
+
+      - name: Show safe current Agent C state
+        run: |
+          set -euo pipefail
+          sudo -u openclaw2 python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("/home/openclaw2/.openclaw/btc-dca-blogger-state.json")
+          s = json.loads(p.read_text()) if p.exists() else {}
+          art = s.get("article") or {}
+          print("date:", s.get("date"))
+          print("phases_done:", s.get("phases_done"))
+          print("images:", len(s.get("images", [])))
+          print("article:", art.get("title") or "<none>")
+          print("wp_post_url:", s.get("wp_post_url") or "<none>")
+          PY
+
+      - name: Complete current concept and publish with at least one image
+        if: env.MODE == 'complete-current'
+        run: |
+          set -euo pipefail
+          sudo -u openclaw2 python3 "$AGENT_C_SCRIPT" --phase article
+          sudo -u openclaw2 python3 "$AGENT_C_SCRIPT" --phase image
+          sudo -u openclaw2 python3 - <<'PY'
+          import json
+          from pathlib import Path
+          s = json.loads(Path("/home/openclaw2/.openclaw/btc-dca-blogger-state.json").read_text())
+          if "article" not in s:
+              raise RuntimeError("Agent C has no article after article phase")
+          if len(s.get("images", [])) < 1:
+              raise RuntimeError("Agent C has no image after image phase")
+          print("Article and at least one image are ready")
+          PY
+          tmp="$(mktemp /tmp/agent-c-publish-one.XXXXXX.py)"
+          sed 's/^TARGET_IMAGES = 3$/TARGET_IMAGES = 1/' "$AGENT_C_SCRIPT" > "$tmp"
+          chmod 0755 "$tmp"
+          sudo -u openclaw2 python3 "$tmp" --phase publish --force
+          rm -f "$tmp"
+
+      - name: Final safe publish summary
+        if: always()
+        run: |
+          sudo -u openclaw2 python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("/home/openclaw2/.openclaw/btc-dca-blogger-state.json")
+          s = json.loads(p.read_text()) if p.exists() else {}
+          print("phases_done:", s.get("phases_done"))
+          print("images:", len(s.get("images", [])))
+          print("wp_post_id:", s.get("wp_post_id") or "<none>")
+          print("wp_post_url:", s.get("wp_post_url") or "<none>")
+          PY

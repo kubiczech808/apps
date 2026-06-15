@@ -1,0 +1,49 @@
+name: Virtual Assistant Telegram smoke
+
+on:
+  push:
+    paths:
+      - .github/workflows/virtual-assistant-telegram-smoke.yml
+      - .virtual-assistant-telegram-smoke-trigger
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN: ${{ secrets.TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN }}
+      TELEGRAM_VIRTUAL_ASSISTANT_CHAT_ID: "6247540911"
+    steps:
+      - name: Send smoke message from Virtual Assistant bot
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN:-}" ]; then
+            echo "Missing TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN in kubiczech808/apps Actions secrets."
+            exit 2
+          fi
+          echo "::add-mask::$TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN"
+          echo "::add-mask::$TELEGRAM_VIRTUAL_ASSISTANT_CHAT_ID"
+          python3 - <<'PY'
+          import os
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ["TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN"]
+          chat_id = os.environ.get("TELEGRAM_VIRTUAL_ASSISTANT_CHAT_ID", "6247540911")
+          text = "\n".join([
+              "Ahoj, tady Virtualni asistentka.",
+              "Mam vlastni Telegram bot a nove poslani: hledat si praci jako najimatelna virtualni asistentka a po schvaleni ji vykonavat.",
+              "LinkedIn, verejne oslovovani a prihlasovani na zakazky budu delat az po schvaleni.",
+          ])
+          data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+          req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
+          with urllib.request.urlopen(req, timeout=20) as response:
+              if response.status >= 300:
+                  raise SystemExit(f"Telegram HTTP {response.status}")
+          PY
+          echo "Smoke message sent"

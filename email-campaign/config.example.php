@@ -1,0 +1,27 @@
+<?php
+
+return [
+    'app_password_hash' => '',
+    'admin_email' => 'admin@osobnizkusenosti.cz',
+    'cron_token' => '',
+    'campaign_cron_interval_minutes' => 5,
+    'campaign_send_delay_seconds' => 2,
+    'from_email' => 'newsletter@osobnizkusenosti.cz',
+    'from_name' => 'Osobni zkusenosti',
+    'smtp' => [
+        'host' => 'smtp.example.com',
+        'port' => 587,
+        'username' => 'newsletter@osobnizkusenosti.cz',
+        'password' => 'smtp-password',
+        'encryption' => 'tls',
+    ],
+    'database' => [
+        'driver' => 'mysql',
+        'host' => 'localhost',
+        'port' => 3306,
+        'name' => 'database_name',
+        'username' => 'database_user',
+        'password' => 'database_password',
+        'charset' => 'utf8mb4',
+    ],
+];
