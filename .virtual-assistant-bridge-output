@@ -1,9 +1,9 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-06-15T12:39:53Z
+checked_at_utc=2026-06-15T12:45:43Z
 playwright_install=ok
 gmail_oauth_token_present= True
 gmail_oauth_secret_kind= json_refresh_token
 gmail_address= mailto.jakub.elias@gmail.com
 gmail_poll_seconds= 7200
-gmail_setup_poll=ok
+gmail_setup_poll=failed:NameError
 virtual_assistant_service=active
