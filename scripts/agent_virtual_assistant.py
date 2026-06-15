@@ -984,14 +984,22 @@ def clean_header_text(value: str) -> str:
 
 def repair_mojibake(value: str) -> str:
     text = value
+    markers = ("Ã", "Â", "Å", "Ă", "Ć", "Ë")
+
+    def score(candidate: str) -> int:
+        return sum(candidate.count(marker) for marker in markers)
+
     for _ in range(3):
-        if not any(marker in text for marker in ("Ã", "Â", "Å")):
+        if not any(marker in text for marker in markers):
             break
-        try:
-            fixed = text.encode("latin1").decode("utf-8")
-        except UnicodeError:
-            break
-        if fixed == text:
+        candidates = [text]
+        for encoding in ("latin1", "cp1252", "cp1250"):
+            try:
+                candidates.append(text.encode(encoding).decode("utf-8"))
+            except UnicodeError:
+                pass
+        fixed = min(candidates, key=score)
+        if fixed == text or score(fixed) >= score(text):
             break
         text = fixed
     return text
