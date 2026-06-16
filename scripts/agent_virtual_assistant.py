@@ -16,6 +16,8 @@ import email.utils
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import threading
 import tempfile
@@ -579,13 +581,13 @@ def write_blogger_requested_topic(instance: str, topic: str) -> Path:
     return state_path
 
 
-def append_orchestration_event(agent_name: str, instance: str, topic: str, mode: str, pid: int) -> None:
+def append_orchestration_event(agent_name: str, instance: str, topic: str, mode: str, runner: str) -> None:
     board = g.AGENT_WORK_DIR / "ORCHESTRATION.md"
     board.parent.mkdir(parents=True, exist_ok=True)
     ts = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     line = (
         f"\n- {ts} | {agent_name} | instance `{instance}` | {mode} | "
-        f"topic: {topic[:180]} | pid: {pid} | status: ASSIGNED\n"
+        f"topic: {topic[:180]} | runner: {runner} | status: ASSIGNED\n"
     )
     with board.open("a", encoding="utf-8") as handle:
         handle.write(line)
@@ -619,21 +621,39 @@ def parse_blogger_delegation_request(text: str) -> str | None:
     state_path = write_blogger_requested_topic(instance, topic)
     log_path = g.OPENCLAW_DIR / "logs" / f"virtual-assistant-{instance}-delegation.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    phases = ["article"] if not publish else ["article", "image", "publish"]
-    command = " && ".join(
-        f"python3 {script} --instance {instance} --phase {phase} --force"
-        for phase in phases
-    )
-    with log_path.open("a", encoding="utf-8") as log_handle:
-        proc = subprocess.Popen(
-            ["bash", "-lc", command],
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            cwd=str(g.AGENT_WORK_DIR),
-            start_new_session=True,
+    topic_arg = shlex.quote(topic)
+    if publish:
+        command = f"python3 {shlex.quote(str(script))} --instance {shlex.quote(instance)} --topic {topic_arg} --phase all --force"
+    else:
+        command = f"python3 {shlex.quote(str(script))} --instance {shlex.quote(instance)} --topic {topic_arg} --phase article --force"
+    runner = ""
+    tmux_path = shutil.which("tmux")
+    if tmux_path:
+        session = f"va-{instance}-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        tmux_command = (
+            f"cd {shlex.quote(str(g.AGENT_WORK_DIR))}; "
+            f"echo '[virtual-assistant] start {session} {dt.datetime.now().astimezone().isoformat(timespec='seconds')}' >> {shlex.quote(str(log_path))}; "
+            f"{command} >> {shlex.quote(str(log_path))} 2>&1; "
+            f"code=$?; echo '[virtual-assistant] exit '$code' {dt.datetime.now().astimezone().isoformat(timespec='seconds')}' >> {shlex.quote(str(log_path))}; exit $code"
         )
+        subprocess.run(
+            [tmux_path, "new-session", "-d", "-s", session, "bash", "-lc", tmux_command],
+            check=True,
+            cwd=str(g.AGENT_WORK_DIR),
+        )
+        runner = f"tmux:{session}"
+    else:
+        with log_path.open("a", encoding="utf-8") as log_handle:
+            proc = subprocess.Popen(
+                ["bash", "-lc", command],
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                cwd=str(g.AGENT_WORK_DIR),
+                start_new_session=True,
+            )
+        runner = f"pid:{proc.pid}"
     mode = "publish" if publish else "draft"
-    append_orchestration_event(agent_name, instance, topic, mode, proc.pid)
+    append_orchestration_event(agent_name, instance, topic, mode, runner)
 
     if instance == "oz":
         return "\n".join([
@@ -642,6 +662,7 @@ def parse_blogger_delegation_request(text: str) -> str | None:
             f"Tema: {topic}",
             f"State: `{state_path}`",
             f"Log: `{log_path}`",
+            f"Runner: `{runner}`",
             "Az draft dobehne, overim vystup ze state/logu. Agenta C jsem nepouzila.",
         ])
     return "\n".join([
@@ -651,6 +672,7 @@ def parse_blogger_delegation_request(text: str) -> str | None:
         f"Tema: {topic}",
         f"State: `{state_path}`",
         f"Log: `{log_path}`",
+        f"Runner: `{runner}`",
     ])
 
 
