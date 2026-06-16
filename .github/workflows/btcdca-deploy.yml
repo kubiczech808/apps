@@ -1,0 +1,109 @@
+name: Deploy BTC-DCA App
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - 'email-campaign/**'
+      - '.github/workflows/btcdca-deploy.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create BTC-DCA app config
+        env:
+          BTCDCA_DB: ${{ secrets.BTCDCA_DB }}
+          BTCDCA_DB_USER: ${{ secrets.BTCDCA_DB_USER }}
+          BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
+          BTCDCA_GOOGLE_CLIENT_ID: ${{ secrets.BTCDCA_GOOGLE_CLIENT_ID }}
+          BTCDCA_GOOGLE_SECRET: ${{ secrets.BTCDCA_GOOGLE_SECRET }}
+          BTCDCA_AUTH_SECRET: ${{ secrets.BTCDCA_AUTH_SECRET }}
+        run: |
+          if [ -z "$BTCDCA_DB" ] || [ -z "$BTCDCA_DB_USER" ] || [ -z "$BTCDCA_DB_PASSWORD" ]; then
+            echo "BTCDCA_DB, BTCDCA_DB_USER and BTCDCA_DB_PASSWORD secrets are required."
+            exit 1
+          fi
+          if [ -z "$BTCDCA_GOOGLE_CLIENT_ID" ] || [ -z "$BTCDCA_GOOGLE_SECRET" ]; then
+            echo "BTCDCA_GOOGLE_CLIENT_ID and BTCDCA_GOOGLE_SECRET secrets are required."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import hashlib
+          import os
+
+          def s(value):
+              return "'" + (value or "").replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+          cron_material = "email-campaign-cron:" + os.environ.get("BTCDCA_DB", "") + ":" + os.environ.get("BTCDCA_DB_USER", "") + ":" + os.environ.get("BTCDCA_DB_PASSWORD", "")
+          cron_token = hashlib.sha256(cron_material.encode("utf-8")).hexdigest()
+          content = f"""<?php
+
+          return [
+              'app_password_hash' => '',
+              'cron_token' => {s(cron_token)},
+              'campaign_cron_interval_minutes' => 5,
+              'campaign_send_delay_seconds' => 2,
+              'from_email' => 'newsletter@btc-dca.com',
+              'from_name' => 'BTC-DCA',
+              'smtp' => [
+                  'host' => 'smtp.example.com',
+                  'port' => 587,
+                  'username' => 'newsletter@btc-dca.com',
+                  'password' => 'smtp-password',
+                  'encryption' => 'tls',
+              ],
+              'google' => [
+                  'client_id' => {s(os.environ.get("BTCDCA_GOOGLE_CLIENT_ID"))},
+                  'client_secret' => {s(os.environ.get("BTCDCA_GOOGLE_SECRET"))},
+                  'auth_secret' => {s(os.environ.get("BTCDCA_AUTH_SECRET") or "/X9BpAxcKC7bHTvy5u16nJUhG4nUEjTQMkbOR0ikyACR/ubE6cbZnmZhEKw2bnUA")},
+                  'redirect_uri' => 'https://www.btc-dca.com/app/auth/google/callback',
+                  'app_url' => 'https://www.btc-dca.com',
+              ],
+              'database' => [
+                  'driver' => 'mysql',
+                  'host' => 'LOCALHOST',
+                  'port' => 3306,
+                  'name' => {s(os.environ.get("BTCDCA_DB"))},
+                  'username' => {s(os.environ.get("BTCDCA_DB_USER"))},
+                  'password' => {s(os.environ.get("BTCDCA_DB_PASSWORD"))},
+                  'charset' => 'utf8mb4',
+              ],
+          ];
+          """
+          with open("email-campaign/config.php", "w", encoding="utf-8") as f:
+              f.write(content)
+          PY
+
+      - name: Lint PHP files
+        run: |
+          php -v
+          find email-campaign -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Validate BTC-DCA FTP secrets
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+        run: |
+          if [ -z "$BTCDCA_FTP_LOGIN" ] || [ -z "$BTCDCA_FTP_PASSWORD" ]; then
+            echo "BTCDCA_FTP_LOGIN and BTCDCA_FTP_PASSWORD secrets are required."
+            exit 1
+          fi
+
+      - name: Upload BTC-DCA app to hosting
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ftp.btc-dca.com
+          username: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          password: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+          local-dir: ./email-campaign/
+          server-dir: ./www/app/
+          exclude: |
+            **/.git*
+            **/.git*/**
