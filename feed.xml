@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Tue, 16 Jun 2026 03:25:57 +0000</lastBuildDate>
-    <item>
-      <title>Why i’m using the DCA inheritance strategy: Programmatic wealth transfer for the next generation</title>
-      <link>https://btc-dca.com/blog/generated-202606020433</link>
-      <guid isPermaLink="false">generated-202606020433</guid>
-      <pubDate>Tue, 02 Jun 2026 04:36:17 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>inheritance</category>
-      <category>long-term investing</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Wed, 17 Jun 2026 03:25:57 +0000</lastBuildDate>
     <item>
       <title>Managing cash drag in my Bitcoin strategy</title>
       <link>https://btc-dca.com/blog/generated-202606020446</link>
@@ -234,54 +223,74 @@
       <title>My emergency fund DCA pivot during capitulation events</title>
       <link>https://btc-dca.com/blog/generated-202606160325</link>
       <guid isPermaLink="false">generated-202606160325</guid>
-      <pubDate>Tue, 16 Jun 2026 03:25:57 +0000</pubDate>
+      <pubDate>Tue, 16 Jun 2026 03:27:49 +0000</pubDate>
       <category>bitcoin</category>
       <category>personal-finance</category>
       <category>investing</category>
       <category>crypto</category>
       <category>dollar-cost-averaging</category>
-      <content:encoded>&lt;p&gt;Back in November 2022, when FTX collapsed and Bitcoin plunged to $16,000, I was sitting on six months of cash in a boring bank account. I wanted to buy the absolute blood in the streets, but my traditional personal finance brain screamed: &lt;em&gt;“Don’t touch the emergency fund!”&lt;/em&gt; That frustration forced me to rethink my entire strategy, leading me to design what I now call &lt;strong&gt;the emergency fund dca pivot: transitioning idle cash to bitcoin during capitulation events&lt;/strong&gt;.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>The purchasing power parity DCA: Pegging to fiat debasement</title>
+      <link>https://btc-dca.com/blog/generated-202606170325</link>
+      <guid isPermaLink="false">generated-202606170325</guid>
+      <pubDate>Wed, 17 Jun 2026 03:25:57 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>personal finance</category>
+      <category>inflation</category>
+      <category>self custody</category>
+      <content:encoded>&lt;p&gt;I used to think putting exactly $100 a week into Bitcoin was the perfect hands-off strategy. But over the last few years, as my grocery bills doubled and my rent crept up, I realized my static savings plan was silently shrinking in real terms. That is why I transitioned to &lt;strong&gt;the purchasing power parity dca: how to peg your accumulation rate to local fiat debasement&lt;/strong&gt;, a dynamic approach that adjusts your savings rate to match the eroding value of your local currency. If your money is losing 8% of its purchasing power every year, keeping your contribution flat means you are actually saving less real value over time.&lt;/p&gt;
 
-&lt;p&gt;The mistake I made was treating my emergency fund as a single, untouchable block of fiat. In reality, the odds of needing all six months of expenses overnight are incredibly low. By keeping it all in cash, I was paying a massive opportunity cost while waiting for a market crash I couldn't even exploit.&lt;/p&gt;
+&lt;p&gt;Most people set a fixed fiat amount and forget it, believing they are disciplined. But they are measuring their discipline in a currency designed to melt. If you want your savings to hold its weight, your DCA needs to grow at least as fast as the rate at which your government prints money.&lt;/p&gt;
 
-&lt;p&gt;So, I split my cash into two tiers. Tier one is my "survival cash"—two months of bare-minimum expenses kept in a liquid savings account. Tier two is my "pivot fund"—four months of expenses that sit in cash &lt;em&gt;until&lt;/em&gt; a major Bitcoin capitulation event occurs. When the market panics, this tier algorithmically transitions into Bitcoin.&lt;/p&gt;
+&lt;p&gt;Here is how I stopped letting fiat debasement quietly hollow out my Bitcoin accumulation plan, the mistakes I made along the way, and how you can set up a dynamic strategy yourself.&lt;/p&gt;
 
-&lt;h2&gt;How to structure the emergency fund DCA pivot: Transitioning idle cash to Bitcoin during capitulation events&lt;/h2&gt;
+&lt;h2&gt;Why a fixed dollar-cost average is silently failing you&lt;/h2&gt;
 
-&lt;p&gt;To make this work without letting emotions take over, you need clear, objective rules. I don't buy just because the price went down a little. I wait for deep, cycle-defining drawdowns.&lt;/p&gt;
+&lt;p&gt;When we talk about dollar-cost averaging, we usually focus on the price of Bitcoin. We think, "If the price goes down, I buy more. If the price goes up, I buy less." This is great for smoothing out volatility, but it completely ignores the other side of the equation: the value of the fiat currency you are using to buy it.&lt;/p&gt;
 
-&lt;p&gt;Here is the exact framework I use to deploy my tier-two cash:&lt;/p&gt;
+&lt;p&gt;Think of it this way. If you started a $200 monthly DCA in 2020, that $200 had a certain economic weight. It represented a specific amount of your labor and purchasing power. Fast forward to today, and that same $200 buys significantly less food, energy, and housing. If you are still buying only $200 worth of Bitcoin today, you are dedicating a smaller fraction of your real economic energy to your future.&lt;/p&gt;
 
-&lt;ul&gt;
-&lt;li&gt;  **The 50% Threshold:** When Bitcoin drops 50% from its recent cycle high, I deploy 25% of my pivot fund into Bitcoin.&lt;/li&gt;
-&lt;li&gt;  **The 60% Threshold:** If the drop reaches 60%, I deploy another 25%.&lt;/li&gt;
-&lt;li&gt;  **The 70%+ Threshold:** If we hit a true cyclical bottom of 70% or more, I deploy the remaining 50% of the pivot fund.&lt;/li&gt;
-&lt;/ul&gt;
+&lt;p&gt;By continuing with a flat rate, you are letting inflation dictate your savings rate. To maintain the exact same economic intensity, your savings rate must adjust. When you commit to the purchasing power parity dca: how to peg your accumulation rate to local fiat debasement, you stop thinking about Bitcoin in terms of nominal fiat price and start thinking about it as a percentage of your true purchasing power.&lt;/p&gt;
 
-&lt;p&gt;If the market never drops that low, the cash simply sits there earning yield. But when a true capitulation happens, I have an automated system ready to buy the dip. I actually modeled these historical drawdowns using &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the dollar cost averaging calculator&lt;/a&gt; I built to see how this strategy would have performed in previous cycles. The results showed that adding this dynamic pivot to a standard daily or weekly DCA dramatically lowers your average cost basis over time.&lt;/p&gt;
+&lt;h2&gt;Implementing the purchasing power parity DCA: How to peg your accumulation rate to local fiat debasement&lt;/h2&gt;
 
-&lt;h2&gt;Automating the execution when panic sets in&lt;/h2&gt;
+&lt;p&gt;To make this strategy work, you need a simple, repeatable rule. You cannot just guess how much to increase your buy order every month. You need to peg it to a metric that represents actual fiat debasement.&lt;/p&gt;
 
-&lt;p&gt;It is easy to write down these rules on paper, but it is incredibly hard to execute them when the media is screaming that Bitcoin is going to zero. When FTX broke, or when Covid hit in March 2020, buying manually felt terrifying.&lt;/p&gt;
+&lt;p&gt;Here is the exact framework I use to adjust my accumulation rate:&lt;/p&gt;
 
-&lt;p&gt;That is why I automate the entire process. I do not want to manually log into an exchange and click "buy" while my hands are shaking. I set up my system to connect directly to my preferred exchange via API. For my European accounts, I like using &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt;, but you can also use global platforms like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; depending on where you live.&lt;/p&gt;
+&lt;p&gt;1. &lt;strong&gt;Establish your baseline:&lt;/strong&gt; Pick a comfortable starting amount (e.g., $100 per week).&lt;/p&gt;
+&lt;p&gt;2. &lt;strong&gt;Choose your debasement index:&lt;/strong&gt; Do not use the official government Consumer Price Index (CPI), as it is heavily manipulated to look lower than it is. Instead, use a metric like the year-over-year growth of the M2 money supply, or independent trackers like Truflation.&lt;/p&gt;
+&lt;p&gt;3. &lt;strong&gt;Apply the annual adjustment:&lt;/strong&gt; Once a year, calculate your new DCA amount using this simple formula:&lt;/p&gt;
+&lt;p&gt;`New DCA = Baseline DCA * (1 + Local Debasement Rate)`&lt;/p&gt;
 
-&lt;p&gt;By using &lt;a href="https://www.btc-dca.com"&gt;the automation tool I built&lt;/a&gt;, I can trigger recurring buys at any frequency and have the coins automatically withdrawn to my hardware wallet. When executing the emergency fund dca pivot: transitioning idle cash to bitcoin during capitulation events, self-custody is non-negotiable. If you are buying during a capitulation, exchanges might face liquidity issues. I always route my automated buys directly to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor&lt;/a&gt; to keep my keys safe.&lt;/p&gt;
+&lt;p&gt;Let's look at a concrete example. If your baseline DCA is $100 per week, and the local M2 money supply grew by 8% over the past year, your new DCA rate for the next twelve months becomes $108 per week.&lt;/p&gt;
 
-&lt;h2&gt;Navigating the worst-case scenario&lt;/h2&gt;
+&lt;p&gt;If you want to see how this compounding adjustment affects your long-term stack compared to a traditional flat rate, you can model different scenarios using this &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware Bitcoin calculator&lt;/a&gt;. It helps you visualize how adjusting your flows affects your purchasing power over a full four-year halving cycle. This is the core philosophy behind the purchasing power parity dca: how to peg your accumulation rate to local fiat debasement—it turns your savings rate into a dynamic shield against monetary dilution.&lt;/p&gt;
 
-&lt;p&gt;So here is the thing: this strategy is not risk-free, and I am definitely not your financial advisor. You have to do your own research and assess your own job security before trying something like this.&lt;/p&gt;
+&lt;h2&gt;The tools and mistakes I made along the way&lt;/h2&gt;
 
-&lt;p&gt;The obvious risk is that you get laid off at the exact moment Bitcoin crashes, forcing you to sell your newly acquired Bitcoin at a loss to pay your rent. This is why preserving tier one (the two months of cash) is absolutely critical. You must never touch that first tier for investing.&lt;/p&gt;
+&lt;p&gt;I will be the first to admit that I messed this up when I first started. Back in 2020, when central banks went into overdrive, the US M2 money supply expanded by roughly 25% in a single year.&lt;/p&gt;
 
-&lt;p&gt;Before you attempt the emergency fund dca pivot: transitioning idle cash to bitcoin during capitulation events, ask yourself if you can sleep at night knowing a portion of your emergency reserves is highly volatile. If the answer is no, stick to a standard, steady DCA from your active income and keep your emergency fund completely in cash.&lt;/p&gt;
+&lt;p&gt;I blindly applied my formula without setting a safety ceiling. My weekly DCA jumped from $150 to nearly $190 almost overnight. While I loved stacking more satoshis, I did not adjust my personal budget for my daily living expenses. I ended up having to sell a portion of my stack a few months later to cover an unexpected car repair—which completely defeated the purpose of a long-term hold.&lt;/p&gt;
 
-&lt;p&gt;For me, the math and the historical cycles make the risk worth it. I would rather have my idle cash working for me when the market offers its best opportunities, rather than watching it melt away to inflation during a bull run.&lt;/p&gt;
+&lt;p&gt;Now, I use a capped model. I adjust my DCA rate to match debasement, but I cap any single-year increase at 15% to protect my short-term liquidity.&lt;/p&gt;
 
-&lt;p&gt;Do you keep your emergency fund strictly in fiat, or do you have a "dry powder" threshold for market crashes?&lt;/p&gt;
+&lt;p&gt;The other major hurdle was execution. Logging into exchanges every week, manually calculating the new inflation-adjusted amount, and placing the order was a massive chore. I used to use &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; and &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; to buy manually, but the friction was too high and I kept missing my buy days.&lt;/p&gt;
+
+&lt;p&gt;So here's the thing: I am a software engineer, so I decided to solve my own problem. I built a free &lt;a href="https://www.btc-dca.com"&gt;automated Bitcoin DCA tool&lt;/a&gt; that connects to your exchange via API. It automates your recurring buys at any frequency you want, and most importantly, it can auto-withdraw your coins directly to your own cold storage. I have mine set to send everything straight to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; because leaving your coins on an exchange is a risk no one should take.&lt;/p&gt;
+
+&lt;p&gt;Obviously, I am not a financial advisor. I am just a guy who writes code, looks at monetary policy, and stacks satoshis. You should always run your own numbers and make sure your budget can handle any adjustments you make to your savings rate.&lt;/p&gt;
+
+&lt;p&gt;If we agree that fiat currency is designed to lose value, then our savings plans should reflect that reality. Dynamic accumulation is the only way to ensure that the economic energy you store today retains its true relative strength tomorrow.&lt;/p&gt;
+
+&lt;p&gt;Would you prefer to keep your DCA simple and fixed, or do you think adjusting your savings rate for inflation is worth the extra budget planning?&lt;/p&gt;
 
 &lt;p&gt;This is also why I keep improving &lt;a href="https://btc-dca.com"&gt;my Bitcoin DCA automation setup&lt;/a&gt; instead of trying to make every buy decision manually.&lt;/p&gt;</content:encoded>
-      <description>Back in November 2022, when FTX collapsed and Bitcoin plunged to $16,000, I was sitting on six months of cash in a boring bank account. I wanted to buy the absolute blood in the streets, but my traditional personal finance brain screamed: *“Don’t touch the emergency fund!”* That frustration forced m...</description>
+      <description>I used to think putting exactly $100 a week into Bitcoin was the perfect hands-off strategy. But over the last few years, as my grocery bills doubled and my rent crept up, I realized my static savings plan was silently shrinking in real terms. That is why I transitioned to **the purchasing power par...</description>
     </item>
   </channel>
 </rss>
