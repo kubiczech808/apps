@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Wed, 17 Jun 2026 03:25:57 +0000</lastBuildDate>
-    <item>
-      <title>Managing cash drag in my Bitcoin strategy</title>
-      <link>https://btc-dca.com/blog/generated-202606020446</link>
-      <guid isPermaLink="false">generated-202606020446</guid>
-      <pubDate>Tue, 02 Jun 2026 04:50:15 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dca</category>
-      <category>personal finance</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Thu, 18 Jun 2026 03:25:33 +0000</lastBuildDate>
     <item>
       <title>Managing my Bitcoin stack with the DCA liquidity ladder</title>
       <link>https://btc-dca.com/blog/generated-202606020609</link>
@@ -236,61 +225,58 @@
       <title>The purchasing power parity DCA: Pegging to fiat debasement</title>
       <link>https://btc-dca.com/blog/generated-202606170325</link>
       <guid isPermaLink="false">generated-202606170325</guid>
-      <pubDate>Wed, 17 Jun 2026 03:25:57 +0000</pubDate>
+      <pubDate>Wed, 17 Jun 2026 03:27:48 +0000</pubDate>
       <category>bitcoin</category>
       <category>dollar cost averaging</category>
       <category>personal finance</category>
       <category>inflation</category>
       <category>self custody</category>
-      <content:encoded>&lt;p&gt;I used to think putting exactly $100 a week into Bitcoin was the perfect hands-off strategy. But over the last few years, as my grocery bills doubled and my rent crept up, I realized my static savings plan was silently shrinking in real terms. That is why I transitioned to &lt;strong&gt;the purchasing power parity dca: how to peg your accumulation rate to local fiat debasement&lt;/strong&gt;, a dynamic approach that adjusts your savings rate to match the eroding value of your local currency. If your money is losing 8% of its purchasing power every year, keeping your contribution flat means you are actually saving less real value over time.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why your idle cash is killing your Bitcoin stack</title>
+      <link>https://btc-dca.com/blog/generated-202606180325</link>
+      <guid isPermaLink="false">generated-202606180325</guid>
+      <pubDate>Thu, 18 Jun 2026 03:25:33 +0000</pubDate>
+      <category>Bitcoin</category>
+      <category>DCA</category>
+      <category>Investing</category>
+      <category>Personal Finance</category>
+      <category>Cryptocurrency</category>
+      <content:encoded>&lt;p&gt;I almost lost three percent of my potential Bitcoin position last month simply because I was being lazy with my cash flow. Most people think dollar cost averaging is just about setting a recurring buy and forgetting it, but they ignore &lt;strong&gt;the dca stacking decay ratio: protecting your purchasing power against exchange inflation&lt;/strong&gt; is a silent battle you have to win if you want to maximize your sats.&lt;/p&gt;
 
-&lt;p&gt;Most people set a fixed fiat amount and forget it, believing they are disciplined. But they are measuring their discipline in a currency designed to melt. If you want your savings to hold its weight, your DCA needs to grow at least as fast as the rate at which your government prints money.&lt;/p&gt;
+&lt;p&gt;The mistake I made was keeping a buffer of fiat on an exchange, thinking I was "ready for the dip." In reality, that cash was just sitting there, losing its relative purchasing power against the daily volatility and the subtle inflationary pressures of exchange-side liquidity. By the time I actually deployed that capital, Bitcoin had moved up, and my "safety buffer" had effectively shrunk.&lt;/p&gt;
 
-&lt;p&gt;Here is how I stopped letting fiat debasement quietly hollow out my Bitcoin accumulation plan, the mistakes I made along the way, and how you can set up a dynamic strategy yourself.&lt;/p&gt;
+&lt;p&gt;When you look at the mechanics of &lt;strong&gt;the dca stacking decay ratio: protecting your purchasing power against exchange inflation&lt;/strong&gt;, it becomes clear that time-in-market beats timing-the-market every single day. If you leave fiat idle, you aren't just missing out on potential gains; you are losing the battle against the market's upward drift. I realized that my strategy needed to be more aggressive, so I started to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; to ensure that the moment my paycheck hits my bank account, it is already moving toward a cold wallet.&lt;/p&gt;
 
-&lt;h2&gt;Why a fixed dollar-cost average is silently failing you&lt;/h2&gt;
+&lt;h2&gt;Understanding the DCA stacking decay ratio: Protecting your purchasing power against exchange inflation&lt;/h2&gt;
 
-&lt;p&gt;When we talk about dollar-cost averaging, we usually focus on the price of Bitcoin. We think, "If the price goes down, I buy more. If the price goes up, I buy less." This is great for smoothing out volatility, but it completely ignores the other side of the equation: the value of the fiat currency you are using to buy it.&lt;/p&gt;
+&lt;p&gt;The math behind this is simple but often overlooked. When you hold cash on an exchange, you are essentially betting that the market will drop enough to justify the loss of exposure you suffer while that cash sits idle. This is a losing game for almost everyone. I prefer to use &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; to simulate different entry frequencies. What I found was that the cost of "waiting" for a better price is almost always higher than the cost of buying at the current market rate, regardless of where we are in the halving cycle.&lt;/p&gt;
 
-&lt;p&gt;Think of it this way. If you started a $200 monthly DCA in 2020, that $200 had a certain economic weight. It represented a specific amount of your labor and purchasing power. Fast forward to today, and that same $200 buys significantly less food, energy, and housing. If you are still buying only $200 worth of Bitcoin today, you are dedicating a smaller fraction of your real economic energy to your future.&lt;/p&gt;
+&lt;p&gt;To master &lt;strong&gt;the dca stacking decay ratio: protecting your purchasing power against exchange inflation&lt;/strong&gt;, you need to treat your fiat like a hot potato. The moment it hits your account, it should be moving. I personally use &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; for my primary entry point because the liquidity is high enough that I don't feel like I'm getting squeezed on the spread. However, I never leave the coins there.&lt;/p&gt;
 
-&lt;p&gt;By continuing with a flat rate, you are letting inflation dictate your savings rate. To maintain the exact same economic intensity, your savings rate must adjust. When you commit to the purchasing power parity dca: how to peg your accumulation rate to local fiat debasement, you stop thinking about Bitcoin in terms of nominal fiat price and start thinking about it as a percentage of your true purchasing power.&lt;/p&gt;
+&lt;p&gt;If you want to build a system that actually protects your wealth, follow this simple checklist:&lt;/p&gt;
 
-&lt;h2&gt;Implementing the purchasing power parity DCA: How to peg your accumulation rate to local fiat debasement&lt;/h2&gt;
+&lt;p&gt;1. Calculate your monthly surplus after all fixed expenses are covered.&lt;/p&gt;
+&lt;p&gt;2. Divide that number by four to determine your weekly "buy" threshold.&lt;/p&gt;
+&lt;p&gt;3. Set up an automated API connection to your preferred exchange to execute this buy regardless of price.&lt;/p&gt;
+&lt;p&gt;4. Trigger an immediate withdrawal to a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; once the buy clears.&lt;/p&gt;
 
-&lt;p&gt;To make this strategy work, you need a simple, repeatable rule. You cannot just guess how much to increase your buy order every month. You need to peg it to a metric that represents actual fiat debasement.&lt;/p&gt;
+&lt;p&gt;This isn't about being a genius trader; it's about removing the human element of hesitation. I used to agonize over whether to buy on a Tuesday or a Thursday, but that was just ego talking. The market doesn't care about my schedule, and it certainly doesn't care about my "buy the dip" ambitions.&lt;/p&gt;
 
-&lt;p&gt;Here is the exact framework I use to adjust my accumulation rate:&lt;/p&gt;
+&lt;h2&gt;Why manual buying is a liability&lt;/h2&gt;
 
-&lt;p&gt;1. &lt;strong&gt;Establish your baseline:&lt;/strong&gt; Pick a comfortable starting amount (e.g., $100 per week).&lt;/p&gt;
-&lt;p&gt;2. &lt;strong&gt;Choose your debasement index:&lt;/strong&gt; Do not use the official government Consumer Price Index (CPI), as it is heavily manipulated to look lower than it is. Instead, use a metric like the year-over-year growth of the M2 money supply, or independent trackers like Truflation.&lt;/p&gt;
-&lt;p&gt;3. &lt;strong&gt;Apply the annual adjustment:&lt;/strong&gt; Once a year, calculate your new DCA amount using this simple formula:&lt;/p&gt;
-&lt;p&gt;`New DCA = Baseline DCA * (1 + Local Debasement Rate)`&lt;/p&gt;
+&lt;p&gt;There is a psychological trap in manual DCA. When you click the "buy" button yourself, you are inviting your emotions into the process. If the price is red, you feel smart. If the price is green, you feel like you're overpaying. By automating, you neutralize these feelings. You turn the process into a mechanical function of your income.&lt;/p&gt;
 
-&lt;p&gt;Let's look at a concrete example. If your baseline DCA is $100 per week, and the local M2 money supply grew by 8% over the past year, your new DCA rate for the next twelve months becomes $108 per week.&lt;/p&gt;
+&lt;p&gt;I’ve had friends tell me they prefer to wait for a 5% drop before they move their money. That’s a noble goal, but in practice, they end up holding 20% of their stack in fiat for months, waiting for a dip that might happen long after the price has already doubled. That is the essence of why &lt;strong&gt;the dca stacking decay ratio: protecting your purchasing power against exchange inflation&lt;/strong&gt; matters so much. You aren't just fighting the market; you're fighting your own desire to be "right" about the timing.&lt;/p&gt;
 
-&lt;p&gt;If you want to see how this compounding adjustment affects your long-term stack compared to a traditional flat rate, you can model different scenarios using this &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware Bitcoin calculator&lt;/a&gt;. It helps you visualize how adjusting your flows affects your purchasing power over a full four-year halving cycle. This is the core philosophy behind the purchasing power parity dca: how to peg your accumulation rate to local fiat debasement—it turns your savings rate into a dynamic shield against monetary dilution.&lt;/p&gt;
+&lt;p&gt;Obviously, I am not a financial advisor, and you should definitely do your own research before connecting any API keys or moving your savings into digital assets. The crypto space is volatile, and self-custody comes with its own set of responsibilities. But if you are going to be in this game, you might as well play it with a system that doesn't rely on your ability to predict the future.&lt;/p&gt;
 
-&lt;h2&gt;The tools and mistakes I made along the way&lt;/h2&gt;
+&lt;p&gt;When I look back at my own mistakes, the biggest one wasn't buying at a "high" price—it was keeping my capital sidelined when it could have been compounding. I’ve since moved to a model where my DCA happens in the background, and I only check my &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;Bitcoin DCA features&lt;/a&gt; once a month to make sure everything is running smoothly. It’s boring, but boring is how you win this game.&lt;/p&gt;
 
-&lt;p&gt;I will be the first to admit that I messed this up when I first started. Back in 2020, when central banks went into overdrive, the US M2 money supply expanded by roughly 25% in a single year.&lt;/p&gt;
-
-&lt;p&gt;I blindly applied my formula without setting a safety ceiling. My weekly DCA jumped from $150 to nearly $190 almost overnight. While I loved stacking more satoshis, I did not adjust my personal budget for my daily living expenses. I ended up having to sell a portion of my stack a few months later to cover an unexpected car repair—which completely defeated the purpose of a long-term hold.&lt;/p&gt;
-
-&lt;p&gt;Now, I use a capped model. I adjust my DCA rate to match debasement, but I cap any single-year increase at 15% to protect my short-term liquidity.&lt;/p&gt;
-
-&lt;p&gt;The other major hurdle was execution. Logging into exchanges every week, manually calculating the new inflation-adjusted amount, and placing the order was a massive chore. I used to use &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; and &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; to buy manually, but the friction was too high and I kept missing my buy days.&lt;/p&gt;
-
-&lt;p&gt;So here's the thing: I am a software engineer, so I decided to solve my own problem. I built a free &lt;a href="https://www.btc-dca.com"&gt;automated Bitcoin DCA tool&lt;/a&gt; that connects to your exchange via API. It automates your recurring buys at any frequency you want, and most importantly, it can auto-withdraw your coins directly to your own cold storage. I have mine set to send everything straight to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; because leaving your coins on an exchange is a risk no one should take.&lt;/p&gt;
-
-&lt;p&gt;Obviously, I am not a financial advisor. I am just a guy who writes code, looks at monetary policy, and stacks satoshis. You should always run your own numbers and make sure your budget can handle any adjustments you make to your savings rate.&lt;/p&gt;
-
-&lt;p&gt;If we agree that fiat currency is designed to lose value, then our savings plans should reflect that reality. Dynamic accumulation is the only way to ensure that the economic energy you store today retains its true relative strength tomorrow.&lt;/p&gt;
-
-&lt;p&gt;Would you prefer to keep your DCA simple and fixed, or do you think adjusting your savings rate for inflation is worth the extra budget planning?&lt;/p&gt;
-
-&lt;p&gt;This is also why I keep improving &lt;a href="https://btc-dca.com"&gt;my Bitcoin DCA automation setup&lt;/a&gt; instead of trying to make every buy decision manually.&lt;/p&gt;</content:encoded>
-      <description>I used to think putting exactly $100 a week into Bitcoin was the perfect hands-off strategy. But over the last few years, as my grocery bills doubled and my rent crept up, I realized my static savings plan was silently shrinking in real terms. That is why I transitioned to **the purchasing power par...</description>
+&lt;p&gt;If you had to choose between the stress of trying to time the market perfectly or the peace of mind that comes with a fully automated, mechanical stack, which one would you actually stick to for the next five years?&lt;/p&gt;</content:encoded>
+      <description>I almost lost three percent of my potential Bitcoin position last month simply because I was being lazy with my cash flow. Most people think dollar cost averaging is just about setting a recurring buy and forgetting it, but they ignore **the dca stacking decay ratio: protecting your purchasing power...</description>
     </item>
   </channel>
 </rss>
