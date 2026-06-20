@@ -53,7 +53,7 @@ jobs:
           BACKUP_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          mkdir -p server-current deploy-root/www deploy-root/www/app
+          mkdir -p server-current deploy-root/www deploy-root/www/app/auth/google/callback
 
           lftp -e "
             set ftp:ssl-allow no;
@@ -62,10 +62,8 @@ jobs:
             set net:timeout 20;
             open -u \"$BTCDCA_FTP_LOGIN\",\"$BTCDCA_FTP_PASSWORD\" ftp.btc-dca.com;
             get -O server-current www/login-user.php;
-            get www/app/.htaccess -o server-current/app.htaccess || true;
             mkdir -p .codex-backups/btcdca-auth/$BACKUP_ID;
             put -O .codex-backups/btcdca-auth/$BACKUP_ID server-current/login-user.php;
-            put -O .codex-backups/btcdca-auth/$BACKUP_ID server-current/app.htaccess || true;
             bye
           "
 
@@ -74,7 +72,7 @@ jobs:
 
           cp btcdca-auth/btcdca-google-login.php deploy-root/www/btcdca-google-login.php
           cp btcdca-auth/btcdca-google-callback.php deploy-root/www/btcdca-google-callback.php
-          cp btcdca-auth/app.htaccess deploy-root/www/app/.htaccess
+          cp btcdca-auth/callback-index.php deploy-root/www/app/auth/google/callback/index.php
 
       - name: Lint generated PHP
         run: |
@@ -97,7 +95,7 @@ jobs:
             put -O www deploy-root/www/login-user.php;
             put -O www deploy-root/www/btcdca-google-login.php;
             put -O www deploy-root/www/btcdca-google-callback.php;
-            mkdir -p www/app;
-            put deploy-root/www/app/.htaccess -o www/app/.htaccess;
+            mkdir -p www/app/auth/google/callback;
+            put deploy-root/www/app/auth/google/callback/index.php -o www/app/auth/google/callback/index.php;
             bye
           "
