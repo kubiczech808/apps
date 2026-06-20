@@ -34,11 +34,6 @@ class Config(BaseSettings):
 
     publish_hour: int = 5
     publish_minute: int = 25
-    medium_draft_scheduler: bool = True
-    medium_draft_schedule_hour: int = 7
-    medium_draft_schedule_minute: int = 25
-    medium_draft_schedule_check_hour: int = 7
-    medium_draft_schedule_check_minute: int = 35
 
     site_url: str = "https://btc-dca.com"
     site_name: str = "btc-dca.com"

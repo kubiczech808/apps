@@ -43,8 +43,6 @@ jobs:
             --exclude '.env' \
             --exclude 'data/medium_cookies.json' \
             --exclude 'data/history.json' \
-            --exclude 'data/medium_featured_images.json' \
-            --exclude 'data/medium_draft_scheduler.json' \
             --exclude 'data/telegram_draft_actions.json' \
             --exclude 'data/token_usage.json' \
             --exclude 'data/topics_cache.json' \

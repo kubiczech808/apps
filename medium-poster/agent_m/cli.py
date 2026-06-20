@@ -143,9 +143,6 @@ def main() -> None:
             "update-links",
             "medium-login",
             "medium-import-cookies",
-            "medium-featured-image",
-            "medium-draft-schedule",
-            "medium-image-maintenance",
             "medium-replace-image",
         ],
         default="draft",
@@ -171,15 +168,6 @@ def main() -> None:
         asyncio.run(MediumPlaywrightPublisher().login())
     elif args.mode == "medium-import-cookies":
         _import_medium_cookies()
-    elif args.mode == "medium-featured-image":
-        from agent_m.medium_featured_images import main as featured_main
-        featured_main()
-    elif args.mode == "medium-draft-schedule":
-        from agent_m.medium_draft_scheduler import main as draft_schedule_main
-        draft_schedule_main()
-    elif args.mode == "medium-image-maintenance":
-        from agent_m.medium_image_maintenance import main as image_maintenance_main
-        image_maintenance_main()
     elif args.mode == "medium-replace-image":
         if not args.post_id:
             raise SystemExit("--post-id is required for medium-replace-image")

@@ -272,7 +272,7 @@ class MediumPlaywrightPublisher:
                         page, post_id, image_bytes, replace_existing=replace_existing
                     )
                 except Exception:
-                    log.exception("Medium featured image backfill failed")
+                    log.exception("Medium image replacement failed")
                     await self._safe_screenshot(page, "medium_featured_image_error.png")
                     raise
                 finally:
@@ -1206,7 +1206,7 @@ class MediumPlaywrightPublisher:
         await self._save_and_publish_update(page)
 
         url = await self._canonical_post_url(page, post_id)
-        log.info("Medium: featured image backfilled for %s at %s", post_id, url)
+        log.info("Medium: featured image updated for %s at %s", post_id, url)
         return url
 
     async def _article_has_image(self, page) -> bool:
