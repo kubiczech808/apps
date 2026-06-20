@@ -27,12 +27,13 @@ jobs:
           BTCDCA_GOOGLE_CLIENT_ID: ${{ secrets.BTCDCA_GOOGLE_CLIENT_ID }}
           BTCDCA_GOOGLE_SECRET: ${{ secrets.BTCDCA_GOOGLE_SECRET }}
         run: |
-          for name in BTCDCA_DB BTCDCA_DB_USER BTCDCA_DB_PASSWORD BTCDCA_FTP_LOGIN BTCDCA_FTP_PASSWORD BTCDCA_GOOGLE_CLIENT_ID BTCDCA_GOOGLE_SECRET; do
-            if [ -z "${!name}" ]; then
-              echo "$name secret is required."
-              exit 1
-            fi
-          done
+          if [ -z "$BTCDCA_DB" ]; then echo "BTCDCA_DB secret is required."; exit 1; fi
+          if [ -z "$BTCDCA_DB_USER" ]; then echo "BTCDCA_DB_USER secret is required."; exit 1; fi
+          if [ -z "$BTCDCA_DB_PASSWORD" ]; then echo "BTCDCA_DB_PASSWORD secret is required."; exit 1; fi
+          if [ -z "$BTCDCA_FTP_LOGIN" ]; then echo "BTCDCA_FTP_LOGIN secret is required."; exit 1; fi
+          if [ -z "$BTCDCA_FTP_PASSWORD" ]; then echo "BTCDCA_FTP_PASSWORD secret is required."; exit 1; fi
+          if [ -z "$BTCDCA_GOOGLE_CLIENT_ID" ]; then echo "BTCDCA_GOOGLE_CLIENT_ID secret is required."; exit 1; fi
+          if [ -z "$BTCDCA_GOOGLE_SECRET" ]; then echo "BTCDCA_GOOGLE_SECRET secret is required."; exit 1; fi
 
       - name: Install lftp
         run: |
