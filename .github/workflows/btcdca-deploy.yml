@@ -1,4 +1,4 @@
-name: Deploy BTC-DCA App
+name: Deploy BTC-DCA Google Login
 
 on:
   push:
@@ -7,103 +7,148 @@ on:
       - master
       - claude/energy-consumption-app-Nf7bh
     paths:
-      - 'email-campaign/**'
+      - 'btcdca-auth/**'
       - '.github/workflows/btcdca-deploy.yml'
   workflow_dispatch:
 
 jobs:
-  deploy:
+  deploy-google-login:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create BTC-DCA app config
+      - name: Validate secrets
         env:
           BTCDCA_DB: ${{ secrets.BTCDCA_DB }}
           BTCDCA_DB_USER: ${{ secrets.BTCDCA_DB_USER }}
           BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+          BTCDCA_GOOGLE_CLIENT_ID: ${{ secrets.BTCDCA_GOOGLE_CLIENT_ID }}
+          BTCDCA_GOOGLE_SECRET: ${{ secrets.BTCDCA_GOOGLE_SECRET }}
+        run: |
+          for name in BTCDCA_DB BTCDCA_DB_USER BTCDCA_DB_PASSWORD BTCDCA_FTP_LOGIN BTCDCA_FTP_PASSWORD BTCDCA_GOOGLE_CLIENT_ID BTCDCA_GOOGLE_SECRET; do
+            if [ -z "${!name}" ]; then
+              echo "$name secret is required."
+              exit 1
+            fi
+          done
+
+      - name: Install lftp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lftp
+
+      - name: Prepare generated config and patched login
+        env:
+          BTCDCA_DB: ${{ secrets.BTCDCA_DB }}
+          BTCDCA_DB_USER: ${{ secrets.BTCDCA_DB_USER }}
+          BTCDCA_DB_PASSWORD: ${{ secrets.BTCDCA_DB_PASSWORD }}
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
           BTCDCA_GOOGLE_CLIENT_ID: ${{ secrets.BTCDCA_GOOGLE_CLIENT_ID }}
           BTCDCA_GOOGLE_SECRET: ${{ secrets.BTCDCA_GOOGLE_SECRET }}
           BTCDCA_AUTH_SECRET: ${{ secrets.BTCDCA_AUTH_SECRET }}
+          BACKUP_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          if [ -z "$BTCDCA_DB" ] || [ -z "$BTCDCA_DB_USER" ] || [ -z "$BTCDCA_DB_PASSWORD" ]; then
-            echo "BTCDCA_DB, BTCDCA_DB_USER and BTCDCA_DB_PASSWORD secrets are required."
-            exit 1
-          fi
-          if [ -z "$BTCDCA_GOOGLE_CLIENT_ID" ] || [ -z "$BTCDCA_GOOGLE_SECRET" ]; then
-            echo "BTCDCA_GOOGLE_CLIENT_ID and BTCDCA_GOOGLE_SECRET secrets are required."
-            exit 1
-          fi
-          python3 - <<'PY'
-          import hashlib
-          import os
+          set -euo pipefail
+          mkdir -p server-current deploy-root/www deploy-root/www/app
 
-          def s(value):
+          lftp -e "
+            set ftp:ssl-allow no;
+            set ftp:passive-mode true;
+            set net:max-retries 3;
+            set net:timeout 20;
+            open -u \"$BTCDCA_FTP_LOGIN\",\"$BTCDCA_FTP_PASSWORD\" ftp.btc-dca.com;
+            get -O server-current www/login-user.php;
+            get www/app/.htaccess -o server-current/app.htaccess || true;
+            mkdir -p .codex-backups/btcdca-auth/$BACKUP_ID;
+            put -O .codex-backups/btcdca-auth/$BACKUP_ID server-current/login-user.php;
+            put -O .codex-backups/btcdca-auth/$BACKUP_ID server-current/app.htaccess || true;
+            bye
+          "
+
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path("server-current/login-user.php")
+          target = Path("deploy-root/www/login-user.php")
+          html = source.read_text(encoding="utf-8", errors="replace")
+
+          css = """
+    .google-oauth-btn { display:flex; align-items:center; justify-content:center; width:100%; padding:13px 14px; background:#fff; color:#202124; border:1px solid var(--border); border-radius:10px; font-family:'DM Sans',sans-serif; font-size:15px; font-weight:700; cursor:pointer; transition:all .2s; text-align:center; margin-bottom:0; }
+    .google-oauth-btn:hover { background:#f8fafc; color:#000; opacity:1; transform:translateY(-1px); }
+    .google-oauth-btn::before { content:'G'; display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; margin-right:10px; border-radius:50%; color:#4285f4; background:#fff; border:1px solid #dfe3ea; font-weight:800; }
+"""
+          block = """    <?php if (!empty($_SESSION['btcdca_google_error'])): ?>
+      <div class="alert alert-danger"><?= htmlspecialchars((string)$_SESSION['btcdca_google_error'], ENT_QUOTES, 'UTF-8'); unset($_SESSION['btcdca_google_error']); ?></div>
+    <?php endif; ?>
+    <a class="google-oauth-btn" href="btcdca-google-login.php">Continue with Google</a>
+    <div class="divider">or</div>
+"""
+
+          if "google-oauth-btn" not in html:
+              if "</style>" not in html:
+                  raise SystemExit("Could not find </style> in login-user.php")
+              html = html.replace("</style>", css + "\n  </style>", 1)
+              marker = '<form action="login-user.php"'
+              if marker not in html:
+                  raise SystemExit("Could not find login form in login-user.php")
+              html = html.replace(marker, block + "    " + marker, 1)
+
+          target.write_text(html, encoding="utf-8")
+          PY
+
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          def php_string(value):
               return "'" + (value or "").replace("\\", "\\\\").replace("'", "\\'") + "'"
 
-          cron_material = "email-campaign-cron:" + os.environ.get("BTCDCA_DB", "") + ":" + os.environ.get("BTCDCA_DB_USER", "") + ":" + os.environ.get("BTCDCA_DB_PASSWORD", "")
-          cron_token = hashlib.sha256(cron_material.encode("utf-8")).hexdigest()
+          auth_secret = os.environ.get("BTCDCA_AUTH_SECRET") or "/X9BpAxcKC7bHTvy5u16nJUhG4nUEjTQMkbOR0ikyACR/ubE6cbZnmZhEKw2bnUA"
           content = f"""<?php
 
           return [
-              'app_password_hash' => '',
-              'cron_token' => {s(cron_token)},
-              'campaign_cron_interval_minutes' => 5,
-              'campaign_send_delay_seconds' => 2,
-              'from_email' => 'newsletter@btc-dca.com',
-              'from_name' => 'BTC-DCA',
-              'smtp' => [
-                  'host' => 'smtp.example.com',
-                  'port' => 587,
-                  'username' => 'newsletter@btc-dca.com',
-                  'password' => 'smtp-password',
-                  'encryption' => 'tls',
-              ],
-              'google' => [
-                  'client_id' => {s(os.environ.get("BTCDCA_GOOGLE_CLIENT_ID"))},
-                  'client_secret' => {s(os.environ.get("BTCDCA_GOOGLE_SECRET"))},
-                  'auth_secret' => {s(os.environ.get("BTCDCA_AUTH_SECRET") or "/X9BpAxcKC7bHTvy5u16nJUhG4nUEjTQMkbOR0ikyACR/ubE6cbZnmZhEKw2bnUA")},
-                  'redirect_uri' => 'https://www.btc-dca.com/app/auth/google/callback',
-                  'app_url' => 'https://www.btc-dca.com',
-              ],
-              'database' => [
-                  'driver' => 'mysql',
-                  'host' => 'LOCALHOST',
-                  'port' => 3306,
-                  'name' => {s(os.environ.get("BTCDCA_DB"))},
-                  'username' => {s(os.environ.get("BTCDCA_DB_USER"))},
-                  'password' => {s(os.environ.get("BTCDCA_DB_PASSWORD"))},
-                  'charset' => 'utf8mb4',
-              ],
+              'db_host' => 'LOCALHOST',
+              'db_port' => 3306,
+              'db_name' => {php_string(os.environ.get("BTCDCA_DB"))},
+              'db_user' => {php_string(os.environ.get("BTCDCA_DB_USER"))},
+              'db_password' => {php_string(os.environ.get("BTCDCA_DB_PASSWORD"))},
+              'google_client_id' => {php_string(os.environ.get("BTCDCA_GOOGLE_CLIENT_ID"))},
+              'google_client_secret' => {php_string(os.environ.get("BTCDCA_GOOGLE_SECRET"))},
+              'google_redirect_uri' => 'https://www.btc-dca.com/app/auth/google/callback',
+              'auth_secret' => {php_string(auth_secret)},
           ];
           """
-          with open("email-campaign/config.php", "w", encoding="utf-8") as f:
-              f.write(content)
+          Path("deploy-root/btcdca-google-config.php").write_text(content, encoding="utf-8")
           PY
 
-      - name: Lint PHP files
+          cp btcdca-auth/btcdca-google-login.php deploy-root/www/btcdca-google-login.php
+          cp btcdca-auth/btcdca-google-callback.php deploy-root/www/btcdca-google-callback.php
+          cp btcdca-auth/app.htaccess deploy-root/www/app/.htaccess
+
+      - name: Lint generated PHP
         run: |
           php -v
-          find email-campaign -name '*.php' -print0 | xargs -0 -n1 php -l
+          find deploy-root -name '*.php' -print0 | xargs -0 -n1 php -l
 
-      - name: Validate BTC-DCA FTP secrets
+      - name: Upload backed-up and patched auth files
         env:
           BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
           BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
         run: |
-          if [ -z "$BTCDCA_FTP_LOGIN" ] || [ -z "$BTCDCA_FTP_PASSWORD" ]; then
-            echo "BTCDCA_FTP_LOGIN and BTCDCA_FTP_PASSWORD secrets are required."
-            exit 1
-          fi
-
-      - name: Upload BTC-DCA app to hosting
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ftp.btc-dca.com
-          username: ${{ secrets.BTCDCA_FTP_LOGIN }}
-          password: ${{ secrets.BTCDCA_FTP_PASSWORD }}
-          local-dir: ./email-campaign/
-          server-dir: ./www/app/
-          exclude: |
-            **/.git*
-            **/.git*/**
+          set -euo pipefail
+          lftp -e "
+            set ftp:ssl-allow no;
+            set ftp:passive-mode true;
+            set net:max-retries 5;
+            set net:timeout 30;
+            open -u \"$BTCDCA_FTP_LOGIN\",\"$BTCDCA_FTP_PASSWORD\" ftp.btc-dca.com;
+            put -O . deploy-root/btcdca-google-config.php;
+            put -O www deploy-root/www/login-user.php;
+            put -O www deploy-root/www/btcdca-google-login.php;
+            put -O www deploy-root/www/btcdca-google-callback.php;
+            mkdir -p www/app;
+            put deploy-root/www/app/.htaccess -o www/app/.htaccess;
+            bye
+          "
