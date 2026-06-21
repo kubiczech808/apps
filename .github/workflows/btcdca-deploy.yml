@@ -1,5 +1,6 @@
 name: Deploy BTC-DCA Google Login
 
+# Deploys only the BTC-DCA auth files and backs up the current login page first.
 on:
   push:
     branches:
