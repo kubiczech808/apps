@@ -36,10 +36,9 @@ jobs:
           if [ -z "$BTCDCA_GOOGLE_CLIENT_ID" ]; then echo "BTCDCA_GOOGLE_CLIENT_ID secret is required."; exit 1; fi
           if [ -z "$BTCDCA_GOOGLE_SECRET" ]; then echo "BTCDCA_GOOGLE_SECRET secret is required."; exit 1; fi
 
-      - name: Install lftp
+      - name: Check Python
         run: |
-          sudo apt-get update
-          sudo apt-get install -y lftp
+          python3 --version
 
       - name: Prepare generated config and patched login
         env:
@@ -52,26 +51,12 @@ jobs:
           BTCDCA_GOOGLE_SECRET: ${{ secrets.BTCDCA_GOOGLE_SECRET }}
           BTCDCA_AUTH_SECRET: ${{ secrets.BTCDCA_AUTH_SECRET }}
           BACKUP_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          BTCDCA_FTP_MODE: prepare
         run: |
           set -euo pipefail
           mkdir -p server-current deploy-root/www deploy-root/www/app/auth/google/callback
 
-          prepare_from_ftp() {
-            local host="$1"
-            lftp -e "
-              set ftp:ssl-allow no;
-              set ftp:passive-mode true;
-              set net:max-retries 3;
-              set net:timeout 20;
-              open -u \"$BTCDCA_FTP_LOGIN\",\"$BTCDCA_FTP_PASSWORD\" $host;
-              get -O server-current www/login-user.php;
-              mkdir -p .codex-backups/btcdca-auth/$BACKUP_ID;
-              put -O .codex-backups/btcdca-auth/$BACKUP_ID server-current/login-user.php;
-              bye
-            "
-          }
-
-          prepare_from_ftp ftp.btc-dca.com || prepare_from_ftp neuron.blueboard.cz
+          python3 btcdca-auth/ftp_transfer.py
 
           python3 btcdca-auth/patch_login.py
           python3 btcdca-auth/generate_config.py
@@ -89,24 +74,7 @@ jobs:
         env:
           BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
           BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+          BTCDCA_FTP_MODE: upload
         run: |
           set -euo pipefail
-          upload_to_ftp() {
-            local host="$1"
-            lftp -e "
-              set ftp:ssl-allow no;
-              set ftp:passive-mode true;
-              set net:max-retries 5;
-              set net:timeout 30;
-              open -u \"$BTCDCA_FTP_LOGIN\",\"$BTCDCA_FTP_PASSWORD\" $host;
-              put -O . deploy-root/btcdca-google-config.php;
-              put -O www deploy-root/www/login-user.php;
-              put -O www deploy-root/www/btcdca-google-login.php;
-              put -O www deploy-root/www/btcdca-google-callback.php;
-              mkdir -p www/app/auth/google/callback;
-              put deploy-root/www/app/auth/google/callback/index.php -o www/app/auth/google/callback/index.php;
-              bye
-            "
-          }
-
-          upload_to_ftp ftp.btc-dca.com || upload_to_ftp neuron.blueboard.cz
+          python3 btcdca-auth/ftp_transfer.py
