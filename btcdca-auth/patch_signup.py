@@ -28,4 +28,25 @@ if "btcdca-google-login.php?flow=signup" not in html:
         raise SystemExit("Could not find signup form in signup-user.php")
     html = html.replace(marker, block + "    " + marker, 1)
 
+html = html.replace(
+    '<div class="step done"><span class="step-num">✓</span><span>Calculate</span></div>',
+    '<div class="step active"><span class="step-num">1</span><span>Create Account</span></div>',
+)
+html = html.replace(
+    '<div class="step active"><span class="step-num">2</span><span>Create Account</span></div>',
+    '<div class="step"><span class="step-num">2</span><span>Portfolio</span></div>',
+)
+html = html.replace(
+    '<h1 class="auth-title">You\'re almost there</h1>',
+    '<h1 class="auth-title">Create your account</h1>',
+)
+html = html.replace(
+    'Create your free account to save your DCA plan and start automating your Bitcoin purchases.',
+    'Create your free account now. You can add your first portfolio after sign up.',
+)
+html = html.replace(
+    'Create Account &amp; Activate Plan →',
+    'Create Account →',
+)
+
 target.write_text(html, encoding="utf-8")

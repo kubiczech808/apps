@@ -27,4 +27,13 @@ if "google-oauth-btn" not in html:
         raise SystemExit("Could not find login form in login-user.php")
     html = html.replace(marker, block + "    " + marker, 1)
 
+html = html.replace(
+    'Don\'t have an account? <a href="https://www.btc-dca.com/dca-calculator.php">Start with the Calculator →</a>',
+    'Don\'t have an account? <a href="signup-user.php">Create a free account →</a>',
+)
+html = html.replace(
+    'Don\'t have an account? <a href="dca-calculator.php">Start with the Calculator →</a>',
+    'Don\'t have an account? <a href="signup-user.php">Create a free account →</a>',
+)
+
 target.write_text(html, encoding="utf-8")
