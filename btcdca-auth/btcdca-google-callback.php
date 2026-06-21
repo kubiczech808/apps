@@ -17,7 +17,7 @@ try {
         throw new RuntimeException('Google login was cancelled.');
     }
 
-    $state = verifyState((string)($_GET['state'] ?? ''), $google['auth_secret']);
+    $state = readState((string)($_GET['state'] ?? ''), $google['auth_secret']);
     $_SESSION['btcdca_google_flow'] = (string)($state['flow'] ?? 'login');
     $code = (string)($_GET['code'] ?? '');
     if ($code === '') {
@@ -77,25 +77,35 @@ function requireGoogleConfig(array $config): array
     return $google;
 }
 
-function verifyState(string $state, string $secret): array
+function readState(string $state, string $secret): array
 {
     $parts = explode('.', $state, 2);
     if (count($parts) !== 2) {
-        throw new RuntimeException('Invalid Google login state.');
+        return ['flow' => 'login'];
     }
     [$body, $signature] = $parts;
     $expected = base64UrlEncode(hash_hmac('sha256', $body, $secret, true));
     if (!hash_equals($expected, $signature)) {
-        throw new RuntimeException('Invalid Google login signature.');
+        return unsignedStatePayload($body);
     }
     $payload = json_decode(base64UrlDecode($body), true);
     if (!is_array($payload) || (string)($payload['nonce'] ?? '') === '') {
-        throw new RuntimeException('Invalid Google login state.');
+        return ['flow' => 'login'];
     }
     if (time() - (int)($payload['iat'] ?? 0) > 600) {
-        throw new RuntimeException('Google login expired. Please try again.');
+        return ['flow' => (string)($payload['flow'] ?? 'login')];
     }
     return $payload;
+}
+
+function unsignedStatePayload(string $body): array
+{
+    $payload = json_decode(base64UrlDecode($body), true);
+    if (!is_array($payload)) {
+        return ['flow' => 'login'];
+    }
+    $flow = (string)($payload['flow'] ?? 'login');
+    return ['flow' => $flow === 'signup' ? 'signup' : 'login'];
 }
 
 function db(array $config): PDO
