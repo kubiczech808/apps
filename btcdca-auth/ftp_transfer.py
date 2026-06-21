@@ -60,6 +60,22 @@ def upload(ftp, local, remote):
     ftp.cwd(original)
 
 
+def delete_optional(ftp, remote):
+    try:
+        ftp.delete(remote)
+        print(f"Deleted old FTP file: {remote}")
+    except ftplib.error_perm as exc:
+        print(f"Optional FTP delete skipped for {remote}: {exc}")
+
+
+def rmdir_optional(ftp, remote):
+    try:
+        ftp.rmd(remote)
+        print(f"Removed old FTP directory: {remote}")
+    except ftplib.error_perm as exc:
+        print(f"Optional FTP rmdir skipped for {remote}: {exc}")
+
+
 def prepare():
     ftp = connect()
     try:
@@ -83,7 +99,8 @@ def upload_deploy():
         upload(ftp, "deploy-root/www/btcdca-google-login.php", "www/btcdca-google-login.php")
         upload(ftp, "deploy-root/www/btcdca-google-callback.php", "www/btcdca-google-callback.php")
         upload(ftp, "deploy-root/www/app/.htaccess", "www/app/.htaccess")
-        upload(ftp, "deploy-root/www/app/auth/google/callback/index.php", "www/app/auth/google/callback/index.php")
+        delete_optional(ftp, "www/app/auth/google/callback/index.php")
+        rmdir_optional(ftp, "www/app/auth/google/callback")
     finally:
         ftp.quit()
 
