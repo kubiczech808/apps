@@ -59,6 +59,8 @@ jobs:
           python3 btcdca-auth/ftp_transfer.py
 
           python3 btcdca-auth/patch_login.py
+          python3 btcdca-auth/patch_signup.py
+          python3 btcdca-auth/patch_app_htaccess.py
           python3 btcdca-auth/generate_config.py
 
           cp btcdca-auth/btcdca-google-login.php deploy-root/www/btcdca-google-login.php

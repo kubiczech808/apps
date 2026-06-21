@@ -20,12 +20,13 @@ if ($clientId === '' || $redirectUri === '' || $authSecret === '') {
     exit('Google login is not configured.');
 }
 
-$nonce = bin2hex(random_bytes(16));
-$_SESSION['btcdca_google_nonce'] = $nonce;
+$flow = (string)($_GET['flow'] ?? 'login');
+$flow = $flow === 'signup' ? 'signup' : 'login';
 
 $statePayload = base64UrlEncode(json_encode([
-    'nonce' => $nonce,
+    'nonce' => bin2hex(random_bytes(16)),
     'iat' => time(),
+    'flow' => $flow,
 ], JSON_UNESCAPED_SLASHES) ?: '{}');
 $stateSignature = base64UrlEncode(hash_hmac('sha256', $statePayload, $authSecret, true));
 

@@ -17,7 +17,8 @@ try {
         throw new RuntimeException('Google login was cancelled.');
     }
 
-    verifyState((string)($_GET['state'] ?? ''), $google['auth_secret']);
+    $state = verifyState((string)($_GET['state'] ?? ''), $google['auth_secret']);
+    $_SESSION['btcdca_google_flow'] = (string)($state['flow'] ?? 'login');
     $code = (string)($_GET['code'] ?? '');
     if ($code === '') {
         throw new RuntimeException('Google did not return an authorization code.');
@@ -76,7 +77,7 @@ function requireGoogleConfig(array $config): array
     return $google;
 }
 
-function verifyState(string $state, string $secret): void
+function verifyState(string $state, string $secret): array
 {
     $parts = explode('.', $state, 2);
     if (count($parts) !== 2) {
@@ -88,14 +89,13 @@ function verifyState(string $state, string $secret): void
         throw new RuntimeException('Invalid Google login signature.');
     }
     $payload = json_decode(base64UrlDecode($body), true);
-    $sessionNonce = (string)($_SESSION['btcdca_google_nonce'] ?? '');
-    unset($_SESSION['btcdca_google_nonce']);
-    if (!is_array($payload) || $sessionNonce === '' || !hash_equals($sessionNonce, (string)($payload['nonce'] ?? ''))) {
-        throw new RuntimeException('Google login expired. Please try again.');
+    if (!is_array($payload) || (string)($payload['nonce'] ?? '') === '') {
+        throw new RuntimeException('Invalid Google login state.');
     }
     if (time() - (int)($payload['iat'] ?? 0) > 600) {
         throw new RuntimeException('Google login expired. Please try again.');
     }
+    return $payload;
 }
 
 function db(array $config): PDO
@@ -355,6 +355,8 @@ function base64UrlDecode(string $value): string
 function renderAuthError(string $message): void
 {
     $_SESSION['btcdca_google_error'] = $message;
-    header('Location: /login-user.php');
+    $flow = (string)($_SESSION['btcdca_google_flow'] ?? '');
+    unset($_SESSION['btcdca_google_flow']);
+    header('Location: ' . ($flow === 'signup' ? '/signup-user.php' : '/login-user.php'));
     exit;
 }

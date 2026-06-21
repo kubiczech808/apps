@@ -41,6 +41,13 @@ def download(ftp, remote, local):
         ftp.retrbinary(f"RETR {remote}", handle.write)
 
 
+def download_optional(ftp, remote, local):
+    try:
+        download(ftp, remote, local)
+    except ftplib.error_perm as exc:
+        print(f"Optional FTP download skipped for {remote}: {exc}")
+
+
 def upload(ftp, local, remote):
     local_path = Path(local)
     parent, name = remote.rsplit("/", 1) if "/" in remote else ("", remote)
@@ -57,7 +64,12 @@ def prepare():
     ftp = connect()
     try:
         download(ftp, "www/login-user.php", "server-current/login-user.php")
+        download(ftp, "www/signup-user.php", "server-current/signup-user.php")
+        download_optional(ftp, "www/app/.htaccess", "server-current/app.htaccess")
         upload(ftp, "server-current/login-user.php", f".codex-backups/btcdca-auth/{BACKUP_ID}/login-user.php")
+        upload(ftp, "server-current/signup-user.php", f".codex-backups/btcdca-auth/{BACKUP_ID}/signup-user.php")
+        if Path("server-current/app.htaccess").exists():
+            upload(ftp, "server-current/app.htaccess", f".codex-backups/btcdca-auth/{BACKUP_ID}/app.htaccess")
     finally:
         ftp.quit()
 
@@ -67,8 +79,10 @@ def upload_deploy():
     try:
         upload(ftp, "deploy-root/btcdca-google-config.php", "btcdca-google-config.php")
         upload(ftp, "deploy-root/www/login-user.php", "www/login-user.php")
+        upload(ftp, "deploy-root/www/signup-user.php", "www/signup-user.php")
         upload(ftp, "deploy-root/www/btcdca-google-login.php", "www/btcdca-google-login.php")
         upload(ftp, "deploy-root/www/btcdca-google-callback.php", "www/btcdca-google-callback.php")
+        upload(ftp, "deploy-root/www/app/.htaccess", "www/app/.htaccess")
         upload(ftp, "deploy-root/www/app/auth/google/callback/index.php", "www/app/auth/google/callback/index.php")
     finally:
         ftp.quit()
