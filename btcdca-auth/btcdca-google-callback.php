@@ -13,15 +13,16 @@ $config = require $configPath;
 
 try {
     $google = requireGoogleConfig($config);
-    if (($_GET['error'] ?? '') !== '') {
-        throw new RuntimeException('Google login was cancelled.');
+    $callbackParams = callbackParams();
+    if (($callbackParams['error'] ?? '') !== '') {
+        throw new RuntimeException('Google returned an error: ' . safeCallbackValue((string)$callbackParams['error']));
     }
 
-    $state = readState((string)($_GET['state'] ?? ''), $google['auth_secret']);
+    $state = readState((string)($callbackParams['state'] ?? ''), $google['auth_secret']);
     $_SESSION['btcdca_google_flow'] = (string)($state['flow'] ?? 'login');
-    $code = (string)($_GET['code'] ?? '');
+    $code = (string)($callbackParams['code'] ?? '');
     if ($code === '') {
-        throw new RuntimeException('Google did not return an authorization code.');
+        throw new RuntimeException('Google did not return an authorization code. Callback keys: ' . callbackParamSummary($callbackParams));
     }
 
     $tokens = httpPostJson('https://oauth2.googleapis.com/token', [
@@ -75,6 +76,65 @@ function requireGoogleConfig(array $config): array
         }
     }
     return $google;
+}
+
+function callbackParams(): array
+{
+    $params = $_GET;
+    $queryStrings = [
+        (string)($_SERVER['QUERY_STRING'] ?? ''),
+        (string)($_SERVER['REDIRECT_QUERY_STRING'] ?? ''),
+    ];
+    $requestUri = (string)($_SERVER['REQUEST_URI'] ?? '');
+    $requestQuery = (string)(parse_url($requestUri, PHP_URL_QUERY) ?: '');
+    if ($requestQuery !== '') {
+        $queryStrings[] = $requestQuery;
+    }
+
+    foreach ($queryStrings as $queryString) {
+        if ($queryString === '') {
+            continue;
+        }
+        $parsed = [];
+        parse_str($queryString, $parsed);
+        foreach ($parsed as $key => $value) {
+            if (!array_key_exists($key, $params)) {
+                $params[$key] = is_array($value) ? reset($value) : $value;
+            }
+        }
+    }
+
+    return $params;
+}
+
+function callbackParamSummary(array $params): string
+{
+    $keys = array_keys($params);
+    sort($keys);
+    $safeKeys = [];
+    foreach ($keys as $key) {
+        $safeKey = preg_replace('/[^a-zA-Z0-9_.-]/', '', (string)$key);
+        if ($safeKey !== '') {
+            $safeKeys[] = $safeKey;
+        }
+    }
+
+    $summary = $safeKeys ? implode(', ', $safeKeys) : 'none';
+    $details = [];
+    foreach (['error', 'error_description'] as $detailKey) {
+        $value = trim((string)($params[$detailKey] ?? ''));
+        if ($value !== '') {
+            $details[] = $detailKey . '=' . safeCallbackValue($value);
+        }
+    }
+
+    return $details ? $summary . ' (' . implode('; ', $details) . ')' : $summary;
+}
+
+function safeCallbackValue(string $value): string
+{
+    $value = preg_replace('/[^a-zA-Z0-9 ._:-]/', '', $value) ?: '';
+    return substr(trim($value), 0, 160);
 }
 
 function readState(string $state, string $secret): array
