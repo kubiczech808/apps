@@ -15,6 +15,8 @@ try {
     $google = requireGoogleConfig($config);
     $callbackParams = callbackParams();
     if (!$callbackParams) {
+        $_SESSION['btcdca_google_error'] = 'Google login did not return an authorization code. Please try again.';
+        logEmptyCallback();
         renderFragmentBridge();
     }
     if (($callbackParams['error'] ?? '') !== '') {
@@ -27,6 +29,7 @@ try {
     if ($code === '') {
         throw new RuntimeException('Google did not return an authorization code. Callback keys: ' . callbackParamSummary($callbackParams));
     }
+    unset($_SESSION['btcdca_google_error']);
 
     $tokens = httpPostJson('https://oauth2.googleapis.com/token', [
         'code' => $code,
@@ -171,6 +174,22 @@ function renderFragmentBridge(): void
 </html>
 HTML;
     exit;
+}
+
+function logEmptyCallback(): void
+{
+    $line = json_encode([
+        'time' => gmdate('c'),
+        'event' => 'empty_google_callback',
+        'request_uri' => (string)($_SERVER['REQUEST_URI'] ?? ''),
+        'query_string' => (string)($_SERVER['QUERY_STRING'] ?? ''),
+        'referer_host' => parse_url((string)($_SERVER['HTTP_REFERER'] ?? ''), PHP_URL_HOST) ?: '',
+        'user_agent' => substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 180),
+        'session' => substr(session_id(), 0, 12),
+    ], JSON_UNESCAPED_SLASHES);
+    if ($line !== false) {
+        @file_put_contents(__DIR__ . '/../btcdca-google-oauth.log', $line . PHP_EOL, FILE_APPEND | LOCK_EX);
+    }
 }
 
 function readState(string $state, string $secret): array

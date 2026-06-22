@@ -34,6 +34,7 @@ $params = [
     'client_id' => $clientId,
     'redirect_uri' => $redirectUri,
     'response_type' => 'code',
+    'response_mode' => 'query',
     'scope' => 'openid email profile',
     'state' => $statePayload . '.' . $stateSignature,
     'prompt' => 'select_account',
