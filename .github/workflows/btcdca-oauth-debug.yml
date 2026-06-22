@@ -1,0 +1,85 @@
+name: Inspect BTC-DCA OAuth Log
+
+on:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - '.github/workflows/btcdca-oauth-debug.yml'
+  workflow_dispatch:
+
+jobs:
+  inspect-oauth-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and print sanitized OAuth log tail
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import json
+          import os
+          from pathlib import Path
+
+          hosts = ["ftp.btc-dca.com", "neuron.blueboard.cz"]
+          login = os.environ["BTCDCA_FTP_LOGIN"]
+          password = os.environ["BTCDCA_FTP_PASSWORD"]
+
+          ftp = None
+          last_error = None
+          for host in hosts:
+              try:
+                  ftp = ftplib.FTP(host, timeout=30)
+                  ftp.login(login, password)
+                  print(f"Connected to {host}")
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  print(f"Connect failed for {host}: {exc}")
+          if ftp is None:
+              raise SystemExit(f"Could not connect to FTP: {last_error}")
+
+          candidates = [
+              "btcdca-google-oauth.log",
+              "www/btcdca-google-oauth.log",
+          ]
+          data = None
+          found = None
+          for remote in candidates:
+              try:
+                  chunks = []
+                  ftp.retrbinary(f"RETR {remote}", chunks.append)
+                  data = b"".join(chunks).decode("utf-8", "replace")
+                  found = remote
+                  break
+              except ftplib.error_perm as exc:
+                  print(f"Not found: {remote}: {exc}")
+          ftp.quit()
+
+          if data is None:
+              print("No OAuth log found.")
+              raise SystemExit(0)
+
+          print(f"Found log: {found}")
+          lines = [line for line in data.splitlines() if line.strip()]
+          print(f"Total lines: {len(lines)}")
+          print("Last OAuth log lines:")
+          for raw in lines[-80:]:
+              try:
+                  entry = json.loads(raw)
+              except Exception:
+                  print(raw[:500])
+                  continue
+              safe = {
+                  "time": entry.get("time", ""),
+                  "event": entry.get("event", ""),
+                  "request_uri": entry.get("request_uri", ""),
+                  "query_string": entry.get("query_string", ""),
+                  "referer_host": entry.get("referer_host", ""),
+                  "user_agent": entry.get("user_agent", "")[:120],
+                  "session": entry.get("session", ""),
+              }
+              print(json.dumps(safe, ensure_ascii=False, sort_keys=True))
+          PY
