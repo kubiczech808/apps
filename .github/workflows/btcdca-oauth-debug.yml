@@ -75,8 +75,10 @@ jobs:
               safe = {
                   "time": entry.get("time", ""),
                   "event": entry.get("event", ""),
+                  "method": entry.get("method", ""),
                   "request_uri": entry.get("request_uri", ""),
                   "query_string": entry.get("query_string", ""),
+                  "post_keys": entry.get("post_keys", ""),
                   "referer_host": entry.get("referer_host", ""),
                   "user_agent": entry.get("user_agent", "")[:120],
                   "session": entry.get("session", ""),

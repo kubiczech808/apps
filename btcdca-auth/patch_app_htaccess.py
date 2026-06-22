@@ -14,8 +14,6 @@ managed = {
 text = "\n".join(line for line in text.splitlines() if line.strip() not in managed).strip()
 
 rule = """RewriteEngine On
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteCond %{REQUEST_FILENAME} !-f
 RewriteRule ^auth/google/callback/?$ /btcdca-google-callback.php [L,QSA]
 """
 

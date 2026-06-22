@@ -87,6 +87,11 @@ function requireGoogleConfig(array $config): array
 function callbackParams(): array
 {
     $params = $_GET;
+    foreach ($_POST as $key => $value) {
+        if (!array_key_exists($key, $params)) {
+            $params[$key] = is_array($value) ? reset($value) : $value;
+        }
+    }
     $queryStrings = [
         (string)($_SERVER['QUERY_STRING'] ?? ''),
         (string)($_SERVER['REDIRECT_QUERY_STRING'] ?? ''),
@@ -181,8 +186,10 @@ function logEmptyCallback(): void
     $line = json_encode([
         'time' => gmdate('c'),
         'event' => 'empty_google_callback',
+        'method' => (string)($_SERVER['REQUEST_METHOD'] ?? ''),
         'request_uri' => (string)($_SERVER['REQUEST_URI'] ?? ''),
         'query_string' => (string)($_SERVER['QUERY_STRING'] ?? ''),
+        'post_keys' => implode(',', array_keys($_POST)),
         'referer_host' => parse_url((string)($_SERVER['HTTP_REFERER'] ?? ''), PHP_URL_HOST) ?: '',
         'user_agent' => substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 180),
         'session' => substr(session_id(), 0, 12),
