@@ -54,7 +54,7 @@ jobs:
           BTCDCA_FTP_MODE: prepare
         run: |
           set -euo pipefail
-          mkdir -p server-current deploy-root/www deploy-root/www/app/auth/google/callback
+          mkdir -p server-current deploy-root/www deploy-root/www/app/auth/google
 
           python3 btcdca-auth/ftp_transfer.py
 
@@ -66,7 +66,6 @@ jobs:
           cp btcdca-auth/btcdca-google-login.php deploy-root/www/btcdca-google-login.php
           cp btcdca-auth/btcdca-google-callback.php deploy-root/www/btcdca-google-callback.php
           cp btcdca-auth/google-index.php deploy-root/www/app/auth/google/index.php
-          cp btcdca-auth/google-callback-index.php deploy-root/www/app/auth/google/callback/index.php
 
       - name: Lint generated PHP
         run: |
