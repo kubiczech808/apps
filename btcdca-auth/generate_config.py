@@ -18,7 +18,7 @@ return [
     'db_password' => {php_string(os.environ.get("BTCDCA_DB_PASSWORD"))},
     'google_client_id' => {php_string(os.environ.get("BTCDCA_GOOGLE_CLIENT_ID"))},
     'google_client_secret' => {php_string(os.environ.get("BTCDCA_GOOGLE_SECRET"))},
-    'google_redirect_uri' => 'https://www.btc-dca.com/app/auth/google/callback',
+    'google_redirect_uri' => 'https://www.btc-dca.com/btcdca-google-callback.php',
     'auth_secret' => {php_string(auth_secret)},
 ];
 """
