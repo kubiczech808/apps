@@ -14,6 +14,9 @@ $config = require $configPath;
 try {
     $google = requireGoogleConfig($config);
     $callbackParams = callbackParams();
+    if (!$callbackParams) {
+        renderFragmentBridge();
+    }
     if (($callbackParams['error'] ?? '') !== '') {
         throw new RuntimeException('Google returned an error: ' . safeCallbackValue((string)$callbackParams['error']));
     }
@@ -135,6 +138,39 @@ function safeCallbackValue(string $value): string
 {
     $value = preg_replace('/[^a-zA-Z0-9 ._:-]/', '', $value) ?: '';
     return substr(trim($value), 0, 160);
+}
+
+function renderFragmentBridge(): void
+{
+    header('Content-Type: text/html; charset=UTF-8');
+    echo <<<'HTML'
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Completing Google login</title>
+</head>
+<body>
+  <p>Completing Google login...</p>
+  <script>
+    (function () {
+      var hash = window.location.hash ? window.location.hash.substring(1) : '';
+      if (hash && /(^|&)(code|error|state)=/.test(hash)) {
+        window.location.replace(window.location.pathname + '?' + hash);
+        return;
+      }
+      window.location.replace('/login-user.php');
+    }());
+  </script>
+  <noscript>
+    <p>Google login could not be completed. Please enable JavaScript and try again.</p>
+    <p><a href="/login-user.php">Back to login</a></p>
+  </noscript>
+</body>
+</html>
+HTML;
+    exit;
 }
 
 function readState(string $state, string $secret): array
