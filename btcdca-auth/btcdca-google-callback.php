@@ -4,68 +4,70 @@ declare(strict_types=1);
 
 session_start();
 
-$configPath = __DIR__ . '/../btcdca-google-config.php';
-if (!is_file($configPath)) {
-    renderAuthError('Google login is not configured.');
-}
-
-$config = require $configPath;
-
-try {
-    $google = requireGoogleConfig($config);
-    $callbackParams = callbackParams();
-    if (!$callbackParams) {
-        $_SESSION['btcdca_google_error'] = 'Google login did not return an authorization code. Please try again.';
-        logEmptyCallback();
-        renderFragmentBridge();
-    }
-    if (($callbackParams['error'] ?? '') !== '') {
-        throw new RuntimeException('Google returned an error: ' . safeCallbackValue((string)$callbackParams['error']));
+if (!defined('BTCDCA_GOOGLE_AUTH_LIB_ONLY')) {
+    $configPath = __DIR__ . '/../btcdca-google-config.php';
+    if (!is_file($configPath)) {
+        renderAuthError('Google login is not configured.');
     }
 
-    $state = readState((string)($callbackParams['state'] ?? ''), $google['auth_secret']);
-    $_SESSION['btcdca_google_flow'] = (string)($state['flow'] ?? 'login');
-    $code = (string)($callbackParams['code'] ?? '');
-    if ($code === '') {
-        throw new RuntimeException('Google did not return an authorization code. Callback keys: ' . callbackParamSummary($callbackParams));
-    }
-    unset($_SESSION['btcdca_google_error']);
+    $config = require $configPath;
 
-    $tokens = httpPostJson('https://oauth2.googleapis.com/token', [
-        'code' => $code,
-        'client_id' => $google['client_id'],
-        'client_secret' => $google['client_secret'],
-        'redirect_uri' => $google['redirect_uri'],
-        'grant_type' => 'authorization_code',
-    ]);
-    $accessToken = (string)($tokens['access_token'] ?? '');
-    if ($accessToken === '') {
-        throw new RuntimeException('Google did not return an access token.');
-    }
+    try {
+        $google = requireGoogleConfig($config);
+        $callbackParams = callbackParams();
+        if (!$callbackParams) {
+            $_SESSION['btcdca_google_error'] = 'Google login did not return an authorization code. Please try again.';
+            logEmptyCallback();
+            renderFragmentBridge();
+        }
+        if (($callbackParams['error'] ?? '') !== '') {
+            throw new RuntimeException('Google returned an error: ' . safeCallbackValue((string)$callbackParams['error']));
+        }
 
-    $profile = httpGetJson('https://openidconnect.googleapis.com/v1/userinfo', [
-        'Authorization: Bearer ' . $accessToken,
-    ]);
-    $email = strtolower(trim((string)($profile['email'] ?? '')));
-    $verified = $profile['email_verified'] ?? false;
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL) || !($verified === true || $verified === 'true' || $verified === 1 || $verified === '1')) {
-        throw new RuntimeException('Google account email is not verified.');
-    }
+        $state = readState((string)($callbackParams['state'] ?? ''), $google['auth_secret']);
+        $_SESSION['btcdca_google_flow'] = (string)($state['flow'] ?? 'login');
+        $code = (string)($callbackParams['code'] ?? '');
+        if ($code === '') {
+            throw new RuntimeException('Google did not return an authorization code. Callback keys: ' . callbackParamSummary($callbackParams));
+        }
+        unset($_SESSION['btcdca_google_error']);
 
-    $pdo = db($config);
-    $user = findUserByEmail($pdo, $email);
-    if (!$user) {
-        $user = createUserFromGoogle($pdo, $profile, $email);
-    }
-    if (!$user) {
-        throw new RuntimeException('Could not create or find a BTC-DCA account for ' . $email . '.');
-    }
+        $tokens = httpPostJson('https://oauth2.googleapis.com/token', [
+            'code' => $code,
+            'client_id' => $google['client_id'],
+            'client_secret' => $google['client_secret'],
+            'redirect_uri' => $google['redirect_uri'],
+            'grant_type' => 'authorization_code',
+        ]);
+        $accessToken = (string)($tokens['access_token'] ?? '');
+        if ($accessToken === '') {
+            throw new RuntimeException('Google did not return an access token.');
+        }
 
-    startUserSession($user, $email, $profile);
-    header('Location: ' . successRedirect());
-    exit;
-} catch (Throwable $e) {
-    renderAuthError($e->getMessage());
+        $profile = httpGetJson('https://openidconnect.googleapis.com/v1/userinfo', [
+            'Authorization: Bearer ' . $accessToken,
+        ]);
+        $email = strtolower(trim((string)($profile['email'] ?? '')));
+        $verified = $profile['email_verified'] ?? false;
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || !($verified === true || $verified === 'true' || $verified === 1 || $verified === '1')) {
+            throw new RuntimeException('Google account email is not verified.');
+        }
+
+        $pdo = db($config);
+        $user = findUserByEmail($pdo, $email);
+        if (!$user) {
+            $user = createUserFromGoogle($pdo, $profile, $email);
+        }
+        if (!$user) {
+            throw new RuntimeException('Could not create or find a BTC-DCA account for ' . $email . '.');
+        }
+
+        startUserSession($user, $email, $profile);
+        header('Location: ' . successRedirect());
+        exit;
+    } catch (Throwable $e) {
+        renderAuthError($e->getMessage());
+    }
 }
 
 function requireGoogleConfig(array $config): array

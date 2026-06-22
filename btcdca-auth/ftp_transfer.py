@@ -98,6 +98,7 @@ def upload_deploy():
         upload(ftp, "deploy-root/www/signup-user.php", "www/signup-user.php")
         upload(ftp, "deploy-root/www/btcdca-google-login.php", "www/btcdca-google-login.php")
         upload(ftp, "deploy-root/www/btcdca-google-callback.php", "www/btcdca-google-callback.php")
+        upload(ftp, "deploy-root/www/btcdca-google-token-login.php", "www/btcdca-google-token-login.php")
         upload(ftp, "deploy-root/www/app/.htaccess", "www/app/.htaccess")
         upload(ftp, "deploy-root/www/app/auth/google/index.php", "www/app/auth/google/index.php")
         delete_optional(ftp, "www/app/auth/google/callback/index.php")

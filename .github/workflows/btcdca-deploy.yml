@@ -65,6 +65,7 @@ jobs:
 
           cp btcdca-auth/btcdca-google-login.php deploy-root/www/btcdca-google-login.php
           cp btcdca-auth/btcdca-google-callback.php deploy-root/www/btcdca-google-callback.php
+          cp btcdca-auth/btcdca-google-token-login.php deploy-root/www/btcdca-google-token-login.php
           cp btcdca-auth/google-index.php deploy-root/www/app/auth/google/index.php
 
       - name: Lint generated PHP
