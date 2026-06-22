@@ -100,8 +100,7 @@ def upload_deploy():
         upload(ftp, "deploy-root/www/btcdca-google-callback.php", "www/btcdca-google-callback.php")
         upload(ftp, "deploy-root/www/app/.htaccess", "www/app/.htaccess")
         upload(ftp, "deploy-root/www/app/auth/google/index.php", "www/app/auth/google/index.php")
-        delete_optional(ftp, "www/app/auth/google/callback/index.php")
-        rmdir_optional(ftp, "www/app/auth/google/callback")
+        upload(ftp, "deploy-root/www/app/auth/google/callback/index.php", "www/app/auth/google/callback/index.php")
     finally:
         ftp.quit()
 
