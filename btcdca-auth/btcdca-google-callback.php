@@ -417,21 +417,7 @@ function startUserSession(array $user, string $email, array $profile): void
 
 function successRedirect(): string
 {
-    $loginSource = @file_get_contents(__DIR__ . '/login-user.php') ?: '';
-    if (preg_match_all('/header\s*\(\s*[\'"]Location:\s*([^\'"]+)/i', $loginSource, $matches)) {
-        foreach ($matches[1] as $target) {
-            $target = trim((string)$target);
-            if ($target !== '' && stripos($target, 'login-user.php') === false) {
-                return $target;
-            }
-        }
-    }
-    foreach (['dashboard.php', 'portfolio.php', 'user-dashboard.php', 'index.php'] as $target) {
-        if (is_file(__DIR__ . '/' . $target)) {
-            return $target;
-        }
-    }
-    return 'https://www.btc-dca.com/';
+    return 'https://www.btc-dca.com/app/';
 }
 
 function httpPostJson(string $url, array $fields): array
