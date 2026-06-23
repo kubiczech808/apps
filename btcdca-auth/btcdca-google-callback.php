@@ -418,7 +418,7 @@ function startUserSession(array $user, string $email, array $profile): void
 
 function successRedirect(bool $isNewUser = false): string
 {
-    return $isNewUser ? 'https://www.btc-dca.com/app/setup.php' : 'https://www.btc-dca.com/app/';
+    return $isNewUser ? 'https://www.btc-dca.com/app/overview.php' : 'https://www.btc-dca.com/app/';
 }
 
 function httpPostJson(string $url, array $fields): array
