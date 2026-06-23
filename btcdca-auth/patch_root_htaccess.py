@@ -16,8 +16,17 @@ RewriteCond %{{REQUEST_METHOD}} ^(?:GET|HEAD)$
 RewriteCond %{{THE_REQUEST}} \\s/+((?:login-user|signup-user|dca-calculator|btcdca-google-login|btcdca-google-callback|btcdca-google-token-login))\\.php[?\\s] [NC]
 RewriteRule ^ /%1 [R=301,L,NE]
 
+# Canonical BTC-DCA app PHP pages without the .php suffix.
+RewriteCond %{{REQUEST_METHOD}} ^(?:GET|HEAD)$
+RewriteCond %{{THE_REQUEST}} \\s/+app/([^?\\s]+)\\.php[?\\s] [NC]
+RewriteRule ^ /app/%1 [R=301,L,NE]
+
+# Serve extensionless BTC-DCA app PHP pages internally before WordPress fallback.
+RewriteCond %{{DOCUMENT_ROOT}}/app/$1.php -f
+RewriteRule ^app/(.+?)/?$ app/$1.php [L,QSA]
+
 # Serve extensionless BTC-DCA PHP pages internally.
-RewriteCond %{{DOCUMENT_ROOT}}/$1.php -f
+RewriteCond %{{REQUEST_FILENAME}}.php -f
 RewriteRule ^(login-user|signup-user|dca-calculator|btcdca-google-login|btcdca-google-callback|btcdca-google-token-login)/?$ $1.php [L,QSA]
 </IfModule>
 {END}

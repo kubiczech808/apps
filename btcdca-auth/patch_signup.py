@@ -119,5 +119,8 @@ html = html.replace('action="btcdca-google-token-login.php"', 'action="btcdca-go
 html = html.replace('href="login-user.php"', 'href="login-user"')
 html = html.replace('href="btcdca-google-login.php?flow=signup"', 'href="btcdca-google-login?flow=signup"')
 html = html.replace('href="btcdca-google-login.php"', 'href="btcdca-google-login"')
+html = html.replace('href="https://www.btc-dca.com/login-user.php"', 'href="https://www.btc-dca.com/login-user"')
+html = html.replace('href="https://www.btc-dca.com/signup-user.php"', 'href="https://www.btc-dca.com/signup-user"')
+html = html.replace('href="https://www.btc-dca.com/dca-calculator.php"', 'href="https://www.btc-dca.com/dca-calculator"')
 
 target.write_text(html, encoding="utf-8")
