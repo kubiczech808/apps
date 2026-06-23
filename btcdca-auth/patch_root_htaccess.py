@@ -22,8 +22,7 @@ RewriteCond %{{THE_REQUEST}} \\s/+app/([^?\\s]+)\\.php[?\\s] [NC]
 RewriteRule ^ /app/%1 [R=301,L,NE]
 
 # Serve extensionless BTC-DCA app PHP pages internally before WordPress fallback.
-RewriteCond %{{REQUEST_FILENAME}}.php -f
-RewriteRule ^app/(.+?)/?$ app/$1.php [L,QSA]
+RewriteRule ^app/([^/.]+)/?$ app/$1.php [L,QSA]
 
 # Serve extensionless BTC-DCA PHP pages internally.
 RewriteCond %{{REQUEST_FILENAME}}.php -f
