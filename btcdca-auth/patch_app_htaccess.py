@@ -37,7 +37,8 @@ RewriteCond %{{THE_REQUEST}} \\s/+app/([^?\\s]+)\\.php[?\\s] [NC]
 RewriteRule ^ /app/%1 [R=301,L,NE]
 
 # Serve extensionless app PHP pages internally.
-RewriteRule ^([^/.]+)/?$ $1.php [L,QSA]
+RewriteRule ^overview/?$ /app/overview.php [L,QSA]
+RewriteRule ^([^/.]+)/?$ /app/$1.php [L,QSA]
 {END}
 """
 
