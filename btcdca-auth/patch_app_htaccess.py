@@ -47,9 +47,8 @@ rule = """RewriteEngine On
 RewriteRule ^auth/google/callback/?$ /btcdca-google-callback.php [L,QSA]
 """
 
-if text and not text.endswith("\n"):
-    text += "\n"
-text += "\n" + extensionless + "\n# BTC-DCA Google OAuth callback\n" + rule
+managed_rules = extensionless + "\n# BTC-DCA Google OAuth callback\n" + rule
+text = managed_rules + ("\n" + text + "\n" if text else "")
 
 target.parent.mkdir(parents=True, exist_ok=True)
 target.write_text(text, encoding="utf-8")

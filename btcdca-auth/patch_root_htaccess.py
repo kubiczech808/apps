@@ -35,10 +35,8 @@ def remove_managed_block(text: str) -> str:
 
 
 text = source.read_text(encoding="utf-8", errors="replace") if source.exists() else ""
-text = remove_managed_block(text).rstrip()
-if text:
-    text += "\n\n"
-text += block
+text = remove_managed_block(text).strip()
+text = block + ("\n" + text + "\n" if text else "")
 
 target.parent.mkdir(parents=True, exist_ok=True)
 target.write_text(text, encoding="utf-8")
