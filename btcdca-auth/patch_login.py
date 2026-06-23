@@ -18,7 +18,7 @@ google_block = """    <?php
       $btcdcaGoogleClientId = is_array($btcdcaGoogleConfig) ? (string)($btcdcaGoogleConfig['google_client_id'] ?? '') : '';
     ?>
     <?php if ($btcdcaGoogleClientId !== ''): ?>
-      <form id="btcdca-google-login-form" action="btcdca-google-token-login.php" method="post" style="display:none;">
+      <form id="btcdca-google-login-form" action="btcdca-google-token-login" method="post" style="display:none;">
         <input type="hidden" name="flow" value="login">
         <input type="hidden" name="credential" id="btcdca-google-login-credential">
       </form>
@@ -54,7 +54,7 @@ google_block = """    <?php
         }());
       </script>
     <?php else: ?>
-      <a class="google-oauth-btn" href="btcdca-google-login.php">Continue with Google</a>
+      <a class="google-oauth-btn" href="btcdca-google-login">Continue with Google</a>
     <?php endif; ?>
 """
 
@@ -70,11 +70,12 @@ if ".google-oauth-wrap" not in html:
         raise SystemExit("Could not find </style> in login-user.php")
     html = html.replace("</style>", css + "\n  </style>", 1)
 
-if "btcdca-google-token-login.php" not in html:
+if "btcdca-google-token-login" not in html:
     replaced = False
     for old in [
         '<a class="google-oauth-btn" href="btcdca-google-login.php">Continue with Google</a>',
         '<a class="google-oauth-btn" href="btcdca-google-login.php?flow=login">Continue with Google</a>',
+        '<a class="google-oauth-btn" href="btcdca-google-login">Continue with Google</a>',
     ]:
         if old in html:
             html = html.replace(old, google_block.rstrip(), 1)
@@ -86,7 +87,7 @@ if "btcdca-google-token-login.php" not in html:
             raise SystemExit("Could not find login form in login-user.php")
         html = html.replace(marker, block + "    " + marker, 1)
 
-if "btcdca-google-token-login.php" not in html:
+if "btcdca-google-token-login" not in html:
     marker = '<form action="login-user.php"'
     if marker not in html:
         raise SystemExit("Could not find login form in login-user.php")
@@ -100,5 +101,12 @@ html = html.replace(
     'Don\'t have an account? <a href="dca-calculator.php">Start with the Calculator →</a>',
     'Don\'t have an account? <a href="signup-user.php">Create a free account →</a>',
 )
+
+html = html.replace('action="login-user.php"', 'action="login-user"')
+html = html.replace('action="btcdca-google-token-login.php"', 'action="btcdca-google-token-login"')
+html = html.replace('href="signup-user.php"', 'href="signup-user"')
+html = html.replace('href="dca-calculator.php"', 'href="dca-calculator"')
+html = html.replace('href="btcdca-google-login.php?flow=login"', 'href="btcdca-google-login?flow=login"')
+html = html.replace('href="btcdca-google-login.php"', 'href="btcdca-google-login"')
 
 target.write_text(html, encoding="utf-8")

@@ -171,12 +171,12 @@ function renderFragmentBridge(): void
         window.location.replace(window.location.pathname + '?' + hash);
         return;
       }
-      window.location.replace('/login-user.php');
+      window.location.replace('/login-user');
     }());
   </script>
   <noscript>
     <p>Google login could not be completed. Please enable JavaScript and try again.</p>
-    <p><a href="/login-user.php">Back to login</a></p>
+    <p><a href="/login-user">Back to login</a></p>
   </noscript>
 </body>
 </html>
@@ -418,7 +418,7 @@ function startUserSession(array $user, string $email, array $profile): void
 
 function successRedirect(bool $isNewUser = false): string
 {
-    return $isNewUser ? 'https://www.btc-dca.com/app/overview.php' : 'https://www.btc-dca.com/app/';
+    return $isNewUser ? 'https://www.btc-dca.com/app/overview' : 'https://www.btc-dca.com/app/';
 }
 
 function httpPostJson(string $url, array $fields): array
@@ -478,6 +478,6 @@ function renderAuthError(string $message): void
     $_SESSION['btcdca_google_error'] = $message;
     $flow = (string)($_SESSION['btcdca_google_flow'] ?? '');
     unset($_SESSION['btcdca_google_flow']);
-    header('Location: ' . ($flow === 'signup' ? '/signup-user.php' : '/login-user.php'));
+    header('Location: ' . ($flow === 'signup' ? '/signup-user' : '/login-user'));
     exit;
 }

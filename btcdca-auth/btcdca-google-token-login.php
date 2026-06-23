@@ -55,6 +55,6 @@ try {
 } catch (Throwable $e) {
     $_SESSION['btcdca_google_error'] = $e->getMessage();
     unset($_SESSION['btcdca_google_flow']);
-    header('Location: ' . ($flow === 'signup' ? '/signup-user.php' : '/login-user.php'));
+    header('Location: ' . ($flow === 'signup' ? '/signup-user' : '/login-user'));
     exit;
 }

@@ -18,7 +18,7 @@ google_block = """    <?php
       $btcdcaGoogleClientId = is_array($btcdcaGoogleConfig) ? (string)($btcdcaGoogleConfig['google_client_id'] ?? '') : '';
     ?>
     <?php if ($btcdcaGoogleClientId !== ''): ?>
-      <form id="btcdca-google-signup-form" action="btcdca-google-token-login.php" method="post" style="display:none;">
+      <form id="btcdca-google-signup-form" action="btcdca-google-token-login" method="post" style="display:none;">
         <input type="hidden" name="flow" value="signup">
         <input type="hidden" name="credential" id="btcdca-google-signup-credential">
       </form>
@@ -54,7 +54,7 @@ google_block = """    <?php
         }());
       </script>
     <?php else: ?>
-      <a class="google-oauth-btn" href="btcdca-google-login.php?flow=signup">Sign up with Google</a>
+      <a class="google-oauth-btn" href="btcdca-google-login?flow=signup">Sign up with Google</a>
     <?php endif; ?>
 """
 
@@ -70,11 +70,12 @@ if ".google-oauth-wrap" not in html:
         raise SystemExit("Could not find </style> in signup-user.php")
     html = html.replace("</style>", css + "\n  </style>", 1)
 
-if "btcdca-google-token-login.php" not in html:
+if "btcdca-google-token-login" not in html:
     replaced = False
     for old in [
         '<a class="google-oauth-btn" href="btcdca-google-login.php?flow=signup">Sign up with Google</a>',
         '<a class="google-oauth-btn" href="btcdca-google-login.php">Sign up with Google</a>',
+        '<a class="google-oauth-btn" href="btcdca-google-login?flow=signup">Sign up with Google</a>',
     ]:
         if old in html:
             html = html.replace(old, google_block.rstrip(), 1)
@@ -86,7 +87,7 @@ if "btcdca-google-token-login.php" not in html:
             raise SystemExit("Could not find signup form in signup-user.php")
         html = html.replace(marker, block + "    " + marker, 1)
 
-if "btcdca-google-token-login.php" not in html:
+if "btcdca-google-token-login" not in html:
     marker = '<form action="signup-user.php"'
     if marker not in html:
         raise SystemExit("Could not find signup form in signup-user.php")
@@ -112,5 +113,11 @@ html = html.replace(
     'Create Account &amp; Activate Plan →',
     'Create Account →',
 )
+
+html = html.replace('action="signup-user.php"', 'action="signup-user"')
+html = html.replace('action="btcdca-google-token-login.php"', 'action="btcdca-google-token-login"')
+html = html.replace('href="login-user.php"', 'href="login-user"')
+html = html.replace('href="btcdca-google-login.php?flow=signup"', 'href="btcdca-google-login?flow=signup"')
+html = html.replace('href="btcdca-google-login.php"', 'href="btcdca-google-login"')
 
 target.write_text(html, encoding="utf-8")
