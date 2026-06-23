@@ -55,6 +55,7 @@ if (!defined('BTCDCA_GOOGLE_AUTH_LIB_ONLY')) {
 
         $pdo = db($config);
         $user = findUserByEmail($pdo, $email);
+        $isNewUser = !$user;
         if (!$user) {
             $user = createUserFromGoogle($pdo, $profile, $email);
         }
@@ -63,7 +64,7 @@ if (!defined('BTCDCA_GOOGLE_AUTH_LIB_ONLY')) {
         }
 
         startUserSession($user, $email, $profile);
-        header('Location: ' . successRedirect());
+        header('Location: ' . successRedirect($isNewUser));
         exit;
     } catch (Throwable $e) {
         renderAuthError($e->getMessage());
@@ -415,9 +416,9 @@ function startUserSession(array $user, string $email, array $profile): void
     $_SESSION['auth_provider'] = 'google';
 }
 
-function successRedirect(): string
+function successRedirect(bool $isNewUser = false): string
 {
-    return 'https://www.btc-dca.com/app/';
+    return $isNewUser ? 'https://www.btc-dca.com/app/setup.php' : 'https://www.btc-dca.com/app/';
 }
 
 function httpPostJson(string $url, array $fields): array

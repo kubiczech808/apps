@@ -40,6 +40,7 @@ try {
 
     $pdo = db($config);
     $user = findUserByEmail($pdo, $email);
+    $isNewUser = !$user;
     if (!$user) {
         $user = createUserFromGoogle($pdo, $profile, $email);
     }
@@ -49,7 +50,7 @@ try {
 
     unset($_SESSION['btcdca_google_error'], $_SESSION['btcdca_google_flow']);
     startUserSession($user, $email, $profile);
-    header('Location: ' . successRedirect());
+    header('Location: ' . successRedirect($isNewUser));
     exit;
 } catch (Throwable $e) {
     $_SESSION['btcdca_google_error'] = $e->getMessage();
