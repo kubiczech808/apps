@@ -339,6 +339,7 @@ def virtual_assistant_load_env() -> dict[str, str]:
         env["TELEGRAM_AGENT_G_BOT_TOKEN"] = token
     if chat_id:
         env["TELEGRAM_AGENT_G_CHAT_ID"] = chat_id
+    env["AGENT_G_AI_BACKEND"] = "codex-cli"
     return env
 
 
@@ -896,6 +897,21 @@ def virtual_assistant_call_codex(history: list[dict[str, str]]) -> str:
     )
 
 
+def virtual_assistant_call_ai(history: list[dict[str, str]]) -> str:
+    try:
+        return virtual_assistant_call_codex(history)
+    except Exception as codex_exc:
+        g.log(f"Codex backend failed, trying Virtual Assistant fallback: {str(codex_exc)[:180]}")
+        env = g.load_env()
+        api_key = next(
+            (env.get(k) for k in ("GEMINI_VA_API_KEY", "GEMINI_API_KEY_FREE", "GEMINI_AGENT_C_KEY", "GEMINI_API_KEY_G", "GEMINI_API_KEY") if env.get(k)),
+            None,
+        )
+        if api_key:
+            return _call_gemini(history, api_key)
+        raise codex_exc
+
+
 def email_state_default() -> dict[str, Any]:
     return {
         "processed_message_ids": [],
@@ -1321,6 +1337,7 @@ g.build_web_context = virtual_assistant_build_web_context
 g.route_model_for_task = virtual_assistant_route_model_for_task
 g.timeout_for_route = virtual_assistant_timeout_for_route
 g.call_codex = virtual_assistant_call_codex
+g.call_ai = virtual_assistant_call_ai
 g.main = virtual_assistant_main
 g.settings_help = settings_help
 g.settings_panel_text = settings_panel_text
