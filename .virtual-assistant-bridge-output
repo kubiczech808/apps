@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-06-24T11:49:52Z
+checked_at_utc=2026-06-24T12:00:28Z
 playwright_install=ok
 telegram_token_present= True
 telegram_getme_ok= True
@@ -8,6 +8,7 @@ telegram_pending_update_count= 0
 telegram_direct_send_ok= True
 codex_cli_present= True
 codex_auth_status= chatgpt-auth-ok
+ai_backend_effective= codex-cli
 gmail_oauth_token_present= True
 gmail_oauth_secret_kind= json_refresh_token
 gmail_address= mailto.jakub.elias@gmail.com
@@ -15,19 +16,19 @@ gmail_poll_seconds= 300
 gmail_setup_poll=ok
 telegram_state_offset= 309696981
 virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 8
+virtual_assistant_lock_age_sec= 5
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-06-24T11:49:55Z
-virtual_assistant_log_signal_1=[2026-06-24 13:43:11] Virtual Assistant email worker started
-virtual_assistant_log_signal_2=[2026-06-24 13:43:11] Agent G daemon started
-virtual_assistant_log_signal_3=[2026-06-24 13:43:14] Email message processing failed id=19ef813dc62c36c0: Gemini API selhalo (503): {
+virtual_assistant_log_mtime_utc= 2026-06-24T12:00:25Z
+virtual_assistant_log_signal_1=[2026-06-24 13:49:48] Virtual Assistant email worker started
+virtual_assistant_log_signal_2=[2026-06-24 13:49:48] Agent G daemon started
+virtual_assistant_log_signal_3=[2026-06-24 13:49:55] Email message processing failed id=19ef813dc62c36c0: Gemini API selhalo (503): {
 virtual_assistant_log_signal_4=  "error": {
-virtual_assistant_log_signal_5=[2026-06-24 13:43:19] Email message processing failed id=19ef813dc62c36c0: Gemini API selhalo (503): {
+virtual_assistant_log_signal_5=[2026-06-24 13:50:04] Email message processing failed id=19ef813dc62c36c0: Gemini API selhalo (503): {
 virtual_assistant_log_signal_6=  "error": {
-virtual_assistant_log_signal_7=[2026-06-24 13:49:47] Email message processing failed id=19ef813dc62c36c0: Gemini API selhalo (503): {
+virtual_assistant_log_signal_7=[2026-06-24 13:55:10] Email message processing failed id=19ef813dc62c36c0: Gemini API selhalo (503): {
 virtual_assistant_log_signal_8=  "error": {
-virtual_assistant_log_signal_9=[2026-06-24 13:49:48] Virtual Assistant email worker started
-virtual_assistant_log_signal_10=[2026-06-24 13:49:48] Agent G daemon started
-virtual_assistant_log_signal_11=[2026-06-24 13:49:55] Email message processing failed id=19ef813dc62c36c0: Gemini API selhalo (503): {
-virtual_assistant_log_signal_12=  "error": {
+virtual_assistant_log_signal_9=[2026-06-24 14:00:13] Email message processing failed id=19ef813dc62c36c0: Gemini API selhalo (503): {
+virtual_assistant_log_signal_10=  "error": {
+virtual_assistant_log_signal_11=[2026-06-24 14:00:25] Agent G daemon started
+virtual_assistant_log_signal_12=[2026-06-24 14:00:25] Virtual Assistant email worker started
 virtual_assistant_service=active
