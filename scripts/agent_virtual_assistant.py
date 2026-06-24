@@ -760,9 +760,8 @@ def virtual_assistant_build_web_context(text: str) -> str:
     return "\n\n".join(parts)
 
 
-def _call_gemini(history: list[dict[str, str]], api_key: str) -> str:
+def _call_gemini_model(history: list[dict[str, str]], api_key: str, model: str) -> str:
     """Gemini API fallback when Codex CLI is unavailable."""
-    model = "gemini-2.0-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     contents: list = []
     prev_role: str | None = None
@@ -804,6 +803,26 @@ def _call_gemini(history: list[dict[str, str]], api_key: str) -> str:
     if not text:
         raise RuntimeError("Gemini API: prazdny text v odpovedi")
     return text
+
+
+def _call_gemini(history: list[dict[str, str]], api_key: str) -> str:
+    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+    last_error: Exception | None = None
+    for model in models:
+        for attempt in range(3):
+            try:
+                return _call_gemini_model(history, api_key, model)
+            except RuntimeError as exc:
+                last_error = exc
+                text = str(exc)
+                if "HTTP 503" not in text and "HTTP 429" not in text:
+                    break
+                g.log(f"Gemini fallback retry: model={model} attempt={attempt + 1} error={text[:140]}")
+                time.sleep(2 + attempt * 3)
+            except Exception as exc:
+                last_error = exc
+                break
+    raise RuntimeError(f"Gemini API selhalo po retry/fallback modelech: {last_error}") from last_error
 
 
 def virtual_assistant_call_codex(history: list[dict[str, str]]) -> str:
