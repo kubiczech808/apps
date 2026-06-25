@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Wed, 24 Jun 2026 03:26:05 +0000</lastBuildDate>
-    <item>
-      <title>How to build a value averaging Bitcoin engine</title>
-      <link>https://btc-dca.com/blog/generated-202606050325</link>
-      <guid isPermaLink="false">generated-202606050325</guid>
-      <pubDate>Fri, 05 Jun 2026 03:27:16 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dollar-cost-averaging</category>
-      <category>value-averaging</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Thu, 25 Jun 2026 03:25:34 +0000</lastBuildDate>
     <item>
       <title>Timing the sunday dip to optimize your DCA</title>
       <link>https://btc-dca.com/blog/generated-202606060325</link>
@@ -250,59 +239,66 @@
       <title>The Bitcoin DCA exchange spread is eating your savings</title>
       <link>https://btc-dca.com/blog/bitcoin-dca-exchange-spread-audit</link>
       <guid isPermaLink="false">bitcoin-dca-exchange-spread-audit</guid>
-      <pubDate>Wed, 24 Jun 2026 03:26:05 +0000</pubDate>
+      <pubDate>Wed, 24 Jun 2026 03:28:07 +0000</pubDate>
       <category>bitcoin</category>
       <category>personal finance</category>
       <category>investing</category>
       <category>dollar cost averaging</category>
       <category>crypto</category>
-      <content:encoded>&lt;p&gt;I used to think that clicking the "recurring buy" button on my mobile app was the smartest, most hands-off way to build my stash. It took me almost two years of doing this to realize that the &lt;strong&gt;bitcoin dca exchange spread&lt;/strong&gt; on those convenient consumer apps was silently eating up to 3% of every single purchase. If you are using a standard retail app to buy Bitcoin every week, you are likely paying a massive hidden tax without even knowing it.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why I still buy Bitcoin at all time highs</title>
+      <link>https://btc-dca.com/blog/buy-bitcoin-at-all-time-highs</link>
+      <guid isPermaLink="false">buy-bitcoin-at-all-time-highs</guid>
+      <pubDate>Thu, 25 Jun 2026 03:25:34 +0000</pubDate>
+      <category>Bitcoin</category>
+      <category>Investing</category>
+      <category>Cryptocurrency</category>
+      <category>Personal Finance</category>
+      <category>DCA</category>
+      <content:encoded>&lt;p&gt;I remember sitting at my desk in 2021, watching the price tick upward, paralyzed by the fear that I was making a massive mistake. I had a rule that I wouldn't &lt;strong&gt;buy bitcoin at all time highs&lt;/strong&gt; because I was convinced a 30% correction was "just around the corner." That hesitation cost me thousands of dollars in potential gains, and more importantly, it taught me that trying to time the market is a fool’s errand.&lt;/p&gt;
 
-&lt;p&gt;Most people look at the explicit trading fee—say, $0.99 or 1.5%—and think that is all they are paying. But the real killer is the spread. This is the difference between the market price of Bitcoin and the price the exchange actually charges you when you click that convenient buy button.&lt;/p&gt;
+&lt;p&gt;Most people wait for the news cycle to tell them it's safe to enter. They wait for the red candles, hoping for a discount that might never come. I stopped doing that. Instead, I shifted my perspective to focus on the long-term accumulation of a scarce asset. If you are waiting for a dip to buy bitcoin at all time highs, you are likely betting against the very nature of an asset that has historically trended upward over multi-year cycles.&lt;/p&gt;
 
-&lt;p&gt;By the time I sat down and did the math, I realized I had wasted hundreds of dollars that could have been sitting in my cold storage instead of funding an exchange's marketing budget. Here is how to audit your own transactions and stop leaving your hard-earned satoshis on the table.&lt;/p&gt;
+&lt;h2&gt;The math of why I buy Bitcoin at all time highs&lt;/h2&gt;
 
-&lt;h2&gt;Why the Bitcoin DCA exchange spread is a silent killer&lt;/h2&gt;
+&lt;p&gt;When you decide to &lt;strong&gt;buy bitcoin at all time highs&lt;/strong&gt;, the psychological friction is intense. Your brain screams that the price is "too expensive," but math often tells a different story. If you look at the history of Bitcoin, the times when you felt like you were buying at the peak were often just the starting points for the next leg up.&lt;/p&gt;
 
-&lt;p&gt;When you use a one-click buy button, the platform doesn't just charge a flat fee; they adjust the bitcoin dca exchange spread to guarantee their own profit margin. They lock in a price for you that is slightly higher than the actual market rate, pocketing the difference.&lt;/p&gt;
+&lt;p&gt;I used to manually log my purchases on a spreadsheet, but it became exhausting. That’s why I eventually built a tool to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; directly through API connections. It removes the emotional weight of looking at the price ticker. When you automate, you aren't trying to outsmart the market; you are simply accepting the average price over time. I’ve found that using &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; helps me visualize how "missing" a few weeks to wait for a dip actually results in a higher cost basis because the price never returned to those previous levels.&lt;/p&gt;
 
-&lt;p&gt;Let's look at how this compounds. If you buy $100 worth of Bitcoin every week, and your exchange is hiding a 2% spread in the price, you are losing $2 every single week. That might not sound like a lot, but over a year, that is over $100 gone.&lt;/p&gt;
+&lt;p&gt;Obviously, I am not your financial advisor, and Bitcoin is incredibly volatile. If you decide to follow a strategy like this, you have to be prepared for the reality that the market can drop 20% or 50% in a heartbeat. You should only ever invest what you can afford to lose, and you should prioritize &lt;a href="https://www.btc-dca.com/how-to-set-up-api-key.php"&gt;learning how to set up an API key&lt;/a&gt; securely if you choose to automate your process.&lt;/p&gt;
 
-&lt;p&gt;Now, factor in Bitcoin's historical growth. If you plug those numbers into &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the dollar cost averaging calculator&lt;/a&gt;, you will see that losing 2% of your purchasing power on every single buy adds up to thousands of dollars of lost potential gains over a full four-year market cycle.&lt;/p&gt;
+&lt;h2&gt;My simple rule for bull market anxiety&lt;/h2&gt;
 
-&lt;p&gt;I made this exact mistake because I valued convenience over efficiency. I just wanted to set it and forget it. But convenience has a price, and in the crypto world, that price is heavily marked up.&lt;/p&gt;
+&lt;p&gt;During a bull market, the temptation to "pause" your DCA plan is overwhelming. You see your portfolio growing, and you think, "I'll just wait for the inevitable crash to buy more." Here is the rule I follow to keep my head on straight:&lt;/p&gt;
 
-&lt;h2&gt;How to audit your exchange fees in five minutes&lt;/h2&gt;
+&lt;p&gt;1. Never stop the recurring purchase based on price action.&lt;/p&gt;
+&lt;p&gt;2. Only adjust the amount if your personal financial situation changes (e.g., a change in income or emergency fund needs).&lt;/p&gt;
+&lt;p&gt;3. If the price feels too high, increase your cold storage withdrawal frequency to ensure you aren't keeping too much on an exchange like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;4. If you feel the need to "do something," spend that energy moving your coins to a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; instead of trying to trade the volatility.&lt;/p&gt;
 
-&lt;p&gt;You do not have to take my word for it. You can audit your own transaction history right now to see exactly how much you are paying. Here is the quick checklist I use to find the real cost of my purchases:&lt;/p&gt;
+&lt;p&gt;This checklist keeps me from over-tinkering. When I look at &lt;a href="https://www.btc-dca.com/dollar-cost-averaging"&gt;what is DCA?&lt;/a&gt; as a concept, it’s not about getting the best price; it’s about removing the need to have an opinion on the price.&lt;/p&gt;
 
-&lt;p&gt;1. &lt;strong&gt;Find your last transaction receipt:&lt;/strong&gt; Open your exchange app and look at your most recent recurring purchase. Note the exact date, time, and the price per Bitcoin you were charged.&lt;/p&gt;
-&lt;p&gt;2. &lt;strong&gt;Look up the historical spot price:&lt;/strong&gt; Go to a public charting site and look at the actual market price of Bitcoin at that exact minute.&lt;/p&gt;
-&lt;p&gt;3. &lt;strong&gt;Calculate the difference:&lt;/strong&gt; Subtract the spot price from your purchase price, divide it by the spot price, and multiply by 100. This is your hidden spread percentage.&lt;/p&gt;
-&lt;p&gt;4. &lt;strong&gt;Add the explicit fee:&lt;/strong&gt; Add this percentage to whatever flat fee the exchange charged you.&lt;/p&gt;
+&lt;h2&gt;Why waiting for a dip is a trap&lt;/h2&gt;
 
-&lt;p&gt;If your total fee is higher than 0.5%, you are paying way too much.&lt;/p&gt;
+&lt;p&gt;The biggest mistake I made early on was thinking that I could "save" my cash for a crash. I kept a large portion of my savings in fiat, waiting for the perfect moment. That money didn't just sit there; it lost purchasing power while Bitcoin moved into new territory. By the time I finally gave up and bought in, my cost basis was significantly higher than if I had just stayed the course.&lt;/p&gt;
 
-&lt;p&gt;Most retail apps will show you a clean "zero fee" screen while giving you a terrible exchange rate. It is a marketing trick, and once you see it, you cannot unsee it.&lt;/p&gt;
+&lt;p&gt;When you &lt;strong&gt;buy bitcoin at all time highs&lt;/strong&gt; as part of a consistent, automated strategy, you are acknowledging that you don't know what will happen tomorrow. You are betting on the long-term adoption of the network rather than the short-term whims of the order book.&lt;/p&gt;
 
-&lt;h2&gt;How to bypass the convenience trap&lt;/h2&gt;
+&lt;p&gt;I prefer to &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;buy Bitcoin on Coinmate&lt;/a&gt; for my European-based DCA because the interface is clean and the API is reliable for my automation needs. Whatever exchange you choose, the principle remains the same: the goal is to accumulate, not to speculate.&lt;/p&gt;
 
-&lt;p&gt;So, how do you get the low fees of an advanced trading platform without spending your Sunday mornings manually placing limit orders?&lt;/p&gt;
+&lt;h2&gt;Moving beyond the price&lt;/h2&gt;
 
-&lt;p&gt;The secret lies in using the exchange's developer API. Instead of using the consumer-facing app interface, you can route your orders directly to the order book. By bypassing the retail interface, you can reduce your bitcoin dca exchange spread to virtually zero, paying only the raw exchange fee.&lt;/p&gt;
+&lt;p&gt;Ultimately, building wealth in Bitcoin isn't about bragging about your entry price. It’s about the habit of converting depreciating currency into a hard, digital asset. If you are constantly checking the price to see if it’s a "good time" to buy, you are playing a game of chance. If you automate your buys, you are playing a game of patience.&lt;/p&gt;
 
-&lt;p&gt;For example, if you are &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buying on Binance&lt;/a&gt;, the standard maker/taker fee is just 0.1%, which is a fraction of what you pay through a standard instant-buy button.&lt;/p&gt;
+&lt;p&gt;I’ve seen people lose their nerve during every cycle. They sell when it’s low because they are scared, and they don't buy when it’s high because they are greedy for a better deal. The most successful investors I know are the ones who turned off their price alerts and just let the protocol do the work.&lt;/p&gt;
 
-&lt;p&gt;Because I wanted to automate this process for myself without paying a third-party service to manage my API keys, I built a free tool to &lt;a href="https://www.btc-dca.com"&gt;automate Bitcoin purchases&lt;/a&gt; directly through exchange APIs. It connects to your exchange account and executes the buys at the raw market rate, then automatically sends the coins to your own hardware wallet.&lt;/p&gt;
+&lt;p&gt;We often talk about the price, but we rarely talk about the peace of mind that comes with knowing your plan is running in the background, regardless of whether the market is at an all-time high or in the depths of a bear market.&lt;/p&gt;
 
-&lt;p&gt;Speaking of custody, never leave your accumulated coins on an exchange, no matter how safe you think it is. Once my automated buys hit a certain threshold, I have them routed straight to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; for safekeeping.&lt;/p&gt;
-
-&lt;p&gt;Just a quick heads up: I am obviously not your financial advisor. I am just a guy who likes math and wants to keep more of his hard-earned satoshis. Do your own research and run the numbers for yourself.&lt;/p&gt;
-
-&lt;p&gt;If you are currently using a recurring buy feature on a major app, have you actually checked the spread you are paying, or do you prefer to pay a premium for the peace of mind?&lt;/p&gt;
-
-&lt;p&gt;This is also why I keep improving &lt;a href="https://btc-dca.com"&gt;my Bitcoin DCA automation setup&lt;/a&gt; instead of trying to make every buy decision manually.&lt;/p&gt;</content:encoded>
-      <description>I used to think that clicking the "recurring buy" button on my mobile app was the smartest, most hands-off way to build my stash. It took me almost two years of doing this to realize that the **bitcoin dca exchange spread** on those convenient consumer apps was silently eating up to 3% of every sing...</description>
+&lt;p&gt;When you look at your own strategy, do you find it harder to buy when the price is soaring or when the market is crashing?&lt;/p&gt;</content:encoded>
+      <description>I remember sitting at my desk in 2021, watching the price tick upward, paralyzed by the fear that I was making a massive mistake. I had a rule that I wouldn't **buy bitcoin at all time highs** because I was convinced a 30% correction was "just around the corner." That hesitation cost me thousands of...</description>
     </item>
   </channel>
 </rss>
