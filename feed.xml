@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Thu, 25 Jun 2026 03:25:34 +0000</lastBuildDate>
-    <item>
-      <title>Timing the sunday dip to optimize your DCA</title>
-      <link>https://btc-dca.com/blog/generated-202606060325</link>
-      <guid isPermaLink="false">generated-202606060325</guid>
-      <pubDate>Sat, 06 Jun 2026 03:27:24 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dollar-cost-averaging</category>
-      <category>investment-strategy</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Fri, 26 Jun 2026 03:25:41 +0000</lastBuildDate>
     <item>
       <title>Building a sovereign business reserve with Bitcoin DCA</title>
       <link>https://btc-dca.com/blog/generated-202606070325</link>
@@ -252,53 +241,61 @@
       <title>Why I still buy Bitcoin at all time highs</title>
       <link>https://btc-dca.com/blog/buy-bitcoin-at-all-time-highs</link>
       <guid isPermaLink="false">buy-bitcoin-at-all-time-highs</guid>
-      <pubDate>Thu, 25 Jun 2026 03:25:34 +0000</pubDate>
+      <pubDate>Thu, 25 Jun 2026 03:29:54 +0000</pubDate>
       <category>Bitcoin</category>
       <category>Investing</category>
       <category>Cryptocurrency</category>
       <category>Personal Finance</category>
       <category>DCA</category>
-      <content:encoded>&lt;p&gt;I remember sitting at my desk in 2021, watching the price tick upward, paralyzed by the fear that I was making a massive mistake. I had a rule that I wouldn't &lt;strong&gt;buy bitcoin at all time highs&lt;/strong&gt; because I was convinced a 30% correction was "just around the corner." That hesitation cost me thousands of dollars in potential gains, and more importantly, it taught me that trying to time the market is a fool’s errand.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>Why your Bitcoin DCA stress test is failing</title>
+      <link>https://btc-dca.com/blog/bitcoin-dca-stress-test</link>
+      <guid isPermaLink="false">bitcoin-dca-stress-test</guid>
+      <pubDate>Fri, 26 Jun 2026 03:25:41 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>investing</category>
+      <category>dca</category>
+      <category>personal finance</category>
+      <category>crypto</category>
+      <content:encoded>&lt;p&gt;I almost sold my entire stack in 2022 because I hadn't run a &lt;strong&gt;bitcoin dca stress test&lt;/strong&gt; before the market turned sour. Like most people, I entered the space fueled by pure conviction, assuming that if I just kept buying every week, the math would eventually work itself out. It turns out that conviction is a terrible substitute for a real risk plan. When the price dropped 70% and my monthly expenses spiked due to a car repair, I realized I was one bad week away from being forced to sell at the absolute bottom.&lt;/p&gt;
 
-&lt;p&gt;Most people wait for the news cycle to tell them it's safe to enter. They wait for the red candles, hoping for a discount that might never come. I stopped doing that. Instead, I shifted my perspective to focus on the long-term accumulation of a scarce asset. If you are waiting for a dip to buy bitcoin at all time highs, you are likely betting against the very nature of an asset that has historically trended upward over multi-year cycles.&lt;/p&gt;
+&lt;p&gt;Most people treat their strategy like a set-and-forget subscription service. They pick an amount, hit start, and hope for the best. But that’s how you get liquidated or, worse, forced into a panic sell. If you aren't accounting for your personal cash flow volatility, your plan is built on sand. I learned the hard way that you need to know exactly how much pain you can withstand before your strategy breaks.&lt;/p&gt;
 
-&lt;h2&gt;The math of why I buy Bitcoin at all time highs&lt;/h2&gt;
+&lt;h2&gt;Why you need a Bitcoin DCA stress test&lt;/h2&gt;
 
-&lt;p&gt;When you decide to &lt;strong&gt;buy bitcoin at all time highs&lt;/strong&gt;, the psychological friction is intense. Your brain screams that the price is "too expensive," but math often tells a different story. If you look at the history of Bitcoin, the times when you felt like you were buying at the peak were often just the starting points for the next leg up.&lt;/p&gt;
+&lt;p&gt;The biggest mistake I see is assuming that your income will always be stable enough to support your accumulation. When I first started, I didn't differentiate between "investing money" and "emergency money." I just threw everything into the machine. When the price tanked, I saw my portfolio value drop while my actual life costs remained static. That’s the danger zone.&lt;/p&gt;
 
-&lt;p&gt;I used to manually log my purchases on a spreadsheet, but it became exhausting. That’s why I eventually built a tool to &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; directly through API connections. It removes the emotional weight of looking at the price ticker. When you automate, you aren't trying to outsmart the market; you are simply accepting the average price over time. I’ve found that using &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; helps me visualize how "missing" a few weeks to wait for a dip actually results in a higher cost basis because the price never returned to those previous levels.&lt;/p&gt;
+&lt;p&gt;A proper stress test isn't just about looking at charts; it’s about looking at your bank account. You need to calculate your survivability ratio. Take your total monthly free cash flow and divide it by your DCA amount. If that number is anything less than 2, you are playing with fire. If you lose your job or face an unexpected bill, you will be forced to stop your DCA or, even worse, sell your assets. I eventually used &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the calculator I built&lt;/a&gt; to model what happens when the market drops 50% while my income stays flat. It gave me a reality check that conviction alone never could.&lt;/p&gt;
 
-&lt;p&gt;Obviously, I am not your financial advisor, and Bitcoin is incredibly volatile. If you decide to follow a strategy like this, you have to be prepared for the reality that the market can drop 20% or 50% in a heartbeat. You should only ever invest what you can afford to lose, and you should prioritize &lt;a href="https://www.btc-dca.com/how-to-set-up-api-key.php"&gt;learning how to set up an API key&lt;/a&gt; securely if you choose to automate your process.&lt;/p&gt;
+&lt;h2&gt;Setting your threshold for survival&lt;/h2&gt;
 
-&lt;h2&gt;My simple rule for bull market anxiety&lt;/h2&gt;
+&lt;p&gt;When I run a simulation, I look for the "forced selling" event. This is the moment where your life expenses exceed your income, and you have to dip into your Bitcoin stack to pay rent. To avoid this, I follow a simple rule: never commit more than 20% of your liquid savings to a recurring buy plan that you can't pause instantly.&lt;/p&gt;
 
-&lt;p&gt;During a bull market, the temptation to "pause" your DCA plan is overwhelming. You see your portfolio growing, and you think, "I'll just wait for the inevitable crash to buy more." Here is the rule I follow to keep my head on straight:&lt;/p&gt;
+&lt;p&gt;Here is the checklist I use to stay sane when the market gets ugly:&lt;/p&gt;
 
-&lt;p&gt;1. Never stop the recurring purchase based on price action.&lt;/p&gt;
-&lt;p&gt;2. Only adjust the amount if your personal financial situation changes (e.g., a change in income or emergency fund needs).&lt;/p&gt;
-&lt;p&gt;3. If the price feels too high, increase your cold storage withdrawal frequency to ensure you aren't keeping too much on an exchange like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt;.&lt;/p&gt;
-&lt;p&gt;4. If you feel the need to "do something," spend that energy moving your coins to a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; instead of trying to trade the volatility.&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;  The 6-month rule: Do I have six months of essential living expenses in a high-yield savings account that is completely separate from my Bitcoin?&lt;/li&gt;
+&lt;li&gt;  The 50% drawdown test: If the price drops by half tomorrow, will I have the emotional and financial capacity to keep buying at that lower price?&lt;/li&gt;
+&lt;li&gt;  The automation check: Can I adjust my DCA frequency in under 60 seconds if my income shifts?&lt;/li&gt;
+&lt;/ul&gt;
 
-&lt;p&gt;This checklist keeps me from over-tinkering. When I look at &lt;a href="https://www.btc-dca.com/dollar-cost-averaging"&gt;what is DCA?&lt;/a&gt; as a concept, it’s not about getting the best price; it’s about removing the need to have an opinion on the price.&lt;/p&gt;
+&lt;p&gt;If the answer to any of those is "no," you need to dial back your buy amount. It’s better to buy less and hold it forever than to buy more and be forced to sell it during a bear market. Obviously, I’m not your financial advisor, so please do your own research before locking in any recurring buys. Markets are volatile, and if you don't build a buffer, the market will eventually build one for you by taking your coins at a loss.&lt;/p&gt;
 
-&lt;h2&gt;Why waiting for a dip is a trap&lt;/h2&gt;
+&lt;h2&gt;Keeping your strategy flexible&lt;/h2&gt;
 
-&lt;p&gt;The biggest mistake I made early on was thinking that I could "save" my cash for a crash. I kept a large portion of my savings in fiat, waiting for the perfect moment. That money didn't just sit there; it lost purchasing power while Bitcoin moved into new territory. By the time I finally gave up and bought in, my cost basis was significantly higher than if I had just stayed the course.&lt;/p&gt;
+&lt;p&gt;I eventually moved my manual buys over to a system where I could &lt;a href="https://www.btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; directly from an exchange. It removed the emotional burden of "should I buy today?" and replaced it with a cold, hard rule. But the automation only works if the underlying math is sound.&lt;/p&gt;
 
-&lt;p&gt;When you &lt;strong&gt;buy bitcoin at all time highs&lt;/strong&gt; as part of a consistent, automated strategy, you are acknowledging that you don't know what will happen tomorrow. You are betting on the long-term adoption of the network rather than the short-term whims of the order book.&lt;/p&gt;
+&lt;p&gt;If you are using an exchange, make sure you aren't leaving your coins there indefinitely. I personally use a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; for my self-custody needs. It’s cheap insurance compared to the risk of an exchange going dark or getting hacked. If you’re just getting started, you might &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt; to get the ball rolling, but don't let those coins sit there once they hit a certain threshold.&lt;/p&gt;
 
-&lt;p&gt;I prefer to &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;buy Bitcoin on Coinmate&lt;/a&gt; for my European-based DCA because the interface is clean and the API is reliable for my automation needs. Whatever exchange you choose, the principle remains the same: the goal is to accumulate, not to speculate.&lt;/p&gt;
+&lt;p&gt;The goal isn't to be a hero who buys the absolute bottom. The goal is to be the person who is still buying when everyone else has given up and gone home. That takes a level of calm that only comes from knowing your numbers are bulletproof.&lt;/p&gt;
 
-&lt;h2&gt;Moving beyond the price&lt;/h2&gt;
+&lt;p&gt;When you look at your current DCA plan, do you feel like you're buying because you believe in the long term, or because you're afraid of missing out on the next pump?&lt;/p&gt;
 
-&lt;p&gt;Ultimately, building wealth in Bitcoin isn't about bragging about your entry price. It’s about the habit of converting depreciating currency into a hard, digital asset. If you are constantly checking the price to see if it’s a "good time" to buy, you are playing a game of chance. If you automate your buys, you are playing a game of patience.&lt;/p&gt;
-
-&lt;p&gt;I’ve seen people lose their nerve during every cycle. They sell when it’s low because they are scared, and they don't buy when it’s high because they are greedy for a better deal. The most successful investors I know are the ones who turned off their price alerts and just let the protocol do the work.&lt;/p&gt;
-
-&lt;p&gt;We often talk about the price, but we rarely talk about the peace of mind that comes with knowing your plan is running in the background, regardless of whether the market is at an all-time high or in the depths of a bear market.&lt;/p&gt;
-
-&lt;p&gt;When you look at your own strategy, do you find it harder to buy when the price is soaring or when the market is crashing?&lt;/p&gt;</content:encoded>
-      <description>I remember sitting at my desk in 2021, watching the price tick upward, paralyzed by the fear that I was making a massive mistake. I had a rule that I wouldn't **buy bitcoin at all time highs** because I was convinced a 30% correction was "just around the corner." That hesitation cost me thousands of...</description>
+&lt;p&gt;This is also why I keep improving &lt;a href="https://btc-dca.com"&gt;my Bitcoin DCA automation setup&lt;/a&gt; instead of trying to make every buy decision manually.&lt;/p&gt;</content:encoded>
+      <description>I almost sold my entire stack in 2022 because I hadn't run a **bitcoin dca stress test** before the market turned sour. Like most people, I entered the space fueled by pure conviction, assuming that if I just kept buying every week, the math would eventually work itself out. It turns out that convic...</description>
     </item>
   </channel>
 </rss>
