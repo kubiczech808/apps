@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Sun, 28 Jun 2026 03:26:04 +0000</lastBuildDate>
-    <item>
-      <title>Finding your personal DCA velocity threshold</title>
-      <link>https://btc-dca.com/blog/generated-202606090325</link>
-      <guid isPermaLink="false">generated-202606090325</guid>
-      <pubDate>Tue, 09 Jun 2026 03:27:40 +0000</pubDate>
-      <category>bitcoin</category>
-      <category>dca</category>
-      <category>investing</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Mon, 29 Jun 2026 03:25:31 +0000</lastBuildDate>
     <item>
       <title>My strategy for the DCA tax-loss harvesting loop: Optimizing your cost basis while accumulating</title>
       <link>https://btc-dca.com/blog/generated-202606100325</link>
@@ -258,56 +247,65 @@
       <title>Why I built a Bitcoin DCA inheritance strategy</title>
       <link>https://btc-dca.com/blog/bitcoin-dca-inheritance-strategy</link>
       <guid isPermaLink="false">bitcoin-dca-inheritance-strategy</guid>
-      <pubDate>Sun, 28 Jun 2026 03:26:04 +0000</pubDate>
+      <pubDate>Sun, 28 Jun 2026 03:28:23 +0000</pubDate>
       <category>bitcoin</category>
       <category>investing</category>
       <category>inheritance</category>
       <category>personal finance</category>
       <category>automation</category>
-      <content:encoded>&lt;p&gt;I spent three hours last Saturday trying to explain to my brother how to access my cold storage if I get hit by a bus. It was a disaster. I realized that my "clever" security setup—the one with the multi-sig, the encrypted backups, and the complex passphrase—was actually a death trap for my family. If I died tomorrow, my Bitcoin would effectively vanish into the void. That’s when I decided to shift my focus toward a more sustainable &lt;strong&gt;bitcoin dca inheritance strategy&lt;/strong&gt;.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>How I use a reverse Bitcoin DCA to sell without regret</title>
+      <link>https://btc-dca.com/blog/reverse-bitcoin-dca-profit-taking</link>
+      <guid isPermaLink="false">reverse-bitcoin-dca-profit-taking</guid>
+      <pubDate>Mon, 29 Jun 2026 03:25:31 +0000</pubDate>
+      <category>Bitcoin</category>
+      <category>Investing</category>
+      <category>Cryptocurrency</category>
+      <category>Personal Finance</category>
+      <category>DCA</category>
+      <content:encoded>&lt;p&gt;I almost ruined my financial progress in 2021 because I thought I was smarter than the market. I watched my portfolio hit a local peak, convinced myself that I’d be the one to sell at the absolute top, and then proceeded to ride the whole thing back down to the floor. It was a painful lesson in human ego. Now, I use a &lt;strong&gt;reverse bitcoin dca&lt;/strong&gt; strategy to automate my exits, removing the need for me to guess when the bull market ends.&lt;/p&gt;
 
-&lt;p&gt;Most people obsess over the "buy" part of Bitcoin. They check prices, they panic during volatility, and they feel like geniuses when the market turns green. But they ignore the "legacy" part entirely. If you are accumulating assets for your children or a spouse, your goal isn't just to stack sats—it’s to ensure those sats are actually accessible when you aren't around.&lt;/p&gt;
+&lt;p&gt;Most people treat selling like a high-stakes game of poker. They wait for headlines, watch influencers on Twitter, and try to time the "blow-off top." The problem is that by the time you feel confident enough to sell, the market has usually already turned. You’re trading against your own emotions, and you will lose every time. Instead, I’ve shifted to a system where I treat selling with the same mechanical detachment as buying.&lt;/p&gt;
 
-&lt;p&gt;The strategy I’ve settled on is simple: separate the accumulation from the accessibility. You need to automate the boring stuff while making the retrieval process foolproof for someone who isn't a crypto expert.&lt;/p&gt;
+&lt;h2&gt;Why a reverse Bitcoin DCA actually works&lt;/h2&gt;
 
-&lt;h2&gt;Automating the build phase of a Bitcoin DCA inheritance strategy&lt;/h2&gt;
+&lt;p&gt;The concept of a reverse bitcoin dca is simple: if you buy on a schedule to accumulate, you sell on a schedule—or a price threshold—to distribute. When I first started, I was terrified that selling would mean "losing" my position. I felt like I was betraying my conviction in Bitcoin. But then I realized that holding forever is only a winning strategy if you actually have a plan for when that capital needs to serve your life.&lt;/p&gt;
 
-&lt;p&gt;The first step in my plan was to stop manually logging into exchanges. I used to set alarms to buy on the 1st and the 15th, but I’d often miss them when life got busy. Now, I use a tool to &lt;a href="https://btc-dca.com"&gt;automate recurring Bitcoin buys&lt;/a&gt; so that the accumulation happens in the background, regardless of whether I’m traveling or just having a bad week.&lt;/p&gt;
+&lt;p&gt;I track my progress against specific milestones, like my house fund or my emergency reserves, using the &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;goal tracking features of the tool I built&lt;/a&gt;. This keeps me honest. When a specific bucket hits its target, I don't look at the charts to see if "number go up" further. I just execute my plan.&lt;/p&gt;
 
-&lt;p&gt;Consistency is the bedrock of any long-term wealth plan. By using a &lt;a href="https://www.btc-dca.com/btc-dca-features"&gt;free automated DCA tool&lt;/a&gt;, I’ve essentially removed my own emotions from the process. I don’t care if Bitcoin is at $60k or $100k; the schedule runs, the sats land in my wallet, and the progress toward my life goals stays on track.&lt;/p&gt;
+&lt;p&gt;Obviously, I am not your financial advisor, and this isn't professional guidance. Markets are wild, and you should always do your own research before locking in any exit strategy. That said, having a rule prevents the "I’ll just wait for one more leg up" mentality that usually leads to holding bags through a multi-year bear market.&lt;/p&gt;
 
-&lt;p&gt;However, automation is only half the battle. If your exchange accounts are locked behind 2FA tied to a phone number that gets canceled the moment you pass away, you’ve hit a dead end. This is why my current setup involves an automated sweep to a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;. Once the coins are in self-custody, the inheritance part becomes a physical and logistical challenge rather than a technical one.&lt;/p&gt;
+&lt;h2&gt;How to set your exit thresholds&lt;/h2&gt;
 
-&lt;h2&gt;The "dead man's switch" checklist&lt;/h2&gt;
+&lt;p&gt;You don't need to be a professional trader to build a system that protects your gains. I use a tiered exit strategy that triggers based on price percentages rather than calendar dates. For instance, my rule is simple: for every 20% increase above my cost basis, I sell 2% of my total stack. It’s small enough that I don't feel like I’m "out" of the market, but it’s consistent enough that I’m constantly taking chips off the table.&lt;/p&gt;
 
-&lt;p&gt;When I talk about a &lt;strong&gt;bitcoin dca inheritance strategy&lt;/strong&gt;, I’m not talking about fancy smart contracts or multi-sig setups that require a master’s degree in computer science. I’m talking about a physical folder in a fireproof safe.&lt;/p&gt;
+&lt;p&gt;If you are struggling to visualize what your exit looks like, you can use &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the cycle-aware calculator I built&lt;/a&gt; to see how different selling frequencies might have impacted your past performance. It’s a great way to see that you don't need to sell the top to be successful; you just need to be disciplined.&lt;/p&gt;
 
-&lt;p&gt;Here is the checklist I use to ensure my family isn't left guessing:&lt;/p&gt;
+&lt;p&gt;When I need to move those funds, I typically &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;buy Bitcoin on Binance&lt;/a&gt; or use &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; for my European transfers. The key is to keep the process boring. If it’s boring, you’re less likely to get emotional. Once I’ve sold, I immediately move the realized gains into a stable asset or my high-yield savings account, and the remaining Bitcoin goes straight to my &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt;.&lt;/p&gt;
 
+&lt;h2&gt;Discipline beats timing every time&lt;/h2&gt;
+
+&lt;p&gt;The biggest mistake I made in my early days was thinking that selling was an admission of defeat. I viewed it as "giving up" on the asset. But that’s a dangerous way to look at a portfolio. Your portfolio is a tool, not a religion. The goal of investing is to eventually improve your life, and that requires moving value from volatile assets into stable ones when the time is right.&lt;/p&gt;
+
+&lt;p&gt;My current checklist for taking profits looks like this:&lt;/p&gt;
 &lt;ul&gt;
-&lt;li&gt;  **The roadmap:** A simple, printed document that explains exactly what Bitcoin is and why I own it. Don't assume your heirs know the difference between a seed phrase and a public address.&lt;/li&gt;
-&lt;li&gt;  **The physical backup:** A steel plate or paper backup of the recovery seed stored in a secure, separate location.&lt;/li&gt;
-&lt;li&gt;  **Clear instructions:** A step-by-step guide on how to open the [Trezor hardware wallet](https://bit.ly/buy-trezor-t) and verify the balance.&lt;/li&gt;
-&lt;li&gt;  **The "who to call" list:** If you have a trusted friend who understands Bitcoin, put their name and contact info in the folder. They don't need the keys, but they need to be the person who helps your spouse navigate the recovery process.&lt;/li&gt;
-&lt;li&gt;  **Periodic review:** Every six months, I update the document. If I’ve changed my wallet or added a new exchange like [Coinmate](https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0), I make sure that’s reflected in the notes.&lt;/li&gt;
+&lt;li&gt;  Is the current price at least 50% above my average buy price?&lt;/li&gt;
+&lt;li&gt;  Have I reached my primary goal for this specific "bucket" (e.g., house down payment)?&lt;/li&gt;
+&lt;li&gt;  Am I selling more than 10% of my total stack in one go? (If yes, stop—that's too much).&lt;/li&gt;
+&lt;li&gt;  Is the market in a state of extreme euphoria? (If everyone is talking about Bitcoin at the grocery store, it’s usually time to trim).&lt;/li&gt;
 &lt;/ul&gt;
 
-&lt;p&gt;Obviously, I’m not your financial or legal advisor. I’m just a guy who realized that hoarding wealth is pointless if your loved ones can’t inherit it. You should absolutely speak to an estate lawyer about how to legally include digital assets in your will, as the laws vary wildly depending on where you live.&lt;/p&gt;
+&lt;p&gt;By following this, I’ve stopped worrying about the daily volatility. I know that if the price goes up, my systematic selling will lock in some profit. If the price goes down, I’m still happy because I’m still holding a core position and my &lt;a href="https://www.btc-dca.com/"&gt;DCA automation&lt;/a&gt; keeps working in the background.&lt;/p&gt;
 
-&lt;h2&gt;Why complexity is the enemy of inheritance&lt;/h2&gt;
+&lt;p&gt;It’s about finding the balance between participating in the upside and ensuring you actually have something to show for it when the cycle turns. It’s easy to be a "HODLer" when the market is green, but it’s a lot harder to be a seller when you think the moon is just around the corner.&lt;/p&gt;
 
-&lt;p&gt;The biggest mistake I almost made was trying to be too "secure." I looked into complex multi-signature setups where you need three out of five keys to move funds. On paper, it sounded like a fortress. In reality, it was a nightmare. If I died, my spouse would have had to coordinate with three different people, none of whom knew the others, to recover the assets.&lt;/p&gt;
+&lt;p&gt;Do you think it's possible to stick to a mechanical selling plan when you're caught in the middle of a massive bull market frenzy, or does the fear of missing out always win?&lt;/p&gt;
 
-&lt;p&gt;If your &lt;strong&gt;bitcoin dca inheritance strategy&lt;/strong&gt; requires a team of people to act in perfect harmony, it will fail.&lt;/p&gt;
-
-&lt;p&gt;Keep it simple. A single hardware wallet, a securely stored seed phrase, and a clear, written set of instructions are worth more than the most sophisticated security setup in the world. I’ve found that using the &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;DCA calculator&lt;/a&gt; helps me visualize the potential future value of these holdings, which provides the motivation to keep the documentation as clean as possible.&lt;/p&gt;
-
-&lt;p&gt;I’ve also started using &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; for the initial purchase phase because the API integration is reliable, but the key is that I never leave funds there for long. The goal is to move the Bitcoin into cold storage as soon as the purchase clears. By removing the dependency on an exchange, I ensure that my family doesn't have to deal with corporate support tickets, which are notoriously difficult to navigate after a death.&lt;/p&gt;
-
-&lt;p&gt;At the end of the day, Bitcoin is supposed to be the ultimate sovereign asset. But true sovereignty includes the ability to pass that value to the next generation. If you’ve built a massive stack but haven't built the bridge for your family to reach it, you haven't really finished the job.&lt;/p&gt;
-
-&lt;p&gt;How do you handle the "handover" problem in your own cold storage setup—do you prioritize extreme security or ease of access for your beneficiaries?&lt;/p&gt;</content:encoded>
-      <description>I spent three hours last Saturday trying to explain to my brother how to access my cold storage if I get hit by a bus. It was a disaster. I realized that my "clever" security setup—the one with the multi-sig, the encrypted backups, and the complex passphrase—was actually a death trap for my family. ...</description>
+&lt;p&gt;This is also why I keep improving &lt;a href="https://btc-dca.com"&gt;my Bitcoin DCA automation setup&lt;/a&gt; instead of trying to make every buy decision manually.&lt;/p&gt;</content:encoded>
+      <description>I almost ruined my financial progress in 2021 because I thought I was smarter than the market. I watched my portfolio hit a local peak, convinced myself that I’d be the one to sell at the absolute top, and then proceeded to ride the whole thing back down to the floor. It was a painful lesson in huma...</description>
     </item>
   </channel>
 </rss>
