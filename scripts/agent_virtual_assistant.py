@@ -496,6 +496,7 @@ def is_orchestration_task(text: str) -> bool:
         "agenta oz",
         "osobni zkusenosti",
         "osobní zkušenosti",
+        "osobnizkusenosti",
     )
     action_terms = (
         "draft",
@@ -533,6 +534,7 @@ def is_oz_draft_task(text: str) -> bool:
         "oz agent",
         "osobni zkusenosti",
         "osobní zkušenosti",
+        "osobnizkusenosti",
     )
     draft_terms = (
         "draft",
@@ -582,7 +584,7 @@ def resolve_blogger_instance(candidates: tuple[str, ...], markers: tuple[str, ..
 
 def blogger_delegation_target(text: str) -> tuple[str, str] | None:
     low = g.normalize_text(text)
-    if any(term in low for term in ("agent oz", "agenta oz", "osobni zkusenosti", "osobní zkušenosti")):
+    if any(term in low for term in ("agent oz", "agenta oz", "osobni zkusenosti", "osobní zkušenosti", "osobnizkusenosti")):
         instance = resolve_blogger_instance(
             ("oz", "osobnizkusenosti-cz", "osobnizkusenosti", "osobni-zkusenosti"),
             ("agent oz", "osobnizkusenosti", "osobni zkusenosti"),
