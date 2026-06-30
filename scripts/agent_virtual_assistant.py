@@ -608,6 +608,20 @@ def extract_blogger_topic(text: str) -> str:
     return cleaned.strip(" .")
 
 
+def article_text_for_combined_delegation(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", text.strip())
+    split = re.split(
+        r"\s+a\s+n[aá]vrh\s+p[rř]isp[eě]vku\s+na\s+x\b",
+        cleaned,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )
+    article = split[0].strip(" .") if split and split[0].strip() else cleaned
+    if "obsah muze byt cokoliv" in g.normalize_text(cleaned) and "obsah muze byt cokoliv" not in g.normalize_text(article):
+        article = article.rstrip(" .") + "; obsah muze byt cokoliv, jde o test"
+    return article
+
+
 def write_blogger_requested_topic(instance: str, topic: str) -> Path:
     state_path = g.OPENCLAW_DIR / f"{instance}-blogger-state.json"
     state = {
@@ -698,7 +712,8 @@ def parse_combined_delegation_request(text: str) -> str | None:
         return None
 
     parts: list[str] = ["Kombinovanou delegaci jsem rozdělila na samostatné úkoly:"]
-    blog_reply = parse_blogger_delegation_request(text)
+    blog_text = article_text_for_combined_delegation(text)
+    blog_reply = parse_blogger_delegation_request(blog_text)
     if blog_reply:
         parts.append("")
         parts.append("Agent pro článek:")
