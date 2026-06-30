@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-06-30T09:45:25Z
+checked_at_utc=2026-06-30T09:57:33Z
 playwright_install=ok
 telegram_token_present= True
 telegram_getme_ok= True
@@ -13,7 +13,7 @@ gmail_oauth_token_present= True
 gmail_oauth_secret_kind= json_refresh_token
 gmail_address= mailto.jakub.elias@gmail.com
 gmail_poll_seconds= 300
-[2026-06-30 11:45:26] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+[2026-06-30 11:57:34] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 ai_smoke_ok= True
 gmail_google_meta_1=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_2=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
@@ -22,19 +22,19 @@ telegram_state_offset= 309696989
 virtual_assistant_lock_exists= True
 virtual_assistant_lock_age_sec= 12
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-06-30T09:45:26Z
-virtual_assistant_log_signal_1=[2026-06-30 05:46:56] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_2=[2026-06-30 06:16:24] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_3=[2026-06-30 07:35:14] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_4=[2026-06-30 07:35:38] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_5=[2026-06-30 08:51:17] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_6=[2026-06-30 09:37:28] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_7=[2026-06-30 10:01:14] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_8=[2026-06-30 10:08:23] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_9=[2026-06-30 10:38:15] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_10=[2026-06-30 11:45:22] Agent G daemon started
-virtual_assistant_log_signal_11=[2026-06-30 11:45:22] Virtual Assistant email worker started
-virtual_assistant_log_signal_12=[2026-06-30 11:45:26] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_mtime_utc= 2026-06-30T09:57:34Z
+virtual_assistant_log_signal_1=[2026-06-30 07:35:38] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_2=[2026-06-30 08:51:17] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_3=[2026-06-30 09:37:28] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_4=[2026-06-30 10:01:14] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_5=[2026-06-30 10:08:23] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_6=[2026-06-30 10:38:15] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_7=[2026-06-30 11:45:22] Agent G daemon started
+virtual_assistant_log_signal_8=[2026-06-30 11:45:22] Virtual Assistant email worker started
+virtual_assistant_log_signal_9=[2026-06-30 11:45:26] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_10=[2026-06-30 11:57:30] Virtual Assistant email worker started
+virtual_assistant_log_signal_11=[2026-06-30 11:57:30] Agent G daemon started
+virtual_assistant_log_signal_12=[2026-06-30 11:57:34] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
