@@ -133,9 +133,9 @@ Orchestrace ostatnich agentu:
   - Pro zmenu nastaveni pouzij workflow `agent-c-update-config.yml` nebo UI `/ai/`.
   - Hotovo znamena: URL draftu/publikovaneho clanku nebo state/log dukaz, ze clanek vznikl.
 - Typicky routing pro btc-dca.com:
-  - Agent C / instance `btc-dca`: blogovy prispevek na btc-dca.com / WordPress, vcetne overeni publikovane URL.
+  - Agent C / instance `btc-dca`: pouze blogovy prispevek na btc-dca.com / WordPress, vcetne overeni publikovane URL.
   - Agent M: syndikace nebo clanek na Medium, DEV a pripadne Hashnode, vcetne overeni vystupu.
-  - Agent D: prispevek na X a navazne engagement kroky, vcetne overeni odkazu nebo workflow vystupu.
+  - Agent D: prispevek na X pro btc-dca.com a navazne engagement kroky, vcetne overeni odkazu nebo workflow vystupu.
   - Agent G: technicky/provozni dohled, pokud narazis na workflow, runner, auth, token, systemd nebo deploy problem.
 - Agent OZ / Osobni zkusenosti:
   - Kdyz Jakub zmini `Agent OZ`, `OZ`, `Osobni zkusenosti` nebo `Osobní zkušenosti`, nikdy to neprekladej na Agent C.
@@ -253,8 +253,8 @@ def virtual_assistant_templates() -> dict[Path, str]:
             "- Overeni: workflow log, debug issue, vysledne Medium/DEV/Hashnode URL.",
             "",
             "## Agent D - X / social posting",
-            "- Role: prispevky na X, schvalovani social postu, engagement follow-up.",
-            "- Typicke ukoly: kratky launch post, thread, follow-up k blogu, engagement summary.",
+            "- Role: prispevky na X pro btc-dca.com, schvalovani social postu, engagement follow-up.",
+            "- Typicke ukoly: navrh X postu, kratky launch post, thread, follow-up k blogu, engagement summary.",
             "- Kanal: OpenClaw workflows `x-poster-daily.yml`, `engagement-hourly.yml`, `engagement-summary.yml`, RPi `x_post.py`, `x-approve.service`.",
             "- Hotovo znamena: potvrzeny X post, URL/tweet id, nebo workflow output, ze post byl pripraven a ceka na schvaleni.",
             "- Overeni: `.rpi-output-poster`, X URL, service/log vystup.",
@@ -586,11 +586,15 @@ def blogger_delegation_target(text: str) -> tuple[str, str] | None:
     low = g.normalize_text(text)
     if any(term in low for term in ("agent oz", "agenta oz", "osobni zkusenosti", "osobní zkušenosti", "osobnizkusenosti")):
         instance = resolve_blogger_instance(
-            ("oz", "osobnizkusenosti-cz", "osobnizkusenosti", "osobni-zkusenosti"),
+            ("osobnizkusenosti-cz", "oz", "osobnizkusenosti", "osobni-zkusenosti"),
             ("agent oz", "osobnizkusenosti", "osobni zkusenosti"),
         )
-        return instance, "Agent OZ"
+        return instance, "Agent osobnizkusenosti-cz"
     if any(term in low for term in ("agent c", "agenta c", "btc-dca", "btc dca")):
+        social_terms = (" x ", "x ", "x post", "twitter", "tweet", "prispevek", "příspěvek", "social")
+        blog_terms = ("blog", "wordpress", "clanek", "clanku", "članek", "článku", "article")
+        if any(term in low for term in social_terms) and not any(term in low for term in blog_terms):
+            return None
         instance = resolve_blogger_instance(("btc-dca", "btcdca"), ("btc-dca", "btc dca", "btcdca"))
         return instance, "Agent C"
     return None
@@ -756,7 +760,11 @@ def parse_general_delegation_request(text: str) -> str | None:
         append_orchestration_event("Agent M", "medium-dev-hashnode", text, "publishing-assignment", str(inbox))
         assigned.append(f"Agent M: zadani ulozeno do `{inbox}`.")
 
-    if any(term in low for term in ("blog", "wordpress", "agent c", "agenta c", "btc-dca", "btc dca")) and not blogger_delegation_target(text):
+    wants_btc_blog = any(term in low for term in ("blog", "wordpress", "agent c", "agenta c")) or (
+        any(term in low for term in ("btc-dca", "btc dca"))
+        and any(term in low for term in ("blog", "wordpress", "clanek", "clanku", "članek", "článku", "article"))
+    )
+    if wants_btc_blog and not blogger_delegation_target(text):
         instance = resolve_blogger_instance(("btc-dca", "btcdca"), ("btc-dca", "btc dca", "btcdca"))
         append_orchestration_event("Agent C", instance, text, "blog-assignment-needs-topic", "ORCHESTRATION.md")
         blockers.append(f"Agent C: chybi jednoznacne tema clanku, zapsano do ORCHESTRATION pro follow-up; nepoustim publikaci bez tematu.")
@@ -786,7 +794,7 @@ def parse_blogger_delegation_request(text: str) -> str | None:
 
     instance, agent_name = target
     publish = explicit_publish_requested(text)
-    if agent_name == "Agent OZ" and publish:
+    if agent_name in {"Agent OZ", "Agent osobnizkusenosti-cz"} and publish:
         return (
             "U Agenta OZ jsem rozpoznala pozadavek s publikaci. Protoze Osobni zkusenosti maji vychozi rezim draft, "
             "publikaci nespoustim automaticky. Potvrd prosim jednou vetou `publikuj Agent OZ: ...`, pokud ma jit opravdu ven."
@@ -838,9 +846,9 @@ def parse_blogger_delegation_request(text: str) -> str | None:
     mode = "publish" if publish else "draft"
     append_orchestration_event(agent_name, instance, topic, mode, runner)
 
-    if agent_name == "Agent OZ":
+    if agent_name in {"Agent OZ", "Agent osobnizkusenosti-cz"}:
         return "\n".join([
-            f"Zadano Agentovi OZ jako draft, bez publikace.",
+            f"Zadano agentovi osobnizkusenosti-cz jako draft, bez publikace.",
             f"Instance: `{instance}`",
             f"Tema: {topic}",
             f"State: `{state_path}`",
