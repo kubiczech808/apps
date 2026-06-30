@@ -388,6 +388,9 @@ def parse_settings_command(text: str) -> str | None:
         delegation_reply = parse_blogger_delegation_request(text)
         if delegation_reply:
             return delegation_reply
+        general_delegation_reply = parse_general_delegation_request(text)
+        if general_delegation_reply:
+            return general_delegation_reply
         gmail_reply = parse_gmail_signup_request(text)
         if gmail_reply:
             return gmail_reply
@@ -622,6 +625,115 @@ def append_orchestration_event(agent_name: str, instance: str, topic: str, mode:
     )
     with board.open("a", encoding="utf-8") as handle:
         handle.write(line)
+
+
+def append_jsonl(path: Path, item: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+def assign_agent_d_x_idea(text: str) -> tuple[bool, str]:
+    state_path = Path("/home/openclaw2/x-post-state.json")
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    idea = {
+        "text": text.strip(),
+        "added": dt.date.today().isoformat(),
+        "source": "virtual-assistant",
+        "assigned_at": now,
+    }
+    try:
+        state = g.load_json(state_path, {})
+        if not isinstance(state, dict):
+            state = {}
+        items = state.get("custom_instructions", [])
+        if not isinstance(items, list):
+            items = []
+        items.append(idea)
+        state["custom_instructions"] = items
+        state["virtual_assistant_last_assignment"] = idea
+        g.write_json(state_path, state)
+        return True, str(state_path)
+    except Exception as exc:
+        inbox = g.OPENCLAW_DIR / "agent-d-inbox.jsonl"
+        append_jsonl(inbox, {
+            "created_at": now,
+            "source": "virtual-assistant",
+            "agent": "Agent D",
+            "task": text.strip(),
+            "error": str(exc)[:240],
+        })
+        return False, str(inbox)
+
+
+def parse_general_delegation_request(text: str) -> str | None:
+    low = g.normalize_text(text)
+    asks_delegation = any(term in low for term in (
+        "deleguj",
+        "delegovat",
+        "prislusnym agentum",
+        "prislusnym agentum",
+        "agentum",
+        "agentum",
+        "zapoj agent",
+        "nemas tvorit",
+        "nemas to tvorit",
+    ))
+    social_task = any(term in low for term in (
+        " x ",
+        "x ",
+        "x post",
+        "twitter",
+        "tweet",
+        "prispevek",
+        "příspěvek",
+        "social",
+        "kampan",
+        "kampaň",
+    ))
+    if not (asks_delegation or (is_orchestration_task(text) and social_task)):
+        return None
+
+    assigned: list[str] = []
+    blockers: list[str] = []
+    if social_task or "agent d" in low or "agenta d" in low:
+        ok, target = assign_agent_d_x_idea(text)
+        append_orchestration_event("Agent D", "x-poster", text, "x-social-draft", target)
+        if ok:
+            assigned.append(f"Agent D / X: zadani ulozeno do `{target}` jako podklad pro dalsi draft.")
+        else:
+            blockers.append(f"Agent D / X: primarni stav nesel zapsat, ulozeno aspon do inboxu `{target}`.")
+
+    if any(term in low for term in ("medium", "dev", "hashnode", "agent m", "agenta m")):
+        inbox = g.OPENCLAW_DIR / "agent-m-inbox.jsonl"
+        append_jsonl(inbox, {
+            "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "source": "virtual-assistant",
+            "agent": "Agent M",
+            "task": text.strip(),
+            "expected_output": "draft/publish plan for Medium/DEV/Hashnode with verification links",
+        })
+        append_orchestration_event("Agent M", "medium-dev-hashnode", text, "publishing-assignment", str(inbox))
+        assigned.append(f"Agent M: zadani ulozeno do `{inbox}`.")
+
+    if any(term in low for term in ("blog", "wordpress", "agent c", "agenta c", "btc-dca", "btc dca")) and not blogger_delegation_target(text):
+        instance = resolve_blogger_instance(("btc-dca", "btcdca"), ("btc-dca", "btc dca", "btcdca"))
+        append_orchestration_event("Agent C", instance, text, "blog-assignment-needs-topic", "ORCHESTRATION.md")
+        blockers.append(f"Agent C: chybi jednoznacne tema clanku, zapsano do ORCHESTRATION pro follow-up; nepoustim publikaci bez tematu.")
+
+    if not assigned and not blockers:
+        append_orchestration_event("Virtual Assistant", "orchestration", text, "needs-routing", "ORCHESTRATION.md")
+        blockers.append("Rozpoznala jsem delegacni zadani, ale neurcila jsem bezpecneho ciloveho agenta. Zapsano do ORCHESTRATION k doreseni.")
+
+    lines = ["Delegace provedena / zapsana:"]
+    lines.extend(f"- {item}" for item in assigned)
+    if blockers:
+        lines.append("")
+        lines.append("K doreseni:")
+        lines.extend(f"- {item}" for item in blockers)
+    lines.append("")
+    lines.append("Nebudu to vydavat za hotove publikovani, dokud nebude overeny vystup od prislusneho agenta.")
+    return "\n".join(lines)
 
 
 def parse_blogger_delegation_request(text: str) -> str | None:
