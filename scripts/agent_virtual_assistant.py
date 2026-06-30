@@ -385,6 +385,9 @@ def handle_settings_callback(data: str) -> tuple[str, dict[str, Any], str]:
 def parse_settings_command(text: str) -> str | None:
     reply = g._base_parse_settings_command(text)
     if reply is None:
+        combined_delegation_reply = parse_combined_delegation_request(text)
+        if combined_delegation_reply:
+            return combined_delegation_reply
         delegation_reply = parse_blogger_delegation_request(text)
         if delegation_reply:
             return delegation_reply
@@ -666,6 +669,52 @@ def assign_agent_d_x_idea(text: str) -> tuple[bool, str]:
         return False, str(inbox)
 
 
+def is_social_delegation_task(text: str) -> bool:
+    low = g.normalize_text(text)
+    return any(term in low for term in (
+        " x ",
+        "x ",
+        "x post",
+        "twitter",
+        "tweet",
+        "prispevek",
+        "příspěvek",
+        "social",
+        "kampan",
+        "kampaň",
+    ))
+
+
+def parse_combined_delegation_request(text: str) -> str | None:
+    has_blog = blogger_delegation_target(text) is not None
+    has_social = is_social_delegation_task(text)
+    if not (has_blog and has_social):
+        return None
+
+    parts: list[str] = ["Kombinovanou delegaci jsem rozdělila na samostatné úkoly:"]
+    blog_reply = parse_blogger_delegation_request(text)
+    if blog_reply:
+        parts.append("")
+        parts.append("Agent pro článek:")
+        parts.append(blog_reply)
+    else:
+        parts.append("")
+        parts.append("Agent pro článek: rozpoznala jsem blogový cíl, ale chybí jasné téma nebo konfigurace. Zapsala jsem to k dořešení.")
+        append_orchestration_event("Blog agent", "blog", text, "blog-assignment-needs-routing", "ORCHESTRATION.md")
+
+    ok, target = assign_agent_d_x_idea(text)
+    append_orchestration_event("Agent D", "x-poster", text, "x-social-draft", target)
+    parts.append("")
+    parts.append("Agent D / X:")
+    if ok:
+        parts.append(f"Zadání uloženo do `{target}` jako podklad pro návrh X příspěvku.")
+    else:
+        parts.append(f"Primární stav nešel zapsat, zadání je uložené aspoň v `{target}`.")
+    parts.append("")
+    parts.append("Nebudu to vydávat za hotové publikování, dokud nebude ověřený draft článku a návrh X příspěvku.")
+    return "\n".join(parts)
+
+
 def parse_general_delegation_request(text: str) -> str | None:
     low = g.normalize_text(text)
     asks_delegation = any(term in low for term in (
@@ -679,18 +728,7 @@ def parse_general_delegation_request(text: str) -> str | None:
         "nemas tvorit",
         "nemas to tvorit",
     ))
-    social_task = any(term in low for term in (
-        " x ",
-        "x ",
-        "x post",
-        "twitter",
-        "tweet",
-        "prispevek",
-        "příspěvek",
-        "social",
-        "kampan",
-        "kampaň",
-    ))
+    social_task = is_social_delegation_task(text)
     if not (asks_delegation or (is_orchestration_task(text) and social_task)):
         return None
 
