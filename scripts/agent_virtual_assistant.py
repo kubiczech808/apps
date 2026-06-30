@@ -116,6 +116,7 @@ Email:
 - Mailbox kontroluj periodicky. Email od Jakuba ber jako instrukci stejne zavaznou jako Telegram zpravu.
 - Na emaily od duveryhodneho odesilatele muzes odpovidat sama, pokud odpoved nepublikuje nic verejne, neposila zpravy tretim stranam, neutvari zavazek a neutraceji se penize.
 - Kdyz email zada verejny nebo reputacni krok, priprav navrh a odpovez s jednim konkretnim dalsim krokem ke schvaleni.
+- Automaticke Google/OAuth/security/no-reply notifikace nejsou tvoje pracovni zadani. Pokud je Jakub vyslovne nepreposle s instrukci, jen je ignoruj/oznac jako zpracovane a nefixuj se na ne v konverzaci.
 - Na emaily od neznamych lidi neodpovidej automaticky pracovnim zavazkem; priprav opatrny draft nebo shrnuti pro Jakuba.
 - Do odpovedi nikdy nevkladej tokeny, cookies, hesla ani interni konfiguraci.
 
@@ -549,12 +550,41 @@ def explicit_publish_requested(text: str) -> bool:
     return any(term in low for term in ("publikuj", "publish", "zverejni", "zveřejni", "vydej", "postni"))
 
 
+def resolve_blogger_instance(candidates: tuple[str, ...], markers: tuple[str, ...]) -> str:
+    for instance in candidates:
+        if (g.OPENCLAW_DIR / f"{instance}-blogger-config.json").exists():
+            return instance
+    try:
+        for cfg_path in sorted(g.OPENCLAW_DIR.glob("*-blogger-config.json")):
+            instance = cfg_path.name.removesuffix("-blogger-config.json")
+            try:
+                data = json.loads(cfg_path.read_text(encoding="utf-8", errors="replace"))
+            except Exception:
+                data = {}
+            haystack = g.normalize_text(" ".join([
+                instance,
+                str(data.get("agent_name") or ""),
+                str(data.get("WP_SITE_URL") or data.get("wp_site_url") or ""),
+                str(data.get("site_name") or ""),
+            ]))
+            if any(marker in haystack for marker in markers):
+                return instance
+    except Exception:
+        pass
+    return candidates[0]
+
+
 def blogger_delegation_target(text: str) -> tuple[str, str] | None:
     low = g.normalize_text(text)
     if any(term in low for term in ("agent oz", "agenta oz", "osobni zkusenosti", "osobní zkušenosti")):
-        return "oz", "Agent OZ"
+        instance = resolve_blogger_instance(
+            ("oz", "osobnizkusenosti-cz", "osobnizkusenosti", "osobni-zkusenosti"),
+            ("agent oz", "osobnizkusenosti", "osobni zkusenosti"),
+        )
+        return instance, "Agent OZ"
     if any(term in low for term in ("agent c", "agenta c", "btc-dca", "btc dca")):
-        return "btc-dca", "Agent C"
+        instance = resolve_blogger_instance(("btc-dca", "btcdca"), ("btc-dca", "btc dca", "btcdca"))
+        return instance, "Agent C"
     return None
 
 
@@ -599,12 +629,12 @@ def parse_blogger_delegation_request(text: str) -> str | None:
     if not target:
         return None
     low = g.normalize_text(text)
-    if not any(term in low for term in ("clanek", "clanku", "članek", "článku", "draft", "post", "tema", "téma", "napiš", "napis", "vygeneruj")):
+    if not any(term in low for term in ("clanek", "clanku", "članek", "článku", "draft", "post", "tema", "téma", "napiš", "napis", "napsat", "vygeneruj", "priprav", "připrav", "zadej", "deleguj")):
         return None
 
     instance, agent_name = target
     publish = explicit_publish_requested(text)
-    if instance == "oz" and publish:
+    if agent_name == "Agent OZ" and publish:
         return (
             "U Agenta OZ jsem rozpoznala pozadavek s publikaci. Protoze Osobni zkusenosti maji vychozi rezim draft, "
             "publikaci nespoustim automaticky. Potvrd prosim jednou vetou `publikuj Agent OZ: ...`, pokud ma jit opravdu ven."
@@ -656,7 +686,7 @@ def parse_blogger_delegation_request(text: str) -> str | None:
     mode = "publish" if publish else "draft"
     append_orchestration_event(agent_name, instance, topic, mode, runner)
 
-    if instance == "oz":
+    if agent_name == "Agent OZ":
         return "\n".join([
             f"Zadano Agentovi OZ jako draft, bez publikace.",
             f"Instance: `{instance}`",
@@ -898,6 +928,11 @@ def virtual_assistant_call_codex(history: list[dict[str, str]]) -> str:
 
 
 def virtual_assistant_call_ai(history: list[dict[str, str]]) -> str:
+    cleaned_history = remove_automated_google_history(history)
+    if len(cleaned_history) != len(history):
+        history[:] = cleaned_history
+        g.write_json(g.HISTORY_FILE, history[-g.MAX_HISTORY:])
+        g.log("Automated Google email instructions removed from Virtual Assistant history")
     try:
         return virtual_assistant_call_codex(history)
     except Exception as codex_exc:
@@ -1112,6 +1147,55 @@ def trusted_email_sender(sender: str, config: dict[str, str]) -> bool:
     return email_address(sender) in trusted
 
 
+def is_automated_google_email(sender: str, subject: str, body: str) -> bool:
+    sender_addr = email_address(sender)
+    sender_text = g.normalize_text(sender)
+    subject_text = g.normalize_text(subject)
+    body_head = g.normalize_text(body[:2000])
+    from_google = (
+        sender_addr.endswith("@google.com")
+        or sender_addr.endswith("@accounts.google.com")
+        or sender_addr.endswith("@cloudnotifications.google.com")
+        or "google" in sender_text
+    )
+    automated_sender = any(token in sender_addr for token in ("no-reply", "noreply", "notification", "notifications"))
+    google_notice_terms = (
+        "google cloud",
+        "google account",
+        "oauth",
+        "security alert",
+        "bezpecnostni",
+        "compromised credentials",
+        "potentially compromised",
+        "client secret",
+        "verification",
+        "overeni googlem",
+        "access blocked",
+        "pristup zablokovan",
+        "api project",
+    )
+    haystack = f"{subject_text}\n{body_head}"
+    return from_google and (automated_sender or any(term in haystack for term in google_notice_terms))
+
+
+def is_automated_google_history_message(message: dict[str, str]) -> bool:
+    content = str(message.get("content") or "")
+    if not content.startswith("EMAIL INSTRUKCE PRO VIRTUALNI ASISTENTKU"):
+        return False
+    low = g.normalize_text(content[:4000])
+    return (
+        ("od:" in low and "google" in low)
+        and any(term in low for term in ("oauth", "google cloud", "security", "bezpecnost", "compromised", "client secret", "pristup zablokovan"))
+    )
+
+
+def remove_automated_google_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [
+        item for item in history
+        if not (isinstance(item, dict) and is_automated_google_history_message(item))
+    ]
+
+
 def gmail_send(access_token: str, to_addr: str, from_addr: str, subject: str, body: str, thread_id: str = "", reply_to_message_id: str = "", references: str = "") -> None:
     headers = [
         f"From: {clean_header_text(from_addr)}",
@@ -1160,9 +1244,14 @@ def process_gmail_message(access_token: str, message_id: str, config: dict[str, 
         return
     trusted = trusted_email_sender(sender_header, config)
     subject = decoded_header_value(message, "Subject") or "(bez predmetu)"
+    if is_automated_google_email(sender_header, subject, body):
+        gmail_request(access_token, "POST", f"messages/{message_id}/modify", {"removeLabelIds": ["UNREAD"]})
+        g.log(f"Automated Google email ignored: from={sender} subject={subject[:80]}")
+        return
     history = g.load_json(g.HISTORY_FILE, [])
     if not isinstance(history, list):
         history = []
+    history = remove_automated_google_history(history)
     history.append({"role": "user", "content": build_email_instruction(message, body, trusted)})
     reply = g.call_ai(history)
     history.append({"role": "assistant", "content": reply})
@@ -1211,7 +1300,7 @@ def gmail_poll_once() -> None:
             config["setup_recipient"],
             config["address"],
             "Virtualni asistentka: email napojen",
-            "Email mailbox je napojeny. Budu ho kontrolovat priblizne jednou za 2 hodiny a na instrukce z duveryhodnych adres budu reagovat odpovedi z teto schranky.",
+            "Email mailbox je napojeny. Budu ho kontrolovat priblizne kazdych 5 minut a na instrukce z duveryhodnych adres budu reagovat odpovedi z teto schranky.",
         )
         state["setup_email_sent"] = True
         g.log(f"Email setup confirmation sent to {config['setup_recipient']}")
