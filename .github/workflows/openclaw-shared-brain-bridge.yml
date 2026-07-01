@@ -63,6 +63,11 @@ jobs:
 
           health = get("/health")
           print("shared_brain_health=", health)
+          graph = get("/graph.json")
+          print("shared_brain_graph_nodes=", len(graph.get("nodes") or []))
+          print("shared_brain_graph_edges=", len(graph.get("edges") or []))
+          with urllib.request.urlopen("http://127.0.0.1:8812/graph", timeout=10) as response:
+              print("shared_brain_graph_html_ok=", response.status == 200)
           search = post("/tools/brain_search", {"query": "Agent D X btc-dca", "k": 2})
           print("shared_brain_tool_search_count=", len(search.get("result") or []))
           mcp = post("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
@@ -94,6 +99,9 @@ jobs:
               index = {}
           print("shared_brain_backend=", index.get("backend"))
           print("shared_brain_notes_dir=", index.get("notes_dir"))
+          print("shared_brain_ui_url= http://100.72.211.11:8812/")
+          print("shared_brain_graph_url= http://100.72.211.11:8812/graph")
+          print("shared_brain_agent_view_url= http://100.72.211.11:8812/agent-view")
           print("shared_brain_file_count=", index.get("file_count"))
           print("shared_brain_chunk_count=", index.get("chunk_count"))
           try:
@@ -101,6 +109,10 @@ jobs:
                   health = json.loads(response.read().decode("utf-8"))
               print("shared_brain_http_ok=", bool(health.get("ok")))
               print("shared_brain_http_tools=", ",".join(health.get("tools") or []))
+              with urllib.request.urlopen("http://127.0.0.1:8812/graph.json", timeout=10) as response:
+                  graph = json.loads(response.read().decode("utf-8"))
+              print("shared_brain_graph_nodes=", len(graph.get("nodes") or []))
+              print("shared_brain_graph_edges=", len(graph.get("edges") or []))
           except Exception as exc:
               print(f"shared_brain_http_ok=failed:{type(exc).__name__}")
           try:

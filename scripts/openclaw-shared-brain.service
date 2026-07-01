@@ -10,6 +10,8 @@ Group=openclaw2
 Environment=PYTHONUNBUFFERED=1
 Environment=OPENCLAW_DIR=/home/openclaw2/.openclaw
 Environment=OPENCLAW_BRAIN_DIR=/home/openclaw2/.openclaw/shared-brain
+Environment=OPENCLAW_BRAIN_HOST=0.0.0.0
+Environment=OPENCLAW_BRAIN_PUBLIC_URL=http://100.72.211.11:8812
 WorkingDirectory=/home/openclaw2/.openclaw/shared-brain
 ExecStart=/usr/bin/python3 /home/openclaw2/scripts/openclaw_shared_brain.py serve
 Restart=always

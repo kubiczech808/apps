@@ -18,6 +18,7 @@ import argparse
 import datetime as dt
 import hashlib
 import http.server
+import html
 import json
 import math
 import os
@@ -37,6 +38,7 @@ INDEX_PATH = Path(os.environ.get("OPENCLAW_BRAIN_INDEX", str(BRAIN_DIR / "index.
 LOG_PATH = OPENCLAW_DIR / "logs" / "openclaw-shared-brain.log"
 HOST = os.environ.get("OPENCLAW_BRAIN_HOST", "127.0.0.1")
 PORT = int(os.environ.get("OPENCLAW_BRAIN_PORT", "8812"))
+PUBLIC_URL = os.environ.get("OPENCLAW_BRAIN_PUBLIC_URL", f"http://{HOST}:{PORT}").rstrip("/")
 
 HEADER_RE = re.compile(r"^(#{2,3})\s+(.*)$")
 LINK_RE = re.compile(r"\[\[([^\]]+?)\]\]")
@@ -442,6 +444,271 @@ def json_response(handler: http.server.BaseHTTPRequestHandler, status: int, data
     handler.wfile.write(body)
 
 
+def text_response(handler: http.server.BaseHTTPRequestHandler, status: int, body: str, content_type: str = "text/html; charset=utf-8") -> None:
+    data = body.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    handler.wfile.write(data)
+
+
+def note_nodes(index: dict[str, Any]) -> list[dict[str, Any]]:
+    seen: dict[str, dict[str, Any]] = {}
+    for chunk in index.get("chunks") or []:
+        file = str(chunk.get("file") or "")
+        if not file:
+            continue
+        node = seen.setdefault(file, {
+            "id": file,
+            "title": str((chunk.get("meta") or {}).get("title") or Path(file).stem),
+            "category": chunk.get("category"),
+            "node_type": chunk.get("node_type"),
+            "tags": chunk.get("tags") or [],
+            "chunks": 0,
+            "links": [],
+        })
+        node["chunks"] += 1
+        node["links"].extend(chunk.get("links") or [])
+    for node in seen.values():
+        node["links"] = sorted(set(node["links"]))
+    return sorted(seen.values(), key=lambda item: str(item.get("id") or ""))
+
+
+def brain_graph(index: dict[str, Any]) -> dict[str, Any]:
+    nodes = note_nodes(index)
+    by_title = {normalize(node["title"]): node["id"] for node in nodes}
+    by_stem = {normalize(Path(node["id"]).stem): node["id"] for node in nodes}
+    edges: list[dict[str, str]] = []
+    for node in nodes:
+        for link in node.get("links") or []:
+            target = by_title.get(normalize(link)) or by_stem.get(normalize(link)) or link
+            edges.append({"source": node["id"], "target": target, "label": link})
+    return {
+        "generated_at": index.get("generated_at"),
+        "nodes": nodes,
+        "edges": edges,
+        "tools": [tool["name"] for tool in tool_schemas()],
+        "notes_dir": str(NOTES_DIR),
+        "agent_visible_base_url": f"http://{HOST}:{PORT}",
+        "public_url": PUBLIC_URL,
+    }
+
+
+def note_list_html() -> str:
+    index = load_index()
+    rows = []
+    for node in note_nodes(index):
+        url = "/note?file=" + urllib.parse.quote(node["id"])
+        rows.append(
+            "<tr>"
+            f"<td><a href='{url}'>{html.escape(node['title'])}</a></td>"
+            f"<td>{html.escape(str(node.get('category') or ''))}</td>"
+            f"<td>{html.escape(str(node.get('node_type') or ''))}</td>"
+            f"<td>{html.escape(str(node.get('chunks') or 0))}</td>"
+            f"<td>{html.escape(', '.join(node.get('links') or []))}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows)
+
+
+def note_detail_html(file_name: str) -> str:
+    index = load_index()
+    chunks = [chunk for chunk in index.get("chunks") or [] if str(chunk.get("file") or "") == file_name]
+    if not chunks:
+        return "<p>Note not found.</p>"
+    parts = []
+    for chunk in chunks:
+        title = html.escape(str(chunk.get("title") or ""))
+        text = html.escape(str(chunk.get("text") or ""))
+        parts.append(f"<article><h2>{title}</h2><pre>{text}</pre></article>")
+    return "\n".join(parts)
+
+
+def brain_page_shell(title: str, body: str) -> str:
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 32px auto; max-width: 980px; padding: 0 18px; line-height: 1.5; }}
+    a {{ color: #0d6b4f; }}
+    pre {{ white-space: pre-wrap; background: #f5f7f5; border: 1px solid #dbe2dd; padding: 12px; border-radius: 6px; }}
+  </style>
+</head>
+<body>
+  <p><a href="/">Back to Shared Brain</a></p>
+  <h1>{html.escape(title)}</h1>
+  {body}
+</body>
+</html>"""
+
+
+def brain_index_html() -> str:
+    index = load_index()
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenClaw Shared Brain</title>
+  <style>
+    :root {{ color-scheme: light dark; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }}
+    body {{ margin: 0; background: #f7f7f4; color: #202124; }}
+    header {{ padding: 24px 32px; background: #10201b; color: #f6fff7; }}
+    main {{ padding: 24px 32px 48px; max-width: 1180px; margin: auto; }}
+    .bar {{ display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 16px 0 24px; }}
+    a.button {{ color: #0b3d2e; border: 1px solid #8ab9a5; background: #eff8f3; padding: 8px 10px; border-radius: 6px; text-decoration: none; }}
+    table {{ width: 100%; border-collapse: collapse; background: white; }}
+    th, td {{ text-align: left; border-bottom: 1px solid #ddd; padding: 10px; vertical-align: top; }}
+    th {{ background: #eef2ee; }}
+    code {{ background: #eef2ee; padding: 2px 4px; border-radius: 4px; }}
+    pre {{ white-space: pre-wrap; background: #fff; border: 1px solid #ddd; padding: 12px; border-radius: 6px; }}
+    #graph {{ min-height: 440px; border: 1px solid #d5ddd8; background: white; border-radius: 6px; overflow: hidden; }}
+    .node {{ cursor: pointer; }}
+    .edge {{ stroke: #8aa096; stroke-width: 1.4; }}
+    @media (prefers-color-scheme: dark) {{
+      body {{ background: #151716; color: #e8eee9; }}
+      table, #graph, pre {{ background: #202522; border-color: #3a4540; }}
+      th, code {{ background: #26322d; }}
+      td, th {{ border-bottom-color: #3a4540; }}
+      a.button {{ color: #bfe7d4; background: #1c2c26; border-color: #476b5c; }}
+    }}
+  </style>
+</head>
+<body>
+<header>
+  <h1>OpenClaw Shared Brain</h1>
+  <p>Local Markdown knowledge graph for OpenClaw agents.</p>
+</header>
+<main>
+  <section>
+    <h2>Status</h2>
+    <p>Backend: <code>{html.escape(str(index.get('backend')))}</code> · Files: <code>{index.get('file_count')}</code> · Chunks: <code>{index.get('chunk_count')}</code></p>
+    <p>Public/Tailscale URL: <code>{html.escape(PUBLIC_URL)}</code></p>
+    <p>Notes dir: <code>{html.escape(str(NOTES_DIR))}</code></p>
+    <div class="bar">
+      <a class="button" href="/graph">Visual graph</a>
+      <a class="button" href="/graph.json">Graph JSON</a>
+      <a class="button" href="/tools">Tool schemas</a>
+      <a class="button" href="/health">Health JSON</a>
+      <a class="button" href="/agent-view">Agent view</a>
+    </div>
+  </section>
+  <section>
+    <h2>Notes</h2>
+    <table>
+      <thead><tr><th>Title</th><th>Category</th><th>Type</th><th>Chunks</th><th>Outgoing links</th></tr></thead>
+      <tbody>{note_list_html()}</tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>"""
+
+
+def brain_graph_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenClaw Shared Brain Graph</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #f6f7f5; color: #202124; }
+    header { padding: 18px 24px; background: #10201b; color: #f6fff7; }
+    main { padding: 18px 24px; }
+    #graph { width: 100%; height: calc(100vh - 150px); min-height: 520px; background: white; border: 1px solid #d9dfdb; border-radius: 6px; }
+    .edge { stroke: #90a39a; stroke-width: 1.5; }
+    .node circle { fill: #0d6b4f; stroke: #f9fffb; stroke-width: 2; }
+    .node text { font-size: 12px; fill: #202124; paint-order: stroke; stroke: #fff; stroke-width: 3px; stroke-linejoin: round; }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+<header><h1>OpenClaw Shared Brain Graph</h1><a href="/">Back to notes</a></header>
+<main><svg id="graph"></svg></main>
+<script>
+async function loadGraph() {
+  const data = await fetch('/graph.json').then(r => r.json());
+  const svg = document.getElementById('graph');
+  const width = svg.clientWidth || 1000;
+  const height = svg.clientHeight || 600;
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  const nodes = data.nodes.map((n, i) => ({...n, x: width/2 + Math.cos(i)*180, y: height/2 + Math.sin(i)*140}));
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  for (const edge of data.edges) {
+    if (!byId.has(edge.target)) {
+      const n = {id: edge.target, title: edge.label || edge.target, category: 'Linked', x: Math.random()*width, y: Math.random()*height};
+      nodes.push(n); byId.set(n.id, n);
+    }
+  }
+  const edges = data.edges.map(e => ({source: byId.get(e.source), target: byId.get(e.target), label: e.label})).filter(e => e.source && e.target);
+  function step() {
+    for (const n of nodes) { n.vx = (n.vx || 0) * 0.85; n.vy = (n.vy || 0) * 0.85; }
+    for (let i=0; i<nodes.length; i++) for (let j=i+1; j<nodes.length; j++) {
+      const a = nodes[i], b = nodes[j], dx = a.x-b.x, dy = a.y-b.y, d2 = Math.max(dx*dx+dy*dy, 80);
+      const f = 900 / d2; a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
+    }
+    for (const e of edges) {
+      const dx = e.target.x-e.source.x, dy = e.target.y-e.source.y, dist = Math.max(Math.hypot(dx,dy), 1), desired = 170;
+      const f = (dist-desired)*0.008; const fx=dx/dist*f, fy=dy/dist*f;
+      e.source.vx += fx; e.source.vy += fy; e.target.vx -= fx; e.target.vy -= fy;
+    }
+    for (const n of nodes) {
+      n.vx += (width/2-n.x)*0.002; n.vy += (height/2-n.y)*0.002;
+      n.x = Math.max(24, Math.min(width-24, n.x+n.vx)); n.y = Math.max(24, Math.min(height-24, n.y+n.vy));
+    }
+  }
+  for (let i=0; i<240; i++) step();
+  svg.innerHTML = '';
+  for (const e of edges) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('class','edge'); line.setAttribute('x1',e.source.x); line.setAttribute('y1',e.source.y); line.setAttribute('x2',e.target.x); line.setAttribute('y2',e.target.y); svg.appendChild(line);
+  }
+  for (const n of nodes) {
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g'); g.setAttribute('class','node');
+    g.setAttribute('transform', `translate(${n.x},${n.y})`);
+    const c = document.createElementNS('http://www.w3.org/2000/svg','circle'); c.setAttribute('r', n.category === 'Linked' ? 7 : 10);
+    const t = document.createElementNS('http://www.w3.org/2000/svg','text'); t.setAttribute('x',14); t.setAttribute('y',4); t.textContent = n.title || n.id;
+    g.appendChild(c); g.appendChild(t);
+    g.addEventListener('click', () => { if (!n.id.endsWith('.md')) return; location.href = '/note?file=' + encodeURIComponent(n.id); });
+    svg.appendChild(g);
+  }
+}
+loadGraph();
+</script>
+</body>
+</html>"""
+
+
+def agent_view_html() -> str:
+    index = load_index()
+    tools = ", ".join(tool["name"] for tool in tool_schemas())
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenClaw Shared Brain Agent View</title>
+<style>body{{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:900px;margin:32px auto;padding:0 18px;line-height:1.5}}code,pre{{background:#f0f3f1;padding:2px 4px;border-radius:4px}}pre{{padding:12px;white-space:pre-wrap}}</style>
+</head><body>
+<h1>What agents can see</h1>
+<p>OpenClaw agents can read the shared brain locally at <code>http://127.0.0.1:{PORT}</code>.</p>
+<p>Human/Tailscale view: <code>{html.escape(PUBLIC_URL)}</code>.</p>
+<p>Available tools: <code>{html.escape(tools)}</code>.</p>
+<p>Notes directory: <code>{html.escape(str(NOTES_DIR))}</code>.</p>
+<p>Indexed files: <code>{index.get('file_count')}</code>; chunks: <code>{index.get('chunk_count')}</code>.</p>
+<h2>Useful links</h2>
+<ul>
+  <li><a href="/">Notes overview</a></li>
+  <li><a href="/graph">Visual graph</a></li>
+  <li><a href="/graph.json">Graph JSON</a></li>
+  <li><a href="/tools">Tool schemas</a></li>
+  <li><a href="/health">Health JSON</a></li>
+</ul>
+</body></html>"""
+
+
 def call_tool(name: str, args: dict[str, Any]) -> Any:
     if name == "brain_search":
         return brain_search(str(args.get("query") or ""), int(args.get("k") or 8), str(args.get("category") or ""), str(args.get("node_type") or ""))
@@ -513,6 +780,23 @@ class BrainHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path in {"", "/"}:
+            text_response(self, 200, brain_index_html())
+            return
+        if parsed.path == "/graph":
+            text_response(self, 200, brain_graph_html())
+            return
+        if parsed.path == "/graph.json":
+            json_response(self, 200, brain_graph(load_index()))
+            return
+        if parsed.path == "/agent-view":
+            text_response(self, 200, agent_view_html())
+            return
+        if parsed.path == "/note":
+            query = urllib.parse.parse_qs(parsed.query)
+            file_name = (query.get("file") or [""])[0]
+            text_response(self, 200, brain_page_shell(f"Note: {file_name}", note_detail_html(file_name)))
+            return
         if parsed.path == "/health":
             index = load_index()
             json_response(self, 200, {
