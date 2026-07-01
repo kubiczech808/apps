@@ -155,6 +155,7 @@ Orchestrace ostatnich agentu:
   - Schvaleni po obsahove strance znamena pokracovat v priprave/zadani draftu Agentovi OZ. Neznamena publikovat, pokud Jakub vyslovne nerekne "publikuj".
   - Agent C pouzivej jen pro btc-dca.com / WordPress btc-dca ukoly, ne pro Osobni zkusenosti.
 - Nepredavej agentum vagnost. Kazdemu dej brief v jeho roli: co ma vytvorit, ton, platformu, linky, termin, co se povazuje za hotovo a jak to ma dolozit.
+- Pri beznem potvrzeni delegace Jakubovi neukazuj state/log/runner cesty ani technicke detaily. Napis jen strucne ve stylu: `Deleguji: - tohle: Agent ABC - tamto: Agent 123`. Detaily patri do logu a ORCHESTRATION.
 - Ved stav v `/home/openclaw2/.openclaw/virtual-assistant/ORCHESTRATION.md`: task id, agent, zadani, stav, posledni kontakt, dukaz hotovo, blocker, dalsi krok.
 - Nehlas Jakubovi "hotovo", dokud nemas overovaci dukaz: publikovana URL, workflow output, log, state file, issue/comment summary nebo explicitni potvrzeni agenta.
 - Pokud agent nereaguje nebo workflow nebezi, res to sama: zkus bezpecny retry, over runner/sluzbu/logy, zkontroluj konfiguraci, a az potom reportuj jeden konkretni blocker.
@@ -1161,35 +1162,27 @@ def is_social_delegation_task(text: str) -> bool:
 
 
 def parse_combined_delegation_request(text: str) -> str | None:
-    has_blog = blogger_delegation_target(text) is not None
+    blog_text = article_text_for_combined_delegation(text)
+    blog_target = blogger_delegation_target(blog_text)
+    has_blog = blog_target is not None
     has_social = is_social_delegation_task(text)
     if not (has_blog and has_social):
         return None
 
-    parts: list[str] = ["Kombinovanou delegaci jsem rozdělila na samostatné úkoly:"]
-    blog_text = article_text_for_combined_delegation(text)
     blog_reply = parse_blogger_delegation_request(blog_text)
-    if blog_reply:
-        parts.append("")
-        parts.append("Agent pro článek:")
-        parts.append(blog_reply)
-    else:
-        parts.append("")
-        parts.append("Agent pro článek: rozpoznala jsem blogový cíl, ale chybí jasné téma nebo konfigurace. Zapsala jsem to k dořešení.")
-        append_orchestration_event("Blog agent", "blog", text, "blog-assignment-needs-routing", "ORCHESTRATION.md")
-
     ok, target = assign_agent_d_x_idea(text)
     append_orchestration_event("Agent D", "x-poster", text, "x-social-draft", target)
-    parts.append("")
-    parts.append("Agent D / X:")
-    if ok:
-        parts.append(f"Zadání uloženo do `{target}` jako podklad pro návrh X příspěvku.")
-    else:
-        parts.append(f"Primární stav nešel zapsat, zadání je uložené aspoň v `{target}`.")
-    parts.append("")
-    parts.append("Nebudu to vydávat za hotové publikování, dokud nebude ověřený draft článku a návrh X příspěvku.")
-    return "\n".join(parts)
 
+    parts: list[str] = ["Deleguji:"]
+    if blog_reply and blog_target:
+        parts.append(f"- clanek/draft: {blog_target[1]}")
+    else:
+        append_orchestration_event("Blog agent", "blog", text, "blog-assignment-needs-routing", "ORCHESTRATION.md")
+        parts.append("- clanek/draft: blog agent, potrebuji doresit cil nebo konfiguraci")
+    parts.append("- navrh prispevku na X: Agent D" if ok else "- navrh prispevku na X: Agent D, fallback inbox")
+    parts.append("")
+    parts.append("Ozvu se, az budu mit overeny vystup nebo skutecny blocker.")
+    return "\n".join(parts)
 
 def parse_general_delegation_request(text: str) -> str | None:
     low = g.normalize_text(text)
@@ -1214,9 +1207,9 @@ def parse_general_delegation_request(text: str) -> str | None:
         ok, target = assign_agent_d_x_idea(text)
         append_orchestration_event("Agent D", "x-poster", text, "x-social-draft", target)
         if ok:
-            assigned.append(f"Agent D / X: zadani ulozeno do `{target}` jako podklad pro dalsi draft.")
+            assigned.append("navrh prispevku na X: Agent D")
         else:
-            blockers.append(f"Agent D / X: primarni stav nesel zapsat, ulozeno aspon do inboxu `{target}`.")
+            blockers.append("navrh prispevku na X: Agent D, fallback inbox")
 
     if any(term in low for term in ("medium", "dev", "hashnode", "agent m", "agenta m")):
         inbox = g.OPENCLAW_DIR / "agent-m-inbox.jsonl"
@@ -1228,7 +1221,7 @@ def parse_general_delegation_request(text: str) -> str | None:
             "expected_output": "draft/publish plan for Medium/DEV/Hashnode with verification links",
         })
         append_orchestration_event("Agent M", "medium-dev-hashnode", text, "publishing-assignment", str(inbox))
-        assigned.append(f"Agent M: zadani ulozeno do `{inbox}`.")
+        assigned.append("Medium/DEV/Hashnode: Agent M")
 
     wants_btc_blog = any(term in low for term in ("blog", "wordpress", "agent c", "agenta c")) or (
         any(term in low for term in ("btc-dca", "btc dca"))
@@ -1237,20 +1230,20 @@ def parse_general_delegation_request(text: str) -> str | None:
     if wants_btc_blog and not blogger_delegation_target(text):
         instance = resolve_blogger_instance(("btc-dca", "btcdca"), ("btc-dca", "btc dca", "btcdca"))
         append_orchestration_event("Agent C", instance, text, "blog-assignment-needs-topic", "ORCHESTRATION.md")
-        blockers.append(f"Agent C: chybi jednoznacne tema clanku, zapsano do ORCHESTRATION pro follow-up; nepoustim publikaci bez tematu.")
+        blockers.append("blog na btc-dca.com: Agent C, ale chybi jednoznacne tema")
 
     if not assigned and not blockers:
         append_orchestration_event("Virtual Assistant", "orchestration", text, "needs-routing", "ORCHESTRATION.md")
-        blockers.append("Rozpoznala jsem delegacni zadani, ale neurcila jsem bezpecneho ciloveho agenta. Zapsano do ORCHESTRATION k doreseni.")
+        blockers.append("rozpoznala jsem delegaci, ale neurcila jsem bezpecneho ciloveho agenta")
 
-    lines = ["Delegace provedena / zapsana:"]
+    lines = ["Deleguji:"]
     lines.extend(f"- {item}" for item in assigned)
     if blockers:
         lines.append("")
         lines.append("K doreseni:")
         lines.extend(f"- {item}" for item in blockers)
     lines.append("")
-    lines.append("Nebudu to vydavat za hotove publikovani, dokud nebude overeny vystup od prislusneho agenta.")
+    lines.append("Ozvu se, az budu mit overeny vystup nebo skutecny blocker.")
     return "\n".join(lines)
 
 
@@ -1319,24 +1312,8 @@ def parse_blogger_delegation_request(text: str) -> str | None:
     append_orchestration_event(agent_name, instance, topic, mode, runner)
 
     if personal_experience_target:
-        return "\n".join([
-            f"Zadano {agent_name} jako draft, bez publikace.",
-            f"Instance: `{instance}`",
-            f"Tema: {topic}",
-            f"State: `{state_path}`",
-            f"Log: `{log_path}`",
-            f"Runner: `{runner}`",
-            "Az draft dobehne, overim vystup ze state/logu. Nepouzila jsem jineho agenta.",
-        ])
-    return "\n".join([
-        f"Zadano {agent_name}.",
-        f"Instance: `{instance}`",
-        f"Rezim: {'publikace' if publish else 'draft/article bez publikace'}",
-        f"Tema: {topic}",
-        f"State: `{state_path}`",
-        f"Log: `{log_path}`",
-        f"Runner: `{runner}`",
-    ])
+        return f"Deleguji draft clanku na {agent_name}."
+    return f"Deleguji {'publikaci' if publish else 'draft clanku'} na {agent_name}."
 
 
 def virtual_assistant_route_model_for_task(text: str, history: list[dict[str, str]], settings: dict[str, str]) -> dict[str, str]:
@@ -1478,7 +1455,16 @@ def _call_gemini_model(history: list[dict[str, str]], api_key: str, model: str) 
 
 
 def _call_gemini(history: list[dict[str, str]], api_key: str) -> str:
-    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"]
+    configured_models = os.environ.get("GEMINI_VA_MODELS", "")
+    models = [item.strip() for item in configured_models.split(",") if item.strip()]
+    if not models:
+        models = [
+            "gemini-flash-latest",
+            "gemini-3.5-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+        ]
     last_error: Exception | None = None
     for model in models:
         for attempt in range(3):
@@ -1488,6 +1474,7 @@ def _call_gemini(history: list[dict[str, str]], api_key: str) -> str:
                 last_error = exc
                 text = str(exc)
                 if "HTTP 503" not in text and "HTTP 429" not in text:
+                    g.log(f"Gemini fallback skip: model={model} error={text[:140]}")
                     break
                 g.log(f"Gemini fallback retry: model={model} attempt={attempt + 1} error={text[:140]}")
                 time.sleep(2 + attempt * 3)
