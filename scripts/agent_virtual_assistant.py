@@ -639,8 +639,18 @@ def select_blogger_agent(text: str) -> dict[str, Any] | None:
     social_terms = (" x ", "x ", "x post", "twitter", "tweet", "social", "prispevek na x")
     if any(term in low for term in social_terms) and not any(term in low for term in article_terms):
         return None
+    score_text = text
+    if any(term in low for term in social_terms) and any(term in low for term in article_terms):
+        blog_part = re.split(
+            r"\s+a\s+n[aĂˇ]vrh\s+p[rĹ™]isp[eÄ›]vku\s+na\s+x\b|\s+a\s+.*?\b(?:x|twitter|tweet)\b",
+            text,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+        if blog_part:
+            score_text = blog_part
     candidates = [entry for entry in discover_agent_registry() if entry.get("kind") == "blogger"]
-    scored = [(text_matches_entry(text, entry), entry) for entry in candidates]
+    scored = [(text_matches_entry(score_text, entry), entry) for entry in candidates]
     scored = [(score, entry) for score, entry in scored if score > 0]
     if not scored:
         return None
