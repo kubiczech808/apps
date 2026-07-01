@@ -64,6 +64,10 @@ g.DEFAULT_SETTINGS = {
     "model": "auto",
     "reasoning_effort": "medium",
 }
+AGENT_REGISTRY_MD = g.AGENT_WORK_DIR / "AGENT_REGISTRY.md"
+AGENT_REGISTRY_JSON = g.AGENT_WORK_DIR / "AGENT_REGISTRY.json"
+AGENT_REGISTRY_OVERLAY = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.json"
+AGENT_REGISTRY_EXAMPLE = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.example.json"
 g.MODE_TIMEOUTS = {
     "fast": 180,
     "balanced": 300,
@@ -123,7 +127,9 @@ Email:
 Orchestrace ostatnich agentu:
 - Kdyz Jakub zada kampan, oznameni, produktovou novinku, marketingovy rollout nebo ukol pro btc-dca.com, automaticky uvazuj v rezimu koordinatora.
 - Nejdriv vytvor kampanovy brief: cil, cilove publikum, hlavni sdeleni, CTA, zdroje pravdy, navrhovane kanaly a rizika.
-- Pak rozhodni, ktere agenty zapojit podle `/home/openclaw2/.openclaw/virtual-assistant/AGENT_REGISTRY.md`.
+- Pak rozhodni, ktere agenty zapojit podle ziveho runtime katalogu v `/home/openclaw2/.openclaw/virtual-assistant/AGENT_REGISTRY.md` a `/home/openclaw2/.openclaw/virtual-assistant/AGENT_REGISTRY.json`.
+- Tento katalog je zdroj pravdy pro aktualni specializace agentu. Pokud je v konfliktu se starsim prikladem v promptu nebo pameti, vyhrava katalog.
+- Budouci agenty a zmeny kompetenci se pridavaji pres `/home/openclaw2/.openclaw/virtual-assistant/AGENT_CAPABILITIES.json` nebo pres nove runtime configy.
 - Blogovaci agenti nejsou jen Agent C. Kazdy soubor `/home/openclaw2/.openclaw/*-blogger-config.json` predstavuje samostatneho blogovaciho agenta s vlastni instanci, konfiguraci, cronem, Telegramem a AI klici.
 - Dynamicky seznam blogovacich agentu dostavas v runtime kontextu. Pokud tam vidis Agent JAMU, Agent OZ nebo jinou instanci, povazuj ji za realne dostupneho agenta v OpenClaw.
 - Typicky routing pro blogy:
@@ -183,7 +189,7 @@ def virtual_assistant_templates() -> dict[Path, str]:
             "Pracuje cesky, strucne, prakticky a lidsky.",
             "Jeji poslani je byt najimatelnou asistentkou pro klienty: hledat vhodnou praci, pripravovat nabidky po schvaleni a vykonavat asistentske ukoly.",
             "Pomaha s organizaci, prioritami, drafty, shrnutimi, navazujicimi kroky, researchi, klientskymi podklady a koordinaci.",
-            "Umi fungovat jako orchestrace Jakubovych agentu: rozpadne kampan na ukoly, zada je Agentum C/M/D/G podle role a overi vysledky.",
+            "Umi fungovat jako orchestrace Jakubovych agentu: rozpadne kampan na ukoly, vybere cil podle ziveho AGENT_REGISTRY a overi vysledky.",
             "Nesmí se zaseknout v opakovanych dotazech; ma sama pripravovat hotove navrhy a ptat se jen na skutecne blokery.",
             "Ma zakladni browser check pres headless Chromium helper; nema tvrdit, ze se stranka neda nacist, dokud helper nezkusi.",
             "Ma Playwright helper pro browser ukoly; bezne formulare vcetne komentaru ma na Jakubovo zadani vyplnit i odeslat, u citlivych externich kroku pripravi praci kolem nich a vyzada si schvaleni.",
@@ -291,11 +297,380 @@ def virtual_assistant_templates() -> dict[Path, str]:
     }
 
 
+def unique_items(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        value = str(item or "").strip()
+        key = g.normalize_text(value)
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return result
+
+
+def domain_from_url(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    if "://" not in value:
+        value = "https://" + value
+    parsed = urllib.parse.urlparse(value)
+    domain = (parsed.netloc or parsed.path).split("/", 1)[0].lower()
+    return domain.removeprefix("www.")
+
+
+def registry_entry(
+    agent_id: str,
+    display_name: str,
+    kind: str,
+    aliases: list[str],
+    capabilities: list[str],
+    domains: list[str] | None = None,
+    channels: dict[str, str] | None = None,
+    notes: str = "",
+    proof: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": agent_id,
+        "display_name": display_name,
+        "kind": kind,
+        "aliases": unique_items([agent_id, display_name, *aliases]),
+        "capabilities": unique_items(capabilities),
+        "domains": unique_items(domains or []),
+        "channels": channels or {},
+        "notes": notes,
+        "proof": unique_items(proof or []),
+    }
+
+
+def discover_blogger_agent_entries() -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    try:
+        cfg_paths = sorted(g.OPENCLAW_DIR.glob("*-blogger-config.json"))
+    except Exception:
+        cfg_paths = []
+    for cfg_path in cfg_paths:
+        instance = cfg_path.name.removesuffix("-blogger-config.json")
+        try:
+            data = json.loads(cfg_path.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            data = {}
+        site_url = str(data.get("WP_SITE_URL") or data.get("wp_site_url") or "")
+        domain = domain_from_url(site_url)
+        agent_name = str(data.get("agent_name") or "").strip()
+        display = agent_name or f"Agent {instance}"
+        status = str(data.get("wp_post_status") or "").strip() or "draft/publish podle configu"
+        aliases = [
+            instance,
+            instance.replace("-", " "),
+            agent_name,
+            str(data.get("site_name") or ""),
+            domain,
+            domain.replace("-", " ") if domain else "",
+        ]
+        low = g.normalize_text(" ".join([instance, agent_name, domain]))
+        if "btc-dca" in low or "btc dca" in low:
+            aliases.extend(["agent c", "agenta c", "btc-dca", "btc dca"])
+        if "osobnizkusenosti" in low or "osobni zkusenosti" in low:
+            aliases.extend(["agent oz", "agenta oz", "oz", "osobni zkusenosti", "osobnizkusenosti"])
+        entries.append(registry_entry(
+            instance,
+            display,
+            "blogger",
+            aliases,
+            [
+                "wordpress_blog",
+                "article_draft",
+                "article_publish_when_explicitly_requested",
+                f"default_status:{status}",
+            ],
+            domains=[domain] if domain else [],
+            channels={
+                "config": str(cfg_path),
+                "state": str(g.OPENCLAW_DIR / f"{instance}-blogger-state.json"),
+                "log": str(g.OPENCLAW_DIR / "logs" / f"{instance}-blogger.log"),
+                "runner": f"/home/openclaw2/scripts/btc-dca-blogger.py --instance {instance}",
+            },
+            notes="Use this agent for its configured WordPress site/domain. Do not route by old agent names when domain says otherwise.",
+            proof=[
+                str(cfg_path),
+                str(g.OPENCLAW_DIR / f"{instance}-blogger-state.json"),
+                str(g.OPENCLAW_DIR / "logs" / f"{instance}-blogger.log"),
+            ],
+        ))
+    return entries
+
+
+def builtin_agent_entries() -> list[dict[str, Any]]:
+    return [
+        registry_entry(
+            "agent-d",
+            "Agent D",
+            "social",
+            ["agent d", "agenta d", "x", "twitter", "tweet", "social", "prispevek na x", "x post"],
+            ["x_social_post", "x_thread", "social_engagement", "btc-dca.com_social"],
+            domains=["btc-dca.com"],
+            channels={
+                "state": "/home/openclaw2/x-post-state.json",
+                "service": "x-approve.service",
+                "workflows": "x-poster-daily.yml, engagement-hourly.yml, engagement-summary.yml",
+            },
+            notes="Owns X/social tasks. Do not send btc-dca.com X posts to the btc-dca WordPress blogger.",
+            proof=["/home/openclaw2/x-post-state.json", ".rpi-output-poster"],
+        ),
+        registry_entry(
+            "agent-m",
+            "Agent M",
+            "syndication",
+            ["agent m", "agenta m", "medium", "dev", "dev.to", "hashnode", "syndikace"],
+            ["medium_publish", "dev_to_publish", "hashnode_publish", "article_syndication"],
+            domains=["medium.com", "dev.to", "hashnode.com"],
+            channels={
+                "workflow": "agent-m-publish.yml",
+                "trigger": ".github/agent-m-trigger.txt",
+                "inbox": "/home/openclaw2/.openclaw/agent-m-inbox.jsonl",
+            },
+            notes="Owns Medium/DEV/Hashnode publishing and syndication.",
+            proof=["GitHub Actions agent-m-publish.yml", "/home/openclaw2/.openclaw/agent-m-inbox.jsonl"],
+        ),
+        registry_entry(
+            "agent-g",
+            "Agent G",
+            "operations",
+            ["agent g", "agenta g", "ops", "provoz", "debug", "runner", "systemd", "deploy", "token", "auth"],
+            ["technical_debug", "workflow_repair", "runner_health", "systemd_service", "auth_and_secret_diagnostics"],
+            channels={
+                "inbox": "/home/openclaw2/.openclaw/agent-g-inbox.jsonl",
+                "logs": "/home/openclaw2/.openclaw/logs/",
+            },
+            notes="Use for technical/runtime blockers in other agents.",
+            proof=["service status", "workflow output", "logs"],
+        ),
+        registry_entry(
+            "virtual-assistant",
+            "Virtualni asistentka",
+            "orchestrator",
+            ["virtualni asistentka", "asistentka", "koordinator"],
+            ["task_intake", "agent_routing", "follow_up", "email_instruction_processing", "browser_task_handoff"],
+            channels={
+                "workspace": str(g.AGENT_WORK_DIR),
+                "orchestration": str(g.AGENT_WORK_DIR / "ORCHESTRATION.md"),
+            },
+            notes="Coordinates agents and reports only useful final status or real blockers to Jakub.",
+            proof=[str(g.AGENT_WORK_DIR / "ORCHESTRATION.md")],
+        ),
+    ]
+
+
+def overlay_agent_entries() -> list[dict[str, Any]]:
+    if not AGENT_REGISTRY_OVERLAY.exists():
+        return []
+    try:
+        data = json.loads(AGENT_REGISTRY_OVERLAY.read_text(encoding="utf-8", errors="replace"))
+    except Exception as exc:
+        g.log(f"Agent registry overlay read failed: {type(exc).__name__}: {exc}")
+        return []
+    raw_entries = data.get("agents", data) if isinstance(data, dict) else data
+    if not isinstance(raw_entries, list):
+        return []
+    entries: list[dict[str, Any]] = []
+    for raw in raw_entries:
+        if not isinstance(raw, dict):
+            continue
+        agent_id = str(raw.get("id") or "").strip()
+        if not agent_id:
+            continue
+        entries.append(registry_entry(
+            agent_id,
+            str(raw.get("display_name") or agent_id),
+            str(raw.get("kind") or "custom"),
+            list(raw.get("aliases") or []),
+            list(raw.get("capabilities") or []),
+            domains=list(raw.get("domains") or []),
+            channels=dict(raw.get("channels") or {}),
+            notes=str(raw.get("notes") or ""),
+            proof=list(raw.get("proof") or []),
+        ))
+    return entries
+
+
+def merge_agent_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        agent_id = str(entry.get("id") or "").strip()
+        if not agent_id:
+            continue
+        existing = merged.get(agent_id)
+        if not existing:
+            merged[agent_id] = entry
+            continue
+        existing["display_name"] = entry.get("display_name") or existing.get("display_name") or agent_id
+        existing["kind"] = entry.get("kind") or existing.get("kind") or "custom"
+        existing["aliases"] = unique_items(list(existing.get("aliases") or []) + list(entry.get("aliases") or []))
+        existing["capabilities"] = unique_items(list(existing.get("capabilities") or []) + list(entry.get("capabilities") or []))
+        existing["domains"] = unique_items(list(existing.get("domains") or []) + list(entry.get("domains") or []))
+        channels = dict(existing.get("channels") or {})
+        channels.update(dict(entry.get("channels") or {}))
+        existing["channels"] = channels
+        existing["notes"] = entry.get("notes") or existing.get("notes") or ""
+        existing["proof"] = unique_items(list(existing.get("proof") or []) + list(entry.get("proof") or []))
+    return sorted(merged.values(), key=lambda item: (str(item.get("kind") or ""), str(item.get("id") or "")))
+
+
+def discover_agent_registry() -> list[dict[str, Any]]:
+    return merge_agent_entries([
+        *discover_blogger_agent_entries(),
+        *builtin_agent_entries(),
+        *overlay_agent_entries(),
+    ])
+
+
+def write_agent_registry_files() -> None:
+    registry = discover_agent_registry()
+    AGENT_REGISTRY_JSON.write_text(json.dumps({
+        "generated_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "source": [
+            str(g.OPENCLAW_DIR / "*-blogger-config.json"),
+            str(AGENT_REGISTRY_OVERLAY),
+            "runtime builtins for Agent D/M/G and Virtualni asistentka",
+        ],
+        "agents": registry,
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    lines = [
+        "# AGENT REGISTRY",
+        "",
+        "Generated from live OpenClaw runtime state. Do not edit generated entries by hand.",
+        f"Generated at: {dt.datetime.now().astimezone().isoformat(timespec='seconds')}",
+        "",
+        "To add a new agent or change competencies without code changes, edit:",
+        f"`{AGENT_REGISTRY_OVERLAY}`",
+        "",
+        "Routing rule: choose by capability + target domain/channel first, old agent names second.",
+        "",
+    ]
+    for entry in registry:
+        lines.extend([
+            f"## {entry.get('display_name')} (`{entry.get('id')}`)",
+            f"- Kind: {entry.get('kind')}",
+            f"- Aliases: {', '.join(entry.get('aliases') or [])}",
+            f"- Domains: {', '.join(entry.get('domains') or []) or '-'}",
+            f"- Capabilities: {', '.join(entry.get('capabilities') or [])}",
+        ])
+        channels = entry.get("channels") or {}
+        if channels:
+            lines.append("- Channels:")
+            for key, value in channels.items():
+                lines.append(f"  - {key}: `{value}`")
+        notes = str(entry.get("notes") or "").strip()
+        if notes:
+            lines.append(f"- Notes: {notes}")
+        lines.append("")
+    AGENT_REGISTRY_MD.write_text("\n".join(lines), encoding="utf-8")
+
+
+def virtual_assistant_agents_context() -> str:
+    registry = discover_agent_registry()
+    if not registry:
+        return ""
+    lines = [
+        "LIVE AGENT REGISTRY:",
+        "Use this current registry over older hard-coded examples. Route by capability + domain/channel.",
+    ]
+    for entry in registry:
+        aliases = ", ".join((entry.get("aliases") or [])[:8])
+        capabilities = ", ".join((entry.get("capabilities") or [])[:8])
+        domains = ", ".join(entry.get("domains") or [])
+        channel_bits = []
+        for key, value in list((entry.get("channels") or {}).items())[:3]:
+            channel_bits.append(f"{key}={value}")
+        line = (
+            f"- {entry.get('display_name')} id={entry.get('id')} kind={entry.get('kind')} "
+            f"domains={domains or '-'} capabilities={capabilities or '-'} aliases={aliases or '-'}"
+        )
+        if channel_bits:
+            line += f" channels={'; '.join(channel_bits)}"
+        lines.append(line[:1200])
+    lines.extend([
+        "Routing reminders:",
+        "- X/social/Twitter tasks for btc-dca.com go to Agent D, not the btc-dca WordPress blogger.",
+        "- WordPress/blog/article tasks go to the blogger instance matching the requested domain.",
+        "- Medium/DEV/Hashnode tasks go to Agent M.",
+        "- Technical/runtime/auth/deploy blockers go to Agent G.",
+        "- If a future agent appears in AGENT_CAPABILITIES.json or a blogger config, treat it as available.",
+    ])
+    return "\n".join(lines)
+
+
+def text_matches_entry(text: str, entry: dict[str, Any]) -> int:
+    low = g.normalize_text(text)
+    score = 0
+    for domain in entry.get("domains") or []:
+        norm = g.normalize_text(str(domain))
+        if norm and norm in low:
+            score += 8
+    for alias in entry.get("aliases") or []:
+        norm = g.normalize_text(str(alias))
+        if norm and norm in low:
+            score += 5 if norm.startswith("agent ") else 3
+    for capability in entry.get("capabilities") or []:
+        norm = g.normalize_text(str(capability).replace("_", " "))
+        if norm and norm in low:
+            score += 2
+    return score
+
+
+def select_blogger_agent(text: str) -> dict[str, Any] | None:
+    low = g.normalize_text(text)
+    article_terms = (
+        "blog",
+        "wordpress",
+        "clanek",
+        "clanku",
+        "draft",
+        "article",
+        "post na web",
+        "osnova",
+        "recenz",
+        "srovnani",
+        "zkusenost",
+    )
+    social_terms = (" x ", "x ", "x post", "twitter", "tweet", "social", "prispevek na x")
+    if any(term in low for term in social_terms) and not any(term in low for term in article_terms):
+        return None
+    candidates = [entry for entry in discover_agent_registry() if entry.get("kind") == "blogger"]
+    scored = [(text_matches_entry(text, entry), entry) for entry in candidates]
+    scored = [(score, entry) for score, entry in scored if score > 0]
+    if not scored:
+        return None
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return scored[0][1]
+
+
 def ensure_virtual_assistant_workspace() -> None:
     g.AGENT_WORK_DIR.mkdir(parents=True, exist_ok=True)
     for path, content in virtual_assistant_templates().items():
+        if path == AGENT_REGISTRY_MD:
+            continue
         if not path.exists():
             path.write_text(content, encoding="utf-8")
+    if not AGENT_REGISTRY_EXAMPLE.exists():
+        AGENT_REGISTRY_EXAMPLE.write_text(json.dumps({
+            "agents": [
+                {
+                    "id": "future-agent",
+                    "display_name": "Agent Future",
+                    "kind": "custom",
+                    "aliases": ["agent future", "future"],
+                    "domains": ["example.com"],
+                    "capabilities": ["what this agent owns"],
+                    "channels": {"inbox": "/home/openclaw2/.openclaw/future-agent-inbox.jsonl"},
+                    "notes": "Copy this object to AGENT_CAPABILITIES.json and edit it. Do not store secrets here.",
+                }
+            ]
+        }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_agent_registry_files()
 
 
 base_load_env = g.load_env
@@ -583,6 +958,11 @@ def resolve_blogger_instance(candidates: tuple[str, ...], markers: tuple[str, ..
 
 
 def blogger_delegation_target(text: str) -> tuple[str, str] | None:
+    entry = select_blogger_agent(text)
+    if entry:
+        return str(entry.get("id")), str(entry.get("display_name") or entry.get("id"))
+    return None
+
     low = g.normalize_text(text)
     if any(term in low for term in ("agent oz", "agenta oz", "osobni zkusenosti", "osobní zkušenosti", "osobnizkusenosti")):
         instance = resolve_blogger_instance(
@@ -809,7 +1189,9 @@ def parse_blogger_delegation_request(text: str) -> str | None:
 
     instance, agent_name = target
     publish = explicit_publish_requested(text)
-    if agent_name in {"Agent OZ", "Agent osobnizkusenosti-cz"} and publish:
+    target_low = g.normalize_text(f"{instance} {agent_name}")
+    personal_experience_target = any(term in target_low for term in ("agent oz", "osobnizkusenosti", "osobni zkusenosti"))
+    if personal_experience_target and publish:
         return (
             "U Agenta OZ jsem rozpoznala pozadavek s publikaci. Protoze Osobni zkusenosti maji vychozi rezim draft, "
             "publikaci nespoustim automaticky. Potvrd prosim jednou vetou `publikuj Agent OZ: ...`, pokud ma jit opravdu ven."
@@ -861,18 +1243,18 @@ def parse_blogger_delegation_request(text: str) -> str | None:
     mode = "publish" if publish else "draft"
     append_orchestration_event(agent_name, instance, topic, mode, runner)
 
-    if agent_name in {"Agent OZ", "Agent osobnizkusenosti-cz"}:
+    if personal_experience_target:
         return "\n".join([
-            f"Zadano agentovi osobnizkusenosti-cz jako draft, bez publikace.",
+            f"Zadano {agent_name} jako draft, bez publikace.",
             f"Instance: `{instance}`",
             f"Tema: {topic}",
             f"State: `{state_path}`",
             f"Log: `{log_path}`",
             f"Runner: `{runner}`",
-            "Az draft dobehne, overim vystup ze state/logu. Agenta C jsem nepouzila.",
+            "Az draft dobehne, overim vystup ze state/logu. Nepouzila jsem jineho agenta.",
         ])
     return "\n".join([
-        f"Zadano Agentovi C.",
+        f"Zadano {agent_name}.",
         f"Instance: `{instance}`",
         f"Rezim: {'publikace' if publish else 'draft/article bez publikace'}",
         f"Tema: {topic}",
@@ -957,6 +1339,9 @@ def browser_check_context(text: str) -> str:
 
 def virtual_assistant_build_web_context(text: str) -> str:
     parts = []
+    agent_context = virtual_assistant_agents_context()
+    if agent_context:
+        parts.append(agent_context)
     browser_context = browser_check_context(text)
     if browser_context:
         parts.append(browser_context)
@@ -987,6 +1372,9 @@ def _call_gemini_model(history: list[dict[str, str]], api_key: str, model: str) 
     except Exception:
         blogger_context = ""
     system_instruction = g.SYSTEM_PROMPT
+    registry_context = virtual_assistant_agents_context()
+    if registry_context:
+        system_instruction = f"{system_instruction}\n\n{registry_context}"
     if blogger_context:
         system_instruction = f"{system_instruction}\n\n{blogger_context}"
     payload = json.dumps({

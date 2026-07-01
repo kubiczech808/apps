@@ -267,3 +267,17 @@ Pouzivej jako stavovy board pro kampane a delegace.
 )
 
 print("virtual_assistant_workspace_updated=yes")
+
+try:
+    import importlib.util
+
+    runtime_path = Path("/home/openclaw2/scripts/agent_virtual_assistant.py")
+    spec = importlib.util.spec_from_file_location("virtual_assistant_runtime", runtime_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot import {runtime_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.ensure_virtual_assistant_workspace()
+    print("virtual_assistant_agent_registry_refreshed=yes")
+except Exception as exc:
+    print(f"virtual_assistant_agent_registry_refreshed=failed:{type(exc).__name__}")
