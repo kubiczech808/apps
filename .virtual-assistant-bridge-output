@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-01T18:47:39Z
+checked_at_utc=2026-07-01T18:55:56Z
 shared_brain_intro_telegram_sent=True
 playwright_install=ok
 telegram_token_present= True
@@ -29,28 +29,31 @@ routing_smoke_social= True
 routing_smoke_article_text= zarid at vznikne draft clanku na osobnizkusenosti.cz; obsah muze byt cokoliv, jde o test
 routing_smoke_x_only_blogger_target= None
 routing_smoke_btc_blog_target= ('btc-dca', 'Agent btc-dca')
-[2026-07-01 20:47:39] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+routing_smoke_oz_explicit_target= ('osobnizkusenosti-cz', 'oz')
+delegation_monitor_available= True
+orchestration_tasks_file= /home/openclaw2/.openclaw/virtual-assistant/ORCHESTRATION_TASKS.json
+[2026-07-01 20:55:56] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 ai_smoke_ok= True
 gmail_google_meta_1=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_2=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
 gmail_setup_poll=ok
 telegram_state_offset= 309696993
 virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 11
+virtual_assistant_lock_age_sec= 14
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-07-01T18:47:39Z
-virtual_assistant_log_signal_1=[2026-07-01 18:44:14] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_2=[2026-07-01 18:52:20] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
-virtual_assistant_log_signal_3=[2026-07-01 19:13:00] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_4=[2026-07-01 19:16:05] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_5=[2026-07-01 19:38:16] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_6=[2026-07-01 19:54:29] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_7=[2026-07-01 20:10:28] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_8=[2026-07-01 20:17:46] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_9=[2026-07-01 20:37:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_10=[2026-07-01 20:47:35] Virtual Assistant email worker started
-virtual_assistant_log_signal_11=[2026-07-01 20:47:35] Agent G daemon started
-virtual_assistant_log_signal_12=[2026-07-01 20:47:39] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_mtime_utc= 2026-07-01T18:55:56Z
+virtual_assistant_log_signal_1=[2026-07-01 19:38:16] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_2=[2026-07-01 19:54:29] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_3=[2026-07-01 20:10:28] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_4=[2026-07-01 20:17:46] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_5=[2026-07-01 20:37:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_6=[2026-07-01 20:47:35] Virtual Assistant email worker started
+virtual_assistant_log_signal_7=[2026-07-01 20:47:35] Agent G daemon started
+virtual_assistant_log_signal_8=[2026-07-01 20:47:39] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_9=[2026-07-01 20:51:15] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_10=[2026-07-01 20:55:53] Virtual Assistant email worker started
+virtual_assistant_log_signal_11=[2026-07-01 20:55:53] Agent G daemon started
+virtual_assistant_log_signal_12=[2026-07-01 20:55:56] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
@@ -81,46 +84,46 @@ va_2026_06_29_log_27=[2026-06-29 12:29:43] Model route: gpt-5.4-mini tier=cheap 
 va_2026_06_29_log_28=[2026-06-29 12:30:20] -> Hotovo:
 va_2026_06_29_log_29=[2026-06-29 13:42:33] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_30=[2026-06-29 13:42:59] Email processed and replied: from=<email>@google.com trusted=False subject=Další informace o aktualizovaných smluvních podmínkách
-va_today_log_1=[2026-07-01 14:05:24] Virtual Assistant email worker started
-va_today_log_2=[2026-07-01 14:05:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_3=[2026-07-01 14:10:43] <- zarid at vznikne draft clanku na osobnizkusenosti.cz a navrh prispevku na X pro btc-dca.com , obsah muze byt cokoliv, jd
-va_today_log_4=[2026-07-01 14:19:12] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
-va_today_log_5=[2026-07-01 14:20:45] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_6=[2026-07-01 14:31:38] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_7=[2026-07-01 14:35:01] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_8=[2026-07-01 14:54:10] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_9=[2026-07-01 15:04:31] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_10=[2026-07-01 15:25:50] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_11=[2026-07-01 15:43:59] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_12=[2026-07-01 15:45:08] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_13=[2026-07-01 15:50:34] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_14=[2026-07-01 15:53:11] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_15=[2026-07-01 16:04:15] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_16=[2026-07-01 16:14:19] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_17=[2026-07-01 16:17:35] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_18=[2026-07-01 16:24:57] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_19=[2026-07-01 16:32:48] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_20=[2026-07-01 16:33:01] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_21=[2026-07-01 16:37:39] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_22=[2026-07-01 17:23:11] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_23=[2026-07-01 17:25:49] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_24=[2026-07-01 17:52:31] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_25=[2026-07-01 18:11:47] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_26=[2026-07-01 18:34:05] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
-va_today_log_27=[2026-07-01 18:37:54] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
-va_today_log_28=[2026-07-01 18:44:14] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_29=[2026-07-01 18:52:20] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
-va_today_log_30=[2026-07-01 19:13:00] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_31=[2026-07-01 19:16:05] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_32=[2026-07-01 19:38:16] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_33=[2026-07-01 19:54:29] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_34=[2026-07-01 20:10:28] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_35=[2026-07-01 20:17:46] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_36=[2026-07-01 20:37:31] <- vystup?
-va_today_log_37=[2026-07-01 20:37:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_38=[2026-07-01 20:38:58] -> Hotovo:
-va_today_log_39=[2026-07-01 20:47:35] Virtual Assistant email worker started
-va_today_log_40=[2026-07-01 20:47:39] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_1=[2026-07-01 14:20:45] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_2=[2026-07-01 14:31:38] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_3=[2026-07-01 14:35:01] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_4=[2026-07-01 14:54:10] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_5=[2026-07-01 15:04:31] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_6=[2026-07-01 15:25:50] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_7=[2026-07-01 15:43:59] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_8=[2026-07-01 15:45:08] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_9=[2026-07-01 15:50:34] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_10=[2026-07-01 15:53:11] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_11=[2026-07-01 16:04:15] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_12=[2026-07-01 16:14:19] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_13=[2026-07-01 16:17:35] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_14=[2026-07-01 16:24:57] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_15=[2026-07-01 16:32:48] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_16=[2026-07-01 16:33:01] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_17=[2026-07-01 16:37:39] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_18=[2026-07-01 17:23:11] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_19=[2026-07-01 17:25:49] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_20=[2026-07-01 17:52:31] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_21=[2026-07-01 18:11:47] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_22=[2026-07-01 18:34:05] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
+va_today_log_23=[2026-07-01 18:37:54] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
+va_today_log_24=[2026-07-01 18:44:14] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_25=[2026-07-01 18:52:20] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
+va_today_log_26=[2026-07-01 19:13:00] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_27=[2026-07-01 19:16:05] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_28=[2026-07-01 19:38:16] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_29=[2026-07-01 19:54:29] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_30=[2026-07-01 20:10:28] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_31=[2026-07-01 20:17:46] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_32=[2026-07-01 20:37:31] <- vystup?
+va_today_log_33=[2026-07-01 20:37:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_34=[2026-07-01 20:38:58] -> Hotovo:
+va_today_log_35=[2026-07-01 20:47:35] Virtual Assistant email worker started
+va_today_log_36=[2026-07-01 20:47:39] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_37=[2026-07-01 20:51:15] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_38=[2026-07-01 20:55:53] Virtual Assistant delegation monitor started
+va_today_log_39=[2026-07-01 20:55:53] Virtual Assistant email worker started
+va_today_log_40=[2026-07-01 20:55:56] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 blogger_config_1=instance=btc-dca agent=btc-dca site=https://www.btc-dca.com status=publish
 blogger_config_2=instance=osobnizkusenosti-cz agent=oz site=https://osobnizkusenosti.cz status=draft
 blogger_config_3=instance=oz agent=Agent OZ site=https://osobnizkusenosti.cz status=draft
