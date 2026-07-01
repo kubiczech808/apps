@@ -68,6 +68,7 @@ AGENT_REGISTRY_MD = g.AGENT_WORK_DIR / "AGENT_REGISTRY.md"
 AGENT_REGISTRY_JSON = g.AGENT_WORK_DIR / "AGENT_REGISTRY.json"
 AGENT_REGISTRY_OVERLAY = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.json"
 AGENT_REGISTRY_EXAMPLE = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.example.json"
+SHARED_BRAIN_SCRIPT = Path("/home/openclaw2/scripts/openclaw_shared_brain.py")
 g.MODE_TIMEOUTS = {
     "fast": 180,
     "balanced": 300,
@@ -85,6 +86,7 @@ Tvoje role:
 - odpovidat cesky, strucne, lidsky a prakticky,
 - pripravovat navrhy odpovedi, checklisty, kratke plany, shrnuti, drafty, tabulky, navazujici kroky a klientsky prehledne vystupy,
 - pravidelne procitat vlastni emailovou schranku a na instrukce od Jakuba reagovat jako na pracovni zadani,
+- pred odpovedi na veci zavisle na historii/projektech/preferencich pouzit OpenClaw Shared Brain, pokud je dostupny,
 - udrzovat kontext v oddelenem workspace a nezasahovat do pameti Agenta G, pokud k tomu Jakub neda jasny pokyn,
 - byt proaktivni jen kdyz to setri Jakubuv cas; pokud staci kratke potvrzeni nebo jeden dalsi krok, dej ho.
 
@@ -125,6 +127,9 @@ Email:
 - Do odpovedi nikdy nevkladej tokeny, cookies, hesla ani interni konfiguraci.
 
 Orchestrace ostatnich agentu:
+- Sdilena pamet: OpenClaw Shared Brain je spolecny druhy mozek agentu. U ukolu, ktere zavisi na historii, agentich kompetencich, dlouhodobych preferencich, projektech nebo predchozich rozhodnutich, nejdriv hledej v brain kontextu a az potom odpovidej.
+- Brain pouziva Markdown poznamky s wiki odkazy, lokani index a nastroje `brain_search`, `brain_get`, `brain_neighbors`, `brain_put`.
+- Dulezite stabilni zavery a preference ukladej do Shared Brain pres `brain_put`/CLI, pokud nejsou tajne.
 - Kdyz Jakub zada kampan, oznameni, produktovou novinku, marketingovy rollout nebo ukol pro btc-dca.com, automaticky uvazuj v rezimu koordinatora.
 - Nejdriv vytvor kampanovy brief: cil, cilove publikum, hlavni sdeleni, CTA, zdroje pravdy, navrhovane kanaly a rizika.
 - Pak rozhodni, ktere agenty zapojit podle ziveho runtime katalogu v `/home/openclaw2/.openclaw/virtual-assistant/AGENT_REGISTRY.md` a `/home/openclaw2/.openclaw/virtual-assistant/AGENT_REGISTRY.json`.
@@ -461,6 +466,21 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
             notes="Coordinates agents and reports only useful final status or real blockers to Jakub.",
             proof=[str(g.AGENT_WORK_DIR / "ORCHESTRATION.md")],
         ),
+        registry_entry(
+            "openclaw-shared-brain",
+            "OpenClaw Shared Brain",
+            "memory",
+            ["shared brain", "druhy mozek", "humanagentwiki", "brain", "shared memory", "spolecna pamet"],
+            ["brain_search", "brain_get", "brain_neighbors", "brain_put", "markdown_knowledge_graph", "agent_shared_memory"],
+            channels={
+                "cli": "/home/openclaw2/scripts/openclaw_shared_brain.py",
+                "http": "http://127.0.0.1:8812",
+                "mcp": "http://127.0.0.1:8812/mcp",
+                "notes": "/home/openclaw2/.openclaw/shared-brain/notes",
+            },
+            notes="Shared local knowledge base for all OpenClaw agents. Search it before answering context/history/preference-sensitive tasks.",
+            proof=["/home/openclaw2/.openclaw/shared-brain/index.json", "openclaw-shared-brain.service"],
+        ),
     ]
 
 
@@ -601,6 +621,51 @@ def virtual_assistant_agents_context() -> str:
         "- If a future agent appears in AGENT_CAPABILITIES.json or a blogger config, treat it as available.",
     ])
     return "\n".join(lines)
+
+
+def shared_brain_context(text: str) -> str:
+    if not SHARED_BRAIN_SCRIPT.exists():
+        return ""
+    low = g.normalize_text(text)
+    trigger_terms = (
+        "pameti",
+        "pamet",
+        "histor",
+        "kontext",
+        "agent",
+        "routing",
+        "kompetenc",
+        "preference",
+        "projekt",
+        "btc-dca",
+        "osobnizkusenosti",
+        "medium",
+        "dev",
+        "x ",
+        "telegram",
+        "email",
+        "openclaw",
+        "nasad",
+        "deploy",
+    )
+    if not any(term in low for term in trigger_terms):
+        return ""
+    try:
+        result = subprocess.run(
+            ["python3", str(SHARED_BRAIN_SCRIPT), "context", text, "-k", "5"],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
+        )
+    except Exception as exc:
+        g.log(f"Shared Brain context failed: {type(exc).__name__}: {exc}")
+        return ""
+    output = (result.stdout or result.stderr or "").strip()
+    if result.returncode != 0:
+        g.log(f"Shared Brain context nonzero: {output[:240]}")
+        return ""
+    return output[:5000]
 
 
 def text_matches_entry(text: str, entry: dict[str, Any]) -> int:
@@ -1352,6 +1417,9 @@ def virtual_assistant_build_web_context(text: str) -> str:
     agent_context = virtual_assistant_agents_context()
     if agent_context:
         parts.append(agent_context)
+    brain_context = shared_brain_context(text)
+    if brain_context:
+        parts.append(brain_context)
     browser_context = browser_check_context(text)
     if browser_context:
         parts.append(browser_context)

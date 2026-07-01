@@ -1,0 +1,130 @@
+name: OpenClaw Shared Brain bridge
+
+on:
+  push:
+    paths:
+      - .github/workflows/openclaw-shared-brain-bridge.yml
+      - .openclaw-shared-brain-trigger
+      - scripts/openclaw_shared_brain.py
+      - scripts/openclaw-shared-brain.service
+      - scripts/agent_virtual_assistant.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openclaw-shared-brain-bridge
+  cancel-in-progress: false
+
+jobs:
+  bridge:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy shared brain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo install -d -o openclaw2 -g openclaw2 -m 0755 /home/openclaw2/scripts
+          sudo install -d -o openclaw2 -g openclaw2 -m 0755 /home/openclaw2/.openclaw/shared-brain
+          sudo install -d -o openclaw2 -g openclaw2 -m 0755 /home/openclaw2/.openclaw/logs
+
+          sudo install -o openclaw2 -g openclaw2 -m 0755 scripts/openclaw_shared_brain.py /home/openclaw2/scripts/openclaw_shared_brain.py
+          sudo install -o root -g root -m 0644 scripts/openclaw-shared-brain.service /etc/systemd/system/openclaw-shared-brain.service
+
+          sudo -u openclaw2 -H python3 /home/openclaw2/scripts/openclaw_shared_brain.py init
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now openclaw-shared-brain.service
+          sudo systemctl restart openclaw-shared-brain.service
+          sleep 2
+
+          sudo -u openclaw2 -H python3 /home/openclaw2/scripts/openclaw_shared_brain.py search "agent routing btc-dca x osobnizkusenosti" -k 3
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          def get(path):
+              with urllib.request.urlopen(f"http://127.0.0.1:8812{path}", timeout=10) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          def post(path, payload):
+              req = urllib.request.Request(
+                  f"http://127.0.0.1:8812{path}",
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+              )
+              with urllib.request.urlopen(req, timeout=10) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          health = get("/health")
+          print("shared_brain_health=", health)
+          search = post("/tools/brain_search", {"query": "Agent D X btc-dca", "k": 2})
+          print("shared_brain_tool_search_count=", len(search.get("result") or []))
+          mcp = post("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+          tools = ((mcp.get("result") or {}).get("tools") or [])
+          print("shared_brain_mcp_tools=", ",".join(tool.get("name", "") for tool in tools))
+          PY
+
+          echo "openclaw-shared-brain.service: $(systemctl is-active openclaw-shared-brain.service || true)"
+          journalctl -u openclaw-shared-brain.service -n 40 --no-pager || true
+
+      - name: Commit sanitized bridge output
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "bridge_output_format=safe-summary-v1"
+            echo "checked_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "shared_brain_service=$(systemctl is-active openclaw-shared-brain.service 2>/dev/null || true)"
+            sudo -u openclaw2 -H python3 - <<'PY'
+          import json
+          import urllib.request
+          from pathlib import Path
+
+          index_path = Path("/home/openclaw2/.openclaw/shared-brain/index.json")
+          try:
+              index = json.loads(index_path.read_text(encoding="utf-8", errors="replace"))
+          except Exception:
+              index = {}
+          print("shared_brain_backend=", index.get("backend"))
+          print("shared_brain_notes_dir=", index.get("notes_dir"))
+          print("shared_brain_file_count=", index.get("file_count"))
+          print("shared_brain_chunk_count=", index.get("chunk_count"))
+          try:
+              with urllib.request.urlopen("http://127.0.0.1:8812/health", timeout=10) as response:
+                  health = json.loads(response.read().decode("utf-8"))
+              print("shared_brain_http_ok=", bool(health.get("ok")))
+              print("shared_brain_http_tools=", ",".join(health.get("tools") or []))
+          except Exception as exc:
+              print(f"shared_brain_http_ok=failed:{type(exc).__name__}")
+          try:
+              import importlib.util
+              spec = importlib.util.spec_from_file_location("brain", "/home/openclaw2/scripts/openclaw_shared_brain.py")
+              module = importlib.util.module_from_spec(spec)
+              spec.loader.exec_module(module)
+              hits = module.brain_search("agent routing btc-dca x osobnizkusenosti", 5)
+              print("shared_brain_search_hits=", len(hits))
+              for idx, hit in enumerate(hits[:5], 1):
+                  print(f"shared_brain_search_{idx}=title={hit.get('title')} file={hit.get('file')} score={hit.get('score')}")
+              print("shared_brain_neighbors=", module.brain_neighbors("Agent Routing"))
+          except Exception as exc:
+              print(f"shared_brain_module_check=failed:{type(exc).__name__}:{str(exc)[:180]}")
+          PY
+          } > .openclaw-shared-brain-output
+
+          git config user.name "RPi Runner"
+          git config user.email "rpi-runner@openclaw"
+          git add .openclaw-shared-brain-output
+          if git diff --cached --quiet; then
+            echo "No shared brain bridge output changes."
+          else
+            git commit -m "openclaw-shared-brain: bridge output"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push
+          fi

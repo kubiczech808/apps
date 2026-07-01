@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenClaw Shared Brain local memory service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw2
+Group=openclaw2
+Environment=PYTHONUNBUFFERED=1
+Environment=OPENCLAW_DIR=/home/openclaw2/.openclaw
+Environment=OPENCLAW_BRAIN_DIR=/home/openclaw2/.openclaw/shared-brain
+WorkingDirectory=/home/openclaw2/.openclaw/shared-brain
+ExecStart=/usr/bin/python3 /home/openclaw2/scripts/openclaw_shared_brain.py serve
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
