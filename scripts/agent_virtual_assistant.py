@@ -13,6 +13,7 @@ import base64
 import email.header
 import datetime as dt
 import email.utils
+import hashlib
 import json
 import os
 import re
@@ -68,6 +69,7 @@ AGENT_REGISTRY_MD = g.AGENT_WORK_DIR / "AGENT_REGISTRY.md"
 AGENT_REGISTRY_JSON = g.AGENT_WORK_DIR / "AGENT_REGISTRY.json"
 AGENT_REGISTRY_OVERLAY = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.json"
 AGENT_REGISTRY_EXAMPLE = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.example.json"
+ORCHESTRATION_TASKS_FILE = g.AGENT_WORK_DIR / "ORCHESTRATION_TASKS.json"
 SHARED_BRAIN_SCRIPT = Path("/home/openclaw2/scripts/openclaw_shared_brain.py")
 g.MODE_TIMEOUTS = {
     "fast": 180,
@@ -158,6 +160,7 @@ Orchestrace ostatnich agentu:
 - Pri beznem potvrzeni delegace Jakubovi neukazuj state/log/runner cesty ani technicke detaily. Napis jen strucne ve stylu: `Deleguji: - tohle: Agent ABC - tamto: Agent 123`. Detaily patri do logu a ORCHESTRATION.
 - Ved stav v `/home/openclaw2/.openclaw/virtual-assistant/ORCHESTRATION.md`: task id, agent, zadani, stav, posledni kontakt, dukaz hotovo, blocker, dalsi krok.
 - Nehlas Jakubovi "hotovo", dokud nemas overovaci dukaz: publikovana URL, workflow output, log, state file, issue/comment summary nebo explicitni potvrzeni agenta.
+- Interni opravy, restarty, deploye a konfiguracni zmeny nejsou odpoved na klientsky delegovany ukol. Jakubovi je neposilej jako "opraveno", pokud se ptal na stav prace agentu; misto toho over stav delegace a vystup.
 - Pokud agent nereaguje nebo workflow nebezi, res to sama: zkus bezpecny retry, over runner/sluzbu/logy, zkontroluj konfiguraci, a az potom reportuj jeden konkretni blocker.
 - Zpet Jakubovi pis az kdyz je kampan hotova napric zapojenymi agenty, nebo kdyz narazis na blocker, ktery se ti nepodarilo vyresit po rozumnych pokusech.
 
@@ -1037,7 +1040,6 @@ def blogger_delegation_target(text: str) -> tuple[str, str] | None:
     entry = select_blogger_agent(text)
     if entry:
         return str(entry.get("id")), str(entry.get("display_name") or entry.get("id"))
-    return None
 
     low = g.normalize_text(text)
     if any(term in low for term in ("agent oz", "agenta oz", "osobni zkusenosti", "osobní zkušenosti", "osobnizkusenosti")):
@@ -1106,6 +1108,59 @@ def append_orchestration_event(agent_name: str, instance: str, topic: str, mode:
         handle.write(line)
 
 
+def delegation_task_id(agent_name: str, instance: str, topic: str, kind: str) -> str:
+    raw = f"{agent_name}|{instance}|{kind}|{topic}".encode("utf-8", errors="replace")
+    return hashlib.sha1(raw).hexdigest()[:16]
+
+
+def load_orchestration_tasks() -> list[dict[str, Any]]:
+    try:
+        data = json.loads(ORCHESTRATION_TASKS_FILE.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def save_orchestration_tasks(tasks: list[dict[str, Any]]) -> None:
+    ORCHESTRATION_TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ORCHESTRATION_TASKS_FILE.write_text(json.dumps(tasks[-200:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def upsert_orchestration_task(
+    agent_name: str,
+    instance: str,
+    topic: str,
+    kind: str,
+    runner: str,
+    proof: dict[str, str] | None = None,
+) -> str:
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    task_id = delegation_task_id(agent_name, instance, topic, kind)
+    tasks = load_orchestration_tasks()
+    existing = next((item for item in tasks if item.get("id") == task_id), None)
+    item = existing or {
+        "id": task_id,
+        "created_at": now,
+        "status": "ASSIGNED",
+        "last_reported_status": "",
+    }
+    item.update({
+        "updated_at": now,
+        "agent": agent_name,
+        "instance": instance,
+        "kind": kind,
+        "topic": topic,
+        "runner": runner,
+        "proof": proof or {},
+    })
+    if existing is None:
+        tasks.append(item)
+    save_orchestration_tasks(tasks)
+    return task_id
+
+
 def append_jsonl(path: Path, item: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -1132,6 +1187,14 @@ def assign_agent_d_x_idea(text: str) -> tuple[bool, str]:
         state["custom_instructions"] = items
         state["virtual_assistant_last_assignment"] = idea
         g.write_json(state_path, state)
+        upsert_orchestration_task(
+            "Agent D",
+            "x-poster",
+            text.strip(),
+            "x-social-draft",
+            str(state_path),
+            {"state": str(state_path), "workflow_output": ".rpi-output-poster"},
+        )
         return True, str(state_path)
     except Exception as exc:
         inbox = g.OPENCLAW_DIR / "agent-d-inbox.jsonl"
@@ -1142,6 +1205,14 @@ def assign_agent_d_x_idea(text: str) -> tuple[bool, str]:
             "task": text.strip(),
             "error": str(exc)[:240],
         })
+        upsert_orchestration_task(
+            "Agent D",
+            "x-poster",
+            text.strip(),
+            "x-social-draft",
+            str(inbox),
+            {"inbox": str(inbox), "workflow_output": ".rpi-output-poster"},
+        )
         return False, str(inbox)
 
 
@@ -1310,6 +1381,18 @@ def parse_blogger_delegation_request(text: str) -> str | None:
         runner = f"pid:{proc.pid}"
     mode = "publish" if publish else "draft"
     append_orchestration_event(agent_name, instance, topic, mode, runner)
+    upsert_orchestration_task(
+        agent_name,
+        instance,
+        topic,
+        "blogger-publish" if publish else "blogger-draft",
+        runner,
+        {
+            "state": str(g.OPENCLAW_DIR / f"{instance}-blogger-state.json"),
+            "log": str(log_path),
+            "config": str(cfg_path),
+        },
+    )
 
     if personal_experience_target:
         return f"Deleguji draft clanku na {agent_name}."
@@ -1956,6 +2039,142 @@ def gmail_poll_once() -> None:
     save_email_state(state)
 
 
+def telegram_notify(text: str) -> bool:
+    env = g.load_env()
+    token = env.get("TELEGRAM_AGENT_G_BOT_TOKEN") or env.get("TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN") or ""
+    chat_id = env.get("TELEGRAM_AGENT_G_CHAT_ID") or env.get("TELEGRAM_VIRTUAL_ASSISTANT_CHAT_ID") or g.DEFAULT_CHAT_ID
+    if not token or not chat_id:
+        g.log("Delegation monitor notification skipped: Telegram token/chat missing")
+        return False
+    payload = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=payload)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8", errors="replace"))
+        return bool(result.get("ok"))
+    except Exception as exc:
+        g.log(f"Delegation monitor Telegram notification failed: {type(exc).__name__}: {exc}")
+        return False
+
+
+def task_age_seconds(task: dict[str, Any]) -> int:
+    raw = str(task.get("created_at") or "")
+    try:
+        created = dt.datetime.fromisoformat(raw)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=dt.datetime.now().astimezone().tzinfo)
+        return max(0, int((dt.datetime.now().astimezone() - created).total_seconds()))
+    except Exception:
+        return 0
+
+
+def find_urls_in_text(text: str) -> list[str]:
+    return re.findall(r"https?://[^\s\"'<>]+", text or "")
+
+
+def blogger_task_observation(task: dict[str, Any]) -> tuple[str, str]:
+    proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
+    state_raw = str(proof.get("state") or "")
+    log_raw = str(proof.get("log") or "")
+    state_path = Path(state_raw) if state_raw else None
+    log_path = Path(log_raw) if log_raw else None
+    state: dict[str, Any] = {}
+    if state_path and state_path.exists() and state_path.is_file():
+        state = g.load_json(state_path, {})
+        if not isinstance(state, dict):
+            state = {}
+    state_text = json.dumps(state, ensure_ascii=False)
+    urls = find_urls_in_text(state_text)
+    errors = state.get("errors")
+    if isinstance(errors, list) and errors:
+        return "BLOCKED", f"{task.get('agent')} narazil na chybu: {str(errors[-1])[:220]}"
+    phases = {g.normalize_text(str(item)) for item in (state.get("phases_done") or []) if item}
+    article_present = bool(state.get("article") or state.get("draft") or state.get("content") or state.get("post_title") or state.get("post_id"))
+    if urls:
+        return "DONE", f"{task.get('agent')} ma overeny vystup: {urls[0]}"
+    if article_present or any(phase in phases for phase in ("article", "publish", "published", "post")):
+        return "DONE", f"{task.get('agent')} dokoncil draft/podklad podle state souboru."
+    if log_path and log_path.exists() and log_path.is_file():
+        try:
+            tail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])
+        except Exception:
+            tail = ""
+        if "[virtual-assistant] exit 0" in tail and task_age_seconds(task) > 180:
+            return "VERIFYING", f"{task.get('agent')} dobehl bez chyby, cekam jeste na vystup ve state/logu."
+        if "[virtual-assistant] exit " in tail and "[virtual-assistant] exit 0" not in tail:
+            return "BLOCKED", f"{task.get('agent')} runner skoncil chybou. Detail je v delegacnim logu."
+    if task_age_seconds(task) > 3600:
+        return "BLOCKED", f"{task.get('agent')} nedodal overitelny vystup do 60 minut."
+    return "VERIFYING", f"{task.get('agent')} je zadany, cekam na overitelny vystup."
+
+
+def x_task_observation(task: dict[str, Any]) -> tuple[str, str]:
+    proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
+    state_path = Path(str(proof.get("state") or "/home/openclaw2/x-post-state.json"))
+    state: dict[str, Any] = {}
+    if state_path.exists():
+        state = g.load_json(state_path, {})
+        if not isinstance(state, dict):
+            state = {}
+    state_text = json.dumps(state, ensure_ascii=False)
+    urls = [url for url in find_urls_in_text(state_text) if "twitter.com" in url or "x.com" in url]
+    if urls:
+        return "DONE", f"Agent D ma overeny X vystup: {urls[0]}"
+    assignment = state.get("virtual_assistant_last_assignment") if isinstance(state, dict) else None
+    if isinstance(assignment, dict) and str(assignment.get("text") or "").strip() == str(task.get("topic") or "").strip():
+        if task_age_seconds(task) > 3600:
+            return "BLOCKED", "Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup."
+        return "VERIFYING", "Agent D ma zadani ulozene, cekam na navrh nebo overitelny vystup."
+    if task_age_seconds(task) > 900:
+        return "BLOCKED", "Agent D assignment se nepropsal do state souboru."
+    return "VERIFYING", "Agent D assignment cekam na propsani do state souboru."
+
+
+def observe_delegation_task(task: dict[str, Any]) -> tuple[str, str]:
+    kind = str(task.get("kind") or "")
+    if kind.startswith("blogger-"):
+        return blogger_task_observation(task)
+    if kind == "x-social-draft":
+        return x_task_observation(task)
+    return "VERIFYING", f"{task.get('agent')} je evidovany, ale nema specializovany verifier."
+
+
+def delegation_monitor_once() -> None:
+    tasks = load_orchestration_tasks()
+    if not tasks:
+        return
+    changed = False
+    for task in tasks:
+        status = str(task.get("status") or "ASSIGNED")
+        if status in {"DONE", "BLOCKED"} and task.get("reported_at"):
+            continue
+        new_status, note = observe_delegation_task(task)
+        now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        if new_status != status or note != task.get("last_observation"):
+            task["status"] = new_status
+            task["last_observation"] = note
+            task["updated_at"] = now
+            changed = True
+        if new_status in {"DONE", "BLOCKED"} and task.get("last_reported_status") != new_status:
+            verb = "Hotovo" if new_status == "DONE" else "Blocker"
+            telegram_notify(f"{verb}: {note}")
+            task["last_reported_status"] = new_status
+            task["reported_at"] = now
+            changed = True
+    if changed:
+        save_orchestration_tasks(tasks)
+
+
+def delegation_monitor_worker_loop() -> None:
+    g.log("Virtual Assistant delegation monitor started")
+    while True:
+        try:
+            delegation_monitor_once()
+        except Exception as exc:
+            g.log(f"Delegation monitor error: {type(exc).__name__}: {exc}")
+        time.sleep(120)
+
+
 def gmail_worker_loop() -> None:
     g.log("Virtual Assistant email worker started")
     while True:
@@ -1974,6 +2193,7 @@ def gmail_worker_loop() -> None:
 def virtual_assistant_main() -> None:
     if "--daemon" in os.sys.argv:
         threading.Thread(target=gmail_worker_loop, name="virtual-assistant-email-worker", daemon=True).start()
+        threading.Thread(target=delegation_monitor_worker_loop, name="virtual-assistant-delegation-monitor", daemon=True).start()
     base_main()
 
 
