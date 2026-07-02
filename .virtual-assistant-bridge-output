@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-02T15:10:35Z
+checked_at_utc=2026-07-02T15:15:16Z
 shared_brain_intro_telegram_sent=not_requested
 playwright_install=ok
 telegram_token_present= True
@@ -32,28 +32,28 @@ routing_smoke_btc_blog_target= ('btc-dca', 'Agent btc-dca')
 routing_smoke_oz_explicit_target= ('osobnizkusenosti-cz', 'oz')
 delegation_monitor_available= True
 orchestration_tasks_file= /home/openclaw2/.openclaw/virtual-assistant/ORCHESTRATION_TASKS.json
-[2026-07-02 17:10:35] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+[2026-07-02 17:15:16] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 ai_smoke_ok= True
 gmail_google_meta_1=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_2=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
 gmail_setup_poll=ok
 telegram_state_offset= 309696996
 virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 13
+virtual_assistant_lock_age_sec= 10
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-07-02T15:10:35Z
-virtual_assistant_log_signal_1=[2026-07-02 17:07:06] Daemon poll error: HTTP Error 401: Unauthorized
-virtual_assistant_log_signal_2=[2026-07-02 17:07:07] Daemon poll error: HTTP Error 401: Unauthorized
-virtual_assistant_log_signal_3=[2026-07-02 17:07:08] Daemon poll error: HTTP Error 401: Unauthorized
-virtual_assistant_log_signal_4=[2026-07-02 17:07:10] Daemon poll error: HTTP Error 401: Unauthorized
-virtual_assistant_log_signal_5=[2026-07-02 17:07:12] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_6=[2026-07-02 17:07:12] Agent G daemon started
-virtual_assistant_log_signal_7=[2026-07-02 17:07:12] Virtual Assistant email worker started
-virtual_assistant_log_signal_8=[2026-07-02 17:07:15] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_9=[2026-07-02 17:10:32] Virtual Assistant email worker started
-virtual_assistant_log_signal_10=[2026-07-02 17:10:32] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_11=[2026-07-02 17:10:32] Agent G daemon started
-virtual_assistant_log_signal_12=[2026-07-02 17:10:35] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_mtime_utc= 2026-07-02T15:15:16Z
+virtual_assistant_log_signal_1=[2026-07-02 17:07:15] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_2=[2026-07-02 17:10:32] Virtual Assistant email worker started
+virtual_assistant_log_signal_3=[2026-07-02 17:10:32] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_4=[2026-07-02 17:10:32] Agent G daemon started
+virtual_assistant_log_signal_5=[2026-07-02 17:10:35] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_6=[2026-07-02 17:15:13] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_7=[2026-07-02 17:15:13] Virtual Assistant email worker started
+virtual_assistant_log_signal_8=[2026-07-02 17:15:13] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_9=[2026-07-02 17:15:13] Agent G daemon started
+virtual_assistant_log_signal_10=[2026-07-02 17:15:13] Telegram recovery replied to unanswered message 2a1e4834f6afb5a5
+virtual_assistant_log_signal_11=[2026-07-02 17:15:14] Telegram recovery replied to unanswered message c9566a36e01ffc95
+virtual_assistant_log_signal_12=[2026-07-02 17:15:16] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
@@ -84,67 +84,67 @@ va_2026_06_29_log_27=[2026-06-29 12:29:43] Model route: gpt-5.4-mini tier=cheap 
 va_2026_06_29_log_28=[2026-06-29 12:30:20] -> Hotovo:
 va_2026_06_29_log_29=[2026-06-29 13:42:33] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_30=[2026-06-29 13:42:59] Email processed and replied: from=<email>@google.com trusted=False subject=Další informace o aktualizovaných smluvních podmínkách
-va_today_log_1=[2026-07-02 17:06:35] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_2=[2026-07-02 17:06:36] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_3=[2026-07-02 17:06:37] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_4=[2026-07-02 17:06:38] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_5=[2026-07-02 17:06:39] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_6=[2026-07-02 17:06:40] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_7=[2026-07-02 17:06:42] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_8=[2026-07-02 17:06:43] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_9=[2026-07-02 17:06:44] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_10=[2026-07-02 17:06:45] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_11=[2026-07-02 17:06:46] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_12=[2026-07-02 17:06:47] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_13=[2026-07-02 17:06:48] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_14=[2026-07-02 17:06:49] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_15=[2026-07-02 17:06:50] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_16=[2026-07-02 17:06:52] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_17=[2026-07-02 17:06:53] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_18=[2026-07-02 17:06:54] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_19=[2026-07-02 17:06:55] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_20=[2026-07-02 17:06:56] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_21=[2026-07-02 17:06:57] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_22=[2026-07-02 17:06:58] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_23=[2026-07-02 17:06:59] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_24=[2026-07-02 17:07:01] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_25=[2026-07-02 17:07:02] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_26=[2026-07-02 17:07:03] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_27=[2026-07-02 17:07:04] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_28=[2026-07-02 17:07:05] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_29=[2026-07-02 17:07:06] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_30=[2026-07-02 17:07:07] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_31=[2026-07-02 17:07:08] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_32=[2026-07-02 17:07:10] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_33=[2026-07-02 17:07:11] <- udelej navrh random prispevku o penezich na X profilu osobnizkusenosti. hci jej nejprve videt a schvalit pred zveejnenim
-va_today_log_34=[2026-07-02 17:07:11] <- zajisti at vznikne draft clanku na osobni zkusenosti na libovolne tema a posli mi na nej odkaz
-va_today_log_35=[2026-07-02 17:07:12] Virtual Assistant delegation monitor started
-va_today_log_36=[2026-07-02 17:07:12] Virtual Assistant email worker started
-va_today_log_37=[2026-07-02 17:07:15] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_38=[2026-07-02 17:10:32] Virtual Assistant email worker started
-va_today_log_39=[2026-07-02 17:10:32] Virtual Assistant delegation monitor started
-va_today_log_40=[2026-07-02 17:10:35] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_1=[2026-07-02 17:06:40] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_2=[2026-07-02 17:06:42] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_3=[2026-07-02 17:06:43] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_4=[2026-07-02 17:06:44] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_5=[2026-07-02 17:06:45] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_6=[2026-07-02 17:06:46] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_7=[2026-07-02 17:06:47] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_8=[2026-07-02 17:06:48] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_9=[2026-07-02 17:06:49] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_10=[2026-07-02 17:06:50] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_11=[2026-07-02 17:06:52] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_12=[2026-07-02 17:06:53] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_13=[2026-07-02 17:06:54] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_14=[2026-07-02 17:06:55] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_15=[2026-07-02 17:06:56] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_16=[2026-07-02 17:06:57] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_17=[2026-07-02 17:06:58] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_18=[2026-07-02 17:06:59] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_19=[2026-07-02 17:07:01] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_20=[2026-07-02 17:07:02] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_21=[2026-07-02 17:07:03] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_22=[2026-07-02 17:07:04] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_23=[2026-07-02 17:07:05] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_24=[2026-07-02 17:07:06] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_25=[2026-07-02 17:07:07] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_26=[2026-07-02 17:07:08] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_27=[2026-07-02 17:07:10] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_28=[2026-07-02 17:07:11] <- udelej navrh random prispevku o penezich na X profilu osobnizkusenosti. hci jej nejprve videt a schvalit pred zveejnenim
+va_today_log_29=[2026-07-02 17:07:11] <- zajisti at vznikne draft clanku na osobni zkusenosti na libovolne tema a posli mi na nej odkaz
+va_today_log_30=[2026-07-02 17:07:12] Virtual Assistant delegation monitor started
+va_today_log_31=[2026-07-02 17:07:12] Virtual Assistant email worker started
+va_today_log_32=[2026-07-02 17:07:15] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_33=[2026-07-02 17:10:32] Virtual Assistant email worker started
+va_today_log_34=[2026-07-02 17:10:32] Virtual Assistant delegation monitor started
+va_today_log_35=[2026-07-02 17:10:35] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_36=[2026-07-02 17:15:13] Virtual Assistant delegation monitor started
+va_today_log_37=[2026-07-02 17:15:13] Virtual Assistant email worker started
+va_today_log_38=[2026-07-02 17:15:13] -> Deleguji:
+va_today_log_39=[2026-07-02 17:15:14] -> Deleguji draft clanku na oz.
+va_today_log_40=[2026-07-02 17:15:16] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 blogger_config_1=instance=btc-dca agent=btc-dca site=https://www.btc-dca.com status=publish
 blogger_config_2=instance=osobnizkusenosti-cz agent=oz site=https://osobnizkusenosti.cz status=draft
 blogger_config_3=instance=oz agent=Agent OZ site=https://osobnizkusenosti.cz status=draft
 blogger_config_4=instance=tajemstvijamu-cz agent=tajemstvijamu-cz site=https://tajemstvijamu.cz status=draft
-agent_d_last_va_assignment_at=2026-07-01T14:10:43+02:00
-agent_d_last_va_assignment_text=zarid at vznikne draft clanku na osobnizkusenosti.cz a navrh prispevku na X pro btc-dca.com , obsah muze byt cokoliv, jde o test
-agent_d_custom_instruction_count=3
+agent_d_last_va_assignment_at=2026-07-02T17:15:13+02:00
+agent_d_last_va_assignment_text=udelej navrh random prispevku o penezich na X profilu osobnizkusenosti. hci jej nejprve videt a schvalit pred zveejnenim
+agent_d_custom_instruction_count=4
 delegation_log_virtual-assistant-btc-dca-delegation.log_1=[2026-06-30 16:42:34] BTC-DCA Blogger — instance=btc-dca phase=article force=True fix_cover=False fix_inline=None telegram=False
 delegation_log_virtual-assistant-btc-dca-delegation.log_2=[2026-06-30 16:42:34] PHASE: article
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_1=[2026-07-01 14:11:01]   article plan notification skipped (notify_article_plan disabled)
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_2=[2026-07-01 14:11:01] OK — phase 'article' complete
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_3=[virtual-assistant] exit 0 2026-07-01T14:10:43+02:00
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_4=[virtual-assistant] start va-osobnizkusenosti-cz-20260702-075814 2026-07-02T07:58:14+02:00
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_5=[2026-07-02 07:58:14] BTC-DCA Blogger — instance=osobnizkusenosti-cz phase=article force=True fix_cover=False fix_inline=None telegram=False
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_6=[2026-07-02 07:58:14] Manual topic assignment loaded: zarid at vznikne draft clanku na osobnizkusenosti.cz a
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_7=[2026-07-02 07:58:14] PHASE: article
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_8=[2026-07-02 07:58:29]   article links: 2 total, 0 internal
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_9=[2026-07-02 07:58:31]   article: Jak efektivně vytvořit draft článku na OsobníZkušenosti.cz (5878 chars, 1 prompts, 2 links)
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_10=[2026-07-02 07:58:31]   article plan notification skipped (notify_article_plan disabled)
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_11=[2026-07-02 07:58:31] OK — phase 'article' complete
-delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_12=[virtual-assistant] exit 0 2026-07-02T07:58:14+02:00
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_1=[virtual-assistant] start va-osobnizkusenosti-cz-20260702-075814 2026-07-02T07:58:14+02:00
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_2=[2026-07-02 07:58:14] BTC-DCA Blogger — instance=osobnizkusenosti-cz phase=article force=True fix_cover=False fix_inline=None telegram=False
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_3=[2026-07-02 07:58:14] Manual topic assignment loaded: zarid at vznikne draft clanku na osobnizkusenosti.cz a
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_4=[2026-07-02 07:58:14] PHASE: article
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_5=[2026-07-02 07:58:29]   article links: 2 total, 0 internal
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_6=[2026-07-02 07:58:31]   article: Jak efektivně vytvořit draft článku na OsobníZkušenosti.cz (5878 chars, 1 prompts, 2 links)
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_7=[2026-07-02 07:58:31]   article plan notification skipped (notify_article_plan disabled)
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_8=[2026-07-02 07:58:31] OK — phase 'article' complete
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_9=[virtual-assistant] exit 0 2026-07-02T07:58:14+02:00
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_10=[virtual-assistant] start va-osobnizkusenosti-cz-20260702-171513 2026-07-02T17:15:13+02:00
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_11=[2026-07-02 17:15:14] BTC-DCA Blogger — instance=osobnizkusenosti-cz phase=article force=True fix_cover=False fix_inline=None telegram=False
+delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_12=[2026-07-02 17:15:14] PHASE: article
 delegation_log_virtual-assistant-oz-delegation.log_1=[virtual-assistant] exit 1 2026-06-28T07:36:26+02:00
 delegation_log_virtual-assistant-oz-delegation.log_2=[virtual-assistant] start va-oz-20260630-164901 2026-06-30T16:49:01+02:00
 delegation_log_virtual-assistant-oz-delegation.log_3=[2026-06-30 16:49:02] BTC-DCA Blogger — instance=oz phase=article force=True fix_cover=False fix_inline=None telegram=False
