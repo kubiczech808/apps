@@ -5,18 +5,7 @@
     <link>https://btc-dca.com</link>
     <description>Expert articles about Bitcoin Dollar-Cost Averaging (DCA) — strategies, analysis, and practical guides.</description>
     <language>en</language>
-    <lastBuildDate>Wed, 01 Jul 2026 03:25:45 +0000</lastBuildDate>
-    <item>
-      <title>How a Bitcoin DCA velocity multiplier scales my stack</title>
-      <link>https://btc-dca.com/blog/generated-202606111118</link>
-      <guid isPermaLink="false">generated-202606111118</guid>
-      <pubDate>Thu, 11 Jun 2026 11:20:46 +0000</pubDate>
-      <category>dollar cost averaging</category>
-      <category>bitcoin mining</category>
-      <category>investment strategy</category>
-      <content:encoded />
-      <description />
-    </item>
+    <lastBuildDate>Thu, 02 Jul 2026 03:25:52 +0000</lastBuildDate>
     <item>
       <title>Overcoming ATH paralysis: How automated DCA can help</title>
       <link>https://btc-dca.com/blog/generated-202606120325</link>
@@ -264,62 +253,73 @@
       <title>Why I changed my multi-cycle Bitcoin DCA frequency</title>
       <link>https://btc-dca.com/blog/multi-cycle-bitcoin-dca</link>
       <guid isPermaLink="false">multi-cycle-bitcoin-dca</guid>
-      <pubDate>Wed, 01 Jul 2026 03:25:45 +0000</pubDate>
+      <pubDate>Wed, 01 Jul 2026 03:27:38 +0000</pubDate>
       <category>bitcoin</category>
       <category>investing</category>
       <category>personal-finance</category>
       <category>dollar-cost-averaging</category>
       <category>crypto</category>
-      <content:encoded>&lt;p&gt;Planning a multi-cycle bitcoin dca means ignoring the daily noise and focusing on a ten-year horizon rather than next month's price action. I used to think buying Bitcoin every single day was the ultimate setup. I had this vision of perfectly averaging out every micro-dip, feeling like a genius investor. But after sitting through a couple of brutal halving cycles, I realized I was over-optimizing for the wrong timeframe. If your horizon is ten years, micro-managing hourly price fluctuations is a massive waste of mental energy and, quite frankly, transaction fees.&lt;/p&gt;
+      <content:encoded />
+      <description />
+    </item>
+    <item>
+      <title>How to inflation proof Bitcoin DCA strategies</title>
+      <link>https://btc-dca.com/blog/inflation-proof-bitcoin-dca</link>
+      <guid isPermaLink="false">inflation-proof-bitcoin-dca</guid>
+      <pubDate>Thu, 02 Jul 2026 03:25:52 +0000</pubDate>
+      <category>bitcoin</category>
+      <category>dollar cost averaging</category>
+      <category>personal finance</category>
+      <category>inflation</category>
+      <category>crypto</category>
+      <content:encoded>&lt;p&gt;I started buying $100 of Bitcoin every week back in 2021, thinking I had my financial future completely figured out. But a few months ago, I realized a painful truth: my static weekly buy was buying less and less real purchasing power every single year. If you want to actually preserve your wealth, you need to learn how to &lt;strong&gt;inflation proof bitcoin dca&lt;/strong&gt; plans rather than just setting and forgetting a flat fiat amount. Most people assume dollar-cost averaging is a set-it-and-forget-it strategy, but inflation quietly eats away at your contribution size. Here is why your static buy is shrinking, and the exact rule I use to fix it.&lt;/p&gt;
 
-&lt;p&gt;Most people start dollar-cost averaging with a trader's mindset. They set up daily buys, constantly check their average cost basis, and panic when a 20% drop happens. I made this exact mistake back in 2017. I was so obsessed with getting the absolute best average price that I ended up with dozens of tiny UTXOs (unspent transaction outputs) and paid a fortune in withdrawal fees. What I actually needed was a &lt;strong&gt;multi-cycle bitcoin dca&lt;/strong&gt; strategy—one built for years, not weeks.&lt;/p&gt;
+&lt;p&gt;When we talk about saving, we tend to think in nominal terms. We see "$100" leave our bank account, and we feel a sense of accomplishment. But $100 in 2024 does not buy what $100 bought in 2020. Not even close. If your grocery bill has doubled, why do you expect your weekly Bitcoin allocation to remain frozen in time?&lt;/p&gt;
 
-&lt;p&gt;So here's the thing: your buy frequency should match your financial runway, not the daily chart. Let's look at why a 10-year accumulator should not optimize the same way as a 12-month speculator, and how you can fix your setup before fees eat your stack.&lt;/p&gt;
+&lt;h2&gt;The illusion of the static hundred-dollar buy&lt;/h2&gt;
 
-&lt;h2&gt;Why your time horizon changes everything&lt;/h2&gt;
+&lt;p&gt;Let’s look at the numbers. If you started a $100 weekly DCA four years ago, and you kept it exactly at $100, your real purchasing power has shrunk by roughly 20% due to official inflation figures—and probably much more in reality.&lt;/p&gt;
 
-&lt;p&gt;When you look at Bitcoin over a 12-month window, the volatility is wild. A daily DCA can feel like a safety blanket because it smooths out those sharp weekly drops. But if you shift your perspective to a multi-cycle horizon—say, eight to twelve years—those daily bumps flatten out into a single, upward-trending line.&lt;/p&gt;
+&lt;p&gt;You aren’t actually investing the same amount anymore. You are investing less.&lt;/p&gt;
 
-&lt;p&gt;Over a ten-year period, the price difference between buying every Tuesday versus buying once a month becomes almost entirely negligible. What actually matters is your consistency and your ability to stay in the game without running out of cash.&lt;/p&gt;
+&lt;p&gt;When I realized this, it hit me like a ton of bricks. I was proud of my consistency, but I was slowly letting my savings rate decay. Bitcoin is the ultimate hard money, designed to protect us from the debasement of fiat currency. But if we feed it a shrinking amount of fiat every month, we are hamstringing our own future wealth.&lt;/p&gt;
 
-&lt;p&gt;If you want to see how this plays out mathematically over long periods, you can play around with &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;the cycle-aware DCA calculator&lt;/a&gt; to model diminishing returns across different halving cycles. What you will quickly realize is that the compounding effect of simply holding Bitcoin long-term vastly outweighs any minor price advantage you get from trying to time daily micro-dips.&lt;/p&gt;
+&lt;p&gt;To visualize this, I went to the &lt;a href="https://www.btc-dca.com/dca-calculator.php"&gt;cycle-aware DCA calculator&lt;/a&gt; I built. I wanted to see the difference between a static monthly contribution and one that adjusts upward to match real-world inflation. Over a ten-year horizon, the difference in the final satoshi count is staggering. By keeping your contribution static, you are essentially choosing to slowly wind down your investment plan without realizing it.&lt;/p&gt;
 
-&lt;h2&gt;The hidden cost of high-frequency buys&lt;/h2&gt;
+&lt;h2&gt;My simple rule to inflation proof Bitcoin DCA strategies&lt;/h2&gt;
 
-&lt;p&gt;Let's talk about the mistake that almost cost me a chunk of my savings: UTXO consolidation. Every time you buy Bitcoin on an exchange like &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt; or &lt;a href="https://advanced.coinbase.com/join/RSCXAJL"&gt;Coinbase&lt;/a&gt; and withdraw it to your own wallet, you create a UTXO. Think of a UTXO like a physical coin in your pocket.&lt;/p&gt;
+&lt;p&gt;So, how do we fix this without constantly stressing over math? I didn’t want to manually recalculate my buys every month. I prefer automation and clean systems.&lt;/p&gt;
 
-&lt;p&gt;If you buy $10 worth of Bitcoin every day and withdraw it daily to your &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor safe custody device&lt;/a&gt;, you will have 365 tiny "coins" in your wallet at the end of the year. When you eventually want to spend or sell that Bitcoin, your wallet has to bundle all 365 of those tiny coins together into a single transaction.&lt;/p&gt;
+&lt;p&gt;I came up with a simple checklist to keep my plan aligned with reality. Here is the exact framework I use now:&lt;/p&gt;
 
-&lt;p&gt;Because Bitcoin transaction fees are based on the size of the data (not the amount of money sent), a transaction with 365 inputs is massive. During periods of high network congestion, the fee to spend those tiny UTXOs can easily eat up 10%, 20%, or even more of your total balance. I learned this the hard way when I tried to move some older, dust-sized balances during the 2021 bull market.&lt;/p&gt;
+&lt;p&gt;1. &lt;strong&gt;The annual step-up:&lt;/strong&gt; Every January, I automatically increase my DCA amount by a flat 10%. Why 10%? Because official CPI numbers are notoriously understated, and 10% roughly tracks the actual expansion of the money supply.&lt;/p&gt;
+&lt;p&gt;2. &lt;strong&gt;The income trigger:&lt;/strong&gt; Whenever I get a raise, a bonus, or a profitable side-gig month, 50% of that new income goes directly into increasing my base weekly DCA.&lt;/p&gt;
+&lt;p&gt;3. &lt;strong&gt;The exchange check:&lt;/strong&gt; I make sure my exchange accounts are linked via API to my &lt;a href="https://www.btc-dca.com"&gt;automated DCA tool&lt;/a&gt; so the transition is seamless and doesn't require manual deposits.&lt;/p&gt;
 
-&lt;p&gt;To prevent this, I now follow a strict threshold rule:&lt;/p&gt;
+&lt;p&gt;If you want to inflation proof bitcoin dca allocations, you have to treat your fiat contribution as a dynamic variable, not a fixed constant. If your salary goes up, your DCA must go up. If the cost of living goes up, your DCA must go up to maintain the same real weight.&lt;/p&gt;
 
-&lt;ul&gt;
-&lt;li&gt;  **The 0.01 BTC Rule:** Never withdraw from an exchange to a hardware wallet until your balance is at least 0.01 BTC (or roughly $500 to $1,000 depending on current prices). This keeps your UTXO sizes healthy and protects you from future fee spikes.&lt;/li&gt;
-&lt;/ul&gt;
+&lt;p&gt;I currently run my automated buys on &lt;a href="https://accounts.binance.com/en/register?ref=ABP939VR"&gt;Binance&lt;/a&gt;, but you can do this on almost any platform that fits your region, whether you prefer to &lt;a href="https://advanced.coinbase.com/join/RSCXAJL"&gt;buy Bitcoin on Coinbase&lt;/a&gt; or use a local gateway. The key is to make the adjustment automatic so you don't have to think about it.&lt;/p&gt;
 
-&lt;h2&gt;How to set up your multi-cycle Bitcoin DCA&lt;/h2&gt;
+&lt;h2&gt;The mistake of over-adjusting during market highs&lt;/h2&gt;
 
-&lt;p&gt;If daily buys are a UTXO trap, how should you actually structure your plan? The answer lies in aligning your purchases with your real-world income cadence.&lt;/p&gt;
+&lt;p&gt;Now, here is where I almost ruined myself, and it is a mistake I see a lot of people make.&lt;/p&gt;
 
-&lt;p&gt;Maintaining a multi-cycle bitcoin dca requires lifestyle sustainability. If you get paid once a month, trying to manage weekly or daily buys just introduces unnecessary friction. You have to constantly keep cash sitting on an exchange, which introduces counterparty risk, or keep transferring money manually.&lt;/p&gt;
+&lt;p&gt;In late 2021, when the market was screaming toward all-time highs, I decided I needed to "aggressively" inflation-proof my strategy. I bumped my weekly buy to a level that my actual cash flow couldn't support long-term. I was so caught up in the FOMO that I ignored my basic emergency fund.&lt;/p&gt;
 
-&lt;p&gt;Here is the simple frequency matrix I use to keep my sanity:&lt;/p&gt;
+&lt;p&gt;When the market turned and the bear market hit, I was forced to slash my DCA down to almost nothing because I was tight on cash. That is the exact opposite of what you want to do. You want to buy more when the price is low, not when it's high.&lt;/p&gt;
 
-&lt;ul&gt;
-&lt;li&gt;  **Monthly salaried employees:** Set up a monthly buy that executes 24 hours after your paycheck hits. Keep it simple.&lt;/li&gt;
-&lt;li&gt;  **Weekly or bi-weekly earners:** Set up bi-weekly buys. This matches your natural cash flow and keeps your exchange balance low.&lt;/li&gt;
-&lt;li&gt;  **Variable/freelance income:** Use weekly buys with a lower baseline amount, then manually top up during deep market corrections if you have excess cash.&lt;/li&gt;
-&lt;/ul&gt;
+&lt;p&gt;It gets messy when you try to inflation proof bitcoin dca purchases without looking at your actual savings rate. Your DCA should always be an amount you can comfortably afford to lose or lock away for at least five to ten years.&lt;/p&gt;
 
-&lt;p&gt;I got so tired of manually managing this balance between low fees, safe withdrawal thresholds, and consistent buys that I actually built a free tool to help me &lt;a href="https://btc-dca.com"&gt;automate my DCA buys&lt;/a&gt; directly via API keys. It connects to exchanges like &lt;a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0"&gt;Coinmate&lt;/a&gt; or OKX, executes the buys at whatever frequency I choose, and only triggers a withdrawal to my hardware wallet once the balance hits my predefined threshold. It solved my UTXO anxiety entirely.&lt;/p&gt;
+&lt;p&gt;Once those automated buys execute, make sure you are sending them straight to self-custody. I use a &lt;a href="https://bit.ly/buy-trezor-t"&gt;Trezor hardware wallet&lt;/a&gt; for my long-term holdings. Leaving your satoshis on an exchange defeats the purpose of securing hard money in the first place.&lt;/p&gt;
 
-&lt;p&gt;Obviously, I am not your financial advisor, and this is just my personal approach to managing my long-term stack. Bitcoin is highly volatile, and you should only invest what you are completely comfortable locking away for years.&lt;/p&gt;
+&lt;p&gt;Obviously, I am not your financial advisor, and this is just my personal journey. I built these tools for my own peace of mind because I wanted a way to track my progress toward real life goals like retirement without getting bogged down in day-to-day price charts.&lt;/p&gt;
 
-&lt;p&gt;But if you are planning to hold this asset for multiple halving cycles, stop stressing over the daily charts. Pick a frequency that matches your paycheck, set up a safe withdrawal threshold, and let time do the heavy lifting.&lt;/p&gt;
+&lt;p&gt;It’s easy to get lazy with DCA. It feels like we’ve solved the investing puzzle just by setting up a recurring buy. But if we don't pay attention to the decaying purchasing power of our fiat, we are only doing half the job.&lt;/p&gt;
 
-&lt;p&gt;How often do you withdraw your DCA purchases to cold storage, and have you ever run into high fee issues when trying to move smaller UTXOs?&lt;/p&gt;</content:encoded>
-      <description>Planning a multi-cycle bitcoin dca means ignoring the daily noise and focusing on a ten-year horizon rather than next month's price action. I used to think buying Bitcoin every single day was the ultimate setup. I had this vision of perfectly averaging out every micro-dip, feeling like a genius inve...</description>
+&lt;p&gt;How often do you review your recurring buy amounts, or have you kept them at the same flat rate since you started?&lt;/p&gt;
+
+&lt;p&gt;This is also why I keep improving &lt;a href="https://btc-dca.com"&gt;my Bitcoin DCA automation setup&lt;/a&gt; instead of trying to make every buy decision manually.&lt;/p&gt;</content:encoded>
+      <description>I started buying $100 of Bitcoin every week back in 2021, thinking I had my financial future completely figured out. But a few months ago, I realized a painful truth: my static weekly buy was buying less and less real purchasing power every single year. If you want to actually preserve your wealth, ...</description>
     </item>
   </channel>
 </rss>
