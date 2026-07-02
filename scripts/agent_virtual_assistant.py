@@ -70,6 +70,7 @@ AGENT_REGISTRY_JSON = g.AGENT_WORK_DIR / "AGENT_REGISTRY.json"
 AGENT_REGISTRY_OVERLAY = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.json"
 AGENT_REGISTRY_EXAMPLE = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.example.json"
 ORCHESTRATION_TASKS_FILE = g.AGENT_WORK_DIR / "ORCHESTRATION_TASKS.json"
+RECOVERY_STATE_FILE = g.AGENT_WORK_DIR / "TELEGRAM_RECOVERY.json"
 SHARED_BRAIN_SCRIPT = Path("/home/openclaw2/scripts/openclaw_shared_brain.py")
 g.MODE_TIMEOUTS = {
     "fast": 180,
@@ -2175,6 +2176,107 @@ def delegation_monitor_worker_loop() -> None:
         time.sleep(120)
 
 
+def parse_log_time(raw: str) -> dt.datetime | None:
+    try:
+        parsed = dt.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+        return parsed.replace(tzinfo=dt.datetime.now().astimezone().tzinfo)
+    except Exception:
+        return None
+
+
+def telegram_recovery_state() -> dict[str, Any]:
+    try:
+        data = json.loads(RECOVERY_STATE_FILE.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    processed = data.get("processed")
+    if not isinstance(processed, list):
+        processed = []
+    data["processed"] = processed[-200:]
+    return data
+
+
+def save_telegram_recovery_state(state: dict[str, Any]) -> None:
+    RECOVERY_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    RECOVERY_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def recover_unanswered_telegram_once() -> None:
+    log_path = g.LOG_FILE
+    if not log_path.exists():
+        return
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-700:]
+    except Exception:
+        return
+    incoming: list[tuple[dt.datetime, str]] = []
+    outgoing_times: list[dt.datetime] = []
+    for line in lines:
+        match = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+(<-|->)\s*(.*)$", line)
+        if not match:
+            continue
+        ts = parse_log_time(match.group(1))
+        if not ts:
+            continue
+        direction = match.group(2)
+        text = match.group(3).strip()
+        if direction == "->":
+            outgoing_times.append(ts)
+        elif text and not text.startswith("/"):
+            incoming.append((ts, text))
+    if not incoming:
+        return
+    last_outgoing = max(outgoing_times) if outgoing_times else dt.datetime.fromtimestamp(0, tz=dt.datetime.now().astimezone().tzinfo)
+    now = dt.datetime.now().astimezone()
+    state = telegram_recovery_state()
+    processed = set(str(item) for item in state.get("processed") or [])
+    changed = False
+    for ts, text in incoming[-5:]:
+        if ts <= last_outgoing:
+            continue
+        age = (now - ts).total_seconds()
+        if age < 180:
+            continue
+        msg_id = hashlib.sha1(f"{ts.isoformat()}|{text}".encode("utf-8", errors="replace")).hexdigest()[:16]
+        if msg_id in processed:
+            continue
+        try:
+            reply = parse_settings_command(text)
+            if not reply:
+                history = g.load_json(g.HISTORY_FILE, [])
+                if not isinstance(history, list):
+                    history = []
+                history.append({"role": "user", "content": text})
+                reply = g.call_ai(history)
+                history.append({"role": "assistant", "content": reply})
+                g.write_json(g.HISTORY_FILE, history[-g.MAX_HISTORY:])
+            if telegram_notify(reply):
+                g.log(f"Telegram recovery replied to unanswered message {msg_id}")
+                g.log(f"-> {reply[:500]}")
+            else:
+                g.log(f"Telegram recovery produced reply but send failed for {msg_id}")
+            processed.add(msg_id)
+            changed = True
+        except Exception as exc:
+            g.log(f"Telegram recovery failed for {msg_id}: {type(exc).__name__}: {exc}")
+    if changed:
+        state["processed"] = list(processed)[-200:]
+        state["updated_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        save_telegram_recovery_state(state)
+
+
+def telegram_recovery_worker_loop() -> None:
+    g.log("Virtual Assistant telegram recovery worker started")
+    while True:
+        try:
+            recover_unanswered_telegram_once()
+        except Exception as exc:
+            g.log(f"Telegram recovery worker error: {type(exc).__name__}: {exc}")
+        time.sleep(90)
+
+
 def gmail_worker_loop() -> None:
     g.log("Virtual Assistant email worker started")
     while True:
@@ -2194,6 +2296,7 @@ def virtual_assistant_main() -> None:
     if "--daemon" in os.sys.argv:
         threading.Thread(target=gmail_worker_loop, name="virtual-assistant-email-worker", daemon=True).start()
         threading.Thread(target=delegation_monitor_worker_loop, name="virtual-assistant-delegation-monitor", daemon=True).start()
+        threading.Thread(target=telegram_recovery_worker_loop, name="virtual-assistant-telegram-recovery", daemon=True).start()
     base_main()
 
 
