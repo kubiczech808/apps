@@ -181,6 +181,207 @@ def list_markdown_files() -> list[Path]:
     return sorted(files)
 
 
+SECRET_KEY_RE = re.compile(r"(token|secret|password|passwd|cookie|oauth|authorization|api[_-]?key|private)", re.IGNORECASE)
+
+
+def safe_scalar(value: Any, max_len: int = 500) -> str:
+    text = str(value if value is not None else "").strip()
+    text = re.sub(r"\s+", " ", text)
+    if len(text) > max_len:
+        return text[:max_len].rstrip() + "..."
+    return text
+
+
+def sanitize_json(value: Any, key: str = "") -> Any:
+    if SECRET_KEY_RE.search(key):
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {str(k): sanitize_json(v, str(k)) for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, list):
+        return [sanitize_json(item, key) for item in value[:80]]
+    if isinstance(value, str):
+        if SECRET_KEY_RE.search(value) and len(value) > 24:
+            return "<redacted-like-secret>"
+        return safe_scalar(value, 1200)
+    return value
+
+
+def read_json_file(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return None
+
+
+def write_generated_note(rel_path: str, title: str, category: str, node_type: str, tags: list[str], body: str) -> None:
+    path = NOTES_DIR / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frontmatter = "\n".join([
+        "---",
+        f"title: {title}",
+        f"category: {category}",
+        f"type: {node_type}",
+        "tags: " + ", ".join(tags),
+        "generated: true",
+        f"updated_at: {now_iso()}",
+        "---",
+        "",
+    ])
+    path.write_text(frontmatter + body.strip() + "\n", encoding="utf-8")
+
+
+def tail_text(path: Path, lines: int = 220, max_chars: int = 20000) -> str:
+    if not path.exists() or not path.is_file():
+        return ""
+    try:
+        selected = path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+    except Exception:
+        return ""
+    text = "\n".join(selected).strip()
+    return text[-max_chars:]
+
+
+def generated_json_note(rel_path: str, title: str, category: str, node_type: str, tags: list[str], source_path: Path, intro: str = "") -> None:
+    data = read_json_file(source_path)
+    if data is None:
+        return
+    safe = sanitize_json(data)
+    body = "\n".join([
+        f"# {title}",
+        "",
+        intro.strip(),
+        "",
+        f"Source: `{source_path}`",
+        "",
+        "```json",
+        json.dumps(safe, ensure_ascii=False, indent=2),
+        "```",
+    ])
+    write_generated_note(rel_path, title, category, node_type, tags, body)
+
+
+def sync_openclaw_runtime_notes() -> None:
+    """Mirror safe OpenClaw runtime summaries into generated Markdown notes."""
+    va_dir = OPENCLAW_DIR / "virtual-assistant"
+
+    generated_json_note(
+        "Generated/Virtual Assistant/Agent Registry.json.md",
+        "Virtual Assistant Agent Registry",
+        "Agents",
+        "registry",
+        ["generated", "agents", "routing"],
+        va_dir / "AGENT_REGISTRY.json",
+        "Live registry used by Virtualni asistentka to route work across agents. Links: [[Agent Routing]].",
+    )
+
+    registry_md = tail_text(va_dir / "AGENT_REGISTRY.md", lines=260)
+    if registry_md:
+        write_generated_note(
+            "Generated/Virtual Assistant/Agent Registry.md",
+            "Agent Registry Markdown",
+            "Agents",
+            "registry",
+            ["generated", "agents", "routing"],
+            "# Agent Registry Markdown\n\nLinks: [[Agent Routing]].\n\n" + registry_md,
+        )
+
+    for name, title, category, node_type, tags in [
+        ("MEMORY.md", "Virtual Assistant Memory", "Preferences", "memory", ["generated", "memory", "preferences"]),
+        ("USER.md", "Virtual Assistant User Profile", "Preferences", "profile", ["generated", "user", "preferences"]),
+        ("SOUL.md", "Virtual Assistant Soul", "Identity", "profile", ["generated", "identity", "assistant"]),
+        ("ORCHESTRATION.md", "Virtual Assistant Orchestration Board", "Delegations", "board", ["generated", "delegation", "orchestration"]),
+    ]:
+        content = tail_text(va_dir / name, lines=260)
+        if content:
+            write_generated_note(
+                f"Generated/Virtual Assistant/{name}.md",
+                title,
+                category,
+                node_type,
+                tags,
+                f"# {title}\n\nSource: `{va_dir / name}`\n\nLinks: [[Agent Routing]], [[Virtual Assistant Agent Registry]].\n\n{content}",
+            )
+
+    generated_json_note(
+        "Generated/Virtual Assistant/Orchestration Tasks.json.md",
+        "Virtual Assistant Orchestration Tasks",
+        "Delegations",
+        "tasks",
+        ["generated", "delegation", "status"],
+        va_dir / "ORCHESTRATION_TASKS.json",
+        "Structured delegation monitor state. A task is not done until it has proof. Links: [[Virtual Assistant Orchestration Board]].",
+    )
+
+    blogger_lines = ["# Blogger Agents", "", "Links: [[Agent Routing]], [[Virtual Assistant Agent Registry]].", ""]
+    for cfg_path in sorted(OPENCLAW_DIR.glob("*-blogger-config.json")):
+        data = read_json_file(cfg_path)
+        if not isinstance(data, dict):
+            continue
+        instance = cfg_path.name.removesuffix("-blogger-config.json")
+        site = safe_scalar(data.get("WP_SITE_URL") or data.get("wp_site_url") or "")
+        agent_name = safe_scalar(data.get("agent_name") or instance)
+        status = safe_scalar(data.get("wp_post_status") or "")
+        blogger_lines.extend([
+            f"## {agent_name} (`{instance}`)",
+            f"- Instance: `{instance}`",
+            f"- Site: {site or '-'}",
+            f"- Default post status: `{status or '-'}`",
+            f"- State: `{OPENCLAW_DIR / f'{instance}-blogger-state.json'}`",
+            f"- Log: `{OPENCLAW_DIR / 'logs' / f'{instance}-blogger.log'}`",
+            "",
+        ])
+        generated_json_note(
+            f"Generated/Blogger Agents/{instance}.json.md",
+            f"Blogger Agent {agent_name}",
+            "Agents",
+            "agent",
+            ["generated", "blogger", "wordpress"],
+            cfg_path,
+            f"Sanitized config for blogger agent `{instance}`. Links: [[Blogger Agents]], [[Agent Routing]].",
+        )
+    if len(blogger_lines) > 4:
+        write_generated_note(
+            "Generated/Blogger Agents/Blogger Agents.md",
+            "Blogger Agents",
+            "Agents",
+            "registry",
+            ["generated", "blogger", "wordpress"],
+            "\n".join(blogger_lines),
+        )
+
+    x_state = Path("/home/openclaw2/x-post-state.json")
+    generated_json_note(
+        "Generated/Agent D/X Post State.json.md",
+        "Agent D X Post State",
+        "Agents",
+        "state",
+        ["generated", "agent-d", "x", "social"],
+        x_state,
+        "Sanitized Agent D/X state and Virtual Assistant assignments. Links: [[Agent Routing]], [[Virtual Assistant Orchestration Tasks]].",
+    )
+
+    runtime_lines = [
+        "# OpenClaw Runtime Overview",
+        "",
+        "Generated summary of local OpenClaw paths and files indexed into the shared brain.",
+        "",
+        f"- OpenClaw dir: `{OPENCLAW_DIR}`",
+        f"- Shared brain notes: `{NOTES_DIR}`",
+        f"- Virtual Assistant workspace: `{va_dir}`",
+        f"- Blogger configs: `{len(list(OPENCLAW_DIR.glob('*-blogger-config.json')))}`",
+        "",
+        "Important links: [[Agent Routing]], [[Virtual Assistant Agent Registry]], [[Virtual Assistant Orchestration Board]], [[Blogger Agents]].",
+    ]
+    write_generated_note(
+        "Generated/OpenClaw Runtime Overview.md",
+        "OpenClaw Runtime Overview",
+        "System",
+        "overview",
+        ["generated", "openclaw", "runtime"],
+        "\n".join(runtime_lines),
+    )
+
+
 def ensure_seed_notes() -> None:
     NOTES_DIR.mkdir(parents=True, exist_ok=True)
     seeds = {
@@ -228,6 +429,8 @@ Known channel principles:
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content.strip() + "\n", encoding="utf-8")
+    sync_openclaw_runtime_notes()
+
 
 
 def build_index() -> dict[str, Any]:
