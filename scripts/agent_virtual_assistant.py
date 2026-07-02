@@ -1081,6 +1081,67 @@ def article_text_for_combined_delegation(text: str) -> str:
     return article
 
 
+def strip_blogger_followup_instructions(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", text.strip())
+    patterns = (
+        r"\s+(?:a\s+)?(?:pošli|posli|zašli|zasli)\s+(?:mi\s+)?(?:na\s+n[eě]j\s+)?(?:odkaz|link).*$",
+        r"\s+(?:a\s+)?(?:chci|chci\s+jej|chci\s+ho)\s+.*?(?:vid[eě]t|schv[aá]lit).*$",
+        r"\s+(?:a\s+)?(?:pak\s+)?(?:mi\s+)?(?:dej|ukaž|ukaz|pošli|posli)\s+.*?(?:v[yý]stup|odkaz|link).*$",
+    )
+    for pattern in patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip(" .")
+
+
+def is_vague_or_instruction_topic(text: str) -> bool:
+    low = g.normalize_text(text)
+    vague_terms = (
+        "libovolne tema",
+        "libovolne",
+        "cokoliv",
+        "random",
+        "jakekoliv",
+        "jakekoliv tema",
+        "neco",
+    )
+    instruction_terms = (
+        "posli mi",
+        "odkaz",
+        "link",
+        "chci jej videt",
+        "chci ho videt",
+        "schvalit",
+    )
+    return any(term in low for term in vague_terms) or any(term in low for term in instruction_terms)
+
+
+def default_blogger_topic(text: str) -> str:
+    low = g.normalize_text(text)
+    if any(term in low for term in ("osobni zkusenosti", "osobnizkusenosti", "agent oz", "agenta oz")):
+        return "Jak si nastavit jednoduchy osobni rozpocet a neztratit motivaci"
+    if any(term in low for term in ("btc-dca", "btc dca")):
+        return "Jak pravidelne investovat do bitcoinu bez zbytecneho stresu"
+    return "Prakticky navod z osobni zkusenosti"
+
+
+def normalize_blogger_topic(topic: str, original_text: str) -> str:
+    cleaned = strip_blogger_followup_instructions(topic)
+    cleaned = re.sub(r"^(?:a\s+)?(?:na\s+)?(?:libovoln[eé]\s+t[eé]ma|jakekoliv\s+tema|jak[eé]koliv\s+t[eé]ma)\b", "", cleaned, flags=re.IGNORECASE).strip(" .")
+    if not cleaned or is_vague_or_instruction_topic(cleaned):
+        return default_blogger_topic(original_text)
+    return cleaned.strip(" .")
+
+
+def extract_blogger_topic(text: str) -> str:
+    cleaned = strip_blogger_followup_instructions(re.sub(r"\s+", " ", text.strip()))
+    if is_vague_or_instruction_topic(cleaned):
+        return default_blogger_topic(text)
+    match = re.search(r"(?:na\s+t[eĂ©]ma|tema|tĂ©ma)\s+(.+)$", cleaned, flags=re.IGNORECASE)
+    if match and match.group(1).strip():
+        return normalize_blogger_topic(match.group(1), text)
+    return normalize_blogger_topic(cleaned, text)
+
+
 def write_blogger_requested_topic(instance: str, topic: str) -> Path:
     state_path = g.OPENCLAW_DIR / f"{instance}-blogger-state.json"
     state = {
@@ -1639,6 +1700,31 @@ def virtual_assistant_call_codex(history: list[dict[str, str]]) -> str:
     )
 
 
+def sanitize_virtual_assistant_reply(reply: str) -> str:
+    text = str(reply or "").strip()
+    if not text:
+        return text
+    technical_markers = (
+        "Instance:",
+        "State:",
+        "Log:",
+        "Runner:",
+        "Tema:",
+        "Téma:",
+        "Az draft",
+        "Až draft",
+        "/home/openclaw2/",
+        "ORCHESTRATION.md",
+    )
+    if any(marker in text for marker in technical_markers):
+        for line in text.splitlines():
+            clean = line.strip()
+            if clean and not any(marker in clean for marker in technical_markers):
+                return clean
+        return text.splitlines()[0].strip()
+    return text
+
+
 def virtual_assistant_call_ai(history: list[dict[str, str]]) -> str:
     cleaned_history = remove_automated_google_history(history)
     if len(cleaned_history) != len(history):
@@ -1646,7 +1732,7 @@ def virtual_assistant_call_ai(history: list[dict[str, str]]) -> str:
         g.write_json(g.HISTORY_FILE, history[-g.MAX_HISTORY:])
         g.log("Automated Google email instructions removed from Virtual Assistant history")
     try:
-        return virtual_assistant_call_codex(history)
+        return sanitize_virtual_assistant_reply(virtual_assistant_call_codex(history))
     except Exception as codex_exc:
         g.log(f"Codex backend failed, trying Virtual Assistant fallback: {str(codex_exc)[:180]}")
         env = g.load_env()
@@ -1655,7 +1741,7 @@ def virtual_assistant_call_ai(history: list[dict[str, str]]) -> str:
             None,
         )
         if api_key:
-            return _call_gemini(history, api_key)
+            return sanitize_virtual_assistant_reply(_call_gemini(history, api_key))
         raise codex_exc
 
 
