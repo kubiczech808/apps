@@ -715,6 +715,168 @@ def note_list_html() -> str:
     return "\n".join(rows)
 
 
+def extract_json_block(text: str) -> Any:
+    match = re.search(r"```json\s*(.*?)\s*```", text or "", flags=re.DOTALL | re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except Exception:
+        return None
+
+
+def first_chunk_text(file_name: str) -> str:
+    index = load_index()
+    for chunk in index.get("chunks") or []:
+        if str(chunk.get("file") or "") == file_name:
+            return str(chunk.get("text") or "")
+    return ""
+
+
+def note_json_data(file_name: str) -> Any:
+    return extract_json_block(first_chunk_text(file_name))
+
+
+def human_value(value: Any, max_len: int = 120) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, bool):
+        return "ano" if value else "ne"
+    if isinstance(value, (list, tuple, set)):
+        text = ", ".join(human_value(item, 60) for item in list(value)[:8] if human_value(item, 60) != "-")
+    elif isinstance(value, dict):
+        text = ", ".join(f"{key}: {human_value(val, 50)}" for key, val in list(value.items())[:6])
+    else:
+        text = str(value)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > max_len:
+        return text[:max_len].rstrip() + "..."
+    return text or "-"
+
+
+def pill(text: str, tone: str = "") -> str:
+    cls = "pill" + (f" {tone}" if tone else "")
+    return f"<span class='{cls}'>{html.escape(text or '-')}</span>"
+
+
+def table_html(headers: list[str], rows: list[list[Any]], empty: str = "No data.") -> str:
+    if not rows:
+        return f"<p>{html.escape(empty)}</p>"
+    head = "".join(f"<th>{html.escape(header)}</th>" for header in headers)
+    body_rows = []
+    for row in rows:
+        body_rows.append("<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>")
+    return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
+
+
+def dashboard_agent_rows() -> list[list[str]]:
+    data = note_json_data("Generated/Virtual Assistant/Agent Registry.json.md")
+    agents = data.get("agents") if isinstance(data, dict) else []
+    rows: list[list[str]] = []
+    if not isinstance(agents, list):
+        return rows
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        rows.append([
+            f"<strong>{html.escape(str(agent.get('display_name') or agent.get('id') or '-'))}</strong><br><code>{html.escape(str(agent.get('id') or '-'))}</code>",
+            html.escape(str(agent.get("kind") or "-")),
+            html.escape(human_value(agent.get("domains"), 140)),
+            html.escape(human_value(agent.get("capabilities"), 220)),
+            html.escape(human_value(agent.get("notes"), 260)),
+        ])
+    return rows
+
+
+def dashboard_blogger_rows() -> list[list[str]]:
+    data = note_json_data("Generated/Virtual Assistant/Agent Registry.json.md")
+    agents = data.get("agents") if isinstance(data, dict) else []
+    rows: list[list[str]] = []
+    if not isinstance(agents, list):
+        return rows
+    for agent in agents:
+        if not isinstance(agent, dict) or agent.get("kind") != "blogger":
+            continue
+        channels = agent.get("channels") if isinstance(agent.get("channels"), dict) else {}
+        rows.append([
+            f"<strong>{html.escape(str(agent.get('display_name') or agent.get('id') or '-'))}</strong><br><code>{html.escape(str(agent.get('id') or '-'))}</code>",
+            html.escape(human_value(agent.get("domains"), 160)),
+            html.escape(human_value(agent.get("capabilities"), 180)),
+            f"<code>{html.escape(str(channels.get('state') or '-'))}</code>",
+        ])
+    return rows
+
+
+def dashboard_task_rows() -> list[list[str]]:
+    data = note_json_data("Generated/Virtual Assistant/Orchestration Tasks.json.md")
+    if not isinstance(data, list):
+        return []
+    rows: list[list[str]] = []
+    for task in sorted(data, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)[:20]:
+        if not isinstance(task, dict):
+            continue
+        status = str(task.get("status") or "UNKNOWN")
+        tone = "ok" if status == "DONE" else "warn" if status in {"ASSIGNED", "VERIFYING"} else "bad"
+        rows.append([
+            pill(status, tone),
+            html.escape(str(task.get("agent") or "-")),
+            html.escape(str(task.get("instance") or "-")),
+            html.escape(human_value(task.get("topic"), 260)),
+            html.escape(human_value(task.get("last_observation"), 260)),
+        ])
+    return rows
+
+
+def dashboard_memory_rows() -> list[list[str]]:
+    rows: list[list[str]] = []
+    for file_name, label in [
+        ("Generated/Virtual Assistant/MEMORY.md.md", "Memory"),
+        ("Generated/Virtual Assistant/USER.md.md", "User profile"),
+        ("Generated/Virtual Assistant/SOUL.md.md", "Assistant profile"),
+        ("Generated/OpenClaw Runtime Overview.md", "Runtime overview"),
+    ]:
+        text = first_chunk_text(file_name)
+        if not text:
+            continue
+        lines = [line.strip("#- ` ") for line in text.splitlines() if line.strip() and not line.startswith("---")]
+        summary = "; ".join(line for line in lines[:5] if line)
+        rows.append([
+            f"<a href='/note?file={urllib.parse.quote(file_name)}'>{html.escape(label)}</a>",
+            html.escape(human_value(summary, 360)),
+        ])
+    return rows
+
+
+def dashboard_html() -> str:
+    return f"""
+  <section>
+    <h2>Dashboard</h2>
+    <div class="summary-grid">
+      <div><span>Agents</span><strong>{len(dashboard_agent_rows())}</strong></div>
+      <div><span>Bloggers</span><strong>{len(dashboard_blogger_rows())}</strong></div>
+      <div><span>Tracked tasks</span><strong>{len(dashboard_task_rows())}</strong></div>
+      <div><span>Memory views</span><strong>{len(dashboard_memory_rows())}</strong></div>
+    </div>
+  </section>
+  <section>
+    <h2>Agents</h2>
+    {table_html(["Agent", "Kind", "Domains", "Capabilities", "Notes"], dashboard_agent_rows(), "No agents indexed yet.")}
+  </section>
+  <section>
+    <h2>Blogger Agents</h2>
+    {table_html(["Agent", "Domain", "Capabilities", "State"], dashboard_blogger_rows(), "No blogger agents indexed yet.")}
+  </section>
+  <section>
+    <h2>Delegations</h2>
+    {table_html(["Status", "Agent", "Instance", "Task", "Last observation"], dashboard_task_rows(), "No delegation tasks tracked yet.")}
+  </section>
+  <section>
+    <h2>Memory And Profiles</h2>
+    {table_html(["View", "Summary"], dashboard_memory_rows(), "No memory/profile notes indexed yet.")}
+  </section>
+"""
+
+
 def note_detail_html(file_name: str) -> str:
     index = load_index()
     chunks = [chunk for chunk in index.get("chunks") or [] if str(chunk.get("file") or "") == file_name]
@@ -724,7 +886,23 @@ def note_detail_html(file_name: str) -> str:
     for chunk in chunks:
         title = html.escape(str(chunk.get("title") or ""))
         text = html.escape(str(chunk.get("text") or ""))
-        parts.append(f"<article><h2>{title}</h2><pre>{text}</pre></article>")
+        data = extract_json_block(text)
+        if isinstance(data, dict):
+            rows = [[f"<code>{html.escape(str(key))}</code>", html.escape(human_value(value, 500))] for key, value in data.items()]
+            parts.append(f"<article><h2>{title}</h2>{table_html(['Field', 'Value'], rows)}</article>")
+        elif isinstance(data, list):
+            rows = []
+            for item in data[:80]:
+                if isinstance(item, dict):
+                    rows.append([
+                        html.escape(human_value(item.get("status") or item.get("display_name") or item.get("id") or item.get("agent"), 160)),
+                        html.escape(human_value(item, 700)),
+                    ])
+                else:
+                    rows.append(["-", html.escape(human_value(item, 700))])
+            parts.append(f"<article><h2>{title}</h2>{table_html(['Item', 'Details'], rows)}</article>")
+        else:
+            parts.append(f"<article><h2>{title}</h2><pre>{text}</pre></article>")
     return "\n".join(parts)
 
 
@@ -762,6 +940,7 @@ def brain_index_html() -> str:
     body {{ margin: 0; background: #f7f7f4; color: #202124; }}
     header {{ padding: 24px 32px; background: #10201b; color: #f6fff7; }}
     main {{ padding: 24px 32px 48px; max-width: 1180px; margin: auto; }}
+    section {{ margin-bottom: 28px; }}
     .bar {{ display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 16px 0 24px; }}
     a.button {{ color: #0b3d2e; border: 1px solid #8ab9a5; background: #eff8f3; padding: 8px 10px; border-radius: 6px; text-decoration: none; }}
     table {{ width: 100%; border-collapse: collapse; background: white; }}
@@ -769,12 +948,22 @@ def brain_index_html() -> str:
     th {{ background: #eef2ee; }}
     code {{ background: #eef2ee; padding: 2px 4px; border-radius: 4px; }}
     pre {{ white-space: pre-wrap; background: #fff; border: 1px solid #ddd; padding: 12px; border-radius: 6px; }}
+    .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }}
+    .summary-grid div {{ background: white; border: 1px solid #d5ddd8; border-radius: 6px; padding: 14px; }}
+    .summary-grid span {{ display: block; color: #5b655f; font-size: 13px; }}
+    .summary-grid strong {{ display: block; margin-top: 4px; font-size: 28px; }}
+    .pill {{ display: inline-block; border-radius: 999px; padding: 3px 8px; border: 1px solid #b7c4bd; background: #eef2ee; font-size: 12px; font-weight: 650; }}
+    .pill.ok {{ background: #e7f5ee; border-color: #8fc8aa; color: #155d3f; }}
+    .pill.warn {{ background: #fff5db; border-color: #e4c56f; color: #755600; }}
+    .pill.bad {{ background: #ffe6e2; border-color: #e59a8f; color: #8a2418; }}
     #graph {{ min-height: 440px; border: 1px solid #d5ddd8; background: white; border-radius: 6px; overflow: hidden; }}
     .node {{ cursor: pointer; }}
     .edge {{ stroke: #8aa096; stroke-width: 1.4; }}
     @media (prefers-color-scheme: dark) {{
       body {{ background: #151716; color: #e8eee9; }}
       table, #graph, pre {{ background: #202522; border-color: #3a4540; }}
+      .summary-grid div {{ background: #202522; border-color: #3a4540; }}
+      .summary-grid span {{ color: #b7c4bd; }}
       th, code {{ background: #26322d; }}
       td, th {{ border-bottom-color: #3a4540; }}
       a.button {{ color: #bfe7d4; background: #1c2c26; border-color: #476b5c; }}
@@ -800,6 +989,7 @@ def brain_index_html() -> str:
       <a class="button" href="/agent-view">Agent view</a>
     </div>
   </section>
+  {dashboard_html()}
   <section>
     <h2>Notes</h2>
     <table>
