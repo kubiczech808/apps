@@ -2204,6 +2204,16 @@ def task_age_seconds(task: dict[str, Any]) -> int:
         return 0
 
 
+def delegation_delivery_note(task: dict[str, Any]) -> str:
+    agent = str(task.get("agent") or "Agent").strip() or "Agent"
+    kind = str(task.get("kind") or "")
+    if kind == "x-social-draft":
+        return "Doruceno: Agent D ma zadani."
+    if kind.startswith("blogger-"):
+        return f"Doruceno: {agent} ma zadani."
+    return f"Doruceno: {agent} ma zadani."
+
+
 def find_urls_in_text(text: str) -> list[str]:
     return re.findall(r"https?://[^\s\"'<>]+", text or "")
 
@@ -2326,12 +2336,25 @@ def delegation_monitor_once() -> None:
             task["last_observation"] = note
             task["updated_at"] = now
             changed = True
+        if (
+            new_status in {"ASSIGNED", "VERIFYING"}
+            and not task.get("delivery_reported_at")
+            and task_age_seconds(task) <= 8 * 3600
+        ):
+            message = delegation_delivery_note(task)
+            if telegram_notify(message):
+                g.log(f"-> {message}")
+                task["delivery_reported_at"] = now
+                task["delivery_reported_status"] = new_status
+                changed = True
         if new_status in {"DONE", "BLOCKED"} and task.get("last_reported_status") != new_status:
             verb = "Hotovo" if new_status == "DONE" else "Blocker"
-            telegram_notify(f"{verb}: {note}")
-            task["last_reported_status"] = new_status
-            task["reported_at"] = now
-            changed = True
+            message = f"{verb}: {note}"
+            if telegram_notify(message):
+                g.log(f"-> {message}")
+                task["last_reported_status"] = new_status
+                task["reported_at"] = now
+                changed = True
     if changed:
         save_orchestration_tasks(tasks)
 
