@@ -840,6 +840,9 @@ def handle_settings_callback(data: str) -> tuple[str, dict[str, Any], str]:
 def parse_settings_command(text: str) -> str | None:
     reply = g._base_parse_settings_command(text)
     if reply is None:
+        status_reply = parse_delegation_status_request(text)
+        if status_reply:
+            return status_reply
         combined_delegation_reply = parse_combined_delegation_request(text)
         if combined_delegation_reply:
             return combined_delegation_reply
@@ -1317,6 +1320,44 @@ def parse_combined_delegation_request(text: str) -> str | None:
     parts.append("Ozvu se, az budu mit overeny vystup nebo skutecny blocker.")
     return "\n".join(parts)
 
+
+def parse_delegation_status_request(text: str) -> str | None:
+    low = g.normalize_text(text)
+    status_terms = ("vystup", "vysledek", "odkaz", "link", "url", "stav", "kde je", "posli mi na nej")
+    new_task_terms = ("zajisti", "vytvor", "vygeneruj", "napis", "udelej navrh", "priprav", "at vznikne")
+    if not any(term in low for term in status_terms):
+        return None
+    if any(term in low for term in new_task_terms):
+        return None
+    tasks = load_orchestration_tasks()
+    if not tasks:
+        return None
+    candidates = [task for task in tasks if str(task.get("kind") or "").startswith("blogger-")]
+    if any(term in low for term in ("oz", "osobni zkusenosti", "osobnizkusenosti")):
+        candidates = [
+            task for task in candidates
+            if any(marker in g.normalize_text(" ".join([str(task.get("agent") or ""), str(task.get("instance") or ""), str(task.get("topic") or "")]))
+                   for marker in ("oz", "osobni zkusenosti", "osobnizkusenosti"))
+        ]
+    else:
+        non_btc = [
+            task for task in candidates
+            if "btc-dca" not in g.normalize_text(" ".join([str(task.get("agent") or ""), str(task.get("instance") or ""), str(task.get("topic") or "")]))
+        ]
+        if non_btc:
+            candidates = non_btc
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: str(item.get("created_at") or item.get("updated_at") or ""), reverse=True)
+    task = candidates[0]
+    status, note = observe_delegation_task(task)
+    if status == "DONE":
+        return f"Predchozi delegace: {note}"
+    if status == "BLOCKED":
+        return f"Blocker u predchozi delegace: {note}"
+    return f"Predchozi delegace jeste nema overeny vystup: {note}"
+
+
 def parse_general_delegation_request(text: str) -> str | None:
     low = g.normalize_text(text)
     asks_delegation = any(term in low for term in (
@@ -1406,12 +1447,17 @@ def parse_blogger_delegation_request(text: str) -> str | None:
     cfg_path = g.OPENCLAW_DIR / f"{instance}-blogger-config.json"
     if not cfg_path.exists():
         return f"Blokuje me: pro {agent_name} chybi konfigurace `{cfg_path}`. Nepouziju nahradne Agenta C."
+    cfg_data = g.load_json(cfg_path, {})
+    if not isinstance(cfg_data, dict):
+        cfg_data = {}
+    default_post_status = g.normalize_text(str(cfg_data.get("wp_post_status") or cfg_data.get("WP_POST_STATUS") or ""))
+    site_domain = domain_from_url(str(cfg_data.get("WP_SITE_URL") or cfg_data.get("wp_site_url") or ""))
 
     state_path = write_blogger_requested_topic(instance, topic)
     log_path = g.OPENCLAW_DIR / "logs" / f"virtual-assistant-{instance}-delegation.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     topic_arg = shlex.quote(topic)
-    if publish:
+    if publish or default_post_status == "draft":
         command = f"python3 {shlex.quote(str(script))} --instance {shlex.quote(instance)} --topic {topic_arg} --phase all --force"
     else:
         command = f"python3 {shlex.quote(str(script))} --instance {shlex.quote(instance)} --topic {topic_arg} --phase article --force"
@@ -1453,6 +1499,9 @@ def parse_blogger_delegation_request(text: str) -> str | None:
             "state": str(g.OPENCLAW_DIR / f"{instance}-blogger-state.json"),
             "log": str(log_path),
             "config": str(cfg_path),
+            "domain": site_domain,
+            "default_post_status": default_post_status,
+            "wants_link": str(any(term in g.normalize_text(text) for term in ("odkaz", "link", "url"))),
         },
     )
 
@@ -2159,10 +2208,41 @@ def find_urls_in_text(text: str) -> list[str]:
     return re.findall(r"https?://[^\s\"'<>]+", text or "")
 
 
+def output_urls_from_state(value: Any, expected_domain: str = "", key_path: str = "") -> list[str]:
+    urls: list[str] = []
+    output_key_terms = (
+        "post_url",
+        "draft_url",
+        "preview_url",
+        "permalink",
+        "wp_url",
+        "wordpress_url",
+        "published_url",
+        "canonical_url",
+        "post_link",
+    )
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child_key = f"{key_path}.{key}" if key_path else str(key)
+            urls.extend(output_urls_from_state(item, expected_domain, child_key))
+    elif isinstance(value, list):
+        for item in value:
+            urls.extend(output_urls_from_state(item, expected_domain, key_path))
+    elif isinstance(value, str):
+        key_low = g.normalize_text(key_path)
+        if any(term in key_low for term in output_key_terms) or key_low.endswith(".url"):
+            urls.extend(find_urls_in_text(value))
+    if expected_domain:
+        urls = [url for url in urls if expected_domain in domain_from_url(url)]
+    return list(dict.fromkeys(urls))
+
+
 def blogger_task_observation(task: dict[str, Any]) -> tuple[str, str]:
     proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
     state_raw = str(proof.get("state") or "")
     log_raw = str(proof.get("log") or "")
+    expected_domain = str(proof.get("domain") or "")
+    wants_link = str(proof.get("wants_link") or "").lower() == "true"
     state_path = Path(state_raw) if state_raw else None
     log_path = Path(log_raw) if log_raw else None
     state: dict[str, Any] = {}
@@ -2170,8 +2250,7 @@ def blogger_task_observation(task: dict[str, Any]) -> tuple[str, str]:
         state = g.load_json(state_path, {})
         if not isinstance(state, dict):
             state = {}
-    state_text = json.dumps(state, ensure_ascii=False)
-    urls = find_urls_in_text(state_text)
+    urls = output_urls_from_state(state, expected_domain)
     errors = state.get("errors")
     if isinstance(errors, list) and errors:
         return "BLOCKED", f"{task.get('agent')} narazil na chybu: {str(errors[-1])[:220]}"
@@ -2179,16 +2258,21 @@ def blogger_task_observation(task: dict[str, Any]) -> tuple[str, str]:
     article_present = bool(state.get("article") or state.get("draft") or state.get("content") or state.get("post_title") or state.get("post_id"))
     if urls:
         return "DONE", f"{task.get('agent')} ma overeny vystup: {urls[0]}"
-    if article_present or any(phase in phases for phase in ("article", "publish", "published", "post")):
-        return "DONE", f"{task.get('agent')} dokoncil draft/podklad podle state souboru."
+    log_tail = ""
     if log_path and log_path.exists() and log_path.is_file():
         try:
-            tail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])
+            log_tail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])
         except Exception:
-            tail = ""
-        if "[virtual-assistant] exit 0" in tail and task_age_seconds(task) > 180:
+            log_tail = ""
+    if wants_link and (article_present or "[virtual-assistant] exit 0" in log_tail):
+        domain_note = f" na domene {expected_domain}" if expected_domain else ""
+        return "BLOCKED", f"{task.get('agent')} vytvoril draft/podklad, ale nenasla jsem overeny odkaz{domain_note}."
+    if article_present or any(phase in phases for phase in ("article", "publish", "published", "post")):
+        return "DONE", f"{task.get('agent')} dokoncil draft/podklad podle state souboru."
+    if log_tail:
+        if "[virtual-assistant] exit 0" in log_tail and task_age_seconds(task) > 180:
             return "VERIFYING", f"{task.get('agent')} dobehl bez chyby, cekam jeste na vystup ve state/logu."
-        if "[virtual-assistant] exit " in tail and "[virtual-assistant] exit 0" not in tail:
+        if "[virtual-assistant] exit " in log_tail and "[virtual-assistant] exit 0" not in log_tail:
             return "BLOCKED", f"{task.get('agent')} runner skoncil chybou. Detail je v delegacnim logu."
     if task_age_seconds(task) > 3600:
         return "BLOCKED", f"{task.get('agent')} nedodal overitelny vystup do 60 minut."
