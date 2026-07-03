@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-03T12:16:16Z
+checked_at_utc=2026-07-03T12:19:59Z
 shared_brain_intro_telegram_sent=not_requested
 playwright_install=ok
 telegram_token_present= True
@@ -39,28 +39,30 @@ routing_smoke_sanitized_reply= Zadano Agentovi OZ jako draft, bez publikace.
 routing_smoke_filtered_output_urls= ['https://osobnizkusenosti.cz/?p=123']
 delegation_monitor_available= True
 orchestration_tasks_file= /home/openclaw2/.openclaw/virtual-assistant/ORCHESTRATION_TASKS.json
-[2026-07-03 14:16:17] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+agent_g_escalated_blockers_summary= 0
+agent_g_escalated_log_blockers_summary= 2
+[2026-07-03 14:20:00] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 ai_smoke_ok= True
 gmail_google_meta_1=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_2=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
 gmail_setup_poll=ok
 telegram_state_offset= 309697015
 virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 11
+virtual_assistant_lock_age_sec= 22
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-07-03T12:16:17Z
-virtual_assistant_log_signal_1=[2026-07-03 13:08:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_2=[2026-07-03 13:08:33] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): {"type":"thread.started","thread_id":"019f27aa-7a38-7460-a1a8-16de2ad15aa0"} {"type":"turn.started"} {"type":"error","message":"You've hit 
-virtual_assistant_log_signal_3=[2026-07-03 13:10:03] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_4=[2026-07-03 13:10:12] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): {"type":"thread.started","thread_id":"019f27ab-e05c-71e1-81b4-83a4b91aa30b"} {"type":"turn.started"} {"type":"error","message":"You've hit 
-virtual_assistant_log_signal_5=[2026-07-03 13:22:12] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_6=[2026-07-03 13:37:24] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_7=[2026-07-03 14:05:41] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_8=[2026-07-03 14:16:14] Virtual Assistant email worker started
-virtual_assistant_log_signal_9=[2026-07-03 14:16:14] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_10=[2026-07-03 14:16:14] Virtual Assistant telegram recovery worker started
-virtual_assistant_log_signal_11=[2026-07-03 14:16:14] Agent G daemon started
-virtual_assistant_log_signal_12=[2026-07-03 14:16:17] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_mtime_utc= 2026-07-03T12:20:00Z
+virtual_assistant_log_signal_1=[2026-07-03 13:37:24] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_2=[2026-07-03 14:05:41] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_3=[2026-07-03 14:16:14] Virtual Assistant email worker started
+virtual_assistant_log_signal_4=[2026-07-03 14:16:14] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_5=[2026-07-03 14:16:14] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_6=[2026-07-03 14:16:14] Agent G daemon started
+virtual_assistant_log_signal_7=[2026-07-03 14:16:17] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_8=[2026-07-03 14:19:56] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_9=[2026-07-03 14:19:56] Virtual Assistant email worker started
+virtual_assistant_log_signal_10=[2026-07-03 14:19:56] Agent G daemon started
+virtual_assistant_log_signal_11=[2026-07-03 14:19:56] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_12=[2026-07-03 14:20:00] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
@@ -91,46 +93,46 @@ va_2026_06_29_log_27=[2026-06-29 12:29:43] Model route: gpt-5.4-mini tier=cheap 
 va_2026_06_29_log_28=[2026-06-29 12:30:20] -> Hotovo:
 va_2026_06_29_log_29=[2026-06-29 13:42:33] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_30=[2026-06-29 13:42:59] Email processed and replied: from=<email>@google.com trusted=False subject=Další informace o aktualizovaných smluvních podmínkách
-va_today_log_1=[2026-07-03 10:34:49] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_2=[2026-07-03 10:36:46] -> Blocker: Agent D assignment se nepropsal do state souboru.
-va_today_log_3=[2026-07-03 11:22:04] <- vystupy mych pozadavku?
-va_today_log_4=[2026-07-03 11:24:46] -> Blocker: Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup.
-va_today_log_5=[2026-07-03 11:34:39] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
-va_today_log_6=[2026-07-03 12:31:23] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_7=[2026-07-03 12:34:52] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_8=[2026-07-03 12:37:21] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_9=[2026-07-03 12:42:48] Virtual Assistant email worker started
-va_today_log_10=[2026-07-03 12:42:48] Virtual Assistant delegation monitor started
-va_today_log_11=[2026-07-03 12:42:49] -> Doruceno: Agent XOZ ma zadani.
-va_today_log_12=[2026-07-03 12:42:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_13=[2026-07-03 12:47:28] Virtual Assistant email worker started
-va_today_log_14=[2026-07-03 12:47:28] Virtual Assistant delegation monitor started
-va_today_log_15=[2026-07-03 12:47:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_16=[2026-07-03 12:59:14] Virtual Assistant email worker started
-va_today_log_17=[2026-07-03 12:59:14] Virtual Assistant delegation monitor started
-va_today_log_18=[2026-07-03 12:59:14] -> Hotovo: Agent XOZ navrhl X prispevek:
-va_today_log_19=[2026-07-03 12:59:17] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_20=[2026-07-03 13:01:41] <- slo by, abych to tu mel ke schvaleni tlacitky jako je to u prispevku agenta D? a slo by aby byl navrh prispevku  vcetne 
-va_today_log_21=[2026-07-03 13:01:41] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_22=[2026-07-03 13:01:58] -> Ano, to dává skvělý smysl a usnadní ti to práci. 
-va_today_log_23=[2026-07-03 13:05:25] <- ukazka bude fajn
-va_today_log_24=[2026-07-03 13:05:25] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_25=[2026-07-03 13:05:32] -> Tady je ukázka, jak by takový schvalovací příspěvek přímo v Telegramu vypadal. Jako téma jsem vzala tvůj včerejší dotaz 
-va_today_log_26=[2026-07-03 13:06:27] <- to je dobre, ale ten obrazek uz musi byt vygenerovany soucasti navrhu
-va_today_log_27=[2026-07-03 13:06:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_28=[2026-07-03 13:06:56] -> Rozumím, dává to stoprocentní smysl. Návrh ti musí v Telegramu přistát rovnou jako hotová fotka s textem v popisku a tla
-va_today_log_29=[2026-07-03 13:08:31] <- jene pozor, XOZ mi nic neposle. posle to tobe a ty mi to musis preposlat vcetne tech tlacitkem pro schvaleni, takze ty t
-va_today_log_30=[2026-07-03 13:08:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_31=[2026-07-03 13:08:50] -> Máš úplnou pravdu, moje chyba. Jako tvá asistentka a koordinátorka jsem to já, kdo s tebou komunikuje a drží rozhraní. 
-va_today_log_32=[2026-07-03 13:10:03] <- ano
-va_today_log_33=[2026-07-03 13:10:03] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_34=[2026-07-03 13:10:35] -> Rozumím, jdu na to.
-va_today_log_35=[2026-07-03 13:22:12] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_36=[2026-07-03 13:37:24] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_37=[2026-07-03 14:05:41] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_38=[2026-07-03 14:16:14] Virtual Assistant email worker started
-va_today_log_39=[2026-07-03 14:16:14] Virtual Assistant delegation monitor started
-va_today_log_40=[2026-07-03 14:16:17] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_1=[2026-07-03 11:34:39] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
+va_today_log_2=[2026-07-03 12:31:23] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_3=[2026-07-03 12:34:52] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_4=[2026-07-03 12:37:21] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_5=[2026-07-03 12:42:48] Virtual Assistant email worker started
+va_today_log_6=[2026-07-03 12:42:48] Virtual Assistant delegation monitor started
+va_today_log_7=[2026-07-03 12:42:49] -> Doruceno: Agent XOZ ma zadani.
+va_today_log_8=[2026-07-03 12:42:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_9=[2026-07-03 12:47:28] Virtual Assistant email worker started
+va_today_log_10=[2026-07-03 12:47:28] Virtual Assistant delegation monitor started
+va_today_log_11=[2026-07-03 12:47:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_12=[2026-07-03 12:59:14] Virtual Assistant email worker started
+va_today_log_13=[2026-07-03 12:59:14] Virtual Assistant delegation monitor started
+va_today_log_14=[2026-07-03 12:59:14] -> Hotovo: Agent XOZ navrhl X prispevek:
+va_today_log_15=[2026-07-03 12:59:17] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_16=[2026-07-03 13:01:41] <- slo by, abych to tu mel ke schvaleni tlacitky jako je to u prispevku agenta D? a slo by aby byl navrh prispevku  vcetne 
+va_today_log_17=[2026-07-03 13:01:41] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_18=[2026-07-03 13:01:58] -> Ano, to dává skvělý smysl a usnadní ti to práci. 
+va_today_log_19=[2026-07-03 13:05:25] <- ukazka bude fajn
+va_today_log_20=[2026-07-03 13:05:25] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_21=[2026-07-03 13:05:32] -> Tady je ukázka, jak by takový schvalovací příspěvek přímo v Telegramu vypadal. Jako téma jsem vzala tvůj včerejší dotaz 
+va_today_log_22=[2026-07-03 13:06:27] <- to je dobre, ale ten obrazek uz musi byt vygenerovany soucasti navrhu
+va_today_log_23=[2026-07-03 13:06:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_24=[2026-07-03 13:06:56] -> Rozumím, dává to stoprocentní smysl. Návrh ti musí v Telegramu přistát rovnou jako hotová fotka s textem v popisku a tla
+va_today_log_25=[2026-07-03 13:08:31] <- jene pozor, XOZ mi nic neposle. posle to tobe a ty mi to musis preposlat vcetne tech tlacitkem pro schvaleni, takze ty t
+va_today_log_26=[2026-07-03 13:08:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_27=[2026-07-03 13:08:50] -> Máš úplnou pravdu, moje chyba. Jako tvá asistentka a koordinátorka jsem to já, kdo s tebou komunikuje a drží rozhraní. 
+va_today_log_28=[2026-07-03 13:10:03] <- ano
+va_today_log_29=[2026-07-03 13:10:03] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_30=[2026-07-03 13:10:35] -> Rozumím, jdu na to.
+va_today_log_31=[2026-07-03 13:22:12] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_32=[2026-07-03 13:37:24] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_33=[2026-07-03 14:05:41] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_34=[2026-07-03 14:16:14] Virtual Assistant email worker started
+va_today_log_35=[2026-07-03 14:16:14] Virtual Assistant delegation monitor started
+va_today_log_36=[2026-07-03 14:16:17] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_37=[2026-07-03 14:19:56] Virtual Assistant delegation monitor started
+va_today_log_38=[2026-07-03 14:19:56] Virtual Assistant email worker started
+va_today_log_39=[2026-07-03 14:19:57] -> Doruceno: Agent G ma zadani.
+va_today_log_40=[2026-07-03 14:20:00] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_today_03_04_log_1=[2026-07-03 04:41:20] Daemon poll error: HTTP Error 401: Unauthorized
 va_today_03_04_log_2=[2026-07-03 04:41:22] Daemon poll error: HTTP Error 401: Unauthorized
 va_today_03_04_log_3=[2026-07-03 04:41:23] Daemon poll error: HTTP Error 401: Unauthorized
@@ -322,7 +324,12 @@ orchestration_task_8_xoz_accepted_at=2026-07-03T12:59:13+02:00
 orchestration_task_8_xoz_in_progress_at=2026-07-03T12:59:13+02:00
 orchestration_task_8_xoz_output_at=2026-07-03T12:59:13+02:00
 orchestration_task_8_xoz_output=Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. Kdyz je jasne, kdo ma co prevzit, jak se overi vysledek a kdy se vratit se stavem, prestanou ukoly mizet mezi radky.
-xoz_activity_log_exists=False
+orchestration_task_9=id=0a01255ac576e7ab created=2026-07-03T14:19:55+02:00 status=VERIFYING delivery=2026-07-03T14:19:56+02:00 reported= agent=Agent G instance=operations kind=technical-blocker topic=Vyres Agent D X blocker z logu: Agent D assignment se nepropsal do state souboru. observation=Agent G resi technicky blocker.
+orchestration_task_9_proof_keys=blocked_agent,inbox,source
+orchestration_task_10=id=48bedd2d973fac68 created=2026-07-03T14:19:55+02:00 status=VERIFYING delivery=2026-07-03T14:19:57+02:00 reported= agent=Agent G instance=operations kind=technical-blocker topic=Vyres Agent D X blocker z logu: Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup. observation=Agent G resi technicky blocker.
+orchestration_task_10_proof_keys=blocked_agent,inbox,source
+xoz_activity_log_exists=True
+xoz_activity_log_lines=0
 telegram_recovery_processed_count=5
 telegram_recovery_attempt_count=0
 blogger_config_1=instance=btc-dca agent=btc-dca site=https://www.btc-dca.com status=publish
