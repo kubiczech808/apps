@@ -2388,11 +2388,18 @@ def telegram_recovery_state() -> dict[str, Any]:
     if not isinstance(processed, list):
         processed = []
     data["processed"] = processed[-200:]
+    attempts = data.get("attempts")
+    if not isinstance(attempts, dict):
+        attempts = {}
+    data["attempts"] = attempts
     return data
 
 
 def save_telegram_recovery_state(state: dict[str, Any]) -> None:
     RECOVERY_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    attempts = state.get("attempts")
+    if isinstance(attempts, dict) and len(attempts) > 200:
+        state["attempts"] = dict(list(attempts.items())[-200:])
     RECOVERY_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -2401,12 +2408,11 @@ def recover_unanswered_telegram_once() -> None:
     if not log_path.exists():
         return
     try:
-        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-700:]
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-1500:]
     except Exception:
         return
-    incoming: list[tuple[dt.datetime, str]] = []
-    outgoing_times: list[dt.datetime] = []
-    for line in lines:
+    events: list[tuple[int, dt.datetime, str, str]] = []
+    for idx, line in enumerate(lines):
         match = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+(<-|->)\s*(.*)$", line)
         if not match:
             continue
@@ -2415,19 +2421,24 @@ def recover_unanswered_telegram_once() -> None:
             continue
         direction = match.group(2)
         text = match.group(3).strip()
-        if direction == "->":
-            outgoing_times.append(ts)
-        elif text and not text.startswith("/"):
-            incoming.append((ts, text))
+        if text:
+            events.append((idx, ts, direction, text))
+    incoming = [event for event in events if event[2] == "<-" and event[3] and not event[3].startswith("/")]
     if not incoming:
         return
-    last_outgoing = max(outgoing_times) if outgoing_times else dt.datetime.fromtimestamp(0, tz=dt.datetime.now().astimezone().tzinfo)
     now = dt.datetime.now().astimezone()
     state = telegram_recovery_state()
     processed = set(str(item) for item in state.get("processed") or [])
+    attempts = state.get("attempts") if isinstance(state.get("attempts"), dict) else {}
     changed = False
-    for ts, text in incoming[-5:]:
-        if ts <= last_outgoing:
+    for idx, ts, _, text in incoming[-10:]:
+        later_incoming = [candidate[0] for candidate in incoming if candidate[0] > idx]
+        next_incoming_idx = min(later_incoming) if later_incoming else 10**12
+        reply_exists = any(
+            direction == "->" and event_idx > idx and event_idx < next_incoming_idx
+            for event_idx, _, direction, _ in events
+        )
+        if reply_exists:
             continue
         age = (now - ts).total_seconds()
         if age < 180:
@@ -2435,6 +2446,17 @@ def recover_unanswered_telegram_once() -> None:
         msg_id = hashlib.sha1(f"{ts.isoformat()}|{text}".encode("utf-8", errors="replace")).hexdigest()[:16]
         if msg_id in processed:
             continue
+        attempt = attempts.get(msg_id) if isinstance(attempts.get(msg_id), dict) else {}
+        last_attempt_raw = str(attempt.get("last_attempt_at") or "")
+        if last_attempt_raw:
+            try:
+                last_attempt = dt.datetime.fromisoformat(last_attempt_raw)
+                if last_attempt.tzinfo is None:
+                    last_attempt = last_attempt.replace(tzinfo=now.tzinfo)
+                if (now - last_attempt).total_seconds() < 600:
+                    continue
+            except Exception:
+                pass
         try:
             reply = parse_settings_command(text)
             if not reply:
@@ -2448,14 +2470,31 @@ def recover_unanswered_telegram_once() -> None:
             if telegram_notify(reply):
                 g.log(f"Telegram recovery replied to unanswered message {msg_id}")
                 g.log(f"-> {reply[:500]}")
+                processed.add(msg_id)
+                attempts.pop(msg_id, None)
+                changed = True
             else:
+                attempt["last_attempt_at"] = now.isoformat(timespec="seconds")
+                attempt["last_error"] = "telegram_send_failed"
+                attempts[msg_id] = attempt
+                changed = True
                 g.log(f"Telegram recovery produced reply but send failed for {msg_id}")
-            processed.add(msg_id)
-            changed = True
         except Exception as exc:
+            attempt["last_attempt_at"] = now.isoformat(timespec="seconds")
+            attempt["last_error"] = f"{type(exc).__name__}: {str(exc)[:180]}"
+            attempt["count"] = int(attempt.get("count") or 0) + 1
+            if not attempt.get("fallback_sent_at") and age >= 300:
+                fallback = "Zachytila jsem zpravu. Zpracovani se nedokoncilo, zkusim ji znovu a nenecham ji zapadnout."
+                if telegram_notify(fallback):
+                    g.log(f"Telegram recovery sent fallback for unanswered message {msg_id}")
+                    g.log(f"-> {fallback}")
+                    attempt["fallback_sent_at"] = now.isoformat(timespec="seconds")
+            attempts[msg_id] = attempt
+            changed = True
             g.log(f"Telegram recovery failed for {msg_id}: {type(exc).__name__}: {exc}")
     if changed:
         state["processed"] = list(processed)[-200:]
+        state["attempts"] = attempts
         state["updated_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
         save_telegram_recovery_state(state)
 
