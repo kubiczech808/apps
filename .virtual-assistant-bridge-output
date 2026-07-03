@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-03T10:42:51Z
+checked_at_utc=2026-07-03T10:47:31Z
 shared_brain_intro_telegram_sent=not_requested
 playwright_install=ok
 telegram_token_present= True
@@ -38,28 +38,28 @@ routing_smoke_sanitized_reply= Zadano Agentovi OZ jako draft, bez publikace.
 routing_smoke_filtered_output_urls= ['https://osobnizkusenosti.cz/?p=123']
 delegation_monitor_available= True
 orchestration_tasks_file= /home/openclaw2/.openclaw/virtual-assistant/ORCHESTRATION_TASKS.json
-[2026-07-03 12:42:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+[2026-07-03 12:47:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 ai_smoke_ok= True
 gmail_google_meta_1=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_2=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
 gmail_setup_poll=ok
 telegram_state_offset= 309697010
 virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 3
+virtual_assistant_lock_age_sec= 13
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-07-03T10:42:52Z
-virtual_assistant_log_signal_1=[2026-07-03 10:34:46] Virtual Assistant email worker started
-virtual_assistant_log_signal_2=[2026-07-03 10:34:46] Agent G daemon started
-virtual_assistant_log_signal_3=[2026-07-03 10:34:49] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_4=[2026-07-03 11:34:39] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
-virtual_assistant_log_signal_5=[2026-07-03 12:31:23] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_6=[2026-07-03 12:34:52] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_7=[2026-07-03 12:37:21] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_8=[2026-07-03 12:42:48] Virtual Assistant email worker started
-virtual_assistant_log_signal_9=[2026-07-03 12:42:48] Agent G daemon started
-virtual_assistant_log_signal_10=[2026-07-03 12:42:48] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_11=[2026-07-03 12:42:48] Virtual Assistant telegram recovery worker started
-virtual_assistant_log_signal_12=[2026-07-03 12:42:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_mtime_utc= 2026-07-03T10:47:31Z
+virtual_assistant_log_signal_1=[2026-07-03 12:34:52] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_2=[2026-07-03 12:37:21] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_3=[2026-07-03 12:42:48] Virtual Assistant email worker started
+virtual_assistant_log_signal_4=[2026-07-03 12:42:48] Agent G daemon started
+virtual_assistant_log_signal_5=[2026-07-03 12:42:48] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_6=[2026-07-03 12:42:48] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_7=[2026-07-03 12:42:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_8=[2026-07-03 12:47:28] Virtual Assistant email worker started
+virtual_assistant_log_signal_9=[2026-07-03 12:47:28] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_10=[2026-07-03 12:47:28] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_11=[2026-07-03 12:47:28] Agent G daemon started
+virtual_assistant_log_signal_12=[2026-07-03 12:47:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
@@ -90,46 +90,46 @@ va_2026_06_29_log_27=[2026-06-29 12:29:43] Model route: gpt-5.4-mini tier=cheap 
 va_2026_06_29_log_28=[2026-06-29 12:30:20] -> Hotovo:
 va_2026_06_29_log_29=[2026-06-29 13:42:33] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_30=[2026-06-29 13:42:59] Email processed and replied: from=<email>@google.com trusted=False subject=Další informace o aktualizovaných smluvních podmínkách
-va_today_log_1=[2026-07-03 09:03:48] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_2=[2026-07-03 09:07:34] Virtual Assistant email worker started
-va_today_log_3=[2026-07-03 09:07:34] Virtual Assistant delegation monitor started
-va_today_log_4=[2026-07-03 09:07:35] -> Hotovo: oz ma overeny vystup: https://www.osobnizkusenosti.cz/?p=6067
-va_today_log_5=[2026-07-03 09:07:35] -> Hotovo: oz ma overeny vystup: https://www.osobnizkusenosti.cz/?p=6067
-va_today_log_6=[2026-07-03 09:07:38] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_7=[2026-07-03 09:23:26] Virtual Assistant email worker started
-va_today_log_8=[2026-07-03 09:23:26] Virtual Assistant delegation monitor started
-va_today_log_9=[2026-07-03 09:23:29] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_10=[2026-07-03 09:57:37] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_11=[2026-07-03 10:14:59] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_12=[2026-07-03 10:17:38] <- chci navrh prispevku na X OZ ke schvaleni
-va_today_log_13=[2026-07-03 10:19:58] <- ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvalen
-va_today_log_14=[2026-07-03 10:20:24] <- ne, agent D dela btc-dca, tohle je na agenta XOZ
-va_today_log_15=[2026-07-03 10:20:25] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_16=[2026-07-03 10:20:39] -> Rozumim, tohle si beru jako pravidlo pro priste. Budu vic cist zamer za pripominkou, sama upravim ton/proces a nebudu z toho delat dalsi ukol pro tebe. Kdyz pripravim navrh, dam ti rovnou pouzitelnou verzi a zeptam se jemne: chces neco upravit, nebo schvalujes tento smer?
-va_today_log_17=[2026-07-03 10:20:57] -> Hotovo:
-va_today_log_18=[2026-07-03 10:21:26] -> Doruceno: Agent D ma zadani.
-va_today_log_19=[2026-07-03 10:23:40] <- zrus zadani agentovi D. to zadani mel dostat agent XOZ
-va_today_log_20=[2026-07-03 10:23:40] -> Deleguji:
-va_today_log_21=[2026-07-03 10:23:40] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_22=[2026-07-03 10:24:15] -> Hotovo:
-va_today_log_23=[2026-07-03 10:25:26] Telegram notification deduped: Doruceno: Agent D ma zadani.
-va_today_log_24=[2026-07-03 10:27:50] <- kolik prispevku dnes agent XOZ okomentoval?
-va_today_log_25=[2026-07-03 10:27:50] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_26=[2026-07-03 10:28:24] -> Dnes 3. 7. 2026 nemám ověřený ani jeden skutečně okomentovaný příspěvek od Agent XOZ/OZ.
-va_today_log_27=[2026-07-03 10:34:46] Virtual Assistant delegation monitor started
-va_today_log_28=[2026-07-03 10:34:46] Virtual Assistant email worker started
-va_today_log_29=[2026-07-03 10:34:49] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_30=[2026-07-03 10:36:46] -> Blocker: Agent D assignment se nepropsal do state souboru.
-va_today_log_31=[2026-07-03 11:22:04] <- vystupy mych pozadavku?
-va_today_log_32=[2026-07-03 11:24:46] -> Blocker: Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup.
-va_today_log_33=[2026-07-03 11:34:39] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
-va_today_log_34=[2026-07-03 12:31:23] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_35=[2026-07-03 12:34:52] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_36=[2026-07-03 12:37:21] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_37=[2026-07-03 12:42:48] Virtual Assistant email worker started
-va_today_log_38=[2026-07-03 12:42:48] Virtual Assistant delegation monitor started
-va_today_log_39=[2026-07-03 12:42:49] -> Doruceno: Agent XOZ ma zadani.
-va_today_log_40=[2026-07-03 12:42:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_1=[2026-07-03 09:07:35] -> Hotovo: oz ma overeny vystup: https://www.osobnizkusenosti.cz/?p=6067
+va_today_log_2=[2026-07-03 09:07:35] -> Hotovo: oz ma overeny vystup: https://www.osobnizkusenosti.cz/?p=6067
+va_today_log_3=[2026-07-03 09:07:38] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_4=[2026-07-03 09:23:26] Virtual Assistant email worker started
+va_today_log_5=[2026-07-03 09:23:26] Virtual Assistant delegation monitor started
+va_today_log_6=[2026-07-03 09:23:29] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_7=[2026-07-03 09:57:37] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_8=[2026-07-03 10:14:59] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_9=[2026-07-03 10:17:38] <- chci navrh prispevku na X OZ ke schvaleni
+va_today_log_10=[2026-07-03 10:19:58] <- ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvalen
+va_today_log_11=[2026-07-03 10:20:24] <- ne, agent D dela btc-dca, tohle je na agenta XOZ
+va_today_log_12=[2026-07-03 10:20:25] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_13=[2026-07-03 10:20:39] -> Rozumim, tohle si beru jako pravidlo pro priste. Budu vic cist zamer za pripominkou, sama upravim ton/proces a nebudu z toho delat dalsi ukol pro tebe. Kdyz pripravim navrh, dam ti rovnou pouzitelnou verzi a zeptam se jemne: chces neco upravit, nebo schvalujes tento smer?
+va_today_log_14=[2026-07-03 10:20:57] -> Hotovo:
+va_today_log_15=[2026-07-03 10:21:26] -> Doruceno: Agent D ma zadani.
+va_today_log_16=[2026-07-03 10:23:40] <- zrus zadani agentovi D. to zadani mel dostat agent XOZ
+va_today_log_17=[2026-07-03 10:23:40] -> Deleguji:
+va_today_log_18=[2026-07-03 10:23:40] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_19=[2026-07-03 10:24:15] -> Hotovo:
+va_today_log_20=[2026-07-03 10:25:26] Telegram notification deduped: Doruceno: Agent D ma zadani.
+va_today_log_21=[2026-07-03 10:27:50] <- kolik prispevku dnes agent XOZ okomentoval?
+va_today_log_22=[2026-07-03 10:27:50] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_23=[2026-07-03 10:28:24] -> Dnes 3. 7. 2026 nemám ověřený ani jeden skutečně okomentovaný příspěvek od Agent XOZ/OZ.
+va_today_log_24=[2026-07-03 10:34:46] Virtual Assistant delegation monitor started
+va_today_log_25=[2026-07-03 10:34:46] Virtual Assistant email worker started
+va_today_log_26=[2026-07-03 10:34:49] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_27=[2026-07-03 10:36:46] -> Blocker: Agent D assignment se nepropsal do state souboru.
+va_today_log_28=[2026-07-03 11:22:04] <- vystupy mych pozadavku?
+va_today_log_29=[2026-07-03 11:24:46] -> Blocker: Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup.
+va_today_log_30=[2026-07-03 11:34:39] Daemon poll error: <urlopen error _ssl.c:1012: The handshake operation timed out>
+va_today_log_31=[2026-07-03 12:31:23] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_32=[2026-07-03 12:34:52] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_33=[2026-07-03 12:37:21] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_34=[2026-07-03 12:42:48] Virtual Assistant email worker started
+va_today_log_35=[2026-07-03 12:42:48] Virtual Assistant delegation monitor started
+va_today_log_36=[2026-07-03 12:42:49] -> Doruceno: Agent XOZ ma zadani.
+va_today_log_37=[2026-07-03 12:42:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_38=[2026-07-03 12:47:28] Virtual Assistant email worker started
+va_today_log_39=[2026-07-03 12:47:28] Virtual Assistant delegation monitor started
+va_today_log_40=[2026-07-03 12:47:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_today_03_04_log_1=[2026-07-03 04:41:20] Daemon poll error: HTTP Error 401: Unauthorized
 va_today_03_04_log_2=[2026-07-03 04:41:22] Daemon poll error: HTTP Error 401: Unauthorized
 va_today_03_04_log_3=[2026-07-03 04:41:23] Daemon poll error: HTTP Error 401: Unauthorized
@@ -275,9 +275,9 @@ orchestration_task_1_proof_keys=config,log,state
 orchestration_task_1_state_keys=article,date,errors,images,keywords,last_image_time,phases_done,topic,wp_post_id,wp_post_status,wp_post_url
 orchestration_task_1_state_post_id=6067
 orchestration_task_1_state_urls=wp_post_url=https://www.osobnizkusenosti.cz/?p=6067
-orchestration_task_2=id=56e739ac4b3bf592 created=2026-07-02T17:15:13+02:00 status=BLOCKED delivery= reported=2026-07-02T19:21:47+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=udelej navrh random prispevku o penezich na X profilu osobnizkusenosti. hci jej nejprve videt a schvalit pred zveejnenim observation=Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup.
+orchestration_task_2=id=56e739ac4b3bf592 created=2026-07-02T17:15:13+02:00 status=CANCELED delivery= reported=2026-07-03T12:47:27+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=udelej navrh random prispevku o penezich na X profilu osobnizkusenosti. hci jej nejprve videt a schvalit pred zveejnenim observation=Zadani pro Agent D zruseno; spravny cil je Agent XOZ.
 orchestration_task_2_proof_keys=state,workflow_output
-orchestration_task_2_state_keys=custom_instructions,virtual_assistant_last_assignment
+orchestration_task_2_state_keys=custom_instructions
 orchestration_task_2_state_post_id=
 orchestration_task_2_state_urls=
 orchestration_task_3=id=d1916eecb5dcd13d created=2026-07-02T17:15:13+02:00 status=DONE delivery= reported=2026-07-02T17:19:13+02:00 agent=oz instance=osobnizkusenosti-cz kind=blogger-draft topic=a posli mi na nej odkaz observation=oz ma overeny vystup: https://advanced.coinbase.com/join/RSCXAJL\
@@ -295,17 +295,17 @@ orchestration_task_5_proof_keys=config,default_post_status,domain,log,requires_l
 orchestration_task_5_state_keys=article,date,errors,images,keywords,last_image_time,phases_done,topic,wp_post_id,wp_post_status,wp_post_url
 orchestration_task_5_state_post_id=6067
 orchestration_task_5_state_urls=wp_post_url=https://www.osobnizkusenosti.cz/?p=6067
-orchestration_task_6=id=c1cb0f52421333f1 created=2026-07-03T10:19:58+02:00 status=BLOCKED delivery=2026-07-03T10:21:26+02:00 reported=2026-07-03T10:36:46+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvaleni observation=Agent D assignment se nepropsal do state souboru.
+orchestration_task_6=id=c1cb0f52421333f1 created=2026-07-03T10:19:58+02:00 status=CANCELED delivery=2026-07-03T10:21:26+02:00 reported=2026-07-03T12:47:27+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvaleni observation=Zadani pro Agent D zruseno; spravny cil je Agent XOZ.
 orchestration_task_6_proof_keys=state,workflow_output
-orchestration_task_6_state_keys=custom_instructions,virtual_assistant_last_assignment
+orchestration_task_6_state_keys=custom_instructions
 orchestration_task_6_state_post_id=
 orchestration_task_6_state_urls=
-orchestration_task_7=id=d6813a85acb88ebc created=2026-07-03T10:23:40+02:00 status=BLOCKED delivery=2026-07-03T10:25:26+02:00 reported=2026-07-03T11:24:46+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvalen observation=Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup.
+orchestration_task_7=id=d6813a85acb88ebc created=2026-07-03T10:23:40+02:00 status=CANCELED delivery=2026-07-03T10:25:26+02:00 reported=2026-07-03T12:47:27+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvalen observation=Zadani pro Agent D zruseno; spravny cil je Agent XOZ.
 orchestration_task_7_proof_keys=state,workflow_output
-orchestration_task_7_state_keys=custom_instructions,virtual_assistant_last_assignment
+orchestration_task_7_state_keys=custom_instructions
 orchestration_task_7_state_post_id=
 orchestration_task_7_state_urls=
-orchestration_task_8=id=d6201923d1ac5e8b created=2026-07-03T12:42:47+02:00 status=VERIFYING delivery=2026-07-03T12:42:48+02:00 reported= agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=chci navrh prispevku na X OZ ke schvaleni observation=Agent XOZ assignment cekam na propsani do state souboru.
+orchestration_task_8=id=d6201923d1ac5e8b created=2026-07-03T12:42:47+02:00 status=VERIFYING delivery=2026-07-03T12:42:48+02:00 reported= agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=chci navrh prispevku na X OZ ke schvaleni observation=Agent XOZ ma zadani ulozene, cekam na navrh nebo overitelny vystup.
 orchestration_task_8_proof_keys=inbox,state
 orchestration_task_8_state_keys=assignments,virtual_assistant_last_assignment
 orchestration_task_8_state_post_id=
@@ -316,9 +316,7 @@ blogger_config_1=instance=btc-dca agent=btc-dca site=https://www.btc-dca.com sta
 blogger_config_2=instance=osobnizkusenosti-cz agent=oz site=https://osobnizkusenosti.cz status=draft
 blogger_config_3=instance=oz agent=Agent OZ site=https://osobnizkusenosti.cz status=draft
 blogger_config_4=instance=tajemstvijamu-cz agent=tajemstvijamu-cz site=https://tajemstvijamu.cz status=draft
-agent_d_last_va_assignment_at=2026-07-03T10:23:40+02:00
-agent_d_last_va_assignment_text=ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvalen
-agent_d_custom_instruction_count=6
+agent_d_custom_instruction_count=0
 delegation_log_virtual-assistant-btc-dca-delegation.log_1=[2026-06-30 16:42:34] BTC-DCA Blogger — instance=btc-dca phase=article force=True fix_cover=False fix_inline=None telegram=False
 delegation_log_virtual-assistant-btc-dca-delegation.log_2=[2026-06-30 16:42:34] PHASE: article
 delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_1=[2026-07-03 04:45:56]   article plan notification skipped (notify_article_plan disabled)
