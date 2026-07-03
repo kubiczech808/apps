@@ -1465,8 +1465,12 @@ def parse_blogger_delegation_request(text: str) -> str | None:
     log_path = g.OPENCLAW_DIR / "logs" / f"virtual-assistant-{instance}-delegation.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     topic_arg = shlex.quote(topic)
-    if publish or default_post_status == "draft":
+    if publish:
         command = f"python3 {shlex.quote(str(script))} --instance {shlex.quote(instance)} --topic {topic_arg} --phase all --force"
+    elif default_post_status == "draft":
+        article_command = f"python3 {shlex.quote(str(script))} --instance {shlex.quote(instance)} --topic {topic_arg} --phase article --force"
+        publish_command = f"python3 {shlex.quote(str(script))} --instance {shlex.quote(instance)} --topic {topic_arg} --phase publish --force"
+        command = f"{article_command} && {publish_command}"
     else:
         command = f"python3 {shlex.quote(str(script))} --instance {shlex.quote(instance)} --topic {topic_arg} --phase article --force"
     runner = ""
