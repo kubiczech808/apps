@@ -29,6 +29,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows/local editor fallback
+    fcntl = None
+
 BASE_PATH = Path("/home/openclaw2/scripts/g_agent.py")
 AGENT_NAME = "Virtualni asistentka"
 
@@ -2321,42 +2326,59 @@ def observe_delegation_task(task: dict[str, Any]) -> tuple[str, str]:
 
 
 def delegation_monitor_once() -> None:
+    lock_handle = None
+    if fcntl is not None:
+        lock_path = g.AGENT_WORK_DIR / "DELEGATION_MONITOR.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_handle = lock_path.open("w", encoding="utf-8")
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock_handle.close()
+            return
     tasks = load_orchestration_tasks()
-    if not tasks:
-        return
-    changed = False
-    for task in tasks:
-        status = str(task.get("status") or "ASSIGNED")
-        if status in {"DONE", "BLOCKED"} and task.get("reported_at"):
-            continue
-        new_status, note = observe_delegation_task(task)
-        now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
-        if new_status != status or note != task.get("last_observation"):
-            task["status"] = new_status
-            task["last_observation"] = note
-            task["updated_at"] = now
-            changed = True
-        if (
-            new_status in {"ASSIGNED", "VERIFYING"}
-            and not task.get("delivery_reported_at")
-            and task_age_seconds(task) <= 8 * 3600
-        ):
-            message = delegation_delivery_note(task)
-            if telegram_notify(message):
-                g.log(f"-> {message}")
-                task["delivery_reported_at"] = now
-                task["delivery_reported_status"] = new_status
+    try:
+        if not tasks:
+            return
+        changed = False
+        for task in tasks:
+            status = str(task.get("status") or "ASSIGNED")
+            if status in {"DONE", "BLOCKED"} and task.get("reported_at"):
+                continue
+            new_status, note = observe_delegation_task(task)
+            now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+            if new_status != status or note != task.get("last_observation"):
+                task["status"] = new_status
+                task["last_observation"] = note
+                task["updated_at"] = now
                 changed = True
-        if new_status in {"DONE", "BLOCKED"} and task.get("last_reported_status") != new_status:
-            verb = "Hotovo" if new_status == "DONE" else "Blocker"
-            message = f"{verb}: {note}"
-            if telegram_notify(message):
-                g.log(f"-> {message}")
-                task["last_reported_status"] = new_status
-                task["reported_at"] = now
-                changed = True
-    if changed:
-        save_orchestration_tasks(tasks)
+            if (
+                new_status in {"ASSIGNED", "VERIFYING"}
+                and not task.get("delivery_reported_at")
+                and task_age_seconds(task) <= 8 * 3600
+            ):
+                message = delegation_delivery_note(task)
+                if telegram_notify(message):
+                    g.log(f"-> {message}")
+                    task["delivery_reported_at"] = now
+                    task["delivery_reported_status"] = new_status
+                    changed = True
+            if new_status in {"DONE", "BLOCKED"} and task.get("last_reported_status") != new_status:
+                verb = "Hotovo" if new_status == "DONE" else "Blocker"
+                message = f"{verb}: {note}"
+                if telegram_notify(message):
+                    g.log(f"-> {message}")
+                    task["last_reported_status"] = new_status
+                    task["reported_at"] = now
+                    changed = True
+        if changed:
+            save_orchestration_tasks(tasks)
+    finally:
+        if lock_handle is not None:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_handle.close()
 
 
 def delegation_monitor_worker_loop() -> None:
