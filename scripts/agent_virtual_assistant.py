@@ -1341,7 +1341,9 @@ def assign_social_x_task(text: str) -> tuple[bool, dict[str, str], str]:
         return ok, target, path
 
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    task_id = delegation_task_id(target["agent"], target["instance"], text.strip(), target["kind"])
     item = {
+        "task_id": task_id,
         "created_at": now,
         "source": "virtual-assistant",
         "agent": target["agent"],
@@ -1361,6 +1363,19 @@ def assign_social_x_task(text: str) -> tuple[bool, dict[str, str], str]:
         assignments.append(item)
         state["assignments"] = assignments[-100:]
         state["virtual_assistant_last_assignment"] = item
+        statuses = state.get("task_status")
+        if not isinstance(statuses, dict):
+            statuses = {}
+        statuses[task_id] = {
+            **(statuses.get(task_id) if isinstance(statuses.get(task_id), dict) else {}),
+            "task_id": task_id,
+            "topic": text.strip(),
+            "status": "DELIVERED",
+            "received_at": now,
+            "updated_at": now,
+            "expected_output": "navrh X prispevku ke schvaleni, bez publikace",
+        }
+        state["task_status"] = statuses
         g.write_json(state_path, state)
         upsert_orchestration_task(
             target["agent"],
@@ -1383,6 +1398,97 @@ def assign_social_x_task(text: str) -> tuple[bool, dict[str, str], str]:
             {"inbox": str(fallback), "error": str(exc)[:240]},
         )
         return False, target, str(fallback)
+
+
+def xoz_task_record_for_task(state: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    statuses = state.get("task_status")
+    task_id = str(task.get("id") or "")
+    if isinstance(statuses, dict) and isinstance(statuses.get(task_id), dict):
+        return statuses[task_id]
+    topic = str(task.get("topic") or "").strip()
+    if isinstance(statuses, dict):
+        for record in statuses.values():
+            if isinstance(record, dict) and str(record.get("topic") or "").strip() == topic:
+                return record
+    assignments = state.get("assignments")
+    if isinstance(assignments, list):
+        for assignment in reversed(assignments):
+            if not isinstance(assignment, dict):
+                continue
+            if str(assignment.get("task_id") or "") == task_id or str(assignment.get("task") or "").strip() == topic:
+                return {
+                    "task_id": task_id,
+                    "topic": topic,
+                    "status": "DELIVERED",
+                    "received_at": assignment.get("created_at") or task.get("created_at") or "",
+                }
+    return {}
+
+
+def xoz_generate_x_draft(topic: str) -> str:
+    low = g.normalize_text(topic)
+    if "krypto" in low or "crypto" in low or "bitcoin" in low or "btc" in low:
+        return (
+            "Osobni zkusenost: u krypta se nejvic vyplaci klidny proces, ne honba za dalsim tipem. "
+            "Kdyz si clovek predem urci pravidla, limity a duvod, proc do toho jde, dela mnohem mene impulzivnich rozhodnuti."
+        )
+    if "ai" in low or "agent" in low:
+        return (
+            "Osobni zkusenost: nejvetsi rozdil v praci s AI agenty neni v tom, ze neco napisou za me. "
+            "Je v tom, ze drzi kontext, hlidaji navaznosti a nenechaji ukoly vysumet. Tam zacina realna uspora casu."
+        )
+    return (
+        "Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. "
+        "Kdyz je jasne, kdo ma co prevzit, jak se overi vysledek a kdy se vratit se stavem, prestanou ukoly mizet mezi radky."
+    )
+
+
+def xoz_worker_once(tasks: list[dict[str, Any]] | None = None) -> int:
+    tasks = tasks if tasks is not None else load_orchestration_tasks()
+    changed = 0
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        if str(task.get("kind") or "") != "xoz-social-draft":
+            continue
+        if str(task.get("status") or "ASSIGNED") in {"DONE", "BLOCKED", "CANCELED"}:
+            continue
+        proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
+        state_path = Path(str(proof.get("state") or g.OPENCLAW_DIR / "agent-xoz-state.json"))
+        state = g.load_json(state_path, {})
+        if not isinstance(state, dict):
+            state = {}
+        statuses = state.get("task_status")
+        if not isinstance(statuses, dict):
+            statuses = {}
+        task_id = str(task.get("id") or delegation_task_id("Agent XOZ", "xoz-poster", str(task.get("topic") or ""), "xoz-social-draft"))
+        record = xoz_task_record_for_task(state, task)
+        if not isinstance(record, dict):
+            record = {}
+        before = json.dumps(record, sort_keys=True, ensure_ascii=False)
+        record["task_id"] = task_id
+        record["topic"] = str(task.get("topic") or "").strip()
+        record["received_at"] = record.get("received_at") or task.get("created_at") or now
+        record["accepted_at"] = record.get("accepted_at") or now
+        record["in_progress_at"] = record.get("in_progress_at") or now
+        record["expected_output"] = record.get("expected_output") or "navrh X prispevku ke schvaleni, bez publikace"
+        if not record.get("output"):
+            record["output"] = xoz_generate_x_draft(record["topic"])
+            record["output_at"] = now
+            record["status"] = "READY_FOR_APPROVAL"
+        else:
+            record["status"] = record.get("status") or "READY_FOR_APPROVAL"
+        record["updated_at"] = now
+        statuses[task_id] = record
+        state["task_status"] = statuses
+        state["last_output"] = record
+        after = json.dumps(record, sort_keys=True, ensure_ascii=False)
+        if before != after:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            g.write_json(state_path, state)
+            changed += 1
+    return changed
 
 
 def is_social_delegation_task(text: str) -> bool:
@@ -2605,6 +2711,15 @@ def x_task_observation(task: dict[str, Any]) -> tuple[str, str]:
         state = g.load_json(state_path, {})
         if not isinstance(state, dict):
             state = {}
+    if str(task.get("kind") or "") == "xoz-social-draft":
+        record = xoz_task_record_for_task(state, task)
+        output = str(record.get("output") or record.get("draft") or record.get("draft_text") or "").strip() if isinstance(record, dict) else ""
+        if output:
+            return "DONE", f"Agent XOZ navrhl X prispevek:\n{output}\n\nChces neco upravit, nebo schvalujes?"
+        if isinstance(record, dict) and record.get("in_progress_at"):
+            return "VERIFYING", "Agent XOZ prevzal zadani a pracuje na vystupu."
+        if isinstance(record, dict) and record.get("accepted_at"):
+            return "VERIFYING", "Agent XOZ potvrdil prevzeti zadani."
     state_text = json.dumps(state, ensure_ascii=False)
     urls = [url for url in find_urls_in_text(state_text) if "twitter.com" in url or "x.com" in url]
     if urls:
@@ -2648,6 +2763,12 @@ def delegation_monitor_once() -> None:
     try:
         if not tasks:
             return
+        try:
+            xoz_changed = xoz_worker_once(tasks)
+            if xoz_changed:
+                g.log(f"Agent XOZ worker updated {xoz_changed} task(s)")
+        except Exception as exc:
+            g.log(f"Agent XOZ worker error: {type(exc).__name__}: {exc}")
         changed = False
         for task in tasks:
             status = str(task.get("status") or "ASSIGNED")
@@ -2704,7 +2825,7 @@ def delegation_monitor_worker_loop() -> None:
             delegation_monitor_once()
         except Exception as exc:
             g.log(f"Delegation monitor error: {type(exc).__name__}: {exc}")
-        time.sleep(120)
+        time.sleep(60)
 
 
 def parse_log_time(raw: str) -> dt.datetime | None:
