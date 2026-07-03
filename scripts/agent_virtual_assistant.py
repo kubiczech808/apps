@@ -1297,6 +1297,12 @@ def ensure_xoz_channel_state() -> dict[str, Any]:
     state = g.load_json(XOZ_STATE_FILE, {})
     if not isinstance(state, dict):
         state = {}
+    XOZ_ACTIVITY_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    XOZ_ACTIVITY_LOG_FILE.touch(exist_ok=True)
+    XOZ_CONTROL_INBOX_FILE.parent.mkdir(parents=True, exist_ok=True)
+    XOZ_CONTROL_INBOX_FILE.touch(exist_ok=True)
+    XOZ_INBOX_FILE.parent.mkdir(parents=True, exist_ok=True)
+    XOZ_INBOX_FILE.touch(exist_ok=True)
     channels = state.get("channels")
     if not isinstance(channels, dict):
         channels = {}
@@ -2778,6 +2784,68 @@ def escalate_reported_agent_d_blockers_once() -> int:
                 changed += 1
     if changed:
         save_orchestration_tasks(tasks)
+    return changed
+
+
+def escalate_recent_agent_d_blocker_log_once() -> int:
+    if not g.LOG_FILE.exists():
+        return 0
+    try:
+        lines = g.LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()[-1200:]
+    except Exception:
+        return 0
+    recent = []
+    for line in lines:
+        match = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+->\s+Blocker:\s+(Agent D.*)$", line)
+        if not match:
+            continue
+        ts = parse_log_time(match.group(1))
+        if not ts:
+            continue
+        if (dt.datetime.now().astimezone() - ts).total_seconds() > 72 * 3600:
+            continue
+        recent.append((ts, match.group(2).strip()))
+    if not recent:
+        return 0
+    existing = "\n".join(json.dumps(item, ensure_ascii=False) for item in read_jsonl(AGENT_G_INBOX_FILE, 1000))
+    changed = 0
+    for ts, blocker in recent[-5:]:
+        key = hashlib.sha1(f"agent-d-log-blocker|{blocker}".encode("utf-8", errors="replace")).hexdigest()[:16]
+        if key in existing:
+            continue
+        now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        topic = f"Vyres Agent D X blocker z logu: {blocker[:160]}"
+        item = {
+            "id": key,
+            "created_at": now,
+            "source": "virtual-assistant",
+            "agent": "Agent G",
+            "kind": "technical-blocker",
+            "related_task_id": "",
+            "blocked_agent": "Agent D",
+            "blocked_instance": "x-poster",
+            "blocked_kind": "x-social-draft",
+            "blocked_topic": "neznamy, vytazeno z VA blocker logu",
+            "blocker": blocker,
+            "proof": {
+                "state": "/home/openclaw2/x-post-state.json",
+                "log": str(g.LOG_FILE),
+                "source": "virtual-assistant-log",
+            },
+            "expected_output": "dohledat proc Agent D/X poster nevytvoril overitelny vystup, opravit workflow/sluzbu nebo vratit konkretni technicky blocker",
+        }
+        append_jsonl(AGENT_G_INBOX_FILE, item)
+        append_orchestration_event("Agent G", "operations", topic, "technical-blocker", str(AGENT_G_INBOX_FILE))
+        upsert_orchestration_task(
+            "Agent G",
+            "operations",
+            topic,
+            "technical-blocker",
+            str(AGENT_G_INBOX_FILE),
+            {"inbox": str(AGENT_G_INBOX_FILE), "blocked_agent": "Agent D", "source": "virtual-assistant-log"},
+        )
+        existing += "\n" + key
+        changed += 1
     return changed
 
 
