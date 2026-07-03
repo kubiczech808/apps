@@ -20,43 +20,50 @@ jobs:
             exit 1
           fi
 
-      - name: Ensure FTP target directory
+      - name: Upload to hosting
         env:
           HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
           HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
           TRADING_FTP_DIR: /www/trading
+          TRADING_LOCAL_DIR: trading
         run: |
           python3 - <<'PY'
           import ftplib
           import os
+          from pathlib import Path
 
           server = os.environ["HOSTING_FTP_SERVER"]
           username = os.environ["HOSTING_FTP_USERNAME"]
           password = os.environ["HOSTING_FTP_PASSWORD"]
           target = os.environ["TRADING_FTP_DIR"].strip("/")
+          local_dir = Path(os.environ["TRADING_LOCAL_DIR"])
 
-          with ftplib.FTP(server, timeout=30) as ftp:
-              ftp.login(username, password)
+          def enter_dir(ftp, parts):
               try:
                   ftp.cwd("/")
               except ftplib.all_errors:
                   pass
-              for part in target.split("/"):
+              for part in parts:
+                  if not part:
+                      continue
                   try:
                       ftp.cwd(part)
                   except ftplib.error_perm:
                       ftp.mkd(part)
                       ftp.cwd(part)
-          PY
 
-      - name: Upload to hosting
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.HOSTING_FTP_SERVER }}
-          username: ${{ secrets.HOSTING_FTP_USERNAME }}
-          password: ${{ secrets.HOSTING_FTP_PASSWORD }}
-          local-dir: ./trading/
-          server-dir: /www/trading/
-          exclude: |
-            **/.git*
+          with ftplib.FTP(server, timeout=30) as ftp:
+              ftp.login(username, password)
+              target_parts = target.split("/")
+              enter_dir(ftp, target_parts)
+
+              for path in sorted(local_dir.rglob("*")):
+                  if not path.is_file():
+                      continue
+                  relative = path.relative_to(local_dir).as_posix()
+                  remote_parts = target_parts + relative.split("/")[:-1]
+                  enter_dir(ftp, remote_parts)
+                  with path.open("rb") as handle:
+                      ftp.storbinary(f"STOR {path.name}", handle)
+          PY
