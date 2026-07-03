@@ -95,6 +95,7 @@ AGENT_G_HANDOFFS_FILE = AGENT_G_WORK_DIR / "HANDOFFS_FROM_VA.jsonl"
 AGENT_G_HANDOFF_STATE_FILE = g.AGENT_WORK_DIR / "AGENT_G_HANDOFF_STATE.json"
 AGENT_G_HISTORY_FILE = BASE_AGENT_G_HISTORY_FILE
 AGENT_G_MEMORY_FILE = BASE_AGENT_G_MEMORY_FILE
+AGENT_G_HANDOFF_VERSION = "agent-g-base-context-v2"
 g.MODE_TIMEOUTS = {
     "fast": 180,
     "balanced": 300,
@@ -1556,7 +1557,7 @@ def deliver_agent_g_handoff(item: dict[str, Any]) -> dict[str, str]:
     handoff_id = str(item.get("id") or hashlib.sha1(json.dumps(item, sort_keys=True, ensure_ascii=False).encode("utf-8", errors="replace")).hexdigest()[:16])
     state = load_agent_g_handoff_state()
     delivered = state["delivered"]
-    if isinstance(delivered.get(handoff_id), dict):
+    if isinstance(delivered.get(handoff_id), dict) and delivered[handoff_id].get("version") == AGENT_G_HANDOFF_VERSION:
         return {**delivered[handoff_id], "deduped": "true"}
     text = agent_g_handoff_text(item)
     append_jsonl(AGENT_G_HANDOFFS_FILE, {**item, "handoff_text": text, "handoff_created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds")})
@@ -1570,6 +1571,9 @@ def deliver_agent_g_handoff(item: dict[str, Any]) -> dict[str, str]:
         "history": history_status,
         "telegram": telegram_status,
         "at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "version": AGENT_G_HANDOFF_VERSION,
+        "history_path": str(AGENT_G_HISTORY_FILE),
+        "memory_path": str(AGENT_G_MEMORY_FILE),
     }
     delivered[handoff_id] = result
     save_agent_g_handoff_state(state)
