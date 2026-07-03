@@ -20,6 +20,36 @@ jobs:
             exit 1
           fi
 
+      - name: Ensure FTP target directory
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+
+          server = os.environ["HOSTING_FTP_SERVER"]
+          username = os.environ["HOSTING_FTP_USERNAME"]
+          password = os.environ["HOSTING_FTP_PASSWORD"]
+          target = os.environ["TRADING_FTP_DIR"].strip("/")
+
+          with ftplib.FTP(server, timeout=30) as ftp:
+              ftp.login(username, password)
+              try:
+                  ftp.cwd("/")
+              except ftplib.all_errors:
+                  pass
+              for part in target.split("/"):
+                  try:
+                      ftp.cwd(part)
+                  except ftplib.error_perm:
+                      ftp.mkd(part)
+                      ftp.cwd(part)
+          PY
+
       - name: Upload to hosting
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
@@ -27,6 +57,6 @@ jobs:
           username: ${{ secrets.HOSTING_FTP_USERNAME }}
           password: ${{ secrets.HOSTING_FTP_PASSWORD }}
           local-dir: ./trading/
-          server-dir: ${{ secrets.HOSTING_FTP_DIR }}/www/trading/
+          server-dir: /www/trading/
           exclude: |
             **/.git*
