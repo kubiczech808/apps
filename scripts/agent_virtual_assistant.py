@@ -83,6 +83,11 @@ XOZ_INBOX_FILE = g.OPENCLAW_DIR / "agent-xoz-inbox.jsonl"
 XOZ_CONTROL_INBOX_FILE = g.OPENCLAW_DIR / "agent-xoz-control-inbox.jsonl"
 XOZ_ACTIVITY_LOG_FILE = g.OPENCLAW_DIR / "agent-xoz-activity.jsonl"
 AGENT_G_INBOX_FILE = g.OPENCLAW_DIR / "agent-g-inbox.jsonl"
+AGENT_G_WORK_DIR = g.OPENCLAW_DIR / "agent-g"
+AGENT_G_HANDOFFS_FILE = AGENT_G_WORK_DIR / "HANDOFFS_FROM_VA.jsonl"
+AGENT_G_HANDOFF_STATE_FILE = g.AGENT_WORK_DIR / "AGENT_G_HANDOFF_STATE.json"
+AGENT_G_HISTORY_FILE = g.OPENCLAW_DIR / "agent-g-history.json"
+AGENT_G_MEMORY_FILE = AGENT_G_WORK_DIR / "MEMORY.md"
 g.MODE_TIMEOUTS = {
     "fast": 180,
     "balanced": 300,
@@ -1427,6 +1432,152 @@ def parse_xoz_control_request(text: str) -> str | None:
     return "Predavam Agentu XOZ upravu komentaru/engagementu. Vystup budu overovat z jeho activity logu."
 
 
+def load_agent_g_handoff_state() -> dict[str, Any]:
+    try:
+        state = json.loads(AGENT_G_HANDOFF_STATE_FILE.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        state = {}
+    if not isinstance(state, dict):
+        state = {}
+    delivered = state.get("delivered")
+    if not isinstance(delivered, dict):
+        delivered = {}
+    state["delivered"] = delivered
+    return state
+
+
+def save_agent_g_handoff_state(state: dict[str, Any]) -> None:
+    AGENT_G_HANDOFF_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    state["updated_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    AGENT_G_HANDOFF_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def agent_g_raw_env() -> dict[str, str]:
+    env = base_load_env()
+    if not isinstance(env, dict):
+        return {}
+    return env
+
+
+def agent_g_token_and_chat() -> tuple[str, str]:
+    env = agent_g_raw_env()
+    token = g.pick(
+        env,
+        "TELEGRAM_AGENT_G_BOT_TOKEN",
+        "G_TELEGRAM_TOKEN",
+        "AGENT_G_TELEGRAM_TOKEN",
+        "TELEGRAM_AGENT_G_TOKEN",
+    )
+    chat_id = g.pick(
+        env,
+        "TELEGRAM_AGENT_G_CHAT_ID",
+        "G_TELEGRAM_CHAT_ID",
+        "AGENT_G_CHAT_ID",
+        "TELEGRAM_AGENT_G_ADMIN_CHAT_ID",
+        "M_TELEGRAM_CHAT_ID",
+    )
+    return token, chat_id
+
+
+def agent_g_telegram_notify(text: str) -> str:
+    token, chat_id = agent_g_token_and_chat()
+    if not token or not chat_id:
+        return "missing-token-or-chat"
+    payload = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=payload)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8", errors="replace"))
+        return "sent" if result.get("ok") else "failed"
+    except Exception as exc:
+        g.log(f"Agent G Telegram handoff failed: {type(exc).__name__}: {exc}")
+        return f"failed:{type(exc).__name__}"
+
+
+def append_agent_g_history_message(content: str) -> str:
+    try:
+        history = json.loads(AGENT_G_HISTORY_FILE.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        history = []
+    if not isinstance(history, list):
+        history = []
+    marker = hashlib.sha1(content.encode("utf-8", errors="replace")).hexdigest()[:16]
+    for item in history[-80:]:
+        if isinstance(item, dict) and marker in str(item.get("content") or ""):
+            return "deduped"
+    history.append({"role": "user", "content": f"[VA-HANDOFF:{marker}]\n{content}"})
+    AGENT_G_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    AGENT_G_HISTORY_FILE.write_text(json.dumps(history[-500:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return "written"
+
+
+def append_agent_g_memory_line(line: str) -> str:
+    AGENT_G_MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    existing = ""
+    if AGENT_G_MEMORY_FILE.exists():
+        try:
+            existing = AGENT_G_MEMORY_FILE.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            existing = ""
+    if line in existing:
+        return "deduped"
+    with AGENT_G_MEMORY_FILE.open("a", encoding="utf-8") as handle:
+        if existing and not existing.endswith("\n"):
+            handle.write("\n")
+        handle.write(line + "\n")
+    return "written"
+
+
+def agent_g_handoff_text(item: dict[str, Any]) -> str:
+    return "\n".join([
+        "INSTRUKCE OD VIRTUALNI ASISTENTKY PRO AGENTA G",
+        f"ID: {item.get('id') or ''}",
+        f"Typ: {item.get('kind') or ''}",
+        f"Blokovany agent: {item.get('blocked_agent') or ''} / {item.get('blocked_instance') or ''}",
+        f"Ukol: {item.get('blocked_topic') or ''}",
+        f"Problem: {item.get('blocker') or ''}",
+        f"Ocekavany vystup: {item.get('expected_output') or ''}",
+        "Po vyreseni zapis vysledek do sve odpovedi a pokud je to runtime oprava, dopln overitelny log/status.",
+    ]).strip()
+
+
+def deliver_agent_g_handoff(item: dict[str, Any]) -> dict[str, str]:
+    handoff_id = str(item.get("id") or hashlib.sha1(json.dumps(item, sort_keys=True, ensure_ascii=False).encode("utf-8", errors="replace")).hexdigest()[:16])
+    state = load_agent_g_handoff_state()
+    delivered = state["delivered"]
+    if isinstance(delivered.get(handoff_id), dict):
+        return {**delivered[handoff_id], "deduped": "true"}
+    text = agent_g_handoff_text(item)
+    append_jsonl(AGENT_G_HANDOFFS_FILE, {**item, "handoff_text": text, "handoff_created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds")})
+    memory_status = append_agent_g_memory_line(f"- VA handoff {handoff_id}: {item.get('blocked_agent')} / {item.get('blocker')}")
+    history_status = append_agent_g_history_message(text)
+    telegram_status = agent_g_telegram_notify("VA handoff: mam pro tebe technicky blocker.\n\n" + text[:3200])
+    result = {
+        "handoff_id": handoff_id,
+        "handoffs": "written",
+        "memory": memory_status,
+        "history": history_status,
+        "telegram": telegram_status,
+        "at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    delivered[handoff_id] = result
+    save_agent_g_handoff_state(state)
+    return result
+
+
+def ensure_agent_g_handoffs_once() -> int:
+    count = 0
+    for item in read_jsonl(AGENT_G_INBOX_FILE, 1000):
+        if not isinstance(item, dict):
+            continue
+        if item.get("source") != "virtual-assistant" or item.get("agent") != "Agent G":
+            continue
+        result = deliver_agent_g_handoff(item)
+        if result.get("deduped") != "true":
+            count += 1
+    return count
+
+
 def assign_agent_d_x_idea(text: str) -> tuple[bool, str]:
     state_path = Path("/home/openclaw2/x-post-state.json")
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -2751,6 +2902,7 @@ def escalate_task_to_agent_g(task: dict[str, Any], note: str) -> bool:
         "expected_output": "opravit nebo restartovat prislusny X workflow/sluzbu, doplnit overitelny vystup do state/logu, nebo vratit konkretni technicky blocker",
     }
     append_jsonl(AGENT_G_INBOX_FILE, item)
+    handoff_result = deliver_agent_g_handoff(item)
     append_orchestration_event("Agent G", "operations", escalation_topic, "technical-blocker", str(AGENT_G_INBOX_FILE))
     upsert_orchestration_task(
         "Agent G",
@@ -2758,11 +2910,19 @@ def escalate_task_to_agent_g(task: dict[str, Any], note: str) -> bool:
         escalation_topic,
         "technical-blocker",
         str(AGENT_G_INBOX_FILE),
-        {"inbox": str(AGENT_G_INBOX_FILE), "related_task_id": str(task.get("id") or ""), "blocked_agent": str(task.get("agent") or "")},
+        {
+            "inbox": str(AGENT_G_INBOX_FILE),
+            "handoffs": str(AGENT_G_HANDOFFS_FILE),
+            "history": str(AGENT_G_HISTORY_FILE),
+            "related_task_id": str(task.get("id") or ""),
+            "blocked_agent": str(task.get("agent") or ""),
+            "handoff": json.dumps(handoff_result, ensure_ascii=False),
+        },
     )
     task["escalated_to_agent_g_at"] = now
     task["agent_g_escalation_id"] = escalation_id
     task["agent_g_escalation_note"] = note
+    task["agent_g_handoff"] = handoff_result
     return True
 
 
@@ -2835,6 +2995,7 @@ def escalate_recent_agent_d_blocker_log_once() -> int:
             "expected_output": "dohledat proc Agent D/X poster nevytvoril overitelny vystup, opravit workflow/sluzbu nebo vratit konkretni technicky blocker",
         }
         append_jsonl(AGENT_G_INBOX_FILE, item)
+        handoff_result = deliver_agent_g_handoff(item)
         append_orchestration_event("Agent G", "operations", topic, "technical-blocker", str(AGENT_G_INBOX_FILE))
         upsert_orchestration_task(
             "Agent G",
@@ -2842,7 +3003,14 @@ def escalate_recent_agent_d_blocker_log_once() -> int:
             topic,
             "technical-blocker",
             str(AGENT_G_INBOX_FILE),
-            {"inbox": str(AGENT_G_INBOX_FILE), "blocked_agent": "Agent D", "source": "virtual-assistant-log"},
+            {
+                "inbox": str(AGENT_G_INBOX_FILE),
+                "handoffs": str(AGENT_G_HANDOFFS_FILE),
+                "history": str(AGENT_G_HISTORY_FILE),
+                "blocked_agent": "Agent D",
+                "source": "virtual-assistant-log",
+                "handoff": json.dumps(handoff_result, ensure_ascii=False),
+            },
         )
         existing += "\n" + key
         changed += 1
@@ -2856,6 +3024,8 @@ def delegation_delivery_note(task: dict[str, Any]) -> str:
         return "Doruceno: Agent D ma zadani."
     if kind == "xoz-social-draft":
         return "Doruceno: Agent XOZ ma zadani."
+    if kind == "technical-blocker" and agent == "Agent G":
+        return "Predano Agentovi G: technicky blocker je v jeho inboxu a pameti."
     if kind.startswith("blogger-"):
         return f"Doruceno: {agent} ma zadani."
     return f"Doruceno: {agent} ma zadani."
