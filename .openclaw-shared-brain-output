@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-03T13:36:41Z
+checked_at_utc=2026-07-03T13:40:34Z
 shared_brain_service=active
 shared_brain_backend= openclaw-lite-hybrid
 shared_brain_notes_dir= /home/openclaw2/.openclaw/shared-brain/notes
@@ -14,7 +14,7 @@ shared_brain_graph_nodes= 16
 shared_brain_graph_edges= 31
 shared_brain_search_hits= 5
 shared_brain_search_1=title=Agent btc-dca (`btc-dca`) file=Generated/Virtual Assistant/Agent Registry.md score=3.680478
-shared_brain_search_2=title=Virtual Assistant Agent Registry file=Generated/Virtual Assistant/Agent Registry.json.md score=3.625823
+shared_brain_search_2=title=Virtual Assistant Agent Registry file=Generated/Virtual Assistant/Agent Registry.json.md score=3.62595
 shared_brain_search_3=title=btc-dca (`btc-dca`) file=Generated/Blogger Agents/Blogger Agents.md score=2.836448
 shared_brain_search_4=title=Agent XOZ (`agent-xoz`) file=Generated/Virtual Assistant/Agent Registry.md score=2.663134
 shared_brain_search_5=title=Agent OZ (`oz`) file=Generated/Virtual Assistant/Agent Registry.md score=2.582494
