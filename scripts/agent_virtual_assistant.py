@@ -49,6 +49,13 @@ def load_base():
 
 g = load_base()
 
+BASE_AGENT_G_STATE_FILE = g.STATE_FILE
+BASE_AGENT_G_HISTORY_FILE = g.HISTORY_FILE
+BASE_AGENT_G_USAGE_FILE = g.USAGE_FILE
+BASE_AGENT_G_SETTINGS_FILE = g.SETTINGS_FILE
+BASE_AGENT_G_WORK_DIR = g.AGENT_WORK_DIR
+BASE_AGENT_G_MEMORY_FILE = g.AGENT_MEMORY_FILE
+
 g.STATE_FILE = g.OPENCLAW_DIR / "virtual-assistant-state.json"
 g.HISTORY_FILE = g.OPENCLAW_DIR / "virtual-assistant-history.json"
 g.USAGE_FILE = g.OPENCLAW_DIR / "virtual-assistant-usage.json"
@@ -83,11 +90,11 @@ XOZ_INBOX_FILE = g.OPENCLAW_DIR / "agent-xoz-inbox.jsonl"
 XOZ_CONTROL_INBOX_FILE = g.OPENCLAW_DIR / "agent-xoz-control-inbox.jsonl"
 XOZ_ACTIVITY_LOG_FILE = g.OPENCLAW_DIR / "agent-xoz-activity.jsonl"
 AGENT_G_INBOX_FILE = g.OPENCLAW_DIR / "agent-g-inbox.jsonl"
-AGENT_G_WORK_DIR = g.OPENCLAW_DIR / "agent-g"
+AGENT_G_WORK_DIR = BASE_AGENT_G_WORK_DIR
 AGENT_G_HANDOFFS_FILE = AGENT_G_WORK_DIR / "HANDOFFS_FROM_VA.jsonl"
 AGENT_G_HANDOFF_STATE_FILE = g.AGENT_WORK_DIR / "AGENT_G_HANDOFF_STATE.json"
-AGENT_G_HISTORY_FILE = g.OPENCLAW_DIR / "agent-g-history.json"
-AGENT_G_MEMORY_FILE = AGENT_G_WORK_DIR / "MEMORY.md"
+AGENT_G_HISTORY_FILE = BASE_AGENT_G_HISTORY_FILE
+AGENT_G_MEMORY_FILE = BASE_AGENT_G_MEMORY_FILE
 g.MODE_TIMEOUTS = {
     "fast": 180,
     "balanced": 300,
@@ -1464,9 +1471,13 @@ def agent_g_token_and_chat() -> tuple[str, str]:
     token = g.pick(
         env,
         "TELEGRAM_AGENT_G_BOT_TOKEN",
+        "TELEGRAM_AGENT_G_TOKEN",
+        "TELEGRAM_G_BOT_TOKEN",
+        "G_TELEGRAM_BOT_TOKEN",
         "G_TELEGRAM_TOKEN",
         "AGENT_G_TELEGRAM_TOKEN",
-        "TELEGRAM_AGENT_G_TOKEN",
+        "AGENT_G_BOT_TOKEN",
+        "G_BOT_TOKEN",
     )
     chat_id = g.pick(
         env,
