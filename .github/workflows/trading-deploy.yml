@@ -1,0 +1,32 @@
+name: Deploy Trading
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'trading/**'
+      - '.github/workflows/trading-deploy.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify deployment target
+        run: |
+          if grep -R -n -E "server-dir:.*email[-]campaign|local-dir:.*email[-]campaign|/www/email[-]campaign/" .github/workflows/trading-deploy.yml trading; then
+            echo "Trading deploy must not target email-campaign."
+            exit 1
+          fi
+
+      - name: Upload to hosting
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.HOSTING_FTP_SERVER }}
+          username: ${{ secrets.HOSTING_FTP_USERNAME }}
+          password: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          local-dir: ./trading/
+          server-dir: /www/trading/
+          exclude: |
+            **/.git*

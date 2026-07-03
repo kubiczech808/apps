@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trading Console</title>
+  <meta name="description" content="Auto trading dashboard pro osobnizkusenosti.cz">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+  <main class="app-shell">
+    <aside class="sidebar" aria-label="Navigace aplikace">
+      <a class="brand" href="./" aria-label="Trading Console">
+        <span class="brand-mark">TC</span>
+        <span>
+          <strong>Trading</strong>
+          <small>autopilot</small>
+        </span>
+      </a>
+
+      <nav class="nav-list" aria-label="Hlavni navigace">
+        <a class="nav-item active" href="#terminal" aria-current="page">
+          <span class="nav-icon" aria-hidden="true">01</span>
+          Terminal
+        </a>
+        <a class="nav-item" href="#strategie">
+          <span class="nav-icon" aria-hidden="true">02</span>
+          Strategie
+        </a>
+        <a class="nav-item" href="#riziko">
+          <span class="nav-icon" aria-hidden="true">03</span>
+          Riziko
+        </a>
+        <a class="nav-item" href="#log">
+          <span class="nav-icon" aria-hidden="true">04</span>
+          Log
+        </a>
+      </nav>
+
+      <section class="account-panel" aria-label="Ucet">
+        <span class="panel-label">Paper account</span>
+        <strong>$48,260.42</strong>
+        <small>BTC, ETH, SOL, EUR</small>
+      </section>
+    </aside>
+
+    <section class="workspace" id="terminal">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">osobnizkusenosti.cz/trading</p>
+          <h1>Auto trading console</h1>
+        </div>
+        <div class="topbar-actions">
+          <button class="icon-button" type="button" title="Obnovit data" data-refresh aria-label="Obnovit data">
+            <span aria-hidden="true">&#8635;</span>
+          </button>
+          <button class="primary-button" type="button" data-toggle-bot>
+            Spustit robota
+          </button>
+        </div>
+      </header>
+
+      <section class="status-grid" aria-label="Souhrn">
+        <article class="metric-card">
+          <span class="metric-label">Rezim</span>
+          <strong data-bot-state>Pozastaveno</strong>
+          <small data-bot-detail>Ceka na spusteni</small>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Dnesni P/L</span>
+          <strong class="positive" data-pl>+$318.40</strong>
+          <small>+0.66 % portfolio</small>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Max drawdown</span>
+          <strong>2.8 %</strong>
+          <small>Limit 6.0 %</small>
+        </article>
+        <article class="metric-card">
+          <span class="metric-label">Otevrene pozice</span>
+          <strong>4</strong>
+          <small>2 long, 2 hedge</small>
+        </article>
+      </section>
+
+      <section class="main-grid">
+        <article class="chart-panel" aria-label="Portfolio equity">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Portfolio equity</p>
+              <h2>$48,260.42</h2>
+            </div>
+            <div class="segmented-control" aria-label="Casovy rozsah">
+              <button class="active" type="button" data-range="1D">1D</button>
+              <button type="button" data-range="1W">1W</button>
+              <button type="button" data-range="1M">1M</button>
+            </div>
+          </div>
+          <canvas id="equityChart" width="960" height="360" aria-label="Graf vyvoje portfolia"></canvas>
+        </article>
+
+        <article class="control-panel" id="strategie" aria-label="Strategie">
+          <div class="section-head compact">
+            <div>
+              <p class="eyebrow">Strategie</p>
+              <h2>Momentum guard</h2>
+            </div>
+            <span class="status-pill">Paper</span>
+          </div>
+
+          <label class="field-label" for="strategy">Aktivni model</label>
+          <select id="strategy" class="field-control">
+            <option>Momentum guard</option>
+            <option>Mean reversion</option>
+            <option>Trend breakout</option>
+          </select>
+
+          <div class="slider-row">
+            <label for="risk">Riziko obchodu</label>
+            <output id="riskValue" for="risk">1.2 %</output>
+          </div>
+          <input id="risk" class="range-control" type="range" min="0.2" max="3" step="0.1" value="1.2">
+
+          <div class="toggle-row">
+            <span>
+              <strong>Auto hedge</strong>
+              <small>Pri prudke volatilite</small>
+            </span>
+            <label class="switch">
+              <input type="checkbox" checked>
+              <span></span>
+            </label>
+          </div>
+
+          <div class="toggle-row">
+            <span>
+              <strong>Stop po ztrate</strong>
+              <small>Denne pri -2.5 %</small>
+            </span>
+            <label class="switch">
+              <input type="checkbox" checked>
+              <span></span>
+            </label>
+          </div>
+        </article>
+      </section>
+
+      <section class="lower-grid">
+        <article class="positions-panel" aria-label="Pozice">
+          <div class="section-head compact">
+            <div>
+              <p class="eyebrow">Pozice</p>
+              <h2>Live book</h2>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Trh</th>
+                  <th>Smer</th>
+                  <th>Velikost</th>
+                  <th>Vstup</th>
+                  <th>P/L</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>BTC/USD</td>
+                  <td><span class="direction long">Long</span></td>
+                  <td>0.18 BTC</td>
+                  <td>$61,840</td>
+                  <td class="positive">+$192</td>
+                </tr>
+                <tr>
+                  <td>ETH/USD</td>
+                  <td><span class="direction hedge">Hedge</span></td>
+                  <td>1.40 ETH</td>
+                  <td>$3,060</td>
+                  <td class="negative">-$44</td>
+                </tr>
+                <tr>
+                  <td>SOL/USD</td>
+                  <td><span class="direction long">Long</span></td>
+                  <td>16.0 SOL</td>
+                  <td>$142.10</td>
+                  <td class="positive">+$73</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="risk-panel" id="riziko" aria-label="Rizikovy profil">
+          <div class="section-head compact">
+            <div>
+              <p class="eyebrow">Riziko</p>
+              <h2>Exposure</h2>
+            </div>
+          </div>
+
+          <div class="allocation">
+            <span style="--w: 42%; --c: #13b981">BTC</span>
+            <span style="--w: 24%; --c: #3b82f6">ETH</span>
+            <span style="--w: 16%; --c: #f59e0b">SOL</span>
+            <span style="--w: 18%; --c: #64748b">Cash</span>
+          </div>
+
+          <ul class="signal-list" id="log">
+            <li>
+              <span class="signal-dot buy"></span>
+              <span>BTC potvrdil pruraz nad EMA 50</span>
+              <time>09:42</time>
+            </li>
+            <li>
+              <span class="signal-dot wait"></span>
+              <span>ETH volatilita nad prumerem</span>
+              <time>09:31</time>
+            </li>
+            <li>
+              <span class="signal-dot sell"></span>
+              <span>SOL castecny profit target</span>
+              <time>09:18</time>
+            </li>
+          </ul>
+        </article>
+      </section>
+    </section>
+  </main>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
