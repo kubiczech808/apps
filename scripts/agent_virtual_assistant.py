@@ -1456,7 +1456,10 @@ def parse_blogger_delegation_request(text: str) -> str | None:
     if not isinstance(cfg_data, dict):
         cfg_data = {}
     default_post_status = g.normalize_text(str(cfg_data.get("wp_post_status") or cfg_data.get("WP_POST_STATUS") or ""))
-    site_domain = domain_from_url(str(cfg_data.get("WP_SITE_URL") or cfg_data.get("wp_site_url") or ""))
+    site_url = str(cfg_data.get("WP_SITE_URL") or cfg_data.get("wp_site_url") or "")
+    site_domain = domain_from_url(site_url)
+    explicit_link_requested = any(term in g.normalize_text(text) for term in ("odkaz", "link", "url", "nahled"))
+    requires_link = default_post_status == "draft" or explicit_link_requested
 
     state_path = write_blogger_requested_topic(instance, topic)
     log_path = g.OPENCLAW_DIR / "logs" / f"virtual-assistant-{instance}-delegation.log"
@@ -1504,9 +1507,11 @@ def parse_blogger_delegation_request(text: str) -> str | None:
             "state": str(g.OPENCLAW_DIR / f"{instance}-blogger-state.json"),
             "log": str(log_path),
             "config": str(cfg_path),
+            "site_url": site_url,
             "domain": site_domain,
             "default_post_status": default_post_status,
-            "wants_link": str(any(term in g.normalize_text(text) for term in ("odkaz", "link", "url"))),
+            "wants_link": str(explicit_link_requested),
+            "requires_link": str(requires_link),
         },
     )
 
@@ -2252,12 +2257,74 @@ def output_urls_from_state(value: Any, expected_domain: str = "", key_path: str 
     return list(dict.fromkeys(urls))
 
 
+def first_state_value_by_key(value: Any, names: set[str]) -> Any:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if g.normalize_text(str(key)) in names:
+                return item
+            found = first_state_value_by_key(item, names)
+            if found not in (None, ""):
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = first_state_value_by_key(item, names)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def site_base_from_task(task: dict[str, Any], proof: dict[str, Any], expected_domain: str) -> str:
+    raw = str(proof.get("site_url") or "").strip()
+    if not raw:
+        config_raw = str(proof.get("config") or "")
+        config_path = Path(config_raw) if config_raw else None
+        if config_path and config_path.exists() and config_path.is_file():
+            config = g.load_json(config_path, {})
+            if isinstance(config, dict):
+                raw = str(config.get("WP_SITE_URL") or config.get("wp_site_url") or "").strip()
+    if not raw and expected_domain:
+        raw = f"https://{expected_domain}"
+    return raw.rstrip("/")
+
+
+def draft_preview_urls_from_state(task: dict[str, Any], proof: dict[str, Any], state: dict[str, Any], expected_domain: str) -> list[str]:
+    post_id = first_state_value_by_key(state, {"post_id", "wp_post_id", "wordpress_post_id"})
+    post_id_text = str(post_id or "").strip()
+    if not re.fullmatch(r"\d+", post_id_text):
+        return []
+    base = site_base_from_task(task, proof, expected_domain)
+    if not base:
+        return []
+    return [
+        f"{base}/?p={post_id_text}&preview=true",
+        f"{base}/wp-admin/post.php?post={post_id_text}&action=edit",
+    ]
+
+
+def blogger_task_requires_link(task: dict[str, Any], proof: dict[str, Any]) -> bool:
+    if str(proof.get("requires_link") or "").lower() == "true":
+        return True
+    if str(proof.get("wants_link") or "").lower() == "true":
+        return True
+    return str(task.get("kind") or "") == "blogger-draft" and str(proof.get("default_post_status") or "").lower() == "draft"
+
+
+def should_recheck_reported_blogger_task(task: dict[str, Any]) -> bool:
+    proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
+    if not str(task.get("kind") or "").startswith("blogger-"):
+        return False
+    if str(task.get("last_reported_status") or "") != "DONE":
+        return False
+    observation = str(task.get("last_observation") or "")
+    return blogger_task_requires_link(task, proof) and "http" not in observation
+
+
 def blogger_task_observation(task: dict[str, Any]) -> tuple[str, str]:
     proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
     state_raw = str(proof.get("state") or "")
     log_raw = str(proof.get("log") or "")
     expected_domain = str(proof.get("domain") or "")
-    wants_link = str(proof.get("wants_link") or "").lower() == "true"
+    requires_link = blogger_task_requires_link(task, proof)
     state_path = Path(state_raw) if state_raw else None
     log_path = Path(log_raw) if log_raw else None
     state: dict[str, Any] = {}
@@ -2266,6 +2333,8 @@ def blogger_task_observation(task: dict[str, Any]) -> tuple[str, str]:
         if not isinstance(state, dict):
             state = {}
     urls = output_urls_from_state(state, expected_domain)
+    if not urls:
+        urls = draft_preview_urls_from_state(task, proof, state, expected_domain)
     errors = state.get("errors")
     if isinstance(errors, list) and errors:
         return "BLOCKED", f"{task.get('agent')} narazil na chybu: {str(errors[-1])[:220]}"
@@ -2279,9 +2348,9 @@ def blogger_task_observation(task: dict[str, Any]) -> tuple[str, str]:
             log_tail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-40:])
         except Exception:
             log_tail = ""
-    if wants_link and (article_present or "[virtual-assistant] exit 0" in log_tail):
+    if requires_link and (article_present or "[virtual-assistant] exit 0" in log_tail):
         domain_note = f" na domene {expected_domain}" if expected_domain else ""
-        return "BLOCKED", f"{task.get('agent')} vytvoril draft/podklad, ale nenasla jsem overeny odkaz{domain_note}."
+        return "BLOCKED", f"{task.get('agent')} vytvoril draft/podklad, ale nenasla jsem odkaz k nahledu{domain_note}."
     if article_present or any(phase in phases for phase in ("article", "publish", "published", "post")):
         return "DONE", f"{task.get('agent')} dokoncil draft/podklad podle state souboru."
     if log_tail:
@@ -2343,7 +2412,8 @@ def delegation_monitor_once() -> None:
         changed = False
         for task in tasks:
             status = str(task.get("status") or "ASSIGNED")
-            if status in {"DONE", "BLOCKED"} and task.get("reported_at"):
+            rechecking_reported_link = status in {"DONE", "BLOCKED"} and bool(task.get("reported_at")) and should_recheck_reported_blogger_task(task)
+            if status in {"DONE", "BLOCKED"} and task.get("reported_at") and not rechecking_reported_link:
                 continue
             new_status, note = observe_delegation_task(task)
             now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -2363,7 +2433,10 @@ def delegation_monitor_once() -> None:
                     task["delivery_reported_at"] = now
                     task["delivery_reported_status"] = new_status
                     changed = True
-            if new_status in {"DONE", "BLOCKED"} and task.get("last_reported_status") != new_status:
+            should_report = task.get("last_reported_status") != new_status or (
+                rechecking_reported_link and new_status == "DONE" and "http" in note
+            )
+            if new_status in {"DONE", "BLOCKED"} and should_report:
                 verb = "Hotovo" if new_status == "DONE" else "Blocker"
                 message = f"{verb}: {note}"
                 if telegram_notify(message):
