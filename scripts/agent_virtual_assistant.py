@@ -78,6 +78,11 @@ ORCHESTRATION_TASKS_FILE = g.AGENT_WORK_DIR / "ORCHESTRATION_TASKS.json"
 RECOVERY_STATE_FILE = g.AGENT_WORK_DIR / "TELEGRAM_RECOVERY.json"
 NOTIFICATION_DEDUPE_FILE = g.AGENT_WORK_DIR / "NOTIFICATION_DEDUPE.json"
 SHARED_BRAIN_SCRIPT = Path("/home/openclaw2/scripts/openclaw_shared_brain.py")
+XOZ_STATE_FILE = g.OPENCLAW_DIR / "agent-xoz-state.json"
+XOZ_INBOX_FILE = g.OPENCLAW_DIR / "agent-xoz-inbox.jsonl"
+XOZ_CONTROL_INBOX_FILE = g.OPENCLAW_DIR / "agent-xoz-control-inbox.jsonl"
+XOZ_ACTIVITY_LOG_FILE = g.OPENCLAW_DIR / "agent-xoz-activity.jsonl"
+AGENT_G_INBOX_FILE = g.OPENCLAW_DIR / "agent-g-inbox.jsonl"
 g.MODE_TIMEOUTS = {
     "fast": 180,
     "balanced": 300,
@@ -444,11 +449,13 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
             ["x_social_post", "x_thread", "social_engagement", "osobnizkusenosti.cz_social"],
             domains=["osobnizkusenosti.cz"],
             channels={
-                "inbox": "/home/openclaw2/.openclaw/agent-xoz-inbox.jsonl",
-                "state": "/home/openclaw2/.openclaw/agent-xoz-state.json",
+                "inbox": str(XOZ_INBOX_FILE),
+                "control_inbox": str(XOZ_CONTROL_INBOX_FILE),
+                "activity_log": str(XOZ_ACTIVITY_LOG_FILE),
+                "state": str(XOZ_STATE_FILE),
             },
-            notes="Owns X/social draft tasks for Osobni zkusenosti. Do not route these tasks to Agent D.",
-            proof=["/home/openclaw2/.openclaw/agent-xoz-inbox.jsonl"],
+            notes="Owns X/social drafts and engagement/comment reporting for Osobni zkusenosti. Must write verifiable comment activity to activity_log.",
+            proof=[str(XOZ_INBOX_FILE), str(XOZ_ACTIVITY_LOG_FILE), str(XOZ_STATE_FILE)],
         ),
         registry_entry(
             "agent-m",
@@ -472,7 +479,7 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
             ["agent g", "agenta g", "ops", "provoz", "debug", "runner", "systemd", "deploy", "token", "auth"],
             ["technical_debug", "workflow_repair", "runner_health", "systemd_service", "auth_and_secret_diagnostics"],
             channels={
-                "inbox": "/home/openclaw2/.openclaw/agent-g-inbox.jsonl",
+                "inbox": str(AGENT_G_INBOX_FILE),
                 "logs": "/home/openclaw2/.openclaw/logs/",
             },
             notes="Use for technical/runtime blockers in other agents.",
@@ -861,6 +868,12 @@ def handle_settings_callback(data: str) -> tuple[str, dict[str, Any], str]:
 def parse_settings_command(text: str) -> str | None:
     reply = g._base_parse_settings_command(text)
     if reply is None:
+        xoz_control_reply = parse_xoz_control_request(text)
+        if xoz_control_reply:
+            return xoz_control_reply
+        xoz_activity_reply = parse_xoz_activity_request(text)
+        if xoz_activity_reply:
+            return xoz_activity_reply
         status_reply = parse_delegation_status_request(text)
         if status_reply:
             return status_reply
@@ -1262,6 +1275,152 @@ def append_jsonl(path: Path, item: dict[str, Any]) -> None:
         handle.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
+def read_jsonl(path: Path, limit: int = 500) -> list[dict[str, Any]]:
+    if not path.exists() or not path.is_file():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return []
+    items: list[dict[str, Any]] = []
+    for line in lines[-limit:]:
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(item, dict):
+            items.append(item)
+    return items
+
+
+def ensure_xoz_channel_state() -> dict[str, Any]:
+    state = g.load_json(XOZ_STATE_FILE, {})
+    if not isinstance(state, dict):
+        state = {}
+    channels = state.get("channels")
+    if not isinstance(channels, dict):
+        channels = {}
+    channels.update({
+        "assignment_inbox": str(XOZ_INBOX_FILE),
+        "control_inbox": str(XOZ_CONTROL_INBOX_FILE),
+        "activity_log": str(XOZ_ACTIVITY_LOG_FILE),
+        "state": str(XOZ_STATE_FILE),
+    })
+    state["channels"] = channels
+    state["contract"] = {
+        "activity_log": "Agent XOZ zapisuje kazdy komentar/post jako JSONL: created_at, action, status, text, url, target_url, task_id.",
+        "control_inbox": "VA sem zapisuje zmeny limitu/poctu/strategie komentaru a XOZ je ma potvrdit ve state.",
+    }
+    g.write_json(XOZ_STATE_FILE, state)
+    return state
+
+
+def parse_iso_time(raw: Any) -> dt.datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.datetime.now().astimezone().tzinfo)
+        return parsed.astimezone()
+    except Exception:
+        return None
+
+
+def xoz_activity_records() -> list[dict[str, Any]]:
+    records = read_jsonl(XOZ_ACTIVITY_LOG_FILE, 1000)
+    state = g.load_json(XOZ_STATE_FILE, {})
+    if isinstance(state, dict):
+        for key in ("activity", "activities", "activity_log", "comments", "published_comments"):
+            value = state.get(key)
+            if isinstance(value, list):
+                records.extend(item for item in value if isinstance(item, dict))
+    unique: dict[str, dict[str, Any]] = {}
+    for record in records:
+        key = str(record.get("id") or record.get("url") or record.get("comment_url") or record.get("created_at") or json.dumps(record, sort_keys=True, ensure_ascii=False))
+        unique[key] = record
+    return list(unique.values())
+
+
+def is_xoz_comment_record(record: dict[str, Any]) -> bool:
+    haystack = g.normalize_text(" ".join(str(record.get(key) or "") for key in ("action", "kind", "type", "status", "text", "url", "comment_url", "target_url")))
+    if any(term in haystack for term in ("comment", "komentar", "koment")):
+        return True
+    return bool(record.get("comment_url") or record.get("target_url")) and "draft" not in haystack
+
+
+def parse_xoz_activity_request(text: str) -> str | None:
+    low = g.normalize_text(text)
+    if not any(term in low for term in ("xoz", "agent xoz", "oz", "osobnizkusenosti", "osobni zkusenosti")):
+        return None
+    if not any(term in low for term in ("komentar", "koment", "comment", "kolik", "aktivita", "prehled", "vystup", "dohledat")):
+        return None
+    records = [record for record in xoz_activity_records() if is_xoz_comment_record(record)]
+    today = dt.datetime.now().astimezone().date()
+    if any(term in low for term in ("dnes", "today")):
+        filtered = []
+        for record in records:
+            ts = parse_iso_time(record.get("created_at") or record.get("time") or record.get("at"))
+            if ts and ts.date() == today:
+                filtered.append(record)
+        records = filtered
+    records.sort(key=lambda item: str(item.get("created_at") or item.get("time") or item.get("at") or ""), reverse=True)
+    if not records:
+        ensure_xoz_channel_state()
+        return (
+            "Nemam dohledatelny zaznam o komentarich Agent XOZ. "
+            "Zavedla jsem pro nej activity log a control inbox; od ted ma kazdy komentar zapisovat jako overitelny zaznam."
+        )
+    lines = [f"Agent XOZ: dohledatelne komentare dnes: {len(records)}" if any(term in low for term in ("dnes", "today")) else f"Agent XOZ: dohledatelne komentare: {len(records)}"]
+    for record in records[:5]:
+        url = str(record.get("url") or record.get("comment_url") or record.get("target_url") or "").strip()
+        text_part = " ".join(str(record.get("text") or record.get("summary") or "").split())[:120]
+        when = str(record.get("created_at") or record.get("time") or "")[:19]
+        detail = " - ".join(part for part in (when, text_part, url) if part)
+        if detail:
+            lines.append(f"- {detail}")
+    return "\n".join(lines)
+
+
+def parse_xoz_control_request(text: str) -> str | None:
+    low = g.normalize_text(text)
+    if not any(term in low for term in ("xoz", "agent xoz", "oz", "osobnizkusenosti", "osobni zkusenosti")):
+        return None
+    if not any(term in low for term in ("komentar", "koment", "comment", "engagement")):
+        return None
+    if not any(term in low for term in ("nastav", "uprav", "zmen", "zvys", "sniz", "limit", "pocet", "mnozstvi", "kolik")):
+        return None
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    numbers = re.findall(r"\b\d+\b", low)
+    item = {
+        "created_at": now,
+        "source": "virtual-assistant",
+        "agent": "Agent XOZ",
+        "task": text.strip(),
+        "requested_comment_count": int(numbers[0]) if numbers else None,
+        "expected_output": "potvrzeni nastaveni a nasledny activity_log s overitelnymi komentari",
+    }
+    append_jsonl(XOZ_CONTROL_INBOX_FILE, item)
+    state = ensure_xoz_channel_state()
+    requests = state.get("control_requests")
+    if not isinstance(requests, list):
+        requests = []
+    requests.append(item)
+    state["control_requests"] = requests[-100:]
+    state["last_control_request"] = item
+    g.write_json(XOZ_STATE_FILE, state)
+    upsert_orchestration_task(
+        "Agent XOZ",
+        "xoz-poster",
+        text.strip(),
+        "xoz-control",
+        str(XOZ_CONTROL_INBOX_FILE),
+        {"control_inbox": str(XOZ_CONTROL_INBOX_FILE), "state": str(XOZ_STATE_FILE), "activity_log": str(XOZ_ACTIVITY_LOG_FILE)},
+    )
+    return "Predavam Agentu XOZ upravu komentaru/engagementu. Vystup budu overovat z jeho activity logu."
+
+
 def assign_agent_d_x_idea(text: str) -> tuple[bool, str]:
     state_path = Path("/home/openclaw2/x-post-state.json")
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -1319,8 +1478,8 @@ def social_x_target(text: str) -> dict[str, str]:
             "agent": "Agent XOZ",
             "instance": "xoz-poster",
             "kind": "xoz-social-draft",
-            "state": str(g.OPENCLAW_DIR / "agent-xoz-state.json"),
-            "inbox": str(g.OPENCLAW_DIR / "agent-xoz-inbox.jsonl"),
+            "state": str(XOZ_STATE_FILE),
+            "inbox": str(XOZ_INBOX_FILE),
             "label": "navrh prispevku na X pro Osobni zkusenosti: Agent XOZ",
         }
     return {
@@ -1447,6 +1606,7 @@ def xoz_worker_once(tasks: list[dict[str, Any]] | None = None) -> int:
     tasks = tasks if tasks is not None else load_orchestration_tasks()
     changed = 0
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    ensure_xoz_channel_state()
     for task in tasks:
         if not isinstance(task, dict):
             continue
@@ -2551,6 +2711,76 @@ def task_age_seconds(task: dict[str, Any]) -> int:
         return 0
 
 
+def should_auto_escalate_to_agent_g(task: dict[str, Any], note: str = "") -> bool:
+    if task.get("escalated_to_agent_g_at"):
+        return False
+    kind = str(task.get("kind") or "")
+    agent = str(task.get("agent") or "")
+    if kind != "x-social-draft" or agent != "Agent D":
+        return False
+    haystack = g.normalize_text(f"{note} {task.get('last_observation') or ''}")
+    return any(term in haystack for term in ("nevznikl overitelny x vystup", "assignment se nepropsal", "runner", "chyba", "blocker"))
+
+
+def escalate_task_to_agent_g(task: dict[str, Any], note: str) -> bool:
+    if task.get("escalated_to_agent_g_at"):
+        return False
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    topic = str(task.get("topic") or "").strip()
+    escalation_topic = f"Vyres blocker u {task.get('agent')}: {topic}"
+    escalation_id = delegation_task_id("Agent G", "operations", escalation_topic, "technical-blocker")
+    item = {
+        "id": escalation_id,
+        "created_at": now,
+        "source": "virtual-assistant",
+        "agent": "Agent G",
+        "kind": "technical-blocker",
+        "related_task_id": task.get("id"),
+        "blocked_agent": task.get("agent"),
+        "blocked_instance": task.get("instance"),
+        "blocked_kind": task.get("kind"),
+        "blocked_topic": topic,
+        "blocker": note,
+        "proof": task.get("proof") if isinstance(task.get("proof"), dict) else {},
+        "expected_output": "opravit nebo restartovat prislusny X workflow/sluzbu, doplnit overitelny vystup do state/logu, nebo vratit konkretni technicky blocker",
+    }
+    append_jsonl(AGENT_G_INBOX_FILE, item)
+    append_orchestration_event("Agent G", "operations", escalation_topic, "technical-blocker", str(AGENT_G_INBOX_FILE))
+    upsert_orchestration_task(
+        "Agent G",
+        "operations",
+        escalation_topic,
+        "technical-blocker",
+        str(AGENT_G_INBOX_FILE),
+        {"inbox": str(AGENT_G_INBOX_FILE), "related_task_id": str(task.get("id") or ""), "blocked_agent": str(task.get("agent") or "")},
+    )
+    task["escalated_to_agent_g_at"] = now
+    task["agent_g_escalation_id"] = escalation_id
+    task["agent_g_escalation_note"] = note
+    return True
+
+
+def escalate_reported_agent_d_blockers_once() -> int:
+    tasks = load_orchestration_tasks()
+    changed = 0
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        note = str(task.get("last_observation") or "")
+        if str(task.get("status") or "") == "BLOCKED" and should_auto_escalate_to_agent_g(task, note):
+            if escalate_task_to_agent_g(task, note):
+                task["status"] = "VERIFYING"
+                task["last_observation"] = "Agent D ma blocker; predano Agentovi G k technicke oprave."
+                task["updated_at"] = now
+                task["last_reported_status"] = "VERIFYING"
+                task.pop("reported_at", None)
+                changed += 1
+    if changed:
+        save_orchestration_tasks(tasks)
+    return changed
+
+
 def delegation_delivery_note(task: dict[str, Any]) -> str:
     agent = str(task.get("agent") or "Agent").strip() or "Agent"
     kind = str(task.get("kind") or "")
@@ -2745,6 +2975,15 @@ def observe_delegation_task(task: dict[str, Any]) -> tuple[str, str]:
         return x_task_observation(task)
     if kind == "xoz-social-draft":
         return x_task_observation(task)
+    if kind == "xoz-control":
+        return "VERIFYING", "Agent XOZ ma control zadani; vysledek overuji z activity logu."
+    if kind == "technical-blocker":
+        proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
+        related_id = str(proof.get("related_task_id") or "")
+        for related in load_orchestration_tasks():
+            if isinstance(related, dict) and str(related.get("id") or "") == related_id and str(related.get("status") or "") == "DONE":
+                return "DONE", "Agent G vyresil technicky blocker; puvodni delegace ma overeny vystup."
+        return "VERIFYING", "Agent G resi technicky blocker."
     return "VERIFYING", f"{task.get('agent')} je evidovany, ale nema specializovany verifier."
 
 
@@ -2773,10 +3012,16 @@ def delegation_monitor_once() -> None:
         for task in tasks:
             status = str(task.get("status") or "ASSIGNED")
             rechecking_reported_link = status in {"DONE", "BLOCKED"} and bool(task.get("reported_at")) and should_recheck_reported_blogger_task(task)
-            if status in {"DONE", "BLOCKED", "CANCELED"} and task.get("reported_at") and not rechecking_reported_link:
+            rechecking_agent_d_blocker = status == "BLOCKED" and bool(task.get("reported_at")) and should_auto_escalate_to_agent_g(task, str(task.get("last_observation") or ""))
+            if status in {"DONE", "BLOCKED", "CANCELED"} and task.get("reported_at") and not rechecking_reported_link and not rechecking_agent_d_blocker:
                 continue
             new_status, note = observe_delegation_task(task)
             now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+            if new_status == "BLOCKED" and should_auto_escalate_to_agent_g(task, note):
+                if escalate_task_to_agent_g(task, note):
+                    g.log(f"Agent D blocker escalated to Agent G: {str(task.get('id') or '')}")
+                new_status = "VERIFYING"
+                note = "Agent D ma blocker; predano Agentovi G k technicke oprave."
             if new_status != status or note != task.get("last_observation"):
                 task["status"] = new_status
                 task["last_observation"] = note
