@@ -27,6 +27,6 @@ jobs:
           username: ${{ secrets.HOSTING_FTP_USERNAME }}
           password: ${{ secrets.HOSTING_FTP_PASSWORD }}
           local-dir: ./trading/
-          server-dir: /www/trading/
+          server-dir: ${{ secrets.HOSTING_FTP_DIR }}/www/trading/
           exclude: |
             **/.git*
