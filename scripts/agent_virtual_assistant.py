@@ -76,6 +76,7 @@ AGENT_REGISTRY_OVERLAY = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.json"
 AGENT_REGISTRY_EXAMPLE = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.example.json"
 ORCHESTRATION_TASKS_FILE = g.AGENT_WORK_DIR / "ORCHESTRATION_TASKS.json"
 RECOVERY_STATE_FILE = g.AGENT_WORK_DIR / "TELEGRAM_RECOVERY.json"
+NOTIFICATION_DEDUPE_FILE = g.AGENT_WORK_DIR / "NOTIFICATION_DEDUPE.json"
 SHARED_BRAIN_SCRIPT = Path("/home/openclaw2/scripts/openclaw_shared_brain.py")
 g.MODE_TIMEOUTS = {
     "fast": 180,
@@ -2207,6 +2208,40 @@ def telegram_notify(text: str) -> bool:
         return False
 
 
+def telegram_notify_deduped(text: str, window_seconds: int = 1800) -> str:
+    key_text = re.sub(r"\s+", " ", text.strip())
+    key = hashlib.sha1(key_text.encode("utf-8", errors="replace")).hexdigest()[:20]
+    now = time.time()
+    try:
+        state = json.loads(NOTIFICATION_DEDUPE_FILE.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        state = {}
+    if not isinstance(state, dict):
+        state = {}
+    try:
+        last_sent = float(state.get(key) or 0)
+    except (TypeError, ValueError):
+        last_sent = 0
+    if last_sent and now - last_sent < window_seconds:
+        g.log(f"Telegram notification deduped: {key_text[:180]}")
+        return "deduped"
+    ok = telegram_notify(text)
+    if ok:
+        state[key] = now
+        cutoff = now - max(window_seconds * 4, 3600)
+        cleaned = {}
+        for item_key, item_value in state.items():
+            try:
+                sent_at = float(item_value)
+            except (TypeError, ValueError):
+                continue
+            if sent_at >= cutoff:
+                cleaned[str(item_key)] = sent_at
+        NOTIFICATION_DEDUPE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        NOTIFICATION_DEDUPE_FILE.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return "sent" if ok else "failed"
+
+
 def task_age_seconds(task: dict[str, Any]) -> int:
     raw = str(task.get("created_at") or "")
     try:
@@ -2432,8 +2467,10 @@ def delegation_monitor_once() -> None:
                 and task_age_seconds(task) <= 8 * 3600
             ):
                 message = delegation_delivery_note(task)
-                if telegram_notify(message):
-                    g.log(f"-> {message}")
+                notify_result = telegram_notify_deduped(message)
+                if notify_result in {"sent", "deduped"}:
+                    if notify_result == "sent":
+                        g.log(f"-> {message}")
                     task["delivery_reported_at"] = now
                     task["delivery_reported_status"] = new_status
                     changed = True
@@ -2443,8 +2480,10 @@ def delegation_monitor_once() -> None:
             if new_status in {"DONE", "BLOCKED"} and should_report:
                 verb = "Hotovo" if new_status == "DONE" else "Blocker"
                 message = f"{verb}: {note}"
-                if telegram_notify(message):
-                    g.log(f"-> {message}")
+                notify_result = telegram_notify_deduped(message)
+                if notify_result in {"sent", "deduped"}:
+                    if notify_result == "sent":
+                        g.log(f"-> {message}")
                     task["last_reported_status"] = new_status
                     task["reported_at"] = now
                     changed = True
