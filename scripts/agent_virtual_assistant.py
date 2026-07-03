@@ -437,6 +437,20 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
             proof=["/home/openclaw2/x-post-state.json", ".rpi-output-poster"],
         ),
         registry_entry(
+            "agent-xoz",
+            "Agent XOZ",
+            "social",
+            ["agent xoz", "xoz", "x oz", "oz x", "osobnizkusenosti x", "osobni zkusenosti x", "x osobnizkusenosti", "x osobni zkusenosti"],
+            ["x_social_post", "x_thread", "social_engagement", "osobnizkusenosti.cz_social"],
+            domains=["osobnizkusenosti.cz"],
+            channels={
+                "inbox": "/home/openclaw2/.openclaw/agent-xoz-inbox.jsonl",
+                "state": "/home/openclaw2/.openclaw/agent-xoz-state.json",
+            },
+            notes="Owns X/social draft tasks for Osobni zkusenosti. Do not route these tasks to Agent D.",
+            proof=["/home/openclaw2/.openclaw/agent-xoz-inbox.jsonl"],
+        ),
+        registry_entry(
             "agent-m",
             "Agent M",
             "syndication",
@@ -626,6 +640,7 @@ def virtual_assistant_agents_context() -> str:
     lines.extend([
         "Routing reminders:",
         "- X/social/Twitter tasks for btc-dca.com go to Agent D, not the btc-dca WordPress blogger.",
+        "- X/social/Twitter tasks for Osobni zkusenosti / osobnizkusenosti.cz go to Agent XOZ, not Agent D.",
         "- WordPress/blog/article tasks go to the blogger instance matching the requested domain.",
         "- Medium/DEV/Hashnode tasks go to Agent M.",
         "- Technical/runtime/auth/deploy blockers go to Agent G.",
@@ -849,6 +864,15 @@ def parse_settings_command(text: str) -> str | None:
         status_reply = parse_delegation_status_request(text)
         if status_reply:
             return status_reply
+        cancel_reply = parse_cancel_social_assignment_request(text)
+        if cancel_reply:
+            return cancel_reply
+        routing_correction_reply = parse_routing_correction_request(text)
+        if routing_correction_reply:
+            return routing_correction_reply
+        social_x_reply = parse_social_x_delegation_request(text)
+        if social_x_reply:
+            return social_x_reply
         combined_delegation_reply = parse_combined_delegation_request(text)
         if combined_delegation_reply:
             return combined_delegation_reply
@@ -1287,6 +1311,80 @@ def assign_agent_d_x_idea(text: str) -> tuple[bool, str]:
         return False, str(inbox)
 
 
+def social_x_target(text: str) -> dict[str, str]:
+    low = g.normalize_text(text)
+    if any(term in low for term in ("xoz", "agent xoz", "osobnizkusenosti", "osobni zkusenosti", "osobnizkusenosti.cz", "oz")) and not any(term in low for term in ("btc-dca", "btc dca", "btcdca")):
+        return {
+            "id": "agent-xoz",
+            "agent": "Agent XOZ",
+            "instance": "xoz-poster",
+            "kind": "xoz-social-draft",
+            "state": str(g.OPENCLAW_DIR / "agent-xoz-state.json"),
+            "inbox": str(g.OPENCLAW_DIR / "agent-xoz-inbox.jsonl"),
+            "label": "navrh prispevku na X pro Osobni zkusenosti: Agent XOZ",
+        }
+    return {
+        "id": "agent-d",
+        "agent": "Agent D",
+        "instance": "x-poster",
+        "kind": "x-social-draft",
+        "state": "/home/openclaw2/x-post-state.json",
+        "inbox": str(g.OPENCLAW_DIR / "agent-d-inbox.jsonl"),
+        "label": "navrh prispevku na X pro btc-dca/default: Agent D",
+    }
+
+
+def assign_social_x_task(text: str) -> tuple[bool, dict[str, str], str]:
+    target = social_x_target(text)
+    if target["id"] == "agent-d":
+        ok, path = assign_agent_d_x_idea(text)
+        return ok, target, path
+
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    item = {
+        "created_at": now,
+        "source": "virtual-assistant",
+        "agent": target["agent"],
+        "task": text.strip(),
+        "expected_output": "navrh X prispevku ke schvaleni, bez publikace",
+    }
+    try:
+        inbox = Path(target["inbox"])
+        append_jsonl(inbox, item)
+        state_path = Path(target["state"])
+        state = g.load_json(state_path, {})
+        if not isinstance(state, dict):
+            state = {}
+        assignments = state.get("assignments", [])
+        if not isinstance(assignments, list):
+            assignments = []
+        assignments.append(item)
+        state["assignments"] = assignments[-100:]
+        state["virtual_assistant_last_assignment"] = item
+        g.write_json(state_path, state)
+        upsert_orchestration_task(
+            target["agent"],
+            target["instance"],
+            text.strip(),
+            target["kind"],
+            str(inbox),
+            {"inbox": str(inbox), "state": str(state_path)},
+        )
+        return True, target, str(inbox)
+    except Exception as exc:
+        fallback = g.OPENCLAW_DIR / "agent-xoz-inbox-failed.jsonl"
+        append_jsonl(fallback, {**item, "error": str(exc)[:240]})
+        upsert_orchestration_task(
+            target["agent"],
+            target["instance"],
+            text.strip(),
+            target["kind"],
+            str(fallback),
+            {"inbox": str(fallback), "error": str(exc)[:240]},
+        )
+        return False, target, str(fallback)
+
+
 def is_social_delegation_task(text: str) -> bool:
     low = g.normalize_text(text)
     return any(term in low for term in (
@@ -1303,17 +1401,111 @@ def is_social_delegation_task(text: str) -> bool:
     ))
 
 
+def is_blog_article_delegation_task(text: str) -> bool:
+    low = g.normalize_text(text)
+    return any(term in low for term in (
+        "blog",
+        "wordpress",
+        "clanek",
+        "clanku",
+        "article",
+        "draft clanku",
+        "napsat clanek",
+        "vygeneruj clanek",
+    ))
+
+
+def parse_social_x_delegation_request(text: str) -> str | None:
+    if not is_social_delegation_task(text):
+        return None
+    low = g.normalize_text(text)
+    if is_blog_article_delegation_task(text) and blogger_delegation_target(text):
+        return None
+    if not any(term in low for term in ("navrh", "prispevek", "tweet", "x post", "social", "schval", "ke schvaleni", "publikuj", "postni")):
+        return None
+    ok, target, path = assign_social_x_task(text)
+    append_orchestration_event(target["agent"], target["instance"], text, target["kind"], path)
+    return f"Deleguji: {target['label']}." if ok else f"Deleguji: {target['label']} pres fallback inbox."
+
+
+def parse_cancel_social_assignment_request(text: str) -> str | None:
+    low = g.normalize_text(text)
+    if not any(term in low for term in ("zrus", "storno", "cancel")):
+        return None
+    if not any(term in low for term in ("agent d", "agenta d", "d ")):
+        return None
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    removed = 0
+    state_path = Path("/home/openclaw2/x-post-state.json")
+    try:
+        state = g.load_json(state_path, {})
+        if isinstance(state, dict):
+            items = state.get("custom_instructions", [])
+            if isinstance(items, list):
+                kept = []
+                for item in items:
+                    item_text = g.normalize_text(str(item.get("text") if isinstance(item, dict) else item))
+                    should_remove = "osobnizkusenosti" in item_text or "osobni zkusenosti" in item_text or "xoz" in item_text or "oz " in item_text
+                    if should_remove:
+                        removed += 1
+                    else:
+                        kept.append(item)
+                state["custom_instructions"] = kept
+            assignment = state.get("virtual_assistant_last_assignment")
+            if isinstance(assignment, dict):
+                assignment_text = g.normalize_text(str(assignment.get("text") or ""))
+                if "osobnizkusenosti" in assignment_text or "osobni zkusenosti" in assignment_text or "xoz" in assignment_text or "oz " in assignment_text:
+                    state.pop("virtual_assistant_last_assignment", None)
+            g.write_json(state_path, state)
+    except Exception as exc:
+        g.log(f"Cancel Agent D assignment state update failed: {type(exc).__name__}: {exc}")
+
+    tasks = load_orchestration_tasks()
+    changed = False
+    for task in tasks:
+        if str(task.get("agent") or "") != "Agent D" or str(task.get("kind") or "") != "x-social-draft":
+            continue
+        topic_low = g.normalize_text(str(task.get("topic") or ""))
+        if "osobnizkusenosti" not in topic_low and "osobni zkusenosti" not in topic_low and "xoz" not in topic_low and "oz " not in topic_low:
+            continue
+        task["status"] = "CANCELED"
+        task["last_reported_status"] = "CANCELED"
+        task["reported_at"] = now
+        task["last_observation"] = "Zadani pro Agent D zruseno; spravny cil je Agent XOZ."
+        task["updated_at"] = now
+        changed = True
+    if changed:
+        save_orchestration_tasks(tasks)
+    return f"Zruseno: zadani pro Agenta D jsem oznacila jako zrusene. Spravny cil pro X Osobni zkusenosti je Agent XOZ."
+
+
+def parse_routing_correction_request(text: str) -> str | None:
+    low = g.normalize_text(text)
+    if not ("agent d" in low or "agenta d" in low):
+        return None
+    if not ("xoz" in low or "osobnizkusenosti" in low or "osobni zkusenosti" in low):
+        return None
+    if not ("btc-dca" in low or "btc dca" in low or "btcdca" in low):
+        return None
+    memory_line = "- Routing: X/social pro Osobni zkusenosti patri Agentovi XOZ; Agent D patri jen na btc-dca.com social/X."
+    try:
+        g.append_memory_line(memory_line)
+    except Exception as exc:
+        g.log(f"Routing correction memory write failed: {type(exc).__name__}: {exc}")
+    return "Beru. Routing opraven: X pro Osobni zkusenosti smeruju na Agent XOZ; Agent D nechavam pro btc-dca."
+
+
 def parse_combined_delegation_request(text: str) -> str | None:
     blog_text = article_text_for_combined_delegation(text)
     blog_target = blogger_delegation_target(blog_text)
-    has_blog = blog_target is not None
+    has_blog = blog_target is not None and is_blog_article_delegation_task(blog_text)
     has_social = is_social_delegation_task(text)
     if not (has_blog and has_social):
         return None
 
     blog_reply = parse_blogger_delegation_request(blog_text)
-    ok, target = assign_agent_d_x_idea(text)
-    append_orchestration_event("Agent D", "x-poster", text, "x-social-draft", target)
+    ok, social_target, target = assign_social_x_task(text)
+    append_orchestration_event(social_target["agent"], social_target["instance"], text, social_target["kind"], target)
 
     parts: list[str] = ["Deleguji:"]
     if blog_reply and blog_target:
@@ -1321,7 +1513,7 @@ def parse_combined_delegation_request(text: str) -> str | None:
     else:
         append_orchestration_event("Blog agent", "blog", text, "blog-assignment-needs-routing", "ORCHESTRATION.md")
         parts.append("- clanek/draft: blog agent, potrebuji doresit cil nebo konfiguraci")
-    parts.append("- navrh prispevku na X: Agent D" if ok else "- navrh prispevku na X: Agent D, fallback inbox")
+    parts.append(f"- {social_target['label']}" if ok else f"- {social_target['label']}, fallback inbox")
     parts.append("")
     parts.append("Ozvu se, az budu mit overeny vystup nebo skutecny blocker.")
     return "\n".join(parts)
@@ -1384,12 +1576,12 @@ def parse_general_delegation_request(text: str) -> str | None:
     assigned: list[str] = []
     blockers: list[str] = []
     if social_task or "agent d" in low or "agenta d" in low:
-        ok, target = assign_agent_d_x_idea(text)
-        append_orchestration_event("Agent D", "x-poster", text, "x-social-draft", target)
+        ok, social_target, target = assign_social_x_task(text)
+        append_orchestration_event(social_target["agent"], social_target["instance"], text, social_target["kind"], target)
         if ok:
-            assigned.append("navrh prispevku na X: Agent D")
+            assigned.append(social_target["label"])
         else:
-            blockers.append("navrh prispevku na X: Agent D, fallback inbox")
+            blockers.append(f"{social_target['label']}, fallback inbox")
 
     if any(term in low for term in ("medium", "dev", "hashnode", "agent m", "agenta m")):
         inbox = g.OPENCLAW_DIR / "agent-m-inbox.jsonl"
@@ -2258,6 +2450,8 @@ def delegation_delivery_note(task: dict[str, Any]) -> str:
     kind = str(task.get("kind") or "")
     if kind == "x-social-draft":
         return "Doruceno: Agent D ma zadani."
+    if kind == "xoz-social-draft":
+        return "Doruceno: Agent XOZ ma zadani."
     if kind.startswith("blogger-"):
         return f"Doruceno: {agent} ma zadani."
     return f"Doruceno: {agent} ma zadani."
@@ -2403,6 +2597,7 @@ def blogger_task_observation(task: dict[str, Any]) -> tuple[str, str]:
 
 
 def x_task_observation(task: dict[str, Any]) -> tuple[str, str]:
+    agent = str(task.get("agent") or "Agent D")
     proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
     state_path = Path(str(proof.get("state") or "/home/openclaw2/x-post-state.json"))
     state: dict[str, Any] = {}
@@ -2413,15 +2608,15 @@ def x_task_observation(task: dict[str, Any]) -> tuple[str, str]:
     state_text = json.dumps(state, ensure_ascii=False)
     urls = [url for url in find_urls_in_text(state_text) if "twitter.com" in url or "x.com" in url]
     if urls:
-        return "DONE", f"Agent D ma overeny X vystup: {urls[0]}"
+        return "DONE", f"{agent} ma overeny X vystup: {urls[0]}"
     assignment = state.get("virtual_assistant_last_assignment") if isinstance(state, dict) else None
     if isinstance(assignment, dict) and str(assignment.get("text") or "").strip() == str(task.get("topic") or "").strip():
         if task_age_seconds(task) > 3600:
-            return "BLOCKED", "Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup."
-        return "VERIFYING", "Agent D ma zadani ulozene, cekam na navrh nebo overitelny vystup."
+            return "BLOCKED", f"{agent} ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup."
+        return "VERIFYING", f"{agent} ma zadani ulozene, cekam na navrh nebo overitelny vystup."
     if task_age_seconds(task) > 900:
-        return "BLOCKED", "Agent D assignment se nepropsal do state souboru."
-    return "VERIFYING", "Agent D assignment cekam na propsani do state souboru."
+        return "BLOCKED", f"{agent} assignment se nepropsal do state souboru."
+    return "VERIFYING", f"{agent} assignment cekam na propsani do state souboru."
 
 
 def observe_delegation_task(task: dict[str, Any]) -> tuple[str, str]:
@@ -2429,6 +2624,8 @@ def observe_delegation_task(task: dict[str, Any]) -> tuple[str, str]:
     if kind.startswith("blogger-"):
         return blogger_task_observation(task)
     if kind == "x-social-draft":
+        return x_task_observation(task)
+    if kind == "xoz-social-draft":
         return x_task_observation(task)
     return "VERIFYING", f"{task.get('agent')} je evidovany, ale nema specializovany verifier."
 
@@ -2452,7 +2649,7 @@ def delegation_monitor_once() -> None:
         for task in tasks:
             status = str(task.get("status") or "ASSIGNED")
             rechecking_reported_link = status in {"DONE", "BLOCKED"} and bool(task.get("reported_at")) and should_recheck_reported_blogger_task(task)
-            if status in {"DONE", "BLOCKED"} and task.get("reported_at") and not rechecking_reported_link:
+            if status in {"DONE", "BLOCKED", "CANCELED"} and task.get("reported_at") and not rechecking_reported_link:
                 continue
             new_status, note = observe_delegation_task(task)
             now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -2672,6 +2869,23 @@ def virtual_assistant_main() -> None:
 
 def parse_work_style_feedback(text: str) -> str | None:
     low = g.normalize_text(text)
+    operational_terms = (
+        "prispevek",
+        "tweet",
+        " x ",
+        "x ",
+        "x post",
+        "clanek",
+        "deleg",
+        "zadani",
+        "zrus",
+        "vytvor",
+        "udelej",
+        "navrh prispevku",
+        "ke schvaleni",
+    )
+    if any(term in low for term in operational_terms):
+        return None
     feedback_words = (
         "feedback",
         "pripom",
