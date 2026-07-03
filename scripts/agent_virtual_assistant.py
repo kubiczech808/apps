@@ -1432,7 +1432,7 @@ def parse_cancel_social_assignment_request(text: str) -> str | None:
     low = g.normalize_text(text)
     if not any(term in low for term in ("zrus", "storno", "cancel")):
         return None
-    if not any(term in low for term in ("agent d", "agenta d", "d ")):
+    if not any(term in low for term in ("agent d", "agenta d", "agentovi d")) and not re.search(r"\bd\b", low):
         return None
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     removed = 0
@@ -2610,7 +2610,10 @@ def x_task_observation(task: dict[str, Any]) -> tuple[str, str]:
     if urls:
         return "DONE", f"{agent} ma overeny X vystup: {urls[0]}"
     assignment = state.get("virtual_assistant_last_assignment") if isinstance(state, dict) else None
-    if isinstance(assignment, dict) and str(assignment.get("text") or "").strip() == str(task.get("topic") or "").strip():
+    assignment_text = ""
+    if isinstance(assignment, dict):
+        assignment_text = str(assignment.get("text") or assignment.get("task") or "").strip()
+    if assignment_text == str(task.get("topic") or "").strip():
         if task_age_seconds(task) > 3600:
             return "BLOCKED", f"{agent} ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup."
         return "VERIFYING", f"{agent} ma zadani ulozene, cekam na navrh nebo overitelny vystup."
