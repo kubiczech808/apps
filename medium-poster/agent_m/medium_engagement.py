@@ -235,8 +235,18 @@ Rules:
 - No hashtags, no emojis, no sales CTA.
 - Plain text only.
 """
-    text = await generate_text(prompt, temperature=0.65, max_tokens=220)
-    return _clean_comment(text)
+    for attempt in range(2):
+        text = await generate_text(prompt, temperature=0.65, max_tokens=260)
+        comment = _clean_comment(text)
+        if _valid_comment(comment):
+            return comment
+        log.warning(
+            "Medium engagement draft rejected for %s on attempt %d: %r",
+            candidate.get("url"),
+            attempt + 1,
+            comment[:160],
+        )
+    return _fallback_comment(candidate)
 
 
 def _clean_comment(text: str) -> str:
@@ -247,6 +257,45 @@ def _clean_comment(text: str) -> str:
     if len(words) > 110:
         text = " ".join(words[:110]).rstrip(".,;:") + "."
     return text
+
+
+def _valid_comment(comment: str) -> bool:
+    words = comment.split()
+    if len(words) < 45 or len(words) > 110:
+        return False
+    if not comment.endswith((".", "?", "!")):
+        return False
+    lowered = comment.lower()
+    generic_openers = (
+        "great article",
+        "great post",
+        "thanks for sharing",
+        "nice article",
+    )
+    if lowered.startswith(generic_openers):
+        return False
+    if lowered.count("http://") + lowered.count("https://") > 1:
+        return False
+    return True
+
+
+def _fallback_comment(candidate: dict) -> str:
+    title = candidate.get("title") or "this"
+    if "timing" in title.lower() or "signal" in (candidate.get("snippet") or "").lower():
+        return (
+            "One thing I would pressure-test is whether the strategy still works after fees, "
+            "spreads, taxes, and missed execution days. For most Bitcoin DCA plans, the hard "
+            "part is not the backtest but staying consistent when the signal disagrees with "
+            "your emotions. I would be curious how the results change if withdrawals to "
+            "self-custody and real exchange spread costs are included."
+        )
+    return (
+        "The nuance I keep coming back to is that Bitcoin DCA is less about finding the perfect "
+        "entry and more about reducing the number of emotional decisions you have to make. The "
+        "best rule is usually the one you can keep following during boring sideways markets and "
+        "ugly drawdowns. I would be curious how you think about fees and withdrawal timing in "
+        "that process."
+    )
 
 
 def _query_from_title(title: str) -> str:
