@@ -376,6 +376,47 @@ class MediumPlaywrightPublisher:
 
     # ── Editor interaction ──────────────────────────────────────────
 
+    async def comment_and_clap(self, article_url: str, comment: str) -> dict:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+        if not comment.strip():
+            raise RuntimeError("Medium comment is empty")
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                try:
+                    result = await self._comment_and_clap_page(page, article_url, comment)
+                except Exception:
+                    log.exception("Medium comment/clap failed")
+                    await self._safe_screenshot(page, "medium_comment_error.png")
+                    raise
+                finally:
+                    cookies = await context.cookies()
+                    if cookies:
+                        normalized = self._normalize_cookies(cookies)
+                        _COOKIES_FILE.write_text(json.dumps(normalized, indent=2))
+                await browser.close()
+                return result
+        finally:
+            self._cleanup_display()
+
     async def publish_draft_now(self, post_id: str, tags: list[str] | None = None) -> str:
         if not _COOKIES_FILE.exists():
             raise RuntimeError(
@@ -708,6 +749,133 @@ class MediumPlaywrightPublisher:
         for error in errors[:4]:
             log.info("Medium draft delete attempt: %s", error)
         return False
+
+    async def _comment_and_clap_page(self, page, article_url: str, comment: str) -> dict:
+        await page.goto(article_url, wait_until="domcontentloaded", timeout=60000)
+        await self._human_delay(5, 8)
+        await self._wait_cloudflare(page)
+
+        clapped = await self._click_medium_clap(page)
+        await self._human_delay(1, 2)
+
+        opened = await self._open_medium_response_editor(page)
+        if not opened:
+            raise RuntimeError("Medium: response editor could not be opened")
+
+        editor = page.locator('textarea, div[contenteditable="true"][role="textbox"], div[contenteditable="true"]').last
+        await editor.wait_for(state="visible", timeout=30000)
+        await editor.click()
+        await page.keyboard.insert_text(comment)
+        await self._human_delay(1, 2)
+
+        submitted = await self._submit_medium_response(page)
+        if not submitted:
+            raise RuntimeError("Medium: response submit button not found")
+
+        await self._human_delay(4, 6)
+        return {
+            "url": article_url,
+            "comment_url": page.url,
+            "clapped": clapped,
+        }
+
+    async def _click_medium_clap(self, page) -> bool:
+        selectors = [
+            'button[aria-label*="clap" i]',
+            'button[data-testid*="clap" i]',
+            'button:has-text("Clap")',
+        ]
+        for selector in selectors:
+            loc = page.locator(selector).first
+            try:
+                if await loc.count() and await loc.is_visible(timeout=2000):
+                    await loc.click(timeout=5000)
+                    log.info("Medium: clapped article via %s", selector)
+                    return True
+            except Exception:
+                continue
+
+        clicked = await page.evaluate("""() => {
+            const buttons = Array.from(document.querySelectorAll('button,[role="button"]'));
+            const btn = buttons.find(el => {
+                const text = `${el.innerText || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('data-testid') || ''}`.toLowerCase();
+                return text.includes('clap') || text.includes('recommend');
+            });
+            if (!btn) return false;
+            btn.click();
+            return true;
+        }""")
+        if clicked:
+            log.info("Medium: clapped article via JS fallback")
+        return bool(clicked)
+
+    async def _open_medium_response_editor(self, page) -> bool:
+        selectors = [
+            'button:has-text("Respond")',
+            'button:has-text("Responses")',
+            'button[aria-label*="respond" i]',
+            'button[aria-label*="response" i]',
+            'a[href*="responses"]',
+        ]
+        for selector in selectors:
+            loc = page.locator(selector).first
+            try:
+                if await loc.count() and await loc.is_visible(timeout=2500):
+                    await loc.click(timeout=5000)
+                    await asyncio.sleep(2)
+                    if await page.locator('textarea, div[contenteditable="true"]').count():
+                        return True
+            except Exception:
+                continue
+
+        opened = await page.evaluate("""() => {
+            const els = Array.from(document.querySelectorAll('button,a,[role="button"]'));
+            const btn = els.find(el => {
+                const text = `${el.innerText || ''} ${el.getAttribute('aria-label') || ''}`.toLowerCase();
+                return text.includes('respond') || text.includes('response') || text.includes('comment');
+            });
+            if (!btn) return false;
+            btn.click();
+            return true;
+        }""")
+        if opened:
+            await asyncio.sleep(2)
+        return bool(opened and await page.locator('textarea, div[contenteditable="true"]').count())
+
+    async def _submit_medium_response(self, page) -> bool:
+        selectors = [
+            'button:has-text("Respond")',
+            'button:has-text("Publish")',
+            'button:has-text("Submit")',
+            'button:has-text("Post")',
+        ]
+        for selector in selectors:
+            loc = page.locator(selector).last
+            try:
+                if await loc.count() and await loc.is_visible(timeout=2500):
+                    disabled = await loc.get_attribute("disabled")
+                    if disabled is not None:
+                        continue
+                    await loc.click(timeout=5000)
+                    log.info("Medium: submitted response via %s", selector)
+                    return True
+            except Exception:
+                continue
+
+        clicked = await page.evaluate("""() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const btn = buttons.reverse().find(el => {
+                const text = `${el.innerText || ''} ${el.getAttribute('aria-label') || ''}`.toLowerCase();
+                const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+                return !disabled && (text.includes('respond') || text.includes('publish') || text.includes('submit') || text.includes('post'));
+            });
+            if (!btn) return false;
+            btn.click();
+            return true;
+        }""")
+        if clicked:
+            log.info("Medium: submitted response via JS fallback")
+        return bool(clicked)
 
     async def _post_has_article_image_page(self, page, post_id: str) -> bool:
         await self._open_edit_page(page, post_id, "post_image_inspection_edit")

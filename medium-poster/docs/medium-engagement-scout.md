@@ -3,8 +3,8 @@
 Goal: find related Medium articles and prepare useful comment drafts that can
 increase visibility without behaving like spam.
 
-The scout is intentionally human-in-the-loop. It searches and drafts comments,
-but it does not publish them automatically.
+The scout is intentionally human-in-the-loop. It searches and drafts comments
+throughout the day, but it publishes only after explicit Telegram approval.
 
 ## Algorithm
 
@@ -29,7 +29,15 @@ but it does not publish them automatically.
    - no hashtags or sales CTA
    - no link by default; at most one btc-dca.com link only when context makes it
      genuinely useful
-8. Send the opportunities to Telegram for manual review.
+8. Send the opportunities to Telegram for manual review with buttons:
+   - `vložit + like`: post the comment and clap the article
+   - `zahodit`: skip the opportunity
+9. On approval, enforce the hard safety limits again before posting:
+   - max 10 posted comments per Prague day
+   - never comment under the same article twice
+   - never comment under the same Medium profile twice in the same ISO week
+10. At 21:01 Europe/Prague, send a Telegram summary with posted article URLs and
+    local posting times.
 
 ## Commands
 
@@ -47,6 +55,6 @@ Telegram:
 
 ## Publishing Policy
 
-Do not add automatic comment posting until the account has a review workflow
-with explicit approval per comment. Medium comments should be sparse, specific,
-and useful enough to stand alone without any link.
+Do not add fully automatic comment posting. Medium comments must remain sparse,
+specific, and useful enough to stand alone without any link. Approval is required
+per comment.

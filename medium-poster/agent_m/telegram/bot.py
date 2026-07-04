@@ -78,6 +78,68 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
             )
 
 
+async def _scheduled_engagement_slot(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from agent_m.medium_engagement import format_opportunity_message, prepare_next_opportunity
+
+        result = await prepare_next_opportunity()
+        if result.get("status") != "prepared":
+            log.info("Medium engagement slot produced no proposal: %s", result)
+            return
+
+        op = result["opportunity"]
+        await context.bot.send_message(
+            chat_id=config.telegram_admin_chat_id,
+            text=format_opportunity_message(result),
+            reply_markup=handlers.engagement_action_keyboard(op["id"]),
+        )
+    except Exception as e:
+        log.exception("Medium engagement slot failed")
+        await context.bot.send_message(
+            chat_id=config.telegram_admin_chat_id,
+            text=f"Medium engagement slot failed:\n{e}",
+        )
+
+
+async def _scheduled_engagement_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        from agent_m.medium_engagement import format_daily_summary
+
+        await context.bot.send_message(
+            chat_id=config.telegram_admin_chat_id,
+            text=format_daily_summary(),
+        )
+    except Exception as e:
+        log.exception("Medium engagement summary failed")
+        await context.bot.send_message(
+            chat_id=config.telegram_admin_chat_id,
+            text=f"Medium engagement summary failed:\n{e}",
+        )
+
+
+async def _schedule_engagement_day(context: ContextTypes.DEFAULT_TYPE) -> None:
+    _schedule_engagement_slots(context.application)
+
+
+def _schedule_engagement_slots(application) -> None:
+    from agent_m.medium_engagement import planned_times_for_today
+
+    now = datetime.datetime.now(ZoneInfo("Europe/Prague"))
+    slots = planned_times_for_today(now)
+    for slot in slots:
+        application.job_queue.run_once(
+            _scheduled_engagement_slot,
+            when=slot,
+            name=f"medium_engagement_{slot.strftime('%Y%m%d_%H%M')}",
+        )
+    if slots:
+        log.info(
+            "Scheduled %d Medium engagement proposal slots: %s",
+            len(slots),
+            ", ".join(slot.strftime("%H:%M") for slot in slots),
+        )
+
+
 _BOT_COMMANDS = [
     BotCommand("post", "Publikovat na všechny platformy"),
     BotCommand("draft", "Publikovat jako koncept"),
@@ -113,6 +175,19 @@ async def _post_init(application) -> None:
         target_time.strftime("%H:%M"),
     )
 
+    _schedule_engagement_slots(application)
+    application.job_queue.run_daily(
+        callback=_schedule_engagement_day,
+        time=datetime.time(hour=0, minute=10, tzinfo=tz),
+        name="medium_engagement_schedule_day",
+    )
+    application.job_queue.run_daily(
+        callback=_scheduled_engagement_summary,
+        time=datetime.time(hour=21, minute=1, tzinfo=tz),
+        name="medium_engagement_summary",
+    )
+    log.info("Scheduled Medium engagement summary at 21:01 Europe/Prague")
+
 
 def build_app():
     app = (
@@ -134,6 +209,7 @@ def build_app():
     app.add_handler(CommandHandler("feedback_clear", handlers.feedback_clear_cmd))
     app.add_handler(CommandHandler("medium_login", handlers.medium_login_cmd))
     app.add_handler(CallbackQueryHandler(handlers.draft_action_callback, pattern=r"^mdraft:"))
+    app.add_handler(CallbackQueryHandler(handlers.engagement_action_callback, pattern=r"^mengage:"))
     app.add_handler(MessageHandler(
         filters.Document.ALL & filters.ChatType.PRIVATE,
         handlers.medium_cookies_document_cmd,

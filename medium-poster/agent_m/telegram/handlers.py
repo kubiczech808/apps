@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 _DRAFT_ACTIONS_FILE = config.data_dir / "telegram_draft_actions.json"
 _MEDIUM_POST_RE = re.compile(r"/p/([a-f0-9]{8,})(?:/|$|[?#])", re.IGNORECASE)
 _draft_action_lock = asyncio.Lock()
+_engagement_action_lock = asyncio.Lock()
 
 
 def admin_only(func):
@@ -189,6 +190,17 @@ def _topic_from_draft_action(action: dict) -> Topic:
         angle=topic.get("angle") or "",
         tags=topic.get("tags") or action.get("article_tags") or ["Bitcoin", "DCA", "Investing"],
         slug=topic.get("slug") or "",
+    )
+
+
+def engagement_action_keyboard(action_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("vložit + like", callback_data=f"mengage:approve:{action_id}"),
+                InlineKeyboardButton("zahodit", callback_data=f"mengage:skip:{action_id}"),
+            ]
+        ]
     )
 
 
@@ -359,6 +371,71 @@ async def draft_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
         await message.reply_text("Unknown draft action.")
+
+
+@admin_only
+async def engagement_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    await query.answer()
+
+    parts = query.data.split(":", 2)
+    if len(parts) != 3:
+        return
+    _, action_name, action_id = parts
+
+    message = query.message
+    if message:
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    async with _engagement_action_lock:
+        if action_name == "skip":
+            from agent_m.medium_engagement import skip_opportunity
+
+            result = skip_opportunity(action_id)
+            if message:
+                await message.reply_text(f"Medium engagement skipped: {result.get('title') or action_id}")
+            return
+
+        if action_name != "approve":
+            if message:
+                await message.reply_text("Unknown engagement action.")
+            return
+
+        if message:
+            await message.reply_text("Posting Medium comment and clapping the article...")
+
+        try:
+            from agent_m.medium_engagement import approve_opportunity
+
+            result = await approve_opportunity(action_id)
+        except Exception as exc:
+            log.exception("Medium engagement approval failed")
+            if message:
+                await message.reply_text(f"Medium engagement failed:\n{exc}")
+            return
+
+        status = result.get("status")
+        if status == "posted":
+            if message:
+                await message.reply_text(
+                    "Medium engagement posted\n"
+                    f"Time: {result.get('posted_at_local')}\n"
+                    f"Article: {result.get('article_url')}\n"
+                    f"Clapped: {'yes' if result.get('clapped') else 'not confirmed'}"
+                )
+            return
+
+        if message:
+            await message.reply_text(
+                "Medium engagement not posted\n"
+                f"Status: {status}\n"
+                f"Detail: {result.get('profile') or result.get('url') or result.get('current_status') or ''}"
+            )
 
 
 @admin_only
