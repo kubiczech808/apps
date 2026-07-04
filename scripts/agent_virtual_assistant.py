@@ -95,7 +95,7 @@ AGENT_G_HANDOFFS_FILE = AGENT_G_WORK_DIR / "HANDOFFS_FROM_VA.jsonl"
 AGENT_G_HANDOFF_STATE_FILE = g.AGENT_WORK_DIR / "AGENT_G_HANDOFF_STATE.json"
 AGENT_G_HISTORY_FILE = BASE_AGENT_G_HISTORY_FILE
 AGENT_G_MEMORY_FILE = BASE_AGENT_G_MEMORY_FILE
-AGENT_G_HANDOFF_VERSION = "agent-g-base-context-v2"
+AGENT_G_HANDOFF_VERSION = "agent-g-telegram-chat-fallback-v3"
 g.MODE_TIMEOUTS = {
     "fast": 180,
     "balanced": 300,
@@ -1487,7 +1487,12 @@ def agent_g_token_and_chat() -> tuple[str, str]:
         "AGENT_G_CHAT_ID",
         "TELEGRAM_AGENT_G_ADMIN_CHAT_ID",
         "M_TELEGRAM_CHAT_ID",
+        "TELEGRAM_VIRTUAL_ASSISTANT_CHAT_ID",
+        "VIRTUAL_ASSISTANT_TELEGRAM_CHAT_ID",
+        "VA_TELEGRAM_CHAT_ID",
     )
+    if token and not chat_id:
+        chat_id = g.DEFAULT_CHAT_ID or "6247540911"
     return token, chat_id
 
 
