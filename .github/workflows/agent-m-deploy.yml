@@ -42,6 +42,7 @@ jobs:
             --exclude '__pycache__' \
             --exclude '.env' \
             --exclude 'data/medium_cookies.json' \
+            --exclude 'data/medium_engagement.json' \
             --exclude 'data/history.json' \
             --exclude 'data/telegram_draft_actions.json' \
             --exclude 'data/token_usage.json' \

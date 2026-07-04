@@ -63,6 +63,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/medium_login — jak nastavit Medium session (+ přijímám JSON soubor z Cookie-Editor)\n"
         "/history — recent publications\n"
         "/topics — content plan status\n"
+        "/engage [query] — find related Medium articles and draft comments\n"
         "/status — token usage & schedule\n"
         "/help — this message\n\n"
         "Slug is optional — without it, the next planned topic is used."
@@ -409,6 +410,29 @@ async def topics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if len(text) > 4000:
         text = text[:3990] + "\n..."
     await msg.reply_text(text)
+
+
+@admin_only
+async def engage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    query = " ".join(context.args).strip() if context.args else None
+    await msg.chat.send_action(ChatAction.TYPING)
+    await msg.reply_text(
+        "Searching Medium for related articles and drafting comments. "
+        "Nothing will be published automatically."
+    )
+
+    try:
+        from agent_m.medium_engagement import format_result, run_once
+
+        result = await run_once(limit=3, query=query)
+        await msg.reply_text(format_result(result))
+    except Exception as exc:
+        log.exception("Medium engagement scout failed")
+        await msg.reply_text(f"Medium engagement scout failed:\n{exc}")
 
 
 @admin_only

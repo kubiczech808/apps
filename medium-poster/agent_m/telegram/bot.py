@@ -87,6 +87,7 @@ _BOT_COMMANDS = [
     BotCommand("medium_login", "Nastavit Medium session (cookies)"),
     BotCommand("history", "Poslední publikace"),
     BotCommand("topics", "Stav obsahového plánu"),
+    BotCommand("engage", "Najít články a navrhnout komentáře"),
     BotCommand("status", "Využití tokenů a rozvrh"),
     BotCommand("help", "Nápověda"),
 ]
@@ -127,6 +128,7 @@ def build_app():
     app.add_handler(CommandHandler("preview", handlers.preview_cmd))
     app.add_handler(CommandHandler("history", handlers.history_cmd))
     app.add_handler(CommandHandler("topics", handlers.topics_cmd))
+    app.add_handler(CommandHandler("engage", handlers.engage_cmd))
     app.add_handler(CommandHandler("status", handlers.status_cmd))
     app.add_handler(CommandHandler("feedback", handlers.feedback_cmd))
     app.add_handler(CommandHandler("feedback_clear", handlers.feedback_clear_cmd))

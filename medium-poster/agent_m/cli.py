@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import io
+import json
 import logging
 import sys
 from pathlib import Path
@@ -144,6 +145,7 @@ def main() -> None:
             "medium-login",
             "medium-import-cookies",
             "medium-replace-image",
+            "medium-engagement-scout",
         ],
         default="draft",
         nargs="?",
@@ -151,6 +153,8 @@ def main() -> None:
     parser.add_argument("--slug", help="Specific topic slug from content plan")
     parser.add_argument("--post-id", help="Medium post ID for targeted maintenance actions")
     parser.add_argument("--image-path", help="Local image path for targeted Medium image replacement")
+    parser.add_argument("--query", help="Specific Medium search query for engagement scout")
+    parser.add_argument("--limit", type=int, default=3, help="Maximum engagement opportunities to prepare")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -185,6 +189,12 @@ def main() -> None:
             )
         )
         print(f"MEDIUM_REPLACE_IMAGE_URL={url}")
+    elif args.mode == "medium-engagement-scout":
+        from agent_m.medium_engagement import run_once
+        result = asyncio.run(run_once(limit=args.limit, query=args.query))
+        print("MEDIUM_ENGAGEMENT_START")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print("MEDIUM_ENGAGEMENT_END")
     else:
         asyncio.run(run(mode=args.mode, slug=args.slug))
 

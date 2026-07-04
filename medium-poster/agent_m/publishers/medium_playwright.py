@@ -12,6 +12,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from agent_m.config import config
 
@@ -191,6 +192,94 @@ class MediumPlaywrightPublisher:
 
     async def list_scheduled_posts(self) -> list[dict]:
         return await self._list_stories("https://medium.com/me/stories?tab=posts-scheduled")
+
+    async def search_articles(self, query: str, limit: int = 10) -> list[dict]:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                url = f"https://medium.com/search?q={quote_plus(query)}"
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                await self._human_delay(4, 7)
+                for _ in range(3):
+                    await page.mouse.wheel(0, 1200)
+                    await asyncio.sleep(1)
+                articles = await page.evaluate(
+                    """({query, limit}) => {
+                        const blocked = [
+                            '/me/',
+                            '/m/signin',
+                            '/m/signout',
+                            '/about',
+                            '/membership',
+                            '/plans',
+                            '/tag/',
+                        ];
+                        const anchors = Array.from(document.querySelectorAll('a[href]'));
+                        const seen = new Set();
+                        const out = [];
+                        for (const a of anchors) {
+                            const href = a.href || '';
+                            if (!href.includes('medium.com')) continue;
+                            if (blocked.some(part => href.includes(part))) continue;
+                            if (href.includes('/edit')) continue;
+                            if (href.includes('/responses/')) continue;
+
+                            let parsed;
+                            try { parsed = new URL(href); } catch (_) { continue; }
+                            const path = parsed.pathname || '';
+                            const looksArticle =
+                                /\\/[a-f0-9]{8,}$/i.test(path) ||
+                                /\\/@[^/]+\\/[^/]+-[a-f0-9]{8,}$/i.test(path) ||
+                                /\\/p\\/[a-f0-9]{8,}/i.test(path);
+                            if (!looksArticle) continue;
+
+                            parsed.search = '';
+                            parsed.hash = '';
+                            const cleanUrl = parsed.toString().replace(/\\/$/, '');
+                            if (seen.has(cleanUrl)) continue;
+
+                            const card = a.closest('article, div[role="article"], div[class]') || a.parentElement;
+                            const rawText = (card?.innerText || a.innerText || '').trim();
+                            const lines = rawText.split('\\n').map(x => x.trim()).filter(Boolean);
+                            const title = (a.innerText || lines.find(x => x.length >= 24) || '').trim();
+                            if (!title || title.length < 20) continue;
+
+                            seen.add(cleanUrl);
+                            out.push({
+                                title,
+                                url: cleanUrl,
+                                snippet: lines.filter(x => x !== title).slice(0, 5).join(' '),
+                                query,
+                            });
+                            if (out.length >= limit) break;
+                        }
+                        return out;
+                    }""",
+                    {"query": query, "limit": limit},
+                )
+                await browser.close()
+                return articles
+        finally:
+            self._cleanup_display()
 
     async def schedule_draft_for_later(
         self,
