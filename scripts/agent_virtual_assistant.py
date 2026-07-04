@@ -1587,11 +1587,19 @@ def deliver_agent_g_handoff(item: dict[str, Any]) -> dict[str, str]:
 
 def ensure_agent_g_handoffs_once() -> int:
     count = 0
-    for item in read_jsonl(AGENT_G_INBOX_FILE, 1000):
+    candidates = read_jsonl(AGENT_G_INBOX_FILE, 1000)
+    candidates.extend(read_jsonl(AGENT_G_HANDOFFS_FILE, 1000))
+    seen: set[str] = set()
+    for item in candidates:
         if not isinstance(item, dict):
             continue
         if item.get("source") != "virtual-assistant" or item.get("agent") != "Agent G":
             continue
+        handoff_id = str(item.get("id") or "")
+        if handoff_id and handoff_id in seen:
+            continue
+        if handoff_id:
+            seen.add(handoff_id)
         result = deliver_agent_g_handoff(item)
         if result.get("deduped") != "true":
             count += 1
