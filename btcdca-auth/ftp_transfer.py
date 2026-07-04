@@ -83,8 +83,10 @@ def prepare():
         download(ftp, "www/signup-user.php", "server-current/signup-user.php")
         download_optional(ftp, "www/.htaccess", "server-current/root.htaccess")
         download_optional(ftp, "www/app/.htaccess", "server-current/app.htaccess")
+        download(ftp, "www/assets/css/custom.css", "server-current/custom.css")
         upload(ftp, "server-current/login-user.php", f".codex-backups/btcdca-auth/{BACKUP_ID}/login-user.php")
         upload(ftp, "server-current/signup-user.php", f".codex-backups/btcdca-auth/{BACKUP_ID}/signup-user.php")
+        upload(ftp, "server-current/custom.css", f".codex-backups/btcdca-auth/{BACKUP_ID}/custom.css")
         if Path("server-current/root.htaccess").exists():
             upload(ftp, "server-current/root.htaccess", f".codex-backups/btcdca-auth/{BACKUP_ID}/root.htaccess")
         if Path("server-current/app.htaccess").exists():
@@ -104,6 +106,7 @@ def upload_deploy():
         upload(ftp, "deploy-root/www/btcdca-google-token-login.php", "www/btcdca-google-token-login.php")
         upload(ftp, "deploy-root/www/.htaccess", "www/.htaccess")
         upload(ftp, "deploy-root/www/app/.htaccess", "www/app/.htaccess")
+        upload(ftp, "deploy-root/www/assets/css/custom.css", "www/assets/css/custom.css")
         upload(ftp, "deploy-root/www/app/auth/google/index.php", "www/app/auth/google/index.php")
         delete_optional(ftp, "www/app/auth/google/callback/index.php")
         rmdir_optional(ftp, "www/app/auth/google/callback")
