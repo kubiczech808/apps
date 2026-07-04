@@ -1,0 +1,88 @@
+name: Inspect BTC-DCA App Files
+
+on:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - '.github/workflows/btcdca-inspect-app.yml'
+  workflow_dispatch:
+
+jobs:
+  inspect-app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Search app files for BTC price widget code
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          import re
+
+          hosts = ["ftp.btc-dca.com", "neuron.blueboard.cz"]
+          login = os.environ["BTCDCA_FTP_LOGIN"]
+          password = os.environ["BTCDCA_FTP_PASSWORD"]
+          text_ext = (".php", ".js", ".css", ".html", ".htm", ".inc", ".txt")
+          terms = re.compile(r"(1\s*BTC|BTC\s*=|sats|bitcoin|coingecko|binance|coinmate|price|kurz|eur|usd|ticker|rate)", re.I)
+          secretish = re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|client[_-]?secret)\s*([=:]|\=\>)\s*['\"]?[^,'\"\s)]+")
+
+          ftp = None
+          last_error = None
+          for host in hosts:
+              try:
+                  ftp = ftplib.FTP(host, timeout=30)
+                  ftp.login(login, password)
+                  print(f"Connected to {host}")
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  print(f"Connect failed for {host}: {exc}")
+          if ftp is None:
+              raise SystemExit(f"Could not connect to FTP: {last_error}")
+
+          def list_files(path, depth=0):
+              if depth > 3:
+                  return
+              try:
+                  names = ftp.nlst(path)
+              except Exception as exc:
+                  print(f"Cannot list {path}: {exc}")
+                  return
+              for name in names:
+                  base = name.rsplit("/", 1)[-1]
+                  if base in {".", ".."}:
+                      continue
+                  if "." not in base:
+                      yield from list_files(name, depth + 1)
+                      continue
+                  if name.lower().endswith(text_ext):
+                      yield name
+
+          matches = 0
+          for remote in sorted(set(list_files("www/app"))):
+              try:
+                  chunks = []
+                  ftp.retrbinary(f"RETR {remote}", chunks.append)
+                  data = b"".join(chunks)
+              except Exception as exc:
+                  print(f"Cannot read {remote}: {exc}")
+                  continue
+              if len(data) > 400_000:
+                  continue
+              text = data.decode("utf-8", "replace")
+              file_hits = []
+              for index, line in enumerate(text.splitlines(), 1):
+                  if terms.search(line):
+                      safe = secretish.sub(r"\1\2***", line.strip())
+                      file_hits.append((index, safe[:240]))
+              if file_hits:
+                  matches += len(file_hits)
+                  print(f"\n## {remote}")
+                  for index, safe in file_hits[:80]:
+                      print(f"{index}: {safe}")
+          ftp.quit()
+          print(f"\nTotal matching lines: {matches}")
+          PY
