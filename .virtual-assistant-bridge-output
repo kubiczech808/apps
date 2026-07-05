@@ -1,12 +1,12 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-05T05:35:31Z
+checked_at_utc=2026-07-05T12:10:03Z
 shared_brain_intro_telegram_sent=not_requested
 xoz_comment_test_requested=false
 playwright_install=ok
 telegram_token_present= True
 telegram_getme_ok= True
 telegram_webhook_url_set= False
-telegram_pending_update_count= 0
+telegram_pending_update_count= 2
 telegram_direct_send_ok=disabled
 codex_cli_present= True
 codex_auth_status= chatgpt-auth-ok
@@ -33,15 +33,19 @@ routing_smoke_x_only_blogger_target= None
 routing_smoke_x_oz_target= {'id': 'agent-xoz', 'agent': 'Agent XOZ', 'instance': 'xoz-poster', 'kind': 'xoz-social-draft', 'state': '/home/openclaw2/.openclaw/agent-xoz-state.json', 'inbox': '/home/openclaw2/.openclaw/agent-xoz-inbox.jsonl', 'label': 'navrh prispevku na X pro Osobni zkusenosti: Agent XOZ'}
 routing_smoke_x_oz_feedback_none= True
 routing_smoke_xoz_activity_query= True
-telegram_dynamic_command_count= 23
+telegram_dynamic_command_count= 24
 telegram_command_xoz_xpost= {'command': 'a_xoz_xpost', 'description': 'Agent XOZ: X post pro OZ', 'agent_id': 'agent-xoz', 'agent_name': 'Agent XOZ', 'kind': 'social', 'action': 'x_social_post'}
 telegram_command_d_xpost= {'command': 'a_d_xpost', 'description': 'Agent D: X post pro btc-dca', 'agent_id': 'agent-d', 'agent_name': 'Agent D', 'kind': 'social', 'action': 'x_social_post'}
 telegram_command_xpost_distinct= True
+routing_smoke_browser_form_task= True
+routing_smoke_xoz_control_skips_browser_form= True
 xoz_style_delegate_reply= Deleguji: navrh prispevku na X pro Osobni zkusenosti: Agent XOZ.
 xoz_style_worker_changed= 1
 xoz_style_last_status= READY_FOR_APPROVAL
 xoz_style_last_output= Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. Bybit muze byt uzitecny pro pokrocilejsi praci s kryptem, ale porad plati: nejdriv pravidla, limity a jasny plan.
 xoz_style_last_image_prompt= Realisticka mobilni pracovni scena: clovek kontroluje krypto portfolio na telefonu, vedle notebook s jednoduchym planem a poznamkami, cisty moderni styl, bez log a bez textu v obrazku.
+xoz_style_last_image_url= https://image.pollinations.ai/prompt/Realisticka%20mobilni%20pracovni%20scena%3A%20clovek%20kontroluje%20krypto%20portfolio%20na%20telefonu%2C%20vedle%20notebook%20s%20jednoduchym%20planem%20a%20poznamkami%2C%20cisty%20moderni%20styl%2C%20b
+xoz_approval_keyboard= {'inline_keyboard': [[{'text': 'Schvalit', 'callback_data': 'xoz:approve:9f5536693ed271c1'}, {'text': 'Upravit', 'callback_data': 'xoz:edit:9f5536693ed271c1'}]]}
 xoz_style_preferences= ['Bez kratkeho oznaceni promo/affiliate v textu ani v podkladu.']
 routing_smoke_btc_blog_target= ('btc-dca', 'Agent btc-dca')
 routing_smoke_oz_explicit_target= ('osobnizkusenosti-cz', 'oz')
@@ -57,28 +61,29 @@ agent_g_chat_available= True
 agent_g_escalated_blockers_summary= 0
 agent_g_escalated_log_blockers_summary= 0
 agent_g_handoffs_written_summary= 0
-[2026-07-05 07:35:32] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+[2026-07-05 14:10:04] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+[2026-07-05 14:10:15] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): {"type":"thread.started","thread_id":"019f322f-8f40-7631-89b8-3a26619d25be"} {"type":"turn.started"} {"type":"error","message":"You've hit your usage limit. U
 ai_smoke_ok= True
 gmail_google_meta_1=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_2=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
 gmail_setup_poll=ok
-telegram_state_offset= 309697025
+telegram_state_offset= 309697028
 virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 9
+virtual_assistant_lock_age_sec= 35
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-07-05T05:35:32Z
-virtual_assistant_log_signal_1=[2026-07-05 07:21:51] Virtual Assistant email worker started
-virtual_assistant_log_signal_2=[2026-07-05 07:21:51] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_3=[2026-07-05 07:21:51] Virtual Assistant telegram recovery worker started
-virtual_assistant_log_signal_4=[2026-07-05 07:21:51] Agent G daemon started
-virtual_assistant_log_signal_5=[2026-07-05 07:27:52] Telegram recovery replied to unanswered message f14b6c79bd122814
-virtual_assistant_log_signal_6=[2026-07-05 07:31:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_7=[2026-07-05 07:35:28] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_8=[2026-07-05 07:35:28] Virtual Assistant telegram recovery worker started
-virtual_assistant_log_signal_9=[2026-07-05 07:35:28] Virtual Assistant email worker started
-virtual_assistant_log_signal_10=[2026-07-05 07:35:28] Agent G daemon started
-virtual_assistant_log_signal_11=[2026-07-05 07:35:28] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_12=[2026-07-05 07:35:32] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_mtime_utc= 2026-07-05T12:10:15Z
+virtual_assistant_log_signal_1=[2026-07-05 14:09:38] Daemon poll error: HTTP Error 401: Unauthorized
+virtual_assistant_log_signal_2=[2026-07-05 14:09:39] Daemon poll error: HTTP Error 401: Unauthorized
+virtual_assistant_log_signal_3=[2026-07-05 14:09:40] Daemon poll error: HTTP Error 401: Unauthorized
+virtual_assistant_log_signal_4=[2026-07-05 14:09:41] Daemon poll error: HTTP Error 401: Unauthorized
+virtual_assistant_log_signal_5=[2026-07-05 14:09:43] Daemon poll error: HTTP Error 401: Unauthorized
+virtual_assistant_log_signal_6=[2026-07-05 14:10:00] Virtual Assistant email worker started
+virtual_assistant_log_signal_7=[2026-07-05 14:10:00] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_8=[2026-07-05 14:10:00] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_9=[2026-07-05 14:10:00] Agent G daemon started
+virtual_assistant_log_signal_10=[2026-07-05 14:10:01] Telegram bot commands refresh: sent
+virtual_assistant_log_signal_11=[2026-07-05 14:10:04] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_12=[2026-07-05 14:10:15] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): {"type":"thread.started","thread_id":"019f322f-8f40-7631-89b8-3a26619d25be"} {"type":"turn.started"} {"type":"error","message":"You've hit 
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
@@ -109,46 +114,46 @@ va_2026_06_29_log_27=[2026-06-29 12:29:43] Model route: gpt-5.4-mini tier=cheap 
 va_2026_06_29_log_28=[2026-06-29 12:30:20] -> Hotovo:
 va_2026_06_29_log_29=[2026-06-29 13:42:33] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_30=[2026-06-29 13:42:59] Email processed and replied: from=<email>@google.com trusted=False subject=Další informace o aktualizovaných smluvních podmínkách
-va_today_log_1=[2026-07-05 02:07:11] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_2=[2026-07-05 02:23:11] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_3=[2026-07-05 02:37:59] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_4=[2026-07-05 03:11:38] Daemon poll error: HTTP Error 502: Bad Gateway
-va_today_log_5=[2026-07-05 03:11:39] Daemon poll error: HTTP Error 502: Bad Gateway
-va_today_log_6=[2026-07-05 03:12:00] Daemon poll error: The read operation timed out
-va_today_log_7=[2026-07-05 05:28:03] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_8=[2026-07-05 05:55:47] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_9=[2026-07-05 05:56:13] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_10=[2026-07-05 06:11:25] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_11=[2026-07-05 06:20:01] <- prehlee komentaru agenta xoz
-va_today_log_12=[2026-07-05 06:24:15] -> Nemam dohledatelny zaznam o komentarich Agent XOZ. Zavedla jsem pro nej activity log a control inbox; od ted ma kazdy komentar zapisovat jako overitelny zaznam.
-va_today_log_13=[2026-07-05 06:49:07] <- reporty agenta XOZ
-va_today_log_14=[2026-07-05 06:49:07] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_15=[2026-07-05 06:49:34] -> **Hotovo**
-va_today_log_16=[2026-07-05 06:51:40] Virtual Assistant delegation monitor started
-va_today_log_17=[2026-07-05 06:51:40] Virtual Assistant email worker started
-va_today_log_18=[2026-07-05 06:53:02] <- ok
-va_today_log_19=[2026-07-05 06:53:02] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_20=[2026-07-05 06:53:08] -> Hotovo:
-va_today_log_21=[2026-07-05 06:55:38] <- tohle NE:   - krátké označení, že jde o promo/affiliate
-va_today_log_22=[2026-07-05 06:55:39] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_23=[2026-07-05 06:55:44] -> Hotovo:
-va_today_log_24=[2026-07-05 06:56:20] Virtual Assistant email worker started
-va_today_log_25=[2026-07-05 06:56:20] Virtual Assistant delegation monitor started
-va_today_log_26=[2026-07-05 07:01:05] Virtual Assistant delegation monitor started
-va_today_log_27=[2026-07-05 07:01:05] Virtual Assistant email worker started
-va_today_log_28=[2026-07-05 07:02:05] -> Doruceno: Agent XOZ ma zadani.
-va_today_log_29=[2026-07-05 07:11:07] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_30=[2026-07-05 07:11:28] Virtual Assistant email worker started
-va_today_log_31=[2026-07-05 07:11:28] Virtual Assistant delegation monitor started
-va_today_log_32=[2026-07-05 07:21:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_33=[2026-07-05 07:21:51] Virtual Assistant email worker started
-va_today_log_34=[2026-07-05 07:21:51] Virtual Assistant delegation monitor started
-va_today_log_35=[2026-07-05 07:24:51] <- https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou 
-va_today_log_36=[2026-07-05 07:27:52] -> Predavam Agentu XOZ. Vystup overim.
-va_today_log_37=[2026-07-05 07:31:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_38=[2026-07-05 07:35:28] Virtual Assistant delegation monitor started
-va_today_log_39=[2026-07-05 07:35:28] Virtual Assistant email worker started
-va_today_log_40=[2026-07-05 07:35:32] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_1=[2026-07-05 14:09:02] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_2=[2026-07-05 14:09:03] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_3=[2026-07-05 14:09:04] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_4=[2026-07-05 14:09:05] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_5=[2026-07-05 14:09:06] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_6=[2026-07-05 14:09:08] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_7=[2026-07-05 14:09:09] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_8=[2026-07-05 14:09:10] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_9=[2026-07-05 14:09:11] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_10=[2026-07-05 14:09:12] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_11=[2026-07-05 14:09:13] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_12=[2026-07-05 14:09:14] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_13=[2026-07-05 14:09:15] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_14=[2026-07-05 14:09:17] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_15=[2026-07-05 14:09:18] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_16=[2026-07-05 14:09:19] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_17=[2026-07-05 14:09:20] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_18=[2026-07-05 14:09:21] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_19=[2026-07-05 14:09:22] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_20=[2026-07-05 14:09:23] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_21=[2026-07-05 14:09:24] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_22=[2026-07-05 14:09:26] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_23=[2026-07-05 14:09:27] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_24=[2026-07-05 14:09:28] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_25=[2026-07-05 14:09:29] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_26=[2026-07-05 14:09:30] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_27=[2026-07-05 14:09:31] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_28=[2026-07-05 14:09:32] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_29=[2026-07-05 14:09:34] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_30=[2026-07-05 14:09:35] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_31=[2026-07-05 14:09:36] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_32=[2026-07-05 14:09:37] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_33=[2026-07-05 14:09:38] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_34=[2026-07-05 14:09:39] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_35=[2026-07-05 14:09:40] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_36=[2026-07-05 14:09:41] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_37=[2026-07-05 14:09:43] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_38=[2026-07-05 14:10:00] Virtual Assistant email worker started
+va_today_log_39=[2026-07-05 14:10:00] Virtual Assistant delegation monitor started
+va_today_log_40=[2026-07-05 14:10:04] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_today_03_04_log_1=[2026-07-05 03:11:38] Daemon poll error: HTTP Error 502: Bad Gateway
 va_today_03_04_log_2=[2026-07-05 03:11:39] Daemon poll error: HTTP Error 502: Bad Gateway
 va_today_03_04_log_3=[2026-07-05 03:12:00] Daemon poll error: The read operation timed out
@@ -277,22 +282,22 @@ orchestration_task_11_xoz_accepted_at=2026-07-04T05:52:46+02:00
 orchestration_task_11_xoz_in_progress_at=2026-07-04T05:52:46+02:00
 orchestration_task_11_xoz_output_at=2026-07-04T05:52:46+02:00
 orchestration_task_11_xoz_output=Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. Kdyz je jasne, kdo ma co prevzit, jak se overi vysledek a kdy se vratit se stavem, prestanou ukoly mizet mezi radky.
-orchestration_task_12=id=4f53c9be0161c7f2 created=2026-07-05T07:01:08+02:00 status=VERIFYING delivery=2026-07-05T07:02:05+02:00 reported= agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=Agent XOZ pridej 1 komentar na X pro Osobni zkusenosti jako test activity logu a zapis overitelny vysledek. observation=Agent XOZ ma control zadani; vysledek overuji z activity logu.
+orchestration_task_12=id=4f53c9be0161c7f2 created=2026-07-05T07:01:08+02:00 status=BLOCKED delivery=2026-07-05T07:02:05+02:00 reported=2026-07-05T08:01:28+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=Agent XOZ pridej 1 komentar na X pro Osobni zkusenosti jako test activity logu a zapis overitelny vysledek. observation=Agent XOZ nedodal overitelny komentar do activity logu do 60 minut.
 orchestration_task_12_proof_keys=activity_log,control_inbox,state
 orchestration_task_12_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_12_state_post_id=
 orchestration_task_12_state_urls=
-orchestration_task_13=id=0f8c6c82be68f7cd created=2026-07-05T07:24:51+02:00 status=VERIFYING delivery=2026-07-05T07:25:51+02:00 reported= agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou adresou pavel@zdavle.cz, jmeno bude ajk  observation=Agent XOZ ma control zadani; vysledek overuji z activity logu.
+orchestration_task_13=id=0f8c6c82be68f7cd created=2026-07-05T07:24:51+02:00 status=CANCELED delivery=2026-07-05T07:25:51+02:00 reported=2026-07-05T14:10:00+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou adresou pavel@zdavle.cz, jmeno bude ajk  observation=Zruseno: WordPress/formularovy komentar patri VA browser Playwright workflow, ne Agentu XOZ.
 orchestration_task_13_proof_keys=activity_log,control_inbox,state
 orchestration_task_13_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_13_state_post_id=
 orchestration_task_13_state_urls=
-orchestration_task_14=id=69b8287731059f49 created=2026-07-05T07:27:52+02:00 status=VERIFYING delivery=2026-07-05T07:28:51+02:00 reported= agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou observation=Agent XOZ ma control zadani; vysledek overuji z activity logu.
+orchestration_task_14=id=69b8287731059f49 created=2026-07-05T07:27:52+02:00 status=CANCELED delivery=2026-07-05T07:28:51+02:00 reported=2026-07-05T14:10:00+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou observation=Zruseno: WordPress/formularovy komentar patri VA browser Playwright workflow, ne Agentu XOZ.
 orchestration_task_14_proof_keys=activity_log,control_inbox,state
 orchestration_task_14_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_14_state_post_id=
 orchestration_task_14_state_urls=
-orchestration_task_15=id=80c4d5eeadfdbecf created=2026-07-05T07:35:31+02:00 status=ASSIGNED delivery= reported= agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=Osobni zkusenosti X navrh ke schvaleni na tema Bybit. Vytvor hotovy text a obrazovy podklad/prompt. Nepublikuj bez schvaleni. Format preference: Bez kratkeho oz observation=
+orchestration_task_15=id=80c4d5eeadfdbecf created=2026-07-05T07:35:31+02:00 status=DONE delivery= reported=2026-07-05T07:36:28+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=Osobni zkusenosti X navrh ke schvaleni na tema Bybit. Vytvor hotovy text a obrazovy podklad/prompt. Nepublikuj bez schvaleni. Format preference: Bez kratkeho oz observation=Agent XOZ navrhl X prispevek: Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. Bybit muze byt uzitecny pro pokroc
 orchestration_task_15_proof_keys=inbox,state
 orchestration_task_15_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_15_state_post_id=
@@ -302,6 +307,16 @@ orchestration_task_15_xoz_accepted_at=2026-07-05T07:35:31+02:00
 orchestration_task_15_xoz_in_progress_at=2026-07-05T07:35:31+02:00
 orchestration_task_15_xoz_output_at=2026-07-05T07:35:31+02:00
 orchestration_task_15_xoz_output=Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. Bybit muze byt uzitecny pro pokrocilejsi praci s kryptem, ale porad plati: nejdriv pravidla, limity a jasny plan.
+orchestration_task_16=id=9f5536693ed271c1 created=2026-07-05T14:10:04+02:00 status=ASSIGNED delivery= reported= agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=Osobni zkusenosti X navrh ke schvaleni na tema bybit. Vytvor hotovy text a obrazovy podklad/prompt. Nepublikuj bez schvaleni. Format preference: Bez kratkeho oz observation=
+orchestration_task_16_proof_keys=inbox,state
+orchestration_task_16_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
+orchestration_task_16_state_post_id=
+orchestration_task_16_state_urls=
+orchestration_task_16_xoz_status=READY_FOR_APPROVAL
+orchestration_task_16_xoz_accepted_at=2026-07-05T14:10:04+02:00
+orchestration_task_16_xoz_in_progress_at=2026-07-05T14:10:04+02:00
+orchestration_task_16_xoz_output_at=2026-07-05T14:10:04+02:00
+orchestration_task_16_xoz_output=Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. Bybit muze byt uzitecny pro pokrocilejsi praci s kryptem, ale porad plati: nejdriv pravidla, limity a jasny plan.
 agent_g_handoff_delivered_count=2
 agent_g_handoff_1=id=f201fbe4fc41510e memory=deduped history=deduped telegram=sent version=agent-g-telegram-chat-fallback-v3
 agent_g_handoff_1_paths=history=/home/openclaw2/.openclaw/g-agent-history.json memory=/home/openclaw2/.openclaw/agent-g/MEMORY.md
