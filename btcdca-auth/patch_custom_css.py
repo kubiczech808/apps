@@ -1,9 +1,6 @@
 from pathlib import Path
 
 
-source = Path("server-current/custom.css")
-target = Path("deploy-root/www/assets/css/custom.css")
-
 START = "/* BEGIN BTC-DCA mobile order cards dark fix */"
 END = "/* END BTC-DCA mobile order cards dark fix */"
 
@@ -17,9 +14,6 @@ def remove_managed_block(value: str) -> str:
         return value[:start].rstrip()
     return (value[:start] + value[end + len(END):]).rstrip()
 
-
-text = source.read_text(encoding="utf-8", errors="replace")
-text = remove_managed_block(text)
 
 block = f"""
 
@@ -213,5 +207,20 @@ block = f"""
 {END}
 """
 
-target.parent.mkdir(parents=True, exist_ok=True)
-target.write_text(text + block + "\n", encoding="utf-8")
+targets = [
+    (Path("server-current/custom.css"), Path("deploy-root/www/assets/css/custom.css")),
+    (Path("server-current/app-custom.css"), Path("deploy-root/www/app/assets/css/custom.css")),
+]
+
+patched = 0
+for source, target in targets:
+    if not source.exists():
+        continue
+    text = source.read_text(encoding="utf-8", errors="replace")
+    text = remove_managed_block(text)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text + block + "\n", encoding="utf-8")
+    patched += 1
+
+if patched == 0:
+    raise SystemExit("No custom.css source files found to patch.")
