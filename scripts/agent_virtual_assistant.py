@@ -1438,6 +1438,8 @@ def is_combined_delegation_request_text(text: str) -> bool:
 
 
 def is_blogger_delegation_request_text(text: str) -> bool:
+    if is_xoz_activity_request_text(text):
+        return False
     target = blogger_delegation_target(text)
     if not target:
         return False
@@ -1463,6 +1465,8 @@ def is_general_delegation_request_text(text: str) -> bool:
 
 def pending_action_candidate(text: str) -> tuple[str, str] | None:
     if is_explicit_command_text(text):
+        return None
+    if is_xoz_activity_request_text(text):
         return None
     if is_xoz_style_and_draft_request_text(text):
         return "xoz-style-draft", "pripravit XOZ navrh prispevku ke schvaleni"
@@ -2327,6 +2331,28 @@ def cancel_misrouted_xoz_browser_tasks(tasks: list[dict[str, Any]]) -> int:
     return changed
 
 
+def cancel_misrouted_activity_blogger_tasks(tasks: list[dict[str, Any]]) -> int:
+    changed = 0
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        if not str(task.get("kind") or "").startswith("blogger-"):
+            continue
+        if str(task.get("status") or "ASSIGNED") == "CANCELED":
+            continue
+        topic = str(task.get("topic") or "")
+        if not is_xoz_activity_request_text(topic):
+            continue
+        task["status"] = "CANCELED"
+        task["last_reported_status"] = "CANCELED"
+        task["reported_at"] = now
+        task["updated_at"] = now
+        task["last_observation"] = "Zruseno: slo o dotaz na XOZ aktivitu, ne o zadani clanku."
+        changed += 1
+    return changed
+
+
 def load_agent_g_handoff_state() -> dict[str, Any]:
     try:
         state = json.loads(AGENT_G_HANDOFF_STATE_FILE.read_text(encoding="utf-8", errors="replace"))
@@ -3037,6 +3063,8 @@ def parse_general_delegation_request(text: str) -> str | None:
 
 
 def parse_blogger_delegation_request(text: str) -> str | None:
+    if is_xoz_activity_request_text(text):
+        return None
     target = blogger_delegation_target(text)
     if not target:
         return None
@@ -4318,13 +4346,16 @@ def delegation_monitor_once() -> None:
         pre_changed = cancel_misrouted_xoz_browser_tasks(tasks)
         if pre_changed:
             g.log(f"Canceled {pre_changed} misrouted XOZ browser/form task(s)")
+        activity_cleanup_changed = cancel_misrouted_activity_blogger_tasks(tasks)
+        if activity_cleanup_changed:
+            g.log(f"Canceled {activity_cleanup_changed} misrouted activity/blogger task(s)")
         try:
             xoz_changed = xoz_worker_once(tasks)
             if xoz_changed:
                 g.log(f"Agent XOZ worker updated {xoz_changed} task(s)")
         except Exception as exc:
             g.log(f"Agent XOZ worker error: {type(exc).__name__}: {exc}")
-        changed = bool(pre_changed)
+        changed = bool(pre_changed or activity_cleanup_changed)
         for task in tasks:
             status = str(task.get("status") or "ASSIGNED")
             rechecking_reported_link = status in {"DONE", "BLOCKED"} and bool(task.get("reported_at")) and should_recheck_reported_blogger_task(task)
