@@ -245,9 +245,10 @@ def planned_times_for_today(now: datetime | None = None, count: int = _DAILY_LIM
     plans = state.setdefault("plans", {})
     day_key = now.date().isoformat()
     day_plan = plans.get(day_key)
-    if not day_plan:
+    if not day_plan or int(day_plan.get("count") or 0) != count:
         day_plan = {
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "count": count,
             "times": [dt.isoformat() for dt in _generate_day_times(now.date(), count)],
         }
         plans[day_key] = day_plan

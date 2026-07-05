@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 _QUOTA_KEYWORDS = ("quota", "resource_exhausted", "429", "rate")
 _MAX_RETRIES = 3
 _RETRY_DELAY_S = 3600  # 1 hour
+_ENGAGEMENT_DAILY_PROPOSALS = 1
 
 
 def _is_quota_error(err: Exception) -> bool:
@@ -85,6 +86,10 @@ async def _scheduled_engagement_slot(context: ContextTypes.DEFAULT_TYPE) -> None
         result = await prepare_next_opportunity()
         if result.get("status") != "prepared":
             log.info("Medium engagement slot produced no proposal: %s", result)
+            await context.bot.send_message(
+                chat_id=config.telegram_admin_chat_id,
+                text=format_opportunity_message(result),
+            )
             return
 
         op = result["opportunity"]
@@ -125,7 +130,7 @@ def _schedule_engagement_slots(application) -> None:
     from agent_m.medium_engagement import planned_times_for_today
 
     now = datetime.datetime.now(ZoneInfo("Europe/Prague"))
-    slots = planned_times_for_today(now)
+    slots = planned_times_for_today(now, count=_ENGAGEMENT_DAILY_PROPOSALS)
     for slot in slots:
         application.job_queue.run_once(
             _scheduled_engagement_slot,
