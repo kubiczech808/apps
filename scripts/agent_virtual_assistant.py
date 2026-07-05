@@ -1369,29 +1369,18 @@ def is_xoz_comment_record(record: dict[str, Any]) -> bool:
     return bool(record.get("comment_url") or record.get("target_url")) and "draft" not in haystack
 
 
-def parse_xoz_activity_request(text: str) -> str | None:
+def is_xoz_activity_request_text(text: str) -> bool:
     low = g.normalize_text(text)
     if not any(term in low for term in ("xoz", "agent xoz", "oz", "osobnizkusenosti", "osobni zkusenosti")):
-        return None
+        return False
     if not any(term in low for term in ("komentar", "koment", "comment", "kolik", "aktivita", "prehled", "vystup", "dohledat")):
-        return None
-    records = [record for record in xoz_activity_records() if is_xoz_comment_record(record)]
-    today = dt.datetime.now().astimezone().date()
-    if any(term in low for term in ("dnes", "today")):
-        filtered = []
-        for record in records:
-            ts = parse_iso_time(record.get("created_at") or record.get("time") or record.get("at"))
-            if ts and ts.date() == today:
-                filtered.append(record)
-        records = filtered
+        return False
+    return True
+
+
+def xoz_comment_overview(records: list[dict[str, Any]], today_only: bool = False) -> str:
     records.sort(key=lambda item: str(item.get("created_at") or item.get("time") or item.get("at") or ""), reverse=True)
-    if not records:
-        ensure_xoz_channel_state()
-        return (
-            "Nemam dohledatelny zaznam o komentarich Agent XOZ. "
-            "Zavedla jsem pro nej activity log a control inbox; od ted ma kazdy komentar zapisovat jako overitelny zaznam."
-        )
-    lines = [f"Agent XOZ: dohledatelne komentare dnes: {len(records)}" if any(term in low for term in ("dnes", "today")) else f"Agent XOZ: dohledatelne komentare: {len(records)}"]
+    lines = [f"Agent XOZ: dohledatelne komentare dnes: {len(records)}" if today_only else f"Agent XOZ: dohledatelne komentare: {len(records)}"]
     for record in records[:5]:
         url = str(record.get("url") or record.get("comment_url") or record.get("target_url") or "").strip()
         text_part = " ".join(str(record.get("text") or record.get("summary") or "").split())[:120]
@@ -1402,13 +1391,41 @@ def parse_xoz_activity_request(text: str) -> str | None:
     return "\n".join(lines)
 
 
+def parse_xoz_activity_request(text: str) -> str | None:
+    if not is_xoz_activity_request_text(text):
+        return None
+    low = g.normalize_text(text)
+    records = [record for record in xoz_activity_records() if is_xoz_comment_record(record)]
+    today = dt.datetime.now().astimezone().date()
+    today_only = any(term in low for term in ("dnes", "today"))
+    if today_only:
+        filtered = []
+        for record in records:
+            ts = parse_iso_time(record.get("created_at") or record.get("time") or record.get("at"))
+            if ts and ts.date() == today:
+                filtered.append(record)
+        records = filtered
+    if not records:
+        state = ensure_xoz_channel_state()
+        now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        if not state.get("activity_channel_announced_at"):
+            state["activity_channel_announced_at"] = now
+            g.write_json(XOZ_STATE_FILE, state)
+            return (
+                "Nemam dohledatelny zaznam o komentarich Agent XOZ. "
+                "Activity log a control inbox jsou pripravene; kazdy dalsi komentar uz musi byt zapsany jako overitelny zaznam."
+            )
+        return "Zatim nemam dohledatelny zaznam o komentarich Agent XOZ v activity logu."
+    return xoz_comment_overview(records, today_only)
+
+
 def parse_xoz_control_request(text: str) -> str | None:
     low = g.normalize_text(text)
     if not any(term in low for term in ("xoz", "agent xoz", "oz", "osobnizkusenosti", "osobni zkusenosti")):
         return None
     if not any(term in low for term in ("komentar", "koment", "comment", "engagement")):
         return None
-    if not any(term in low for term in ("nastav", "uprav", "zmen", "zvys", "sniz", "limit", "pocet", "mnozstvi", "kolik")):
+    if not any(term in low for term in ("nastav", "uprav", "zmen", "zvys", "sniz", "limit", "pocet", "mnozstvi", "kolik", "pridej", "vloz", "okomentuj", "komentuj")):
         return None
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     numbers = re.findall(r"\b\d+\b", low)
@@ -1417,7 +1434,8 @@ def parse_xoz_control_request(text: str) -> str | None:
         "source": "virtual-assistant",
         "agent": "Agent XOZ",
         "task": text.strip(),
-        "requested_comment_count": int(numbers[0]) if numbers else None,
+        "requested_comment_count": int(numbers[0]) if numbers else 1,
+        "action": "add_comment" if any(term in low for term in ("pridej", "vloz", "okomentuj", "komentuj")) else "configure_engagement",
         "expected_output": "potvrzeni nastaveni a nasledny activity_log s overitelnymi komentari",
     }
     append_jsonl(XOZ_CONTROL_INBOX_FILE, item)
@@ -3242,6 +3260,19 @@ def observe_delegation_task(task: dict[str, Any]) -> tuple[str, str]:
     if kind == "xoz-social-draft":
         return x_task_observation(task)
     if kind == "xoz-control":
+        created_at = parse_iso_time(task.get("created_at"))
+        records = []
+        for record in xoz_activity_records():
+            if not is_xoz_comment_record(record):
+                continue
+            record_time = parse_iso_time(record.get("created_at") or record.get("time") or record.get("at"))
+            if created_at and record_time and record_time < created_at:
+                continue
+            records.append(record)
+        if records:
+            return "DONE", xoz_comment_overview(records, today_only=False)
+        if task_age_seconds(task) > 3600:
+            return "BLOCKED", "Agent XOZ nedodal overitelny komentar do activity logu do 60 minut."
         return "VERIFYING", "Agent XOZ ma control zadani; vysledek overuji z activity logu."
     if kind == "technical-blocker":
         proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
