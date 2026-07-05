@@ -21,22 +21,27 @@ throughout the day, but it publishes only after explicit Telegram approval.
    - extra points for overlap with the search query
    - negative signals: broad crypto without Bitcoin, airdrops, meme coins,
      casino framing, or obvious 100x bait
-6. Keep only candidates above the relevance threshold.
-7. Draft a short comment with Gemini:
+6. Inspect the article/profile before drafting a comment. Keep only candidates
+   that satisfy all hard filters:
+   - article is confidently English
+   - article has at least 3 responses/comments
+   - author/profile has at least 500 followers
+7. Keep only candidates above the relevance threshold and hard filters.
+8. Draft a short comment with Gemini:
    - 55-95 words
    - concrete point, nuance, or question
    - no generic praise
    - no hashtags or sales CTA
    - no link by default; at most one btc-dca.com link only when context makes it
      genuinely useful
-8. Send the opportunities to Telegram for manual review with buttons:
+9. Send the opportunities to Telegram for manual review with buttons:
    - `vložit + like`: post the comment and clap the article
    - `zahodit`: skip the opportunity
-9. On approval, enforce the hard safety limits again before posting:
+10. On approval, enforce the hard safety limits again before posting:
    - max 10 posted comments per Prague day
    - never comment under the same article twice
    - never comment under the same Medium profile twice in the same ISO week
-10. At 21:01 Europe/Prague, send a Telegram summary with posted article URLs and
+11. At 21:01 Europe/Prague, send a Telegram summary with posted article URLs and
     local posting times.
 
 ## Commands

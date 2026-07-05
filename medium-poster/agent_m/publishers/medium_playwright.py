@@ -281,6 +281,97 @@ class MediumPlaywrightPublisher:
         finally:
             self._cleanup_display()
 
+    async def inspect_article_engagement(self, article_url: str) -> dict:
+        if not _COOKIES_FILE.exists():
+            raise RuntimeError(
+                "No Medium cookies found. Send a Cookie-Editor JSON export to the bot first."
+            )
+
+        self._ensure_display()
+        from playwright.async_api import async_playwright
+
+        try:
+            stealth = self._make_stealth()
+            async with stealth.use_async(async_playwright()) as p:
+                browser = await p.chromium.launch(headless=False, args=self._browser_args())
+                context = await browser.new_context(
+                    user_agent=self._user_agent(),
+                    viewport={"width": 1280, "height": 900},
+                    locale="en-US",
+                    timezone_id="Europe/Prague",
+                    extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+                )
+                await stealth.apply_stealth_async(context)
+                await context.add_cookies(self._load_cookies())
+                page = await context.new_page()
+                try:
+                    await page.goto(article_url, wait_until="domcontentloaded", timeout=60000)
+                    await self._human_delay(4, 7)
+                    await self._wait_cloudflare(page)
+                    details = await page.evaluate("""() => {
+                        const parseCount = (text, labels) => {
+                            const safe = String(text || '').replace(/,/g, '');
+                            let best = 0;
+                            for (const label of labels) {
+                                const re = new RegExp('([0-9]+(?:\\\\.[0-9]+)?)\\\\s*([KkMm]?)\\\\s+' + label, 'g');
+                                let match;
+                                while ((match = re.exec(safe)) !== null) {
+                                    let n = parseFloat(match[1] || '0');
+                                    const suffix = (match[2] || '').toLowerCase();
+                                    if (suffix === 'k') n *= 1000;
+                                    if (suffix === 'm') n *= 1000000;
+                                    best = Math.max(best, Math.round(n));
+                                }
+                            }
+                            return best;
+                        };
+                        const text = document.body?.innerText || '';
+                        const anchors = Array.from(document.querySelectorAll('a[href]'));
+                        const author = anchors.find(a => {
+                            try {
+                                const u = new URL(a.href);
+                                return u.hostname.includes('medium.com') && /^\\/@[^/]+\\/?$/.test(u.pathname);
+                            } catch (_) {
+                                return false;
+                            }
+                        });
+                        return {
+                            lang: document.documentElement.lang || '',
+                            title: document.title || '',
+                            textSample: text.slice(0, 5000),
+                            responses: parseCount(text, ['responses?', 'comments?']),
+                            followers: parseCount(text, ['followers?']),
+                            authorProfileUrl: author ? author.href.split('?')[0].replace(/\\/$/, '') : '',
+                        };
+                    }""")
+                    if details.get("followers", 0) < 500 and details.get("authorProfileUrl"):
+                        try:
+                            await page.goto(details["authorProfileUrl"], wait_until="domcontentloaded", timeout=60000)
+                            await self._human_delay(3, 5)
+                            profile_followers = await page.evaluate("""() => {
+                                const text = document.body?.innerText || '';
+                                const safe = text.replace(/,/g, '');
+                                const re = /([0-9]+(?:\\.[0-9]+)?)\\s*([KkMm]?)\\s+followers?/gi;
+                                let best = 0;
+                                let match;
+                                while ((match = re.exec(safe)) !== null) {
+                                    let n = parseFloat(match[1] || '0');
+                                    const suffix = (match[2] || '').toLowerCase();
+                                    if (suffix === 'k') n *= 1000;
+                                    if (suffix === 'm') n *= 1000000;
+                                    best = Math.max(best, Math.round(n));
+                                }
+                                return best;
+                            }""")
+                            details["followers"] = max(int(details.get("followers") or 0), int(profile_followers or 0))
+                        except Exception as exc:
+                            log.info("Medium author profile inspection failed for %s: %s", article_url, exc)
+                    return details
+                finally:
+                    await browser.close()
+        finally:
+            self._cleanup_display()
+
     async def schedule_draft_for_later(
         self,
         post_id: str,

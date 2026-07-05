@@ -23,6 +23,8 @@ _STATE_FILE = config.data_dir / "medium_engagement.json"
 _OWN_MEDIUM_MARKERS = ("/@info_89535/", "medium.com/@info_89535")
 _PRAGUE = ZoneInfo("Europe/Prague")
 _DAILY_LIMIT = 10
+_MIN_RESPONSES = 3
+_MIN_FOLLOWERS = 500
 _DEFAULT_QUERIES = [
     "bitcoin dca",
     "dollar cost averaging bitcoin",
@@ -42,6 +44,9 @@ class EngagementOpportunity:
     score: int
     reason: str
     comment: str
+    responses: int
+    followers: int
+    language: str
 
 
 async def run_once(limit: int = 3, query: str | None = None) -> dict:
@@ -68,10 +73,36 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
 
     candidates = _rank_candidates(raw_candidates, seen | blocked_articles, blocked_profiles)
     opportunities: list[EngagementOpportunity] = []
+    rejected: list[dict] = []
+    inspected = 0
 
-    for candidate in candidates[: max(limit * 2, limit)]:
+    for candidate in candidates[: max(limit * 8, 12)]:
         if len(opportunities) >= limit:
             break
+        inspected += 1
+        try:
+            details = await publisher.inspect_article_engagement(candidate["url"])
+        except Exception as exc:
+            log.warning("Medium engagement article inspection failed for %s: %s", candidate.get("url"), exc)
+            rejected.append({"url": candidate.get("url"), "reason": f"inspection failed: {exc}"})
+            seen.add(candidate["url"])
+            continue
+
+        eligible, reason = _eligible_article(candidate, details)
+        candidate["responses"] = int(details.get("responses") or 0)
+        candidate["followers"] = int(details.get("followers") or 0)
+        candidate["language"] = details.get("lang") or "unknown"
+        candidate["author_profile_url"] = details.get("authorProfileUrl") or candidate.get("profile")
+        candidate["eligibility_reason"] = reason
+        if not eligible:
+            rejected.append({
+                "url": candidate.get("url"),
+                "title": candidate.get("title"),
+                "reason": reason,
+            })
+            seen.add(candidate["url"])
+            continue
+
         try:
             comment = await _draft_comment(candidate)
         except Exception as exc:
@@ -87,6 +118,9 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
                 score=candidate["score"],
                 reason=candidate["reason"],
                 comment=comment,
+                responses=candidate["responses"],
+                followers=candidate["followers"],
+                language=candidate["language"],
             )
         )
         seen.add(candidate["url"])
@@ -99,6 +133,8 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
         "status": "ok" if opportunities else "nothing_found",
         "queries": queries,
         "candidates_found": len(raw_candidates),
+        "candidates_inspected": inspected,
+        "rejected": rejected[:10],
         "opportunities": [op.__dict__ for op in opportunities],
     }
 
@@ -228,9 +264,10 @@ def format_opportunity_message(result: dict) -> str:
     return (
         "Medium engagement candidate\n\n"
         f"Title: {op.get('title')}\n"
-        f"Profile: {op.get('profile')}\n"
-        f"Score: {op.get('score')} | Query: {op.get('query')}\n"
-        f"URL: {op.get('url')}\n\n"
+            f"Profile: {op.get('profile')}\n"
+            f"Score: {op.get('score')} | Query: {op.get('query')}\n"
+            f"Responses: {op.get('responses')} | Followers: {op.get('followers')} | Language: {op.get('language')}\n"
+            f"URL: {op.get('url')}\n\n"
         "Comment draft:\n"
         f"{op.get('comment')}\n\n"
         "Nothing has been published yet. Approve to post the comment and clap the article."
@@ -280,6 +317,7 @@ def format_result(result: dict) -> str:
                 "",
                 f"{idx}. {item.get('title')}",
                 f"Score: {item.get('score')} | Query: {item.get('query')}",
+                f"Responses: {item.get('responses')} | Followers: {item.get('followers')} | Language: {item.get('language')}",
                 f"Reason: {item.get('reason')}",
                 f"URL: {item.get('url')}",
                 "Comment:",
@@ -381,6 +419,54 @@ def _score_candidate(title: str, snippet: str, query: str) -> tuple[int, str]:
         score -= 20
 
     return score, ", ".join(reasons[:5]) or "query overlap"
+
+
+def _eligible_article(candidate: dict, details: dict) -> tuple[bool, str]:
+    responses = int(details.get("responses") or 0)
+    followers = int(details.get("followers") or 0)
+    lang = str(details.get("lang") or "").lower()
+    sample = " ".join(
+        [
+            candidate.get("title") or "",
+            candidate.get("snippet") or "",
+            details.get("title") or "",
+            details.get("textSample") or "",
+        ]
+    )
+
+    if responses < _MIN_RESPONSES:
+        return False, f"too few comments/responses ({responses} < {_MIN_RESPONSES})"
+    if followers < _MIN_FOLLOWERS:
+        return False, f"too few followers ({followers} < {_MIN_FOLLOWERS})"
+    if not _looks_english(lang, sample):
+        return False, f"not confidently English (lang={lang or 'unknown'})"
+    return True, "eligible"
+
+
+def _looks_english(lang: str, text: str) -> bool:
+    if lang and not lang.startswith("en"):
+        return False
+
+    sample = _clean_text(text).lower()[:2500]
+    if not sample:
+        return False
+
+    letters = [ch for ch in sample if ch.isalpha()]
+    if not letters:
+        return False
+    ascii_letters = sum(1 for ch in letters if "a" <= ch <= "z")
+    if ascii_letters / max(1, len(letters)) < 0.88:
+        return False
+
+    english_markers = {
+        "the", "and", "that", "with", "this", "from", "have", "you",
+        "bitcoin", "dca", "market", "price", "strategy", "investing",
+    }
+    words = re.findall(r"[a-z]{3,}", sample)
+    if not words:
+        return False
+    hits = sum(1 for word in words[:300] if word in english_markers)
+    return hits >= 5 or ("bitcoin" in words and ("dca" in words or "strategy" in words))
 
 
 async def _draft_comment(candidate: dict) -> str:
