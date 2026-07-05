@@ -537,6 +537,7 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
             commands=[
                 {"action": "agent_routing", "description": "VA: smerovani ukolu"},
                 {"action": "follow_up", "description": "VA: stav delegaci"},
+                {"action": "browser_form", "description": "VA: Playwright formular"},
             ],
             notes="Coordinates agents and reports only useful final status or real blockers to Jakub.",
             proof=[str(g.AGENT_WORK_DIR / "ORCHESTRATION.md")],
@@ -658,6 +659,7 @@ COMMAND_ACTION_ALIASES = {
     "systemd_service": "systemd",
     "agent_routing": "route",
     "follow_up": "followup",
+    "browser_form": "browser",
     "brain_search": "search",
     "brain_get": "get",
     "brain_neighbors": "neighbors",
@@ -1106,7 +1108,54 @@ def settings_panel() -> tuple[str, dict[str, Any]]:
     return settings_panel_text(), g.settings_main_keyboard()
 
 
+def handle_xoz_approval_callback(data: str) -> tuple[str, dict[str, Any] | None, str] | None:
+    if not data.startswith("xoz:"):
+        return None
+    parts = data.split(":", 2)
+    if len(parts) != 3:
+        return ("Nerozumim schvalovacimu tlacitku.", None, "")
+    action, task_id = parts[1], parts[2]
+    tasks = load_orchestration_tasks()
+    task = next((item for item in tasks if str(item.get("id") or "").startswith(task_id)), None)
+    if not task:
+        return ("Tenhle XOZ navrh uz neumim dohledat.", None, "")
+    proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
+    state_path = Path(str(proof.get("state") or XOZ_STATE_FILE))
+    state = g.load_json(state_path, {})
+    if not isinstance(state, dict):
+        state = {}
+    record = xoz_task_record_for_task(state, task)
+    if action == "approve":
+        now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        record["status"] = "APPROVED_BY_JAKUB"
+        record["approved_at"] = now
+        statuses = state.get("task_status")
+        if not isinstance(statuses, dict):
+            statuses = {}
+        statuses[str(task.get("id") or task_id)] = record
+        state["task_status"] = statuses
+        state["last_output"] = record
+        g.write_json(state_path, state)
+        append_jsonl(XOZ_CONTROL_INBOX_FILE, {
+            "created_at": now,
+            "source": "virtual-assistant",
+            "agent": "Agent XOZ",
+            "action": "approved_for_next_step",
+            "task_id": str(task.get("id") or task_id),
+            "task": str(task.get("topic") or ""),
+            "expected_output": "provist dalsi schvaleny krok podle XOZ workflow a zapsat vysledek",
+        })
+        return ("Schvaleno. Predavam XOZ pokyn k dalsimu kroku.", None, "")
+    if action == "edit":
+        return ("Napis prosim upravu jednou vetou; predam ji Agentu XOZ k prepracovani.", None, "")
+    return ("Nerozumim schvalovacimu tlacitku.", None, "")
+
+
 def handle_settings_callback(data: str) -> tuple[str, dict[str, Any], str]:
+    xoz_callback = handle_xoz_approval_callback(data)
+    if xoz_callback:
+        text, markup, notice = xoz_callback
+        return text, markup or {}, notice
     text, markup, notice = g._base_handle_settings_callback(data)
     return replace_agent_name(text), markup, notice
 
@@ -1165,6 +1214,8 @@ def execute_dynamic_agent_command(item: dict[str, str], payload: str) -> str:
         ok, target, path = assign_social_x_task(payload, forced_agent_id=agent_id)
         append_orchestration_event(target["agent"], target["instance"], payload, target["kind"], path)
         return f"Deleguji: {target['label']}."
+    if agent_id == "virtual-assistant" and any(term in action_low for term in ("browser", "form")):
+        return parse_browser_form_task_request(payload) or "Blokuje me: nerozpoznala jsem URL a pole formulare."
     if any(term in action_low for term in ("article", "wordpress", "blog")):
         registry = discover_agent_registry()
         entry = next((candidate for candidate in registry if str(candidate.get("id") or "") == agent_id), None)
@@ -1229,6 +1280,9 @@ def parse_settings_command(text: str) -> str | None:
         style_draft_reply = parse_xoz_style_and_draft_request(text)
         if style_draft_reply:
             return style_draft_reply
+        browser_form_reply = parse_browser_form_task_request(text)
+        if browser_form_reply:
+            return browser_form_reply
         xoz_control_reply = parse_xoz_control_request(text)
         if xoz_control_reply:
             return xoz_control_reply
@@ -1765,6 +1819,8 @@ def parse_xoz_activity_request(text: str) -> str | None:
 
 
 def parse_xoz_control_request(text: str) -> str | None:
+    if is_browser_form_task_text(text):
+        return None
     low = g.normalize_text(text)
     if not any(term in low for term in ("xoz", "agent xoz", "oz", "osobnizkusenosti", "osobni zkusenosti")):
         return None
@@ -1801,6 +1857,205 @@ def parse_xoz_control_request(text: str) -> str | None:
         {"control_inbox": str(XOZ_CONTROL_INBOX_FILE), "state": str(XOZ_STATE_FILE), "activity_log": str(XOZ_ACTIVITY_LOG_FILE)},
     )
     return "Predavam Agentu XOZ. Vystup overim."
+
+
+def is_browser_form_task_text(text: str) -> bool:
+    low = g.normalize_text(text)
+    urls = find_urls_in_text(text)
+    if not urls:
+        return False
+    if any(("x.com" in url or "twitter.com" in url) for url in urls):
+        return False
+    browser_terms = (
+        "formular",
+        "form",
+        "komentar pod",
+        "pridej komentar",
+        "vloz komentar",
+        "okomentuj",
+        "odesli komentar",
+        "vypln",
+        "odesli",
+        "submit",
+    )
+    return any(term in low for term in browser_terms)
+
+
+def random_comment_for_form(seed: str) -> str:
+    comments = [
+        "Diky za prakticky clanek, pomohl mi udelat si v tom jasno.",
+        "Zajimava osobni zkusenost, podobne veci ted taky resim.",
+        "Dobry postreh, hlavne ta cast o praktickem pouziti mi dava smysl.",
+        "Fajn shrnuti, ocenil jsem konkretni pohled z praxe.",
+    ]
+    idx = int(hashlib.sha1(seed.encode("utf-8", errors="replace")).hexdigest()[:4], 16) % len(comments)
+    return comments[idx]
+
+
+def extract_comment_form_entries(text: str) -> list[dict[str, str]]:
+    emails = re.findall(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", text)
+    if not emails:
+        return []
+    entries: list[dict[str, str]] = []
+    for idx, email_value in enumerate(emails):
+        email_pos = text.find(email_value)
+        window = text[max(0, email_pos - 120): email_pos + 180]
+        name = ""
+        patterns = (
+            r"jm[eé]no\s+(?:bude|je|:)?\s+([A-Za-z0-9._-]{2,40})",
+            r"name\s+(?:will be|is|:)?\s+([A-Za-z0-9._-]{2,40})",
+        )
+        for pattern in patterns:
+            matches = re.findall(pattern, window, flags=re.IGNORECASE)
+            if matches:
+                name = matches[-1]
+                break
+        if not name:
+            name = f"komentar{idx + 1}"
+        comment = random_comment_for_form(f"{email_value}|{name}|{idx}")
+        entries.append({"email": email_value, "name": name, "comment": comment})
+    return entries
+
+
+def browser_task_paths(task_id: str, index: int) -> dict[str, Path]:
+    base = g.AGENT_WORK_DIR / "browser-tasks"
+    base.mkdir(parents=True, exist_ok=True)
+    stem = f"{task_id}-{index}"
+    return {
+        "task": base / f"{stem}.json",
+        "result": base / f"{stem}.result.json",
+        "log": base / f"{stem}.log",
+        "screenshot": base / f"{stem}.png",
+    }
+
+
+def wordpress_comment_actions(entry: dict[str, str]) -> list[dict[str, str]]:
+    return [
+        {"type": "fill", "selector": "textarea#comment, textarea[name='comment']", "value": entry["comment"]},
+        {"type": "fill", "selector": "input#author, input[name='author']", "value": entry["name"]},
+        {"type": "fill", "selector": "input#email, input[name='email']", "value": entry["email"]},
+        {"type": "click", "selector": "input#submit, input[type='submit'], button[type='submit'], button:has-text('Odeslat')"},
+    ]
+
+
+def start_playwright_form_task(url: str, entry: dict[str, str], task_id: str, index: int) -> dict[str, str]:
+    helper = Path("/home/openclaw2/scripts/virtual_assistant_playwright.mjs")
+    paths = browser_task_paths(task_id, index)
+    task = {
+        "url": url,
+        "allowSubmit": True,
+        "waitUntil": "domcontentloaded",
+        "timeoutMs": 60000,
+        "screenshotPath": str(paths["screenshot"]),
+        "actions": wordpress_comment_actions(entry),
+    }
+    paths["task"].write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    command = (
+        f"node {shlex.quote(str(helper))} {shlex.quote(str(paths['task']))} "
+        f"> {shlex.quote(str(paths['result']))} 2> {shlex.quote(str(paths['log']))}"
+    )
+    command = command + " ; echo $? >> " + shlex.quote(str(paths["log"]))
+    subprocess.Popen(["bash", "-lc", command], cwd=str(g.AGENT_WORK_DIR), start_new_session=True)
+    return {key: str(value) for key, value in paths.items()}
+
+
+def parse_browser_form_task_request(text: str) -> str | None:
+    if not is_browser_form_task_text(text):
+        return None
+    urls = find_urls_in_text(text)
+    if not urls:
+        return None
+    url = urls[0]
+    entries = extract_comment_form_entries(text)
+    if not entries:
+        return "Blokuje me: rozpoznala jsem browser/formular ukol, ale nenasla jsem email/jmeno pro vyplneni."
+    task_id = delegation_task_id("Virtualni asistentka", "browser", text.strip(), "browser-form")
+    proof_items = []
+    for idx, entry in enumerate(entries, 1):
+        try:
+            proof_items.append(start_playwright_form_task(url, entry, task_id, idx))
+        except Exception as exc:
+            g.log(f"Playwright form task start failed: {type(exc).__name__}: {exc}")
+            fallback = browser_task_paths(task_id, idx)
+            fallback["log"].write_text(f"start_failed={type(exc).__name__}: {exc}\n", encoding="utf-8")
+            proof_items.append({key: str(value) for key, value in fallback.items()})
+    proof = {
+        "url": url,
+        "entries": json.dumps(entries, ensure_ascii=False),
+        "tasks": json.dumps(proof_items, ensure_ascii=False),
+    }
+    upsert_orchestration_task(
+        "Virtualni asistentka",
+        "browser",
+        text.strip(),
+        "browser-form",
+        str(g.AGENT_WORK_DIR / "browser-tasks"),
+        proof,
+    )
+    return f"Spoustim browser formular pres Playwright: {len(entries)} komentar(e). Vystup overim."
+
+
+def browser_form_task_observation(task: dict[str, Any]) -> tuple[str, str]:
+    proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
+    try:
+        task_files = json.loads(str(proof.get("tasks") or "[]"))
+    except Exception:
+        task_files = []
+    if not isinstance(task_files, list) or not task_files:
+        return "BLOCKED", "Browser formular nema ulozene Playwright task soubory."
+    done = 0
+    blockers: list[str] = []
+    for item in task_files:
+        if not isinstance(item, dict):
+            continue
+        result_path = Path(str(item.get("result") or ""))
+        log_path = Path(str(item.get("log") or ""))
+        if result_path.exists():
+            try:
+                data = json.loads(result_path.read_text(encoding="utf-8", errors="replace"))
+            except Exception as exc:
+                blockers.append(f"nejde precist result: {type(exc).__name__}")
+                continue
+            if data.get("ok"):
+                done += 1
+            else:
+                blockers.append(str(data.get("error") or data.get("summary") or "Playwright vratil ok=false")[:180])
+        elif log_path.exists():
+            try:
+                log_tail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-4:])
+            except Exception:
+                log_tail = ""
+            if "start_failed" in log_tail:
+                blockers.append(log_tail[:180])
+    if done == len(task_files):
+        return "DONE", f"Browser formular odeslan pres Playwright: {done}/{len(task_files)} komentar(e)."
+    if blockers:
+        return "BLOCKED", "Browser formular se nepodarilo dokoncit: " + "; ".join(blockers[:2])
+    if task_age_seconds(task) > 900:
+        return "BLOCKED", "Browser formular nema vysledek z Playwright helperu do 15 minut."
+    return "VERIFYING", "Browser formular bezi pres Playwright."
+
+
+def cancel_misrouted_xoz_browser_tasks(tasks: list[dict[str, Any]]) -> int:
+    changed = 0
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        if str(task.get("kind") or "") != "xoz-control":
+            continue
+        if str(task.get("status") or "ASSIGNED") in {"DONE", "BLOCKED", "CANCELED"}:
+            continue
+        topic = str(task.get("topic") or "")
+        if not is_browser_form_task_text(topic):
+            continue
+        task["status"] = "CANCELED"
+        task["last_reported_status"] = "CANCELED"
+        task["reported_at"] = now
+        task["updated_at"] = now
+        task["last_observation"] = "Zruseno: WordPress/formularovy komentar patri VA browser Playwright workflow, ne Agentu XOZ."
+        changed += 1
+    return changed
 
 
 def load_agent_g_handoff_state() -> dict[str, Any]:
@@ -2169,6 +2424,12 @@ def xoz_generate_image_prompt(topic: str) -> str:
     return "Realisticka kancelarska scena s poznamkami, checklistem a telefonem pro pripravu socialniho prispevku, prirozene svetlo, bez log a bez textu v obrazku."
 
 
+def generated_image_url(prompt: str) -> str:
+    clean = re.sub(r"\s+", " ", prompt.strip())
+    encoded = urllib.parse.quote(clean[:900])
+    return f"https://image.pollinations.ai/prompt/{encoded}?width=1200&height=675&nologo=true&enhance=true&model=flux"
+
+
 def xoz_current_draft_preferences() -> list[str]:
     state = g.load_json(XOZ_STATE_FILE, {})
     prefs = state.get("draft_format_preferences") if isinstance(state, dict) else []
@@ -2256,9 +2517,14 @@ def xoz_worker_once(tasks: list[dict[str, Any]] | None = None) -> int:
         if not record.get("output"):
             record["output"] = xoz_generate_x_draft(record["topic"])
             record["image_prompt"] = xoz_generate_image_prompt(record["topic"])
+            record["image_url"] = generated_image_url(record["image_prompt"])
             record["output_at"] = now
             record["status"] = "READY_FOR_APPROVAL"
         else:
+            if not record.get("image_prompt"):
+                record["image_prompt"] = xoz_generate_image_prompt(record["topic"])
+            if record.get("image_prompt") and not record.get("image_url"):
+                record["image_url"] = generated_image_url(str(record.get("image_prompt") or ""))
             record["status"] = record.get("status") or "READY_FOR_APPROVAL"
         record["updated_at"] = now
         statuses[task_id] = record
@@ -3269,22 +3535,80 @@ def gmail_poll_once() -> None:
     save_email_state(state)
 
 
-def telegram_notify(text: str) -> bool:
+def telegram_token_chat() -> tuple[str, str]:
     env = g.load_env()
     token = env.get("TELEGRAM_AGENT_G_BOT_TOKEN") or env.get("TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN") or ""
     chat_id = env.get("TELEGRAM_AGENT_G_CHAT_ID") or env.get("TELEGRAM_VIRTUAL_ASSISTANT_CHAT_ID") or g.DEFAULT_CHAT_ID
+    return token, chat_id
+
+
+def telegram_api_post(method: str, payload: dict[str, Any], timeout: int = 20) -> dict[str, Any]:
+    token, _ = telegram_token_chat()
+    if not token:
+        return {"ok": False, "description": "missing-token"}
+    data = urllib.parse.urlencode({key: json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value) for key, value in payload.items()}).encode("utf-8")
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", data=data)
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
+def telegram_notify(text: str) -> bool:
+    token, chat_id = telegram_token_chat()
     if not token or not chat_id:
         g.log("Delegation monitor notification skipped: Telegram token/chat missing")
         return False
-    payload = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=payload)
     try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            result = json.loads(response.read().decode("utf-8", errors="replace"))
+        result = telegram_api_post("sendMessage", {"chat_id": chat_id, "text": text})
         return bool(result.get("ok"))
     except Exception as exc:
         g.log(f"Delegation monitor Telegram notification failed: {type(exc).__name__}: {exc}")
         return False
+
+
+def xoz_approval_keyboard(task_id: str) -> dict[str, Any]:
+    short_id = str(task_id or "")[:32]
+    return {
+        "inline_keyboard": [[
+            {"text": "Schvalit", "callback_data": f"xoz:approve:{short_id}"},
+            {"text": "Upravit", "callback_data": f"xoz:edit:{short_id}"},
+        ]]
+    }
+
+
+def telegram_notify_xoz_approval(task: dict[str, Any], note: str) -> str:
+    token, chat_id = telegram_token_chat()
+    if not token or not chat_id:
+        return "failed"
+    proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
+    state_path = Path(str(proof.get("state") or XOZ_STATE_FILE))
+    state = g.load_json(state_path, {})
+    record = xoz_task_record_for_task(state if isinstance(state, dict) else {}, task)
+    image_url = str(record.get("image_url") or "").strip() if isinstance(record, dict) else ""
+    output = str(record.get("output") or "").strip() if isinstance(record, dict) else ""
+    caption = output or note
+    if len(caption) > 900:
+        caption = caption[:897].rstrip() + "..."
+    caption = caption + "\n\nChces neco upravit, nebo schvalujes?"
+    keyboard = xoz_approval_keyboard(str(task.get("id") or ""))
+    try:
+        if image_url:
+            result = telegram_api_post("sendPhoto", {
+                "chat_id": chat_id,
+                "photo": image_url,
+                "caption": caption,
+                "reply_markup": keyboard,
+            }, timeout=30)
+        else:
+            result = telegram_api_post("sendMessage", {
+                "chat_id": chat_id,
+                "text": note,
+                "reply_markup": keyboard,
+            }, timeout=20)
+        if result.get("ok"):
+            return "sent"
+    except Exception as exc:
+        g.log(f"XOZ approval Telegram photo failed: {type(exc).__name__}: {exc}")
+    return "sent" if telegram_notify(note) else "failed"
 
 
 def telegram_notify_deduped(text: str, window_seconds: int = 1800) -> str:
@@ -3648,8 +3972,11 @@ def x_task_observation(task: dict[str, Any]) -> tuple[str, str]:
         output = str(record.get("output") or record.get("draft") or record.get("draft_text") or "").strip() if isinstance(record, dict) else ""
         if output:
             image_prompt = str(record.get("image_prompt") or "").strip() if isinstance(record, dict) else ""
+            image_url = str(record.get("image_url") or "").strip() if isinstance(record, dict) else ""
             parts = [f"Agent XOZ navrhl X prispevek:\n{output}"]
-            if image_prompt:
+            if image_url:
+                parts.append(f"Obrazek:\n{image_url}")
+            elif image_prompt:
                 parts.append(f"Obrazek/prompt:\n{image_prompt}")
             parts.append("Chces neco upravit, nebo schvalujes?")
             return "DONE", "\n\n".join(parts)
@@ -3682,6 +4009,8 @@ def observe_delegation_task(task: dict[str, Any]) -> tuple[str, str]:
         return x_task_observation(task)
     if kind == "xoz-social-draft":
         return x_task_observation(task)
+    if kind == "browser-form":
+        return browser_form_task_observation(task)
     if kind == "xoz-control":
         created_at = parse_iso_time(task.get("created_at"))
         records = []
@@ -3722,13 +4051,16 @@ def delegation_monitor_once() -> None:
     try:
         if not tasks:
             return
+        pre_changed = cancel_misrouted_xoz_browser_tasks(tasks)
+        if pre_changed:
+            g.log(f"Canceled {pre_changed} misrouted XOZ browser/form task(s)")
         try:
             xoz_changed = xoz_worker_once(tasks)
             if xoz_changed:
                 g.log(f"Agent XOZ worker updated {xoz_changed} task(s)")
         except Exception as exc:
             g.log(f"Agent XOZ worker error: {type(exc).__name__}: {exc}")
-        changed = False
+        changed = bool(pre_changed)
         for task in tasks:
             status = str(task.get("status") or "ASSIGNED")
             rechecking_reported_link = status in {"DONE", "BLOCKED"} and bool(task.get("reported_at")) and should_recheck_reported_blogger_task(task)
@@ -3766,7 +4098,10 @@ def delegation_monitor_once() -> None:
             if new_status in {"DONE", "BLOCKED"} and should_report:
                 verb = "Hotovo" if new_status == "DONE" else "Blocker"
                 message = f"{verb}: {note}"
-                notify_result = telegram_notify_deduped(message)
+                if new_status == "DONE" and str(task.get("kind") or "") == "xoz-social-draft":
+                    notify_result = telegram_notify_xoz_approval(task, note)
+                else:
+                    notify_result = telegram_notify_deduped(message)
                 if notify_result in {"sent", "deduped"}:
                     if notify_result == "sent":
                         g.log(f"-> {message}")
