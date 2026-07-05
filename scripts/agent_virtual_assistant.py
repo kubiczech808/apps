@@ -1411,11 +1411,8 @@ def parse_xoz_activity_request(text: str) -> str | None:
         if not state.get("activity_channel_announced_at"):
             state["activity_channel_announced_at"] = now
             g.write_json(XOZ_STATE_FILE, state)
-            return (
-                "Nemam dohledatelny zaznam o komentarich Agent XOZ. "
-                "Activity log a control inbox jsou pripravene; kazdy dalsi komentar uz musi byt zapsany jako overitelny zaznam."
-            )
-        return "Zatim nemam dohledatelny zaznam o komentarich Agent XOZ v activity logu."
+            return "Zatim nemam dohledatelny zaznam o komentarich Agent XOZ."
+        return "Zatim nemam dohledatelny zaznam o komentarich Agent XOZ."
     return xoz_comment_overview(records, today_only)
 
 
@@ -1455,7 +1452,7 @@ def parse_xoz_control_request(text: str) -> str | None:
         str(XOZ_CONTROL_INBOX_FILE),
         {"control_inbox": str(XOZ_CONTROL_INBOX_FILE), "state": str(XOZ_STATE_FILE), "activity_log": str(XOZ_ACTIVITY_LOG_FILE)},
     )
-    return "Predavam Agentu XOZ upravu komentaru/engagementu. Vystup budu overovat z jeho activity logu."
+    return "Predavam Agentu XOZ. Vystup overim."
 
 
 def load_agent_g_handoff_state() -> dict[str, Any]:
