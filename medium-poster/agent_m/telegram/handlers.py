@@ -22,6 +22,13 @@ from agent_m.gemini.researcher import Topic
 from agent_m.history import History
 from agent_m.pipeline import run_pipeline
 from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
+from agent_m.topic_suggestions import (
+    confirm_suggestion,
+    create_suggestion,
+    format_confirmation,
+    get_confirmed,
+    reject_suggestion,
+)
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +36,7 @@ _DRAFT_ACTIONS_FILE = config.data_dir / "telegram_draft_actions.json"
 _MEDIUM_POST_RE = re.compile(r"/p/([a-f0-9]{8,})(?:/|$|[?#])", re.IGNORECASE)
 _draft_action_lock = asyncio.Lock()
 _engagement_action_lock = asyncio.Lock()
+_topic_suggestion_lock = asyncio.Lock()
 
 
 def admin_only(func):
@@ -55,6 +63,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(  # type: ignore[union-attr]
         f"Agent M ready.\n"
         f"Platforms: {platforms_str}\n\n"
+        "/topic <text> - propose a new article topic for confirmation\n"
         "/post [slug] — publish to all platforms\n"
         "/draft [slug] — publish as draft\n"
         "/preview [slug] — generate without publishing\n"
@@ -201,6 +210,15 @@ def engagement_action_keyboard(action_id: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("zahodit", callback_data=f"mengage:skip:{action_id}"),
             ]
         ]
+    )
+
+
+def topic_suggestion_keyboard(suggestion_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton("Ano, pridat", callback_data=f"mtopic:approve:{suggestion_id}"),
+            InlineKeyboardButton("Ne", callback_data=f"mtopic:reject:{suggestion_id}"),
+        ]]
     )
 
 
@@ -438,6 +456,85 @@ async def engagement_action_callback(update: Update, context: ContextTypes.DEFAU
             )
 
 
+async def _offer_topic_suggestion(update: Update, text: str) -> None:
+    msg = update.message
+    if not msg:
+        return
+    clean = " ".join(text.split()).strip()
+    if len(clean) < 4:
+        await msg.reply_text("Napis trochu konkretneji, jake tema clanku navrhujes.")
+        return
+    suggestion = create_suggestion(clean)
+    await msg.reply_text(
+        format_confirmation(suggestion),
+        reply_markup=topic_suggestion_keyboard(suggestion["id"]),
+    )
+
+
+@admin_only
+async def topic_suggestion_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = " ".join(context.args).strip() if context.args else ""
+    if not text:
+        msg = update.message
+        if msg:
+            await msg.reply_text("Pouziti: /topic <navrh tematu clanku>")
+        return
+    await _offer_topic_suggestion(update, text)
+
+
+@admin_only
+async def topic_suggestion_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg or not msg.text:
+        return
+    await _offer_topic_suggestion(update, msg.text)
+
+
+@admin_only
+async def topic_suggestion_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    await query.answer()
+
+    parts = query.data.split(":", 2)
+    if len(parts) != 3:
+        return
+    _, action_name, suggestion_id = parts
+    message = query.message
+    if message:
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+    async with _topic_suggestion_lock:
+        if action_name == "approve":
+            suggestion = confirm_suggestion(suggestion_id)
+            if message:
+                if suggestion:
+                    await message.reply_text(
+                        "Tema pridano do fronty.\n"
+                        f"Tema: {suggestion.get('topic')}\n"
+                        f"Slug: {suggestion.get('slug')}\n"
+                        "Bude mit prednost pri pristim /draft nebo denni publikaci."
+                    )
+                else:
+                    await message.reply_text("Navrh tematu uz neni dostupny.")
+            return
+
+        if action_name == "reject":
+            suggestion = reject_suggestion(suggestion_id)
+            if message:
+                await message.reply_text(
+                    f"Navrh tematu zamitnut: {(suggestion or {}).get('topic') or suggestion_id}"
+                )
+            return
+
+        if message:
+            await message.reply_text("Neznama akce pro navrh tematu.")
+
+
 @admin_only
 async def history_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
@@ -472,6 +569,13 @@ async def topics_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     available = total - used
 
     lines = [f"Content plan: {available}/{total} available\n"]
+
+    confirmed = get_confirmed()
+    queued = [item for item in confirmed if item.get("slug") not in used_slugs]
+    if queued:
+        lines.append("SUGGESTED TOPICS (priority queue):")
+        for item in queued:
+            lines.append(f"  [next] {item.get('slug')}: {str(item.get('topic') or '')[:80]}")
 
     pillars: dict[str, list[str]] = {}
     for p in all_plans:

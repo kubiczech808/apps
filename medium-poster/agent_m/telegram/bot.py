@@ -146,6 +146,7 @@ def _schedule_engagement_slots(application) -> None:
 
 
 _BOT_COMMANDS = [
+    BotCommand("topic", "Navrhnout nove tema clanku"),
     BotCommand("post", "Publikovat na všechny platformy"),
     BotCommand("draft", "Publikovat jako koncept"),
     BotCommand("preview", "Vygenerovat bez publikace"),
@@ -208,6 +209,7 @@ def build_app():
     app.add_handler(CommandHandler("preview", handlers.preview_cmd))
     app.add_handler(CommandHandler("history", handlers.history_cmd))
     app.add_handler(CommandHandler("topics", handlers.topics_cmd))
+    app.add_handler(CommandHandler("topic", handlers.topic_suggestion_cmd))
     app.add_handler(CommandHandler("engage", handlers.engage_cmd))
     app.add_handler(CommandHandler("status", handlers.status_cmd))
     app.add_handler(CommandHandler("feedback", handlers.feedback_cmd))
@@ -215,8 +217,13 @@ def build_app():
     app.add_handler(CommandHandler("medium_login", handlers.medium_login_cmd))
     app.add_handler(CallbackQueryHandler(handlers.draft_action_callback, pattern=r"^mdraft:"))
     app.add_handler(CallbackQueryHandler(handlers.engagement_action_callback, pattern=r"^mengage:"))
+    app.add_handler(CallbackQueryHandler(handlers.topic_suggestion_callback, pattern=r"^mtopic:"))
     app.add_handler(MessageHandler(
         filters.Document.ALL & filters.ChatType.PRIVATE,
         handlers.medium_cookies_document_cmd,
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        handlers.topic_suggestion_text,
     ))
     return app

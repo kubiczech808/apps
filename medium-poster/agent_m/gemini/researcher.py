@@ -9,6 +9,7 @@ from pathlib import Path
 from agent_m.config import config
 from agent_m.content_plan import ContentPlan, get_available, get_by_slug, get_plan
 from agent_m.gemini.client import generate_text
+from agent_m.topic_suggestions import get_confirmed_by_slug, get_next_confirmed, to_content_plan
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +31,18 @@ class TopicResearcher:
         if used_slugs is None:
             used_slugs = set()
 
+        suggestion = get_next_confirmed(used_slugs)
+        if suggestion:
+            pick = to_content_plan(suggestion)
+            log.info("Selected confirmed Telegram topic: %s", pick.slug)
+            return Topic(
+                title=pick.title_hint,
+                angle=pick.angle,
+                tags=pick.tags,
+                slug=pick.slug,
+                plan=pick,
+            )
+
         available = get_available(used_slugs)
         if available:
             pick = available[0]
@@ -47,6 +60,9 @@ class TopicResearcher:
 
     async def get_topic_by_slug(self, slug: str) -> Topic | None:
         plan = get_by_slug(slug)
+        if not plan:
+            suggestion = get_confirmed_by_slug(slug)
+            plan = to_content_plan(suggestion) if suggestion else None
         if not plan:
             return None
         return Topic(
