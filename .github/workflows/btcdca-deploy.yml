@@ -75,7 +75,7 @@ jobs:
       - name: Lint generated PHP
         run: |
           php -v
-          find deploy-root -name '*.php' -print0 | xargs -0 -n1 php -l
+          find deploy-root -name '*.php' -print0 | xargs -0 -n1 php -d short_open_tag=1 -l
 
       - name: Upload backed-up and patched auth files
         env:
