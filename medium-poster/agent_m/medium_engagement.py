@@ -78,6 +78,7 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
     # blocks.
     candidates = _rank_candidates(raw_candidates, blocked_articles, blocked_profiles)
     opportunities: list[EngagementOpportunity] = []
+    fallback_candidates: list[dict] = []
     rejected: list[dict] = []
     inspected = 0
 
@@ -93,13 +94,19 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
             seen.add(candidate["url"])
             continue
 
-        eligible, reason = _eligible_article(candidate, details)
         candidate["responses"] = int(details.get("responses") or 0)
         candidate["followers"] = int(details.get("followers") or 0)
         candidate["language"] = details.get("lang") or "unknown"
         candidate["author_profile_url"] = details.get("authorProfileUrl") or candidate.get("profile")
+
+        eligible, reason = _eligible_article(candidate, details)
         candidate["eligibility_reason"] = reason
         if not eligible:
+            fallback_ok, fallback_reason = _fallback_article(candidate, details)
+            if fallback_ok:
+                fallback = dict(candidate)
+                fallback["fallback_reason"] = fallback_reason
+                fallback_candidates.append(fallback)
             rejected.append({
                 "url": candidate.get("url"),
                 "title": candidate.get("title"),
@@ -129,6 +136,44 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
             )
         )
         seen.add(candidate["url"])
+
+    if not opportunities and fallback_candidates:
+        fallback_candidates.sort(
+            key=lambda item: (
+                int(item.get("followers") or 0),
+                int(item.get("responses") or 0),
+                int(item.get("score") or 0),
+            ),
+            reverse=True,
+        )
+        for candidate in fallback_candidates[: max(limit * 3, 3)]:
+            if len(opportunities) >= limit:
+                break
+            candidate["reason"] = (
+                f"{candidate.get('reason')}; fallback: no inspected article had "
+                f"{_MIN_RESPONSES}+ responses, selected highest follower count"
+            )
+            try:
+                comment = await _draft_comment(candidate)
+            except Exception as exc:
+                log.warning("Medium engagement fallback comment draft failed for %s: %s", candidate.get("url"), exc)
+                continue
+            opportunities.append(
+                EngagementOpportunity(
+                    id=str(uuid.uuid4()),
+                    title=candidate["title"],
+                    url=candidate["url"],
+                    profile=candidate["profile"],
+                    query=candidate["query"],
+                    score=candidate["score"],
+                    reason=candidate["reason"],
+                    comment=comment,
+                    responses=candidate["responses"],
+                    followers=candidate["followers"],
+                    language=candidate["language"],
+                )
+            )
+            seen.add(candidate["url"])
 
     state["seen_urls"] = sorted(seen)[-500:]
     state["last_run_at"] = datetime.now(timezone.utc).isoformat()
@@ -454,6 +499,25 @@ def _eligible_article(candidate: dict, details: dict) -> tuple[bool, str]:
     if not _looks_english(lang, sample):
         return False, f"not confidently English (lang={lang or 'unknown'})"
     return True, "eligible"
+
+
+def _fallback_article(candidate: dict, details: dict) -> tuple[bool, str]:
+    followers = int(details.get("followers") or 0)
+    lang = str(details.get("lang") or "").lower()
+    sample = " ".join(
+        [
+            candidate.get("title") or "",
+            candidate.get("snippet") or "",
+            details.get("title") or "",
+            details.get("textSample") or "",
+        ]
+    )
+
+    if followers < _MIN_FOLLOWERS:
+        return False, f"fallback rejected: too few followers ({followers} < {_MIN_FOLLOWERS})"
+    if not _looks_english(lang, sample):
+        return False, f"fallback rejected: not confidently English (lang={lang or 'unknown'})"
+    return True, "fallback eligible by follower count"
 
 
 def _looks_english(lang: str, text: str) -> bool:
