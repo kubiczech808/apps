@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-06-06-mysql-only';
+const APP_VERSION = '2026-07-05-sender-window-limit';
 
 date_default_timezone_set('Europe/Prague');
 
@@ -4867,7 +4867,7 @@ function sendScheduledCampaigns(PDO $pdo, array $config): string
         $capacity = campaignRemainingWindowSlots($pdo, $campaign);
         if ($capacity['remaining'] < 1) {
             $reset = $capacity['reset_at'] ? ' Obnovi se ' . formatDateTime((string)$capacity['reset_at']) . '.' : '';
-            $messages[] = 'Kampan "' . (string)$campaign['name'] . '": limit za poslednich 24 hodin je vycerpany, plan zustava otevreny.' . $reset;
+            $messages[] = 'Kampan "' . (string)$campaign['name'] . '": ' . campaignWindowLimitMessage($capacity) . $reset;
             continue;
         }
         $runId = createCampaignSendRun($pdo, (int)$campaign['id'], 'scheduled', 'queued', 'Planovana davka kampane "' . (string)$campaign['name'] . '" byla zarazena na pozadi.');
@@ -4896,7 +4896,7 @@ function sendCampaignBatch(PDO $pdo, array $config, array $campaign, int $runId 
     $run = findCampaignSendRun($pdo, $runId);
     $capacity = campaignRemainingWindowSlots($pdo, $campaign);
     if ($capacity['remaining'] < 1) {
-        $message = 'Limit za poslednich 24 hodin je uz vycerpany. Dalsi pokus probehne po obnoveni limitu.';
+        $message = campaignWindowLimitMessage($capacity) . ' Dalsi pokus probehne po obnoveni limitu.';
         updateCampaignSendRun($pdo, $runId, [
             'status' => 'queued',
             'message' => $message,
@@ -5029,22 +5029,69 @@ function sendCampaignBatch(PDO $pdo, array $config, array $campaign, int $runId 
     return $message . "\n";
 }
 
-function campaignRemainingWindowSlots(PDO $pdo, array $campaign): array
+function campaignRemainingWindowSlots(PDO $pdo, array $campaign, ?array $pace = null): array
 {
     $windowStart = date('c', time() - 86400);
     $sentStmt = $pdo->prepare('SELECT COUNT(*) sent_count, MIN(sent_at) first_sent_at FROM send_logs WHERE campaign_id=? AND (status="sent" OR message LIKE "Bounce:%") AND sent_at>=?');
     $sentStmt->execute([(int)$campaign['id'], $windowStart]);
     $row = $sentStmt->fetch(PDO::FETCH_ASSOC) ?: [];
-    $sentInWindow = (int)($row['sent_count'] ?? 0);
-    $firstSentAt = (string)($row['first_sent_at'] ?? '');
-    $firstSentTime = $firstSentAt !== '' ? strtotime($firstSentAt) : false;
-    $limit = campaignDailyLimit($pdo, $campaign)['limit'];
+    $campaignSentInWindow = (int)($row['sent_count'] ?? 0);
+    $campaignFirstSentAt = (string)($row['first_sent_at'] ?? '');
+    $campaignFirstSentTime = $campaignFirstSentAt !== '' ? strtotime($campaignFirstSentAt) : false;
+
+    $senderStmt = $pdo->prepare('
+        SELECT COUNT(*) sent_count, MIN(l.sent_at) first_sent_at
+        FROM send_logs l
+        JOIN campaigns c ON c.id=l.campaign_id
+        JOIN contact_databases cl ON cl.id=c.list_id
+        WHERE (l.status="sent" OR l.message LIKE "Bounce:%")
+          AND l.sent_at>=?
+          AND COALESCE(cl.archived, 0)=0
+    ');
+    $senderStmt->execute([$windowStart]);
+    $senderRow = $senderStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    $senderSentInWindow = (int)($senderRow['sent_count'] ?? 0);
+    $senderFirstSentAt = (string)($senderRow['first_sent_at'] ?? '');
+    $senderFirstSentTime = $senderFirstSentAt !== '' ? strtotime($senderFirstSentAt) : false;
+
+    $pace = $pace ?: campaignDailyLimit($pdo, $campaign);
+    $limit = (int)$pace['limit'];
+    $senderLimit = senderDailyLimit($pdo, $campaign, $pace);
+    $campaignRemaining = max(0, $limit - $campaignSentInWindow);
+    $senderRemaining = max(0, $senderLimit - $senderSentInWindow);
+    $resetTime = null;
+    if ($campaignRemaining < 1 && $campaignFirstSentTime) {
+        $resetTime = $campaignFirstSentTime + 86400;
+    }
+    if ($senderRemaining < 1 && $senderFirstSentTime) {
+        $senderResetTime = $senderFirstSentTime + 86400;
+        $resetTime = $resetTime === null ? $senderResetTime : min($resetTime, $senderResetTime);
+    }
     return [
         'limit' => $limit,
-        'sent' => $sentInWindow,
-        'remaining' => max(0, $limit - $sentInWindow),
-        'reset_at' => $firstSentTime ? date('c', $firstSentTime + 86400) : '',
+        'sent' => $campaignSentInWindow,
+        'remaining' => min($campaignRemaining, $senderRemaining),
+        'campaign_limit' => $limit,
+        'campaign_sent' => $campaignSentInWindow,
+        'campaign_remaining' => $campaignRemaining,
+        'sender_limit' => $senderLimit,
+        'sender_sent' => $senderSentInWindow,
+        'sender_remaining' => $senderRemaining,
+        'reset_at' => $resetTime ? date('c', $resetTime) : '',
+        'campaign_reset_at' => $campaignFirstSentTime ? date('c', $campaignFirstSentTime + 86400) : '',
+        'sender_reset_at' => $senderFirstSentTime ? date('c', $senderFirstSentTime + 86400) : '',
     ];
+}
+
+function campaignWindowLimitMessage(array $capacity): string
+{
+    if ((int)($capacity['campaign_remaining'] ?? 0) < 1) {
+        return 'Limit teto kampane za poslednich 24 hodin je vycerpany, plan zustava otevreny.';
+    }
+    if ((int)($capacity['sender_remaining'] ?? 0) < 1) {
+        return 'Kapacita odesilaci schranky za poslednich 24 hodin je vycerpana, plan zustava otevreny.';
+    }
+    return 'Limit za poslednich 24 hodin je vycerpany, plan zustava otevreny.';
 }
 
 function isTechnicalSendError(string $message): bool
@@ -5275,15 +5322,18 @@ function base64UrlDecode(string $value): string
 function campaignDailyLimit(PDO $pdo, array $campaign): array
 {
     $manual = max(1, (int)$campaign['daily_limit']);
+    $defaultSenderLimit = senderHistoricalDailyLimit($pdo);
     if ((int)($campaign['auto_daily_limit'] ?? 1) !== 1) {
+        $senderLimit = min(250, max($manual, $defaultSenderLimit));
         return [
             'limit' => $manual,
+            'sender_limit' => $senderLimit,
             'reason' => 'Rucni limit kampane.',
             'conclusion' => 'Pro dalsi beh se pouzije rucne nastaveny limit ' . $manual . '/24 h.',
             'sending_days' => 0,
             'healthy_days' => 0,
             'healthy_milestones' => 0,
-            'growth_limit' => $manual,
+            'growth_limit' => $senderLimit,
             'manual_limit' => $manual,
             'failure_rate' => 0.0,
             'bounce_rate' => 0.0,
@@ -5369,21 +5419,24 @@ function campaignDailyLimit(PDO $pdo, array $campaign): array
 
     $healthyMilestones = max(0, (int)floor($healthyDays / 3));
     $growthLimit = (int)round(100 * pow(1.25, $healthyMilestones));
-    $limit = $growthLimit;
-    $limit = min($limit, $manual, 250);
+    $senderLimit = min(max($growthLimit, $defaultSenderLimit), 250);
+    $limit = min($senderLimit, $manual);
     $reason = 'Auto: start 100 za 24 h, po kazdych 3 zdravych odesilacich dnech rust cca 25 %, technicky strop 250 nebo rucni maximum kampane.' . $rateSummary . $ruleSummary;
     $conclusionReason = '';
 
     if ($recentSent >= 20 && $bounceRate >= 0.02) {
-        $limit = min($limit, 100);
+        $senderLimit = min($senderLimit, 100);
+        $limit = min($limit, $senderLimit);
         $reason = 'Auto: bounce je zvyseny, limit se drzi na max. 100 za 24 h.' . $rateSummary . $ruleSummary;
         $conclusionReason = 'bounce za posledni evidovane dny je ' . number_format($bounceRate * 100, 1, '.', '') . ' %, tedy na hranici 2 % nebo vyse';
     } elseif ($recentTotal >= 20 && $failureRate >= 0.1) {
-        $limit = max(25, (int)floor($limit * 0.5));
+        $senderLimit = max(25, (int)floor($senderLimit * 0.5));
+        $limit = min($limit, $senderLimit);
         $reason = 'Auto: vysoka chybovost za posledni dny, limit je docasne snizeny.' . $rateSummary . $ruleSummary;
         $conclusionReason = 'netechnicka chybovost za posledni evidovane dny je ' . number_format($failureRate * 100, 1, '.', '') . ' %, tedy alespon 10 %';
     } elseif ($recentTotal >= 20 && $failureRate >= 0.05) {
-        $limit = max(50, min($limit, 100));
+        $senderLimit = max(50, min($senderLimit, 100));
+        $limit = min($limit, $senderLimit);
         $reason = 'Auto: zvysena chybovost za posledni dny, limit se drzi konzervativne.' . $rateSummary . $ruleSummary;
         $conclusionReason = 'netechnicka chybovost za posledni evidovane dny je ' . number_format($failureRate * 100, 1, '.', '') . ' %, tedy alespon 5 %';
     } elseif ($recentSent >= 50 && $recentReplied > 0 && $limit > 100) {
@@ -5407,6 +5460,7 @@ function campaignDailyLimit(PDO $pdo, array $campaign): array
 
     return [
         'limit' => max(1, $limit),
+        'sender_limit' => max(1, $senderLimit),
         'reason' => $reason,
         'conclusion' => $conclusion,
         'sending_days' => $sendingDays,
@@ -5422,6 +5476,48 @@ function campaignDailyLimit(PDO $pdo, array $campaign): array
         'recent_bounced' => $recentBounced,
         'recent_replied' => $recentReplied,
     ];
+}
+
+function senderHistoricalDailyLimit(PDO $pdo): int
+{
+    $campaignLimit = (int)$pdo->query('SELECT COALESCE(MAX(daily_limit), 0) FROM campaigns')->fetchColumn();
+    $historyLimit = (int)$pdo->query('
+        SELECT COALESCE(MAX(day_count), 0)
+        FROM (
+            SELECT substr(l.sent_at,1,10) day, COUNT(*) day_count
+            FROM send_logs l
+            JOIN campaigns c ON c.id=l.campaign_id
+            JOIN contact_databases cl ON cl.id=c.list_id
+            WHERE l.status="sent"
+              AND COALESCE(cl.archived, 0)=0
+            GROUP BY substr(l.sent_at,1,10)
+        ) sent_days
+    ')->fetchColumn();
+    return min(250, max(100, $campaignLimit, $historyLimit));
+}
+
+function senderDailyLimit(PDO $pdo, array $campaign, array $pace): int
+{
+    $candidate = max(
+        (int)($pace['sender_limit'] ?? 0),
+        (int)($pace['growth_limit'] ?? 0),
+        senderHistoricalDailyLimit($pdo)
+    );
+    $limit = min(250, max(1, $candidate));
+    $recentSent = (int)($pace['recent_sent'] ?? 0);
+    $recentTotal = (int)($pace['recent_total'] ?? 0);
+    $bounceRate = (float)($pace['bounce_rate'] ?? 0.0);
+    $failureRate = (float)($pace['failure_rate'] ?? 0.0);
+    if ($recentSent >= 20 && $bounceRate >= 0.02) {
+        return min($limit, 100);
+    }
+    if ($recentTotal >= 20 && $failureRate >= 0.1) {
+        return max(25, (int)floor($limit * 0.5));
+    }
+    if ($recentTotal >= 20 && $failureRate >= 0.05) {
+        return max(50, min($limit, 100));
+    }
+    return $limit;
 }
 
 function findCampaign(PDO $pdo, int $id): array
@@ -5644,15 +5740,15 @@ function renderApp(PDO $pdo, ?array $flash): void
         <div><span>Otevreno</span><strong><a href="<?= h(contactMetricUrl($currentListId, 'opened')) ?>"><?= h((string)$overview['opened']) ?></a></strong></div>
         <div><span>Kliknuli</span><strong><a href="<?= h(contactMetricUrl($currentListId, 'clicked')) ?>"><?= h((string)$overview['clicked_contacts']) ?></a></strong></div>
         <div><span>Za 24 h odeslano</span><strong><?= h((string)$overview['sent_today']) ?></strong><small><?= h($config['from_email']) ?></small></div>
-        <div><span>Za 24 h zbyva</span><strong><?= h((string)$overview['remaining_today']) ?></strong><small><?= $overview['limit_reset_at'] ? 'Obnovi se ' . h(formatDateTime((string)$overview['limit_reset_at'])) : 'Zatim bez odeslani' ?></small></div>
+        <div><span>Schranka zbyva / 24 h</span><strong><?= h((string)$overview['remaining_today']) ?></strong><small>Limit <?= h((string)$overview['sender_limit_today']) ?><?= $overview['limit_reset_at'] ? ', obnovi se ' . h(formatDateTime((string)$overview['limit_reset_at'])) : ', zatim bez odeslani' ?></small></div>
         <div><span>Odpovedeli</span><strong><a href="<?= h(contactMetricUrl($currentListId, 'replied')) ?>"><?= h((string)$overview['replied_contacts']) ?></a></strong></div>
         <div><span>Open rate</span><strong><?= h($overview['open_rate']) ?> %</strong></div>
         <div><span>Click-through</span><strong><?= h($overview['ctr']) ?> %</strong></div>
     </section>
     <section class="panel">
         <h2>Stav kampane</h2>
-        <table><thead><tr><th>Kampan</th><th>Stav</th><th>Databaze</th><th>Planovano</th><th>Osloveno</th><th>Otevreno</th><th>Odpovedeli</th><th>Kliky</th><th>Zbyva 24 h</th></tr></thead><tbody>
-            <tr><td><?= h($current['name'] ?: 'Bez kampane') ?></td><td><?= h($current['status'] ?? 'draft') ?></td><td><?= h(listName($lists, (int)($current['list_id'] ?? 1))) ?></td><td><?= h((string)$overview['planned']) ?></td><td><a href="<?= h(contactMetricUrl($currentListId, 'contacted')) ?>"><?= h((string)$overview['campaign_sent']) ?></a></td><td><a href="<?= h(contactMetricUrl($currentListId, 'opened')) ?>"><?= h((string)$overview['campaign_opened']) ?></a></td><td><a href="<?= h(contactMetricUrl($currentListId, 'replied')) ?>"><?= h((string)$overview['campaign_replied']) ?></a></td><td><a href="<?= h(contactMetricUrl($currentListId, 'clicked')) ?>"><?= h((string)$overview['campaign_clicks']) ?></a></td><td><?= h((string)$overview['remaining_today']) ?></td></tr>
+        <table><thead><tr><th>Kampan</th><th>Stav</th><th>Databaze</th><th>Planovano</th><th>Osloveno</th><th>Otevreno</th><th>Odpovedeli</th><th>Kliky</th><th>Zbyva kampani 24 h</th></tr></thead><tbody>
+            <tr><td><?= h($current['name'] ?: 'Bez kampane') ?></td><td><?= h($current['status'] ?? 'draft') ?></td><td><?= h(listName($lists, (int)($current['list_id'] ?? 1))) ?></td><td><?= h((string)$overview['planned']) ?></td><td><a href="<?= h(contactMetricUrl($currentListId, 'contacted')) ?>"><?= h((string)$overview['campaign_sent']) ?></a></td><td><a href="<?= h(contactMetricUrl($currentListId, 'opened')) ?>"><?= h((string)$overview['campaign_opened']) ?></a></td><td><a href="<?= h(contactMetricUrl($currentListId, 'replied')) ?>"><?= h((string)$overview['campaign_replied']) ?></a></td><td><a href="<?= h(contactMetricUrl($currentListId, 'clicked')) ?>"><?= h((string)$overview['campaign_clicks']) ?></a></td><td><?= h((string)$overview['campaign_remaining_today']) ?> / <?= h((string)$overview['campaign_limit_today']) ?></td></tr>
         </tbody></table>
     </section>
     <?php endif; ?>
@@ -5673,7 +5769,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         <?php foreach ($campaigns as $campaign): ?>
             <?php
                 $campaignPace = campaignDailyLimit($pdo, $campaign);
-                $campaignWindow = campaignRemainingWindowSlots($pdo, $campaign);
+                $campaignWindow = campaignRemainingWindowSlots($pdo, $campaign, $campaignPace);
                 $campaignTarget = (int)($campaign['target_count'] ?? $campaign['planned_count']);
                 $excludedContacts = max(0, (int)$campaign['planned_count'] - $campaignTarget);
                 $includePreviously = (int)($campaign['include_previously_contacted'] ?? 0) === 1;
@@ -5689,7 +5785,11 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><?= h((string)$campaign['sent_count']) ?></td>
                 <td><a href="<?= h(contactMetricUrl((int)$campaign['list_id'], 'replied')) ?>"><?= h((string)$campaign['replied_count']) ?></a></td>
                 <td><?= h((string)$campaign['remaining_count']) ?></td>
-                <td><?= h((string)$campaignWindow['sent']) ?><?php if ($campaignWindow['reset_at']): ?><br><small><?= h(formatDateTime((string)$campaignWindow['reset_at'])) ?></small><?php endif; ?></td>
+                <td>
+                    <?= h((string)$campaignWindow['campaign_sent']) ?>/<?= h((string)$campaignWindow['campaign_limit']) ?>
+                    <br><small>kampan zbyva <?= h((string)$campaignWindow['campaign_remaining']) ?></small>
+                    <br><small>schranka zbyva <?= h((string)$campaignWindow['sender_remaining']) ?>/<?= h((string)$campaignWindow['sender_limit']) ?></small>
+                </td>
                 <td>
                     <div class="actions-row">
                         <form method="post" class="inline"><input type="hidden" name="action" value="toggle_campaign_status"><input type="hidden" name="campaign_id" value="<?= h((string)$campaign['id']) ?>"><button><?= $campaign['status'] === 'active' ? 'Pozastavit' : 'Spustit' ?></button></form>
@@ -5724,7 +5824,8 @@ function renderApp(PDO $pdo, ?array $flash): void
                         </div>
                         <div class="note campaign-limit-note">
                             <strong>Limit pro dalsi beh: <?= h((string)$campaignPace['limit']) ?>/24 h.</strong>
-                            Ted zbyva <?= h((string)$campaignWindow['remaining']) ?><?= $campaignWindow['reset_at'] ? ', obnovi se ' . h(formatDateTime((string)$campaignWindow['reset_at'])) : '' ?>.
+                            Teto kampani zbyva <?= h((string)$campaignWindow['campaign_remaining']) ?> / <?= h((string)$campaignWindow['campaign_limit']) ?>.
+                            Odesilaci schrance zbyva <?= h((string)$campaignWindow['sender_remaining']) ?> / <?= h((string)$campaignWindow['sender_limit']) ?><?= $campaignWindow['reset_at'] ? ', dalsi obnova ' . h(formatDateTime((string)$campaignWindow['reset_at'])) : '' ?>.
                             <?= h((string)($campaignPace['conclusion'] ?? '')) ?>
                         </div>
                         <div class="editor-tabs" role="group" aria-label="Rezim editoru">
@@ -5769,7 +5870,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <p class="limit-verdict"><?= h((string)($campaignPace['conclusion'] ?? '')) ?></p>
                                 <dl class="info-grid">
                                     <dt>Aktualni limit</dt>
-                                    <dd><?= h((string)$campaignPace['limit']) ?>/24 h, nyni zbyva <?= h((string)$campaignWindow['remaining']) ?><?= $campaignWindow['reset_at'] ? ', obnova ' . h(formatDateTime((string)$campaignWindow['reset_at'])) : '' ?>.</dd>
+                                    <dd>Kampan <?= h((string)$campaignWindow['campaign_remaining']) ?> / <?= h((string)$campaignWindow['campaign_limit']) ?> za 24 h. Odesilaci schranka <?= h((string)$campaignWindow['sender_remaining']) ?> / <?= h((string)$campaignWindow['sender_limit']) ?> za 24 h<?= $campaignWindow['reset_at'] ? ', nejblizsi obnova ' . h(formatDateTime((string)$campaignWindow['reset_at'])) : '' ?>.</dd>
                                     <dt>Posledni 3 dny</dt>
                                     <dd><?= h((string)$campaignPace['recent_sent']) ?> odeslano, <?= h((string)$campaignPace['recent_failed']) ?> netechnickych chyb, <?= h((string)$campaignPace['recent_bounced']) ?> bounce, <?= h((string)$campaignPace['recent_replied']) ?> odpovedi.</dd>
                                     <dt>Zdrave dny</dt>
@@ -6639,6 +6740,7 @@ function campaignRows(PDO $pdo): array
         $row['effective_daily_limit'] = (int)$pace['limit'];
         $row['pace_reason'] = $pace['reason'];
         $row['remaining_today'] = max(0, (int)$pace['limit'] - (int)$row['sent_today']);
+        $row['sender_daily_limit'] = (int)senderDailyLimit($pdo, $row, $pace);
     }
     unset($row);
     return $rows;
@@ -7198,6 +7300,8 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
     $sentToday = (int)($sendWindow['sent_count'] ?? 0);
     $firstSentAt = (string)($sendWindow['first_sent_at'] ?? '');
     $firstSentTime = $firstSentAt !== '' ? strtotime($firstSentAt) : false;
+    $senderLimit = senderDailyLimit($pdo, $campaign, $pace);
+    $campaignWindow = campaignRemainingWindowSlots($pdo, $campaign, $pace);
 
     $campaignId = (int)($campaign['id'] ?? 0);
     $plannedFilter = (int)($campaign['include_previously_contacted'] ?? 0) === 1 ? '' : '
@@ -7239,7 +7343,10 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
         'replied_contacts' => $repliedContacts,
         'clicks' => $clicks,
         'sent_today' => $sentToday,
-        'remaining_today' => max(0, (int)$pace['limit'] - $sentToday),
+        'sender_limit_today' => $senderLimit,
+        'remaining_today' => max(0, $senderLimit - $sentToday),
+        'campaign_remaining_today' => (int)($campaignWindow['campaign_remaining'] ?? 0),
+        'campaign_limit_today' => (int)($campaignWindow['campaign_limit'] ?? $pace['limit']),
         'limit_reset_at' => $firstSentTime ? date('c', $firstSentTime + 86400) : '',
         'planned' => $planned,
         'campaign_sent' => $campaignSent,
