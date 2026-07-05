@@ -24,9 +24,35 @@ text = remove_managed_block(text)
 block = f"""
 
 {START}
-@media only screen and (max-width: 600px) {{
+@media only screen and (max-width: 991px) {{
   .mobile-card,
   .box.mobile-card,
+  section.services .mobile-card,
+  section.services .bg-white,
+  section.services .box,
+  section.services .card,
+  section.services .list-group-item,
+  section.services [style*="background:#fff"],
+  section.services [style*="background: #fff"],
+  section.services [style*="background-color:#fff"],
+  section.services [style*="background-color: #fff"],
+  section.services [style*="background:white"],
+  section.services [style*="background: white"],
+  section.services [style*="background-color:white"],
+  section.services [style*="background-color: white"],
+  .col-sm-10.col-xs-12.pX-0.m-a .mobile-card,
+  .col-sm-10.col-xs-12.pX-0.m-a .bg-white,
+  .col-sm-10.col-xs-12.pX-0.m-a .box,
+  .col-sm-10.col-xs-12.pX-0.m-a .card,
+  .col-sm-10.col-xs-12.pX-0.m-a .list-group-item,
+  .col-sm-10.col-xs-12.pX-0.m-a [style*="background:#fff"],
+  .col-sm-10.col-xs-12.pX-0.m-a [style*="background: #fff"],
+  .col-sm-10.col-xs-12.pX-0.m-a [style*="background-color:#fff"],
+  .col-sm-10.col-xs-12.pX-0.m-a [style*="background-color: #fff"],
+  .col-sm-10.col-xs-12.pX-0.m-a [style*="background:white"],
+  .col-sm-10.col-xs-12.pX-0.m-a [style*="background: white"],
+  .col-sm-10.col-xs-12.pX-0.m-a [style*="background-color:white"],
+  .col-sm-10.col-xs-12.pX-0.m-a [style*="background-color: white"],
   #mainTableBody,
   #mainTableBody > *,
   #mainTableBody .bg-white,
@@ -38,7 +64,15 @@ block = f"""
   .table-responsive .bg-white,
   .table-responsive .box,
   .table-responsive .card,
-  .table-responsive .list-group-item {{
+  .table-responsive .list-group-item,
+  .table-responsive [style*="background:#fff"],
+  .table-responsive [style*="background: #fff"],
+  .table-responsive [style*="background-color:#fff"],
+  .table-responsive [style*="background-color: #fff"],
+  .table-responsive [style*="background:white"],
+  .table-responsive [style*="background: white"],
+  .table-responsive [style*="background-color:white"],
+  .table-responsive [style*="background-color: white"] {{
     background: var(--card) !important;
     border: 1px solid var(--border) !important;
     border-radius: var(--radius) !important;
@@ -67,7 +101,31 @@ block = f"""
   .table-responsive .bg-white span,
   .table-responsive .bg-white small,
   .table-responsive .bg-white strong,
-  .table-responsive .bg-white label {{
+  .table-responsive .bg-white label,
+  section.services .bg-white p,
+  section.services .bg-white div,
+  section.services .bg-white span,
+  section.services .bg-white small,
+  section.services .bg-white strong,
+  section.services .bg-white label,
+  section.services .box p,
+  section.services .box div,
+  section.services .box span,
+  section.services .box small,
+  section.services .box strong,
+  section.services .box label,
+  .col-sm-10.col-xs-12.pX-0.m-a .bg-white p,
+  .col-sm-10.col-xs-12.pX-0.m-a .bg-white div,
+  .col-sm-10.col-xs-12.pX-0.m-a .bg-white span,
+  .col-sm-10.col-xs-12.pX-0.m-a .bg-white small,
+  .col-sm-10.col-xs-12.pX-0.m-a .bg-white strong,
+  .col-sm-10.col-xs-12.pX-0.m-a .bg-white label,
+  .col-sm-10.col-xs-12.pX-0.m-a .box p,
+  .col-sm-10.col-xs-12.pX-0.m-a .box div,
+  .col-sm-10.col-xs-12.pX-0.m-a .box span,
+  .col-sm-10.col-xs-12.pX-0.m-a .box small,
+  .col-sm-10.col-xs-12.pX-0.m-a .box strong,
+  .col-sm-10.col-xs-12.pX-0.m-a .box label {{
     color: var(--text-muted) !important;
   }}
 
@@ -144,7 +202,9 @@ block = f"""
   }}
 
   .mobile-card .btn-outline-danger,
-  #mainTableBody .btn-outline-danger {{
+  #mainTableBody .btn-outline-danger,
+  section.services .btn-outline-danger,
+  .col-sm-10.col-xs-12.pX-0.m-a .btn-outline-danger {{
     background: transparent !important;
     color: var(--red) !important;
     border-color: rgba(239,68,68,0.45) !important;
