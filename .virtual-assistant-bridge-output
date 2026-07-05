@@ -1,8 +1,8 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-05T05:11:06Z
+checked_at_utc=2026-07-05T05:31:52Z
 shared_brain_intro_telegram_sent=not_requested
 xoz_comment_test_requested=true
-xoz_comment_test_reply= Predavam Agentu XOZ upravu komentaru/engagementu. Vystup budu overovat z jeho activity logu.
+xoz_comment_test_reply= Predavam Agentu XOZ. Vystup overim.
 xoz_comment_test_control_inbox= /home/openclaw2/.openclaw/agent-xoz-control-inbox.jsonl
 xoz_comment_test_activity_before= 0
 playwright_install=ok
@@ -50,29 +50,28 @@ agent_g_chat_available= True
 agent_g_escalated_blockers_summary= 0
 agent_g_escalated_log_blockers_summary= 0
 agent_g_handoffs_written_summary= 0
-[2026-07-05 07:11:07] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-[2026-07-05 07:11:09] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): {"type":"thread.started","thread_id":"019f30af-fd2e-71c2-9013-b38c4ed3ae8c"} {"type":"turn.started"} {"type":"error","message":"You've hit your usage limit. U
+[2026-07-05 07:31:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 ai_smoke_ok= True
 gmail_google_meta_1=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_2=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
 gmail_setup_poll=ok
-telegram_state_offset= 309697024
+telegram_state_offset= 309697025
 virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 2
+virtual_assistant_lock_age_sec= 0
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-07-05T05:11:09Z
-virtual_assistant_log_signal_1=[2026-07-05 06:53:02] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_2=[2026-07-05 06:55:39] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_3=[2026-07-05 06:56:20] Virtual Assistant email worker started
-virtual_assistant_log_signal_4=[2026-07-05 06:56:20] Virtual Assistant telegram recovery worker started
-virtual_assistant_log_signal_5=[2026-07-05 06:56:20] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_6=[2026-07-05 06:56:20] Agent G daemon started
-virtual_assistant_log_signal_7=[2026-07-05 07:01:05] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_8=[2026-07-05 07:01:05] Agent G daemon started
-virtual_assistant_log_signal_9=[2026-07-05 07:01:05] Virtual Assistant email worker started
-virtual_assistant_log_signal_10=[2026-07-05 07:01:05] Virtual Assistant telegram recovery worker started
-virtual_assistant_log_signal_11=[2026-07-05 07:11:07] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_12=[2026-07-05 07:11:09] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): {"type":"thread.started","thread_id":"019f30af-fd2e-71c2-9013-b38c4ed3ae8c"} {"type":"turn.started"} {"type":"error","message":"You've hit 
+virtual_assistant_log_mtime_utc= 2026-07-05T05:31:52Z
+virtual_assistant_log_signal_1=[2026-07-05 07:11:28] Virtual Assistant email worker started
+virtual_assistant_log_signal_2=[2026-07-05 07:11:28] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_3=[2026-07-05 07:11:28] Agent G daemon started
+virtual_assistant_log_signal_4=[2026-07-05 07:11:28] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_5=[2026-07-05 07:21:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_6=[2026-07-05 07:21:33] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): {"type":"thread.started","thread_id":"019f30b9-8278-7581-97e1-bc182c7a91e0"} {"type":"turn.started"} {"type":"error","message":"You've hit 
+virtual_assistant_log_signal_7=[2026-07-05 07:21:51] Virtual Assistant email worker started
+virtual_assistant_log_signal_8=[2026-07-05 07:21:51] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_9=[2026-07-05 07:21:51] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_10=[2026-07-05 07:21:51] Agent G daemon started
+virtual_assistant_log_signal_11=[2026-07-05 07:27:52] Telegram recovery replied to unanswered message f14b6c79bd122814
+virtual_assistant_log_signal_12=[2026-07-05 07:31:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
@@ -133,6 +132,14 @@ va_today_log_27=[2026-07-05 07:01:05] Virtual Assistant delegation monitor start
 va_today_log_28=[2026-07-05 07:01:05] Virtual Assistant email worker started
 va_today_log_29=[2026-07-05 07:02:05] -> Doruceno: Agent XOZ ma zadani.
 va_today_log_30=[2026-07-05 07:11:07] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_31=[2026-07-05 07:11:28] Virtual Assistant email worker started
+va_today_log_32=[2026-07-05 07:11:28] Virtual Assistant delegation monitor started
+va_today_log_33=[2026-07-05 07:21:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_34=[2026-07-05 07:21:51] Virtual Assistant email worker started
+va_today_log_35=[2026-07-05 07:21:51] Virtual Assistant delegation monitor started
+va_today_log_36=[2026-07-05 07:24:51] <- https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou 
+va_today_log_37=[2026-07-05 07:27:52] -> Predavam Agentu XOZ. Vystup overim.
+va_today_log_38=[2026-07-05 07:31:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_today_03_04_log_1=[2026-07-05 03:11:38] Daemon poll error: HTTP Error 502: Bad Gateway
 va_today_03_04_log_2=[2026-07-05 03:11:39] Daemon poll error: HTTP Error 502: Bad Gateway
 va_today_03_04_log_3=[2026-07-05 03:12:00] Daemon poll error: The read operation timed out
@@ -266,6 +273,16 @@ orchestration_task_12_proof_keys=activity_log,control_inbox,state
 orchestration_task_12_state_keys=assignments,channels,contract,control_requests,last_control_request,last_output,task_status,virtual_assistant_last_assignment
 orchestration_task_12_state_post_id=
 orchestration_task_12_state_urls=
+orchestration_task_13=id=0f8c6c82be68f7cd created=2026-07-05T07:24:51+02:00 status=VERIFYING delivery=2026-07-05T07:25:51+02:00 reported= agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou adresou pavel@zdavle.cz, jmeno bude ajk  observation=Agent XOZ ma control zadani; vysledek overuji z activity logu.
+orchestration_task_13_proof_keys=activity_log,control_inbox,state
+orchestration_task_13_state_keys=assignments,channels,contract,control_requests,last_control_request,last_output,task_status,virtual_assistant_last_assignment
+orchestration_task_13_state_post_id=
+orchestration_task_13_state_urls=
+orchestration_task_14=id=69b8287731059f49 created=2026-07-05T07:27:52+02:00 status=VERIFYING delivery=2026-07-05T07:28:51+02:00 reported= agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou observation=Agent XOZ ma control zadani; vysledek overuji z activity logu.
+orchestration_task_14_proof_keys=activity_log,control_inbox,state
+orchestration_task_14_state_keys=assignments,channels,contract,control_requests,last_control_request,last_output,task_status,virtual_assistant_last_assignment
+orchestration_task_14_state_post_id=
+orchestration_task_14_state_urls=
 agent_g_handoff_delivered_count=2
 agent_g_handoff_1=id=f201fbe4fc41510e memory=deduped history=deduped telegram=sent version=agent-g-telegram-chat-fallback-v3
 agent_g_handoff_1_paths=history=/home/openclaw2/.openclaw/g-agent-history.json memory=/home/openclaw2/.openclaw/agent-g/MEMORY.md
@@ -276,7 +293,7 @@ agent_g_handoffs_file_exists=True
 xoz_activity_log_exists=True
 xoz_activity_log_lines=0
 systemd_agent_probe_failed=NameError:name 'subprocess' is not defined
-telegram_recovery_processed_count=8
+telegram_recovery_processed_count=9
 telegram_recovery_attempt_count=0
 blogger_config_1=instance=btc-dca agent=btc-dca site=https://www.btc-dca.com status=publish
 blogger_config_2=instance=osobnizkusenosti-cz agent=oz site=https://osobnizkusenosti.cz status=draft
@@ -310,3 +327,4 @@ delegation_log_virtual-assistant-oz-delegation.log_10=[virtual-assistant] exit 0
 delegation_log_virtual-assistant-oz-delegation.log_11=[2026-07-02 17:07:11] BTC-DCA Blogger — instance=oz phase=article force=True fix_cover=False fix_inline=None telegram=False
 delegation_log_virtual-assistant-oz-delegation.log_12=[2026-07-02 17:07:11] PHASE: article
 virtual_assistant_service=active
+bridge_diagnostic_status=0
