@@ -71,7 +71,12 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
         except Exception as exc:
             log.warning("Medium engagement search failed for %r: %s", q, exc)
 
-    candidates = _rank_candidates(raw_candidates, seen | blocked_articles, blocked_profiles)
+    # A searched-but-rejected article is not permanently disqualified. Its
+    # response count, language hints, or author follower count can change, and
+    # a narrow query may otherwise get stuck with zero inspected candidates.
+    # Only pending/posted articles and this week's used profiles are hard
+    # blocks.
+    candidates = _rank_candidates(raw_candidates, blocked_articles, blocked_profiles)
     opportunities: list[EngagementOpportunity] = []
     rejected: list[dict] = []
     inspected = 0
@@ -156,6 +161,8 @@ async def prepare_next_opportunity(query: str | None = None) -> dict:
             "status": "nothing_found",
             "queries": result.get("queries") or [],
             "candidates_found": result.get("candidates_found", 0),
+            "candidates_inspected": result.get("candidates_inspected", 0),
+            "rejected": result.get("rejected") or [],
         }
 
     state = _read_state(_STATE_FILE)
@@ -256,10 +263,15 @@ def format_opportunity_message(result: dict) -> str:
     if result.get("status") == "limit_reached":
         return f"Medium engagement: daily limit reached ({result.get('limit')})."
     if result.get("status") != "prepared":
-        return (
-            "Medium engagement: no suitable article found for this slot.\n"
-            f"Candidates checked: {result.get('candidates_found', 0)}"
-        )
+        lines = [
+            "Medium engagement: no suitable article found for this slot.",
+            f"Candidates found: {result.get('candidates_found', 0)}",
+            f"Candidates inspected: {result.get('candidates_inspected', 0)}",
+        ]
+        for item in (result.get("rejected") or [])[:3]:
+            title = item.get("title") or item.get("url") or "candidate"
+            lines.append(f"- {title}: {item.get('reason')}")
+        return "\n".join(lines)[:4096]
     op = result["opportunity"]
     return (
         "Medium engagement candidate\n\n"
