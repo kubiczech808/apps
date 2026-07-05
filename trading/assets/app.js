@@ -1,121 +1,208 @@
-const chart = document.querySelector("#equityChart");
-const rangeButtons = document.querySelectorAll("[data-range]");
-const risk = document.querySelector("#risk");
-const riskValue = document.querySelector("#riskValue");
-const toggleButton = document.querySelector("[data-toggle-bot]");
-const refreshButton = document.querySelector("[data-refresh]");
-const botState = document.querySelector("[data-bot-state]");
-const botDetail = document.querySelector("[data-bot-detail]");
-const pl = document.querySelector("[data-pl]");
-
-let botRunning = false;
-let activeRange = "1D";
-
-const series = {
-  "1D": [48010, 48070, 48120, 48040, 48190, 48210, 48160, 48290, 48325, 48260],
-  "1W": [46200, 46520, 46880, 47140, 46990, 47660, 48120, 47940, 48260, 48280],
-  "1M": [42100, 43060, 44420, 43840, 45220, 46640, 47290, 46910, 47880, 48260],
+const state = {
+  markets: [],
+  selectedMarket: null,
+  selectedOutcomeIndex: 0,
+  selectedBook: null,
 };
 
-function drawChart() {
-  if (!chart) return;
+const els = {
+  markets: document.querySelector("[data-markets]"),
+  refresh: document.querySelector("[data-refresh]"),
+  search: document.querySelector("[data-search]"),
+  searchInput: document.querySelector("#marketSearch"),
+  title: document.querySelector("[data-selected-title]"),
+  outcome: document.querySelector("[data-outcome]"),
+  side: document.querySelector("[data-side]"),
+  price: document.querySelector("[data-price]"),
+  bankroll: document.querySelector("[data-bankroll]"),
+  allocation: document.querySelector("[data-allocation]"),
+  amount: document.querySelector("[data-amount]"),
+  maxOrder: document.querySelector("[data-max-order]"),
+  payload: document.querySelector("[data-payload]"),
+  build: document.querySelector("[data-build]"),
+  copy: document.querySelector("[data-copy]"),
+  bestBid: document.querySelector("[data-best-bid]"),
+  bestAsk: document.querySelector("[data-best-ask]"),
+  spread: document.querySelector("[data-spread]"),
+};
 
-  const ctx = chart.getContext("2d");
-  const rect = chart.getBoundingClientRect();
-  const scale = window.devicePixelRatio || 1;
-  chart.width = Math.round(rect.width * scale);
-  chart.height = Math.round(rect.height * scale);
-  ctx.scale(scale, scale);
-
-  const width = rect.width;
-  const height = rect.height;
-  const padding = 34;
-  const values = series[activeRange];
-  const min = Math.min(...values) - 180;
-  const max = Math.max(...values) + 180;
-  const stepX = (width - padding * 2) / (values.length - 1);
-
-  ctx.clearRect(0, 0, width, height);
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = "#d9e1e7";
-
-  for (let i = 0; i < 5; i += 1) {
-    const y = padding + ((height - padding * 2) / 4) * i;
-    ctx.beginPath();
-    ctx.moveTo(padding, y);
-    ctx.lineTo(width - padding, y);
-    ctx.stroke();
-  }
-
-  const points = values.map((value, index) => ({
-    x: padding + stepX * index,
-    y: padding + (1 - (value - min) / (max - min)) * (height - padding * 2),
-  }));
-
-  const gradient = ctx.createLinearGradient(0, padding, 0, height - padding);
-  gradient.addColorStop(0, "rgba(15, 159, 122, 0.22)");
-  gradient.addColorStop(1, "rgba(15, 159, 122, 0)");
-
-  ctx.beginPath();
-  points.forEach((point, index) => {
-    if (index === 0) ctx.moveTo(point.x, point.y);
-    else ctx.lineTo(point.x, point.y);
-  });
-  ctx.lineTo(points.at(-1).x, height - padding);
-  ctx.lineTo(points[0].x, height - padding);
-  ctx.closePath();
-  ctx.fillStyle = gradient;
-  ctx.fill();
-
-  ctx.beginPath();
-  points.forEach((point, index) => {
-    if (index === 0) ctx.moveTo(point.x, point.y);
-    else ctx.lineTo(point.x, point.y);
-  });
-  ctx.strokeStyle = "#0f9f7a";
-  ctx.lineWidth = 3;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  ctx.stroke();
-
-  const lastPoint = points.at(-1);
-  ctx.beginPath();
-  ctx.arc(lastPoint.x, lastPoint.y, 6, 0, Math.PI * 2);
-  ctx.fillStyle = "#ffffff";
-  ctx.fill();
-  ctx.strokeStyle = "#0f9f7a";
-  ctx.lineWidth = 3;
-  ctx.stroke();
+function money(value, digits = 2) {
+  if (!Number.isFinite(value)) return "-";
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
 }
 
-rangeButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    activeRange = button.dataset.range;
-    rangeButtons.forEach((item) => item.classList.toggle("active", item === button));
-    drawChart();
-  });
+function probability(value) {
+  if (!Number.isFinite(value)) return "-";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function parseNumber(input, fallback = 0) {
+  const value = Number(input?.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+async function getJson(url) {
+  const response = await fetch(url, { cache: "no-store" });
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.error || `Request failed: ${response.status}`);
+  }
+  return payload;
+}
+
+function renderMarkets() {
+  if (!state.markets.length) {
+    els.markets.innerHTML = '<div class="empty">No markets loaded.</div>';
+    return;
+  }
+
+  els.markets.innerHTML = state.markets
+    .map((market, index) => {
+      const prices = market.outcomePrices?.map((item) => Number(item)).filter(Number.isFinite) || [];
+      const summary = prices.length ? prices.map(probability).join(" / ") : "No prices";
+      return `
+        <button class="market-button${market === state.selectedMarket ? " active" : ""}" type="button" data-market-index="${index}">
+          <strong>${market.question}</strong>
+          <span class="market-meta">
+            <span>${summary}</span>
+            <span>Liquidity ${money(Number(market.liquidity || 0), 0)}</span>
+            <span>24h ${money(Number(market.volume24hr || 0), 0)}</span>
+          </span>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function renderOutcomeOptions() {
+  const market = state.selectedMarket;
+  if (!market) {
+    els.outcome.innerHTML = "";
+    return;
+  }
+
+  els.outcome.innerHTML = market.outcomes
+    .map((outcome, index) => `<option value="${index}">${outcome}</option>`)
+    .join("");
+  els.outcome.value = String(state.selectedOutcomeIndex);
+}
+
+function selectedTokenId() {
+  return state.selectedMarket?.clobTokenIds?.[state.selectedOutcomeIndex] || "";
+}
+
+function updateRisk() {
+  const bankroll = parseNumber(els.bankroll, 0);
+  const allocation = Math.min(5, Math.max(0, parseNumber(els.allocation, 5)));
+  const max = bankroll * (allocation / 100);
+  const amount = Math.min(parseNumber(els.amount, max), max || parseNumber(els.amount, 0));
+  els.maxOrder.textContent = money(max);
+  if (Number.isFinite(amount) && max > 0 && parseNumber(els.amount, 0) > max) {
+    els.amount.value = amount.toFixed(2);
+  }
+}
+
+function buildPayload() {
+  updateRisk();
+  const tokenId = selectedTokenId();
+  const price = parseNumber(els.price, 0.5);
+  const amount = parseNumber(els.amount, 0);
+  const size = price > 0 ? amount / price : 0;
+  const payload = {
+    mode: "dry-run",
+    market: {
+      id: state.selectedMarket?.id || null,
+      question: state.selectedMarket?.question || null,
+      slug: state.selectedMarket?.slug || null,
+    },
+    order: {
+      tokenId,
+      outcome: state.selectedMarket?.outcomes?.[state.selectedOutcomeIndex] || null,
+      side: els.side.value,
+      price: Number(price.toFixed(4)),
+      size: Number(size.toFixed(4)),
+      amountUsdc: Number(amount.toFixed(2)),
+      tickSize: state.selectedBook?.book?.tick_size || "0.01",
+      negRisk: Boolean(state.selectedMarket?.negRisk),
+      orderType: "GTC",
+    },
+    executorCommand:
+      `npm run order:poc -- --token-id ${tokenId} --side ${els.side.value} --price ${price.toFixed(4)} --size ${size.toFixed(4)} --tick-size ${state.selectedBook?.book?.tick_size || "0.01"}${state.selectedMarket?.negRisk ? " --neg-risk true" : ""}`,
+  };
+  els.payload.value = JSON.stringify(payload, null, 2);
+}
+
+function renderBook() {
+  const book = state.selectedBook;
+  els.bestBid.textContent = book?.bestBid == null ? "-" : probability(Number(book.bestBid));
+  els.bestAsk.textContent = book?.bestAsk == null ? "-" : probability(Number(book.bestAsk));
+  els.spread.textContent = book?.spread == null ? "-" : `${(Number(book.spread) * 100).toFixed(1)} pts`;
+  if (book?.bestAsk != null && els.side.value === "BUY") {
+    els.price.value = Number(book.bestAsk).toFixed(2);
+  }
+  buildPayload();
+}
+
+async function loadMarkets() {
+  els.markets.innerHTML = '<div class="empty">Loading markets...</div>';
+  const search = els.searchInput.value.trim();
+  const query = new URLSearchParams({ action: "markets", limit: "20" });
+  if (search) query.set("search", search);
+  try {
+    const payload = await getJson(`api.php?${query}`);
+    state.markets = payload.markets || [];
+    state.selectedMarket = state.markets[0] || null;
+    state.selectedOutcomeIndex = 0;
+    renderMarkets();
+    renderOutcomeOptions();
+    await loadBook();
+  } catch (error) {
+    els.markets.innerHTML = `<div class="error">${error.message}</div>`;
+  }
+}
+
+async function loadBook() {
+  const tokenId = selectedTokenId();
+  if (!tokenId) return;
+  els.title.textContent = state.selectedMarket.question;
+  state.selectedBook = null;
+  renderBook();
+  try {
+    state.selectedBook = await getJson(`api.php?action=book&token_id=${encodeURIComponent(tokenId)}`);
+    renderBook();
+  } catch (error) {
+    els.payload.value = JSON.stringify({ error: error.message }, null, 2);
+  }
+}
+
+els.markets.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-market-index]");
+  if (!button) return;
+  state.selectedMarket = state.markets[Number(button.dataset.marketIndex)];
+  state.selectedOutcomeIndex = 0;
+  renderMarkets();
+  renderOutcomeOptions();
+  await loadBook();
 });
 
-risk?.addEventListener("input", () => {
-  riskValue.textContent = `${Number(risk.value).toFixed(1)} %`;
+els.outcome.addEventListener("change", async () => {
+  state.selectedOutcomeIndex = Number(els.outcome.value);
+  await loadBook();
 });
 
-toggleButton?.addEventListener("click", () => {
-  botRunning = !botRunning;
-  toggleButton.classList.toggle("running", botRunning);
-  toggleButton.textContent = botRunning ? "Pozastavit robota" : "Spustit robota";
-  botState.textContent = botRunning ? "Bezi" : "Pozastaveno";
-  botDetail.textContent = botRunning ? "Skenuje trhy kazdych 30 s" : "Ceka na spusteni";
+[els.side, els.price, els.bankroll, els.allocation, els.amount].forEach((input) => {
+  input.addEventListener("input", buildPayload);
+  input.addEventListener("change", buildPayload);
 });
 
-refreshButton?.addEventListener("click", () => {
-  const current = Number(pl.textContent.replace(/[^0-9.-]/g, ""));
-  const next = current + (Math.random() * 48 - 18);
-  pl.textContent = `${next >= 0 ? "+" : "-"}$${Math.abs(next).toFixed(2)}`;
-  pl.classList.toggle("positive", next >= 0);
-  pl.classList.toggle("negative", next < 0);
-  drawChart();
+els.refresh.addEventListener("click", loadMarkets);
+els.search.addEventListener("click", loadMarkets);
+els.searchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") loadMarkets();
+});
+els.build.addEventListener("click", buildPayload);
+els.copy.addEventListener("click", async () => {
+  await navigator.clipboard.writeText(els.payload.value);
 });
 
-window.addEventListener("resize", drawChart);
-drawChart();
+loadMarkets();

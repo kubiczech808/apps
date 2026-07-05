@@ -62,6 +62,8 @@ jobs:
                   if not path.is_file():
                       continue
                   relative = path.relative_to(local_dir).as_posix()
+                  if relative not in {"index.html", "api.php"} and not relative.startswith("assets/"):
+                      continue
                   remote_parts = target_parts + relative.split("/")[:-1]
                   enter_dir(ftp, remote_parts)
                   with path.open("rb") as handle:

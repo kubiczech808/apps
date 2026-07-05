@@ -3,49 +3,123 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Trading - Hello world</title>
-  <style>
-    :root {
-      color-scheme: light;
-      font-family: Arial, Helvetica, sans-serif;
-      background: #f5f7fb;
-      color: #111827;
-    }
-
-    body {
-      display: grid;
-      min-height: 100vh;
-      margin: 0;
-      place-items: center;
-    }
-
-    main {
-      width: min(680px, calc(100vw - 32px));
-      padding: 40px;
-      border: 1px solid #d7dee8;
-      border-radius: 8px;
-      background: #ffffff;
-      box-shadow: 0 18px 50px rgba(17, 24, 39, 0.08);
-      text-align: center;
-    }
-
-    h1 {
-      margin: 0 0 12px;
-      font-size: clamp(40px, 8vw, 72px);
-      letter-spacing: 0;
-    }
-
-    p {
-      margin: 0;
-      color: #4b5563;
-      font-size: 18px;
-    }
-  </style>
+  <title>Polymarket Trading PoC</title>
+  <link rel="stylesheet" href="assets/app.css">
 </head>
 <body>
-  <main>
-    <h1>Hello world</h1>
-    <p>Trading index page is live.</p>
+  <main class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="./">
+        <span class="brand-mark">PM</span>
+        <span>
+          <strong>Polymarket</strong>
+          <small>trading PoC</small>
+        </span>
+      </a>
+
+      <section class="status-panel">
+        <span class="label">Execution mode</span>
+        <strong>Dry-run only</strong>
+        <small>Live orders run only from the local executor with explicit confirmation.</small>
+      </section>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">osobnizkusenosti.cz/trading</p>
+          <h1>Event-market order desk</h1>
+        </div>
+        <button class="primary-button" type="button" data-refresh>Refresh markets</button>
+      </header>
+
+      <section class="grid">
+        <article class="panel markets-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Discovery</p>
+              <h2>Active markets</h2>
+            </div>
+          </div>
+          <label class="field-label" for="marketSearch">Search</label>
+          <div class="search-row">
+            <input id="marketSearch" class="field-control" type="search" placeholder="bitcoin, fed, world cup">
+            <button class="secondary-button" type="button" data-search>Search</button>
+          </div>
+          <div class="market-list" data-markets></div>
+        </article>
+
+        <article class="panel order-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Order draft</p>
+              <h2 data-selected-title>Select a market</h2>
+            </div>
+            <span class="pill" data-mode>dry-run</span>
+          </div>
+
+          <div class="book-grid">
+            <div>
+              <span class="label">Best bid</span>
+              <strong data-best-bid>-</strong>
+            </div>
+            <div>
+              <span class="label">Best ask</span>
+              <strong data-best-ask>-</strong>
+            </div>
+            <div>
+              <span class="label">Spread</span>
+              <strong data-spread>-</strong>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <label>
+              <span class="field-label">Outcome</span>
+              <select class="field-control" data-outcome></select>
+            </label>
+            <label>
+              <span class="field-label">Side</span>
+              <select class="field-control" data-side>
+                <option value="BUY">BUY</option>
+                <option value="SELL">SELL</option>
+              </select>
+            </label>
+            <label>
+              <span class="field-label">Limit price</span>
+              <input class="field-control" data-price type="number" min="0.01" max="0.99" step="0.01" value="0.50">
+            </label>
+            <label>
+              <span class="field-label">Bankroll USDC</span>
+              <input class="field-control" data-bankroll type="number" min="0" step="1" value="100">
+            </label>
+            <label>
+              <span class="field-label">Allocation</span>
+              <input class="field-control" data-allocation type="number" min="1" max="5" step="0.5" value="5">
+            </label>
+            <label>
+              <span class="field-label">Order amount USDC</span>
+              <input class="field-control" data-amount type="number" min="1" step="1" value="5">
+            </label>
+          </div>
+
+          <div class="risk-line">
+            <span>Max order</span>
+            <strong data-max-order>$5.00</strong>
+          </div>
+
+          <label class="field-label" for="orderJson">Executor payload</label>
+          <textarea id="orderJson" class="payload" data-payload readonly></textarea>
+
+          <div class="actions">
+            <button class="secondary-button" type="button" data-copy>Copy payload</button>
+            <button class="primary-button" type="button" data-build>Build draft</button>
+          </div>
+        </article>
+      </section>
+    </section>
   </main>
+
+  <script src="assets/app.js"></script>
 </body>
 </html>

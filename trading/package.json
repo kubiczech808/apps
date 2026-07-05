@@ -1,0 +1,12 @@
+{
+  "name": "polymarket-trading-poc",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "order:poc": "node tools/polymarket-order-poc.mjs"
+  },
+  "dependencies": {
+    "@polymarket/clob-client-v2": "^1.0.8",
+    "viem": "^2.31.0"
+  }
+}
