@@ -307,7 +307,7 @@ class MediumPlaywrightPublisher:
                 try:
                     await page.goto(article_url, wait_until="domcontentloaded", timeout=60000)
                     await self._human_delay(4, 7)
-                    await self._wait_cloudflare(page)
+                    await self._wait_for_cloudflare(page, "engagement_inspect")
                     details = await page.evaluate("""() => {
                         const parseCount = (text, labels) => {
                             const safe = String(text || '').replace(/,/g, '');
@@ -844,7 +844,7 @@ class MediumPlaywrightPublisher:
     async def _comment_and_clap_page(self, page, article_url: str, comment: str) -> dict:
         await page.goto(article_url, wait_until="domcontentloaded", timeout=60000)
         await self._human_delay(5, 8)
-        await self._wait_cloudflare(page)
+        await self._wait_for_cloudflare(page, "engagement_comment")
 
         clapped = await self._click_medium_clap(page)
         await self._human_delay(1, 2)
