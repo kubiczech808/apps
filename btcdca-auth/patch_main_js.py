@@ -1,9 +1,6 @@
 from pathlib import Path
 
 
-source = Path("server-current/main.js")
-target = Path("deploy-root/www/assets/js/main.js")
-
 START = "/* BEGIN BTC-DCA immediate ticker init */"
 END = "/* END BTC-DCA immediate ticker init */"
 ORDER_START = "/* BEGIN BTC-DCA mobile order dark runtime fix */"
@@ -19,10 +16,6 @@ def remove_managed_block(value: str, start_marker: str, end_marker: str) -> str:
         return value[:start].rstrip()
     return (value[:start] + value[end + len(end_marker):]).rstrip()
 
-
-text = source.read_text(encoding="utf-8", errors="replace")
-text = remove_managed_block(text, START, END)
-text = remove_managed_block(text, ORDER_START, ORDER_END)
 
 block = f"""
 
@@ -143,5 +136,21 @@ order_block = f"""
 {ORDER_END}
 """
 
-target.parent.mkdir(parents=True, exist_ok=True)
-target.write_text(text + block + order_block + "\n", encoding="utf-8")
+targets = [
+    (Path("server-current/main.js"), Path("deploy-root/www/assets/js/main.js")),
+    (Path("server-current/app.js"), Path("deploy-root/www/app/assets/js/app.js")),
+]
+
+patched = 0
+for source, target in targets:
+    if not source.exists():
+        continue
+    text = source.read_text(encoding="utf-8", errors="replace")
+    text = remove_managed_block(text, START, END)
+    text = remove_managed_block(text, ORDER_START, ORDER_END)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text + block + order_block + "\n", encoding="utf-8")
+    patched += 1
+
+if patched == 0:
+    raise SystemExit("No JavaScript source files found to patch.")

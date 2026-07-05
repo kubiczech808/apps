@@ -87,12 +87,14 @@ def prepare():
         download(ftp, "www/assets/css/custom.css", "server-current/custom.css")
         download(ftp, "www/app/assets/css/custom.css", "server-current/app-custom.css")
         download(ftp, "www/assets/js/main.js", "server-current/main.js")
+        download(ftp, "www/app/assets/js/app.js", "server-current/app.js")
         upload(ftp, "server-current/login-user.php", f".codex-backups/btcdca-auth/{BACKUP_ID}/login-user.php")
         upload(ftp, "server-current/signup-user.php", f".codex-backups/btcdca-auth/{BACKUP_ID}/signup-user.php")
         upload(ftp, "server-current/app-index.php", f".codex-backups/btcdca-auth/{BACKUP_ID}/app-index.php")
         upload(ftp, "server-current/custom.css", f".codex-backups/btcdca-auth/{BACKUP_ID}/custom.css")
         upload(ftp, "server-current/app-custom.css", f".codex-backups/btcdca-auth/{BACKUP_ID}/app-custom.css")
         upload(ftp, "server-current/main.js", f".codex-backups/btcdca-auth/{BACKUP_ID}/main.js")
+        upload(ftp, "server-current/app.js", f".codex-backups/btcdca-auth/{BACKUP_ID}/app.js")
         if Path("server-current/root.htaccess").exists():
             upload(ftp, "server-current/root.htaccess", f".codex-backups/btcdca-auth/{BACKUP_ID}/root.htaccess")
         if Path("server-current/app.htaccess").exists():
@@ -116,6 +118,7 @@ def upload_deploy():
         upload(ftp, "deploy-root/www/assets/css/custom.css", "www/assets/css/custom.css")
         upload(ftp, "deploy-root/www/app/assets/css/custom.css", "www/app/assets/css/custom.css")
         upload(ftp, "deploy-root/www/assets/js/main.js", "www/assets/js/main.js")
+        upload(ftp, "deploy-root/www/app/assets/js/app.js", "www/app/assets/js/app.js")
         upload(ftp, "deploy-root/www/app/auth/google/index.php", "www/app/auth/google/index.php")
         delete_optional(ftp, "www/app/auth/google/callback/index.php")
         rmdir_optional(ftp, "www/app/auth/google/callback")
