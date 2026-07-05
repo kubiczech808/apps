@@ -1,6 +1,14 @@
 name: Deploy Email Campaign
 
 on:
+  push:
+    branches:
+      - main
+      - master
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - 'email-campaign/**'
+      - '.github/workflows/email-campaign-deploy.yml'
   workflow_dispatch:
 
 jobs:
