@@ -81,6 +81,7 @@ def prepare():
     try:
         download(ftp, "www/login-user.php", "server-current/login-user.php")
         download(ftp, "www/signup-user.php", "server-current/signup-user.php")
+        download(ftp, "www/app/index.php", "server-current/app-index.php")
         download_optional(ftp, "www/.htaccess", "server-current/root.htaccess")
         download_optional(ftp, "www/app/.htaccess", "server-current/app.htaccess")
         download(ftp, "www/assets/css/custom.css", "server-current/custom.css")
@@ -88,6 +89,7 @@ def prepare():
         download(ftp, "www/assets/js/main.js", "server-current/main.js")
         upload(ftp, "server-current/login-user.php", f".codex-backups/btcdca-auth/{BACKUP_ID}/login-user.php")
         upload(ftp, "server-current/signup-user.php", f".codex-backups/btcdca-auth/{BACKUP_ID}/signup-user.php")
+        upload(ftp, "server-current/app-index.php", f".codex-backups/btcdca-auth/{BACKUP_ID}/app-index.php")
         upload(ftp, "server-current/custom.css", f".codex-backups/btcdca-auth/{BACKUP_ID}/custom.css")
         upload(ftp, "server-current/app-custom.css", f".codex-backups/btcdca-auth/{BACKUP_ID}/app-custom.css")
         upload(ftp, "server-current/main.js", f".codex-backups/btcdca-auth/{BACKUP_ID}/main.js")
@@ -105,6 +107,7 @@ def upload_deploy():
         upload(ftp, "deploy-root/btcdca-google-config.php", "btcdca-google-config.php")
         upload(ftp, "deploy-root/www/login-user.php", "www/login-user.php")
         upload(ftp, "deploy-root/www/signup-user.php", "www/signup-user.php")
+        upload(ftp, "deploy-root/www/app/index.php", "www/app/index.php")
         upload(ftp, "deploy-root/www/btcdca-google-login.php", "www/btcdca-google-login.php")
         upload(ftp, "deploy-root/www/btcdca-google-callback.php", "www/btcdca-google-callback.php")
         upload(ftp, "deploy-root/www/btcdca-google-token-login.php", "www/btcdca-google-token-login.php")

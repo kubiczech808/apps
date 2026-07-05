@@ -60,6 +60,7 @@ jobs:
 
           python3 btcdca-auth/patch_login.py
           python3 btcdca-auth/patch_signup.py
+          python3 btcdca-auth/patch_app_index.py
           python3 btcdca-auth/patch_custom_css.py
           python3 btcdca-auth/patch_main_js.py
           python3 btcdca-auth/patch_root_htaccess.py
