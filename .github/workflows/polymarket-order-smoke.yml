@@ -1,0 +1,83 @@
+name: Polymarket Order Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      token_id:
+        description: Polymarket CLOB token id
+        required: true
+      side:
+        description: BUY or SELL
+        required: true
+        default: BUY
+      price:
+        description: Limit price, e.g. 0.50
+        required: true
+      size:
+        description: Outcome token size
+        required: true
+      tick_size:
+        description: Tick size
+        required: true
+        default: "0.01"
+      neg_risk:
+        description: Negative risk market
+        required: true
+        default: "false"
+      live_confirm:
+        description: Set true only for a real live order
+        required: true
+        default: "false"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      POLYMARKET_HOST: https://clob.polymarket.com
+      POLYMARKET_CHAIN_ID: 137
+      POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
+      POLYMARKET_DEPOSIT_WALLET_ADDRESS: ${{ secrets.POLYMARKET_DEPOSIT_WALLET_ADDRESS }}
+      POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE }}
+      TRADING_BANKROLL_USDC: ${{ secrets.TRADING_BANKROLL_USDC }}
+      MAX_ORDER_FRACTION: ${{ secrets.MAX_ORDER_FRACTION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install trading dependencies
+        working-directory: trading
+        run: npm install
+
+      - name: Validate mode
+        run: |
+          if [ "${{ inputs.live_confirm }}" = "true" ]; then
+            echo "Live order mode requested."
+          else
+            echo "Dry-run mode requested."
+          fi
+
+      - name: Run Polymarket order smoke
+        working-directory: trading
+        run: |
+          EXTRA_ARGS=""
+          if [ "${{ inputs.neg_risk }}" = "true" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --neg-risk true"
+          fi
+
+          if [ "${{ inputs.live_confirm }}" = "true" ]; then
+            export POLYMARKET_DRY_RUN=false
+            EXTRA_ARGS="$EXTRA_ARGS --confirm-live"
+          else
+            export POLYMARKET_DRY_RUN=true
+          fi
+
+          npm run order:poc -- \
+            --token-id "${{ inputs.token_id }}" \
+            --side "${{ inputs.side }}" \
+            --price "${{ inputs.price }}" \
+            --size "${{ inputs.size }}" \
+            --tick-size "${{ inputs.tick_size }}" \
+            $EXTRA_ARGS
