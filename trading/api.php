@@ -120,17 +120,25 @@ try {
         }
 
         $book = fetch_json('https://clob.polymarket.com/book?' . http_build_query(['token_id' => $tokenId]));
-        $buy = fetch_json('https://clob.polymarket.com/price?' . http_build_query(['token_id' => $tokenId, 'side' => 'BUY']));
-        $sell = fetch_json('https://clob.polymarket.com/price?' . http_build_query(['token_id' => $tokenId, 'side' => 'SELL']));
-        $spread = fetch_json('https://clob.polymarket.com/spread?' . http_build_query(['token_id' => $tokenId]));
+        $bidPrices = array_map(
+            static fn (array $level): float => (float) ($level['price'] ?? 0),
+            is_array($book['bids'] ?? null) ? $book['bids'] : []
+        );
+        $askPrices = array_map(
+            static fn (array $level): float => (float) ($level['price'] ?? 0),
+            is_array($book['asks'] ?? null) ? $book['asks'] : []
+        );
+        $bestBid = $bidPrices !== [] ? max($bidPrices) : null;
+        $bestAsk = $askPrices !== [] ? min($askPrices) : null;
+        $spread = $bestBid !== null && $bestAsk !== null ? max(0, $bestAsk - $bestBid) : null;
 
         respond([
             'ok' => true,
             'generatedAt' => gmdate('c'),
             'tokenId' => $tokenId,
-            'bestAsk' => isset($buy['price']) ? (float) $buy['price'] : null,
-            'bestBid' => isset($sell['price']) ? (float) $sell['price'] : null,
-            'spread' => isset($spread['spread']) ? (float) $spread['spread'] : null,
+            'bestAsk' => $bestAsk,
+            'bestBid' => $bestBid,
+            'spread' => $spread,
             'book' => $book,
         ]);
     }
