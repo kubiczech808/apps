@@ -81,6 +81,7 @@ AGENT_REGISTRY_MD = g.AGENT_WORK_DIR / "AGENT_REGISTRY.md"
 AGENT_REGISTRY_JSON = g.AGENT_WORK_DIR / "AGENT_REGISTRY.json"
 AGENT_REGISTRY_OVERLAY = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.json"
 AGENT_REGISTRY_EXAMPLE = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.example.json"
+TELEGRAM_COMMANDS_FILE = g.AGENT_WORK_DIR / "TELEGRAM_COMMANDS.json"
 ORCHESTRATION_TASKS_FILE = g.AGENT_WORK_DIR / "ORCHESTRATION_TASKS.json"
 RECOVERY_STATE_FILE = g.AGENT_WORK_DIR / "TELEGRAM_RECOVERY.json"
 NOTIFICATION_DEDUPE_FILE = g.AGENT_WORK_DIR / "NOTIFICATION_DEDUPE.json"
@@ -363,6 +364,7 @@ def registry_entry(
     capabilities: list[str],
     domains: list[str] | None = None,
     channels: dict[str, str] | None = None,
+    commands: list[Any] | None = None,
     notes: str = "",
     proof: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -374,6 +376,7 @@ def registry_entry(
         "capabilities": unique_items(capabilities),
         "domains": unique_items(domains or []),
         "channels": channels or {},
+        "commands": commands or [],
         "notes": notes,
         "proof": unique_items(proof or []),
     }
@@ -427,6 +430,10 @@ def discover_blogger_agent_entries() -> list[dict[str, Any]]:
                 "log": str(g.OPENCLAW_DIR / "logs" / f"{instance}-blogger.log"),
                 "runner": f"/home/openclaw2/scripts/btc-dca-blogger.py --instance {instance}",
             },
+            commands=[
+                {"action": "article_draft", "description": f"{display}: draft clanku"},
+                {"action": "wordpress_blog", "description": f"{display}: blogovy ukol"},
+            ],
             notes="Use this agent for its configured WordPress site/domain. Do not route by old agent names when domain says otherwise.",
             proof=[
                 str(cfg_path),
@@ -451,6 +458,10 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
                 "service": "x-approve.service",
                 "workflows": "x-poster-daily.yml, engagement-hourly.yml, engagement-summary.yml",
             },
+            commands=[
+                {"action": "x_social_post", "description": "Agent D: X post pro btc-dca"},
+                {"action": "social_engagement", "description": "Agent D: X engagement btc-dca"},
+            ],
             notes="Owns X/social tasks. Do not send btc-dca.com X posts to the btc-dca WordPress blogger.",
             proof=["/home/openclaw2/x-post-state.json", ".rpi-output-poster"],
         ),
@@ -467,6 +478,11 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
                 "activity_log": str(XOZ_ACTIVITY_LOG_FILE),
                 "state": str(XOZ_STATE_FILE),
             },
+            commands=[
+                {"action": "x_social_post", "description": "Agent XOZ: X post pro OZ"},
+                {"action": "social_engagement", "description": "Agent XOZ: X komentare/engagement"},
+                {"action": "activity_report", "description": "Agent XOZ: prehled komentaru"},
+            ],
             notes="Owns X/social drafts and engagement/comment reporting for Osobni zkusenosti. Must write verifiable comment activity to activity_log.",
             proof=[str(XOZ_INBOX_FILE), str(XOZ_ACTIVITY_LOG_FILE), str(XOZ_STATE_FILE)],
         ),
@@ -482,6 +498,11 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
                 "trigger": ".github/agent-m-trigger.txt",
                 "inbox": "/home/openclaw2/.openclaw/agent-m-inbox.jsonl",
             },
+            commands=[
+                {"action": "medium_publish", "description": "Agent M: Medium publikace"},
+                {"action": "dev_to_publish", "description": "Agent M: DEV.to publikace"},
+                {"action": "article_syndication", "description": "Agent M: syndikace clanku"},
+            ],
             notes="Owns Medium/DEV/Hashnode publishing and syndication.",
             proof=["GitHub Actions agent-m-publish.yml", "/home/openclaw2/.openclaw/agent-m-inbox.jsonl"],
         ),
@@ -495,6 +516,11 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
                 "inbox": str(AGENT_G_INBOX_FILE),
                 "logs": "/home/openclaw2/.openclaw/logs/",
             },
+            commands=[
+                {"action": "technical_debug", "description": "Agent G: technicky blocker"},
+                {"action": "runner_health", "description": "Agent G: stav runneru"},
+                {"action": "workflow_repair", "description": "Agent G: oprava workflow"},
+            ],
             notes="Use for technical/runtime blockers in other agents.",
             proof=["service status", "workflow output", "logs"],
         ),
@@ -508,6 +534,10 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
                 "workspace": str(g.AGENT_WORK_DIR),
                 "orchestration": str(g.AGENT_WORK_DIR / "ORCHESTRATION.md"),
             },
+            commands=[
+                {"action": "agent_routing", "description": "VA: smerovani ukolu"},
+                {"action": "follow_up", "description": "VA: stav delegaci"},
+            ],
             notes="Coordinates agents and reports only useful final status or real blockers to Jakub.",
             proof=[str(g.AGENT_WORK_DIR / "ORCHESTRATION.md")],
         ),
@@ -523,6 +553,10 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
                 "mcp": "http://127.0.0.1:8812/mcp",
                 "notes": "/home/openclaw2/.openclaw/shared-brain/notes",
             },
+            commands=[
+                {"action": "brain_search", "description": "Shared Brain: hledat"},
+                {"action": "brain_put", "description": "Shared Brain: ulozit poznamku"},
+            ],
             notes="Shared local knowledge base for all OpenClaw agents. Search it before answering context/history/preference-sensitive tasks.",
             proof=["/home/openclaw2/.openclaw/shared-brain/index.json", "openclaw-shared-brain.service"],
         ),
@@ -555,6 +589,7 @@ def overlay_agent_entries() -> list[dict[str, Any]]:
             list(raw.get("capabilities") or []),
             domains=list(raw.get("domains") or []),
             channels=dict(raw.get("channels") or {}),
+            commands=list(raw.get("commands") or []),
             notes=str(raw.get("notes") or ""),
             proof=list(raw.get("proof") or []),
         ))
@@ -579,6 +614,7 @@ def merge_agent_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         channels = dict(existing.get("channels") or {})
         channels.update(dict(entry.get("channels") or {}))
         existing["channels"] = channels
+        existing["commands"] = list(existing.get("commands") or []) + list(entry.get("commands") or [])
         existing["notes"] = entry.get("notes") or existing.get("notes") or ""
         existing["proof"] = unique_items(list(existing.get("proof") or []) + list(entry.get("proof") or []))
     return sorted(merged.values(), key=lambda item: (str(item.get("kind") or ""), str(item.get("id") or "")))
@@ -590,6 +626,180 @@ def discover_agent_registry() -> list[dict[str, Any]]:
         *builtin_agent_entries(),
         *overlay_agent_entries(),
     ])
+
+
+STATIC_BOT_COMMANDS = [
+    {"command": "menu", "description": "Menu nastaveni Virtualni asistentky"},
+    {"command": "agents", "description": "Prehled agentu a jejich prikazu"},
+    {"command": "status", "description": "Bezpecny stav a aktualni model"},
+    {"command": "usage", "description": "Lokalni mereni pouziti Codexu"},
+    {"command": "model", "description": "Vybrat ChatGPT/Codex model"},
+    {"command": "rychlost", "description": "Vybrat rychlost odpovedi"},
+    {"command": "inteligence", "description": "Vybrat uroven premysleni"},
+    {"command": "reset", "description": "Smazat historii konverzace"},
+]
+
+
+COMMAND_ACTION_ALIASES = {
+    "x_social_post": "xpost",
+    "x_thread": "xthread",
+    "social_engagement": "engage",
+    "activity_report": "report",
+    "wordpress_blog": "blog",
+    "article_draft": "article",
+    "article_publish_when_explicitly_requested": "publish",
+    "medium_publish": "medium",
+    "dev_to_publish": "devto",
+    "hashnode_publish": "hashnode",
+    "article_syndication": "syndicate",
+    "technical_debug": "debug",
+    "workflow_repair": "workflow",
+    "runner_health": "runner",
+    "systemd_service": "systemd",
+    "agent_routing": "route",
+    "follow_up": "followup",
+    "brain_search": "search",
+    "brain_get": "get",
+    "brain_neighbors": "neighbors",
+    "brain_put": "put",
+}
+
+
+AGENT_COMMAND_ALIASES = {
+    "agent-d": "d",
+    "agent-xoz": "xoz",
+    "agent-m": "m",
+    "agent-g": "g",
+    "virtual-assistant": "va",
+    "openclaw-shared-brain": "brain",
+}
+
+
+def telegram_command_slug(value: str, max_len: int = 18) -> str:
+    raw = g.normalize_text(value)
+    raw = raw.replace("agent ", "agent_").replace("-", "_")
+    slug = re.sub(r"[^a-z0-9_]+", "_", raw).strip("_")
+    slug = re.sub(r"_+", "_", slug)
+    return (slug or "cmd")[:max_len].strip("_") or "cmd"
+
+
+def agent_command_token(entry: dict[str, Any]) -> str:
+    agent_id = str(entry.get("id") or "")
+    if agent_id in AGENT_COMMAND_ALIASES:
+        return AGENT_COMMAND_ALIASES[agent_id]
+    token = telegram_command_slug(agent_id.removeprefix("agent-"), 12)
+    if token.startswith("agent_"):
+        token = token.removeprefix("agent_")
+    return token[:12] or "agent"
+
+
+def action_command_token(action: str) -> str:
+    return telegram_command_slug(COMMAND_ACTION_ALIASES.get(action, action), 12)
+
+
+def normalize_agent_command(raw: Any, entry: dict[str, Any]) -> dict[str, str] | None:
+    if isinstance(raw, str):
+        action = raw.strip()
+        description = action.replace("_", " ")
+        explicit_command = ""
+    elif isinstance(raw, dict):
+        action = str(raw.get("action") or raw.get("capability") or raw.get("name") or "").strip()
+        description = str(raw.get("description") or action.replace("_", " ")).strip()
+        explicit_command = str(raw.get("command") or "").strip().lstrip("/")
+    else:
+        return None
+    if not action or action.startswith("default_status:"):
+        return None
+    agent_token = agent_command_token(entry)
+    action_token = action_command_token(action)
+    command = telegram_command_slug(explicit_command, 32) if explicit_command else f"a_{agent_token}_{action_token}"
+    if len(command) > 32:
+        digest = hashlib.sha1(f"{entry.get('id')}|{action}".encode("utf-8", errors="replace")).hexdigest()[:6]
+        command = f"a_{agent_token[:10]}_{action_token[:10]}_{digest}"[:32].strip("_")
+    display = str(entry.get("display_name") or entry.get("id") or "Agent")
+    desc = description or f"{display}: {action.replace('_', ' ')}"
+    if display.lower() not in desc.lower():
+        desc = f"{display}: {desc}"
+    return {
+        "command": command,
+        "description": desc[:240],
+        "agent_id": str(entry.get("id") or ""),
+        "agent_name": display,
+        "kind": str(entry.get("kind") or ""),
+        "action": action,
+    }
+
+
+def agent_commands_for_entry(entry: dict[str, Any]) -> list[dict[str, str]]:
+    raw_commands = list(entry.get("commands") or [])
+    if not raw_commands:
+        raw_commands = [cap for cap in list(entry.get("capabilities") or []) if not str(cap).startswith("default_status:")][:3]
+    items: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in raw_commands[:6]:
+        item = normalize_agent_command(raw, entry)
+        if not item or item["command"] in seen:
+            continue
+        seen.add(item["command"])
+        items.append(item)
+    return items
+
+
+def dynamic_agent_command_map() -> dict[str, dict[str, str]]:
+    mapping: dict[str, dict[str, str]] = {}
+    for entry in discover_agent_registry():
+        for item in agent_commands_for_entry(entry):
+            command = item["command"]
+            if command in mapping:
+                digest = hashlib.sha1(f"{item.get('agent_id')}|{item.get('action')}".encode("utf-8", errors="replace")).hexdigest()[:5]
+                command = f"{command[:26]}_{digest}"[:32].strip("_")
+                item = {**item, "command": command}
+            mapping[command] = item
+    return dict(sorted(mapping.items()))
+
+
+def build_telegram_bot_commands() -> list[dict[str, str]]:
+    commands = [dict(item) for item in STATIC_BOT_COMMANDS]
+    used = {item["command"] for item in commands}
+    for command, item in dynamic_agent_command_map().items():
+        if command in used:
+            continue
+        used.add(command)
+        commands.append({"command": command, "description": item["description"]})
+        if len(commands) >= 100:
+            break
+    return commands
+
+
+def write_telegram_commands_file() -> None:
+    mapping = dynamic_agent_command_map()
+    TELEGRAM_COMMANDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TELEGRAM_COMMANDS_FILE.write_text(json.dumps({
+        "generated_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "bot_commands": build_telegram_bot_commands(),
+        "dynamic_commands": list(mapping.values()),
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def refresh_telegram_bot_commands(push_to_telegram: bool = False) -> str:
+    commands = build_telegram_bot_commands()
+    g.BOT_COMMANDS = commands
+    write_telegram_commands_file()
+    if not push_to_telegram:
+        return "prepared"
+    env = g.load_env()
+    token = env.get("TELEGRAM_AGENT_G_BOT_TOKEN") or env.get("TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN") or ""
+    if not token:
+        return "missing-token"
+    payload = urllib.parse.urlencode({"commands": json.dumps(commands, ensure_ascii=False)}).encode("utf-8")
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/setMyCommands", data=payload)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+        return "sent" if data.get("ok") else "failed"
+    except Exception as exc:
+        g.log(f"Telegram command refresh failed: {type(exc).__name__}: {exc}")
+        return f"failed:{type(exc).__name__}"
 
 
 def write_agent_registry_files() -> None:
@@ -628,11 +838,22 @@ def write_agent_registry_files() -> None:
             lines.append("- Channels:")
             for key, value in channels.items():
                 lines.append(f"  - {key}: `{value}`")
+        commands = entry.get("commands") or []
+        if commands:
+            lines.append("- Commands:")
+            for command in commands:
+                if isinstance(command, dict):
+                    label = str(command.get("command") or command.get("action") or command.get("capability") or "").strip()
+                    desc = str(command.get("description") or "").strip()
+                    lines.append(f"  - {label}: {desc}" if desc else f"  - {label}")
+                else:
+                    lines.append(f"  - {command}")
         notes = str(entry.get("notes") or "").strip()
         if notes:
             lines.append(f"- Notes: {notes}")
         lines.append("")
     AGENT_REGISTRY_MD.write_text("\n".join(lines), encoding="utf-8")
+    write_telegram_commands_file()
 
 
 def virtual_assistant_agents_context() -> str:
@@ -650,12 +871,17 @@ def virtual_assistant_agents_context() -> str:
         channel_bits = []
         for key, value in list((entry.get("channels") or {}).items())[:3]:
             channel_bits.append(f"{key}={value}")
+        command_bits = []
+        for command in agent_commands_for_entry(entry)[:4]:
+            command_bits.append(f"/{command.get('command')}={command.get('action')}")
         line = (
             f"- {entry.get('display_name')} id={entry.get('id')} kind={entry.get('kind')} "
             f"domains={domains or '-'} capabilities={capabilities or '-'} aliases={aliases or '-'}"
         )
         if channel_bits:
             line += f" channels={'; '.join(channel_bits)}"
+        if command_bits:
+            line += f" commands={'; '.join(command_bits)}"
         lines.append(line[:1200])
     lines.extend([
         "Routing reminders:",
@@ -786,6 +1012,9 @@ def ensure_virtual_assistant_workspace() -> None:
                     "aliases": ["agent future", "future"],
                     "domains": ["example.com"],
                     "capabilities": ["what this agent owns"],
+                    "commands": [
+                        {"action": "example_action", "description": "Agent Future: priklad akce"}
+                    ],
                     "channels": {"inbox": "/home/openclaw2/.openclaw/future-agent-inbox.jsonl"},
                     "notes": "Copy this object to AGENT_CAPABILITIES.json and edit it. Do not store secrets here.",
                 }
@@ -845,6 +1074,7 @@ def replace_agent_name(text: str) -> str:
 
 
 def settings_help() -> str:
+    dynamic = dynamic_agent_commands_text(limit=18)
     return "\n".join([
         f"Menu {AGENT_NAME}:",
         *g.settings_lines(),
@@ -855,8 +1085,11 @@ def settings_help() -> str:
         "/inteligence - uroven premysleni",
         "/status - stav",
         "/usage - lokalni vyuziti",
+        "/agents - agenti a jejich dynamicke prikazy",
         "",
         "Zkratky porad funguji: /mini, /max, /fast, /balanced, /deep.",
+        "",
+        dynamic,
     ])
 
 
@@ -878,9 +1111,124 @@ def handle_settings_callback(data: str) -> tuple[str, dict[str, Any], str]:
     return replace_agent_name(text), markup, notice
 
 
+def dynamic_agent_commands_text(limit: int = 30) -> str:
+    mapping = dynamic_agent_command_map()
+    if not mapping:
+        return "Dynamicke prikazy agentu: zatim zadne."
+    lines = ["Dynamicke prikazy agentu:"]
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for item in mapping.values():
+        grouped.setdefault(item.get("agent_name") or item.get("agent_id") or "Agent", []).append(item)
+    count = 0
+    for agent_name in sorted(grouped):
+        bits = []
+        for item in grouped[agent_name]:
+            bits.append(f"/{item['command']}")
+            count += 1
+            if count >= limit:
+                break
+        if bits:
+            lines.append(f"- {agent_name}: {', '.join(bits)}")
+        if count >= limit:
+            break
+    return "\n".join(lines)
+
+
+def parse_dynamic_agent_command(text: str) -> str | None:
+    match = re.match(r"^/([a-zA-Z0-9_]{1,32})(?:@\w+)?(?:\s+(.*))?$", text.strip(), flags=re.DOTALL)
+    if not match:
+        return None
+    command = match.group(1).lower()
+    payload = (match.group(2) or "").strip()
+    if command == "agents":
+        return dynamic_agent_commands_text(limit=60)
+    mapping = dynamic_agent_command_map()
+    item = mapping.get(command)
+    if not item:
+        return None
+    agent_name = item.get("agent_name") or item.get("agent_id") or "Agent"
+    action = item.get("action") or ""
+    if not payload:
+        return f"{agent_name}: napis za prikaz konkretni zadani. Napr. /{command} priprav navrh ke schvaleni."
+    return execute_dynamic_agent_command(item, payload)
+
+
+def execute_dynamic_agent_command(item: dict[str, str], payload: str) -> str:
+    agent_id = item.get("agent_id") or ""
+    agent_name = item.get("agent_name") or agent_id or "Agent"
+    action = item.get("action") or ""
+    action_low = g.normalize_text(action)
+    if action_low in {"activity_report"} or "report" in action_low:
+        reply = parse_xoz_activity_request(f"Agent XOZ prehled komentaru {payload}") if agent_id == "agent-xoz" else None
+        return reply or f"{agent_name}: zatim nemam specializovany report pro tuto akci."
+    if any(term in action_low for term in ("x_social", "x_thread", "social_engagement", "engage")):
+        ok, target, path = assign_social_x_task(payload, forced_agent_id=agent_id)
+        append_orchestration_event(target["agent"], target["instance"], payload, target["kind"], path)
+        return f"Deleguji: {target['label']}."
+    if any(term in action_low for term in ("article", "wordpress", "blog")):
+        registry = discover_agent_registry()
+        entry = next((candidate for candidate in registry if str(candidate.get("id") or "") == agent_id), None)
+        if entry and str(entry.get("kind") or "") == "blogger":
+            domains = entry.get("domains") or []
+            augmented = f"{payload} {domains[0] if domains else agent_id}"
+            return parse_blogger_delegation_request(augmented) or f"{agent_name}: nerozpoznala jsem tema clanku."
+    if agent_id == "agent-m" or any(term in action_low for term in ("medium", "dev", "hashnode", "syndicate")):
+        inbox = g.OPENCLAW_DIR / "agent-m-inbox.jsonl"
+        append_jsonl(inbox, {
+            "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "source": "virtual-assistant",
+            "agent": "Agent M",
+            "action": action,
+            "task": payload,
+            "expected_output": "vystup a overitelny odkaz nebo blocker",
+        })
+        append_orchestration_event("Agent M", "medium-dev-hashnode", payload, "publishing-assignment", str(inbox))
+        upsert_orchestration_task("Agent M", "medium-dev-hashnode", payload, "publishing-assignment", str(inbox), {"inbox": str(inbox)})
+        return "Deleguji: Agent M."
+    if agent_id == "agent-g" or any(term in action_low for term in ("debug", "workflow", "runner", "systemd")):
+        item_payload = {
+            "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "source": "virtual-assistant",
+            "agent": "Agent G",
+            "kind": "technical-blocker",
+            "action": action,
+            "task": payload,
+            "expected_output": "vyresit technicky ukol nebo vratit konkretni blocker",
+        }
+        append_jsonl(AGENT_G_INBOX_FILE, item_payload)
+        deliver_agent_g_handoff(item_payload)
+        append_orchestration_event("Agent G", "operations", payload, "technical-blocker", str(AGENT_G_INBOX_FILE))
+        upsert_orchestration_task("Agent G", "operations", payload, "technical-blocker", str(AGENT_G_INBOX_FILE), {"inbox": str(AGENT_G_INBOX_FILE)})
+        return "Deleguji: Agent G."
+    registry = discover_agent_registry()
+    entry = next((candidate for candidate in registry if str(candidate.get("id") or "") == agent_id), None)
+    channels = dict(entry.get("channels") or {}) if entry else {}
+    inbox_value = channels.get("inbox") or channels.get("control_inbox")
+    if inbox_value:
+        inbox = Path(str(inbox_value))
+        append_jsonl(inbox, {
+            "created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "source": "virtual-assistant",
+            "agent": agent_name,
+            "action": action,
+            "task": payload,
+            "expected_output": "vystup nebo konkretni blocker",
+        })
+        append_orchestration_event(agent_name, agent_id, payload, f"agent-command:{action}", str(inbox))
+        upsert_orchestration_task(agent_name, agent_id, payload, f"agent-command:{action}", str(inbox), {"inbox": str(inbox)})
+        return f"Deleguji: {agent_name}."
+    return f"Blokuje me: {agent_name} nema v registry dohledatelny inbox pro prikaz `{action}`."
+
+
 def parse_settings_command(text: str) -> str | None:
     reply = g._base_parse_settings_command(text)
     if reply is None:
+        dynamic_reply = parse_dynamic_agent_command(text)
+        if dynamic_reply:
+            return dynamic_reply
+        style_draft_reply = parse_xoz_style_and_draft_request(text)
+        if style_draft_reply:
+            return style_draft_reply
         xoz_control_reply = parse_xoz_control_request(text)
         if xoz_control_reply:
             return xoz_control_reply
@@ -1670,9 +2018,13 @@ def assign_agent_d_x_idea(text: str) -> tuple[bool, str]:
         return False, str(inbox)
 
 
-def social_x_target(text: str) -> dict[str, str]:
+def social_x_target(text: str, forced_agent_id: str = "") -> dict[str, str]:
     low = g.normalize_text(text)
-    if any(term in low for term in ("xoz", "agent xoz", "osobnizkusenosti", "osobni zkusenosti", "osobnizkusenosti.cz", "oz")) and not any(term in low for term in ("btc-dca", "btc dca", "btcdca")):
+    if forced_agent_id == "agent-xoz" or (
+        forced_agent_id != "agent-d"
+        and any(term in low for term in ("xoz", "agent xoz", "osobnizkusenosti", "osobni zkusenosti", "osobnizkusenosti.cz", "oz"))
+        and not any(term in low for term in ("btc-dca", "btc dca", "btcdca"))
+    ):
         return {
             "id": "agent-xoz",
             "agent": "Agent XOZ",
@@ -1693,8 +2045,8 @@ def social_x_target(text: str) -> dict[str, str]:
     }
 
 
-def assign_social_x_task(text: str) -> tuple[bool, dict[str, str], str]:
-    target = social_x_target(text)
+def assign_social_x_task(text: str, forced_agent_id: str = "") -> tuple[bool, dict[str, str], str]:
+    target = social_x_target(text, forced_agent_id=forced_agent_id)
     if target["id"] == "agent-d":
         ok, path = assign_agent_d_x_idea(text)
         return ok, target, path
@@ -1707,7 +2059,8 @@ def assign_social_x_task(text: str) -> tuple[bool, dict[str, str], str]:
         "source": "virtual-assistant",
         "agent": target["agent"],
         "task": text.strip(),
-        "expected_output": "navrh X prispevku ke schvaleni, bez publikace",
+        "format_preferences": xoz_current_draft_preferences(),
+        "expected_output": "navrh X prispevku ke schvaleni, bez publikace; vratit hotovy text a obrazovy podklad/prompt",
     }
     try:
         inbox = Path(target["inbox"])
@@ -1786,6 +2139,11 @@ def xoz_task_record_for_task(state: dict[str, Any], task: dict[str, Any]) -> dic
 
 def xoz_generate_x_draft(topic: str) -> str:
     low = g.normalize_text(topic)
+    if "bybit" in low:
+        return (
+            "Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. "
+            "Bybit muze byt uzitecny pro pokrocilejsi praci s kryptem, ale porad plati: nejdriv pravidla, limity a jasny plan."
+        )
     if "krypto" in low or "crypto" in low or "bitcoin" in low or "btc" in low:
         return (
             "Osobni zkusenost: u krypta se nejvic vyplaci klidny proces, ne honba za dalsim tipem. "
@@ -1800,6 +2158,67 @@ def xoz_generate_x_draft(topic: str) -> str:
         "Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. "
         "Kdyz je jasne, kdo ma co prevzit, jak se overi vysledek a kdy se vratit se stavem, prestanou ukoly mizet mezi radky."
     )
+
+
+def xoz_generate_image_prompt(topic: str) -> str:
+    low = g.normalize_text(topic)
+    if "bybit" in low:
+        return "Realisticka mobilni pracovni scena: clovek kontroluje krypto portfolio na telefonu, vedle notebook s jednoduchym planem a poznamkami, cisty moderni styl, bez log a bez textu v obrazku."
+    if "krypto" in low or "bitcoin" in low or "btc" in low:
+        return "Realisticka pracovni scena s notebookem, grafem krypta a rucne psanymi pravidly investicniho planu, civilni ceske prostredi, bez log a bez textu v obrazku."
+    return "Realisticka kancelarska scena s poznamkami, checklistem a telefonem pro pripravu socialniho prispevku, prirozene svetlo, bez log a bez textu v obrazku."
+
+
+def xoz_current_draft_preferences() -> list[str]:
+    state = g.load_json(XOZ_STATE_FILE, {})
+    prefs = state.get("draft_format_preferences") if isinstance(state, dict) else []
+    if not isinstance(prefs, list):
+        return []
+    return [str(item).strip() for item in prefs if str(item or "").strip()]
+
+
+def update_xoz_draft_preferences_from_text(text: str) -> list[str]:
+    low = g.normalize_text(text)
+    additions: list[str] = []
+    if ("promo" in low or "affiliate" in low) and any(term in low for term in ("ne", "bez", "nechci")):
+        additions.append("Bez kratkeho oznaceni promo/affiliate v textu ani v podkladu.")
+    if any(term in low for term in ("hotovy text", "text")) and any(term in low for term in ("obrazek", "fotka", "image")):
+        additions.append("Navrh ma obsahovat hotovy text a obrazovy podklad/prompt ke schvaleni.")
+    if "schvalovac" in low or "schvaleni" in low:
+        additions.append("VA ma vratit navrh ke schvaleni a nepublikovat bez potvrzeni.")
+    if not additions and any(term in low for term in ("tohle ne", "bez", "nechci")):
+        additions.append("Respektovat posledni stylistickou pripominku bez dalsiho doptavani.")
+    state = ensure_xoz_channel_state()
+    existing = state.get("draft_format_preferences")
+    if not isinstance(existing, list):
+        existing = []
+    prefs = unique_items([str(item) for item in existing] + additions)
+    state["draft_format_preferences"] = prefs[-20:]
+    state["draft_format_preferences_updated_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    g.write_json(XOZ_STATE_FILE, state)
+    if additions:
+        try:
+            g.append_memory_line("- XOZ format preference: " + " ".join(additions)[:500])
+        except Exception as exc:
+            g.log(f"XOZ preference memory write failed: {type(exc).__name__}: {exc}")
+    return prefs
+
+
+def infer_recent_xoz_topic(text: str) -> str:
+    haystack = [text]
+    try:
+        history = g.load_json(g.HISTORY_FILE, [])
+    except Exception:
+        history = []
+    if isinstance(history, list):
+        for item in history[-16:]:
+            if isinstance(item, dict):
+                haystack.append(str(item.get("content") or ""))
+    combined = "\n".join(haystack)
+    brands = re.findall(r"\b(Bybit|Binance|Coinbase|XTB|Kraken|OKX|Bitget|BTC-DCA|Bitcoin|Ethereum)\b", combined, flags=re.IGNORECASE)
+    if brands:
+        return brands[-1]
+    return "aktualni navrh pro Osobni zkusenosti podle schvaleneho formatu"
 
 
 def xoz_worker_once(tasks: list[dict[str, Any]] | None = None) -> int:
@@ -1833,8 +2252,10 @@ def xoz_worker_once(tasks: list[dict[str, Any]] | None = None) -> int:
         record["accepted_at"] = record.get("accepted_at") or now
         record["in_progress_at"] = record.get("in_progress_at") or now
         record["expected_output"] = record.get("expected_output") or "navrh X prispevku ke schvaleni, bez publikace"
+        record["format_preferences"] = record.get("format_preferences") or xoz_current_draft_preferences()
         if not record.get("output"):
             record["output"] = xoz_generate_x_draft(record["topic"])
+            record["image_prompt"] = xoz_generate_image_prompt(record["topic"])
             record["output_at"] = now
             record["status"] = "READY_FOR_APPROVAL"
         else:
@@ -3226,7 +3647,12 @@ def x_task_observation(task: dict[str, Any]) -> tuple[str, str]:
         record = xoz_task_record_for_task(state, task)
         output = str(record.get("output") or record.get("draft") or record.get("draft_text") or "").strip() if isinstance(record, dict) else ""
         if output:
-            return "DONE", f"Agent XOZ navrhl X prispevek:\n{output}\n\nChces neco upravit, nebo schvalujes?"
+            image_prompt = str(record.get("image_prompt") or "").strip() if isinstance(record, dict) else ""
+            parts = [f"Agent XOZ navrhl X prispevek:\n{output}"]
+            if image_prompt:
+                parts.append(f"Obrazek/prompt:\n{image_prompt}")
+            parts.append("Chces neco upravit, nebo schvalujes?")
+            return "DONE", "\n\n".join(parts)
         if isinstance(record, dict) and record.get("in_progress_at"):
             return "VERIFYING", "Agent XOZ prevzal zadani a pracuje na vystupu."
         if isinstance(record, dict) and record.get("accepted_at"):
@@ -3507,6 +3933,17 @@ def telegram_recovery_worker_loop() -> None:
         time.sleep(90)
 
 
+def telegram_command_refresh_worker_loop() -> None:
+    g.log("Virtual Assistant Telegram command refresh worker started")
+    while True:
+        try:
+            status = refresh_telegram_bot_commands(push_to_telegram=True)
+            g.log(f"Telegram bot commands refresh: {status}")
+        except Exception as exc:
+            g.log(f"Telegram command refresh worker error: {type(exc).__name__}: {exc}")
+        time.sleep(600)
+
+
 def gmail_worker_loop() -> None:
     g.log("Virtual Assistant email worker started")
     while True:
@@ -3523,10 +3960,15 @@ def gmail_worker_loop() -> None:
 
 
 def virtual_assistant_main() -> None:
+    try:
+        refresh_telegram_bot_commands(push_to_telegram=False)
+    except Exception as exc:
+        g.log(f"Telegram command preparation failed: {type(exc).__name__}: {exc}")
     if "--daemon" in os.sys.argv:
         threading.Thread(target=gmail_worker_loop, name="virtual-assistant-email-worker", daemon=True).start()
         threading.Thread(target=delegation_monitor_worker_loop, name="virtual-assistant-delegation-monitor", daemon=True).start()
         threading.Thread(target=telegram_recovery_worker_loop, name="virtual-assistant-telegram-recovery", daemon=True).start()
+        threading.Thread(target=telegram_command_refresh_worker_loop, name="virtual-assistant-command-refresh", daemon=True).start()
     base_main()
 
 
@@ -3585,6 +4027,28 @@ def parse_work_style_feedback(text: str) -> str | None:
     )
 
 
+def parse_xoz_style_and_draft_request(text: str) -> str | None:
+    low = g.normalize_text(text)
+    if not any(term in low for term in ("navrh", "prispevek", "post", "tweet", "takovy navrh")):
+        return None
+    if not any(term in low for term in ("tohle ne", "promo", "affiliate", "bez", "nechci", "udel", "priprav")):
+        return None
+    if any(term in low for term in ("btc-dca", "btc dca", "agent d")) and not any(term in low for term in ("xoz", "osobni zkusenosti", "osobnizkusenosti", "oz")):
+        return None
+    prefs = update_xoz_draft_preferences_from_text(text)
+    topic = infer_recent_xoz_topic(text)
+    preference_text = "; ".join(prefs[-6:])
+    payload = (
+        f"Osobni zkusenosti X navrh ke schvaleni na tema {topic}. "
+        "Vytvor hotovy text a obrazovy podklad/prompt. Nepublikuj bez schvaleni."
+    )
+    if preference_text:
+        payload += f" Format preference: {preference_text}"
+    ok, target, path = assign_social_x_task(payload, forced_agent_id="agent-xoz")
+    append_orchestration_event(target["agent"], target["instance"], payload, target["kind"], path)
+    return "Deleguji: navrh prispevku na X pro Osobni zkusenosti: Agent XOZ."
+
+
 def parse_gmail_signup_request(text: str) -> str | None:
     low = g.normalize_text(text)
     wants_email = any(word in low for word in ("gmail", "google email", "google mail", "e-mail", "email"))
@@ -3632,15 +4096,7 @@ g.settings_panel = settings_panel
 g.handle_settings_callback = handle_settings_callback
 g.parse_settings_command = parse_settings_command
 g.status_text = status_text
-g.BOT_COMMANDS = [
-    {"command": "menu", "description": "Menu nastaveni Virtualni asistentky"},
-    {"command": "status", "description": "Bezpecny stav a aktualni model"},
-    {"command": "usage", "description": "Lokalni mereni pouziti Codexu"},
-    {"command": "model", "description": "Vybrat ChatGPT/Codex model"},
-    {"command": "rychlost", "description": "Vybrat rychlost odpovedi"},
-    {"command": "inteligence", "description": "Vybrat uroven premysleni"},
-    {"command": "reset", "description": "Smazat historii konverzace"},
-]
+g.BOT_COMMANDS = build_telegram_bot_commands()
 
 
 if __name__ == "__main__":
