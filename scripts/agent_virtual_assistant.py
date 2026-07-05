@@ -82,6 +82,7 @@ AGENT_REGISTRY_JSON = g.AGENT_WORK_DIR / "AGENT_REGISTRY.json"
 AGENT_REGISTRY_OVERLAY = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.json"
 AGENT_REGISTRY_EXAMPLE = g.AGENT_WORK_DIR / "AGENT_CAPABILITIES.example.json"
 TELEGRAM_COMMANDS_FILE = g.AGENT_WORK_DIR / "TELEGRAM_COMMANDS.json"
+PENDING_CONFIRMATIONS_FILE = g.AGENT_WORK_DIR / "PENDING_CONFIRMATIONS.json"
 ORCHESTRATION_TASKS_FILE = g.AGENT_WORK_DIR / "ORCHESTRATION_TASKS.json"
 RECOVERY_STATE_FILE = g.AGENT_WORK_DIR / "TELEGRAM_RECOVERY.json"
 NOTIFICATION_DEDUPE_FILE = g.AGENT_WORK_DIR / "NOTIFICATION_DEDUPE.json"
@@ -184,8 +185,11 @@ Orchestrace ostatnich agentu:
   - Agent C pouzivej jen pro btc-dca.com / WordPress btc-dca ukoly, ne pro Osobni zkusenosti.
 - Nepredavej agentum vagnost. Kazdemu dej brief v jeho roli: co ma vytvorit, ton, platformu, linky, termin, co se povazuje za hotovo a jak to ma dolozit.
 - Pri beznem potvrzeni delegace Jakubovi neukazuj state/log/runner cesty ani technicke detaily. Napis jen strucne ve stylu: `Deleguji: - tohle: Agent ABC - tamto: Agent 123`. Detaily patri do logu a ORCHESTRATION.
+- Pokud Jakub nepouzije explicitni Telegram prikaz z menu a ty vyhodnotis, ze bys mela spustit nebo delegovat akci, nejdriv posli potvrzovaci zpravu s volbou Ano/Ne. Bez potvrzeni nespoustej blog draft, X/social delegaci, browser formular ani jine side-effect workflow.
+- Kratke dotazy typu `reposty xoz`, `stav agenta D`, `komentare xoz` jsou dotazy na prehled, ne pokyn neco vytvorit.
 - Ved stav v `/home/openclaw2/.openclaw/virtual-assistant/ORCHESTRATION.md`: task id, agent, zadani, stav, posledni kontakt, dukaz hotovo, blocker, dalsi krok.
 - Nehlas Jakubovi "hotovo", dokud nemas overovaci dukaz: publikovana URL, workflow output, log, state file, issue/comment summary nebo explicitni potvrzeni agenta.
+- U browser/formular workflow nerikej, ze odeslani nebo komentar probehl, pokud po submitu nevidis potvrzovaci hlasku, moderacni hlasku, URL/ID nebo vlozeny obsah na strance. Pokud Playwright jen klikl submit bez dukazu, priznej to jako neoverene.
 - Interni opravy, restarty, deploye a konfiguracni zmeny nejsou odpoved na klientsky delegovany ukol. Jakubovi je neposilej jako "opraveno", pokud se ptal na stav prace agentu; misto toho over stav delegace a vystup.
 - Pokud agent nereaguje nebo workflow nebezi, res to sama: zkus bezpecny retry, over runner/sluzbu/logy, zkontroluj konfiguraci, a az potom reportuj jeden konkretni blocker.
 - Zpet Jakubovi pis az kdyz je kampan hotova napric zapojenymi agenty, nebo kdyz narazis na blocker, ktery se ti nepodarilo vyresit po rozumnych pokusech.
@@ -228,6 +232,9 @@ def virtual_assistant_templates() -> dict[Path, str]:
             "Nesmí se zaseknout v opakovanych dotazech; ma sama pripravovat hotove navrhy a ptat se jen na skutecne blokery.",
             "Ma zakladni browser check pres headless Chromium helper; nema tvrdit, ze se stranka neda nacist, dokud helper nezkusi.",
             "Ma Playwright helper pro browser ukoly; bezne formulare vcetne komentaru ma na Jakubovo zadani vyplnit i odeslat, u citlivych externich kroku pripravi praci kolem nich a vyzada si schvaleni.",
+            "Pokud Jakub nepouzije explicitni prikaz z Telegram menu, pred spustenim/delegaci akce musi poslat potvrzeni Ano/Ne a cekat na volbu.",
+            "Kratke dotazy jako `reposty xoz` jsou report, ne zadani clanku ani jina delegace.",
+            "U browser/formular ukolu nesmi tvrdit hotovo bez dukazu po submitu: potvrzovaci hlaska, moderace, URL/ID nebo viditelny vlozeny obsah.",
             "Bez schvaleneho handoffu nezaklada Google/LinkedIn ucty finalne sama, ale pripravi cely balicek pro rychle zalozeni.",
             "Pro vlastni identitu pouziva default Ema Vale a nevyzaduje znovu preferovane jmeno.",
             "Neoverena dostupnost Gmail handle neni blocker; ma dat poradi variant a fallback pravidlo.",
@@ -1152,6 +1159,10 @@ def handle_xoz_approval_callback(data: str) -> tuple[str, dict[str, Any] | None,
 
 
 def handle_settings_callback(data: str) -> tuple[str, dict[str, Any], str]:
+    pending_callback = handle_pending_confirmation_callback(data)
+    if pending_callback:
+        text, markup, notice = pending_callback
+        return text, markup or {}, notice
     xoz_callback = handle_xoz_approval_callback(data)
     if xoz_callback:
         text, markup, notice = xoz_callback
@@ -1271,12 +1282,235 @@ def execute_dynamic_agent_command(item: dict[str, str], payload: str) -> str:
     return f"Blokuje me: {agent_name} nema v registry dohledatelny inbox pro prikaz `{action}`."
 
 
+def load_pending_confirmations() -> dict[str, Any]:
+    try:
+        data = json.loads(PENDING_CONFIRMATIONS_FILE.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    items = data.get("items")
+    if not isinstance(items, dict):
+        items = {}
+    data["items"] = items
+    return data
+
+
+def save_pending_confirmations(data: dict[str, Any]) -> None:
+    PENDING_CONFIRMATIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data["updated_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    PENDING_CONFIRMATIONS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def confirmation_keyboard(action_id: str) -> dict[str, Any]:
+    return {
+        "inline_keyboard": [[
+            {"text": "Ano", "callback_data": f"confirm:yes:{action_id}"},
+            {"text": "Ne", "callback_data": f"confirm:no:{action_id}"},
+        ]]
+    }
+
+
+def send_confirmation_request(action_id: str, label: str) -> bool:
+    _, chat_id = telegram_token_chat()
+    if not chat_id:
+        return False
+    text = f"Rozumim to jako: {label}\n\nSpustit?"
+    try:
+        result = telegram_api_post("sendMessage", {
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": confirmation_keyboard(action_id),
+        })
+        return bool(result.get("ok"))
+    except Exception as exc:
+        g.log(f"Confirmation request send failed: {type(exc).__name__}: {exc}")
+        return False
+
+
+def queue_action_confirmation(action_key: str, label: str, text: str) -> str:
+    data = load_pending_confirmations()
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    action_id = hashlib.sha1(f"{action_key}|{text}|{now}".encode("utf-8", errors="replace")).hexdigest()[:16]
+    data["items"][action_id] = {
+        "id": action_id,
+        "created_at": now,
+        "status": "PENDING",
+        "action_key": action_key,
+        "label": label,
+        "text": text,
+    }
+    save_pending_confirmations(data)
+    sent = send_confirmation_request(action_id, label)
+    return "Cekam na potvrzeni tlacitkem Ano/Ne." if sent else f"Rozumim to jako: {label}. Potvrd prosim `ano`, nebo to uprav."
+
+
+def execute_confirmed_action(action_key: str, text: str) -> str:
+    if action_key == "xoz-style-draft":
+        return parse_xoz_style_and_draft_request(text) or "Nepodarilo se pripravit XOZ navrh."
+    if action_key == "browser-form":
+        return parse_browser_form_task_request(text) or "Nepodarilo se spustit browser formular."
+    if action_key == "xoz-control":
+        return parse_xoz_control_request(text) or "Nepodarilo se predat XOZ control ukol."
+    if action_key == "cancel-social":
+        return parse_cancel_social_assignment_request(text) or "Nepodarilo se zrusit social zadani."
+    if action_key == "social-x":
+        return parse_social_x_delegation_request(text) or "Nepodarilo se delegovat X/social ukol."
+    if action_key == "combined-delegation":
+        return parse_combined_delegation_request(text) or "Nepodarilo se rozdelit kombinovanou delegaci."
+    if action_key == "blogger":
+        return parse_blogger_delegation_request(text) or "Nepodarilo se delegovat blogger ukol."
+    if action_key == "general-delegation":
+        return parse_general_delegation_request(text) or "Nepodarilo se delegovat ukol."
+    return "Neznam typ potvrzene akce."
+
+
+def handle_pending_confirmation_callback(data: str) -> tuple[str, dict[str, Any] | None, str] | None:
+    if not data.startswith("confirm:"):
+        return None
+    parts = data.split(":", 2)
+    if len(parts) != 3:
+        return ("Nerozumim potvrzovacimu tlacitku.", None, "")
+    decision, action_id = parts[1], parts[2]
+    state = load_pending_confirmations()
+    item = state["items"].get(action_id)
+    if not isinstance(item, dict):
+        return ("Tohle potvrzeni uz neumim dohledat.", None, "")
+    if item.get("status") != "PENDING":
+        return ("Tohle potvrzeni uz bylo zpracovane.", None, "")
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    if decision == "no":
+        item["status"] = "CANCELED"
+        item["resolved_at"] = now
+        save_pending_confirmations(state)
+        return ("Stornovano.", None, "")
+    if decision != "yes":
+        return ("Nerozumim potvrzovacimu tlacitku.", None, "")
+    item["status"] = "CONFIRMED"
+    item["resolved_at"] = now
+    save_pending_confirmations(state)
+    reply = execute_confirmed_action(str(item.get("action_key") or ""), str(item.get("text") or ""))
+    item["status"] = "EXECUTED"
+    item["executed_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    item["reply"] = str(reply)[:500]
+    save_pending_confirmations(state)
+    return (reply, None, "")
+
+
+def is_explicit_command_text(text: str) -> bool:
+    return text.strip().startswith("/")
+
+
+def is_xoz_control_request_text(text: str) -> bool:
+    if is_browser_form_task_text(text):
+        return False
+    low = g.normalize_text(text)
+    if not any(term in low for term in ("xoz", "agent xoz", "oz", "osobnizkusenosti", "osobni zkusenosti")):
+        return False
+    if not any(term in low for term in ("komentar", "koment", "comment", "engagement")):
+        return False
+    if not any(term in low for term in ("nastav", "uprav", "zmen", "zvys", "sniz", "limit", "pocet", "mnozstvi", "kolik", "pridej", "vloz", "okomentuj", "komentuj")):
+        return False
+    return True
+
+
+def is_social_x_delegation_request_text(text: str) -> bool:
+    if not is_social_delegation_task(text):
+        return False
+    low = g.normalize_text(text)
+    if is_blog_article_delegation_task(text) and blogger_delegation_target(text):
+        return False
+    return any(term in low for term in ("navrh", "prispevek", "tweet", "x post", "social", "schval", "ke schvaleni", "publikuj", "postni"))
+
+
+def is_cancel_social_assignment_request_text(text: str) -> bool:
+    low = g.normalize_text(text)
+    return (
+        any(term in low for term in ("zrus", "storno", "cancel"))
+        and (any(term in low for term in ("agent d", "agenta d", "agentovi d")) or bool(re.search(r"\bd\b", low)))
+    )
+
+
+def is_combined_delegation_request_text(text: str) -> bool:
+    blog_text = article_text_for_combined_delegation(text)
+    blog_target = blogger_delegation_target(blog_text)
+    return bool(blog_target is not None and is_blog_article_delegation_task(blog_text) and is_social_delegation_task(text))
+
+
+def is_blogger_delegation_request_text(text: str) -> bool:
+    target = blogger_delegation_target(text)
+    if not target:
+        return False
+    low = g.normalize_text(text)
+    return any(term in low for term in ("clanek", "clanku", "članek", "článku", "draft", "post", "tema", "téma", "napiš", "napis", "napsat", "vygeneruj", "priprav", "připrav", "zadej", "deleguj"))
+
+
+def is_general_delegation_request_text(text: str) -> bool:
+    low = g.normalize_text(text)
+    asks_delegation = any(term in low for term in (
+        "deleguj",
+        "delegovat",
+        "prislusnym agentum",
+        "příslušným agentům",
+        "agentum",
+        "agentům",
+        "zapoj agent",
+        "nemas tvorit",
+        "nemas to tvorit",
+    ))
+    return bool(asks_delegation or (is_orchestration_task(text) and is_social_delegation_task(text)))
+
+
+def pending_action_candidate(text: str) -> tuple[str, str] | None:
+    if is_explicit_command_text(text):
+        return None
+    if is_xoz_style_and_draft_request_text(text):
+        return "xoz-style-draft", "pripravit XOZ navrh prispevku ke schvaleni"
+    if is_browser_form_task_text(text):
+        return "browser-form", "spustit browser/formular pres Playwright"
+    if is_xoz_control_request_text(text):
+        return "xoz-control", "predat Agentu XOZ X engagement/control ukol"
+    if is_cancel_social_assignment_request_text(text):
+        return "cancel-social", "zrusit social/X zadani"
+    if is_combined_delegation_request_text(text):
+        return "combined-delegation", "rozdelit zadani mezi prislusne agenty"
+    if is_social_x_delegation_request_text(text):
+        return "social-x", "delegovat X/social ukol"
+    if is_blogger_delegation_request_text(text):
+        return "blogger", "delegovat blogovy/clankovy ukol"
+    if is_general_delegation_request_text(text):
+        return "general-delegation", "delegovat ukol dalsim agentum"
+    return None
+
+
 def parse_settings_command(text: str) -> str | None:
     reply = g._base_parse_settings_command(text)
     if reply is None:
         dynamic_reply = parse_dynamic_agent_command(text)
         if dynamic_reply:
             return dynamic_reply
+        xoz_activity_reply = parse_xoz_activity_request(text)
+        if xoz_activity_reply:
+            return xoz_activity_reply
+        status_reply = parse_delegation_status_request(text)
+        if status_reply:
+            return status_reply
+        gmail_reply = parse_gmail_signup_request(text)
+        if gmail_reply:
+            return gmail_reply
+        feedback_reply = parse_work_style_feedback(text)
+        if feedback_reply:
+            return feedback_reply
+        if is_explicit_command_text(text) and is_cancel_social_assignment_request_text(text):
+            return parse_cancel_social_assignment_request(text)
+        routing_correction_reply = parse_routing_correction_request(text)
+        if routing_correction_reply:
+            return routing_correction_reply
+        candidate = pending_action_candidate(text)
+        if candidate:
+            return queue_action_confirmation(candidate[0], candidate[1], text)
+        if not is_explicit_command_text(text):
+            return None
         style_draft_reply = parse_xoz_style_and_draft_request(text)
         if style_draft_reply:
             return style_draft_reply
@@ -1286,18 +1520,6 @@ def parse_settings_command(text: str) -> str | None:
         xoz_control_reply = parse_xoz_control_request(text)
         if xoz_control_reply:
             return xoz_control_reply
-        xoz_activity_reply = parse_xoz_activity_request(text)
-        if xoz_activity_reply:
-            return xoz_activity_reply
-        status_reply = parse_delegation_status_request(text)
-        if status_reply:
-            return status_reply
-        cancel_reply = parse_cancel_social_assignment_request(text)
-        if cancel_reply:
-            return cancel_reply
-        routing_correction_reply = parse_routing_correction_request(text)
-        if routing_correction_reply:
-            return routing_correction_reply
         social_x_reply = parse_social_x_delegation_request(text)
         if social_x_reply:
             return social_x_reply
@@ -1310,12 +1532,6 @@ def parse_settings_command(text: str) -> str | None:
         general_delegation_reply = parse_general_delegation_request(text)
         if general_delegation_reply:
             return general_delegation_reply
-        gmail_reply = parse_gmail_signup_request(text)
-        if gmail_reply:
-            return gmail_reply
-        feedback_reply = parse_work_style_feedback(text)
-        if feedback_reply:
-            return feedback_reply
         return None
     return replace_agent_name(reply)
 
@@ -1771,18 +1987,23 @@ def is_xoz_comment_record(record: dict[str, Any]) -> bool:
     return bool(record.get("comment_url") or record.get("target_url")) and "draft" not in haystack
 
 
+def is_xoz_repost_record(record: dict[str, Any]) -> bool:
+    haystack = g.normalize_text(" ".join(str(record.get(key) or "") for key in ("action", "kind", "type", "status", "text", "summary", "url", "target_url")))
+    return any(term in haystack for term in ("repost", "retweet", "reshare", "share", "sdileni", "sdílení", "preposl", "přeposl"))
+
+
 def is_xoz_activity_request_text(text: str) -> bool:
     low = g.normalize_text(text)
     if not any(term in low for term in ("xoz", "agent xoz", "oz", "osobnizkusenosti", "osobni zkusenosti")):
         return False
-    if not any(term in low for term in ("komentar", "koment", "comment", "kolik", "aktivita", "prehled", "vystup", "dohledat")):
+    if not any(term in low for term in ("komentar", "koment", "comment", "repost", "retweet", "sdileni", "sdílení", "kolik", "aktivita", "prehled", "přehled", "vystup", "dohledat")):
         return False
     return True
 
 
-def xoz_comment_overview(records: list[dict[str, Any]], today_only: bool = False) -> str:
+def xoz_activity_overview(records: list[dict[str, Any]], label: str, today_only: bool = False) -> str:
     records.sort(key=lambda item: str(item.get("created_at") or item.get("time") or item.get("at") or ""), reverse=True)
-    lines = [f"Agent XOZ: dohledatelne komentare dnes: {len(records)}" if today_only else f"Agent XOZ: dohledatelne komentare: {len(records)}"]
+    lines = [f"Agent XOZ: dohledatelne {label} dnes: {len(records)}" if today_only else f"Agent XOZ: dohledatelne {label}: {len(records)}"]
     for record in records[:5]:
         url = str(record.get("url") or record.get("comment_url") or record.get("target_url") or "").strip()
         text_part = " ".join(str(record.get("text") or record.get("summary") or "").split())[:120]
@@ -1793,11 +2014,21 @@ def xoz_comment_overview(records: list[dict[str, Any]], today_only: bool = False
     return "\n".join(lines)
 
 
+def xoz_comment_overview(records: list[dict[str, Any]], today_only: bool = False) -> str:
+    return xoz_activity_overview(records, "komentare", today_only)
+
+
 def parse_xoz_activity_request(text: str) -> str | None:
     if not is_xoz_activity_request_text(text):
         return None
     low = g.normalize_text(text)
-    records = [record for record in xoz_activity_records() if is_xoz_comment_record(record)]
+    wants_reposts = any(term in low for term in ("repost", "retweet", "sdileni", "sdílení"))
+    if wants_reposts:
+        records = [record for record in xoz_activity_records() if is_xoz_repost_record(record)]
+        label = "reposty"
+    else:
+        records = [record for record in xoz_activity_records() if is_xoz_comment_record(record)]
+        label = "komentare"
     today = dt.datetime.now().astimezone().date()
     today_only = any(term in low for term in ("dnes", "today"))
     if today_only:
@@ -1813,21 +2044,15 @@ def parse_xoz_activity_request(text: str) -> str | None:
         if not state.get("activity_channel_announced_at"):
             state["activity_channel_announced_at"] = now
             g.write_json(XOZ_STATE_FILE, state)
-            return "Zatim nemam dohledatelny zaznam o komentarich Agent XOZ."
-        return "Zatim nemam dohledatelny zaznam o komentarich Agent XOZ."
-    return xoz_comment_overview(records, today_only)
+            return f"Zatim nemam dohledatelny zaznam o {label} Agent XOZ."
+        return f"Zatim nemam dohledatelny zaznam o {label} Agent XOZ."
+    return xoz_activity_overview(records, label, today_only)
 
 
 def parse_xoz_control_request(text: str) -> str | None:
-    if is_browser_form_task_text(text):
+    if not is_xoz_control_request_text(text):
         return None
     low = g.normalize_text(text)
-    if not any(term in low for term in ("xoz", "agent xoz", "oz", "osobnizkusenosti", "osobni zkusenosti")):
-        return None
-    if not any(term in low for term in ("komentar", "koment", "comment", "engagement")):
-        return None
-    if not any(term in low for term in ("nastav", "uprav", "zmen", "zvys", "sniz", "limit", "pocet", "mnozstvi", "kolik", "pridej", "vloz", "okomentuj", "komentuj")):
-        return None
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     numbers = re.findall(r"\b\d+\b", low)
     item = {
@@ -1995,19 +2220,57 @@ def parse_browser_form_task_request(text: str) -> str | None:
     return f"Spoustim browser formular pres Playwright: {len(entries)} komentar(e). Vystup overim."
 
 
+def browser_form_submission_evidence(data: dict[str, Any], entry: dict[str, str]) -> str:
+    page_text = g.normalize_text(str(data.get("pageText") or ""))
+    marker = data.get("submitMarker") if isinstance(data.get("submitMarker"), dict) else {}
+    marker_text = g.normalize_text(" ".join(str(marker.get(key) or "") for key in ("bodySubmitted", "resultText")))
+    comment = g.normalize_text(str(entry.get("comment") or ""))
+    name = g.normalize_text(str(entry.get("name") or ""))
+    success_terms = (
+        "dekujeme",
+        "děkujeme",
+        "odeslano",
+        "odesláno",
+        "odeslana",
+        "odeslána",
+        "ceka na schvaleni",
+        "čeká na schválení",
+        "awaiting moderation",
+        "comment submitted",
+        "review submitted",
+        "success",
+    )
+    haystack = f"{marker_text}\n{page_text}"
+    if any(term in haystack for term in success_terms):
+        return "potvrzovaci hlaska po odeslani"
+    if comment and comment[:40] in page_text:
+        return "vlozeny text je videt na strance"
+    if name and comment and name in page_text and comment.split(" ")[0] in page_text:
+        return "jmeno a cast komentare jsou videt na strance"
+    return ""
+
+
 def browser_form_task_observation(task: dict[str, Any]) -> tuple[str, str]:
     proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
     try:
         task_files = json.loads(str(proof.get("tasks") or "[]"))
     except Exception:
         task_files = []
+    try:
+        entries = json.loads(str(proof.get("entries") or "[]"))
+    except Exception:
+        entries = []
+    if not isinstance(entries, list):
+        entries = []
     if not isinstance(task_files, list) or not task_files:
         return "BLOCKED", "Browser formular nema ulozene Playwright task soubory."
     done = 0
     blockers: list[str] = []
-    for item in task_files:
+    unverified: list[str] = []
+    for index, item in enumerate(task_files):
         if not isinstance(item, dict):
             continue
+        entry = entries[index] if index < len(entries) and isinstance(entries[index], dict) else {}
         result_path = Path(str(item.get("result") or ""))
         log_path = Path(str(item.get("log") or ""))
         if result_path.exists():
@@ -2017,7 +2280,11 @@ def browser_form_task_observation(task: dict[str, Any]) -> tuple[str, str]:
                 blockers.append(f"nejde precist result: {type(exc).__name__}")
                 continue
             if data.get("ok"):
-                done += 1
+                evidence = browser_form_submission_evidence(data, entry)
+                if evidence:
+                    done += 1
+                else:
+                    unverified.append("Playwright vyplnil a klikl submit, ale nenasel potvrzeni ani viditelny vlozeny obsah.")
             else:
                 blockers.append(str(data.get("error") or data.get("summary") or "Playwright vratil ok=false")[:180])
         elif log_path.exists():
@@ -2029,6 +2296,8 @@ def browser_form_task_observation(task: dict[str, Any]) -> tuple[str, str]:
                 blockers.append(log_tail[:180])
     if done == len(task_files):
         return "DONE", f"Browser formular odeslan pres Playwright: {done}/{len(task_files)} komentar(e)."
+    if unverified and not blockers:
+        return "BLOCKED", "Nemuzu potvrdit odeslani formulare: " + "; ".join(unverified[:2])
     if blockers:
         return "BLOCKED", "Browser formular se nepodarilo dokoncit: " + "; ".join(blockers[:2])
     if task_age_seconds(task) > 900:
@@ -2427,7 +2696,7 @@ def xoz_generate_image_prompt(topic: str) -> str:
 def generated_image_url(prompt: str) -> str:
     clean = re.sub(r"\s+", " ", prompt.strip())
     encoded = urllib.parse.quote(clean[:900])
-    return f"https://image.pollinations.ai/prompt/{encoded}?width=1200&height=675&nologo=true&enhance=true&model=flux"
+    return f"https://image.pollinations.ai/prompt/{encoded}?width=1536&height=864&nologo=true&enhance=true&model=flux"
 
 
 def xoz_current_draft_preferences() -> list[str]:
@@ -2569,12 +2838,7 @@ def is_blog_article_delegation_task(text: str) -> bool:
 
 
 def parse_social_x_delegation_request(text: str) -> str | None:
-    if not is_social_delegation_task(text):
-        return None
-    low = g.normalize_text(text)
-    if is_blog_article_delegation_task(text) and blogger_delegation_target(text):
-        return None
-    if not any(term in low for term in ("navrh", "prispevek", "tweet", "x post", "social", "schval", "ke schvaleni", "publikuj", "postni")):
+    if not is_social_x_delegation_request_text(text):
         return None
     ok, target, path = assign_social_x_task(text)
     append_orchestration_event(target["agent"], target["instance"], text, target["kind"], path)
@@ -4362,13 +4626,19 @@ def parse_work_style_feedback(text: str) -> str | None:
     )
 
 
-def parse_xoz_style_and_draft_request(text: str) -> str | None:
+def is_xoz_style_and_draft_request_text(text: str) -> bool:
     low = g.normalize_text(text)
     if not any(term in low for term in ("navrh", "prispevek", "post", "tweet", "takovy navrh")):
-        return None
+        return False
     if not any(term in low for term in ("tohle ne", "promo", "affiliate", "bez", "nechci", "udel", "priprav")):
-        return None
+        return False
     if any(term in low for term in ("btc-dca", "btc dca", "agent d")) and not any(term in low for term in ("xoz", "osobni zkusenosti", "osobnizkusenosti", "oz")):
+        return False
+    return True
+
+
+def parse_xoz_style_and_draft_request(text: str) -> str | None:
+    if not is_xoz_style_and_draft_request_text(text):
         return None
     prefs = update_xoz_draft_preferences_from_text(text)
     topic = infer_recent_xoz_topic(text)

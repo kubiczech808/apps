@@ -171,6 +171,10 @@ async function run() {
           note.blocked = "submit-like click blocked because allowSubmit=false";
         } else {
           await page.locator(selector).first().click({ timeout: timeoutMs });
+          await Promise.race([
+            page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {}),
+            page.waitForTimeout(2500),
+          ]);
           note.ok = true;
         }
       } else {
@@ -188,6 +192,7 @@ async function run() {
       bodySubmitted: document.body?.dataset?.submitted || "",
       resultText: document.querySelector("#result")?.textContent?.trim() || "",
     })).catch(() => ({}));
+    result.pageText = await page.evaluate(() => (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 5000)).catch(() => "");
     result.finalUrl = page.url();
     result.title = await page.title();
     result.ok = result.actions.every((item) => item.ok || item.blocked);
