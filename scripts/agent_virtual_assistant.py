@@ -187,6 +187,8 @@ Orchestrace ostatnich agentu:
 - Pri beznem potvrzeni delegace Jakubovi neukazuj state/log/runner cesty ani technicke detaily. Napis jen strucne ve stylu: `Deleguji: - tohle: Agent ABC - tamto: Agent 123`. Detaily patri do logu a ORCHESTRATION.
 - Pokud Jakub nepouzije explicitni Telegram prikaz z menu a ty vyhodnotis, ze bys mela spustit nebo delegovat akci, nejdriv posli potvrzovaci zpravu s volbou Ano/Ne. Bez potvrzeni nespoustej blog draft, X/social delegaci, browser formular ani jine side-effect workflow.
 - Kratke dotazy typu `reposty xoz`, `stav agenta D`, `komentare xoz` jsou dotazy na prehled, ne pokyn neco vytvorit.
+- Explicitni tema, znacka, platforma a cilovy agent v aktualni zprave maji vzdy prednost pred historii. Starsi historii pouzij jen k doplneni chybejiciho detailu stejneho tematu; nikdy nemichej jiny produkt nebo predchozi browser ukol do noveho social zadani.
+- Kdyz Jakub upresni jen ciloveho agenta, zachovej cele puvodni pending zadani a zmen pouze cil. Nevytvarej nove tema z posledni nesouvisejici zpravy.
 - Ved stav v `/home/openclaw2/.openclaw/virtual-assistant/ORCHESTRATION.md`: task id, agent, zadani, stav, posledni kontakt, dukaz hotovo, blocker, dalsi krok.
 - Nehlas Jakubovi "hotovo", dokud nemas overovaci dukaz: publikovana URL, workflow output, log, state file, issue/comment summary nebo explicitni potvrzeni agenta.
 - U browser/formular workflow nerikej, ze odeslani nebo komentar probehl, pokud po submitu nevidis potvrzovaci hlasku, moderacni hlasku, URL/ID nebo vlozeny obsah na strance. Pokud Playwright jen klikl submit bez dukazu, priznej to jako neoverene.
@@ -234,6 +236,8 @@ def virtual_assistant_templates() -> dict[Path, str]:
             "Ma Playwright helper pro browser ukoly; bezne formulare vcetne komentaru ma na Jakubovo zadani vyplnit i odeslat, u citlivych externich kroku pripravi praci kolem nich a vyzada si schvaleni.",
             "Pokud Jakub nepouzije explicitni prikaz z Telegram menu, pred spustenim/delegaci akce musi poslat potvrzeni Ano/Ne a cekat na volbu.",
             "Kratke dotazy jako `reposty xoz` jsou report, ne zadani clanku ani jina delegace.",
+            "Aktualni explicitni tema a znacka maji prednost pred historii; historie smi doplnit jen chybejici detail stejneho tematu.",
+            "Pri oprave ciloveho agenta zachovej cele puvodni pending zadani a zmen pouze cil.",
             "U browser/formular ukolu nesmi tvrdit hotovo bez dukazu po submitu: potvrzovaci hlaska, moderace, URL/ID nebo viditelny vlozeny obsah.",
             "Bez schvaleneho handoffu nezaklada Google/LinkedIn ucty finalne sama, ale pripravi cely balicek pro rychle zalozeni.",
             "Pro vlastni identitu pouziva default Ema Vale a nevyzaduje znovu preferovane jmeno.",
@@ -1419,6 +1423,56 @@ def parse_pending_confirmation_text(text: str) -> str | None:
     return result[0] if result else None
 
 
+def is_pending_target_correction_text(text: str) -> bool:
+    low = g.normalize_text(text)
+    target_xoz = any(term in low for term in ("agent xoz", "agenta xoz", "agentovi xoz", "na xoz", "pro xoz"))
+    correction = any(term in low for term in ("tohle je na", "to patri", "patri to", "ma to dostat", "spravny agent", "predat"))
+    return target_xoz and correction
+
+
+def recent_social_request_from_history(exclude_text: str = "") -> str:
+    history = g.load_json(g.HISTORY_FILE, [])
+    if not isinstance(history, list):
+        return ""
+    exclude_low = g.normalize_text(exclude_text)
+    for item in reversed(history[-30:]):
+        if not isinstance(item, dict) or str(item.get("role") or "") != "user":
+            continue
+        content = str(item.get("content") or "").strip()
+        if not content or g.normalize_text(content) == exclude_low:
+            continue
+        if is_social_x_delegation_request_text(content):
+            return content
+    return ""
+
+
+def parse_pending_target_correction(text: str) -> str | None:
+    if not is_pending_target_correction_text(text):
+        return None
+    state = load_pending_confirmations()
+    social_action_keys = {"social-x", "xoz-style-draft", "combined-delegation", "general-delegation"}
+    pending = [
+        item for item in state.get("items", {}).values()
+        if isinstance(item, dict) and item.get("status") == "PENDING" and str(item.get("action_key") or "") in social_action_keys
+    ]
+    pending.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    if pending:
+        item = pending[0]
+        original = str(item.get("text") or "").strip()
+        item["action_key"] = "social-x"
+        item["label"] = "delegovat X/social navrh Agentu XOZ pro Osobni zkusenosti"
+        item["text"] = original + "\nCil: Agent XOZ; kanal X pro Osobni zkusenosti. Zachovej tema a pozadavky z puvodniho zadani."
+        item["updated_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        save_pending_confirmations(state)
+        send_confirmation_request(str(item.get("id") or ""), str(item.get("label") or ""))
+        return "Upraveno: pending zadani smeruje na Agenta XOZ a zachovava puvodni tema."
+    original = recent_social_request_from_history(text)
+    if original:
+        corrected = original + "\nCil: Agent XOZ; kanal X pro Osobni zkusenosti. Zachovej tema a pozadavky z puvodniho zadani."
+        return queue_action_confirmation("social-x", "delegovat X/social navrh Agentu XOZ pro Osobni zkusenosti", corrected)
+    return "Nemam pending X zadani, ktere bych mohla bezpecne presmerovat."
+
+
 def is_explicit_command_text(text: str) -> bool:
     return text.strip().startswith("/")
 
@@ -1518,6 +1572,9 @@ def parse_settings_command(text: str) -> str | None:
         pending_text_reply = parse_pending_confirmation_text(text)
         if pending_text_reply:
             return pending_text_reply
+        target_correction_reply = parse_pending_target_correction(text)
+        if target_correction_reply:
+            return target_correction_reply
         xoz_activity_reply = parse_xoz_activity_request(text)
         if xoz_activity_reply:
             return xoz_activity_reply
@@ -2849,12 +2906,47 @@ def xoz_task_record_for_task(state: dict[str, Any], task: dict[str, Any]) -> dic
     return {}
 
 
+def find_bybit_affiliate_link(text: str) -> str:
+    sources = [text]
+    history = g.load_json(g.HISTORY_FILE, [])
+    if isinstance(history, list):
+        for item in reversed(history[-80:]):
+            if isinstance(item, dict):
+                sources.append(str(item.get("content") or ""))
+    candidates: list[str] = []
+    for source in sources:
+        if "bybit" not in g.normalize_text(source):
+            continue
+        urls = find_urls_in_text(source)
+        for url in urls:
+            domain = domain_from_url(url)
+            if domain.endswith("bybit.com") or domain.endswith("bybit.eu"):
+                candidates.append(url.rstrip(".,);]"))
+    for url in candidates:
+        low = url.lower()
+        if any(term in low for term in ("ref=", "invite", "affiliate", "partner", "/b/")):
+            return url
+    if candidates:
+        return candidates[0]
+    return ""
+
+
 def xoz_generate_x_draft(topic: str) -> str:
     low = g.normalize_text(topic)
     if "bybit" in low:
+        affiliate_link = find_bybit_affiliate_link(topic)
+        link_text = affiliate_link or "[DOPLNIT SCHVALENY BYBIT AFFILIATE ODKAZ]"
+        if ("1 euro" in low or "1 eur" in low) and ("20 eur" in low or "20 euro" in low):
+            return (
+                "Bybit ma akci pro nove uzivatele: po vkladu 1 EUR muzes podle podminek akce ziskat bonus 20 EUR. "
+                "Pokud hledas alternativu pro nakup a spravu krypta, muze to byt zajimavy zpusob, jak si platformu vyzkouset s malym vkladem. "
+                "Pred registraci si zkontroluj aktualni podminky a dostupnost akce.\n\n"
+                f"{link_text}"
+            )
         return (
             "Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. "
-            "Bybit muze byt uzitecny pro pokrocilejsi praci s kryptem, ale porad plati: nejdriv pravidla, limity a jasny plan."
+            "Bybit muze byt uzitecny pro pokrocilejsi praci s kryptem, ale porad plati: nejdriv pravidla, limity a jasny plan.\n\n"
+            f"{link_text}"
         )
     if "krypto" in low or "crypto" in low or "bitcoin" in low or "btc" in low:
         return (
@@ -2875,6 +2967,8 @@ def xoz_generate_x_draft(topic: str) -> str:
 def xoz_generate_image_prompt(topic: str) -> str:
     low = g.normalize_text(topic)
     if "bybit" in low:
+        if ("1 euro" in low or "1 eur" in low) and ("20 eur" in low or "20 euro" in low):
+            return "Moderni realisticka kryptomenova promo scena: jedna eurova mince prechazi do balicku dvaceti eurovych minci, mobilni telefon s abstraktnim burzovnim rozhranim, ciste svetlo, bez log, bez znacek a bez textu v obrazku."
         return "Realisticka mobilni pracovni scena: clovek kontroluje krypto portfolio na telefonu, vedle notebook s jednoduchym planem a poznamkami, cisty moderni styl, bez log a bez textu v obrazku."
     if "krypto" in low or "bitcoin" in low or "btc" in low:
         return "Realisticka pracovni scena s notebookem, grafem krypta a rucne psanymi pravidly investicniho planu, civilni ceske prostredi, bez log a bez textu v obrazku."
@@ -2923,19 +3017,20 @@ def update_xoz_draft_preferences_from_text(text: str) -> list[str]:
 
 
 def infer_recent_xoz_topic(text: str) -> str:
-    haystack = [text]
+    brand_pattern = r"\b(Bybit|Binance|Coinbase|XTB|Kraken|OKX|Bitget|BTC-DCA|Bitcoin|Ethereum)\b"
+    current_brands = re.findall(brand_pattern, text, flags=re.IGNORECASE)
+    if current_brands:
+        return current_brands[-1]
     try:
         history = g.load_json(g.HISTORY_FILE, [])
     except Exception:
         history = []
     if isinstance(history, list):
-        for item in history[-16:]:
+        for item in reversed(history[-16:]):
             if isinstance(item, dict):
-                haystack.append(str(item.get("content") or ""))
-    combined = "\n".join(haystack)
-    brands = re.findall(r"\b(Bybit|Binance|Coinbase|XTB|Kraken|OKX|Bitget|BTC-DCA|Bitcoin|Ethereum)\b", combined, flags=re.IGNORECASE)
-    if brands:
-        return brands[-1]
+                brands = re.findall(brand_pattern, str(item.get("content") or ""), flags=re.IGNORECASE)
+                if brands:
+                    return brands[-1]
     return "aktualni navrh pro Osobni zkusenosti podle schvaleneho formatu"
 
 
@@ -3127,8 +3222,10 @@ def parse_combined_delegation_request(text: str) -> str | None:
 def parse_delegation_status_request(text: str) -> str | None:
     low = g.normalize_text(text)
     status_terms = ("vystup", "vysledek", "odkaz", "link", "url", "stav", "kde je", "posli mi na nej")
-    new_task_terms = ("zajisti", "vytvor", "vygeneruj", "napis", "udelej navrh", "priprav", "at vznikne")
+    new_task_terms = ("zajisti", "vytvor", "vygeneruj", "napis", "udelej navrh", "priprav", "at vznikne", "dej na x", "prispevek", "navrh", "postni", "publikuj")
     if not any(term in low for term in status_terms):
+        return None
+    if is_social_x_delegation_request_text(text) or is_combined_delegation_request_text(text) or is_browser_form_action_text(text):
         return None
     if any(term in low for term in new_task_terms):
         return None
