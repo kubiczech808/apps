@@ -2921,7 +2921,7 @@ def find_bybit_affiliate_link(text: str) -> str:
         for url in urls:
             domain = domain_from_url(url)
             if domain.endswith("bybit.com") or domain.endswith("bybit.eu"):
-                candidates.append(url.rstrip(".,);]"))
+                candidates.append(re.sub(r"[`'\".,);\]]+$", "", url))
     for url in candidates:
         low = url.lower()
         if any(term in low for term in ("ref=", "invite", "affiliate", "partner", "/b/")):
