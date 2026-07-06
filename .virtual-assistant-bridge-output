@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-06T11:08:12Z
+checked_at_utc=2026-07-06T11:12:08Z
 shared_brain_intro_telegram_sent=not_requested
 xoz_comment_test_requested=false
 playwright_install=ok
@@ -38,8 +38,8 @@ routing_smoke_reposts_no_action= None
 routing_smoke_blog_needs_confirmation= ('blogger', 'delegovat blogovy/clankovy ukol')
 routing_smoke_browser_needs_confirmation= ('browser-form', 'spustit browser/formular pres Playwright')
 routing_smoke_contextless_browser_needs_confirmation= ('browser-form', 'spustit browser/formular pres Playwright')
-routing_smoke_default_review_entry= {'kind': 'review', 'email': 'mailto.jakub.elias@gmail.com', 'name': 'Ema Vale', 'comment': 'Prijemna textura, snadno se nanasi a po pouziti pusobi plet sveze. Oceňuji jednoduche pouziti a lehky pocit na pleti.', 'rating': '5'}
-routing_smoke_review_actions= [{'type': 'fill', 'selector': "input[name='name'], input[name='author'], input#name, input#author", 'value': 'Ema Vale'}, {'type': 'fill', 'selector': "input[name='email'], input#email", 'value': 'mailto.jakub.elias@gmail.com'}, {'type': 'fill', 'selector': "textarea[name='review'], textarea[name='comment'], textarea#review, textarea#comment", 'value': 'Prijemna textura, snadno se nanasi a po pouziti pusobi plet sveze. Oceňuji jednoduche pouziti a lehky pocit na pleti.'}, {'type': 'select', 'selector': "select#rating, select[name='rating']", 'value': '5', 'optional': True}, {'type': 'check', 'selector': "input[name='rating'][value='5'], input[type='radio'][value='5']", 'optional': True}, {'type': 'click', 'selector': "input#submit, input[type='submit'], button[type='submit'], button:has-text('Odeslat')"}]
+routing_smoke_default_review_entry= {'kind': 'review', 'email': 'mailto.jakub.elias@gmail.com', 'name': 'Ema Vale', 'comment': 'Prijemna textura, snadno se nanasi a po pouziti pusobi plet sveze. Ocenuji jednoduche pouziti a lehky pocit na pleti.', 'rating': '5'}
+routing_smoke_review_actions= [{'type': 'fill', 'selector': "input[name='name'], input[name='author'], input#name, input#author", 'value': 'Ema Vale'}, {'type': 'fill', 'selector': "input[name='email'], input#email", 'value': 'mailto.jakub.elias@gmail.com'}, {'type': 'fill', 'selector': "textarea[name='review'], textarea[name='comment'], textarea#review, textarea#comment", 'value': 'Prijemna textura, snadno se nanasi a po pouziti pusobi plet sveze. Ocenuji jednoduche pouziti a lehky pocit na pleti.'}, {'type': 'select', 'selector': "select#rating, select[name='rating']", 'value': '5', 'optional': True}, {'type': 'check', 'selector': "input[name='rating'][value='5'], input[type='radio'][value='5']", 'optional': True}, {'type': 'click', 'selector': "input#submit, input[type='submit'], button[type='submit'], button:has-text('Odeslat')"}]
 telegram_dynamic_command_count= 24
 telegram_command_xoz_xpost= {'command': 'a_xoz_xpost', 'description': 'Agent XOZ: X post pro OZ', 'agent_id': 'agent-xoz', 'agent_name': 'Agent XOZ', 'kind': 'social', 'action': 'x_social_post'}
 telegram_command_d_xpost= {'command': 'a_d_xpost', 'description': 'Agent D: X post pro btc-dca', 'agent_id': 'agent-d', 'agent_name': 'Agent D', 'kind': 'social', 'action': 'x_social_post'}
@@ -60,29 +60,29 @@ agent_g_chat_available= True
 agent_g_escalated_blockers_summary= 0
 agent_g_escalated_log_blockers_summary= 0
 agent_g_handoffs_written_summary= 0
-[2026-07-06 13:08:13] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-[2026-07-06 13:08:15] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-06T11:08:13.978511Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Your authentication t
+[2026-07-06 13:12:09] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+[2026-07-06 13:12:11] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-06T11:12:09.522359Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Your authentication t
 ai_smoke_ok= True
 gmail_google_meta_1=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_2=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
 gmail_setup_poll=ok
 telegram_state_offset= 309697045
 virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 11
+virtual_assistant_lock_age_sec= 3
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-07-06T11:08:15Z
-virtual_assistant_log_signal_1=[2026-07-06 12:21:10] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-virtual_assistant_log_signal_2=[2026-07-06 12:29:03] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_3=[2026-07-06 12:39:03] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_4=[2026-07-06 12:49:03] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_5=[2026-07-06 12:59:03] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_6=[2026-07-06 13:08:10] Virtual Assistant email worker started
-virtual_assistant_log_signal_7=[2026-07-06 13:08:10] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_8=[2026-07-06 13:08:10] Virtual Assistant telegram recovery worker started
-virtual_assistant_log_signal_9=[2026-07-06 13:08:10] Agent G daemon started
-virtual_assistant_log_signal_10=[2026-07-06 13:08:10] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_11=[2026-07-06 13:08:13] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_12=[2026-07-06 13:08:15] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-06T11:08:13.978511Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Yo
+virtual_assistant_log_mtime_utc= 2026-07-06T11:12:11Z
+virtual_assistant_log_signal_1=[2026-07-06 13:08:10] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_2=[2026-07-06 13:08:10] Agent G daemon started
+virtual_assistant_log_signal_3=[2026-07-06 13:08:10] Telegram bot commands refresh: sent
+virtual_assistant_log_signal_4=[2026-07-06 13:08:13] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_5=[2026-07-06 13:08:15] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-06T11:08:13.978511Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Yo
+virtual_assistant_log_signal_6=[2026-07-06 13:12:05] Virtual Assistant email worker started
+virtual_assistant_log_signal_7=[2026-07-06 13:12:05] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_8=[2026-07-06 13:12:05] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_9=[2026-07-06 13:12:05] Agent G daemon started
+virtual_assistant_log_signal_10=[2026-07-06 13:12:05] Telegram bot commands refresh: sent
+virtual_assistant_log_signal_11=[2026-07-06 13:12:09] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_12=[2026-07-06 13:12:11] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-06T11:12:09.522359Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Yo
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
@@ -113,46 +113,46 @@ va_2026_06_29_log_27=[2026-06-29 12:29:43] Model route: gpt-5.4-mini tier=cheap 
 va_2026_06_29_log_28=[2026-06-29 12:30:20] -> Hotovo:
 va_2026_06_29_log_29=[2026-06-29 13:42:33] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_30=[2026-06-29 13:42:59] Email processed and replied: from=<email>@google.com trusted=False subject=Další informace o aktualizovaných smluvních podmínkách
-va_today_log_1=[2026-07-06 00:01:45] <- zase lzes. komentar ke schvaleni nevznikl
-va_today_log_2=[2026-07-06 00:01:45] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_3=[2026-07-06 00:01:56] -> Omlouvám se, máš pravdu. Pochybila jsem a tvrdila, že odeslání proběhlo, aniž bych měla skutečné ověření nebo reálný důk
-va_today_log_4=[2026-07-06 01:41:14] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_5=[2026-07-06 02:47:45] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_6=[2026-07-06 02:55:27] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_7=[2026-07-06 03:12:00] Daemon poll error: HTTP Error 429: Too Many Requests
-va_today_log_8=[2026-07-06 03:12:01] Daemon poll error: HTTP Error 429: Too Many Requests
-va_today_log_9=[2026-07-06 03:12:02] Daemon poll error: HTTP Error 429: Too Many Requests
-va_today_log_10=[2026-07-06 03:12:03] Daemon poll error: HTTP Error 429: Too Many Requests
-va_today_log_11=[2026-07-06 03:12:06] Daemon poll error: HTTP Error 502: Bad Gateway
-va_today_log_12=[2026-07-06 03:12:07] Daemon poll error: HTTP Error 502: Bad Gateway
-va_today_log_13=[2026-07-06 03:12:28] Daemon poll error: The read operation timed out
-va_today_log_14=[2026-07-06 04:44:58] Daemon poll error: The read operation timed out
-va_today_log_15=[2026-07-06 04:45:19] Daemon poll error: <urlopen error [Errno -3] Temporary failure in name resolution>
-va_today_log_16=[2026-07-06 05:24:53] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_17=[2026-07-06 07:14:34] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_18=[2026-07-06 08:01:27] Virtual Assistant delegation monitor started
-va_today_log_19=[2026-07-06 08:01:27] Virtual Assistant email worker started
-va_today_log_20=[2026-07-06 08:01:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_21=[2026-07-06 08:07:22] <- tak to zkus znova, vypln ten formular
-va_today_log_22=[2026-07-06 08:08:27] -> Blocker: Browser formular se nepodarilo dokoncit: nejde precist result: JSONDecodeError
-va_today_log_23=[2026-07-06 08:09:06] <- vypln formular jakymikoliv daty https://tajemstvijamu.cz/produkt/bali-moon-face-krem/#reviews a potvrd ho.
-va_today_log_24=[2026-07-06 08:10:48] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_25=                                                          [2026-07-06 08:11:06] Virtual Assistant email worker started
-va_today_log_26=[2026-07-06 08:11:06] Virtual Assistant delegation monitor started
-va_today_log_27=[2026-07-06 08:21:04] -> Cekam na potvrzeni tlacitkem Ano/Ne.
-va_today_log_28=[2026-07-06 09:01:52] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_29=[2026-07-06 09:43:42] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_30=[2026-07-06 10:29:22] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_31=[2026-07-06 10:35:46] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_32=[2026-07-06 10:45:05] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_33=[2026-07-06 10:46:07] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_34=[2026-07-06 10:58:50] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_35=[2026-07-06 11:03:21] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_36=[2026-07-06 11:10:27] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_37=[2026-07-06 12:21:10] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
-va_today_log_38=[2026-07-06 13:08:10] Virtual Assistant email worker started
-va_today_log_39=[2026-07-06 13:08:10] Virtual Assistant delegation monitor started
-va_today_log_40=[2026-07-06 13:08:13] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_1=[2026-07-06 01:41:14] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_2=[2026-07-06 02:47:45] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_3=[2026-07-06 02:55:27] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_4=[2026-07-06 03:12:00] Daemon poll error: HTTP Error 429: Too Many Requests
+va_today_log_5=[2026-07-06 03:12:01] Daemon poll error: HTTP Error 429: Too Many Requests
+va_today_log_6=[2026-07-06 03:12:02] Daemon poll error: HTTP Error 429: Too Many Requests
+va_today_log_7=[2026-07-06 03:12:03] Daemon poll error: HTTP Error 429: Too Many Requests
+va_today_log_8=[2026-07-06 03:12:06] Daemon poll error: HTTP Error 502: Bad Gateway
+va_today_log_9=[2026-07-06 03:12:07] Daemon poll error: HTTP Error 502: Bad Gateway
+va_today_log_10=[2026-07-06 03:12:28] Daemon poll error: The read operation timed out
+va_today_log_11=[2026-07-06 04:44:58] Daemon poll error: The read operation timed out
+va_today_log_12=[2026-07-06 04:45:19] Daemon poll error: <urlopen error [Errno -3] Temporary failure in name resolution>
+va_today_log_13=[2026-07-06 05:24:53] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_14=[2026-07-06 07:14:34] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_15=[2026-07-06 08:01:27] Virtual Assistant delegation monitor started
+va_today_log_16=[2026-07-06 08:01:27] Virtual Assistant email worker started
+va_today_log_17=[2026-07-06 08:01:31] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_18=[2026-07-06 08:07:22] <- tak to zkus znova, vypln ten formular
+va_today_log_19=[2026-07-06 08:08:27] -> Blocker: Browser formular se nepodarilo dokoncit: nejde precist result: JSONDecodeError
+va_today_log_20=[2026-07-06 08:09:06] <- vypln formular jakymikoliv daty https://tajemstvijamu.cz/produkt/bali-moon-face-krem/#reviews a potvrd ho.
+va_today_log_21=[2026-07-06 08:10:48] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_22=                                                          [2026-07-06 08:11:06] Virtual Assistant email worker started
+va_today_log_23=[2026-07-06 08:11:06] Virtual Assistant delegation monitor started
+va_today_log_24=[2026-07-06 08:21:04] -> Cekam na potvrzeni tlacitkem Ano/Ne.
+va_today_log_25=[2026-07-06 09:01:52] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_26=[2026-07-06 09:43:42] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_27=[2026-07-06 10:29:22] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_28=[2026-07-06 10:35:46] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_29=[2026-07-06 10:45:05] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_30=[2026-07-06 10:46:07] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_31=[2026-07-06 10:58:50] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_32=[2026-07-06 11:03:21] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_33=[2026-07-06 11:10:27] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_34=[2026-07-06 12:21:10] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_35=[2026-07-06 13:08:10] Virtual Assistant email worker started
+va_today_log_36=[2026-07-06 13:08:10] Virtual Assistant delegation monitor started
+va_today_log_37=[2026-07-06 13:08:13] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_38=[2026-07-06 13:12:05] Virtual Assistant email worker started
+va_today_log_39=[2026-07-06 13:12:05] Virtual Assistant delegation monitor started
+va_today_log_40=[2026-07-06 13:12:09] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_today_03_04_log_1=[2026-07-06 03:12:00] Daemon poll error: HTTP Error 429: Too Many Requests
 va_today_03_04_log_2=[2026-07-06 03:12:01] Daemon poll error: HTTP Error 429: Too Many Requests
 va_today_03_04_log_3=[2026-07-06 03:12:02] Daemon poll error: HTTP Error 429: Too Many Requests
