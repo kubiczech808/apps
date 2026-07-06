@@ -2263,7 +2263,7 @@ def default_review_form_entry(text: str) -> dict[str, str] | None:
         "kind": "review",
         "email": str(config.get("address") or "mailto.jakub.elias@gmail.com"),
         "name": "Ema Vale",
-        "comment": "Prijemna textura, snadno se nanasi a po pouziti pusobi plet sveze. Oceňuji jednoduche pouziti a lehky pocit na pleti.",
+        "comment": "Prijemna textura, snadno se nanasi a po pouziti pusobi plet sveze. Ocenuji jednoduche pouziti a lehky pocit na pleti.",
         "rating": "5",
     }
 
