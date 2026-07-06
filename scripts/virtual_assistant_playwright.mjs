@@ -156,29 +156,37 @@ async function run() {
       const type = String(action.type || "").toLowerCase();
       const selector = requireString(action.selector, "action.selector");
       const note = { type, selector, ok: false };
-      if (type === "fill") {
-        await page.locator(selector).first().fill(String(action.value ?? ""), { timeout: timeoutMs });
-        note.ok = true;
-      } else if (type === "check") {
-        await page.locator(selector).first().check({ timeout: timeoutMs });
-        note.ok = true;
-      } else if (type === "select") {
-        await page.locator(selector).first().selectOption(String(action.value ?? ""), { timeout: timeoutMs });
-        note.ok = true;
-      } else if (type === "click") {
-        const text = await page.locator(selector).first().innerText({ timeout: 3000 }).catch(() => "");
-        if (!allowSubmit && isSubmitLike(selector, text)) {
-          note.blocked = "submit-like click blocked because allowSubmit=false";
-        } else {
-          await page.locator(selector).first().click({ timeout: timeoutMs });
-          await Promise.race([
-            page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {}),
-            page.waitForTimeout(2500),
-          ]);
+      try {
+        if (type === "fill") {
+          await page.locator(selector).first().fill(String(action.value ?? ""), { timeout: timeoutMs });
           note.ok = true;
+        } else if (type === "check") {
+          await page.locator(selector).first().check({ timeout: timeoutMs });
+          note.ok = true;
+        } else if (type === "select") {
+          await page.locator(selector).first().selectOption(String(action.value ?? ""), { timeout: timeoutMs });
+          note.ok = true;
+        } else if (type === "click") {
+          const text = await page.locator(selector).first().innerText({ timeout: 3000 }).catch(() => "");
+          if (!allowSubmit && isSubmitLike(selector, text)) {
+            note.blocked = "submit-like click blocked because allowSubmit=false";
+          } else {
+            await page.locator(selector).first().click({ timeout: timeoutMs });
+            await Promise.race([
+              page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {}),
+              page.waitForTimeout(2500),
+            ]);
+            note.ok = true;
+          }
+        } else {
+          note.blocked = `unknown action type ${type}`;
         }
-      } else {
-        note.blocked = `unknown action type ${type}`;
+      } catch (error) {
+        if (action.optional === true) {
+          note.blocked = `optional action unavailable: ${error.message}`;
+        } else {
+          throw error;
+        }
       }
       result.actions.push(note);
     }

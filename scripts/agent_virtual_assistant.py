@@ -1332,6 +1332,10 @@ def queue_action_confirmation(action_key: str, label: str, text: str) -> str:
     data = load_pending_confirmations()
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     stored_text = browser_contextual_task_text(text) if action_key == "browser-form" else text
+    for pending_item in data.get("items", {}).values():
+        if isinstance(pending_item, dict) and pending_item.get("status") == "PENDING":
+            pending_item["status"] = "SUPERSEDED"
+            pending_item["resolved_at"] = now
     action_id = hashlib.sha1(f"{action_key}|{stored_text}|{now}".encode("utf-8", errors="replace")).hexdigest()[:16]
     data["items"][action_id] = {
         "id": action_id,
@@ -2248,6 +2252,22 @@ def extract_review_form_entry(text: str) -> dict[str, str] | None:
     }
 
 
+def default_review_form_entry(text: str) -> dict[str, str] | None:
+    low = g.normalize_text(text)
+    any_data = any(term in low for term in ("jakymikoliv daty", "jakakoliv data", "libovolnymi daty", "hodnoty si vymysli", "data si vymysli"))
+    review_target = any(term in low for term in ("#reviews", "/reviews", "recenze", "review", "hodnoceni", "/produkt/"))
+    if not (any_data and review_target):
+        return None
+    config = gmail_env_config()
+    return {
+        "kind": "review",
+        "email": str(config.get("address") or "mailto.jakub.elias@gmail.com"),
+        "name": "Ema Vale",
+        "comment": "Prijemna textura, snadno se nanasi a po pouziti pusobi plet sveze. Oceňuji jednoduche pouziti a lehky pocit na pleti.",
+        "rating": "5",
+    }
+
+
 def browser_task_paths(task_id: str, index: int) -> dict[str, Path]:
     base = g.AGENT_WORK_DIR / "browser-tasks"
     base.mkdir(parents=True, exist_ok=True)
@@ -2255,6 +2275,7 @@ def browser_task_paths(task_id: str, index: int) -> dict[str, Path]:
     return {
         "task": base / f"{stem}.json",
         "result": base / f"{stem}.result.json",
+        "result_tmp": base / f"{stem}.result.tmp",
         "log": base / f"{stem}.log",
         "screenshot": base / f"{stem}.png",
     }
@@ -2269,15 +2290,16 @@ def wordpress_comment_actions(entry: dict[str, str]) -> list[dict[str, str]]:
     ]
 
 
-def review_form_actions(entry: dict[str, str]) -> list[dict[str, str]]:
-    actions: list[dict[str, str]] = [
+def review_form_actions(entry: dict[str, str]) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = [
         {"type": "fill", "selector": "input[name='name'], input[name='author'], input#name, input#author", "value": entry["name"]},
     ]
     if entry.get("email"):
         actions.append({"type": "fill", "selector": "input[name='email'], input#email", "value": entry["email"]})
     actions.extend([
         {"type": "fill", "selector": "textarea[name='review'], textarea[name='comment'], textarea#review, textarea#comment", "value": entry["comment"]},
-        {"type": "check", "selector": f"input[name='rating'][value='{entry.get('rating') or '5'}'], input[type='radio'][value='{entry.get('rating') or '5'}']"},
+        {"type": "select", "selector": "select#rating, select[name='rating']", "value": entry.get("rating") or "5", "optional": True},
+        {"type": "check", "selector": f"input[name='rating'][value='{entry.get('rating') or '5'}'], input[type='radio'][value='{entry.get('rating') or '5'}']", "optional": True},
         {"type": "click", "selector": "input#submit, input[type='submit'], button[type='submit'], button:has-text('Odeslat')"},
     ])
     return actions
@@ -2297,9 +2319,12 @@ def start_playwright_form_task(url: str, entry: dict[str, str], task_id: str, in
     paths["task"].write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     command = (
         f"node {shlex.quote(str(helper))} {shlex.quote(str(paths['task']))} "
-        f"> {shlex.quote(str(paths['result']))} 2> {shlex.quote(str(paths['log']))}"
+        f"> {shlex.quote(str(paths['result_tmp']))} 2> {shlex.quote(str(paths['log']))}; "
+        f"rc=$?; if [ -s {shlex.quote(str(paths['result_tmp']))} ]; then "
+        f"mv {shlex.quote(str(paths['result_tmp']))} {shlex.quote(str(paths['result']))}; "
+        f"else rm -f {shlex.quote(str(paths['result_tmp']))}; fi; "
+        f"echo exit_code=$rc >> {shlex.quote(str(paths['log']))}; exit $rc"
     )
-    command = command + " ; echo $? >> " + shlex.quote(str(paths["log"]))
     subprocess.Popen(["bash", "-lc", command], cwd=str(g.AGENT_WORK_DIR), start_new_session=True)
     return {key: str(value) for key, value in paths.items()}
 
@@ -2312,6 +2337,8 @@ def parse_browser_form_task_request(text: str) -> str | None:
         return None
     url = urls[0]
     review_entry = extract_review_form_entry(text)
+    if not review_entry:
+        review_entry = default_review_form_entry(text)
     entries = [review_entry] if review_entry else extract_comment_form_entries(text)
     if not entries:
         return "Blokuje me: rozpoznala jsem browser/formular ukol, ale nenasla jsem dost hodnot pro jeho pole."
@@ -2338,7 +2365,7 @@ def parse_browser_form_task_request(text: str) -> str | None:
         str(g.AGENT_WORK_DIR / "browser-tasks"),
         proof,
     )
-    return f"Spoustim browser formular pres Playwright: {len(entries)} komentar(e). Vystup overim."
+    return f"Spoustim browser formular pres Playwright: {len(entries)} odeslani. Vystup overim."
 
 
 def browser_form_submission_evidence(data: dict[str, Any], entry: dict[str, str]) -> str:
@@ -2388,6 +2415,7 @@ def browser_form_task_observation(task: dict[str, Any]) -> tuple[str, str]:
     done = 0
     blockers: list[str] = []
     unverified: list[str] = []
+    pending = 0
     for index, item in enumerate(task_files):
         if not isinstance(item, dict):
             continue
@@ -2396,9 +2424,16 @@ def browser_form_task_observation(task: dict[str, Any]) -> tuple[str, str]:
         log_path = Path(str(item.get("log") or ""))
         if result_path.exists():
             try:
-                data = json.loads(result_path.read_text(encoding="utf-8", errors="replace"))
+                result_text = result_path.read_text(encoding="utf-8", errors="replace").strip()
+                if not result_text:
+                    pending += 1
+                    continue
+                data = json.loads(result_text)
             except Exception as exc:
-                blockers.append(f"nejde precist result: {type(exc).__name__}")
+                if task_age_seconds(task) <= 900:
+                    pending += 1
+                else:
+                    blockers.append(f"nejde precist dokonceny result: {type(exc).__name__}")
                 continue
             if data.get("ok"):
                 evidence = browser_form_submission_evidence(data, entry)
@@ -2415,12 +2450,22 @@ def browser_form_task_observation(task: dict[str, Any]) -> tuple[str, str]:
                 log_tail = ""
             if "start_failed" in log_tail:
                 blockers.append(log_tail[:180])
+            else:
+                exit_match = re.search(r"exit_code=(\d+)", log_tail)
+                if exit_match and exit_match.group(1) != "0":
+                    blockers.append(f"Playwright skoncil s exit code {exit_match.group(1)}")
+                else:
+                    pending += 1
+        else:
+            pending += 1
     if done == len(task_files):
-        return "DONE", f"Browser formular odeslan pres Playwright: {done}/{len(task_files)} komentar(e)."
+        return "DONE", f"Browser formular ma overeny vysledek po odeslani: {done}/{len(task_files)}."
     if unverified and not blockers:
         return "BLOCKED", "Nemuzu potvrdit odeslani formulare: " + "; ".join(unverified[:2])
     if blockers:
         return "BLOCKED", "Browser formular se nepodarilo dokoncit: " + "; ".join(blockers[:2])
+    if pending:
+        return "VERIFYING", "Browser formular bezi pres Playwright; cekam na dokonceny vysledek."
     if task_age_seconds(task) > 900:
         return "BLOCKED", "Browser formular nema vysledek z Playwright helperu do 15 minut."
     return "VERIFYING", "Browser formular bezi pres Playwright."
