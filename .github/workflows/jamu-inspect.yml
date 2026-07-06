@@ -30,6 +30,15 @@ jobs:
           test -n "$WP_JAMU_PWD" || { echo 'Missing WP_JAMU_PWD'; exit 1; }
       - name: Inspect WordPress without changing it
         run: python scripts/jamu_inspect.py
+      - name: Publish sanitized audit summary
+        if: success()
+        run: |
+          python - <<'PY'
+          import json
+          with open('jamu-audit.json', encoding='utf-8') as handle:
+              audit = json.load(handle)
+          print('::notice title=JAMU audit::' + json.dumps(audit, ensure_ascii=False, separators=(',', ':')))
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
