@@ -2,6 +2,11 @@ name: Inspect Tajemství JAMU
 
 on:
   workflow_dispatch:
+  push:
+    branches: ['feat/jamu-multilingual']
+    paths:
+      - '.github/workflows/jamu-inspect.yml'
+      - 'scripts/jamu_inspect.py'
 
 permissions:
   contents: read
