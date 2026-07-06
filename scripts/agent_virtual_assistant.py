@@ -292,7 +292,7 @@ def virtual_assistant_templates() -> dict[Path, str]:
             "## Agent OZ - Osobni zkusenosti / drafty clanku",
             "- Role: pripravovat drafty clanku pro web Osobni zkusenosti a osobni/recenzni obsah.",
             "- Typicke ukoly: draft clanku, osnova, srovnani, osobni zkusenost, recenze, podklady pro editoracni schvaleni.",
-            "- Kanal: blogovaci agent z runtime registru, typicky instance `oz` / Agent OZ, pokud je dostupna v konfiguraci blogeru.",
+            "- Kanal: prave jeden aktivni blogovaci agent z runtime registru pro domenu `osobnizkusenosti.cz`; duplicitni instance se nesmi zobrazovat ani pouzivat.",
             "- Vychozi stav: draft. Nic nepublikovat, pokud Jakub vyslovne nerekne `publikuj` nebo `publish`.",
             "- Hotovo znamena: hotovy text draftu nebo workflow/state doklad, ze draft vznikl. Publikovana URL neni vyzadovana a nema byt cil bez vyslovneho pokynu.",
             "- Kriticke pravidlo: Osobni zkusenosti ani Agent OZ nikdy nezamenovat za Agent C / btc-dca.com.",
@@ -393,10 +393,46 @@ def registry_entry(
     }
 
 
+def blogger_config_activity_mtime(cfg_path: Path) -> float:
+    instance = cfg_path.name.removesuffix("-blogger-config.json")
+    candidates = [
+        cfg_path,
+        g.OPENCLAW_DIR / f"{instance}-blogger-state.json",
+        g.OPENCLAW_DIR / "logs" / f"{instance}-blogger.log",
+        g.OPENCLAW_DIR / "logs" / f"virtual-assistant-{instance}-delegation.log",
+    ]
+    mtimes = []
+    for path in candidates:
+        try:
+            mtimes.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    return max(mtimes, default=0.0)
+
+
+def latest_blogger_config_paths(cfg_paths: list[Path]) -> list[Path]:
+    grouped: dict[str, list[Path]] = {}
+    ungrouped: list[Path] = []
+    for cfg_path in cfg_paths:
+        try:
+            data = json.loads(cfg_path.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            data = {}
+        domain = domain_from_url(str(data.get("WP_SITE_URL") or data.get("wp_site_url") or ""))
+        if domain == "osobnizkusenosti.cz":
+            grouped.setdefault(domain, []).append(cfg_path)
+        else:
+            ungrouped.append(cfg_path)
+    selected = list(ungrouped)
+    for paths in grouped.values():
+        selected.append(max(paths, key=lambda path: (blogger_config_activity_mtime(path), path.name == "oz-blogger-config.json")))
+    return sorted(selected)
+
+
 def discover_blogger_agent_entries() -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     try:
-        cfg_paths = sorted(g.OPENCLAW_DIR.glob("*-blogger-config.json"))
+        cfg_paths = latest_blogger_config_paths(sorted(g.OPENCLAW_DIR.glob("*-blogger-config.json")))
     except Exception:
         cfg_paths = []
     for cfg_path in cfg_paths:
@@ -408,7 +444,7 @@ def discover_blogger_agent_entries() -> list[dict[str, Any]]:
         site_url = str(data.get("WP_SITE_URL") or data.get("wp_site_url") or "")
         domain = domain_from_url(site_url)
         agent_name = str(data.get("agent_name") or "").strip()
-        display = agent_name or f"Agent {instance}"
+        display = "Agent OZ" if domain == "osobnizkusenosti.cz" else (agent_name or f"Agent {instance}")
         status = str(data.get("wp_post_status") or "").strip() or "draft/publish podle configu"
         aliases = [
             instance,
@@ -1178,7 +1214,7 @@ def handle_settings_callback(data: str) -> tuple[str, dict[str, Any], str]:
     pending_callback = handle_pending_confirmation_callback(data)
     if pending_callback:
         text, markup, notice = pending_callback
-        return text, markup or {}, notice
+        return text, markup if markup is not None else {}, notice
     xoz_callback = handle_xoz_approval_callback(data)
     if xoz_callback:
         text, markup, notice = xoz_callback
@@ -1332,27 +1368,52 @@ def confirmation_keyboard(action_id: str) -> dict[str, Any]:
     }
 
 
-def send_confirmation_request(action_id: str, label: str) -> bool:
+def send_confirmation_request(action_id: str, label: str) -> int | None:
     _, chat_id = telegram_token_chat()
     if not chat_id:
-        return False
-    text = f"Rozumim to jako: {label}\n\nSpustit?"
+        return None
     try:
+        message = f"Rozumim to jako: {label}\n\nSpustit?"
         result = telegram_api_post("sendMessage", {
             "chat_id": chat_id,
-            "text": text,
+            "text": message,
             "reply_markup": confirmation_keyboard(action_id),
         })
-        return bool(result.get("ok"))
+        if result.get("ok"):
+            g.log(f"-> {message[:500]}")
+            return int((result.get("result") or {}).get("message_id") or 0) or None
+        return None
     except Exception as exc:
         g.log(f"Confirmation request send failed: {type(exc).__name__}: {exc}")
-        return False
+        return None
 
 
 def queue_action_confirmation(action_key: str, label: str, text: str) -> str:
     data = load_pending_confirmations()
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     stored_text = browser_contextual_task_text(text) if action_key == "browser-form" else text
+    fingerprint = hashlib.sha1(f"{action_key}|{g.normalize_text(stored_text)}".encode("utf-8", errors="replace")).hexdigest()[:20]
+    current_time = dt.datetime.now().astimezone()
+    for existing in data.get("items", {}).values():
+        if not isinstance(existing, dict):
+            continue
+        existing_fingerprint = str(existing.get("fingerprint") or "")
+        if not existing_fingerprint:
+            existing_fingerprint = hashlib.sha1(
+                f"{existing.get('action_key')}|{g.normalize_text(str(existing.get('text') or ''))}".encode("utf-8", errors="replace")
+            ).hexdigest()[:20]
+        if existing_fingerprint != fingerprint:
+            continue
+        created = parse_iso_time(existing.get("created_at"))
+        if not created or (current_time - created).total_seconds() > 900:
+            continue
+        status = str(existing.get("status") or "")
+        if status == "PENDING":
+            return f"Potvrzeni uz ceka: {existing.get('label') or label}."
+        if status in {"CONFIRMED", "EXECUTED"}:
+            return f"Uz potvrzeno a spusteno: {existing.get('label') or label}."
+        if status == "CANCELED":
+            return f"Uz stornovano: {existing.get('label') or label}."
     for pending_item in data.get("items", {}).values():
         if isinstance(pending_item, dict) and pending_item.get("status") == "PENDING":
             pending_item["status"] = "SUPERSEDED"
@@ -1365,10 +1426,15 @@ def queue_action_confirmation(action_key: str, label: str, text: str) -> str:
         "action_key": action_key,
         "label": label,
         "text": stored_text,
+        "fingerprint": fingerprint,
     }
     save_pending_confirmations(data)
-    sent = send_confirmation_request(action_id, label)
-    return "Cekam na potvrzeni tlacitkem Ano/Ne." if sent else f"Rozumim to jako: {label}. Potvrd prosim `ano`, nebo to uprav."
+    message_id = send_confirmation_request(action_id, label)
+    if message_id:
+        data["items"][action_id]["telegram_message_id"] = message_id
+        save_pending_confirmations(data)
+        return f"Ke spusteni je pripraveno: {label}."
+    return f"Rozumim to jako: {label}. Potvrd prosim `ano`, nebo to uprav."
 
 
 def execute_confirmed_action(action_key: str, text: str) -> str:
@@ -1409,7 +1475,7 @@ def handle_pending_confirmation_callback(data: str) -> tuple[str, dict[str, Any]
         item["status"] = "CANCELED"
         item["resolved_at"] = now
         save_pending_confirmations(state)
-        return ("Stornovano.", None, "")
+        return (f"Stornovano: {item.get('label') or 'akce'}.", {"inline_keyboard": []}, "")
     if decision != "yes":
         return ("Nerozumim potvrzovacimu tlacitku.", None, "")
     item["status"] = "CONFIRMED"
@@ -1420,7 +1486,7 @@ def handle_pending_confirmation_callback(data: str) -> tuple[str, dict[str, Any]
     item["executed_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     item["reply"] = str(reply)[:500]
     save_pending_confirmations(state)
-    return (reply, None, "")
+    return (f"Potvrzeno. {reply}", {"inline_keyboard": []}, "")
 
 
 def parse_pending_confirmation_text(text: str) -> str | None:
@@ -1560,7 +1626,11 @@ def pending_action_candidate(text: str) -> tuple[str, str] | None:
     if is_explicit_command_text(text):
         return None
     if is_browser_form_action_text(text):
-        return "browser-form", "spustit browser/formular pres Playwright"
+        urls = find_urls_in_text(text)
+        domain = domain_from_url(urls[0]) if urls else "zadanem webu"
+        low = g.normalize_text(text)
+        form_kind = "recenzi/komentar" if any(term in low for term in ("#reviews", "/produkt/", "recenze", "review")) else "formular/komentar"
+        return "browser-form", f"vyplnit a odeslat {form_kind} na {domain} pres Playwright"
     if is_xoz_activity_request_text(text):
         return None
     if is_xoz_style_and_draft_request_text(text):
@@ -1574,7 +1644,13 @@ def pending_action_candidate(text: str) -> tuple[str, str] | None:
     if is_social_x_delegation_request_text(text):
         return "social-x", "delegovat X/social ukol"
     if is_blogger_delegation_request_text(text):
-        return "blogger", "delegovat blogovy/clankovy ukol"
+        target = blogger_delegation_target(text)
+        agent_name = target[1] if target else "prislusneho blogovaciho agenta"
+        topic = extract_blogger_topic(text)
+        topic_match = re.search(r"\bo\s+([^.;\n]{3,120})", text, flags=re.IGNORECASE)
+        topic_label = topic_match.group(1).strip() if topic_match else topic[:140].strip()
+        mode = "publikovat clanek" if explicit_publish_requested(text) else "vytvorit draft clanku"
+        return "blogger", f"{mode} pres {agent_name}: {topic_label}"
     if is_general_delegation_request_text(text):
         return "general-delegation", "delegovat ukol dalsim agentum"
     return None
@@ -1790,7 +1866,9 @@ def is_oz_draft_task(text: str) -> bool:
 
 def explicit_publish_requested(text: str) -> bool:
     low = g.normalize_text(text)
-    return any(term in low for term in ("publikuj", "publish", "zverejni", "zveřejni", "vydej", "postni"))
+    if any(term in low for term in ("publikuj", "publish", "zverejni", "zveřejni", "vydej")):
+        return True
+    return "postni" in low and "draft" not in low and "navrh" not in low
 
 
 def resolve_blogger_instance(candidates: tuple[str, ...], markers: tuple[str, ...]) -> str:
@@ -2368,7 +2446,21 @@ def extract_review_form_entry(text: str) -> dict[str, str] | None:
 
 def default_review_form_entry(text: str) -> dict[str, str] | None:
     low = g.normalize_text(text)
-    any_data = any(term in low for term in ("jakymikoliv daty", "jakakoliv data", "libovolnymi daty", "hodnoty si vymysli", "data si vymysli"))
+    any_data = any(term in low for term in (
+        "jakymikoliv daty",
+        "jakakoliv data",
+        "libovolnymi daty",
+        "libovolny komentar",
+        "libovolnou recenzi",
+        "jakykoliv komentar",
+        "jakoukoliv recenzi",
+        "random komentar",
+        "random recenzi",
+        "hodnoty si vymysli",
+        "data si vymysli",
+        "komentar vymysli",
+        "recenzi vymysli",
+    ))
     review_target = any(term in low for term in ("#reviews", "/reviews", "recenze", "review", "hodnoceni", "/produkt/"))
     if not (any_data and review_target):
         return None
@@ -2379,6 +2471,21 @@ def default_review_form_entry(text: str) -> dict[str, str] | None:
         "name": "Ema Vale",
         "comment": "Prijemna textura, snadno se nanasi a po pouziti pusobi plet sveze. Ocenuji jednoduche pouziti a lehky pocit na pleti.",
         "rating": "5",
+    }
+
+
+def default_comment_form_entry(text: str) -> dict[str, str] | None:
+    low = g.normalize_text(text)
+    wants_comment = any(term in low for term in ("komentar", "comment", "okomentuj"))
+    wants_action = any(term in low for term in ("pridej", "vloz", "odesli", "potvrd", "okomentuj"))
+    if not (wants_comment and wants_action):
+        return None
+    config = gmail_env_config()
+    return {
+        "kind": "comment",
+        "email": str(config.get("address") or "mailto.jakub.elias@gmail.com"),
+        "name": "Ema Vale",
+        "comment": random_comment_for_form(text),
     }
 
 
@@ -2454,6 +2561,9 @@ def parse_browser_form_task_request(text: str) -> str | None:
     if not review_entry:
         review_entry = default_review_form_entry(text)
     entries = [review_entry] if review_entry else extract_comment_form_entries(text)
+    if not entries:
+        default_comment = default_comment_form_entry(text)
+        entries = [default_comment] if default_comment else []
     if not entries:
         return "Blokuje me: rozpoznala jsem browser/formular ukol, ale nenasla jsem dost hodnot pro jeho pole."
     task_id = delegation_task_id("Virtualni asistentka", "browser", text.strip(), "browser-form")
@@ -4773,6 +4883,23 @@ def save_telegram_recovery_state(state: dict[str, Any]) -> None:
     RECOVERY_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def has_recent_confirmation_for_text(text: str, max_age_seconds: int = 86400) -> bool:
+    normalized = g.normalize_text(text)
+    now = dt.datetime.now().astimezone()
+    state = load_pending_confirmations()
+    for item in state.get("items", {}).values():
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "") not in {"PENDING", "CONFIRMED", "EXECUTED", "CANCELED"}:
+            continue
+        if g.normalize_text(str(item.get("text") or "")) != normalized:
+            continue
+        created = parse_iso_time(item.get("created_at"))
+        if created and (now - created).total_seconds() <= max_age_seconds:
+            return True
+    return False
+
+
 def recover_unanswered_telegram_once() -> None:
     log_path = g.LOG_FILE
     if not log_path.exists():
@@ -4815,6 +4942,11 @@ def recover_unanswered_telegram_once() -> None:
             continue
         msg_id = hashlib.sha1(f"{ts.isoformat()}|{text}".encode("utf-8", errors="replace")).hexdigest()[:16]
         if msg_id in processed:
+            continue
+        if has_recent_confirmation_for_text(text):
+            processed.add(msg_id)
+            changed = True
+            g.log(f"Telegram recovery skipped confirmed/pending action {msg_id}")
             continue
         attempt = attempts.get(msg_id) if isinstance(attempts.get(msg_id), dict) else {}
         last_attempt_raw = str(attempt.get("last_attempt_at") or "")

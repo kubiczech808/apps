@@ -214,7 +214,7 @@ Virtualni asistentka je koordinator. Tohle je mapa agentu a kanalu.
 ## Agent OZ - Osobni zkusenosti / drafty clanku
 - Role: pripravovat drafty clanku pro web Osobni zkusenosti a osobni/recenzni obsah.
 - Typicke ukoly: draft clanku, osnova, srovnani, osobni zkusenost, recenze, podklady pro editoracni schvaleni.
-- Kanal: blogovaci agent z runtime registru, typicky instance `oz` / Agent OZ, pokud je dostupna v konfiguraci blogeru.
+- Kanal: prave jeden aktivni blogovaci agent z runtime registru pro domenu `osobnizkusenosti.cz`; duplicitni instance se nesmi zobrazovat ani pouzivat.
 - Vychozi stav: draft. Nic nepublikovat, pokud Jakub vyslovne nerekne `publikuj` nebo `publish`.
 - Hotovo znamena: hotovy text draftu nebo workflow/state doklad, ze draft vznikl. Publikovana URL neni vyzadovana a nema byt cil bez vyslovneho pokynu.
 - Kriticke pravidlo: Osobni zkusenosti ani Agent OZ nikdy nezamenovat za Agent C / btc-dca.com.
