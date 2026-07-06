@@ -513,11 +513,11 @@ def _fallback_article(candidate: dict, details: dict) -> tuple[bool, str]:
         ]
     )
 
-    if followers < _MIN_FOLLOWERS:
-        return False, f"fallback rejected: too few followers ({followers} < {_MIN_FOLLOWERS})"
+    if followers <= 0:
+        return False, "fallback rejected: follower count unavailable"
     if not _looks_english(lang, sample):
         return False, f"fallback rejected: not confidently English (lang={lang or 'unknown'})"
-    return True, "fallback eligible by follower count"
+    return True, "fallback eligible by highest known follower count"
 
 
 def _looks_english(lang: str, text: str) -> bool:

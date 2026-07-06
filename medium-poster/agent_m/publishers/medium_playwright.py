@@ -327,10 +327,29 @@ class MediumPlaywrightPublisher:
                         };
                         const text = document.body?.innerText || '';
                         const anchors = Array.from(document.querySelectorAll('a[href]'));
+                        const articleHandle = (() => {
+                            try {
+                                return new URL(location.href).pathname
+                                    .split('/')
+                                    .find(part => part.startsWith('@')) || '';
+                            } catch (_) {
+                                return '';
+                            }
+                        })();
                         const author = anchors.find(a => {
                             try {
                                 const u = new URL(a.href);
-                                return u.hostname.includes('medium.com') && /^\\/@[^/]+\\/?$/.test(u.pathname);
+                                const handle = u.pathname.split('/').find(part => part.startsWith('@')) || '';
+                                return articleHandle && handle.toLowerCase() === articleHandle.toLowerCase();
+                            } catch (_) {
+                                return false;
+                            }
+                        }) || anchors.find(a => {
+                            try {
+                                const u = new URL(a.href);
+                                return u.hostname.includes('medium.com')
+                                    && /^\\/@[^/]+\\/?$/.test(u.pathname)
+                                    && !u.pathname.toLowerCase().includes('@info_89535');
                             } catch (_) {
                                 return false;
                             }
