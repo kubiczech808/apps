@@ -872,13 +872,18 @@ class MediumPlaywrightPublisher:
         if not opened:
             raise RuntimeError("Medium: response editor could not be opened")
 
-        editor = page.locator('textarea, div[contenteditable="true"][role="textbox"], div[contenteditable="true"]').last
-        await editor.wait_for(state="visible", timeout=30000)
+        editor = await self._find_visible_response_editor(page, timeout_ms=30000)
+        if editor is None:
+            raise RuntimeError("Medium: visible response editor not found after opening responses")
         await editor.click()
-        await page.keyboard.insert_text(comment)
+        tag_name = await editor.evaluate("el => el.tagName.toLowerCase()")
+        if tag_name == "textarea":
+            await editor.fill(comment)
+        else:
+            await page.keyboard.insert_text(comment)
         await self._human_delay(1, 2)
 
-        submitted = await self._submit_medium_response(page)
+        submitted = await self._submit_medium_response(page, editor)
         if not submitted:
             raise RuntimeError("Medium: response submit button not found")
 
@@ -933,7 +938,7 @@ class MediumPlaywrightPublisher:
                 if await loc.count() and await loc.is_visible(timeout=2500):
                     await loc.click(timeout=5000)
                     await asyncio.sleep(2)
-                    if await page.locator('textarea, div[contenteditable="true"]').count():
+                    if await self._find_visible_response_editor(page, timeout_ms=5000):
                         return True
             except Exception:
                 continue
@@ -950,15 +955,68 @@ class MediumPlaywrightPublisher:
         }""")
         if opened:
             await asyncio.sleep(2)
-        return bool(opened and await page.locator('textarea, div[contenteditable="true"]').count())
+        return bool(opened and await self._find_visible_response_editor(page, timeout_ms=5000))
 
-    async def _submit_medium_response(self, page) -> bool:
+    async def _find_visible_response_editor(self, page, timeout_ms: int = 5000):
+        selectors = [
+            'div[contenteditable="true"][role="textbox"]:visible',
+            'div[contenteditable="true"][data-contents="true"]:visible',
+            '[contenteditable="true"][aria-label*="response" i]:visible',
+            '[contenteditable="true"][aria-label*="comment" i]:visible',
+            'div[contenteditable="true"]:visible',
+            'textarea:visible:not([name^="g-recaptcha-response"]):not([id^="g-recaptcha-response"])',
+        ]
+        deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
+        while asyncio.get_running_loop().time() < deadline:
+            for selector in selectors:
+                locators = page.locator(selector)
+                try:
+                    count = min(await locators.count(), 8)
+                    for index in range(count):
+                        candidate = locators.nth(index)
+                        if await candidate.is_visible(timeout=500):
+                            editable = await candidate.get_attribute("contenteditable")
+                            disabled = await candidate.get_attribute("disabled")
+                            if editable == "true" or disabled is None:
+                                log.info("Medium: found visible response editor via %s", selector)
+                                return candidate
+                except Exception:
+                    continue
+            await asyncio.sleep(0.5)
+        return None
+
+    async def _submit_medium_response(self, page, editor=None) -> bool:
         selectors = [
             'button:has-text("Respond")',
             'button:has-text("Publish")',
             'button:has-text("Submit")',
             'button:has-text("Post")',
         ]
+        if editor is not None:
+            scoped_buttons = editor.locator(
+                'xpath=ancestor::*[self::form or @role="dialog" or @role="complementary"][1]//button'
+            )
+            try:
+                count = await scoped_buttons.count()
+                for index in range(count - 1, -1, -1):
+                    button = scoped_buttons.nth(index)
+                    if not await button.is_visible(timeout=1000):
+                        continue
+                    label = " ".join(filter(None, [
+                        await button.inner_text(),
+                        await button.get_attribute("aria-label"),
+                    ])).lower()
+                    disabled = await button.get_attribute("disabled")
+                    aria_disabled = await button.get_attribute("aria-disabled")
+                    if disabled is None and aria_disabled != "true" and any(
+                        word in label for word in ("respond", "publish", "submit", "post")
+                    ):
+                        await button.click(timeout=5000)
+                        log.info("Medium: submitted response via editor-scoped button: %s", label)
+                        return True
+            except Exception:
+                pass
+
         for selector in selectors:
             loc = page.locator(selector).last
             try:
