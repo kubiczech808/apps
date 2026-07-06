@@ -1331,14 +1331,15 @@ def send_confirmation_request(action_id: str, label: str) -> bool:
 def queue_action_confirmation(action_key: str, label: str, text: str) -> str:
     data = load_pending_confirmations()
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
-    action_id = hashlib.sha1(f"{action_key}|{text}|{now}".encode("utf-8", errors="replace")).hexdigest()[:16]
+    stored_text = browser_contextual_task_text(text) if action_key == "browser-form" else text
+    action_id = hashlib.sha1(f"{action_key}|{stored_text}|{now}".encode("utf-8", errors="replace")).hexdigest()[:16]
     data["items"][action_id] = {
         "id": action_id,
         "created_at": now,
         "status": "PENDING",
         "action_key": action_key,
         "label": label,
-        "text": text,
+        "text": stored_text,
     }
     save_pending_confirmations(data)
     sent = send_confirmation_request(action_id, label)
@@ -1395,6 +1396,23 @@ def handle_pending_confirmation_callback(data: str) -> tuple[str, dict[str, Any]
     item["reply"] = str(reply)[:500]
     save_pending_confirmations(state)
     return (reply, None, "")
+
+
+def parse_pending_confirmation_text(text: str) -> str | None:
+    low = g.normalize_text(text).strip(" .!?")
+    yes_terms = {"ano", "souhlasim", "souhlasím", "potvrzuji", "spustit", "proved"}
+    no_terms = {"ne", "storno", "zrus", "zruš", "nepotvrzuji"}
+    if low not in yes_terms and low not in no_terms:
+        return None
+    state = load_pending_confirmations()
+    pending = [item for item in state.get("items", {}).values() if isinstance(item, dict) and item.get("status") == "PENDING"]
+    if not pending:
+        return None
+    pending.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    action_id = str(pending[0].get("id") or "")
+    decision = "yes" if low in yes_terms else "no"
+    result = handle_pending_confirmation_callback(f"confirm:{decision}:{action_id}")
+    return result[0] if result else None
 
 
 def is_explicit_command_text(text: str) -> bool:
@@ -1466,12 +1484,12 @@ def is_general_delegation_request_text(text: str) -> bool:
 def pending_action_candidate(text: str) -> tuple[str, str] | None:
     if is_explicit_command_text(text):
         return None
+    if is_browser_form_action_text(text):
+        return "browser-form", "spustit browser/formular pres Playwright"
     if is_xoz_activity_request_text(text):
         return None
     if is_xoz_style_and_draft_request_text(text):
         return "xoz-style-draft", "pripravit XOZ navrh prispevku ke schvaleni"
-    if is_browser_form_task_text(text):
-        return "browser-form", "spustit browser/formular pres Playwright"
     if is_xoz_control_request_text(text):
         return "xoz-control", "predat Agentu XOZ X engagement/control ukol"
     if is_cancel_social_assignment_request_text(text):
@@ -1493,6 +1511,9 @@ def parse_settings_command(text: str) -> str | None:
         dynamic_reply = parse_dynamic_agent_command(text)
         if dynamic_reply:
             return dynamic_reply
+        pending_text_reply = parse_pending_confirmation_text(text)
+        if pending_text_reply:
+            return pending_text_reply
         xoz_activity_reply = parse_xoz_activity_request(text)
         if xoz_activity_reply:
             return xoz_activity_reply
@@ -1997,6 +2018,8 @@ def is_xoz_repost_record(record: dict[str, Any]) -> bool:
 
 
 def is_xoz_activity_request_text(text: str) -> bool:
+    if is_browser_form_action_text(text):
+        return False
     low = g.normalize_text(text)
     if not any(term in low for term in ("xoz", "agent xoz", "oz", "osobnizkusenosti", "osobni zkusenosti")):
         return False
@@ -2089,25 +2112,67 @@ def parse_xoz_control_request(text: str) -> str | None:
 
 
 def is_browser_form_task_text(text: str) -> bool:
-    low = g.normalize_text(text)
+    if not is_browser_form_action_text(text):
+        return False
     urls = find_urls_in_text(text)
     if not urls:
         return False
     if any(("x.com" in url or "twitter.com" in url) for url in urls):
         return False
-    browser_terms = (
+    return True
+
+
+def is_browser_form_action_text(text: str) -> bool:
+    low = g.normalize_text(text)
+    object_terms = (
         "formular",
         "form",
-        "komentar pod",
-        "pridej komentar",
-        "vloz komentar",
-        "okomentuj",
-        "odesli komentar",
+        "komentar",
+        "comment",
+        "recenze",
+        "review",
+        "hodnoceni",
+        "rating",
+    )
+    action_terms = (
         "vypln",
         "odesli",
+        "potvrd",
         "submit",
+        "pridej",
+        "vloz",
+        "okomentuj",
+        "zverejni",
+        "publikuj",
     )
-    return any(term in low for term in browser_terms)
+    return any(term in low for term in object_terms) and any(term in low for term in action_terms)
+
+
+def browser_contextual_task_text(text: str) -> str:
+    if find_urls_in_text(text):
+        return text.strip()
+    history = g.load_json(g.HISTORY_FILE, [])
+    if not isinstance(history, list):
+        return text.strip()
+    recent_context: list[str] = []
+    selected_url = ""
+    for item in reversed(history[-20:]):
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        if not selected_url:
+            urls = find_urls_in_text(content)
+            if urls:
+                selected_url = urls[-1]
+        low = g.normalize_text(content)
+        if any(term in low for term in ("formular", "recenze", "review", "hodnoceni", "komentar")):
+            recent_context.append(content[:1200])
+        if selected_url and len(recent_context) >= 3:
+            break
+    parts = [selected_url, text.strip(), *reversed(recent_context[:3])]
+    return "\n".join(part for part in parts if part).strip()
 
 
 def random_comment_for_form(seed: str) -> str:
@@ -2142,8 +2207,45 @@ def extract_comment_form_entries(text: str) -> list[dict[str, str]]:
         if not name:
             name = f"komentar{idx + 1}"
         comment = random_comment_for_form(f"{email_value}|{name}|{idx}")
-        entries.append({"email": email_value, "name": name, "comment": comment})
+        entries.append({"kind": "comment", "email": email_value, "name": name, "comment": comment})
     return entries
+
+
+def extract_review_form_entry(text: str) -> dict[str, str] | None:
+    low = g.normalize_text(text)
+    if not any(term in low for term in ("recenze", "review", "hodnoceni", "rating", "hvezd", "hvězd")):
+        return None
+    name = ""
+    for pattern in (
+        r"(?:jm[eé]no|name)\s*[:*\-]*\s*([A-Za-zÀ-ž][A-Za-zÀ-ž ._-]{1,60})",
+        r"jm[eé]nem\s+([A-Za-zÀ-ž][A-Za-zÀ-ž ._-]{1,60})",
+    ):
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            name = re.sub(r"\s+", " ", match.group(1)).strip(" *.-")
+            break
+    rating_match = re.search(r"\b([1-5])\s*(?:/\s*5|hv[eě]zdi|star)", text, flags=re.IGNORECASE)
+    rating = rating_match.group(1) if rating_match else "5"
+    review = ""
+    review_match = re.search(r"(?:recenze|review)\s*[:*\-]*\s*[\"“]?(.{20,1200}?)[\"”]?(?:\n\n|$)", text, flags=re.IGNORECASE | re.DOTALL)
+    if review_match:
+        review = re.sub(r"\s+", " ", review_match.group(1)).strip(' "“”*')
+    if not review:
+        quoted = re.findall(r'["“]([^"”]{20,1200})["”]', text, flags=re.DOTALL)
+        if quoted:
+            review = re.sub(r"\s+", " ", quoted[-1]).strip()
+    email_match = re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", text)
+    if not name:
+        name = "Ema Vale"
+    if not review:
+        return None
+    return {
+        "kind": "review",
+        "email": email_match.group(0) if email_match else "",
+        "name": name,
+        "comment": review,
+        "rating": rating,
+    }
 
 
 def browser_task_paths(task_id: str, index: int) -> dict[str, Path]:
@@ -2167,6 +2269,20 @@ def wordpress_comment_actions(entry: dict[str, str]) -> list[dict[str, str]]:
     ]
 
 
+def review_form_actions(entry: dict[str, str]) -> list[dict[str, str]]:
+    actions: list[dict[str, str]] = [
+        {"type": "fill", "selector": "input[name='name'], input[name='author'], input#name, input#author", "value": entry["name"]},
+    ]
+    if entry.get("email"):
+        actions.append({"type": "fill", "selector": "input[name='email'], input#email", "value": entry["email"]})
+    actions.extend([
+        {"type": "fill", "selector": "textarea[name='review'], textarea[name='comment'], textarea#review, textarea#comment", "value": entry["comment"]},
+        {"type": "check", "selector": f"input[name='rating'][value='{entry.get('rating') or '5'}'], input[type='radio'][value='{entry.get('rating') or '5'}']"},
+        {"type": "click", "selector": "input#submit, input[type='submit'], button[type='submit'], button:has-text('Odeslat')"},
+    ])
+    return actions
+
+
 def start_playwright_form_task(url: str, entry: dict[str, str], task_id: str, index: int) -> dict[str, str]:
     helper = Path("/home/openclaw2/scripts/virtual_assistant_playwright.mjs")
     paths = browser_task_paths(task_id, index)
@@ -2176,7 +2292,7 @@ def start_playwright_form_task(url: str, entry: dict[str, str], task_id: str, in
         "waitUntil": "domcontentloaded",
         "timeoutMs": 60000,
         "screenshotPath": str(paths["screenshot"]),
-        "actions": wordpress_comment_actions(entry),
+        "actions": review_form_actions(entry) if entry.get("kind") == "review" else wordpress_comment_actions(entry),
     }
     paths["task"].write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     command = (
@@ -2195,9 +2311,10 @@ def parse_browser_form_task_request(text: str) -> str | None:
     if not urls:
         return None
     url = urls[0]
-    entries = extract_comment_form_entries(text)
+    review_entry = extract_review_form_entry(text)
+    entries = [review_entry] if review_entry else extract_comment_form_entries(text)
     if not entries:
-        return "Blokuje me: rozpoznala jsem browser/formular ukol, ale nenasla jsem email/jmeno pro vyplneni."
+        return "Blokuje me: rozpoznala jsem browser/formular ukol, ale nenasla jsem dost hodnot pro jeho pole."
     task_id = delegation_task_id("Virtualni asistentka", "browser", text.strip(), "browser-form")
     proof_items = []
     for idx, entry in enumerate(entries, 1):
