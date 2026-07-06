@@ -2,7 +2,7 @@
 Contributors: tajemstvijamu
 Tags: multilingual, woocommerce, seo, hreflang
 Requires at least: 6.5
-Tested up to: 6.8
+Tested up to: 7.0
 Requires PHP: 8.1
 Stable tag: 0.1.0
 License: GPLv2 or later
@@ -27,4 +27,3 @@ Languages: Czech (source), English, German and Polish.
 Uninstalling or deactivating the plugin does not delete translations. This is
 intentional. Product prices, stock, SKUs, variations, taxes, shipping, coupons
 and orders are never copied into the translation table.
-

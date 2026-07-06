@@ -22,13 +22,19 @@ class Audit:
     plugin_directories: list[str] = None
     admin_login_ok: bool = False
     active_plugins: list[str] = None
+    admin_final_path: str = ""
+    admin_cookie_names: list[str] = None
+    admin_error: str = ""
     product_count: Optional[int] = None
+    product_category_count: Optional[int] = None
+    product_attribute_count: Optional[int] = None
     page_count: Optional[int] = None
     post_count: Optional[int] = None
 
     def __post_init__(self):
         self.plugin_directories = self.plugin_directories or []
         self.active_plugins = self.active_plugins or []
+        self.admin_cookie_names = self.admin_cookie_names or []
 
 
 def ftp_entries(ftp: ftplib.FTP, path: str) -> list[tuple[str, str]]:
@@ -84,8 +90,18 @@ def admin_audit(audit: Audit) -> None:
         timeout=30,
         allow_redirects=True,
     )
+    audit.admin_final_path = requests.utils.urlparse(response.url).path
+    audit.admin_cookie_names = sorted(cookie.name for cookie in session.cookies)
     audit.admin_login_ok = "/wp-admin" in response.url and "login_error" not in response.text
     if not audit.admin_login_ok:
+        error = re.search(r'<div id="login_error"[^>]*>(.*?)</div>', response.text, re.I | re.S)
+        if error:
+            message = re.sub(r'<[^>]+>', ' ', error.group(1))
+            audit.admin_error = re.sub(r'\s+', ' ', unescape(message)).strip()[:300]
+        elif response.status_code != 200:
+            audit.admin_error = f"HTTP {response.status_code}"
+        else:
+            audit.admin_error = "Login was not accepted; no standard WordPress error was returned."
         return
 
     plugins = session.get("https://tajemstvijamu.cz/wp-admin/plugins.php", timeout=30).text
@@ -94,7 +110,33 @@ def admin_audit(audit: Audit) -> None:
     )))
     for post_type, field in [("product", "product_count"), ("page", "page_count"), ("post", "post_count")]:
         url = f"https://tajemstvijamu.cz/wp-admin/edit.php?post_type={post_type}" if post_type != "post" else "https://tajemstvijamu.cz/wp-admin/edit.php"
-        setattr(audit, field, parse_count(session.get(url, timeout=30).text))
+        parsed = parse_count(session.get(url, timeout=30).text)
+        if parsed is not None:
+            setattr(audit, field, parsed)
+
+
+def public_inventory(audit: Audit) -> None:
+    session = requests.Session()
+    session.headers["User-Agent"] = "JAMU deployment audit/1.0"
+
+    def total(url: str) -> Optional[int]:
+        response = session.get(url, timeout=30)
+        if not response.ok:
+            return None
+        header = response.headers.get("X-WP-Total")
+        if header and header.isdigit():
+            return int(header)
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        return len(payload) if isinstance(payload, list) else None
+
+    audit.product_count = audit.product_count or total("https://tajemstvijamu.cz/wp-json/wc/store/v1/products?per_page=1")
+    audit.product_category_count = total("https://tajemstvijamu.cz/wp-json/wc/store/v1/products/categories?per_page=100")
+    audit.product_attribute_count = total("https://tajemstvijamu.cz/wp-json/wc/store/v1/products/attributes")
+    audit.page_count = audit.page_count or total("https://tajemstvijamu.cz/wp-json/wp/v2/pages?per_page=1")
+    audit.post_count = audit.post_count or total("https://tajemstvijamu.cz/wp-json/wp/v2/posts?per_page=1")
 
 
 def main() -> int:
@@ -130,6 +172,7 @@ def main() -> int:
         audit.plugin_directories = sorted(name for name, kind in ftp_entries(ftp, f"{prefix}/wp-content/plugins") if name not in {".", ".."})
     ftp.quit()
 
+    public_inventory(audit)
     admin_audit(audit)
     result = asdict(audit)
     with open("jamu-audit.json", "w", encoding="utf-8") as handle:
@@ -143,4 +186,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
