@@ -1,0 +1,34 @@
+name: Inspect Tajemství JAMU
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      JAMU_FTP_LOGIN: ${{ secrets.JAMU_FTP_LOGIN }}
+      JAMU_FTP_PWD: ${{ secrets.JAMU_FTP_PWD }}
+      JAMU_WP_LOGIN: ${{ secrets.JAMU_WP_LOGIN }}
+      WP_JAMU_PWD: ${{ secrets.WP_JAMU_PWD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate required secrets
+        run: |
+          test -n "$JAMU_FTP_LOGIN" || { echo 'Missing JAMU_FTP_LOGIN'; exit 1; }
+          test -n "$JAMU_FTP_PWD" || { echo 'Missing JAMU_FTP_PWD'; exit 1; }
+          test -n "$JAMU_WP_LOGIN" || { echo 'Missing JAMU_WP_LOGIN'; exit 1; }
+          test -n "$WP_JAMU_PWD" || { echo 'Missing WP_JAMU_PWD'; exit 1; }
+      - name: Inspect WordPress without changing it
+        run: python scripts/jamu_inspect.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jamu-audit
+          path: jamu-audit.json
+          if-no-files-found: ignore
+          retention-days: 7

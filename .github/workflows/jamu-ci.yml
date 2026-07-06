@@ -1,0 +1,79 @@
+name: JAMU multilingual CI
+
+on:
+  push:
+    branches: ['feat/jamu-multilingual']
+    paths:
+      - 'wordpress/jamu-multilingual/**'
+      - '.github/workflows/jamu-ci.yml'
+  pull_request:
+    paths:
+      - 'wordpress/jamu-multilingual/**'
+      - '.github/workflows/jamu-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  php-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+      - name: PHP syntax check
+        run: find wordpress/jamu-multilingual -name '*.php' -print0 | xargs -0 -n1 php -l
+
+  wordpress-woocommerce-smoke:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: wordpress
+          MYSQL_USER: wordpress
+          MYSQL_PASSWORD: wordpress
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mysqli
+      - name: Install WP-CLI
+        run: |
+          curl -fsSL -o /tmp/wp-cli.phar https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+          chmod +x /tmp/wp-cli.phar
+          sudo mv /tmp/wp-cli.phar /usr/local/bin/wp
+      - name: Create disposable WordPress and WooCommerce
+        run: |
+          mkdir -p /tmp/jamu-wp
+          wp core download --path=/tmp/jamu-wp --quiet
+          wp config create --path=/tmp/jamu-wp --dbname=wordpress --dbuser=wordpress --dbpass=wordpress --dbhost=127.0.0.1 --quiet
+          wp core install --path=/tmp/jamu-wp --url=http://127.0.0.1:8080 --title=JAMU-CI --admin_user=admin --admin_password=admin-ci-only --admin_email=ci@example.invalid --skip-email --quiet
+          wp plugin install woocommerce --activate --path=/tmp/jamu-wp --quiet
+          cp -R wordpress/jamu-multilingual /tmp/jamu-wp/wp-content/plugins/jamu-multilingual
+          wp plugin activate jamu-multilingual --path=/tmp/jamu-wp
+          wp rewrite structure '/%postname%/' --path=/tmp/jamu-wp
+          wp rewrite flush --hard --path=/tmp/jamu-wp
+          wp eval-file /tmp/jamu-wp/wp-content/plugins/jamu-multilingual/tests/smoke.php --path=/tmp/jamu-wp
+      - name: Verify localized HTTP response and SEO
+        run: |
+          wp server --host=127.0.0.1 --port=8080 --path=/tmp/jamu-wp >/tmp/jamu-wp-server.log 2>&1 &
+          for attempt in {1..20}; do curl -fsS http://127.0.0.1:8080/ >/dev/null && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8080/en/product/test-product/ -o /tmp/product.html
+          grep -q 'English test product' /tmp/product.html
+          grep -q 'rel="canonical"' /tmp/product.html
+          grep -q 'hreflang="en"' /tmp/product.html
+          PRODUCT_ID="$(cat /tmp/jamu-product-id)"
+          grep -Eq "name=.?add-to-cart.? value=.?$PRODUCT_ID" /tmp/product.html
+
