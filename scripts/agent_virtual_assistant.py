@@ -491,8 +491,16 @@ def builtin_agent_entries() -> list[dict[str, Any]]:
             },
             commands=[
                 {"action": "x_social_post", "description": "Agent XOZ: X post pro OZ"},
-                {"action": "social_engagement", "description": "Agent XOZ: X komentare/engagement"},
-                {"action": "activity_report", "description": "Agent XOZ: prehled komentaru"},
+                {
+                    "action": "social_engagement",
+                    "description": "Agent XOZ: X komentare/engagement",
+                    "default_payload": "1 vhodny komentar na X pro Osobni zkusenosti podle aktualni strategie a zapis overitelny vysledek",
+                },
+                {
+                    "action": "activity_report",
+                    "description": "Agent XOZ: prehled komentaru a repostu",
+                    "default_payload": "prehled komentaru a repostu",
+                },
             ],
             notes="Owns X/social drafts and engagement/comment reporting for Osobni zkusenosti. Must write verifiable comment activity to activity_log.",
             proof=[str(XOZ_INBOX_FILE), str(XOZ_ACTIVITY_LOG_FILE), str(XOZ_STATE_FILE)],
@@ -719,8 +727,11 @@ def normalize_agent_command(raw: Any, entry: dict[str, Any]) -> dict[str, str] |
         action = str(raw.get("action") or raw.get("capability") or raw.get("name") or "").strip()
         description = str(raw.get("description") or action.replace("_", " ")).strip()
         explicit_command = str(raw.get("command") or "").strip().lstrip("/")
+        default_payload = str(raw.get("default_payload") or "").strip()
     else:
         return None
+    if isinstance(raw, str):
+        default_payload = ""
     if not action or action.startswith("default_status:"):
         return None
     agent_token = agent_command_token(entry)
@@ -740,6 +751,7 @@ def normalize_agent_command(raw: Any, entry: dict[str, Any]) -> dict[str, str] |
         "agent_name": display,
         "kind": str(entry.get("kind") or ""),
         "action": action,
+        "default_payload": default_payload,
     }
 
 
@@ -1213,6 +1225,8 @@ def parse_dynamic_agent_command(text: str) -> str | None:
     agent_name = item.get("agent_name") or item.get("agent_id") or "Agent"
     action = item.get("action") or ""
     if not payload:
+        payload = str(item.get("default_payload") or "").strip()
+    if not payload:
         return f"{agent_name}: napis za prikaz konkretni zadani. Napr. /{command} priprav navrh ke schvaleni."
     return execute_dynamic_agent_command(item, payload)
 
@@ -1223,8 +1237,11 @@ def execute_dynamic_agent_command(item: dict[str, str], payload: str) -> str:
     action = item.get("action") or ""
     action_low = g.normalize_text(action)
     if action_low in {"activity_report"} or "report" in action_low:
-        reply = parse_xoz_activity_request(f"Agent XOZ prehled komentaru {payload}") if agent_id == "agent-xoz" else None
+        reply = xoz_combined_activity_report(payload) if agent_id == "agent-xoz" else None
         return reply or f"{agent_name}: zatim nemam specializovany report pro tuto akci."
+    if agent_id == "agent-xoz" and any(term in action_low for term in ("social_engagement", "engage")):
+        control_text = f"Agent XOZ pridej komentar na X: {payload}"
+        return parse_xoz_control_request(control_text) or "Blokuje me: nepodarilo se predat engagement Agentu XOZ."
     if any(term in action_low for term in ("x_social", "x_thread", "social_engagement", "engage")):
         ok, target, path = assign_social_x_task(payload, forced_agent_id=agent_id)
         append_orchestration_event(target["agent"], target["instance"], payload, target["kind"], path)
@@ -2068,6 +2085,8 @@ def xoz_activity_records() -> list[dict[str, Any]]:
 
 def is_xoz_comment_record(record: dict[str, Any]) -> bool:
     haystack = g.normalize_text(" ".join(str(record.get(key) or "") for key in ("action", "kind", "type", "status", "text", "url", "comment_url", "target_url")))
+    if any(term in haystack for term in ("repost", "retweet", "reshare", "sdileni", "preposl")):
+        return False
     if any(term in haystack for term in ("comment", "komentar", "koment")):
         return True
     return bool(record.get("comment_url") or record.get("target_url")) and "draft" not in haystack
@@ -2104,6 +2123,44 @@ def xoz_activity_overview(records: list[dict[str, Any]], label: str, today_only:
 
 def xoz_comment_overview(records: list[dict[str, Any]], today_only: bool = False) -> str:
     return xoz_activity_overview(records, "komentare", today_only)
+
+
+def xoz_combined_activity_report(text: str = "") -> str:
+    records = xoz_activity_records()
+    low = g.normalize_text(text)
+    today_only = any(term in low for term in ("dnes", "today"))
+    if today_only:
+        today = dt.datetime.now().astimezone().date()
+        filtered = []
+        for record in records:
+            timestamp = parse_iso_time(record.get("created_at") or record.get("time") or record.get("at"))
+            if timestamp and timestamp.date() == today:
+                filtered.append(record)
+        records = filtered
+    comments = [record for record in records if is_xoz_comment_record(record)]
+    reposts = [record for record in records if is_xoz_repost_record(record)]
+    scope = "dnes" if today_only else "celkem"
+    lines = [f"Agent XOZ: {scope} komentare {len(comments)}, reposty {len(reposts)}."]
+    recent = sorted(
+        comments + reposts,
+        key=lambda item: str(item.get("created_at") or item.get("time") or item.get("at") or ""),
+        reverse=True,
+    )
+    seen: set[str] = set()
+    for record in recent:
+        key = str(record.get("id") or record.get("url") or record.get("comment_url") or record.get("created_at") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        kind = "repost" if is_xoz_repost_record(record) else "komentar"
+        url = str(record.get("url") or record.get("comment_url") or record.get("target_url") or "").strip()
+        summary = " ".join(str(record.get("text") or record.get("summary") or "").split())[:120]
+        detail = " - ".join(part for part in (kind, summary, url) if part)
+        if detail:
+            lines.append(f"- {detail}")
+        if len(lines) >= 6:
+            break
+    return "\n".join(lines)
 
 
 def parse_xoz_activity_request(text: str) -> str | None:
