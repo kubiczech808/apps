@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 PLUGIN_SLUG = "jamu-multilingual"
 REMOTE_PARENT = PurePosixPath("/www/wp-content/plugins")
 LOCAL_ROOT = Path("wordpress") / PLUGIN_SLUG
-IGNORED_PARTS = {"tests", "__pycache__", ".git"}
+IGNORED_PARTS = {"tests", "tools", "__pycache__", ".git"}
 
 
 def connect() -> tuple[ftplib.FTP, str]:
@@ -135,4 +135,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

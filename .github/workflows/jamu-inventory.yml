@@ -1,0 +1,42 @@
+name: Export JAMU public source content
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/jamu-multilingual']
+    paths:
+      - '.github/jamu-inventory-trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jamu-source-inventory
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      JAMU_FTP_LOGIN: ${{ secrets.JAMU_FTP_LOGIN }}
+      JAMU_FTP_PWD: ${{ secrets.JAMU_FTP_PWD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/jamu-multilingual
+      - name: Validate secrets and bridge template
+        run: |
+          test -n "$JAMU_FTP_LOGIN" || { echo 'Missing JAMU_FTP_LOGIN'; exit 1; }
+          test -n "$JAMU_FTP_PWD" || { echo 'Missing JAMU_FTP_PWD'; exit 1; }
+          test -f scripts/templates/jamu_inventory_bridge.php
+      - name: Export public source content through ephemeral bridge
+        run: python scripts/jamu_inventory_bridge.py
+      - name: Commit source inventory to working branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add jamu-content/source-inventory.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Capture JAMU public source inventory'
+          git push origin HEAD:feat/jamu-multilingual

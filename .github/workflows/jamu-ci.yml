@@ -5,10 +5,12 @@ on:
     branches: ['feat/jamu-multilingual']
     paths:
       - 'wordpress/jamu-multilingual/**'
+      - 'scripts/templates/*.php'
       - '.github/workflows/jamu-ci.yml'
   pull_request:
     paths:
       - 'wordpress/jamu-multilingual/**'
+      - 'scripts/templates/*.php'
       - '.github/workflows/jamu-ci.yml'
   workflow_dispatch:
 
@@ -24,7 +26,9 @@ jobs:
         with:
           php-version: '8.3'
       - name: PHP syntax check
-        run: find wordpress/jamu-multilingual -name '*.php' -print0 | xargs -0 -n1 php -l
+        run: |
+          find wordpress/jamu-multilingual -name '*.php' -print0 | xargs -0 -n1 php -l
+          find scripts/templates -name '*.php' -print0 | xargs -0 -n1 php -l
 
   wordpress-woocommerce-smoke:
     runs-on: ubuntu-latest
