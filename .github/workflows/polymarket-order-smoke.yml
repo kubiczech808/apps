@@ -1,6 +1,11 @@
 name: Polymarket Order Smoke
 
 on:
+  push:
+    paths:
+      - 'trading/package.json'
+      - 'trading/tools/polymarket-order-poc.mjs'
+      - '.github/workflows/polymarket-order-smoke.yml'
   workflow_dispatch:
     inputs:
       token_id:
@@ -36,10 +41,10 @@ jobs:
       POLYMARKET_HOST: https://clob.polymarket.com
       POLYMARKET_CHAIN_ID: 137
       POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
-      POLYMARKET_DEPOSIT_WALLET_ADDRESS: ${{ secrets.POLYMARKET_DEPOSIT_WALLET_ADDRESS }}
-      POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE }}
-      TRADING_BANKROLL_USDC: ${{ secrets.TRADING_BANKROLL_USDC }}
-      MAX_ORDER_FRACTION: ${{ secrets.MAX_ORDER_FRACTION }}
+      POLYMARKET_FUNDER_ADDRESS: 0x3252de913d9323667f21f4d88fa1f996fc282293
+      POLYMARKET_SIGNATURE_TYPE: 1
+      TRADING_BANKROLL_USDC: 100
+      MAX_ORDER_FRACTION: 0.05
     steps:
       - uses: actions/checkout@v4
 
@@ -62,12 +67,30 @@ jobs:
       - name: Run Polymarket order smoke
         working-directory: trading
         run: |
+          TOKEN_ID="${{ inputs.token_id }}"
+          SIDE="${{ inputs.side }}"
+          PRICE="${{ inputs.price }}"
+          SIZE="${{ inputs.size }}"
+          TICK_SIZE="${{ inputs.tick_size }}"
+          NEG_RISK="${{ inputs.neg_risk }}"
+
+          if [ -z "$TOKEN_ID" ]; then
+            MARKET_JSON=$(curl --fail --silent --show-error \
+              'https://gamma-api.polymarket.com/markets?limit=1&active=true&closed=false&order=volume24hr&ascending=false')
+            TOKEN_ID=$(echo "$MARKET_JSON" | jq -r '.[0].clobTokenIds | if type == "string" then fromjson[0] else .[0] end')
+            TICK_SIZE=$(echo "$MARKET_JSON" | jq -r '.[0].orderPriceMinTickSize // "0.01"')
+            NEG_RISK=$(echo "$MARKET_JSON" | jq -r '.[0].negRisk // false')
+            SIDE="BUY"
+            PRICE="0.01"
+            SIZE="1"
+          fi
+
           EXTRA_ARGS=""
-          if [ "${{ inputs.neg_risk }}" = "true" ]; then
+          if [ "$NEG_RISK" = "true" ]; then
             EXTRA_ARGS="$EXTRA_ARGS --neg-risk true"
           fi
 
-          if [ "${{ inputs.live_confirm }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.live_confirm }}" = "true" ]; then
             export POLYMARKET_DRY_RUN=false
             EXTRA_ARGS="$EXTRA_ARGS --confirm-live"
           else
@@ -75,9 +98,9 @@ jobs:
           fi
 
           npm run order:poc -- \
-            --token-id "${{ inputs.token_id }}" \
-            --side "${{ inputs.side }}" \
-            --price "${{ inputs.price }}" \
-            --size "${{ inputs.size }}" \
-            --tick-size "${{ inputs.tick_size }}" \
+            --token-id "$TOKEN_ID" \
+            --side "$SIDE" \
+            --price "$PRICE" \
+            --size "$SIZE" \
+            --tick-size "$TICK_SIZE" \
             $EXTRA_ARGS

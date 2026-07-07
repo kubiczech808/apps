@@ -51,13 +51,13 @@ function printJson(payload) {
 async function main() {
   const order = readOrderArgs();
   const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
-  const funderAddress = process.env.POLYMARKET_DEPOSIT_WALLET_ADDRESS;
+  const funderAddress = process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_DEPOSIT_WALLET_ADDRESS;
   const signatureType = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 3);
 
   if (!privateKey || !funderAddress) {
     printJson({
       mode: "unsigned-draft",
-      reason: "POLYMARKET_PRIVATE_KEY and POLYMARKET_DEPOSIT_WALLET_ADDRESS are required to sign orders",
+      reason: "POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER_ADDRESS are required to sign orders",
       order,
     });
     return;

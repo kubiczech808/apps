@@ -36,10 +36,13 @@ Do not paste private keys into chat, GitHub issues, or committed files.
 Create these repository secrets before running `Polymarket Order Smoke`:
 
 - `POLYMARKET_PRIVATE_KEY`: private key for a dedicated trading/session wallet, never a main wallet.
-- `POLYMARKET_DEPOSIT_WALLET_ADDRESS`: Polymarket deposit wallet/funder address.
-- `POLYMARKET_SIGNATURE_TYPE`: use `3` for the current deposit-wallet flow unless you know the account uses another wallet type.
-- `TRADING_BANKROLL_USDC`: total bankroll used by the safety check, for example `100`.
-- `MAX_ORDER_FRACTION`: max order fraction of bankroll, default recommendation `0.05`.
+
+The current Google/Magic proxy account uses these non-secret workflow defaults:
+
+- Funder address: `0x3252de913d9323667f21f4d88fa1f996fc282293`
+- Signature type: `1` (`POLY_PROXY`)
+- Dry-run bankroll: `100`
+- Max order fraction: `0.05`
 
 Optional only if we later choose not to derive L2 credentials from the private key:
 
