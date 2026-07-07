@@ -31,9 +31,10 @@ PROTECTED_TERMS = [
     'Tanamu Tanami', 'Kalila Kalila', 'Sacred Flowers', 'Bali spirit',
     'Nadis Herbal', 'Bali Flowers', 'Bali Moon Face', 'Minyak Balur',
     'Kutus Kutus', 'Praha Vršovice', 'Ústí nad Orlicí', 'Vysoké Mýto',
-    'Lenka Eliášová', 'tajemstvijamu.cz', 'JAMU', 'Jamu', 'Bali', 'Dharma',
+    'Lenka Eliášová', 'tajemstvijamu.cz', 'JAMU', 'Jamu',
     'Studio Oblouková', 'Masáže Isis', 'Joga studio Siddha', 'Masáže Zahrada života',
 ]
+UNRESTORED_MARKER_RE = re.compile(r'Z\s*X\s*Q|X\s*Q\s*\d|Q\s*X\s*Z', re.I)
 
 
 def stable_id(key: str) -> int:
@@ -77,18 +78,29 @@ def choice_values(choices) -> list[dict]:
 
 def protect_text(value: str) -> str:
     protected = value
-    for index, term in enumerate(PROTECTED_TERMS):
+    for index, term in sorted(enumerate(PROTECTED_TERMS), key=lambda item: len(item[1]), reverse=True):
         marker = f'ZXQ{index}QXZ'
-        protected = re.sub(re.escape(term), marker, protected, flags=re.I)
+        pattern = r'(?<![\w])' + re.escape(term) + r'(?![\w])'
+        protected = re.sub(pattern, marker, protected, flags=re.I)
     return protected
 
 
 def restore_text(value: str) -> str:
     restored = value
     for index, term in enumerate(PROTECTED_TERMS):
-        marker = r'Z\s*X\s*Q\s*' + str(index) + r'\s*Q\s*X\s*Z'
+        marker = r'Z\s*X\s*Q?\s*[-_\s]*' + str(index) + r'\s*Q?\s*X\s*Z'
         restored = re.sub(marker, term, restored, flags=re.I)
     return restored
+
+
+def assert_no_unrestored_markers(rows: list[dict]) -> None:
+    payload = json.dumps(rows, ensure_ascii=False)
+    match = UNRESTORED_MARKER_RE.search(payload)
+    if match:
+        start = max(0, match.start() - 60)
+        end = min(len(payload), match.end() + 60)
+        snippet = payload[start:end]
+        raise RuntimeError(f'Unrestored translation marker detected near: {snippet}')
 
 
 def split_chunks(text: str, limit: int = 380) -> list[str]:
@@ -501,6 +513,7 @@ def main() -> int:
     strings = collect_strings(inventory, args.scope)
     translator.prepare(strings)
     rows = build_rows(inventory, translator, args.scope, overrides)
+    assert_no_unrestored_markers(rows)
     output = Path(args.output or f'jamu-content/translations-{args.language}.json')
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps({

@@ -39,6 +39,18 @@ class TranslationHelpersTest(unittest.TestCase):
         spaced = protected.replace('ZXQ', 'Z X Q').replace('QXZ', 'Q X Z')
         self.assertEqual(source, jt.restore_text(spaced))
 
+    def test_protection_does_not_mark_inside_czech_words(self):
+        source = 'Balijská masáž v Bali spirit prostoru.'
+        protected = jt.protect_text(source)
+        self.assertIn('Balijská masáž', protected)
+        self.assertNotIn('ZXQ', protected.split(' masáž', 1)[0])
+        self.assertNotEqual(source, protected)
+        self.assertEqual(source, jt.restore_text(protected))
+
+    def test_unrestored_markers_are_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, 'Unrestored translation marker'):
+            jt.assert_no_unrestored_markers([{'title': 'Olej oleju ZXQ4XZ'}])
+
 
 if __name__ == '__main__':
     unittest.main()
