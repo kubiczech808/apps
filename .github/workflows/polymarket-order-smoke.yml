@@ -39,12 +39,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       POLYMARKET_HOST: https://clob.polymarket.com
-      POLYMARKET_CHAIN_ID: 137
+      POLYMARKET_CHAIN_ID: "137"
       POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
       POLYMARKET_FUNDER_ADDRESS: 0x3252de913d9323667f21f4d88fa1f996fc282293
-      POLYMARKET_SIGNATURE_TYPE: 1
-      TRADING_BANKROLL_USDC: 100
-      MAX_ORDER_FRACTION: 0.05
+      POLYMARKET_SIGNATURE_TYPE: "1"
+      TRADING_BANKROLL_USDC: "100"
+      MAX_ORDER_FRACTION: "0.05"
     steps:
       - uses: actions/checkout@v4
 
