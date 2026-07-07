@@ -88,16 +88,16 @@ def protect_text(value: str) -> str:
 def restore_text(value: str) -> str:
     restored = value
     for index, term in enumerate(PROTECTED_TERMS):
-        marker = r'Z\s*X\s*[QG]?\s*[-_\s]*' + str(index) + r'(?:\s*[QXG]){0,3}\s*Z'
-        restored = re.sub(marker, term, restored, flags=re.I)
-        truncated_marker = r'Z\s*X\s*[QG]?\s*[-_\s]*' + str(index) + r'(?:\s*[QXG]){1,4}(?=\W|$)'
-        restored = re.sub(truncated_marker, term, restored, flags=re.I)
-        missing_leading_z = r'(?<![\w])(?:[A-Za-z]{1,8})?X\s*Q\s*[-_\s]*' + str(index) + r'(?:\s*[QXG]){1,4}\s*Z?'
-        restored = re.sub(missing_leading_z, term, restored, flags=re.I)
-    orphan_marker = r'(?<![\w])(?:[A-Za-z]{1,8})?Z\s*X\s*(?:[QG]\s*){1,4}X?\s*Z'
-    restored = re.sub(orphan_marker, 'JAMU', restored, flags=re.I)
-    missing_z_orphan_marker = r'(?<![\w])(?:[A-Za-z]{1,8})?X\s*Q\s*(?:[QG]\s*){1,4}X?\s*Z'
-    restored = re.sub(missing_z_orphan_marker, 'JAMU', restored, flags=re.I)
+        marker = r'Z\s*X\s*[A-Z]?\s*[-_\s]*' + str(index) + r'(?:\s*[A-Z]){0,4}\s*Z'
+        restored = re.sub(marker, term, restored)
+        truncated_marker = r'Z\s*X\s*[A-Z]?\s*[-_\s]*' + str(index) + r'(?:\s*[A-Z]){1,5}(?=\W|$)'
+        restored = re.sub(truncated_marker, term, restored)
+        missing_leading_z = r'(?<![\w])(?:[A-Za-z]{1,8})?X\s*Q\s*[-_\s]*' + str(index) + r'(?:\s*[A-Z]){1,5}\s*Z?'
+        restored = re.sub(missing_leading_z, term, restored)
+    orphan_marker = r'(?<![\w])(?:[A-Za-z]{1,8})?Z\s*X\s*(?:[A-Z]\s*){1,5}Z'
+    restored = re.sub(orphan_marker, 'JAMU', restored)
+    missing_z_orphan_marker = r'(?<![\w])(?:[A-Za-z]{1,8})?X\s*Q\s*(?:[A-Z]\s*){1,5}Z'
+    restored = re.sub(missing_z_orphan_marker, 'JAMU', restored)
     return restored
 
 
