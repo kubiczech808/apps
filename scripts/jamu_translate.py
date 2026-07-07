@@ -54,6 +54,16 @@ def source_meta(row: dict) -> str:
     return shortened + '…'
 
 
+def choice_values(choices) -> list[dict]:
+    if isinstance(choices, dict):
+        values = choices.values()
+    elif isinstance(choices, list):
+        values = choices
+    else:
+        return []
+    return [choice for choice in values if isinstance(choice, dict)]
+
+
 def split_chunks(text: str, limit: int = 380) -> list[str]:
     text = text.strip()
     if len(text) <= limit:
@@ -205,7 +215,7 @@ def collect_strings(inventory: dict, scope: str) -> set[str]:
                     strings.update(visible_segments(value))
                 elif key != 'code':
                     add(value)
-            for choice in field.get('choices', []):
+            for choice in choice_values(field.get('choices', [])):
                 add(choice.get('label', ''))
         for value in form.get('settings', {}).values():
             add(value)
@@ -339,10 +349,11 @@ def build_rows(inventory: dict, translator: Translator, scope: str) -> list[dict
                     translated_field[key] = translator.text(str(field[key]))
             if field.get('code') and scope == 'full':
                 translated_field['code'] = translator.markup(str(field['code']))
-            if field.get('choices'):
+            choices = choice_values(field.get('choices'))
+            if choices:
                 translated_field['choices'] = [
                     {'label': translator.text(str(choice.get('label', ''))), 'value': choice.get('value', '')}
-                    for choice in field['choices']
+                    for choice in choices
                 ]
             fields[str(field_id)] = translated_field
         settings = {key: translator.text(str(value)) for key, value in form.get('settings', {}).items() if value}

@@ -25,6 +25,12 @@ class TranslationHelpersTest(unittest.TestCase):
         self.assertEqual('parent-page/child-page', routes[('post', 2)])
         self.assertEqual('root-term/child-term', routes[('term', 2)])
 
+    def test_wpforms_choices_accept_lists_and_id_keyed_objects(self):
+        expected = [{'label': 'Praha', 'value': 'praha'}]
+        self.assertEqual(expected, jt.choice_values(expected))
+        self.assertEqual(expected, jt.choice_values({'1': expected[0]}))
+        self.assertEqual([], jt.choice_values('invalid'))
+
 
 if __name__ == '__main__':
     unittest.main()
