@@ -11,28 +11,38 @@ on:
       token_id:
         description: Polymarket CLOB token id
         required: true
+        type: string
       side:
         description: BUY or SELL
         required: true
         default: BUY
+        type: choice
+        options:
+          - BUY
+          - SELL
       price:
         description: Limit price, e.g. 0.50
         required: true
+        type: string
       size:
         description: Outcome token size
         required: true
+        type: string
       tick_size:
         description: Tick size
         required: true
         default: "0.01"
+        type: string
       neg_risk:
         description: Negative risk market
         required: true
-        default: "false"
+        default: false
+        type: boolean
       live_confirm:
         description: Set true only for a real live order
         required: true
-        default: "false"
+        default: false
+        type: boolean
 
 jobs:
   smoke:
