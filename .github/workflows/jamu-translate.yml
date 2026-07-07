@@ -1,0 +1,72 @@
+name: Generate JAMU translation draft
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/jamu-multilingual']
+    paths:
+      - '.github/jamu-translate-trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jamu-translation-generation
+  cancel-in-progress: false
+
+jobs:
+  translate:
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [en, de, pl]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HF_HOME: /tmp/huggingface
+      TOKENIZERS_PARALLELISM: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/jamu-multilingual
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: scripts/requirements-jamu-translate.txt
+      - name: Install open-source translation runtime
+        run: pip install -r scripts/requirements-jamu-translate.txt
+      - name: Generate ${{ matrix.language }} title and SEO draft
+        run: |
+          python scripts/jamu_translate.py \
+            --language '${{ matrix.language }}' \
+            --scope titles \
+            --output 'translations-${{ matrix.language }}.json'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jamu-translations-${{ matrix.language }}
+          path: translations-${{ matrix.language }}.json
+          retention-days: 7
+
+  merge:
+    needs: translate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/jamu-multilingual
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: jamu-translations-*
+          path: jamu-content/generated
+          merge-multiple: true
+      - name: Merge language drafts
+        run: python scripts/jamu_merge_translations.py
+      - name: Commit translation draft
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add jamu-content/translations-draft.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Generate JAMU translation title draft'
+          git push origin HEAD:feat/jamu-multilingual

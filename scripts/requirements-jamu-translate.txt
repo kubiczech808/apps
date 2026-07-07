@@ -1,0 +1,4 @@
+transformers>=4.45,<5
+torch>=2.5,<3
+sentencepiece
+sacremoses
