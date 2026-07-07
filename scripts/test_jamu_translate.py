@@ -56,6 +56,7 @@ class TranslationHelpersTest(unittest.TestCase):
         self.assertEqual('Tajemství JAMU', jt.restore_text('ZXQ0QQZ'))
         self.assertEqual('JAMU', jt.restore_text('ZXQ18QX'))
         self.assertEqual('JAMU', jt.restore_text('PanXQ18QXZ'))
+        self.assertEqual('JAMU', jt.restore_text('ZXQQXZ'))
 
 
 if __name__ == '__main__':

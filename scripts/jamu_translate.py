@@ -94,17 +94,25 @@ def restore_text(value: str) -> str:
         restored = re.sub(truncated_marker, term, restored, flags=re.I)
         missing_leading_z = r'(?<![\w])(?:[A-Za-z]{1,8})?X\s*Q\s*[-_\s]*' + str(index) + r'(?:\s*[QXG]){1,4}\s*Z?'
         restored = re.sub(missing_leading_z, term, restored, flags=re.I)
+    orphan_marker = r'(?<![\w])(?:[A-Za-z]{1,8})?Z\s*X\s*(?:[QG]\s*){1,4}X?\s*Z'
+    restored = re.sub(orphan_marker, 'JAMU', restored, flags=re.I)
+    missing_z_orphan_marker = r'(?<![\w])(?:[A-Za-z]{1,8})?X\s*Q\s*(?:[QG]\s*){1,4}X?\s*Z'
+    restored = re.sub(missing_z_orphan_marker, 'JAMU', restored, flags=re.I)
     return restored
 
 
 def assert_no_unrestored_markers(rows: list[dict]) -> None:
     payload = json.dumps(rows, ensure_ascii=False)
-    match = UNRESTORED_MARKER_RE.search(payload)
-    if match:
-        start = max(0, match.start() - 60)
-        end = min(len(payload), match.end() + 60)
-        snippet = payload[start:end]
-        raise RuntimeError(f'Unrestored translation marker detected near: {snippet}')
+    matches = list(UNRESTORED_MARKER_RE.finditer(payload))
+    if matches:
+        contexts = []
+        for match in matches[:8]:
+            start = max(0, match.start() - 60)
+            end = min(len(payload), match.end() + 60)
+            contexts.append(payload[start:end])
+        details = ' | '.join(contexts)
+        extra = f' (+{len(matches) - 8} more)' if len(matches) > 8 else ''
+        raise RuntimeError(f'Unrestored translation marker detected near: {details}{extra}')
 
 
 def split_chunks(text: str, limit: int = 380) -> list[str]:
