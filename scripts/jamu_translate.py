@@ -92,6 +92,8 @@ def restore_text(value: str) -> str:
         restored = re.sub(marker, term, restored, flags=re.I)
         truncated_marker = r'Z\s*X\s*[QG]?\s*[-_\s]*' + str(index) + r'(?:\s*[QXG]){1,4}(?=\W|$)'
         restored = re.sub(truncated_marker, term, restored, flags=re.I)
+        missing_leading_z = r'(?<![\w])(?:[A-Za-z]{1,8})?X\s*Q\s*[-_\s]*' + str(index) + r'(?:\s*[QXG]){1,4}\s*Z?'
+        restored = re.sub(missing_leading_z, term, restored, flags=re.I)
     return restored
 
 
