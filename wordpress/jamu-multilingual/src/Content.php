@@ -34,6 +34,12 @@ final class Content
         add_filter('get_term', [$this, 'term'], 20, 2);
         add_filter('wp_get_attachment_image_attributes', [$this, 'image_attributes'], 20, 3);
         add_filter('wp_nav_menu_objects', [$this, 'menu_items'], 20, 2);
+        add_filter('get_block_template', [$this, 'block_template'], 20, 3);
+        add_filter('get_block_templates', [$this, 'block_templates'], 20, 3);
+        add_filter('render_block_data', [$this, 'block_data'], 20, 3);
+        add_filter('wpforms_frontend_form_data', [$this, 'wpforms_data'], 20);
+        add_filter('option_blogname', fn ($value) => $this->site_option($value, 'blogname'), 20);
+        add_filter('option_blogdescription', fn ($value) => $this->site_option($value, 'blogdescription'), 20);
     }
 
     public function title(string $title, int $post_id = 0): string
@@ -167,6 +173,111 @@ final class Content
             $markup['description'] = wp_strip_all_tags($translation->excerpt ?: $translation->content);
         }
         return $markup;
+    }
+
+    public function block_template($template, string $id, string $template_type)
+    {
+        if (!$template || !$this->active() || !isset($template->content)) {
+            return $template;
+        }
+        $translation = $this->repository->get(
+            'template',
+            Identity::stable_id('template:' . $id),
+            $this->languages->current()
+        );
+        if (!$translation || $translation->content === '') {
+            return $template;
+        }
+        $localized = clone $template;
+        $localized->content = $translation->content;
+        if ($translation->title !== '' && isset($localized->title)) {
+            $localized->title = $translation->title;
+        }
+        return $localized;
+    }
+
+    public function block_templates(array $templates, array $query, string $template_type): array
+    {
+        if (!$this->active()) {
+            return $templates;
+        }
+        foreach ($templates as $index => $template) {
+            if (is_object($template) && isset($template->id)) {
+                $templates[$index] = $this->block_template($template, (string) $template->id, $template_type);
+            }
+        }
+        return $templates;
+    }
+
+    public function block_data(array $parsed_block, array $source_block, ?object $parent_block): array
+    {
+        if (!$this->active() || !in_array($parsed_block['blockName'] ?? '', ['core/navigation-link', 'core/navigation-submenu'], true)) {
+            return $parsed_block;
+        }
+        $attributes = $parsed_block['attrs'] ?? [];
+        $object_id = absint($attributes['id'] ?? 0);
+        $kind = (string) ($attributes['kind'] ?? '');
+        $type = (string) ($attributes['type'] ?? '');
+        $language = $this->languages->current();
+
+        if ($object_id && $kind === 'post-type') {
+            $translation = $this->repository->get('post', $object_id, $language);
+            if ($translation) {
+                $attributes['label'] = $translation->title ?: ($attributes['label'] ?? '');
+                $attributes['url'] = $this->router->localized_post_url($object_id, $language) ?: ($attributes['url'] ?? '');
+            }
+        } elseif ($object_id && $kind === 'taxonomy') {
+            $translation = $this->repository->get('term', $object_id, $language);
+            if ($translation) {
+                $attributes['label'] = $translation->title ?: ($attributes['label'] ?? '');
+                if (in_array($type, ['product_cat', 'product_tag'], true)) {
+                    $attributes['url'] = $this->router->localized_term_url($object_id, $type, $language) ?: ($attributes['url'] ?? '');
+                }
+            }
+        } else {
+            $key = 'navigation:' . ($attributes['label'] ?? '') . '|' . ($attributes['url'] ?? '');
+            $translation = $this->repository->get('string', Identity::stable_id($key), $language);
+            if ($translation) {
+                $attributes['label'] = $translation->title ?: ($attributes['label'] ?? '');
+                if (!empty($translation->data_decoded['url'])) {
+                    $attributes['url'] = $translation->data_decoded['url'];
+                }
+            }
+        }
+        $parsed_block['attrs'] = $attributes;
+        return $parsed_block;
+    }
+
+    public function wpforms_data(array $form_data): array
+    {
+        if (!$this->active() || empty($form_data['id'])) {
+            return $form_data;
+        }
+        $translation = $this->repository->get('form', (int) $form_data['id'], $this->languages->current());
+        if (!$translation || empty($translation->data_decoded)) {
+            return $form_data;
+        }
+        $translated = $translation->data_decoded;
+        if (!empty($translated['fields']) && is_array($translated['fields'])) {
+            $form_data['fields'] = array_replace_recursive($form_data['fields'] ?? [], $translated['fields']);
+        }
+        if (!empty($translated['settings']) && is_array($translated['settings'])) {
+            $form_data['settings'] = array_replace_recursive($form_data['settings'] ?? [], $translated['settings']);
+        }
+        return $form_data;
+    }
+
+    public function site_option(mixed $value, string $option): mixed
+    {
+        if (!$this->active()) {
+            return $value;
+        }
+        $translation = $this->repository->get(
+            'option',
+            Identity::stable_id('option:' . $option),
+            $this->languages->current()
+        );
+        return $translation && $translation->title !== '' ? $translation->title : $value;
     }
 
     private function product_field(string $value, object $product, string $field): string

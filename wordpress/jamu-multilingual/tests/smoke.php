@@ -1,6 +1,8 @@
 <?php
 
 use Jamu\Multilingual\Languages;
+use Jamu\Multilingual\Content;
+use Jamu\Multilingual\Identity;
 use Jamu\Multilingual\Repository;
 use Jamu\Multilingual\Router;
 
@@ -11,6 +13,8 @@ if (!defined('ABSPATH')) {
 $repository = new Repository();
 $languages = new Languages();
 $router = new Router($repository, $languages);
+$languages->set_current('en');
+$content_layer = new Content($repository, $languages, $router);
 
 $product = new WC_Product_Simple();
 $product->set_name('Český testovací produkt');
@@ -78,6 +82,37 @@ $repository->save([
     'title' => 'English test page', 'content' => '<p>English page content.</p>',
     'status' => 'publish',
 ]);
+
+$template_id = 'jadro//front-page';
+$repository->save([
+    'object_type' => 'template', 'object_subtype' => 'wp_template',
+    'object_id' => Identity::stable_id('template:' . $template_id),
+    'language' => 'en', 'title' => 'English front page template',
+    'content' => '<!-- wp:paragraph --><p>English template content.</p><!-- /wp:paragraph -->',
+    'status' => 'publish',
+]);
+$template = (object) ['id' => $template_id, 'title' => 'Source template', 'content' => '<p>Source</p>'];
+$localized_template = $content_layer->block_template($template, $template_id, 'wp_template');
+if (!str_contains($localized_template->content, 'English template content')) {
+    throw new RuntimeException('Block template was not localized.');
+}
+
+$repository->save([
+    'object_type' => 'form', 'object_subtype' => 'wpforms', 'object_id' => 55,
+    'language' => 'en', 'status' => 'publish',
+    'data' => [
+        'fields' => ['1' => ['label' => 'First name', 'placeholder' => 'Your name']],
+        'settings' => ['submit_text' => 'Send'],
+    ],
+]);
+$localized_form = $content_layer->wpforms_data([
+    'id' => 55,
+    'fields' => ['1' => ['id' => 1, 'label' => 'Jméno', 'placeholder' => 'Vaše jméno']],
+    'settings' => ['submit_text' => 'Odeslat'],
+]);
+if ($localized_form['fields']['1']['label'] !== 'First name' || $localized_form['settings']['submit_text'] !== 'Send') {
+    throw new RuntimeException('WPForms data was not localized safely.');
+}
 
 $untranslated = new WC_Product_Simple();
 $untranslated->set_name('Nepřeložený produkt');

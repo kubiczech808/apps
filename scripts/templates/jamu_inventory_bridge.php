@@ -49,12 +49,32 @@ add_action('wp_loaded', static function (): void {
         'terms' => [],
         'attributes' => [],
         'menus' => [],
+        'block_templates' => [],
+        'forms' => [],
         'media' => [],
+        'registered_post_types' => [],
         'active_theme' => [],
         'active_plugins' => [],
     ];
 
+    $registered_post_types = get_post_types([], 'objects');
+    foreach ($registered_post_types as $post_type => $object) {
+        $counts = wp_count_posts($post_type);
+        $inventory['registered_post_types'][] = [
+            'name' => $post_type,
+            'label' => $object->label,
+            'public' => (bool) $object->public,
+            'show_ui' => (bool) $object->show_ui,
+            'published' => (int) ($counts->publish ?? 0),
+        ];
+    }
+
     $public_post_types = get_post_types(['public' => true], 'objects');
+    foreach (['wp_navigation', 'wp_template', 'wp_template_part', 'wp_block'] as $special_type) {
+        if (isset($registered_post_types[$special_type])) {
+            $public_post_types[$special_type] = $registered_post_types[$special_type];
+        }
+    }
     unset($public_post_types['attachment']);
     foreach ($public_post_types as $post_type => $object) {
         $posts = get_posts([
@@ -144,6 +164,77 @@ add_action('wp_loaded', static function (): void {
         ];
     }
 
+    if (function_exists('get_block_templates')) {
+        foreach (['wp_template', 'wp_template_part'] as $template_type) {
+            foreach (get_block_templates([], $template_type) as $template) {
+                $stable_key = 'template:' . $template->id;
+                $inventory['block_templates'][] = [
+                    'object_type' => 'template',
+                    'object_subtype' => $template_type,
+                    'object_id' => (int) hexdec(substr(hash('sha256', $stable_key), 0, 15)),
+                    'template_id' => $template->id,
+                    'wp_id' => (int) ($template->wp_id ?? 0),
+                    'slug' => $template->slug,
+                    'theme' => $template->theme,
+                    'source' => $template->source,
+                    'title' => is_object($template->title) ? ($template->title->rendered ?? '') : (string) $template->title,
+                    'description' => (string) ($template->description ?? ''),
+                    'content' => (string) $template->content,
+                    'area' => (string) ($template->area ?? ''),
+                ];
+            }
+        }
+    }
+
+    $forms = get_posts([
+        'post_type' => 'wpforms',
+        'post_status' => 'publish',
+        'posts_per_page' => -1,
+        'orderby' => 'ID',
+        'order' => 'ASC',
+    ]);
+    foreach ($forms as $form) {
+        $form_data = json_decode($form->post_content, true);
+        if (!is_array($form_data)) {
+            continue;
+        }
+        $public_fields = [];
+        foreach ((array) ($form_data['fields'] ?? []) as $field_id => $field) {
+            $public_field = [
+                'id' => (int) ($field['id'] ?? $field_id),
+                'type' => (string) ($field['type'] ?? ''),
+            ];
+            foreach (['label', 'description', 'placeholder', 'sublabel_hide', 'size', 'format', 'code'] as $key) {
+                if (array_key_exists($key, $field)) {
+                    $public_field[$key] = $field[$key];
+                }
+            }
+            if (!empty($field['choices']) && is_array($field['choices'])) {
+                $public_field['choices'] = array_map(static function ($choice): array {
+                    return [
+                        'label' => (string) ($choice['label'] ?? ''),
+                        'value' => (string) ($choice['value'] ?? ''),
+                    ];
+                }, $field['choices']);
+            }
+            $public_fields[(string) $field_id] = $public_field;
+        }
+        $public_settings = [];
+        foreach (['form_title', 'form_desc', 'submit_text', 'submit_text_processing', 'confirmation_message'] as $key) {
+            if (array_key_exists($key, $form_data['settings'] ?? [])) {
+                $public_settings[$key] = $form_data['settings'][$key];
+            }
+        }
+        $inventory['forms'][] = [
+            'object_type' => 'form',
+            'object_subtype' => 'wpforms',
+            'object_id' => $form->ID,
+            'title' => $form->post_title,
+            'fields' => $public_fields,
+            'settings' => $public_settings,
+        ];
+    }
+
     $attachments = get_posts([
         'post_type' => 'attachment',
         'post_status' => 'inherit',
@@ -190,4 +281,3 @@ add_action('wp_loaded', static function (): void {
     echo wp_json_encode($inventory, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
 }, 999);
-

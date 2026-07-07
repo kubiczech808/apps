@@ -74,6 +74,8 @@ def main() -> int:
             'terms': len(inventory.get('terms', [])),
             'attributes': len(inventory.get('attributes', [])),
             'menus': len(inventory.get('menus', [])),
+            'block_templates': len(inventory.get('block_templates', [])),
+            'forms': len(inventory.get('forms', [])),
             'media': len(inventory.get('media', [])),
             'active_plugins': len(inventory.get('active_plugins', [])),
             'theme': inventory.get('active_theme', {}).get('name', ''),
