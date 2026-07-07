@@ -1647,8 +1647,7 @@ def pending_action_candidate(text: str) -> tuple[str, str] | None:
         target = blogger_delegation_target(text)
         agent_name = target[1] if target else "prislusneho blogovaciho agenta"
         topic = extract_blogger_topic(text)
-        topic_match = re.search(r"\bo\s+([^.;\n]{3,120})", text, flags=re.IGNORECASE)
-        topic_label = topic_match.group(1).strip() if topic_match else topic[:140].strip()
+        topic_label = blogger_topic_label(topic)
         mode = "publikovat clanek" if explicit_publish_requested(text) else "vytvorit draft clanku"
         return "blogger", f"{mode} pres {agent_name}: {topic_label}"
     if is_general_delegation_request_text(text):
@@ -1951,6 +1950,47 @@ def strip_blogger_followup_instructions(text: str) -> str:
     return cleaned.strip(" .")
 
 
+def strip_blogger_command_prefix(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", text.strip())
+    cleaned = re.sub(
+        r"^(?:prosim\s+)?(?:postni|vytvor|vygeneruj|napis|priprav|zadej|deleguj)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    cleaned = re.sub(
+        r"^(?:draft|clanek|article|post|podklad)(?:\s+clanku)?\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    cleaned = re.sub(
+        r"^(?:na|pro)\s+(?:agenta?\s+)?(?:agentu\s+)?(?:oz|osobni\s+zkusenosti|osobnizkusenosti(?:\.cz)?)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned.strip(" .")
+
+
+def normalize_blogger_instruction_tail(text: str) -> str:
+    cleaned = text.strip(" .")
+    cleaned = re.sub(
+        r"^(?:a\s+)?(?:napis|uved|zmin)\s*,?\s+(?:ze|že)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip(" .")
+
+
+def blogger_topic_label(topic: str, limit: int = 180) -> str:
+    cleaned = re.sub(r"\s+", " ", topic.strip(" ."))
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip(" ,.;") + "..."
+
+
 def is_vague_or_instruction_topic(text: str) -> bool:
     low = g.normalize_text(text)
     vague_terms = (
@@ -1997,7 +2037,19 @@ def extract_blogger_topic(text: str) -> str:
     match = re.search(r"(?:na\s+t[eĂ©]ma|tema|tĂ©ma)\s+(.+)$", cleaned, flags=re.IGNORECASE)
     if match and match.group(1).strip():
         return normalize_blogger_topic(match.group(1), text)
-    return normalize_blogger_topic(cleaned, text)
+    command_stripped = strip_blogger_command_prefix(cleaned)
+    about_match = re.search(
+        r"^(?:o|na\s+tema|na\s+téma)\s+([^.;\n]{3,140})(?:[.;]\s*(.+))?$",
+        command_stripped,
+        flags=re.IGNORECASE,
+    )
+    if about_match:
+        topic = about_match.group(1).strip(" .")
+        tail = normalize_blogger_instruction_tail(about_match.group(2) or "")
+        if tail:
+            return normalize_blogger_topic(f"{topic}: {tail}", text)
+        return normalize_blogger_topic(topic, text)
+    return normalize_blogger_topic(command_stripped or cleaned, text)
 
 
 def write_blogger_requested_topic(instance: str, topic: str) -> Path:
@@ -3524,7 +3576,7 @@ def parse_blogger_delegation_request(text: str) -> str | None:
     site_url = str(cfg_data.get("WP_SITE_URL") or cfg_data.get("wp_site_url") or "")
     site_domain = domain_from_url(site_url)
     explicit_link_requested = any(term in g.normalize_text(text) for term in ("odkaz", "link", "url", "nahled"))
-    requires_link = default_post_status == "draft" or explicit_link_requested
+    requires_link = explicit_link_requested
 
     state_path = write_blogger_requested_topic(instance, topic)
     log_path = g.OPENCLAW_DIR / "logs" / f"virtual-assistant-{instance}-delegation.log"
@@ -4616,21 +4668,26 @@ def draft_preview_urls_from_state(task: dict[str, Any], proof: dict[str, Any], s
 
 
 def blogger_task_requires_link(task: dict[str, Any], proof: dict[str, Any]) -> bool:
-    if str(proof.get("requires_link") or "").lower() == "true":
+    wants_link = str(proof.get("wants_link") or "").lower()
+    if wants_link == "true":
         return True
-    if str(proof.get("wants_link") or "").lower() == "true":
-        return True
-    return str(task.get("kind") or "") == "blogger-draft" and str(proof.get("default_post_status") or "").lower() == "draft"
+    if wants_link == "false":
+        return False
+    return str(proof.get("requires_link") or "").lower() == "true"
 
 
 def should_recheck_reported_blogger_task(task: dict[str, Any]) -> bool:
     proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
     if not str(task.get("kind") or "").startswith("blogger-"):
         return False
-    if str(task.get("last_reported_status") or "") != "DONE":
-        return False
     observation = str(task.get("last_observation") or "")
-    return blogger_task_requires_link(task, proof) and "http" not in observation
+    reported_status = str(task.get("last_reported_status") or "")
+    if reported_status == "DONE":
+        return blogger_task_requires_link(task, proof) and "http" not in observation
+    if reported_status == "BLOCKED":
+        low = g.normalize_text(observation)
+        return "odkaz" in low and not blogger_task_requires_link(task, proof)
+    return False
 
 
 def blogger_task_observation(task: dict[str, Any]) -> tuple[str, str]:
