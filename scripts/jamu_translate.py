@@ -88,7 +88,7 @@ def protect_text(value: str) -> str:
 def restore_text(value: str) -> str:
     restored = value
     for index, term in enumerate(PROTECTED_TERMS):
-        marker = r'Z\s*X\s*[QG]?\s*[-_\s]*' + str(index) + r'\s*Q?\s*X\s*Z'
+        marker = r'Z\s*X\s*[QG]?\s*[-_\s]*' + str(index) + r'(?:\s*[QXG]){0,3}\s*Z'
         restored = re.sub(marker, term, restored, flags=re.I)
     return restored
 
