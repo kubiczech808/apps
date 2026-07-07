@@ -74,6 +74,15 @@ jobs:
           grep -q 'English test product' /tmp/product.html
           grep -q 'rel="canonical"' /tmp/product.html
           grep -q 'hreflang="en"' /tmp/product.html
-          PRODUCT_ID="$(cat /tmp/jamu-product-id)"
+          grep -Eq '<html[^>]+lang="en"' /tmp/product.html
+          grep -q 'English test meta description' /tmp/product.html
+          PRODUCT_ID="$(php -r '$d=json_decode(file_get_contents("/tmp/jamu-smoke-ids.json"),true);echo $d["product"];')"
           grep -Eq "name=.?add-to-cart.? value=.?$PRODUCT_ID" /tmp/product.html
-
+          curl -fsS http://127.0.0.1:8080/en/product-category/test-category/ -o /tmp/category.html
+          grep -q 'English test category' /tmp/category.html
+          grep -q 'English test product' /tmp/category.html
+          curl -fsS http://127.0.0.1:8080/en/test-page/ -o /tmp/page.html
+          grep -q 'English test page' /tmp/page.html
+          grep -q 'English page content' /tmp/page.html
+          curl -fsS http://127.0.0.1:8080/en/product/neprelozeny-produkt/ -o /tmp/missing.html
+          grep -qi 'noindex' /tmp/missing.html
