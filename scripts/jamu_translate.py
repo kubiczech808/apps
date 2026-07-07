@@ -90,6 +90,8 @@ def restore_text(value: str) -> str:
     for index, term in enumerate(PROTECTED_TERMS):
         marker = r'Z\s*X\s*[QG]?\s*[-_\s]*' + str(index) + r'(?:\s*[QXG]){0,3}\s*Z'
         restored = re.sub(marker, term, restored, flags=re.I)
+        truncated_marker = r'Z\s*X\s*[QG]?\s*[-_\s]*' + str(index) + r'(?:\s*[QXG]){1,4}(?=\W|$)'
+        restored = re.sub(truncated_marker, term, restored, flags=re.I)
     return restored
 
 

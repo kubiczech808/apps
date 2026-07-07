@@ -54,6 +54,7 @@ class TranslationHelpersTest(unittest.TestCase):
     def test_restore_marker_with_q_to_g_mutation(self):
         self.assertEqual('Kutus Kutus', jt.restore_text('ZXG12QXZ'))
         self.assertEqual('Tajemství JAMU', jt.restore_text('ZXQ0QQZ'))
+        self.assertEqual('JAMU', jt.restore_text('ZXQ18QX'))
 
 
 if __name__ == '__main__':
