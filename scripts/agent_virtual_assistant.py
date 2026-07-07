@@ -2513,15 +2513,16 @@ def wordpress_comment_actions(entry: dict[str, str]) -> list[dict[str, str]]:
 
 def review_form_actions(entry: dict[str, str]) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = [
-        {"type": "fill", "selector": "input[name='name'], input[name='author'], input#name, input#author", "value": entry["name"]},
+        {"type": "click", "selector": "#tab-title-reviews a[href='#tab-reviews'], a[href='#tab-reviews']", "optional": True},
+        {"type": "fill", "selector": "form#commentform input#author, form#commentform input[name='author']", "value": entry["name"]},
     ]
     if entry.get("email"):
-        actions.append({"type": "fill", "selector": "input[name='email'], input#email", "value": entry["email"]})
+        actions.append({"type": "fill", "selector": "form#commentform input#email, form#commentform input[name='email']", "value": entry["email"]})
     actions.extend([
-        {"type": "fill", "selector": "textarea[name='review'], textarea[name='comment'], textarea#review, textarea#comment", "value": entry["comment"]},
-        {"type": "select", "selector": "select#rating, select[name='rating']", "value": entry.get("rating") or "5", "optional": True},
-        {"type": "check", "selector": f"input[name='rating'][value='{entry.get('rating') or '5'}'], input[type='radio'][value='{entry.get('rating') or '5'}']", "optional": True},
-        {"type": "click", "selector": "input#submit, input[type='submit'], button[type='submit'], button:has-text('Odeslat')"},
+        {"type": "fill", "selector": "form#commentform textarea#comment, form#commentform textarea[name='comment']", "value": entry["comment"]},
+        {"type": "select", "selector": "form#commentform select#rating, form#commentform select[name='rating']", "value": entry.get("rating") or "5", "optional": True},
+        {"type": "click", "selector": f"form#commentform p.stars a.star-{entry.get('rating') or '5'}, form#commentform a.star-{entry.get('rating') or '5'}", "optional": True},
+        {"type": "click", "selector": "form#commentform input#submit, form#commentform input[type='submit'], form#commentform button[type='submit']"},
     ])
     return actions
 
@@ -2532,7 +2533,7 @@ def start_playwright_form_task(url: str, entry: dict[str, str], task_id: str, in
     task = {
         "url": url,
         "allowSubmit": True,
-        "waitUntil": "domcontentloaded",
+        "waitUntil": "commit",
         "timeoutMs": 60000,
         "screenshotPath": str(paths["screenshot"]),
         "actions": review_form_actions(entry) if entry.get("kind") == "review" else wordpress_comment_actions(entry),
