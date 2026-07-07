@@ -37,11 +37,21 @@ jobs:
       - name: Install open-source translation runtime
         run: pip install -r scripts/requirements-jamu-translate.txt
       - name: Generate ${{ matrix.language }} title and SEO draft
+        shell: bash
         run: |
+          set +e
           python scripts/jamu_translate.py \
             --language '${{ matrix.language }}' \
             --scope titles \
-            --output 'translations-${{ matrix.language }}.json'
+            --output 'translations-${{ matrix.language }}.json' \
+            >translation.log 2>&1
+          status=$?
+          cat translation.log
+          if [ "$status" -ne 0 ]; then
+            message="$(tail -n 35 translation.log | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')"
+            echo "::error title=JAMU ${{ matrix.language }} translation failure::$message"
+          fi
+          exit "$status"
       - uses: actions/upload-artifact@v4
         with:
           name: jamu-translations-${{ matrix.language }}
