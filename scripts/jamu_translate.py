@@ -32,6 +32,7 @@ PROTECTED_TERMS = [
     'Nadis Herbal', 'Bali Flowers', 'Bali Moon Face', 'Minyak Balur',
     'Kutus Kutus', 'Praha Vršovice', 'Ústí nad Orlicí', 'Vysoké Mýto',
     'Lenka Eliášová', 'tajemstvijamu.cz', 'JAMU', 'Jamu', 'Bali', 'Dharma',
+    'Studio Oblouková', 'Masáže Isis', 'Joga studio Siddha', 'Masáže Zahrada života',
 ]
 
 
@@ -296,7 +297,15 @@ def unique_routes(rows: list[dict], language: str) -> dict[tuple[str, int], str]
     return routes
 
 
-def build_rows(inventory: dict, translator: Translator, scope: str) -> list[dict]:
+def title_for(source: dict, translator: Translator, overrides: dict) -> str:
+    object_type = source.get('object_type', 'post')
+    override = overrides.get(translator.language, {}).get(object_type, {}).get(str(source['object_id']))
+    if override:
+        return override
+    return translator.text(source.get('title') or source.get('slug', ''))
+
+
+def build_rows(inventory: dict, translator: Translator, scope: str, overrides: dict) -> list[dict]:
     rows: list[dict] = []
     route_sources = []
     source_urls = {}
@@ -306,11 +315,11 @@ def build_rows(inventory: dict, translator: Translator, scope: str) -> list[dict
         if subtype in {'wp_template', 'wp_template_part', 'wp_navigation', 'wp_block'}:
             continue
         row = dict(source)
-        row['_translated_title'] = translator.text(source.get('title') or source.get('slug', ''))
+        row['_translated_title'] = title_for(source, translator, overrides)
         route_sources.append(row)
     for source in inventory.get('terms', []):
         row = dict(source)
-        row['_translated_title'] = translator.text(source.get('title', ''))
+        row['_translated_title'] = title_for(source, translator, overrides)
         route_sources.append(row)
 
     routes = unique_routes(route_sources, translator.language)
@@ -318,7 +327,7 @@ def build_rows(inventory: dict, translator: Translator, scope: str) -> list[dict
         subtype = source['object_subtype']
         if subtype in {'wp_template', 'wp_template_part', 'wp_navigation', 'wp_block'}:
             continue
-        title = translator.text(source.get('title') or source.get('slug', ''))
+        title = title_for(source, translator, overrides)
         route = routes.get(('post', int(source['object_id'])), slugify(title))
         translated = {
             'object_type': 'post', 'object_subtype': subtype,
@@ -327,7 +336,7 @@ def build_rows(inventory: dict, translator: Translator, scope: str) -> list[dict
             'title': title,
             'excerpt': translator.markup(source.get('excerpt', '')) if scope == 'full' else '',
             'content': translator.markup(source.get('content', '')) if scope == 'full' else '',
-            'seo_title': translator.text(source.get('seo_title') or source.get('title') or source.get('slug', '')),
+            'seo_title': title,
             'meta_description': translator.text(source_meta(source)),
             'data': {}, 'status': 'publish' if scope == 'full' else 'draft',
         }
@@ -336,7 +345,7 @@ def build_rows(inventory: dict, translator: Translator, scope: str) -> list[dict
             source_urls[source['url'].rstrip('/') + '/'] = translated
 
     for source in inventory.get('terms', []):
-        title = translator.text(source.get('title', ''))
+        title = title_for(source, translator, overrides)
         route = routes.get(('term', int(source['object_id'])), slugify(title))
         translated = {
             'object_type': 'term', 'object_subtype': source['object_subtype'],
@@ -481,14 +490,17 @@ def main() -> int:
     parser.add_argument('--language', required=True, choices=sorted(MODEL_CONFIG))
     parser.add_argument('--scope', default='titles', choices=['titles', 'full'])
     parser.add_argument('--input', default='jamu-content/source-inventory.json')
+    parser.add_argument('--overrides', default='jamu-content/title-overrides.json')
     parser.add_argument('--output')
     args = parser.parse_args()
 
     inventory = json.loads(Path(args.input).read_text(encoding='utf-8'))
+    overrides_path = Path(args.overrides)
+    overrides = json.loads(overrides_path.read_text(encoding='utf-8')) if overrides_path.exists() else {}
     translator = Translator(args.language)
     strings = collect_strings(inventory, args.scope)
     translator.prepare(strings)
-    rows = build_rows(inventory, translator, args.scope)
+    rows = build_rows(inventory, translator, args.scope, overrides)
     output = Path(args.output or f'jamu-content/translations-{args.language}.json')
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps({
