@@ -13,9 +13,12 @@ from typing import Iterable
 
 
 MODEL_CONFIG = {
-    'en': {'model': 'Helsinki-NLP/opus-mt-cs-en', 'prefix': ''},
-    'de': {'model': 'Helsinki-NLP/opus-mt-cs-de', 'prefix': ''},
-    'pl': {'model': 'Helsinki-NLP/opus-mt-sla-sla', 'prefix': '>>pol<< '},
+    'en': {'models': [('Helsinki-NLP/opus-mt-cs-en', '')]},
+    'de': {'models': [('Helsinki-NLP/opus-mt-cs-de', '')]},
+    'pl': {'models': [
+        ('Helsinki-NLP/opus-mt-cs-en', ''),
+        ('pumad/pumadic-en-pl', ''),
+    ]},
 }
 
 LANGUAGE_NAMES = {'en': 'English', 'de': 'German', 'pl': 'Polish'}
@@ -23,6 +26,13 @@ TOKEN_RE = re.compile(r'(?s)(<!--.*?-->|<[^>]+>)')
 SHORTCODE_RE = re.compile(r'^\s*\[[A-Za-z_][^\]]*\]\s*$')
 SPACE_RE = re.compile(r'^(\s*)(.*?)(\s*)$', re.S)
 SENTENCE_RE = re.compile(r'(?<=[.!?])\s+(?=[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])')
+PROTECTED_TERMS = [
+    'Tajemství JAMU', 'Jamu Balance Pure', 'Jamu Balance', 'Dharma Pure',
+    'Tanamu Tanami', 'Kalila Kalila', 'Sacred Flowers', 'Bali spirit',
+    'Nadis Herbal', 'Bali Flowers', 'Bali Moon Face', 'Minyak Balur',
+    'Kutus Kutus', 'Praha Vršovice', 'Ústí nad Orlicí', 'Vysoké Mýto',
+    'Lenka Eliášová', 'tajemstvijamu.cz', 'JAMU', 'Jamu', 'Bali', 'Dharma',
+]
 
 
 def stable_id(key: str) -> int:
@@ -62,6 +72,22 @@ def choice_values(choices) -> list[dict]:
     else:
         return []
     return [choice for choice in values if isinstance(choice, dict)]
+
+
+def protect_text(value: str) -> str:
+    protected = value
+    for index, term in enumerate(PROTECTED_TERMS):
+        marker = f'ZXQ{index}QXZ'
+        protected = re.sub(re.escape(term), marker, protected, flags=re.I)
+    return protected
+
+
+def restore_text(value: str) -> str:
+    restored = value
+    for index, term in enumerate(PROTECTED_TERMS):
+        marker = r'Z\s*X\s*Q\s*' + str(index) + r'\s*Q\s*X\s*Z'
+        restored = re.sub(marker, term, restored, flags=re.I)
+    return restored
 
 
 def split_chunks(text: str, limit: int = 380) -> list[str]:
@@ -111,12 +137,14 @@ class Translator:
 
         config = MODEL_CONFIG[language]
         self.language = language
-        self.prefix = config['prefix']
         self.torch = torch
         torch.set_num_threads(max(1, min(4, os.cpu_count() or 2)))
-        self.tokenizer = AutoTokenizer.from_pretrained(config['model'])
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(config['model'])
-        self.model.eval()
+        self.stages = []
+        for model_name, prefix in config['models']:
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            model.eval()
+            self.stages.append((tokenizer, model, prefix))
         self.memory: dict[str, str] = {}
 
     def prepare(self, values: Iterable[str]) -> None:
@@ -131,21 +159,23 @@ class Translator:
         batch_size = 16
         for start in range(0, len(unique), batch_size):
             batch = unique[start:start + batch_size]
-            inputs = [self.prefix + item for item in batch]
-            encoded = self.tokenizer(
-                inputs, return_tensors='pt', padding=True, truncation=True, max_length=512
-            )
-            with self.torch.no_grad():
-                generated = self.model.generate(
-                    **encoded,
-                    max_new_tokens=512,
-                    num_beams=3,
-                    early_stopping=True,
-                    renormalize_logits=True,
+            translated = [protect_text(item) for item in batch]
+            for tokenizer, model, prefix in self.stages:
+                inputs = [prefix + item for item in translated]
+                encoded = tokenizer(
+                    inputs, return_tensors='pt', padding=True, truncation=True, max_length=512
                 )
-            translated = self.tokenizer.batch_decode(generated, skip_special_tokens=True)
+                with self.torch.no_grad():
+                    generated = model.generate(
+                        **encoded,
+                        max_new_tokens=512,
+                        num_beams=3,
+                        early_stopping=True,
+                        renormalize_logits=True,
+                    )
+                translated = tokenizer.batch_decode(generated, skip_special_tokens=True)
             for source, target in zip(batch, translated):
-                self.memory[source] = self.fix_glossary(source, target.strip())
+                self.memory[source] = self.fix_glossary(source, restore_text(target.strip()))
             print(f'[{self.language}] translated {min(start + batch_size, len(unique))}/{len(unique)} segments', flush=True)
 
     def text(self, value: str) -> str:
@@ -172,10 +202,7 @@ class Translator:
 
     @staticmethod
     def fix_glossary(source: str, target: str) -> str:
-        protected = [
-            'Tajemství JAMU', 'JAMU', 'Jamu', 'Kutus Kutus', 'Minyak Balur',
-            'Bali', 'Ajurvéda', 'Ájurvéda', 'Ecomail', 'WooCommerce',
-        ]
+        protected = ['Tajemství JAMU', 'JAMU', 'Jamu', 'Kutus Kutus', 'Minyak Balur', 'Bali', 'Ecomail', 'WooCommerce']
         for term in protected:
             if term in source and term.lower() not in target.lower():
                 target = target.replace(term.lower(), term)
@@ -470,7 +497,7 @@ def main() -> int:
         'language': args.language,
         'language_name': LANGUAGE_NAMES[args.language],
         'scope': args.scope,
-        'model': MODEL_CONFIG[args.language]['model'],
+        'model': ' -> '.join(model for model, prefix in MODEL_CONFIG[args.language]['models']),
         'translations': rows,
     }, ensure_ascii=False, indent=2), encoding='utf-8')
     print(f'Wrote {len(rows)} {args.language} translation rows to {output}')

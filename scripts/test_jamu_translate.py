@@ -31,6 +31,14 @@ class TranslationHelpersTest(unittest.TestCase):
         self.assertEqual(expected, jt.choice_values({'1': expected[0]}))
         self.assertEqual([], jt.choice_values('invalid'))
 
+    def test_brand_and_place_names_round_trip_through_markers(self):
+        source = 'Tajemství JAMU nabízí Minyak Balur v Ústí nad Orlicí.'
+        protected = jt.protect_text(source)
+        self.assertNotIn('Tajemství JAMU', protected)
+        self.assertEqual(source, jt.restore_text(protected))
+        spaced = protected.replace('ZXQ', 'Z X Q').replace('QXZ', 'Q X Z')
+        self.assertEqual(source, jt.restore_text(spaced))
+
 
 if __name__ == '__main__':
     unittest.main()
