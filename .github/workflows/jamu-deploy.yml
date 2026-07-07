@@ -1,0 +1,47 @@
+name: Deploy JAMU plugin (inactive)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/jamu-multilingual']
+    paths:
+      - '.github/jamu-deploy-trigger'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jamu-production-plugin-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-inactive-plugin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: jamu-production
+    env:
+      JAMU_FTP_LOGIN: ${{ secrets.JAMU_FTP_LOGIN }}
+      JAMU_FTP_PWD: ${{ secrets.JAMU_FTP_PWD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deployment scope and secrets
+        run: |
+          test -n "$JAMU_FTP_LOGIN" || { echo 'Missing JAMU_FTP_LOGIN'; exit 1; }
+          test -n "$JAMU_FTP_PWD" || { echo 'Missing JAMU_FTP_PWD'; exit 1; }
+          test -f wordpress/jamu-multilingual/jamu-multilingual.php
+          test ! -e wordpress/jamu-multilingual/wp-config.php
+      - name: PHP syntax check
+        run: find wordpress/jamu-multilingual -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: Upload only the standalone plugin directory
+        run: python scripts/jamu_ftp_deploy.py
+      - name: Verify public site remains available
+        run: |
+          curl --fail --silent --show-error --max-time 30 https://tajemstvijamu.cz/ -o /tmp/jamu-home.html
+          grep -q '<html' /tmp/jamu-home.html
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jamu-deploy-manifest
+          path: jamu-deploy-manifest.json
+          if-no-files-found: ignore
+          retention-days: 14
