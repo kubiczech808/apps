@@ -51,6 +51,9 @@ class TranslationHelpersTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Unrestored translation marker'):
             jt.assert_no_unrestored_markers([{'title': 'Olej oleju ZXQ4XZ'}])
 
+    def test_restore_marker_with_q_to_g_mutation(self):
+        self.assertEqual('Kutus Kutus', jt.restore_text('ZXG12QXZ'))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -34,7 +34,7 @@ PROTECTED_TERMS = [
     'Lenka Eliášová', 'tajemstvijamu.cz', 'JAMU', 'Jamu',
     'Studio Oblouková', 'Masáže Isis', 'Joga studio Siddha', 'Masáže Zahrada života',
 ]
-UNRESTORED_MARKER_RE = re.compile(r'Z\s*X\s*Q|X\s*Q\s*\d|Q\s*X\s*Z', re.I)
+UNRESTORED_MARKER_RE = re.compile(r'Z\s*X\s*[QG]|X\s*Q\s*\d|Q\s*X\s*Z', re.I)
 
 
 def stable_id(key: str) -> int:
@@ -88,7 +88,7 @@ def protect_text(value: str) -> str:
 def restore_text(value: str) -> str:
     restored = value
     for index, term in enumerate(PROTECTED_TERMS):
-        marker = r'Z\s*X\s*Q?\s*[-_\s]*' + str(index) + r'\s*Q?\s*X\s*Z'
+        marker = r'Z\s*X\s*[QG]?\s*[-_\s]*' + str(index) + r'\s*Q?\s*X\s*Z'
         restored = re.sub(marker, term, restored, flags=re.I)
     return restored
 
