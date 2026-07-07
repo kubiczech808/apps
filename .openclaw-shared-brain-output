@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-07T04:43:26Z
+checked_at_utc=2026-07-07T14:58:10Z
 shared_brain_service=active
 shared_brain_backend= openclaw-lite-hybrid
 shared_brain_notes_dir= /home/openclaw2/.openclaw/shared-brain/notes
@@ -13,9 +13,9 @@ shared_brain_http_tools= brain_search,brain_get,brain_neighbors,brain_put
 shared_brain_graph_nodes= 16
 shared_brain_graph_edges= 31
 shared_brain_search_hits= 5
-shared_brain_search_1=title=Agent btc-dca (`btc-dca`) file=Generated/Virtual Assistant/Agent Registry.md score=3.724029
-shared_brain_search_2=title=Virtual Assistant Agent Registry file=Generated/Virtual Assistant/Agent Registry.json.md score=3.711397
-shared_brain_search_3=title=Agent D (`agent-d`) file=Generated/Virtual Assistant/Agent Registry.md score=2.974534
-shared_brain_search_4=title=Agent OZ (`osobnizkusenosti-cz`) file=Generated/Virtual Assistant/Agent Registry.md score=2.848885
-shared_brain_search_5=title=btc-dca (`btc-dca`) file=Generated/Blogger Agents/Blogger Agents.md score=2.737838
+shared_brain_search_1=title=Agent btc-dca (`btc-dca`) file=Generated/Virtual Assistant/Agent Registry.md score=3.704175
+shared_brain_search_2=title=Virtual Assistant Agent Registry file=Generated/Virtual Assistant/Agent Registry.json.md score=3.68722
+shared_brain_search_3=title=Agent D (`agent-d`) file=Generated/Virtual Assistant/Agent Registry.md score=2.952091
+shared_brain_search_4=title=Agent OZ (`osobnizkusenosti-cz`) file=Generated/Virtual Assistant/Agent Registry.md score=2.838039
+shared_brain_search_5=title=btc-dca (`btc-dca`) file=Generated/Blogger Agents/Blogger Agents.md score=2.74436
 shared_brain_neighbors= {'links_to': [], 'linked_from': [{'title': 'Agent D X Post State', 'file': 'Generated/Agent D/X Post State.json.md', 'category': 'Agents'}, {'title': 'Blogger Agents', 'file': 'Generated/Blogger Agents/Blogger Agents.md', 'category': 'Agents'}, {'title': 'Blogger Agent btc-dca', 'file': 'Generated/Blogger Agents/btc-dca.json.md', 'category': 'Agents'}, {'title': 'Blogger Agent oz', 'file': 'Generated/Blogger Agents/osobnizkusenosti-cz.json.md', 'category': 'Agents'}, {'title': 'Blogger Agent Agent OZ', 'file': 'Generated/Blogger Agents/oz.json.md', 'category': 'Agents'}, {'title': 'Blogger Agent tajemstvijamu-cz', 'file': 'Generated/Blogger Agents/tajemstvijamu-cz.json.md', 'category': 'Agents'}, {'title': 'OpenClaw Runtime Overview', 'file': 'Generated/OpenClaw Runtime Overview.md', 'category': 'System'}, {'title': 'Virtual Assistant Agent Registry', 'file': 'Generated/Virtual Assistant/Agent Registry.json.md', 'category': 'Agents'}, {'title': 'Agent Registry Markdown', 'file': 'Generated/Virtual Assistant/Agent Registry.md', 'category': 'Agents'}, {'title': 'Virtual Assistant Memory', 'file': 'Generated/Virtual Assistant/MEMORY.md.md', 'category': 'Preferences'}, {'title': 'Virtual Assistant Orchestration Board', 'file': 'Generated/Virtual Assistant/ORCHESTRATION.md.md', 'category': 'Delegations'}, {'title': 'Virtual Assistant Soul', 'file': 'Generated/Virtual Assistant/SOUL.md.md', 'category': 'Identity'}, {'title': 'Virtual Assistant User Profile', 'file': 'Generated/Virtual Assistant/USER.md.md', 'category': 'Preferences'}]}
