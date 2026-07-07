@@ -17,7 +17,7 @@
     {
       "language": "pl",
       "scope": "titles",
-      "model": "Helsinki-NLP/opus-mt-sla-sla",
+      "model": "Helsinki-NLP/opus-mt-cs-en -> pumad/pumadic-en-pl",
       "rows": 183
     }
   ],
@@ -78,7 +78,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Beinreflextherapie und Kutus Kutus",
-      "meta_description": "Durch die Verknüpfung einer retroreflektierenden Massage nach der Jamu-Theapie mit Kräuteröl können Sie den Körper entspannen, sie von Schmerzen loswerden und die Immunität stärken.",
+      "meta_description": "Durch die Verknüpfung einer retroreflektierenden Massage nach JAMU mit Kräuteröl können Sie den Körper entspannen, von Schmerzen loswerden und die Immunität stärken.",
       "data": {},
       "status": "draft"
     },
@@ -87,13 +87,13 @@
       "object_subtype": "post",
       "object_id": 1521,
       "language": "de",
-      "route_path": "wie-man-mit-kutus-kutus-ol-aus-dem-komfort-zu-hause-behandelt",
-      "slug": "wie-man-mit-kutus-kutus-ol-aus-dem-komfort-zu-hause-behandelt",
-      "title": "Wie man mit Kutus-Kutus-Öl aus dem Komfort zu Hause behandelt",
+      "route_path": "wie-die-behandlung-mit-kutus-kutus-ol-aus-dem-komfort-von-zu-hause",
+      "slug": "wie-die-behandlung-mit-kutus-kutus-ol-aus-dem-komfort-von-zu-hause",
+      "title": "Wie die Behandlung mit Kutus Kutus Öl aus dem Komfort von zu Hause",
       "excerpt": "",
       "content": "",
-      "seo_title": "Wie man mit Kutus-Kutus-Öl aus dem Komfort zu Hause behandelt",
-      "meta_description": "Verwenden Sie die Behandlung von Kutus Kutus immer, wenn Sie Energie verlieren, Schmerzen spüren oder \"etwas kriecht\" auf Sie.",
+      "seo_title": "Wie die Behandlung mit Kutus Kutus Öl aus dem Komfort von zu Hause",
+      "meta_description": "Die Kutus Kutus-Therapie sollte immer angewendet werden, wenn Ihnen Energie fehlt, Sie Schmerzen spüren oder \"etwas kriecht\" an Ihnen kriecht.",
       "data": {},
       "status": "draft"
     },
@@ -108,7 +108,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Abendrituale für einen besseren Schlaf",
-      "meta_description": "Ein guter Schlaf ist wichtig für unsere Körper und unseren Geist, die Kräuterölmassage von Kutus Kutus wird uns beruhigen, damit wir besser einschlafen und schlafen.",
+      "meta_description": "Ein guter Schlaf ist wichtig für unsere Körper und unseren Geist, die Kräuterölmassage Kutus Kutus beruhigt uns.",
       "data": {},
       "status": "draft"
     },
@@ -138,7 +138,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Tanamaöl für schönes Haar",
-      "meta_description": "Tanamöl (Tanamu Tanami-Öl) fördert das Haarwachstum, denn es enthält eine Reihe von Nährstoffen, die wichtig sind für gesundes Haar, einschließlich Fettsäuren,...",
+      "meta_description": "Tanamöl (Öl Tanamu Tanami) fördert das Haarwachstum, denn es enthält eine Reihe von Nährstoffen, die wichtig sind für gesundes Haar, einschließlich Fettsäuren,...",
       "data": {},
       "status": "draft"
     },
@@ -153,7 +153,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "%%title%% %%page%%",
-      "meta_description": "Das Heilöl Kutus Kutus aus Bali enthält 69 Zutaten Kräuter und Gewürze, die gegen Schmerzen und die allgemeine Gesundheit helfen.",
+      "meta_description": "Kutus Kutus Bali enthält 69 Zutaten von Kräutern und Gewürzen, die gegen Schmerzen und die allgemeine Gesundheit helfen.",
       "data": {},
       "status": "draft"
     },
@@ -162,13 +162,13 @@
       "object_subtype": "post",
       "object_id": 3319,
       "language": "de",
-      "route_path": "jamu-traditionelle-heilkunst-aus-indonesien",
-      "slug": "jamu-traditionelle-heilkunst-aus-indonesien",
-      "title": "Jamu - Traditionelle Heilkunst aus Indonesien",
+      "route_path": "jamu-traditionelle-heiltechnik-aus-indonesien",
+      "slug": "jamu-traditionelle-heiltechnik-aus-indonesien",
+      "title": "JAMU - Traditionelle Heiltechnik aus Indonesien",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jamu - Traditionelle Heilkunst aus Indonesien",
-      "meta_description": "Das Wort \"Jamu\" ist in indonesischer Sprache eingewurzelt und bezieht sich auf eine Mischung aus Kräutern und Gewürzen, die für die Zubereitung von Heilgetränken verwendet wird.",
+      "seo_title": "JAMU - Traditionelle Heiltechnik aus Indonesien",
+      "meta_description": "Das Wort \"JAMU\" hat Wurzeln in Indonesien und bezieht sich auf eine Mischung aus Kräutern und Gewürzen, die für die Zubereitung von Heilgetränken verwendet wird. Es kommt aus einem traditionellen indonesischen...",
       "data": {},
       "status": "draft"
     },
@@ -179,11 +179,11 @@
       "language": "de",
       "route_path": "bali-heilige-blumen-und-aromatherapie",
       "slug": "bali-heilige-blumen-und-aromatherapie",
-      "title": "Bali - heilige Blumen und Aromatherapie",
+      "title": "Bali - Heilige Blumen und Aromatherapie",
       "excerpt": "",
       "content": "",
-      "seo_title": "Bali - heilige Blumen und Aromatherapie",
-      "meta_description": "Erfahren Sie, wie sich diese Blumen auf Bali-Traditionen und spirituelle Rituale auswirken.",
+      "seo_title": "Bali - Heilige Blumen und Aromatherapie",
+      "meta_description": "Finden Sie heraus, wie diese Blumen Baliej Tradition und spirituelle Rituale beeinflussen. Die heilenden Wirkungen, die sie im täglichen Leben auf Bali nutzen.",
       "data": {},
       "status": "draft"
     },
@@ -192,13 +192,13 @@
       "object_subtype": "post",
       "object_id": 4265,
       "language": "de",
-      "route_path": "personliche-erfahrung-traditionelle-massage-von-einem-heiler-in-bali",
-      "slug": "personliche-erfahrung-traditionelle-massage-von-einem-heiler-in-bali",
-      "title": "Persönliche Erfahrung: traditionelle Massage von einem Heiler in Bali",
+      "route_path": "personliche-erfahrung-traditionelle-massage-von-einem-heiler-auf-bali",
+      "slug": "personliche-erfahrung-traditionelle-massage-von-einem-heiler-auf-bali",
+      "title": "Persönliche Erfahrung: traditionelle Massage von einem Heiler auf Bali",
       "excerpt": "",
       "content": "",
-      "seo_title": "Persönliche Erfahrung: traditionelle Massage von einem Heiler in Bali",
-      "meta_description": "Persönliche Erfahrung mit einem traditionellen Heiler in Bali. Beschreibung der Massage, Energiebehandlung prana healing und die Bedeutung der geistigen Heilung.",
+      "seo_title": "Persönliche Erfahrung: traditionelle Massage von einem Heiler auf Bali",
+      "meta_description": "Persönliche Erfahrung mit einem traditionellen Heiler auf Bali. Beschreibung der Massage, der Energiebehandlung prana healing und der Bedeutung der spirituellen Heilung.",
       "data": {},
       "status": "draft"
     },
@@ -222,13 +222,13 @@
       "object_subtype": "post",
       "object_id": 4524,
       "language": "de",
-      "route_path": "was-ist-die-indonesische-grube-naturliche-elixier-fur-energie-und-gleichgewicht",
-      "slug": "was-ist-die-indonesische-grube-naturliche-elixier-fur-energie-und-gleichgewicht",
-      "title": "Was ist die indonesische Grube? Natürliche Elixier für Energie und Gleichgewicht",
+      "route_path": "was-ist-die-indonesische-jamu-naturliche-elixier-fur-energie-und-gleichgewicht",
+      "slug": "was-ist-die-indonesische-jamu-naturliche-elixier-fur-energie-und-gleichgewicht",
+      "title": "Was ist die indonesische JAMU? Natürliche Elixier für Energie und Gleichgewicht",
       "excerpt": "",
       "content": "",
-      "seo_title": "Was ist die indonesische Grube? Natürliche Elixier für Energie und Gleichgewicht",
-      "meta_description": "Stellen Sie sich ein warmes, duftendes Getränk vor, das Sie erwärmt, Energie liefert und gleichzeitig Ihren Körper auf natürliche Weise unterstützt. Es ist eine Jama...",
+      "seo_title": "Was ist die indonesische JAMU? Natürliche Elixier für Energie und Gleichgewicht",
+      "meta_description": "Stellen Sie sich ein warmes, duftendes Getränk vor, das Sie erwärmt, Energie liefert und gleichzeitig Ihren Körper auf natürliche Weise unterstützt. Es ist JAMU",
       "data": {},
       "status": "draft"
     },
@@ -252,13 +252,13 @@
       "object_subtype": "page",
       "object_id": 7,
       "language": "de",
-      "route_path": "naturliche-produkte-von-jam",
-      "slug": "naturliche-produkte-von-jam",
-      "title": "Natürliche Produkte von Jam",
+      "route_path": "naturliche-produkte-jamu",
+      "slug": "naturliche-produkte-jamu",
+      "title": "Natürliche Produkte JAMU",
       "excerpt": "",
       "content": "",
       "seo_title": "Přírodní produkty%%page%% %%sep%% %%sitename%%",
-      "meta_description": "Bei uns finden Sie Produkte rein aus natürlichen Zutaten ohne unnötige Kunststoffe in Übereinstimmung mit JAMU.",
+      "meta_description": "Bei uns finden Sie Produkte rein aus natürlichen Zutaten ohne unnötige Kunststoffe gemäß JAMU.",
       "data": {},
       "status": "draft"
     },
@@ -348,7 +348,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Massage",
-      "meta_description": "Bei meinen Massagen kombinieren ich die Prinzipien von ajurvedischen Abhyang mit balianischen Techniken und meine eigene intuitive Arbeit mit Energie. Ich glaube, dass die heilende Berührung und...",
+      "meta_description": "Bei meinen Massagen kombinieren ich die Prinzipien von ajurvedischen Abhyangy mit Baliyji-Techniken und meine eigene intuitive Arbeit mit Energie. Ich glaube, Heilmittel berühren und...",
       "data": {},
       "status": "draft"
     },
@@ -378,7 +378,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "%%sitename%% - Zdraví, masáže a přírodní produkty",
-      "meta_description": "Das Geheimnis von JAMU befasst sich mit Gesundheit, Massagen, und Naturprodukte aus Bali nach traditioneller Heilerei und Ayurveda",
+      "meta_description": "Tajemství JAMU befasst sich mit Gesundheit, Massagen, und Naturprodukte aus Bali nach traditionellem Heilen und Ayurveda",
       "data": {},
       "status": "draft"
     },
@@ -402,13 +402,13 @@
       "object_subtype": "page",
       "object_id": 3948,
       "language": "de",
-      "route_path": "was-ist-jama",
-      "slug": "was-ist-jama",
-      "title": "Was ist Jama?",
+      "route_path": "was-ist-jamu",
+      "slug": "was-ist-jamu",
+      "title": "Was ist JAMU?",
       "excerpt": "",
       "content": "",
-      "seo_title": "Was ist Jama?",
-      "meta_description": "Jamu ist eine traditionelle Kräutermedizin und Wellness, die die Indoneser seit Jahrhunderten benutzen, um einen gesunden Körper, Geist und Geist zu erhalten. Dazu gehören Kräutergetränke...",
+      "seo_title": "Was ist JAMU?",
+      "meta_description": "JAMU ist eine traditionelle Kräutermedizin und Wellness-Behandlung, die von den Indonesiern jahrhundertelang verwendet wird, um einen gesunden Körper, Geist und Geist zu erhalten.",
       "data": {},
       "status": "draft"
     },
@@ -438,7 +438,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Partner",
-      "meta_description": "Partner-Orte, wo Sie das Kutus-Kutus-Öl-Produkt testen und kaufen Kräuteröl Kutus Kutus ist einzigartig in seinem Aroma, Zusammensetzung und Wirkung....",
+      "meta_description": "Partner-Orte, wo Sie das Kutus Kutus-Öl ausprobieren und kaufen Das Kräuteröl Kutus Kutus ist einzigartig in seinem Aroma, Zusammensetzung und Wirkung....",
       "data": {},
       "status": "draft"
     },
@@ -462,13 +462,13 @@
       "object_subtype": "page",
       "object_id": 4011,
       "language": "de",
-      "route_path": "balischer-krauterolmassage",
-      "slug": "balischer-krauterolmassage",
-      "title": "Balischer Kräuterölmassage",
+      "route_path": "baliyjska-krauterolmassage",
+      "slug": "baliyjska-krauterolmassage",
+      "title": "Baliyjská Kräuterölmassage",
       "excerpt": "",
       "content": "",
-      "seo_title": "Balischer Kräuterölmassage",
-      "meta_description": "Ein entspanntes Ganzkörperritual, das auf der traditionellen Bali-Heilung beruht. Es verbindet Elemente der Akupressur, Reflextherapie, Stretching und Aromatherapie....",
+      "seo_title": "Baliyjská Kräuterölmassage",
+      "meta_description": "Ein entspanntes Ganzkörperritual, das auf dem traditionellen Balij-Heiler basiert. Es verbindet Elemente der Akupressur, Reflextherapie, Stretching und Aromatherapie....",
       "data": {},
       "status": "draft"
     },
@@ -477,13 +477,13 @@
       "object_subtype": "page",
       "object_id": 4018,
       "language": "de",
-      "route_path": "bali-massagekurse",
-      "slug": "bali-massagekurse",
-      "title": "Bali-Massagekurse",
+      "route_path": "zxq20-kurseqxzej-massage",
+      "slug": "zxq20-kurseqxzej-massage",
+      "title": "ZXQ20-KurseQXZej-Massage",
       "excerpt": "",
       "content": "",
-      "seo_title": "Bali-Massagekurse",
-      "meta_description": "Entdecken Sie das Geheimnis der balianischen Massagen und erweitern Sie Ihren Horizont auf dem Bali Massagekurs. Derzeit gibt es keinen Termin, aber wir können...",
+      "seo_title": "ZXQ20-KurseQXZej-Massage",
+      "meta_description": "Entdecken Sie das Geheimnis der Baliymes-Massage und erweitern Sie Ihren Horizont auf einem Massagekurs Bali Massage. Derzeit gibt es keinen Termin, aber wir können...",
       "data": {},
       "status": "draft"
     },
@@ -552,12 +552,12 @@
       "object_subtype": "product",
       "object_id": 17,
       "language": "de",
-      "route_path": "tanamu-tanami-kohlol",
-      "slug": "tanamu-tanami-kohlol",
-      "title": "Tanamu Tanami-Kohlöl",
+      "route_path": "tanamu-tanami-hautol",
+      "slug": "tanamu-tanami-hautol",
+      "title": "Tanamu Tanami Hautöl",
       "excerpt": "",
       "content": "",
-      "seo_title": "Tanamu Tanami-Kohlöl",
+      "seo_title": "Tanamu Tanami Hautöl",
       "meta_description": "\"Tamanöl\" ist reich an Omega-3-Fettsäuren, natürlichen Antioxidantien. Es wirkt gegen Bakterien, Viren, Pilze und Schimmel.",
       "data": {},
       "status": "draft"
@@ -588,7 +588,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Natürliche Seife Tanamu Tanami",
-      "meta_description": "Tanam Tanami hilft bei der Pflege der Haut, die Probleme (Akne, trockene und schuppige Haut, Blasen, Verbrennungen, Geschwüre, Ekzem, Juckreiz durch Allergien verursacht).",
+      "meta_description": "Tanamu Tanami hilft bei der Hautpflege, die Probleme verursacht (Akne, trockene und schuppige Haut, Blasen, Verbrennungen, Ulzera, Ekzem, Juckreiz durch Allergien).",
       "data": {},
       "status": "draft"
     },
@@ -629,11 +629,11 @@
       "language": "de",
       "route_path": "ritual-duftriegel-bali-energie-bali-spirit",
       "slug": "ritual-duftriegel-bali-energie-bali-spirit",
-      "title": "Ritual Duftriegel Bali Energie \"Bali Spirit\"",
+      "title": "Ritual Duftriegel Bali Energie \"Bali spirit\"",
       "excerpt": "",
       "content": "",
-      "seo_title": "Ritual Duftriegel Bali Energie \"Bali Spirit\"",
-      "meta_description": "Eine Mischung aus ätherischen Ölen aus Bali in duftenden Stäbchen reinigt natürlich die Luft, harmonisiert die Energie und fördert Meditation. Sie sind 100% natürlich, ohne...",
+      "seo_title": "Ritual Duftriegel Bali Energie \"Bali spirit\"",
+      "meta_description": "Eine Mischung aus ätherischen Ölen aus Bali in Duftstäbchen reinigt natürlich die Luft, harmonisiert die Energie und fördert die Meditationseinstellung. Sie sind 100% natürlich, ohne...",
       "data": {},
       "status": "draft"
     },
@@ -648,7 +648,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Teakholzschalen",
-      "meta_description": "Hochwertiges und robustes Teakholz - exotische Schüssel von der exotischen Insel Bali",
+      "meta_description": "Hochwertiges und robustes Teakholz - exotische Schale von der exotischen Insel Bali",
       "data": {},
       "status": "draft"
     },
@@ -663,7 +663,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Teakholzseife",
-      "meta_description": "Bringen Sie ein Stück Schönheit von Bali in Ihr Badezimmer mit unserer Teakholzseife. Seifen werden mit Liebe und Sorgfalt von Hand auf der Insel Bali hergestellt, wo...",
+      "meta_description": "Bringen Sie ein Stück der Schönheit von Bali in Ihr Badezimmer mit unserer Teakholzseife. Seifen werden mit Liebe und Sorgfalt von Hand auf der Insel Bali hergestellt, wo...",
       "data": {},
       "status": "draft"
     },
@@ -678,7 +678,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Teak-Tasse",
-      "meta_description": "Eine Tasse aus baliianischem Teakholz mit einem Durchmesser von 9 cm.",
+      "meta_description": "Eine Tasse BaliJ Teakholz mit einem Durchmesser von 9 cm.",
       "data": {},
       "status": "draft"
     },
@@ -693,7 +693,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Ayurvedische Creme Nadis Herbal",
-      "meta_description": "Hey Warten Sie Ihre Haut nach Ayurveda .. Körbchencreme aus Bali mit Aloe Vera, Kokosöl und Kakaobutter für Feuchtigkeit und Elastizität. Mit Tripala...",
+      "meta_description": "Hey Warten Sie Ihre Haut nach Ayurveda",
       "data": {},
       "status": "draft"
     },
@@ -723,7 +723,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Creme Sacred Scent Nadis Herbal",
-      "meta_description": "Body Cream Sacred Scent von einem lokalen kleinen Hersteller Nadis Herbal hergestellt, die Produkte nach traditionellen holistischen Rezepten produziert.",
+      "meta_description": "Body Cream Sacred Scent hergestellt von einem lokalen kleinen Hersteller Nadis Herbal, der Produkte nach traditionellen holistischen Rezepten produziert.",
       "data": {},
       "status": "draft"
     },
@@ -732,13 +732,13 @@
       "object_subtype": "product",
       "object_id": 4293,
       "language": "de",
-      "route_path": "steifes-parfum-bali-flowers",
-      "slug": "steifes-parfum-bali-flowers",
-      "title": "Steifes Parfüm Bali Flowers",
+      "route_path": "festes-bali-flowers-parfum",
+      "slug": "festes-bali-flowers-parfum",
+      "title": "Festes Bali Flowers-Parfüm",
       "excerpt": "",
       "content": "",
-      "seo_title": "Steifes Parfüm Bali Flowers",
-      "meta_description": "Natürliches festes Parfüm Bali Flowes mit einem anziehenden Duft von balianischen Blumen wie Jasmin, Champagner und Französisch (Plumérie).",
+      "seo_title": "Festes Bali Flowers-Parfüm",
+      "meta_description": "Natürliches, festes Bali Floves mit dem eindrucksvollen Duft von Baliybern wie Jasmin, Champagner und Franzipanien (Plumérie). Der Inhalt der Packung ist 15g.",
       "data": {},
       "status": "draft"
     },
@@ -747,13 +747,13 @@
       "object_subtype": "product",
       "object_id": 4398,
       "language": "de",
-      "route_path": "lemongrass-zitronengras-creme-nadis-herbal",
-      "slug": "lemongrass-zitronengras-creme-nadis-herbal",
-      "title": "Lemongrass (Zitronengras) Creme Nadis Herbal",
+      "route_path": "limongras-zitronengras-nadis-herbal-creme",
+      "slug": "limongras-zitronengras-nadis-herbal-creme",
+      "title": "Limongras (Zitronengras) Nadis Herbal Creme",
       "excerpt": "",
       "content": "",
-      "seo_title": "Lemongrass (Zitronengras) Creme Nadis Herbal",
-      "meta_description": "Die Creme in Bali von einem lokalen kleinen Hersteller aus lokalen Rohstoffen hergestellt. Es enthält ätherisches Öl lemongrass, das die Haut erfrischend und Energie liefert.",
+      "seo_title": "Limongras (Zitronengras) Nadis Herbal Creme",
+      "meta_description": "Die Creme auf Bali von einem lokalen kleinen Hersteller aus lokalen Rohstoffen hergestellt. Es enthält ätherisches Öl lemongrass, das die Haut erfrischend und Energie liefert.",
       "data": {},
       "status": "draft"
     },
@@ -768,7 +768,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Bali Moon Face Creme",
-      "meta_description": "Natürliche Creme aus Bali mit Aloe, Kokosöl, Kakaobutter und Seetang für Weichigkeit, feuchtigkeitsspendende und strahlende Haut.",
+      "meta_description": "Natürliche Creme aus Bali mit Aloe, Kokosöl, Kakaobutter und Seetang für weiche, hydratisierte und strahlende Haut.",
       "data": {},
       "status": "draft"
     },
@@ -777,13 +777,13 @@
       "object_subtype": "product",
       "object_id": 4528,
       "language": "de",
-      "route_path": "jamu-balance-zu-einer-wurzigen-mischung-zum-herstellen-von-getranken",
-      "slug": "jamu-balance-zu-einer-wurzigen-mischung-zum-herstellen-von-getranken",
-      "title": "Jamu Balance  zu einer würzigen Mischung zum Herstellen von Getränken",
+      "route_path": "jamu-balance-die-wurzige-mischung-zur-zubereitung-des-getranks",
+      "slug": "jamu-balance-die-wurzige-mischung-zur-zubereitung-des-getranks",
+      "title": "Jamu Balance Die würzige Mischung zur Zubereitung des Getränks",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jamu Balance  zu einer würzigen Mischung zum Herstellen von Getränken",
-      "meta_description": "Jamu Balance ist eine würzige Mischung aus Bali mit Kurkuma, Ingwer, Kencurem und Kokoszucker. Erhitzende Getränke für das tägliche Ritual aus Indonesien, Bali.",
+      "seo_title": "Jamu Balance Die würzige Mischung zur Zubereitung des Getränks",
+      "meta_description": "Jamu Balance ist eine würzige Mischung aus Bali mit Kurkuma, Ingwer, Kencur und Kokoszucker. Erhitzende Getränke für das tägliche Ritual aus Indonesien, Bali.",
       "data": {},
       "status": "draft"
     },
@@ -792,12 +792,12 @@
       "object_subtype": "product",
       "object_id": 4539,
       "language": "de",
-      "route_path": "jamu-balance-punktchen",
-      "slug": "jamu-balance-punktchen",
-      "title": "Jamu Balance Pünktchen",
+      "route_path": "jamu-balance-pure-eine-wurzige-mischung-fur-ein-zuckerfreies-getrank",
+      "slug": "jamu-balance-pure-eine-wurzige-mischung-fur-ein-zuckerfreies-getrank",
+      "title": "Jamu Balance Pure Eine würzige Mischung für ein zuckerfreies Getränk",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jamu Balance Pünktchen",
+      "seo_title": "Jamu Balance Pure Eine würzige Mischung für ein zuckerfreies Getränk",
       "meta_description": "Jamu Balance ist eine würzige Mischung aus Bali mit Kurkuma, Ingwer, Kencur und Pfeffer. Erhitzende Getränke für das tägliche Ritual aus Indonesien, Bali. Unterstützt Immunität.",
       "data": {},
       "status": "draft"
@@ -807,13 +807,13 @@
       "object_subtype": "product",
       "object_id": 4542,
       "language": "de",
-      "route_path": "dharma-kurbis-mischung-zur-zubereitung-des-getranks",
-      "slug": "dharma-kurbis-mischung-zur-zubereitung-des-getranks",
-      "title": "Dharma-Kürbis-Mischung zur Zubereitung des Getränks",
+      "route_path": "dharma-die-wurzige-mischung-zur-zubereitung-des-getranks",
+      "slug": "dharma-die-wurzige-mischung-zur-zubereitung-des-getranks",
+      "title": "Dharma Die würzige Mischung zur Zubereitung des Getränks",
       "excerpt": "",
       "content": "",
-      "seo_title": "Dharma-Kürbis-Mischung zur Zubereitung des Getränks",
-      "meta_description": "Jamu Dharma ist eine würzige Mischung aus Bali mit Kurkuma, Ingwer, rotem Ingwer, schwarzem Pfeffer und Kokoszucker. Für eine bessere Verdauung und Gleichgewicht des Körpers.",
+      "seo_title": "Dharma Die würzige Mischung zur Zubereitung des Getränks",
+      "meta_description": "JAMU Dharma ist eine würzige Mischung aus Bali mit Kurkuma, Ingwer, rotem Ingwer, schwarzem Pfeffer und Kokoszucker. Für eine bessere Verdauung und Gleichgewicht des Körpers.",
       "data": {},
       "status": "draft"
     },
@@ -822,13 +822,13 @@
       "object_subtype": "product",
       "object_id": 4544,
       "language": "de",
-      "route_path": "dharma-kurbis-mischung-zur-herstellung-eines-zuckerfreien-getranks",
-      "slug": "dharma-kurbis-mischung-zur-herstellung-eines-zuckerfreien-getranks",
-      "title": "Dharma-Kürbis-Mischung zur Herstellung eines zuckerfreien Getränks",
+      "route_path": "dharma-pure-gewurzte-mischung-fur-ein-zuckerfreies-getrank",
+      "slug": "dharma-pure-gewurzte-mischung-fur-ein-zuckerfreies-getrank",
+      "title": "Dharma Pure gewürzte Mischung für ein zuckerfreies Getränk",
       "excerpt": "",
       "content": "",
-      "seo_title": "Dharma-Kürbis-Mischung zur Herstellung eines zuckerfreien Getränks",
-      "meta_description": "Die in Bali hergestellte würzige Mischung enthält Kurkuma, Ingwer und rote Ingwer, traditionell mit der Unterstützung der Verdauung verbunden. Ohne Zuckerzusatz.",
+      "seo_title": "Dharma Pure gewürzte Mischung für ein zuckerfreies Getränk",
+      "meta_description": "Die auf Bali hergestellte würzige Mischung enthält Kurkuma, Ingwer und rote Ingwer, traditionell mit Verdauungsunterstützung verbunden. Ohne Zuckerzusatz.",
       "data": {},
       "status": "draft"
     },
@@ -1023,7 +1023,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Ergänzungen",
-      "meta_description": "Ergänzungen aus Bali, die Ihrem Raum eine außergewöhnliche spirituelle Atmosphäre liefern. Teakholz und andere natürliche Materialien aus Bali verwandeln Ihren Platz in eine Oase der Ruhe...",
+      "meta_description": "Ergänzungen von Bali, die Ihrem Raum eine außergewöhnliche spirituelle Atmosphäre liefern. Teakholz und andere natürliche Materialien von Bali verwandeln Ihren Platz in eine Oase der Ruhe...",
       "data": {},
       "status": "draft"
     },
@@ -1038,7 +1038,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Yoga und Meditation",
-      "meta_description": "Gönnen Sie sich einen Moment der Ruhe und tauchen Sie in die baliianische Atmosphäre mit natürlichen Duftstäbchen aus Bali . Ihre spirituellen Duft wird Ihre Meditation unterstützen,...",
+      "meta_description": "Gönnen Sie sich einen Moment der Ruhe und tauchen Sie in die Balianischen Atmosphäre mit natürlichen Duftstäbchen von Bali . Ihre spirituellen Duft wird Ihre Meditation unterstützen,...",
       "data": {},
       "status": "draft"
     },
@@ -1053,7 +1053,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Massage",
-      "meta_description": "Erleben Sie Entspannung mit natürlichen Kräuterölen aus Bali . Selbstpfleger, die Stress entspannen und Ihre Gesundheit fördern. Öle auf Massagen oder Selbstpfleger in Form von Automassage,...",
+      "meta_description": "Erleben Sie Entspannung mit natürlichen Kräuterölen aus Bali . Selbstpfleger, die Stress entspannt und Ihre Gesundheit fördert. Öle auf Massagen oder Selbstpfleger in Form von Automassage,...",
       "data": {},
       "status": "draft"
     },
@@ -1098,7 +1098,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Gesundheit und Schönheit",
-      "meta_description": "Entdecken Sie die Geheimnisse der Schönheit und Gesundheit mit der natürlichen Kosmetik aus Bali. Kräuterprodukte pflegen Haut ohne Chemikalien und nutzen die Kraft der Natur und Kräuter...",
+      "meta_description": "Entdecken Sie die Geheimnisse der Schönheit und Gesundheit mit der natürlichen Kosmetik von Bali. Kräuterprodukte pflegen Haut ohne Chemikalien und nutzen die Kraft der Natur und Kräuter...",
       "data": {},
       "status": "draft"
     },
@@ -1123,7 +1123,7 @@
             "label": "Ort",
             "choices": [
               {
-                "label": "Prag Vršovice",
+                "label": "Praha Vršovice",
                 "value": ""
               },
               {
@@ -1131,7 +1131,7 @@
                 "value": ""
               },
               {
-                "label": "Hohe Mythos",
+                "label": "Vysoké Mýto",
                 "value": ""
               }
             ]
@@ -1145,7 +1145,7 @@
         },
         "settings": {
           "form_title": "Reservierungsformular",
-          "form_desc": "Interessieren Sie sich für die Jam-Massage? Kontaktieren Sie mich mit dem Formular. Ich rufe Sie zurück.",
+          "form_desc": "Interessieren Sie sich für Tajemství JAMU Massagen? Kontaktieren Sie mich mit der Mitte dieses Formulars.",
           "submit_text": "Senden",
           "submit_text_processing": "Gesendet..."
         }
@@ -1197,7 +1197,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus Kräutertherapie aus Bali, die das Gleichgewicht des Lebens und den Strom der Lebensenergie von Qi oder Pran fördert."
+        "alt": "Kutus Kutus Kräutertherapie aus Bali, die das Lebensgleichgewicht und den Lebensstrom von Qi oder Prana fördert."
       },
       "status": "draft"
     },
@@ -1231,7 +1231,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus Kräutertherapie aus Bali, die das Gleichgewicht des Lebens und den Strom der Lebensenergie von Qi oder Pran fördert."
+        "alt": "Kutus Kutus Kräutertherapie aus Bali, die das Lebensgleichgewicht und den Lebensstrom von Qi oder Prana fördert."
       },
       "status": "draft"
     },
@@ -1248,7 +1248,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus Kräuterseife enthält nur 100% pflanzliche Substanzen und fördert den Energiefluss von Chhci oder Prana."
+        "alt": "Kutus Kutus Kräuterseife enthält nur 100% pflanzliche Substanzen und hilft den Energiefluss von Chhci oder Prana. Es hält das Gleichgewicht und die geistige und körperliche Gesundheit."
       },
       "status": "draft"
     },
@@ -1265,7 +1265,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus ist ein pflanzliches therapeutisches Öl von der tropischen Insel Bali, das das Gleichgewicht des Lebens bewahrt und dadurch positive Auswirkungen auf die Immunität und als alternative oder ergänzende Behandlung von Krankheiten hat."
+        "alt": "Kutus Kutus ist ein pflanzliches therapeutisches Öl von der tropischen Insel Bali, das hilft, das Gleichgewicht des Lebens zu erhalten und somit positive Auswirkungen auf die Immunität und als alternative oder ergänzende Behandlung von Krankheiten hat."
       },
       "status": "draft"
     },
@@ -1282,7 +1282,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Yoga, Meditation, Liebe und Kräuteröl Kutus Kotus bringt mir das Gleichgewicht des Lebens und die geistige Gesundheit."
+        "alt": "Yoga, Meditation, Liebe und Kräuteröl Kutus Kutus bringt mir das Gleichgewicht des Lebens und die psychische Gesundheit."
       },
       "status": "draft"
     },
@@ -1316,7 +1316,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Die Rexlexologie des Körpers oder Zonentherapie nach der Kräutertherapie von Jam (die auf der chinesischen Medizin basiert) wird in einer alternativen Medizin eingesetzt."
+        "alt": "Die Rexlexologie des Körpers oder Zonentherapie nach der Kräutertherapie JAMU (die auf der chinesischen Medizin basiert) wird in einer alternativen Medizin eingesetzt."
       },
       "status": "draft"
     },
@@ -1350,7 +1350,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus ist ein Kräuteröl aus Indonesien - Bali, das das Gleichgewicht und die Gesundheit des Lebens hält."
+        "alt": "Kutus Kutus ist ein Kräuteröl aus Indonesien - Bali, das das Gleichgewicht und die Gesundheit des Lebens bewahrt."
       },
       "status": "draft"
     },
@@ -1367,7 +1367,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus ist ein Kräuteröl aus Indonesien - Bali, das das Gleichgewicht und die Gesundheit des Lebens hält."
+        "alt": "Kutus Kutus ist ein Kräuteröl aus Indonesien - Bali, das das Gleichgewicht und die Gesundheit des Lebens bewahrt."
       },
       "status": "draft"
     },
@@ -1401,7 +1401,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Natürliches Öl Kalila Kalila aus Bali, enthält nur natürliche Latten. Ohne Chemie und schädliche Stoffe."
+        "alt": "Natürliches Kalila Kalila von Bali, enthält nur natürliche Latten. Ohne Chemie und schädliche Stoffe."
       },
       "status": "draft"
     },
@@ -1418,7 +1418,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Das Kräuteröl Kutus Kutus hält das Gleichgewicht und die Gesundheit des Lebens aufrecht."
+        "alt": "Das Kräuteröl Kutus Kutus hält das Gleichgewicht und die Gesundheit aufrecht. Das Öl wird bei Yogaunterricht oder Meditation verwendet."
       },
       "status": "draft"
     },
@@ -1452,7 +1452,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Appae Kutus Kutus Kräuteröl"
+        "alt": "Anwendung von Kutus Kutus Kräuteröl"
       },
       "status": "draft"
     },
@@ -1554,7 +1554,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kräuter- und natürliche Seifen aus Bali"
+        "alt": "Kräuter- und natürliche Seife aus Bali"
       },
       "status": "draft"
     },
@@ -1588,7 +1588,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Rexlepher Therapie Kutus Kutus Kräuteröl"
+        "alt": "Rexlefe Therapie Kutus Kutus Kräuteröl"
       },
       "status": "draft"
     },
@@ -1639,7 +1639,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "kutus kutus öl die Tschechische Republik"
+        "alt": "Kutus Kutus Öl Tschechische Republik"
       },
       "status": "draft"
     },
@@ -1656,7 +1656,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Jamsabbeere"
+        "alt": "Geheimnis JAMU"
       },
       "status": "draft"
     },
@@ -1673,7 +1673,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "JAMU-Geheimnis-Logo"
+        "alt": "geheimnis-Logo JAMU"
       },
       "status": "draft"
     },
@@ -1724,7 +1724,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Das Gleichgewicht von Körper, Geist und Seele - Das Geheimnis des Yama"
+        "alt": "Gleichgewicht von Körper, Geist und Seele - Tajemství JAMU"
       },
       "status": "draft"
     },
@@ -1741,7 +1741,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Die Massagemassage hat von den traditionellen Heilern in Bali gelernt. Vor der Massage führt sie Gebet und Meditation durch."
+        "alt": "Die Massagemassage Balijská hat von den traditionellen Heilern auf Bali gelernt. Vor der Massage führt sie Gebet und Meditation durch."
       },
       "status": "draft"
     },
@@ -1775,7 +1775,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Duftstäbchen aus Bali \"Heilige Blumen\", natürlich ohne synthetische Stoffe, fett - lange Brennzeit. Spirituelle Stäbchen geeignet für Meditation, Yoga, Bali Massagen."
+        "alt": "Duftstäbchen von Bali \"Heilige Blumen\", natürlich ohne synthetische Stoffe, dick - lange Brennzeit. Spirituelle Stäbchen geeignet für Meditation, Yoga, Baliej Massagen."
       },
       "status": "draft"
     },
@@ -1792,7 +1792,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Duftstäbchen aus Bali \"Heilige Blumen\", natürlich ohne synthetische Stoffe, fett - lange Brennzeit. Geeignet für Meditation, Yoga, Balische Massagen."
+        "alt": "Duftstäbchen von Bali \"Heilige Blumen\", natürlich ohne synthetische Stoffe, dick - lange Brennzeit. Geeignet für Meditation, Yoga, Baliej Massagen."
       },
       "status": "draft"
     },
@@ -1809,7 +1809,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kurkum-Getränke Jamu aus Indonesien"
+        "alt": "Kurkum-Getränke JAMU aus Indonesien"
       },
       "status": "draft"
     },
@@ -1843,7 +1843,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Duftriegel Bali Spirit, 100% natürlich harmlos. Nelken, Magnolie, Ylang-ylang, Zitronengras, Muskatnuss, Weihrauch"
+        "alt": "Duftriegel Bali spirit, 100% natürlich harmlos. Nelken, Magnolie, Ylang-ylang, Zitronengras, Muskatnuss, Weihrauch"
       },
       "status": "draft"
     },
@@ -1860,7 +1860,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Herstellung von Jam-Drinks - Zimt-Tonic, Zitronengras, Nagel, Sternanis"
+        "alt": "JAMU Getränke - Zimt-Tonic, Zitronengras, Nagel, Sternanis"
       },
       "status": "draft"
     },
@@ -1877,7 +1877,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Die Herstellung von Jam-Drinks - ein traditionelles Getränk aus Indonesien zur Gesundheitsförderung wird aus Kurkuma, Ingwer-Tamarind hergestellt."
+        "alt": "Herstellung von JAMU Getränke - traditionelle Getränke aus Indonesien zur Gesundheitsförderung wird aus Kurkuma, Ingwer Tamarin hergestellt."
       },
       "status": "draft"
     },
@@ -1894,7 +1894,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Natürliche Heiler aus Indonesien verwendet Kurkuma, Ingwer, rote Ingwer. Geeignet für die Behandlung von Erkältungen, Entzündungen."
+        "alt": "Natürliche Heilung aus Indonesien verwendet JAMU Getränke Kurkuma, Ingwer, rote Ingwer. Geeignet für die Behandlung von Erkältungen, bei Entzündungen."
       },
       "status": "draft"
     },
@@ -1911,7 +1911,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Nadis Herbal kleiner Hersteller von natürlichen Kosmetika und Nahrungsergänzungsmittel aus Bali"
+        "alt": "Nadis Herbal Kleiner Hersteller von natürlichen Kosmetika und Nahrungsergänzungsmitteln aus Bali"
       },
       "status": "draft"
     },
@@ -1928,7 +1928,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kurkuma traditionelle Heiler in Bali, Kurkuma Jamu Getränk"
+        "alt": "Kurkuma traditionelle Heilmittel auf Bali, Kurkuma JAMU Getränk"
       },
       "status": "draft"
     },
@@ -1945,7 +1945,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Duftstäbchen aus Bali \"Heilige Blumen\", natürlich ohne synthetische Stoffe, fett - lange Brennzeit. Geeignet für Meditation, Yoga, Balische Massagen."
+        "alt": "Duftstäbchen von Bali \"Heilige Blumen\", natürlich ohne synthetische Stoffe, dick - lange Brennzeit. Geeignet für Meditation, Yoga, Baliej Massagen."
       },
       "status": "draft"
     },
@@ -1962,7 +1962,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Teakhalter für Duftessenz / Stäbchen aus Bali"
+        "alt": "Teakhalter für Duftessenz / Stäbchen von Bali"
       },
       "status": "draft"
     },
@@ -1979,7 +1979,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Teakhalter für Duftessenz / Stäbchen aus Bali"
+        "alt": "Teakhalter für Duftessenz / Stäbchen von Bali"
       },
       "status": "draft"
     },
@@ -1996,7 +1996,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Eine Teetasse aus Bali"
+        "alt": "ZXQ20TasseQXZ"
       },
       "status": "draft"
     },
@@ -2047,7 +2047,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Körper ajurvedische Creme, natürliche Kosmetik, in Bali hergestellt,"
+        "alt": "Körper ajurvedische Creme, natürliche Kosmetik, hergestellt auf Bali,"
       },
       "status": "draft"
     },
@@ -2064,7 +2064,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Körpercreme, natürliche Kosmetik, hergestellt auf Bali, ätherische Öle - Frangibianien (Plumen)"
+        "alt": "Körpercreme, natürliche Kosmetik, hergestellt auf Bali, ätherische Öle - Frangipinie (Plumen)"
       },
       "status": "draft"
     },
@@ -2098,7 +2098,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Teakschüssel aus Bali"
+        "alt": "ZXQ20-TeakschaleQXZ"
       },
       "status": "draft"
     },
@@ -2183,7 +2183,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Ein Duftstab aus natürlichen Materialien, ohne Chemie, ist eine bessere Variante für die Gesundheit. Duftriegel haben eine reinigende, spirituelle Bedeutung für die balinische Kultur."
+        "alt": "Ein Duftstab aus natürlichen Materialien, ohne Chemie ist eine bessere Variante für die Gesundheit. Duftriegel haben eine reinigende, spirituelle Bedeutung für Balijsche Kultur."
       },
       "status": "draft"
     },
@@ -2200,7 +2200,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias am Strand, Bali."
+        "alt": "Lenka Eliášová am Strand, Bali."
       },
       "status": "draft"
     },
@@ -2217,7 +2217,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Balische Massage in Prag"
+        "alt": "Balijská massage in Prag"
       },
       "status": "draft"
     },
@@ -2268,7 +2268,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Hindu-Bali"
+        "alt": "Hindu Bali"
       },
       "status": "draft"
     },
@@ -2285,7 +2285,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali-Gate"
+        "alt": "Bali gate"
       },
       "status": "draft"
     },
@@ -2319,7 +2319,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias entdeckt den balianischen Hinduismus, ist am balisischen Tempel und zündet einen Duftriegel an."
+        "alt": "Lenka Eliášová entdeckt BaliJ Hinduismus, ist bei Balijým und zündet den Duftstab an."
       },
       "status": "draft"
     },
@@ -2353,7 +2353,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lena Elias, Bali-Massage-Kurse"
+        "alt": "Lenka Eliášová, Bali-Kurse"
       },
       "status": "draft"
     },
@@ -2387,7 +2387,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Für die Bali hat die Blume eine Plumerie, bekannt als \"Jepun\", eine tiefe kulturelle und spirituelle Bedeutung. Lenka auf Bali mit einer Blume Plumrie. Das Geheimnis des Jams."
+        "alt": "Für Balijce hat eine Blume Plumerie, bekannt als \"Jepun\", eine tiefe kulturelle und spirituelle Bedeutung. Lenka auf Bali mit einer Blume Plumérie. Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -2421,7 +2421,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias lernt die baliianische Kultur kennen und lernt traditionelle Massagen von balianischen Heilern."
+        "alt": "Lenka Eliášová erfährt BaliJs Kultur und lernt traditionelle Massagen von Baliysky Heilern."
       },
       "status": "draft"
     },
@@ -2438,7 +2438,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kräutertrinken Jamu - Zitronengras, Nelken, Zimt, Kardamom. Kräutertee aus Bali. Kräuter aus Bali für Gesundheit. Geheimnis Jam."
+        "alt": "JAMU - Zitronengras, Nelken, Zimt, Kardamom. Kräutertee aus Bali. Kräuter aus Bali für Gesundheit. Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -2455,7 +2455,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Jam-Geheimnisse, Gesundheitsversorgung"
+        "alt": "Tajemství JAMU, Gesundheitsversorgung"
       },
       "status": "draft"
     },
@@ -2472,7 +2472,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasová - sie lernte Bali-Massagen und lernte die lokale Kultur in Bali kennen. Frangipanie (Plumerie) - eine weiße oder gelbe Blume ist ein Symbol für Reinheit, Schönheit und Heiligkeit."
+        "alt": "Lenka Eliášová - gelernt Balij Massagen und erlernte die lokale Kultur auf Bali. Frangipania (Plumerie) - eine weiße oder gelbe Blume ist ein Symbol für Reinheit, Schönheit und Heiligkeit. Bali spielt eine Plumerie eine wichtige Rolle in Hindu-Ritualen, Zeremonien und täglichen Leben."
       },
       "status": "draft"
     },
@@ -2489,7 +2489,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias - Masseurin der Ayurveden und Balischen Massagen."
+        "alt": "Lenka Eliášová - Ajurveden-Masseurin und Baliymassage."
       },
       "status": "draft"
     },
@@ -2506,7 +2506,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Ost-Massage-Stil - Balisch-und Jaurveda-Massage, Jam-Geheimnis"
+        "alt": "Ostliche Massagestile - Balijská und jaurvedische Massage, Tajemství JAMU"
       },
       "status": "draft"
     },
@@ -2523,7 +2523,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias, Heilmittel in Bali"
+        "alt": "Lenka Eliášová, Heilmittel für Bali"
       },
       "status": "draft"
     },
@@ -2540,7 +2540,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias, energetische Massage - Balisch massage, ajurvedische abhyanga massage"
+        "alt": "Lenka Eliášová, Energiemassage - Balijská massage, ajurvedische abhyanga massage"
       },
       "status": "draft"
     },
@@ -2557,7 +2557,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Balische Massage in Prag"
+        "alt": "Balijská massage in Prag"
       },
       "status": "draft"
     },
@@ -2574,7 +2574,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias abhyanga massage"
+        "alt": "Lenka Eliášová abhyanga massage"
       },
       "status": "draft"
     },
@@ -2591,7 +2591,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias, Jams Geheimnis, balanische Gesundheits- und Schönheitspflege."
+        "alt": "Lenka Eliášová, Tajemství JAMU, Balijská Gesundheits- und Schönheitspflege."
       },
       "status": "draft"
     },
@@ -2608,7 +2608,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias, Zusammenarbeit, Yoga Wochenende"
+        "alt": "Lenka Eliášová, Zusammenarbeit, Yoga Wochenende"
       },
       "status": "draft"
     },
@@ -2625,7 +2625,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliašová, Balija massage b Prag, Kurse"
+        "alt": "Lenka Eliášová, Balijská massage b Prag, Kurse"
       },
       "status": "draft"
     },
@@ -2642,7 +2642,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali-Kultur und Spiritualität, Jam-Geheimnis."
+        "alt": "BaliJ Kultur und Spiritualität, Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -2659,7 +2659,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali-Kultur und Spiritualität, Jam-Geheimnis."
+        "alt": "BaliJ Kultur und Spiritualität, Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -2676,7 +2676,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus Kräuteröl aus Bali für Massagen."
+        "alt": "Kutus Kutus Kräuteröl von Bali für Massagen."
       },
       "status": "draft"
     },
@@ -2693,7 +2693,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Traditionelle Heilkunst aus Bali, Jams Geheimnis"
+        "alt": "Traditionelle Heiltechnik von Bali, Tajemství JAMU"
       },
       "status": "draft"
     },
@@ -2710,7 +2710,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias Yoga"
+        "alt": "Lenka Eliášová Yoga"
       },
       "status": "draft"
     },
@@ -2727,7 +2727,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Automassage Das Geheimnis von Jam"
+        "alt": "Tajemství JAMU Automassage"
       },
       "status": "draft"
     },
@@ -2744,7 +2744,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kräuteröl von Bali Kutus Kutus und seine heilenden Wirkungen."
+        "alt": "Kräuteröl aus Bali Kutus Kutus und seine heilenden Wirkungen."
       },
       "status": "draft"
     },
@@ -2761,7 +2761,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Das Gleichgewicht des Körpers, des Geistes und des Geistes, das Geheimnis des Jams ist ein reiner Zugang zur Gesundheit."
+        "alt": "Das Gleichgewicht des Körpers, des Geistes und des Geistes. Tajemství JAMU Ein vollständiger Zugang zur Gesundheit."
       },
       "status": "draft"
     },
@@ -2778,7 +2778,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasová, Bali Massagen in Prag, Studium in Bali."
+        "alt": "Lenka Eliášová, Bali Massage in Prag. Studium an Bali. Bali Heiler."
       },
       "status": "draft"
     },
@@ -2795,7 +2795,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias Bali-Massage und Heilmittel aus Indonesien."
+        "alt": "Lenka Eliášová Balijjische Massagen und Heiler aus Indonesien. Balijská strand."
       },
       "status": "draft"
     },
@@ -2829,7 +2829,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Blumen wie Frindschipanien, Jasmin und Champagner sind für meine spirituellen und heilenden Zwecke verehrt worden und werden auf Bali bei Ritualen und Meditationen verwendet."
+        "alt": "Blumen wie Frandzipanien, Jasmin und Champagner sind für meine spirituellen und heilenden Zwecke verehrt und werden auf Bali für Rituale und Meditationen verwendet."
       },
       "status": "draft"
     },
@@ -2846,7 +2846,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Die Masseurin Lenka hat sich von einem balianischen Schamanen in Bali in der Nähe von Ubudu behandeln lassen."
+        "alt": "Die Masseurin Lenka wurde von einem Bali-Schamanen auf Bali in der Nähe von Ubud behandelt."
       },
       "status": "draft"
     },
@@ -2863,7 +2863,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Natürliches, festes Parfüm aus Bali, enthält: Jasmin, Plumerie, Champagner, Kokosöl, Bienenwachs. Name Bali Flowers - www.tajemstvijamu.cz"
+        "alt": "Natürliches, festes Bali-Parfüm, enthält: Jasmin, Plumserie, Champagner, Kokosöl, Bienenwachs. Bali Flowers - www.tajemstvijamu.cz"
       },
       "status": "draft"
     },
@@ -2914,7 +2914,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Ein Dharma-Getränke - sein würziges Getränk. Kurkuma, Ingwer, Roter Ingwer zur Unterstützung der Verdauung."
+        "alt": "Einen Drink Dharma - ihm ein würziges Getränk. Kurkuma, Ingwer, Roter Ingwer zur Unterstützung der Verdauung."
       },
       "status": "draft"
     },
@@ -2931,7 +2931,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Das Kräutergetränk aus Bali - Jam enthält Kurkuma, Ingwer, Java-Ingwer und fördert Immunität."
+        "alt": "Bali - JAMU enthält Kurkuma, Ingwer, Java-Ingwer."
       },
       "status": "draft"
     },
@@ -2948,7 +2948,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Getränke aus Bali - würzige Mischung zur Förderung der Verdauung"
+        "alt": "Getränke aus Bali - würzige Mischung zur Unterstützung der Verdauung"
       },
       "status": "draft"
     },
@@ -3012,7 +3012,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "url": "https://tajemstvijamu.cz/de/naturliche-produkte-von-jam/"
+        "url": "https://tajemstvijamu.cz/de/naturliche-produkte-jamu/"
       },
       "status": "draft"
     },
@@ -3089,7 +3089,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Foot Reflex Therapy and Kutus Kutus",
-      "meta_description": "By connecting reflective massage according to Jam's therapy with herbal oil, you can release the body, relieve them of pain and strengthen immunity.",
+      "meta_description": "By connecting the reflective massage according to JAMU theory with herbal oil, you can release the body, relieve them of pain and strengthen immunity.",
       "data": {},
       "status": "draft"
     },
@@ -3098,13 +3098,13 @@
       "object_subtype": "post",
       "object_id": 1521,
       "language": "en",
-      "route_path": "how-to-at-oil-therapy-kutus-kutus-from-home-comfort",
-      "slug": "how-to-at-oil-therapy-kutus-kutus-from-home-comfort",
-      "title": "How to at oil therapy Kutus Kutus from home comfort",
+      "route_path": "how-to-treat-kutus-kutus-oil-from-home-comfort",
+      "slug": "how-to-treat-kutus-kutus-oil-from-home-comfort",
+      "title": "How to treat Kutus Kutus oil from home comfort",
       "excerpt": "",
       "content": "",
-      "seo_title": "How to at oil therapy Kutus Kutus from home comfort",
-      "meta_description": "Therapist Kutus Kutus apply every time you miss energy, you will feel pain or that \"something crawls on you.\"",
+      "seo_title": "How to treat Kutus Kutus oil from home comfort",
+      "meta_description": "Apply the Kutus Kutus therapy whenever you miss energy, you will feel pain or that \"something crawls on you.\"",
       "data": {},
       "status": "draft"
     },
@@ -3119,7 +3119,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Evening rituals for better sleep",
-      "meta_description": "Quality sleep is important to our body and mind. A massage with herbal oil Kutus Kutus calms us down... makes us sleep and sleep better.",
+      "meta_description": "Quality sleep is important to our body and mind. A massage with herbal oil Kutus Kutus will calm us down... we will sleep better and sleep better.",
       "data": {},
       "status": "draft"
     },
@@ -3149,7 +3149,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Tanamum oil for beautiful hair",
-      "meta_description": "Tanam oil (Tanamu Tanami oil) promotes hair growth, because it contains a number of nourishing substances that are important for healthy hair, including fatty acids, ...",
+      "meta_description": "Tanam oil (Tanamu Tanami oil) promotes hair growth, since it contains a number of nourishment substances that are important for healthy hair, including fatty acids, ...",
       "data": {},
       "status": "draft"
     },
@@ -3158,13 +3158,13 @@
       "object_subtype": "post",
       "object_id": 2938,
       "language": "en",
-      "route_path": "what-herbs-does-kutus-kutus-herbal-oil-contain",
-      "slug": "what-herbs-does-kutus-kutus-herbal-oil-contain",
-      "title": "What herbs does Kutus Kutus herbal oil contain?",
+      "route_path": "what-herbs-contains-the-herbal-oil-kutus-kutus",
+      "slug": "what-herbs-contains-the-herbal-oil-kutus-kutus",
+      "title": "What herbs contains the herbal oil Kutus Kutus?",
       "excerpt": "",
       "content": "",
       "seo_title": "%%title%% %%page%%",
-      "meta_description": "The Kutus Kutus therapeutic oil from Bali contains 69 ingredients of herbs and spices that help prevent pain and overall health.",
+      "meta_description": "Kutus Kutus therapeutic oil from Bali contains 69 ingredients of herbs and spices that help against pain and overall health.",
       "data": {},
       "status": "draft"
     },
@@ -3175,11 +3175,11 @@
       "language": "en",
       "route_path": "jamu-traditional-healing-from-indonesia",
       "slug": "jamu-traditional-healing-from-indonesia",
-      "title": "Jamu - Traditional Healing from Indonesia",
+      "title": "JAMU - Traditional Healing from Indonesia",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jamu - Traditional Healing from Indonesia",
-      "meta_description": "The word \"Jamu\" has roots in Indonesian and refers to a mixture of herbs and spices that is used to prepare medicinal beverages. It comes from traditional Indonesian...",
+      "seo_title": "JAMU - Traditional Healing from Indonesia",
+      "meta_description": "The word JAMU has roots in Indonesian and refers to a mixture of herbs and spices that is used to prepare medicinal beverages. It comes from traditional Indonesian...",
       "data": {},
       "status": "draft"
     },
@@ -3194,7 +3194,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Bali - sacred flowers and aromatherapy",
-      "meta_description": "Find out how these flowers affect Balinese traditions and spiritual rituals, the healing effects they use in their daily lives in Bali.",
+      "meta_description": "Find out how these flowers affect Baliian traditions and spiritual rituals. The healing effects they use in their daily life on Bali.",
       "data": {},
       "status": "draft"
     },
@@ -3203,13 +3203,13 @@
       "object_subtype": "post",
       "object_id": 4265,
       "language": "en",
-      "route_path": "personal-experience-traditional-massage-from-the-healer-in-bali",
-      "slug": "personal-experience-traditional-massage-from-the-healer-in-bali",
-      "title": "Personal experience: traditional massage from the healer in Bali",
+      "route_path": "personal-experience-traditional-massage-from-the-healer-on-bali",
+      "slug": "personal-experience-traditional-massage-from-the-healer-on-bali",
+      "title": "Personal experience: traditional massage from the healer on Bali",
       "excerpt": "",
       "content": "",
-      "seo_title": "Personal experience: traditional massage from the healer in Bali",
-      "meta_description": "Personal experience with traditional healer in Bali. Description of massage, energy treatment of prana healing and the importance of spiritual healing.",
+      "seo_title": "Personal experience: traditional massage from the healer on Bali",
+      "meta_description": "Personal experience with a traditional healer on Bali. Description of massage, energy treatment of prana healing and the importance of spiritual healing.",
       "data": {},
       "status": "draft"
     },
@@ -3233,13 +3233,13 @@
       "object_subtype": "post",
       "object_id": 4524,
       "language": "en",
-      "route_path": "what-is-indonesian-jam-natural-elixir-for-energy-and-balance",
-      "slug": "what-is-indonesian-jam-natural-elixir-for-energy-and-balance",
-      "title": "What is Indonesian jam? Natural elixir for energy and balance",
+      "route_path": "what-is-indonesian-jamu-natural-elixir-for-energy-and-balance",
+      "slug": "what-is-indonesian-jamu-natural-elixir-for-energy-and-balance",
+      "title": "What is Indonesian JAMU? Natural elixir for energy and balance",
       "excerpt": "",
       "content": "",
-      "seo_title": "What is Indonesian jam? Natural elixir for energy and balance",
-      "meta_description": "Imagine a warm, fragrant drink that warms you up, gives you energy while supporting your body in a natural way. This is the jam of traditional Indonesian herbal...",
+      "seo_title": "What is Indonesian JAMU? Natural elixir for energy and balance",
+      "meta_description": "Imagine a warm, fragrant drink that warms you up, gives you energy while supporting your body in a natural way. This is JAMU...",
       "data": {},
       "status": "draft"
     },
@@ -3263,13 +3263,13 @@
       "object_subtype": "page",
       "object_id": 7,
       "language": "en",
-      "route_path": "natural-yamu-products",
-      "slug": "natural-yamu-products",
-      "title": "Natural Yamu Products",
+      "route_path": "natural-products-jamu",
+      "slug": "natural-products-jamu",
+      "title": "Natural products JAMU",
       "excerpt": "",
       "content": "",
       "seo_title": "Přírodní produkty%%page%% %%sep%% %%sitename%%",
-      "meta_description": "In our country you will find products purely natural ingredients without unnecessary artificial substances in accordance with JAMU.",
+      "meta_description": "You will find products purely from natural ingredients without unnecessary artificial substances in accordance with JAMU.",
       "data": {},
       "status": "draft"
     },
@@ -3314,7 +3314,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "General Terms and Conditions",
-      "meta_description": "These terms and conditions apply to the purchase in the online store www.tajemstvijamu.cz . The terms and conditions specify the rights and obligations of the seller....",
+      "meta_description": "These terms and conditions apply to the purchase in the online store www.tajemstvijamu.cz . The terms specify and specify the rights and obligations of the seller....",
       "data": {},
       "status": "draft"
     },
@@ -3359,7 +3359,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Massages",
-      "meta_description": "In my massages I combine the principles of Ayurvedic Abhyang with Balinese techniques and my own intuitive work with energy. I believe that healing touch and...",
+      "meta_description": "In my massages I combine the principles of Ayurvedic abhyang with Balijian techniques and my own intuitive work with energy. I believe that healing touch and...",
       "data": {},
       "status": "draft"
     },
@@ -3389,7 +3389,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "%%sitename%% - Zdraví, masáže a přírodní produkty",
-      "meta_description": "The secret of JAMU deals with health, massages, and natural products from Bali according to traditional healing and Ayurveda",
+      "meta_description": "Tajemství JAMU deals with health, massages, and natural products from Bali according to traditional healing and Ayurveda",
       "data": {},
       "status": "draft"
     },
@@ -3415,11 +3415,11 @@
       "language": "en",
       "route_path": "what-is-jamu",
       "slug": "what-is-jamu",
-      "title": "What is Jamu?",
+      "title": "What is JAMU?",
       "excerpt": "",
       "content": "",
-      "seo_title": "What is Jamu?",
-      "meta_description": "Jamu is a traditional herbal medicine and wellness care that the Indonesians have used for centuries to maintain a healthy body, mind and spirit. It includes herbal drinks...",
+      "seo_title": "What is JAMU?",
+      "meta_description": "JAMU is a traditional herbal medicine and wellness care that the Indonesians have been using for centuries to maintain a healthy body, mind and spirit. It includes herbal drinks...",
       "data": {},
       "status": "draft"
     },
@@ -3449,7 +3449,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Partners",
-      "meta_description": "Partner places where you can try and buy Kutus Kutus herbal oil is unique in its scent, composition and effects. It uses...",
+      "meta_description": "Partner places © where you can try and buy Kutus Kutus Oil The Kutus Kutus herbal oil is unique in its aroma, composition and effects. It uses...",
       "data": {},
       "status": "draft"
     },
@@ -3473,13 +3473,13 @@
       "object_subtype": "page",
       "object_id": 4011,
       "language": "en",
-      "route_path": "bali-massage-with-herbal-oil",
-      "slug": "bali-massage-with-herbal-oil",
-      "title": "Bali massage with herbal oil",
+      "route_path": "balijska-massage-with-herbal-oil",
+      "slug": "balijska-massage-with-herbal-oil",
+      "title": "Balijská massage with herbal oil",
       "excerpt": "",
       "content": "",
-      "seo_title": "Bali massage with herbal oil",
-      "meta_description": "Relaxation whole body ritual, which is based on traditional Balinese healing. It connects elements of acupressure, reflex therapy, stretching and aromatherapy...",
+      "seo_title": "Balijská massage with herbal oil",
+      "meta_description": "Relaxation full body ritual based on traditional Balijské healerství. It combines elements of acupressure, reflex therapy, stretching and aromatherapy...",
       "data": {},
       "status": "draft"
     },
@@ -3488,13 +3488,13 @@
       "object_subtype": "page",
       "object_id": 4018,
       "language": "en",
-      "route_path": "balinese-massage-courses",
-      "slug": "balinese-massage-courses",
-      "title": "Balinese Massage Courses",
+      "route_path": "baliian-massage-courses",
+      "slug": "baliian-massage-courses",
+      "title": "Baliian Massage Courses",
       "excerpt": "",
       "content": "",
-      "seo_title": "Balinese Massage Courses",
-      "meta_description": "Discover the secrets of Balinese massages and expand your horizons on the Bali massage course. Currently there is no deadline, but we can agree on...",
+      "seo_title": "Baliian Massage Courses",
+      "meta_description": "Discover the secrets of Balijské massages and expand your horizons on the Bali massage course. Currently no term is written, but we can agree on...",
       "data": {},
       "status": "draft"
     },
@@ -3509,7 +3509,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "bylinny-olej-z-bali",
-      "meta_description": "Herbal oil from Bali Helps with tiredness of the body and mind to support treatment of acute and chronic diseases. A mixture of herbs and spices, virgin coconut oil and essential...",
+      "meta_description": "Herbal oil from Bali Helps in tiredness of the body and mind as well as in support of treatment of acute and chronic diseases. A mixture of herbs and spices, virgin coconut oil and essential...",
       "data": {},
       "status": "draft"
     },
@@ -3563,12 +3563,12 @@
       "object_subtype": "product",
       "object_id": 17,
       "language": "en",
-      "route_path": "tanamu-tanami-skin-oil",
-      "slug": "tanamu-tanami-skin-oil",
-      "title": "Tanamu Tanami Skin Oil",
+      "route_path": "skin-oil-tanamu-tanami",
+      "slug": "skin-oil-tanamu-tanami",
+      "title": "Skin oil Tanamu Tanami",
       "excerpt": "",
       "content": "",
-      "seo_title": "Tanamu Tanami Skin Oil",
+      "seo_title": "Skin oil Tanamu Tanami",
       "meta_description": "\"Taman oil\" is rich in omega 3 fatty acids, natural antioxidants. It acts against bacteria, viruses, fungi and fungi.",
       "data": {},
       "status": "draft"
@@ -3578,12 +3578,12 @@
       "object_subtype": "product",
       "object_id": 18,
       "language": "en",
-      "route_path": "minyak-balur-massage-oil",
-      "slug": "minyak-balur-massage-oil",
-      "title": "Minyak Balur Massage Oil",
+      "route_path": "massage-oil-minyak-balur",
+      "slug": "massage-oil-minyak-balur",
+      "title": "Massage oil Minyak Balur",
       "excerpt": "",
       "content": "",
-      "seo_title": "Minyak Balur Massage Oil",
+      "seo_title": "Massage oil Minyak Balur",
       "meta_description": "The oil consists of 69 medicinal exotic herbs that positively affect the health and life of the Pran energy. It helps relieve pain and diseases without medication.",
       "data": {},
       "status": "draft"
@@ -3593,12 +3593,12 @@
       "object_subtype": "product",
       "object_id": 19,
       "language": "en",
-      "route_path": "natural-tanamu-tanami-soap",
-      "slug": "natural-tanamu-tanami-soap",
-      "title": "Natural Tanamu Tanami Soap",
+      "route_path": "natural-soap-tanamu-tanami",
+      "slug": "natural-soap-tanamu-tanami",
+      "title": "Natural soap Tanamu Tanami",
       "excerpt": "",
       "content": "",
-      "seo_title": "Natural Tanamu Tanami Soap",
+      "seo_title": "Natural soap Tanamu Tanami",
       "meta_description": "Tanamu Tanami helps with skin care that troubles problems (acne, dry and scaly skin, blisters, burns, ulcers, eczema, itching caused by allergies).",
       "data": {},
       "status": "draft"
@@ -3623,12 +3623,12 @@
       "object_subtype": "product",
       "object_id": 3614,
       "language": "en",
-      "route_path": "ritual-fragrance-bars-sacred-flowers-sacred-flowers",
-      "slug": "ritual-fragrance-bars-sacred-flowers-sacred-flowers",
-      "title": "Ritual Fragrance Bars Sacred Flowers \"Sacred Flowers\"",
+      "route_path": "ritual-fragrances-sacred-flowers-sacred-flowers",
+      "slug": "ritual-fragrances-sacred-flowers-sacred-flowers",
+      "title": "Ritual Fragrances Sacred Flowers \"Sacred Flowers\"",
       "excerpt": "",
       "content": "",
-      "seo_title": "Ritual Fragrance Bars Sacred Flowers \"Sacred Flowers\"",
+      "seo_title": "Ritual Fragrances Sacred Flowers \"Sacred Flowers\"",
       "meta_description": "Scented sticks suitable for massage, meditation, yoga and other forms of relaxation. Burning time is 50 minutes.",
       "data": {},
       "status": "draft"
@@ -3638,13 +3638,13 @@
       "object_subtype": "product",
       "object_id": 3623,
       "language": "en",
-      "route_path": "ritual-scented-bars-bali-energy-bali-spirit",
-      "slug": "ritual-scented-bars-bali-energy-bali-spirit",
-      "title": "Ritual Scented Bars Bali Energy \"Bali spirit\"",
+      "route_path": "ritual-fragrances-bali-energy-bali-spirit",
+      "slug": "ritual-fragrances-bali-energy-bali-spirit",
+      "title": "Ritual Fragrances Bali Energy \"Bali spirit\"",
       "excerpt": "",
       "content": "",
-      "seo_title": "Ritual Scented Bars Bali Energy \"Bali spirit\"",
-      "meta_description": "The mixture of essential oils from Bali in odorous sticks naturally cleanses the air, harmonizes energy and promotes meditation tuning. They are 100% natural, without...",
+      "seo_title": "Ritual Fragrances Bali Energy \"Bali spirit\"",
+      "meta_description": "The mixture of essential oils from Bali in odorous sticks naturally cleanses the air, harmonizes energy and promotes meditation...",
       "data": {},
       "status": "draft"
     },
@@ -3689,7 +3689,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Tea mug",
-      "meta_description": "A cup made of Balinese teak wood with a diameter of 9 cm.",
+      "meta_description": "Cup of Baliyjská teak wood with a diameter of 9 cm.",
       "data": {},
       "status": "draft"
     },
@@ -3700,10 +3700,10 @@
       "language": "en",
       "route_path": "ayurvedic-cream-nadis-herbal",
       "slug": "ayurvedic-cream-nadis-herbal",
-      "title": "Ayurvedic cream Nadis Herbal",
+      "title": "Ayurvedic Cream Nadis Herbal",
       "excerpt": "",
       "content": "",
-      "seo_title": "Ayurvedic cream Nadis Herbal",
+      "seo_title": "Ayurvedic Cream Nadis Herbal",
       "meta_description": "Pamper your skin according to Ayurveda's body cream from Bali with Aloe vera, coconut oil and cocoa butter for moisturizing and elasticity. Enriched Triphala oil...",
       "data": {},
       "status": "draft"
@@ -3713,12 +3713,12 @@
       "object_subtype": "product",
       "object_id": 3688,
       "language": "en",
-      "route_path": "frangipani-cream-nadis-herbal",
-      "slug": "frangipani-cream-nadis-herbal",
-      "title": "Frangipani cream Nadis Herbal",
+      "route_path": "frangipani-nadis-herbal-cream",
+      "slug": "frangipani-nadis-herbal-cream",
+      "title": "Frangipani Nadis Herbal Cream",
       "excerpt": "",
       "content": "",
-      "seo_title": "Frangipani cream Nadis Herbal",
+      "seo_title": "Frangipani Nadis Herbal Cream",
       "meta_description": "Cream with essential oil frangipani softens, regenerates and moisturizes the skin. A delicate exotic fragrance creates calm and deep relaxation.",
       "data": {},
       "status": "draft"
@@ -3734,7 +3734,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Sacred Scent Nadis Herbal Cream",
-      "meta_description": "Body Cream Sacred Scent made from a local small manufacturer Nadis Herbal, which manufactures products according to traditional holistic recipes. For production they are used...",
+      "meta_description": "Body Cream Sacred Scent made from a local small manufacturer Nadis Herbal, which manufactures products according to traditional holistic recipes. They are used...",
       "data": {},
       "status": "draft"
     },
@@ -3749,7 +3749,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Solid perfume Bali Flowers",
-      "meta_description": "Natural firm perfume Bali Flowes with a captivating aroma of Balinese flowers such as jasmine, champagne and Franzipania (Plumérie).",
+      "meta_description": "Natural hard perfume Bali Flowes with captivating fragrance Balijské flowers such as jasmine, champagne and francjipanie (Plumérie). Package contents is 15g.",
       "data": {},
       "status": "draft"
     },
@@ -3758,13 +3758,13 @@
       "object_subtype": "product",
       "object_id": 4398,
       "language": "en",
-      "route_path": "lemongrass-citron-grass-cream-nadis-herbal",
-      "slug": "lemongrass-citron-grass-cream-nadis-herbal",
-      "title": "Lemongrass (Citron grass) cream Nadis Herbal",
+      "route_path": "lemongrass-citron-grass-nadis-herbal-cream",
+      "slug": "lemongrass-citron-grass-nadis-herbal-cream",
+      "title": "Lemongrass (Citron grass) Nadis Herbal cream",
       "excerpt": "",
       "content": "",
-      "seo_title": "Lemongrass (Citron grass) cream Nadis Herbal",
-      "meta_description": "Cream made in Bali by a local small producer of local ingredients. Contains essential oil lemongrass, which refreshes the skin and adds energy.",
+      "seo_title": "Lemongrass (Citron grass) Nadis Herbal cream",
+      "meta_description": "Cream made on Bali by a local small producer of local ingredients. Contains lemongrass essential oil, which refreshes the skin and boosts energy.",
       "data": {},
       "status": "draft"
     },
@@ -3779,7 +3779,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Bali Moon Face Cream",
-      "meta_description": "Natural Bali cream with aloe, coconut oil, cocoa butter and seaweed for soft, moisturized and shiny skin.",
+      "meta_description": "Natural Bali cream with aloe, coconut oil, cocoa butter and seaweed for soft, moisturized and radiant skin.",
       "data": {},
       "status": "draft"
     },
@@ -3790,11 +3790,11 @@
       "language": "en",
       "route_path": "jamu-balance-spicy-mixture-for-beverage-preparation",
       "slug": "jamu-balance-spicy-mixture-for-beverage-preparation",
-      "title": "Jamu Balance © Spicy mixture for beverage preparation",
+      "title": "Jamu Balance spicy mixture for beverage preparation",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jamu Balance © Spicy mixture for beverage preparation",
-      "meta_description": "Jamu Balance is a spicy blend of Bali with turmeric, ginger, kencur and coconut sugar. Warming drink for everyday ritual from Indonesia, Bali.",
+      "seo_title": "Jamu Balance spicy mixture for beverage preparation",
+      "meta_description": "Jamu Balance is a spicy blend of Bali with turmeric, ginger, kencurum and coconut sugar. Heating drink for everyday ritual from Indonesia, Bali.",
       "data": {},
       "status": "draft"
     },
@@ -3803,13 +3803,13 @@
       "object_subtype": "product",
       "object_id": 4539,
       "language": "en",
-      "route_path": "jamu-balance-pure-spicy-mixture-for-preparing-a-drink-without-sugar",
-      "slug": "jamu-balance-pure-spicy-mixture-for-preparing-a-drink-without-sugar",
-      "title": "Jamu Balance Pure © Spicy mixture for preparing a drink without sugar",
+      "route_path": "jamu-balance-pure-spicy-blend-to-prepare-a-drink-without-sugar",
+      "slug": "jamu-balance-pure-spicy-blend-to-prepare-a-drink-without-sugar",
+      "title": "Jamu Balance Pure spicy blend to prepare a drink without sugar",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jamu Balance Pure © Spicy mixture for preparing a drink without sugar",
-      "meta_description": "Jamu Balance is a spicy blend from Bali with turmeric, ginger, kencurum and pepper. Warming drink for everyday ritual from Indonesia, Bali. Supports immunity.",
+      "seo_title": "Jamu Balance Pure spicy blend to prepare a drink without sugar",
+      "meta_description": "Jamu Balance is a spicy blend of Bali with turmeric, ginger, kencurum and pepper. Heating drink for everyday ritual from Indonesia, Bali. Supports immunity.",
       "data": {},
       "status": "draft"
     },
@@ -3820,11 +3820,11 @@
       "language": "en",
       "route_path": "dharma-spicy-mixture-for-beverage-preparation",
       "slug": "dharma-spicy-mixture-for-beverage-preparation",
-      "title": "Dharma © Spicy mixture for beverage preparation",
+      "title": "Dharma spicy mixture for beverage preparation",
       "excerpt": "",
       "content": "",
-      "seo_title": "Dharma © Spicy mixture for beverage preparation",
-      "meta_description": "Jamu Dharma is a spicy blend of Bali with turmeric, ginger, red ginger, black pepper and coconut sugar. For better digestion and balance of the body.",
+      "seo_title": "Dharma spicy mixture for beverage preparation",
+      "meta_description": "JAMU Dharma is a spicy blend of Bali with turmeric, ginger, red ginger, black pepper and coconut sugar. For better digestion and balance of the body.",
       "data": {},
       "status": "draft"
     },
@@ -3833,13 +3833,13 @@
       "object_subtype": "product",
       "object_id": 4544,
       "language": "en",
-      "route_path": "dharma-pure-cumshot-blend-for-the-preparation-of-a-sugar-free-beverage",
-      "slug": "dharma-pure-cumshot-blend-for-the-preparation-of-a-sugar-free-beverage",
-      "title": "Dharma Pure cumshot blend for the preparation of a sugar-free beverage",
+      "route_path": "dharma-pure-spicy-blend-to-prepare-a-drink-without-sugar",
+      "slug": "dharma-pure-spicy-blend-to-prepare-a-drink-without-sugar",
+      "title": "Dharma Pure spicy blend to prepare a drink without sugar",
       "excerpt": "",
       "content": "",
-      "seo_title": "Dharma Pure cumshot blend for the preparation of a sugar-free beverage",
-      "meta_description": "Spicy blend produced in Bali contains turmeric, ginger and red ginger, traditionally associated with the support of digestion. No added sugar.",
+      "seo_title": "Dharma Pure spicy blend to prepare a drink without sugar",
+      "meta_description": "Spicy blend produced on Bali contains turmeric, ginger and red ginger, traditionally associated with the support of digestion. No added sugar.",
       "data": {},
       "status": "draft"
     },
@@ -4034,7 +4034,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Supplements",
-      "meta_description": "Supplements from Bali that give your space an extraordinary spiritual atmosphere. Teak wood and other natural materials from Bali will transform your place into an oasis of peace...",
+      "meta_description": "Accessories from Bali that give your space an extraordinary spiritual atmosphere. Teak wood and other natural materials from Bali will transform your place into an oasis of peace...",
       "data": {},
       "status": "draft"
     },
@@ -4049,7 +4049,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Yoga and meditation",
-      "meta_description": "Enjoy a moment of peace and immerse yourself in the Balinese atmosphere with natural scented bars from Bali. Their spiritual scent will support your meditation, deepen...",
+      "meta_description": "Indulge in moments of peace and immerse yourself in the Baliian atmosphere with natural scented bars from Bali . Their spiritual scent will support your meditation, deepen...",
       "data": {},
       "status": "draft"
     },
@@ -4064,7 +4064,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Massages",
-      "meta_description": "Experience relaxation with natural herbal oils from Bali. Self-care that relieves stress and promotes your health. Oils for massage or self-care in the form of car massage,...",
+      "meta_description": "Experience relaxation with natural herbal oils from Bali. Self-care that relieves stress and promotes your health. Oils for massage or self-care in the form of auto massage,...",
       "data": {},
       "status": "draft"
     },
@@ -4142,7 +4142,7 @@
                 "value": ""
               },
               {
-                "label": "High Myth",
+                "label": "Vysoké Mýto",
                 "value": ""
               }
             ]
@@ -4156,7 +4156,7 @@
         },
         "settings": {
           "form_title": "Reservation form",
-          "form_desc": "Are you interested in the Jam Secret massage? Contact me through this form. I'll call you back as soon as possible.",
+          "form_desc": "Are you interested in anything about Tajemství JAMU massages? Contact me through this form. I'll call you back as soon as possible.",
           "submit_text": "Send",
           "submit_text_processing": "Sending..."
         }
@@ -4208,7 +4208,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus herbal therapy from Bali, which promotes the balance of life and flow of life energy of Qi or Prana."
+        "alt": "Kutus Kutus herbal therapy from Bali, which promotes life balance and flow of life energy of Qi or Prana."
       },
       "status": "draft"
     },
@@ -4225,7 +4225,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus oil contains 69 medicinal herbs and positively affects the mental and physical health of man."
+        "alt": "Kutus Kutus oil contains 69 medicinal herbs and positively affects the mental and physical health of the person."
       },
       "status": "draft"
     },
@@ -4242,7 +4242,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus herbal therapy from Bali, which promotes the balance of life and flow of life energy of Qi or Prana."
+        "alt": "Kutus Kutus herbal therapy from Bali, which promotes life balance and flow of life energy of Qi or Prana."
       },
       "status": "draft"
     },
@@ -4293,7 +4293,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Yoga, meditation, love and herbal oil Kutus Kutus helps me balance my life and my mental health."
+        "alt": "Yoga, meditation, love and herbal oil Kutus Kutus is good for my balance of life and my mental health."
       },
       "status": "draft"
     },
@@ -4327,7 +4327,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Rexlexology of the body or zone therapy according to the herbal therapy of Jam (based on Chinese medicine) is used in alternative medicine."
+        "alt": "Rexlexology of the body or zone therapy according to herbal therapy JAMU (based on Chinese medicine) is used in alternative medicine."
       },
       "status": "draft"
     },
@@ -4361,7 +4361,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus is an herbal oil from Indonesia - Bali, which maintains the balance of life and health."
+        "alt": "Kutus Kutus is an herbal oil from Indonesia - Bali, which maintains life balance and health."
       },
       "status": "draft"
     },
@@ -4378,7 +4378,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus is an herbal oil from Indonesia - Bali, which maintains the balance of life and health."
+        "alt": "Kutus Kutus is an herbal oil from Indonesia - Bali, which maintains life balance and health."
       },
       "status": "draft"
     },
@@ -4395,7 +4395,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus sustains the flow of Qi energy, or flowing in chakras."
+        "alt": "Kutus Kutus maintains the flow of Qi energy, or flowing in chakras."
       },
       "status": "draft"
     },
@@ -4412,7 +4412,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Natural oil Kalila Kalila from Bali, contains only natural latka. Without chemistry and harmful substances."
+        "alt": "Natural oil Kalila Kalila from Bali, contains only natural lats. Without chemistry and harmful substances."
       },
       "status": "draft"
     },
@@ -4429,7 +4429,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "The herbal oil Kutus Kutus maintains the balance of life and health. The oil can be used for yoga lessons or meditation."
+        "alt": "Herbal oil Kutus Kutus keeps life balance and health. Oil can be used for yoga lessons or meditation."
       },
       "status": "draft"
     },
@@ -4446,7 +4446,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus herbal oil from Bali"
+        "alt": "Kutus Kutus Herbal Oil from Bali"
       },
       "status": "draft"
     },
@@ -4480,7 +4480,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus helps to remove menstrual pain"
+        "alt": "Kutus Kutus helps remove menstrual pain"
       },
       "status": "draft"
     },
@@ -4497,7 +4497,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus promotes the energy of Qi and contributes to health"
+        "alt": "Kutus Kutus supports Qi energy and contributes to health"
       },
       "status": "draft"
     },
@@ -4531,7 +4531,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus herbal oil from Bali"
+        "alt": "Kutus Kutus Herbal Oil from Bali"
       },
       "status": "draft"
     },
@@ -4548,7 +4548,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Tanam oil - fuck skin from Bali"
+        "alt": "Tanam oil - serum on skin from Bali"
       },
       "status": "draft"
     },
@@ -4650,7 +4650,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus kutus oil Czech Republic"
+        "alt": "Kutus Kutus Oil Czech Republic"
       },
       "status": "draft"
     },
@@ -4667,7 +4667,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "The Secret of Jam"
+        "alt": "The Secret of JAMU"
       },
       "status": "draft"
     },
@@ -4684,7 +4684,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "JAMU's Secret Logo"
+        "alt": "JAMU logo of mystery"
       },
       "status": "draft"
     },
@@ -4735,7 +4735,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Balance of the body, mind and soul - The Secret of Jam"
+        "alt": "Balance of body, mind and soul - Tajemství JAMU"
       },
       "status": "draft"
     },
@@ -4752,7 +4752,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "The masseuse of Balinese massages was taught by traditional healers in Bali. Before the massage she performs prayer and meditation."
+        "alt": "The masseuse Balijsky massage was taught by traditional healers on Bali. Before the massage she performs prayer and meditation."
       },
       "status": "draft"
     },
@@ -4786,7 +4786,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Scent bars from Bali \"Holy Flowers,\" natural without synthetic substances, fat - long burning time. Spiritual sticks suitable for meditation, yoga, Balinese massage."
+        "alt": "Scented bars from Bali \" Sacred Flowers,\" natural without synthetic substances, thick - long burning time. Spiritual sticks suitable for meditation, yoga, Balian massage."
       },
       "status": "draft"
     },
@@ -4803,7 +4803,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Fragrance bars from Bali \"Holy Flowers,\" natural without synthetic substances, fat - long burning time. Suitable for meditation, yoga, Balinese massage."
+        "alt": "Scented bars from Bali \" Sacred Flowers,\" natural without synthetic substances, thick - long burning time. Suitable for meditation, yoga, Balian massage."
       },
       "status": "draft"
     },
@@ -4820,7 +4820,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Turmeric Jam drink from Indonesia"
+        "alt": "Turmeric drink JAMU from Indonesia"
       },
       "status": "draft"
     },
@@ -4854,7 +4854,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Scent bar Bali spirit, 100% natural harmless. Clove, magnolia, ylang-ylang, lemon grass, nutmeg, incense"
+        "alt": "Scent bar Bali spirit, 100% natural safe. Clove, magnolia, ylang-ylang, lemon grass, nutmeg, incense"
       },
       "status": "draft"
     },
@@ -4871,7 +4871,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Manufacture of Jam drinks - tonic from cinnamon, lemon grass, cloves, badian"
+        "alt": "Production of JAMU drinks - tonic from cinnamon, lemon grass, nail, badian"
       },
       "status": "draft"
     },
@@ -4888,7 +4888,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "The production of jam drinks - a traditional drink from Indonesia to promote health is made from turmeric, tamarind ginger."
+        "alt": "Production of JAMU drink - traditional drink from Indonesia to promote health is made from turmeric, tamarind ginger."
       },
       "status": "draft"
     },
@@ -4905,7 +4905,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Natural healing from Indonesia uses curcuma, ginger, red ginger to prepare a jam. Suitable for treating colds, inflammation."
+        "alt": "Natural Healing from Indonesia uses curcuma, ginger, red ginger to prepare JAMU drinks. Suitable for cold treatment, inflammation."
       },
       "status": "draft"
     },
@@ -4939,7 +4939,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Turmeric Traditional Healing in Bali, Kurkuma Jam Drink"
+        "alt": "Turmeric Traditional Healing at Bali, Turmeric JAMU Drink"
       },
       "status": "draft"
     },
@@ -4956,7 +4956,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Fragrance bars from Bali \"Holy Flowers,\" natural without synthetic substances, fat - long burning time. Suitable for meditation, yoga, Balinese massage."
+        "alt": "Scented bars from Bali \" Sacred Flowers,\" natural without synthetic substances, thick - long burning time. Suitable for meditation, yoga, Balian massage."
       },
       "status": "draft"
     },
@@ -4973,7 +4973,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Tea holder for fragrance essence / Bali bar"
+        "alt": "Tea holder for fragrance essence/bar from Bali"
       },
       "status": "draft"
     },
@@ -4990,7 +4990,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Tea holder for fragrance essence / Bali bar"
+        "alt": "Tea holder for fragrance essence/bar from Bali"
       },
       "status": "draft"
     },
@@ -5007,7 +5007,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Teak cup from Bali"
+        "alt": "Tea cup from Bali"
       },
       "status": "draft"
     },
@@ -5024,7 +5024,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Teak bowls, made in Bali"
+        "alt": "Teak bowls, made on Bali"
       },
       "status": "draft"
     },
@@ -5058,7 +5058,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Body Ayurvedic cream, natural cosmetics, made in Bali,"
+        "alt": "Body Ayurvedic cream, natural cosmetics, made on Bali,"
       },
       "status": "draft"
     },
@@ -5075,7 +5075,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Body cream, natural cosmetics, made in Bali, essential oils - frangipania (plumeria)"
+        "alt": "Body cream, natural cosmetics, made on Bali, essential oils - frangipania (plumeria)"
       },
       "status": "draft"
     },
@@ -5092,7 +5092,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Body cream, natural cosmetics, made on Bali, essential oils - champagne, vertivar, patchouli"
+        "alt": "Body cream, natural cosmetics, made on Bali, essential oils - champagne, vertivar, patchuli"
       },
       "status": "draft"
     },
@@ -5126,7 +5126,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Herbs contained in herbal oil Kutus Kutus - ginger, turmeric, cloves, badyan, plumery."
+        "alt": "Herbs contained in herbal oil Kutus Kutus - ginger, turmeric, cloves, badyan, plumery. Bali"
       },
       "status": "draft"
     },
@@ -5194,7 +5194,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Scent bar made of natural materials, without chemistry is a better option for health. Scent bars have a cleansing, spiritual significance for Balinese culture."
+        "alt": "Scented stick made of natural materials, without chemistry is a better option for health. Scented bars have a cleansing, spiritual significance for Balijské culture."
       },
       "status": "draft"
     },
@@ -5211,7 +5211,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias on the beach, Bali."
+        "alt": "Lenka Eliášová on the beach, Bali."
       },
       "status": "draft"
     },
@@ -5228,7 +5228,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali massage in Prague"
+        "alt": "Balijská massage in Prague"
       },
       "status": "draft"
     },
@@ -5279,7 +5279,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "♪ Hindu bali ♪"
+        "alt": "Hindu Bali"
       },
       "status": "draft"
     },
@@ -5330,7 +5330,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliášová discovers Balinese Hinduism, is at the Balis Temple and lights a fragrant bar."
+        "alt": "Lenka Eliášová discovers Balijian Hinduism, is at Balisykého Temple and ignites a fragrant bar."
       },
       "status": "draft"
     },
@@ -5364,7 +5364,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias, Bali Massage Courses"
+        "alt": "Lenka Eliášová, Baliian massage courses"
       },
       "status": "draft"
     },
@@ -5398,7 +5398,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "For Bali, the flower of the plumery, known as \"jepun,\" has a deep cultural and spiritual meaning. Lenka in Bali with a flower of the plumery. The secret of the Jam."
+        "alt": "For Balijce has a plumery flower known as \"jepun\", a deep cultural and spiritual meaning. Lenka on Bali with a plumery flower. Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -5432,7 +5432,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliášová recognizes Balinese culture and learns traditional massages from Balinese healers."
+        "alt": "Lenka Eliášová recognizes Balij's culture and learns traditional massages from Balij's healers."
       },
       "status": "draft"
     },
@@ -5449,7 +5449,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Herbal drink Jamu - lemon grass, cloves, cinnamon, cardamom. Herbal tea from Bali. Herbs from Bali for health. Secret Jam."
+        "alt": "Herbal drink JAMU - lemon grass, cloves, cinnamon, cardamom. Herbal tea from Bali. Herbs from Bali for health. Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -5466,7 +5466,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Secrets of Jamu, holistic health care"
+        "alt": "Tajemství JAMU, holistic health care"
       },
       "status": "draft"
     },
@@ -5483,7 +5483,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliášová - she learned Bali massage and learned local culture in Bali. Frangipania (plumeria) - white or yellow flower is a symbol of purity, beauty and sanctity. In Bali, plumeria plays an important role in Hindu rituals, ceremonies and everyday life."
+        "alt": "Lenka Eliášová - she learned Baliian massage and learned local culture on Bali. Frangipania (plumeria) - white or yellow flower is a symbol of purity, beauty and sanctity. Bali plays an important role in Hindu rituals, ceremonies and everyday life."
       },
       "status": "draft"
     },
@@ -5500,7 +5500,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliášová - masseuse of Ayurvedic and Balinese massages."
+        "alt": "Lenka Eliášová - masseuse of Ayurvedic and Balijské massage."
       },
       "status": "draft"
     },
@@ -5517,7 +5517,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Eastern Massage Styles - Balinese and Yaurvedic Massage, Secrets of Jam"
+        "alt": "Eastern Massage Styles - Balijská a jaurvedská massage, Tajemství JAMU"
       },
       "status": "draft"
     },
@@ -5534,7 +5534,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias, Bali Healing"
+        "alt": "Lenka Eliášová, healing on Bali"
       },
       "status": "draft"
     },
@@ -5551,7 +5551,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliášová, energy massage - Balinese massage, Ayurvedic abhyanga massage"
+        "alt": "Lenka Eliášová, energy massage - Balijská massage, Ayurvedic abhyanga massage"
       },
       "status": "draft"
     },
@@ -5568,7 +5568,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali massage in Prague"
+        "alt": "Balijská massage in Prague"
       },
       "status": "draft"
     },
@@ -5585,7 +5585,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliášová abhyanga massage"
+        "alt": "Lenka Eliášová Abhyanga massage"
       },
       "status": "draft"
     },
@@ -5602,7 +5602,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliášová, Secret of Jam, Balinese Health and Beauty Care."
+        "alt": "Lenka Eliášová, Tajemství JAMU, Balijské zdravotování o zdravo a zdravo."
       },
       "status": "draft"
     },
@@ -5636,7 +5636,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliášová, Bali massage b Prague, courses"
+        "alt": "Lenka Eliášová, Balijská massage b Prague, courses"
       },
       "status": "draft"
     },
@@ -5653,7 +5653,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali culture and spirituality, Jam's secret."
+        "alt": "Balijská culture and spirituality, Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -5670,7 +5670,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali culture and spirituality, Jam's secret."
+        "alt": "Balijská culture and spirituality, Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -5704,7 +5704,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Traditional Healing from Bali, The Secret of Jam"
+        "alt": "Traditional Healing from Bali, Tajemství JAMU"
       },
       "status": "draft"
     },
@@ -5721,7 +5721,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias Yoga"
+        "alt": "Lenka Eliášová Yoga"
       },
       "status": "draft"
     },
@@ -5738,7 +5738,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Car massage Secrets of Jam"
+        "alt": "Automassage Tajemství JAMU"
       },
       "status": "draft"
     },
@@ -5772,7 +5772,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "The balance of body, mind and spirit, the secret of Jamu's holistic approach to health."
+        "alt": "Balance of body, mind and spirit. Tajemství JAMU holistic approach to health."
       },
       "status": "draft"
     },
@@ -5789,7 +5789,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliášová, Bali massage in Prague. Study in Bali. Bali healing."
+        "alt": "Lenka Eliášová, Bali massage in Prague. Study on Bali. Bali healing."
       },
       "status": "draft"
     },
@@ -5806,7 +5806,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliášová Bali massage and healing from Indonesia. Bali beach."
+        "alt": "Lenka Eliášová Balijská massage and healing from Indonesia. Balijská beach."
       },
       "status": "draft"
     },
@@ -5823,7 +5823,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Production of natural cosmetics - floral massage oil in Bali. Raw materials: Aloe Vera, corn, Plumérie, Ylang Ylang, and champagne."
+        "alt": "Production of natural cosmetics - floral massage oil on Bali. Raw materials: Aloe Vera, corn, plumery, Ylang Ylang, and champagne."
       },
       "status": "draft"
     },
@@ -5840,7 +5840,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Flowers such as Franzipania, Jasmine and champagne I am worshipped for my spiritual and medicinal purposes and are used in Bali in rituals and meditations."
+        "alt": "Flowers such as Franzipania, Jasmine and champagne I am worshipped for my spiritual and medicinal purposes and are used on Bali in rituals and meditations."
       },
       "status": "draft"
     },
@@ -5857,7 +5857,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Masseuse Lenka was treated by a Balinese shaman in Bali near Ubud. His name is Ketut."
+        "alt": "Masseuse Lenka has been treated by Baliian shaman on Bali, near Ubud. His name is Ketut."
       },
       "status": "draft"
     },
@@ -5874,7 +5874,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Natural hard perfume from Bali, contains: jasmine, plumery, champagne, coconut oil, beeswax. Name Bali Flowers - www.tejamstvijamu.cz"
+        "alt": "Natural solid perfume from Bali, contains: jasmine, plumery, champagne, coconut oil, beeswax. Name Bali Flowers - www.tajemstvijamu.cz"
       },
       "status": "draft"
     },
@@ -5908,7 +5908,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Spicy drink from Bali, natural medicine, Made in Bali - Ubud. Balance"
+        "alt": "Spicy drink from Bali, natural medicine, Made on Bali - Ubud. Balance"
       },
       "status": "draft"
     },
@@ -5942,7 +5942,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Herbal drink from Bali - jam contains turmeric, ginger, Javan ginger. Supports immunity."
+        "alt": "Herbal drink from Bali - JAMU contains turmeric, ginger, Javan ginger. It supports immunity."
       },
       "status": "draft"
     },
@@ -5959,7 +5959,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali Beverage - Spicy blend to support digestion"
+        "alt": "Drink from Bali - spicy mixture to support digestion"
       },
       "status": "draft"
     },
@@ -6023,7 +6023,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "url": "https://tajemstvijamu.cz/en/natural-yamu-products/"
+        "url": "https://tajemstvijamu.cz/en/natural-products-jamu/"
       },
       "status": "draft"
     },
@@ -6049,13 +6049,13 @@
       "object_subtype": "post",
       "object_id": 1393,
       "language": "pl",
-      "route_path": "bol-menstruacyjny-co-to-jest-i-dlaczego-tak-nas-boli",
-      "slug": "bol-menstruacyjny-co-to-jest-i-dlaczego-tak-nas-boli",
-      "title": "Ból menstruacyjny - co to jest i dlaczego tak nas boli",
+      "route_path": "cierpienie-psychiczne-co-to-jest-i-dlaczego-tak-bardzo-boli",
+      "slug": "cierpienie-psychiczne-co-to-jest-i-dlaczego-tak-bardzo-boli",
+      "title": "Cierpienie psychiczne - co to jest i dlaczego tak bardzo boli.",
       "excerpt": "",
       "content": "",
       "seo_title": "%%title%% %%page%%",
-      "meta_description": "Co oznaczają te bóle w medycynie orientacyjnej i jak z nimi walczyć?",
+      "meta_description": "Co te bóle oznaczają leki dobroczynne i jak sobie z nimi poradzić?",
       "data": {},
       "status": "draft"
     },
@@ -6064,13 +6064,13 @@
       "object_subtype": "post",
       "object_id": 1394,
       "language": "pl",
-      "route_path": "8-wskazowek-na-bol-miesniowy-co-mi-pomoglo",
-      "slug": "8-wskazowek-na-bol-miesniowy-co-mi-pomoglo",
-      "title": "8 wskazówek na ból mięśniowy, co mi pomogło",
+      "route_path": "8-napiwkow-na-bol-ludzki-lub-co-mi-pomoglo",
+      "slug": "8-napiwkow-na-bol-ludzki-lub-co-mi-pomoglo",
+      "title": "8 napiwków na ból ludzki lub co mi pomogło",
       "excerpt": "",
       "content": "",
-      "seo_title": "8 wskazówek na ból mięśniowy, co mi pomogło",
-      "meta_description": "Ból menstruacyjny zgodnie z medycyną orientacyjną oznacza przerwanie prądu energii chi. Wypróbowane wskazówki na miesięczne kręgosłupy naturalnie bez leków.",
+      "seo_title": "8 napiwków na ból ludzki lub co mi pomogło",
+      "meta_description": "Błędny ból w zależności od leków oryginalnych wskazuje na przerwanie przepływu energii Qi. Testowane napiwki dla menstrualnych skurczów naturalnie bez medytacji.",
       "data": {},
       "status": "draft"
     },
@@ -6079,13 +6079,13 @@
       "object_subtype": "post",
       "object_id": 1412,
       "language": "pl",
-      "route_path": "jak-wspierac-prad-energii-chi",
-      "slug": "jak-wspierac-prad-energii-chi",
-      "title": "Jak wspierać prąd energii chi",
+      "route_path": "jak-wspierac-przeplyw-energii-qi",
+      "slug": "jak-wspierac-przeplyw-energii-qi",
+      "title": "Jak wspierać przepływ energii Qi",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jak wspierać prąd energii chi",
-      "meta_description": "Większość tradycyjnych form medycyny twierdzi, że przyczyną choroby jest nierówność energetyczna, blokowanie naturalnego przepływu energii Chi.",
+      "seo_title": "Jak wspierać przepływ energii Qi",
+      "meta_description": "Większość tradycyjnych form medycyny mówi, że przyczyną choroby jest nierównowaga energetyczna, blokowanie naturalnych przepływów energii Qi.",
       "data": {},
       "status": "draft"
     },
@@ -6094,13 +6094,13 @@
       "object_subtype": "post",
       "object_id": 1478,
       "language": "pl",
-      "route_path": "terapia-odbiorcza-z-nog-i-kutus-kutus",
-      "slug": "terapia-odbiorcza-z-nog-i-kutus-kutus",
-      "title": "Terapia odbiorcza z nóg i Kutus Kutus",
+      "route_path": "skrzydla-reflex-therapy-i-kutus-kutus",
+      "slug": "skrzydla-reflex-therapy-i-kutus-kutus",
+      "title": "Skrzydła Reflex Therapy i Kutus Kutus",
       "excerpt": "",
       "content": "",
-      "seo_title": "Terapia odbiorcza z nóg i Kutus Kutus",
-      "meta_description": "Połączenie masażu odbiorczego zgodnie z terapją Jamu z olejem roślinnym może spowodować uwolnienie ciała, uwolnienie ich od bólu i zwiększenie immunitetu.",
+      "seo_title": "Skrzydła Reflex Therapy i Kutus Kutus",
+      "meta_description": "Łącząc masę charakterystyczną zgodnie z teoriami JAMU z olejem ziołowym, możesz uwolnić ciało, uwolnić je od bólu i wzmocnić dyskrecję.",
       "data": {},
       "status": "draft"
     },
@@ -6109,13 +6109,13 @@
       "object_subtype": "post",
       "object_id": 1521,
       "language": "pl",
-      "route_path": "jak-na-terapii-olejem-kutus-kutus-z-wygody-domu",
-      "slug": "jak-na-terapii-olejem-kutus-kutus-z-wygody-domu",
-      "title": "Jak na terapii olejem Kutus Kutus z wygody domu",
+      "route_path": "jak-traktowac-olej-kutus-kutus-z-komfortu",
+      "slug": "jak-traktowac-olej-kutus-kutus-z-komfortu",
+      "title": "Jak traktować olej Kutus Kutus z komfortu",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jak na terapii olejem Kutus Kutus z wygody domu",
-      "meta_description": "Leczenie Kutus Kutus należy stosować za każdym razem, gdy brakuje ci energii, będziesz czuć ból lub że \"coś na tobie wpada\".",
+      "seo_title": "Jak traktować olej Kutus Kutus z komfortu",
+      "meta_description": "W przybliżeniu Kutus Kutus terapii, kiedy stracisz energię, poczujesz ból lub \"wszystko się na tobie pełza\".",
       "data": {},
       "status": "draft"
     },
@@ -6124,13 +6124,13 @@
       "object_subtype": "post",
       "object_id": 1834,
       "language": "pl",
-      "route_path": "obrzedy-wieczorne-dla-lepszego-snu",
-      "slug": "obrzedy-wieczorne-dla-lepszego-snu",
-      "title": "Obrzędy wieczorne dla lepszego snu",
+      "route_path": "wiczenia-rytualow-na-lepsze-spanie",
+      "slug": "wiczenia-rytualow-na-lepsze-spanie",
+      "title": "wiczenia rytuałów na lepsze spanie",
       "excerpt": "",
       "content": "",
-      "seo_title": "Obrzędy wieczorne dla lepszego snu",
-      "meta_description": "Jakość snu jest ważna dla naszego ciała i umysłu.",
+      "seo_title": "wiczenia rytuałów na lepsze spanie",
+      "meta_description": "Spód życia jest ważne dla naszego ciała i umysłu, masa z olejem z ziołku z ZXG12QXZ ochłodzi nas... będziemy spać lepiej i spać lepiej.",
       "data": {},
       "status": "draft"
     },
@@ -6139,13 +6139,13 @@
       "object_subtype": "post",
       "object_id": 1935,
       "language": "pl",
-      "route_path": "masaz-ziolowy-z-afrodyzjakami",
-      "slug": "masaz-ziolowy-z-afrodyzjakami",
-      "title": "Masaż ziołowy z afrodyzjakami",
+      "route_path": "masazer-z-maslem-orzechowym-z-afrodyzjami",
+      "slug": "masazer-z-maslem-orzechowym-z-afrodyzjami",
+      "title": "Masażer z masłem orzechowym z afrodyzjami",
       "excerpt": "",
       "content": "",
       "seo_title": "%%title%% %%page%%",
-      "meta_description": "Miłej masażu, Benefity dostaną nie tylko masowane, ale także uczestnik, a dotyk przekazuje silną energię, która ma siłę leczenia.",
+      "meta_description": "Cieszcie się masażem wspólnika, a ścięty z niego stają się nie tylko masażystką, ale także uczestnikiem.",
       "data": {},
       "status": "draft"
     },
@@ -6154,13 +6154,13 @@
       "object_subtype": "post",
       "object_id": 2915,
       "language": "pl",
-      "route_path": "olej-tanamowy-dla-pieknych-wlosow",
-      "slug": "olej-tanamowy-dla-pieknych-wlosow",
-      "title": "Olej tanamowy dla pięknych włosów",
+      "route_path": "oleamum-olej-pieknych-wlosow",
+      "slug": "oleamum-olej-pieknych-wlosow",
+      "title": "Oleamum olej pięknych włosów",
       "excerpt": "",
       "content": "",
-      "seo_title": "Olej tanamowy dla pięknych włosów",
-      "meta_description": "Olej tanamowy (olej Tanamu Tanami) wspiera wzrost włosów, ponieważ zawiera wiele substancji spożywczych, które są ważne dla zdrowych włosów, w tym kwasów tłuszczowych...",
+      "seo_title": "Oleamum olej pięknych włosów",
+      "meta_description": "Olejny olej (Tanamu Tanami) promuje wzrost włosów, ponieważ zawiera szereg substancji aromatyzujących, które są ważne dla zdrowych włosów, w tym kwasy tłuszczowe, ...",
       "data": {},
       "status": "draft"
     },
@@ -6169,13 +6169,13 @@
       "object_subtype": "post",
       "object_id": 2938,
       "language": "pl",
-      "route_path": "jakie-rosliny-zawieraja-olej-roslinny-kutus-kutus",
-      "slug": "jakie-rosliny-zawieraja-olej-roslinny-kutus-kutus",
-      "title": "Jakie rośliny zawierają olej roślinny Kutus Kutus?",
+      "route_path": "jakie-ziola-zawiera-olej-ziolowy-kutus-kutus",
+      "slug": "jakie-ziola-zawiera-olej-ziolowy-kutus-kutus",
+      "title": "Jakie zioła zawiera olej ziołowy Kutus Kutus?",
       "excerpt": "",
       "content": "",
       "seo_title": "%%title%% %%page%%",
-      "meta_description": "Olej terapeutyczny Kutus Kutus z Bali zawiera 69 składników zioł i przypraw, które przyczyniają się do przeciwbólowego i ogólnego zdrowia.",
+      "meta_description": "Kutus Kutus therapeutic oil from Bali zawiera 69 składników zioła i opactwa, które pomagają w walce z bólem i ogólnym zdrowiem.",
       "data": {},
       "status": "draft"
     },
@@ -6184,13 +6184,13 @@
       "object_subtype": "post",
       "object_id": 3319,
       "language": "pl",
-      "route_path": "jamu-tradycyjne-leczenie-z-indonezji",
-      "slug": "jamu-tradycyjne-leczenie-z-indonezji",
-      "title": "Jamu - Tradycyjne leczenie z Indonezji",
+      "route_path": "jamu-tradycyjne-healing-z-indonezji",
+      "slug": "jamu-tradycyjne-healing-z-indonezji",
+      "title": "JAMU - Tradycyjne Healing z Indonezji",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jamu - Tradycyjne leczenie z Indonezji",
-      "meta_description": "Słowo „Jama” ma korzenie w języku indonezyjskim i wskazuje na mieszaninę zioł i zapraw, używaną do przygotowania napojów leczniczych. Pochodzi z tradycyjnego indonezyjskiego...",
+      "seo_title": "JAMU - Tradycyjne Healing z Indonezji",
+      "meta_description": "Słowo JAMU ma korzenie w Indonezji i odnosi się do mieszanki zioł i przypraw, które są wykorzystywane do przygotowywania lekarstw leczniczych.",
       "data": {},
       "status": "draft"
     },
@@ -6199,13 +6199,13 @@
       "object_subtype": "post",
       "object_id": 4244,
       "language": "pl",
-      "route_path": "bali-swiete-kwiaty-i-aromaterapie",
-      "slug": "bali-swiete-kwiaty-i-aromaterapie",
-      "title": "Bali - święte kwiaty i aromaterapie",
+      "route_path": "bali-swiete-kwiaty-i-filantropy",
+      "slug": "bali-swiete-kwiaty-i-filantropy",
+      "title": "Bali - święte kwiaty i filantropy",
       "excerpt": "",
       "content": "",
-      "seo_title": "Bali - święte kwiaty i aromaterapie",
-      "meta_description": "Dowiedz się, jak te kwiaty wpływają na tradycje balii i rytuały duchowe.",
+      "seo_title": "Bali - święte kwiaty i filantropy",
+      "meta_description": "Dowiedz się, jak te kwiaty mają wpływ na tradycję Baliian i duchowe rytuały.",
       "data": {},
       "status": "draft"
     },
@@ -6214,13 +6214,13 @@
       "object_subtype": "post",
       "object_id": 4265,
       "language": "pl",
-      "route_path": "osobiste-doswiadczenie-tradycyjny-masaz-od-lekarza-na-bali",
-      "slug": "osobiste-doswiadczenie-tradycyjny-masaz-od-lekarza-na-bali",
-      "title": "Osobiste doświadczenie: tradycyjny masaż od lekarza na Bali",
+      "route_path": "doswiadczenie-osobiste-tradycyjne-masowanie-od-hejleru-na-bali",
+      "slug": "doswiadczenie-osobiste-tradycyjne-masowanie-od-hejleru-na-bali",
+      "title": "Doświadczenie osobiste: tradycyjne masowanie od hejleru na Bali",
       "excerpt": "",
       "content": "",
-      "seo_title": "Osobiste doświadczenie: tradycyjny masaż od lekarza na Bali",
-      "meta_description": "Osobiste doświadczenie z tradycyjnym lekarzem na Bali. Opis masażu, energetycznego leczenia prania healing i znaczenie duchowego uzdrawiania.",
+      "seo_title": "Doświadczenie osobiste: tradycyjne masowanie od hejleru na Bali",
+      "meta_description": "Doświadczenie osobiste z tradycyjnym healerem na Bali. Description of massage, energy treatment of prana healing and the meaning of spiritual healing.",
       "data": {},
       "status": "draft"
     },
@@ -6229,13 +6229,13 @@
       "object_subtype": "post",
       "object_id": 4360,
       "language": "pl",
-      "route_path": "parfemy-na-co-uwazac-i-dlaczego-moga-nas-szkodzic",
-      "slug": "parfemy-na-co-uwazac-i-dlaczego-moga-nas-szkodzic",
-      "title": "Parfemy: Na co uważać i dlaczego mogą nas szkodzić?",
+      "route_path": "perfumazy-co-tam-jest-by-byc-wyrafinowanym-i-dlaczego-moga-nas-skrzywdzic",
+      "slug": "perfumazy-co-tam-jest-by-byc-wyrafinowanym-i-dlaczego-moga-nas-skrzywdzic",
+      "title": "Perfumazy: co tam jest, by być wyrafinowanym i dlaczego mogą nas skrzywdzić?",
       "excerpt": "",
       "content": "",
       "seo_title": "%%title%% %%page%%",
-      "meta_description": "Parfemy mogą zawierać szkodliwe składniki syntetyczne. Dowiedz się, na co uważać, jak wpływają na zdrowie i dlaczego wybrać perfumy naturalne.",
+      "meta_description": "Perfumy mogą zawierać szkodliwe substancje syntetyczne, dowiedzieć się, co być ostrożnym, jak mają wpływ na zdrowie i dlaczego wybrać naturalne perfumy.",
       "data": {},
       "status": "draft"
     },
@@ -6244,13 +6244,13 @@
       "object_subtype": "post",
       "object_id": 4524,
       "language": "pl",
-      "route_path": "co-to-jest-dolek-indonezyjski-naturalny-eliksir-energii-i-rownowagi",
-      "slug": "co-to-jest-dolek-indonezyjski-naturalny-eliksir-energii-i-rownowagi",
-      "title": "Co to jest dołek indonezyjski? Naturalny eliksir energii i równowagi",
+      "route_path": "co-to-jest-indonezja-jamu-naturalne-wektory-energii-i-rownowagi",
+      "slug": "co-to-jest-indonezja-jamu-naturalne-wektory-energii-i-rownowagi",
+      "title": "Co to jest Indonezja JAMU? Naturalne wektory energii i równowagi.",
       "excerpt": "",
       "content": "",
-      "seo_title": "Co to jest dołek indonezyjski? Naturalny eliksir energii i równowagi",
-      "meta_description": "Wyobraźcie sobie ciepłe, zapachowe napoje, które cię ogrzewa, dostarcza energię, a jednocześnie popiera twoje ciało naturalną drogą. To jest jama - tradycyjny indonezyjski zioła...",
+      "seo_title": "Co to jest Indonezja JAMU? Naturalne wektory energii i równowagi.",
+      "meta_description": "Wyobraź sobie ciepłego, nędznego drinka, który cię rozgrzewa, daje ci energię, wspierając swoje ciało w naturalny sposób.",
       "data": {},
       "status": "draft"
     },
@@ -6259,13 +6259,13 @@
       "object_subtype": "page",
       "object_id": 3,
       "language": "pl",
-      "route_path": "zasady-ochrony-danych-osobowych",
-      "slug": "zasady-ochrony-danych-osobowych",
-      "title": "Zasady ochrony danych osobowych",
+      "route_path": "polityka-priorytetowa",
+      "slug": "polityka-priorytetowa",
+      "title": "Polityka priorytetowa",
       "excerpt": "",
       "content": "",
-      "seo_title": "Zasady ochrony danych osobowych",
-      "meta_description": "1. Informacje wstępne Administrator danych osobowych, o których mowa w art. 4 pkt 7 rozporządzenia Parlamentu Europejskiego i Rady (UE) 2016/679 w sprawie ochrony osób fizycznych w odniesieniu do...",
+      "seo_title": "Polityka priorytetowa",
+      "meta_description": "1. Introduktor informacji o kontrolowaniu danych osobowych zgodnie z art. 4 ust. 7 rozporządzenia (UE) 2016/679 Parlamentu Europejskiego i Rady w sprawie ochrony osób w odniesieniu do...",
       "data": {},
       "status": "draft"
     },
@@ -6274,13 +6274,13 @@
       "object_subtype": "page",
       "object_id": 7,
       "language": "pl",
-      "route_path": "produkty-naturalne-jamu",
-      "slug": "produkty-naturalne-jamu",
-      "title": "Produkty naturalne Jamu",
+      "route_path": "produkty-naturalne-zxq18qz",
+      "slug": "produkty-naturalne-zxq18qz",
+      "title": "Produkty naturalne ZXQ18QZ",
       "excerpt": "",
       "content": "",
       "seo_title": "Přírodní produkty%%page%% %%sep%% %%sitename%%",
-      "meta_description": "U nas znajdziesz produkty czyste z naturalnych składników bez niepotrzebnych substancji sztucznych zgodnie z JAMU.",
+      "meta_description": "Znajdziecie produkty wyłącznie z naturalnych składników bez zbędnych sztucznych substancji zgodnie z JAMU.",
       "data": {},
       "status": "draft"
     },
@@ -6289,13 +6289,13 @@
       "object_subtype": "page",
       "object_id": 8,
       "language": "pl",
-      "route_path": "moj-koszyk-na-zakupy",
-      "slug": "moj-koszyk-na-zakupy",
-      "title": "Mój koszyk na zakupy",
+      "route_path": "moj-woz-towarowy",
+      "slug": "moj-woz-towarowy",
+      "title": "Mój wóz towarowy",
       "excerpt": "",
       "content": "",
-      "seo_title": "Mój koszyk na zakupy",
-      "meta_description": "Podobne produkty Twój koszyk jest teraz pusty! Nowinka",
+      "seo_title": "Mój wóz towarowy",
+      "meta_description": "Produkty z cynaru są obecnie puste!",
       "data": {},
       "status": "draft"
     },
@@ -6310,7 +6310,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Moje konto",
-      "meta_description": "[woocommerce_my_account]",
+      "meta_description": "[woo trademyaccount]",
       "data": {},
       "status": "draft"
     },
@@ -6319,13 +6319,13 @@
       "object_subtype": "page",
       "object_id": 11,
       "language": "pl",
-      "route_path": "ogolne-warunki-handlowe",
-      "slug": "ogolne-warunki-handlowe",
-      "title": "Ogólne warunki handlowe",
+      "route_path": "general-terms-and-conditions",
+      "slug": "general-terms-and-conditions",
+      "title": "General Terms and Conditions",
       "excerpt": "",
       "content": "",
-      "seo_title": "Ogólne warunki handlowe",
-      "meta_description": "Te warunki handlowe mają zastosowanie do zakupu w sklepie internetowym www.taimstime.cz . Warunki bliższe określają i określają prawa i obowiązki sprzedawcy....",
+      "seo_title": "General Terms and Conditions",
+      "meta_description": "Te warunki i warunki mają zastosowanie do zakupu w sklepie online www.tajemstvijamu.cz.",
       "data": {},
       "status": "draft"
     },
@@ -6334,13 +6334,13 @@
       "object_subtype": "page",
       "object_id": 2957,
       "language": "pl",
-      "route_path": "transport-i-platnosc",
-      "slug": "transport-i-platnosc",
-      "title": "Transport i płatność",
+      "route_path": "transport-i-platnosci",
+      "slug": "transport-i-platnosci",
+      "title": "Transport i płatności",
       "excerpt": "",
       "content": "",
-      "seo_title": "Transport i płatność",
-      "meta_description": "Nie jestem wielkim e-shopem, ale mamą, która ma obowiązek biznesu i obowiązków matki.",
+      "seo_title": "Transport i płatności",
+      "meta_description": "Nie jestem wielkim e-shopem, ale mamę, która zajmuje się biznesem i matkami.",
       "data": {},
       "status": "draft"
     },
@@ -6355,7 +6355,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Współpraca",
-      "meta_description": "Uwielbiam współpracować z ludźmi, którzy podzielają tę samą ideę harmonii ciała, umysłu i duszy.",
+      "meta_description": "Lubię współpracować z ludźmi, którzy podzielają ten sam pomysł harmonii ciała, umysłu i duszy.",
       "data": {},
       "status": "draft"
     },
@@ -6364,13 +6364,13 @@
       "object_subtype": "page",
       "object_id": 2972,
       "language": "pl",
-      "route_path": "masaz",
-      "slug": "masaz",
-      "title": "Masaż",
+      "route_path": "masaze",
+      "slug": "masaze",
+      "title": "Masaże",
       "excerpt": "",
       "content": "",
-      "seo_title": "Masaż",
-      "meta_description": "W moich masażach połączę zasady abhiangów z technikami balijskimi i własną intuicyjną pracą z energią.",
+      "seo_title": "Masaże",
+      "meta_description": "W moich masażach łączyłem zasady abhyang z technikami Balijian i moją własną intuicję z energią.",
       "data": {},
       "status": "draft"
     },
@@ -6385,7 +6385,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Blog",
-      "meta_description": "Potrzebna byłaby historia o tym, o czym są artykuły - w jakim sensie te historie i co ciekawe w nich przeczyta czytelnik.",
+      "meta_description": "Tutaj moglibyśmy porozmawiać o tym, o czym są artykuły - w jakim sensie są to historie i jakie interesujące czytanie są",
       "data": {},
       "status": "draft"
     },
@@ -6400,7 +6400,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "%%sitename%% - Zdraví, masáže a přírodní produkty",
-      "meta_description": "Tajemnica JAMU zajmuje się zdrowiem, masażami i naturalnymi produktami z Bali zgodnie z tradycyjnym leczeniem i Ajurwedą",
+      "meta_description": "Tajemství JAMU zajmuje się zdrowiem, masami i produktami naturalnymi z Bali według tradycyjnego ogrzewania i Ayurveda",
       "data": {},
       "status": "draft"
     },
@@ -6415,7 +6415,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "To ja...",
-      "meta_description": "„Jestem empatyczna i wrażliwa i moja droga znalazłam w przekazywaniu energii innym ludziom.” Nazywam się Lenka, jestem masażystką i interesuję się tradycyjnym leczeniem....",
+      "meta_description": "/Jestem empathyczny i wrażliwy i znalazłem drogę do transferu energii do innych ludzi. /Nazywam się Lenka, jestem masażystą i interesuje mnie tradycyjne uzdrowienie...",
       "data": {},
       "status": "draft"
     },
@@ -6424,13 +6424,13 @@
       "object_subtype": "page",
       "object_id": 3948,
       "language": "pl",
-      "route_path": "co-to-jest-jama",
-      "slug": "co-to-jest-jama",
-      "title": "Co to jest Jama?",
+      "route_path": "co-to-jest-jamu",
+      "slug": "co-to-jest-jamu",
+      "title": "Co to jest JAMU?",
       "excerpt": "",
       "content": "",
-      "seo_title": "Co to jest Jama?",
-      "meta_description": "Jamu jest tradycyjną medycyną roślinną i wellness opieki, którą Indonezani używają od wieków do utrzymania zdrowego ciała, umysłu i ducha.",
+      "seo_title": "Co to jest JAMU?",
+      "meta_description": "JAMU jest tradycyjnym lekarstwem ziołowym i dobrze prosperującym, że Indonezy używają od wieków do zachowania zdrowego ciała, umysłu i ducha.",
       "data": {},
       "status": "draft"
     },
@@ -6445,7 +6445,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Kontakt",
-      "meta_description": "Masz coś w sercu lub potrzebujesz porady? Jestem tu dla ciebie. Skontaktuj się ze mną przez e-mail lub w wiadomościach na Instagram . Informacje kontaktowe Email:...",
+      "meta_description": "Czy masz coś do powiedzenia lub potrzebuję porady?",
       "data": {},
       "status": "draft"
     },
@@ -6454,13 +6454,13 @@
       "object_subtype": "page",
       "object_id": 4005,
       "language": "pl",
-      "route_path": "partnerzy",
-      "slug": "partnerzy",
-      "title": "Partnerzy",
+      "route_path": "partners",
+      "slug": "partners",
+      "title": "Partners",
       "excerpt": "",
       "content": "",
-      "seo_title": "Partnerzy",
-      "meta_description": "Miejsca partnerskie – gdzie produkt oleju Kutus Kutus można spróbować i kupić Olej ziołowy Kutus Kutus jest wyjątkowy z jego zapachu, składu i skutków. Wykorzystuje...",
+      "seo_title": "Partners",
+      "meta_description": "Uczestniczy  gdzie można spróbować kupić Kutus Kutus Oil z Kutus Kutus jego ropa jest unikalna w jego aroma, kompozycji i wpływach.",
       "data": {},
       "status": "draft"
     },
@@ -6469,13 +6469,13 @@
       "object_subtype": "page",
       "object_id": 4008,
       "language": "pl",
-      "route_path": "masaz-ajurwedzki-abhyanga",
-      "slug": "masaz-ajurwedzki-abhyanga",
-      "title": "Masaż Ajurwedzki Abhyanga",
+      "route_path": "ayurvedic-abhylio-massage",
+      "slug": "ayurvedic-abhylio-massage",
+      "title": "Ayurvedic Abhylio Massage",
       "excerpt": "",
       "content": "",
-      "seo_title": "Masaż Ajurwedzki Abhyanga",
-      "meta_description": "W ajurwedzie Abhyanga (typ masażu aurwedzkiego) jest środkiem na zwiększenie zdrowia, zapobieganie chorobom i jednym z kluczowych czynników długowieczności. Masaż Ajurwedzki...",
+      "seo_title": "Ayurvedic Abhylio Massage",
+      "meta_description": "Abhyanga (jako masa ayurvedica) jest środkiem wzmacniania zdrowia, zapobiegania chorobom i jednym z kluczowych czynników długotrwałej dłużności.",
       "data": {},
       "status": "draft"
     },
@@ -6484,13 +6484,13 @@
       "object_subtype": "page",
       "object_id": 4011,
       "language": "pl",
-      "route_path": "masaz-balijska-olejem-ziolowym",
-      "slug": "masaz-balijska-olejem-ziolowym",
-      "title": "Masaż balijska olejem ziołowym",
+      "route_path": "balijska-masazu-z-olejem-z-opalem",
+      "slug": "balijska-masazu-z-olejem-z-opalem",
+      "title": "Balijská masażu z olejem z opałem",
       "excerpt": "",
       "content": "",
-      "seo_title": "Masaż balijska olejem ziołowym",
-      "meta_description": "Odpoczywający cały rytuał , który pochodzi z tradycyjnego leczenia balijskiego. Połącza elementy akupresury, terapii refleksyjnej, stretchingu i aromaterapii....",
+      "seo_title": "Balijská masażu z olejem z opałem",
+      "meta_description": "Zrelaksowanie pełnego rytuału ciała opartego na tradycyjnej Balijské healerství, łączy elementy akupressure, reflex therapy, turning and psychoherapy...",
       "data": {},
       "status": "draft"
     },
@@ -6499,13 +6499,13 @@
       "object_subtype": "page",
       "object_id": 4018,
       "language": "pl",
-      "route_path": "kursy-masazu-balijskiego",
-      "slug": "kursy-masazu-balijskiego",
-      "title": "Kursy masażu balijskiego",
+      "route_path": "baliian-massage-courses",
+      "slug": "baliian-massage-courses",
+      "title": "Baliian Massage Courses",
       "excerpt": "",
       "content": "",
-      "seo_title": "Kursy masażu balijskiego",
-      "meta_description": "Odkryj sekrety masażu balijskiego i rozszerz horyzonty na kursie masażu Bali masażu. Obecnie nie jest zapisany żadnych terminów, ale możemy uzgodnić na...",
+      "seo_title": "Baliian Massage Courses",
+      "meta_description": "Odkryj tajemnice masażu Balijské i rozszerzaj swoje horyzonty na masowym kursie ZXQ20XZ.",
       "data": {},
       "status": "draft"
     },
@@ -6520,7 +6520,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "bylinny-olej-z-bali",
-      "meta_description": "Zielone oleje z Bali pomagają w zmęczeniu ciała i umysłu i wspieraniu leczenia akutnych i chronycznych chorób. Zmiana zioł i zapraw, kokosowy olej panny i esencialne...",
+      "meta_description": "Olejny olej z Bali przyczynia się do zmęczenia ciała i umysłu, jak również do wsparcia leczenia surowych i chronicznych chorób, mieszanka zioł i opactwa, oleju dziewicowego i niezbędnego...",
       "data": {},
       "status": "draft"
     },
@@ -6529,12 +6529,12 @@
       "object_subtype": "page",
       "object_id": 4203,
       "language": "pl",
-      "route_path": "rezerwacja-masazy",
-      "slug": "rezerwacja-masazy",
-      "title": "Rezerwacja masaży",
+      "route_path": "rezerwacja-na-masaz",
+      "slug": "rezerwacja-na-masaz",
+      "title": "Rezerwacja na masaż.",
       "excerpt": "",
       "content": "",
-      "seo_title": "Rezerwacja masaży",
+      "seo_title": "Rezerwacja na masaż.",
       "meta_description": "",
       "data": {},
       "status": "draft"
@@ -6544,13 +6544,13 @@
       "object_subtype": "page",
       "object_id": 4380,
       "language": "pl",
-      "route_path": "parfemy-na-co-uwazac-i-dlaczego-moga-nas-szkodzic",
-      "slug": "parfemy-na-co-uwazac-i-dlaczego-moga-nas-szkodzic",
-      "title": "Parfemy: Na co uważać i dlaczego mogą nas szkodzić?",
+      "route_path": "perfumazy-co-tam-jest-by-byc-wyrafinowanym-i-dlaczego-moga-nas-skrzywdzic",
+      "slug": "perfumazy-co-tam-jest-by-byc-wyrafinowanym-i-dlaczego-moga-nas-skrzywdzic",
+      "title": "Perfumazy: co tam jest, by być wyrafinowanym i dlaczego mogą nas skrzywdzić?",
       "excerpt": "",
       "content": "",
       "seo_title": "%%title%% %%page%%",
-      "meta_description": "Parfemy mogą zawierać szkodliwe składniki syntetyczne. Dowiedz się, na co uważać, jak wpływają na zdrowie i dlaczego wybrać perfumy naturalne.",
+      "meta_description": "Perfumy mogą zawierać szkodliwe substancje syntetyczne, dowiedzieć się, co być ostrożnym, jak mają wpływ na zdrowie i dlaczego wybrać naturalne perfumy.",
       "data": {},
       "status": "draft"
     },
@@ -6559,13 +6559,13 @@
       "object_subtype": "page",
       "object_id": 4442,
       "language": "pl",
-      "route_path": "rezerwacja",
-      "slug": "rezerwacja",
-      "title": "Rezerwacja",
+      "route_path": "klient",
+      "slug": "klient",
+      "title": "Klient",
       "excerpt": "",
       "content": "",
-      "seo_title": "Rezerwacja",
-      "meta_description": "[woo commerce_checcut]",
+      "seo_title": "Klient",
+      "meta_description": "[woo handlucheckout]",
       "data": {},
       "status": "draft"
     },
@@ -6574,13 +6574,13 @@
       "object_subtype": "product",
       "object_id": 17,
       "language": "pl",
-      "route_path": "oliwka-tanamu-tanami",
-      "slug": "oliwka-tanamu-tanami",
-      "title": "Oliwka tanamu Tanami",
+      "route_path": "olej-oleju-zxq4xz",
+      "slug": "olej-oleju-zxq4xz",
+      "title": "Olej oleju ZXQ4XZ",
       "excerpt": "",
       "content": "",
-      "seo_title": "Oliwka tanamu Tanami",
-      "meta_description": "\"Oliwka ziemna\" jest bogata w omega 3 kwasy tłuszczowe, antyoksydanty naturalne, działa przeciwko bakteriom, wirusom, grzybamom i płuskam.",
+      "seo_title": "Olej oleju ZXQ4XZ",
+      "meta_description": "\"Taman oil\" jest bogaty w kwasach omega 3, naturalnych antyoksygenów.",
       "data": {},
       "status": "draft"
     },
@@ -6589,13 +6589,13 @@
       "object_subtype": "product",
       "object_id": 18,
       "language": "pl",
-      "route_path": "olej-masazowy-minyak-balur",
-      "slug": "olej-masazowy-minyak-balur",
-      "title": "Olej masażowy Minyak Balur",
+      "route_path": "niski-olej-zxq11xz",
+      "slug": "niski-olej-zxq11xz",
+      "title": "Niski olej ZXQ11XZ",
       "excerpt": "",
       "content": "",
-      "seo_title": "Olej masażowy Minyak Balur",
-      "meta_description": "Oliwa składają się z 69 ziaren leczniczych, które pozytywnie wpływają na zdrowie i życie energii Prany, pomagają uwolnić się od bólu i chorób bez leków.",
+      "seo_title": "Niski olej ZXQ11XZ",
+      "meta_description": "Nafta składa się z 69 egzotycznych ziołków, które pozytywnie wpływają na zdrowie i życie energii Pran, pomaga złagodzić ból i choroby bez leków.",
       "data": {},
       "status": "draft"
     },
@@ -6604,13 +6604,13 @@
       "object_subtype": "product",
       "object_id": 19,
       "language": "pl",
-      "route_path": "mydlo-naturalne-tanamu-tanami",
-      "slug": "mydlo-naturalne-tanamu-tanami",
-      "title": "Mydło naturalne Tanamu Tanami",
+      "route_path": "naturalne-mydlo-zxq4qz",
+      "slug": "naturalne-mydlo-zxq4qz",
+      "title": "Naturalne mydło ZXQ4QZ",
       "excerpt": "",
       "content": "",
-      "seo_title": "Mydło naturalne Tanamu Tanami",
-      "meta_description": "Tanamu Tanami pomaga w opiece nad skórą, która cierpi na problemy (akne, sucha i szpikowana skóra, pęcherzyki, oparzenia, wrzody, egzem, swędzenie spowodowane alergiami).",
+      "seo_title": "Naturalne mydło ZXQ4QZ",
+      "meta_description": "Tanamu Tanami pomaga z skórą, która sprawia kłopoty (około, sucha, sucha, skórzana skóra, ślimaki, ulcery, edobma, itching wywołany przez alergie).",
       "data": {},
       "status": "draft"
     },
@@ -6619,13 +6619,13 @@
       "object_subtype": "product",
       "object_id": 20,
       "language": "pl",
-      "route_path": "mydlo-naturalne-kalilo-kalilo",
-      "slug": "mydlo-naturalne-kalilo-kalilo",
-      "title": "Mydło naturalne Kalilo Kalilo",
+      "route_path": "naturalne-mydlo-zxq5qz",
+      "slug": "naturalne-mydlo-zxq5qz",
+      "title": "Naturalne mydło ZXQ5QZ",
       "excerpt": "",
       "content": "",
-      "seo_title": "Mydło naturalne Kalilo Kalilo",
-      "meta_description": "Zielone mydło jest stworzone przez 100% naturalnych składników. Dzięki zawartości roślin leczniczych wykrwawia skórę i pozytywnie wpływa na układ przepływowy i mięśniowy",
+      "seo_title": "Naturalne mydło ZXQ5QZ",
+      "meta_description": "Mydło Herbal powstaje w 100% naturalnych składników. Krew skórza poprzez zawartość pyłu i pozytywnie wpływa na system cyrculatory i lymph.",
       "data": {},
       "status": "draft"
     },
@@ -6634,13 +6634,13 @@
       "object_subtype": "product",
       "object_id": 3614,
       "language": "pl",
-      "route_path": "rytualne-patyki-wonne-kwiaty-sacred-flowers",
-      "slug": "rytualne-patyki-wonne-kwiaty-sacred-flowers",
-      "title": "Rytualne patyki Wonne Kwiaty \"Sacred Flowers\"",
+      "route_path": "ritual-fragrances-sacred-flowers-sacred-flowers",
+      "slug": "ritual-fragrances-sacred-flowers-sacred-flowers",
+      "title": "Ritual Fragrances Sacred Flowers \"Sacred Flowers\"",
       "excerpt": "",
       "content": "",
-      "seo_title": "Rytualne patyki Wonne Kwiaty \"Sacred Flowers\"",
-      "meta_description": "Płytki zapachowe pasujące do masażu, medytacji, jogi i innych form relaksacji. Czas spalania wynosi 50 minut.",
+      "seo_title": "Ritual Fragrances Sacred Flowers \"Sacred Flowers\"",
+      "meta_description": "Scented sticks pas for massage, meditation, joga and other forms of relaxation. Burning time to 50 minutes.",
       "data": {},
       "status": "draft"
     },
@@ -6649,13 +6649,13 @@
       "object_subtype": "product",
       "object_id": 3623,
       "language": "pl",
-      "route_path": "rytualne-patyki-wonne-bali-energii-bali-spirit",
-      "slug": "rytualne-patyki-wonne-bali-energii-bali-spirit",
-      "title": "Rytualne patyki wonne Bali energii \"Bali spirit\"",
+      "route_path": "ritual-fragrances-bali-energy-bali-spirit",
+      "slug": "ritual-fragrances-bali-energy-bali-spirit",
+      "title": "Ritual Fragrances Bali Energy \"Bali spirit\"",
       "excerpt": "",
       "content": "",
-      "seo_title": "Rytualne patyki wonne Bali energii \"Bali spirit\"",
-      "meta_description": "Mieszanina olejów esencialnych z Bali w zapachowych pęcherzykach naturalnie oczyszcza powietrze, harmonizuje energię i wspiera nastroje medytacyjne. Są 100% naturalne, bez...",
+      "seo_title": "Ritual Fragrances Bali Energy \"Bali spirit\"",
+      "meta_description": "Pomieszanie kluczowych olejów z Bali w pozorowych lasach naturalnie oczyszcza powietrze, harmonizuje energię i promuje medytację...",
       "data": {},
       "status": "draft"
     },
@@ -6664,13 +6664,13 @@
       "object_subtype": "product",
       "object_id": 3664,
       "language": "pl",
-      "route_path": "miska-z-drewna-teaowego",
-      "slug": "miska-z-drewna-teaowego",
-      "title": "Miska z drewna teaowego",
+      "route_path": "taa-miseczka",
+      "slug": "taa-miseczka",
+      "title": "Taa miseczka",
       "excerpt": "",
       "content": "",
-      "seo_title": "Miska z drewna teaowego",
-      "meta_description": "Kwalifikowalne i odporne drzewo teackie - eksotyczna miska z wyspy Bali",
+      "seo_title": "Taa miseczka",
+      "meta_description": "Quality and durable teak wood - exotic bowl from exotic island Bali",
       "data": {},
       "status": "draft"
     },
@@ -6679,13 +6679,13 @@
       "object_subtype": "product",
       "object_id": 3678,
       "language": "pl",
-      "route_path": "mydlo-z-drewna-teakowego",
-      "slug": "mydlo-z-drewna-teakowego",
-      "title": "Mydło z drewna teakowego",
+      "route_path": "mydlo-z-drewna",
+      "slug": "mydlo-z-drewna",
+      "title": "Mydło z drewna",
       "excerpt": "",
       "content": "",
-      "seo_title": "Mydło z drewna teakowego",
-      "meta_description": "Przynieś trochę piękności z Bali do łazienki z naszym mydłem z drzewa teaku. Mielniki są produkowane z miłością i opieką ręcznie na wyspie Bali, gdzie...",
+      "seo_title": "Mydło z drewna",
+      "meta_description": "Przynieś kawałek piękna z Bali do swojej łazienki z mydłem ziemniaczanym.",
       "data": {},
       "status": "draft"
     },
@@ -6694,13 +6694,13 @@
       "object_subtype": "product",
       "object_id": 3685,
       "language": "pl",
-      "route_path": "kubek-teacki",
-      "slug": "kubek-teacki",
-      "title": "Kubek teacki",
+      "route_path": "tea-mug",
+      "slug": "tea-mug",
+      "title": "Tea mug",
       "excerpt": "",
       "content": "",
-      "seo_title": "Kubek teacki",
-      "meta_description": "Górnik z teaku o średnicy 9 cm.",
+      "seo_title": "Tea mug",
+      "meta_description": "Puchar Baliyjská teak o średnicy 9 cm.",
       "data": {},
       "status": "draft"
     },
@@ -6709,13 +6709,13 @@
       "object_subtype": "product",
       "object_id": 3686,
       "language": "pl",
-      "route_path": "krem-ajurwedzki-nadis-herbal",
-      "slug": "krem-ajurwedzki-nadis-herbal",
-      "title": "Krem Ajurwedzki Nadis Herbal",
+      "route_path": "ayurvedic-cream-nadis-herbal",
+      "slug": "ayurvedic-cream-nadis-herbal",
+      "title": "Ayurvedic Cream Nadis Herbal",
       "excerpt": "",
       "content": "",
-      "seo_title": "Krem Ajurwedzki Nadis Herbal",
-      "meta_description": "Wchłońcie skórę według Ajurwedy – krem ciała z Bali z Aloe Vera, olej kokosowy i masło kakaowe do hydratacji i elastyczności. Zbożny Triphala olej...",
+      "seo_title": "Ayurvedic Cream Nadis Herbal",
+      "meta_description": "Uściśnij skórę według ciasta Ayurvedy z Bali z Aloe vera, kokonut olej i kokoa masturcing and elasticity.",
       "data": {},
       "status": "draft"
     },
@@ -6724,13 +6724,13 @@
       "object_subtype": "product",
       "object_id": 3688,
       "language": "pl",
-      "route_path": "krem-frangipany-nadis-herbal",
-      "slug": "krem-frangipany-nadis-herbal",
-      "title": "Krem frangipany Nadis Herbal",
+      "route_path": "frangipani-nadis-herbalqei",
+      "slug": "frangipani-nadis-herbalqei",
+      "title": "Frangipani Nadis HerbalQei",
       "excerpt": "",
       "content": "",
-      "seo_title": "Krem frangipany Nadis Herbal",
-      "meta_description": "Krem z olejem esencialnym zwiększa, regeneruje i hydratuje skórę. Ładny zapach egzotyczny sprawia spokój i głębokie relaksowanie.",
+      "seo_title": "Frangipani Nadis HerbalQei",
+      "meta_description": "Krem z niezbędnymi miękkimi tłuszczami olejowymi, regeneracjami i zapachami skóry, delikatny egzotyczny zapach tworzy spokój i głęboką relaksację.",
       "data": {},
       "status": "draft"
     },
@@ -6739,13 +6739,13 @@
       "object_subtype": "product",
       "object_id": 3689,
       "language": "pl",
-      "route_path": "krem-sacred-sent-nadis-herbal",
-      "slug": "krem-sacred-sent-nadis-herbal",
-      "title": "Krem Sacred Sent Nadis Herbal",
+      "route_path": "sacred-scent-nadis-herbal-cream",
+      "slug": "sacred-scent-nadis-herbal-cream",
+      "title": "Sacred Scent Nadis Herbal Cream",
       "excerpt": "",
       "content": "",
-      "seo_title": "Krem Sacred Sent Nadis Herbal",
-      "meta_description": "Punkty Cream Sacred Scen wyprodukowane przez miejscowego producenta Nadis Herbal, który wytwarza produkty zgodnie z tradycyjnymi receptami holistycznymi. Używane do produkcji...",
+      "seo_title": "Sacred Scent Nadis Herbal Cream",
+      "meta_description": "Body Cream Sacred Scent wykonany z lokalnego producenta Nadis Herbal, produkującego produkty według tradycyjnej modyfikacji holistycznej.",
       "data": {},
       "status": "draft"
     },
@@ -6754,13 +6754,13 @@
       "object_subtype": "product",
       "object_id": 4293,
       "language": "pl",
-      "route_path": "twardy-perfum-bali-flowers",
-      "slug": "twardy-perfum-bali-flowers",
-      "title": "Twardy perfum Bali Flowers",
+      "route_path": "sprzedaz-perfum-zxq9xz",
+      "slug": "sprzedaz-perfum-zxq9xz",
+      "title": "Sprzedaż perfum ZXQ9XZ",
       "excerpt": "",
       "content": "",
-      "seo_title": "Twardy perfum Bali Flowers",
-      "meta_description": "Przyrodni parfem twardy Bali Flows z podwodnym zapachem kwiatów balijskich, takich jak jasmina, kuchenka i frangipania (Plumeria). Zawartość opakowań to 15 g.",
+      "seo_title": "Sprzedaż perfum ZXQ9XZ",
+      "meta_description": "Naturalne ciężkie perfumy Bali Flowes z rytuacją fragrance Balijské, takie jak jasmine, szampan i foncipanie (Plumérie).Kolejne zawartość Package jest 15g.",
       "data": {},
       "status": "draft"
     },
@@ -6769,13 +6769,13 @@
       "object_subtype": "product",
       "object_id": 4398,
       "language": "pl",
-      "route_path": "lemongrass-trawa-cytronowa-krem-nadis-herbal",
-      "slug": "lemongrass-trawa-cytronowa-krem-nadis-herbal",
-      "title": "Lemongrass (trawa cytronowa) krem Nadis Herbal",
+      "route_path": "lemongrass-citron-grass-zxq8qxocolor",
+      "slug": "lemongrass-citron-grass-zxq8qxocolor",
+      "title": "Lemongrass (Citron grass) ZXQ8QXOcolor",
       "excerpt": "",
       "content": "",
-      "seo_title": "Lemongrass (trawa cytronowa) krem Nadis Herbal",
-      "meta_description": "Krem wyprodukowany na Bali przez miejscowego producenta z surowców lokalnych. Zawiera esencjonalny olej lemongrass, który odświeża skórę i dostarcza energię.",
+      "seo_title": "Lemongrass (Citron grass) ZXQ8QXOcolor",
+      "meta_description": "Cream made on Bali by a local small produce of local compositions.",
       "data": {},
       "status": "draft"
     },
@@ -6784,13 +6784,13 @@
       "object_subtype": "product",
       "object_id": 4405,
       "language": "pl",
-      "route_path": "bali-moon-face-krem",
-      "slug": "bali-moon-face-krem",
-      "title": "Bali Moon Face Krem",
+      "route_path": "zxq10qx-spolka",
+      "slug": "zxq10qx-spolka",
+      "title": "ZXQ10QX Spółka",
       "excerpt": "",
       "content": "",
-      "seo_title": "Bali Moon Face Krem",
-      "meta_description": "Krem naturalny z Bali z aloe, olejem kokosowym, masłem kakaowym i rzeźbami morskimi dla cienkiej, hydratowanej i świecącej skóry.",
+      "seo_title": "ZXQ10QX Spółka",
+      "meta_description": "Natural Bali śmietan z aloe, kokosy, masło kokosowe i wodorosty dla miękkiej, wilgotnej i promieniicznej skóry.",
       "data": {},
       "status": "draft"
     },
@@ -6799,13 +6799,13 @@
       "object_subtype": "product",
       "object_id": 4528,
       "language": "pl",
-      "route_path": "jamu-balance-mieszanka-korzen-do-przygotowania-napoju",
-      "slug": "jamu-balance-mieszanka-korzen-do-przygotowania-napoju",
-      "title": "Jamu Balance – mieszanka korzeń do przygotowania napoju",
+      "route_path": "jamu-balance-mieszanina-mieszanina-do-przygotowania-beverage",
+      "slug": "jamu-balance-mieszanina-mieszanina-do-przygotowania-beverage",
+      "title": "Jamu Balance mieszanina mieszanina do przygotowania beverage",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jamu Balance – mieszanka korzeń do przygotowania napoju",
-      "meta_description": "Jamu Balance jest korzeniem mieszanki z Bali z kurkumą, dzwonkiem, kencurem i cukrem kokosowym. Napiwek ogrzewający dla codziennego rytuału z Indonezji, Bali.",
+      "seo_title": "Jamu Balance mieszanina mieszanina do przygotowania beverage",
+      "meta_description": "Jamu Balance to mieszanina mieszanka z Bali z turmeric, ginger, kencurum i kokosu kokosowego.Produkuje alkohol za codzienne rytuały z Indonezji, ZX20QXZ.",
       "data": {},
       "status": "draft"
     },
@@ -6814,13 +6814,13 @@
       "object_subtype": "product",
       "object_id": 4539,
       "language": "pl",
-      "route_path": "jamu-balance-pure-mieszanka-korzeniowa-do-przygotowania-napoju-bez-cukru",
-      "slug": "jamu-balance-pure-mieszanka-korzeniowa-do-przygotowania-napoju-bez-cukru",
-      "title": "Jamu Balance Pure – mieszanka korzeniowa do przygotowania napoju bez cukru",
+      "route_path": "jamu-balance-pure-mieszanina-do-przygotowywania-drinka-bez-cukru",
+      "slug": "jamu-balance-pure-mieszanina-do-przygotowywania-drinka-bez-cukru",
+      "title": "Jamu Balance Pure mieszanina do przygotowywania drinka bez cukru",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jamu Balance Pure – mieszanka korzeniowa do przygotowania napoju bez cukru",
-      "meta_description": "Jamu Balance jest zakorzeniona mieszanka z Bali z kurkumą, dzwonkiem, kencurem i pepórem. Popiera immunitet.",
+      "seo_title": "Jamu Balance Pure mieszanina do przygotowywania drinka bez cukru",
+      "meta_description": "Jamu Balance to mieszanina mieszanka z Bali z turmeric, ginger, kencurum i pepper.Upijając się za codzienną ceremonię z Indonezji, Bali.",
       "data": {},
       "status": "draft"
     },
@@ -6829,13 +6829,13 @@
       "object_subtype": "product",
       "object_id": 4542,
       "language": "pl",
-      "route_path": "dharma-mieszanka-korzen-do-sporzadzania-napoju",
-      "slug": "dharma-mieszanka-korzen-do-sporzadzania-napoju",
-      "title": "Dharma – mieszanka korzeń do sporządzania napoju",
+      "route_path": "dharma-mieszanina-mieszanina-do-przygotowania-beverage",
+      "slug": "dharma-mieszanina-mieszanina-do-przygotowania-beverage",
+      "title": "Dharma mieszanina mieszanina do przygotowania beverage",
       "excerpt": "",
       "content": "",
-      "seo_title": "Dharma – mieszanka korzeń do sporządzania napoju",
-      "meta_description": "Jamu Dharma jest korzeniem mieszanki z Bali z kurkumą, dzwonkiem, czerwonym brzuchem, czarnym paprykiem i cukrem kokosowym. Dla lepszego spożycia i równowagi ciała.",
+      "seo_title": "Dharma mieszanina mieszanina do przygotowania beverage",
+      "meta_description": "JAMU Dharma to mieszanina mieszanka Bali z turmericem, gingerem, czerwonym pingerem, czarnym pieprzem i kokosem.",
       "data": {},
       "status": "draft"
     },
@@ -6844,13 +6844,13 @@
       "object_subtype": "product",
       "object_id": 4544,
       "language": "pl",
-      "route_path": "dharma-pure-mieszanka-korzeniowa-do-sporzadzania-napoju-bez-cukru",
-      "slug": "dharma-pure-mieszanka-korzeniowa-do-sporzadzania-napoju-bez-cukru",
-      "title": "Dharma Pure – mieszanka korzeniowa do sporządzania napoju bez cukru",
+      "route_path": "dharma-pure-mieszanina-mieszanka-do-przygotowania-drinka-bez-cukru",
+      "slug": "dharma-pure-mieszanina-mieszanka-do-przygotowania-drinka-bez-cukru",
+      "title": "Dharma Pure mieszanina mieszanka do przygotowania drinka bez cukru",
       "excerpt": "",
       "content": "",
-      "seo_title": "Dharma Pure – mieszanka korzeniowa do sporządzania napoju bez cukru",
-      "meta_description": "Mieszanina produkowana na Bali zawiera kurkumę, dzwon i czerwone brzuch, tradycyjnie łącząca się z poparciem diety. Bez dodatkowego cukru.",
+      "seo_title": "Dharma Pure mieszanina mieszanka do przygotowania drinka bez cukru",
+      "meta_description": "Spicy patch wyprodukowany na Bali zawiera turmeric, ginger i czerwony binger, tradycyjnie związane z poparciem kopania.",
       "data": {},
       "status": "draft"
     },
@@ -6859,12 +6859,12 @@
       "object_subtype": "oum-location",
       "object_id": 3226,
       "language": "pl",
-      "route_path": "studia-poludnie",
-      "slug": "studia-poludnie",
-      "title": "Studia Południe",
+      "route_path": "studio-oblong",
+      "slug": "studio-oblong",
+      "title": "Studio Oblong",
       "excerpt": "",
       "content": "",
-      "seo_title": "Studia Południe",
+      "seo_title": "Studio Oblong",
       "meta_description": "",
       "data": {},
       "status": "draft"
@@ -6874,12 +6874,12 @@
       "object_subtype": "oum-location",
       "object_id": 3228,
       "language": "pl",
-      "route_path": "masaz-isis",
-      "slug": "masaz-isis",
-      "title": "Masaż Isis",
+      "route_path": "masaza-izyda",
+      "slug": "masaza-izyda",
+      "title": "Masaża Izyda",
       "excerpt": "",
       "content": "",
-      "seo_title": "Masaż Isis",
+      "seo_title": "Masaża Izyda",
       "meta_description": "",
       "data": {},
       "status": "draft"
@@ -6889,12 +6889,12 @@
       "object_subtype": "oum-location",
       "object_id": 3229,
       "language": "pl",
-      "route_path": "joga-studio-siddha",
-      "slug": "joga-studio-siddha",
-      "title": "Joga Studio Siddha",
+      "route_path": "yoga-studio-siddha",
+      "slug": "yoga-studio-siddha",
+      "title": "Yoga Studio Siddha",
       "excerpt": "",
       "content": "",
-      "seo_title": "Joga Studio Siddha",
+      "seo_title": "Yoga Studio Siddha",
       "meta_description": "",
       "data": {},
       "status": "draft"
@@ -6904,12 +6904,12 @@
       "object_subtype": "oum-location",
       "object_id": 3230,
       "language": "pl",
-      "route_path": "masaz-ogrod-zycia",
-      "slug": "masaz-ogrod-zycia",
-      "title": "Masaż ogród życia",
+      "route_path": "swiatlo-zycia",
+      "slug": "swiatlo-zycia",
+      "title": "Światło życia",
       "excerpt": "",
       "content": "",
-      "seo_title": "Masaż ogród życia",
+      "seo_title": "Światło życia",
       "meta_description": "",
       "data": {},
       "status": "draft"
@@ -6919,12 +6919,12 @@
       "object_subtype": "category",
       "object_id": 19,
       "language": "pl",
-      "route_path": "jak-uzywac-oleju",
-      "slug": "jak-uzywac-oleju",
-      "title": "Jak używać oleju",
+      "route_path": "jak-uzywac-oil",
+      "slug": "jak-uzywac-oil",
+      "title": "Jak używać Oil",
       "excerpt": "",
       "content": "",
-      "seo_title": "Jak używać oleju",
+      "seo_title": "Jak używać Oil",
       "meta_description": "",
       "data": {},
       "status": "draft"
@@ -6934,12 +6934,12 @@
       "object_subtype": "category",
       "object_id": 22,
       "language": "pl",
-      "route_path": "niezawarte",
-      "slug": "niezawarte",
-      "title": "Niezawarte",
+      "route_path": "nieuzbrojony",
+      "slug": "nieuzbrojony",
+      "title": "Nieuzbrojony",
       "excerpt": "",
       "content": "",
-      "seo_title": "Niezawarte",
+      "seo_title": "Nieuzbrojony",
       "meta_description": "",
       "data": {},
       "status": "draft"
@@ -6949,12 +6949,12 @@
       "object_subtype": "category",
       "object_id": 1,
       "language": "pl",
-      "route_path": "niezawarte-1",
-      "slug": "niezawarte-1",
-      "title": "Niezawarte",
+      "route_path": "nieuzbrojony-1",
+      "slug": "nieuzbrojony-1",
+      "title": "Nieuzbrojony",
       "excerpt": "",
       "content": "",
-      "seo_title": "Niezawarte",
+      "seo_title": "Nieuzbrojony",
       "meta_description": "",
       "data": {},
       "status": "draft"
@@ -6970,7 +6970,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Agarwood",
-      "meta_description": "Olej z drzewa Agarwood jest znany jako Oud, który jest jednym z najdroższych zapachowych parfumów na świecie.",
+      "meta_description": "Olej z drzewa Agarwood znany jest jako Oud, który jest jednym z najdroższych zapachów luksusowych perfum na świecie.",
       "data": {},
       "status": "draft"
     },
@@ -6979,13 +6979,13 @@
       "object_subtype": "post_tag",
       "object_id": 43,
       "language": "pl",
-      "route_path": "badiana",
-      "slug": "badiana",
-      "title": "Badiana",
+      "route_path": "badian",
+      "slug": "badian",
+      "title": "Badian",
       "excerpt": "",
       "content": "",
-      "seo_title": "Badiana",
-      "meta_description": "Badian, czyli chiński anys, pozytywnie wpływa na system obrotowy i dożylność. W sumie wspiera prawidłowe funkcjonowanie systemu odpornościowego.",
+      "seo_title": "Badian",
+      "meta_description": "Badyan, lub chiński asise, ma pozytywny wpływ na system cyrculatory i na digitalizację.Forall, wspiera właściwe funkcjonowanie systemu immunologicznego.",
       "data": {},
       "status": "draft"
     },
@@ -6994,13 +6994,13 @@
       "object_subtype": "post_tag",
       "object_id": 41,
       "language": "pl",
-      "route_path": "trawa-cytrynowa",
-      "slug": "trawa-cytrynowa",
-      "title": "Trawa cytrynowa",
+      "route_path": "lemon-traw",
+      "slug": "lemon-traw",
+      "title": "Lemon traw",
       "excerpt": "",
       "content": "",
-      "seo_title": "Trawa cytrynowa",
-      "meta_description": "Aroma trawy cytrynowej uwalnia stres i napięcie, działa przeciw zmęczeniu i zwiększa zdolność koncentracji. Działa jako antyoksydant i wzmacnia immunitet.",
+      "seo_title": "Lemon traw",
+      "meta_description": "Aroma cytryna cytryna uwalnia stres i napięcie, działa przeciwko zmęczeniu i zwiększa koncentrację, działa jako antyoksydant i wzmacnia derogację.",
       "data": {},
       "status": "draft"
     },
@@ -7009,13 +7009,13 @@
       "object_subtype": "post_tag",
       "object_id": 40,
       "language": "pl",
-      "route_path": "kurkuma",
-      "slug": "kurkuma",
-      "title": "Kurkuma",
+      "route_path": "turmeric-curcuma",
+      "slug": "turmeric-curcuma",
+      "title": "Turmeric (curcuma)",
       "excerpt": "",
       "content": "",
-      "seo_title": "Kurkuma",
-      "meta_description": "Kurkuma jest używana przez długie stulecia do zmniejszenia bólu, ulgi zapalenia stawów, skóry i mięśni.",
+      "seo_title": "Turmeric (curcuma)",
+      "meta_description": "Turmeric był używany od wieków do rekompensowania bólu, do rekompensowania ruchów, skóry i mięśni.",
       "data": {},
       "status": "draft"
     },
@@ -7024,12 +7024,12 @@
       "object_subtype": "product_cat",
       "object_id": 15,
       "language": "pl",
-      "route_path": "niezawarte",
-      "slug": "niezawarte",
-      "title": "Niezawarte",
+      "route_path": "nieuzbrojony",
+      "slug": "nieuzbrojony",
+      "title": "Nieuzbrojony",
       "excerpt": "",
       "content": "",
-      "seo_title": "Niezawarte",
+      "seo_title": "Nieuzbrojony",
       "meta_description": "",
       "data": {},
       "status": "draft"
@@ -7039,13 +7039,13 @@
       "object_subtype": "product_cat",
       "object_id": 32,
       "language": "pl",
-      "route_path": "wtyczki",
-      "slug": "wtyczki",
-      "title": "Wtyczki",
+      "route_path": "deliverlements",
+      "slug": "deliverlements",
+      "title": "Deliverlements",
       "excerpt": "",
       "content": "",
-      "seo_title": "Wtyczki",
-      "meta_description": "Dodatki z Bali, które dodają do waszej przestrzeni niezwykłe atmosfery. Drewno teatralne i inne materiały naturalne z Bali zmieniają twoje miejsce w oazie spokoju...",
+      "seo_title": "Deliverlements",
+      "meta_description": "Przybysze z Bali, które dają wam przestrzeń nadzwyczajną atmosferę duchową, drzewa i inne materiały naturalne ZXQ20QX... przemienią twoje miejsce w wazę pokoju...",
       "data": {},
       "status": "draft"
     },
@@ -7060,7 +7060,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Yoga i medytacja",
-      "meta_description": "Zachowajcie spokój i zanurzcie się w atmosferze balijskiej z naturalnymi zapachami z Bali. Ich duchowy zapach popiera wasze medytacje, pogłębia...",
+      "meta_description": "Indulge in moments of peace and immerse yourself in the ZXQ-20XZian atmosfery natural illed bars from Bali.",
       "data": {},
       "status": "draft"
     },
@@ -7069,13 +7069,13 @@
       "object_subtype": "product_cat",
       "object_id": 29,
       "language": "pl",
-      "route_path": "masaz",
-      "slug": "masaz",
-      "title": "Masaż",
+      "route_path": "masaze",
+      "slug": "masaze",
+      "title": "Masaże",
       "excerpt": "",
       "content": "",
-      "seo_title": "Masaż",
-      "meta_description": "Rozluźnij się z naturalnymi olejami roślinnymi z Bali . Samoopieka, która uwalnia stres i wspiera zdrowie. Oleje na masaże, lub samoopieki w formie automasy,...",
+      "seo_title": "Masaże",
+      "meta_description": "Doświadczenie odprężające z naturalnymi olejami z Bali. Self-cas that cuts stress and supportings your Health. Oils for massage or self-care in the form of auto massage,...",
       "data": {},
       "status": "draft"
     },
@@ -7114,13 +7114,13 @@
       "object_subtype": "product_cat",
       "object_id": 30,
       "language": "pl",
-      "route_path": "zdrowie-i-piekno",
-      "slug": "zdrowie-i-piekno",
-      "title": "Zdrowie i piękno",
+      "route_path": "zdrowie-i-pieknosc",
+      "slug": "zdrowie-i-pieknosc",
+      "title": "Zdrowie i piękność",
       "excerpt": "",
       "content": "",
-      "seo_title": "Zdrowie i piękno",
-      "meta_description": "Odkryj tajemnice piękno i zdrowie z naturalną kosmetyką z Bali. Produkty roślinne opiekują się skórą bez substancji chemicznych i korzystają z siły natury i zioła dla...",
+      "seo_title": "Zdrowie i piękność",
+      "meta_description": "Odkryj tajemnice piękna i zdrowia z naturalnymi kosmetykami z Bali. Zbiorniki Herbal dbają o skórę bez chemikaliów i używają mocy przyrody i jej potomków...",
       "data": {},
       "status": "draft"
     },
@@ -7131,7 +7131,7 @@
       "language": "pl",
       "route_path": "",
       "slug": "",
-      "title": "Formularz rezerwacyjny",
+      "title": "Poszukiwań",
       "excerpt": "",
       "content": "",
       "seo_title": "",
@@ -7139,21 +7139,21 @@
       "data": {
         "fields": {
           "1": {
-            "label": "Nazwa"
+            "label": "Nazwisko"
           },
           "4": {
             "label": "Miejsce",
             "choices": [
               {
-                "label": "Proszek Vrchownicy",
+                "label": "Praha Vršovice",
                 "value": ""
               },
               {
-                "label": "Usta nad Orlicą",
+                "label": "Ústí nad Orlicí",
                 "value": ""
               },
               {
-                "label": "Wysoki Mito",
+                "label": "Vysoké Mýto",
                 "value": ""
               }
             ]
@@ -7162,14 +7162,14 @@
             "label": "E-mail"
           },
           "3": {
-            "label": "Komentarz lub wiadomość"
+            "label": "Komunikacja lub wiadomość"
           }
         },
         "settings": {
-          "form_title": "Formularz rezerwacyjny",
-          "form_desc": "Możecie skontaktować się ze mną w sprawie masażu Tajemnicy Jamy?",
-          "submit_text": "Wyślij",
-          "submit_text_processing": "Wysyłane..."
+          "form_title": "Poszukiwań",
+          "form_desc": "Czy interesuje cię coś masażu Tajemství JAMU?",
+          "submit_text": "Przyślij",
+          "submit_text_processing": "Wysłać..."
         }
       },
       "status": "draft"
@@ -7181,7 +7181,7 @@
       "language": "pl",
       "route_path": "",
       "slug": "",
-      "title": "Prosty formularz kontaktowy",
+      "title": "Prosta forma kontaktowa",
       "excerpt": "",
       "content": "",
       "seo_title": "",
@@ -7189,19 +7189,19 @@
       "data": {
         "fields": {
           "1": {
-            "label": "Nazwa i nazwisko"
+            "label": "Nazwisko i nazwisko"
           },
           "2": {
             "label": "E-mail"
           },
           "3": {
-            "label": "Komentarz lub wiadomość"
+            "label": "Komunikacja lub wiadomość"
           }
         },
         "settings": {
-          "form_title": "Prosty formularz kontaktowy",
-          "submit_text": "Wyślij",
-          "submit_text_processing": "Wysyłane..."
+          "form_title": "Prosta forma kontaktowa",
+          "submit_text": "Przyślij",
+          "submit_text_processing": "Wysłać..."
         }
       },
       "status": "draft"
@@ -7219,7 +7219,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus leczenie roślinne z Bali, które wspiera równowagę życia i przepływ energii życiowej Chi, czyli Prana."
+        "alt": "Kutus Kutus herbal therapy from Bali, która promuje równowagę życia i przepływ energii życiowej Qi lub Prana."
       },
       "status": "draft"
     },
@@ -7236,7 +7236,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus olej zawiera 69 roślin leczniczych i pozytywnie wpływa na zdrowie psychiczne i fizyczne człowieka."
+        "alt": "Kutus Kutus zawiera 69 ziołków leczonych i pozytywnie wpływa na zdrowie psychiczne i fizyczne danej osoby."
       },
       "status": "draft"
     },
@@ -7253,7 +7253,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus leczenie roślinne z Bali, które wspiera równowagę życia i przepływ energii życiowej Chi, czyli Prana."
+        "alt": "Kutus Kutus herbal therapy from Bali, która promuje równowagę życia i przepływ energii życiowej Qi lub Prana."
       },
       "status": "draft"
     },
@@ -7270,7 +7270,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus zioła zawiera tylko 100% substancji roślinnych i pomaga przepływać energię Czchi lub Prana. Utrzymuje równowagę i zdrowie psychiczne i fizyczne."
+        "alt": "Mydło Kutus Kutus z herbem ziołowym zawierają tylko 100% substancji ziołowych i pomaga przepływowi energii Chhci lub Prana.Utrzyma równowagę i zdrowie psychiczne i fizyczne."
       },
       "status": "draft"
     },
@@ -7287,7 +7287,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus jest roślinnym oliwą terapeutyczną z tropicznej wyspy Bali, która pomaga utrzymać równowagę życiową i w ten sposób ma pozytywny wpływ na immunitet i jako alternatywne lub dodatkowe leczenie chorob."
+        "alt": "Kutus Kutus to ziołowiec z tropikalnej wyspy ZXQ GQXZ, który pomaga utrzymać równowagę życia i w związku z tym ma pozytywny wpływ na derogację i jako alternatywny lub uzupełniający sposób leczenia chorób."
       },
       "status": "draft"
     },
@@ -7304,7 +7304,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Jóga, medytacja, miłość i olej roślinny Kutus Kutus pomaga mi zachowywać równowagę i zdrowie życiowe i psychiczne."
+        "alt": "Yoga, medytacja, miłość i olej ziołowy Kutus Kutus jest dobra dla mojej równowagi życia i zdrowia psychicznego."
       },
       "status": "draft"
     },
@@ -7321,7 +7321,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Terapia refekcyjna z nóg według Kutus Kutus terapii roślinnej."
+        "alt": "Ognista refekcyjna, według Kutus Kutus jej arapii."
       },
       "status": "draft"
     },
@@ -7338,7 +7338,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Rexlexologia ciała, czyli terapia ziołowa, zgodnie z leczeniem ziołowym Jamu (która pochodzi z Chińskiej Medycyny), jest wykorzystywana w medycynie alternatywnej."
+        "alt": "Ramlexologia ciał lub molewiastki w zależności od jej arapy JAMU (w oparciu o chińską medycynę) jest stosowana w alternatywnej medycynie."
       },
       "status": "draft"
     },
@@ -7355,7 +7355,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Oliwa roślinne wspiera przepływ energii życiowej Chi. Energia płynie w Chuckrach. Jakie mamy Chuckry? Korzeń Chuckry, sakra Chuckra, płatnik słoneczny, Chuckra serca, szyja szyi, trzecie oko, koronna Chuckra"
+        "alt": "Olejny olej wspiera przepływ energii życiowej Qi, przepływ energii w czosnkach."
       },
       "status": "draft"
     },
@@ -7372,7 +7372,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus jest olejem roślinnym z Indonezji - Bali, który utrzymuje równowagę i zdrowie."
+        "alt": "Kutus Kutus to ropa z Indonezji - Bali, która utrzymuje równowagę życia i zdrowie."
       },
       "status": "draft"
     },
@@ -7389,7 +7389,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus jest olejem roślinnym z Indonezji - Bali, który utrzymuje równowagę i zdrowie."
+        "alt": "Kutus Kutus to ropa z Indonezji - Bali, która utrzymuje równowagę życia i zdrowie."
       },
       "status": "draft"
     },
@@ -7406,7 +7406,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus używa prądu energii chi, czyli przepływu w Чакrach."
+        "alt": "Kutus Kutus utrzymuje przepływ energii Qi lub przepływa w żołądkach."
       },
       "status": "draft"
     },
@@ -7423,7 +7423,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Naturalne oleje Kalilo z Bali zawiera tylko łaty naturalne, bez chemii i szkodliwych substancji."
+        "alt": "Naturalny olej Kalila Kalila z Bali zawiera tylko bionety, bez substancji chemicznych i szkodliwych."
       },
       "status": "draft"
     },
@@ -7440,7 +7440,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Olej ziołowy Kutus Kutus utrzymuje równowagę i zdrowie. Oliwa należy używać w lekcjach jogi lub medytacji."
+        "alt": "Olejny olej Kutus Kutus utrzymuje równowagę życia i zdrowie."
       },
       "status": "draft"
     },
@@ -7457,7 +7457,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus olej roślinny z Bali"
+        "alt": "Kutus Kutus Herbal Oil from Bali"
       },
       "status": "draft"
     },
@@ -7474,7 +7474,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Aplikacja Kutus Kutus oleju roślinnego"
+        "alt": "Stosowanie Kutus Kutus jej oleju"
       },
       "status": "draft"
     },
@@ -7491,7 +7491,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus pomaga usunąć ból miesięczny"
+        "alt": "Kutus Kutus pomaga usuwać ludzkie bóle"
       },
       "status": "draft"
     },
@@ -7508,7 +7508,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus wspiera energię Chi i przyczynia się do zdrowia"
+        "alt": "Kutus Kutus wspiera energię Qi i przyczynia się do zdrowia"
       },
       "status": "draft"
     },
@@ -7525,7 +7525,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus olej roślinny z Bali samoleczenie i masaż samochodowy"
+        "alt": "Kutus Kutus Herbal Oil from Bali Self-treatment and Auto Massage"
       },
       "status": "draft"
     },
@@ -7542,7 +7542,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus olej roślinny z Bali"
+        "alt": "Kutus Kutus Herbal Oil from Bali"
       },
       "status": "draft"
     },
@@ -7559,7 +7559,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Olej tanamowy - serum na skórę z Bali"
+        "alt": "Olejny olej - serum na skórze z ZXQ20QQQZ"
       },
       "status": "draft"
     },
@@ -7576,7 +7576,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Zielone i naturalne mydło z Bali"
+        "alt": "Herbalne i naturalne mydło z ZXQ20QZ"
       },
       "status": "draft"
     },
@@ -7593,7 +7593,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Tanamowe mydło na skórę"
+        "alt": "Taname Soap for Skin"
       },
       "status": "draft"
     },
@@ -7610,7 +7610,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "leczenie rexlefowe Kutus Kutus olej roślinny"
+        "alt": "Rexlef therapy Kutus Kutus its dust oil"
       },
       "status": "draft"
     },
@@ -7627,7 +7627,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus olej roślinny"
+        "alt": "Kutus Kutus Packal Oil"
       },
       "status": "draft"
     },
@@ -7644,7 +7644,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus równowaga życia i zdrowie"
+        "alt": "Kutus Kutus życiowa higiena życia i zdrowie"
       },
       "status": "draft"
     },
@@ -7661,7 +7661,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kupus kukus olej czeska Republika Czeska"
+        "alt": "Kutus Kutus Oil Czech"
       },
       "status": "draft"
     },
@@ -7678,7 +7678,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "tajemnice jamy"
+        "alt": "Sekret ZXQ18XZ"
       },
       "status": "draft"
     },
@@ -7695,7 +7695,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "logo tajemnicy JAMU"
+        "alt": "JAMU logo o tajemnicze"
       },
       "status": "draft"
     },
@@ -7729,7 +7729,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Masaż Ajurwedzki Lenka, Praga"
+        "alt": "Ayurvedic masażu Lenka, Praga"
       },
       "status": "draft"
     },
@@ -7746,7 +7746,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "równowaga ciała, umysłu i duszy - Tajemnica Jama"
+        "alt": "Ruchy ciała, umysłu i duszy - ZXQ0QQZ"
       },
       "status": "draft"
     },
@@ -7763,7 +7763,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Masaż balijskich masażów uczył się od tradycyjnych lekarzy na Bali, przed masażem wykonuje motyl i medytację."
+        "alt": "Masaskość masażu Balijsky została nauczana przez tradycyjne healatory na ZXQ-20QXZ."
       },
       "status": "draft"
     },
@@ -7780,7 +7780,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Logo JAMU"
+        "alt": "ZXQ18QX"
       },
       "status": "draft"
     },
@@ -7797,7 +7797,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Płytki zapachowe z Bali \"Święte kwiaty\", naturalne bez syntetycznych substancji, grube - długi czas palenia. Spiritualne patyki odpowiednie do medytacji, jogi, masażu balistycznego."
+        "alt": "Scented bars from Bali Sacred Flowers; naturalny bez substancji syntetycznych, gruby, długi czas płonowy.Romantal trzyma się odpowiednich do medytacji, jogi, ZXQ20XZ."
       },
       "status": "draft"
     },
@@ -7814,7 +7814,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Płytki zapachowe z Bali \"Święte kwiaty\", naturalne bez syntetycznych substancji, grube - długopalenie."
+        "alt": "Scented bars from Bali Sacred Flowers; naturalne bez substancji syntetycznych, gruby, długi czas płonący."
       },
       "status": "draft"
     },
@@ -7831,7 +7831,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Napiwek kurkumowy Jamu z Indonezji"
+        "alt": "Turmericzny drink JAMU z Indonezji"
       },
       "status": "draft"
     },
@@ -7848,7 +7848,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Wonne patyki z Bali, odpowiednie do medytacji, jogi, rytualnych ceremonii i masażu."
+        "alt": "Scent bar from Bali odpowiedni dla medytacji, jogi, ceremonii rytuałów i masek."
       },
       "status": "draft"
     },
@@ -7865,7 +7865,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Płytka wonna Bali spirit, 100% naturalny niewybaczalny. Grzyb, magnolia, ylang-yang, trawa cytrynowa, orzech muszkatowy, kadzidło"
+        "alt": "Scent bar Bali spirit, 100% bezpieczne środowisko naturalne."
       },
       "status": "draft"
     },
@@ -7882,7 +7882,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Produkcja napojów Jamu - tonika z skorupy, trawa cytrynowa, grzybica, badianu"
+        "alt": "Produkcja JAMU pije - tonic from cinnamon, rumu cytrynowego, nail, zła"
       },
       "status": "draft"
     },
@@ -7899,7 +7899,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Produkcja jamy napojów - tradycyjny napoj z Indonezji w celu wsparcia zdrowia jest produkowana z kurkum, źródeł tamarindu."
+        "alt": "Produkcja cukru JAMU - tradycyjnego picia z Indonezji do promowania zdrowia jest wytwarzana z turmericznego, tuarind ginger."
       },
       "status": "draft"
     },
@@ -7916,7 +7916,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Leczenie naturalne z Indonezji stosuje się do przygotowania jamy napojów kurkum, brzuch, czerwone brzuch."
+        "alt": "Naturalny Healing z Indonezji używa rampy, ginger, czerwony strumień, aby przygotować drinki PanXQ18QXZ napojów."
       },
       "status": "draft"
     },
@@ -7933,7 +7933,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Nadis Herbal mały producent kosmetyki naturalnej i dodatków do jedzenia z Bali"
+        "alt": "Nadis Herbal mały producent naturalnych kosmetyków i uzupełnień żywnościowych z Bali"
       },
       "status": "draft"
     },
@@ -7950,7 +7950,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kurkuma tradycyjna terapia na Bali, Kurkuma napiwek"
+        "alt": "Turmeric Traditional Healing at Bali, Turmeric ZXQQHQXZ Drink"
       },
       "status": "draft"
     },
@@ -7967,7 +7967,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Płytki zapachowe z Bali \"Święte kwiaty\", naturalne bez syntetycznych substancji, grube - długopalenie."
+        "alt": "Scented bars from Bali Sacred Flowers; naturalne bez substancji syntetycznych, gruby, długi czas płonący."
       },
       "status": "draft"
     },
@@ -7984,7 +7984,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Pojemnik na esence zapachowe / ciasteczko z Bali"
+        "alt": "Tea holder for fragrance basic/bar from Bali"
       },
       "status": "draft"
     },
@@ -8001,7 +8001,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Pojemnik na esence zapachowe / ciasteczko z Bali"
+        "alt": "Tea holder for fragrance basic/bar from Bali"
       },
       "status": "draft"
     },
@@ -8018,7 +8018,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kubek teacki z Bali"
+        "alt": "Herbata z ZXQ20CXZ"
       },
       "status": "draft"
     },
@@ -8035,7 +8035,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Misty teackie, wykonane na Bali"
+        "alt": "Wstążki, zrobione na Bali"
       },
       "status": "draft"
     },
@@ -8052,7 +8052,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Miedź teakowa z Bali"
+        "alt": "Mięso mydło z ZXQ20CXZ"
       },
       "status": "draft"
     },
@@ -8069,7 +8069,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Krem ciała, kosmetyka naturalna, wyprodukowana na Bali,"
+        "alt": "Body Ayurvediccolor, Naturalne kosmety, wprowadzone na Bali,"
       },
       "status": "draft"
     },
@@ -8086,7 +8086,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Krem ciała, kosmetyka naturalna, wyprodukowana na Bali, oleje esencialne - frangipania (plumerja)"
+        "alt": "Bodycolor, naturalne kosmety, zrobione na Bali, kluczowe olejy - fogipania (plumeria)"
       },
       "status": "draft"
     },
@@ -8103,7 +8103,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Krem ciała, kosmetyka naturalna, wyprodukowana na Bali, oleje esencialne - empaka, wertivier, paczule"
+        "alt": "Bodycolor, naturalne kosmety, zrobione na Bali, kluczowe olejy - szampan, vertermar, fluuli"
       },
       "status": "draft"
     },
@@ -8120,7 +8120,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Miska teakowa z Bali"
+        "alt": "Wstążka z ZXQ20CXZ"
       },
       "status": "draft"
     },
@@ -8137,7 +8137,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Zioła zawarte w oleju ziołowym Kutus Kutus - brzuch, kurkuma, grzyb, badiana, plumeria. Bali"
+        "alt": "Herbs zawierał w olejku ziołowym Kutus Kutus - ginger, turmeric, cloves, illyan, plumery. Bali"
       },
       "status": "draft"
     },
@@ -8154,7 +8154,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Oliwa oleiste do naturalnie pięknych włosów"
+        "alt": "Pełna ropa dla bezspornych włosów"
       },
       "status": "draft"
     },
@@ -8171,7 +8171,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kobieta medytująca przy wschodzie słońca"
+        "alt": "Kobieta medytująca w słońcu"
       },
       "status": "draft"
     },
@@ -8188,7 +8188,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kobieta przy zachodzie słońca widzi swoje ciało i cieszy się obecną chwilą."
+        "alt": "O zachodzie słońca kobieta widzi jej ciało i cieszy się obecnym momentem."
       },
       "status": "draft"
     },
@@ -8205,7 +8205,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Pachełka z materiałów naturalnych, bez chemii, jest lepsza w zdrowiu."
+        "alt": "Scented stick made of natural materials, without chemia jest lepszą opcją dla zdrowia.Scented bars have a cleaning, spiritual importance of Balijské culture."
       },
       "status": "draft"
     },
@@ -8222,7 +8222,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasz na plaży, Bali."
+        "alt": "Lenka Eliášová na plaży, Bali."
       },
       "status": "draft"
     },
@@ -8239,7 +8239,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Masaż balijski w Pradze"
+        "alt": "Balijská masażu w Pradze"
       },
       "status": "draft"
     },
@@ -8256,7 +8256,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "bali natural oil"
+        "alt": "Bali oleju"
       },
       "status": "draft"
     },
@@ -8273,7 +8273,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali flower natury"
+        "alt": "BaliTOGO"
       },
       "status": "draft"
     },
@@ -8290,7 +8290,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali hindu"
+        "alt": "Hindu ZXQ20QZ"
       },
       "status": "draft"
     },
@@ -8307,7 +8307,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Bali gate"
+        "alt": "ZXQ 20QQVI"
       },
       "status": "draft"
     },
@@ -8324,7 +8324,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Masazy proszku"
+        "alt": "Masazeroha"
       },
       "status": "draft"
     },
@@ -8341,7 +8341,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasz odkrywa balijski hinduizm, jest przy świątyni balizowej i zapala patyk."
+        "alt": "Lenka Eliášová odkrywa Balijian Hinduism, znajduje się w świątyni Balisekého i ignites a fragrant bar."
       },
       "status": "draft"
     },
@@ -8358,7 +8358,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Nafty oleju przygotowawczego"
+        "alt": "Herbs Oil Preparation"
       },
       "status": "draft"
     },
@@ -8375,7 +8375,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasz, kurs masażu balijskiego"
+        "alt": "Lenka Eliášová, Baliiańskie kursy masażowe"
       },
       "status": "draft"
     },
@@ -8392,7 +8392,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Masaż oliwny Ajurwed do uwolnienia kręgosłupa."
+        "alt": "Ayurvedic oil massage to relax the cervical spine."
       },
       "status": "draft"
     },
@@ -8409,7 +8409,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Dla Balijczyków kwiat plumerii, znany jako \"jepun\", głębokie znaczenie kulturowe i duchowe, leniwa na Bali z kwiatem plumerii."
+        "alt": "Dla Balijce posiada hydrauliczny kwiat znany jako \"jepun\", głęboko kulturowe i duchowe znaczenie Lenka w Bali z hydraulikiem.ZXQQQXZ."
       },
       "status": "draft"
     },
@@ -8426,7 +8426,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "rośliny"
+        "alt": "Zioła"
       },
       "status": "draft"
     },
@@ -8443,7 +8443,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasz rozpoznaje kulturę balistyczną i uczy się tradycyjnego masażu od lekarzy balijskich."
+        "alt": "Lenka Eliášová uznaje kulturę Balij i uczy tradycyjne masaże z OXQ20QXZ."
       },
       "status": "draft"
     },
@@ -8460,7 +8460,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Zielony napiwek Jama - trawa cytrynowa, grzybica, skorupa, kardamon. Zielona herbata z Bali. Zioła z Bali dla zdrowia."
+        "alt": "Herbal pije JAMU - trawa cytrynowa, cloves, cinnamon, Cardamom. Herbal herbatę z ZXQ-20QXZ. Herbs from Bali dla Zdrowia. Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -8477,7 +8477,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Tajemnica Jama, ogólna opieka zdrowotna"
+        "alt": "Tajemství JAMU, opieka holistyczna"
       },
       "status": "draft"
     },
@@ -8494,7 +8494,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasza - uczyła się masażu balijskiego i poznawała lokalną kulturę na Bali. Francuska (plumeria) - biały lub żółty kwiat jest symbolem czystości, piękności i świętości. Na Bali gra plumerię ważną rolę w hinduistycznych rytuałach, obrzędach i codziennym życiu."
+        "alt": "Lenka Eliášová - nauczyła się masażu Baliian i nauczyła się lokalnej kultury na Bali.Negipania (plumlum) – biały i żółty kwiat to symbol czystości, piękna i geografii.ZXQQQXZ odgrywa ważną rolę w rytuałach hinduskich, ceremonie i życiu codziennym."
       },
       "status": "draft"
     },
@@ -8511,7 +8511,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasza - masażerka masażu ajurwedzkiego i baleckiego."
+        "alt": "Lenka Eliášová - masażu Ayurvedic i ZXQ-20QXZcské."
       },
       "status": "draft"
     },
@@ -8528,7 +8528,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Wschodnie style masażu - masaż balijski i jaurwedzki, Tajemnica Jamu"
+        "alt": "East Massage Styles - Balijská a jaurvedská massage, ZXQQQXZ"
       },
       "status": "draft"
     },
@@ -8545,7 +8545,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasz, leczenie na Bali"
+        "alt": "Lenka Eliášová, healing on Bali"
       },
       "status": "draft"
     },
@@ -8562,7 +8562,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasz, masaż energetyczny - masaż baliczny, masaż ajurwedzki Abhyanga"
+        "alt": "Lenka Eliášová, masa energetyczna - Baliská masażu, Ayurvedic abhyanga masa"
       },
       "status": "draft"
     },
@@ -8579,7 +8579,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Masaż balijski w Pradze"
+        "alt": "Balijská masażu w Pradze"
       },
       "status": "draft"
     },
@@ -8596,7 +8596,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Elias masaż abhianga"
+        "alt": "Lenka Eliášová Abhyangahaage"
       },
       "status": "draft"
     },
@@ -8613,7 +8613,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasz, tajemnica Jama, opieka nad zdrowiem i pięknom."
+        "alt": "Lenka Eliášová, Tajemství JAMU, Balijské zdravotování z obrovo a odravo."
       },
       "status": "draft"
     },
@@ -8630,7 +8630,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasz, współpraca, joga weekend"
+        "alt": "Lenka Eliášová, współpraca, jola weekend"
       },
       "status": "draft"
     },
@@ -8647,7 +8647,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasz, Masaż Balijski b Praga, kursy"
+        "alt": "Lenka Eliášová, Balijská masażu si Pragi, kursy"
       },
       "status": "draft"
     },
@@ -8664,7 +8664,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kultura balijska i spirytualita, Tajna Jama."
+        "alt": "Balijská culture and spirituality, Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -8681,7 +8681,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kultura balijska i spirytualita, Tajna Jama."
+        "alt": "Balijská culture and spirituality, Tajemství JAMU."
       },
       "status": "draft"
     },
@@ -8698,7 +8698,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kutus Kutus olej roślinny z Bali na masaż."
+        "alt": "Kutus Kutus zioła z Bali dla masażu."
       },
       "status": "draft"
     },
@@ -8715,7 +8715,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Tradycyjne leczenie z Bali, Sekret Jama"
+        "alt": "Tradycyjny Healing z Bali, Tajemství JAMU"
       },
       "status": "draft"
     },
@@ -8732,7 +8732,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliaszowa joga"
+        "alt": "Lenka EliášováYga"
       },
       "status": "draft"
     },
@@ -8749,7 +8749,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Automasaż Sekret Jama"
+        "alt": "Automassage ZXQ0RXZ"
       },
       "status": "draft"
     },
@@ -8766,7 +8766,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Oliwka roślinna z Bali Kutus Kutus i jego efekty lecznicze."
+        "alt": "Olejny olej z Bali Kutus Kutus i jego wpływ na leki."
       },
       "status": "draft"
     },
@@ -8783,7 +8783,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Równowaga ciała, umysłu i ducha, tajemnica Jama jest pełnym dostępem do zdrowia."
+        "alt": "Ogromność ciała, umysłu i ducha."
       },
       "status": "draft"
     },
@@ -8800,7 +8800,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasz, Bali Masaż w Pradze, Bali Studium Bali, Bali Lekarstwa."
+        "alt": "Lenka Eliášová, Bali masażu w Pradze."
       },
       "status": "draft"
     },
@@ -8817,7 +8817,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Lenka Eliasza masażu balijskiego i leczenie z Indonezji."
+        "alt": "Lenka Eliášová Balijská masażu i healing z Indonezji."
       },
       "status": "draft"
     },
@@ -8834,7 +8834,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Produkcja naturalnej kosmetyki - oleju masażowego z kwiatów na Bali. Surowce: Aloe Vera, kukurydza, Plumeria, Ylang Ylang, i czapka."
+        "alt": "Produkcja naturalnych kosmetyków - olej masowych na Bali - materiały: Aloe Vera, kukurydza, hydrery, Ylang Ylang i szampan."
       },
       "status": "draft"
     },
@@ -8851,7 +8851,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Kwiaty takie jak frangipania, jasmin i champuka, które wielbią mnie dla celów duchowych i lekarstw i używają się na Bali podczas rytuałów i medytacji."
+        "alt": "Kwiaty, takie jak Franzipania, Jasmine i szampan, są uhonorowane dla moich duchowych i medycznych celów i są używane w rytuałach i medytacjach ZX20QXZ."
       },
       "status": "draft"
     },
@@ -8868,7 +8868,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Maserka Lenka została uleczona od balijskiego szamana na Bali, niedaleko Ubudu."
+        "alt": "Masseuse Lenka został leczony przez Baliian shaman na Bali w pobliżu Umoc.Jego imię to Ketut."
       },
       "status": "draft"
     },
@@ -8885,7 +8885,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Naturalny twardy perfum z Bali, zawiera: jasminie, plumerieria, kokosowe oleje, wosk pszczoły.Nazwisko Bali Flowers - www.taimstium.cz"
+        "alt": "Naturalne perfumy z Bali zawierają: jasmine, hydrauliki, szampan, ekolog, beswax.Nazwa Bali Flowers - www.ZXQ17XZ"
       },
       "status": "draft"
     },
@@ -8902,7 +8902,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Toksyczne substancje w perfumach, które uszkodzają zdrowie."
+        "alt": "Substancje toksyczne w perfumach szkodliwych dla zdrowia."
       },
       "status": "draft"
     },
@@ -8919,7 +8919,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Napiwek koronowy z Bali, medycyna naturalna, Wyprodukowany na Bali - Ubud. Balance"
+        "alt": "Spicy Drink from Bali, naturalny medycyna, Made on Bali - Umoc. Balance"
       },
       "status": "draft"
     },
@@ -8936,7 +8936,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Napiwek Dharma - jego korzeńowe napoje - Kurkuma, wyzwanie, czerwone zapasy na poparcie."
+        "alt": "Pij Dharma - jego picie. Turmeric, ginger, czerwony ginger, aby wesprzeć trawienie."
       },
       "status": "draft"
     },
@@ -8953,7 +8953,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Zielony napoj z Bali - jama zawiera kurkumę, dzwon, wyzwanie jawne. Popiera immunitet."
+        "alt": "Herbal pije z Bali - JAMU zawiera turmeric, ginger, Javanspinger."
       },
       "status": "draft"
     },
@@ -8970,7 +8970,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "alt": "Napiwek z Bali - mieszanka korzeńna na poparcie trawy"
+        "alt": "Pij z Bali - mieszanina mieszanka do wsparcia digitalizacji"
       },
       "status": "draft"
     },
@@ -8996,7 +8996,7 @@
       "language": "pl",
       "route_path": "",
       "slug": "blogdescription",
-      "title": "BUDZIENIE WNITRZNIA JA - ZOBACZ WSZYSTKIE ZŁOWE",
+      "title": "CZŚ CZŚ CZŚ CZŚ CZŚ CZŚ CZŚ CZŚ CZŚ",
       "excerpt": "",
       "content": "",
       "seo_title": "",
@@ -9011,13 +9011,13 @@
       "language": "pl",
       "route_path": "",
       "slug": "",
-      "title": "Masaż",
+      "title": "Masaże",
       "excerpt": "",
       "content": "",
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "url": "https://tajemstvijamu.cz/pl/masaz/"
+        "url": "https://tajemstvijamu.cz/pl/masaze/"
       },
       "status": "draft"
     },
@@ -9034,7 +9034,7 @@
       "seo_title": "",
       "meta_description": "",
       "data": {
-        "url": "https://tajemstvijamu.cz/pl/produkty-naturalne-jamu/"
+        "url": "https://tajemstvijamu.cz/pl/produkty-naturalne-zxq18qz/"
       },
       "status": "draft"
     },
