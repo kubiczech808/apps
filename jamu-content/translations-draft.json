@@ -288,7 +288,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Mein Konto",
-      "meta_description": "[woocommerce_my_account]",
+      "meta_description": "",
       "data": {},
       "status": "draft"
     },
@@ -543,7 +543,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Kasse",
-      "meta_description": "[woocommerce_checkout]",
+      "meta_description": "",
       "data": {},
       "status": "draft"
     },
@@ -3299,7 +3299,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "My Account",
-      "meta_description": "[woocommerce_my_account]",
+      "meta_description": "",
       "data": {},
       "status": "draft"
     },
@@ -3404,7 +3404,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "About Me",
-      "meta_description": "© I am empathic and sensitive and I have found my way in the transfer of energy to other people. © My name is Lenka, I am a masseuse and I am interested in traditional healing...",
+      "meta_description": "© I am empathic and sensitive and I found my way in the transfer of energy to other people. © My name is Lenka, I am a masseuse and I am interested in traditional healing....",
       "data": {},
       "status": "draft"
     },
@@ -3479,7 +3479,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Balinese Herbal Oil Massage",
-      "meta_description": "Relaxation whole body ritual, which is based on traditional Balinese healing. It connects elements of acupressure, reflex therapy, stretching and aromatherapy...",
+      "meta_description": "Relaxation whole body ritual, which is based on traditional Balinese healing. It combines elements of acupressure, reflex therapy, stretching and aromatherapy....",
       "data": {},
       "status": "draft"
     },
@@ -3554,7 +3554,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Checkout",
-      "meta_description": "[woocommerce_checkout]",
+      "meta_description": "",
       "data": {},
       "status": "draft"
     },
@@ -6310,7 +6310,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Moje konto",
-      "meta_description": "[woo trademyaccount]",
+      "meta_description": "",
       "data": {},
       "status": "draft"
     },
@@ -6415,7 +6415,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "O mnie",
-      "meta_description": "/Jestem empathyczny i wrażliwy i znalazłem drogę do transferu energii do innych ludzi. /Nazywam się Lenka, jestem masażystą i interesuje mnie tradycyjne uzdrowienie...",
+      "meta_description": "Jestem empathyczny i wrażliwy i znalazłem drogę do transferu energii do innych ludzi. Nazywam się Lenka, jestem masażystą i interesuje mnie tradycyjne uzdrowienie...",
       "data": {},
       "status": "draft"
     },
@@ -6490,7 +6490,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Balijski masaż olejkiem ziołowym",
-      "meta_description": "Pocieszenie całego rytuału ciała, który opiera się na tradycyjnym uzdrowieniu Balinese, łączy elementy akupressure, reflex therapy, reving and psychoherapy...",
+      "meta_description": "Uspokoić całą ceremonię ciała, która opiera się na tradycyjnym uzdrowie Balinese, łączy elementy akupressure, reflex therapy, turning and psychoherapy...",
       "data": {},
       "status": "draft"
     },
@@ -6565,7 +6565,7 @@
       "excerpt": "",
       "content": "",
       "seo_title": "Kasa",
-      "meta_description": "[woo handlucheckout]",
+      "meta_description": "",
       "data": {},
       "status": "draft"
     },
