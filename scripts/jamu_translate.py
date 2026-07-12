@@ -57,9 +57,11 @@ def plain_text(markup: str) -> str:
 
 def source_meta(row: dict) -> str:
     existing = plain_text(str(row.get('meta_description', '')))
-    if existing:
+    if existing and not SHORTCODE_RE.match(existing):
         return existing[:180]
     candidate = plain_text(str(row.get('excerpt') or row.get('content') or ''))
+    if SHORTCODE_RE.match(candidate):
+        return ''
     if len(candidate) <= 160:
         return candidate
     shortened = candidate[:157].rsplit(' ', 1)[0]

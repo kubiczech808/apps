@@ -31,6 +31,10 @@ class TranslationHelpersTest(unittest.TestCase):
         self.assertEqual(expected, jt.choice_values({'1': expected[0]}))
         self.assertEqual([], jt.choice_values('invalid'))
 
+    def test_shortcode_only_meta_is_not_translated(self):
+        self.assertEqual('', jt.source_meta({'meta_description': '[woocommerce_checkout]'}))
+        self.assertEqual('', jt.source_meta({'content': '[woocommerce_checkout]'}))
+
     def test_brand_and_place_names_round_trip_through_markers(self):
         source = 'Tajemství JAMU nabízí Minyak Balur v Ústí nad Orlicí.'
         protected = jt.protect_text(source)
