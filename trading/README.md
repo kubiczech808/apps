@@ -6,6 +6,17 @@ This PoC keeps public market discovery separate from private order execution.
 
 `index.html` and `api.php` only read public Polymarket market data. They never receive a private key and never submit live orders.
 
+## Paper trading workflow
+
+The public UI now has a paper-trading desk with a default 100 USDC portfolio and a hard 5% max allocation per idea.
+
+1. Candidate scan: loads active Polymarket markets, checks CLOB orderbooks, and ranks tradeable candidates by liquidity, 24h volume, spread, time-to-resolution, and resolution clarity.
+2. Analysis: uses the selected outcome, current ask, user-entered AI probability, and the 5% allocation cap to calculate break-even probability, edge, expected value, expected ROI, and max drawdown.
+3. Paper entry: only records a paper position when the decision is `PAPER BUY`. Otherwise it blocks the entry as `WAIT`.
+4. Tracking: stores the local paper ledger in browser `localStorage`; positions can be resolved as win/loss for realized P/L tracking.
+
+This first version is deterministic and does not call a private LLM API from the public site. A real AI analyst step should run server-side or in GitHub Actions so model keys stay out of browser code.
+
 ## Local executor
 
 Install dependencies inside `trading/`:

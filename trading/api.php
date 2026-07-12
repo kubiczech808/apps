@@ -103,6 +103,7 @@ try {
                 'volume24hr' => (float) ($market['volume24hr'] ?? 0),
                 'endDate' => $market['endDate'] ?? null,
                 'negRisk' => (bool) ($market['negRisk'] ?? false),
+                'orderPriceMinTickSize' => $market['orderPriceMinTickSize'] ?? '0.01',
             ];
         }
 

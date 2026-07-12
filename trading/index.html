@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Polymarket Trading PoC</title>
+  <title>Polymarket Paper Trading</title>
   <link rel="stylesheet" href="assets/app.css">
 </head>
 <body>
@@ -13,14 +13,23 @@
         <span class="brand-mark">PM</span>
         <span>
           <strong>Polymarket</strong>
-          <small>trading PoC</small>
+          <small>paper trading</small>
         </span>
       </a>
 
       <section class="status-panel">
-        <span class="label">Execution mode</span>
-        <strong>Dry-run only</strong>
-        <small>Live orders run only from the local executor with explicit confirmation.</small>
+        <span class="label">Mode</span>
+        <strong>Paper only</strong>
+        <small>Zadne live ordery. Kapital je modelovan jako portfolio 100 USDC a jedna sazka smi riskovat max. 5 %.</small>
+      </section>
+
+      <section class="status-panel">
+        <span class="label">Portfolio</span>
+        <strong data-sidebar-equity>$100.00</strong>
+        <small>
+          Open risk <span data-sidebar-risk>$0.00</span><br>
+          Realized P/L <span data-sidebar-pl>$0.00</span>
+        </small>
       </section>
     </aside>
 
@@ -28,40 +37,54 @@
       <header class="topbar">
         <div>
           <p class="eyebrow">osobnizkusenosti.cz/trading</p>
-          <h1>Event-market order desk</h1>
+          <h1>AI paper-trading desk</h1>
         </div>
-        <button class="primary-button" type="button" data-refresh>Refresh markets</button>
+        <button class="primary-button" type="button" data-refresh>Refresh candidates</button>
       </header>
 
       <section class="grid">
-        <article class="panel markets-panel">
+        <article class="panel candidates-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Discovery</p>
-              <h2>Active markets</h2>
+              <p class="eyebrow">Step 1</p>
+              <h2>Kandidati pro sazku</h2>
             </div>
+            <span class="pill" data-candidate-count>0</span>
           </div>
-          <label class="field-label" for="marketSearch">Search</label>
+
+          <label class="field-label" for="marketSearch">Tema</label>
           <div class="search-row">
-            <input id="marketSearch" class="field-control" type="search" placeholder="bitcoin, fed, world cup">
+            <input id="marketSearch" class="field-control" type="search" placeholder="bitcoin, election, fed, inflation">
             <button class="secondary-button" type="button" data-search>Search</button>
           </div>
-          <div class="market-list" data-markets></div>
+
+          <div class="scan-controls">
+            <label>
+              <span class="field-label">Min. volume 24h</span>
+              <input class="field-control" data-min-volume type="number" min="0" step="100" value="500">
+            </label>
+            <label>
+              <span class="field-label">Max spread pts</span>
+              <input class="field-control" data-max-spread type="number" min="0.1" step="0.1" value="8">
+            </label>
+          </div>
+
+          <div class="candidate-list" data-candidates></div>
         </article>
 
-        <article class="panel order-panel">
+        <article class="panel analysis-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Order draft</p>
-              <h2 data-selected-title>Select a market</h2>
+              <p class="eyebrow">Step 2</p>
+              <h2 data-selected-title>Vyber kandidata</h2>
             </div>
-            <span class="pill" data-mode>dry-run</span>
+            <span class="pill" data-selected-score>-</span>
           </div>
 
           <div class="book-grid">
             <div>
-              <span class="label">Best bid</span>
-              <strong data-best-bid>-</strong>
+              <span class="label">Outcome</span>
+              <strong data-outcome-label>-</strong>
             </div>
             <div>
               <span class="label">Best ask</span>
@@ -71,49 +94,83 @@
               <span class="label">Spread</span>
               <strong data-spread>-</strong>
             </div>
+            <div>
+              <span class="label">Liquidity</span>
+              <strong data-liquidity>-</strong>
+            </div>
           </div>
 
           <div class="form-grid">
             <label>
-              <span class="field-label">Outcome</span>
-              <select class="field-control" data-outcome></select>
+              <span class="field-label">AI probability</span>
+              <input class="field-control" data-ai-probability type="number" min="1" max="99" step="0.5" value="55">
             </label>
             <label>
-              <span class="field-label">Side</span>
-              <select class="field-control" data-side>
-                <option value="BUY">BUY</option>
-                <option value="SELL">SELL</option>
-              </select>
+              <span class="field-label">Portfolio USDC</span>
+              <input class="field-control" data-bankroll type="number" min="10" step="10" value="100">
             </label>
             <label>
-              <span class="field-label">Limit price</span>
-              <input class="field-control" data-price type="number" min="0.01" max="0.99" step="0.01" value="0.50">
+              <span class="field-label">Allocation %</span>
+              <input class="field-control" data-allocation type="number" min="0.5" max="5" step="0.5" value="5">
             </label>
             <label>
-              <span class="field-label">Bankroll USDC</span>
-              <input class="field-control" data-bankroll type="number" min="0" step="1" value="100">
-            </label>
-            <label>
-              <span class="field-label">Allocation</span>
-              <input class="field-control" data-allocation type="number" min="1" max="5" step="0.5" value="5">
-            </label>
-            <label>
-              <span class="field-label">Order amount USDC</span>
-              <input class="field-control" data-amount type="number" min="1" step="1" value="5">
+              <span class="field-label">Entry price cap</span>
+              <input class="field-control" data-price-cap type="number" min="0.01" max="0.99" step="0.001" value="0.50">
             </label>
           </div>
 
-          <div class="risk-line">
-            <span>Max order</span>
-            <strong data-max-order>$5.00</strong>
+          <div class="metrics-strip">
+            <div>
+              <span class="label">Stake</span>
+              <strong data-stake>$5.00</strong>
+            </div>
+            <div>
+              <span class="label">EV</span>
+              <strong data-ev>$0.00</strong>
+            </div>
+            <div>
+              <span class="label">Max drawdown</span>
+              <strong data-drawdown>5.0%</strong>
+            </div>
+            <div>
+              <span class="label">Decision</span>
+              <strong data-decision>WAIT</strong>
+            </div>
           </div>
 
-          <label class="field-label" for="orderJson">Executor payload</label>
-          <textarea id="orderJson" class="payload" data-payload readonly></textarea>
+          <div class="memo" data-memo>
+            <div class="empty">Vyber trh vlevo. Potom zadej nasi odhadovanou pravdepodobnost a spust hlubsi analyzu.</div>
+          </div>
 
           <div class="actions">
+            <button class="secondary-button" type="button" data-build-memo>Run analysis</button>
+            <button class="primary-button" type="button" data-paper-enter>Paper enter</button>
+          </div>
+        </article>
+      </section>
+
+      <section class="portfolio-grid">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Step 3</p>
+              <h2>Paper portfolio</h2>
+            </div>
+            <button class="secondary-button" type="button" data-clear-ledger>Clear ledger</button>
+          </div>
+          <div class="ledger" data-ledger></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Executor</p>
+              <h2>Dry-run payload</h2>
+            </div>
+          </div>
+          <textarea class="payload" data-payload readonly></textarea>
+          <div class="actions">
             <button class="secondary-button" type="button" data-copy>Copy payload</button>
-            <button class="primary-button" type="button" data-build>Build draft</button>
           </div>
         </article>
       </section>
