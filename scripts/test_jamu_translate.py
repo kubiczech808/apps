@@ -68,6 +68,13 @@ class TranslationHelpersTest(unittest.TestCase):
         self.assertEqual('JAMU Therapie', jt.restore_text('ZX-TherapieQ18QXZ'))
         self.assertEqual(jt.PROTECTED_TERMS[11] + ' \u00d6l', jt.restore_text('ZXQ11 \u00d6lQXZ'))
 
+    def test_restore_bare_orphan_markers(self):
+        self.assertEqual('JAMU.', jt.restore_text('ZXQ.'))
+        self.assertEqual(
+            jt.PROTECTED_TERMS[16] + ', Na Louži 1310/6',
+            jt.restore_text('ZXQ /QXZ, Na Louži 1310/6'),
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

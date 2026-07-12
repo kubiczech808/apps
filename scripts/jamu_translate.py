@@ -118,6 +118,8 @@ def restore_text(value: str) -> str:
     restored = re.sub(orphan_marker, 'JAMU', restored)
     missing_z_orphan_marker = r'(?<![\w])(?:[A-Za-z]{1,8})?X\s*Q\s*(?:[A-Z]\s*){1,5}Z'
     restored = re.sub(missing_z_orphan_marker, 'JAMU', restored)
+    restored = re.sub(r'(?<![\w])Z\s*X\s*Q\s*/\s*Q\s*X\s*Z(?=,\s*Na\s+Lou)', PROTECTED_TERMS[16], restored)
+    restored = re.sub(r'(?<![\w])Z\s*X\s*[QG](?=\W|$)', 'JAMU', restored)
     restored = re.sub(r'(?<=\w)\s*Q\s*X\s*Z(?=\W|$)', '', restored)
     return restored
 
