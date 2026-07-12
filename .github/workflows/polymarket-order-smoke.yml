@@ -107,10 +107,25 @@ jobs:
             export POLYMARKET_DRY_RUN=true
           fi
 
-          npm run order:poc -- \
+          set +e
+          OUTPUT=$(npm run order:poc -- \
             --token-id "$TOKEN_ID" \
             --side "$SIDE" \
             --price "$PRICE" \
             --size "$SIZE" \
             --tick-size "$TICK_SIZE" \
-            $EXTRA_ARGS
+            $EXTRA_ARGS 2>&1)
+          STATUS=$?
+          set -e
+
+          SAFE_OUTPUT=$(printf '%s\n' "$OUTPUT" \
+            | sed -E 's/0x[0-9a-fA-F]{64}/[redacted-private-key]/g' \
+            | tail -n 12)
+
+          if [ "$STATUS" -ne 0 ]; then
+            SAFE_OUTPUT_ONE_LINE=$(printf '%s' "$SAFE_OUTPUT" | tr '\n' ' ')
+            echo "::error title=Polymarket smoke failed::$SAFE_OUTPUT_ONE_LINE"
+            exit "$STATUS"
+          fi
+
+          printf '%s\n' "$SAFE_OUTPUT"
