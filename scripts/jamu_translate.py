@@ -90,6 +90,24 @@ def protect_text(value: str) -> str:
 def restore_text(value: str) -> str:
     restored = value
     for index, term in enumerate(PROTECTED_TERMS):
+        inserted_before_index = (
+            r'(?<![\w])Z\s*X\s*[-_\s]*(?P<insert>[\wÀ-ž][\wÀ-ž-]{0,60})'
+            r'\s*Q\s*[-_\s]*' + str(index) + r'(?:\s*[A-Z]){0,5}\s*Z'
+        )
+        restored = re.sub(
+            inserted_before_index,
+            lambda match, replacement=term: f'{replacement} {match.group("insert")}',
+            restored,
+        )
+        inserted_after_index = (
+            r'Z\s*X\s*[A-Z]?\s*[-_\s]*' + str(index) +
+            r'\s+(?P<insert>[\wÀ-ž][\wÀ-ž-]{0,60})\s*Q\s*X\s*Z'
+        )
+        restored = re.sub(
+            inserted_after_index,
+            lambda match, replacement=term: f'{replacement} {match.group("insert")}',
+            restored,
+        )
         marker = r'Z\s*X\s*[A-Z]?\s*[-_\s]*' + str(index) + r'(?:\s*[A-Z]){0,4}\s*Z'
         restored = re.sub(marker, term, restored)
         truncated_marker = r'Z\s*X\s*[A-Z]?\s*[-_\s]*' + str(index) + r'(?:\s*[A-Z]){1,5}(?=\W|$)'
@@ -100,6 +118,7 @@ def restore_text(value: str) -> str:
     restored = re.sub(orphan_marker, 'JAMU', restored)
     missing_z_orphan_marker = r'(?<![\w])(?:[A-Za-z]{1,8})?X\s*Q\s*(?:[A-Z]\s*){1,5}Z'
     restored = re.sub(missing_z_orphan_marker, 'JAMU', restored)
+    restored = re.sub(r'(?<=\w)\s*Q\s*X\s*Z(?=\W|$)', '', restored)
     return restored
 
 

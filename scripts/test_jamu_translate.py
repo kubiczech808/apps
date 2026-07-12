@@ -63,6 +63,11 @@ class TranslationHelpersTest(unittest.TestCase):
         self.assertEqual('JAMU', jt.restore_text('ZXQQXZ'))
         self.assertEqual('Tajemství JAMU', jt.restore_text('ZXQ0RXZ'))
 
+    def test_restore_marker_split_by_translated_words(self):
+        self.assertEqual('JAMU Therapie', jt.restore_text('JAMU TherapieQXZ'))
+        self.assertEqual('JAMU Therapie', jt.restore_text('ZX-TherapieQ18QXZ'))
+        self.assertEqual(jt.PROTECTED_TERMS[11] + ' \u00d6l', jt.restore_text('ZXQ11 \u00d6lQXZ'))
+
 
 if __name__ == '__main__':
     unittest.main()
