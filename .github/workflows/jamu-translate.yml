@@ -2,6 +2,15 @@ name: Generate JAMU translation draft
 
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Translation scope to generate
+        required: true
+        type: choice
+        default: titles
+        options:
+          - titles
+          - full
   push:
     branches: ['feat/jamu-multilingual']
     paths:
@@ -36,13 +45,31 @@ jobs:
           cache-dependency-path: scripts/requirements-jamu-translate.txt
       - name: Install open-source translation runtime
         run: pip install -r scripts/requirements-jamu-translate.txt
-      - name: Generate ${{ matrix.language }} title and SEO draft
+      - name: Resolve translation scope
+        shell: bash
+        run: |
+          scope="${{ github.event_name == 'workflow_dispatch' && inputs.scope || '' }}"
+          if [ -z "$scope" ]; then
+            trigger="$(cat .github/jamu-translate-trigger 2>/dev/null || true)"
+            if [[ "$trigger" == full* ]] || [[ "$trigger" == *scope=full* ]]; then
+              scope="full"
+            else
+              scope="titles"
+            fi
+          fi
+          if [[ "$scope" != "titles" && "$scope" != "full" ]]; then
+            echo "::error title=Invalid JAMU translation scope::$scope"
+            exit 1
+          fi
+          echo "TRANSLATION_SCOPE=$scope" >> "$GITHUB_ENV"
+          echo "Using JAMU translation scope: $scope"
+      - name: Generate ${{ matrix.language }} translation draft
         shell: bash
         run: |
           set +e
           python scripts/jamu_translate.py \
             --language '${{ matrix.language }}' \
-            --scope titles \
+            --scope "$TRANSLATION_SCOPE" \
             --output 'translations-${{ matrix.language }}.json' \
             >translation.log 2>&1
           status=$?
@@ -73,10 +100,12 @@ jobs:
       - name: Merge language drafts
         run: python scripts/jamu_merge_translations.py
       - name: Commit translation draft
+        shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add jamu-content/translations-draft.json
           git diff --cached --quiet && exit 0
-          git commit -m 'Generate JAMU translation title draft'
+          scope="$(python -c "import json, pathlib; docs=[json.load(open(p, encoding='utf-8')) for p in pathlib.Path('jamu-content/generated').glob('translations-*.json')]; scopes=sorted({d.get('scope','draft') for d in docs}); print(scopes[0] if scopes else 'draft')")"
+          git commit -m "Generate JAMU translation ${scope} draft"
           git push origin HEAD:feat/jamu-multilingual
