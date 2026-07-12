@@ -63,7 +63,7 @@ async function main() {
     return;
   }
 
-  const [{ ClobClient, Side, OrderType, SignatureTypeV2 }, { createWalletClient, http }, { privateKeyToAccount }] =
+  const [{ ClobClient, Side, OrderType, SignatureTypeV2 }, { createWalletClient, custom }, { privateKeyToAccount }] =
     await Promise.all([
       import("@polymarket/clob-client-v2"),
       import("viem"),
@@ -78,7 +78,14 @@ async function main() {
   };
 
   const account = privateKeyToAccount(privateKey);
-  const signer = createWalletClient({ account, transport: http() });
+  const signer = createWalletClient({
+    account,
+    transport: custom({
+      request: async ({ method }) => {
+        throw new Error(`Unexpected JSON-RPC request while signing Polymarket order: ${method}`);
+      },
+    }),
+  });
   const tempClient = new ClobClient({ host: HOST, chain: CHAIN_ID, signer });
   const creds = await tempClient.createOrDeriveApiKey();
   const client = new ClobClient({
