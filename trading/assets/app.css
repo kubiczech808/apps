@@ -153,6 +153,43 @@ button {
   margin-top: 16px;
 }
 
+.dashboard-tabs {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tab-button {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.tab-button:hover,
+.tab-button.active {
+  border-color: var(--accent);
+  background: #ccfbf1;
+  color: #115e59;
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
 .panel {
   min-width: 0;
   padding: 20px;
@@ -420,7 +457,7 @@ button {
 .ledger table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 760px;
+  min-width: 1040px;
 }
 
 .ledger th,
@@ -463,6 +500,16 @@ button {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.market-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.market-link:hover strong {
+  color: var(--accent-dark);
 }
 
 .positive {

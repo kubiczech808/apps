@@ -149,55 +149,69 @@
         </article>
       </section>
 
-      <section class="portfolio-grid">
-        <article class="panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Autonomous bot</p>
-              <h2>Daily paper picks</h2>
-            </div>
-            <span class="pill" data-bot-action>loading</span>
-          </div>
-          <div class="bot-status" data-bot-status></div>
-          <div class="ledger" data-bot-trades></div>
-        </article>
+      <section class="dashboard-tabs" data-tabs>
+        <div class="tab-list" role="tablist" aria-label="Trading dashboard">
+          <button class="tab-button active" type="button" data-tab-target="daily-picks">Daily picks</button>
+          <button class="tab-button" type="button" data-tab-target="evaluation-log">Evaluation log</button>
+          <button class="tab-button" type="button" data-tab-target="local-portfolio">Local portfolio</button>
+          <button class="tab-button" type="button" data-tab-target="dry-run-payload">Dry-run payload</button>
+        </div>
 
-        <article class="panel full-width">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Autonomous bot</p>
-              <h2>Evaluation log</h2>
+        <section class="tab-panel active" data-tab-panel="daily-picks">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Autonomous bot</p>
+                <h2>Daily paper picks</h2>
+              </div>
+              <span class="pill" data-bot-action>loading</span>
             </div>
-          </div>
-          <div class="ledger" data-bot-evaluations></div>
-        </article>
+            <div class="bot-status" data-bot-status></div>
+            <div class="ledger" data-bot-trades></div>
+          </article>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="evaluation-log">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Autonomous bot</p>
+                <h2>Evaluation log</h2>
+              </div>
+            </div>
+            <div class="ledger" data-bot-evaluations></div>
+          </article>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="local-portfolio">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Manual sandbox</p>
+                <h2>Local paper portfolio</h2>
+              </div>
+              <button class="secondary-button" type="button" data-clear-ledger>Clear ledger</button>
+            </div>
+            <div class="ledger" data-ledger></div>
+          </article>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="dry-run-payload">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Executor</p>
+                <h2>Dry-run payload</h2>
+              </div>
+            </div>
+            <textarea class="payload" data-payload readonly></textarea>
+            <div class="actions">
+              <button class="secondary-button" type="button" data-copy>Copy payload</button>
+            </div>
+          </article>
+        </section>
       </section>
 
-      <section class="portfolio-grid">
-        <article class="panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Manual sandbox</p>
-              <h2>Local paper portfolio</h2>
-            </div>
-            <button class="secondary-button" type="button" data-clear-ledger>Clear ledger</button>
-          </div>
-          <div class="ledger" data-ledger></div>
-        </article>
-
-        <article class="panel">
-          <div class="panel-head">
-            <div>
-              <p class="eyebrow">Executor</p>
-              <h2>Dry-run payload</h2>
-            </div>
-          </div>
-          <textarea class="payload" data-payload readonly></textarea>
-          <div class="actions">
-            <button class="secondary-button" type="button" data-copy>Copy payload</button>
-          </div>
-        </article>
-      </section>
     </section>
   </main>
 

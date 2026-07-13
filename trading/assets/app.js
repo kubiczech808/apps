@@ -42,6 +42,8 @@ const els = {
   botStatus: document.querySelector("[data-bot-status]"),
   botTrades: document.querySelector("[data-bot-trades]"),
   botEvaluations: document.querySelector("[data-bot-evaluations]"),
+  tabButtons: document.querySelectorAll("[data-tab-target]"),
+  tabPanels: document.querySelectorAll("[data-tab-panel]"),
   payload: document.querySelector("[data-payload]"),
   copy: document.querySelector("[data-copy]"),
   sidebarEquity: document.querySelector("[data-sidebar-equity]"),
@@ -88,7 +90,7 @@ function percent(value) {
 
 function sortArrow(key) {
   if (state.evaluationSort.key !== key) return "";
-  return state.evaluationSort.direction === "asc" ? " ↑" : " ↓";
+  return state.evaluationSort.direction === "asc" ? " asc" : " desc";
 }
 
 function parseInput(input, fallback = 0) {
@@ -98,6 +100,43 @@ function parseInput(input, fallback = 0) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function decimalOdds(price) {
+  const value = Number(price);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return 1 / value;
+}
+
+function odds(value) {
+  if (!Number.isFinite(value)) return "-";
+  return `${value.toFixed(2)}x`;
+}
+
+function gainIfWin(item) {
+  const stake = Number(item.stakeUsdc || 5);
+  const shares = Number(item.executableShares || item.shares);
+  const price = Number(item.marketPrice || item.entryPrice);
+  if (Number.isFinite(shares) && Number.isFinite(stake)) return shares - stake;
+  const decimal = decimalOdds(price);
+  if (decimal == null || !Number.isFinite(stake)) return null;
+  return stake * (decimal - 1);
+}
+
+function polymarketUrl(item) {
+  const slug = String(item?.slug || "").trim();
+  if (/^[a-z0-9-]+$/i.test(slug)) return `https://polymarket.com/event/${slug}`;
+  return "https://polymarket.com/";
+}
+
+function marketAnchor(item) {
+  const href = polymarketUrl(item);
+  return `
+    <a class="market-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
+      <strong>${escapeHtml(item.outcome)}</strong>
+      <span>${escapeHtml(item.question)}</span>
+    </a>
+  `;
 }
 
 async function getJson(url) {
@@ -543,8 +582,7 @@ function renderBotState(botState) {
             <tr>
               <td>${escapeHtml(trade.date || trade.openedAt || "-")}</td>
               <td>
-                <strong>${escapeHtml(trade.outcome)}</strong>
-                <span>${escapeHtml(trade.question)}</span>
+                ${marketAnchor(trade)}
               </td>
               <td>
                 ${probability(Number(trade.entryPrice))}
@@ -568,6 +606,8 @@ function evaluationSortValue(item, key) {
   if (key === "status") return String(item.status || "");
   if (key === "market") return `${item.outcome || ""} ${item.question || ""}`.toLowerCase();
   if (key === "marketPrice") return Number(item.marketPrice);
+  if (key === "odds") return decimalOdds(item.marketPrice);
+  if (key === "gainIfWin") return gainIfWin(item);
   if (key === "aiProbability") return Number(item.aiProbability);
   if (key === "annualizedReturn") return Number(item.annualizedReturn);
   if (key === "analysis") return `${(item.rejectReasons || []).join("; ")} ${item.analysisSummary || ""}`.toLowerCase();
@@ -613,6 +653,8 @@ function renderBotEvaluations() {
           ${sortableHeader("status", "Status")}
           ${sortableHeader("market", "Market")}
           ${sortableHeader("marketPrice", "Mkt entry")}
+          ${sortableHeader("odds", "Odds")}
+          ${sortableHeader("gainIfWin", "Gain @ $5")}
           ${sortableHeader("aiProbability", "AI prob.")}
           ${sortableHeader("annualizedReturn", "EV p.a.")}
           ${sortableHeader("analysis", "Analysis")}
@@ -624,13 +666,14 @@ function renderBotEvaluations() {
             <td>${escapeHtml(item.evaluatedAt || "-")}</td>
             <td class="${item.status === "ELIGIBLE" ? "positive" : "negative"}">${escapeHtml(item.status || "-")}</td>
             <td>
-              <strong>${escapeHtml(item.outcome)}</strong>
-              <span>${escapeHtml(item.question)}</span>
+              ${marketAnchor(item)}
             </td>
             <td>
               ${probability(Number(item.marketPrice))}
               <span>${item.bestAsk == null ? "" : `ask ${probability(Number(item.bestAsk))}`}${item.slippage == null ? "" : `, slip ${(Number(item.slippage) * 100).toFixed(1)} pts`}</span>
             </td>
+            <td>${odds(decimalOdds(item.marketPrice))}</td>
+            <td class="${Number(gainIfWin(item)) >= 0 ? "positive" : "negative"}">${money(gainIfWin(item))}</td>
             <td>${probability(Number(item.aiProbability))}</td>
             <td class="${Number(item.annualizedReturn) >= 0 ? "positive" : "negative"}">${percent(Number(item.annualizedReturn))}</td>
             <td>
@@ -675,6 +718,17 @@ els.ledger.addEventListener("click", (event) => {
   if (win) resolvePosition(win.dataset.resolveWin, "WIN");
   if (loss) resolvePosition(loss.dataset.resolveLoss, "LOSS");
 });
+els.tabButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const target = button.dataset.tabTarget;
+    els.tabButtons.forEach((item) => {
+      item.classList.toggle("active", item === button);
+    });
+    els.tabPanels.forEach((panel) => {
+      panel.classList.toggle("active", panel.dataset.tabPanel === target);
+    });
+  });
+});
 els.botEvaluations.addEventListener("click", (event) => {
   const button = event.target.closest("[data-evaluation-sort]");
   if (!button) return;
@@ -683,7 +737,7 @@ els.botEvaluations.addEventListener("click", (event) => {
     state.evaluationSort.direction = state.evaluationSort.direction === "asc" ? "desc" : "asc";
   } else {
     state.evaluationSort.key = key;
-    state.evaluationSort.direction = ["marketPrice", "aiProbability", "annualizedReturn"].includes(key) ? "desc" : "asc";
+    state.evaluationSort.direction = ["marketPrice", "odds", "gainIfWin", "aiProbability", "annualizedReturn"].includes(key) ? "desc" : "asc";
   }
   renderBotEvaluations();
 });
