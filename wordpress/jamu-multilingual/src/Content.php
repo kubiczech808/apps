@@ -10,6 +10,7 @@ defined('ABSPATH') || exit;
 final class Content
 {
     private bool $term_guard = false;
+    private bool $template_part_guard = false;
 
     public function __construct(
         private Repository $repository,
@@ -28,14 +29,18 @@ final class Content
         add_filter('woocommerce_product_get_description', [$this, 'product_description'], 20, 2);
         add_filter('woocommerce_product_get_short_description', [$this, 'product_short_description'], 20, 2);
         add_filter('woocommerce_product_variation_get_name', [$this, 'product_name'], 20, 2);
+        add_filter('woocommerce_product_single_add_to_cart_text', [$this, 'add_to_cart_text'], 20, 2);
+        add_filter('woocommerce_product_add_to_cart_text', [$this, 'add_to_cart_text'], 20, 2);
         add_filter('woocommerce_attribute_label', [$this, 'attribute_label'], 20, 3);
         add_filter('woocommerce_structured_data_product', [$this, 'product_schema'], 20, 2);
 
+        add_filter('gettext', [$this, 'gettext'], 20, 3);
         add_filter('get_term', [$this, 'term'], 20, 2);
         add_filter('wp_get_attachment_image_attributes', [$this, 'image_attributes'], 20, 3);
         add_filter('wp_nav_menu_objects', [$this, 'menu_items'], 20, 2);
         add_filter('get_block_template', [$this, 'block_template'], 20, 3);
         add_filter('get_block_templates', [$this, 'block_templates'], 20, 3);
+        add_filter('render_block', [$this, 'template_part_block'], 20, 2);
         add_filter('render_block_data', [$this, 'block_data'], 20, 3);
         add_filter('wpforms_frontend_form_data', [$this, 'wpforms_data'], 20);
         add_filter('option_blogname', fn ($value) => $this->site_option($value, 'blogname'), 20);
@@ -90,6 +95,22 @@ final class Content
     public function product_short_description(string $description, object $product): string
     {
         return $this->product_field($description, $product, 'excerpt');
+    }
+
+    public function add_to_cart_text(string $text, ?object $product = null): string
+    {
+        if (!$this->active()) {
+            return $text;
+        }
+        return $this->ui_string('Add to cart') ?: $text;
+    }
+
+    public function gettext(string $translation, string $text, string $domain): string
+    {
+        if (!$this->active()) {
+            return $translation;
+        }
+        return $this->ui_string($text) ?: $translation;
     }
 
     public function term($term, string $taxonomy)
@@ -209,6 +230,43 @@ final class Content
         return $templates;
     }
 
+    public function template_part_block(string $block_content, array $block): string
+    {
+        if (
+            !$this->active()
+            || $this->template_part_guard
+            || ($block['blockName'] ?? '') !== 'core/template-part'
+        ) {
+            return $block_content;
+        }
+
+        $attributes = $block['attrs'] ?? [];
+        $slug = sanitize_key((string) ($attributes['slug'] ?? ''));
+        if ($slug === '') {
+            return $block_content;
+        }
+
+        $theme = (string) ($attributes['theme'] ?? '');
+        if ($theme === '') {
+            $theme = wp_get_theme()->get_stylesheet();
+        }
+        $template_id = $theme . '//' . $slug;
+        $translation = $this->repository->get(
+            'template',
+            Identity::stable_id('template:' . $template_id),
+            $this->languages->current()
+        );
+        if (!$translation || $translation->content === '') {
+            return $block_content;
+        }
+
+        $this->template_part_guard = true;
+        $rendered = do_blocks($translation->content);
+        $this->template_part_guard = false;
+
+        return $rendered;
+    }
+
     public function block_data(array $parsed_block, array $source_block, ?object $parent_block): array
     {
         if (!$this->active() || !in_array($parsed_block['blockName'] ?? '', ['core/navigation-link', 'core/navigation-submenu'], true)) {
@@ -290,6 +348,60 @@ final class Content
             : (int) $product->get_id();
         $translation = $this->repository->get('post', $id, $this->languages->current());
         return $translation && $translation->{$field} !== '' ? $translation->{$field} : $value;
+    }
+
+    private function ui_string(string $text): string
+    {
+        $strings = [
+            'en' => [
+                'Add to cart' => 'Add to cart',
+                'Product quantity' => 'Product quantity',
+                'Quantity' => 'Quantity',
+                'View cart' => 'View cart',
+                'Select options' => 'Select options',
+                'Read more' => 'Read more',
+                'Description' => 'Description',
+                'Additional information' => 'Additional information',
+                'Reviews' => 'Reviews',
+                'Related products' => 'Related products',
+                'Sale!' => 'Sale!',
+                'Checkout' => 'Checkout',
+                'Cart' => 'Cart',
+            ],
+            'de' => [
+                'Add to cart' => 'In den Warenkorb',
+                'Product quantity' => 'Produktmenge',
+                'Quantity' => 'Menge',
+                'View cart' => 'Warenkorb ansehen',
+                'Select options' => 'Optionen wählen',
+                'Read more' => 'Weiterlesen',
+                'Description' => 'Beschreibung',
+                'Additional information' => 'Zusätzliche Informationen',
+                'Reviews' => 'Bewertungen',
+                'Related products' => 'Ähnliche Produkte',
+                'Sale!' => 'Angebot!',
+                'Checkout' => 'Kasse',
+                'Cart' => 'Warenkorb',
+            ],
+            'pl' => [
+                'Add to cart' => 'Dodaj do koszyka',
+                'Product quantity' => 'Ilość produktu',
+                'Quantity' => 'Ilość',
+                'View cart' => 'Zobacz koszyk',
+                'Select options' => 'Wybierz opcje',
+                'Read more' => 'Czytaj więcej',
+                'Description' => 'Opis',
+                'Additional information' => 'Dodatkowe informacje',
+                'Reviews' => 'Opinie',
+                'Related products' => 'Podobne produkty',
+                'Sale!' => 'Promocja!',
+                'Checkout' => 'Zamówienie',
+                'Cart' => 'Koszyk',
+            ],
+        ];
+
+        $language = $this->languages->current();
+        return $strings[$language][$text] ?? '';
     }
 
     private function active(): bool
