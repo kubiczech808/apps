@@ -41,6 +41,7 @@ final class Content
         add_filter('get_block_template', [$this, 'block_template'], 20, 3);
         add_filter('get_block_templates', [$this, 'block_templates'], 20, 3);
         add_filter('render_block', [$this, 'template_part_block'], 20, 2);
+        add_filter('render_block', [$this, 'navigation_item_block'], 21, 2);
         add_filter('render_block_data', [$this, 'block_data'], 20, 3);
         add_filter('wpforms_frontend_form_data', [$this, 'wpforms_data'], 20);
         add_filter('option_blogname', fn ($value) => $this->site_option($value, 'blogname'), 20);
@@ -62,7 +63,7 @@ final class Content
             return $content;
         }
         $translation = $this->repository->get('post', get_the_ID(), $this->languages->current());
-        return $translation && $translation->content !== '' ? $translation->content : $content;
+        return $translation && $translation->content !== '' ? $this->localized_markup($translation->content) : $content;
     }
 
     public function excerpt(string $excerpt, ?WP_Post $post = null): string
@@ -210,7 +211,7 @@ final class Content
             return $template;
         }
         $localized = clone $template;
-        $localized->content = $translation->content;
+        $localized->content = $this->localized_markup($translation->content);
         if ($translation->title !== '' && isset($localized->title)) {
             $localized->title = $translation->title;
         }
@@ -261,7 +262,7 @@ final class Content
         }
 
         $this->template_part_guard = true;
-        $rendered = do_blocks($translation->content);
+        $rendered = do_blocks($this->localized_markup($translation->content));
         $this->template_part_guard = false;
 
         if (preg_match('/^(\s*<(header|footer|div)\b[^>]*>)(.*)(<\/\2>\s*)$/is', $block_content, $matches)) {
@@ -271,42 +272,50 @@ final class Content
         return $rendered;
     }
 
+    public function navigation_item_block(string $block_content, array $block): string
+    {
+        if (!$this->active() || !in_array($block['blockName'] ?? '', ['core/navigation-link', 'core/navigation-submenu'], true)) {
+            return $block_content;
+        }
+
+        $attributes = $this->localized_navigation_attributes($block['attrs'] ?? []);
+        $label = (string) ($attributes['label'] ?? '');
+        $url = (string) ($attributes['url'] ?? '');
+
+        if ($url !== '') {
+            $block_content = preg_replace_callback(
+                '/\bhref=(["\'])(.*?)\1/i',
+                static fn (array $match): string => 'href=' . $match[1] . esc_url($url) . $match[1],
+                $block_content,
+                1
+            ) ?? $block_content;
+        }
+
+        if ($label !== '') {
+            $block_content = preg_replace_callback(
+                '/(<span\b[^>]*class=(["\'])(?=[^"\']*wp-block-navigation-item__label)[^"\']*\2[^>]*>)(.*?)(<\/span>)/is',
+                static fn (array $match): string => $match[1] . esc_html($label) . $match[4],
+                $block_content,
+                1
+            ) ?? $block_content;
+
+            $block_content = preg_replace_callback(
+                '/\baria-label=(["\'])(.*?)\1/i',
+                static fn (array $match): string => 'aria-label=' . $match[1] . esc_attr($label . ' submenu') . $match[1],
+                $block_content,
+                1
+            ) ?? $block_content;
+        }
+
+        return $block_content;
+    }
+
     public function block_data(array $parsed_block, array $source_block, ?object $parent_block): array
     {
         if (!$this->active() || !in_array($parsed_block['blockName'] ?? '', ['core/navigation-link', 'core/navigation-submenu'], true)) {
             return $parsed_block;
         }
-        $attributes = $parsed_block['attrs'] ?? [];
-        $object_id = absint($attributes['id'] ?? 0);
-        $kind = (string) ($attributes['kind'] ?? '');
-        $type = (string) ($attributes['type'] ?? '');
-        $language = $this->languages->current();
-
-        if ($object_id && $kind === 'post-type') {
-            $translation = $this->repository->get('post', $object_id, $language);
-            if ($translation) {
-                $attributes['label'] = $translation->title ?: ($attributes['label'] ?? '');
-                $attributes['url'] = $this->router->localized_post_url($object_id, $language) ?: ($attributes['url'] ?? '');
-            }
-        } elseif ($object_id && $kind === 'taxonomy') {
-            $translation = $this->repository->get('term', $object_id, $language);
-            if ($translation) {
-                $attributes['label'] = $translation->title ?: ($attributes['label'] ?? '');
-                if (in_array($type, ['product_cat', 'product_tag'], true)) {
-                    $attributes['url'] = $this->router->localized_term_url($object_id, $type, $language) ?: ($attributes['url'] ?? '');
-                }
-            }
-        } else {
-            $key = 'navigation:' . ($attributes['label'] ?? '') . '|' . ($attributes['url'] ?? '');
-            $translation = $this->repository->get('string', Identity::stable_id($key), $language);
-            if ($translation) {
-                $attributes['label'] = $translation->title ?: ($attributes['label'] ?? '');
-                if (!empty($translation->data_decoded['url'])) {
-                    $attributes['url'] = $translation->data_decoded['url'];
-                }
-            }
-        }
-        $parsed_block['attrs'] = $attributes;
+        $parsed_block['attrs'] = $this->localized_navigation_attributes($parsed_block['attrs'] ?? []);
         return $parsed_block;
     }
 
@@ -351,7 +360,52 @@ final class Content
             ? (int) $product->get_parent_id()
             : (int) $product->get_id();
         $translation = $this->repository->get('post', $id, $this->languages->current());
-        return $translation && $translation->{$field} !== '' ? $translation->{$field} : $value;
+        return $translation && $translation->{$field} !== '' ? $this->localized_markup((string) $translation->{$field}) : $value;
+    }
+
+    private function localized_navigation_attributes(array $attributes): array
+    {
+        $object_id = absint($attributes['id'] ?? 0);
+        $kind = (string) ($attributes['kind'] ?? '');
+        $type = (string) ($attributes['type'] ?? '');
+        $language = $this->languages->current();
+
+        if ($object_id && $kind === 'post-type') {
+            $translation = $this->repository->get('post', $object_id, $language);
+            if ($translation) {
+                $attributes['label'] = $translation->title ?: ($attributes['label'] ?? '');
+                $attributes['url'] = $this->router->localized_post_url($object_id, $language) ?: ($attributes['url'] ?? '');
+            }
+        } elseif ($object_id && $kind === 'taxonomy') {
+            $translation = $this->repository->get('term', $object_id, $language);
+            if ($translation) {
+                $attributes['label'] = $translation->title ?: ($attributes['label'] ?? '');
+                if (in_array($type, ['product_cat', 'product_tag'], true)) {
+                    $attributes['url'] = $this->router->localized_term_url($object_id, $type, $language) ?: ($attributes['url'] ?? '');
+                }
+            }
+        } else {
+            $key = 'navigation:' . ($attributes['label'] ?? '') . '|' . ($attributes['url'] ?? '');
+            $translation = $this->repository->get('string', Identity::stable_id($key), $language);
+            if ($translation) {
+                $attributes['label'] = $translation->title ?: ($attributes['label'] ?? '');
+                if (!empty($translation->data_decoded['url'])) {
+                    $attributes['url'] = $translation->data_decoded['url'];
+                }
+            }
+        }
+
+        return $attributes;
+    }
+
+    private function localized_markup(string $value): string
+    {
+        $site = preg_quote(home_url('/'), '#');
+        return preg_replace(
+            '#(' . $site . ')(?:en|de|pl)/(?:[^"\']+/)*wp-content/uploads/#i',
+            '$1wp-content/uploads/',
+            $value
+        ) ?? $value;
     }
 
     private function ui_string(string $text): string
