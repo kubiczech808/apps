@@ -80,7 +80,12 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _scheduled_engagement_slot(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        from agent_m.medium_engagement import format_opportunity_message, prepare_next_opportunity
+        from agent_m.medium_engagement import (
+            approve_opportunity,
+            format_opportunity_message,
+            is_auto_post_enabled,
+            prepare_next_opportunity,
+        )
 
         result = await prepare_next_opportunity()
         if result.get("status") != "prepared":
@@ -92,6 +97,33 @@ async def _scheduled_engagement_slot(context: ContextTypes.DEFAULT_TYPE) -> None
             return
 
         op = result["opportunity"]
+        if is_auto_post_enabled():
+            log.info("Medium engagement auto-posting opportunity %s", op.get("id"))
+            post_result = await approve_opportunity(op["id"])
+            if post_result.get("status") == "posted":
+                await context.bot.send_message(
+                    chat_id=config.telegram_admin_chat_id,
+                    text=(
+                        "Medium engagement auto-posted\n"
+                        f"Time: {post_result.get('posted_at_local')}\n"
+                        f"Profile: {post_result.get('profile')}\n"
+                        f"Article: {post_result.get('article_url')}\n"
+                        f"Clapped: {'yes' if post_result.get('clapped') else 'not confirmed'}"
+                    ),
+                )
+                return
+
+            await context.bot.send_message(
+                chat_id=config.telegram_admin_chat_id,
+                text=(
+                    "Medium engagement auto-post not completed\n"
+                    f"Status: {post_result.get('status')}\n"
+                    f"Article: {op.get('url')}\n"
+                    f"Detail: {post_result.get('profile') or post_result.get('url') or post_result.get('current_status') or ''}"
+                ),
+            )
+            return
+
         await context.bot.send_message(
             chat_id=config.telegram_admin_chat_id,
             text=format_opportunity_message(result),
@@ -166,6 +198,7 @@ _BOT_COMMANDS = [
     BotCommand("topics", "Stav obsahového plánu"),
     BotCommand("engage", "Najít články a navrhnout komentáře"),
     BotCommand("engage_auto", "Nastavit denni pocet engagement navrhu"),
+    BotCommand("engage_autopost", "Zapnout auto engagement bez schvalovani"),
     BotCommand("status", "Využití tokenů a rozvrh"),
     BotCommand("help", "Nápověda"),
 ]
@@ -222,6 +255,7 @@ def build_app():
     app.add_handler(CommandHandler("topic", handlers.topic_suggestion_cmd))
     app.add_handler(CommandHandler("engage", handlers.engage_cmd))
     app.add_handler(CommandHandler("engage_auto", handlers.engage_auto_cmd))
+    app.add_handler(CommandHandler("engage_autopost", handlers.engage_autopost_cmd))
     app.add_handler(CommandHandler("status", handlers.status_cmd))
     app.add_handler(CommandHandler("feedback", handlers.feedback_cmd))
     app.add_handler(CommandHandler("feedback_clear", handlers.feedback_clear_cmd))

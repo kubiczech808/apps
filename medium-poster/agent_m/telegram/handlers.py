@@ -75,6 +75,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/topics — content plan status\n"
         "/engage [query] — find related Medium articles and draft comments\n"
         "/engage_auto <0-10> — set daily scheduled Medium engagement proposals\n"
+        "/engage_autopost on|off|status — post scheduled engagement without approval\n"
         "/status — token usage & schedule\n"
         "/help — this message\n\n"
         "Slug is optional — without it, the next planned topic is used."
@@ -656,6 +657,43 @@ async def engage_auto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"Daily proposals: {result['daily_proposals']}\n"
         f"Hard daily posting cap: {result['max_daily_posts']}\n"
         f"Today's slots rescheduled: {'yes' if rescheduled else 'not confirmed'}"
+    )
+
+
+@admin_only
+async def engage_autopost_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    from agent_m.medium_engagement import (
+        get_daily_proposal_count,
+        is_auto_post_enabled,
+        set_auto_post_enabled,
+    )
+
+    action = (context.args[0].lower() if context.args else "status").strip()
+    if action in {"on", "enable", "enabled", "zapnout"}:
+        result = set_auto_post_enabled(True)
+    elif action in {"off", "disable", "disabled", "vypnout"}:
+        result = set_auto_post_enabled(False)
+    elif action in {"status", "stav"}:
+        result = {
+            "auto_post_enabled": is_auto_post_enabled(),
+            "daily_proposals": get_daily_proposal_count(),
+            "max_daily_posts": 10,
+        }
+    else:
+        await msg.reply_text("Usage: /engage_autopost on|off|status")
+        return
+
+    enabled = bool(result["auto_post_enabled"])
+    await msg.reply_text(
+        "Medium engagement autopost\n"
+        f"Status: {'ON - comments will be posted without approval' if enabled else 'OFF - proposals require approval'}\n"
+        f"Scheduled slots per day: {result['daily_proposals']}\n"
+        f"Hard daily posting cap: {result['max_daily_posts']}\n"
+        "Use /engage_auto <0-10> to change how many scheduled slots run each day."
     )
 
 

@@ -301,6 +301,26 @@ def get_daily_proposal_count() -> int:
     return _clamp_daily_proposals(settings.get("daily_proposals", _DEFAULT_DAILY_PROPOSALS))
 
 
+def is_auto_post_enabled() -> bool:
+    state = _read_state(_STATE_FILE)
+    settings = state.setdefault("settings", {})
+    return bool(settings.get("auto_post_enabled", False))
+
+
+def set_auto_post_enabled(enabled: bool) -> dict:
+    state = _read_state(_STATE_FILE)
+    settings = state.setdefault("settings", {})
+    settings["auto_post_enabled"] = bool(enabled)
+    settings["auto_post_updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write_state(_STATE_FILE, state)
+    return {
+        "status": "ok",
+        "auto_post_enabled": bool(enabled),
+        "daily_proposals": _clamp_daily_proposals(settings.get("daily_proposals", _DEFAULT_DAILY_PROPOSALS)),
+        "max_daily_posts": _DAILY_LIMIT,
+    }
+
+
 def set_daily_proposal_count(count: int) -> dict:
     count = _clamp_daily_proposals(count)
     state = _read_state(_STATE_FILE)
