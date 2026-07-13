@@ -157,10 +157,14 @@ final class Router
         if (!$translation && $require_translation) {
             return '';
         }
+        $config = $this->languages->get($language);
+        if ($post->post_type === 'page' && (int) get_option('page_on_front') === (int) $post->ID) {
+            return home_url(user_trailingslashit($config['prefix']));
+        }
+
         $route = $translation && $translation->route_path
             ? trim($translation->route_path, '/')
             : $this->original_content_path($post);
-        $config = $this->languages->get($language);
 
         if ($post->post_type === 'product') {
             $route = $config['product_base'] . '/' . basename($route);
@@ -257,4 +261,3 @@ final class Router
             && (!is_admin() || wp_doing_ajax());
     }
 }
-
