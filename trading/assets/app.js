@@ -134,13 +134,25 @@ function odds(value) {
 }
 
 function gainIfWin(item) {
+  const netGain = Number(item.netGainIfWinUsdc);
+  if (Number.isFinite(netGain)) return netGain;
   const stake = Number(item.stakeUsdc || 5);
+  const fee = Number(item.takerFeeUsdc || 0);
   const shares = Number(item.executableShares || item.shares);
   const price = Number(item.marketPrice || item.entryPrice);
-  if (Number.isFinite(shares) && Number.isFinite(stake)) return shares - stake;
+  if (Number.isFinite(shares) && Number.isFinite(stake)) return shares - stake - (Number.isFinite(fee) ? fee : 0);
   const decimal = decimalOdds(price);
   if (decimal == null || !Number.isFinite(stake)) return null;
-  return stake * (decimal - 1);
+  return stake * (decimal - 1) - (Number.isFinite(fee) ? fee : 0);
+}
+
+function feeLine(item) {
+  const fee = Number(item.takerFeeUsdc);
+  if (!Number.isFinite(fee) || fee <= 0) return "";
+  const rate = Number(item.feeRate);
+  const type = item.feeType ? ` ${item.feeType}` : "";
+  const rateText = Number.isFinite(rate) && rate > 0 ? `, ${(rate * 100).toFixed(1)}%${type}` : type;
+  return `fee ${money(fee, 5)}${rateText}`;
 }
 
 function polymarketUrl(item) {
@@ -618,7 +630,7 @@ function renderBotState(botState) {
               </td>
               <td>
                 ${probability(Number(trade.entryPrice))}
-                <span>${trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`}</span>
+                <span>${[trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`, feeLine(trade)].filter(Boolean).join(", ")}</span>
               </td>
               <td>${probability(Number(trade.aiProbability))}</td>
               <td class="${Number(trade.annualizedReturn) >= 0 ? "positive" : "negative"}">${percent(Number(trade.annualizedReturn))}</td>
@@ -717,10 +729,17 @@ function renderBotEvaluations() {
             </td>
             <td>
               ${probability(Number(item.marketPrice))}
-              <span>${item.bestAsk == null ? "" : `ask ${probability(Number(item.bestAsk))}`}${item.slippage == null ? "" : `, slip ${(Number(item.slippage) * 100).toFixed(1)} pts`}</span>
+              <span>${[
+                item.bestAsk == null ? "" : `ask ${probability(Number(item.bestAsk))}`,
+                item.slippage == null ? "" : `slip ${(Number(item.slippage) * 100).toFixed(1)} pts`,
+                feeLine(item),
+              ].filter(Boolean).join(", ")}</span>
             </td>
             <td>${odds(decimalOdds(item.marketPrice))}</td>
-            <td class="${Number(gainIfWin(item)) >= 0 ? "positive" : "negative"}">${money(gainIfWin(item))}</td>
+            <td class="${Number(gainIfWin(item)) >= 0 ? "positive" : "negative"}">
+              ${money(gainIfWin(item))}
+              <span>net after fee</span>
+            </td>
             <td>${probability(Number(item.aiProbability))}</td>
             <td class="${Number(item.annualizedReturn) >= 0 ? "positive" : "negative"}">${percent(Number(item.annualizedReturn))}</td>
             <td>

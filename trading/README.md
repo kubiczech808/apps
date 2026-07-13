@@ -26,9 +26,10 @@ The bot:
 - evaluates public Polymarket markets and CLOB orderbooks in the background,
 - records every evaluated candidate with price, spread, liquidity, estimated probability, expected value, annualized expected return, rejection reasons, and an analysis summary,
 - simulates market BUY execution through available ask levels for the full 5 USDC stake; expected value uses the average executable price including slippage, not the midpoint,
+- subtracts Polymarket taker fees when the market has `feesEnabled` and a `feeSchedule.rate`; the simulated fee is calculated per fill as `shares * feeRate * price * (1 - price)` and rounded to 5 decimals,
 - requires estimated probability of at least 95%,
 - rejects candidates with annualized expected return below 5%,
-- risks at most 5 USDC per idea from a 100 USDC paper portfolio,
+- places a 5 USDC simulated stake per idea from a 100 USDC paper portfolio; max paper loss includes any taker fee,
 - opens at most one paper trade per Prague calendar day,
 - skips new entries when available paper capital is exhausted or the same token already has an open paper position.
 

@@ -176,6 +176,29 @@ function simulateMarketBuy(asks, stakeUsdc) {
   };
 }
 
+function feeConfig(market) {
+  const schedule = market.feeSchedule && typeof market.feeSchedule === "object" ? market.feeSchedule : {};
+  const rate = Number(schedule.rate ?? 0);
+  const enabled = Boolean(market.feesEnabled) && Number.isFinite(rate) && rate > 0;
+  return {
+    feesEnabled: enabled,
+    feeRate: enabled ? rate : 0,
+    feeType: market.feeType || (enabled ? "unknown" : "fee_free"),
+    takerOnly: schedule.takerOnly !== false,
+  };
+}
+
+function takerFeeForFills(fills, feeRate) {
+  if (!Number.isFinite(feeRate) || feeRate <= 0) return 0;
+  const fee = fills.reduce((sum, fill) => {
+    const size = Number(fill.size);
+    const price = Number(fill.price);
+    if (!Number.isFinite(size) || !Number.isFinite(price)) return sum;
+    return sum + size * feeRate * price * (1 - price);
+  }, 0);
+  return Number(fee.toFixed(5));
+}
+
 function estimateProbability({ market, outcome, ask, bid, spread, liquidity, volume24hr, tags, days }) {
   const marketConsensus = Number.isFinite(bid) && Number.isFinite(ask) ? (bid + ask) / 2 : ask;
   let probability = marketConsensus;
@@ -226,6 +249,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
   const days = daysToEnd(market.endDate);
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
   const execution = simulateMarketBuy(asks, stake);
+  const fees = feeConfig(market);
 
   if (!Number.isFinite(bestAsk) || bestAsk <= 0 || bestAsk >= 1) return null;
   if (!Number.isFinite(execution.avgPrice) || execution.avgPrice <= 0 || execution.avgPrice >= 1) return null;
@@ -242,12 +266,16 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     days,
   });
   const executionPrice = execution.avgPrice;
-  const expectedRoi = probability / executionPrice - 1;
+  const takerFee = takerFeeForFills(execution.fills, fees.feeRate);
+  const totalCost = stake + takerFee;
+  const grossGainIfWin = execution.shares - stake;
+  const netGainIfWin = execution.shares - stake - takerFee;
+  const expectedValue = probability * execution.shares - stake - takerFee;
+  const expectedRoi = totalCost > 0 ? expectedValue / totalCost : 0;
   const annualizedReturn = days ? expectedRoi * (365 / days) : expectedRoi;
-  const grossRoiIfWin = 1 / executionPrice - 1;
+  const grossRoiIfWin = totalCost > 0 ? netGainIfWin / totalCost : 0;
   const grossAnnualizedIfWin = days ? grossRoiIfWin * (365 / days) : grossRoiIfWin;
   const edge = probability - executionPrice;
-  const expectedValue = stake * expectedRoi;
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   const probabilityOk = probability >= MIN_PROBABILITY;
@@ -286,6 +314,13 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     filledStakeUsdc: execution.filledUsdc,
     executableShares: execution.shares,
     marketFills: execution.fills,
+    feesEnabled: fees.feesEnabled,
+    feeType: fees.feeType,
+    feeRate: fees.feeRate,
+    takerFeeUsdc: takerFee,
+    totalCostUsdc: Number(totalCost.toFixed(5)),
+    grossGainIfWinUsdc: Number(grossGainIfWin.toFixed(4)),
+    netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
     daysToResolution: days == null ? null : Number(days.toFixed(2)),
     aiProbability: Number(probability.toFixed(4)),
     edge: Number(edge.toFixed(4)),
@@ -294,11 +329,12 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     grossAnnualizedIfWin: Number(grossAnnualizedIfWin.toFixed(4)),
     stakeUsdc: Number(stake.toFixed(2)),
     expectedValueUsdc: Number(expectedValue.toFixed(4)),
-    maxLossUsdc: Number(stake.toFixed(2)),
+    maxLossUsdc: Number(totalCost.toFixed(5)),
     analysisSummary: [
       `Estimated probability ${(probability * 100).toFixed(1)}% vs simulated market-buy entry ${(executionPrice * 100).toFixed(1)}%.`,
       `Best ask ${(bestAsk * 100).toFixed(1)}%, slippage ${execution.slippage == null ? "n/a" : (execution.slippage * 100).toFixed(1) + " pts"} for ${stake.toFixed(2)} USDC.`,
-      `Expected annualized return ${(annualizedReturn * 100).toFixed(1)}% with max paper loss ${stake.toFixed(2)} USDC.`,
+      `Polymarket taker fee ${takerFee.toFixed(5)} USDC (${fees.feesEnabled ? `${(fees.feeRate * 100).toFixed(1)}% ${fees.feeType}` : "fee-free market"}).`,
+      `Net gain if win ${netGainIfWin.toFixed(4)} USDC; expected annualized return ${(annualizedReturn * 100).toFixed(1)}% with max paper loss ${totalCost.toFixed(5)} USDC.`,
       notes.length ? notes.join(" ") : "No strong qualitative adjustment found.",
     ].join(" "),
     evidence: [
@@ -309,6 +345,10 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
       `avgExecutionPrice=${executionPrice}`,
       `filledStakeUsdc=${execution.filledUsdc}`,
       `executableDepthUsdc=${execution.depthUsdc}`,
+      `feesEnabled=${fees.feesEnabled}`,
+      `feeRate=${fees.feeRate}`,
+      `takerFeeUsdc=${takerFee}`,
+      `netGainIfWinUsdc=${netGainIfWin}`,
       `bestBid=${bestBid ?? "n/a"}`,
       `spread=${spread ?? "n/a"}`,
       `volume24hr=${volume24hr}`,
@@ -364,7 +404,14 @@ function maybeOpenDailyTrade(state, eligible) {
     expectedValueUsdc: best.expectedValueUsdc,
     stakeUsdc: Number(stake.toFixed(2)),
     shares: best.executableShares,
-    maxLossUsdc: Number(stake.toFixed(2)),
+    feesEnabled: best.feesEnabled,
+    feeType: best.feeType,
+    feeRate: best.feeRate,
+    takerFeeUsdc: best.takerFeeUsdc,
+    totalCostUsdc: best.totalCostUsdc,
+    grossGainIfWinUsdc: best.grossGainIfWinUsdc,
+    netGainIfWinUsdc: best.netGainIfWinUsdc,
+    maxLossUsdc: best.maxLossUsdc,
     marketFills: best.marketFills,
     analysisSummary: best.analysisSummary,
   };
