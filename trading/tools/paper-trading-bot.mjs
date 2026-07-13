@@ -126,6 +126,53 @@ function bestBook(book) {
     bestAsk,
     spread: bestBid != null && bestAsk != null ? Math.max(0, bestAsk - bestBid) : null,
     askDepth: asks.slice(0, 5).reduce((sum, level) => sum + Number(level.size || 0), 0),
+    asks,
+  };
+}
+
+function simulateMarketBuy(asks, stakeUsdc) {
+  const levels = asks
+    .map((level) => ({
+      price: Number(level.price),
+      size: Number(level.size),
+    }))
+    .filter((level) => Number.isFinite(level.price) && Number.isFinite(level.size) && level.price > 0 && level.size > 0)
+    .sort((a, b) => a.price - b.price);
+
+  let remaining = stakeUsdc;
+  let cost = 0;
+  let shares = 0;
+  const fills = [];
+
+  for (const level of levels) {
+    if (remaining <= 0) break;
+    const levelCost = level.price * level.size;
+    const costAtLevel = Math.min(remaining, levelCost);
+    const sizeAtLevel = costAtLevel / level.price;
+    cost += costAtLevel;
+    shares += sizeAtLevel;
+    remaining -= costAtLevel;
+    fills.push({
+      price: Number(level.price.toFixed(4)),
+      size: Number(sizeAtLevel.toFixed(4)),
+      costUsdc: Number(costAtLevel.toFixed(4)),
+    });
+  }
+
+  const avgPrice = shares > 0 ? cost / shares : null;
+  const bestAsk = levels[0]?.price ?? null;
+  const depthUsdc = levels.reduce((sum, level) => sum + level.price * level.size, 0);
+
+  return {
+    requestedUsdc: Number(stakeUsdc.toFixed(2)),
+    filledUsdc: Number(cost.toFixed(4)),
+    fillable: cost >= stakeUsdc * 0.999,
+    shares: Number(shares.toFixed(4)),
+    avgPrice: avgPrice == null ? null : Number(avgPrice.toFixed(4)),
+    bestAsk: bestAsk == null ? null : Number(bestAsk.toFixed(4)),
+    slippage: avgPrice != null && bestAsk != null ? Number((avgPrice - bestAsk).toFixed(4)) : null,
+    depthUsdc: Number(depthUsdc.toFixed(4)),
+    fills: fills.slice(0, 8),
   };
 }
 
@@ -172,13 +219,16 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
   const question = String(market.question || "");
   const outcomes = parseJsonField(market.outcomes);
   const outcome = String(outcomes[outcomeIndex] || `Outcome ${outcomeIndex + 1}`);
-  const { bestBid, bestAsk, spread, askDepth } = bestBook(book);
+  const { bestBid, bestAsk, spread, askDepth, asks } = bestBook(book);
   const volume24hr = Number(market.volume24hr || 0);
   const liquidity = Number(market.liquidity || 0);
   const tags = tagQuestion(question);
   const days = daysToEnd(market.endDate);
+  const stake = PORTFOLIO_USDC * MAX_FRACTION;
+  const execution = simulateMarketBuy(asks, stake);
 
   if (!Number.isFinite(bestAsk) || bestAsk <= 0 || bestAsk >= 1) return null;
+  if (!Number.isFinite(execution.avgPrice) || execution.avgPrice <= 0 || execution.avgPrice >= 1) return null;
 
   const { probability, notes } = estimateProbability({
     market,
@@ -191,23 +241,25 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     tags,
     days,
   });
-  const expectedRoi = probability / bestAsk - 1;
+  const executionPrice = execution.avgPrice;
+  const expectedRoi = probability / executionPrice - 1;
   const annualizedReturn = days ? expectedRoi * (365 / days) : expectedRoi;
-  const grossRoiIfWin = 1 / bestAsk - 1;
+  const grossRoiIfWin = 1 / executionPrice - 1;
   const grossAnnualizedIfWin = days ? grossRoiIfWin * (365 / days) : grossRoiIfWin;
-  const edge = probability - bestAsk;
-  const stake = PORTFOLIO_USDC * MAX_FRACTION;
+  const edge = probability - executionPrice;
   const expectedValue = stake * expectedRoi;
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   const probabilityOk = probability >= MIN_PROBABILITY;
   const returnOk = annualizedReturn >= MIN_ANNUAL_RETURN;
-  const status = probabilityOk && returnOk && spreadOk && volumeOk ? "ELIGIBLE" : "REJECTED";
+  const depthOk = execution.fillable;
+  const status = probabilityOk && returnOk && spreadOk && volumeOk && depthOk ? "ELIGIBLE" : "REJECTED";
   const rejectReasons = [
     probabilityOk ? null : `probability ${(probability * 100).toFixed(1)}% below ${(MIN_PROBABILITY * 100).toFixed(0)}%`,
     returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`,
     spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
     volumeOk ? null : "liquidity/volume too low",
+    depthOk ? null : `insufficient ask depth for ${stake.toFixed(2)} USDC market buy`,
   ].filter(Boolean);
 
   return {
@@ -221,12 +273,19 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     tokenId,
     endDate: market.endDate || null,
     tags,
-    marketPrice: Number(bestAsk.toFixed(4)),
+    executionMode: "MARKET_BUY",
+    marketPrice: Number(executionPrice.toFixed(4)),
+    bestAsk: Number(bestAsk.toFixed(4)),
     bestBid: bestBid == null ? null : Number(bestBid.toFixed(4)),
     spread: spread == null ? null : Number(spread.toFixed(4)),
+    slippage: execution.slippage,
     liquidity: Number(liquidity.toFixed(2)),
     volume24hr: Number(volume24hr.toFixed(2)),
     askDepth: Number(askDepth.toFixed(2)),
+    executableDepthUsdc: execution.depthUsdc,
+    filledStakeUsdc: execution.filledUsdc,
+    executableShares: execution.shares,
+    marketFills: execution.fills,
     daysToResolution: days == null ? null : Number(days.toFixed(2)),
     aiProbability: Number(probability.toFixed(4)),
     edge: Number(edge.toFixed(4)),
@@ -237,14 +296,19 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     expectedValueUsdc: Number(expectedValue.toFixed(4)),
     maxLossUsdc: Number(stake.toFixed(2)),
     analysisSummary: [
-      `Estimated probability ${(probability * 100).toFixed(1)}% vs market ask ${(bestAsk * 100).toFixed(1)}%.`,
+      `Estimated probability ${(probability * 100).toFixed(1)}% vs simulated market-buy entry ${(executionPrice * 100).toFixed(1)}%.`,
+      `Best ask ${(bestAsk * 100).toFixed(1)}%, slippage ${execution.slippage == null ? "n/a" : (execution.slippage * 100).toFixed(1) + " pts"} for ${stake.toFixed(2)} USDC.`,
       `Expected annualized return ${(annualizedReturn * 100).toFixed(1)}% with max paper loss ${stake.toFixed(2)} USDC.`,
       notes.length ? notes.join(" ") : "No strong qualitative adjustment found.",
     ].join(" "),
     evidence: [
       `question=${question}`,
       `outcome=${outcome}`,
+      `executionMode=MARKET_BUY`,
       `bestAsk=${bestAsk}`,
+      `avgExecutionPrice=${executionPrice}`,
+      `filledStakeUsdc=${execution.filledUsdc}`,
+      `executableDepthUsdc=${execution.depthUsdc}`,
       `bestBid=${bestBid ?? "n/a"}`,
       `spread=${spread ?? "n/a"}`,
       `volume24hr=${volume24hr}`,
@@ -281,7 +345,6 @@ function maybeOpenDailyTrade(state, eligible) {
     return { action: "SKIP", reason: "no eligible non-duplicate candidate", available };
   }
 
-  const shares = stake / best.marketPrice;
   const trade = {
     id: `paper-${today}-${best.tokenId}`,
     openedAt: nowIso(),
@@ -292,13 +355,17 @@ function maybeOpenDailyTrade(state, eligible) {
     slug: best.slug,
     outcome: best.outcome,
     tokenId: best.tokenId,
+    executionMode: best.executionMode,
     entryPrice: best.marketPrice,
+    bestAsk: best.bestAsk,
+    slippage: best.slippage,
     aiProbability: best.aiProbability,
     annualizedReturn: best.annualizedReturn,
     expectedValueUsdc: best.expectedValueUsdc,
     stakeUsdc: Number(stake.toFixed(2)),
-    shares: Number(shares.toFixed(4)),
+    shares: best.executableShares,
     maxLossUsdc: Number(stake.toFixed(2)),
+    marketFills: best.marketFills,
     analysisSummary: best.analysisSummary,
   };
 

@@ -546,7 +546,10 @@ function renderBotState(botState) {
                 <strong>${escapeHtml(trade.outcome)}</strong>
                 <span>${escapeHtml(trade.question)}</span>
               </td>
-              <td>${probability(Number(trade.entryPrice))}</td>
+              <td>
+                ${probability(Number(trade.entryPrice))}
+                <span>${trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`}</span>
+              </td>
               <td>${probability(Number(trade.aiProbability))}</td>
               <td class="${Number(trade.annualizedReturn) >= 0 ? "positive" : "negative"}">${percent(Number(trade.annualizedReturn))}</td>
               <td>${money(Number(trade.stakeUsdc || 0))}</td>
@@ -609,7 +612,7 @@ function renderBotEvaluations() {
           ${sortableHeader("evaluatedAt", "Time")}
           ${sortableHeader("status", "Status")}
           ${sortableHeader("market", "Market")}
-          ${sortableHeader("marketPrice", "Price")}
+          ${sortableHeader("marketPrice", "Mkt entry")}
           ${sortableHeader("aiProbability", "AI prob.")}
           ${sortableHeader("annualizedReturn", "EV p.a.")}
           ${sortableHeader("analysis", "Analysis")}
@@ -624,7 +627,10 @@ function renderBotEvaluations() {
               <strong>${escapeHtml(item.outcome)}</strong>
               <span>${escapeHtml(item.question)}</span>
             </td>
-            <td>${probability(Number(item.marketPrice))}</td>
+            <td>
+              ${probability(Number(item.marketPrice))}
+              <span>${item.bestAsk == null ? "" : `ask ${probability(Number(item.bestAsk))}`}${item.slippage == null ? "" : `, slip ${(Number(item.slippage) * 100).toFixed(1)} pts`}</span>
+            </td>
             <td>${probability(Number(item.aiProbability))}</td>
             <td class="${Number(item.annualizedReturn) >= 0 ? "positive" : "negative"}">${percent(Number(item.annualizedReturn))}</td>
             <td>

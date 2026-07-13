@@ -25,6 +25,7 @@ The bot:
 
 - evaluates public Polymarket markets and CLOB orderbooks in the background,
 - records every evaluated candidate with price, spread, liquidity, estimated probability, expected value, annualized expected return, rejection reasons, and an analysis summary,
+- simulates market BUY execution through available ask levels for the full 5 USDC stake; expected value uses the average executable price including slippage, not the midpoint,
 - requires estimated probability of at least 95%,
 - rejects candidates with annualized expected return below 5%,
 - risks at most 5 USDC per idea from a 100 USDC paper portfolio,
