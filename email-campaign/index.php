@@ -73,6 +73,10 @@ if ($dbWarning && !$flash) {
     $flash = ['ok', $migrationNotice];
 }
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'change_language') {
+    handleLanguageChange($pdo);
+}
+
 if (($_GET['auth'] ?? '') === 'google') {
     try {
         startGoogleAuth($config);
@@ -458,7 +462,9 @@ function renderDatabaseBootFailure(Throwable $e): void
 {
     http_response_code(500);
     $headline = databasePermissionDenied($e) ? 'MySQL uzivatel nema prava k databazi.' : 'MySQL databaze neni dostupna.';
+    ob_start();
     ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chyba databaze</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body><header><strong>Email rozesilac</strong></header><main><section class="panel narrow"><div class="flash error"><?= h($headline) ?> Detail: <?= h($e->getMessage()) ?></div><p class="note">Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.</p></section></main></body></html><?php
+    echo localizeHtml((string)ob_get_clean());
 }
 
 function effectiveConfig(PDO $pdo, array $config): array
@@ -488,6 +494,10 @@ function effectiveConfig(PDO $pdo, array $config): array
         'password' => $settings['imap_password'] ?? '',
         'encryption' => $settings['imap_encryption'] ?? 'ssl',
     ];
+    $configuredLanguage = trim((string)($settings['ui_language'] ?? ($config['ui_language'] ?? '')));
+    if ($configuredLanguage !== '') {
+        $config['ui_language'] = normalizeUiLanguage($configuredLanguage);
+    }
     return $config;
 }
 
@@ -5269,7 +5279,9 @@ function unsubscribeRecipient(PDO $pdo, string $token): void
     addSuppression($pdo, $email, 'unsubscribe', 'link');
     recordTrackingEvent($pdo, (int)$log['id'], 'unsubscribe', 'link:' . $email);
     header('Content-Type: text/html; charset=utf-8');
-    echo '<!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Odhlaseno</title><link rel="stylesheet" href="' . h(assetUrl('assets/app.css')) . '"></head><body><main><section class="panel narrow"><h1>Odhlaseno</h1><p>Tento kontakt uz nebude zahrnuty do dalsich rozesilek.</p></section></main></body></html>';
+    ob_start();
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Odhlaseno</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body><main><section class="panel narrow"><h1>Odhlaseno</h1><p>Tento kontakt uz nebude zahrnuty do dalsich rozesilek.</p></section></main><?php renderLanguageFooter($pdo); ?></body></html><?php
+    echo localizeHtml((string)ob_get_clean(), $pdo);
 }
 
 function addSuppression(PDO $pdo, string $email, string $reason, string $source): void
@@ -5548,6 +5560,513 @@ function assetUrl(string $path): string
     return $path . '?v=' . rawurlencode($version);
 }
 
+function supportedUiLanguages(): array
+{
+    return ['cs' => 'Cestina', 'en' => 'English'];
+}
+
+function normalizeUiLanguage(string $language): string
+{
+    $language = strtolower(str_replace('_', '-', trim($language)));
+    $language = substr($language, 0, 2);
+    return array_key_exists($language, supportedUiLanguages()) ? $language : 'cs';
+}
+
+function defaultUiLanguage(): string
+{
+    $header = strtolower((string)($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? ''));
+    foreach (explode(',', $header) as $part) {
+        $candidate = trim(explode(';', $part)[0] ?? '');
+        if ($candidate === '') {
+            continue;
+        }
+        $language = normalizeUiLanguage($candidate);
+        if ($language !== 'cs' || str_starts_with(strtolower($candidate), 'cs')) {
+            return $language;
+        }
+    }
+    return 'cs';
+}
+
+function currentUiLanguage(?PDO $pdo = null, array $config = []): string
+{
+    if (!empty($_SESSION['auth']) && !empty($config['ui_language'])) {
+        $language = normalizeUiLanguage((string)$config['ui_language']);
+        $_SESSION['ui_language'] = $language;
+        return $language;
+    }
+    if (!empty($_SESSION['ui_language'])) {
+        return normalizeUiLanguage((string)$_SESSION['ui_language']);
+    }
+    if (!empty($_COOKIE['ui_language'])) {
+        return normalizeUiLanguage((string)$_COOKIE['ui_language']);
+    }
+    return defaultUiLanguage();
+}
+
+function uiLanguageCookiePath(): string
+{
+    $dir = str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? '/')));
+    if ($dir === '' || $dir === '.' || $dir === '/') {
+        return '/';
+    }
+    return rtrim($dir, '/') . '/';
+}
+
+function safeLanguageReturnUrl(): string
+{
+    $return = trim((string)($_POST['return_to'] ?? ($_SERVER['REQUEST_URI'] ?? './')));
+    if ($return === '' || preg_match('#^[a-z][a-z0-9+.-]*:#i', $return) || substr($return, 0, 2) === '//') {
+        return './';
+    }
+    return $return;
+}
+
+function handleLanguageChange(PDO $pdo): void
+{
+    $language = normalizeUiLanguage((string)($_POST['lang'] ?? ''));
+    $_SESSION['ui_language'] = $language;
+    setcookie('ui_language', $language, [
+        'expires' => time() + 365 * 24 * 60 * 60,
+        'path' => uiLanguageCookiePath(),
+        'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
+        'httponly' => false,
+        'samesite' => 'Lax',
+    ]);
+    if (!empty($_SESSION['auth'])) {
+        setSetting($pdo, 'ui_language', $language);
+    }
+    header('Location: ' . safeLanguageReturnUrl(), true, 303);
+    exit;
+}
+
+function renderLanguageFooter(?PDO $pdo = null, array $config = []): void
+{
+    $current = currentUiLanguage($pdo, $config);
+    $returnTo = (string)($_SERVER['REQUEST_URI'] ?? './');
+    ?>
+    <footer class="app-footer">
+        <form method="post" class="language-switcher" autocomplete="off">
+            <input type="hidden" name="action" value="change_language">
+            <input type="hidden" name="return_to" value="<?= h($returnTo) ?>">
+            <span>Jazyk rozhrani</span>
+            <?php foreach (supportedUiLanguages() as $code => $label): ?>
+                <button type="submit" name="lang" value="<?= h($code) ?>" class="<?= $current === $code ? 'active' : '' ?>" <?= $current === $code ? 'aria-current="true"' : '' ?>><?= h($label) ?></button>
+            <?php endforeach; ?>
+        </form>
+    </footer>
+    <?php
+}
+
+function localizeHtml(string $html, ?PDO $pdo = null, array $config = []): string
+{
+    $language = currentUiLanguage($pdo, $config);
+    $html = preg_replace('#<html\s+lang="[^"]*"#i', '<html lang="' . h($language) . '"', $html, 1) ?? $html;
+    if ($language === 'cs') {
+        return $html;
+    }
+    $map = uiTranslationMap($language);
+    if (!$map) {
+        return $html;
+    }
+    $parts = preg_split('#(<[^>]+>)#u', $html, -1, PREG_SPLIT_DELIM_CAPTURE);
+    if ($parts === false) {
+        return translateHtmlAttributes(translateHtmlText($html, $map), $map);
+    }
+    $out = '';
+    $skipStack = [];
+    foreach ($parts as $part) {
+        if ($part === '') {
+            continue;
+        }
+        if ($part[0] === '<') {
+            $tagName = htmlTagName($part);
+            if ($tagName !== null && htmlIsClosingTag($part)) {
+                if ($skipStack && $tagName === end($skipStack)) {
+                    array_pop($skipStack);
+                }
+                $out .= $part;
+                continue;
+            }
+            $skipActive = !empty($skipStack);
+            $out .= $skipActive ? $part : translateHtmlAttributes($part, $map);
+            if ($tagName !== null && !htmlIsVoidTag($tagName) && ($skipActive || htmlStartsNoTranslateRegion($part, $tagName))) {
+                $skipStack[] = $tagName;
+            }
+            continue;
+        }
+        $out .= $skipStack ? $part : translateHtmlText($part, $map);
+    }
+    return $out;
+}
+
+function translateHtmlText(string $text, array $map): string
+{
+    $text = strtr($text, $map);
+    return preg_replace_callback(
+        '#(?<![\p{L}\p{N}_])(ano|ne)(?![\p{L}\p{N}_])#u',
+        static fn(array $matches): string => $matches[1] === 'ano' ? 'yes' : 'no',
+        $text
+    ) ?? $text;
+}
+
+function htmlTagName(string $tag): ?string
+{
+    return preg_match('#^</?\s*([a-z0-9]+)#i', $tag, $matches) ? strtolower($matches[1]) : null;
+}
+
+function htmlIsClosingTag(string $tag): bool
+{
+    return preg_match('#^</#', $tag) === 1;
+}
+
+function htmlIsVoidTag(string $tagName): bool
+{
+    return in_array($tagName, ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'], true);
+}
+
+function htmlStartsNoTranslateRegion(string $tag, string $tagName): bool
+{
+    if (in_array($tagName, ['script', 'style', 'textarea'], true)) {
+        return true;
+    }
+    if ($tagName !== 'div' || preg_match('#\bclass\s*=\s*(["\'])(.*?)\1#i', $tag, $matches) !== 1) {
+        return false;
+    }
+    return in_array('editor', preg_split('#\s+#', trim($matches[2])) ?: [], true);
+}
+
+function translateHtmlAttributes(string $tag, array $map): string
+{
+    return preg_replace_callback(
+        '#\b(placeholder|aria-label|title|alt)="([^"]*)"#u',
+        static fn(array $matches): string => $matches[1] . '="' . strtr($matches[2], $map) . '"',
+        $tag
+    ) ?? $tag;
+}
+
+function uiTranslationMap(string $language): array
+{
+    if ($language !== 'en') {
+        return [];
+    }
+    $map = [
+        'Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.' => 'The application is configured to use only the production MySQL/MariaDB database. Please check APP_DATABASE_NAME, APP_DATABASE_USERNAME and APP_DATABASE_PASSWORD in GitHub Secrets, especially the database user permissions for SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER on this database.',
+        'Jednotlive casti nastaveni se meni oddelene, aby se prihlasovaci udaje nikdy neprepsaly omylem.' => 'Each configuration area is edited separately so credentials are not overwritten accidentally.',
+        'Prehled pripravenych kampani, jejich planu, limitu a stavu osloveni.' => 'Overview of prepared campaigns, schedules, limits and outreach status.',
+        'Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl a PanoramaFirm.pl. Z nalezenych detailu pak hleda email, nazev, web a adresu.' => 'The backend walks through result pages until the source stops returning records. Supported sources are Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl and PanoramaFirm.pl. From detail pages it extracts email, name, website and address.',
+        'Kazdy kontejner drzi zdroj, klicove slovo a cilovou databazi. Kliknutim na radek otevres logy konkretniho kontejneru.' => 'Each container stores the source, keyword and target database. Click a row to open logs for that container.',
+        'Kliknutim na radek otevres konkretni databazi kontaktu.' => 'Click a row to open that contact database.',
+        'Tento kontakt uz nebude zahrnuty do dalsich rozesilek.' => 'This contact will no longer be included in future sends.',
+        'Aplikace zustala dostupna, ale pri nacitani prihlasene casti narazila na chybu. Tento text pomuze opravit konkretni misto bez obecne HTTP 500.' => 'The application stayed available, but the authenticated area hit an error while loading. This message helps fix the exact place without a generic HTTP 500.',
+        'Vytvor prvni administracni ucet. Emailove pripojeni nastavis po prihlaseni.' => 'Create the first admin account. You can configure email after signing in.',
+        'Zahrnout kontakty oslovene jinou kampani nebo oznacene jako oslovene pri importu' => 'Include contacts contacted by another campaign or marked as contacted during import',
+        'Automaticky ridit limit za 24 h podle dorucitelnosti' => 'Automatically manage the 24 h limit based on deliverability',
+        'Stejnemu kontaktu se neposle znovu; hlida se kombinace ID kampane a ID kontaktu v logu odeslani.' => 'The same contact will not receive the same campaign again; this is checked by campaign ID and contact ID in the send log.',
+        'Tabulka nize zobrazuje poslednich 50 behu; soucet viditelnych radku proto nemusi odpovidat celkovemu souhrnu.' => 'The table below shows the last 50 runs, so the sum of visible rows may differ from the overall summary.',
+        'Soucasne heslo je potreba pouze pri zmene admin emailu nebo hesla.' => 'The current password is required only when changing the admin email or password.',
+        'Selector najdes u poskytovatele emailu. Kontrola overuje DNS zaznamy domeny odesilatele, ne samotny podpis konkretni zpravy.' => 'You can find the selector at your email provider. The check verifies DNS records for the sender domain, not the signature of a specific message.',
+        'Prehled behu, ktere prave bezi nebo cekaji ve fronte napric vsemi scraping kontejnery.' => 'Overview of runs that are currently running or waiting across all scraping containers.',
+        'Ted nebezi ani neceka zadny scraping beh.' => 'No scraping run is currently running or waiting.',
+        'Zatim neni zalozeny zadny scraping kontejner.' => 'No scraping container has been created yet.',
+        'Soubor se nahraje a import pobezi na pozadi. Prubeh uvidis v historii importu.' => 'The file will be uploaded and imported in the background. You will see progress in import history.',
+        'Kontakt uz byl drive osloven' => 'Contact was already contacted before',
+        'Email, nazev, web, adresa nebo zdroj' => 'Email, name, website, address or source',
+        'Zpet na databaze kontaktu' => 'Back to Contact Databases',
+        'Zpet na vsechny kontejnery' => 'Back to All Containers',
+        'Zpet na databazi' => 'Back to Database',
+        'Plan scrapingu' => 'Scraping Schedule',
+        'Vytvorit koncept' => 'Create Draft',
+        'Importovat kontakty' => 'Import Contacts',
+        'Ulozit kontakt' => 'Save Contact',
+        'Zrusit filtr' => 'Clear Filter',
+        'Test v aplikaci overuje DNS zaznamy. Neumi sam vygenerovat DKIM klic ani poznat vsechny spravne ' => 'The in-app test verifies DNS records. It cannot generate a DKIM key or know all correct ',
+        'Pro ostre rozesilky je lepsi postupne prejit na ' => 'For live sends, it is better to gradually move to ',
+        'Na domene ma byt jen jeden SPF zaznam zacinajici ' => 'The domain should have only one SPF record starting with ',
+        'Musi povolit server/sluzbu, pres kterou odesilame SMTP.' => 'It must allow the server/service used for SMTP sending.',
+        'Selector a verejny klic musi dodat poskytovatel mailboxu/SMTP.' => 'The selector and public key must be provided by the mailbox/SMTP provider.',
+        'Bez selectoru aplikace nevi, jaky DKIM zaznam hledat.' => 'Without a selector, the application does not know which DKIM record to look for.',
+        'SMTP nastaveni ulozeno.' => 'SMTP settings saved.',
+        'IMAP nastaveni ulozeno.' => 'IMAP settings saved.',
+        'Prihlaseni ulozeno.' => 'Login settings saved.',
+        'SMTP pripojeni a prihlaseni funguje.' => 'SMTP connection and authentication work.',
+        'IMAP pripojeni a prihlaseni funguje.' => 'IMAP connection and authentication work.',
+        'Kampan ulozena.' => 'Campaign saved.',
+        'Kampan vytvorena.' => 'Campaign created.',
+        'Kampan spustena.' => 'Campaign started.',
+        'Kampan pozastavena.' => 'Campaign paused.',
+        'Databaze kontaktu vytvorena.' => 'Contact database created.',
+        'Databaze kontaktu prejmenovana.' => 'Contact database renamed.',
+        'Databaze kontaktu archivovana a skryta napric aplikaci.' => 'Contact database archived and hidden across the application.',
+        'Kontakt odstranen.' => 'Contact removed.',
+        'Scraping kontejner odstranen.' => 'Scraping container removed.',
+        'Scraping job pozastaven.' => 'Scraping job paused.',
+        'Scraping job obnoven.' => 'Scraping job resumed.',
+        'Testovaci email neni platny.' => 'Test email is not valid.',
+        'Testovaci email odeslan.' => 'Test email sent.',
+        'Odesilani kampane bezi na pozadi. Prubeh uvidis v poslednim odeslani.' => 'Campaign sending is running in the background. You will see progress in recent sends.',
+        'Vybrana databaze kontaktu neni dostupna.' => 'Selected contact database is not available.',
+        'Email kontaktu neni platny.' => 'Contact email is not valid.',
+        'Kontakt uz existuje a nebylo co aktualizovat.' => 'The contact already exists and there was nothing to update.',
+        'Kontakt pro odstraneni neni platny.' => 'Contact selected for removal is not valid.',
+        'Kontakt nebyl nalezen.' => 'Contact was not found.',
+        'Cas planu musi byt ve formatu HH:MM.' => 'Schedule time must use the HH:MM format.',
+        'Cas planu neni platny.' => 'Schedule time is not valid.',
+        'Plan scrapingu ulozen.' => 'Scraping schedule saved.',
+        'Scraping kontejner neni aktivni.' => 'Scraping container is not active.',
+        'Scraping kontejner nenalezen.' => 'Scraping container was not found.',
+        'Neznamy zdroj dat.' => 'Unknown data source.',
+        'Zadej klicove slovo pro scraping.' => 'Enter a keyword for scraping.',
+        'Scraping kontejner se stejnymi parametry uz existuje.' => 'A scraping container with the same parameters already exists.',
+        'Zadej nazev databaze kontaktu.' => 'Enter a contact database name.',
+        'Zadej novy nazev databaze kontaktu.' => 'Enter a new contact database name.',
+        'pro tuto kampan' => 'for this campaign',
+        'touto kampani' => 'by this campaign',
+        'pred dalsim odeslanim' => 'before the next send',
+        'aktivni dostupne kontakty' => 'active available contacts',
+        'nejblizsi obnova' => 'next reset',
+        'Prazdne = nemenit' => 'Empty = keep unchanged',
+        'Nechat prazdne = nemenit' => 'Leave empty = keep unchanged',
+        'Jen pri zmene prihlaseni' => 'Only when changing login',
+        'Napriklad: masaze, massage, Massagen, masaz' => 'Example: masaze, massage, Massagen, masaz',
+        'Vysvetleni limitu a zpusobilych kontaktu' => 'Limit and eligible contacts explanation',
+        'Doplneni zdroju kontaktu selhalo' => 'Contact source backfill failed',
+        'Startovni udrzba databaze byla preskocena kvuli docasne DB chybe' => 'Startup database maintenance was skipped because of a temporary DB error',
+        'Startovni udrzba databaze selhala' => 'Startup database maintenance failed',
+        'Nastaveni aplikace se nepodarilo nacist z databaze' => 'Application settings could not be loaded from the database',
+        'Aplikace je pripravena.' => 'The application is ready.',
+        'Nespravny email nebo heslo.' => 'Incorrect email or password.',
+        'Administraci se nepodarilo nacist' => 'Administration could not be loaded',
+        'MySQL uzivatel nema prava k databazi.' => 'The MySQL user does not have database permissions.',
+        'MySQL databaze neni dostupna.' => 'The MySQL database is not available.',
+        'Odhlaseni nebylo nalezeno.' => 'Unsubscribe record was not found.',
+        'Admin email neni platny.' => 'Admin email is not valid.',
+        'Pro zmenu prihlasovacich udaju zadej soucasne heslo.' => 'Enter the current password to change login details.',
+        'Nove heslo musi mit alespon 10 znaku.' => 'The new password must have at least 10 characters.',
+        'Kampan nenalezena.' => 'Campaign not found.',
+        'Hotovo.' => 'Done.',
+        'Chyba databaze' => 'Database Error',
+        'Chyba aplikace' => 'Application Error',
+        'Email rozesilac' => 'Email Campaign',
+        'Nastaveni aplikace' => 'Application Setup',
+        'Pokracovat pres Google' => 'Continue with Google',
+        'Vytvorit pres Google' => 'Create with Google',
+        'Vytvorit administraci' => 'Create Admin Account',
+        'Admin heslo' => 'Admin Password',
+        'Admin email' => 'Admin Email',
+        'Prihlasit' => 'Log In',
+        'Odhlasit' => 'Log Out',
+        'Zkusit znovu' => 'Try Again',
+        'Jazyk rozhrani' => 'Interface Language',
+        'Cestina' => 'Czech',
+        'Verze' => 'Version',
+        'Prehled' => 'Dashboard',
+        'Kontakty' => 'Contacts',
+        'Kampane' => 'Campaigns',
+        'Konfigurace' => 'Settings',
+        'Stav kampane' => 'Campaign Status',
+        'Stav kampani' => 'Campaign Status',
+        'Kampan' => 'Campaign',
+        'Stav' => 'Status',
+        'Databaze kontaktu' => 'Contact Database',
+        'Databaze' => 'Database',
+        'Planovano' => 'Planned',
+        'Osloveno' => 'Contacted',
+        'Otevreno' => 'Opened',
+        'Odpovedeli' => 'Replied',
+        'Odpovedi' => 'Replies',
+        'Kliknuli' => 'Clicked',
+        'Kliky' => 'Clicks',
+        'Za 24 h odeslano' => 'Sent in 24 h',
+        'Schranka zbyva / 24 h' => 'Mailbox remaining / 24 h',
+        'Zbyva kampani 24 h' => 'Campaign remaining 24 h',
+        'obnovi se' => 'resets',
+        'zatim bez odeslani' => 'no sends yet',
+        'Bez kampane' => 'No Campaign',
+        'Nova kampan' => 'New Campaign',
+        'Zatim neni zalozena zadna kampan.' => 'No campaign has been created yet.',
+        'Nazev' => 'Name',
+        'Predmet' => 'Subject',
+        'Plan' => 'Schedule',
+        'Zbyva' => 'Remaining',
+        'Akce' => 'Actions',
+        'Pozastavit' => 'Pause',
+        'Spustit hned' => 'Run Now',
+        'Spustit' => 'Start',
+        'Koncept' => 'Draft',
+        'Aktivni' => 'Active',
+        'Pozastaveno' => 'Paused',
+        'Max za 24 h' => 'Max per 24 h',
+        'Cas denniho odesilani' => 'Daily sending time',
+        'Zpusobili' => 'Eligible',
+        'Vyrazeno' => 'Excluded',
+        'Stejna kampan' => 'Same Campaign',
+        'Cilova databaze' => 'Target Database',
+        'Limit pro dalsi beh' => 'Limit for Next Run',
+        'Teto kampani zbyva' => 'This campaign has remaining',
+        'Odesilaci schrance zbyva' => 'Sending mailbox has remaining',
+        'dalsi obnova' => 'next reset',
+        'Rezim editoru' => 'Editor Mode',
+        'Nahled' => 'Preview',
+        'Obrazek' => 'Image',
+        'Ulozit kampan' => 'Save Campaign',
+        'Odeslat test' => 'Send Test',
+        'Vysvetleni kampane' => 'Campaign Explanation',
+        'Zavrit' => 'Close',
+        'Posledni odeslani' => 'Recent Sends',
+        'Souhrn vsech behu' => 'Summary of All Runs',
+        'behu' => 'runs',
+        'Celkem' => 'Total',
+        'kontaktu' => 'contacts',
+        'k osloveni' => 'to contact',
+        'odeslanych emailu' => 'sent emails',
+        'unikatnich oslovenych kontaktu' => 'unique contacted contacts',
+        'chyb' => 'errors',
+        'Kdy' => 'When',
+        'Kontakt' => 'Contact',
+        'Otevrel' => 'Opened',
+        'Kliknul' => 'Clicked',
+        'Odpovedel' => 'Replied',
+        'Soubor' => 'File',
+        'Radku' => 'Rows',
+        'Detail' => 'Detail',
+        'Filtr' => 'Filter',
+        'Spusteno' => 'Started',
+        'Typ' => 'Type',
+        'Vybrano' => 'Selected',
+        'Odeslano' => 'Sent',
+        'Chyby' => 'Errors',
+        'Dalsi pokus' => 'Next Attempt',
+        'Dokonceno' => 'Finished',
+        'Zprava' => 'Message',
+        'Nova databaze' => 'New Database',
+        'Vytvorit databazi' => 'Create Database',
+        'Prejmenovat' => 'Rename',
+        'Odstranit' => 'Remove',
+        'Archivovat' => 'Archive',
+        'K osloveni' => 'To Contact',
+        'Neosloveno' => 'Not Contacted',
+        'Import kontaktu' => 'Import Contacts',
+        'Rucne vlozit kontakt' => 'Add Contact Manually',
+        'Historie importu' => 'Import History',
+        'Detail importu' => 'Import Detail',
+        'Pridane kontakty' => 'Added Contacts',
+        'Aktualizovane kontakty' => 'Updated Contacts',
+        'Preskocene kontakty' => 'Skipped Contacts',
+        'Zdroj dat' => 'Data Source',
+        'Zdrojova URL' => 'Source URL',
+        'Zdroj' => 'Source',
+        'Adresa' => 'Address',
+        'Pridano' => 'Added',
+        'Modifikovano' => 'Modified',
+        'Osloven' => 'Contacted',
+        'Smazat' => 'Delete',
+        'Hledat v kontaktech' => 'Search Contacts',
+        'Stranka' => 'Page',
+        'Zpet' => 'Back',
+        'Aktivni scraping behy' => 'Active Scraping Runs',
+        'Scraping kontejnery' => 'Scraping Containers',
+        'Novy scraping kontejner' => 'New Scraping Container',
+        'Novy scraping' => 'New Scraping',
+        'Vytvorit kontejner' => 'Create Container',
+        'Klicove slovo' => 'Keyword',
+        'Cilova databaze kontaktu' => 'Target Contact Database',
+        'Spusteni' => 'Run Schedule',
+        'Posledni beh' => 'Last Run',
+        'Vlozeno' => 'Inserted',
+        'Aktualizovano' => 'Updated',
+        'Prerusit' => 'Stop',
+        'Aktivovat plan' => 'Activate Schedule',
+        'Pozastavit plan' => 'Pause Schedule',
+        'Spustit ted' => 'Run Now',
+        'Log scraping behu' => 'Scraping Run Log',
+        'Tento kontejner zatim nema zadny beh.' => 'This container does not have any run yet.',
+        'Zprac.' => 'Proc.',
+        'Zpracovano' => 'Processed',
+        'Aktualiz.' => 'Updated',
+        'Presk.' => 'Skipped',
+        'Preskoceno' => 'Skipped',
+        'Vysledek' => 'Result',
+        'Detail behu' => 'Run Detail',
+        'Frekvence' => 'Frequency',
+        'Denne' => 'Daily',
+        'Jednou tydne' => 'Weekly',
+        'Den v tydnu' => 'Weekday',
+        'Cas spusteni' => 'Run Time',
+        'Ulozit plan' => 'Save Schedule',
+        'Plan pozastaven' => 'Schedule paused',
+        'Plan zapnut' => 'Schedule active',
+        'SMTP odesilani' => 'SMTP Sending',
+        'SMTP nastaveni' => 'SMTP Settings',
+        'SMTP server' => 'SMTP Server',
+        'SMTP uzivatel' => 'SMTP Username',
+        'SMTP heslo' => 'SMTP Password',
+        'Upravit SMTP' => 'Edit SMTP',
+        'Otestovat SMTP' => 'Test SMTP',
+        'Ulozit SMTP' => 'Save SMTP',
+        'Odesilatel email' => 'Sender Email',
+        'Odesilatel jmeno' => 'Sender Name',
+        'Sifrovani' => 'Encryption',
+        'Bez' => 'None',
+        'SPF / DKIM / DMARC' => 'SPF / DKIM / DMARC',
+        'DNS overeni' => 'DNS Verification',
+        'Otestovat DNS' => 'Test DNS',
+        'Co musi byt nastaveno' => 'What Must Be Configured',
+        'Posledni kontrola' => 'Last Check',
+        'Domena' => 'Domain',
+        'nenastaveno' => 'not set',
+        'IMAP odpovedi' => 'IMAP Replies',
+        'IMAP nastaveni' => 'IMAP Settings',
+        'IMAP server' => 'IMAP Server',
+        'IMAP uzivatel' => 'IMAP Username',
+        'IMAP heslo' => 'IMAP Password',
+        'Upravit IMAP' => 'Edit IMAP',
+        'Otestovat IMAP' => 'Test IMAP',
+        'Ulozit IMAP' => 'Save IMAP',
+        'Synchronizovat odpovedi' => 'Sync Replies',
+        'Prihlaseni do aplikace' => 'Application Login',
+        'Upravit prihlaseni' => 'Edit Login',
+        'Ulozit prihlaseni' => 'Save Login',
+        'Soucasne heslo' => 'Current Password',
+        'Nove heslo' => 'New Password',
+        'Zrusit' => 'Cancel',
+        'Otestovat' => 'Test',
+        'Ulozit' => 'Save',
+        'Host' => 'Host',
+        'Port' => 'Port',
+        'Uzivatelske jmeno' => 'Username',
+        'Heslo' => 'Password',
+        'pondeli' => 'Monday',
+        'utery' => 'Tuesday',
+        'streda' => 'Wednesday',
+        'ctvrtek' => 'Thursday',
+        'patek' => 'Friday',
+        'sobota' => 'Saturday',
+        'nedele' => 'Sunday',
+        'manualni' => 'manual',
+        'naplanovany' => 'scheduled',
+        'historicky' => 'historical',
+        'jednorazovy' => 'one-time',
+        'rozpracovano' => 'in progress',
+        'bezi' => 'running',
+        'bezi...' => 'running...',
+        'hotovo' => 'done',
+        'chyba' => 'error',
+        'zruseno' => 'cancelled',
+        'ceka' => 'waiting',
+        'fronta' => 'queue',
+        'vlozeno' => 'inserted',
+        'aktualizovano' => 'updated',
+        'preskoceno' => 'skipped',
+        'nezjisteno' => 'unknown',
+        'nenapojeno' => 'not connected',
+        'Odhlaseno' => 'Unsubscribed',
+        'nebo' => 'or',
+    ];
+    uksort($map, static fn(string $a, string $b): int => strlen($b) <=> strlen($a));
+    return $map;
+}
+
 function formatDateTime(string $value): string
 {
     $time = strtotime($value);
@@ -5557,19 +6076,25 @@ function formatDateTime(string $value): string
 function renderLogin(?array $flash, array $config): void
 {
     $googleEnabled = googleAuthEnabled($config);
-    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email rozesilac</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body class="login"><main><form method="post" class="panel narrow login-panel"><input type="hidden" name="action" value="login"><h1>Email rozesilac</h1><?php renderFlash($flash); ?><?php if ($googleEnabled): ?><a class="button google-button" href="?auth=google">Pokracovat pres Google</a><div class="auth-divider"><span>nebo</span></div><?php endif; ?><label>Email<input type="email" name="email" autocomplete="username" autofocus required></label><label>Heslo<input type="password" name="password" autocomplete="current-password" required></label><button>Prihlasit</button><p class="version">Verze <?= h(APP_VERSION) ?></p></form></main></body></html><?php
+    ob_start();
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email rozesilac</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body class="login"><main><form method="post" class="panel narrow login-panel"><input type="hidden" name="action" value="login"><h1>Email rozesilac</h1><?php renderFlash($flash); ?><?php if ($googleEnabled): ?><a class="button google-button" href="?auth=google">Pokracovat pres Google</a><div class="auth-divider"><span>nebo</span></div><?php endif; ?><label>Email<input type="email" name="email" autocomplete="username" autofocus required></label><label>Heslo<input type="password" name="password" autocomplete="current-password" required></label><button>Prihlasit</button><p class="version">Verze <?= h(APP_VERSION) ?></p></form></main><?php renderLanguageFooter(null, $config); ?></body></html><?php
+    echo localizeHtml((string)ob_get_clean(), null, $config);
 }
 
 function renderSetup(?array $flash, array $config): void
 {
     $googleEnabled = googleAuthEnabled($config);
-    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nastaveni aplikace</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body class="login"><main><form method="post" class="panel narrow login-panel"><input type="hidden" name="action" value="setup"><h1>Nastaveni aplikace</h1><?php renderFlash($flash); ?><p>Vytvor prvni administracni ucet. Emailove pripojeni nastavis po prihlaseni.</p><?php if ($googleEnabled): ?><a class="button google-button" href="?auth=google">Vytvorit pres Google</a><div class="auth-divider"><span>nebo</span></div><?php endif; ?><label>Admin email<input type="email" name="admin_email" autocomplete="username" autofocus required></label><label>Admin heslo<input type="password" name="new_password" minlength="10" autocomplete="new-password" required></label><button>Vytvorit administraci</button></form></main></body></html><?php
+    ob_start();
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nastaveni aplikace</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body class="login"><main><form method="post" class="panel narrow login-panel"><input type="hidden" name="action" value="setup"><h1>Nastaveni aplikace</h1><?php renderFlash($flash); ?><p>Vytvor prvni administracni ucet. Emailove pripojeni nastavis po prihlaseni.</p><?php if ($googleEnabled): ?><a class="button google-button" href="?auth=google">Vytvorit pres Google</a><div class="auth-divider"><span>nebo</span></div><?php endif; ?><label>Admin email<input type="email" name="admin_email" autocomplete="username" autofocus required></label><label>Admin heslo<input type="password" name="new_password" minlength="10" autocomplete="new-password" required></label><button>Vytvorit administraci</button></form></main><?php renderLanguageFooter(null, $config); ?></body></html><?php
+    echo localizeHtml((string)ob_get_clean(), null, $config);
 }
 
 function renderFatal(Throwable $e, ?array $flash): void
 {
     $message = 'Administraci se nepodarilo nacist: ' . $e->getMessage();
-    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chyba aplikace</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body><header><strong>Email rozesilac</strong><a href="?logout=1">Odhlasit</a></header><main><section class="panel narrow"><?php renderFlash($flash); ?><div class="flash error"><?= h($message) ?></div><p class="note">Aplikace zustala dostupna, ale pri nacitani prihlasene casti narazila na chybu. Tento text pomuze opravit konkretni misto bez obecne HTTP 500.</p><a class="button" href="./?route=dashboard">Zkusit znovu</a></section></main></body></html><?php
+    ob_start();
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chyba aplikace</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body><header><strong>Email rozesilac</strong><a href="?logout=1">Odhlasit</a></header><main><section class="panel narrow"><?php renderFlash($flash); ?><div class="flash error"><?= h($message) ?></div><p class="note">Aplikace zustala dostupna, ale pri nacitani prihlasene casti narazila na chybu. Tento text pomuze opravit konkretni misto bez obecne HTTP 500.</p><a class="button" href="./?route=dashboard">Zkusit znovu</a></section></main><?php renderLanguageFooter(); ?></body></html><?php
+    echo localizeHtml((string)ob_get_clean());
 }
 
 function renderFlash(?array $flash): void
@@ -5709,6 +6234,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         $activeScrapingJobs = activeScrapingJobs($pdo);
         $scrapingItemsByJob = scrapingItemsByJob($pdo, array_map(fn($job) => (int)$job['id'], $scrapingJobs));
     }
+    ob_start();
     ?><!doctype html>
 <html lang="cs">
 <head>
@@ -6550,8 +7076,10 @@ function renderApp(PDO $pdo, ?array $flash): void
     </dialog>
     <?php endif; ?>
 </main>
+<?php renderLanguageFooter($pdo, $config); ?>
 <script src="<?= h(assetUrl('assets/app.js')) ?>"></script>
 </body></html><?php
+    echo localizeHtml((string)ob_get_clean(), $pdo, $config);
 }
 
 function recipientPage(PDO $pdo, int $listId): array

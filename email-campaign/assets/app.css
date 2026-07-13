@@ -1158,6 +1158,47 @@ td a {
   }
 }
 
+.app-footer {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 24px 24px;
+  color: var(--muted);
+}
+
+.view-contacts .app-footer,
+.view-campaigns .app-footer,
+.view-scraping .app-footer {
+  max-width: none;
+}
+
+.language-switcher {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.language-switcher span {
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.language-switcher button {
+  padding: 7px 10px;
+  font-size: 12px;
+  background: #eef1ef;
+  color: var(--text);
+}
+
+.language-switcher button.active {
+  background: #dff2eb;
+  color: var(--accent-dark);
+}
+
 @media (max-width: 760px) {
   .campaign-list-panel,
   .database-list-panel,
@@ -1357,5 +1398,17 @@ td a {
   .pagination .button,
   .pagination button {
     width: 100%;
+  }
+
+  .app-footer {
+    padding: 0 12px 18px;
+  }
+
+  .language-switcher {
+    justify-content: stretch;
+  }
+
+  .language-switcher button {
+    flex: 1 1 auto;
   }
 }
