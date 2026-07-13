@@ -1181,22 +1181,35 @@ td a {
   padding-top: 14px;
 }
 
-.language-switcher span {
+.language-switcher > span {
   font-size: 12px;
   font-weight: 800;
   text-transform: uppercase;
 }
 
-.language-switcher button {
-  padding: 7px 10px;
-  font-size: 12px;
+.language-switcher button.flag-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 34px;
+  padding: 0;
+  font-size: 19px;
+  line-height: 1;
   background: #eef1ef;
   color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 999px;
 }
 
-.language-switcher button.active {
+.language-switcher button.flag-button.active {
   background: #dff2eb;
+  border-color: #97d9c8;
   color: var(--accent-dark);
+}
+
+.language-switcher button.flag-button:hover {
+  transform: translateY(-1px);
 }
 
 @media (max-width: 760px) {
