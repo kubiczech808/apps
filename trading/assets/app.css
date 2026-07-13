@@ -190,6 +190,42 @@ button {
   display: block;
 }
 
+.evaluation-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.segment-button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.segment-button:hover,
+.segment-button.active {
+  background: #ffffff;
+  color: var(--accent-dark);
+}
+
 .panel {
   min-width: 0;
   padding: 20px;
@@ -571,6 +607,11 @@ button {
   .panel-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .evaluation-head {
+    align-items: stretch;
+    justify-content: flex-start;
   }
 
   .search-row,

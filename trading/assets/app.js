@@ -9,6 +9,7 @@ const state = {
     key: "evaluatedAt",
     direction: "desc",
   },
+  evaluationStatus: "ELIGIBLE",
 };
 
 const els = {
@@ -42,6 +43,8 @@ const els = {
   botStatus: document.querySelector("[data-bot-status]"),
   botTrades: document.querySelector("[data-bot-trades]"),
   botEvaluations: document.querySelector("[data-bot-evaluations]"),
+  evaluationSummary: document.querySelector("[data-evaluation-summary]"),
+  evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   tabButtons: document.querySelectorAll("[data-tab-target]"),
   tabPanels: document.querySelectorAll("[data-tab-panel]"),
   payload: document.querySelector("[data-payload]"),
@@ -630,6 +633,11 @@ function sortedEvaluations(evaluations) {
   });
 }
 
+function filteredEvaluations(evaluations) {
+  if (state.evaluationStatus === "ALL") return evaluations;
+  return evaluations.filter((item) => String(item.status || "").toUpperCase() === state.evaluationStatus);
+}
+
 function sortableHeader(key, label) {
   const active = state.evaluationSort.key === key ? " active" : "";
   return `<th><button class="sort-button${active}" type="button" data-evaluation-sort="${key}">${label}${sortArrow(key)}</button></th>`;
@@ -637,13 +645,23 @@ function sortableHeader(key, label) {
 
 function renderBotEvaluations() {
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
+  const eligibleCount = evaluations.filter((item) => item.status === "ELIGIBLE").length;
+
+  if (els.evaluationSummary) {
+    els.evaluationSummary.textContent = `${eligibleCount} / ${evaluations.length} eligible`;
+  }
 
   if (!evaluations.length) {
     els.botEvaluations.innerHTML = '<div class="empty">Zatim zadna vyhodnoceni.</div>';
     return;
   }
 
-  const visibleEvaluations = sortedEvaluations(evaluations).slice(0, 80);
+  const visibleEvaluations = sortedEvaluations(filteredEvaluations(evaluations)).slice(0, 80);
+
+  if (!visibleEvaluations.length) {
+    els.botEvaluations.innerHTML = `<div class="empty">No ${state.evaluationStatus.toLowerCase()} evaluations in the latest log.</div>`;
+    return;
+  }
 
   els.botEvaluations.innerHTML = `
     <table>
@@ -729,7 +747,16 @@ els.tabButtons.forEach((button) => {
     });
   });
 });
-els.botEvaluations.addEventListener("click", (event) => {
+els.evaluationStatusButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.evaluationStatus = button.dataset.evaluationStatus;
+    els.evaluationStatusButtons.forEach((item) => {
+      item.classList.toggle("active", item === button);
+    });
+    renderBotEvaluations();
+  });
+});
+els.botEvaluations?.addEventListener("click", (event) => {
   const button = event.target.closest("[data-evaluation-sort]");
   if (!button) return;
   const key = button.dataset.evaluationSort;
