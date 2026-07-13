@@ -2413,6 +2413,8 @@ function scrapingDiscoveryBuffer(string $source = ''): int
         'dastelefonbuch_de' => 250,
         'gelbeseiten_de' => 300,
         'pkt_pl' => 300,
+        'merchantcircle_us' => 250,
+        'yellowpages_ca' => 250,
     ][$source] ?? 10000;
 }
 
@@ -2423,6 +2425,8 @@ function recentNoEmailScrapingCacheDays(string $source): int
         'dastelefonbuch_de' => 21,
         'gelbeseiten_de' => 21,
         'pkt_pl' => 21,
+        'merchantcircle_us' => 21,
+        'yellowpages_ca' => 21,
     ][$source] ?? 14;
 }
 
@@ -2613,7 +2617,7 @@ function discoverScrapingPage(PDO $pdo, array $job): string
         'current_page' => $page + 1,
         'discovered_count' => (int)$job['discovered_count'] + $added + $directProcessed,
     ];
-    if (in_array((string)$job['source'], ['firmy_cz', 'herold_at', 'dastelefonbuch_de', 'dasoertliche_de', 'gelbeseiten_de', 'pkt_pl', 'panoramafirm_pl'], true) && !$hasNextPage) {
+    if (in_array((string)$job['source'], ['firmy_cz', 'herold_at', 'dastelefonbuch_de', 'dasoertliche_de', 'gelbeseiten_de', 'pkt_pl', 'panoramafirm_pl', 'merchantcircle_us', 'yellowpages_ca'], true) && !$hasNextPage) {
         $updateFields['discovery_done'] = 1;
         $updateFields['last_message'] = 'Posledni stranka zdroje byla nactena, dobiha zpracovani nalezenych detailu.';
     }
@@ -2656,6 +2660,16 @@ function searchResultHasNextPage(string $html, string $source, string $baseUrl, 
         return preg_match('/href=(["\'])\/[^"\']+\/firmy,' . ($page + 1) . '\.html\1/i', $html) === 1
             || preg_match('/href=(["\'])https?:\/\/panoramafirm\.pl\/[^"\']+\/firmy,' . ($page + 1) . '\.html\1/i', $html) === 1
             || panoramaFirmTotalResults($html) > ($page * 25);
+    }
+    if ($source === 'merchantcircle_us') {
+        $expectedStart = $page * 20;
+        return preg_match('/href=(["\'])[^"\']*[?&]start=' . $expectedStart . '(?:&|&amp;|#|\1)/i', $html) === 1
+            || preg_match('/<a\b[^>]*class=(["\'])(?:(?!\1).)*\bnext\b(?:(?!\1).)*\1[^>]*href=(["\'])(.*?)\2/i', $html) === 1;
+    }
+    if ($source === 'yellowpages_ca') {
+        return preg_match('#href=(["\'])[^"\']*/search/si/' . ($page + 1) . '/#i', $html) === 1
+            || preg_match('/href=(["\'])[^"\']*[?&]page=' . ($page + 1) . '(?:&|&amp;|#|\1)/i', $html) === 1
+            || preg_match('/<a\b[^>]*class=(["\'])(?:(?!\1).)*\bnext\b(?:(?!\1).)*\1[^>]*href=(["\'])(.*?)\2/i', $html) === 1;
     }
     if ($source !== 'zoznam_sk') {
         return false;
@@ -2749,6 +2763,10 @@ function processScrapingItem(PDO $pdo, array $job, array $item): string
         }
         $html = httpGet((string)$item['url']);
         $contact = extractContactFromHtml($html, (string)$item['url']);
+        if (($contact['email'] === '' || !filter_var($contact['email'], FILTER_VALIDATE_EMAIL))
+            && in_array((string)$job['source'], ['merchantcircle_us', 'yellowpages_ca'], true)) {
+            $contact = enrichDirectoryContactFromBusinessWebsite($contact);
+        }
         if ($contact['email'] === '' || !filter_var($contact['email'], FILTER_VALIDATE_EMAIL)) {
             markScrapingItem($pdo, (int)$item['id'], 'skipped', $contact, 'Email nenalezen.');
             incrementScrapingJob($pdo, (int)$job['id'], 'processed_count', 'skipped_count', 'Email nenalezen.');
@@ -2831,6 +2849,8 @@ function scrapingSources(): array
         'gelbeseiten_de' => 'GelbeSeiten.de',
         'pkt_pl' => 'Pkt.pl',
         'panoramafirm_pl' => 'PanoramaFirm.pl',
+        'merchantcircle_us' => 'MerchantCircle',
+        'yellowpages_ca' => 'YellowPages.ca',
     ];
 }
 
@@ -2959,6 +2979,36 @@ function scrapingSearchUrls(string $source, string $keyword, int $page): array
             [
                 'label' => 'PanoramaFirm.pl',
                 'url' => 'https://panoramafirm.pl' . $path,
+            ],
+        ];
+    }
+
+    if ($source === 'merchantcircle_us') {
+        $query = [
+            'pagesize' => 20,
+            'q' => normalizeScrapingKeyword($keyword),
+            'qn' => 'United States',
+        ];
+        if ($page > 1) {
+            $query['start'] = ($page - 1) * 20;
+        }
+        return [
+            [
+                'label' => 'MerchantCircle',
+                'url' => 'https://www.merchantcircle.com/search?' . http_build_query($query),
+            ],
+        ];
+    }
+
+    if ($source === 'yellowpages_ca') {
+        $keyword = normalizeScrapingKeyword($keyword);
+        if ($keyword === '') {
+            throw new RuntimeException('Klicove slovo pro YellowPages.ca neni platne.');
+        }
+        return [
+            [
+                'label' => 'YellowPages.ca',
+                'url' => 'https://www.yellowpages.ca/search/si/' . max(1, $page) . '/' . rawurlencode($keyword) . '/Canada',
             ],
         ];
     }
@@ -3289,7 +3339,13 @@ function normalizeScrapingDetailUrl(string $url, string $source = ''): string
     if ($source === 'panoramafirm_pl') {
         return normalizePanoramaFirmDetailUrl($url);
     }
-    return normalizeFirmyDetailUrl($url) ?: normalizeHeroldDetailUrl($url) ?: normalizeZoznamDetailUrl($url) ?: normalizeDasTelefonbuchDetailUrl($url) ?: normalizeDasOertlicheDetailUrl($url) ?: normalizeGelbeSeitenDetailUrl($url) ?: normalizePktDetailUrl($url) ?: normalizePanoramaFirmDetailUrl($url);
+    if ($source === 'merchantcircle_us') {
+        return normalizeMerchantCircleDetailUrl($url);
+    }
+    if ($source === 'yellowpages_ca') {
+        return normalizeYellowPagesCaDetailUrl($url);
+    }
+    return normalizeFirmyDetailUrl($url) ?: normalizeHeroldDetailUrl($url) ?: normalizeZoznamDetailUrl($url) ?: normalizeDasTelefonbuchDetailUrl($url) ?: normalizeDasOertlicheDetailUrl($url) ?: normalizeGelbeSeitenDetailUrl($url) ?: normalizePktDetailUrl($url) ?: normalizePanoramaFirmDetailUrl($url) ?: normalizeMerchantCircleDetailUrl($url) ?: normalizeYellowPagesCaDetailUrl($url);
 }
 
 function normalizeFirmyDetailUrl(string $url): string
@@ -3426,6 +3482,44 @@ function normalizePanoramaFirmDetailUrl(string $url): string
     return 'https://panoramafirm.pl' . $path;
 }
 
+function normalizeMerchantCircleDetailUrl(string $url): string
+{
+    if ($url === '' || !preg_match('/^https?:\/\//i', $url)) {
+        return '';
+    }
+    $parts = parse_url($url);
+    $host = strtolower((string)($parts['host'] ?? ''));
+    $path = (string)($parts['path'] ?? '');
+    if (!in_array($host, ['merchantcircle.com', 'www.merchantcircle.com'], true)) {
+        return '';
+    }
+    if (!preg_match('#^/[a-z0-9][a-z0-9-]*-[a-z]{2}/?$#i', $path)) {
+        return '';
+    }
+    if (preg_match('#^/(?:search|directory|root|business-action|business_homepage|consumer|static|contact|about|privacy|terms)(?:/|$)#i', $path)) {
+        return '';
+    }
+    return 'https://www.merchantcircle.com' . rtrim($path, '/');
+}
+
+function normalizeYellowPagesCaDetailUrl(string $url): string
+{
+    if ($url === '' || !preg_match('/^https?:\/\//i', $url)) {
+        return '';
+    }
+    $parts = parse_url($url);
+    $host = strtolower((string)($parts['host'] ?? ''));
+    $path = (string)($parts['path'] ?? '');
+    if (!in_array($host, ['yellowpages.ca', 'www.yellowpages.ca', 'm.yellowpages.ca', 'yp.ca', 'www.yp.ca', 'pagesjaunes.ca', 'www.pagesjaunes.ca'], true)) {
+        return '';
+    }
+    if (!preg_match('#^/bus/[^?#]+\.html$#i', $path)) {
+        return '';
+    }
+    $canonicalHost = str_contains($host, 'pagesjaunes.ca') ? 'www.pagesjaunes.ca' : 'www.yellowpages.ca';
+    return 'https://' . $canonicalHost . $path;
+}
+
 function normalizeSearchResultUrl(string $url): string
 {
     if ($url === '') {
@@ -3470,6 +3564,12 @@ function extractContactFromHtml(string $html, string $url): array
     }
     if (normalizePanoramaFirmDetailUrl($url) !== '') {
         return extractDirectoryDetailContact($html, $url, ['panoramafirm.pl', 'wenet.pl', 'wenetpolska.pl', 'biznesfinder.pl', 'panoramadanych.pl']);
+    }
+    if (normalizeMerchantCircleDetailUrl($url) !== '') {
+        return extractDirectoryDetailContact($html, $url, ['merchantcircle.com', 'static1.merchantcircle.com', 'static2.merchantcircle.com', 'static3.merchantcircle.com', 'static4.merchantcircle.com']);
+    }
+    if (normalizeYellowPagesCaDetailUrl($url) !== '') {
+        return extractDirectoryDetailContact($html, $url, ['yellowpages.ca', 'yp.ca', 'pagesjaunes.ca']);
     }
     $text = html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8');
     preg_match('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i', $text, $emailMatch);
@@ -3651,12 +3751,12 @@ function extractDirectoryDetailContact(string $html, string $url, array $sourceH
 {
     $json = firmyJsonLd($html);
     $text = html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8');
-    $email = extractMailtoEmail($html);
+    $email = extractMailtoEmail($html, $sourceHosts);
     if ($email === '') {
         $email = extractCloudflareProtectedEmail($html);
     }
     if ($email === '') {
-        $email = extractUsefulEmail($html);
+        $email = extractUsefulEmail($html, $sourceHosts);
     }
 
     $subjectName = trim((string)($json['name'] ?? ''));
@@ -3669,7 +3769,7 @@ function extractDirectoryDetailContact(string $html, string $url, array $sourceH
     if ($subjectName === '' && preg_match('/<title[^>]*>(.*?)<\/title>/is', $html, $titleMatch)) {
         $subjectName = trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags($titleMatch[1]), ENT_QUOTES, 'UTF-8')));
     }
-    $subjectName = trim(preg_replace('/\s*(?:\||-)\s*(?:GelbeSeiten\.de|Das Oertliche|Das Ortliche|DasOertliche\.de|pkt\.pl|Panorama Firm).*$/iu', '', $subjectName) ?? $subjectName);
+    $subjectName = trim(preg_replace('/\s*(?:\||-)\s*(?:GelbeSeiten\.de|Das Oertliche|Das Ortliche|DasOertliche\.de|pkt\.pl|Panorama Firm|MerchantCircle|YellowPages\.ca|Yellow Pages|YP\.ca|PagesJaunes\.ca|Pages Jaunes).*$/iu', '', $subjectName) ?? $subjectName);
 
     $website = extractDirectoryWebsite($html, $url, $sourceHosts, (string)($json['url'] ?? ''));
     $address = directoryAddress($json);
@@ -3686,17 +3786,35 @@ function extractDirectoryDetailContact(string $html, string $url, array $sourceH
     ];
 }
 
-function extractMailtoEmail(string $html): string
+function extractMailtoEmail(string $html, array $sourceHosts = []): string
 {
     if (preg_match('/(?:href|data-link)=(["\'])mailto:([^"\']+)\1/i', $html, $mailMatch)) {
         $email = html_entity_decode(rawurldecode(trim($mailMatch[2])), ENT_QUOTES, 'UTF-8');
         $email = preg_replace('/\?.*$/', '', $email) ?? $email;
+        if (emailMatchesSourceHosts($email, $sourceHosts)) {
+            return '';
+        }
         return filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : '';
     }
     return '';
 }
 
-function extractUsefulEmail(string $html): string
+function emailMatchesSourceHosts(string $email, array $sourceHosts): bool
+{
+    $domain = strtolower((string)substr(strrchr(strtolower(trim($email)), '@') ?: '', 1));
+    if ($domain === '') {
+        return false;
+    }
+    foreach ($sourceHosts as $sourceHost) {
+        $sourceHost = strtolower((string)$sourceHost);
+        if ($domain === $sourceHost || str_ends_with($domain, '.' . $sourceHost)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function extractUsefulEmail(string $html, array $sourceHosts = []): string
 {
     $text = html_entity_decode($html, ENT_QUOTES, 'UTF-8');
     preg_match_all('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/i', $text, $matches);
@@ -3711,9 +3829,37 @@ function extractUsefulEmail(string $html): string
         if (preg_match('/@(example|domain|invalid|localhost)\./i', $candidate)) {
             continue;
         }
+        if (emailMatchesSourceHosts($candidate, $sourceHosts)) {
+            continue;
+        }
         return $candidate;
     }
     return '';
+}
+
+function enrichDirectoryContactFromBusinessWebsite(array $contact): array
+{
+    $website = normalizeWebsite(trim((string)($contact['website'] ?? '')));
+    if ($website === '') {
+        return $contact;
+    }
+    try {
+        $siteContact = extractContactFromHtml(httpGet($website), $website);
+    } catch (Throwable $e) {
+        return $contact;
+    }
+    $siteEmail = strtolower(trim((string)($siteContact['email'] ?? '')));
+    if ($siteEmail === '' || !filter_var($siteEmail, FILTER_VALIDATE_EMAIL)) {
+        return $contact;
+    }
+    $contact['email'] = $siteEmail;
+    foreach (['subject_name', 'address', 'name'] as $field) {
+        if (trim((string)($contact[$field] ?? '')) === '' && trim((string)($siteContact[$field] ?? '')) !== '') {
+            $contact[$field] = $siteContact[$field];
+        }
+    }
+    $contact['website'] = $website;
+    return $contact;
 }
 
 function extractDirectoryWebsite(string $html, string $baseUrl, array $sourceHosts, string $jsonUrl = ''): string
@@ -5762,7 +5908,7 @@ function uiTranslationMap(string $language): array
             'Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.' => 'Die Anwendung ist nur fuer die produktive MySQL/MariaDB-Datenbank konfiguriert. Bitte pruefe APP_DATABASE_NAME, APP_DATABASE_USERNAME und APP_DATABASE_PASSWORD in GitHub Secrets sowie die Datenbankrechte fuer SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER auf dieser Datenbank.',
             'Jednotlive casti nastaveni se meni oddelene, aby se prihlasovaci udaje nikdy neprepsaly omylem.' => 'Die einzelnen Einstellungsbereiche werden getrennt bearbeitet, damit Zugangsdaten nicht versehentlich ueberschrieben werden.',
             'Prehled pripravenych kampani, jejich planu, limitu a stavu osloveni.' => 'Uebersicht der vorbereiteten Kampagnen, Plaene, Limits und Kontaktstatus.',
-            'Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl a PanoramaFirm.pl. Z nalezenych detailu pak hleda email, nazev, web a adresu.' => 'Das Backend durchsucht die Ergebnisseiten fortlaufend, solange die Quelle weitere Eintraege liefert. Unterstuetzt werden Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl und PanoramaFirm.pl. Aus den Detailseiten werden E-Mail, Name, Website und Adresse gelesen.',
+            'Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl, PanoramaFirm.pl, MerchantCircle a YellowPages.ca. Z nalezenych detailu pak hleda email, nazev, web a adresu.' => 'Das Backend durchsucht die Ergebnisseiten fortlaufend, solange die Quelle weitere Eintraege liefert. Unterstuetzt werden Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl, PanoramaFirm.pl, MerchantCircle und YellowPages.ca. Aus den Detailseiten werden E-Mail, Name, Website und Adresse gelesen.',
             'Kazdy kontejner drzi zdroj, klicove slovo a cilovou databazi. Kliknutim na radek otevres logy konkretniho kontejneru.' => 'Jeder Container speichert Quelle, Suchbegriff und Zieldatenbank. Mit einem Klick auf die Zeile oeffnest du die Logs des Containers.',
             'Kliknutim na radek otevres konkretni databazi kontaktu.' => 'Mit einem Klick auf die Zeile oeffnest du die jeweilige Kontaktdatenbank.',
             'Tento kontakt uz nebude zahrnuty do dalsich rozesilek.' => 'Dieser Kontakt wird in weiteren Aussendungen nicht mehr beruecksichtigt.',
@@ -6083,7 +6229,7 @@ function uiTranslationMap(string $language): array
         'Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.' => 'The application is configured to use only the production MySQL/MariaDB database. Please check APP_DATABASE_NAME, APP_DATABASE_USERNAME and APP_DATABASE_PASSWORD in GitHub Secrets, especially the database user permissions for SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER on this database.',
         'Jednotlive casti nastaveni se meni oddelene, aby se prihlasovaci udaje nikdy neprepsaly omylem.' => 'Each configuration area is edited separately so credentials are not overwritten accidentally.',
         'Prehled pripravenych kampani, jejich planu, limitu a stavu osloveni.' => 'Overview of prepared campaigns, schedules, limits and outreach status.',
-        'Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl a PanoramaFirm.pl. Z nalezenych detailu pak hleda email, nazev, web a adresu.' => 'The backend walks through result pages until the source stops returning records. Supported sources are Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl and PanoramaFirm.pl. From detail pages it extracts email, name, website and address.',
+        'Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl, PanoramaFirm.pl, MerchantCircle a YellowPages.ca. Z nalezenych detailu pak hleda email, nazev, web a adresu.' => 'The backend walks through result pages until the source stops returning records. Supported sources are Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl, PanoramaFirm.pl, MerchantCircle and YellowPages.ca. From detail pages it extracts email, name, website and address.',
         'Kazdy kontejner drzi zdroj, klicove slovo a cilovou databazi. Kliknutim na radek otevres logy konkretniho kontejneru.' => 'Each container stores the source, keyword and target database. Click a row to open logs for that container.',
         'Kliknutim na radek otevres konkretni databazi kontaktu.' => 'Click a row to open that contact database.',
         'Tento kontakt uz nebude zahrnuty do dalsich rozesilek.' => 'This contact will no longer be included in future sends.',
@@ -7184,7 +7330,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             </label>
             <label>Klicove slovo<input name="keyword" placeholder="Napriklad: masaze, massage, Massagen, masaz" required></label>
             <label>Cilova databaze kontaktu<select name="list_id"><?php foreach ($lists as $list) echo '<option value="'.h((string)$list['id']).'" '.($selectedListId===(int)$list['id']?'selected':'').'>'.h($list['name']).'</option>'; ?></select></label>
-            <div class="note">Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl a PanoramaFirm.pl. Z nalezenych detailu pak hleda email, nazev, web a adresu.</div>
+            <div class="note">Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl, PanoramaFirm.pl, MerchantCircle a YellowPages.ca. Z nalezenych detailu pak hleda email, nazev, web a adresu.</div>
             <div class="modal-actions">
                 <button>Vytvorit kontejner</button>
             </div>
