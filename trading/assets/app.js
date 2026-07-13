@@ -142,6 +142,18 @@ function marketAnchor(item) {
   `;
 }
 
+function analysisBadge(item) {
+  const reasons = (item.rejectReasons || []).join("; ") || "passes filters";
+  const details = [reasons, item.analysisSummary || ""].filter(Boolean).join("\n\n");
+  return `
+    <span class="analysis-popover">
+      <button class="info-button" type="button" aria-label="Show analysis details" title="${escapeHtml(details)}">i</button>
+      <span class="analysis-tooltip" role="tooltip">${escapeHtml(details)}</span>
+    </span>
+    <span class="analysis-reason">${escapeHtml(reasons)}</span>
+  `;
+}
+
 async function getJson(url) {
   const response = await fetch(url, { cache: "no-store" });
   const payload = await response.json();
@@ -695,8 +707,7 @@ function renderBotEvaluations() {
             <td>${probability(Number(item.aiProbability))}</td>
             <td class="${Number(item.annualizedReturn) >= 0 ? "positive" : "negative"}">${percent(Number(item.annualizedReturn))}</td>
             <td>
-              <strong>${escapeHtml((item.rejectReasons || []).join("; ") || "passes filters")}</strong>
-              <span>${escapeHtml(item.analysisSummary || "")}</span>
+              ${analysisBadge(item)}
             </td>
           </tr>
         `).join("")}

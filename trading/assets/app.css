@@ -548,6 +548,63 @@ button {
   color: var(--accent-dark);
 }
 
+.ledger td .analysis-popover {
+  position: relative;
+  display: inline-flex;
+  max-width: none;
+  margin: 0;
+  vertical-align: middle;
+}
+
+.info-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ledger td .analysis-tooltip {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  display: none;
+  width: min(420px, 72vw);
+  max-width: 420px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #111827;
+  color: #f8fafc;
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-transform: none;
+  white-space: pre-line;
+}
+
+.ledger td .analysis-popover:hover .analysis-tooltip,
+.ledger td .analysis-popover:focus-within .analysis-tooltip {
+  display: block;
+}
+
+.analysis-reason {
+  display: inline-block !important;
+  max-width: 220px !important;
+  margin: 0 0 0 8px !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .positive {
   color: var(--good) !important;
 }
