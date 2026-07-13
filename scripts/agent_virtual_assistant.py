@@ -1207,6 +1207,22 @@ def handle_xoz_approval_callback(data: str) -> tuple[str, dict[str, Any] | None,
         return ("Schvaleno. Predavam XOZ pokyn k dalsimu kroku.", None, "")
     if action == "edit":
         return ("Napis prosim upravu jednou vetou; predam ji Agentu XOZ k prepracovani.", None, "")
+    if action == "cancel":
+        now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        record["status"] = "CANCELED_BY_JAKUB"
+        record["canceled_at"] = now
+        statuses = state.get("task_status")
+        if not isinstance(statuses, dict):
+            statuses = {}
+        statuses[str(task.get("id") or task_id)] = record
+        state["task_status"] = statuses
+        state["last_output"] = record
+        g.write_json(state_path, state)
+        task["status"] = "CANCELED"
+        task["last_observation"] = "XOZ navrh zrusen tlacitkem."
+        task["updated_at"] = now
+        save_orchestration_tasks(tasks)
+        return ("Zruseno. XOZ navrh dal neposouvam.", None, "")
     return ("Nerozumim schvalovacimu tlacitku.", None, "")
 
 
@@ -4342,6 +4358,7 @@ def xoz_approval_keyboard(task_id: str) -> dict[str, Any]:
         "inline_keyboard": [[
             {"text": "Schvalit", "callback_data": f"xoz:approve:{short_id}"},
             {"text": "Upravit", "callback_data": f"xoz:edit:{short_id}"},
+            {"text": "Zrusit", "callback_data": f"xoz:cancel:{short_id}"},
         ]]
     }
 
@@ -4372,14 +4389,32 @@ def telegram_notify_xoz_approval(task: dict[str, Any], note: str) -> str:
         else:
             result = telegram_api_post("sendMessage", {
                 "chat_id": chat_id,
-                "text": note,
+                "text": caption,
                 "reply_markup": keyboard,
             }, timeout=20)
         if result.get("ok"):
+            message_id = ((result.get("result") or {}) or {}).get("message_id")
+            if message_id:
+                task["approval_keyboard_message_id"] = str(message_id)
+            task["approval_keyboard_reported_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
             return "sent"
     except Exception as exc:
-        g.log(f"XOZ approval Telegram photo failed: {type(exc).__name__}: {exc}")
-    return "sent" if telegram_notify(note) else "failed"
+        g.log(f"XOZ approval Telegram media send failed: {type(exc).__name__}: {exc}")
+    try:
+        result = telegram_api_post("sendMessage", {
+            "chat_id": chat_id,
+            "text": caption,
+            "reply_markup": keyboard,
+        }, timeout=20)
+        if result.get("ok"):
+            message_id = ((result.get("result") or {}) or {}).get("message_id")
+            if message_id:
+                task["approval_keyboard_message_id"] = str(message_id)
+            task["approval_keyboard_reported_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+            return "sent"
+    except Exception as exc:
+        g.log(f"XOZ approval Telegram message failed: {type(exc).__name__}: {exc}")
+    return "failed"
 
 
 def telegram_notify_deduped(text: str, window_seconds: int = 1800) -> str:
@@ -4777,6 +4812,27 @@ def x_task_observation(task: dict[str, Any]) -> tuple[str, str]:
     return "VERIFYING", f"{agent} assignment cekam na propsani do state souboru."
 
 
+def should_resend_xoz_approval_buttons(task: dict[str, Any]) -> bool:
+    if str(task.get("kind") or "") != "xoz-social-draft":
+        return False
+    if str(task.get("status") or "") != "DONE":
+        return False
+    if task.get("approval_keyboard_reported_at"):
+        return False
+    if task_age_seconds(task) > 14 * 24 * 3600:
+        return False
+    proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
+    state_path = Path(str(proof.get("state") or XOZ_STATE_FILE))
+    state = g.load_json(state_path, {}) if state_path.exists() else {}
+    record = xoz_task_record_for_task(state if isinstance(state, dict) else {}, task)
+    if not isinstance(record, dict):
+        return False
+    if not str(record.get("output") or "").strip():
+        return False
+    status = str(record.get("status") or "").upper()
+    return status in {"", "READY_FOR_APPROVAL", "DELIVERED"}
+
+
 def observe_delegation_task(task: dict[str, Any]) -> tuple[str, str]:
     kind = str(task.get("kind") or "")
     if kind.startswith("blogger-"):
@@ -4844,7 +4900,8 @@ def delegation_monitor_once() -> None:
             status = str(task.get("status") or "ASSIGNED")
             rechecking_reported_link = status in {"DONE", "BLOCKED"} and bool(task.get("reported_at")) and should_recheck_reported_blogger_task(task)
             rechecking_agent_d_blocker = status == "BLOCKED" and bool(task.get("reported_at")) and should_auto_escalate_to_agent_g(task, str(task.get("last_observation") or ""))
-            if status in {"DONE", "BLOCKED", "CANCELED"} and task.get("reported_at") and not rechecking_reported_link and not rechecking_agent_d_blocker:
+            rechecking_xoz_buttons = status == "DONE" and bool(task.get("reported_at")) and should_resend_xoz_approval_buttons(task)
+            if status in {"DONE", "BLOCKED", "CANCELED"} and task.get("reported_at") and not rechecking_reported_link and not rechecking_agent_d_blocker and not rechecking_xoz_buttons:
                 continue
             new_status, note = observe_delegation_task(task)
             now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -4873,7 +4930,7 @@ def delegation_monitor_once() -> None:
                     changed = True
             should_report = task.get("last_reported_status") != new_status or (
                 rechecking_reported_link and new_status == "DONE" and "http" in note
-            )
+            ) or rechecking_xoz_buttons
             if new_status in {"DONE", "BLOCKED"} and should_report:
                 verb = "Hotovo" if new_status == "DONE" else "Blocker"
                 message = f"{verb}: {note}"
