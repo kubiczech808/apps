@@ -264,6 +264,10 @@ final class Content
         $rendered = do_blocks($translation->content);
         $this->template_part_guard = false;
 
+        if (preg_match('/^(\s*<(header|footer|div)\b[^>]*>)(.*)(<\/\2>\s*)$/is', $block_content, $matches)) {
+            return $matches[1] . $rendered . $matches[4];
+        }
+
         return $rendered;
     }
 
