@@ -74,6 +74,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/history — recent publications\n"
         "/topics — content plan status\n"
         "/engage [query] — find related Medium articles and draft comments\n"
+        "/engage_auto <0-10> — set daily scheduled Medium engagement proposals\n"
         "/status — token usage & schedule\n"
         "/help — this message\n\n"
         "Slug is optional — without it, the next planned topic is used."
@@ -614,6 +615,48 @@ async def engage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception as exc:
         log.exception("Medium engagement scout failed")
         await msg.reply_text(f"Medium engagement scout failed:\n{exc}")
+
+
+@admin_only
+async def engage_auto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    from agent_m.medium_engagement import get_daily_proposal_count, set_daily_proposal_count
+
+    if not context.args:
+        count = get_daily_proposal_count()
+        await msg.reply_text(
+            "Medium engagement auto proposals\n"
+            f"Current: {count} per day\n"
+            "Usage: /engage_auto <0-10>\n"
+            "0 disables scheduled proposals. Approved comments still have a hard cap of 10 per day."
+        )
+        return
+
+    try:
+        count = int(context.args[0])
+    except ValueError:
+        await msg.reply_text("Usage: /engage_auto <0-10>")
+        return
+
+    result = set_daily_proposal_count(count)
+    try:
+        from agent_m.telegram.bot import _schedule_engagement_slots
+
+        _schedule_engagement_slots(context.application)
+        rescheduled = True
+    except Exception:
+        log.exception("Could not reschedule Medium engagement slots after /engage_auto")
+        rescheduled = False
+
+    await msg.reply_text(
+        "Medium engagement auto proposals updated\n"
+        f"Daily proposals: {result['daily_proposals']}\n"
+        f"Hard daily posting cap: {result['max_daily_posts']}\n"
+        f"Today's slots rescheduled: {'yes' if rescheduled else 'not confirmed'}"
+    )
 
 
 @admin_only

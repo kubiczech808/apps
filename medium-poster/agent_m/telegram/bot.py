@@ -18,7 +18,6 @@ log = logging.getLogger(__name__)
 _QUOTA_KEYWORDS = ("quota", "resource_exhausted", "429", "rate")
 _MAX_RETRIES = 3
 _RETRY_DELAY_S = 3600  # 1 hour
-_ENGAGEMENT_DAILY_PROPOSALS = 1
 
 
 def _is_quota_error(err: Exception) -> bool:
@@ -127,10 +126,17 @@ async def _schedule_engagement_day(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _schedule_engagement_slots(application) -> None:
-    from agent_m.medium_engagement import planned_times_for_today
+    from agent_m.medium_engagement import get_daily_proposal_count, planned_times_for_today
 
     now = datetime.datetime.now(ZoneInfo("Europe/Prague"))
-    slots = planned_times_for_today(now, count=_ENGAGEMENT_DAILY_PROPOSALS)
+    daily_count = get_daily_proposal_count()
+    for job in application.job_queue.jobs():
+        if job.name.startswith("medium_engagement_") and job.name not in {
+            "medium_engagement_schedule_day",
+            "medium_engagement_summary",
+        }:
+            job.schedule_removal()
+    slots = planned_times_for_today(now, count=daily_count)
     for slot in slots:
         application.job_queue.run_once(
             _scheduled_engagement_slot,
@@ -139,10 +145,13 @@ def _schedule_engagement_slots(application) -> None:
         )
     if slots:
         log.info(
-            "Scheduled %d Medium engagement proposal slots: %s",
+            "Scheduled %d/%d Medium engagement proposal slots: %s",
             len(slots),
+            daily_count,
             ", ".join(slot.strftime("%H:%M") for slot in slots),
         )
+    else:
+        log.info("Scheduled 0/%d Medium engagement proposal slots for the rest of today", daily_count)
 
 
 _BOT_COMMANDS = [
@@ -156,6 +165,7 @@ _BOT_COMMANDS = [
     BotCommand("history", "Poslední publikace"),
     BotCommand("topics", "Stav obsahového plánu"),
     BotCommand("engage", "Najít články a navrhnout komentáře"),
+    BotCommand("engage_auto", "Nastavit denni pocet engagement navrhu"),
     BotCommand("status", "Využití tokenů a rozvrh"),
     BotCommand("help", "Nápověda"),
 ]
@@ -211,6 +221,7 @@ def build_app():
     app.add_handler(CommandHandler("topics", handlers.topics_cmd))
     app.add_handler(CommandHandler("topic", handlers.topic_suggestion_cmd))
     app.add_handler(CommandHandler("engage", handlers.engage_cmd))
+    app.add_handler(CommandHandler("engage_auto", handlers.engage_auto_cmd))
     app.add_handler(CommandHandler("status", handlers.status_cmd))
     app.add_handler(CommandHandler("feedback", handlers.feedback_cmd))
     app.add_handler(CommandHandler("feedback_clear", handlers.feedback_clear_cmd))

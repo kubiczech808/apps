@@ -23,6 +23,7 @@ _STATE_FILE = config.data_dir / "medium_engagement.json"
 _OWN_MEDIUM_MARKERS = ("/@info_89535/", "medium.com/@info_89535")
 _PRAGUE = ZoneInfo("Europe/Prague")
 _DAILY_LIMIT = 10
+_DEFAULT_DAILY_PROPOSALS = 1
 _MIN_RESPONSES = 3
 _MIN_FOLLOWERS = 500
 _DEFAULT_QUERIES = [
@@ -59,7 +60,7 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
     state = _read_state(_STATE_FILE)
     seen = set(state.setdefault("seen_urls", []))
     blocked_articles = _used_article_urls(state)
-    blocked_profiles = _used_profiles_this_week(state)
+    blocked_profiles = _blocked_profiles(state) | _used_profiles_this_week(state)
 
     queries = [query] if query else await _build_queries()
     publisher = MediumPlaywrightPublisher()
@@ -278,14 +279,44 @@ def skip_opportunity(op_id: str) -> dict:
         return {"status": "not_found", "id": op_id}
     if op.get("status") != "pending":
         return {"status": "already_handled", "id": op_id, "current_status": op.get("status")}
+    profile = _normalize_profile(op.get("profile") or _profile_from_url(op.get("url") or ""))
+    if profile:
+        blocked = state.setdefault("blocked_profiles", {})
+        blocked[profile] = {
+            "blocked_at": datetime.now(timezone.utc).isoformat(),
+            "reason": "telegram_skip",
+            "title": op.get("title"),
+            "url": op.get("url"),
+            "opportunity_id": op_id,
+        }
     op["status"] = "skipped"
     op["updated_at"] = datetime.now(timezone.utc).isoformat()
     _write_state(_STATE_FILE, state)
-    return {"status": "skipped", "id": op_id, "title": op.get("title")}
+    return {"status": "skipped", "id": op_id, "title": op.get("title"), "profile": profile}
 
 
-def planned_times_for_today(now: datetime | None = None, count: int = _DAILY_LIMIT) -> list[datetime]:
+def get_daily_proposal_count() -> int:
+    state = _read_state(_STATE_FILE)
+    settings = state.setdefault("settings", {})
+    return _clamp_daily_proposals(settings.get("daily_proposals", _DEFAULT_DAILY_PROPOSALS))
+
+
+def set_daily_proposal_count(count: int) -> dict:
+    count = _clamp_daily_proposals(count)
+    state = _read_state(_STATE_FILE)
+    settings = state.setdefault("settings", {})
+    settings["daily_proposals"] = count
+    settings["updated_at"] = datetime.now(timezone.utc).isoformat()
+    plans = state.setdefault("plans", {})
+    today = datetime.now(_PRAGUE).date().isoformat()
+    plans.pop(today, None)
+    _write_state(_STATE_FILE, state)
+    return {"status": "ok", "daily_proposals": count, "max_daily_posts": _DAILY_LIMIT}
+
+
+def planned_times_for_today(now: datetime | None = None, count: int | None = None) -> list[datetime]:
     now = now.astimezone(_PRAGUE) if now else datetime.now(_PRAGUE)
+    count = get_daily_proposal_count() if count is None else _clamp_daily_proposals(count)
     state = _read_state(_STATE_FILE)
     plans = state.setdefault("plans", {})
     day_key = now.date().isoformat()
@@ -521,11 +552,13 @@ def _fallback_article(candidate: dict, details: dict) -> tuple[bool, str]:
 
 
 def _looks_english(lang: str, text: str) -> bool:
-    if lang and not lang.startswith("en"):
-        return False
-
     sample = _clean_text(text).lower()[:2500]
     if not sample:
+        return False
+
+    if _looks_french(sample):
+        return False
+    if lang and not lang.startswith("en"):
         return False
 
     letters = [ch for ch in sample if ch.isalpha()]
@@ -544,6 +577,27 @@ def _looks_english(lang: str, text: str) -> bool:
         return False
     hits = sum(1 for word in words[:300] if word in english_markers)
     return hits >= 5 or ("bitcoin" in words and ("dca" in words or "strategy" in words))
+
+
+def _looks_french(sample: str) -> bool:
+    words = re.findall(r"[a-zàâçéèêëîïôûùüÿñæœ]{2,}", sample.lower())
+    if not words:
+        return False
+    french_markers = {
+        "la", "le", "les", "des", "du", "de", "pour", "avec", "dans",
+        "une", "est", "pas", "plus", "sur", "par", "vous", "votre",
+        "meilleure", "strategie", "stratégie", "acheter", "investissement",
+        "recurrent", "récurrent", "ou", "et", "que", "qui",
+    }
+    french_hits = sum(1 for word in words[:220] if word in french_markers)
+    english_markers = {
+        "the", "and", "that", "with", "this", "from", "have", "your",
+        "market", "price", "strategy", "investing", "stack", "wallet",
+    }
+    english_hits = sum(1 for word in words[:220] if word in english_markers)
+    if french_hits >= 4 and french_hits > english_hits:
+        return True
+    return bool(re.search(r"\b(la|le|les|du|des)\s+\w+\s+(strategie|stratégie|pour|bitcoin)\b", sample))
 
 
 async def _draft_comment(candidate: dict) -> str:
@@ -705,19 +759,47 @@ def _used_profiles_this_week(state: dict, exclude_pending_id: str | None = None)
     profiles = set()
     for item in state.get("posted", []):
         if _week_key(_parse_dt(item.get("posted_at") or item.get("posted_at_local"))) == week:
-            profiles.add(item.get("profile") or _profile_from_url(item.get("url") or ""))
+            profiles.add(_normalize_profile(item.get("profile") or _profile_from_url(item.get("url") or "")))
     for pending_id, item in state.get("pending", {}).items():
         if pending_id == exclude_pending_id:
             continue
         if item.get("status") == "pending":
             created = _parse_dt(item.get("created_at"))
             if _week_key(created) == week:
-                profiles.add(item.get("profile") or _profile_from_url(item.get("url") or ""))
+                profiles.add(_normalize_profile(item.get("profile") or _profile_from_url(item.get("url") or "")))
     return {p for p in profiles if p}
 
 
+def _blocked_profiles(state: dict) -> set[str]:
+    raw = state.get("blocked_profiles") or {}
+    if isinstance(raw, dict):
+        return {_normalize_profile(key) for key in raw.keys() if _normalize_profile(key)}
+    if isinstance(raw, list):
+        return {_normalize_profile(str(item)) for item in raw if _normalize_profile(str(item))}
+    return set()
+
+
+def _normalize_profile(profile: str | None) -> str:
+    if not profile:
+        return ""
+    profile = profile.strip().lower()
+    if profile.startswith("https://"):
+        profile = profile[len("https://"):]
+    elif profile.startswith("http://"):
+        profile = profile[len("http://"):]
+    return profile.rstrip("/")
+
+
+def _clamp_daily_proposals(count: object) -> int:
+    try:
+        value = int(count)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        value = _DEFAULT_DAILY_PROPOSALS
+    return max(0, min(_DAILY_LIMIT, value))
+
+
 def _generate_day_times(day: date, count: int) -> list[datetime]:
-    # Ten spread-out slots between 07:35 and 20:10 Europe/Prague.
+    # Spread slots between 07:35 and 20:10 Europe/Prague.
     import random
 
     start_min = 7 * 60 + 35
