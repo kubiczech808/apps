@@ -1,0 +1,60 @@
+name: Apply JAMU multilingual production
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/jamu-multilingual']
+    paths:
+      - '.github/jamu-apply-trigger'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jamu-production-apply
+  cancel-in-progress: false
+
+jobs:
+  deploy-activate-import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: jamu-production
+    env:
+      JAMU_FTP_LOGIN: ${{ secrets.JAMU_FTP_LOGIN }}
+      JAMU_FTP_PWD: ${{ secrets.JAMU_FTP_PWD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/jamu-multilingual
+      - name: Validate deployment scope and secrets
+        run: |
+          test -n "$JAMU_FTP_LOGIN" || { echo 'Missing JAMU_FTP_LOGIN'; exit 1; }
+          test -n "$JAMU_FTP_PWD" || { echo 'Missing JAMU_FTP_PWD'; exit 1; }
+          test -f wordpress/jamu-multilingual/jamu-multilingual.php
+          test -f jamu-content/translations-draft.json
+          test -f scripts/templates/jamu_apply_bridge.php
+          test ! -e wordpress/jamu-multilingual/wp-config.php
+      - name: PHP syntax check
+        run: |
+          find wordpress/jamu-multilingual -name '*.php' -print0 | xargs -0 -n1 php -l
+          php -l scripts/templates/jamu_apply_bridge.php
+      - name: Upload standalone plugin directory
+        run: python scripts/jamu_ftp_deploy.py
+      - name: Activate plugin and import translations
+        run: python scripts/jamu_apply_translations.py
+      - name: Verify localized entry URLs
+        run: |
+          for lang in en de pl; do
+            curl --fail --silent --show-error --location --max-time 60 "https://tajemstvijamu.cz/${lang}/" -o "/tmp/jamu-${lang}.html"
+            grep -qi '<html' "/tmp/jamu-${lang}.html"
+            grep -qi "jamu-language-${lang}\\|hreflang=\"${lang}\"\\|lang=\"${lang}" "/tmp/jamu-${lang}.html"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jamu-apply-manifests
+          path: |
+            jamu-deploy-manifest.json
+            jamu-apply-manifest.json
+          if-no-files-found: ignore
+          retention-days: 14

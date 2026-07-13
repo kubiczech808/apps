@@ -346,13 +346,27 @@ final class Admin
             'route_path' => sanitize_text_field($row['route_path'] ?? ''),
             'slug' => sanitize_title($row['slug'] ?? ''),
             'title' => sanitize_text_field($row['title'] ?? ''),
-            'excerpt' => wp_kses_post($row['excerpt'] ?? ''),
-            'content' => wp_kses_post($row['content'] ?? ''),
+            'excerpt' => $this->sanitize_markup((string) ($row['excerpt'] ?? '')),
+            'content' => $this->sanitize_markup((string) ($row['content'] ?? '')),
             'seo_title' => sanitize_text_field($row['seo_title'] ?? ''),
             'meta_description' => sanitize_textarea_field($row['meta_description'] ?? ''),
             'data' => is_array($row['data'] ?? null) ? $row['data'] : [],
             'status' => ($row['status'] ?? '') === 'publish' ? 'publish' : 'draft',
         ];
+    }
+
+    private function sanitize_markup(string $value): string
+    {
+        $comments = [];
+        $placeholder_prefix = 'jamu_ml_block_comment_';
+        $value = preg_replace_callback('/<!--\s*\/?wp:[\s\S]*?-->/', static function (array $match) use (&$comments, $placeholder_prefix): string {
+            $placeholder = $placeholder_prefix . count($comments) . '_';
+            $comments[$placeholder] = $match[0];
+            return $placeholder;
+        }, $value) ?? $value;
+
+        $value = wp_kses_post($value);
+        return strtr($value, $comments);
     }
 
     private function source_inventory(): array
