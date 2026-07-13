@@ -153,8 +153,32 @@
         <article class="panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Step 3</p>
-              <h2>Paper portfolio</h2>
+              <p class="eyebrow">Autonomous bot</p>
+              <h2>Daily paper picks</h2>
+            </div>
+            <span class="pill" data-bot-action>loading</span>
+          </div>
+          <div class="bot-status" data-bot-status></div>
+          <div class="ledger" data-bot-trades></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Autonomous bot</p>
+              <h2>Evaluation log</h2>
+            </div>
+          </div>
+          <div class="ledger" data-bot-evaluations></div>
+        </article>
+      </section>
+
+      <section class="portfolio-grid">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Manual sandbox</p>
+              <h2>Local paper portfolio</h2>
             </div>
             <button class="secondary-button" type="button" data-clear-ledger>Clear ledger</button>
           </div>

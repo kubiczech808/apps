@@ -33,6 +33,10 @@ const els = {
   paperEnter: document.querySelector("[data-paper-enter]"),
   ledger: document.querySelector("[data-ledger]"),
   clearLedger: document.querySelector("[data-clear-ledger]"),
+  botAction: document.querySelector("[data-bot-action]"),
+  botStatus: document.querySelector("[data-bot-status]"),
+  botTrades: document.querySelector("[data-bot-trades]"),
+  botEvaluations: document.querySelector("[data-bot-evaluations]"),
   payload: document.querySelector("[data-payload]"),
   copy: document.querySelector("[data-copy]"),
   sidebarEquity: document.querySelector("[data-sidebar-equity]"),
@@ -68,6 +72,11 @@ function money(value, digits = 2) {
 }
 
 function probability(value) {
+  if (!Number.isFinite(value)) return "-";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function percent(value) {
   if (!Number.isFinite(value)) return "-";
   return `${(value * 100).toFixed(1)}%`;
 }
@@ -461,6 +470,124 @@ function renderPortfolio() {
   `;
 }
 
+async function loadBotState() {
+  if (!els.botStatus) return;
+
+  try {
+    const statePayload = await fetch(`data/paper-state.json?t=${Date.now()}`, { cache: "no-store" });
+    if (!statePayload.ok) throw new Error(`paper-state.json HTTP ${statePayload.status}`);
+    renderBotState(await statePayload.json());
+  } catch (error) {
+    els.botAction.textContent = "offline";
+    els.botStatus.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+    els.botTrades.innerHTML = '<div class="empty">Autonomous paper bot state is not available yet.</div>';
+    els.botEvaluations.innerHTML = '<div class="empty">No evaluations loaded.</div>';
+  }
+}
+
+function renderBotState(botState) {
+  const decision = botState.lastDecision || {};
+  const portfolio = botState.portfolio || {};
+  const trades = Array.isArray(botState.trades) ? botState.trades : [];
+  const evaluations = Array.isArray(botState.evaluations) ? botState.evaluations : [];
+
+  els.botAction.textContent = decision.action || "waiting";
+  els.botStatus.innerHTML = `
+    <div class="bot-summary">
+      <div>
+        <span class="label">Last run</span>
+        <strong>${escapeHtml(botState.generatedAt || "not yet")}</strong>
+      </div>
+      <div>
+        <span class="label">Free capital</span>
+        <strong>${money(Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100))}</strong>
+      </div>
+      <div>
+        <span class="label">Filters</span>
+        <strong>${percent(Number(portfolio.minProbability ?? 0.95))} / ${percent(Number(portfolio.minAnnualReturn ?? 0.05))} p.a.</strong>
+      </div>
+      <div>
+        <span class="label">Decision</span>
+        <strong>${escapeHtml(decision.reason || "-")}</strong>
+      </div>
+    </div>
+  `;
+
+  if (!trades.length) {
+    els.botTrades.innerHTML = '<div class="empty">Zatim zadne autonomni paper obchody.</div>';
+  } else {
+    els.botTrades.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Opened</th>
+            <th>Market</th>
+            <th>Entry</th>
+            <th>AI prob.</th>
+            <th>p.a.</th>
+            <th>Stake</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${trades.slice(0, 12).map((trade) => `
+            <tr>
+              <td>${escapeHtml(trade.date || trade.openedAt || "-")}</td>
+              <td>
+                <strong>${escapeHtml(trade.outcome)}</strong>
+                <span>${escapeHtml(trade.question)}</span>
+              </td>
+              <td>${probability(Number(trade.entryPrice))}</td>
+              <td>${probability(Number(trade.aiProbability))}</td>
+              <td class="${Number(trade.annualizedReturn) >= 0 ? "positive" : "negative"}">${percent(Number(trade.annualizedReturn))}</td>
+              <td>${money(Number(trade.stakeUsdc || 0))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+
+  if (!evaluations.length) {
+    els.botEvaluations.innerHTML = '<div class="empty">Zatim zadna vyhodnoceni.</div>';
+    return;
+  }
+
+  els.botEvaluations.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Status</th>
+          <th>Market</th>
+          <th>Price</th>
+          <th>AI prob.</th>
+          <th>EV p.a.</th>
+          <th>Analysis</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${evaluations.slice(0, 80).map((item) => `
+          <tr>
+            <td>${escapeHtml(item.evaluatedAt || "-")}</td>
+            <td class="${item.status === "ELIGIBLE" ? "positive" : "negative"}">${escapeHtml(item.status || "-")}</td>
+            <td>
+              <strong>${escapeHtml(item.outcome)}</strong>
+              <span>${escapeHtml(item.question)}</span>
+            </td>
+            <td>${probability(Number(item.marketPrice))}</td>
+            <td>${probability(Number(item.aiProbability))}</td>
+            <td class="${Number(item.annualizedReturn) >= 0 ? "positive" : "negative"}">${percent(Number(item.annualizedReturn))}</td>
+            <td>
+              <strong>${escapeHtml((item.rejectReasons || []).join("; ") || "passes filters")}</strong>
+              <span>${escapeHtml(item.analysisSummary || "")}</span>
+            </td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
 els.candidates.addEventListener("click", (event) => {
   const button = event.target.closest("[data-candidate-index]");
   if (!button) return;
@@ -497,4 +624,5 @@ els.copy.addEventListener("click", async () => {
 });
 
 renderPortfolio();
+loadBotState();
 loadCandidates();

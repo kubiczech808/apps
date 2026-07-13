@@ -1,0 +1,80 @@
+name: Trading Paper Bot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */4 * * *'
+
+jobs:
+  paper:
+    runs-on: ubuntu-latest
+    env:
+      PAPER_STATE_PATH: data/paper-state.json
+      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/data/paper-state.json
+      PAPER_PORTFOLIO_USDC: "100"
+      PAPER_MAX_FRACTION: "0.05"
+      PAPER_MIN_PROBABILITY: "0.95"
+      PAPER_MIN_ANNUAL_RETURN: "0.05"
+      PAPER_MAX_EVALUATIONS_PER_RUN: "80"
+      PAPER_MAX_SPREAD: "0.08"
+      PAPER_MIN_VOLUME_24H: "100"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify paper bot target
+        run: |
+          if grep -R -n -E "server-dir:.*email[-]campaign|local-dir:.*email[-]campaign|/www/email[-]campaign/" .github/workflows/trading-paper-bot.yml trading; then
+            echo "Trading paper bot must not target email-campaign."
+            exit 1
+          fi
+
+      - name: Run paper bot
+        working-directory: trading
+        run: npm run paper:bot
+
+      - name: Upload paper state
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+          PAPER_STATE_FILE: trading/data/paper-state.json
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          from pathlib import Path
+
+          server = os.environ["HOSTING_FTP_SERVER"]
+          username = os.environ["HOSTING_FTP_USERNAME"]
+          password = os.environ["HOSTING_FTP_PASSWORD"]
+          target = os.environ["TRADING_FTP_DIR"].strip("/")
+          state_file = Path(os.environ["PAPER_STATE_FILE"])
+
+          if not state_file.exists():
+              raise SystemExit("paper-state.json was not generated")
+
+          def enter_dir(ftp, parts):
+              try:
+                  ftp.cwd("/")
+              except ftplib.all_errors:
+                  pass
+              for part in parts:
+                  if not part:
+                      continue
+                  try:
+                      ftp.cwd(part)
+                  except ftplib.error_perm:
+                      ftp.mkd(part)
+                      ftp.cwd(part)
+
+          with ftplib.FTP(server, timeout=30) as ftp:
+              ftp.login(username, password)
+              enter_dir(ftp, target.split("/"))
+              with state_file.open("rb") as handle:
+                  ftp.storbinary("STOR paper-state.json", handle)
+          PY

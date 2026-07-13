@@ -17,6 +17,22 @@ The public UI now has a paper-trading desk with a default 100 USDC portfolio and
 
 This first version is deterministic and does not call a private LLM API from the public site. A real AI analyst step should run server-side or in GitHub Actions so model keys stay out of browser code.
 
+## Autonomous paper bot
+
+`.github/workflows/trading-paper-bot.yml` runs every 4 hours and writes `trading/data/paper-state.json` to the public `/trading/data/` directory.
+
+The bot:
+
+- evaluates public Polymarket markets and CLOB orderbooks in the background,
+- records every evaluated candidate with price, spread, liquidity, estimated probability, expected value, annualized expected return, rejection reasons, and an analysis summary,
+- requires estimated probability of at least 95%,
+- rejects candidates with annualized expected return below 5%,
+- risks at most 5 USDC per idea from a 100 USDC paper portfolio,
+- opens at most one paper trade per Prague calendar day,
+- skips new entries when available paper capital is exhausted or the same token already has an open paper position.
+
+This is not live trading. It does not use the Polymarket private key and cannot submit orders.
+
 ## Local executor
 
 Install dependencies inside `trading/`:

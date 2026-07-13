@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "order:poc": "node tools/polymarket-order-poc.mjs"
+    "order:poc": "node tools/polymarket-order-poc.mjs",
+    "paper:bot": "node tools/paper-trading-bot.mjs"
   },
   "dependencies": {
     "@polymarket/clob-client-v2": "^1.0.8",
