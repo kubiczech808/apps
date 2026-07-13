@@ -91,6 +91,23 @@ function percent(value) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function formatDate(value) {
+  const text = String(value || "");
+  const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) return `${dateOnly[3]}. ${dateOnly[2]}. ${dateOnly[1]}`;
+
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text || "-";
+  return new Intl.DateTimeFormat("cs-CZ", {
+    timeZone: "Europe/Prague",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function sortArrow(key) {
   if (state.evaluationSort.key !== key) return "";
   return state.evaluationSort.direction === "asc" ? " asc" : " desc";
@@ -560,7 +577,7 @@ function renderBotState(botState) {
     <div class="bot-summary">
       <div>
         <span class="label">Last run</span>
-        <strong>${escapeHtml(botState.generatedAt || "not yet")}</strong>
+        <strong>${escapeHtml(botState.generatedAt ? formatDate(botState.generatedAt) : "not yet")}</strong>
       </div>
       <div>
         <span class="label">Free capital</span>
@@ -595,7 +612,7 @@ function renderBotState(botState) {
         <tbody>
           ${trades.slice(0, 12).map((trade) => `
             <tr>
-              <td>${escapeHtml(trade.date || trade.openedAt || "-")}</td>
+              <td>${escapeHtml(formatDate(trade.date || trade.openedAt || ""))}</td>
               <td>
                 ${marketAnchor(trade)}
               </td>
@@ -693,7 +710,7 @@ function renderBotEvaluations() {
       <tbody>
         ${visibleEvaluations.map((item) => `
           <tr>
-            <td>${escapeHtml(item.evaluatedAt || "-")}</td>
+            <td>${escapeHtml(formatDate(item.evaluatedAt || ""))}</td>
             <td class="${item.status === "ELIGIBLE" ? "positive" : "negative"}">${escapeHtml(item.status || "-")}</td>
             <td>
               ${marketAnchor(item)}
