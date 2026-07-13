@@ -4,6 +4,11 @@ const state = {
   candidates: [],
   selected: null,
   ledger: readLedger(),
+  botState: null,
+  evaluationSort: {
+    key: "evaluatedAt",
+    direction: "desc",
+  },
 };
 
 const els = {
@@ -79,6 +84,11 @@ function probability(value) {
 function percent(value) {
   if (!Number.isFinite(value)) return "-";
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function sortArrow(key) {
+  if (state.evaluationSort.key !== key) return "";
+  return state.evaluationSort.direction === "asc" ? " ↑" : " ↓";
 }
 
 function parseInput(input, fallback = 0) {
@@ -486,10 +496,10 @@ async function loadBotState() {
 }
 
 function renderBotState(botState) {
+  state.botState = botState;
   const decision = botState.lastDecision || {};
   const portfolio = botState.portfolio || {};
   const trades = Array.isArray(botState.trades) ? botState.trades : [];
-  const evaluations = Array.isArray(botState.evaluations) ? botState.evaluations : [];
 
   els.botAction.textContent = decision.action || "waiting";
   els.botStatus.innerHTML = `
@@ -547,26 +557,66 @@ function renderBotState(botState) {
     `;
   }
 
+  renderBotEvaluations();
+}
+
+function evaluationSortValue(item, key) {
+  if (key === "evaluatedAt") return Date.parse(item.evaluatedAt || "") || 0;
+  if (key === "status") return String(item.status || "");
+  if (key === "market") return `${item.outcome || ""} ${item.question || ""}`.toLowerCase();
+  if (key === "marketPrice") return Number(item.marketPrice);
+  if (key === "aiProbability") return Number(item.aiProbability);
+  if (key === "annualizedReturn") return Number(item.annualizedReturn);
+  if (key === "analysis") return `${(item.rejectReasons || []).join("; ")} ${item.analysisSummary || ""}`.toLowerCase();
+  return "";
+}
+
+function sortedEvaluations(evaluations) {
+  const direction = state.evaluationSort.direction === "asc" ? 1 : -1;
+  const key = state.evaluationSort.key;
+  return [...evaluations].sort((a, b) => {
+    const aValue = evaluationSortValue(a, key);
+    const bValue = evaluationSortValue(b, key);
+    const aMissing = aValue == null || Number.isNaN(aValue);
+    const bMissing = bValue == null || Number.isNaN(bValue);
+    if (aMissing && bMissing) return 0;
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+    if (typeof aValue === "number" && typeof bValue === "number") return (aValue - bValue) * direction;
+    return String(aValue).localeCompare(String(bValue)) * direction;
+  });
+}
+
+function sortableHeader(key, label) {
+  const active = state.evaluationSort.key === key ? " active" : "";
+  return `<th><button class="sort-button${active}" type="button" data-evaluation-sort="${key}">${label}${sortArrow(key)}</button></th>`;
+}
+
+function renderBotEvaluations() {
+  const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
+
   if (!evaluations.length) {
     els.botEvaluations.innerHTML = '<div class="empty">Zatim zadna vyhodnoceni.</div>';
     return;
   }
 
+  const visibleEvaluations = sortedEvaluations(evaluations).slice(0, 80);
+
   els.botEvaluations.innerHTML = `
     <table>
       <thead>
         <tr>
-          <th>Time</th>
-          <th>Status</th>
-          <th>Market</th>
-          <th>Price</th>
-          <th>AI prob.</th>
-          <th>EV p.a.</th>
-          <th>Analysis</th>
+          ${sortableHeader("evaluatedAt", "Time")}
+          ${sortableHeader("status", "Status")}
+          ${sortableHeader("market", "Market")}
+          ${sortableHeader("marketPrice", "Price")}
+          ${sortableHeader("aiProbability", "AI prob.")}
+          ${sortableHeader("annualizedReturn", "EV p.a.")}
+          ${sortableHeader("analysis", "Analysis")}
         </tr>
       </thead>
       <tbody>
-        ${evaluations.slice(0, 80).map((item) => `
+        ${visibleEvaluations.map((item) => `
           <tr>
             <td>${escapeHtml(item.evaluatedAt || "-")}</td>
             <td class="${item.status === "ELIGIBLE" ? "positive" : "negative"}">${escapeHtml(item.status || "-")}</td>
@@ -618,6 +668,18 @@ els.ledger.addEventListener("click", (event) => {
   const loss = event.target.closest("[data-resolve-loss]");
   if (win) resolvePosition(win.dataset.resolveWin, "WIN");
   if (loss) resolvePosition(loss.dataset.resolveLoss, "LOSS");
+});
+els.botEvaluations.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-evaluation-sort]");
+  if (!button) return;
+  const key = button.dataset.evaluationSort;
+  if (state.evaluationSort.key === key) {
+    state.evaluationSort.direction = state.evaluationSort.direction === "asc" ? "desc" : "asc";
+  } else {
+    state.evaluationSort.key = key;
+    state.evaluationSort.direction = ["marketPrice", "aiProbability", "annualizedReturn"].includes(key) ? "desc" : "asc";
+  }
+  renderBotEvaluations();
 });
 els.copy.addEventListener("click", async () => {
   await navigator.clipboard.writeText(els.payload.value);

@@ -437,6 +437,25 @@ button {
   text-transform: uppercase;
 }
 
+.sort-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 850;
+  text-align: left;
+  text-transform: inherit;
+}
+
+.sort-button:hover,
+.sort-button.active {
+  color: var(--accent-dark);
+}
+
 .ledger td span {
   display: block;
   max-width: 420px;
