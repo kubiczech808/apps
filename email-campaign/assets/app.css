@@ -123,6 +123,14 @@ h2 { font-size: 18px; }
   gap: clamp(10px, 2vw, 24px);
   font-weight: 700;
 }
+.landing-nav .language-dropdown {
+  margin-left: 2px;
+}
+.landing-nav .language-dropdown summary {
+  min-height: 40px;
+  padding: 8px 10px;
+  box-shadow: none;
+}
 .landing-brand {
   display: inline-flex;
   align-items: center;
@@ -1290,6 +1298,19 @@ form.inline { margin: 0; }
 .language-dropdown button.active {
   background: #e7f4ef;
   color: var(--accent-dark);
+}
+.language-dropdown.flags-only .language-dropdown-menu {
+  min-width: 58px;
+  justify-items: center;
+}
+.language-dropdown.flags-only button {
+  justify-content: center;
+  width: 42px;
+  height: 38px;
+  padding: 0;
+}
+.language-dropdown.flags-only button span:first-child {
+  font-size: 22px;
 }
 .onboarding-hero {
   display: grid;

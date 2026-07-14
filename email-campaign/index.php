@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-14-onboarding-localized';
+const APP_VERSION = '2026-07-14-landing-cs-diacritics';
 
 date_default_timezone_set('Europe/Prague');
 
@@ -1203,7 +1203,7 @@ function renderOnboardingWizard(PDO $pdo, array $config, array $lead, string $st
     <body class="onboarding-page onboarding-step-<?= h($step) ?>">
     <main class="onboarding-shell">
         <div class="onboarding-topbar">
-            <?php renderLanguageDropdown($pdo, $config); ?>
+            <?php renderLanguageDropdown($pdo, $config, true); ?>
         </div>
         <section class="onboarding-hero">
             <div>
@@ -6817,26 +6817,26 @@ function renderLanguageFooter(?PDO $pdo = null, array $config = []): void
     <?php
 }
 
-function renderLanguageDropdown(?PDO $pdo = null, array $config = []): void
+function renderLanguageDropdown(?PDO $pdo = null, array $config = [], bool $flagsOnly = false): void
 {
     $current = currentUiLanguage($pdo, $config);
     $languages = supportedUiLanguages();
     $active = $languages[$current] ?? $languages['cs'];
     $returnTo = (string)($_SERVER['REQUEST_URI'] ?? './');
     ?>
-    <form method="post" class="language-dropdown" autocomplete="off">
+    <form method="post" class="language-dropdown <?= $flagsOnly ? 'flags-only' : '' ?>" autocomplete="off">
         <input type="hidden" name="action" value="change_language">
         <input type="hidden" name="return_to" value="<?= h($returnTo) ?>">
         <details>
             <summary aria-label="Jazyk rozhrani" title="Jazyk rozhrani">
                 <span aria-hidden="true"><?= h($active['flag']) ?></span>
-                <strong><?= h(strtoupper($current)) ?></strong>
+                <?php if (!$flagsOnly): ?><strong><?= h(strtoupper($current)) ?></strong><?php endif; ?>
             </summary>
             <div class="language-dropdown-menu">
                 <?php foreach ($languages as $code => $language): ?>
-                    <button type="submit" name="lang" value="<?= h($code) ?>" class="<?= $current === $code ? 'active' : '' ?>" <?= $current === $code ? 'aria-current="true"' : '' ?>>
+                    <button type="submit" name="lang" value="<?= h($code) ?>" class="<?= $current === $code ? 'active' : '' ?>" aria-label="<?= h($language['label']) ?>" title="<?= h($language['label']) ?>" <?= $current === $code ? 'aria-current="true"' : '' ?>>
                         <span aria-hidden="true"><?= h($language['flag']) ?></span>
-                        <span><?= h($language['label']) ?></span>
+                        <?php if (!$flagsOnly): ?><span><?= h($language['label']) ?></span><?php endif; ?>
                     </button>
                 <?php endforeach; ?>
             </div>
@@ -6943,6 +6943,92 @@ function uiTranslationMap(string $language): array
 {
     if ($language === 'de') {
         $map = [
+            'AI akvizice B2B zákazníků' => 'KI-Akquise fuer B2B-Kunden',
+            'Hlavní navigace' => 'Hauptnavigation',
+            'AI lead generation pro malé B2B firmy' => 'KI-Leadgenerierung fuer kleine B2B-Unternehmen',
+            'Získejte nové firemní zákazníky během několika minut.' => 'Gewinnen Sie neue Firmenkunden in wenigen Minuten.',
+            'Řekněte nám, co prodáváte. AI sama najde vhodné firmy, napíše personalizované oslovení a odešle ho vaším jménem.' => 'Sagen Sie uns, was Sie verkaufen. Die KI findet passende Unternehmen, schreibt personalisierte Ansprache und versendet sie in Ihrem Namen.',
+            'Vyzkoušet zdarma' => 'Kostenlos testen',
+            'Podívat se, jak to funguje' => 'Ansehen, wie es funktioniert',
+            'Ceník' => 'Preise',
+            'Přihlásit' => 'Anmelden',
+            'relevantní kontakt' => 'relevanter Kontakt',
+            'email připraven' => 'E-Mail vorbereitet',
+            'čeká na odeslání' => 'wartet auf Versand',
+            'Začněte bez marketingových znalostí' => 'Starten Sie ohne Marketingwissen',
+            'Popište jednou větou, co prodáváte.' => 'Beschreiben Sie in einem Satz, was Sie verkaufen.',
+            'Připravíme vám první seznam kontaktů, návrh emailu a průvodce odesláním. Trial je na 7 dní zdarma, potom 19 USD měsíčně. Zrušení kdykoliv.' => 'Wir bereiten die erste Kontaktliste, einen E-Mail-Entwurf und den Versandassistenten vor. 7 Tage kostenlos testen, danach 19 USD pro Monat. Jederzeit kuendbar.',
+            'Pracovní email' => 'Geschaeftliche E-Mail',
+            'například jana@firma.cz' => 'z. B. jana@firma.cz',
+            'Název firmy' => 'Firmenname',
+            'volitelně' => 'optional',
+            'například Oleje Pro' => 'z. B. Oleje Pro',
+            'Co prodáváte' => 'Was verkaufen Sie',
+            'Například: Prodávám profesionální masážní oleje pro wellness centra.' => 'Zum Beispiel: Ich verkaufe professionelle Massageoele fuer Wellnesszentren.',
+            'Už máte přístup?' => 'Haben Sie bereits Zugang?',
+            'Pokračovat přes Google' => 'Mit Google fortfahren',
+            'Pro koho je služba' => 'Fuer wen ist der Service',
+            'Pro lidi, kteří chtějí nové zákazníky, ne další složitý nástroj.' => 'Fuer Menschen, die neue Kunden wollen, nicht noch ein kompliziertes Tool.',
+            'Živnostníci' => 'Selbststaendige',
+            'Malé firmy' => 'Kleine Unternehmen',
+            'Výrobci' => 'Hersteller',
+            'Distributoři' => 'Distributoren',
+            'Dodavatelé B2B služeb' => 'B2B-Dienstleister',
+            'masážní oleje' => 'Massageoele',
+            'pracovní oblečení' => 'Arbeitskleidung',
+            'gastro vybavení' => 'Gastro-Ausstattung',
+            'účetnictví' => 'Buchhaltung',
+            'reklamní tisk' => 'Werbedruck',
+            'Od popisu produktu k prvním oslovením.' => 'Von der Produktbeschreibung zur ersten Ansprache.',
+            'Popište svůj produkt' => 'Beschreiben Sie Ihr Produkt',
+            'Například: Prodávám profesionální masážní oleje.' => 'Zum Beispiel: Ich verkaufe professionelle Massageoele.',
+            'AI najde vhodné firmy' => 'Die KI findet passende Unternehmen',
+            'Vybere masážní studia, wellness centra, hotely nebo další relevantní segmenty.' => 'Sie waehlt Massagestudios, Wellnesszentren, Hotels oder weitere relevante Segmente aus.',
+            'Připraví oslovení' => 'Sie erstellt die Ansprache',
+            'Každý email je konkrétní a vysvětlí, proč kontakt dává smysl.' => 'Jede E-Mail ist konkret und erklaert, warum der Kontakt sinnvoll ist.',
+            'Odešlete jedním kliknutím' => 'Mit einem Klick versenden',
+            'Schválíte emaily, nebo necháte rozesílku běžet automaticky.' => 'Sie geben E-Mails frei oder lassen den Versand automatisch laufen.',
+            'Sledujete výsledky' => 'Ergebnisse verfolgen',
+            'Vidíte odeslání, doručení, kliky, otevření a odpovědi.' => 'Sie sehen Versand, Zustellung, Klicks, Oeffnungen und Antworten.',
+            'Hlavní výhody' => 'Hauptvorteile',
+            'Méně ruční práce, více relevantních rozhovorů.' => 'Weniger Handarbeit, mehr relevante Gespraeche.',
+            'Žádné hledání kontaktů' => 'Keine Kontaktsuche',
+            'AI projde vhodné zdroje a připraví seznam firem za vás.' => 'Die KI durchsucht passende Quellen und erstellt die Firmenliste fuer Sie.',
+            'Žádné psaní emailů' => 'Keine E-Mails schreiben',
+            'Oslovení vznikne automaticky podle vašeho produktu a cílové firmy.' => 'Die Ansprache entsteht automatisch passend zu Produkt und Zielfirma.',
+            'Žádné složité nastavení' => 'Keine komplizierte Einrichtung',
+            'Stačí připojit Gmail, Outlook nebo vlastní SMTP.' => 'Verbinden Sie einfach Gmail, Outlook oder eigenes SMTP.',
+            'Relevantní firmy' => 'Relevante Unternehmen',
+            'Nehledáme náhodné emaily. Hledáme firmy, které mohou být zákazníky.' => 'Wir suchen keine zufaelligen E-Mails. Wir suchen Unternehmen, die Kunden werden koennen.',
+            'Úspora času' => 'Zeitersparnis',
+            'Co běžně zabere hodiny, projdete během několika minut.' => 'Was sonst Stunden dauert, erledigen Sie in wenigen Minuten.',
+            'Příklad' => 'Beispiel',
+            'Vy prodáváte masážní oleje.' => 'Sie verkaufen Massageoele.',
+            'AI najde wellness centra, maséry a rehabilitační centra. Potom připraví konkrétní email pro každý kontakt.' => 'Die KI findet Wellnesszentren, Masseure und Reha-Zentren. Danach erstellt sie fuer jeden Kontakt eine konkrete E-Mail.',
+            'Dobrý den,' => 'Guten Tag,',
+            'všimli jsme si, že nabízíte sportovní masáže. Dodáváme profesionální masážní oleje používané více než 300 studii. Rádi vám pošleme vzorek zdarma...' => 'uns ist aufgefallen, dass Sie Sportmassagen anbieten. Wir liefern professionelle Massageoele, die von mehr als 300 Studios genutzt werden. Gerne senden wir Ihnen eine kostenlose Probe...',
+            'Proč je to jiné' => 'Warum es anders ist',
+            'Konkurence prodává nástroje. My prodáváme nové zákazníky.' => 'Der Wettbewerb verkauft Tools. Wir verkaufen neue Kunden.',
+            'Běžné nástroje' => 'Uebliche Tools',
+            'CRM, databáze, sekvence, kampaně a lead management. Musíte se vše naučit.' => 'CRM, Datenbanken, Sequenzen, Kampagnen und Lead-Management. Sie muessen alles lernen.',
+            'Náš přístup' => 'Unser Ansatz',
+            'Napište: "Prodávám pracovní rukavice." AI najde firmy, připraví oslovení a provede vás odesláním.' => 'Schreiben Sie: "Ich verkaufe Arbeitshandschuhe." Die KI findet Firmen, erstellt die Ansprache und fuehrt Sie durch den Versand.',
+            'Jednoduché balíčky podle objemu oslovení.' => 'Einfache Pakete nach Kontaktvolumen.',
+            'oslovení měsíčně' => 'Ansprachen pro Monat',
+            'Jedno oslovení zahrnuje nalezení vhodné firmy, kontaktu, AI analýzu relevance, personalizovaný email a odeslání.' => 'Eine Ansprache umfasst die Suche nach passender Firma und Kontakt, KI-Relevanzanalyse, personalisierte E-Mail und Versand.',
+            'Nejkratší odpovědi na nejčastější otázky.' => 'Kurze Antworten auf haeufige Fragen.',
+            'Ne. Oslovení jsou cílená na relevantní firmy a každé je personalizované.' => 'Nein. Die Ansprache ist auf relevante Unternehmen ausgerichtet und jede E-Mail ist personalisiert.',
+            'Oslovení jsou cílená na relevantní firmy a každé je personalizované.' => 'Die Ansprache ist auf relevante Unternehmen ausgerichtet und jede E-Mail ist personalisiert.',
+            'Musím něco nastavovat?' => 'Muss ich etwas einrichten?',
+            'Stačí připojit Gmail, Outlook nebo vlastní SMTP odesílání.' => 'Sie verbinden einfach Gmail, Outlook oder eigenes SMTP.',
+            'Musím psát emaily?' => 'Muss ich E-Mails schreiben?',
+            'Ne. AI připraví obsah za vás a vy ho můžete před odesláním upravit.' => 'Nein. Die KI bereitet den Inhalt vor und Sie koennen ihn vor dem Versand bearbeiten.',
+            'AI připraví obsah za vás a vy ho můžete před odesláním upravit.' => 'Die KI bereitet den Inhalt vor und Sie koennen ihn vor dem Versand bearbeiten.',
+            'Mohu vše zkontrolovat?' => 'Kann ich alles pruefen?',
+            'Ano. Kontakty i emaily můžete před kampaní schválit nebo změnit.' => 'Ja. Kontakte und E-Mails koennen Sie vor der Kampagne freigeben oder aendern.',
+            'Kontakty i emaily můžete před kampaní schválit nebo změnit.' => 'Kontakte und E-Mails koennen Sie vor der Kampagne freigeben oder aendern.',
+            'Přestaňte hledat zákazníky ručně.' => 'Hoeren Sie auf, Kunden manuell zu suchen.',
+            'Nechte AI najít firmy, připravit oslovení a získávat nové obchodní příležitosti za vás.' => 'Lassen Sie die KI Firmen finden, Ansprache vorbereiten und neue Geschaeftschancen fuer Sie gewinnen.',
             'AI akvizice B2B zakazniku' => 'KI-Akquise fuer B2B-Kunden',
             'AI lead generation pro male B2B firmy' => 'KI-Leadgenerierung fuer kleine B2B-Unternehmen',
             'Ziskejte nove firemni zakazniky behem nekolika minut.' => 'Gewinnen Sie neue Firmenkunden in wenigen Minuten.',
@@ -7408,6 +7494,92 @@ function uiTranslationMap(string $language): array
         return [];
     }
     $map = [
+        'AI akvizice B2B zákazníků' => 'AI B2B customer acquisition',
+        'Hlavní navigace' => 'Main Navigation',
+        'AI lead generation pro malé B2B firmy' => 'AI lead generation for small B2B companies',
+        'Získejte nové firemní zákazníky během několika minut.' => 'Get new business customers in minutes.',
+        'Řekněte nám, co prodáváte. AI sama najde vhodné firmy, napíše personalizované oslovení a odešle ho vaším jménem.' => 'Tell us what you sell. AI finds relevant companies, writes personalized outreach and sends it on your behalf.',
+        'Vyzkoušet zdarma' => 'Try for free',
+        'Podívat se, jak to funguje' => 'See how it works',
+        'Ceník' => 'Pricing',
+        'Přihlásit' => 'Sign in',
+        'relevantní kontakt' => 'relevant contact',
+        'email připraven' => 'email ready',
+        'čeká na odeslání' => 'waiting to send',
+        'Začněte bez marketingových znalostí' => 'Start without marketing knowledge',
+        'Popište jednou větou, co prodáváte.' => 'Describe what you sell in one sentence.',
+        'Připravíme vám první seznam kontaktů, návrh emailu a průvodce odesláním. Trial je na 7 dní zdarma, potom 19 USD měsíčně. Zrušení kdykoliv.' => 'We will prepare your first contact list, email draft and sending guide. The trial is free for 7 days, then 19 USD per month. Cancel anytime.',
+        'Pracovní email' => 'Work email',
+        'například jana@firma.cz' => 'for example jana@company.com',
+        'Název firmy' => 'Company name',
+        'volitelně' => 'optional',
+        'například Oleje Pro' => 'for example Oils Pro',
+        'Co prodáváte' => 'What do you sell',
+        'Například: Prodávám profesionální masážní oleje pro wellness centra.' => 'For example: I sell professional massage oils for wellness centers.',
+        'Už máte přístup?' => 'Already have access?',
+        'Pokračovat přes Google' => 'Continue with Google',
+        'Pro koho je služba' => 'Who it is for',
+        'Pro lidi, kteří chtějí nové zákazníky, ne další složitý nástroj.' => 'For people who want new customers, not another complicated tool.',
+        'Živnostníci' => 'Freelancers',
+        'Malé firmy' => 'Small companies',
+        'Výrobci' => 'Manufacturers',
+        'Distributoři' => 'Distributors',
+        'Dodavatelé B2B služeb' => 'B2B service providers',
+        'masážní oleje' => 'massage oils',
+        'pracovní oblečení' => 'workwear',
+        'gastro vybavení' => 'restaurant equipment',
+        'účetnictví' => 'accounting',
+        'reklamní tisk' => 'promotional printing',
+        'Od popisu produktu k prvním oslovením.' => 'From product description to first outreach.',
+        'Popište svůj produkt' => 'Describe your product',
+        'Například: Prodávám profesionální masážní oleje.' => 'For example: I sell professional massage oils.',
+        'AI najde vhodné firmy' => 'AI finds relevant companies',
+        'Vybere masážní studia, wellness centra, hotely nebo další relevantní segmenty.' => 'It selects massage studios, wellness centers, hotels or other relevant segments.',
+        'Připraví oslovení' => 'It prepares the outreach',
+        'Každý email je konkrétní a vysvětlí, proč kontakt dává smysl.' => 'Every email is specific and explains why the contact makes sense.',
+        'Odešlete jedním kliknutím' => 'Send with one click',
+        'Schválíte emaily, nebo necháte rozesílku běžet automaticky.' => 'Approve the emails or let the send-out run automatically.',
+        'Sledujete výsledky' => 'Track results',
+        'Vidíte odeslání, doručení, kliky, otevření a odpovědi.' => 'See sent emails, delivery, clicks, opens and replies.',
+        'Hlavní výhody' => 'Main benefits',
+        'Méně ruční práce, více relevantních rozhovorů.' => 'Less manual work, more relevant conversations.',
+        'Žádné hledání kontaktů' => 'No contact hunting',
+        'AI projde vhodné zdroje a připraví seznam firem za vás.' => 'AI searches suitable sources and prepares a company list for you.',
+        'Žádné psaní emailů' => 'No email writing',
+        'Oslovení vznikne automaticky podle vašeho produktu a cílové firmy.' => 'Outreach is created automatically based on your product and target company.',
+        'Žádné složité nastavení' => 'No complex setup',
+        'Stačí připojit Gmail, Outlook nebo vlastní SMTP.' => 'Just connect Gmail, Outlook or your own SMTP.',
+        'Relevantní firmy' => 'Relevant companies',
+        'Nehledáme náhodné emaily. Hledáme firmy, které mohou být zákazníky.' => 'We do not search random emails. We find companies that could become customers.',
+        'Úspora času' => 'Time saved',
+        'Co běžně zabere hodiny, projdete během několika minut.' => 'What usually takes hours can be done in minutes.',
+        'Příklad' => 'Example',
+        'Vy prodáváte masážní oleje.' => 'You sell massage oils.',
+        'AI najde wellness centra, maséry a rehabilitační centra. Potom připraví konkrétní email pro každý kontakt.' => 'AI finds wellness centers, massage therapists and rehabilitation centers. Then it prepares a specific email for each contact.',
+        'Dobrý den,' => 'Hello,',
+        'všimli jsme si, že nabízíte sportovní masáže. Dodáváme profesionální masážní oleje používané více než 300 studii. Rádi vám pošleme vzorek zdarma...' => 'we noticed that you offer sports massages. We supply professional massage oils used by more than 300 studios. We would be happy to send you a free sample...',
+        'Proč je to jiné' => 'Why it is different',
+        'Konkurence prodává nástroje. My prodáváme nové zákazníky.' => 'Competitors sell tools. We sell new customers.',
+        'Běžné nástroje' => 'Typical tools',
+        'CRM, databáze, sekvence, kampaně a lead management. Musíte se vše naučit.' => 'CRM, databases, sequences, campaigns and lead management. You have to learn it all.',
+        'Náš přístup' => 'Our approach',
+        'Napište: "Prodávám pracovní rukavice." AI najde firmy, připraví oslovení a provede vás odesláním.' => 'Write: "I sell work gloves." AI finds companies, prepares the outreach and guides you through sending.',
+        'Jednoduché balíčky podle objemu oslovení.' => 'Simple plans based on outreach volume.',
+        'oslovení měsíčně' => 'outreach emails per month',
+        'Jedno oslovení zahrnuje nalezení vhodné firmy, kontaktu, AI analýzu relevance, personalizovaný email a odeslání.' => 'One outreach includes finding the right company, finding the contact, AI relevance analysis, personalized email and sending.',
+        'Nejkratší odpovědi na nejčastější otázky.' => 'Short answers to common questions.',
+        'Ne. Oslovení jsou cílená na relevantní firmy a každé je personalizované.' => 'No. Outreach is targeted at relevant companies and each email is personalized.',
+        'Oslovení jsou cílená na relevantní firmy a každé je personalizované.' => 'Outreach is targeted at relevant companies and each email is personalized.',
+        'Musím něco nastavovat?' => 'Do I need to configure anything?',
+        'Stačí připojit Gmail, Outlook nebo vlastní SMTP odesílání.' => 'Just connect Gmail, Outlook or your own SMTP sending.',
+        'Musím psát emaily?' => 'Do I have to write emails?',
+        'Ne. AI připraví obsah za vás a vy ho můžete před odesláním upravit.' => 'No. AI prepares the content for you and you can edit it before sending.',
+        'AI připraví obsah za vás a vy ho můžete před odesláním upravit.' => 'AI prepares the content for you and you can edit it before sending.',
+        'Mohu vše zkontrolovat?' => 'Can I review everything?',
+        'Ano. Kontakty i emaily můžete před kampaní schválit nebo změnit.' => 'Yes. You can approve or edit contacts and emails before the campaign.',
+        'Kontakty i emaily můžete před kampaní schválit nebo změnit.' => 'You can approve or edit contacts and emails before the campaign.',
+        'Přestaňte hledat zákazníky ručně.' => 'Stop searching for customers manually.',
+        'Nechte AI najít firmy, připravit oslovení a získávat nové obchodní příležitosti za vás.' => 'Let AI find companies, prepare outreach and bring you new business opportunities.',
         'AI akvizice B2B zakazniku' => 'AI B2B customer acquisition',
         'AI lead generation pro male B2B firmy' => 'AI lead generation for small B2B companies',
         'Ziskejte nove firemni zakazniky behem nekolika minut.' => 'Get new business customers in minutes.',
@@ -7883,7 +8055,7 @@ function renderLogin(?array $flash, array $config): void
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width,initial-scale=1">
-        <title>AI akvizice B2B zakazniku</title>
+        <title>AI akvizice B2B zákazníků</title>
         <link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>">
     </head>
     <body class="landing-page">
@@ -7892,11 +8064,12 @@ function renderLogin(?array $flash, array $config): void
                 <span>AI</span>
                 <strong>Akvizice B2B</strong>
             </a>
-            <nav aria-label="Hlavni navigace">
+            <nav aria-label="Hlavní navigace">
                 <a href="#how">Jak to funguje</a>
-                <a href="#pricing">Cenik</a>
+                <a href="#pricing">Ceník</a>
                 <a href="#faq">FAQ</a>
-                <a class="landing-login-link" href="#login">Prihlasit</a>
+                <a class="landing-login-link" href="#login">Přihlásit</a>
+                <?php renderLanguageDropdown(null, $config, true); ?>
             </nav>
         </header>
 
@@ -7906,49 +8079,49 @@ function renderLogin(?array $flash, array $config): void
                     <div class="landing-preview">
                         <div class="landing-preview-toolbar"><span></span><span></span><span></span></div>
                         <div class="landing-preview-grid">
-                            <div><b>Studio Orion</b><small>relevantni kontakt</small></div>
-                            <div><b>Wellness Lotos</b><small>email pripraven</small></div>
-                            <div><b>Masaze Vital</b><small>ceka na odeslani</small></div>
+                            <div><b>Studio Orion</b><small>relevantní kontakt</small></div>
+                            <div><b>Wellness Lotos</b><small>email připraven</small></div>
+                            <div><b>Masáže Vital</b><small>čeká na odeslání</small></div>
                         </div>
                     </div>
                 </div>
                 <div class="landing-hero-content">
-                    <p class="landing-eyebrow">AI lead generation pro male B2B firmy</p>
-                    <h1>Ziskejte nove firemni zakazniky behem nekolika minut.</h1>
-                    <p>Reknete nam, co prodavate. AI sama najde vhodne firmy, napise personalizovane osloveni a odesle ho vasim jmenem.</p>
+                    <p class="landing-eyebrow">AI lead generation pro malé B2B firmy</p>
+                    <h1>Získejte nové firemní zákazníky během několika minut.</h1>
+                    <p>Řekněte nám, co prodáváte. AI sama najde vhodné firmy, napíše personalizované oslovení a odešle ho vaším jménem.</p>
                     <div class="landing-cta-row">
-                        <a class="button landing-primary" href="#signup">Vyzkouset zdarma</a>
-                        <a class="button landing-secondary" href="#how">Podivat se, jak to funguje</a>
+                        <a class="button landing-primary" href="#signup">Vyzkoušet zdarma</a>
+                        <a class="button landing-secondary" href="#how">Podívat se, jak to funguje</a>
                     </div>
                 </div>
             </section>
 
             <section class="landing-auth-strip" id="signup">
                 <div class="landing-signup-copy">
-                    <span class="landing-kicker">Zacnete bez marketingovych znalosti</span>
-                    <h2>Popiste jednou vetou, co prodavate.</h2>
-                    <p>Pripravime vam prvni seznam kontaktu, navrh emailu a pruvodce odeslanim. Trial je na 7 dni zdarma, potom 19 USD mesicne. Zruseni kdykoliv.</p>
+                    <span class="landing-kicker">Začněte bez marketingových znalostí</span>
+                    <h2>Popište jednou větou, co prodáváte.</h2>
+                    <p>Připravíme vám první seznam kontaktů, návrh emailu a průvodce odesláním. Trial je na 7 dní zdarma, potom 19 USD měsíčně. Zrušení kdykoliv.</p>
                 </div>
                 <div class="landing-auth-card">
                     <?php renderFlash($flash); ?>
                     <form method="post" class="landing-form" autocomplete="off">
                         <input type="hidden" name="action" value="start_public_onboarding">
-                        <label>Pracovni email<input type="email" name="signup_email" placeholder="napriklad jana@firma.cz" autocomplete="email" required></label>
-                        <label>Nazev firmy <span>volitelne</span><input name="business_name" placeholder="napriklad Oleje Pro" autocomplete="organization"></label>
-                        <label>Co prodavate<textarea name="product_description" rows="4" placeholder="Napriklad: Prodavam profesionalni masazni oleje pro wellness centra." required></textarea></label>
-                        <button>Vyzkouset zdarma</button>
+                        <label>Pracovní email<input type="email" name="signup_email" placeholder="například jana@firma.cz" autocomplete="email" required></label>
+                        <label>Název firmy <span>volitelně</span><input name="business_name" placeholder="například Oleje Pro" autocomplete="organization"></label>
+                        <label>Co prodáváte<textarea name="product_description" rows="4" placeholder="Například: Prodávám profesionální masážní oleje pro wellness centra." required></textarea></label>
+                        <button>Vyzkoušet zdarma</button>
                     </form>
                     <div class="landing-login-mini" id="login">
-                        <h2>Uz mate pristup?</h2>
+                        <h2>Už máte přístup?</h2>
                         <?php if ($googleEnabled): ?>
-                            <a class="button google-button" href="?auth=google">Pokracovat pres Google</a>
+                            <a class="button google-button" href="?auth=google">Pokračovat přes Google</a>
                             <div class="auth-divider"><span>nebo</span></div>
                         <?php endif; ?>
                         <form method="post" class="landing-login-form">
                             <input type="hidden" name="action" value="login">
                             <label>Email<input type="email" name="email" autocomplete="username" required></label>
                             <label>Heslo<input type="password" name="password" autocomplete="current-password" required></label>
-                            <button type="submit">Prihlasit</button>
+                            <button type="submit">Přihlásit</button>
                         </form>
                         <p class="version">Verze <?= h(APP_VERSION) ?></p>
                     </div>
@@ -7957,117 +8130,116 @@ function renderLogin(?array $flash, array $config): void
 
             <section class="landing-section landing-audience">
                 <div class="landing-section-head">
-                    <span class="landing-kicker">Pro koho je sluzba</span>
-                    <h2>Pro lidi, kteri chteji nove zakazniky, ne dalsi slozity nastroj.</h2>
+                    <span class="landing-kicker">Pro koho je služba</span>
+                    <h2>Pro lidi, kteří chtějí nové zákazníky, ne další složitý nástroj.</h2>
                 </div>
                 <div class="landing-chip-grid">
-                    <span>Zivnostnici</span>
-                    <span>Male firmy</span>
-                    <span>Vyrobci</span>
-                    <span>Distributori</span>
+                    <span>Živnostníci</span>
+                    <span>Malé firmy</span>
+                    <span>Výrobci</span>
+                    <span>Distributoři</span>
                     <span>Agentury</span>
-                    <span>Dodavatele B2B sluzeb</span>
+                    <span>Dodavatelé B2B služeb</span>
                 </div>
                 <div class="landing-example-list">
-                    <span>masazni oleje</span>
-                    <span>pracovni obleceni</span>
+                    <span>masážní oleje</span>
+                    <span>pracovní oblečení</span>
                     <span>software</span>
-                    <span>gastro vybaveni</span>
-                    <span>ucetnictvi</span>
-                    <span>reklamni tisk</span>
+                    <span>gastro vybavení</span>
+                    <span>účetnictví</span>
+                    <span>reklamní tisk</span>
                 </div>
             </section>
 
             <section class="landing-section" id="how">
                 <div class="landing-section-head">
                     <span class="landing-kicker">Jak to funguje</span>
-                    <h2>Od popisu produktu k prvnim oslovenim.</h2>
+                    <h2>Od popisu produktu k prvním oslovením.</h2>
                 </div>
                 <div class="landing-steps">
-                    <article><span>1</span><h3>Popiste svuj produkt</h3><p>Napriklad: Prodavam profesionalni masazni oleje.</p></article>
-                    <article><span>2</span><h3>AI najde vhodne firmy</h3><p>Vybere masazni studia, wellness centra, hotely nebo dalsi relevantni segmenty.</p></article>
-                    <article><span>3</span><h3>Pripravi osloveni</h3><p>Kazdy email je konkretni a vysvetli, proc kontakt dava smysl.</p></article>
-                    <article><span>4</span><h3>Odeslete jednim kliknutim</h3><p>Schvalite emaily, nebo nechate rozesilku bezet automaticky.</p></article>
-                    <article><span>5</span><h3>Sledujete vysledky</h3><p>Vidite odeslani, doruceni, kliky, otevreni a odpovedi.</p></article>
+                    <article><span>1</span><h3>Popište svůj produkt</h3><p>Například: Prodávám profesionální masážní oleje.</p></article>
+                    <article><span>2</span><h3>AI najde vhodné firmy</h3><p>Vybere masážní studia, wellness centra, hotely nebo další relevantní segmenty.</p></article>
+                    <article><span>3</span><h3>Připraví oslovení</h3><p>Každý email je konkrétní a vysvětlí, proč kontakt dává smysl.</p></article>
+                    <article><span>4</span><h3>Odešlete jedním kliknutím</h3><p>Schválíte emaily, nebo necháte rozesílku běžet automaticky.</p></article>
+                    <article><span>5</span><h3>Sledujete výsledky</h3><p>Vidíte odeslání, doručení, kliky, otevření a odpovědi.</p></article>
                 </div>
             </section>
 
             <section class="landing-section landing-benefits">
                 <div class="landing-section-head">
-                    <span class="landing-kicker">Hlavni vyhody</span>
-                    <h2>Mene rucni prace, vice relevantnich rozhovoru.</h2>
+                    <span class="landing-kicker">Hlavní výhody</span>
+                    <h2>Méně ruční práce, více relevantních rozhovorů.</h2>
                 </div>
                 <div class="landing-feature-grid">
-                    <article><h3>Zadne hledani kontaktu</h3><p>AI projde vhodne zdroje a pripravi seznam firem za vas.</p></article>
-                    <article><h3>Zadne psani emailu</h3><p>Osloveni vznikne automaticky podle vaseho produktu a cilove firmy.</p></article>
-                    <article><h3>Zadne slozite nastaveni</h3><p>Staci pripojit Gmail, Outlook nebo vlastni SMTP.</p></article>
-                    <article><h3>Relevantni firmy</h3><p>Nehledame nahodne emaily. Hledame firmy, ktere mohou byt zakazniky.</p></article>
-                    <article><h3>Uspora casu</h3><p>Co bezne zabere hodiny, projdete behem nekolika minut.</p></article>
+                    <article><h3>Žádné hledání kontaktů</h3><p>AI projde vhodné zdroje a připraví seznam firem za vás.</p></article>
+                    <article><h3>Žádné psaní emailů</h3><p>Oslovení vznikne automaticky podle vašeho produktu a cílové firmy.</p></article>
+                    <article><h3>Žádné složité nastavení</h3><p>Stačí připojit Gmail, Outlook nebo vlastní SMTP.</p></article>
+                    <article><h3>Relevantní firmy</h3><p>Nehledáme náhodné emaily. Hledáme firmy, které mohou být zákazníky.</p></article>
+                    <article><h3>Úspora času</h3><p>Co běžně zabere hodiny, projdete během několika minut.</p></article>
                 </div>
             </section>
 
             <section class="landing-section landing-story">
                 <div>
-                    <span class="landing-kicker">Priklad</span>
-                    <h2>Vy prodavate masazni oleje.</h2>
-                    <p>AI najde wellness centra, masery a rehabilitacni centra. Potom pripravi konkretni email pro kazdy kontakt.</p>
+                    <span class="landing-kicker">Příklad</span>
+                    <h2>Vy prodáváte masážní oleje.</h2>
+                    <p>AI najde wellness centra, maséry a rehabilitační centra. Potom připraví konkrétní email pro každý kontakt.</p>
                 </div>
                 <blockquote>
-                    Dobry den,<br><br>
-                    vsimli jsme si, ze nabizite sportovni masaze. Dodavame profesionalni masazni oleje pouzivane vice nez 300 studii. Radi vam posleme vzorek zdarma...
+                    Dobrý den,<br><br>
+                    všimli jsme si, že nabízíte sportovní masáže. Dodáváme profesionální masážní oleje používané více než 300 studii. Rádi vám pošleme vzorek zdarma...
                 </blockquote>
             </section>
 
             <section class="landing-section landing-difference">
                 <div class="landing-section-head">
-                    <span class="landing-kicker">Proc je to jine</span>
-                    <h2>Konkurence prodava nastroje. My prodavame nove zakazniky.</h2>
+                    <span class="landing-kicker">Proč je to jiné</span>
+                    <h2>Konkurence prodává nástroje. My prodáváme nové zákazníky.</h2>
                 </div>
                 <div class="landing-compare">
                     <article>
-                        <h3>Bezne nastroje</h3>
-                        <p>CRM, databaze, sekvence, kampane a lead management. Musite se vse naucit.</p>
+                        <h3>Běžné nástroje</h3>
+                        <p>CRM, databáze, sekvence, kampaně a lead management. Musíte se vše naučit.</p>
                     </article>
                     <article>
-                        <h3>Nas pristup</h3>
-                        <p>Napiste: "Prodavam pracovni rukavice." AI najde firmy, pripravi osloveni a provede vas odeslanim.</p>
+                        <h3>Náš přístup</h3>
+                        <p>Napište: "Prodávám pracovní rukavice." AI najde firmy, připraví oslovení a provede vás odesláním.</p>
                     </article>
                 </div>
             </section>
 
             <section class="landing-section" id="pricing">
                 <div class="landing-section-head">
-                    <span class="landing-kicker">Cenik</span>
-                    <h2>Jednoduche balicky podle objemu osloveni.</h2>
+                    <span class="landing-kicker">Ceník</span>
+                    <h2>Jednoduché balíčky podle objemu oslovení.</h2>
                 </div>
                 <div class="landing-pricing">
-                    <article><h3>Starter</h3><strong>100</strong><p>osloveni mesicne</p></article>
-                    <article class="highlight"><h3>Growth</h3><strong>500</strong><p>osloveni mesicne</p></article>
-                    <article><h3>Business</h3><strong>2000</strong><p>osloveni mesicne</p></article>
+                    <article><h3>Starter</h3><strong>100</strong><p>oslovení měsíčně</p></article>
+                    <article class="highlight"><h3>Growth</h3><strong>500</strong><p>oslovení měsíčně</p></article>
+                    <article><h3>Business</h3><strong>2000</strong><p>oslovení měsíčně</p></article>
                 </div>
-                <p class="landing-note">Jedno osloveni zahrnuje nalezeni vhodne firmy, kontaktu, AI analyzu relevance, personalizovany email a odeslani.</p>
+                <p class="landing-note">Jedno oslovení zahrnuje nalezení vhodné firmy, kontaktu, AI analýzu relevance, personalizovaný email a odeslání.</p>
             </section>
 
             <section class="landing-section landing-faq" id="faq">
                 <div class="landing-section-head">
                     <span class="landing-kicker">FAQ</span>
-                    <h2>Nejkratsi odpovedi na nejcastejsi otazky.</h2>
+                    <h2>Nejkratší odpovědi na nejčastější otázky.</h2>
                 </div>
                 <div class="landing-faq-grid">
-                    <article><h3>Je to spam?</h3><p>Ne. Osloveni jsou cilena na relevantni firmy a kazde je personalizovane.</p></article>
-                    <article><h3>Musim neco nastavovat?</h3><p>Staci pripojit Gmail, Outlook nebo vlastni SMTP odesilani.</p></article>
-                    <article><h3>Musim psat emaily?</h3><p>Ne. AI pripravi obsah za vas a vy ho muzete pred odeslanim upravit.</p></article>
-                    <article><h3>Mohu vse zkontrolovat?</h3><p>Ano. Kontakty i emaily muzete pred kampani schvalit nebo zmenit.</p></article>
+                    <article><h3>Je to spam?</h3><p>Ne. Oslovení jsou cílená na relevantní firmy a každé je personalizované.</p></article>
+                    <article><h3>Musím něco nastavovat?</h3><p>Stačí připojit Gmail, Outlook nebo vlastní SMTP odesílání.</p></article>
+                    <article><h3>Musím psát emaily?</h3><p>Ne. AI připraví obsah za vás a vy ho můžete před odesláním upravit.</p></article>
+                    <article><h3>Mohu vše zkontrolovat?</h3><p>Ano. Kontakty i emaily můžete před kampaní schválit nebo změnit.</p></article>
                 </div>
             </section>
 
             <section class="landing-final">
-                <h2>Prestante hledat zakazniky rucne.</h2>
-                <p>Nechte AI najit firmy, pripravit osloveni a ziskavat nove obchodni prilezitosti za vas.</p>
-                <a class="button landing-primary" href="#signup">Vyzkouset zdarma</a>
+                <h2>Přestaňte hledat zákazníky ručně.</h2>
+                <p>Nechte AI najít firmy, připravit oslovení a získávat nové obchodní příležitosti za vás.</p>
+                <a class="button landing-primary" href="#signup">Vyzkoušet zdarma</a>
             </section>
         </main>
-        <?php renderLanguageFooter(null, $config); ?>
     </body>
     </html><?php
     echo localizeHtml((string)ob_get_clean(), null, $config);
