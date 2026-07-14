@@ -83,6 +83,9 @@ final class Router
         $language = sanitize_key((string) ($wp->query_vars['jamu_lang'] ?? ''));
         if (!$language) {
             $request = trim((string) ($wp->request ?? ''), '/');
+            if ($request === '') {
+                $request = trim((string) wp_parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/');
+            }
             foreach ($this->languages->additional() as $candidate => $config) {
                 if ($request === trim((string) $config['prefix'], '/')) {
                     $language = $candidate;
