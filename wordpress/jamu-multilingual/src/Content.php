@@ -586,8 +586,10 @@ final class Content
 .jamu-language-menu__flag{align-items:center;display:inline-flex;line-height:1}
 .jamu-language-menu__flag-icon{border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.15);display:block;height:1rem;width:1.5rem}
 .jamu-language-menu .wp-block-navigation__submenu-icon{margin-left:.2em}
-.jamu-language-menu .wp-block-navigation__submenu-container{min-width:3.25rem}
-.jamu-language-menu__item .wp-block-navigation-item__content{justify-content:center;min-width:2.75rem}
+.jamu-language-menu .wp-block-navigation__submenu-container{background:transparent!important;background-color:transparent!important;border:0!important;box-shadow:none!important;gap:.25rem;margin:0!important;min-width:0!important;padding:.2rem 0 0!important;width:auto!important}
+.jamu-language-menu__item,.jamu-language-menu__item .wp-block-navigation-item__content{background:transparent!important;background-color:transparent!important}
+.jamu-language-menu__item .wp-block-navigation-item__content{justify-content:center;min-width:1.75rem;padding:.1rem 0!important}
+@media (min-width:782px){.jamu-language-menu{position:relative}.jamu-language-menu .wp-block-navigation__submenu-container{left:50%!important;right:auto!important;top:100%!important;transform:translateX(-50%)}}
 </style>
 HTML;
     }
@@ -1072,6 +1074,10 @@ JS
         $items = [];
 
         foreach ($this->languages->all() as $language => $config) {
+            if ($language === $current) {
+                continue;
+            }
+
             $url = $this->language_url($language);
             if ($url === '') {
                 $url = $this->language_home_url($language);
@@ -1084,22 +1090,19 @@ JS
                 'code' => strtoupper($language),
                 'name' => (string) ($config['label'] ?? strtoupper($language)),
             ];
-            $is_current = $language === $current;
             $items[] = sprintf(
-                '<li class="wp-block-navigation-item wp-block-navigation-link jamu-language-menu__item%s"><a class="wp-block-navigation-item__content" href="%s" hreflang="%s" lang="%s" aria-label="%s" title="%s"%s><span class="wp-block-navigation-item__label"><span class="jamu-language-menu__flag" aria-hidden="true">%s</span><span class="jamu-language-menu__name screen-reader-text">%s</span></span></a></li>',
-                $is_current ? ' is-current' : '',
+                '<li class="wp-block-navigation-item wp-block-navigation-link jamu-language-menu__item"><a class="wp-block-navigation-item__content" href="%s" hreflang="%s" lang="%s" aria-label="%s" title="%s"><span class="wp-block-navigation-item__label"><span class="jamu-language-menu__flag" aria-hidden="true">%s</span><span class="jamu-language-menu__name screen-reader-text">%s</span></span></a></li>',
                 esc_url($url),
                 esc_attr($language),
                 esc_attr($language),
                 esc_attr($language_meta['name']),
                 esc_attr($language_meta['name']),
-                $is_current ? ' aria-current="page"' : '',
                 $this->language_flag_svg($language),
                 esc_html($language_meta['name'])
             );
         }
 
-        if (count($items) < 2) {
+        if (count($items) < 1) {
             return '';
         }
 
