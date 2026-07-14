@@ -26,6 +26,7 @@ final class Router
         add_filter('post_link', [$this, 'filter_post_link'], 20, 2);
         add_filter('page_link', [$this, 'filter_page_link'], 20, 2);
         add_filter('term_link', [$this, 'filter_term_link'], 20, 3);
+        add_filter('redirect_canonical', [$this, 'filter_canonical_redirect'], 20, 2);
     }
 
     public function add_rewrite_rules(): void
@@ -231,6 +232,19 @@ final class Router
         }
         $localized = $this->localized_term_url($term, $taxonomy, $this->languages->current());
         return $localized ?: $url;
+    }
+
+    public function filter_canonical_redirect($redirect_url, string $requested_url)
+    {
+        $path = trim((string) wp_parse_url($requested_url, PHP_URL_PATH), '/');
+        foreach ($this->languages->additional() as $language => $config) {
+            if ($path === trim((string) $config['prefix'], '/')) {
+                $this->languages->set_current($language);
+                return false;
+            }
+        }
+
+        return $redirect_url;
     }
 
     private function original_post_url(WP_Post $post): string
