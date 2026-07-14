@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-14-onboarding-wizard';
+const APP_VERSION = '2026-07-14-onboarding-localized';
 
 date_default_timezone_set('Europe/Prague');
 
