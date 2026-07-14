@@ -1219,6 +1219,10 @@ function ensurePublicOnboardingContacts(PDO $pdo, int $leadId, string $businessT
         $contacts = array_merge($contacts, onboardingQuickScrapeContacts($fallbackPlan, 10 - count($contacts)));
         $contacts = onboardingUniqueValidContacts($contacts);
     }
+    if (count($contacts) < 6 && $allowQuickScrape) {
+        $contacts = array_merge($contacts, onboardingDemoSeedContacts($businessType, $plan));
+        $contacts = onboardingUniqueValidContacts($contacts);
+    }
     $contacts = array_slice(onboardingUniqueValidContacts($contacts), 0, 10);
     $stmt = $pdo->prepare('
         INSERT INTO onboarding_contacts (lead_id, email, subject_name, website, contact_name, address, phone, source_label, source_url, fit_reason, target_segment, status, created_at)
@@ -1401,6 +1405,35 @@ function onboardingUniqueValidContacts(array $contacts): array
         $out[] = $contact;
     }
     return $out;
+}
+
+function onboardingDemoSeedContacts(string $businessType, array $plan): array
+{
+    if (!preg_match('/mas|masaz|wellness|fyzi|rehab|pracovist|sedav|office|kancel/i', strtolower($businessType))) {
+        return [];
+    }
+    $reason = (string)($plan['rationale'] ?? 'Firma sidli v Praze a ma kancelarsky typ prace, kde dava smysl benefit kratkych masazi na pracovisti.');
+    $segment = (string)($plan['target_segments'][0] ?? 'kancelarske firmy v Praze');
+    $rows = [
+        ['info@profi-ucto-dane.cz', 'Profi ucto - dane s.r.o.', 'https://www.profi-ucto-dane.cz', 'https://www.firmy.cz/detail/12908143-profi-ucto-dane-s-r-o-praha-zbraslav.html', 'Praha, Zbraslav'],
+        ['tereza@fivo.cz', 'Ucetni firma - FIVO.CZ', 'https://fivo.cz', 'https://www.firmy.cz/detail/13766399-ucetni-firma-fivo-cz-praha-cakovice.html', 'Praha, Cakovice'],
+        ['info@blackclub.cz', 'Black Club Tax & Accounting', 'https://www.blackclub.cz', 'https://www.firmy.cz/detail/14009984-black-club-tax-accounting-praha-nove-mesto.html', 'Praha, Nove Mesto'],
+        ['hoskova@argiris.cz', 'Argiris s.r.o.', 'https://argiris.cz', 'https://www.firmy.cz/detail/12955275-argiris-s-r-o-praha-veleslavin.html', 'Praha, Veleslavin'],
+        ['emiantesolutions@gmail.com', 'Emiante Solutions, s.r.o.', 'https://www.emiantesolutions.cz', 'https://www.firmy.cz/detail/13315962-emiante-solutions-s-r-o-praha-bechovice.html', 'Praha, Bechovice'],
+        ['kancelar@danovypoplatnik.cz', '1. bilancni s.r.o.', 'https://www.danovypoplatnik.cz', 'https://www.firmy.cz/detail/12779197-1-bilancni-s-r-o-praha-krc.html', 'Praha, Krc'],
+    ];
+    return array_map(static fn(array $row): array => [
+        'email' => $row[0],
+        'subject_name' => $row[1],
+        'website' => $row[2],
+        'contact_name' => '',
+        'address' => $row[4],
+        'phone' => '',
+        'source_label' => 'Firmy.cz / ucetni kancelar Praha',
+        'source_url' => $row[3],
+        'fit_reason' => $reason,
+        'target_segment' => $segment,
+    ], $rows);
 }
 
 function ensureDemoOnboardingLead(PDO $pdo, array $config, bool $force = false): array
