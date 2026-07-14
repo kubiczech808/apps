@@ -89,11 +89,27 @@ function normalizeState(input) {
       minProbability: Number(input.portfolio?.minProbability || MIN_PROBABILITY),
       minAnnualReturn: Number(input.portfolio?.minAnnualReturn || MIN_ANNUAL_RETURN),
     },
-    trades: Array.isArray(input.trades) ? input.trades : [],
+    trades: Array.isArray(input.trades) ? input.trades.map(normalizeTrade) : [],
     evaluations: Array.isArray(input.evaluations) ? input.evaluations : [],
     lastTradeDate: input.lastTradeDate || null,
     lastDecision: input.lastDecision || null,
     runLog: Array.isArray(input.runLog) ? input.runLog : [],
+  };
+}
+
+function normalizeTrade(trade) {
+  if (!trade || typeof trade !== "object") return trade;
+  if (Array.isArray(trade.riskGroupKeys) && trade.riskGroupKeys.length) return trade;
+  const risk = riskProfile({
+    question: trade.question,
+    slug: trade.slug,
+    outcome: trade.outcome,
+    tags: trade.tags,
+  });
+  return {
+    ...trade,
+    riskGroupKeys: risk.keys,
+    riskGroupLabels: risk.labels,
   };
 }
 
@@ -112,6 +128,109 @@ function tagQuestion(question) {
   if (/\b(nba|nfl|mlb|nhl|ufc|world cup|champions|match|game|tournament)\b/.test(text)) tags.push("sports");
   if (/\b(will|by|before|on|in 2026|in 2027)\b/.test(text)) tags.push("clear-resolution");
   return tags.length ? tags : ["general"];
+}
+
+function normalizeRiskText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function displayRiskName(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function cleanTeamName(value) {
+  let text = String(value || "")
+    .replace(/\b(the|a|an)\b/gi, " ")
+    .replace(/\b(on|in|at|by|before|after)\b.*$/i, " ")
+    .replace(/\b(to advance|advance|win|wins|winner|draw|end|team)\b.*$/i, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  text = text.replace(/^will\s+/i, "").replace(/[?:,]+$/g, "").trim();
+  return text;
+}
+
+function addTeam(teams, value) {
+  const cleaned = cleanTeamName(value);
+  const key = normalizeRiskText(cleaned);
+  if (!key || key.length < 2) return;
+  if (/^(yes|no|over|under|draw|other|none)$/.test(key)) return;
+  teams.set(key, displayRiskName(cleaned));
+}
+
+function extractTeams(question) {
+  const text = String(question || "");
+  const teams = new Map();
+  const patterns = [
+    /^Exact Score:\s*(.+?)\s+\d+\s*-\s*\d+\s*(.+?)\?/i,
+    /^(.+?)\s+vs\.?\s+(.+?)(?::|\s+end\b|\s+go\b|\s+O\/U\b|\?|$)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      addTeam(teams, match[1]);
+      addTeam(teams, match[2]);
+    }
+  }
+
+  const spread = text.match(/^Spread:\s*(.+?)\s*\(/i);
+  if (spread) addTeam(teams, spread[1]);
+
+  const winner = text.match(/^Will\s+(.+?)\s+win(?:\s+on\b|\s+the\b|\?|$)/i);
+  if (winner && !/\bvs\.?\b/i.test(winner[1])) addTeam(teams, winner[1]);
+
+  return teams;
+}
+
+function eventSlugKey(slug) {
+  const text = normalizeRiskText(slug).replace(/\s+/g, "-");
+  const dated = text.match(/^(.+?-\d{4}-\d{2}-\d{2})(?:-|$)/);
+  return dated ? dated[1] : "";
+}
+
+function riskProfile({ question, slug, outcome, tags }) {
+  const keys = new Set();
+  const labels = new Map();
+  const addKey = (key, label) => {
+    if (!key) return;
+    keys.add(key);
+    if (label) labels.set(key, label);
+  };
+
+  const normalizedSlug = normalizeRiskText(slug).replace(/\s+/g, "-");
+  if (normalizedSlug) addKey(`market:${normalizedSlug}`, `Market: ${normalizedSlug}`);
+
+  const eventKey = eventSlugKey(slug);
+  if (eventKey) addKey(`event:${eventKey}`, `Event: ${eventKey}`);
+
+  const teams = extractTeams(question);
+  for (const [teamKey, label] of teams) {
+    addKey(`team:${teamKey}`, `Team: ${label}`);
+  }
+
+  if (teams.size >= 2) {
+    const pair = [...teams.keys()].sort().join("-vs-");
+    const pairLabel = [...teams.values()].sort().join(" vs ");
+    addKey(`match:${pair}`, `Match: ${pairLabel}`);
+  }
+
+  const tagList = Array.isArray(tags) ? tags : tagQuestion(question);
+  return {
+    keys: [...keys],
+    labels: [...keys].map((key) => labels.get(key) || key),
+    category: tagList.includes("sports") ? "sports" : tagList[0] || "general",
+    primaryEntity: [...teams.values()][0] || String(outcome || ""),
+  };
 }
 
 function bestBook(book) {
@@ -246,6 +365,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
   const volume24hr = Number(market.volume24hr || 0);
   const liquidity = Number(market.liquidity || 0);
   const tags = tagQuestion(question);
+  const risk = riskProfile({ question, slug: market.slug, outcome, tags });
   const days = daysToEnd(market.endDate);
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
   const execution = simulateMarketBuy(asks, stake);
@@ -301,6 +421,10 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     tokenId,
     endDate: market.endDate || null,
     tags,
+    riskCategory: risk.category,
+    riskPrimaryEntity: risk.primaryEntity,
+    riskGroupKeys: risk.keys,
+    riskGroupLabels: risk.labels,
     executionMode: "MARKET_BUY",
     marketPrice: Number(executionPrice.toFixed(4)),
     bestAsk: Number(bestAsk.toFixed(4)),
@@ -340,6 +464,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     evidence: [
       `question=${question}`,
       `outcome=${outcome}`,
+      `riskGroupKeys=${risk.keys.join(",")}`,
       `executionMode=MARKET_BUY`,
       `bestAsk=${bestAsk}`,
       `avgExecutionPrice=${executionPrice}`,
@@ -368,10 +493,36 @@ function alreadyOpen(trades, tokenId) {
   return trades.some((trade) => trade.status === "OPEN" && trade.tokenId === tokenId);
 }
 
+function riskBlock(candidate, trades) {
+  const candidateKeys = new Set(Array.isArray(candidate.riskGroupKeys) ? candidate.riskGroupKeys : []);
+  if (!candidateKeys.size) return null;
+
+  for (const trade of trades.filter((item) => item.status === "OPEN")) {
+    const tradeKeys = Array.isArray(trade.riskGroupKeys) ? trade.riskGroupKeys : [];
+    const overlap = tradeKeys.filter((key) => candidateKeys.has(key));
+    if (overlap.length) {
+      return {
+        tradeId: trade.id,
+        question: trade.question,
+        outcome: trade.outcome,
+        overlap,
+      };
+    }
+  }
+
+  return null;
+}
+
+function riskBlockReason(block) {
+  const overlap = block?.overlap?.slice(0, 3).join(", ") || "risk group";
+  return `open correlated paper trade ${block.tradeId} already covers ${overlap}`;
+}
+
 function maybeOpenDailyTrade(state, eligible) {
   const today = pragueDateKey();
   const available = Math.max(0, PORTFOLIO_USDC - openRisk(state.trades));
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
+  let skippedForRisk = 0;
 
   if (state.lastTradeDate === today) {
     return { action: "SKIP", reason: "daily paper trade already opened", available };
@@ -380,9 +531,21 @@ function maybeOpenDailyTrade(state, eligible) {
     return { action: "SKIP", reason: "not enough free paper capital", available };
   }
 
-  const best = eligible.find((item) => !alreadyOpen(state.trades, item.tokenId));
+  const best = eligible.find((item) => {
+    if (alreadyOpen(state.trades, item.tokenId)) return false;
+    const block = riskBlock(item, state.trades);
+    if (!block) return true;
+    skippedForRisk += 1;
+    item.selectionStatus = "RISK_BLOCKED";
+    item.riskBlockedByTradeId = block.tradeId;
+    item.riskBlockedReason = riskBlockReason(block);
+    return false;
+  });
   if (!best) {
-    return { action: "SKIP", reason: "no eligible non-duplicate candidate", available };
+    const reason = skippedForRisk > 0
+      ? "no eligible non-correlated candidate"
+      : "no eligible non-duplicate candidate";
+    return { action: "SKIP", reason, available, skippedForRisk };
   }
 
   const trade = {
@@ -395,6 +558,10 @@ function maybeOpenDailyTrade(state, eligible) {
     slug: best.slug,
     outcome: best.outcome,
     tokenId: best.tokenId,
+    riskCategory: best.riskCategory,
+    riskPrimaryEntity: best.riskPrimaryEntity,
+    riskGroupKeys: best.riskGroupKeys,
+    riskGroupLabels: best.riskGroupLabels,
     executionMode: best.executionMode,
     entryPrice: best.marketPrice,
     bestAsk: best.bestAsk,
@@ -418,7 +585,7 @@ function maybeOpenDailyTrade(state, eligible) {
 
   state.trades.unshift(trade);
   state.lastTradeDate = today;
-  return { action: "OPENED", reason: "best eligible candidate", trade, available: available - stake };
+  return { action: "OPENED", reason: "best eligible non-correlated candidate", trade, available: available - stake, skippedForRisk };
 }
 
 async function loadMarkets() {
@@ -490,6 +657,7 @@ async function run() {
     action: decision.action,
     reason: decision.reason,
     tradeId: decision.trade?.id || null,
+    riskSkippedCount: decision.skippedForRisk || 0,
   };
   state.evaluations = [...evaluations, ...state.evaluations].slice(0, MAX_HISTORY);
   state.runLog = [
@@ -499,6 +667,7 @@ async function run() {
       eligibleCount: eligible.length,
       action: decision.action,
       reason: decision.reason,
+      riskSkippedCount: decision.skippedForRisk || 0,
     },
     ...state.runLog,
   ].slice(0, 120);

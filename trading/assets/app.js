@@ -155,6 +155,15 @@ function feeLine(item) {
   return `fee ${money(fee, 5)}${rateText}`;
 }
 
+function riskLine(item) {
+  const labels = Array.isArray(item.riskGroupLabels) ? item.riskGroupLabels : [];
+  const visible = labels
+    .filter((label) => /^(Team|Match|Event):/i.test(label))
+    .slice(0, 3);
+  if (!visible.length) return "";
+  return `risk: ${visible.join(", ")}`;
+}
+
 function polymarketUrl(item) {
   const slug = String(item?.slug || "").trim();
   if (/^[a-z0-9-]+$/i.test(slug)) return `https://polymarket.com/event/${slug}`;
@@ -172,7 +181,10 @@ function marketAnchor(item) {
 }
 
 function analysisBadge(item) {
-  const reasons = (item.rejectReasons || []).join("; ") || "passes filters";
+  const riskReason = item.selectionStatus === "RISK_BLOCKED"
+    ? (item.riskBlockedReason || "risk-blocked by an open correlated paper trade")
+    : "";
+  const reasons = [riskReason, ...(item.rejectReasons || [])].filter(Boolean).join("; ") || "passes filters";
   const details = [reasons, item.analysisSummary || ""].filter(Boolean).join("\n\n");
   return `
     <span class="analysis-popover">
@@ -181,6 +193,12 @@ function analysisBadge(item) {
     </span>
     <span class="analysis-reason">${escapeHtml(reasons)}</span>
   `;
+}
+
+function evaluationStatusLabel(item) {
+  const status = String(item.status || "-");
+  if (item.selectionStatus === "RISK_BLOCKED") return `${status} / RISK BLOCKED`;
+  return status;
 }
 
 async function getJson(url) {
@@ -602,6 +620,7 @@ function renderBotState(botState) {
       <div>
         <span class="label">Decision</span>
         <strong>${escapeHtml(decision.reason || "-")}</strong>
+        <span>${Number(decision.riskSkippedCount || 0) ? `${decision.riskSkippedCount} risk-blocked` : ""}</span>
       </div>
     </div>
   `;
@@ -627,6 +646,7 @@ function renderBotState(botState) {
               <td>${escapeHtml(formatDate(trade.date || trade.openedAt || ""))}</td>
               <td>
                 ${marketAnchor(trade)}
+                <span>${escapeHtml(riskLine(trade))}</span>
               </td>
               <td>
                 ${probability(Number(trade.entryPrice))}
@@ -687,9 +707,11 @@ function sortableHeader(key, label) {
 function renderBotEvaluations() {
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
   const eligibleCount = evaluations.filter((item) => item.status === "ELIGIBLE").length;
+  const riskBlockedCount = evaluations.filter((item) => item.selectionStatus === "RISK_BLOCKED").length;
+  const tradableCount = Math.max(0, eligibleCount - riskBlockedCount);
 
   if (els.evaluationSummary) {
-    els.evaluationSummary.textContent = `${eligibleCount} / ${evaluations.length} eligible`;
+    els.evaluationSummary.textContent = `${tradableCount} tradable / ${eligibleCount} eligible / ${evaluations.length} total`;
   }
 
   if (!evaluations.length) {
@@ -723,9 +745,10 @@ function renderBotEvaluations() {
         ${visibleEvaluations.map((item) => `
           <tr>
             <td>${escapeHtml(formatDate(item.evaluatedAt || ""))}</td>
-            <td class="${item.status === "ELIGIBLE" ? "positive" : "negative"}">${escapeHtml(item.status || "-")}</td>
+            <td class="${item.status === "ELIGIBLE" && item.selectionStatus !== "RISK_BLOCKED" ? "positive" : "negative"}">${escapeHtml(evaluationStatusLabel(item))}</td>
             <td>
               ${marketAnchor(item)}
+              <span>${escapeHtml(riskLine(item))}</span>
             </td>
             <td>
               ${probability(Number(item.marketPrice))}
