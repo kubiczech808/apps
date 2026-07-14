@@ -38,6 +38,7 @@ jobs:
           BTCDCA_AUTH_SECRET: ${{ secrets.BTCDCA_AUTH_SECRET }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+          STRIPE_PUBLISHED_KEY: ${{ secrets.STRIPE_PUBLISHED_KEY }}
           STRIPE_PRICE_ID: ${{ secrets.STRIPE_PRICE_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
@@ -83,7 +84,7 @@ jobs:
               ],
               'stripe' => [
                   'secret_key' => {s(os.environ.get("STRIPE_SECRET_KEY"))},
-                  'publishable_key' => {s(os.environ.get("STRIPE_PUBLISHABLE_KEY"))},
+                  'publishable_key' => {s(os.environ.get("STRIPE_PUBLISHABLE_KEY") or os.environ.get("STRIPE_PUBLISHED_KEY"))},
                   'price_id' => {s(os.environ.get("STRIPE_PRICE_ID"))},
               ],
               'ai' => [

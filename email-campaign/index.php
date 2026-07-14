@@ -653,29 +653,41 @@ function onboardingSelectedContacts(PDO $pdo, array $lead): array
 function stripeConfigured(array $config): bool
 {
     $stripe = $config['stripe'] ?? [];
-    return trim((string)($stripe['secret_key'] ?? '')) !== '' && trim((string)($stripe['price_id'] ?? '')) !== '';
+    return trim((string)($stripe['secret_key'] ?? '')) !== '';
 }
 
 function createOnboardingStripeCheckout(PDO $pdo, array $config, array $lead): string
 {
     if (!stripeConfigured($config)) {
-        throw new RuntimeException('Stripe neni nakonfigurovany. Dopln STRIPE_SECRET_KEY a STRIPE_PRICE_ID do GitHub Secrets.');
+        throw new RuntimeException('Stripe neni nakonfigurovany. Dopln STRIPE_SECRET_KEY do GitHub Secrets.');
     }
     $successUrl = onboardingLeadUrl($lead) . '&step=launch&stripe_session_id={CHECKOUT_SESSION_ID}';
     $cancelUrl = onboardingLeadUrl($lead) . '&step=payment';
-    $stripe = $config['stripe'];
-    $response = stripeApiRequest($config, 'POST', '/v1/checkout/sessions', [
+    $params = [
         'mode' => 'subscription',
         'customer_email' => (string)$lead['account_email'],
         'client_reference_id' => 'onboarding_lead_' . (int)$lead['id'],
         'success_url' => $successUrl,
         'cancel_url' => $cancelUrl,
-        'line_items[0][price]' => (string)$stripe['price_id'],
         'line_items[0][quantity]' => '1',
         'subscription_data[trial_period_days]' => (string)((int)($lead['trial_days'] ?? 7) ?: 7),
         'payment_method_collection' => 'always',
         'metadata[onboarding_lead_id]' => (string)$lead['id'],
-    ]);
+    ];
+    $stripe = $config['stripe'];
+    if (trim((string)($stripe['price_id'] ?? '')) !== '') {
+        $params['line_items[0][price]'] = (string)$stripe['price_id'];
+    } else {
+        $amountCents = max(100, (int)round(((float)($lead['monthly_price_usd'] ?? 19.00) ?: 19.00) * 100));
+        $params += [
+            'line_items[0][price_data][currency]' => 'usd',
+            'line_items[0][price_data][unit_amount]' => (string)$amountCents,
+            'line_items[0][price_data][recurring][interval]' => 'month',
+            'line_items[0][price_data][product_data][name]' => 'AI B2B outreach',
+            'line_items[0][price_data][product_data][description]' => 'Vyhledani kontaktu, AI priprava osloveni a kampanovy odesilaci pruvodce.',
+        ];
+    }
+    $response = stripeApiRequest($config, 'POST', '/v1/checkout/sessions', $params);
     $url = (string)($response['url'] ?? '');
     if ($url === '') {
         throw new RuntimeException('Stripe nevratil URL platebniho formulare.');
@@ -1700,7 +1712,7 @@ function renderOnboardingWizard(PDO $pdo, array $config, array $lead, string $st
                         <?php elseif (stripeConfigured($config)): ?>
                             <form method="post" class="onboarding-actions"><input type="hidden" name="action" value="onboarding_start_stripe"><button>Pridat platebni kartu</button></form>
                         <?php else: ?>
-                            <div class="flash error">Stripe zatim neni pripojeny. Dopln GitHub Secrets STRIPE_SECRET_KEY a STRIPE_PRICE_ID, potom znovu nasad aplikaci.</div>
+                            <div class="flash error">Stripe zatim neni pripojeny. Dopln GitHub Secret STRIPE_SECRET_KEY, potom znovu nasad aplikaci.</div>
                         <?php endif; ?>
                     </div>
                 <?php elseif ($step === 'launch'): ?>
@@ -7561,7 +7573,7 @@ function uiTranslationMap(string $language): array
             'Platebni karta je overena.' => 'Die Zahlungskarte ist verifiziert.',
             'Pokracovat ke spusteni' => 'Weiter zum Start',
             'Pridat platebni kartu' => 'Zahlungskarte hinzufuegen',
-            'Stripe zatim neni pripojeny. Dopln GitHub Secrets STRIPE_SECRET_KEY a STRIPE_PRICE_ID, potom znovu nasad aplikaci.' => 'Stripe ist noch nicht verbunden. Fuege die GitHub Secrets STRIPE_SECRET_KEY und STRIPE_PRICE_ID hinzu und deploye die Anwendung erneut.',
+            'Stripe zatim neni pripojeny. Dopln GitHub Secret STRIPE_SECRET_KEY, potom znovu nasad aplikaci.' => 'Stripe ist noch nicht verbunden. Fuege das GitHub Secret STRIPE_SECRET_KEY hinzu und deploye die Anwendung erneut.',
             'Spustit kampan' => 'Kampagne starten',
             'Posledni kontrola pred spustenim. Odesilani pobezi na pozadi pres bezny kampanovy worker.' => 'Letzte Pruefung vor dem Start. Der Versand laeuft im Hintergrund ueber den normalen Kampagnen-Worker.',
             'Prijemci' => 'Empfaenger',
@@ -7583,7 +7595,7 @@ function uiTranslationMap(string $language): array
             'SMTP uzivatel musi byt vyplneny.' => 'SMTP-Benutzer muss ausgefuellt sein.',
             'SMTP heslo musi byt vyplneny.' => 'SMTP-Passwort muss ausgefuellt sein.',
             'Nejprve dokoncit aktivaci uctu.' => 'Schliesse zuerst die Kontoaktivierung ab.',
-            'Stripe neni nakonfigurovany. Dopln STRIPE_SECRET_KEY a STRIPE_PRICE_ID do GitHub Secrets.' => 'Stripe ist nicht konfiguriert. Fuege STRIPE_SECRET_KEY und STRIPE_PRICE_ID zu den GitHub Secrets hinzu.',
+            'Stripe neni nakonfigurovany. Dopln STRIPE_SECRET_KEY do GitHub Secrets.' => 'Stripe ist nicht konfiguriert. Fuege STRIPE_SECRET_KEY zu den GitHub Secrets hinzu.',
             'Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.' => 'Die Anwendung ist nur fuer die produktive MySQL/MariaDB-Datenbank konfiguriert. Bitte pruefe APP_DATABASE_NAME, APP_DATABASE_USERNAME und APP_DATABASE_PASSWORD in GitHub Secrets sowie die Datenbankrechte fuer SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER auf dieser Datenbank.',
             'Jednotlive casti nastaveni se meni oddelene, aby se prihlasovaci udaje nikdy neprepsaly omylem.' => 'Die einzelnen Einstellungsbereiche werden getrennt bearbeitet, damit Zugangsdaten nicht versehentlich ueberschrieben werden.',
             'Prehled pripravenych kampani, jejich planu, limitu a stavu osloveni.' => 'Uebersicht der vorbereiteten Kampagnen, Plaene, Limits und Kontaktstatus.',
@@ -8115,7 +8127,7 @@ function uiTranslationMap(string $language): array
         'Platebni karta je overena.' => 'Payment card is verified.',
         'Pokracovat ke spusteni' => 'Continue to launch',
         'Pridat platebni kartu' => 'Add payment card',
-        'Stripe zatim neni pripojeny. Dopln GitHub Secrets STRIPE_SECRET_KEY a STRIPE_PRICE_ID, potom znovu nasad aplikaci.' => 'Stripe is not connected yet. Add GitHub Secrets STRIPE_SECRET_KEY and STRIPE_PRICE_ID, then deploy the app again.',
+        'Stripe zatim neni pripojeny. Dopln GitHub Secret STRIPE_SECRET_KEY, potom znovu nasad aplikaci.' => 'Stripe is not connected yet. Add the GitHub Secret STRIPE_SECRET_KEY, then deploy the app again.',
         'Spustit kampan' => 'Launch campaign',
         'Posledni kontrola pred spustenim. Odesilani pobezi na pozadi pres bezny kampanovy worker.' => 'Final check before launch. Sending will run in the background through the regular campaign worker.',
         'Prijemci' => 'Recipients',
@@ -8137,7 +8149,7 @@ function uiTranslationMap(string $language): array
         'SMTP uzivatel musi byt vyplneny.' => 'SMTP username is required.',
         'SMTP heslo musi byt vyplneny.' => 'SMTP password is required.',
         'Nejprve dokoncit aktivaci uctu.' => 'Complete account activation first.',
-        'Stripe neni nakonfigurovany. Dopln STRIPE_SECRET_KEY a STRIPE_PRICE_ID do GitHub Secrets.' => 'Stripe is not configured. Add STRIPE_SECRET_KEY and STRIPE_PRICE_ID to GitHub Secrets.',
+        'Stripe neni nakonfigurovany. Dopln STRIPE_SECRET_KEY do GitHub Secrets.' => 'Stripe is not configured. Add STRIPE_SECRET_KEY to GitHub Secrets.',
         'Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.' => 'The application is configured to use only the production MySQL/MariaDB database. Please check APP_DATABASE_NAME, APP_DATABASE_USERNAME and APP_DATABASE_PASSWORD in GitHub Secrets, especially the database user permissions for SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER on this database.',
         'Jednotlive casti nastaveni se meni oddelene, aby se prihlasovaci udaje nikdy neprepsaly omylem.' => 'Each configuration area is edited separately so credentials are not overwritten accidentally.',
         'Prehled pripravenych kampani, jejich planu, limitu a stavu osloveni.' => 'Overview of prepared campaigns, schedules, limits and outreach status.',
