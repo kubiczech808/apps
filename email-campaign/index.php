@@ -1209,8 +1209,15 @@ function ensurePublicOnboardingContacts(PDO $pdo, int $leadId, string $businessT
         $plan = onboardingFallbackLeadPlan($businessType);
     }
     $contacts = onboardingCandidateContactsFromRecipients($pdo, $plan, $businessType, 10);
+    $contacts = onboardingUniqueValidContacts($contacts);
     if (count($contacts) < 6 && $allowQuickScrape) {
         $contacts = array_merge($contacts, onboardingQuickScrapeContacts($plan, 10 - count($contacts)));
+        $contacts = onboardingUniqueValidContacts($contacts);
+    }
+    if (count($contacts) < 6 && $allowQuickScrape) {
+        $fallbackPlan = onboardingFallbackLeadPlan($businessType);
+        $contacts = array_merge($contacts, onboardingQuickScrapeContacts($fallbackPlan, 10 - count($contacts)));
+        $contacts = onboardingUniqueValidContacts($contacts);
     }
     $contacts = array_slice(onboardingUniqueValidContacts($contacts), 0, 10);
     $stmt = $pdo->prepare('
@@ -1340,7 +1347,7 @@ function onboardingQuickScrapeContacts(array $plan, int $limit): array
                         return $contacts;
                     }
                 }
-                foreach (array_slice(extractCandidateUrls($html, $search['url'], $source), 0, 4) as $url) {
+                foreach (array_slice(extractCandidateUrls($html, $search['url'], $source), 0, 10) as $url) {
                     try {
                         $contact = extractContactFromHtml(httpGet($url), $url);
                     } catch (Throwable $e) {
