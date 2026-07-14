@@ -30,6 +30,11 @@ jobs:
           BTCDCA_GOOGLE_CLIENT_ID: ${{ secrets.BTCDCA_GOOGLE_CLIENT_ID }}
           BTCDCA_GOOGLE_SECRET: ${{ secrets.BTCDCA_GOOGLE_SECRET }}
           BTCDCA_AUTH_SECRET: ${{ secrets.BTCDCA_AUTH_SECRET }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+          STRIPE_PRICE_ID: ${{ secrets.STRIPE_PRICE_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
         run: |
           if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
             echo "MySQL database secrets are required for email-campaign deploy."
@@ -68,6 +73,15 @@ jobs:
                   'redirect_uri' => 'https://www.btc-dca.com/app/auth/google/callback',
                   'app_url' => 'https://www.btc-dca.com',
               ],
+              'stripe' => [
+                  'secret_key' => {s(os.environ.get("STRIPE_SECRET_KEY"))},
+                  'publishable_key' => {s(os.environ.get("STRIPE_PUBLISHABLE_KEY"))},
+                  'price_id' => {s(os.environ.get("STRIPE_PRICE_ID"))},
+              ],
+              'ai' => [
+                  'openai_api_key' => {s(os.environ.get("OPENAI_API_KEY"))},
+                  'openai_model' => {s(os.environ.get("OPENAI_MODEL") or "gpt-4.1")},
+              ],
               'database' => [
                   'driver' => 'mysql',
                   'host' => {s(os.environ.get("APP_DATABASE_HOST"))},
@@ -98,3 +112,23 @@ jobs:
           server-dir: /www/email-campaign/
           exclude: |
             **/.git*
+
+      - name: Send onboarding demo invite
+        env:
+          APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
+          APP_DATABASE_USERNAME: ${{ secrets.APP_DATABASE_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.APP_DATABASE_PASSWORD }}
+        run: |
+          python3 - <<'PY' > /tmp/email_campaign_cron_token
+          import hashlib
+          import os
+          material = "email-campaign-cron:" + os.environ.get("APP_DATABASE_NAME", "") + ":" + os.environ.get("APP_DATABASE_USERNAME", "") + ":" + os.environ.get("APP_DATABASE_PASSWORD", "")
+          print(hashlib.sha256(material.encode("utf-8")).hexdigest())
+          PY
+          token="$(cat /tmp/email_campaign_cron_token)"
+          url="https://www.osobnizkusenosti.cz/email-campaign/?cron=${token}&send_onboarding_demo=1"
+          http_code="$(curl --silent --show-error --max-time 120 --output /tmp/onboarding_demo_invite.txt --write-out "%{http_code}" "$url" || true)"
+          cat /tmp/onboarding_demo_invite.txt || true
+          if ! [[ "$http_code" =~ ^[0-9]+$ ]] || [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "::warning::Onboarding demo invite endpoint returned HTTP ${http_code}."
+          fi

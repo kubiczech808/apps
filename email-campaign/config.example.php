@@ -22,6 +22,15 @@ return [
         'redirect_uri' => 'https://www.btc-dca.com/app/auth/google/callback',
         'app_url' => 'https://www.btc-dca.com',
     ],
+    'stripe' => [
+        'secret_key' => '',
+        'publishable_key' => '',
+        'price_id' => '',
+    ],
+    'ai' => [
+        'openai_api_key' => '',
+        'openai_model' => 'gpt-4.1',
+    ],
     'database' => [
         'driver' => 'mysql',
         'host' => 'localhost',

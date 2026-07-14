@@ -351,6 +351,43 @@ document.querySelectorAll(".campaign-detail-form").forEach((form) => {
   });
 });
 
+document.querySelectorAll("[data-onboarding-select-all]").forEach((toggle) => {
+  const form = toggle.closest("form");
+  const checkboxes = () => Array.from(form?.querySelectorAll(".onboarding-contact-checkbox") || []);
+  const syncToggle = () => {
+    const boxes = checkboxes();
+    toggle.checked = boxes.length > 0 && boxes.every((box) => box.checked);
+    toggle.indeterminate = boxes.some((box) => box.checked) && !toggle.checked;
+  };
+  toggle.addEventListener("change", () => {
+    checkboxes().forEach((box) => {
+      box.checked = toggle.checked;
+    });
+  });
+  form?.addEventListener("change", (event) => {
+    if (event.target.closest(".onboarding-contact-checkbox")) syncToggle();
+  });
+  syncToggle();
+});
+
+document.querySelectorAll("[data-gmail-preset]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const form = button.closest(".onboarding-card")?.querySelector(".smtp-form");
+    if (!form) return;
+    const email = button.dataset.accountEmail || form.querySelector('[name="from_email"]')?.value || "";
+    const set = (selector, value) => {
+      const field = form.querySelector(selector);
+      if (field) field.value = value;
+    };
+    set('[name="from_email"]', email);
+    set("[data-smtp-host]", "smtp.gmail.com");
+    set("[data-smtp-port]", "587");
+    set("[data-smtp-encryption]", "tls");
+    set("[data-smtp-username]", email);
+    form.querySelector('[name="smtp_password"]')?.focus();
+  });
+});
+
 document.querySelectorAll(".toggle-detail").forEach((button) => {
   button.addEventListener("click", () => {
     const row = document.getElementById(button.dataset.target);

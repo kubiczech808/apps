@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-05-sender-window-limit';
+const APP_VERSION = '2026-07-14-onboarding-wizard';
 
 date_default_timezone_set('Europe/Prague');
 
@@ -121,6 +121,10 @@ if (isset($_GET['cron'])) {
     if (function_exists('set_time_limit')) {
         @set_time_limit(110);
     }
+    if (isset($_GET['send_onboarding_demo'])) {
+        echo sendOnboardingDemoInvite($pdo, $config);
+        exit;
+    }
     echo sendBatch($pdo, $config);
     echo "\n" . syncImapReplies($pdo, $config);
     echo "\n" . runCronImports($pdo);
@@ -158,6 +162,11 @@ if (($_GET['worker'] ?? '') === 'campaigns') {
         exit("Forbidden\n");
     }
     echo runCampaignWorker($pdo, $config, (int)($_GET['campaign_id'] ?? 0), (int)($_GET['run_id'] ?? 0));
+    exit;
+}
+
+if (isset($_GET['onboarding'])) {
+    handleOnboardingRequest($pdo, $config, $flash);
     exit;
 }
 
@@ -399,6 +408,838 @@ function handlePost(PDO $pdo, array $config): ?string
     }
 
     return null;
+}
+
+function handleOnboardingRequest(PDO $pdo, array $config, ?array $flash): void
+{
+    $token = trim((string)($_GET['onboarding'] ?? ''));
+    $lead = onboardingLeadByToken($pdo, $token);
+    if (!$lead) {
+        renderOnboardingNotFound($config);
+        return;
+    }
+
+    $step = onboardingRequestedStep($lead);
+    try {
+        if (isset($_GET['stripe_session_id'])) {
+            verifyOnboardingStripeSession($pdo, $config, $lead, (string)$_GET['stripe_session_id']);
+            $lead = onboardingLeadByToken($pdo, $token) ?: $lead;
+            $flash = ['ok', 'Platebni karta byla overena pres Stripe a trial je pripraveny.'];
+            $step = 'launch';
+        }
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $action = (string)($_POST['action'] ?? '');
+            if ($action === 'onboarding_save_contacts') {
+                saveOnboardingContactsSelection($pdo, $lead);
+                onboardingRedirect($lead, 'email', 'Vyber kontaktu ulozen.');
+            }
+            if ($action === 'onboarding_save_email') {
+                saveOnboardingEmail($pdo, $lead);
+                onboardingRedirect($lead, 'smtp', 'Obsah emailu ulozen.');
+            }
+            if ($action === 'onboarding_test_smtp') {
+                saveAndTestOnboardingSmtp($pdo, $lead);
+                onboardingRedirect($lead, 'payment', 'SMTP pripojeni funguje.');
+            }
+            if ($action === 'onboarding_start_stripe') {
+                $url = createOnboardingStripeCheckout($pdo, $config, $lead);
+                header('Location: ' . $url);
+                exit;
+            }
+            if ($action === 'onboarding_launch_campaign') {
+                $message = launchOnboardingCampaign($pdo, $lead);
+                onboardingRedirect(onboardingLeadByToken($pdo, $token) ?: $lead, 'done', $message);
+            }
+        }
+
+        $lead = onboardingLeadByToken($pdo, $token) ?: $lead;
+        if ($step === 'email') {
+            ensureOnboardingEmailDraft($pdo, $config, $lead);
+            $lead = onboardingLeadByToken($pdo, $token) ?: $lead;
+        }
+    } catch (Throwable $e) {
+        $flash = ['error', $e->getMessage()];
+        $lead = onboardingLeadByToken($pdo, $token) ?: $lead;
+    }
+
+    renderOnboardingWizard($pdo, $config, $lead, $step, $flash);
+}
+
+function onboardingLeadByToken(PDO $pdo, string $token): ?array
+{
+    if (!preg_match('/^[A-Za-z0-9_-]{12,96}$/', $token)) {
+        return null;
+    }
+    $stmt = $pdo->prepare('SELECT * FROM onboarding_leads WHERE token=? LIMIT 1');
+    $stmt->execute([$token]);
+    $lead = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $lead ?: null;
+}
+
+function onboardingLeadContacts(PDO $pdo, int $leadId): array
+{
+    $stmt = $pdo->prepare('SELECT * FROM onboarding_contacts WHERE lead_id=? ORDER BY id ASC');
+    $stmt->execute([$leadId]);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function onboardingRequestedStep(array $lead): string
+{
+    $requested = (string)($_GET['step'] ?? '');
+    $valid = ['contacts', 'email', 'smtp', 'payment', 'launch', 'done'];
+    if (in_array($requested, $valid, true)) {
+        return $requested;
+    }
+    return [
+        'contacts_ready' => 'email',
+        'email_ready' => 'smtp',
+        'smtp_ready' => 'payment',
+        'payment_ready' => 'launch',
+        'launched' => 'done',
+    ][(string)($lead['status'] ?? 'new')] ?? 'contacts';
+}
+
+function onboardingRedirect(array $lead, string $step, string $message): void
+{
+    $_SESSION['flash'] = ['ok', $message];
+    header('Location: ./?onboarding=' . rawurlencode((string)$lead['token']) . '&step=' . rawurlencode($step));
+    exit;
+}
+
+function onboardingAdvanceStatus(string $current, string $target): string
+{
+    $order = ['new' => 0, 'contacts_ready' => 1, 'email_ready' => 2, 'smtp_ready' => 3, 'payment_ready' => 4, 'launched' => 5];
+    return ($order[$current] ?? 0) >= ($order[$target] ?? 0) ? $current : $target;
+}
+
+function saveOnboardingContactsSelection(PDO $pdo, array $lead): void
+{
+    $contacts = onboardingLeadContacts($pdo, (int)$lead['id']);
+    $validIds = array_flip(array_map(static fn($row) => (int)$row['id'], $contacts));
+    $selected = [];
+    foreach ((array)($_POST['contact_ids'] ?? []) as $id) {
+        $id = (int)$id;
+        if (isset($validIds[$id])) {
+            $selected[] = $id;
+        }
+    }
+    $selected = array_values(array_unique($selected));
+    if (!$selected) {
+        throw new RuntimeException('Vyber alespon jeden kontakt pro osloveni.');
+    }
+    $stmt = $pdo->prepare('UPDATE onboarding_leads SET selected_contact_ids=?, status=?, updated_at=? WHERE id=?');
+    $stmt->execute([
+        json_encode($selected, JSON_UNESCAPED_SLASHES),
+        onboardingAdvanceStatus((string)$lead['status'], 'contacts_ready'),
+        date('c'),
+        (int)$lead['id'],
+    ]);
+}
+
+function saveOnboardingEmail(PDO $pdo, array $lead): void
+{
+    $subject = trim((string)($_POST['email_subject'] ?? ''));
+    $body = cleanHtml((string)($_POST['body_html'] ?? ''));
+    if ($subject === '') {
+        throw new RuntimeException('Zadej predmet emailu.');
+    }
+    if (trim(strip_tags($body)) === '' && stripos($body, '<img') === false) {
+        throw new RuntimeException('Telo emailu nesmi byt prazdne.');
+    }
+    $stmt = $pdo->prepare('UPDATE onboarding_leads SET email_subject=?, email_body_html=?, status=?, updated_at=? WHERE id=?');
+    $stmt->execute([
+        $subject,
+        $body,
+        onboardingAdvanceStatus((string)$lead['status'], 'email_ready'),
+        date('c'),
+        (int)$lead['id'],
+    ]);
+}
+
+function onboardingSmtpConfigFromArray(array $data): array
+{
+    $fromEmail = strtolower(trim((string)($data['from_email'] ?? '')));
+    $fromName = trim((string)($data['from_name'] ?? ''));
+    $host = trim((string)($data['smtp_host'] ?? ''));
+    $username = trim((string)($data['smtp_username'] ?? ''));
+    $password = (string)($data['smtp_password'] ?? '');
+    $port = max(1, min(65535, (int)($data['smtp_port'] ?? 587)));
+    $encryption = in_array((string)($data['smtp_encryption'] ?? 'tls'), ['tls', 'ssl', ''], true) ? (string)($data['smtp_encryption'] ?? 'tls') : 'tls';
+    if (!filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+        throw new RuntimeException('Email odesilatele neni platny.');
+    }
+    foreach (['SMTP server' => $host, 'SMTP uzivatel' => $username, 'SMTP heslo' => $password] as $label => $value) {
+        if (trim((string)$value) === '') {
+            throw new RuntimeException($label . ' musi byt vyplneny.');
+        }
+    }
+    return [
+        'from_email' => $fromEmail,
+        'from_name' => $fromName !== '' ? $fromName : $fromEmail,
+        'smtp' => [
+            'host' => $host,
+            'port' => $port,
+            'username' => $username,
+            'password' => $password,
+            'encryption' => $encryption,
+        ],
+    ];
+}
+
+function saveAndTestOnboardingSmtp(PDO $pdo, array $lead): void
+{
+    $smtpConfig = onboardingSmtpConfigFromArray($_POST);
+    (new SmtpMailer($smtpConfig))->testConnection();
+    $stmt = $pdo->prepare('
+        UPDATE onboarding_leads
+        SET from_email=?, from_name=?, smtp_host=?, smtp_port=?, smtp_username=?, smtp_password=?, smtp_encryption=?,
+            smtp_validated=1, status=?, updated_at=?
+        WHERE id=?
+    ');
+    $stmt->execute([
+        $smtpConfig['from_email'],
+        $smtpConfig['from_name'],
+        $smtpConfig['smtp']['host'],
+        $smtpConfig['smtp']['port'],
+        $smtpConfig['smtp']['username'],
+        $smtpConfig['smtp']['password'],
+        $smtpConfig['smtp']['encryption'],
+        onboardingAdvanceStatus((string)$lead['status'], 'smtp_ready'),
+        date('c'),
+        (int)$lead['id'],
+    ]);
+}
+
+function onboardingSmtpConfigFromLead(array $lead): array
+{
+    return onboardingSmtpConfigFromArray([
+        'from_email' => (string)$lead['from_email'],
+        'from_name' => (string)$lead['from_name'],
+        'smtp_host' => (string)$lead['smtp_host'],
+        'smtp_port' => (int)$lead['smtp_port'],
+        'smtp_username' => (string)$lead['smtp_username'],
+        'smtp_password' => (string)$lead['smtp_password'],
+        'smtp_encryption' => (string)$lead['smtp_encryption'],
+    ]);
+}
+
+function onboardingSelectedContactIds(array $lead, array $contacts): array
+{
+    $stored = json_decode((string)($lead['selected_contact_ids'] ?? ''), true);
+    if (is_array($stored) && $stored) {
+        return array_values(array_unique(array_map('intval', $stored)));
+    }
+    return array_map(static fn($row) => (int)$row['id'], $contacts);
+}
+
+function onboardingSelectedContacts(PDO $pdo, array $lead): array
+{
+    $contacts = onboardingLeadContacts($pdo, (int)$lead['id']);
+    $selected = array_flip(onboardingSelectedContactIds($lead, $contacts));
+    return array_values(array_filter($contacts, static fn($row) => isset($selected[(int)$row['id']])));
+}
+
+function stripeConfigured(array $config): bool
+{
+    $stripe = $config['stripe'] ?? [];
+    return trim((string)($stripe['secret_key'] ?? '')) !== '' && trim((string)($stripe['price_id'] ?? '')) !== '';
+}
+
+function createOnboardingStripeCheckout(PDO $pdo, array $config, array $lead): string
+{
+    if (!stripeConfigured($config)) {
+        throw new RuntimeException('Stripe neni nakonfigurovany. Dopln STRIPE_SECRET_KEY a STRIPE_PRICE_ID do GitHub Secrets.');
+    }
+    $successUrl = onboardingLeadUrl($lead) . '&step=launch&stripe_session_id={CHECKOUT_SESSION_ID}';
+    $cancelUrl = onboardingLeadUrl($lead) . '&step=payment';
+    $stripe = $config['stripe'];
+    $response = stripeApiRequest($config, 'POST', '/v1/checkout/sessions', [
+        'mode' => 'subscription',
+        'customer_email' => (string)$lead['account_email'],
+        'client_reference_id' => 'onboarding_lead_' . (int)$lead['id'],
+        'success_url' => $successUrl,
+        'cancel_url' => $cancelUrl,
+        'line_items[0][price]' => (string)$stripe['price_id'],
+        'line_items[0][quantity]' => '1',
+        'subscription_data[trial_period_days]' => (string)((int)($lead['trial_days'] ?? 7) ?: 7),
+        'payment_method_collection' => 'always',
+        'metadata[onboarding_lead_id]' => (string)$lead['id'],
+    ]);
+    $url = (string)($response['url'] ?? '');
+    if ($url === '') {
+        throw new RuntimeException('Stripe nevratil URL platebniho formulare.');
+    }
+    $stmt = $pdo->prepare('UPDATE onboarding_leads SET stripe_session_id=?, updated_at=? WHERE id=?');
+    $stmt->execute([(string)($response['id'] ?? ''), date('c'), (int)$lead['id']]);
+    return $url;
+}
+
+function verifyOnboardingStripeSession(PDO $pdo, array $config, array $lead, string $sessionId): void
+{
+    if (!stripeConfigured($config)) {
+        throw new RuntimeException('Stripe neni nakonfigurovany, platebni krok nejde overit.');
+    }
+    if (!preg_match('/^cs_[A-Za-z0-9_]+$/', $sessionId)) {
+        throw new RuntimeException('Stripe session ID neni platne.');
+    }
+    $session = stripeApiRequest($config, 'GET', '/v1/checkout/sessions/' . rawurlencode($sessionId), []);
+    $status = (string)($session['status'] ?? '');
+    $paymentStatus = (string)($session['payment_status'] ?? '');
+    if ($status !== 'complete' || !in_array($paymentStatus, ['paid', 'no_payment_required'], true)) {
+        throw new RuntimeException('Platebni karta zatim nebyla pres Stripe overena.');
+    }
+    $stmt = $pdo->prepare('
+        UPDATE onboarding_leads
+        SET stripe_session_id=?, stripe_customer_id=?, stripe_subscription_id=?, payment_status="verified", status=?, updated_at=?
+        WHERE id=?
+    ');
+    $stmt->execute([
+        $sessionId,
+        (string)($session['customer'] ?? ''),
+        (string)($session['subscription'] ?? ''),
+        onboardingAdvanceStatus((string)$lead['status'], 'payment_ready'),
+        date('c'),
+        (int)$lead['id'],
+    ]);
+}
+
+function stripeApiRequest(array $config, string $method, string $path, array $params): array
+{
+    $secret = trim((string)($config['stripe']['secret_key'] ?? ''));
+    if ($secret === '') {
+        throw new RuntimeException('Stripe secret key neni nastaveny.');
+    }
+    $url = 'https://api.stripe.com' . $path;
+    $body = http_build_query($params);
+    if ($method === 'GET' && $body !== '') {
+        $url .= '?' . $body;
+        $body = '';
+    }
+    return formHttpRequest($url, $method, [
+        'Authorization: Bearer ' . $secret,
+        'Content-Type: application/x-www-form-urlencoded',
+    ], $body, 30);
+}
+
+function formHttpRequest(string $url, string $method, array $headers, string $body, int $timeout): array
+{
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CUSTOMREQUEST => $method,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_TIMEOUT => $timeout,
+        ]);
+        if ($method !== 'GET') {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        }
+        $response = curl_exec($ch);
+        $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+        if ($response === false) {
+            throw new RuntimeException('HTTP request selhal: ' . $error);
+        }
+    } else {
+        $context = stream_context_create([
+            'http' => [
+                'method' => $method,
+                'header' => implode("\r\n", $headers),
+                'content' => $method === 'GET' ? '' : $body,
+                'timeout' => $timeout,
+                'ignore_errors' => true,
+            ],
+        ]);
+        $response = file_get_contents($url, false, $context);
+        $status = 0;
+        foreach ($http_response_header ?? [] as $header) {
+            if (preg_match('#^HTTP/\S+\s+(\d+)#', $header, $matches)) {
+                $status = (int)$matches[1];
+                break;
+            }
+        }
+        if ($response === false) {
+            throw new RuntimeException('HTTP request selhal.');
+        }
+    }
+    $json = json_decode((string)$response, true);
+    if (!is_array($json)) {
+        throw new RuntimeException('API vratilo necitelnou odpoved.');
+    }
+    if ($status < 200 || $status >= 300) {
+        $message = (string)($json['error']['message'] ?? $json['message'] ?? 'API request selhal.');
+        throw new RuntimeException($message);
+    }
+    return $json;
+}
+
+function onboardingPaymentReady(array $lead): bool
+{
+    return (string)($lead['payment_status'] ?? '') === 'verified';
+}
+
+function launchOnboardingCampaign(PDO $pdo, array $lead): string
+{
+    $lead = onboardingLeadByToken($pdo, (string)$lead['token']) ?: $lead;
+    if ((int)($lead['campaign_id'] ?? 0) > 0) {
+        return 'Kampan uz byla zalozena. Najdes ji v nastaveni kampani.';
+    }
+    if ((int)($lead['smtp_validated'] ?? 0) !== 1) {
+        throw new RuntimeException('Nejprve over SMTP pripojeni.');
+    }
+    if (!onboardingPaymentReady($lead)) {
+        throw new RuntimeException('Nejprve over platebni kartu pres Stripe.');
+    }
+    $selectedContacts = onboardingSelectedContacts($pdo, $lead);
+    if (!$selectedContacts) {
+        throw new RuntimeException('Neni vybran zadny kontakt pro kampan.');
+    }
+    $smtp = onboardingSmtpConfigFromLead($lead);
+    $now = date('c');
+    $pdo->beginTransaction();
+    try {
+        foreach ([
+            'from_email' => $smtp['from_email'],
+            'from_name' => $smtp['from_name'],
+            'smtp_host' => $smtp['smtp']['host'],
+            'smtp_port' => (string)$smtp['smtp']['port'],
+            'smtp_username' => $smtp['smtp']['username'],
+            'smtp_password' => $smtp['smtp']['password'],
+            'smtp_encryption' => $smtp['smtp']['encryption'],
+        ] as $key => $value) {
+            setSetting($pdo, $key, (string)$value);
+        }
+
+        $listName = 'Onboarding - ' . trim((string)($lead['business_name'] ?: $lead['account_email'])) . ' - ' . date('Y-m-d');
+        $listId = createContactDatabase($pdo, $listName);
+        foreach ($selectedContacts as $contact) {
+            upsertRecipient($pdo, $listId, [
+                'email' => (string)$contact['email'],
+                'subject_name' => (string)$contact['subject_name'],
+                'website' => (string)$contact['website'],
+                'address' => (string)$contact['address'],
+                'name' => (string)$contact['contact_name'],
+                'source_label' => 'Onboarding wizard',
+                'source_url' => (string)$contact['website'],
+                'contacted_before' => 0,
+            ]);
+        }
+
+        $campaignName = 'Onboarding - ' . trim((string)($lead['business_name'] ?: $lead['account_email']));
+        $stmt = $pdo->prepare('INSERT INTO campaigns (list_id, name, subject, body_html, daily_limit, batch_limit, auto_daily_limit, include_previously_contacted, schedule_time, status, created_at, updated_at) VALUES (?, ?, ?, ?, 100, 100, 1, 0, "09:00", "active", ?, ?)');
+        $stmt->execute([
+            $listId,
+            substr($campaignName, 0, 255),
+            (string)$lead['email_subject'],
+            cleanHtml((string)$lead['email_body_html']),
+            $now,
+            $now,
+        ]);
+        $campaignId = (int)$pdo->lastInsertId();
+        $update = $pdo->prepare('UPDATE onboarding_leads SET list_id=?, campaign_id=?, status="launched", updated_at=? WHERE id=?');
+        $update->execute([$listId, $campaignId, $now, (int)$lead['id']]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+
+    return queueCampaignBatch($pdo, $campaignId);
+}
+
+function ensureOnboardingEmailDraft(PDO $pdo, array $config, array $lead): void
+{
+    if (trim((string)($lead['email_subject'] ?? '')) !== '' && trim((string)($lead['email_body_html'] ?? '')) !== '') {
+        return;
+    }
+    $contacts = onboardingLeadContacts($pdo, (int)$lead['id']);
+    $draft = onboardingGenerateEmailDraft($config, $lead, $contacts);
+    $stmt = $pdo->prepare('UPDATE onboarding_leads SET email_subject=?, email_body_html=?, updated_at=? WHERE id=?');
+    $stmt->execute([$draft['subject'], $draft['html'], date('c'), (int)$lead['id']]);
+}
+
+function onboardingGenerateEmailDraft(array $config, array $lead, array $contacts): array
+{
+    $fallback = onboardingFallbackEmailDraft($lead, $contacts);
+    $apiKey = trim((string)($config['ai']['openai_api_key'] ?? ''));
+    if ($apiKey === '') {
+        return $fallback;
+    }
+    $model = trim((string)($config['ai']['openai_model'] ?? 'gpt-4.1')) ?: 'gpt-4.1';
+    $sampleContacts = array_slice(array_map(static fn($row) => [
+        'subject' => (string)$row['subject_name'],
+        'web' => (string)$row['website'],
+        'address' => (string)$row['address'],
+    ], $contacts), 0, 8);
+    $prompt = "Vytvor kratky obchodni email v cestine pro prvni osloveni. Vrat pouze JSON s klici subject a html. "
+        . "Odesilatel: " . (string)($lead['business_name'] ?? '') . ". Typ byznysu: " . (string)($lead['business_type'] ?? '') . ". "
+        . "Cilova skupina: " . (string)($lead['audience_label'] ?? '') . ". Ukazka nalezenych kontaktu: " . json_encode($sampleContacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Email ma byt konkretni, slusny, bez prehnaneho marketingu, HTML jen s odstavci a odkazy.";
+    try {
+        $response = jsonHttpPost('https://api.openai.com/v1/responses', [
+            'Authorization: Bearer ' . $apiKey,
+            'Content-Type: application/json',
+        ], [
+            'model' => $model,
+            'input' => $prompt,
+        ], 35);
+        $text = openAiResponseText($response);
+        $json = parseJsonObjectFromText($text);
+        $subject = trim((string)($json['subject'] ?? ''));
+        $html = cleanHtml((string)($json['html'] ?? ''));
+        if ($subject !== '' && $html !== '') {
+            return ['subject' => $subject, 'html' => $html];
+        }
+    } catch (Throwable $e) {
+        error_log('Onboarding AI draft fallback: ' . $e->getMessage());
+    }
+    return $fallback;
+}
+
+function jsonHttpPost(string $url, array $headers, array $payload, int $timeout): array
+{
+    $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($body === false) {
+        throw new RuntimeException('JSON request nejde zakodovat.');
+    }
+    return formHttpRequest($url, 'POST', $headers, $body, $timeout);
+}
+
+function openAiResponseText(array $response): string
+{
+    if (isset($response['output_text'])) {
+        return (string)$response['output_text'];
+    }
+    $parts = [];
+    foreach ((array)($response['output'] ?? []) as $item) {
+        foreach ((array)($item['content'] ?? []) as $content) {
+            if (isset($content['text'])) {
+                $parts[] = (string)$content['text'];
+            }
+        }
+    }
+    return trim(implode("\n", $parts));
+}
+
+function parseJsonObjectFromText(string $text): array
+{
+    $trimmed = trim($text);
+    if (str_starts_with($trimmed, '```')) {
+        $trimmed = preg_replace('/^```(?:json)?\s*|\s*```$/i', '', $trimmed) ?? $trimmed;
+    }
+    $decoded = json_decode($trimmed, true);
+    if (is_array($decoded)) {
+        return $decoded;
+    }
+    if (preg_match('/\{.*\}/s', $trimmed, $match)) {
+        $decoded = json_decode($match[0], true);
+        if (is_array($decoded)) {
+            return $decoded;
+        }
+    }
+    return [];
+}
+
+function onboardingFallbackEmailDraft(array $lead, array $contacts): array
+{
+    $business = trim((string)($lead['business_name'] ?? ''));
+    $business = $business !== '' ? $business : 'nas projekt';
+    $audience = trim((string)($lead['audience_label'] ?? ''));
+    $audience = $audience !== '' ? $audience : 'vas byznys';
+    $subject = 'Mozna spoluprace pro ' . $audience;
+    $html = '<p>Dobry den,</p>'
+        . '<p>nasli jsme vas mezi kontakty, u kterych dava smysl kratke predstaveni sluzby ' . h($business) . '.</p>'
+        . '<p>Rad bych vam ve 2 vetach ukazal, jak by spoluprace mohla pomoci prave v oblasti ' . h($audience) . '. Pokud to nebude relevantni, staci kratce odpovedet a nebudu vas dale kontaktovat.</p>'
+        . '<p>Mohu poslat konkretni navrh?</p>'
+        . '<p>S pozdravem<br>' . h($business) . '</p>';
+    return ['subject' => $subject, 'html' => $html];
+}
+
+function ensureDemoOnboardingLead(PDO $pdo): array
+{
+    $settings = loadSettings($pdo);
+    $token = (string)($settings['onboarding_demo_token'] ?? '');
+    $lead = $token !== '' ? onboardingLeadByToken($pdo, $token) : null;
+    if ($lead) {
+        ensureDemoOnboardingContacts($pdo, (int)$lead['id']);
+        return $lead;
+    }
+
+    $token = bin2hex(random_bytes(24));
+    $draft = onboardingFallbackEmailDraft([
+        'business_name' => 'Tajemstvi jamu',
+        'business_type' => 'online obsah a sluzby pro osobni rozvoj',
+        'audience_label' => 'wellness a masazni studia',
+    ], []);
+    $stmt = $pdo->prepare('
+        INSERT INTO onboarding_leads (token, account_email, business_name, business_type, audience_label, status, email_subject, email_body_html, trial_days, monthly_price_usd, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, "new", ?, ?, 7, 19.00, ?, ?)
+    ');
+    $now = date('c');
+    $stmt->execute([
+        $token,
+        'ej.akub@seznam.cz',
+        'Tajemstvi jamu',
+        'online obsah a sluzby pro osobni rozvoj',
+        'wellness a masazni studia',
+        $draft['subject'],
+        $draft['html'],
+        $now,
+        $now,
+    ]);
+    setSetting($pdo, 'onboarding_demo_token', $token);
+    $lead = onboardingLeadByToken($pdo, $token);
+    if (!$lead) {
+        throw new RuntimeException('Demo onboarding lead se nepodarilo vytvorit.');
+    }
+    ensureDemoOnboardingContacts($pdo, (int)$lead['id']);
+    return $lead;
+}
+
+function ensureDemoOnboardingContacts(PDO $pdo, int $leadId): void
+{
+    $contacts = [
+        ['studio.orion@example.com', 'Studio Orion', 'https://example.com/studio-orion', 'Petra Novakova', 'Korunni 12, Praha', '+420 777 100 201'],
+        ['recepce.lotos@example.com', 'Wellness Lotos', 'https://example.com/wellness-lotos', 'Recepce', 'Lidicka 8, Brno', '+420 777 100 202'],
+        ['info.vital@example.com', 'Masaze Vital', 'https://example.com/masaze-vital', 'Marek Svoboda', 'Smetanova 4, Plzen', '+420 777 100 203'],
+        ['kontakt.harmonie@example.com', 'Salon Harmonie', 'https://example.com/salon-harmonie', '', 'Masarykova 22, Olomouc', '+420 777 100 204'],
+        ['hello.relax@example.com', 'Relax Point', 'https://example.com/relax-point', 'Jana Kralova', 'Dlouha 31, Ostrava', '+420 777 100 205'],
+        ['info.zenhouse@example.com', 'Zen House', 'https://example.com/zen-house', '', 'Namesti 3, Liberec', '+420 777 100 206'],
+    ];
+    $stmt = $pdo->prepare('
+        INSERT INTO onboarding_contacts (lead_id, email, subject_name, website, contact_name, address, phone, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, "found", ?)
+        ON DUPLICATE KEY UPDATE subject_name=VALUES(subject_name), website=VALUES(website), contact_name=VALUES(contact_name), address=VALUES(address), phone=VALUES(phone)
+    ');
+    foreach ($contacts as $contact) {
+        $stmt->execute([$leadId, $contact[0], $contact[1], $contact[2], $contact[3], $contact[4], $contact[5], date('c')]);
+    }
+}
+
+function sendOnboardingDemoInvite(PDO $pdo, array $config): string
+{
+    $lead = ensureDemoOnboardingLead($pdo);
+    $settings = loadSettings($pdo);
+    $force = isset($_GET['force_onboarding_demo']);
+    if (!$force && trim((string)($settings['onboarding_demo_invite_sent_at'] ?? '')) !== '') {
+        return "Onboarding demo invite uz byl odeslan. URL: " . onboardingLeadUrl($lead) . "\n";
+    }
+    $contacts = onboardingLeadContacts($pdo, (int)$lead['id']);
+    $subject = 'Nasli jsme ' . count($contacts) . ' kontaktu pro vase prvni osloveni';
+    (new SmtpMailer($config))->send((string)$lead['account_email'], $subject, onboardingInviteEmailHtml($lead, $contacts));
+    setSetting($pdo, 'onboarding_demo_invite_sent_at', date('c'));
+    return "Onboarding demo invite odeslan na " . (string)$lead['account_email'] . ". URL: " . onboardingLeadUrl($lead) . "\n";
+}
+
+function onboardingLeadUrl(array $lead): string
+{
+    return appBaseUrl() . '?onboarding=' . rawurlencode((string)$lead['token']);
+}
+
+function onboardingInviteEmailHtml(array $lead, array $contacts): string
+{
+    $url = onboardingLeadUrl($lead);
+    $count = count($contacts);
+    return '<div style="font-family:Arial,sans-serif;line-height:1.5;color:#1e2522;max-width:620px">'
+        . '<h1 style="font-size:24px;margin:0 0 14px">Nasli jsme ' . h((string)$count) . ' kontaktu, ktere davaji smysl oslovit</h1>'
+        . '<p>Pripravili jsme pro vas kratky seznam potencialnich zakazniku a navrh prvniho emailu. Staci zkontrolovat kontakty, upravit text, pripojit SMTP a spustit kampan.</p>'
+        . '<p><a href="' . h($url) . '" style="display:inline-block;background:#0f7b6c;color:white;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:8px">Pokracovat oslovenim</a></p>'
+        . '<p style="color:#67736d;font-size:13px">Trial je na 7 dni zdarma, pote 19 USD mesicne. Zruseni je mozne kdykoliv.</p>'
+        . '</div>';
+}
+
+function renderOnboardingNotFound(array $config): void
+{
+    http_response_code(404);
+    ob_start();
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Onboarding nenalezen</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body class="onboarding-page"><main class="onboarding-shell"><section class="onboarding-card"><h1>Odkaz neni platny</h1><p>Onboarding odkaz se nepodarilo najit. Zkontroluj prosim odkaz z emailu.</p></section></main></body></html><?php
+    echo localizeHtml((string)ob_get_clean(), null, $config);
+}
+
+function renderOnboardingWizard(PDO $pdo, array $config, array $lead, string $step, ?array $flash): void
+{
+    $contacts = onboardingLeadContacts($pdo, (int)$lead['id']);
+    $selectedIds = array_flip(onboardingSelectedContactIds($lead, $contacts));
+    $selectedContacts = array_values(array_filter($contacts, static fn($row) => isset($selectedIds[(int)$row['id']])));
+    $steps = [
+        'contacts' => 'Kontakty',
+        'email' => 'Email',
+        'smtp' => 'Odesilatel',
+        'payment' => 'Platba',
+        'launch' => 'Spusteni',
+        'done' => 'Hotovo',
+    ];
+    $stepKeys = array_keys($steps);
+    $activeIndex = max(0, array_search($step, $stepKeys, true));
+    ob_start();
+    ?><!doctype html>
+    <html lang="cs">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Prvni osloveni zakazniku</title>
+        <link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>">
+    </head>
+    <body class="onboarding-page onboarding-step-<?= h($step) ?>">
+    <main class="onboarding-shell">
+        <section class="onboarding-hero">
+            <div>
+                <span class="eyebrow">Prvni kampan</span>
+                <h1>Nasli jsme <?= h((string)count($contacts)) ?> kontaktu pro <?= h((string)($lead['business_name'] ?: $lead['account_email'])) ?></h1>
+                <p>Projdi kontakty, uprav navrh emailu, pripoj odesilaci schranku a spust kampan z vlastni adresy.</p>
+            </div>
+            <div class="onboarding-hero-card">
+                <span>Prihlasovaci email</span>
+                <strong><?= h((string)$lead['account_email']) ?></strong>
+                <small>Trial 7 dni zdarma, potom 19 USD / mesic. Zruseni kdykoliv.</small>
+            </div>
+        </section>
+        <section class="onboarding-layout">
+            <aside class="onboarding-progress" aria-label="Prubeh">
+                <?php foreach ($steps as $key => $label): ?>
+                    <?php $index = array_search($key, $stepKeys, true); ?>
+                    <a class="<?= $index === $activeIndex ? 'active' : ($index < $activeIndex ? 'done' : '') ?>" href="<?= h(onboardingLeadUrl($lead) . '&step=' . $key) ?>">
+                        <span><?= h((string)($index + 1)) ?></span><?= h($label) ?>
+                    </a>
+                <?php endforeach; ?>
+            </aside>
+            <section class="onboarding-card">
+                <?php renderFlash($flash); ?>
+                <?php if ($step === 'contacts'): ?>
+                    <div class="section-header">
+                        <div>
+                            <h2>Nalezene kontakty</h2>
+                            <p>Vyber kontakty, ktere se maji oslovit. Predvybrane jsou vsechny.</p>
+                        </div>
+                        <strong><?= h((string)count($contacts)) ?> kontaktu</strong>
+                    </div>
+                    <form method="post" class="onboarding-form">
+                        <input type="hidden" name="action" value="onboarding_save_contacts">
+                        <label class="check onboarding-select-all"><input type="checkbox" data-onboarding-select-all checked> Oslovit vsechny</label>
+                        <div class="onboarding-table-wrap">
+                            <table class="onboarding-contact-table no-client-sort">
+                                <thead><tr><th></th><th>Subjekt</th><th>Email</th><th>Kontakt</th><th>Adresa</th><th>Telefon</th></tr></thead>
+                                <tbody>
+                                <?php foreach ($contacts as $contact): ?>
+                                    <?php $checked = isset($selectedIds[(int)$contact['id']]); ?>
+                                    <tr>
+                                        <td><input type="checkbox" class="onboarding-contact-checkbox" name="contact_ids[]" value="<?= h((string)$contact['id']) ?>" <?= $checked ? 'checked' : '' ?>></td>
+                                        <td><strong><?= h((string)$contact['subject_name']) ?></strong><?php if ((string)$contact['website'] !== ''): ?><br><a href="<?= h((string)$contact['website']) ?>" target="_blank" rel="noopener"><?= h(websiteLabel((string)$contact['website'])) ?></a><?php endif; ?></td>
+                                        <td><?= h((string)$contact['email']) ?></td>
+                                        <td><?= h((string)$contact['contact_name']) ?></td>
+                                        <td><?= h((string)$contact['address']) ?></td>
+                                        <td><?= h((string)$contact['phone']) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="onboarding-actions"><button>Pokracovat k emailu</button></div>
+                    </form>
+                <?php elseif ($step === 'email'): ?>
+                    <div class="section-header">
+                        <div>
+                            <h2>Navrh emailu</h2>
+                            <p>Obsah je predpripraveny podle byznysu a nalezenych kontaktu. Pred odeslanim ho muzes upravit vcetne HTML a obrazku.</p>
+                        </div>
+                        <span class="badge good"><?= h((string)count($selectedContacts)) ?> prijemcu</span>
+                    </div>
+                    <form method="post" class="campaign-detail-form onboarding-email-form">
+                        <input type="hidden" name="action" value="onboarding_save_email">
+                        <input type="hidden" name="body_html" class="body-html" value="<?= h((string)$lead['email_body_html']) ?>">
+                        <label>Predmet<input name="email_subject" value="<?= h((string)$lead['email_subject']) ?>" required></label>
+                        <div class="editor-tabs" role="group" aria-label="Rezim editoru">
+                            <button type="button" class="active" data-editor-mode="preview">Nahled</button>
+                            <button type="button" data-editor-mode="html">HTML</button>
+                        </div>
+                        <div class="toolbar">
+                            <button type="button" data-cmd="bold">B</button>
+                            <button type="button" data-cmd="italic">I</button>
+                            <button type="button" data-cmd="insertUnorderedList">List</button>
+                            <button type="button" data-link>Link</button>
+                            <button type="button" data-image-upload>Obrazek</button>
+                            <input type="file" class="editor-image-input" accept="image/*" multiple hidden>
+                        </div>
+                        <div class="editor" contenteditable="true"><?= (string)$lead['email_body_html'] ?></div>
+                        <textarea class="html-source is-hidden" spellcheck="false" aria-label="HTML telo emailu"><?= h((string)$lead['email_body_html']) ?></textarea>
+                        <div class="onboarding-actions"><a class="button secondary" href="<?= h(onboardingLeadUrl($lead) . '&step=contacts') ?>">Zpet</a><button>Pokracovat k odesilateli</button></div>
+                    </form>
+                <?php elseif ($step === 'smtp'): ?>
+                    <div class="section-header">
+                        <div>
+                            <h2>Odesilani z vlastni emailove adresy</h2>
+                            <p>Po overeni SMTP se kampan bude odesilat z tvoji schranky. Gmail vyzaduje heslo aplikace.</p>
+                        </div>
+                        <button type="button" class="secondary" data-gmail-preset data-account-email="<?= h((string)$lead['account_email']) ?>">Gmail</button>
+                    </div>
+                    <form method="post" class="onboarding-form smtp-form" autocomplete="off">
+                        <input type="hidden" name="action" value="onboarding_test_smtp">
+                        <div class="grid two">
+                            <label>Email odesilatele<input type="email" name="from_email" value="<?= h((string)($lead['from_email'] ?: $lead['account_email'])) ?>" autocomplete="off" required></label>
+                            <label>Jmeno odesilatele<input name="from_name" value="<?= h((string)($lead['from_name'] ?: $lead['business_name'])) ?>" autocomplete="off"></label>
+                            <label>SMTP server<input name="smtp_host" value="<?= h((string)$lead['smtp_host']) ?>" autocomplete="off" data-smtp-host required></label>
+                            <label>Port<input type="number" name="smtp_port" value="<?= h((string)($lead['smtp_port'] ?: 587)) ?>" autocomplete="off" data-smtp-port required></label>
+                            <label>Sifrovani<select name="smtp_encryption" data-smtp-encryption><option value="tls" <?= (string)$lead['smtp_encryption'] === 'tls' ? 'selected' : '' ?>>TLS</option><option value="ssl" <?= (string)$lead['smtp_encryption'] === 'ssl' ? 'selected' : '' ?>>SSL</option><option value="" <?= (string)$lead['smtp_encryption'] === '' ? 'selected' : '' ?>>Bez</option></select></label>
+                            <label>SMTP uzivatel<input name="smtp_username" value="<?= h((string)$lead['smtp_username']) ?>" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-smtp-username required></label>
+                            <label class="full">SMTP heslo<input type="password" name="smtp_password" value="" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" required></label>
+                        </div>
+                        <div class="onboarding-actions"><a class="button secondary" href="<?= h(onboardingLeadUrl($lead) . '&step=email') ?>">Zpet</a><button>Otestovat a pokracovat</button></div>
+                    </form>
+                <?php elseif ($step === 'payment'): ?>
+                    <div class="onboarding-payment">
+                        <h2>7 dni zdarma, potom 19 USD mesicne</h2>
+                        <p>Stripe overi platebni kartu a zalozi trial. Kartu je mozne pozdeji zrusit kdykoliv.</p>
+                        <div class="pricing-card">
+                            <strong>19 USD</strong><span>/ mesic po trialu</span>
+                            <small>Prvni tyden zdarma. Bez dlouhodobeho zavazku.</small>
+                        </div>
+                        <?php if (onboardingPaymentReady($lead)): ?>
+                            <p class="flash ok">Platebni karta je overena.</p>
+                            <p><a class="button" href="<?= h(onboardingLeadUrl($lead) . '&step=launch') ?>">Pokracovat ke spusteni</a></p>
+                        <?php elseif (stripeConfigured($config)): ?>
+                            <form method="post"><input type="hidden" name="action" value="onboarding_start_stripe"><button>Pridat platebni kartu</button></form>
+                        <?php else: ?>
+                            <div class="flash error">Stripe zatim neni pripojeny. Dopln GitHub Secrets STRIPE_SECRET_KEY a STRIPE_PRICE_ID, potom znovu nasad aplikaci.</div>
+                        <?php endif; ?>
+                    </div>
+                <?php elseif ($step === 'launch'): ?>
+                    <div class="section-header">
+                        <div>
+                            <h2>Spustit kampan</h2>
+                            <p>Posledni kontrola pred spustenim. Odesilani pobezi na pozadi pres bezny kampanovy worker.</p>
+                        </div>
+                        <span class="badge good"><?= h((string)count($selectedContacts)) ?> kontaktu</span>
+                    </div>
+                    <div class="launch-summary">
+                        <div><span>Odesilatel</span><strong><?= h((string)($lead['from_email'] ?: $lead['account_email'])) ?></strong></div>
+                        <div><span>Predmet</span><strong><?= h((string)$lead['email_subject']) ?></strong></div>
+                        <div><span>Platba</span><strong><?= onboardingPaymentReady($lead) ? 'overeno' : 'ceka' ?></strong></div>
+                    </div>
+                    <div class="email-preview"><?= (string)$lead['email_body_html'] ?></div>
+                    <?php if ((int)($lead['campaign_id'] ?? 0) > 0): ?>
+                        <p class="flash ok">Kampan je zalozena a rozesilka byla predana na pozadi.</p>
+                        <p><a class="button" href="./?route=campaigns">Prejit na nastaveni kampane</a></p>
+                    <?php else: ?>
+                        <form method="post" class="onboarding-form"><input type="hidden" name="action" value="onboarding_launch_campaign"><div class="onboarding-actions"><a class="button secondary" href="<?= h(onboardingLeadUrl($lead) . '&step=payment') ?>">Zpet</a><button>Spustit kampan</button></div></form>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <div class="onboarding-done">
+                        <h2>Kampan je spustena</h2>
+                        <p>Odesilani bezi na pozadi. Stav, metriky a dalsi nastaveni najdes v prehledu kampani.</p>
+                        <a class="button" href="./?route=campaigns">Prejit na kampane</a>
+                    </div>
+                <?php endif; ?>
+            </section>
+        </section>
+    </main>
+    <script src="<?= h(assetUrl('assets/app.js')) ?>"></script>
+    </body>
+    </html><?php
+    echo localizeHtml((string)ob_get_clean(), $pdo, $config);
 }
 
 function databasePermissionDenied(Throwable $e): bool

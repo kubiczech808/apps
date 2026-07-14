@@ -86,6 +86,7 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'schedule_weekday', 'INTEGER NOT NULL DEFAULT 1'), 'scraping_containers.schedule_weekday');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'last_scheduled_at', $this->textColumn("''")), 'scraping_containers.last_scheduled_at');
         $this->safeMigrationStep(fn() => $this->ensureSuppressionTable(), 'suppression_list');
+        $this->safeMigrationStep(fn() => $this->ensureOnboardingTables(), 'onboarding_tables');
         $this->safeMigrationStep(fn() => $this->ensureOperationalIndexes(), 'operational_indexes');
     }
 
@@ -399,6 +400,56 @@ final class Database
                 reason VARCHAR(80) NOT NULL DEFAULT '',
                 source VARCHAR(80) NOT NULL DEFAULT '',
                 created_at VARCHAR(40) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    }
+
+    private function ensureOnboardingTables(): void
+    {
+        $this->pdo->exec("CREATE TABLE IF NOT EXISTS onboarding_leads (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                token VARCHAR(96) NOT NULL UNIQUE,
+                account_email VARCHAR(320) NOT NULL,
+                business_name VARCHAR(255) NOT NULL DEFAULT '',
+                business_type VARCHAR(255) NOT NULL DEFAULT '',
+                audience_label VARCHAR(255) NOT NULL DEFAULT '',
+                status VARCHAR(40) NOT NULL DEFAULT 'new',
+                selected_contact_ids MEDIUMTEXT NULL,
+                email_subject VARCHAR(255) NOT NULL DEFAULT '',
+                email_body_html MEDIUMTEXT NULL,
+                from_email VARCHAR(320) NOT NULL DEFAULT '',
+                from_name VARCHAR(255) NOT NULL DEFAULT '',
+                smtp_host VARCHAR(255) NOT NULL DEFAULT '',
+                smtp_port INT NOT NULL DEFAULT 587,
+                smtp_username VARCHAR(320) NOT NULL DEFAULT '',
+                smtp_password VARCHAR(500) NOT NULL DEFAULT '',
+                smtp_encryption VARCHAR(20) NOT NULL DEFAULT 'tls',
+                smtp_validated INT NOT NULL DEFAULT 0,
+                stripe_customer_id VARCHAR(255) NOT NULL DEFAULT '',
+                stripe_session_id VARCHAR(255) NOT NULL DEFAULT '',
+                stripe_subscription_id VARCHAR(255) NOT NULL DEFAULT '',
+                payment_status VARCHAR(40) NOT NULL DEFAULT 'pending',
+                trial_days INT NOT NULL DEFAULT 7,
+                monthly_price_usd DECIMAL(8,2) NOT NULL DEFAULT 19.00,
+                list_id INT NOT NULL DEFAULT 0,
+                campaign_id INT NOT NULL DEFAULT 0,
+                created_at VARCHAR(40) NOT NULL,
+                updated_at VARCHAR(40) NOT NULL,
+                INDEX onboarding_leads_email_idx (account_email)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        $this->pdo->exec("CREATE TABLE IF NOT EXISTS onboarding_contacts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                lead_id INT NOT NULL,
+                email VARCHAR(320) NOT NULL,
+                subject_name VARCHAR(255) NOT NULL DEFAULT '',
+                website VARCHAR(500) NOT NULL DEFAULT '',
+                contact_name VARCHAR(255) NOT NULL DEFAULT '',
+                address VARCHAR(500) NOT NULL DEFAULT '',
+                phone VARCHAR(80) NOT NULL DEFAULT '',
+                status VARCHAR(40) NOT NULL DEFAULT 'found',
+                created_at VARCHAR(40) NOT NULL,
+                UNIQUE KEY onboarding_lead_email (lead_id, email),
+                INDEX onboarding_contacts_lead_idx (lead_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     }
 
