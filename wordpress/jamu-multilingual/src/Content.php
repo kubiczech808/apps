@@ -42,6 +42,7 @@ final class Content
         add_filter('get_block_templates', [$this, 'block_templates'], 20, 3);
         add_filter('render_block', [$this, 'template_part_block'], 20, 2);
         add_filter('render_block', [$this, 'navigation_item_block'], 21, 2);
+        add_filter('render_block', [$this, 'post_excerpt_block'], 22, 3);
         add_filter('render_block_data', [$this, 'block_data'], 20, 3);
         add_filter('wpforms_frontend_form_data', [$this, 'wpforms_data'], 20);
         add_filter('option_blogname', fn ($value) => $this->site_option($value, 'blogname'), 20);
@@ -310,6 +311,43 @@ final class Content
         return $block_content;
     }
 
+    public function post_excerpt_block(string $block_content, array $block, ?object $instance = null): string
+    {
+        if (!$this->active() || ($block['blockName'] ?? '') !== 'core/post-excerpt') {
+            return $block_content;
+        }
+
+        $post_id = 0;
+        if ($instance && isset($instance->context['postId'])) {
+            $post_id = absint($instance->context['postId']);
+        }
+        if (!$post_id) {
+            $post_id = absint(get_the_ID());
+        }
+        if (!$post_id) {
+            return $block_content;
+        }
+
+        $translation = $this->repository->get('post', $post_id, $this->languages->current());
+        if (!$translation || $translation->excerpt === '') {
+            return $block_content;
+        }
+
+        $excerpt = $this->excerpt_fragment($this->localized_markup((string) $translation->excerpt));
+        if ($excerpt === '') {
+            return $block_content;
+        }
+
+        $updated = preg_replace_callback(
+            '/(<p\b[^>]*class=(["\'])(?=[^"\']*wp-block-post-excerpt__excerpt)[^"\']*\2[^>]*>)(.*?)(<\/p>)/is',
+            static fn (array $match): string => $match[1] . $excerpt . $match[4],
+            $block_content,
+            1
+        );
+
+        return $updated ?? $block_content;
+    }
+
     public function block_data(array $parsed_block, array $source_block, ?object $parent_block): array
     {
         if (!$this->active() || !in_array($parsed_block['blockName'] ?? '', ['core/navigation-link', 'core/navigation-submenu'], true)) {
@@ -396,6 +434,15 @@ final class Content
         }
 
         return $attributes;
+    }
+
+    private function excerpt_fragment(string $value): string
+    {
+        $value = trim($value);
+        $value = preg_replace('#</p>\s*<p\b[^>]*>#i', '<br><br>', $value) ?? $value;
+        $value = preg_replace('#^\s*<p\b[^>]*>#i', '', $value) ?? $value;
+        $value = preg_replace('#</p>\s*$#i', '', $value) ?? $value;
+        return trim($value);
     }
 
     private function localized_markup(string $value): string
