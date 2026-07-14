@@ -70,11 +70,17 @@ final class Languages
             return $this->current = $requested;
         }
 
-        $path = trim((string) wp_parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/');
-        $first = strtok($path, '/') ?: '';
-        return $this->current = isset(self::CONFIG[$first]) && $first !== self::DEFAULT
-            ? $first
-            : self::DEFAULT;
+        $language = $this->language_from_path((string) ($_SERVER['REQUEST_URI'] ?? '/'));
+        if ($language !== '') {
+            return $this->current = $language;
+        }
+
+        $language = $this->context_language();
+        if ($language !== '') {
+            return $this->current = $language;
+        }
+
+        return $this->current = self::DEFAULT;
     }
 
     public function set_current(string $language): void
@@ -113,5 +119,60 @@ final class Languages
             return false;
         }
         return true;
+    }
+
+    private function context_language(): string
+    {
+        $request_path = trim((string) wp_parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH), '/');
+        $is_context_request = wp_doing_ajax()
+            || (defined('REST_REQUEST') && REST_REQUEST)
+            || str_starts_with($request_path, 'wp-json/')
+            || str_contains($request_path, '/wp-json/')
+            || isset($_GET['wc-ajax']);
+
+        if (!$is_context_request) {
+            return '';
+        }
+
+        $referer = (string) ($_SERVER['HTTP_REFERER'] ?? '');
+        if ($referer !== '' && $this->is_same_site_url($referer)) {
+            $language = $this->language_from_path($referer);
+            if ($language !== '') {
+                return $language;
+            }
+            return '';
+        }
+
+        $cookie = sanitize_key((string) ($_COOKIE['jamu_lang'] ?? ''));
+        return isset(self::CONFIG[$cookie]) && $cookie !== self::DEFAULT ? $cookie : '';
+    }
+
+    private function language_from_path(string $url_or_path): string
+    {
+        $path = wp_parse_url($url_or_path, PHP_URL_PATH);
+        if (!is_string($path)) {
+            $path = $url_or_path;
+        }
+
+        $path = trim($path, '/');
+        $first = strtok($path, '/') ?: '';
+        return isset(self::CONFIG[$first]) && $first !== self::DEFAULT ? $first : '';
+    }
+
+    private function is_same_site_url(string $url): bool
+    {
+        $parts = wp_parse_url($url);
+        if (!is_array($parts)) {
+            return false;
+        }
+
+        $host = strtolower((string) ($parts['host'] ?? ''));
+        if ($host === '') {
+            return true;
+        }
+
+        $home = wp_parse_url(home_url('/'));
+        $site_host = strtolower((string) ($home['host'] ?? ''));
+        return $site_host !== '' && ($host === $site_host || $host === 'www.' . $site_host);
     }
 }

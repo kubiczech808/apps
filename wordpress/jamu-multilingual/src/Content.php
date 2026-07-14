@@ -583,6 +583,10 @@ final class Content
     const attrs = ['aria-label', 'title', 'placeholder', 'value'];
     let scheduled = false;
 
+    if (data.language) {
+        document.cookie = 'jamu_lang=' + encodeURIComponent(data.language) + '; path=/; max-age=2592000; SameSite=Lax';
+    }
+
     function withWhitespace(original, translated) {
         const leading = original.match(/^\s*/)[0] || '';
         const trailing = original.match(/\s*$/)[0] || '';
@@ -678,7 +682,7 @@ final class Content
         scheduled = true;
         window.requestAnimationFrame(function () {
             scheduled = false;
-            apply(root || document.body);
+            apply(document.body);
         });
     }
 
@@ -690,6 +694,14 @@ final class Content
 
     new MutationObserver(function (mutations) {
         for (const mutation of mutations) {
+            if (mutation.type === 'characterData') {
+                schedule(mutation.target.parentElement || document.body);
+                return;
+            }
+            if (mutation.type === 'attributes') {
+                schedule(mutation.target || document.body);
+                return;
+            }
             for (const node of mutation.addedNodes) {
                 if (node.nodeType === 1 || node.nodeType === 3) {
                     schedule(node.nodeType === 1 ? node : node.parentElement);
@@ -697,7 +709,13 @@ final class Content
                 }
             }
         }
-    }).observe(document.documentElement, { childList: true, subtree: true });
+    }).observe(document.documentElement, {
+        attributeFilter: attrs,
+        attributes: true,
+        characterData: true,
+        childList: true,
+        subtree: true
+    });
 })();
 JS
         );
@@ -717,6 +735,8 @@ JS
                 'Proceed to Checkout' => 'Zur Kasse',
                 'Checkout' => 'Kasse',
                 'Cart' => 'Warenkorb',
+                'Basket' => 'Warenkorb',
+                'Cart totals' => 'Warenkorbsumme',
                 'Subtotal' => 'Zwischensumme',
                 'Total' => 'Gesamtsumme',
                 'Shipping' => 'Versand',
@@ -731,10 +751,18 @@ JS
                 'Update cart' => 'Warenkorb aktualisieren',
                 'Remove item' => 'Artikel entfernen',
                 'Remove' => 'Entfernen',
+                'Add a coupon' => 'Gutschein hinzufügen',
+                'Enter code' => 'Code eingeben',
+                'Remove coupon' => 'Gutschein entfernen',
                 'Continue Shopping' => 'Weiter einkaufen',
                 'Continue shopping' => 'Weiter einkaufen',
                 'Start shopping' => 'Einkauf starten',
+                'Your cart is currently empty!' => 'Ihr Warenkorb ist derzeit leer!',
+                'No products in the cart.' => 'Keine Produkte im Warenkorb.',
+                'Return to shop' => 'Zurück zum Shop',
                 'Order summary' => 'Bestellübersicht',
+                'Your order' => 'Ihre Bestellung',
+                'Order details' => 'Bestelldetails',
                 'Billing details' => 'Rechnungsdetails',
                 'Shipping address' => 'Lieferadresse',
                 'Billing address' => 'Rechnungsadresse',
@@ -742,6 +770,8 @@ JS
                 'Payment options' => 'Zahlungsarten',
                 'Payment method' => 'Zahlungsart',
                 'Place order' => 'Bestellung aufgeben',
+                'Place Order' => 'Bestellung aufgeben',
+                'Pay for order' => 'Bestellung bezahlen',
                 'Product' => 'Produkt',
                 'Products' => 'Produkte',
                 'Quantity' => 'Menge',
@@ -753,15 +783,57 @@ JS
                 'Street address' => 'Straße und Hausnummer',
                 'Town / City' => 'Ort / Stadt',
                 'Postcode / ZIP' => 'Postleitzahl',
+                'Postal code' => 'Postleitzahl',
+                'ZIP Code' => 'Postleitzahl',
+                'Apartment, suite, unit, etc.' => 'Wohnung, Suite, Einheit usw.',
+                'Apartment, suite, unit, etc. (optional)' => 'Wohnung, Suite, Einheit usw. (optional)',
+                'State / County' => 'Bundesland / Landkreis',
+                'State/County' => 'Bundesland / Landkreis',
                 'Phone' => 'Telefon',
                 'Email address' => 'E-Mail-Adresse',
                 'Order notes' => 'Bestellhinweise',
                 'Add a note to your order' => 'Eine Notiz zur Bestellung hinzufügen',
+                'Shipping options' => 'Versandoptionen',
+                'Free shipping' => 'Kostenloser Versand',
+                'Local pickup' => 'Abholung vor Ort',
+                'Calculate shipping' => 'Versand berechnen',
+                'Shipping to' => 'Versand nach',
+                'Change address' => 'Adresse ändern',
+                'Returning customer?' => 'Schon Kunde?',
+                'Click here to login' => 'Hier klicken, um sich anzumelden',
+                'Have a coupon?' => 'Haben Sie einen Gutschein?',
+                'Click here to enter your code' => 'Hier klicken, um den Code einzugeben',
+                'Create an account?' => 'Konto erstellen?',
+                'Use same address for billing' => 'Dieselbe Adresse für die Rechnung verwenden',
+                'Enter the address where you want your order delivered.' => 'Geben Sie die Adresse ein, an die Ihre Bestellung geliefert werden soll.',
+                'Enter the billing address that matches your payment method.' => 'Geben Sie die Rechnungsadresse ein, die zu Ihrer Zahlungsmethode passt.',
+                'This field is required' => 'Dieses Feld ist erforderlich',
+                'There are no payment methods available.' => 'Es sind keine Zahlungsarten verfügbar.',
+                'I have read and agree to the website terms and conditions' => 'Ich habe die Allgemeinen Geschäftsbedingungen der Website gelesen und akzeptiere sie',
+                'Privacy policy' => 'Datenschutzerklärung',
+                'Terms and conditions' => 'Allgemeine Geschäftsbedingungen',
+                'Thank you. Your order has been received.' => 'Vielen Dank. Ihre Bestellung ist eingegangen.',
+                'Open cart' => 'Warenkorb öffnen',
+                'Close cart' => 'Warenkorb schließen',
+                'Items in cart' => 'Artikel im Warenkorb',
                 'Shipping, taxes, and discounts calculated at checkout.' => 'Versand, Steuern und Rabatte werden an der Kasse berechnet.',
                 'Previous Page' => 'Vorherige Seite',
                 'Next Page' => 'Nächste Seite',
                 'Add a review' => 'Bewertung hinzufügen',
                 'Reviews' => 'Bewertungen',
+                'Mezisoučet' => 'Zwischensumme',
+                'Doprava' => 'Versand',
+                'Celkem' => 'Gesamtsumme',
+                'Celkem k platbě' => 'Gesamtsumme',
+                'Přejít k pokladně' => 'Zur Kasse',
+                'Pokladna' => 'Kasse',
+                'Košík' => 'Warenkorb',
+                'Zobrazit košík' => 'Warenkorb ansehen',
+                'Objednávka' => 'Bestellung',
+                'Fakturační údaje' => 'Rechnungsdetails',
+                'Dodací adresa' => 'Lieferadresse',
+                'Platební metoda' => 'Zahlungsart',
+                'Odeslat objednávku' => 'Bestellung aufgeben',
             ],
             'pl' => [
                 'Your cart' => 'Twój koszyk',
@@ -770,6 +842,8 @@ JS
                 'Proceed to Checkout' => 'Przejdź do kasy',
                 'Checkout' => 'Kasa',
                 'Cart' => 'Koszyk',
+                'Basket' => 'Koszyk',
+                'Cart totals' => 'Podsumowanie koszyka',
                 'Subtotal' => 'Suma częściowa',
                 'Total' => 'Razem',
                 'Shipping' => 'Dostawa',
@@ -784,10 +858,18 @@ JS
                 'Update cart' => 'Aktualizuj koszyk',
                 'Remove item' => 'Usuń produkt',
                 'Remove' => 'Usuń',
+                'Add a coupon' => 'Dodaj kupon',
+                'Enter code' => 'Wpisz kod',
+                'Remove coupon' => 'Usuń kupon',
                 'Continue Shopping' => 'Kontynuuj zakupy',
                 'Continue shopping' => 'Kontynuuj zakupy',
                 'Start shopping' => 'Rozpocznij zakupy',
+                'Your cart is currently empty!' => 'Twój koszyk jest pusty!',
+                'No products in the cart.' => 'Brak produktów w koszyku.',
+                'Return to shop' => 'Wróć do sklepu',
                 'Order summary' => 'Podsumowanie zamówienia',
+                'Your order' => 'Twoje zamówienie',
+                'Order details' => 'Szczegóły zamówienia',
                 'Billing details' => 'Dane rozliczeniowe',
                 'Shipping address' => 'Adres dostawy',
                 'Billing address' => 'Adres rozliczeniowy',
@@ -795,6 +877,8 @@ JS
                 'Payment options' => 'Metody płatności',
                 'Payment method' => 'Metoda płatności',
                 'Place order' => 'Złóż zamówienie',
+                'Place Order' => 'Złóż zamówienie',
+                'Pay for order' => 'Zapłać za zamówienie',
                 'Product' => 'Produkt',
                 'Products' => 'Produkty',
                 'Quantity' => 'Ilość',
@@ -806,10 +890,39 @@ JS
                 'Street address' => 'Ulica i numer',
                 'Town / City' => 'Miasto',
                 'Postcode / ZIP' => 'Kod pocztowy',
+                'Postal code' => 'Kod pocztowy',
+                'ZIP Code' => 'Kod pocztowy',
+                'Apartment, suite, unit, etc.' => 'Mieszkanie, lokal itp.',
+                'Apartment, suite, unit, etc. (optional)' => 'Mieszkanie, lokal itp. (opcjonalnie)',
+                'State / County' => 'Województwo / powiat',
+                'State/County' => 'Województwo / powiat',
                 'Phone' => 'Telefon',
                 'Email address' => 'Adres e-mail',
                 'Order notes' => 'Uwagi do zamówienia',
                 'Add a note to your order' => 'Dodaj notatkę do zamówienia',
+                'Shipping options' => 'Opcje dostawy',
+                'Free shipping' => 'Darmowa dostawa',
+                'Local pickup' => 'Odbiór osobisty',
+                'Calculate shipping' => 'Oblicz dostawę',
+                'Shipping to' => 'Dostawa do',
+                'Change address' => 'Zmień adres',
+                'Returning customer?' => 'Masz już konto?',
+                'Click here to login' => 'Kliknij tutaj, aby się zalogować',
+                'Have a coupon?' => 'Masz kupon?',
+                'Click here to enter your code' => 'Kliknij tutaj, aby wpisać kod',
+                'Create an account?' => 'Utworzyć konto?',
+                'Use same address for billing' => 'Użyj tego samego adresu do rozliczenia',
+                'Enter the address where you want your order delivered.' => 'Wpisz adres, na który chcesz otrzymać zamówienie.',
+                'Enter the billing address that matches your payment method.' => 'Wpisz adres rozliczeniowy zgodny z metodą płatności.',
+                'This field is required' => 'To pole jest wymagane',
+                'There are no payment methods available.' => 'Brak dostępnych metod płatności.',
+                'I have read and agree to the website terms and conditions' => 'Przeczytałem/am i akceptuję regulamin strony',
+                'Privacy policy' => 'Polityka prywatności',
+                'Terms and conditions' => 'Regulamin',
+                'Thank you. Your order has been received.' => 'Dziękujemy. Twoje zamówienie zostało przyjęte.',
+                'Open cart' => 'Otwórz koszyk',
+                'Close cart' => 'Zamknij koszyk',
+                'Items in cart' => 'Produkty w koszyku',
                 'Shipping, taxes, and discounts calculated at checkout.' => 'Koszt dostawy, podatki i rabaty zostaną obliczone przy kasie.',
                 'Previous Page' => 'Poprzednia strona',
                 'Next Page' => 'Następna strona',
@@ -817,12 +930,31 @@ JS
                 'Reviews' => 'Opinie',
                 'Reviews (1)' => 'Opinie (1)',
                 '(1 customer review)' => '(1 opinia klienta)',
+                'New' => 'Nowość',
+                'Mezisoučet' => 'Suma częściowa',
+                'Doprava' => 'Dostawa',
+                'Celkem' => 'Razem',
+                'Celkem k platbě' => 'Razem do zapłaty',
+                'Přejít k pokladně' => 'Przejdź do kasy',
+                'Pokladna' => 'Kasa',
+                'Košík' => 'Koszyk',
+                'Zobrazit košík' => 'Zobacz koszyk',
+                'Objednávka' => 'Zamówienie',
+                'Fakturační údaje' => 'Dane rozliczeniowe',
+                'Dodací adresa' => 'Adres dostawy',
+                'Platební metoda' => 'Metoda płatności',
+                'Odeslat objednávku' => 'Złóż zamówienie',
             ],
         ];
 
         $patterns = [
             'de' => [
                 ['match' => '^Your cart \\(items: (\\d+)\\)$', 'one' => 'Ihr Warenkorb (1 Artikel)', 'other' => 'Ihr Warenkorb ($1 Artikel)'],
+                ['match' => '^Your cart \\((\\d+) item\\)$', 'one' => 'Ihr Warenkorb (1 Artikel)', 'other' => 'Ihr Warenkorb ($1 Artikel)'],
+                ['match' => '^Your cart \\((\\d+) items\\)$', 'one' => 'Ihr Warenkorb (1 Artikel)', 'other' => 'Ihr Warenkorb ($1 Artikel)'],
+                ['match' => '^Number of items in the cart: (\\d+)$', 'one' => 'Anzahl der Artikel im Warenkorb: 1', 'other' => 'Anzahl der Artikel im Warenkorb: $1'],
+                ['match' => '^Remove (.+) from cart$', 'other' => '$1 aus dem Warenkorb entfernen'],
+                ['match' => '^Quantity of (.+) in your cart\\.?$', 'other' => 'Menge von $1 in Ihrem Warenkorb'],
                 ['match' => '^\\((\\d+) customer review\\)$', 'one' => '(1 Kundenbewertung)', 'other' => '($1 Kundenbewertungen)'],
                 ['match' => '^\\((\\d+) customer reviews\\)$', 'one' => '(1 Kundenbewertung)', 'other' => '($1 Kundenbewertungen)'],
                 ['match' => '^Reviews \\((\\d+)\\)$', 'one' => 'Bewertungen (1)', 'other' => 'Bewertungen ($1)'],
@@ -830,6 +962,11 @@ JS
             ],
             'pl' => [
                 ['match' => '^Your cart \\(items: (\\d+)\\)$', 'one' => 'Twój koszyk (1 produkt)', 'other' => 'Twój koszyk ($1 produktów)'],
+                ['match' => '^Your cart \\((\\d+) item\\)$', 'one' => 'Twój koszyk (1 produkt)', 'other' => 'Twój koszyk ($1 produktów)'],
+                ['match' => '^Your cart \\((\\d+) items\\)$', 'one' => 'Twój koszyk (1 produkt)', 'other' => 'Twój koszyk ($1 produktów)'],
+                ['match' => '^Number of items in the cart: (\\d+)$', 'one' => 'Liczba produktów w koszyku: 1', 'other' => 'Liczba produktów w koszyku: $1'],
+                ['match' => '^Remove (.+) from cart$', 'other' => 'Usuń z koszyka: $1'],
+                ['match' => '^Quantity of (.+) in your cart\\.?$', 'other' => 'Ilość produktu $1 w koszyku'],
                 ['match' => '^\\((\\d+) customer review\\)$', 'one' => '(1 opinia klienta)', 'other' => '($1 opinii klientów)'],
                 ['match' => '^\\((\\d+) customer reviews\\)$', 'one' => '(1 opinia klienta)', 'other' => '($1 opinii klientów)'],
                 ['match' => '^Reviews \\((\\d+)\\)$', 'one' => 'Opinie (1)', 'other' => 'Opinie ($1)'],
@@ -839,6 +976,7 @@ JS
 
         $language = $this->languages->current();
         return [
+            'language' => $language,
             'exact' => $exact[$language] ?? [],
             'patterns' => $patterns[$language] ?? [],
         ];
@@ -1211,7 +1349,7 @@ JS
                 'Reviews' => 'Opinie',
                 'Related products' => 'Podobne produkty',
                 'Sale!' => 'Promocja!',
-                'Checkout' => 'Zamówienie',
+                'Checkout' => 'Kasa',
                 'Cart' => 'Koszyk',
                 'Leave a Reply' => 'Dodaj komentarz',
                 'Cancel reply' => 'Anuluj odpowiedź',
