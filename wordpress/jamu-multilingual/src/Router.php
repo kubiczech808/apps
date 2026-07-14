@@ -81,6 +81,17 @@ final class Router
     public function resolve_request(\WP $wp): void
     {
         $language = sanitize_key((string) ($wp->query_vars['jamu_lang'] ?? ''));
+        if (!$language) {
+            $request = trim((string) ($wp->request ?? ''), '/');
+            foreach ($this->languages->additional() as $candidate => $config) {
+                if ($request === trim((string) $config['prefix'], '/')) {
+                    $language = $candidate;
+                    $wp->query_vars['jamu_lang'] = $candidate;
+                    $wp->query_vars['jamu_route_type'] = 'home';
+                    break;
+                }
+            }
+        }
         if (!$language || $language === Languages::DEFAULT) {
             return;
         }
