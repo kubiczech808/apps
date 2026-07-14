@@ -1646,8 +1646,7 @@ function contactSourceFromImportRun(array $run): string
 
 function contactSourceFromScrapingJob(array $job): string
 {
-    $sources = scrapingSources();
-    $source = $sources[(string)($job['source'] ?? '')] ?? (string)($job['source'] ?? '');
+    $source = scrapingSourceLabel((string)($job['source'] ?? ''));
     $keyword = trim((string)($job['keyword'] ?? ''));
     return trim($source . ($keyword !== '' ? ' / ' . $keyword : ''));
 }
@@ -2016,6 +2015,9 @@ function startScrapingRun(PDO $pdo, int $containerId): string
     if ($container['status'] !== 'active') {
         throw new RuntimeException('Scraping kontejner neni aktivni.');
     }
+    if (!scrapingSourceIsActive((string)$container['source'])) {
+        throw new RuntimeException('Zdroj dat je deaktivovany.');
+    }
     $existingJobId = activeScrapingRunForParams($pdo, $container);
     if ($existingJobId > 0) {
         triggerScrapingWorker($pdo);
@@ -2028,6 +2030,9 @@ function startScrapingRun(PDO $pdo, int $containerId): string
 
 function createScrapingRun(PDO $pdo, array $container, string $message = 'Beh ceka na spusteni.', string $runType = 'manual'): int
 {
+    if (!scrapingSourceIsActive((string)$container['source'])) {
+        throw new RuntimeException('Zdroj dat je deaktivovany.');
+    }
     $existingJobId = activeScrapingRunForParams($pdo, $container);
     if ($existingJobId > 0) {
         return $existingJobId;
@@ -2045,6 +2050,9 @@ function queueScrapingContainerRun(PDO $pdo, int $containerId): string
     if ($container['status'] !== 'active') {
         throw new RuntimeException('Scraping kontejner neni aktivni.');
     }
+    if (!scrapingSourceIsActive((string)$container['source'])) {
+        throw new RuntimeException('Zdroj dat je deaktivovany.');
+    }
     $existingJobId = activeScrapingRunForParams($pdo, $container);
     if ($existingJobId > 0) {
         triggerScrapingWorker($pdo);
@@ -2058,6 +2066,9 @@ function queueScrapingContainerRun(PDO $pdo, int $containerId): string
 function saveScrapingSchedule(PDO $pdo, int $containerId): string
 {
     $container = findScrapingContainer($pdo, $containerId);
+    if (!scrapingSourceIsActive((string)$container['source'])) {
+        throw new RuntimeException('Zdroj dat je deaktivovany.');
+    }
     $time = trim((string)($_POST['schedule_time'] ?? '09:00'));
     if (!preg_match('/^\d{2}:\d{2}$/', $time)) {
         throw new RuntimeException('Cas planu musi byt ve formatu HH:MM.');
@@ -2086,6 +2097,9 @@ function toggleScrapingSchedule(PDO $pdo, int $containerId): string
 {
     $container = findScrapingContainer($pdo, $containerId);
     $enabled = (int)($container['schedule_enabled'] ?? 0) === 1 ? 0 : 1;
+    if ($enabled === 1 && !scrapingSourceIsActive((string)$container['source'])) {
+        throw new RuntimeException('Zdroj dat je deaktivovany.');
+    }
     if ($enabled === 1) {
         $stmt = $pdo->prepare('UPDATE scraping_containers SET schedule_enabled=?, last_scheduled_at="", updated_at=? WHERE id=?');
         $stmt->execute([$enabled, date('c'), $containerId]);
@@ -2118,8 +2132,14 @@ function scheduleDueScrapingRuns(PDO $pdo): string
     }
     $messages = [];
     $mark = $pdo->prepare('UPDATE scraping_containers SET last_scheduled_at=?, updated_at=? WHERE id=?');
+    $disableInactive = $pdo->prepare('UPDATE scraping_containers SET schedule_enabled=0, updated_at=? WHERE id=?');
     $triggerWorker = false;
     foreach ($containers as $container) {
+        if (!scrapingSourceIsActive((string)$container['source'])) {
+            $disableInactive->execute([date('c'), (int)$container['id']]);
+            $messages[] = 'Kontejner #' . (int)$container['id'] . ': zdroj dat je deaktivovany, plan byl pozastaven.';
+            continue;
+        }
         $existingJobId = activeScrapingRunForParams($pdo, $container);
         if ($existingJobId > 0) {
             $messages[] = 'Kontejner #' . (int)$container['id'] . ': ma rozpracovany beh #' . $existingJobId . ', plan zustava cekat.';
@@ -2299,6 +2319,14 @@ function runScrapingJob(PDO $pdo, int $jobId, int $steps = 8): string
     $job = findScrapingJob($pdo, $jobId);
     if (in_array($job['status'], ['paused', 'finished', 'failed', 'cancelled'], true)) {
         return 'Scraping job neni aktivni.';
+    }
+    if (!scrapingSourceIsActive((string)$job['source'])) {
+        updateScrapingJob($pdo, $jobId, [
+            'status' => 'cancelled',
+            'last_message' => 'Zruseno: zdroj dat je deaktivovany.',
+            'finished_at' => date('c'),
+        ]);
+        return 'Scraping job #' . $jobId . ': zdroj dat je deaktivovany.';
     }
 
     $startFields = ['status' => 'running'];
@@ -2849,9 +2877,31 @@ function scrapingSources(): array
         'gelbeseiten_de' => 'GelbeSeiten.de',
         'pkt_pl' => 'Pkt.pl',
         'panoramafirm_pl' => 'PanoramaFirm.pl',
+    ];
+}
+
+function inactiveScrapingSources(): array
+{
+    return [
         'merchantcircle_us' => 'MerchantCircle',
         'yellowpages_ca' => 'YellowPages.ca',
     ];
+}
+
+function scrapingSourceLabels(): array
+{
+    return scrapingSources() + inactiveScrapingSources();
+}
+
+function scrapingSourceLabel(string $source): string
+{
+    $labels = scrapingSourceLabels();
+    return (string)($labels[$source] ?? $source);
+}
+
+function scrapingSourceIsActive(string $source): bool
+{
+    return array_key_exists($source, scrapingSources());
 }
 
 function scrapingSearchUrls(string $source, string $keyword, int $page): array
@@ -4502,8 +4552,7 @@ function scrapingJobLogMessage(array $job): string
 
 function logScrapingImportRun(PDO $pdo, array $job): void
 {
-    $sources = scrapingSources();
-    $fileName = 'scraping: ' . ($sources[$job['source']] ?? $job['source']) . ' / ' . $job['keyword'];
+    $fileName = 'scraping: ' . scrapingSourceLabel((string)$job['source']) . ' / ' . $job['keyword'];
     $stmt = $pdo->prepare('INSERT INTO import_runs (list_id, list_name, file_name, inserted_count, updated_count, skipped_count, total_rows, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     $stmt->execute([
         (int)$job['list_id'],
@@ -5908,7 +5957,7 @@ function uiTranslationMap(string $language): array
             'Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.' => 'Die Anwendung ist nur fuer die produktive MySQL/MariaDB-Datenbank konfiguriert. Bitte pruefe APP_DATABASE_NAME, APP_DATABASE_USERNAME und APP_DATABASE_PASSWORD in GitHub Secrets sowie die Datenbankrechte fuer SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER auf dieser Datenbank.',
             'Jednotlive casti nastaveni se meni oddelene, aby se prihlasovaci udaje nikdy neprepsaly omylem.' => 'Die einzelnen Einstellungsbereiche werden getrennt bearbeitet, damit Zugangsdaten nicht versehentlich ueberschrieben werden.',
             'Prehled pripravenych kampani, jejich planu, limitu a stavu osloveni.' => 'Uebersicht der vorbereiteten Kampagnen, Plaene, Limits und Kontaktstatus.',
-            'Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl, PanoramaFirm.pl, MerchantCircle a YellowPages.ca. Z nalezenych detailu pak hleda email, nazev, web a adresu.' => 'Das Backend durchsucht die Ergebnisseiten fortlaufend, solange die Quelle weitere Eintraege liefert. Unterstuetzt werden Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl, PanoramaFirm.pl, MerchantCircle und YellowPages.ca. Aus den Detailseiten werden E-Mail, Name, Website und Adresse gelesen.',
+            'Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl a PanoramaFirm.pl. Z nalezenych detailu pak hleda email, nazev, web a adresu.' => 'Das Backend durchsucht die Ergebnisseiten fortlaufend, solange die Quelle weitere Eintraege liefert. Unterstuetzt werden Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl und PanoramaFirm.pl. Aus den Detailseiten werden E-Mail, Name, Website und Adresse gelesen.',
             'Kazdy kontejner drzi zdroj, klicove slovo a cilovou databazi. Kliknutim na radek otevres logy konkretniho kontejneru.' => 'Jeder Container speichert Quelle, Suchbegriff und Zieldatenbank. Mit einem Klick auf die Zeile oeffnest du die Logs des Containers.',
             'Kliknutim na radek otevres konkretni databazi kontaktu.' => 'Mit einem Klick auf die Zeile oeffnest du die jeweilige Kontaktdatenbank.',
             'Tento kontakt uz nebude zahrnuty do dalsich rozesilek.' => 'Dieser Kontakt wird in weiteren Aussendungen nicht mehr beruecksichtigt.',
@@ -5970,6 +6019,7 @@ function uiTranslationMap(string $language): array
             'Scraping kontejner neni aktivni.' => 'Scraping-Container ist nicht aktiv.',
             'Scraping kontejner nenalezen.' => 'Scraping-Container wurde nicht gefunden.',
             'Neznamy zdroj dat.' => 'Unbekannte Datenquelle.',
+            'Zdroj dat je deaktivovany.' => 'Die Datenquelle ist deaktiviert.',
             'Zadej klicove slovo pro scraping.' => 'Gib einen Suchbegriff fuer Scraping ein.',
             'Scraping kontejner se stejnymi parametry uz existuje.' => 'Ein Scraping-Container mit denselben Parametern existiert bereits.',
             'Zadej nazev databaze kontaktu.' => 'Gib einen Namen fuer die Kontaktdatenbank ein.',
@@ -6229,7 +6279,7 @@ function uiTranslationMap(string $language): array
         'Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.' => 'The application is configured to use only the production MySQL/MariaDB database. Please check APP_DATABASE_NAME, APP_DATABASE_USERNAME and APP_DATABASE_PASSWORD in GitHub Secrets, especially the database user permissions for SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER on this database.',
         'Jednotlive casti nastaveni se meni oddelene, aby se prihlasovaci udaje nikdy neprepsaly omylem.' => 'Each configuration area is edited separately so credentials are not overwritten accidentally.',
         'Prehled pripravenych kampani, jejich planu, limitu a stavu osloveni.' => 'Overview of prepared campaigns, schedules, limits and outreach status.',
-        'Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl, PanoramaFirm.pl, MerchantCircle a YellowPages.ca. Z nalezenych detailu pak hleda email, nazev, web a adresu.' => 'The backend walks through result pages until the source stops returning records. Supported sources are Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl, PanoramaFirm.pl, MerchantCircle and YellowPages.ca. From detail pages it extracts email, name, website and address.',
+        'Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl a PanoramaFirm.pl. Z nalezenych detailu pak hleda email, nazev, web a adresu.' => 'The backend walks through result pages until the source stops returning records. Supported sources are Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl and PanoramaFirm.pl. From detail pages it extracts email, name, website and address.',
         'Kazdy kontejner drzi zdroj, klicove slovo a cilovou databazi. Kliknutim na radek otevres logy konkretniho kontejneru.' => 'Each container stores the source, keyword and target database. Click a row to open logs for that container.',
         'Kliknutim na radek otevres konkretni databazi kontaktu.' => 'Click a row to open that contact database.',
         'Tento kontakt uz nebude zahrnuty do dalsich rozesilek.' => 'This contact will no longer be included in future sends.',
@@ -6291,6 +6341,7 @@ function uiTranslationMap(string $language): array
         'Scraping kontejner neni aktivni.' => 'Scraping container is not active.',
         'Scraping kontejner nenalezen.' => 'Scraping container was not found.',
         'Neznamy zdroj dat.' => 'Unknown data source.',
+        'Zdroj dat je deaktivovany.' => 'The data source is disabled.',
         'Zadej klicove slovo pro scraping.' => 'Enter a keyword for scraping.',
         'Scraping kontejner se stejnymi parametry uz existuje.' => 'A scraping container with the same parameters already exists.',
         'Zadej nazev databaze kontaktu.' => 'Enter a contact database name.',
@@ -7221,7 +7272,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         <?php foreach ($activeScrapingJobs as $job): ?>
             <tr class="link-row" data-href="<?= h(routeUrl('scraping') . '&container_id=' . (int)$job['container_id']) ?>" tabindex="0">
                 <td><?= h((string)$job['id']) ?></td>
-                <td><?= h(scrapingSources()[$job['display_source']] ?? $job['display_source']) ?></td>
+                <td><?= h(scrapingSourceLabel((string)$job['display_source'])) ?></td>
                 <td><?= h($job['display_keyword']) ?></td>
                 <td><?= h($job['list_name'] ?: 'Vychozi seznam') ?></td>
                 <td><?= statusBadge(scrapingStatusLabel((string)$job['status'], 'job')) ?></td>
@@ -7257,7 +7308,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         <?php foreach ($scrapingContainers as $container): ?>
             <tr class="link-row" data-href="<?= h(routeUrl('scraping') . '&container_id=' . (int)$container['id']) ?>" tabindex="0">
                 <td><?= h((string)$container['id']) ?></td>
-                <td><?= h(scrapingSources()[$container['source']] ?? $container['source']) ?></td>
+                <td><?= h(scrapingSourceLabel((string)$container['source'])) ?></td>
                 <td><?= h($container['keyword']) ?></td>
                 <td><?= h($container['list_name'] ?: 'Vychozi seznam') ?></td>
                 <td>
@@ -7291,7 +7342,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <h2>Plan scrapingu</h2>
                                 <button type="button" class="secondary icon" data-dialog-close>Zavrit</button>
                             </div>
-                            <p><?= h(scrapingSources()[$container['source']] ?? $container['source']) ?> / <?= h($container['keyword']) ?> / <?= h($container['list_name'] ?: 'Vychozi seznam') ?></p>
+                            <p><?= h(scrapingSourceLabel((string)$container['source'])) ?> / <?= h($container['keyword']) ?> / <?= h($container['list_name'] ?: 'Vychozi seznam') ?></p>
                             <label>Frekvence
                                 <select name="schedule_frequency">
                                     <option value="daily" <?= scrapingScheduleFrequency($container) === 'daily' ? 'selected' : '' ?>>Denne</option>
@@ -7330,7 +7381,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             </label>
             <label>Klicove slovo<input name="keyword" placeholder="Napriklad: masaze, massage, Massagen, masaz" required></label>
             <label>Cilova databaze kontaktu<select name="list_id"><?php foreach ($lists as $list) echo '<option value="'.h((string)$list['id']).'" '.($selectedListId===(int)$list['id']?'selected':'').'>'.h($list['name']).'</option>'; ?></select></label>
-            <div class="note">Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl, PanoramaFirm.pl, MerchantCircle a YellowPages.ca. Z nalezenych detailu pak hleda email, nazev, web a adresu.</div>
+            <div class="note">Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl a PanoramaFirm.pl. Z nalezenych detailu pak hleda email, nazev, web a adresu.</div>
             <div class="modal-actions">
                 <button>Vytvorit kontejner</button>
             </div>
@@ -7341,7 +7392,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         <div class="section-header">
             <div>
                 <h2>Log scraping behu</h2>
-                <p><?= h((scrapingSources()[$selectedScrapingContainer['source']] ?? $selectedScrapingContainer['source']) . ' / ' . $selectedScrapingContainer['keyword'] . ' / ' . ($selectedScrapingContainer['list_name'] ?: 'Vychozi seznam')) ?></p>
+                <p><?= h(scrapingSourceLabel((string)$selectedScrapingContainer['source']) . ' / ' . $selectedScrapingContainer['keyword'] . ' / ' . ($selectedScrapingContainer['list_name'] ?: 'Vychozi seznam')) ?></p>
             </div>
             <a class="button small secondary" href="<?= h(routeUrl('scraping')) ?>">Zpet na vsechny kontejnery</a>
         </div>
