@@ -1908,15 +1908,18 @@ td a {
   .onboarding-shell {
     padding: 10px;
   }
-  .language-dropdown,
-  .language-dropdown details {
+  .onboarding-page {
+    padding-bottom: calc(78px + env(safe-area-inset-bottom));
+  }
+  .onboarding-topbar .language-dropdown,
+  .onboarding-topbar .language-dropdown details {
     width: 100%;
   }
-  .language-dropdown summary {
+  .onboarding-topbar .language-dropdown summary {
     justify-content: center;
     width: 100%;
   }
-  .language-dropdown-menu {
+  .onboarding-topbar .language-dropdown-menu {
     left: 0;
     right: 0;
   }
@@ -1931,12 +1934,34 @@ td a {
     grid-template-columns: 1fr 1fr;
   }
   .onboarding-actions {
-    display: grid;
-    grid-template-columns: 1fr;
+    position: sticky;
+    bottom: 0;
+    z-index: 35;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    margin: 18px -16px -16px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    border-radius: 0 0 8px 8px;
+    background: rgba(255, 255, 255, .96);
+    box-shadow: 0 -12px 28px rgba(16, 35, 31, .12);
+    backdrop-filter: blur(10px);
   }
   .onboarding-actions button,
   .onboarding-actions .button {
-    width: 100%;
+    width: auto;
+    min-width: 136px;
+    max-width: 48%;
+    white-space: nowrap;
+  }
+  .onboarding-actions .secondary {
+    margin-right: auto;
+  }
+  .onboarding-actions button:last-child,
+  .onboarding-actions .button:last-child {
+    margin-left: auto;
   }
   .onboarding-contact-table {
     min-width: 0;
@@ -1968,6 +1993,41 @@ td a {
   }
   .onboarding-contact-table td:first-child::before {
     content: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .landing-auth-strip,
+  .landing-section,
+  .landing-final,
+  .landing-hero-content {
+    width: calc(100% - 20px);
+  }
+  .landing-hero h1 {
+    font-size: 34px;
+  }
+  .landing-hero p {
+    font-size: 16px;
+  }
+  .onboarding-shell {
+    padding: 8px;
+  }
+  .onboarding-hero,
+  .onboarding-card {
+    padding: 14px;
+  }
+  .onboarding-progress a {
+    font-size: 12px;
+  }
+  .onboarding-actions {
+    margin-right: -14px;
+    margin-left: -14px;
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+  .onboarding-actions button,
+  .onboarding-actions .button {
+    min-width: 124px;
   }
 }
 

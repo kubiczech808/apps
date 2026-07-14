@@ -1246,12 +1246,12 @@ function renderOnboardingWizard(PDO $pdo, array $config, array $lead, string $st
                                 <?php foreach ($contacts as $contact): ?>
                                     <?php $checked = isset($selectedIds[(int)$contact['id']]); ?>
                                     <tr>
-                                        <td><input type="checkbox" class="onboarding-contact-checkbox" name="contact_ids[]" value="<?= h((string)$contact['id']) ?>" <?= $checked ? 'checked' : '' ?>></td>
-                                        <td><strong><?= h((string)$contact['subject_name']) ?></strong><?php if ((string)$contact['website'] !== ''): ?><br><a href="<?= h((string)$contact['website']) ?>" target="_blank" rel="noopener"><?= h(websiteLabel((string)$contact['website'])) ?></a><?php endif; ?></td>
-                                        <td><?= h((string)$contact['email']) ?></td>
-                                        <td><?= h((string)$contact['contact_name']) ?></td>
-                                        <td><?= h((string)$contact['address']) ?></td>
-                                        <td><?= h((string)$contact['phone']) ?></td>
+                                        <td data-label="Oslovit"><input type="checkbox" class="onboarding-contact-checkbox" name="contact_ids[]" value="<?= h((string)$contact['id']) ?>" <?= $checked ? 'checked' : '' ?>></td>
+                                        <td data-label="Subjekt"><strong><?= h((string)$contact['subject_name']) ?></strong><?php if ((string)$contact['website'] !== ''): ?><br><a href="<?= h((string)$contact['website']) ?>" target="_blank" rel="noopener"><?= h(websiteLabel((string)$contact['website'])) ?></a><?php endif; ?></td>
+                                        <td data-label="Email"><?= h((string)$contact['email']) ?></td>
+                                        <td data-label="Kontakt"><?= h((string)$contact['contact_name']) ?></td>
+                                        <td data-label="Adresa"><?= h((string)$contact['address']) ?></td>
+                                        <td data-label="Telefon"><?= h((string)$contact['phone']) ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                                 </tbody>
@@ -1318,9 +1318,9 @@ function renderOnboardingWizard(PDO $pdo, array $config, array $lead, string $st
                         </div>
                         <?php if (onboardingPaymentReady($lead)): ?>
                             <p class="flash ok">Platebni karta je overena.</p>
-                            <p><a class="button" href="<?= h(onboardingLeadUrl($lead) . '&step=launch') ?>">Pokracovat ke spusteni</a></p>
+                            <div class="onboarding-actions"><a class="button" href="<?= h(onboardingLeadUrl($lead) . '&step=launch') ?>">Pokracovat ke spusteni</a></div>
                         <?php elseif (stripeConfigured($config)): ?>
-                            <form method="post"><input type="hidden" name="action" value="onboarding_start_stripe"><button>Pridat platebni kartu</button></form>
+                            <form method="post" class="onboarding-actions"><input type="hidden" name="action" value="onboarding_start_stripe"><button>Pridat platebni kartu</button></form>
                         <?php else: ?>
                             <div class="flash error">Stripe zatim neni pripojeny. Dopln GitHub Secrets STRIPE_SECRET_KEY a STRIPE_PRICE_ID, potom znovu nasad aplikaci.</div>
                         <?php endif; ?>
@@ -6933,7 +6933,7 @@ function htmlStartsNoTranslateRegion(string $tag, string $tagName): bool
 function translateHtmlAttributes(string $tag, array $map): string
 {
     return preg_replace_callback(
-        '#\b(placeholder|aria-label|title|alt)="([^"]*)"#u',
+        '#\b(placeholder|aria-label|title|alt|data-label)="([^"]*)"#u',
         static fn(array $matches): string => $matches[1] . '="' . strtr($matches[2], $map) . '"',
         $tag
     ) ?? $tag;
@@ -7130,6 +7130,7 @@ function uiTranslationMap(string $language): array
             'Platba' => 'Zahlung',
             'Nalezene kontakty' => 'Gefundene Kontakte',
             'Vyber kontakty, ktere se maji oslovit. Predvybrane jsou vsechny.' => 'Waehle die Kontakte aus, die angesprochen werden sollen. Alle sind vorausgewaehlt.',
+            'Oslovit' => 'Kontaktieren',
             'Oslovit vsechny' => 'Alle kontaktieren',
             'Subjekt' => 'Unternehmen',
             'Telefon' => 'Telefon',
@@ -7681,6 +7682,7 @@ function uiTranslationMap(string $language): array
         'Platba' => 'Payment',
         'Nalezene kontakty' => 'Found contacts',
         'Vyber kontakty, ktere se maji oslovit. Predvybrane jsou vsechny.' => 'Select the contacts to contact. All are selected by default.',
+        'Oslovit' => 'Contact',
         'Oslovit vsechny' => 'Contact all',
         'Subjekt' => 'Company',
         'Telefon' => 'Phone',
