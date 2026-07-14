@@ -584,11 +584,31 @@ final class Content
             $value
         ) ?? $value;
 
+        $value = $this->localized_text_cleanup($value);
+
         return preg_replace(
             '#(' . $site . ')(?:en|de|pl)/(?:[^"\']+/)*wp-content/uploads/#i',
             '$1wp-content/uploads/',
             $value
         ) ?? $value;
+    }
+
+    private function localized_text_cleanup(string $value): string
+    {
+        $replacements = [
+            'en' => [
+                'Products Products' => 'View products',
+            ],
+            'de' => [
+                'Produkte Produkte' => 'Produkte ansehen',
+            ],
+            'pl' => [
+                'Produkty Produktów' => 'Zobacz produkty',
+                '<p># S</p>' => '<p></p>',
+            ],
+        ];
+
+        return strtr($value, $replacements[$this->languages->current()] ?? []);
     }
 
     private function localized_url_attribute(string $url): string
