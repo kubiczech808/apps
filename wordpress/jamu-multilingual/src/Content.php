@@ -46,6 +46,7 @@ final class Content
         add_filter('render_block', [$this, 'post_excerpt_block'], 22, 3);
         add_filter('render_block', [$this, 'post_terms_block'], 23, 2);
         add_filter('render_block', [$this, 'post_navigation_link_block'], 24, 2);
+        add_filter('render_block', [$this, 'query_pagination_link_block'], 25, 2);
         add_filter('render_block', [$this, 'navigation_language_switcher'], 30, 2);
         add_filter('render_block_data', [$this, 'block_data'], 20, 3);
         add_filter('comment_form_defaults', [$this, 'comment_form_defaults'], 20);
@@ -54,6 +55,7 @@ final class Content
         add_filter('wpforms_frontend_form_data', [$this, 'wpforms_data'], 20);
         add_filter('option_blogname', fn ($value) => $this->site_option($value, 'blogname'), 20);
         add_filter('option_blogdescription', fn ($value) => $this->site_option($value, 'blogdescription'), 20);
+        add_action('wp_footer', [$this, 'frontend_i18n_fallback'], 99);
     }
 
     public function title(string $title, int $post_id = 0): string
@@ -392,6 +394,30 @@ final class Content
         ]);
     }
 
+    public function query_pagination_link_block(string $block_content, array $block): string
+    {
+        if (!$this->active() || !in_array($block['blockName'] ?? '', ['core/query-pagination-next', 'core/query-pagination-previous'], true)) {
+            return $block_content;
+        }
+
+        $replacements = [
+            'en' => [
+                'Next Page' => 'Next page',
+                'Previous Page' => 'Previous page',
+            ],
+            'de' => [
+                'Next Page' => 'Nächste Seite',
+                'Previous Page' => 'Vorherige Seite',
+            ],
+            'pl' => [
+                'Next Page' => 'Następna strona',
+                'Previous Page' => 'Poprzednia strona',
+            ],
+        ];
+
+        return strtr($block_content, $replacements[$this->languages->current()] ?? []);
+    }
+
     public function navigation_language_switcher(string $block_content, array $block): string
     {
         if (
@@ -534,6 +560,288 @@ final class Content
             $this->languages->current()
         );
         return $translation && $translation->title !== '' ? $translation->title : $value;
+    }
+
+    public function frontend_i18n_fallback(): void
+    {
+        if (!$this->active()) {
+            return;
+        }
+
+        $data = $this->frontend_i18n_data();
+        if (empty($data['exact']) && empty($data['patterns'])) {
+            return;
+        }
+
+        printf(
+            "<script id=\"jamu-ml-frontend-i18n\">\n%s\n</script>\n",
+            'window.jamuMlI18n=' . wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ';' . <<<'JS'
+(function () {
+    const data = window.jamuMlI18n || {};
+    const exact = data.exact || {};
+    const patterns = data.patterns || [];
+    const attrs = ['aria-label', 'title', 'placeholder', 'value'];
+    let scheduled = false;
+
+    function withWhitespace(original, translated) {
+        const leading = original.match(/^\s*/)[0] || '';
+        const trailing = original.match(/\s*$/)[0] || '';
+        return leading + translated + trailing;
+    }
+
+    function translate(value) {
+        if (typeof value !== 'string') {
+            return '';
+        }
+        const normalized = value.replace(/\s+/g, ' ').trim();
+        if (!normalized) {
+            return '';
+        }
+        if (Object.prototype.hasOwnProperty.call(exact, normalized)) {
+            return exact[normalized];
+        }
+        for (const item of patterns) {
+            const match = normalized.match(new RegExp(item.match));
+            if (!match) {
+                continue;
+            }
+            if (item.one && match[1] === '1') {
+                return item.one.replace('$1', match[1]);
+            }
+            if (item.other) {
+                return item.other.replace('$1', match[1] || '');
+            }
+        }
+        return '';
+    }
+
+    function translateTextNode(node) {
+        const translated = translate(node.nodeValue || '');
+        if (translated) {
+            node.nodeValue = withWhitespace(node.nodeValue || '', translated);
+        }
+    }
+
+    function translateElementAttributes(element) {
+        if (!element || element.nodeType !== 1) {
+            return;
+        }
+        for (const attr of attrs) {
+            if (!element.hasAttribute(attr)) {
+                continue;
+            }
+            if (attr === 'value' && element.tagName !== 'BUTTON') {
+                const type = (element.getAttribute('type') || '').toLowerCase();
+                if (!['button', 'submit', 'reset'].includes(type)) {
+                    continue;
+                }
+            }
+            const value = element.getAttribute(attr) || '';
+            const translated = translate(value);
+            if (translated && translated !== value) {
+                element.setAttribute(attr, translated);
+            }
+        }
+    }
+
+    function apply(root) {
+        const scope = root && root.nodeType === 1 ? root : document.body;
+        if (!scope) {
+            return;
+        }
+
+        if (scope.nodeType === 1) {
+            translateElementAttributes(scope);
+            scope.querySelectorAll('[aria-label],[title],[placeholder],input[value],button[value]').forEach(translateElementAttributes);
+        }
+
+        const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
+            acceptNode(node) {
+                const parent = node.parentElement;
+                if (!parent || ['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA'].includes(parent.tagName)) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return translate(node.nodeValue || '') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+            }
+        });
+        const nodes = [];
+        while (walker.nextNode()) {
+            nodes.push(walker.currentNode);
+        }
+        nodes.forEach(translateTextNode);
+    }
+
+    function schedule(root) {
+        if (scheduled) {
+            return;
+        }
+        scheduled = true;
+        window.requestAnimationFrame(function () {
+            scheduled = false;
+            apply(root || document.body);
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () { apply(document.body); });
+    } else {
+        apply(document.body);
+    }
+
+    new MutationObserver(function (mutations) {
+        for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
+                if (node.nodeType === 1 || node.nodeType === 3) {
+                    schedule(node.nodeType === 1 ? node : node.parentElement);
+                    return;
+                }
+            }
+        }
+    }).observe(document.documentElement, { childList: true, subtree: true });
+})();
+JS
+        );
+    }
+
+    private function frontend_i18n_data(): array
+    {
+        $exact = [
+            'en' => [
+                'Previous Page' => 'Previous page',
+                'Next Page' => 'Next page',
+            ],
+            'de' => [
+                'Your cart' => 'Ihr Warenkorb',
+                'View cart' => 'Warenkorb ansehen',
+                'Proceed to checkout' => 'Zur Kasse',
+                'Proceed to Checkout' => 'Zur Kasse',
+                'Checkout' => 'Kasse',
+                'Cart' => 'Warenkorb',
+                'Subtotal' => 'Zwischensumme',
+                'Total' => 'Gesamtsumme',
+                'Shipping' => 'Versand',
+                'Taxes' => 'Steuern',
+                'Tax' => 'Steuer',
+                'Discount' => 'Rabatt',
+                'Discounts' => 'Rabatte',
+                'Coupon' => 'Gutschein',
+                'Coupon code' => 'Gutscheincode',
+                'Apply coupon' => 'Gutschein anwenden',
+                'Apply' => 'Anwenden',
+                'Update cart' => 'Warenkorb aktualisieren',
+                'Remove item' => 'Artikel entfernen',
+                'Remove' => 'Entfernen',
+                'Continue Shopping' => 'Weiter einkaufen',
+                'Continue shopping' => 'Weiter einkaufen',
+                'Start shopping' => 'Einkauf starten',
+                'Order summary' => 'Bestellübersicht',
+                'Billing details' => 'Rechnungsdetails',
+                'Shipping address' => 'Lieferadresse',
+                'Billing address' => 'Rechnungsadresse',
+                'Contact information' => 'Kontaktinformationen',
+                'Payment options' => 'Zahlungsarten',
+                'Payment method' => 'Zahlungsart',
+                'Place order' => 'Bestellung aufgeben',
+                'Product' => 'Produkt',
+                'Products' => 'Produkte',
+                'Quantity' => 'Menge',
+                'Price' => 'Preis',
+                'First name' => 'Vorname',
+                'Last name' => 'Nachname',
+                'Company name' => 'Firmenname',
+                'Country / Region' => 'Land / Region',
+                'Street address' => 'Straße und Hausnummer',
+                'Town / City' => 'Ort / Stadt',
+                'Postcode / ZIP' => 'Postleitzahl',
+                'Phone' => 'Telefon',
+                'Email address' => 'E-Mail-Adresse',
+                'Order notes' => 'Bestellhinweise',
+                'Add a note to your order' => 'Eine Notiz zur Bestellung hinzufügen',
+                'Shipping, taxes, and discounts calculated at checkout.' => 'Versand, Steuern und Rabatte werden an der Kasse berechnet.',
+                'Previous Page' => 'Vorherige Seite',
+                'Next Page' => 'Nächste Seite',
+                'Add a review' => 'Bewertung hinzufügen',
+                'Reviews' => 'Bewertungen',
+            ],
+            'pl' => [
+                'Your cart' => 'Twój koszyk',
+                'View cart' => 'Zobacz koszyk',
+                'Proceed to checkout' => 'Przejdź do kasy',
+                'Proceed to Checkout' => 'Przejdź do kasy',
+                'Checkout' => 'Kasa',
+                'Cart' => 'Koszyk',
+                'Subtotal' => 'Suma częściowa',
+                'Total' => 'Razem',
+                'Shipping' => 'Dostawa',
+                'Taxes' => 'Podatki',
+                'Tax' => 'Podatek',
+                'Discount' => 'Rabat',
+                'Discounts' => 'Rabaty',
+                'Coupon' => 'Kupon',
+                'Coupon code' => 'Kod kuponu',
+                'Apply coupon' => 'Zastosuj kupon',
+                'Apply' => 'Zastosuj',
+                'Update cart' => 'Aktualizuj koszyk',
+                'Remove item' => 'Usuń produkt',
+                'Remove' => 'Usuń',
+                'Continue Shopping' => 'Kontynuuj zakupy',
+                'Continue shopping' => 'Kontynuuj zakupy',
+                'Start shopping' => 'Rozpocznij zakupy',
+                'Order summary' => 'Podsumowanie zamówienia',
+                'Billing details' => 'Dane rozliczeniowe',
+                'Shipping address' => 'Adres dostawy',
+                'Billing address' => 'Adres rozliczeniowy',
+                'Contact information' => 'Dane kontaktowe',
+                'Payment options' => 'Metody płatności',
+                'Payment method' => 'Metoda płatności',
+                'Place order' => 'Złóż zamówienie',
+                'Product' => 'Produkt',
+                'Products' => 'Produkty',
+                'Quantity' => 'Ilość',
+                'Price' => 'Cena',
+                'First name' => 'Imię',
+                'Last name' => 'Nazwisko',
+                'Company name' => 'Nazwa firmy',
+                'Country / Region' => 'Kraj / region',
+                'Street address' => 'Ulica i numer',
+                'Town / City' => 'Miasto',
+                'Postcode / ZIP' => 'Kod pocztowy',
+                'Phone' => 'Telefon',
+                'Email address' => 'Adres e-mail',
+                'Order notes' => 'Uwagi do zamówienia',
+                'Add a note to your order' => 'Dodaj notatkę do zamówienia',
+                'Shipping, taxes, and discounts calculated at checkout.' => 'Koszt dostawy, podatki i rabaty zostaną obliczone przy kasie.',
+                'Previous Page' => 'Poprzednia strona',
+                'Next Page' => 'Następna strona',
+                'Add a review' => 'Dodaj opinię',
+                'Reviews' => 'Opinie',
+                'Reviews (1)' => 'Opinie (1)',
+                '(1 customer review)' => '(1 opinia klienta)',
+            ],
+        ];
+
+        $patterns = [
+            'de' => [
+                ['match' => '^Your cart \\(items: (\\d+)\\)$', 'one' => 'Ihr Warenkorb (1 Artikel)', 'other' => 'Ihr Warenkorb ($1 Artikel)'],
+                ['match' => '^\\((\\d+) customer review\\)$', 'one' => '(1 Kundenbewertung)', 'other' => '($1 Kundenbewertungen)'],
+                ['match' => '^\\((\\d+) customer reviews\\)$', 'one' => '(1 Kundenbewertung)', 'other' => '($1 Kundenbewertungen)'],
+                ['match' => '^Reviews \\((\\d+)\\)$', 'one' => 'Bewertungen (1)', 'other' => 'Bewertungen ($1)'],
+                ['match' => '^Rated ([0-9,.]+) out of 5$', 'other' => 'Bewertet mit $1 von 5'],
+            ],
+            'pl' => [
+                ['match' => '^Your cart \\(items: (\\d+)\\)$', 'one' => 'Twój koszyk (1 produkt)', 'other' => 'Twój koszyk ($1 produktów)'],
+                ['match' => '^\\((\\d+) customer review\\)$', 'one' => '(1 opinia klienta)', 'other' => '($1 opinii klientów)'],
+                ['match' => '^\\((\\d+) customer reviews\\)$', 'one' => '(1 opinia klienta)', 'other' => '($1 opinii klientów)'],
+                ['match' => '^Reviews \\((\\d+)\\)$', 'one' => 'Opinie (1)', 'other' => 'Opinie ($1)'],
+                ['match' => '^Rated ([0-9,.]+) out of 5$', 'other' => 'Oceniono na $1 z 5'],
+            ],
+        ];
+
+        $language = $this->languages->current();
+        return [
+            'exact' => $exact[$language] ?? [],
+            'patterns' => $patterns[$language] ?? [],
+        ];
     }
 
     private function product_field(string $value, object $product, string $field): string
@@ -930,7 +1238,12 @@ final class Content
         ];
 
         $language = $this->languages->current();
-        return $strings[$language][$text] ?? '';
+        if (isset($strings[$language][$text])) {
+            return $strings[$language][$text];
+        }
+
+        $frontend = $this->frontend_i18n_data();
+        return $frontend['exact'][$text] ?? '';
     }
 
     private function active(): bool
