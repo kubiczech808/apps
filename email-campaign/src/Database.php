@@ -87,6 +87,10 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'last_scheduled_at', $this->textColumn("''")), 'scraping_containers.last_scheduled_at');
         $this->safeMigrationStep(fn() => $this->ensureSuppressionTable(), 'suppression_list');
         $this->safeMigrationStep(fn() => $this->ensureOnboardingTables(), 'onboarding_tables');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_contacts', 'source_label', $this->textColumn("''")), 'onboarding_contacts.source_label');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_contacts', 'source_url', $this->textColumn("''")), 'onboarding_contacts.source_url');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_contacts', 'fit_reason', $this->textColumn("''")), 'onboarding_contacts.fit_reason');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_contacts', 'target_segment', $this->textColumn("''")), 'onboarding_contacts.target_segment');
         $this->safeMigrationStep(fn() => $this->ensureOperationalIndexes(), 'operational_indexes');
     }
 
@@ -446,6 +450,10 @@ final class Database
                 contact_name VARCHAR(255) NOT NULL DEFAULT '',
                 address VARCHAR(500) NOT NULL DEFAULT '',
                 phone VARCHAR(80) NOT NULL DEFAULT '',
+                source_label VARCHAR(500) NOT NULL DEFAULT '',
+                source_url VARCHAR(500) NOT NULL DEFAULT '',
+                fit_reason VARCHAR(500) NOT NULL DEFAULT '',
+                target_segment VARCHAR(500) NOT NULL DEFAULT '',
                 status VARCHAR(40) NOT NULL DEFAULT 'found',
                 created_at VARCHAR(40) NOT NULL,
                 UNIQUE KEY onboarding_lead_email (lead_id, email),

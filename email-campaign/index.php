@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-14-landing-cs-diacritics';
+const APP_VERSION = '2026-07-14-gemini-onboarding';
 
 date_default_timezone_set('Europe/Prague');
 
@@ -831,8 +831,8 @@ function launchOnboardingCampaign(PDO $pdo, array $lead): string
                 'website' => (string)$contact['website'],
                 'address' => (string)$contact['address'],
                 'name' => (string)$contact['contact_name'],
-                'source_label' => 'Onboarding wizard',
-                'source_url' => (string)$contact['website'],
+                'source_label' => (string)(($contact['source_label'] ?? '') ?: 'Onboarding wizard'),
+                'source_url' => (string)(($contact['source_url'] ?? '') ?: $contact['website']),
                 'contacted_before' => 0,
             ]);
         }
@@ -875,20 +875,46 @@ function ensureOnboardingEmailDraft(PDO $pdo, array $config, array $lead): void
 function onboardingGenerateEmailDraft(array $config, array $lead, array $contacts): array
 {
     $fallback = onboardingFallbackEmailDraft($lead, $contacts);
+    $sampleContacts = array_slice(array_map(static fn($row) => [
+        'subject' => (string)$row['subject_name'],
+        'web' => (string)$row['website'],
+        'address' => (string)$row['address'],
+        'segment' => (string)($row['target_segment'] ?? ''),
+        'fit_reason' => (string)($row['fit_reason'] ?? ''),
+    ], $contacts), 0, 8);
+    $prompt = "Vytvor kratky obchodni email v cestine pro prvni osloveni. Vrat pouze JSON s klici subject a html. "
+        . "Odesilatel: " . (string)($lead['business_name'] ?? '') . ". Typ byznysu: " . (string)($lead['business_type'] ?? '') . ". "
+        . "Cilova skupina: " . (string)($lead['audience_label'] ?? '') . ". Ukazka nalezenych kontaktu: " . json_encode($sampleContacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Email ma byt konkretni, slusny, vecny, bez prehnaneho marketingu, bez slibu ktere nezname, HTML jen s odstavci a odkazy.";
+    $geminiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
+    if ($geminiKey !== '') {
+        try {
+            $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
+                'x-goog-api-key: ' . $geminiKey,
+                'Content-Type: application/json',
+            ], [
+                'model' => trim((string)($config['ai']['gemini_model'] ?? 'gemini-3.5-flash')) ?: 'gemini-3.5-flash',
+                'system_instruction' => 'Jsi seniorni B2B copywriter. Vystup musi byt pouze validni JSON bez markdownu.',
+                'input' => $prompt,
+                'generation_config' => ['temperature' => 0.45],
+            ], 35);
+            $text = geminiInteractionText($response);
+            $json = parseJsonObjectFromText($text);
+            $subject = trim((string)($json['subject'] ?? ''));
+            $html = cleanHtml((string)($json['html'] ?? ''));
+            if ($subject !== '' && $html !== '') {
+                return ['subject' => $subject, 'html' => $html];
+            }
+        } catch (Throwable $e) {
+            error_log('Onboarding Gemini draft fallback: ' . $e->getMessage());
+        }
+    }
+
     $apiKey = trim((string)($config['ai']['openai_api_key'] ?? ''));
     if ($apiKey === '') {
         return $fallback;
     }
     $model = trim((string)($config['ai']['openai_model'] ?? 'gpt-4.1')) ?: 'gpt-4.1';
-    $sampleContacts = array_slice(array_map(static fn($row) => [
-        'subject' => (string)$row['subject_name'],
-        'web' => (string)$row['website'],
-        'address' => (string)$row['address'],
-    ], $contacts), 0, 8);
-    $prompt = "Vytvor kratky obchodni email v cestine pro prvni osloveni. Vrat pouze JSON s klici subject a html. "
-        . "Odesilatel: " . (string)($lead['business_name'] ?? '') . ". Typ byznysu: " . (string)($lead['business_type'] ?? '') . ". "
-        . "Cilova skupina: " . (string)($lead['audience_label'] ?? '') . ". Ukazka nalezenych kontaktu: " . json_encode($sampleContacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Email ma byt konkretni, slusny, bez prehnaneho marketingu, HTML jen s odstavci a odkazy.";
     try {
         $response = jsonHttpPost('https://api.openai.com/v1/responses', [
             'Authorization: Bearer ' . $apiKey,
@@ -935,6 +961,31 @@ function openAiResponseText(array $response): string
     return trim(implode("\n", $parts));
 }
 
+function geminiInteractionText(array $response): string
+{
+    if (isset($response['output_text'])) {
+        return (string)$response['output_text'];
+    }
+    $parts = [];
+    foreach ((array)($response['steps'] ?? []) as $step) {
+        foreach ((array)($step['content'] ?? []) as $content) {
+            if (is_array($content) && isset($content['text'])) {
+                $parts[] = (string)$content['text'];
+            } elseif (is_string($content)) {
+                $parts[] = $content;
+            }
+        }
+    }
+    foreach ((array)($response['candidates'] ?? []) as $candidate) {
+        foreach ((array)($candidate['content']['parts'] ?? []) as $part) {
+            if (isset($part['text'])) {
+                $parts[] = (string)$part['text'];
+            }
+        }
+    }
+    return trim(implode("\n", $parts));
+}
+
 function parseJsonObjectFromText(string $text): array
 {
     $trimmed = trim($text);
@@ -969,6 +1020,112 @@ function onboardingFallbackEmailDraft(array $lead, array $contacts): array
     return ['subject' => $subject, 'html' => $html];
 }
 
+function onboardingGenerateLeadPlan(array $config, string $businessName, string $businessType): array
+{
+    $fallback = onboardingFallbackLeadPlan($businessType);
+    $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
+    if ($apiKey === '') {
+        return $fallback;
+    }
+    $prompt = "Navrhni B2B lead-generation plan pro firmu. Vrat pouze validni JSON bez markdownu. "
+        . "Firma: " . $businessName . ". Popis nabidky: " . $businessType . ". "
+        . "JSON klice: audience_label string, rationale string, email_angle string, "
+        . "target_segments pole stringu, candidate_terms pole kratkych vyhledavacich terminu, "
+        . "scraping_queries pole objektu {source, keyword, why}. "
+        . "Pouzij realne katalogove dotazy pro zdroje firmy_cz, zoznam_sk, herold_at, dastelefonbuch_de, dasoertliche_de, gelbeseiten_de, pkt_pl nebo panoramafirm_pl. "
+        . "Pokud je nabidka lokalni, zahrn mesto/region z popisu. Nehledej nahodne obory, ale segmenty s jasnym duvodem potreby.";
+    try {
+        $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
+            'x-goog-api-key: ' . $apiKey,
+            'Content-Type: application/json',
+        ], [
+            'model' => trim((string)($config['ai']['gemini_model'] ?? 'gemini-3.5-flash')) ?: 'gemini-3.5-flash',
+            'system_instruction' => 'Jsi analytik B2B akvizice. Navrhuj jen realisticke segmenty a prakticke katalogove dotazy. Vystup je pouze JSON.',
+            'input' => $prompt,
+            'generation_config' => ['temperature' => 0.35],
+        ], 35);
+        $json = parseJsonObjectFromText(geminiInteractionText($response));
+        return onboardingNormalizeLeadPlan($json, $fallback);
+    } catch (Throwable $e) {
+        error_log('Onboarding Gemini lead plan fallback: ' . $e->getMessage());
+        return $fallback;
+    }
+}
+
+function onboardingNormalizeLeadPlan(array $json, array $fallback): array
+{
+    $plan = $fallback;
+    foreach (['audience_label', 'rationale', 'email_angle'] as $key) {
+        $value = truncatePlainText(trim((string)($json[$key] ?? '')), $key === 'audience_label' ? 240 : 500);
+        if ($value !== '') {
+            $plan[$key] = $value;
+        }
+    }
+    foreach (['target_segments', 'candidate_terms'] as $key) {
+        $values = [];
+        foreach ((array)($json[$key] ?? []) as $value) {
+            $value = truncatePlainText(trim((string)$value), 120);
+            if ($value !== '' && !in_array($value, $values, true)) {
+                $values[] = $value;
+            }
+            if (count($values) >= 10) {
+                break;
+            }
+        }
+        if ($values) {
+            $plan[$key] = $values;
+        }
+    }
+    $queries = [];
+    foreach ((array)($json['scraping_queries'] ?? []) as $query) {
+        if (!is_array($query)) {
+            continue;
+        }
+        $source = normalizeScrapingSourceKey((string)($query['source'] ?? 'firmy_cz'));
+        $keyword = truncatePlainText(trim((string)($query['keyword'] ?? '')), 120);
+        $why = truncatePlainText(trim((string)($query['why'] ?? '')), 240);
+        if ($keyword === '' || !scrapingSourceIsActive($source)) {
+            continue;
+        }
+        $queries[] = ['source' => $source, 'keyword' => $keyword, 'why' => $why];
+        if (count($queries) >= 8) {
+            break;
+        }
+    }
+    if ($queries) {
+        $plan['scraping_queries'] = $queries;
+    }
+    return $plan;
+}
+
+function onboardingFallbackLeadPlan(string $businessType): array
+{
+    $value = strtolower($businessType);
+    if (preg_match('/mas|masaz|wellness|fyzi|rehab|pracovist|sedav|office|kancel/i', $value)) {
+        return [
+            'audience_label' => 'firmy s kancelarskou praci a sedavym zamestnanim ve stejnem meste',
+            'rationale' => 'U techto firem dava smysl prevence bolesti zad, regenerace a benefit pro zamestnance primo na pracovisti.',
+            'email_angle' => 'Firemni masaze jako jednoduchy benefit pro lidi, kteri vetsinu dne sedi u pocitace.',
+            'target_segments' => ['IT firmy', 'ucetni a danove kancelare', 'advokatni kancelare', 'call centra', 'administrativni centra', 'coworkingy'],
+            'candidate_terms' => ['IT firma Praha', 'ucetni kancelar Praha', 'advokatni kancelar Praha', 'call centrum Praha', 'coworking Praha', 'administrativni sluzby Praha'],
+            'scraping_queries' => [
+                ['source' => 'firmy_cz', 'keyword' => 'IT firma Praha', 'why' => 'sedava prace u pocitace'],
+                ['source' => 'firmy_cz', 'keyword' => 'ucetni kancelar Praha', 'why' => 'administrativni tymy se sedavou praci'],
+                ['source' => 'firmy_cz', 'keyword' => 'advokatni kancelar Praha', 'why' => 'kancelarska prace a benefit pro tym'],
+                ['source' => 'firmy_cz', 'keyword' => 'call centrum Praha', 'why' => 'vysoka zatez zad a krku pri sedave praci'],
+            ],
+        ];
+    }
+    return [
+        'audience_label' => publicOnboardingAudienceLabel($businessType),
+        'rationale' => 'Vybrane firmy maji pravdepodobnou B2B potrebu odpovidajici nabidce.',
+        'email_angle' => 'Vecne predstaveni konkretniho prinosu pro danou firmu.',
+        'target_segments' => [publicOnboardingAudienceLabel($businessType)],
+        'candidate_terms' => [publicOnboardingAudienceLabel($businessType)],
+        'scraping_queries' => [['source' => 'firmy_cz', 'keyword' => publicOnboardingAudienceLabel($businessType), 'why' => 'obecny relevantni segment']],
+    ];
+}
+
 function createPublicOnboardingLead(PDO $pdo, array $config): array
 {
     $email = strtolower(trim((string)($_POST['signup_email'] ?? '')));
@@ -987,7 +1144,8 @@ function createPublicOnboardingLead(PDO $pdo, array $config): array
     $businessName = truncatePlainText($businessName, 240);
 
     $token = bin2hex(random_bytes(24));
-    $audience = publicOnboardingAudienceLabel($businessType);
+    $plan = onboardingGenerateLeadPlan($config, $businessName, $businessType);
+    $audience = trim((string)($plan['audience_label'] ?? '')) ?: publicOnboardingAudienceLabel($businessType);
     $now = date('c');
     $stmt = $pdo->prepare('
         INSERT INTO onboarding_leads (token, account_email, business_name, business_type, audience_label, status, email_subject, email_body_html, trial_days, monthly_price_usd, created_at, updated_at)
@@ -998,7 +1156,7 @@ function createPublicOnboardingLead(PDO $pdo, array $config): array
     if (!$lead) {
         throw new RuntimeException('Registraci se nepodarilo zalozit.');
     }
-    ensurePublicOnboardingContacts($pdo, (int)$lead['id'], $businessType, $audience);
+    ensurePublicOnboardingContacts($pdo, (int)$lead['id'], $businessType, $audience, $config, $plan, false);
     return onboardingLeadByToken($pdo, $token) ?: $lead;
 }
 
@@ -1045,52 +1203,229 @@ function publicOnboardingAudienceLabel(string $businessType): string
     return 'relevantni B2B firmy';
 }
 
-function ensurePublicOnboardingContacts(PDO $pdo, int $leadId, string $businessType, string $audience): void
+function ensurePublicOnboardingContacts(PDO $pdo, int $leadId, string $businessType, string $audience, array $config = [], array $plan = [], bool $allowQuickScrape = false): void
 {
-    $base = [
-        ['kontakt.alpha@example.com', 'Alpha Studio', 'https://example.com/alpha-studio', 'Recepce', 'Namesti 12, Praha', '+420 777 200 101'],
-        ['info.bravo@example.com', 'Bravo Services', 'https://example.com/bravo-services', 'Petr Novak', 'Smetanova 8, Brno', '+420 777 200 102'],
-        ['hello.delta@example.com', 'Delta Partner', 'https://example.com/delta-partner', '', 'Lidicka 21, Ostrava', '+420 777 200 103'],
-        ['office.everest@example.com', 'Everest Group', 'https://example.com/everest-group', 'Jana Kralova', 'Dlouha 4, Plzen', '+420 777 200 104'],
-        ['team.futura@example.com', 'Futura Center', 'https://example.com/futura-center', '', 'Masarykova 19, Olomouc', '+420 777 200 105'],
-        ['sales.horizon@example.com', 'Horizon Point', 'https://example.com/horizon-point', 'Marek Svoboda', 'Jiraskova 7, Liberec', '+420 777 200 106'],
-    ];
-    if (preg_match('/mas|olej|wellness|fyzi|rehab/i', strtolower($businessType . ' ' . $audience))) {
-        $base = [
-            ['studio.orion@example.com', 'Studio Orion', 'https://example.com/studio-orion', 'Petra Novakova', 'Korunni 12, Praha', '+420 777 100 201'],
-            ['recepce.lotos@example.com', 'Wellness Lotos', 'https://example.com/wellness-lotos', 'Recepce', 'Lidicka 8, Brno', '+420 777 100 202'],
-            ['info.vital@example.com', 'Masaze Vital', 'https://example.com/masaze-vital', 'Marek Svoboda', 'Smetanova 4, Plzen', '+420 777 100 203'],
-            ['kontakt.harmonie@example.com', 'Salon Harmonie', 'https://example.com/salon-harmonie', '', 'Masarykova 22, Olomouc', '+420 777 100 204'],
-            ['hello.relax@example.com', 'Relax Point', 'https://example.com/relax-point', 'Jana Kralova', 'Dlouha 31, Ostrava', '+420 777 100 205'],
-            ['info.zenhouse@example.com', 'Zen House', 'https://example.com/zen-house', '', 'Namesti 3, Liberec', '+420 777 100 206'],
-        ];
+    if (!$plan) {
+        $plan = onboardingFallbackLeadPlan($businessType);
     }
+    $contacts = onboardingCandidateContactsFromRecipients($pdo, $plan, $businessType, 10);
+    if (count($contacts) < 6 && $allowQuickScrape) {
+        $contacts = array_merge($contacts, onboardingQuickScrapeContacts($plan, 10 - count($contacts)));
+    }
+    $contacts = array_slice(onboardingUniqueValidContacts($contacts), 0, 10);
     $stmt = $pdo->prepare('
-        INSERT INTO onboarding_contacts (lead_id, email, subject_name, website, contact_name, address, phone, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, "found", ?)
-        ON DUPLICATE KEY UPDATE subject_name=VALUES(subject_name), website=VALUES(website), contact_name=VALUES(contact_name), address=VALUES(address), phone=VALUES(phone)
+        INSERT INTO onboarding_contacts (lead_id, email, subject_name, website, contact_name, address, phone, source_label, source_url, fit_reason, target_segment, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "found", ?)
+        ON DUPLICATE KEY UPDATE subject_name=VALUES(subject_name), website=VALUES(website), contact_name=VALUES(contact_name), address=VALUES(address), phone=VALUES(phone), source_label=VALUES(source_label), source_url=VALUES(source_url), fit_reason=VALUES(fit_reason), target_segment=VALUES(target_segment)
     ');
-    foreach ($base as $contact) {
-        $stmt->execute([$leadId, $contact[0], $contact[1], $contact[2], $contact[3], $contact[4], $contact[5], date('c')]);
+    foreach ($contacts as $contact) {
+        $stmt->execute([
+            $leadId,
+            strtolower(trim((string)$contact['email'])),
+            truncatePlainText((string)($contact['subject_name'] ?? ''), 255),
+            normalizeWebsite((string)($contact['website'] ?? '')),
+            truncatePlainText((string)($contact['contact_name'] ?? $contact['name'] ?? ''), 255),
+            truncatePlainText((string)($contact['address'] ?? ''), 500),
+            truncatePlainText((string)($contact['phone'] ?? ''), 80),
+            truncatePlainText((string)($contact['source_label'] ?? ''), 500),
+            truncatePlainText((string)($contact['source_url'] ?? ''), 500),
+            truncatePlainText((string)($contact['fit_reason'] ?? $plan['rationale'] ?? ''), 500),
+            truncatePlainText((string)($contact['target_segment'] ?? ($plan['target_segments'][0] ?? $audience)), 500),
+            date('c'),
+        ]);
     }
 }
 
-function ensureDemoOnboardingLead(PDO $pdo): array
+function onboardingCandidateContactsFromRecipients(PDO $pdo, array $plan, string $businessType, int $limit): array
+{
+    $terms = onboardingCandidateTerms($plan, $businessType);
+    $conditions = ['r.archived=0', 'r.status="active"', 'r.email!=""'];
+    $values = [];
+    if ($terms) {
+        $termConditions = [];
+        foreach (array_slice($terms, 0, 12) as $term) {
+            $like = '%' . $term . '%';
+            $termConditions[] = '(r.subject_name LIKE ? OR r.website LIKE ? OR r.address LIKE ? OR r.source_label LIKE ? OR r.source_url LIKE ?)';
+            array_push($values, $like, $like, $like, $like, $like);
+        }
+        $conditions[] = '(' . implode(' OR ', $termConditions) . ')';
+    }
+    $sql = '
+        SELECT r.email, r.subject_name, r.website, r.address, r.name, r.source_label, r.source_url
+        FROM recipients r
+        LEFT JOIN contact_databases d ON d.id=r.list_id
+        WHERE ' . implode(' AND ', $conditions) . '
+          AND COALESCE(d.archived,0)=0
+          AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
+        ORDER BY CASE WHEN r.source_url!="" THEN 0 ELSE 1 END, r.updated_at DESC, r.id DESC
+        LIMIT ' . max(1, $limit * 3);
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($values);
+    $contacts = [];
+    $segment = (string)($plan['target_segments'][0] ?? ($plan['audience_label'] ?? 'relevantni B2B firmy'));
+    $reason = (string)($plan['rationale'] ?? 'Kontakt odpovida navrzenemu segmentu.');
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $contacts[] = [
+            'email' => (string)$row['email'],
+            'subject_name' => (string)$row['subject_name'],
+            'website' => (string)$row['website'],
+            'contact_name' => (string)$row['name'],
+            'address' => (string)$row['address'],
+            'phone' => '',
+            'source_label' => (string)$row['source_label'],
+            'source_url' => (string)$row['source_url'],
+            'fit_reason' => $reason,
+            'target_segment' => $segment,
+        ];
+    }
+    return $contacts;
+}
+
+function onboardingCandidateTerms(array $plan, string $businessType): array
+{
+    $terms = [];
+    foreach ([(array)($plan['candidate_terms'] ?? []), (array)($plan['target_segments'] ?? [])] as $group) {
+        foreach ($group as $term) {
+            $term = truncatePlainText(trim((string)$term), 80);
+            if ($term !== '' && !in_array($term, $terms, true)) {
+                $terms[] = $term;
+            }
+        }
+    }
+    foreach (array_slice((array)($plan['scraping_queries'] ?? []), 0, 3) as $query) {
+        if (is_array($query)) {
+            $term = truncatePlainText(trim((string)($query['keyword'] ?? '')), 80);
+            if ($term !== '' && !in_array($term, $terms, true)) {
+                $terms[] = $term;
+            }
+        }
+    }
+    if (!$terms) {
+        $terms[] = publicOnboardingAudienceLabel($businessType);
+    }
+    return $terms;
+}
+
+function onboardingQuickScrapeContacts(array $plan, int $limit): array
+{
+    $contacts = [];
+    $seen = [];
+    foreach (array_slice((array)($plan['scraping_queries'] ?? []), 0, 3) as $query) {
+        if (!is_array($query) || count($contacts) >= $limit) {
+            continue;
+        }
+        $source = normalizeScrapingSourceKey((string)($query['source'] ?? 'firmy_cz'));
+        $keyword = trim((string)($query['keyword'] ?? ''));
+        if ($keyword === '' || !scrapingSourceIsActive($source)) {
+            continue;
+        }
+        try {
+            foreach (scrapingSearchUrls($source, $keyword, 1) as $search) {
+                $searchResponse = fetchScrapingSearch($search);
+                $html = (string)$searchResponse['html'];
+                $directContacts = [];
+                if ($source === 'herold_at') {
+                    $directContacts = extractHeroldListingContacts($html, $search['url']);
+                } elseif ($source === 'panoramafirm_pl') {
+                    $directContacts = extractPanoramaFirmListingContacts($html, $search['url']);
+                }
+                foreach ($directContacts as $contact) {
+                    $email = strtolower(trim((string)($contact['email'] ?? '')));
+                    if (!filter_var($email, FILTER_VALIDATE_EMAIL) || isset($seen[$email])) {
+                        continue;
+                    }
+                    $seen[$email] = true;
+                    $contacts[] = onboardingDecorateCandidateContact($contact, $source, (string)($contact['_source_url'] ?? $search['url']), $query, $plan);
+                    if (count($contacts) >= $limit) {
+                        return $contacts;
+                    }
+                }
+                foreach (array_slice(extractCandidateUrls($html, $search['url'], $source), 0, 4) as $url) {
+                    try {
+                        $contact = extractContactFromHtml(httpGet($url), $url);
+                    } catch (Throwable $e) {
+                        continue;
+                    }
+                    $email = strtolower(trim((string)($contact['email'] ?? '')));
+                    if (!filter_var($email, FILTER_VALIDATE_EMAIL) || isset($seen[$email])) {
+                        continue;
+                    }
+                    $seen[$email] = true;
+                    $contacts[] = onboardingDecorateCandidateContact($contact, $source, $url, $query, $plan);
+                    if (count($contacts) >= $limit) {
+                        return $contacts;
+                    }
+                }
+                break;
+            }
+        } catch (Throwable $e) {
+            error_log('Onboarding quick scrape skipped [' . $source . ' / ' . $keyword . ']: ' . $e->getMessage());
+        }
+    }
+    return $contacts;
+}
+
+function onboardingDecorateCandidateContact(array $contact, string $source, string $sourceUrl, array $query, array $plan): array
+{
+    return [
+        'email' => (string)($contact['email'] ?? ''),
+        'subject_name' => (string)($contact['subject_name'] ?? ''),
+        'website' => (string)($contact['website'] ?? ''),
+        'contact_name' => (string)($contact['name'] ?? $contact['contact_name'] ?? ''),
+        'address' => (string)($contact['address'] ?? ''),
+        'phone' => (string)($contact['phone'] ?? ''),
+        'source_label' => scrapingSourceLabel($source) . ' / ' . (string)($query['keyword'] ?? ''),
+        'source_url' => $sourceUrl,
+        'fit_reason' => (string)($query['why'] ?? $plan['rationale'] ?? ''),
+        'target_segment' => (string)($plan['target_segments'][0] ?? $plan['audience_label'] ?? ''),
+    ];
+}
+
+function onboardingUniqueValidContacts(array $contacts): array
+{
+    $out = [];
+    $seen = [];
+    foreach ($contacts as $contact) {
+        $email = strtolower(trim((string)($contact['email'] ?? '')));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || isset($seen[$email])) {
+            continue;
+        }
+        $seen[$email] = true;
+        $out[] = $contact;
+    }
+    return $out;
+}
+
+function ensureDemoOnboardingLead(PDO $pdo, array $config, bool $force = false): array
 {
     $settings = loadSettings($pdo);
     $token = (string)($settings['onboarding_demo_token'] ?? '');
     $lead = $token !== '' ? onboardingLeadByToken($pdo, $token) : null;
-    if ($lead) {
-        ensureDemoOnboardingContacts($pdo, (int)$lead['id']);
-        return $lead;
+    $businessName = 'Masaze do firem Praha';
+    $businessType = 'masazni centrum, ktere dela vyjezdy na pracoviste a nabizi kratke regeneracni masaze pro zamestnance se sedavym zamestnanim v Praze';
+    $plan = onboardingGenerateLeadPlan($config, $businessName, $businessType);
+    $audience = trim((string)($plan['audience_label'] ?? '')) ?: publicOnboardingAudienceLabel($businessType);
+    if ($lead && !$force) {
+        ensureDemoOnboardingContacts($pdo, (int)$lead['id'], $config, $businessType, $audience, $plan);
+        ensureOnboardingEmailDraft($pdo, $config, onboardingLeadByToken($pdo, $token) ?: $lead);
+        return onboardingLeadByToken($pdo, $token) ?: $lead;
+    }
+    if ($lead && $force) {
+        $now = date('c');
+        $pdo->prepare('DELETE FROM onboarding_contacts WHERE lead_id=?')->execute([(int)$lead['id']]);
+        $pdo->prepare('
+            UPDATE onboarding_leads
+            SET account_email=?, business_name=?, business_type=?, audience_label=?, status="new", selected_contact_ids=NULL,
+                email_subject="", email_body_html="", list_id=0, campaign_id=0, updated_at=?
+            WHERE id=?
+        ')->execute(['ej.akub@seznam.cz', $businessName, $businessType, $audience, $now, (int)$lead['id']]);
+        ensureDemoOnboardingContacts($pdo, (int)$lead['id'], $config, $businessType, $audience, $plan);
+        $lead = onboardingLeadByToken($pdo, $token) ?: $lead;
+        ensureOnboardingEmailDraft($pdo, $config, $lead);
+        return onboardingLeadByToken($pdo, $token) ?: $lead;
     }
 
     $token = bin2hex(random_bytes(24));
-    $draft = onboardingFallbackEmailDraft([
-        'business_name' => 'Tajemstvi jamu',
-        'business_type' => 'online obsah a sluzby pro osobni rozvoj',
-        'audience_label' => 'wellness a masazni studia',
-    ], []);
     $stmt = $pdo->prepare('
         INSERT INTO onboarding_leads (token, account_email, business_name, business_type, audience_label, status, email_subject, email_body_html, trial_days, monthly_price_usd, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, "new", ?, ?, 7, 19.00, ?, ?)
@@ -1099,11 +1434,11 @@ function ensureDemoOnboardingLead(PDO $pdo): array
     $stmt->execute([
         $token,
         'ej.akub@seznam.cz',
-        'Tajemstvi jamu',
-        'online obsah a sluzby pro osobni rozvoj',
-        'wellness a masazni studia',
-        $draft['subject'],
-        $draft['html'],
+        $businessName,
+        $businessType,
+        $audience,
+        '',
+        '',
         $now,
         $now,
     ]);
@@ -1112,35 +1447,22 @@ function ensureDemoOnboardingLead(PDO $pdo): array
     if (!$lead) {
         throw new RuntimeException('Demo onboarding lead se nepodarilo vytvorit.');
     }
-    ensureDemoOnboardingContacts($pdo, (int)$lead['id']);
-    return $lead;
+    ensureDemoOnboardingContacts($pdo, (int)$lead['id'], $config, $businessType, $audience, $plan);
+    $lead = onboardingLeadByToken($pdo, $token) ?: $lead;
+    ensureOnboardingEmailDraft($pdo, $config, $lead);
+    return onboardingLeadByToken($pdo, $token) ?: $lead;
 }
 
-function ensureDemoOnboardingContacts(PDO $pdo, int $leadId): void
+function ensureDemoOnboardingContacts(PDO $pdo, int $leadId, array $config, string $businessType, string $audience, array $plan): void
 {
-    $contacts = [
-        ['studio.orion@example.com', 'Studio Orion', 'https://example.com/studio-orion', 'Petra Novakova', 'Korunni 12, Praha', '+420 777 100 201'],
-        ['recepce.lotos@example.com', 'Wellness Lotos', 'https://example.com/wellness-lotos', 'Recepce', 'Lidicka 8, Brno', '+420 777 100 202'],
-        ['info.vital@example.com', 'Masaze Vital', 'https://example.com/masaze-vital', 'Marek Svoboda', 'Smetanova 4, Plzen', '+420 777 100 203'],
-        ['kontakt.harmonie@example.com', 'Salon Harmonie', 'https://example.com/salon-harmonie', '', 'Masarykova 22, Olomouc', '+420 777 100 204'],
-        ['hello.relax@example.com', 'Relax Point', 'https://example.com/relax-point', 'Jana Kralova', 'Dlouha 31, Ostrava', '+420 777 100 205'],
-        ['info.zenhouse@example.com', 'Zen House', 'https://example.com/zen-house', '', 'Namesti 3, Liberec', '+420 777 100 206'],
-    ];
-    $stmt = $pdo->prepare('
-        INSERT INTO onboarding_contacts (lead_id, email, subject_name, website, contact_name, address, phone, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, "found", ?)
-        ON DUPLICATE KEY UPDATE subject_name=VALUES(subject_name), website=VALUES(website), contact_name=VALUES(contact_name), address=VALUES(address), phone=VALUES(phone)
-    ');
-    foreach ($contacts as $contact) {
-        $stmt->execute([$leadId, $contact[0], $contact[1], $contact[2], $contact[3], $contact[4], $contact[5], date('c')]);
-    }
+    ensurePublicOnboardingContacts($pdo, $leadId, $businessType, $audience, $config, $plan, true);
 }
 
 function sendOnboardingDemoInvite(PDO $pdo, array $config): string
 {
-    $lead = ensureDemoOnboardingLead($pdo);
     $settings = loadSettings($pdo);
     $force = isset($_GET['force_onboarding_demo']);
+    $lead = ensureDemoOnboardingLead($pdo, $config, $force);
     if (!$force && trim((string)($settings['onboarding_demo_invite_sent_at'] ?? '')) !== '') {
         return "Onboarding demo invite uz byl odeslan. URL: " . onboardingLeadUrl($lead) . "\n";
     }
@@ -1160,9 +1482,19 @@ function onboardingInviteEmailHtml(array $lead, array $contacts): string
 {
     $url = onboardingLeadUrl($lead);
     $count = count($contacts);
+    $preview = '';
+    foreach (array_slice($contacts, 0, 5) as $contact) {
+        $name = trim((string)($contact['subject_name'] ?? ''));
+        $reason = trim((string)($contact['fit_reason'] ?? ''));
+        if ($name === '') {
+            continue;
+        }
+        $preview .= '<li><strong>' . h($name) . '</strong>' . ($reason !== '' ? '<br><span style="color:#67736d">' . h($reason) . '</span>' : '') . '</li>';
+    }
     return '<div style="font-family:Arial,sans-serif;line-height:1.5;color:#1e2522;max-width:620px">'
         . '<h1 style="font-size:24px;margin:0 0 14px">Nasli jsme ' . h((string)$count) . ' kontaktu, ktere davaji smysl oslovit</h1>'
         . '<p>Pripravili jsme pro vas kratky seznam potencialnich zakazniku a navrh prvniho emailu. Staci zkontrolovat kontakty, upravit text, pripojit SMTP a spustit kampan.</p>'
+        . ($preview !== '' ? '<ul style="padding-left:20px;margin:14px 0">' . $preview . '</ul>' : '')
         . '<p><a href="' . h($url) . '" style="display:inline-block;background:#0f7b6c;color:white;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:8px">Pokracovat oslovenim</a></p>'
         . '<p style="color:#67736d;font-size:13px">Odkaz vas provede prvni kampani krok za krokem.</p>'
         . '</div>';
@@ -1247,7 +1579,13 @@ function renderOnboardingWizard(PDO $pdo, array $config, array $lead, string $st
                                     <?php $checked = isset($selectedIds[(int)$contact['id']]); ?>
                                     <tr>
                                         <td data-label="Oslovit"><input type="checkbox" class="onboarding-contact-checkbox" name="contact_ids[]" value="<?= h((string)$contact['id']) ?>" <?= $checked ? 'checked' : '' ?>></td>
-                                        <td data-label="Subjekt"><strong><?= h((string)$contact['subject_name']) ?></strong><?php if ((string)$contact['website'] !== ''): ?><br><a href="<?= h((string)$contact['website']) ?>" target="_blank" rel="noopener"><?= h(websiteLabel((string)$contact['website'])) ?></a><?php endif; ?></td>
+                                        <td data-label="Subjekt">
+                                            <strong><?= h((string)$contact['subject_name']) ?></strong>
+                                            <?php if ((string)$contact['website'] !== ''): ?><br><a href="<?= h((string)$contact['website']) ?>" target="_blank" rel="noopener"><?= h(websiteLabel((string)$contact['website'])) ?></a><?php endif; ?>
+                                            <?php if ((string)($contact['target_segment'] ?? '') !== ''): ?><br><small><?= h((string)$contact['target_segment']) ?></small><?php endif; ?>
+                                            <?php if ((string)($contact['fit_reason'] ?? '') !== ''): ?><br><small><?= h((string)$contact['fit_reason']) ?></small><?php endif; ?>
+                                            <?php if ((string)($contact['source_url'] ?? '') !== ''): ?><br><small><a href="<?= h((string)$contact['source_url']) ?>" target="_blank" rel="noopener"><?= h((string)($contact['source_label'] ?: 'Zdroj')) ?></a></small><?php endif; ?>
+                                        </td>
                                         <td data-label="Email"><?= h((string)$contact['email']) ?></td>
                                         <td data-label="Kontakt"><?= h((string)$contact['contact_name']) ?></td>
                                         <td data-label="Adresa"><?= h((string)$contact['address']) ?></td>
@@ -3857,6 +4195,37 @@ function scrapingSourceLabel(string $source): string
 {
     $labels = scrapingSourceLabels();
     return (string)($labels[$source] ?? $source);
+}
+
+function normalizeScrapingSourceKey(string $source): string
+{
+    $key = strtolower(trim($source));
+    $key = str_replace(['.', '-', ' '], '_', $key);
+    $aliases = [
+        'firmy' => 'firmy_cz',
+        'firmy_cz' => 'firmy_cz',
+        'herold' => 'herold_at',
+        'herold_at' => 'herold_at',
+        'zoznam' => 'zoznam_sk',
+        'zoznam_sk' => 'zoznam_sk',
+        'dastelefonbuch' => 'dastelefonbuch_de',
+        'das_telefonbuch' => 'dastelefonbuch_de',
+        'das_telefonbuch_de' => 'dastelefonbuch_de',
+        'dastelefonbuch_de' => 'dastelefonbuch_de',
+        'telefonbuch' => 'dastelefonbuch_de',
+        'dasoertliche' => 'dasoertliche_de',
+        'das_oertliche' => 'dasoertliche_de',
+        'dasoertliche_de' => 'dasoertliche_de',
+        'gelbeseiten' => 'gelbeseiten_de',
+        'gelbe_seiten' => 'gelbeseiten_de',
+        'gelbeseiten_de' => 'gelbeseiten_de',
+        'pkt' => 'pkt_pl',
+        'pkt_pl' => 'pkt_pl',
+        'panoramafirm' => 'panoramafirm_pl',
+        'panorama_firm' => 'panoramafirm_pl',
+        'panoramafirm_pl' => 'panoramafirm_pl',
+    ];
+    return $aliases[$key] ?? $key;
 }
 
 function scrapingSourceIsActive(string $source): bool

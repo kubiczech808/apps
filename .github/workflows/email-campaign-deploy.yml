@@ -10,6 +10,12 @@ on:
       - 'email-campaign/**'
       - '.github/workflows/email-campaign-deploy.yml'
   workflow_dispatch:
+    inputs:
+      force_onboarding_demo:
+        description: 'Regenerate and resend onboarding demo invite'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   deploy:
@@ -35,6 +41,8 @@ jobs:
           STRIPE_PRICE_ID: ${{ secrets.STRIPE_PRICE_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          GEMINI_API_KEY_M: ${{ secrets.GEMINI_API_KEY_M }}
+          GEMINI_MODEL: gemini-3.5-flash
         run: |
           if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
             echo "MySQL database secrets are required for email-campaign deploy."
@@ -81,6 +89,8 @@ jobs:
               'ai' => [
                   'openai_api_key' => {s(os.environ.get("OPENAI_API_KEY"))},
                   'openai_model' => {s(os.environ.get("OPENAI_MODEL") or "gpt-4.1")},
+                  'gemini_api_key' => {s(os.environ.get("GEMINI_API_KEY_M"))},
+                  'gemini_model' => {s(os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash")},
               ],
               'database' => [
                   'driver' => 'mysql',
@@ -118,6 +128,7 @@ jobs:
           APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
           APP_DATABASE_USERNAME: ${{ secrets.APP_DATABASE_USERNAME }}
           APP_DATABASE_PASSWORD: ${{ secrets.APP_DATABASE_PASSWORD }}
+          FORCE_ONBOARDING_DEMO: ${{ github.event_name == 'workflow_dispatch' && inputs.force_onboarding_demo || false }}
         run: |
           python3 - <<'PY' > /tmp/email_campaign_cron_token
           import hashlib
@@ -126,7 +137,11 @@ jobs:
           print(hashlib.sha256(material.encode("utf-8")).hexdigest())
           PY
           token="$(cat /tmp/email_campaign_cron_token)"
-          url="https://www.osobnizkusenosti.cz/email-campaign/?cron=${token}&send_onboarding_demo=1"
+          force_query=""
+          if [ "$FORCE_ONBOARDING_DEMO" = "true" ]; then
+            force_query="&force_onboarding_demo=1"
+          fi
+          url="https://www.osobnizkusenosti.cz/email-campaign/?cron=${token}&send_onboarding_demo=1${force_query}"
           http_code="$(curl --silent --show-error --max-time 120 --output /tmp/onboarding_demo_invite.txt --write-out "%{http_code}" "$url" || true)"
           cat /tmp/onboarding_demo_invite.txt || true
           if ! [[ "$http_code" =~ ^[0-9]+$ ]] || [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
