@@ -22,7 +22,7 @@ final class Content
     public function register(): void
     {
         add_filter('the_title', [$this, 'title'], 20, 2);
-        add_filter('the_content', [$this, 'content'], 20);
+        add_filter('the_content', [$this, 'content'], 7);
         add_filter('get_the_excerpt', [$this, 'excerpt'], 20, 2);
 
         add_filter('woocommerce_product_get_name', [$this, 'product_name'], 20, 2);
@@ -43,6 +43,7 @@ final class Content
         add_filter('render_block', [$this, 'template_part_block'], 20, 2);
         add_filter('render_block', [$this, 'navigation_item_block'], 21, 2);
         add_filter('render_block', [$this, 'post_excerpt_block'], 22, 3);
+        add_filter('render_block', [$this, 'post_terms_block'], 23, 2);
         add_filter('render_block_data', [$this, 'block_data'], 20, 3);
         add_filter('wpforms_frontend_form_data', [$this, 'wpforms_data'], 20);
         add_filter('option_blogname', fn ($value) => $this->site_option($value, 'blogname'), 20);
@@ -348,6 +349,31 @@ final class Content
         return $updated ?? $block_content;
     }
 
+    public function post_terms_block(string $block_content, array $block): string
+    {
+        if (!$this->active() || ($block['blockName'] ?? '') !== 'core/post-terms') {
+            return $block_content;
+        }
+
+        $language = $this->languages->current();
+        $replacements = [
+            'en' => [
+                'Z kategorie ,,' => 'From category “',
+                'Další články na téma:' => 'More articles about:',
+            ],
+            'de' => [
+                'Z kategorie ,,' => 'Aus der Kategorie „',
+                'Další články na téma:' => 'Weitere Artikel zum Thema:',
+            ],
+            'pl' => [
+                'Z kategorie ,,' => 'Z kategorii „',
+                'Další články na téma:' => 'Więcej artykułów na temat:',
+            ],
+        ];
+
+        return strtr($block_content, $replacements[$language] ?? []);
+    }
+
     public function block_data(array $parsed_block, array $source_block, ?object $parent_block): array
     {
         if (!$this->active() || !in_array($parsed_block['blockName'] ?? '', ['core/navigation-link', 'core/navigation-submenu'], true)) {
@@ -448,11 +474,119 @@ final class Content
     private function localized_markup(string $value): string
     {
         $site = preg_quote(home_url('/'), '#');
+        $value = preg_replace(
+            '#(' . $site . ')(?:en|de|pl)/(?:[^"\']+/)*wp-content/uploads/#i',
+            '$1wp-content/uploads/',
+            $value
+        ) ?? $value;
+
+        if (!$this->active()) {
+            return $value;
+        }
+
+        $value = preg_replace_callback(
+            '/\b(href|action)=(["\'])(.*?)\2/i',
+            function (array $match): string {
+                $localized = $this->localized_url_attribute(html_entity_decode($match[3], ENT_QUOTES));
+                if ($localized === '') {
+                    return $match[0];
+                }
+                return $match[1] . '=' . $match[2] . esc_url($localized) . $match[2];
+            },
+            $value
+        ) ?? $value;
+
         return preg_replace(
             '#(' . $site . ')(?:en|de|pl)/(?:[^"\']+/)*wp-content/uploads/#i',
             '$1wp-content/uploads/',
             $value
         ) ?? $value;
+    }
+
+    private function localized_url_attribute(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '' || str_starts_with($url, '#') || preg_match('#^(?:mailto|tel|sms|javascript):#i', $url)) {
+            return '';
+        }
+
+        $parts = wp_parse_url($url);
+        if (!is_array($parts)) {
+            return '';
+        }
+
+        $home_parts = wp_parse_url(home_url('/'));
+        $site_host = strtolower((string) ($home_parts['host'] ?? ''));
+        $host = strtolower((string) ($parts['host'] ?? ''));
+        if ($host !== '' && $host !== $site_host && $host !== 'www.' . $site_host) {
+            return '';
+        }
+
+        $language = $this->languages->current();
+        $prefix = (string) $this->languages->get($language)['prefix'];
+        $path = trim((string) ($parts['path'] ?? ''), '/');
+        if ($path === '') {
+            return $this->with_url_suffix(home_url(user_trailingslashit($prefix)), $parts);
+        }
+
+        if (preg_match('#^(?:wp-content|wp-includes|wp-admin)/#i', $path)) {
+            return '';
+        }
+
+        $segments = array_values(array_filter(explode('/', $path), static fn (string $segment): bool => $segment !== ''));
+        $removed_localized_prefix = false;
+        while ($segments && in_array(strtolower($segments[0]), ['en', 'de', 'pl', 'tajemstvi-jamu'], true)) {
+            array_shift($segments);
+            $removed_localized_prefix = true;
+        }
+
+        if ($removed_localized_prefix) {
+            $normalized_path = implode('/', $segments);
+            $localized = $normalized_path === ''
+                ? home_url(user_trailingslashit($prefix))
+                : home_url(user_trailingslashit($prefix . '/' . $normalized_path));
+            return $this->with_url_suffix($localized, $parts);
+        }
+
+        $first = strtolower($segments[0] ?? '');
+        $last = sanitize_title((string) end($segments));
+        $post = null;
+
+        if ($first === 'produkt' && $last !== '') {
+            $post = get_page_by_path($last, OBJECT, 'product');
+        } elseif ($first === 'kategorie-produktu' && $last !== '') {
+            $term = get_term_by('slug', $last, 'product_cat');
+            if ($term instanceof WP_Term) {
+                $localized = $this->router->localized_term_url($term, 'product_cat', $language);
+                return $localized ? $this->with_url_suffix($localized, $parts) : '';
+            }
+        } elseif ($first === 'stitek-produktu' && $last !== '') {
+            $term = get_term_by('slug', $last, 'product_tag');
+            if ($term instanceof WP_Term) {
+                $localized = $this->router->localized_term_url($term, 'product_tag', $language);
+                return $localized ? $this->with_url_suffix($localized, $parts) : '';
+            }
+        } else {
+            $post = get_page_by_path($path, OBJECT, ['page', 'post']);
+        }
+
+        if ($post instanceof WP_Post) {
+            $localized = $this->router->localized_post_url($post, $language);
+            return $localized ? $this->with_url_suffix($localized, $parts) : '';
+        }
+
+        return '';
+    }
+
+    private function with_url_suffix(string $url, array $parts): string
+    {
+        if (!empty($parts['query'])) {
+            $url .= (str_contains($url, '?') ? '&' : '?') . $parts['query'];
+        }
+        if (!empty($parts['fragment'])) {
+            $url .= '#' . $parts['fragment'];
+        }
+        return $url;
     }
 
     private function ui_string(string $text): string
@@ -472,6 +606,27 @@ final class Content
                 'Sale!' => 'Sale!',
                 'Checkout' => 'Checkout',
                 'Cart' => 'Cart',
+                'Leave a Reply' => 'Leave a Reply',
+                'Cancel reply' => 'Cancel reply',
+                'Your email address will not be published.' => 'Your email address will not be published.',
+                'Required fields are marked *' => 'Required fields are marked *',
+                'Your email address will not be published. Required fields are marked *' => 'Your email address will not be published. Required fields are marked *',
+                'Your email address will not be published. Required fields are marked %s' => 'Your email address will not be published. Required fields are marked %s',
+                'Comment' => 'Comment',
+                'Name' => 'Name',
+                'Email' => 'Email',
+                'Website' => 'Website',
+                'Save my name, email, and website in this browser for the next time I comment.' => 'Save my name, email, and website in this browser for the next time I comment.',
+                'Post Comment' => 'Post Comment',
+                'Reply' => 'Reply',
+                'Previous:' => 'Previous:',
+                'Next:' => 'Next:',
+                'Open menu' => 'Open menu',
+                'Close menu' => 'Close menu',
+                'View my cart' => 'View my cart',
+                'Go to checkout' => 'Go to checkout',
+                'Start shopping' => 'Start shopping',
+                'Number of items in the cart: %d' => 'Number of items in the cart: %d',
             ],
             'de' => [
                 'Add to cart' => 'In den Warenkorb',
@@ -487,6 +642,27 @@ final class Content
                 'Sale!' => 'Angebot!',
                 'Checkout' => 'Kasse',
                 'Cart' => 'Warenkorb',
+                'Leave a Reply' => 'Kommentar hinterlassen',
+                'Cancel reply' => 'Antwort abbrechen',
+                'Your email address will not be published.' => 'Ihre E-Mail-Adresse wird nicht veröffentlicht.',
+                'Required fields are marked *' => 'Pflichtfelder sind mit * markiert',
+                'Your email address will not be published. Required fields are marked *' => 'Ihre E-Mail-Adresse wird nicht veröffentlicht. Pflichtfelder sind mit * markiert',
+                'Your email address will not be published. Required fields are marked %s' => 'Ihre E-Mail-Adresse wird nicht veröffentlicht. Pflichtfelder sind mit %s markiert',
+                'Comment' => 'Kommentar',
+                'Name' => 'Name',
+                'Email' => 'E-Mail',
+                'Website' => 'Website',
+                'Save my name, email, and website in this browser for the next time I comment.' => 'Meinen Namen, meine E-Mail-Adresse und Website in diesem Browser speichern, bis ich wieder kommentiere.',
+                'Post Comment' => 'Kommentar veröffentlichen',
+                'Reply' => 'Antworten',
+                'Previous:' => 'Vorheriger:',
+                'Next:' => 'Nächster:',
+                'Open menu' => 'Menü öffnen',
+                'Close menu' => 'Menü schließen',
+                'View my cart' => 'Warenkorb ansehen',
+                'Go to checkout' => 'Zur Kasse',
+                'Start shopping' => 'Einkauf starten',
+                'Number of items in the cart: %d' => 'Anzahl der Artikel im Warenkorb: %d',
             ],
             'pl' => [
                 'Add to cart' => 'Dodaj do koszyka',
@@ -502,6 +678,27 @@ final class Content
                 'Sale!' => 'Promocja!',
                 'Checkout' => 'Zamówienie',
                 'Cart' => 'Koszyk',
+                'Leave a Reply' => 'Dodaj komentarz',
+                'Cancel reply' => 'Anuluj odpowiedź',
+                'Your email address will not be published.' => 'Twój adres e-mail nie zostanie opublikowany.',
+                'Required fields are marked *' => 'Wymagane pola są oznaczone *',
+                'Your email address will not be published. Required fields are marked *' => 'Twój adres e-mail nie zostanie opublikowany. Wymagane pola są oznaczone *',
+                'Your email address will not be published. Required fields are marked %s' => 'Twój adres e-mail nie zostanie opublikowany. Wymagane pola są oznaczone %s',
+                'Comment' => 'Komentarz',
+                'Name' => 'Imię',
+                'Email' => 'E-mail',
+                'Website' => 'Strona internetowa',
+                'Save my name, email, and website in this browser for the next time I comment.' => 'Zapisz moje imię, e-mail i stronę w tej przeglądarce, aby użyć ich przy następnym komentarzu.',
+                'Post Comment' => 'Opublikuj komentarz',
+                'Reply' => 'Odpowiedz',
+                'Previous:' => 'Poprzedni:',
+                'Next:' => 'Następny:',
+                'Open menu' => 'Otwórz menu',
+                'Close menu' => 'Zamknij menu',
+                'View my cart' => 'Zobacz koszyk',
+                'Go to checkout' => 'Przejdź do kasy',
+                'Start shopping' => 'Rozpocznij zakupy',
+                'Number of items in the cart: %d' => 'Liczba produktów w koszyku: %d',
             ],
         ];
 
