@@ -434,7 +434,7 @@ function handleOnboardingRequest(PDO $pdo, array $config, ?array $flash): void
         if (isset($_GET['stripe_session_id'])) {
             verifyOnboardingStripeSession($pdo, $config, $lead, (string)$_GET['stripe_session_id']);
             $lead = onboardingLeadByToken($pdo, $token) ?: $lead;
-            $flash = ['ok', 'Platebni karta byla overena pres Stripe a trial je pripraveny.'];
+            $flash = ['ok', 'Nastaveni je dokonceno. Muzes spustit kampan.'];
             $step = 'launch';
         }
 
@@ -800,7 +800,7 @@ function launchOnboardingCampaign(PDO $pdo, array $lead): string
         throw new RuntimeException('Nejprve over SMTP pripojeni.');
     }
     if (!onboardingPaymentReady($lead)) {
-        throw new RuntimeException('Nejprve over platebni kartu pres Stripe.');
+        throw new RuntimeException('Nejprve dokoncit aktivaci uctu.');
     }
     $selectedContacts = onboardingSelectedContacts($pdo, $lead);
     if (!$selectedContacts) {
@@ -1164,7 +1164,7 @@ function onboardingInviteEmailHtml(array $lead, array $contacts): string
         . '<h1 style="font-size:24px;margin:0 0 14px">Nasli jsme ' . h((string)$count) . ' kontaktu, ktere davaji smysl oslovit</h1>'
         . '<p>Pripravili jsme pro vas kratky seznam potencialnich zakazniku a navrh prvniho emailu. Staci zkontrolovat kontakty, upravit text, pripojit SMTP a spustit kampan.</p>'
         . '<p><a href="' . h($url) . '" style="display:inline-block;background:#0f7b6c;color:white;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:8px">Pokracovat oslovenim</a></p>'
-        . '<p style="color:#67736d;font-size:13px">Trial je na 7 dni zdarma, pote 19 USD mesicne. Zruseni je mozne kdykoliv.</p>'
+        . '<p style="color:#67736d;font-size:13px">Odkaz vas provede prvni kampani krok za krokem.</p>'
         . '</div>';
 }
 
@@ -1185,7 +1185,7 @@ function renderOnboardingWizard(PDO $pdo, array $config, array $lead, string $st
         'contacts' => 'Kontakty',
         'email' => 'Email',
         'smtp' => 'Odesilatel',
-        'payment' => 'Platba',
+        'payment' => 'Aktivace',
         'launch' => 'Spusteni',
         'done' => 'Hotovo',
     ];
@@ -1214,7 +1214,7 @@ function renderOnboardingWizard(PDO $pdo, array $config, array $lead, string $st
             <div class="onboarding-hero-card">
                 <span>Prihlasovaci email</span>
                 <strong><?= h((string)$lead['account_email']) ?></strong>
-                <small>Trial 7 dni zdarma, potom 19 USD / mesic. Zruseni kdykoliv.</small>
+                <small>Tento pruvodce te provede prvnim oslovenim krok za krokem.</small>
             </div>
         </section>
         <section class="onboarding-layout">
@@ -1336,7 +1336,7 @@ function renderOnboardingWizard(PDO $pdo, array $config, array $lead, string $st
                     <div class="launch-summary">
                         <div><span>Odesilatel</span><strong><?= h((string)($lead['from_email'] ?: $lead['account_email'])) ?></strong></div>
                         <div><span>Predmet</span><strong><?= h((string)$lead['email_subject']) ?></strong></div>
-                        <div><span>Platba</span><strong><?= onboardingPaymentReady($lead) ? 'overeno' : 'ceka' ?></strong></div>
+                        <div><span>Prijemci</span><strong><?= h((string)count($selectedContacts)) ?></strong></div>
                     </div>
                     <div class="email-preview"><?= (string)$lead['email_body_html'] ?></div>
                     <?php if ((int)($lead['campaign_id'] ?? 0) > 0): ?>
@@ -7124,10 +7124,10 @@ function uiTranslationMap(string $language): array
             ' kontaktu pro ' => ' Kontakte fuer ',
             'Projdi kontakty, uprav navrh emailu, pripoj odesilaci schranku a spust kampan z vlastni adresy.' => 'Pruefe die Kontakte, bearbeite den E-Mail-Entwurf, verbinde dein Postfach und starte die Kampagne von deiner eigenen Adresse.',
             'Prihlasovaci email' => 'Anmelde-E-Mail',
-            'Trial 7 dni zdarma, potom 19 USD / mesic. Zruseni kdykoliv.' => '7 Tage kostenlos testen, danach 19 USD / Monat. Jederzeit kuendbar.',
+            'Tento pruvodce te provede prvnim oslovenim krok za krokem.' => 'Dieser Assistent fuehrt dich Schritt fuer Schritt durch die erste Ansprache.',
             'Prubeh' => 'Fortschritt',
             'Odesilatel' => 'Absender',
-            'Platba' => 'Zahlung',
+            'Aktivace' => 'Aktivierung',
             'Nalezene kontakty' => 'Gefundene Kontakte',
             'Vyber kontakty, ktere se maji oslovit. Predvybrane jsou vsechny.' => 'Waehle die Kontakte aus, die angesprochen werden sollen. Alle sind vorausgewaehlt.',
             'Oslovit' => 'Kontaktieren',
@@ -7155,6 +7155,7 @@ function uiTranslationMap(string $language): array
             'Stripe zatim neni pripojeny. Dopln GitHub Secrets STRIPE_SECRET_KEY a STRIPE_PRICE_ID, potom znovu nasad aplikaci.' => 'Stripe ist noch nicht verbunden. Fuege die GitHub Secrets STRIPE_SECRET_KEY und STRIPE_PRICE_ID hinzu und deploye die Anwendung erneut.',
             'Spustit kampan' => 'Kampagne starten',
             'Posledni kontrola pred spustenim. Odesilani pobezi na pozadi pres bezny kampanovy worker.' => 'Letzte Pruefung vor dem Start. Der Versand laeuft im Hintergrund ueber den normalen Kampagnen-Worker.',
+            'Prijemci' => 'Empfaenger',
             'overeno' => 'verifiziert',
             'Kampan je zalozena a rozesilka byla predana na pozadi.' => 'Die Kampagne wurde erstellt und der Versand im Hintergrund eingeplant.',
             'Prejit na nastaveni kampane' => 'Zu den Kampagneneinstellungen',
@@ -7164,7 +7165,7 @@ function uiTranslationMap(string $language): array
             'Vyber kontaktu ulozen.' => 'Kontaktauswahl gespeichert.',
             'Obsah emailu ulozen.' => 'E-Mail-Inhalt gespeichert.',
             'SMTP pripojeni funguje.' => 'SMTP-Verbindung funktioniert.',
-            'Platebni karta byla overena pres Stripe a trial je pripraveny.' => 'Die Zahlungskarte wurde ueber Stripe verifiziert und der Trial ist bereit.',
+            'Nastaveni je dokonceno. Muzes spustit kampan.' => 'Die Einrichtung ist abgeschlossen. Du kannst die Kampagne starten.',
             'Vyber alespon jeden kontakt pro osloveni.' => 'Waehle mindestens einen Kontakt fuer die Ansprache aus.',
             'Zadej predmet emailu.' => 'Gib einen E-Mail-Betreff ein.',
             'Telo emailu nesmi byt prazdne.' => 'Der E-Mail-Inhalt darf nicht leer sein.',
@@ -7172,6 +7173,7 @@ function uiTranslationMap(string $language): array
             'SMTP server musi byt vyplneny.' => 'SMTP-Server muss ausgefuellt sein.',
             'SMTP uzivatel musi byt vyplneny.' => 'SMTP-Benutzer muss ausgefuellt sein.',
             'SMTP heslo musi byt vyplneny.' => 'SMTP-Passwort muss ausgefuellt sein.',
+            'Nejprve dokoncit aktivaci uctu.' => 'Schliesse zuerst die Kontoaktivierung ab.',
             'Stripe neni nakonfigurovany. Dopln STRIPE_SECRET_KEY a STRIPE_PRICE_ID do GitHub Secrets.' => 'Stripe ist nicht konfiguriert. Fuege STRIPE_SECRET_KEY und STRIPE_PRICE_ID zu den GitHub Secrets hinzu.',
             'Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.' => 'Die Anwendung ist nur fuer die produktive MySQL/MariaDB-Datenbank konfiguriert. Bitte pruefe APP_DATABASE_NAME, APP_DATABASE_USERNAME und APP_DATABASE_PASSWORD in GitHub Secrets sowie die Datenbankrechte fuer SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER auf dieser Datenbank.',
             'Jednotlive casti nastaveni se meni oddelene, aby se prihlasovaci udaje nikdy neprepsaly omylem.' => 'Die einzelnen Einstellungsbereiche werden getrennt bearbeitet, damit Zugangsdaten nicht versehentlich ueberschrieben werden.',
@@ -7676,10 +7678,10 @@ function uiTranslationMap(string $language): array
         ' kontaktu pro ' => ' contacts for ',
         'Projdi kontakty, uprav navrh emailu, pripoj odesilaci schranku a spust kampan z vlastni adresy.' => 'Review the contacts, edit the email draft, connect your sending mailbox and launch the campaign from your own address.',
         'Prihlasovaci email' => 'Login email',
-        'Trial 7 dni zdarma, potom 19 USD / mesic. Zruseni kdykoliv.' => '7-day free trial, then 19 USD / month. Cancel anytime.',
+        'Tento pruvodce te provede prvnim oslovenim krok za krokem.' => 'This guide walks you through the first outreach step by step.',
         'Prubeh' => 'Progress',
         'Odesilatel' => 'Sender',
-        'Platba' => 'Payment',
+        'Aktivace' => 'Activation',
         'Nalezene kontakty' => 'Found contacts',
         'Vyber kontakty, ktere se maji oslovit. Predvybrane jsou vsechny.' => 'Select the contacts to contact. All are selected by default.',
         'Oslovit' => 'Contact',
@@ -7707,6 +7709,7 @@ function uiTranslationMap(string $language): array
         'Stripe zatim neni pripojeny. Dopln GitHub Secrets STRIPE_SECRET_KEY a STRIPE_PRICE_ID, potom znovu nasad aplikaci.' => 'Stripe is not connected yet. Add GitHub Secrets STRIPE_SECRET_KEY and STRIPE_PRICE_ID, then deploy the app again.',
         'Spustit kampan' => 'Launch campaign',
         'Posledni kontrola pred spustenim. Odesilani pobezi na pozadi pres bezny kampanovy worker.' => 'Final check before launch. Sending will run in the background through the regular campaign worker.',
+        'Prijemci' => 'Recipients',
         'overeno' => 'verified',
         'Kampan je zalozena a rozesilka byla predana na pozadi.' => 'The campaign has been created and the send-out was handed to the background worker.',
         'Prejit na nastaveni kampane' => 'Go to campaign settings',
@@ -7716,7 +7719,7 @@ function uiTranslationMap(string $language): array
         'Vyber kontaktu ulozen.' => 'Contact selection saved.',
         'Obsah emailu ulozen.' => 'Email content saved.',
         'SMTP pripojeni funguje.' => 'SMTP connection works.',
-        'Platebni karta byla overena pres Stripe a trial je pripraveny.' => 'The payment card was verified through Stripe and the trial is ready.',
+        'Nastaveni je dokonceno. Muzes spustit kampan.' => 'Setup is complete. You can launch the campaign.',
         'Vyber alespon jeden kontakt pro osloveni.' => 'Select at least one contact for outreach.',
         'Zadej predmet emailu.' => 'Enter an email subject.',
         'Telo emailu nesmi byt prazdne.' => 'Email body cannot be empty.',
@@ -7724,6 +7727,7 @@ function uiTranslationMap(string $language): array
         'SMTP server musi byt vyplneny.' => 'SMTP server is required.',
         'SMTP uzivatel musi byt vyplneny.' => 'SMTP username is required.',
         'SMTP heslo musi byt vyplneny.' => 'SMTP password is required.',
+        'Nejprve dokoncit aktivaci uctu.' => 'Complete account activation first.',
         'Stripe neni nakonfigurovany. Dopln STRIPE_SECRET_KEY a STRIPE_PRICE_ID do GitHub Secrets.' => 'Stripe is not configured. Add STRIPE_SECRET_KEY and STRIPE_PRICE_ID to GitHub Secrets.',
         'Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.' => 'The application is configured to use only the production MySQL/MariaDB database. Please check APP_DATABASE_NAME, APP_DATABASE_USERNAME and APP_DATABASE_PASSWORD in GitHub Secrets, especially the database user permissions for SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER on this database.',
         'Jednotlive casti nastaveni se meni oddelene, aby se prihlasovaci udaje nikdy neprepsaly omylem.' => 'Each configuration area is edited separately so credentials are not overwritten accidentally.',
