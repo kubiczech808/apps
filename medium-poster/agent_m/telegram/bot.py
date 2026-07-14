@@ -187,19 +187,19 @@ def _schedule_engagement_slots(application) -> None:
 
 
 _BOT_COMMANDS = [
-    BotCommand("topic", "Navrhnout nove tema clanku"),
-    BotCommand("post", "Publikovat na všechny platformy"),
-    BotCommand("draft", "Publikovat jako koncept"),
-    BotCommand("preview", "Vygenerovat bez publikace"),
-    BotCommand("feedback", "Přidat/zobrazit trvalé instrukce"),
+    BotCommand("topic", "Param: <text> - navrhnout nove tema clanku"),
+    BotCommand("post", "Param: [slug] - publikovat na vsechny platformy"),
+    BotCommand("draft", "Param: [slug] - publikovat jako koncept"),
+    BotCommand("preview", "Param: [slug] - vygenerovat bez publikace"),
+    BotCommand("feedback", "Param: [text] - pridat/zobrazit trvale instrukce"),
     BotCommand("feedback_clear", "Smazat všechny instrukce"),
     BotCommand("medium_login", "Nastavit Medium session (cookies)"),
-    BotCommand("medium_publish", "Zapnout/vypnout publikovani na Medium"),
+    BotCommand("medium_publish", "Param: on|off|status - publikovani clanku na Medium"),
     BotCommand("history", "Poslední publikace"),
     BotCommand("topics", "Stav obsahového plánu"),
-    BotCommand("engage", "Najít články a navrhnout komentáře"),
-    BotCommand("engage_auto", "Nastavit denni pocet engagement navrhu"),
-    BotCommand("engage_autopost", "Zapnout auto engagement bez schvalovani"),
+    BotCommand("engage", "Param: [query] - najit clanky a navrhnout komentare"),
+    BotCommand("engage_auto", "Param: <0-10> - denni pocet engagement navrhu"),
+    BotCommand("engage_autopost", "Param: on|off|status - komentare bez schvalovani"),
     BotCommand("status", "Využití tokenů a rozvrh"),
     BotCommand("help", "Nápověda"),
 ]
