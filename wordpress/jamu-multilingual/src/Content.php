@@ -11,6 +11,7 @@ final class Content
 {
     private bool $term_guard = false;
     private bool $template_part_guard = false;
+    private bool $language_navigation_inserted = false;
 
     public function __construct(
         private Repository $repository,
@@ -45,6 +46,7 @@ final class Content
         add_filter('render_block', [$this, 'post_excerpt_block'], 22, 3);
         add_filter('render_block', [$this, 'post_terms_block'], 23, 2);
         add_filter('render_block', [$this, 'post_navigation_link_block'], 24, 2);
+        add_filter('render_block', [$this, 'navigation_language_switcher'], 30, 2);
         add_filter('render_block_data', [$this, 'block_data'], 20, 3);
         add_filter('comment_form_defaults', [$this, 'comment_form_defaults'], 20);
         add_filter('comment_form_default_fields', [$this, 'comment_form_default_fields'], 20);
@@ -390,6 +392,37 @@ final class Content
         ]);
     }
 
+    public function navigation_language_switcher(string $block_content, array $block): string
+    {
+        if (
+            $this->language_navigation_inserted
+            || (is_admin() && !wp_doing_ajax())
+            || ($block['blockName'] ?? '') !== 'core/navigation'
+            || !str_contains($block_content, 'wp-block-navigation__container')
+        ) {
+            return $block_content;
+        }
+
+        $switcher = $this->language_navigation_markup();
+        if ($switcher === '') {
+            return $block_content;
+        }
+
+        $updated = preg_replace_callback(
+            '/(<ul\b[^>]*class=(["\'])(?=[^"\']*wp-block-navigation__container)[^"\']*\2[^>]*>)(.*)(<\/ul>)/is',
+            static fn (array $match): string => $match[1] . $match[3] . $switcher . $match[4],
+            $block_content,
+            1
+        );
+
+        if (!is_string($updated) || $updated === $block_content) {
+            return $block_content;
+        }
+
+        $this->language_navigation_inserted = true;
+        return $updated;
+    }
+
     public function block_data(array $parsed_block, array $source_block, ?object $parent_block): array
     {
         if (!$this->active() || !in_array($parsed_block['blockName'] ?? '', ['core/navigation-link', 'core/navigation-submenu'], true)) {
@@ -548,6 +581,92 @@ final class Content
         }
 
         return $attributes;
+    }
+
+    private function language_navigation_markup(): string
+    {
+        $meta = [
+            'cs' => ['flag' => '🇨🇿', 'code' => 'CZ', 'name' => 'Čeština'],
+            'en' => ['flag' => '🇬🇧', 'code' => 'EN', 'name' => 'English'],
+            'de' => ['flag' => '🇩🇪', 'code' => 'DE', 'name' => 'Deutsch'],
+            'pl' => ['flag' => '🇵🇱', 'code' => 'PL', 'name' => 'Polski'],
+        ];
+        $current = $this->languages->current();
+        $current_meta = $meta[$current] ?? $meta[Languages::DEFAULT];
+        $items = [];
+
+        foreach ($this->languages->all() as $language => $config) {
+            $url = $this->language_url($language);
+            if ($url === '') {
+                continue;
+            }
+
+            $language_meta = $meta[$language] ?? [
+                'flag' => strtoupper($language),
+                'code' => strtoupper($language),
+                'name' => (string) ($config['label'] ?? strtoupper($language)),
+            ];
+            $is_current = $language === $current;
+            $items[] = sprintf(
+                '<li class="wp-block-navigation-item wp-block-navigation-link jamu-language-menu__item%s"><a class="wp-block-navigation-item__content" href="%s" hreflang="%s" lang="%s"%s><span class="wp-block-navigation-item__label"><span class="jamu-language-menu__flag" aria-hidden="true">%s</span> <span class="jamu-language-menu__name">%s</span></span></a></li>',
+                $is_current ? ' is-current' : '',
+                esc_url($url),
+                esc_attr($language),
+                esc_attr($language),
+                $is_current ? ' aria-current="page"' : '',
+                esc_html($language_meta['flag']),
+                esc_html($language_meta['name'])
+            );
+        }
+
+        if (count($items) < 2) {
+            return '';
+        }
+
+        $context = [
+            'submenuOpenedBy' => ['click' => false, 'hover' => false, 'focus' => false],
+            'type' => 'submenu',
+            'modal' => null,
+            'previousFocus' => null,
+        ];
+        $aria_label = sprintf(
+            /* translators: %s: current language name */
+            __('Language, current: %s', 'jamu-multilingual'),
+            $current_meta['name']
+        );
+
+        return sprintf(
+            '<li data-wp-context="%s" data-wp-interactive="core/navigation" data-wp-on--focusout="actions.handleMenuFocusout" data-wp-on--keydown="actions.handleMenuKeydown" data-wp-on--pointerenter="actions.openMenuOnHover" data-wp-on--pointerleave="actions.closeMenuOnHover" data-wp-watch="callbacks.initMenu" tabindex="-1" class="wp-block-navigation-item has-child open-on-hover-click wp-block-navigation-submenu jamu-language-menu"><a class="wp-block-navigation-item__content" href="%s" aria-label="%s"><span class="wp-block-navigation-item__label"><span class="jamu-language-menu__flag" aria-hidden="true">%s</span> <span class="jamu-language-menu__code">%s</span></span></a><button data-wp-bind--aria-expanded="state.isMenuOpen" data-wp-on--click="actions.toggleMenuOnClick" aria-label="%s" class="wp-block-navigation__submenu-icon wp-block-navigation-submenu__toggle"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" focusable="false"><path d="M1.50002 4L6.00002 8L10.5 4" stroke-width="1.5"></path></svg></button><ul data-wp-on--focus="actions.openMenuOnFocus" class="wp-block-navigation__submenu-container wp-block-navigation-submenu">%s</ul></li>',
+            esc_attr((string) wp_json_encode($context)),
+            esc_url($this->language_url($current) ?: home_url('/')),
+            esc_attr($aria_label),
+            esc_html($current_meta['flag']),
+            esc_html($current_meta['code']),
+            esc_attr__('Language submenu', 'jamu-multilingual'),
+            implode('', $items)
+        );
+    }
+
+    private function language_url(string $language): string
+    {
+        $object = get_queried_object();
+        $current = $this->languages->current();
+        $require_translation = $language !== Languages::DEFAULT && $language !== $current;
+
+        if ($object instanceof WP_Post) {
+            return $this->router->localized_post_url($object, $language, $require_translation);
+        }
+
+        if ($object instanceof WP_Term && in_array($object->taxonomy, ['product_cat', 'product_tag'], true)) {
+            return $this->router->localized_term_url($object, $object->taxonomy, $language, $require_translation);
+        }
+
+        if ($language === Languages::DEFAULT) {
+            return home_url('/');
+        }
+
+        $front_id = (int) get_option('page_on_front');
+        return $front_id ? $this->router->localized_post_url($front_id, $language, true) : '';
     }
 
     private function excerpt_fragment(string $value): string
