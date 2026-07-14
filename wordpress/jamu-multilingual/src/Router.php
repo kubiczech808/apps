@@ -239,7 +239,13 @@ final class Router
 
     private function set_post_query(\WP $wp, int $post_id, string $post_type): void
     {
-        unset($wp->query_vars['name'], $wp->query_vars['pagename'], $wp->query_vars['page_id']);
+        unset($wp->query_vars['name'], $wp->query_vars['pagename'], $wp->query_vars['page_id'], $wp->query_vars['p']);
+        if ($post_type === 'page') {
+            $wp->query_vars['page_id'] = $post_id;
+            $wp->query_vars['post_type'] = 'page';
+            return;
+        }
+
         $wp->query_vars['post_type'] = $post_type;
         $wp->query_vars['p'] = $post_id;
     }

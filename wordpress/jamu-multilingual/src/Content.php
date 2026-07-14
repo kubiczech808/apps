@@ -44,7 +44,11 @@ final class Content
         add_filter('render_block', [$this, 'navigation_item_block'], 21, 2);
         add_filter('render_block', [$this, 'post_excerpt_block'], 22, 3);
         add_filter('render_block', [$this, 'post_terms_block'], 23, 2);
+        add_filter('render_block', [$this, 'post_navigation_link_block'], 24, 2);
         add_filter('render_block_data', [$this, 'block_data'], 20, 3);
+        add_filter('comment_form_defaults', [$this, 'comment_form_defaults'], 20);
+        add_filter('comment_form_default_fields', [$this, 'comment_form_default_fields'], 20);
+        add_filter('comment_form_field_comment', [$this, 'comment_form_field_comment'], 20);
         add_filter('wpforms_frontend_form_data', [$this, 'wpforms_data'], 20);
         add_filter('option_blogname', fn ($value) => $this->site_option($value, 'blogname'), 20);
         add_filter('option_blogdescription', fn ($value) => $this->site_option($value, 'blogdescription'), 20);
@@ -374,6 +378,18 @@ final class Content
         return strtr($block_content, $replacements[$language] ?? []);
     }
 
+    public function post_navigation_link_block(string $block_content, array $block): string
+    {
+        if (!$this->active() || ($block['blockName'] ?? '') !== 'core/post-navigation-link') {
+            return $block_content;
+        }
+
+        return strtr($block_content, [
+            'Previous:' => $this->ui_string('Previous:') ?: 'Previous:',
+            'Next:' => $this->ui_string('Next:') ?: 'Next:',
+        ]);
+    }
+
     public function block_data(array $parsed_block, array $source_block, ?object $parent_block): array
     {
         if (!$this->active() || !in_array($parsed_block['blockName'] ?? '', ['core/navigation-link', 'core/navigation-submenu'], true)) {
@@ -400,6 +416,78 @@ final class Content
             $form_data['settings'] = array_replace_recursive($form_data['settings'] ?? [], $translated['settings']);
         }
         return $form_data;
+    }
+
+    public function comment_form_defaults(array $defaults): array
+    {
+        if (!$this->active()) {
+            return $defaults;
+        }
+
+        $defaults['title_reply'] = $this->ui_string('Leave a Reply') ?: ($defaults['title_reply'] ?? '');
+        $defaults['cancel_reply_link'] = $this->ui_string('Cancel reply') ?: ($defaults['cancel_reply_link'] ?? '');
+        $defaults['label_submit'] = $this->ui_string('Post Comment') ?: ($defaults['label_submit'] ?? '');
+        $defaults['comment_notes_before'] = sprintf(
+            '<p class="comment-notes">%s <span class="required-field-message">%s</span></p>',
+            esc_html($this->ui_string('Your email address will not be published.')),
+            esc_html($this->ui_string('Required fields are marked *'))
+        );
+
+        return $defaults;
+    }
+
+    public function comment_form_default_fields(array $fields): array
+    {
+        if (!$this->active()) {
+            return $fields;
+        }
+
+        $commenter = wp_get_current_commenter();
+        $required = (bool) get_option('require_name_email');
+        $required_mark = $required ? ' <span class="required">*</span>' : '';
+        $required_attrs = $required ? ' required aria-required="true"' : '';
+
+        $fields['author'] = sprintf(
+            '<p class="comment-form-author"><label for="author">%s%s</label><input id="author" name="author" type="text" value="%s" size="30" maxlength="245" autocomplete="name"%s /></p>',
+            esc_html($this->ui_string('Name')),
+            $required_mark,
+            esc_attr($commenter['comment_author'] ?? ''),
+            $required_attrs
+        );
+        $fields['email'] = sprintf(
+            '<p class="comment-form-email"><label for="email">%s%s</label><input id="email" name="email" type="email" value="%s" size="30" maxlength="100" aria-describedby="email-notes" autocomplete="email"%s /></p>',
+            esc_html($this->ui_string('Email')),
+            $required_mark,
+            esc_attr($commenter['comment_author_email'] ?? ''),
+            $required_attrs
+        );
+        $fields['url'] = sprintf(
+            '<p class="comment-form-url"><label for="url">%s</label><input id="url" name="url" type="url" value="%s" size="30" maxlength="200" autocomplete="url" /></p>',
+            esc_html($this->ui_string('Website')),
+            esc_attr($commenter['comment_author_url'] ?? '')
+        );
+
+        if (isset($fields['cookies'])) {
+            $fields['cookies'] = preg_replace(
+                '#(<label\b[^>]*for=["\']wp-comment-cookies-consent["\'][^>]*>)(.*?)(</label>)#is',
+                '$1' . esc_html($this->ui_string('Save my name, email, and website in this browser for the next time I comment.')) . '$3',
+                $fields['cookies']
+            ) ?? $fields['cookies'];
+        }
+
+        return $fields;
+    }
+
+    public function comment_form_field_comment(string $field): string
+    {
+        if (!$this->active()) {
+            return $field;
+        }
+
+        return sprintf(
+            '<p class="comment-form-comment"><label for="comment">%s <span class="required">*</span></label><textarea id="comment" name="comment" cols="45" rows="8" maxlength="65525" required aria-required="true"></textarea></p>',
+            esc_html($this->ui_string('Comment'))
+        );
     }
 
     public function site_option(mixed $value, string $option): mixed
