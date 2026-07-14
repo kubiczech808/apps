@@ -55,6 +55,7 @@ final class Content
         add_filter('wpforms_frontend_form_data', [$this, 'wpforms_data'], 20);
         add_filter('option_blogname', fn ($value) => $this->site_option($value, 'blogname'), 20);
         add_filter('option_blogdescription', fn ($value) => $this->site_option($value, 'blogdescription'), 20);
+        add_action('wp_head', [$this, 'language_switcher_styles'], 30);
         add_action('wp_footer', [$this, 'frontend_i18n_fallback'], 99);
     }
 
@@ -271,9 +272,20 @@ final class Content
             return $block_content;
         }
 
+        $previous_language_navigation_inserted = $this->language_navigation_inserted;
+        if ($slug === 'header') {
+            $this->language_navigation_inserted = false;
+        }
+
         $this->template_part_guard = true;
         $rendered = do_blocks($this->localized_markup($translation->content));
         $this->template_part_guard = false;
+
+        if ($slug === 'header') {
+            $this->language_navigation_inserted = str_contains($rendered, 'jamu-language-menu');
+        } else {
+            $this->language_navigation_inserted = $previous_language_navigation_inserted;
+        }
 
         if (preg_match('/^(\s*<(header|footer|div)\b[^>]*>)(.*)(<\/\2>\s*)$/is', $block_content, $matches)) {
             return $matches[1] . $rendered . $matches[4];
@@ -560,6 +572,24 @@ final class Content
             $this->languages->current()
         );
         return $translation && $translation->title !== '' ? $translation->title : $value;
+    }
+
+    public function language_switcher_styles(): void
+    {
+        if (is_admin() && !wp_doing_ajax()) {
+            return;
+        }
+
+        echo <<<'HTML'
+<style id="jamu-ml-language-switcher-style">
+.jamu-language-menu .screen-reader-text{border:0;clip:rect(1px,1px,1px,1px);clip-path:inset(50%);height:1px;margin:-1px;overflow:hidden;padding:0;position:absolute!important;width:1px;word-wrap:normal!important}
+.jamu-language-menu>.wp-block-navigation-item__content .wp-block-navigation-item__label,.jamu-language-menu__item .wp-block-navigation-item__label{align-items:center;display:inline-flex;gap:0}
+.jamu-language-menu__flag{font-size:1.25em;line-height:1}
+.jamu-language-menu .wp-block-navigation__submenu-icon{margin-left:.2em}
+.jamu-language-menu .wp-block-navigation__submenu-container{min-width:3.25rem}
+.jamu-language-menu__item .wp-block-navigation-item__content{justify-content:center;min-width:2.75rem}
+</style>
+HTML;
     }
 
     public function frontend_i18n_fallback(): void
@@ -1054,11 +1084,13 @@ JS
             ];
             $is_current = $language === $current;
             $items[] = sprintf(
-                '<li class="wp-block-navigation-item wp-block-navigation-link jamu-language-menu__item%s"><a class="wp-block-navigation-item__content" href="%s" hreflang="%s" lang="%s"%s><span class="wp-block-navigation-item__label"><span class="jamu-language-menu__flag" aria-hidden="true">%s</span> <span class="jamu-language-menu__name">%s</span></span></a></li>',
+                '<li class="wp-block-navigation-item wp-block-navigation-link jamu-language-menu__item%s"><a class="wp-block-navigation-item__content" href="%s" hreflang="%s" lang="%s" aria-label="%s" title="%s"%s><span class="wp-block-navigation-item__label"><span class="jamu-language-menu__flag" aria-hidden="true">%s</span><span class="jamu-language-menu__name screen-reader-text">%s</span></span></a></li>',
                 $is_current ? ' is-current' : '',
                 esc_url($url),
                 esc_attr($language),
                 esc_attr($language),
+                esc_attr($language_meta['name']),
+                esc_attr($language_meta['name']),
                 $is_current ? ' aria-current="page"' : '',
                 esc_html($language_meta['flag']),
                 esc_html($language_meta['name'])
@@ -1082,12 +1114,13 @@ JS
         );
 
         return sprintf(
-            '<li data-wp-context="%s" data-wp-interactive="core/navigation" data-wp-on--focusout="actions.handleMenuFocusout" data-wp-on--keydown="actions.handleMenuKeydown" data-wp-on--pointerenter="actions.openMenuOnHover" data-wp-on--pointerleave="actions.closeMenuOnHover" data-wp-watch="callbacks.initMenu" tabindex="-1" class="wp-block-navigation-item has-child open-on-hover-click wp-block-navigation-submenu jamu-language-menu"><a class="wp-block-navigation-item__content" href="%s" aria-label="%s"><span class="wp-block-navigation-item__label"><span class="jamu-language-menu__flag" aria-hidden="true">%s</span> <span class="jamu-language-menu__code">%s</span></span></a><button data-wp-bind--aria-expanded="state.isMenuOpen" data-wp-on--click="actions.toggleMenuOnClick" aria-label="%s" class="wp-block-navigation__submenu-icon wp-block-navigation-submenu__toggle"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" focusable="false"><path d="M1.50002 4L6.00002 8L10.5 4" stroke-width="1.5"></path></svg></button><ul data-wp-on--focus="actions.openMenuOnFocus" class="wp-block-navigation__submenu-container wp-block-navigation-submenu">%s</ul></li>',
+            '<li data-wp-context="%s" data-wp-interactive="core/navigation" data-wp-on--focusout="actions.handleMenuFocusout" data-wp-on--keydown="actions.handleMenuKeydown" data-wp-on--pointerenter="actions.openMenuOnHover" data-wp-on--pointerleave="actions.closeMenuOnHover" data-wp-watch="callbacks.initMenu" tabindex="-1" class="wp-block-navigation-item has-child open-on-hover-click wp-block-navigation-submenu jamu-language-menu"><a class="wp-block-navigation-item__content" href="%s" aria-label="%s" title="%s"><span class="wp-block-navigation-item__label"><span class="jamu-language-menu__flag" aria-hidden="true">%s</span><span class="jamu-language-menu__name screen-reader-text">%s</span></span></a><button data-wp-bind--aria-expanded="state.isMenuOpen" data-wp-on--click="actions.toggleMenuOnClick" aria-label="%s" class="wp-block-navigation__submenu-icon wp-block-navigation-submenu__toggle"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" focusable="false"><path d="M1.50002 4L6.00002 8L10.5 4" stroke-width="1.5"></path></svg></button><ul data-wp-on--focus="actions.openMenuOnFocus" class="wp-block-navigation__submenu-container wp-block-navigation-submenu">%s</ul></li>',
             esc_attr((string) wp_json_encode($context)),
             esc_url($this->language_url($current) ?: home_url('/')),
             esc_attr($aria_label),
+            esc_attr($current_meta['name']),
             esc_html($current_meta['flag']),
-            esc_html($current_meta['code']),
+            esc_html($current_meta['name']),
             esc_attr__('Language submenu', 'jamu-multilingual'),
             implode('', $items)
         );
