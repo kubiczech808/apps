@@ -194,6 +194,7 @@ _BOT_COMMANDS = [
     BotCommand("feedback", "Přidat/zobrazit trvalé instrukce"),
     BotCommand("feedback_clear", "Smazat všechny instrukce"),
     BotCommand("medium_login", "Nastavit Medium session (cookies)"),
+    BotCommand("medium_publish", "Zapnout/vypnout publikovani na Medium"),
     BotCommand("history", "Poslední publikace"),
     BotCommand("topics", "Stav obsahového plánu"),
     BotCommand("engage", "Najít články a navrhnout komentáře"),
@@ -260,6 +261,7 @@ def build_app():
     app.add_handler(CommandHandler("feedback", handlers.feedback_cmd))
     app.add_handler(CommandHandler("feedback_clear", handlers.feedback_clear_cmd))
     app.add_handler(CommandHandler("medium_login", handlers.medium_login_cmd))
+    app.add_handler(CommandHandler("medium_publish", handlers.medium_publish_cmd))
     app.add_handler(CallbackQueryHandler(handlers.draft_action_callback, pattern=r"^mdraft:"))
     app.add_handler(CallbackQueryHandler(handlers.engagement_action_callback, pattern=r"^mengage:"))
     app.add_handler(CallbackQueryHandler(handlers.topic_suggestion_callback, pattern=r"^mtopic:"))

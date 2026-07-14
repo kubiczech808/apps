@@ -52,11 +52,16 @@ def admin_only(func):
 
 @admin_only
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from agent_m.medium_publish_settings import is_medium_publish_enabled
+
     platforms = []
     if config.devto_api_key:
         platforms.append("Dev.to")
     if config.medium_playwright:
-        platforms.append("Medium (Playwright)")
+        label = "Medium (Playwright)"
+        if not is_medium_publish_enabled():
+            label += " disabled"
+        platforms.append(label)
     platforms.append("GitHub Pages (RSS)")
     platforms_str = ", ".join(platforms)
 
@@ -71,6 +76,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/feedback — show all active feedback\n"
         "/feedback_clear — remove all feedback\n"
         "/medium_login — jak nastavit Medium session (+ přijímám JSON soubor z Cookie-Editor)\n"
+        "/medium_publish on|off|status — zapnout/vypnout publikování článků na Medium\n"
         "/history — recent publications\n"
         "/topics — content plan status\n"
         "/engage [query] — find related Medium articles and draft comments\n"
@@ -698,6 +704,37 @@ async def engage_autopost_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 @admin_only
+async def medium_publish_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    from agent_m.medium_publish_settings import (
+        medium_publish_status,
+        set_medium_publish_enabled,
+    )
+
+    action = (context.args[0].lower() if context.args else "status").strip()
+    if action in {"on", "enable", "enabled", "zapnout"}:
+        result = set_medium_publish_enabled(True)
+    elif action in {"off", "disable", "disabled", "vypnout"}:
+        result = set_medium_publish_enabled(False)
+    elif action in {"status", "stav"}:
+        result = medium_publish_status()
+    else:
+        await msg.reply_text("Usage: /medium_publish on|off|status")
+        return
+
+    enabled = bool(result["enabled"])
+    await msg.reply_text(
+        "Medium article publishing\n"
+        f"Status: {'ON - new articles will publish to Medium' if enabled else 'OFF - new articles will skip Medium'}\n"
+        "This affects /post, /draft and the daily article pipeline. "
+        "Medium engagement and Medium login/cookies stay available."
+    )
+
+
+@admin_only
 async def medium_login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
     if not msg:
@@ -820,11 +857,13 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     used_slugs = await history.get_used_slugs()
     remaining = len(get_plan()) - len(used_slugs)
+    from agent_m.medium_publish_settings import is_medium_publish_enabled
 
     text = (
         f"Last publish: {last}\n"
         f"Schedule: daily at {config.publish_hour:02d}:{config.publish_minute:02d} UTC\n"
         f"Content plan: {remaining} articles remaining\n\n"
+        f"Medium publish: {'ON' if is_medium_publish_enabled() else 'OFF'}\n"
         f"Today: {today['total']} tokens, {today['calls']} calls\n"
         f"This month: {month['total']} tokens, {month['calls']} calls"
     )

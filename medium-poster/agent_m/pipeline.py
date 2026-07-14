@@ -11,6 +11,7 @@ from agent_m.gemini.imager import generate_header_image
 from agent_m.gemini.researcher import Topic, TopicResearcher
 from agent_m.gemini.writer import Article, write_article_from_plan
 from agent_m.history import History
+from agent_m.medium_publish_settings import is_medium_publish_enabled
 from agent_m.publishers.github_pages import GitHubPagesPublisher
 from agent_m.publishers.rss_feed import generate_feed
 
@@ -159,25 +160,28 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         else:
             platform_errors.append("Dev.to: DEVTO_API_KEY missing")
 
-        # 3. Medium (Playwright)
-        if config.medium_playwright:
-            medium_url, medium_error = await _publish_medium_playwright(
-                article, not is_draft, image_url, image_bytes
-            )
-            if medium_url:
-                published_to.append("Medium")
-                platform_urls["Medium"] = medium_url
-                post_url = medium_url
-            elif medium_error:
-                platform_errors.append(f"Medium: {medium_error}")
+        if is_medium_publish_enabled():
+            # 3. Medium (Playwright)
+            if config.medium_playwright:
+                medium_url, medium_error = await _publish_medium_playwright(
+                    article, not is_draft, image_url, image_bytes
+                )
+                if medium_url:
+                    published_to.append("Medium")
+                    platform_urls["Medium"] = medium_url
+                    post_url = medium_url
+                elif medium_error:
+                    platform_errors.append(f"Medium: {medium_error}")
 
-        # 4. Medium (API — integration token)
-        if config.medium_token and not config.medium_playwright:
-            medium_url = await _publish_medium_api(article, image_url, rss_url, is_draft)
-            if medium_url:
-                published_to.append("Medium")
-                platform_urls["Medium"] = medium_url
-                post_url = medium_url
+            # 4. Medium (API — integration token)
+            if config.medium_token and not config.medium_playwright:
+                medium_url = await _publish_medium_api(article, image_url, rss_url, is_draft)
+                if medium_url:
+                    published_to.append("Medium")
+                    platform_urls["Medium"] = medium_url
+                    post_url = medium_url
+        else:
+            log.info("[pipeline] Medium publishing disabled by Telegram setting")
 
     log.info("[pipeline] Step 7/7: Saving to history (published_to=%s, errors=%s)",
              published_to, platform_errors)
