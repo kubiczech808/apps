@@ -1211,6 +1211,86 @@ form.inline { margin: 0; }
   margin: 0 auto;
   padding: 28px;
 }
+.onboarding-topbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+.language-dropdown {
+  position: relative;
+  z-index: 40;
+  margin: 0;
+}
+.language-dropdown details {
+  position: relative;
+}
+.language-dropdown summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid #cbd8d2;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text);
+  box-shadow: 0 8px 20px rgba(16, 35, 31, 0.08);
+  cursor: pointer;
+  list-style: none;
+}
+.language-dropdown summary::-webkit-details-marker {
+  display: none;
+}
+.language-dropdown summary::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  margin: -3px 2px 0 3px;
+}
+.language-dropdown details[open] summary::after {
+  transform: rotate(225deg);
+  margin-top: 3px;
+}
+.language-dropdown summary span,
+.language-dropdown button span:first-child {
+  font-size: 20px;
+  line-height: 1;
+}
+.language-dropdown summary strong {
+  font-size: 13px;
+  letter-spacing: .04em;
+}
+.language-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  gap: 4px;
+  min-width: 178px;
+  padding: 8px;
+  border: 1px solid #d8e2dd;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 18px 44px rgba(16, 35, 31, 0.18);
+}
+.language-dropdown button {
+  justify-content: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+.language-dropdown button:hover,
+.language-dropdown button.active {
+  background: #e7f4ef;
+  color: var(--accent-dark);
+}
 .onboarding-hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
@@ -1774,6 +1854,9 @@ td a {
   .onboarding-shell {
     padding: 14px;
   }
+  .onboarding-topbar {
+    margin-bottom: 10px;
+  }
   .onboarding-hero,
   .onboarding-layout,
   .launch-summary {
@@ -1803,6 +1886,18 @@ td a {
 @media (max-width: 640px) {
   .onboarding-shell {
     padding: 10px;
+  }
+  .language-dropdown,
+  .language-dropdown details {
+    width: 100%;
+  }
+  .language-dropdown summary {
+    justify-content: center;
+    width: 100%;
+  }
+  .language-dropdown-menu {
+    left: 0;
+    right: 0;
   }
   .onboarding-hero,
   .onboarding-card {
