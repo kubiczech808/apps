@@ -433,10 +433,10 @@ final class Content
     public function navigation_language_switcher(string $block_content, array $block): string
     {
         if (
-            $this->language_navigation_inserted
-            || (is_admin() && !wp_doing_ajax())
+            (is_admin() && !wp_doing_ajax())
             || ($block['blockName'] ?? '') !== 'core/navigation'
             || !str_contains($block_content, 'wp-block-navigation__container')
+            || str_contains($block_content, 'jamu-language-menu')
         ) {
             return $block_content;
         }
@@ -457,7 +457,6 @@ final class Content
             return $block_content;
         }
 
-        $this->language_navigation_inserted = true;
         return $updated;
     }
 
@@ -584,7 +583,8 @@ final class Content
 <style id="jamu-ml-language-switcher-style">
 .jamu-language-menu .screen-reader-text{border:0;clip:rect(1px,1px,1px,1px);clip-path:inset(50%);height:1px;margin:-1px;overflow:hidden;padding:0;position:absolute!important;width:1px;word-wrap:normal!important}
 .jamu-language-menu>.wp-block-navigation-item__content .wp-block-navigation-item__label,.jamu-language-menu__item .wp-block-navigation-item__label{align-items:center;display:inline-flex;gap:0}
-.jamu-language-menu__flag{font-size:1.25em;line-height:1}
+.jamu-language-menu__flag{align-items:center;display:inline-flex;line-height:1}
+.jamu-language-menu__flag-icon{border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.15);display:block;height:1rem;width:1.5rem}
 .jamu-language-menu .wp-block-navigation__submenu-icon{margin-left:.2em}
 .jamu-language-menu .wp-block-navigation__submenu-container{min-width:3.25rem}
 .jamu-language-menu__item .wp-block-navigation-item__content{justify-content:center;min-width:2.75rem}
@@ -1062,10 +1062,10 @@ JS
     private function language_navigation_markup(): string
     {
         $meta = [
-            'cs' => ['flag' => '🇨🇿', 'code' => 'CZ', 'name' => 'Čeština'],
-            'en' => ['flag' => '🇬🇧', 'code' => 'EN', 'name' => 'English'],
-            'de' => ['flag' => '🇩🇪', 'code' => 'DE', 'name' => 'Deutsch'],
-            'pl' => ['flag' => '🇵🇱', 'code' => 'PL', 'name' => 'Polski'],
+            'cs' => ['code' => 'CZ', 'name' => 'Čeština'],
+            'en' => ['code' => 'EN', 'name' => 'English'],
+            'de' => ['code' => 'DE', 'name' => 'Deutsch'],
+            'pl' => ['code' => 'PL', 'name' => 'Polski'],
         ];
         $current = $this->languages->current();
         $current_meta = $meta[$current] ?? $meta[Languages::DEFAULT];
@@ -1074,11 +1074,13 @@ JS
         foreach ($this->languages->all() as $language => $config) {
             $url = $this->language_url($language);
             if ($url === '') {
+                $url = $this->language_home_url($language);
+            }
+            if ($url === '') {
                 continue;
             }
 
             $language_meta = $meta[$language] ?? [
-                'flag' => strtoupper($language),
                 'code' => strtoupper($language),
                 'name' => (string) ($config['label'] ?? strtoupper($language)),
             ];
@@ -1092,7 +1094,7 @@ JS
                 esc_attr($language_meta['name']),
                 esc_attr($language_meta['name']),
                 $is_current ? ' aria-current="page"' : '',
-                esc_html($language_meta['flag']),
+                $this->language_flag_svg($language),
                 esc_html($language_meta['name'])
             );
         }
@@ -1116,14 +1118,25 @@ JS
         return sprintf(
             '<li data-wp-context="%s" data-wp-interactive="core/navigation" data-wp-on--focusout="actions.handleMenuFocusout" data-wp-on--keydown="actions.handleMenuKeydown" data-wp-on--pointerenter="actions.openMenuOnHover" data-wp-on--pointerleave="actions.closeMenuOnHover" data-wp-watch="callbacks.initMenu" tabindex="-1" class="wp-block-navigation-item has-child open-on-hover-click wp-block-navigation-submenu jamu-language-menu"><a class="wp-block-navigation-item__content" href="%s" aria-label="%s" title="%s"><span class="wp-block-navigation-item__label"><span class="jamu-language-menu__flag" aria-hidden="true">%s</span><span class="jamu-language-menu__name screen-reader-text">%s</span></span></a><button data-wp-bind--aria-expanded="state.isMenuOpen" data-wp-on--click="actions.toggleMenuOnClick" aria-label="%s" class="wp-block-navigation__submenu-icon wp-block-navigation-submenu__toggle"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true" focusable="false"><path d="M1.50002 4L6.00002 8L10.5 4" stroke-width="1.5"></path></svg></button><ul data-wp-on--focus="actions.openMenuOnFocus" class="wp-block-navigation__submenu-container wp-block-navigation-submenu">%s</ul></li>',
             esc_attr((string) wp_json_encode($context)),
-            esc_url($this->language_url($current) ?: home_url('/')),
+            esc_url($this->language_url($current) ?: $this->language_home_url($current)),
             esc_attr($aria_label),
             esc_attr($current_meta['name']),
-            esc_html($current_meta['flag']),
+            $this->language_flag_svg($current),
             esc_html($current_meta['name']),
             esc_attr__('Language submenu', 'jamu-multilingual'),
             implode('', $items)
         );
+    }
+
+    private function language_flag_svg(string $language): string
+    {
+        return match ($language) {
+            'cs' => '<svg class="jamu-language-menu__flag-icon" viewBox="0 0 36 24" width="24" height="16" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><rect width="36" height="12" fill="#fff"/><rect y="12" width="36" height="12" fill="#d7141a"/><path d="M0 0 18 12 0 24Z" fill="#11457e"/></svg>',
+            'en' => '<svg class="jamu-language-menu__flag-icon" viewBox="0 0 36 24" width="24" height="16" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><rect width="36" height="24" fill="#012169"/><path d="M0 0 36 24M36 0 0 24" stroke="#fff" stroke-width="6"/><path d="M0 0 36 24M36 0 0 24" stroke="#c8102e" stroke-width="3"/><path d="M18 0v24M0 12h36" stroke="#fff" stroke-width="8"/><path d="M18 0v24M0 12h36" stroke="#c8102e" stroke-width="4"/></svg>',
+            'de' => '<svg class="jamu-language-menu__flag-icon" viewBox="0 0 36 24" width="24" height="16" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><rect width="36" height="8" fill="#000"/><rect y="8" width="36" height="8" fill="#dd0000"/><rect y="16" width="36" height="8" fill="#ffce00"/></svg>',
+            'pl' => '<svg class="jamu-language-menu__flag-icon" viewBox="0 0 36 24" width="24" height="16" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><rect width="36" height="12" fill="#fff"/><rect y="12" width="36" height="12" fill="#dc143c"/></svg>',
+            default => '<span class="jamu-language-menu__fallback" aria-hidden="true">' . esc_html(strtoupper($language)) . '</span>',
+        };
     }
 
     private function language_url(string $language): string
@@ -1146,6 +1159,17 @@ JS
 
         $front_id = (int) get_option('page_on_front');
         return $front_id ? $this->router->localized_post_url($front_id, $language, true) : '';
+    }
+
+    private function language_home_url(string $language): string
+    {
+        if ($language === Languages::DEFAULT) {
+            return home_url('/');
+        }
+
+        $config = $this->languages->get($language);
+        $prefix = trim((string) ($config['prefix'] ?? ''), '/');
+        return $prefix !== '' ? home_url(user_trailingslashit($prefix)) : home_url('/');
     }
 
     private function excerpt_fragment(string $value): string
