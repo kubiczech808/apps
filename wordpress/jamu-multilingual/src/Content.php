@@ -632,6 +632,10 @@ HTML;
     const exact = data.exact || {};
     const patterns = data.patterns || [];
     const attrs = ['aria-label', 'title', 'placeholder', 'value'];
+    const locale = data.locale || data.language || document.documentElement.lang || 'cs';
+    const regionNames = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
+        ? new Intl.DisplayNames([locale], { type: 'region' })
+        : null;
     let scheduled = false;
 
     if (data.language) {
@@ -677,10 +681,25 @@ HTML;
         }
     }
 
+    function translateCountryOption(element) {
+        if (!regionNames || !element || element.tagName !== 'OPTION') {
+            return;
+        }
+        const code = (element.getAttribute('value') || '').trim().toUpperCase();
+        if (!/^[A-Z]{2}$/.test(code)) {
+            return;
+        }
+        const label = regionNames.of(code);
+        if (label && element.textContent.trim() !== label) {
+            element.textContent = label;
+        }
+    }
+
     function translateElementAttributes(element) {
         if (!element || element.nodeType !== 1) {
             return;
         }
+        translateCountryOption(element);
         for (const attr of attrs) {
             if (!element.hasAttribute(attr)) {
                 continue;
@@ -707,7 +726,7 @@ HTML;
 
         if (scope.nodeType === 1) {
             translateElementAttributes(scope);
-            scope.querySelectorAll('[aria-label],[title],[placeholder],input[value],button[value]').forEach(translateElementAttributes);
+            scope.querySelectorAll('[aria-label],[title],[placeholder],input[value],button[value],option').forEach(translateElementAttributes);
         }
 
         const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
@@ -995,6 +1014,94 @@ JS
                 'Dodací adresa' => 'Adres dostawy',
                 'Platební metoda' => 'Metoda płatności',
                 'Odeslat objednávku' => 'Złóż zamówienie',
+                'Jméno' => 'Imię',
+                'Jméno (optional)' => 'Imię (opcjonalnie)',
+                'Jméno (volitelné)' => 'Imię (opcjonalnie)',
+                'Příjmení' => 'Nazwisko',
+                'Příjmení (optional)' => 'Nazwisko (opcjonalnie)',
+                'Příjmení (volitelné)' => 'Nazwisko (opcjonalnie)',
+                'Název společnosti' => 'Nazwa firmy',
+                'Název společnosti (optional)' => 'Nazwa firmy (opcjonalnie)',
+                'Název společnosti (volitelné)' => 'Nazwa firmy (opcjonalnie)',
+                'Firma' => 'Firma',
+                'Firma (optional)' => 'Firma (opcjonalnie)',
+                'Firma (volitelné)' => 'Firma (opcjonalnie)',
+                'Země / region' => 'Kraj / region',
+                'Země/region' => 'Kraj / region',
+                'Kraj / region' => 'Województwo / region',
+                'Kraj / region (optional)' => 'Województwo / region (opcjonalnie)',
+                'Kraj / region (volitelné)' => 'Województwo / region (opcjonalnie)',
+                'Ulice a číslo popisné' => 'Ulica i numer domu',
+                'Ulice' => 'Ulica',
+                'Adresa' => 'Adres',
+                'Adresa (optional)' => 'Adres (opcjonalnie)',
+                'Adresa (volitelné)' => 'Adres (opcjonalnie)',
+                'Byt, apartmá, jednotka atd.' => 'Mieszkanie, lokal itp.',
+                'Byt, apartmá, jednotka atd. (optional)' => 'Mieszkanie, lokal itp. (opcjonalnie)',
+                'Byt, apartmá, jednotka atd. (volitelné)' => 'Mieszkanie, lokal itp. (opcjonalnie)',
+                'Město' => 'Miasto',
+                'Město (optional)' => 'Miasto (opcjonalnie)',
+                'Město (volitelné)' => 'Miasto (opcjonalnie)',
+                'PSČ' => 'Kod pocztowy',
+                'PSČ (optional)' => 'Kod pocztowy (opcjonalnie)',
+                'PSČ (volitelné)' => 'Kod pocztowy (opcjonalnie)',
+                'Telefon' => 'Telefon',
+                'Telefon (optional)' => 'Telefon (opcjonalnie)',
+                'Telefon (volitelné)' => 'Telefon (opcjonalnie)',
+                'E-mailová adresa' => 'Adres e-mail',
+                'E-mailová adresa (optional)' => 'Adres e-mail (opcjonalnie)',
+                'E-mailová adresa (volitelné)' => 'Adres e-mail (opcjonalnie)',
+                'Poznámky k objednávce' => 'Uwagi do zamówienia',
+                'Přidat poznámku k objednávce' => 'Dodaj notatkę do zamówienia',
+                'Použít stejnou adresu pro fakturaci' => 'Użyj tego samego adresu do rozliczenia',
+                'Doručovací údaje' => 'Dane dostawy',
+                'Doprava zdarma' => 'Darmowa dostawa',
+                'Možnosti dopravy' => 'Opcje dostawy',
+                'Způsob dopravy' => 'Metoda dostawy',
+                'Vyberte způsob dopravy' => 'Wybierz metodę dostawy',
+                'Osobní odběr' => 'Odbiór osobisty',
+                'Místní vyzvednutí' => 'Odbiór osobisty',
+                'Zásilkovna' => 'Packeta (punkt odbioru)',
+                'Balíkovna' => 'Balíkovna (punkt odbioru)',
+                'Česká pošta' => 'Poczta czeska',
+                'PPL' => 'PPL',
+                'GLS' => 'GLS',
+                'Cena dopravy' => 'Koszt dostawy',
+                'Platební metody' => 'Metody płatności',
+                'Platební možnosti' => 'Opcje płatności',
+                'Způsob platby' => 'Metoda płatności',
+                'Vyberte způsob platby' => 'Wybierz metodę płatności',
+                'Dobírka' => 'Pobranie',
+                'Platba dobírkou' => 'Płatność za pobraniem',
+                'Platba na dobírku' => 'Płatność za pobraniem',
+                'Platba převodem' => 'Przelew bankowy',
+                'Bankovní převod' => 'Przelew bankowy',
+                'Platba na účet' => 'Przelew bankowy',
+                'Přímý bankovní převod' => 'Bezpośredni przelew bankowy',
+                'Platba kartou' => 'Płatność kartą',
+                'Online platba kartou' => 'Płatność online kartą',
+                'Platební karta' => 'Karta płatnicza',
+                'GoPay' => 'GoPay',
+                'GoPay - platební brána' => 'GoPay - bramka płatnicza',
+                'Hotově' => 'Gotówką',
+                'Hotově při převzetí' => 'Gotówką przy odbiorze',
+                'platba na účet bankovním převodem nebo QR kódem' => 'płatność przelewem bankowym lub kodem QR',
+                'Platba na účet bankovním převodem nebo QR kódem' => 'Płatność przelewem bankowym lub kodem QR',
+                'Toto pole je povinné' => 'To pole jest wymagane',
+                'Toto je povinné pole.' => 'To pole jest wymagane.',
+                'Zadejte platnou e-mailovou adresu' => 'Wpisz prawidłowy adres e-mail',
+                'Zadejte platné telefonní číslo' => 'Wpisz prawidłowy numer telefonu',
+                'Česká republika' => 'Czechy',
+                'Slovensko' => 'Słowacja',
+                'Německo' => 'Niemcy',
+                'Rakousko' => 'Austria',
+                'Polsko' => 'Polska',
+                'Maďarsko' => 'Węgry',
+                'Itálie' => 'Włochy',
+                'Francie' => 'Francja',
+                'Španělsko' => 'Hiszpania',
+                'Spojené království (UK)' => 'Wielka Brytania (UK)',
+                'Spojené státy americké (US)' => 'Stany Zjednoczone (US)',
             ],
         ];
 
@@ -1028,6 +1135,7 @@ JS
         $language = $this->languages->current();
         return [
             'language' => $language,
+            'locale' => str_replace('_', '-', (string) ($this->languages->get($language)['locale'] ?? $language)),
             'exact' => $exact[$language] ?? [],
             'patterns' => $patterns[$language] ?? [],
         ];
