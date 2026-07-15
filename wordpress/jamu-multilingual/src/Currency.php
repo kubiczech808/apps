@@ -9,6 +9,15 @@ final class Currency
     private const YAY_CURRENCY_COOKIE = 'yay_currency_widget';
     private const YAY_SWITCHER_COOKIE = 'yay_currency_do_change_switcher';
 
+    private const CHECKOUT_GATEWAY_IDS = [
+        'bacs',
+        'cod',
+        'woocommerce_payments',
+        'stripe_applepay',
+        'stripe_googlepay',
+        'stripe_sepa',
+    ];
+
     private const MAP = [
         'cs' => ['code' => 'CZK', 'id' => '3347'],
         'en' => ['code' => 'EUR', 'id' => '3348'],
@@ -24,6 +33,8 @@ final class Currency
     {
         $this->set_request_currency();
         add_action('init', [$this, 'set_request_currency'], 0);
+        add_filter('woocommerce_available_payment_gateways', [$this, 'available_payment_gateways'], PHP_INT_MAX);
+        add_action('wp_footer', [$this, 'payment_gateway_frontend_guard'], 5);
         add_action('wp_footer', [$this, 'frontend_fallback'], 90);
     }
 
@@ -158,6 +169,136 @@ JS
         );
     }
 
+    public function available_payment_gateways(array $gateways): array
+    {
+        if (!$this->should_apply() || !$this->uses_pln_currency()) {
+            return $gateways;
+        }
+
+        if (!function_exists('WC') || !WC() || !WC()->payment_gateways()) {
+            return $gateways;
+        }
+
+        $all_gateways = WC()->payment_gateways()->payment_gateways();
+        if (!is_array($all_gateways)) {
+            return $gateways;
+        }
+
+        foreach (self::CHECKOUT_GATEWAY_IDS as $gateway_id) {
+            if (isset($gateways[$gateway_id]) || empty($all_gateways[$gateway_id])) {
+                continue;
+            }
+
+            $gateway = $all_gateways[$gateway_id];
+            if (!$this->gateway_can_be_restored($gateway)) {
+                continue;
+            }
+
+            $gateways[$gateway_id] = $gateway;
+        }
+
+        return $this->sort_gateways($gateways);
+    }
+
+    public function payment_gateway_frontend_guard(): void
+    {
+        if (!$this->should_apply() || !$this->uses_pln_currency()) {
+            return;
+        }
+
+        $gateway_ids = array_values(self::CHECKOUT_GATEWAY_IDS);
+
+        printf(
+            "<script id=\"jamu-ml-payment-gateway-guard\">\n%s\n</script>\n",
+            'window.jamuMlPaymentGateways=' . wp_json_encode(['ids' => $gateway_ids], JSON_UNESCAPED_SLASHES) . ';' . <<<'JS'
+(function () {
+    const allowedIds = (window.jamuMlPaymentGateways && window.jamuMlPaymentGateways.ids) || [];
+    if (!allowedIds.length) {
+        return;
+    }
+
+    function patchYayCurrencyData(data) {
+        if (!data || !Array.isArray(data.converted_currency)) {
+            return data;
+        }
+
+        for (const currency of data.converted_currency) {
+            if (String(currency.currency || '').toUpperCase() === 'PLN') {
+                currency.paymentMethods = ['all'];
+            }
+        }
+        return data;
+    }
+
+    function restoreHiddenPaymentMethods(root) {
+        const scope = root && root.nodeType === 1 ? root : document.body;
+        if (!scope) {
+            return;
+        }
+
+        for (const id of allowedIds) {
+            const selectors = [
+                '[value="' + id + '"]',
+                '[data-gateway_id="' + id + '"]',
+                '[data-payment-method="' + id + '"]',
+                '[id*="' + id + '"]',
+                '[class*="' + id + '"]'
+            ];
+            for (const element of scope.querySelectorAll(selectors.join(','))) {
+                const wrapper = element.closest('li,fieldset,.wc-block-components-radio-control__option,.wc-block-components-payment-methods__payment-method,.payment_method_' + id) || element;
+                wrapper.hidden = false;
+                wrapper.removeAttribute('hidden');
+                wrapper.style.removeProperty('display');
+                wrapper.style.removeProperty('visibility');
+            }
+        }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(window, 'yay_callback_data')) {
+        window.yay_callback_data = patchYayCurrencyData(window.yay_callback_data);
+    } else {
+        try {
+            Object.defineProperty(window, 'yay_callback_data', {
+                configurable: true,
+                get() {
+                    return undefined;
+                },
+                set(value) {
+                    const patched = patchYayCurrencyData(value);
+                    Object.defineProperty(window, 'yay_callback_data', {
+                        configurable: true,
+                        writable: true,
+                        value: patched
+                    });
+                }
+            });
+        } catch (error) {
+            // If another script already locked the property, the server-side gateway filter still applies.
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () {
+            restoreHiddenPaymentMethods(document.body);
+        });
+    } else {
+        restoreHiddenPaymentMethods(document.body);
+    }
+
+    new MutationObserver(function (mutations) {
+        for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
+                if (node.nodeType === 1) {
+                    restoreHiddenPaymentMethods(node);
+                }
+            }
+        }
+    }).observe(document.documentElement, { childList: true, subtree: true });
+})();
+JS
+        );
+    }
+
     private function should_apply(): bool
     {
         if (wp_doing_cron()) {
@@ -176,6 +317,43 @@ JS
     {
         $language = $this->languages->current();
         return self::MAP[$language] ?? null;
+    }
+
+    private function uses_pln_currency(): bool
+    {
+        $cookie = sanitize_text_field(wp_unslash((string) ($_COOKIE[self::YAY_CURRENCY_COOKIE] ?? '')));
+        if ($cookie === self::MAP['pl']['id']) {
+            return true;
+        }
+
+        $target = $this->target();
+        return is_array($target) && ($target['code'] ?? '') === 'PLN';
+    }
+
+    private function gateway_can_be_restored(object $gateway): bool
+    {
+        if (isset($gateway->enabled) && $gateway->enabled !== 'yes') {
+            return false;
+        }
+
+        if (method_exists($gateway, 'is_available')) {
+            return (bool) $gateway->is_available();
+        }
+
+        return true;
+    }
+
+    private function sort_gateways(array $gateways): array
+    {
+        $ordered = [];
+        foreach (self::CHECKOUT_GATEWAY_IDS as $gateway_id) {
+            if (isset($gateways[$gateway_id])) {
+                $ordered[$gateway_id] = $gateways[$gateway_id];
+                unset($gateways[$gateway_id]);
+            }
+        }
+
+        return $ordered + $gateways;
     }
 
     private function set_cookie(string $name, string $value): void
