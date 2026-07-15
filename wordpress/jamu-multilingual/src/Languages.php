@@ -112,13 +112,13 @@ final class Languages
 
     public function should_localize_request(): bool
     {
+        $localize = true;
         if (wp_doing_cron()) {
-            return false;
+            $localize = false;
+        } elseif (is_admin() && !wp_doing_ajax()) {
+            $localize = false;
         }
-        if (is_admin() && !wp_doing_ajax()) {
-            return false;
-        }
-        return true;
+        return (bool) apply_filters('jamu_ml_should_localize_request', $localize);
     }
 
     private function context_language(): string

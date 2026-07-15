@@ -1465,7 +1465,11 @@ JS
 
     private function active(): bool
     {
-        return $this->languages->current() !== Languages::DEFAULT
-            && (!is_admin() || wp_doing_ajax());
+        if ($this->languages->current() === Languages::DEFAULT) {
+            return false;
+        }
+
+        $active = !is_admin() || wp_doing_ajax();
+        return (bool) apply_filters('jamu_ml_should_translate_content', $active, $this->languages->current());
     }
 }

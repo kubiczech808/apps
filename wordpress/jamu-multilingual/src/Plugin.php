@@ -31,6 +31,7 @@ final class Plugin
         (new Seo($repository, $languages, $router))->register();
         (new Sitemap($repository, $languages, $router))->register();
         (new Shortcode($repository, $languages, $router))->register();
+        (new Email($languages))->register();
 
         if (is_admin()) {
             (new Admin($repository, $languages, $router))->register();
@@ -41,4 +42,3 @@ final class Plugin
         });
     }
 }
-
