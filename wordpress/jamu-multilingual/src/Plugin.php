@@ -32,6 +32,7 @@ final class Plugin
         (new Sitemap($repository, $languages, $router))->register();
         (new Shortcode($repository, $languages, $router))->register();
         (new Currency($languages))->register();
+        (new Shipping($languages))->register();
         (new Email($languages))->register();
 
         if (is_admin()) {
