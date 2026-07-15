@@ -72,6 +72,40 @@ function isSubmitLike(selector, text = "") {
   );
 }
 
+async function clickOrSubmit(page, selector, allowSubmit, timeoutMs) {
+  const locator = page.locator(selector).first();
+  const text = await locator.innerText({ timeout: 3000 }).catch(() => "");
+  const submitLike = isSubmitLike(selector, text);
+  if (!allowSubmit && submitLike) {
+    return { ok: false, blocked: "submit-like click blocked because allowSubmit=false" };
+  }
+  try {
+    await locator.click({ timeout: timeoutMs });
+    return { ok: true, fallback: "" };
+  } catch (error) {
+    if (!submitLike) {
+      throw error;
+    }
+    const fallback = await locator.evaluate((el) => {
+      const form = el.form || el.closest("form");
+      if (typeof el.click === "function") {
+        el.click();
+        return "dom-click";
+      }
+      if (form && typeof form.requestSubmit === "function") {
+        form.requestSubmit(el);
+        return "form-requestSubmit";
+      }
+      if (form && typeof form.submit === "function") {
+        form.submit();
+        return "form-submit";
+      }
+      throw new Error("submit fallback unavailable");
+    }, { timeout: timeoutMs });
+    return { ok: true, fallback, recoveredFrom: error.message };
+  }
+}
+
 async function elementSummary(page) {
   return await page.evaluate(() => {
     const visible = (el) => {
@@ -291,16 +325,17 @@ async function run() {
           await page.locator(selector).first().selectOption(String(action.value ?? ""), { timeout: timeoutMs });
           note.ok = true;
         } else if (type === "click") {
-          const text = await page.locator(selector).first().innerText({ timeout: 3000 }).catch(() => "");
-          if (!allowSubmit && isSubmitLike(selector, text)) {
-            note.blocked = "submit-like click blocked because allowSubmit=false";
-          } else {
-            await page.locator(selector).first().click({ timeout: timeoutMs });
+          const clickResult = await clickOrSubmit(page, selector, allowSubmit, timeoutMs);
+          if (clickResult.blocked) {
+            note.blocked = clickResult.blocked;
+          } else if (clickResult.ok) {
             await Promise.race([
               page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {}),
               page.waitForTimeout(2500),
             ]);
             note.ok = true;
+            if (clickResult.fallback) note.fallback = clickResult.fallback;
+            if (clickResult.recoveredFrom) note.recoveredFrom = clickResult.recoveredFrom;
           }
         } else {
           note.blocked = `unknown action type ${type}`;
@@ -309,10 +344,15 @@ async function run() {
         if (action.optional === true) {
           note.blocked = `optional action unavailable: ${error.message}`;
         } else {
-          throw error;
+          note.error = error.message;
+          result.error = error.message;
+          result.actions.push(note);
+          break;
         }
       }
-      result.actions.push(note);
+      if (!result.actions.includes(note)) {
+        result.actions.push(note);
+      }
     }
     if (screenshotPath) {
       await fs.mkdir(path.dirname(screenshotPath), { recursive: true });
@@ -335,6 +375,6 @@ async function run() {
 }
 
 run().catch((error) => {
-  console.error(JSON.stringify({ ok: false, error: error.message }, null, 2));
+  console.log(JSON.stringify({ ok: false, error: error.message }, null, 2));
   process.exit(1);
 });
