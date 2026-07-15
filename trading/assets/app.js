@@ -43,6 +43,8 @@ const els = {
   botInlineAction: document.querySelector("[data-bot-inline-action]"),
   botStatus: document.querySelector("[data-bot-status]"),
   botTrades: document.querySelector("[data-bot-trades]"),
+  closedTrades: document.querySelector("[data-closed-trades]"),
+  closedSummary: document.querySelector("[data-closed-summary]"),
   botEvaluations: document.querySelector("[data-bot-evaluations]"),
   evaluationSummary: document.querySelector("[data-evaluation-summary]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
@@ -214,6 +216,10 @@ function tradePnlPct(trade) {
   return Number(trade.unrealizedPnlPct);
 }
 
+function isClosedTrade(trade) {
+  return ["WON", "LOST"].includes(String(trade.status || "").toUpperCase());
+}
+
 function tradeStatusNote(trade) {
   const parts = [
     trade.currentPrice == null ? "" : `mark ${probability(Number(trade.currentPrice))}`,
@@ -221,6 +227,48 @@ function tradeStatusNote(trade) {
     trade.marketUrlStatus === "use_event_slug" ? "event link" : "",
   ];
   return parts.filter(Boolean).join(", ");
+}
+
+function renderTradeRows(trades, emptyText) {
+  if (!trades.length) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Opened</th>
+          <th>Market</th>
+          <th>Entry</th>
+          <th>Status</th>
+          <th>P/L</th>
+          <th>Stake</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${trades.map((trade) => `
+          <tr>
+            <td>${escapeHtml(formatDate(trade.date || trade.openedAt || ""))}</td>
+            <td>
+              ${marketAnchor(trade)}
+              <span>${escapeHtml(riskLine(trade))}</span>
+            </td>
+            <td>
+              ${probability(Number(trade.entryPrice))}
+              <span>${[trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`, feeLine(trade)].filter(Boolean).join(", ")}</span>
+            </td>
+            <td>
+              ${escapeHtml(trade.status || "OPEN")}
+              <span>${escapeHtml(tradeStatusNote(trade))}</span>
+            </td>
+            <td class="${pnlClass(tradePnlValue(trade))}">
+              ${signedMoney(tradePnlValue(trade))}
+              <span>${signedPercent(tradePnlPct(trade))}</span>
+            </td>
+            <td>${money(Number(trade.stakeUsdc || 0))}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
 }
 
 function portfolioPeriodDays(botState, trades) {
@@ -662,6 +710,8 @@ async function loadBotState() {
     if (els.botInlineAction) els.botInlineAction.textContent = "offline";
     els.botStatus.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
     els.botTrades.innerHTML = '<div class="empty">Autonomous paper bot state is not available yet.</div>';
+    if (els.closedTrades) els.closedTrades.innerHTML = '<div class="empty">Closed paper trades are not available yet.</div>';
+    if (els.closedSummary) els.closedSummary.textContent = "offline";
     els.botEvaluations.innerHTML = '<div class="empty">No evaluations loaded.</div>';
   }
 }
@@ -671,6 +721,8 @@ function renderBotState(botState) {
   const decision = botState.lastDecision || {};
   const portfolio = botState.portfolio || {};
   const trades = Array.isArray(botState.trades) ? botState.trades : [];
+  const closedTrades = trades.filter(isClosedTrade);
+  const openTrades = trades.filter((trade) => !isClosedTrade(trade));
   const periodDays = portfolioPeriodDays(botState, trades);
   const annualized = annualizedPortfolioReturn(portfolio, periodDays);
   const totalPnl = Number(portfolio.totalPnlUsdc || 0);
@@ -727,47 +779,13 @@ function renderBotState(botState) {
     </div>
   `;
 
-  if (!trades.length) {
-    els.botTrades.innerHTML = '<div class="empty">Zatim zadne autonomni paper obchody.</div>';
-  } else {
-    els.botTrades.innerHTML = `
-      <table>
-        <thead>
-          <tr>
-            <th>Opened</th>
-            <th>Market</th>
-            <th>Entry</th>
-            <th>Status</th>
-            <th>P/L</th>
-            <th>Stake</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${trades.slice(0, 12).map((trade) => `
-            <tr>
-              <td>${escapeHtml(formatDate(trade.date || trade.openedAt || ""))}</td>
-              <td>
-                ${marketAnchor(trade)}
-                <span>${escapeHtml(riskLine(trade))}</span>
-              </td>
-              <td>
-                ${probability(Number(trade.entryPrice))}
-                <span>${[trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`, feeLine(trade)].filter(Boolean).join(", ")}</span>
-              </td>
-              <td>
-                ${escapeHtml(trade.status || "OPEN")}
-                <span>${escapeHtml(tradeStatusNote(trade))}</span>
-              </td>
-              <td class="${pnlClass(tradePnlValue(trade))}">
-                ${signedMoney(tradePnlValue(trade))}
-                <span>${signedPercent(tradePnlPct(trade))}</span>
-              </td>
-              <td>${money(Number(trade.stakeUsdc || 0))}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    `;
+  els.botTrades.innerHTML = renderTradeRows(openTrades.slice(0, 12), "Zatim zadne otevrene autonomni paper obchody.");
+  if (els.closedSummary) {
+    const closedPnl = closedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
+    els.closedSummary.textContent = `${closedTrades.length} closed / ${signedMoney(closedPnl)}`;
+  }
+  if (els.closedTrades) {
+    els.closedTrades.innerHTML = renderTradeRows(closedTrades, "Zatim zadne ukoncene paper obchody.");
   }
 
   renderBotEvaluations();

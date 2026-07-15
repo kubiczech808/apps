@@ -62,6 +62,7 @@
       <section class="dashboard-tabs" data-tabs>
         <div class="tab-list" role="tablist" aria-label="Trading dashboard">
           <button class="tab-button active" type="button" data-tab-target="daily-picks">Daily picks</button>
+          <button class="tab-button" type="button" data-tab-target="closed-trades">Closed trades</button>
           <button class="tab-button" type="button" data-tab-target="evaluation-log">Evaluation log</button>
           <button class="tab-button" type="button" data-tab-target="manual-analysis">Manual analysis</button>
           <button class="tab-button" type="button" data-tab-target="local-portfolio">Local portfolio</button>
@@ -79,6 +80,19 @@
             </div>
             <div class="bot-status" data-bot-status></div>
             <div class="ledger" data-bot-trades></div>
+          </article>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="closed-trades">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Autonomous bot</p>
+                <h2>Closed paper trades</h2>
+              </div>
+              <span class="pill" data-closed-summary>0 closed</span>
+            </div>
+            <div class="ledger" data-closed-trades></div>
           </article>
         </section>
 
