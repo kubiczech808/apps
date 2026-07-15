@@ -34,6 +34,8 @@ final class Content
         add_filter('woocommerce_product_add_to_cart_text', [$this, 'add_to_cart_text'], 20, 2);
         add_filter('woocommerce_attribute_label', [$this, 'attribute_label'], 20, 3);
         add_filter('woocommerce_structured_data_product', [$this, 'product_schema'], 20, 2);
+        add_filter('woocommerce_gateway_title', [$this, 'woocommerce_ui_string'], 20);
+        add_filter('woocommerce_gateway_description', [$this, 'woocommerce_ui_string'], 20);
 
         add_filter('gettext', [$this, 'gettext'], 20, 3);
         add_filter('get_term', [$this, 'term'], 20, 2);
@@ -124,6 +126,20 @@ final class Content
             return $translation;
         }
         return $this->ui_string($text) ?: $translation;
+    }
+
+    public function woocommerce_ui_string(string $value): string
+    {
+        if (!$this->active()) {
+            return $value;
+        }
+
+        $plain = trim(wp_strip_all_tags($value));
+        if ($plain === '') {
+            return $value;
+        }
+
+        return $this->ui_string($plain) ?: $value;
     }
 
     public function term($term, string $taxonomy)
@@ -631,6 +647,7 @@ HTML;
     const data = window.jamuMlI18n || {};
     const exact = data.exact || {};
     const patterns = data.patterns || [];
+    const legal = data.legal || {};
     const attrs = ['aria-label', 'title', 'placeholder', 'value'];
     const locale = data.locale || data.language || document.documentElement.lang || 'cs';
     const regionNames = typeof Intl !== 'undefined' && typeof Intl.DisplayNames === 'function'
@@ -648,11 +665,15 @@ HTML;
         return leading + translated + trailing;
     }
 
+    function normalizeText(value) {
+        return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
     function translate(value) {
         if (typeof value !== 'string') {
             return '';
         }
-        const normalized = value.replace(/\s+/g, ' ').trim();
+        const normalized = normalizeText(value);
         if (!normalized) {
             return '';
         }
@@ -695,6 +716,110 @@ HTML;
         }
     }
 
+    function legalLink(element, type) {
+        const links = Array.from(element.querySelectorAll('a'));
+        return links.find(function (link) {
+            const text = normalizeText(link.textContent).toLowerCase();
+            const href = String(link.getAttribute('href') || '').toLowerCase();
+            if (type === 'privacy') {
+                return text.includes('privacy')
+                    || text.includes('datenschutz')
+                    || text.includes('prywat')
+                    || href.includes('privacy')
+                    || href.includes('datenschutz')
+                    || href.includes('ochrana-osobnich-udaju')
+                    || href.includes('polityka-prywatnosci');
+            }
+            return text.includes('terms')
+                || text.includes('conditions')
+                || text.includes('bedingungen')
+                || text.includes('regulamin')
+                || href.includes('obchodni-podminky')
+                || href.includes('geschaftsbedingungen')
+                || href.includes('regulamin')
+                || href.includes('terms');
+        }) || null;
+    }
+
+    function legalTextMatches(text, type) {
+        if (type === 'privacy') {
+            return text.includes('Vaše osobní údaje budou použity')
+                || text.includes('Your personal data will be used')
+                || text.includes('Ihre personenbezogenen Daten werden')
+                || text.includes('Twoje dane osobowe będą');
+        }
+        return text.includes('I have read and agree to the website')
+            || text.includes('Přečetl')
+            || text.includes('Souhlasím')
+            || text.includes('Ich habe die')
+            || text.includes('Przeczytałem/am i akceptuję');
+    }
+
+    function translateLegalElement(element, type) {
+        const item = legal[type] || null;
+        if (!item || !element || element.nodeType !== 1) {
+            return;
+        }
+        const marker = (data.language || '') + ':' + type;
+        if (element.getAttribute('data-jamu-ml-legal') === marker) {
+            return;
+        }
+        const text = normalizeText(element.textContent);
+        if (!legalTextMatches(text, type)) {
+            return;
+        }
+        const link = legalLink(element, type);
+        if (!link) {
+            return;
+        }
+
+        const input = element.tagName === 'LABEL'
+            ? element.querySelector(':scope > input[type="checkbox"]')
+            : null;
+        const required = element.querySelector(':scope > abbr.required, :scope > .required');
+        const translatedLink = link.cloneNode(false);
+        translatedLink.textContent = item.link || normalizeText(link.textContent);
+
+        const nodes = [];
+        if (input) {
+            nodes.push(input);
+            nodes.push(document.createTextNode(' '));
+        }
+        nodes.push(document.createTextNode((item.before || '').replace(/\s+$/g, '') + ' '));
+        nodes.push(translatedLink);
+        if (item.after) {
+            nodes.push(document.createTextNode(' ' + String(item.after).replace(/^\s+/g, '')));
+        }
+        if (required && !required.closest('a')) {
+            nodes.push(document.createTextNode(' '));
+            nodes.push(required);
+        }
+
+        element.replaceChildren.apply(element, nodes);
+        element.setAttribute('data-jamu-ml-legal', marker);
+    }
+
+    function translateLegalBlocks(root) {
+        if (!legal.privacy && !legal.terms) {
+            return;
+        }
+        const scope = root && root.nodeType === 1 ? root : document.body;
+        if (!scope) {
+            return;
+        }
+        const candidates = [];
+        if (scope.matches && scope.matches('p,span,label,.wc-block-components-checkbox__label,.woocommerce-privacy-policy-text,.woocommerce-terms-and-conditions-checkbox-text')) {
+            candidates.push(scope);
+        }
+        scope.querySelectorAll('p,span,label,.wc-block-components-checkbox__label,.woocommerce-privacy-policy-text,.woocommerce-terms-and-conditions-checkbox-text').forEach(function (element) {
+            candidates.push(element);
+        });
+        candidates.forEach(function (element) {
+            translateLegalElement(element, 'privacy');
+            translateLegalElement(element, 'terms');
+        });
+    }
+
     function translateElementAttributes(element) {
         if (!element || element.nodeType !== 1) {
             return;
@@ -725,6 +850,7 @@ HTML;
         }
 
         if (scope.nodeType === 1) {
+            translateLegalBlocks(scope);
             translateElementAttributes(scope);
             scope.querySelectorAll('[aria-label],[title],[placeholder],input[value],button[value],option').forEach(translateElementAttributes);
         }
@@ -1105,6 +1231,250 @@ JS
             ],
         ];
 
+        $checkout_exact = [
+            'en' => [
+                'Vaše osobní údaje budou použity k vyřízení Vaší objednávky, zvýšení spokojenosti po celou dobu procházení tohoto webu a k dalším účelům popsaných na stránce' => 'Your personal data will be used to process your order, support your experience throughout this website, and for other purposes described in our',
+                'privacy policy' => 'privacy policy',
+                'I have read and agree to the website' => 'I have read and agree to the website',
+                'terms and conditions' => 'terms and conditions',
+                'Jméno' => 'First name',
+                'Jméno (optional)' => 'First name (optional)',
+                'Jméno (volitelné)' => 'First name (optional)',
+                'Příjmení' => 'Last name',
+                'Příjmení (optional)' => 'Last name (optional)',
+                'Příjmení (volitelné)' => 'Last name (optional)',
+                'Název společnosti' => 'Company name',
+                'Název společnosti (optional)' => 'Company name (optional)',
+                'Název společnosti (volitelné)' => 'Company name (optional)',
+                'Firma' => 'Company',
+                'Firma (optional)' => 'Company (optional)',
+                'Firma (volitelné)' => 'Company (optional)',
+                'Země / region' => 'Country / Region',
+                'Země/region' => 'Country / Region',
+                'Kraj / region' => 'Region / State',
+                'Kraj / region (optional)' => 'Region / State (optional)',
+                'Kraj / region (volitelné)' => 'Region / State (optional)',
+                'Ulice a číslo popisné' => 'Street address',
+                'Ulice' => 'Street',
+                'Adresa' => 'Address',
+                'Adresa (optional)' => 'Address (optional)',
+                'Adresa (volitelné)' => 'Address (optional)',
+                'Byt, apartmá, jednotka atd.' => 'Apartment, suite, unit, etc.',
+                'Byt, apartmá, jednotka atd. (optional)' => 'Apartment, suite, unit, etc. (optional)',
+                'Byt, apartmá, jednotka atd. (volitelné)' => 'Apartment, suite, unit, etc. (optional)',
+                'Město' => 'Town / City',
+                'Město (optional)' => 'Town / City (optional)',
+                'Město (volitelné)' => 'Town / City (optional)',
+                'PSČ' => 'Postcode / ZIP',
+                'PSČ (optional)' => 'Postcode / ZIP (optional)',
+                'PSČ (volitelné)' => 'Postcode / ZIP (optional)',
+                'Telefon' => 'Phone',
+                'Telefon (optional)' => 'Phone (optional)',
+                'Telefon (volitelné)' => 'Phone (optional)',
+                'E-mailová adresa' => 'Email address',
+                'E-mailová adresa (optional)' => 'Email address (optional)',
+                'E-mailová adresa (volitelné)' => 'Email address (optional)',
+                'Poznámky k objednávce' => 'Order notes',
+                'Přidat poznámku k objednávce' => 'Add a note to your order',
+                'Použít stejnou adresu pro fakturaci' => 'Use same address for billing',
+                'Doručovací údaje' => 'Shipping details',
+                'Doprava zdarma' => 'Free shipping',
+                'Možnosti dopravy' => 'Shipping options',
+                'Způsob dopravy' => 'Shipping method',
+                'Vyberte způsob dopravy' => 'Select a shipping method',
+                'Osobní odběr' => 'Local pickup',
+                'Místní vyzvednutí' => 'Local pickup',
+                'Zásilkovna' => 'Packeta (pickup point)',
+                'Balíkovna' => 'Balíkovna (pickup point)',
+                'Česká pošta' => 'Czech Post',
+                'PPL' => 'PPL',
+                'GLS' => 'GLS',
+                'Cena dopravy' => 'Shipping cost',
+                'Platební metody' => 'Payment methods',
+                'Platební možnosti' => 'Payment options',
+                'Způsob platby' => 'Payment method',
+                'Vyberte způsob platby' => 'Select a payment method',
+                'Dobírka' => 'Cash on delivery',
+                'Platba dobírkou' => 'Cash on delivery',
+                'Platba na dobírku' => 'Cash on delivery',
+                'Převodem / QR kódem (-10 Kč)' => 'Bank transfer / QR code (-10 Kč)',
+                'Platba převodem' => 'Bank transfer',
+                'Bankovní převod' => 'Bank transfer',
+                'Bankovním převodem' => 'By bank transfer',
+                'Platba na účet' => 'Bank transfer',
+                'Přímý bankovní převod' => 'Direct bank transfer',
+                'Platba kartou' => 'Card payment',
+                'Online platba kartou' => 'Online card payment',
+                'Platební karta' => 'Payment card',
+                'GoPay - platební brána' => 'GoPay payment gateway',
+                'Hotově' => 'Cash',
+                'Hotově při převzetí' => 'Cash on pickup',
+                'platba na účet bankovním převodem nebo QR kódem' => 'payment by bank transfer or QR code',
+                'Platba na účet bankovním převodem nebo QR kódem' => 'Payment by bank transfer or QR code',
+                'Toto pole je povinné' => 'This field is required',
+                'Toto je povinné pole.' => 'This field is required.',
+                'Zadejte platnou e-mailovou adresu' => 'Enter a valid email address',
+                'Zadejte platné telefonní číslo' => 'Enter a valid phone number',
+                'Česká republika' => 'Czechia',
+                'Slovensko' => 'Slovakia',
+                'Německo' => 'Germany',
+                'Rakousko' => 'Austria',
+                'Polsko' => 'Poland',
+                'Maďarsko' => 'Hungary',
+                'Itálie' => 'Italy',
+                'Francie' => 'France',
+                'Španělsko' => 'Spain',
+                'Spojené království (UK)' => 'United Kingdom (UK)',
+                'Spojené státy americké (US)' => 'United States (US)',
+            ],
+            'de' => [
+                'Vaše osobní údaje budou použity k vyřízení Vaší objednávky, zvýšení spokojenosti po celou dobu procházení tohoto webu a k dalším účelům popsaných na stránce' => 'Ihre personenbezogenen Daten werden verwendet, um Ihre Bestellung zu bearbeiten, Ihre Nutzung dieser Website zu unterstützen und für weitere Zwecke, die in unserer',
+                'privacy policy' => 'Datenschutzerklärung',
+                'I have read and agree to the website' => 'Ich habe die',
+                'terms and conditions' => 'Allgemeinen Geschäftsbedingungen',
+                'Jméno' => 'Vorname',
+                'Jméno (optional)' => 'Vorname (optional)',
+                'Jméno (volitelné)' => 'Vorname (optional)',
+                'Příjmení' => 'Nachname',
+                'Příjmení (optional)' => 'Nachname (optional)',
+                'Příjmení (volitelné)' => 'Nachname (optional)',
+                'Název společnosti' => 'Firmenname',
+                'Název společnosti (optional)' => 'Firmenname (optional)',
+                'Název společnosti (volitelné)' => 'Firmenname (optional)',
+                'Firma' => 'Firma',
+                'Firma (optional)' => 'Firma (optional)',
+                'Firma (volitelné)' => 'Firma (optional)',
+                'Země / region' => 'Land / Region',
+                'Země/region' => 'Land / Region',
+                'Kraj / region' => 'Bundesland / Region',
+                'Kraj / region (optional)' => 'Bundesland / Region (optional)',
+                'Kraj / region (volitelné)' => 'Bundesland / Region (optional)',
+                'Ulice a číslo popisné' => 'Straße und Hausnummer',
+                'Ulice' => 'Straße',
+                'Adresa' => 'Adresse',
+                'Adresa (optional)' => 'Adresse (optional)',
+                'Adresa (volitelné)' => 'Adresse (optional)',
+                'Byt, apartmá, jednotka atd.' => 'Wohnung, Suite, Einheit usw.',
+                'Byt, apartmá, jednotka atd. (optional)' => 'Wohnung, Suite, Einheit usw. (optional)',
+                'Byt, apartmá, jednotka atd. (volitelné)' => 'Wohnung, Suite, Einheit usw. (optional)',
+                'Město' => 'Ort / Stadt',
+                'Město (optional)' => 'Ort / Stadt (optional)',
+                'Město (volitelné)' => 'Ort / Stadt (optional)',
+                'PSČ' => 'Postleitzahl',
+                'PSČ (optional)' => 'Postleitzahl (optional)',
+                'PSČ (volitelné)' => 'Postleitzahl (optional)',
+                'Telefon' => 'Telefon',
+                'Telefon (optional)' => 'Telefon (optional)',
+                'Telefon (volitelné)' => 'Telefon (optional)',
+                'E-mailová adresa' => 'E-Mail-Adresse',
+                'E-mailová adresa (optional)' => 'E-Mail-Adresse (optional)',
+                'E-mailová adresa (volitelné)' => 'E-Mail-Adresse (optional)',
+                'Poznámky k objednávce' => 'Bestellhinweise',
+                'Přidat poznámku k objednávce' => 'Eine Notiz zur Bestellung hinzufügen',
+                'Použít stejnou adresu pro fakturaci' => 'Dieselbe Adresse für die Rechnung verwenden',
+                'Doručovací údaje' => 'Lieferdetails',
+                'Doprava zdarma' => 'Kostenloser Versand',
+                'Možnosti dopravy' => 'Versandoptionen',
+                'Způsob dopravy' => 'Versandart',
+                'Vyberte způsob dopravy' => 'Versandart auswählen',
+                'Osobní odběr' => 'Abholung vor Ort',
+                'Místní vyzvednutí' => 'Abholung vor Ort',
+                'Zásilkovna' => 'Packeta (Abholstelle)',
+                'Balíkovna' => 'Balíkovna (Abholstelle)',
+                'Česká pošta' => 'Tschechische Post',
+                'PPL' => 'PPL',
+                'GLS' => 'GLS',
+                'Cena dopravy' => 'Versandkosten',
+                'Platební metody' => 'Zahlungsarten',
+                'Platební možnosti' => 'Zahlungsoptionen',
+                'Způsob platby' => 'Zahlungsart',
+                'Vyberte způsob platby' => 'Zahlungsart auswählen',
+                'Dobírka' => 'Nachnahme',
+                'Platba dobírkou' => 'Zahlung per Nachnahme',
+                'Platba na dobírku' => 'Zahlung per Nachnahme',
+                'Převodem / QR kódem (-10 Kč)' => 'Banküberweisung / QR-Code (-10 Kč)',
+                'Platba převodem' => 'Banküberweisung',
+                'Bankovní převod' => 'Banküberweisung',
+                'Bankovním převodem' => 'Per Banküberweisung',
+                'Platba na účet' => 'Banküberweisung',
+                'Přímý bankovní převod' => 'Direkte Banküberweisung',
+                'Platba kartou' => 'Kartenzahlung',
+                'Online platba kartou' => 'Online-Kartenzahlung',
+                'Platební karta' => 'Zahlungskarte',
+                'GoPay - platební brána' => 'GoPay-Zahlungsportal',
+                'Hotově' => 'Bar',
+                'Hotově při převzetí' => 'Bar bei Abholung',
+                'platba na účet bankovním převodem nebo QR kódem' => 'Zahlung per Banküberweisung oder QR-Code',
+                'Platba na účet bankovním převodem nebo QR kódem' => 'Zahlung per Banküberweisung oder QR-Code',
+                'Toto pole je povinné' => 'Dieses Feld ist erforderlich',
+                'Toto je povinné pole.' => 'Dieses Feld ist erforderlich.',
+                'Zadejte platnou e-mailovou adresu' => 'Geben Sie eine gültige E-Mail-Adresse ein',
+                'Zadejte platné telefonní číslo' => 'Geben Sie eine gültige Telefonnummer ein',
+                'Česká republika' => 'Tschechien',
+                'Slovensko' => 'Slowakei',
+                'Německo' => 'Deutschland',
+                'Rakousko' => 'Österreich',
+                'Polsko' => 'Polen',
+                'Maďarsko' => 'Ungarn',
+                'Itálie' => 'Italien',
+                'Francie' => 'Frankreich',
+                'Španělsko' => 'Spanien',
+                'Spojené království (UK)' => 'Vereinigtes Königreich (UK)',
+                'Spojené státy americké (US)' => 'Vereinigte Staaten (US)',
+            ],
+            'pl' => [
+                'Vaše osobní údaje budou použity k vyřízení Vaší objednávky, zvýšení spokojenosti po celou dobu procházení tohoto webu a k dalším účelům popsaných na stránce' => 'Twoje dane osobowe będą używane do realizacji zamówienia, obsługi korzystania z tej strony oraz do innych celów opisanych w naszej',
+                'privacy policy' => 'polityce prywatności',
+                'I have read and agree to the website' => 'Przeczytałem/am i akceptuję',
+                'terms and conditions' => 'regulamin',
+                'Převodem / QR kódem (-10 Kč)' => 'Przelew / kod QR (-10 Kč)',
+                'Bankovním převodem' => 'Przelewem bankowym',
+            ],
+        ];
+
+        foreach ($checkout_exact as $language => $strings) {
+            $exact[$language] = array_replace($exact[$language] ?? [], $strings);
+        }
+
+        $legal = [
+            'en' => [
+                'privacy' => [
+                    'before' => 'Your personal data will be used to process your order, support your experience throughout this website, and for other purposes described in our',
+                    'link' => 'privacy policy',
+                    'after' => '.',
+                ],
+                'terms' => [
+                    'before' => 'I have read and agree to the website',
+                    'link' => 'terms and conditions',
+                    'after' => '',
+                ],
+            ],
+            'de' => [
+                'privacy' => [
+                    'before' => 'Ihre personenbezogenen Daten werden verwendet, um Ihre Bestellung zu bearbeiten, Ihre Nutzung dieser Website zu unterstützen und für weitere Zwecke, die in unserer',
+                    'link' => 'Datenschutzerklärung',
+                    'after' => 'beschrieben sind.',
+                ],
+                'terms' => [
+                    'before' => 'Ich habe die',
+                    'link' => 'Allgemeinen Geschäftsbedingungen',
+                    'after' => 'gelesen und akzeptiere sie',
+                ],
+            ],
+            'pl' => [
+                'privacy' => [
+                    'before' => 'Twoje dane osobowe będą używane do realizacji zamówienia, obsługi korzystania z tej strony oraz do innych celów opisanych w naszej',
+                    'link' => 'polityce prywatności',
+                    'after' => '.',
+                ],
+                'terms' => [
+                    'before' => 'Przeczytałem/am i akceptuję',
+                    'link' => 'regulamin',
+                    'after' => '',
+                ],
+            ],
+        ];
+
         $patterns = [
             'de' => [
                 ['match' => '^Your cart \\(items: (\\d+)\\)$', 'one' => 'Ihr Warenkorb (1 Artikel)', 'other' => 'Ihr Warenkorb ($1 Artikel)'],
@@ -1138,6 +1508,7 @@ JS
             'locale' => str_replace('_', '-', (string) ($this->languages->get($language)['locale'] ?? $language)),
             'exact' => $exact[$language] ?? [],
             'patterns' => $patterns[$language] ?? [],
+            'legal' => $legal[$language] ?? [],
         ];
     }
 
