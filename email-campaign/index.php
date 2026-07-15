@@ -129,6 +129,7 @@ if (isset($_GET['cron'])) {
     echo "\n" . syncImapReplies($pdo, $config);
     echo "\n" . runCronImports($pdo);
     echo "\n" . runCronScraping($pdo);
+    echo "\n" . runCronAiResearch($pdo, $config);
     exit;
 }
 
@@ -1657,6 +1658,255 @@ function onboardingDemoSeedContacts(string $businessType, array $plan): array
         'fit_reason' => $reason,
         'target_segment' => $segment,
     ], $rows);
+}
+
+function runCronAiResearch(PDO $pdo, array $config): string
+{
+    $settings = loadSettings($pdo);
+    $lastRun = (int)($settings['ai_research_last_run_at'] ?? 0);
+    if ($lastRun > 0 && time() - $lastRun < 3600) {
+        return 'AI research: dalsi beh jeste neni na rade.';
+    }
+    $lockUntil = (int)($settings['ai_research_lock_until'] ?? 0);
+    if ($lockUntil > time()) {
+        return 'AI research: uz bezi.';
+    }
+    setSetting($pdo, 'ai_research_lock_until', (string)(time() + 900));
+    try {
+        $message = runAiResearchOnce($pdo, $config);
+        setSetting($pdo, 'ai_research_last_run_at', (string)time());
+        setSetting($pdo, 'ai_research_lock_until', '');
+        return $message;
+    } catch (Throwable $e) {
+        setSetting($pdo, 'ai_research_lock_until', '');
+        return 'AI research selhal: ' . $e->getMessage();
+    }
+}
+
+function runAiResearchOnce(PDO $pdo, array $config): string
+{
+    $seed = selectAiResearchSeedRecipient($pdo);
+    if (!$seed) {
+        return 'AI research: neni dostupny zadny ulozeny kontakt.';
+    }
+    $plan = aiResearchPlan($config, $seed);
+    $contacts = aiResearchFindContacts($plan, 10);
+    $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
+    $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
+    $runId = saveAiResearchRun($pdo, $seed, $plan, $evaluated, $accepted);
+    setSetting($pdo, 'ai_research_last_seed_id', (string)(int)$seed['id']);
+    return 'AI research: beh #' . $runId . ', seed ' . (string)$seed['email'] . ', nalezeno ' . count($evaluated) . ', vhodnych ' . count($accepted) . '.';
+}
+
+function selectAiResearchSeedRecipient(PDO $pdo): ?array
+{
+    $lastId = max(0, (int)(loadSettings($pdo)['ai_research_last_seed_id'] ?? 0));
+    $sql = '
+        SELECT r.id, r.email, r.subject_name, r.website, r.address, r.name, r.source_label, r.source_url
+        FROM recipients r
+        JOIN contact_databases d ON d.id=r.list_id
+        WHERE r.status="active"
+          AND COALESCE(r.archived,0)=0
+          AND COALESCE(d.archived,0)=0
+          AND r.email!=""
+          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id)
+          AND r.id>?
+        ORDER BY r.id ASC
+        LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([$lastId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($row) {
+        return $row;
+    }
+    $stmt = $pdo->prepare(str_replace('AND r.id>?', '', $sql));
+    $stmt->execute([]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+function aiResearchPlan(array $config, array $seed): array
+{
+    $business = trim((string)($seed['subject_name'] ?: $seed['email']));
+    $website = trim((string)($seed['website'] ?? ''));
+    $address = trim((string)($seed['address'] ?? ''));
+    $fallback = onboardingFallbackLeadPlan($business . ' ' . $website . ' ' . $address);
+    $fallback['audience_label'] = 'B2B subjekty vhodne pro nabidku firmy ' . $business;
+    $fallback['candidate_terms'] = array_slice(array_values(array_unique(array_merge(
+        [(string)$business],
+        (array)($fallback['candidate_terms'] ?? [])
+    ))), 0, 8);
+
+    $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
+    if ($apiKey === '') {
+        return $fallback;
+    }
+    $prompt = "Vybrany ulozeny kontakt ma pravdepodobne ziskavat nove B2B zakazniky. "
+        . "Navrhni, koho by mel tento byznys oslovovat, jake filtry pouzit a jaka klicova slova pouzit pro hledani kontaktu. "
+        . "Seed kontakt: " . json_encode([
+            'email' => (string)$seed['email'],
+            'business' => $business,
+            'website' => $website,
+            'address' => $address,
+            'source' => (string)($seed['source_label'] ?? ''),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Vrat pouze JSON s klici audience_label, rationale, email_angle, target_segments, candidate_terms, filters, scraping_queries. "
+        . "filters je pole pravidel pro overeni vhodnosti kontaktu. scraping_queries pouziva zdroje firmy_cz, zoznam_sk, herold_at, dastelefonbuch_de, dasoertliche_de, gelbeseiten_de, pkt_pl nebo panoramafirm_pl.";
+    try {
+        $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
+            'x-goog-api-key: ' . $apiKey,
+            'Content-Type: application/json',
+        ], [
+            'model' => trim((string)($config['ai']['gemini_model'] ?? 'gemini-3.5-flash')) ?: 'gemini-3.5-flash',
+            'system_instruction' => 'Jsi B2B akvizicni strateg. Vystup je pouze validni JSON bez markdownu.',
+            'input' => $prompt,
+            'generation_config' => ['temperature' => 0.35],
+        ], 35);
+        $json = parseJsonObjectFromText(geminiInteractionText($response));
+        $plan = onboardingNormalizeLeadPlan($json, $fallback);
+        $filters = [];
+        foreach ((array)($json['filters'] ?? []) as $filter) {
+            $filter = truncatePlainText(trim(is_array($filter) ? json_encode($filter, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : (string)$filter), 240);
+            if ($filter !== '') {
+                $filters[] = $filter;
+            }
+        }
+        $plan['filters'] = $filters ?: ['Kontakt musi odpovidat navrzenemu B2B segmentu a mit dohledatelny email.'];
+        return $plan;
+    } catch (Throwable $e) {
+        error_log('AI research plan fallback: ' . $e->getMessage());
+        return $fallback + ['filters' => ['Kontakt musi odpovidat navrzenemu B2B segmentu a mit dohledatelny email.']];
+    }
+}
+
+function aiResearchFindContacts(array $plan, int $limit): array
+{
+    return array_slice(onboardingUniqueValidContacts(onboardingQuickScrapeContacts($plan, $limit)), 0, $limit);
+}
+
+function aiResearchEvaluateContacts(array $config, array $seed, array $plan, array $contacts): array
+{
+    if (!$contacts) {
+        return [];
+    }
+    $fallback = [];
+    foreach ($contacts as $contact) {
+        $fallback[] = aiResearchDecorateContact($seed, $plan, $contact, true, 'Kontakt odpovida navrzenemu segmentu podle zdroje a dostupnych dat.');
+    }
+    $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
+    if ($apiKey === '') {
+        return $fallback;
+    }
+    $prompt = "Vyhodnot nalezene kontakty pro B2B osloveni seed byznysu. "
+        . "Seed: " . json_encode($seed, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Plan: " . json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Kontakty: " . json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Vrat pouze JSON {\"contacts\":[{\"email\":\"...\",\"accepted\":true,\"fit_reason\":\"...\",\"subject\":\"...\",\"html\":\"...\"}]}. "
+        . "HTML je kratke unikatni obchodni osloveni pro dany kontakt, vecne a bez prehnanych slibu.";
+    try {
+        $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
+            'x-goog-api-key: ' . $apiKey,
+            'Content-Type: application/json',
+        ], [
+            'model' => trim((string)($config['ai']['gemini_model'] ?? 'gemini-3.5-flash')) ?: 'gemini-3.5-flash',
+            'system_instruction' => 'Jsi B2B obchodnik a hodnotitel relevance. Vystup je pouze validni JSON.',
+            'input' => $prompt,
+            'generation_config' => ['temperature' => 0.45],
+        ], 45);
+        $json = parseJsonObjectFromText(geminiInteractionText($response));
+        $byEmail = [];
+        foreach ((array)($json['contacts'] ?? []) as $row) {
+            if (is_array($row) && isset($row['email'])) {
+                $byEmail[strtolower(trim((string)$row['email']))] = $row;
+            }
+        }
+        $out = [];
+        foreach ($contacts as $contact) {
+            $email = strtolower(trim((string)($contact['email'] ?? '')));
+            $ai = $byEmail[$email] ?? [];
+            $out[] = aiResearchDecorateContact($seed, $plan, $contact, (bool)($ai['accepted'] ?? true), (string)($ai['fit_reason'] ?? ''), (string)($ai['subject'] ?? ''), (string)($ai['html'] ?? ''));
+        }
+        return $out;
+    } catch (Throwable $e) {
+        error_log('AI research evaluate fallback: ' . $e->getMessage());
+        return $fallback;
+    }
+}
+
+function aiResearchDecorateContact(array $seed, array $plan, array $contact, bool $accepted, string $reason = '', string $subject = '', string $html = ''): array
+{
+    $seedBusiness = trim((string)($seed['subject_name'] ?: $seed['email']));
+    $targetName = trim((string)($contact['subject_name'] ?? $contact['email'] ?? ''));
+    if ($subject === '') {
+        $subject = 'Mozna spoluprace pro ' . ($targetName !== '' ? $targetName : 'vasi firmu');
+    }
+    if ($html === '') {
+        $html = '<p>Dobry den,</p><p>narazili jsme na vas kontakt a myslime si, ze by pro vas mohla byt relevantni nabidka firmy ' . h($seedBusiness) . '.</p><p>Rad bych kratce ukazal konkretni moznost spoluprace. Mohu poslat vice informaci?</p>';
+    }
+    return array_merge($contact, [
+        'status' => $accepted ? 'accepted' : 'rejected',
+        'fit_reason' => $reason !== '' ? $reason : (string)($plan['rationale'] ?? ''),
+        'email_subject' => truncatePlainText($subject, 255),
+        'email_body_html' => cleanHtml($html),
+    ]);
+}
+
+function saveAiResearchRun(PDO $pdo, array $seed, array $plan, array $evaluated, array $accepted): int
+{
+    $now = date('c');
+    $draftSubject = (string)($accepted[0]['email_subject'] ?? '');
+    $draftHtml = (string)($accepted[0]['email_body_html'] ?? '');
+    $stmt = $pdo->prepare('
+        INSERT INTO ai_research_runs (seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ');
+    $status = $accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts');
+    $message = $accepted ? 'AI nasla vhodne kontakty a pripravila osloveni.' : ($evaluated ? 'AI nenasla dostatecne vhodny kontakt.' : 'Scraping nenasel zadny kontakt.');
+    $stmt->execute([
+        (int)$seed['id'],
+        (string)$seed['email'],
+        truncatePlainText((string)($seed['subject_name'] ?: $seed['email']), 255),
+        truncatePlainText(normalizeWebsite((string)($seed['website'] ?? '')), 500),
+        truncatePlainText((string)($seed['address'] ?? ''), 500),
+        truncatePlainText((string)($seed['source_label'] ?? ''), 500),
+        truncatePlainText((string)($seed['source_url'] ?? ''), 500),
+        $status,
+        truncatePlainText((string)($plan['audience_label'] ?? ''), 500),
+        (string)($plan['rationale'] ?? ''),
+        (string)($plan['email_angle'] ?? ''),
+        json_encode((array)($plan['filters'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]',
+        json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
+        $draftSubject,
+        $draftHtml,
+        count($evaluated),
+        count($accepted),
+        $message,
+        $now,
+        $now,
+    ]);
+    $runId = (int)$pdo->lastInsertId();
+    $item = $pdo->prepare('
+        INSERT INTO ai_research_contacts (run_id, email, subject_name, website, address, phone, source_label, source_url, status, fit_reason, email_subject, email_body_html, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ');
+    foreach ($evaluated as $contact) {
+        $item->execute([
+            $runId,
+            strtolower(trim((string)($contact['email'] ?? ''))),
+            truncatePlainText((string)($contact['subject_name'] ?? ''), 255),
+            truncatePlainText(normalizeWebsite((string)($contact['website'] ?? '')), 500),
+            truncatePlainText((string)($contact['address'] ?? ''), 500),
+            truncatePlainText((string)($contact['phone'] ?? ''), 80),
+            truncatePlainText((string)($contact['source_label'] ?? ''), 500),
+            truncatePlainText((string)($contact['source_url'] ?? ''), 500),
+            (string)($contact['status'] ?? 'accepted'),
+            truncatePlainText((string)($contact['fit_reason'] ?? ''), 500),
+            truncatePlainText((string)($contact['email_subject'] ?? ''), 255),
+            cleanHtml((string)($contact['email_body_html'] ?? '')),
+            $now,
+        ]);
+    }
+    return $runId;
 }
 
 function ensureDemoOnboardingLead(PDO $pdo, array $config, bool $force = false): array
@@ -8938,6 +9188,10 @@ function renderPublicAuthPage(?array $flash, array $config, string $mode): void
                 <?php renderFlash($flash); ?>
                 <?php if ($mode === 'signup'): ?>
                     <h2>Vyzkouset zdarma</h2>
+                    <?php if ($googleEnabled): ?>
+                        <a class="button google-button" href="?auth=google">Pokracovat pres Google</a>
+                        <div class="auth-divider"><span>nebo popiste nabidku</span></div>
+                    <?php endif; ?>
                     <form method="post" action="?auth=signup" class="landing-form" autocomplete="off">
                         <input type="hidden" name="action" value="start_public_onboarding">
                         <label>Pracovni email<input type="email" name="signup_email" placeholder="napriklad jana@firma.cz" autocomplete="email" required></label>
@@ -9225,17 +9479,17 @@ function renderFlash(?array $flash): void
 function currentView(): string
 {
     $route = trim((string)($_GET['route'] ?? ''), '/');
-    $map = ['dashboard' => 'overview', 'contacts' => 'contacts', 'campaigns' => 'campaigns', 'scraping' => 'scraping', 'config' => 'config'];
+    $map = ['dashboard' => 'overview', 'contacts' => 'contacts', 'campaigns' => 'campaigns', 'scraping' => 'scraping', 'research' => 'research', 'config' => 'config'];
     if (isset($map[$route])) {
         return $map[$route];
     }
     $view = $_GET['view'] ?? 'overview';
-    return in_array($view, ['overview', 'contacts', 'campaigns', 'scraping', 'config'], true) ? $view : 'overview';
+    return in_array($view, ['overview', 'contacts', 'campaigns', 'scraping', 'research', 'config'], true) ? $view : 'overview';
 }
 
 function routeUrl(string $view): string
 {
-    $map = ['overview' => './?route=dashboard', 'contacts' => './?route=contacts', 'campaigns' => './?route=campaigns', 'scraping' => './?route=scraping', 'config' => './?route=config'];
+    $map = ['overview' => './?route=dashboard', 'contacts' => './?route=contacts', 'campaigns' => './?route=campaigns', 'scraping' => './?route=scraping', 'research' => './?route=research', 'config' => './?route=config'];
     return $map[$view] ?? './?route=dashboard';
 }
 
@@ -9284,6 +9538,8 @@ function renderApp(PDO $pdo, ?array $flash): void
     $scrapingJobs = [];
     $activeScrapingJobs = [];
     $scrapingItemsByJob = [];
+    $aiResearchRuns = [];
+    $aiResearchContactsByRun = [];
     $selectedList = null;
     $current = ['id' => 0, 'list_id' => 1, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den,</p><p>...</p>', 'daily_limit' => 300, 'batch_limit' => 10, 'auto_daily_limit' => 1, 'include_previously_contacted' => 0, 'schedule_time' => '09:00', 'status' => 'draft'];
     $currentListId = 1;
@@ -9351,6 +9607,9 @@ function renderApp(PDO $pdo, ?array $flash): void
         $scrapingJobs = scrapingJobs($pdo, $selectedListId, $selectedScrapingContainerId);
         $activeScrapingJobs = activeScrapingJobs($pdo);
         $scrapingItemsByJob = scrapingItemsByJob($pdo, array_map(fn($job) => (int)$job['id'], $scrapingJobs));
+    } elseif ($view === 'research') {
+        $aiResearchRuns = aiResearchRuns($pdo);
+        $aiResearchContactsByRun = aiResearchContactsByRun($pdo, array_map(fn($run) => (int)$run['id'], $aiResearchRuns));
     }
     ob_start();
     ?><!doctype html>
@@ -9372,6 +9631,7 @@ function renderApp(PDO $pdo, ?array $flash): void
     <a class="<?= $view === 'contacts' ? 'active' : '' ?>" href="<?= h(routeUrl('contacts')) ?>">Kontakty</a>
     <a class="<?= $view === 'campaigns' ? 'active' : '' ?>" href="<?= h(routeUrl('campaigns')) ?>">Kampane</a>
     <a class="<?= $view === 'scraping' ? 'active' : '' ?>" href="<?= h(routeUrl('scraping')) ?>">Scraping</a>
+    <a class="<?= $view === 'research' ? 'active' : '' ?>" href="<?= h(routeUrl('research')) ?>">AI research</a>
     <a class="<?= $view === 'config' ? 'active' : '' ?>" href="<?= h(routeUrl('config')) ?>">Konfigurace</a>
 </nav>
 <main>
@@ -10061,6 +10321,93 @@ function renderApp(PDO $pdo, ?array $flash): void
     <?php endif; ?>
     <?php endif; ?>
 
+    <?php if ($view === 'research'): ?>
+    <section class="panel">
+        <div class="section-header">
+            <div>
+                <h2>AI research administrace</h2>
+                <p>Kazdou hodinu agent vybere jeden ulozeny kontakt, navrhne B2B cileni, najde max. 10 kontaktu, vyhodnoti relevanci a ulozi navrh osloveni.</p>
+            </div>
+        </div>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>AI cileni</th><th>Nalezeno</th><th>Vhodne</th><th>Zprava</th></tr></thead><tbody>
+        <?php if (!$aiResearchRuns): ?>
+            <tr><td colspan="9">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+        <?php endif; ?>
+        <?php foreach ($aiResearchRuns as $run): ?>
+            <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
+            <tr class="<?= $runContacts ? 'expandable-row' : '' ?>" <?php if ($runContacts): ?>data-detail-target="ai-research-detail-<?= h((string)$run['id']) ?>" tabindex="0" aria-expanded="false"<?php endif; ?>>
+                <td><?= $runContacts ? 'Zobrazit' : '-' ?></td>
+                <td><?= h(formatDateTime((string)$run['created_at'])) ?></td>
+                <td><strong><?= h((string)$run['seed_business']) ?></strong><?php if ($run['seed_website']): ?><br><a href="<?= h((string)$run['seed_website']) ?>" target="_blank" rel="noopener"><?= h((string)$run['seed_website']) ?></a><?php endif; ?></td>
+                <td><?= h((string)$run['seed_email']) ?></td>
+                <td><?= statusBadge((string)$run['status']) ?></td>
+                <td><?= h((string)$run['audience_label']) ?></td>
+                <td><?= h((string)$run['found_count']) ?></td>
+                <td><?= h((string)$run['accepted_count']) ?></td>
+                <td><?= h((string)$run['message']) ?></td>
+            </tr>
+            <?php if ($runContacts): ?>
+            <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
+                <td colspan="9">
+                    <div class="scraping-detail">
+                        <div class="scraping-detail-head">
+                            <strong>AI plan #<?= h((string)$run['id']) ?></strong>
+                            <span><?= h((string)$run['accepted_count']) ?> vhodnych z <?= h((string)$run['found_count']) ?> nalezenych</span>
+                        </div>
+                        <div class="research-plan-grid">
+                            <section>
+                                <h3>Co AI vymyslela</h3>
+                                <p><strong>Cileni:</strong> <?= h((string)$run['audience_label']) ?></p>
+                                <p><strong>Proc:</strong> <?= h((string)$run['rationale']) ?></p>
+                                <p><strong>Uhel emailu:</strong> <?= h((string)$run['email_angle']) ?></p>
+                            </section>
+                            <section>
+                                <h3>Filtry a hledani</h3>
+                                <?php $plan = json_decode((string)$run['plan_json'], true) ?: []; ?>
+                                <?php $filters = json_decode((string)$run['filters_json'], true) ?: []; ?>
+                                <p><strong>Filtry:</strong> <?= h(implode('; ', array_map('strval', $filters))) ?></p>
+                                <p><strong>Klicova slova:</strong> <?= h(implode(', ', array_map('strval', (array)($plan['candidate_terms'] ?? [])))) ?></p>
+                                <p><strong>Zdroje:</strong> <?= h(implode(', ', array_map(static fn($q) => is_array($q) ? scrapingSourceLabel((string)($q['source'] ?? '')) . ' / ' . (string)($q['keyword'] ?? '') : '', (array)($plan['scraping_queries'] ?? [])))) ?></p>
+                            </section>
+                            <section>
+                                <h3>Vzor osloveni</h3>
+                                <p><strong><?= h((string)$run['email_subject']) ?></strong></p>
+                                <div class="email-preview"><?= cleanHtml((string)$run['email_body_html']) ?></div>
+                            </section>
+                        </div>
+                        <div class="scraping-result-grid">
+                            <section class="scraping-result-group">
+                                <div class="scraping-result-group-head"><strong>Nalezene kontakty</strong><span><?= h((string)count($runContacts)) ?></span></div>
+                                <div class="scraping-result-list">
+                                    <?php foreach ($runContacts as $contact): ?>
+                                    <article class="scraping-result-item">
+                                        <div class="scraping-result-title">
+                                            <strong><?= h((string)($contact['subject_name'] ?: $contact['email'])) ?></strong>
+                                            <?= statusBadge((string)$contact['status']) ?>
+                                        </div>
+                                        <div class="scraping-result-meta">
+                                            <?php if ($contact['email'] !== ''): ?><span><?= h((string)$contact['email']) ?></span><?php endif; ?>
+                                            <?php if ($contact['address'] !== ''): ?><span><?= h((string)$contact['address']) ?></span><?php endif; ?>
+                                            <?php if ($contact['website'] !== ''): ?><a href="<?= h((string)$contact['website']) ?>" target="_blank" rel="noopener"><?= h((string)$contact['website']) ?></a><?php endif; ?>
+                                        </div>
+                                        <?php if ($contact['source_url'] !== ''): ?><div class="scraping-source-url"><span>Zdrojova URL</span><a href="<?= h((string)$contact['source_url']) ?>" target="_blank" rel="noopener"><?= h((string)$contact['source_url']) ?></a></div><?php endif; ?>
+                                        <p><?= h((string)$contact['fit_reason']) ?></p>
+                                        <p><strong><?= h((string)$contact['email_subject']) ?></strong></p>
+                                        <div class="email-preview"><?= cleanHtml((string)$contact['email_body_html']) ?></div>
+                                    </article>
+                                    <?php endforeach; ?>
+                                </div>
+                            </section>
+                        </div>
+                    </div>
+                </td>
+            </tr>
+            <?php endif; ?>
+        <?php endforeach; ?>
+        </tbody></table>
+    </section>
+    <?php endif; ?>
+
     <?php if ($view === 'config'): ?>
     <section class="panel">
         <div class="section-header">
@@ -10706,6 +11053,39 @@ function scrapingItemsByJob(PDO $pdo, array $jobIds): array
             $grouped[$jobId] = [];
         }
         $grouped[$jobId][] = $row;
+    }
+    return $grouped;
+}
+
+function aiResearchRuns(PDO $pdo): array
+{
+    return $pdo->query('
+        SELECT *
+        FROM ai_research_runs
+        ORDER BY id DESC
+        LIMIT 100
+    ')->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function aiResearchContactsByRun(PDO $pdo, array $runIds): array
+{
+    $runIds = array_values(array_unique(array_filter(array_map('intval', $runIds))));
+    if (!$runIds) {
+        return [];
+    }
+    $rows = $pdo->query('
+        SELECT *
+        FROM ai_research_contacts
+        WHERE run_id IN (' . implode(',', $runIds) . ')
+        ORDER BY id ASC
+    ')->fetchAll(PDO::FETCH_ASSOC);
+    $grouped = [];
+    foreach ($rows as $row) {
+        $runId = (int)$row['run_id'];
+        if (!isset($grouped[$runId])) {
+            $grouped[$runId] = [];
+        }
+        $grouped[$runId][] = $row;
     }
     return $grouped;
 }

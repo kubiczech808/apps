@@ -48,7 +48,8 @@ header .version { color: #b9c8c2; margin: 0 auto 0 18px; }
 main { width: min(100%, 1440px); margin: 0 auto; padding: 24px; }
 .view-contacts main,
 .view-campaigns main,
-.view-scraping main {
+.view-scraping main,
+.view-research main {
   width: 100%;
   max-width: none;
 }
@@ -1783,6 +1784,14 @@ td a {
 .view-scraping .log-table td:nth-child(8) { width: 98px; }
 .view-scraping .log-table th:nth-child(9),
 .view-scraping .log-table td:nth-child(9) { width: auto; }
+.view-research table {
+  min-width: 1320px;
+}
+.view-research td:nth-child(3),
+.view-research td:nth-child(6),
+.view-research td:nth-child(9) {
+  max-width: 280px;
+}
 .detail-row td {
   background: #f8faf7;
   border-bottom: 1px solid var(--line);
@@ -1843,6 +1852,22 @@ td a {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+.research-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.research-plan-grid section {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+.research-plan-grid h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
 }
 .scraping-result-group {
   border: 1px solid var(--line);
@@ -2134,7 +2159,8 @@ td a {
     max-height: calc(100dvh - 24px);
     overflow: auto;
   }
-  .scraping-result-grid { grid-template-columns: 1fr; }
+  .scraping-result-grid,
+  .research-plan-grid { grid-template-columns: 1fr; }
   table { min-width: 980px; }
 }
 
@@ -2157,7 +2183,8 @@ td a {
 
 .view-contacts .app-footer,
 .view-campaigns .app-footer,
-.view-scraping .app-footer {
+.view-scraping .app-footer,
+.view-research .app-footer {
   max-width: none;
 }
 
@@ -2224,6 +2251,7 @@ td a {
   .database-table,
   .contacts-table,
   .import-history,
+  .view-research table,
   .view-scraping .active-jobs-table,
   .view-scraping .container-table,
   .view-scraping .log-table,
@@ -2241,6 +2269,7 @@ td a {
   .database-table thead,
   .contacts-table thead,
   .import-history thead,
+  .view-research table thead,
   .view-scraping .active-jobs-table thead,
   .view-scraping .container-table thead,
   .view-scraping .log-table thead,
@@ -2260,6 +2289,8 @@ td a {
   .contacts-table tr,
   .import-history tbody,
   .import-history tr,
+  .view-research table tbody,
+  .view-research table tr,
   .view-scraping .active-jobs-table tbody,
   .view-scraping .active-jobs-table tr,
   .view-scraping .container-table tbody,
@@ -2278,6 +2309,7 @@ td a {
   .database-table tr,
   .contacts-table tr,
   .import-history tr,
+  .view-research table tr,
   .view-scraping .active-jobs-table tr,
   .view-scraping .container-table tr,
   .view-scraping .log-table tr:not(.detail-row),
@@ -2294,6 +2326,7 @@ td a {
   .database-table td,
   .contacts-table td,
   .import-history td,
+  .view-research table td,
   .view-scraping .active-jobs-table td,
   .view-scraping .container-table td,
   .view-scraping .log-table td,
@@ -2317,6 +2350,7 @@ td a {
   .database-table td:last-child,
   .contacts-table td:last-child,
   .import-history td:last-child,
+  .view-research table td:last-child,
   .view-scraping .active-jobs-table td:last-child,
   .view-scraping .container-table td:last-child,
   .view-scraping .log-table td:last-child,
@@ -2330,6 +2364,7 @@ td a {
   .database-table td::before,
   .contacts-table td::before,
   .import-history td::before,
+  .view-research table td::before,
   .view-scraping .active-jobs-table td::before,
   .view-scraping .container-table td::before,
   .view-scraping .log-table td::before,
@@ -2343,6 +2378,7 @@ td a {
 
   .campaign-table .detail-row,
   .send-runs-table .detail-row,
+  .view-research table .detail-row,
   .view-scraping .log-table .detail-row {
     border: 0;
     background: transparent;
@@ -2351,6 +2387,7 @@ td a {
 
   .campaign-table .detail-row > td,
   .send-runs-table .detail-row > td,
+  .view-research table .detail-row > td,
   .view-scraping .log-table .detail-row > td {
     display: block;
     padding: 0;
@@ -2360,6 +2397,7 @@ td a {
 
   .campaign-table .detail-row > td::before,
   .send-runs-table .detail-row > td::before,
+  .view-research table .detail-row > td::before,
   .view-scraping .log-table .detail-row > td::before {
     content: none;
   }

@@ -88,6 +88,7 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureSuppressionTable(), 'suppression_list');
         $this->safeMigrationStep(fn() => $this->ensureOnboardingTables(), 'onboarding_tables');
         $this->safeMigrationStep(fn() => $this->ensureOnboardingEventsTable(), 'onboarding_events');
+        $this->safeMigrationStep(fn() => $this->ensureAiResearchTables(), 'ai_research_tables');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_sent_at', $this->textColumn("''")), 'onboarding_leads.invite_sent_at');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_last_sent_at', $this->textColumn("''")), 'onboarding_leads.invite_last_sent_at');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_send_count', 'INTEGER NOT NULL DEFAULT 0'), 'onboarding_leads.invite_send_count');
@@ -502,6 +503,54 @@ final class Database
                 created_at VARCHAR(40) NOT NULL,
                 INDEX onboarding_events_lead_idx (lead_id, created_at),
                 INDEX onboarding_events_type_idx (event_type, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    }
+
+    private function ensureAiResearchTables(): void
+    {
+        $this->pdo->exec("CREATE TABLE IF NOT EXISTS ai_research_runs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                seed_recipient_id INT NOT NULL DEFAULT 0,
+                seed_email VARCHAR(320) NOT NULL DEFAULT '',
+                seed_business VARCHAR(255) NOT NULL DEFAULT '',
+                seed_website VARCHAR(500) NOT NULL DEFAULT '',
+                seed_address VARCHAR(500) NOT NULL DEFAULT '',
+                seed_source_label VARCHAR(500) NOT NULL DEFAULT '',
+                seed_source_url VARCHAR(500) NOT NULL DEFAULT '',
+                status VARCHAR(40) NOT NULL DEFAULT 'done',
+                audience_label VARCHAR(500) NOT NULL DEFAULT '',
+                rationale TEXT NOT NULL,
+                email_angle TEXT NOT NULL,
+                filters_json MEDIUMTEXT NOT NULL,
+                plan_json MEDIUMTEXT NOT NULL,
+                email_subject VARCHAR(255) NOT NULL DEFAULT '',
+                email_body_html MEDIUMTEXT NULL,
+                found_count INT NOT NULL DEFAULT 0,
+                accepted_count INT NOT NULL DEFAULT 0,
+                message VARCHAR(500) NOT NULL DEFAULT '',
+                created_at VARCHAR(40) NOT NULL,
+                updated_at VARCHAR(40) NOT NULL,
+                INDEX ai_research_seed_idx (seed_recipient_id),
+                INDEX ai_research_status_idx (status, created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        $this->pdo->exec("CREATE TABLE IF NOT EXISTS ai_research_contacts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                run_id INT NOT NULL,
+                email VARCHAR(320) NOT NULL DEFAULT '',
+                subject_name VARCHAR(255) NOT NULL DEFAULT '',
+                website VARCHAR(500) NOT NULL DEFAULT '',
+                address VARCHAR(500) NOT NULL DEFAULT '',
+                phone VARCHAR(80) NOT NULL DEFAULT '',
+                source_label VARCHAR(500) NOT NULL DEFAULT '',
+                source_url VARCHAR(500) NOT NULL DEFAULT '',
+                status VARCHAR(40) NOT NULL DEFAULT 'accepted',
+                fit_reason VARCHAR(500) NOT NULL DEFAULT '',
+                email_subject VARCHAR(255) NOT NULL DEFAULT '',
+                email_body_html MEDIUMTEXT NULL,
+                created_at VARCHAR(40) NOT NULL,
+                INDEX ai_research_contacts_run_idx (run_id),
+                INDEX ai_research_contacts_email_idx (email)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     }
 
