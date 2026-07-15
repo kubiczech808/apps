@@ -9,10 +9,17 @@ const PORTFOLIO_USDC = Number(process.env.PAPER_PORTFOLIO_USDC || 100);
 const MAX_FRACTION = Number(process.env.PAPER_MAX_FRACTION || 0.05);
 const MIN_PROBABILITY = Number(process.env.PAPER_MIN_PROBABILITY || 0.95);
 const MIN_ANNUAL_RETURN = Number(process.env.PAPER_MIN_ANNUAL_RETURN || 0.05);
+const OPPORTUNITY_MIN_PROBABILITY = Number(process.env.PAPER_OPPORTUNITY_MIN_PROBABILITY || 0.6);
+const OPPORTUNITY_MIN_EDGE = Number(process.env.PAPER_OPPORTUNITY_MIN_EDGE || 0.04);
+const OPPORTUNITY_MIN_ANNUAL_RETURN = Number(process.env.PAPER_OPPORTUNITY_MIN_ANNUAL_RETURN || 0.3);
 const MAX_EVALUATIONS_PER_RUN = Number(process.env.PAPER_MAX_EVALUATIONS_PER_RUN || 80);
 const MAX_SPREAD = Number(process.env.PAPER_MAX_SPREAD || 0.08);
 const MIN_VOLUME_24H = Number(process.env.PAPER_MIN_VOLUME_24H || 100);
 const MAX_HISTORY = Number(process.env.PAPER_MAX_HISTORY || 1200);
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const AI_ANALYSIS_LIMIT = Number(process.env.PAPER_AI_ANALYSIS_LIMIT || 10);
+const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
 const TZ = "Europe/Prague";
 
 function nowIso() {
@@ -81,19 +88,38 @@ async function readState() {
 
 function normalizeState(input) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: input.generatedAt || null,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
       maxFraction: Number(input.portfolio?.maxFraction || MAX_FRACTION),
       minProbability: Number(input.portfolio?.minProbability || MIN_PROBABILITY),
       minAnnualReturn: Number(input.portfolio?.minAnnualReturn || MIN_ANNUAL_RETURN),
+      opportunityMinProbability: Number(input.portfolio?.opportunityMinProbability || OPPORTUNITY_MIN_PROBABILITY),
+      opportunityMinEdge: Number(input.portfolio?.opportunityMinEdge || OPPORTUNITY_MIN_EDGE),
+      opportunityMinAnnualReturn: Number(input.portfolio?.opportunityMinAnnualReturn || OPPORTUNITY_MIN_ANNUAL_RETURN),
     },
     trades: Array.isArray(input.trades) ? input.trades.map(normalizeTrade) : [],
     evaluations: Array.isArray(input.evaluations) ? input.evaluations : [],
+    learningProfile: normalizeLearningProfile(input.learningProfile),
     lastTradeDate: input.lastTradeDate || null,
     lastDecision: input.lastDecision || null,
     runLog: Array.isArray(input.runLog) ? input.runLog : [],
+  };
+}
+
+function normalizeLearningProfile(profile = {}) {
+  return {
+    version: 1,
+    updatedAt: profile.updatedAt || null,
+    sampleSize: Number(profile.sampleSize || 0),
+    brierScore: profile.brierScore != null && Number.isFinite(Number(profile.brierScore)) ? Number(profile.brierScore) : null,
+    calibrationBias: profile.calibrationBias != null && Number.isFinite(Number(profile.calibrationBias)) ? Number(profile.calibrationBias) : 0,
+    bucketCalibration: profile.bucketCalibration && typeof profile.bucketCalibration === "object" ? profile.bucketCalibration : {},
+    factorAdjustments: profile.factorAdjustments && typeof profile.factorAdjustments === "object" ? profile.factorAdjustments : {},
+    promptRules: Array.isArray(profile.promptRules) ? profile.promptRules : [],
+    aiLastRun: profile.aiLastRun || null,
+    aiModel: profile.aiModel || null,
   };
 }
 
@@ -466,7 +492,163 @@ async function refreshTrades(trades) {
   return refreshed;
 }
 
-function estimateProbability({ market, outcome, ask, bid, spread, liquidity, volume24hr, tags, days }) {
+function probabilityBucket(probability) {
+  const value = Number(probability);
+  if (!Number.isFinite(value)) return "unknown";
+  if (value < 0.2) return "00-20";
+  if (value < 0.4) return "20-40";
+  if (value < 0.6) return "40-60";
+  if (value < 0.8) return "60-80";
+  if (value < 0.9) return "80-90";
+  if (value < 0.97) return "90-97";
+  return "97-100";
+}
+
+function outcomeKind(outcome) {
+  const text = String(outcome || "").toLowerCase();
+  if (text === "yes") return "YES";
+  if (text === "no") return "NO";
+  return "OUTCOME";
+}
+
+function analysisFactorKeys({ probability, outcome, tags, spread, liquidity, volume24hr, days, market }) {
+  const keys = new Set();
+  const tagList = Array.isArray(tags) && tags.length ? tags : ["general"];
+  for (const tag of tagList.slice(0, 4)) keys.add(`tag:${tag}`);
+  keys.add(`bucket:${probabilityBucket(probability)}`);
+  keys.add(`outcome:${outcomeKind(outcome).toLowerCase()}`);
+  keys.add(spread != null && spread <= 0.015 ? "spread:tight" : "spread:wide");
+  keys.add(liquidity >= 5000 || volume24hr >= 5000 ? "liquidity:deep" : "liquidity:thin");
+  keys.add(days != null && days <= 21 ? "horizon:short" : "horizon:long");
+  if (market?.negRisk) keys.add("market:negative-risk");
+  return [...keys];
+}
+
+function learningAdjustment({ probability, outcome, tags, spread, liquidity, volume24hr, days, market, learningProfile }) {
+  const profile = normalizeLearningProfile(learningProfile);
+  const factors = analysisFactorKeys({ probability, outcome, tags, spread, liquidity, volume24hr, days, market });
+  const applied = [];
+  let adjustment = 0;
+
+  for (const key of factors) {
+    const value = Number(profile.factorAdjustments?.[key]?.adjustment);
+    if (Number.isFinite(value) && value !== 0) {
+      adjustment += value;
+      applied.push({ key, adjustment: Number(value.toFixed(4)) });
+    }
+  }
+
+  const bucket = profile.bucketCalibration?.[probabilityBucket(probability)];
+  const bucketError = Number(bucket?.calibrationError);
+  if (Number.isFinite(bucketError) && Number(bucket?.count || 0) >= 3) {
+    const value = clamp(bucketError * 0.25, -0.04, 0.04);
+    adjustment += value;
+    applied.push({ key: `calibration:${probabilityBucket(probability)}`, adjustment: Number(value.toFixed(4)) });
+  }
+
+  const bias = Number(profile.calibrationBias);
+  if (Number.isFinite(bias) && profile.sampleSize >= 5) {
+    const value = clamp(bias * 0.15, -0.025, 0.025);
+    adjustment += value;
+    applied.push({ key: "global:bias", adjustment: Number(value.toFixed(4)) });
+  }
+
+  return {
+    adjustment: clamp(adjustment, -0.08, 0.08),
+    applied,
+    factors,
+  };
+}
+
+function confidenceTier(probability) {
+  if (probability >= 0.95) return "near-certain";
+  if (probability >= 0.8) return "high";
+  if (probability >= 0.6) return "edge-watch";
+  if (probability >= 0.4) return "uncertain";
+  return "long-shot";
+}
+
+function buildHeuristicAnalysis({
+  question,
+  outcome,
+  probability,
+  rawProbability,
+  executionPrice,
+  edge,
+  annualizedReturn,
+  expectedValue,
+  notes,
+  tags,
+  learning,
+}) {
+  const direction = outcomeKind(outcome);
+  const likely = probability >= 0.5 ? "likely" : "unlikely";
+  const value = expectedValue > 0 ? "positive" : "negative";
+  const thesis = `${direction} thesis: ${String(outcome || "selected outcome")} is ${likely} at ${(probability * 100).toFixed(1)}% versus market-buy entry ${(executionPrice * 100).toFixed(1)}%; expected value is ${value}.`;
+  const uncertaintyFlags = [
+    executionPrice > 0.97 ? "crowded near-certain market" : "",
+    executionPrice < 0.15 ? "long-shot price bucket" : "",
+    Math.abs(edge) < 0.015 ? "thin modeled edge" : "",
+    tags.includes("clear-resolution") ? "" : "resolution wording needs review",
+  ].filter(Boolean);
+
+  return {
+    model: "heuristic-calibration-v2",
+    direction,
+    thesis,
+    probability: Number(probability.toFixed(4)),
+    rawProbability: Number(rawProbability.toFixed(4)),
+    confidenceTier: confidenceTier(probability),
+    marketImpliedProbability: Number(executionPrice.toFixed(4)),
+    edge: Number(edge.toFixed(4)),
+    expectedValueUsdc: Number(expectedValue.toFixed(4)),
+    annualizedReturn: Number(annualizedReturn.toFixed(4)),
+    evidence: notes.slice(0, 6),
+    counterEvidence: uncertaintyFlags,
+    tags,
+    learningAdjustment: Number((probability - rawProbability).toFixed(4)),
+    learningFactors: learning.factors,
+    appliedLearning: learning.applied,
+  };
+}
+
+function scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk }) {
+  const highConfidenceOk = probability >= MIN_PROBABILITY;
+  const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
+    && edge >= OPPORTUNITY_MIN_EDGE
+    && annualizedReturn >= OPPORTUNITY_MIN_ANNUAL_RETURN;
+  const returnOk = annualizedReturn >= MIN_ANNUAL_RETURN;
+  const eligible = (highConfidenceOk || opportunityOk) && returnOk && spreadOk && volumeOk && depthOk;
+  return {
+    status: eligible ? "ELIGIBLE" : "REJECTED",
+    thesisType: highConfidenceOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY" : "REJECTED"),
+    rejectReasons: [
+      highConfidenceOk || opportunityOk ? null : `probability ${(probability * 100).toFixed(1)}% below high-confidence threshold and edge-opportunity threshold`,
+      returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`,
+      spreadOk ? null : "spread too wide",
+      volumeOk ? null : "liquidity/volume too low",
+      depthOk ? null : "insufficient ask depth for market buy",
+    ].filter(Boolean),
+  };
+}
+
+function economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk }) {
+  const executionPrice = execution.avgPrice;
+  const expectedValue = probability * execution.shares - stake - takerFee;
+  const expectedRoi = totalCost > 0 ? expectedValue / totalCost : 0;
+  const annualizedReturn = days ? expectedRoi * (365 / days) : expectedRoi;
+  const edge = probability - executionPrice;
+  const scored = scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk });
+  return {
+    expectedValue,
+    expectedRoi,
+    annualizedReturn,
+    edge,
+    ...scored,
+  };
+}
+
+function estimateProbability({ market, outcome, ask, bid, spread, liquidity, volume24hr, tags, days, learningProfile }) {
   const marketConsensus = Number.isFinite(bid) && Number.isFinite(ask) ? (bid + ask) / 2 : ask;
   let probability = marketConsensus;
   const notes = [];
@@ -499,13 +681,32 @@ function estimateProbability({ market, outcome, ask, bid, spread, liquidity, vol
     notes.push("Negative-risk market: execution needs extra care in live mode.");
   }
 
+  const rawProbability = clamp(probability, 0.01, 0.995);
+  const learning = learningAdjustment({
+    probability: rawProbability,
+    outcome,
+    tags,
+    spread,
+    liquidity,
+    volume24hr,
+    days,
+    market,
+    learningProfile,
+  });
+  probability = rawProbability + learning.adjustment;
+  if (learning.applied.length) {
+    notes.push(`Learning calibration adjusted probability by ${(learning.adjustment * 100).toFixed(1)} pts.`);
+  }
+
   return {
     probability: clamp(probability, 0.01, 0.995),
+    rawProbability,
     notes,
+    learning,
   };
 }
 
-function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
+function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfile }) {
   const question = String(market.question || "");
   const outcomes = parseJsonField(market.outcomes);
   const outcome = String(outcomes[outcomeIndex] || `Outcome ${outcomeIndex + 1}`);
@@ -522,7 +723,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
   if (!Number.isFinite(bestAsk) || bestAsk <= 0 || bestAsk >= 1) return null;
   if (!Number.isFinite(execution.avgPrice) || execution.avgPrice <= 0 || execution.avgPrice >= 1) return null;
 
-  const { probability, notes } = estimateProbability({
+  const { probability, rawProbability, notes, learning } = estimateProbability({
     market,
     outcome,
     ask: bestAsk,
@@ -532,36 +733,43 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     volume24hr,
     tags,
     days,
+    learningProfile,
   });
   const executionPrice = execution.avgPrice;
   const takerFee = takerFeeForFills(execution.fills, fees.feeRate);
   const totalCost = stake + takerFee;
   const grossGainIfWin = execution.shares - stake;
   const netGainIfWin = execution.shares - stake - takerFee;
-  const expectedValue = probability * execution.shares - stake - takerFee;
-  const expectedRoi = totalCost > 0 ? expectedValue / totalCost : 0;
-  const annualizedReturn = days ? expectedRoi * (365 / days) : expectedRoi;
   const grossRoiIfWin = totalCost > 0 ? netGainIfWin / totalCost : 0;
   const grossAnnualizedIfWin = days ? grossRoiIfWin * (365 / days) : grossRoiIfWin;
-  const edge = probability - executionPrice;
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
-  const probabilityOk = probability >= MIN_PROBABILITY;
-  const returnOk = annualizedReturn >= MIN_ANNUAL_RETURN;
   const depthOk = execution.fillable;
-  const status = probabilityOk && returnOk && spreadOk && volumeOk && depthOk ? "ELIGIBLE" : "REJECTED";
-  const rejectReasons = [
-    probabilityOk ? null : `probability ${(probability * 100).toFixed(1)}% below ${(MIN_PROBABILITY * 100).toFixed(0)}%`,
-    returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`,
-    spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
-    volumeOk ? null : "liquidity/volume too low",
-    depthOk ? null : `insufficient ask depth for ${stake.toFixed(2)} USDC market buy`,
-  ].filter(Boolean);
+  const economics = economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk });
+  const rejectReasons = economics.rejectReasons.map((reason) => {
+    if (reason === "spread too wide") return `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`;
+    if (reason === "insufficient ask depth for market buy") return `insufficient ask depth for ${stake.toFixed(2)} USDC market buy`;
+    return reason;
+  });
+  const aiAnalysis = buildHeuristicAnalysis({
+    question,
+    outcome,
+    probability,
+    rawProbability,
+    executionPrice,
+    edge: economics.edge,
+    annualizedReturn: economics.annualizedReturn,
+    expectedValue: economics.expectedValue,
+    notes,
+    tags,
+    learning,
+  });
 
   return {
     id: `${market.id}-${outcomeIndex}-${Date.now()}`,
     evaluatedAt: nowIso(),
-    status,
+    status: economics.status,
+    thesisType: economics.thesisType,
     rejectReasons,
     question,
     slug: market.slug || "",
@@ -596,18 +804,24 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
     daysToResolution: days == null ? null : Number(days.toFixed(2)),
     aiProbability: Number(probability.toFixed(4)),
-    edge: Number(edge.toFixed(4)),
-    expectedRoi: Number(expectedRoi.toFixed(4)),
-    annualizedReturn: Number(annualizedReturn.toFixed(4)),
+    rawProbability: Number(rawProbability.toFixed(4)),
+    edge: Number(economics.edge.toFixed(4)),
+    expectedRoi: Number(economics.expectedRoi.toFixed(4)),
+    annualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
     grossAnnualizedIfWin: Number(grossAnnualizedIfWin.toFixed(4)),
     stakeUsdc: Number(stake.toFixed(2)),
-    expectedValueUsdc: Number(expectedValue.toFixed(4)),
+    expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
     maxLossUsdc: Number(totalCost.toFixed(5)),
+    aiAnalysis,
+    probabilityThesis: aiAnalysis.thesis,
+    analysisModel: aiAnalysis.model,
     analysisSummary: [
-      `Estimated probability ${(probability * 100).toFixed(1)}% vs simulated market-buy entry ${(executionPrice * 100).toFixed(1)}%.`,
+      `${aiAnalysis.thesis}`,
+      `Raw probability ${(rawProbability * 100).toFixed(1)}%, calibrated probability ${(probability * 100).toFixed(1)}% vs simulated market-buy entry ${(executionPrice * 100).toFixed(1)}%.`,
       `Best ask ${(bestAsk * 100).toFixed(1)}%, slippage ${execution.slippage == null ? "n/a" : (execution.slippage * 100).toFixed(1) + " pts"} for ${stake.toFixed(2)} USDC.`,
       `Polymarket taker fee ${takerFee.toFixed(5)} USDC (${fees.feesEnabled ? `${(fees.feeRate * 100).toFixed(1)}% ${fees.feeType}` : "fee-free market"}).`,
-      `Net gain if win ${netGainIfWin.toFixed(4)} USDC; expected annualized return ${(annualizedReturn * 100).toFixed(1)}% with max paper loss ${totalCost.toFixed(5)} USDC.`,
+      `Net gain if win ${netGainIfWin.toFixed(4)} USDC; expected annualized return ${(economics.annualizedReturn * 100).toFixed(1)}% with max paper loss ${totalCost.toFixed(5)} USDC.`,
+      `Selection thesis type: ${economics.thesisType}.`,
       notes.length ? notes.join(" ") : "No strong qualitative adjustment found.",
     ].join(" "),
     evidence: [
@@ -623,6 +837,10 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
       `feeRate=${fees.feeRate}`,
       `takerFeeUsdc=${takerFee}`,
       `netGainIfWinUsdc=${netGainIfWin}`,
+      `rawProbability=${rawProbability}`,
+      `calibratedProbability=${probability}`,
+      `thesisType=${economics.thesisType}`,
+      `learningFactors=${learning.factors.join(",")}`,
       `bestBid=${bestBid ?? "n/a"}`,
       `spread=${spread ?? "n/a"}`,
       `volume24hr=${volume24hr}`,
@@ -630,6 +848,199 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
       `daysToResolution=${days ?? "n/a"}`,
     ],
   };
+}
+
+function parseJsonObject(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function callOpenAiJson(messages) {
+  if (!OPENAI_API_KEY) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        temperature: 0.1,
+        response_format: { type: "json_object" },
+        messages,
+      }),
+    });
+    if (!response.ok) throw new Error(`OpenAI HTTP ${response.status}`);
+    const payload = await response.json();
+    return parseJsonObject(payload?.choices?.[0]?.message?.content);
+  } catch (error) {
+    return { error: error.message || String(error) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function refreshEvaluationAfterProbability(evaluation, probability, modelName, modelAnalysis) {
+  const stake = Number(evaluation.stakeUsdc || PORTFOLIO_USDC * MAX_FRACTION);
+  const takerFee = Number(evaluation.takerFeeUsdc || 0);
+  const totalCostValue = Number(evaluation.totalCostUsdc || stake + takerFee);
+  const execution = {
+    avgPrice: Number(evaluation.marketPrice),
+    shares: Number(evaluation.executableShares),
+  };
+  const spread = Number(evaluation.spread);
+  const spreadOk = Number.isFinite(spread) && spread <= MAX_SPREAD;
+  const liquidity = Number(evaluation.liquidity || 0);
+  const volume24hr = Number(evaluation.volume24hr || 0);
+  const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
+  const depthOk = Number(evaluation.filledStakeUsdc || 0) >= stake * 0.999;
+  const days = Number(evaluation.daysToResolution);
+  const economics = economicsForProbability({
+    probability,
+    execution,
+    stake,
+    takerFee,
+    totalCost: totalCostValue,
+    days: Number.isFinite(days) ? days : null,
+    spreadOk,
+    volumeOk,
+    depthOk,
+  });
+
+  const rejectReasons = economics.rejectReasons.map((reason) => {
+    if (reason === "spread too wide") return `spread ${Number.isFinite(spread) ? (spread * 100).toFixed(1) + " pts" : "n/a"} too wide`;
+    if (reason === "insufficient ask depth for market buy") return `insufficient ask depth for ${stake.toFixed(2)} USDC market buy`;
+    return reason;
+  });
+  const aiAnalysis = {
+    ...(evaluation.aiAnalysis || {}),
+    ...modelAnalysis,
+    model: modelName,
+    probability: Number(probability.toFixed(4)),
+    marketImpliedProbability: Number(evaluation.marketPrice),
+    edge: Number(economics.edge.toFixed(4)),
+    expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
+    annualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
+    confidenceTier: modelAnalysis?.confidenceTier || confidenceTier(probability),
+  };
+
+  return {
+    ...evaluation,
+    status: economics.status,
+    thesisType: economics.thesisType,
+    rejectReasons,
+    aiProbability: Number(probability.toFixed(4)),
+    edge: Number(economics.edge.toFixed(4)),
+    expectedRoi: Number(economics.expectedRoi.toFixed(4)),
+    annualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
+    expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
+    aiAnalysis,
+    probabilityThesis: aiAnalysis.thesis || evaluation.probabilityThesis,
+    analysisModel: modelName,
+    analysisSummary: [
+      aiAnalysis.thesis || evaluation.probabilityThesis || "AI analysis produced no thesis.",
+      `Model probability ${(probability * 100).toFixed(1)}% vs market-buy entry ${(Number(evaluation.marketPrice) * 100).toFixed(1)}%.`,
+      `Edge ${(economics.edge * 100).toFixed(1)} pts; expected annualized return ${(economics.annualizedReturn * 100).toFixed(1)}%; thesis type ${economics.thesisType}.`,
+      modelAnalysis?.evidence ? `Evidence: ${[].concat(modelAnalysis.evidence).join(" ")}` : "",
+      modelAnalysis?.counterEvidence ? `Counter evidence: ${[].concat(modelAnalysis.counterEvidence).join(" ")}` : "",
+      evaluation.analysisSummary || "",
+    ].filter(Boolean).join(" "),
+  };
+}
+
+async function enrichEvaluationsWithAi(evaluations, learningProfile) {
+  if (!OPENAI_API_KEY || AI_ANALYSIS_LIMIT <= 0) return evaluations;
+  const candidates = [...evaluations]
+    .filter((item) => item.status !== "ERROR")
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === "ELIGIBLE" ? -1 : 1;
+      if (b.expectedValueUsdc !== a.expectedValueUsdc) return b.expectedValueUsdc - a.expectedValueUsdc;
+      return b.annualizedReturn - a.annualizedReturn;
+    })
+    .slice(0, AI_ANALYSIS_LIMIT);
+  const byId = new Map(evaluations.map((item) => [item.id, item]));
+
+  for (const candidate of candidates) {
+    const prompt = {
+      task: "Analyze a Polymarket paper-trading candidate. Estimate whether the selected outcome thesis should be YES/NO/OUTCOME, assign calibrated probability, and explain edge. Use only supplied market/orderbook data; do not invent external facts.",
+      candidate: {
+        question: candidate.question,
+        outcome: candidate.outcome,
+        marketPrice: candidate.marketPrice,
+        bestBid: candidate.bestBid,
+        bestAsk: candidate.bestAsk,
+        spread: candidate.spread,
+        slippage: candidate.slippage,
+        liquidity: candidate.liquidity,
+        volume24hr: candidate.volume24hr,
+        daysToResolution: candidate.daysToResolution,
+        takerFeeUsdc: candidate.takerFeeUsdc,
+        netGainIfWinUsdc: candidate.netGainIfWinUsdc,
+        expectedValueUsdc: candidate.expectedValueUsdc,
+        annualizedReturn: candidate.annualizedReturn,
+        heuristicProbability: candidate.aiProbability,
+        rawProbability: candidate.rawProbability,
+        tags: candidate.tags,
+        riskGroupLabels: candidate.riskGroupLabels,
+        currentThesis: candidate.probabilityThesis,
+      },
+      learningProfile: {
+        sampleSize: learningProfile.sampleSize,
+        brierScore: learningProfile.brierScore,
+        calibrationBias: learningProfile.calibrationBias,
+        promptRules: learningProfile.promptRules,
+      },
+      requiredJson: {
+        direction: "YES | NO | OUTCOME",
+        probability: "number from 0.01 to 0.995",
+        thesis: "one sentence",
+        confidenceTier: "near-certain | high | edge-watch | uncertain | long-shot",
+        evidence: ["short bullet"],
+        counterEvidence: ["short bullet"],
+      },
+    };
+    const result = await callOpenAiJson([
+      { role: "system", content: "You are a cautious prediction-market analyst. Return only valid JSON." },
+      { role: "user", content: JSON.stringify(prompt) },
+    ]);
+    if (!result || result.error) {
+      byId.set(candidate.id, {
+        ...candidate,
+        aiAnalysis: {
+          ...(candidate.aiAnalysis || {}),
+          aiModelError: result?.error || "OpenAI analysis unavailable",
+        },
+      });
+      continue;
+    }
+    const probability = clamp(Number(result.probability), 0.01, 0.995);
+    if (!Number.isFinite(probability)) continue;
+    byId.set(candidate.id, refreshEvaluationAfterProbability(candidate, probability, OPENAI_MODEL, {
+      direction: result.direction || outcomeKind(candidate.outcome),
+      thesis: result.thesis || candidate.probabilityThesis,
+      confidenceTier: result.confidenceTier || confidenceTier(probability),
+      evidence: Array.isArray(result.evidence) ? result.evidence.slice(0, 6) : [],
+      counterEvidence: Array.isArray(result.counterEvidence) ? result.counterEvidence.slice(0, 6) : [],
+      source: "openai-initial-analysis",
+    }));
+  }
+
+  return evaluations.map((item) => byId.get(item.id) || item);
 }
 
 function openRisk(trades) {
@@ -708,6 +1119,7 @@ function maybeOpenDailyTrade(state, eligible) {
     eventSlug: best.eventSlug,
     outcome: best.outcome,
     tokenId: best.tokenId,
+    tags: best.tags,
     riskCategory: best.riskCategory,
     riskPrimaryEntity: best.riskPrimaryEntity,
     riskGroupKeys: best.riskGroupKeys,
@@ -715,8 +1127,15 @@ function maybeOpenDailyTrade(state, eligible) {
     executionMode: best.executionMode,
     entryPrice: best.marketPrice,
     bestAsk: best.bestAsk,
+    bestBid: best.bestBid,
+    spread: best.spread,
     slippage: best.slippage,
+    liquidity: best.liquidity,
+    volume24hr: best.volume24hr,
+    daysToResolution: best.daysToResolution,
     aiProbability: best.aiProbability,
+    rawProbability: best.rawProbability,
+    thesisType: best.thesisType,
     annualizedReturn: best.annualizedReturn,
     expectedValueUsdc: best.expectedValueUsdc,
     stakeUsdc: Number(stake.toFixed(2)),
@@ -734,12 +1153,245 @@ function maybeOpenDailyTrade(state, eligible) {
     unrealizedPnlUsdc: 0,
     unrealizedPnlPct: 0,
     marketFills: best.marketFills,
+    aiAnalysis: best.aiAnalysis,
+    probabilityThesis: best.probabilityThesis,
+    analysisModel: best.analysisModel,
     analysisSummary: best.analysisSummary,
   };
 
   state.trades.unshift(trade);
   state.lastTradeDate = today;
   return { action: "OPENED", reason: "best eligible non-correlated candidate", trade, available: available - stake, skippedForRisk };
+}
+
+function closedOutcome(trade) {
+  const status = String(trade.status || "").toUpperCase();
+  if (status === "WON") return 1;
+  if (status === "LOST") return 0;
+  return null;
+}
+
+function deterministicPostMortem(trade) {
+  const actual = closedOutcome(trade);
+  const predicted = Number(trade.aiProbability);
+  const error = Number.isFinite(predicted) && actual != null ? actual - predicted : null;
+  const absoluteError = error == null ? null : Math.abs(error);
+  const overconfidentLoss = trade.status === "LOST" && predicted >= 0.8;
+  const underpricedWin = trade.status === "WON" && Number(trade.entryPrice) <= 0.8;
+  const conclusion = trade.status === "WON"
+    ? "Puvodni teze byla podporena vysledkem."
+    : "Puvodni teze selhala proti vysledku trhu.";
+  const lessons = [
+    overconfidentLoss ? "Snizit duveru u podobnych near-certain vstupu, dokud neni vice nez jen trzni konsensus." : "",
+    underpricedWin ? "Podobne edge opportunity si zaslouzi vyssi prioritu, pokud zustane kladne EV po fees a slippage." : "",
+    trade.thesisType === "EDGE_OPPORTUNITY" ? "Sledovat, zda nizsi pravdepodobnost kompenzuje vyssi vyplatu v realne kalibraci." : "",
+    Array.isArray(trade.riskGroupLabels) && trade.riskGroupLabels.length ? `Rizikova skupina: ${trade.riskGroupLabels.slice(0, 3).join(", ")}.` : "",
+  ].filter(Boolean);
+
+  return {
+    reviewedAt: nowIso(),
+    model: OPENAI_API_KEY ? "heuristic-fallback-after-ai-error" : "heuristic-postmortem-v1",
+    result: trade.status,
+    actualOutcome: actual,
+    predictedProbability: Number.isFinite(predicted) ? Number(predicted.toFixed(4)) : null,
+    predictionError: error == null ? null : Number(error.toFixed(4)),
+    absoluteError: absoluteError == null ? null : Number(absoluteError.toFixed(4)),
+    conclusion,
+    thesisReview: trade.probabilityThesis || trade.analysisSummary || "No stored thesis.",
+    lessons,
+    optimizationSignals: {
+      overconfidentLoss,
+      underpricedWin,
+      thesisType: trade.thesisType || "UNKNOWN",
+      probabilityBucket: probabilityBucket(predicted),
+      factorKeys: analysisFactorKeys({
+        probability: Number.isFinite(predicted) ? predicted : 0.5,
+        outcome: trade.outcome,
+        tags: trade.tags || [trade.riskCategory || "general"],
+        spread: trade.spread,
+        liquidity: trade.liquidity,
+        volume24hr: trade.volume24hr,
+        days: trade.daysToResolution,
+        market: { negRisk: trade.feeType === "negative_risk" },
+      }),
+    },
+  };
+}
+
+async function reviewClosedTradesWithAi(trades) {
+  const reviewed = [];
+  let remaining = AI_POSTMORTEM_LIMIT;
+
+  for (const trade of trades) {
+    if (!["WON", "LOST"].includes(String(trade.status || "").toUpperCase()) || trade.postMortem) {
+      reviewed.push(trade);
+      continue;
+    }
+
+    const fallback = deterministicPostMortem(trade);
+    if (!OPENAI_API_KEY || remaining <= 0) {
+      reviewed.push({ ...trade, postMortem: fallback });
+      continue;
+    }
+
+    remaining -= 1;
+    const prompt = {
+      task: "Review a resolved Polymarket paper trade. Compare the initial thesis and probability against the actual result. Produce a concise conclusion and optimization signals for future initial analysis. Use only supplied data.",
+      trade: {
+        question: trade.question,
+        outcome: trade.outcome,
+        result: trade.status,
+        entryPrice: trade.entryPrice,
+        aiProbability: trade.aiProbability,
+        rawProbability: trade.rawProbability,
+        thesisType: trade.thesisType,
+        probabilityThesis: trade.probabilityThesis,
+        analysisSummary: trade.analysisSummary,
+        realizedPnlUsdc: trade.realizedPnlUsdc,
+        realizedPnlPct: trade.realizedPnlPct,
+        riskGroupLabels: trade.riskGroupLabels,
+      },
+      requiredJson: {
+        conclusion: "short Czech sentence",
+        thesisReview: "short Czech paragraph",
+        lessons: ["short Czech bullet"],
+        probabilityAdjustmentHint: "increase | decrease | neutral",
+        factorKeysToReward: ["factor:key"],
+        factorKeysToPenalize: ["factor:key"],
+      },
+    };
+    const result = await callOpenAiJson([
+      { role: "system", content: "You are a prediction-market calibration reviewer. Return only valid JSON." },
+      { role: "user", content: JSON.stringify(prompt) },
+    ]);
+    if (!result || result.error) {
+      reviewed.push({ ...trade, postMortem: { ...fallback, aiModelError: result?.error || "OpenAI post-mortem unavailable" } });
+      continue;
+    }
+    reviewed.push({
+      ...trade,
+      postMortem: {
+        ...fallback,
+        model: OPENAI_MODEL,
+        conclusion: result.conclusion || fallback.conclusion,
+        thesisReview: result.thesisReview || fallback.thesisReview,
+        lessons: Array.isArray(result.lessons) && result.lessons.length ? result.lessons.slice(0, 6) : fallback.lessons,
+        probabilityAdjustmentHint: result.probabilityAdjustmentHint || "neutral",
+        factorKeysToReward: Array.isArray(result.factorKeysToReward) ? result.factorKeysToReward.slice(0, 8) : [],
+        factorKeysToPenalize: Array.isArray(result.factorKeysToPenalize) ? result.factorKeysToPenalize.slice(0, 8) : [],
+      },
+    });
+  }
+
+  return reviewed;
+}
+
+function buildLearningProfile(trades, previousProfile = {}) {
+  const closed = trades.filter((trade) => closedOutcome(trade) != null && Number.isFinite(Number(trade.aiProbability)));
+  const profile = normalizeLearningProfile(previousProfile);
+  if (!closed.length) {
+    return {
+      ...profile,
+      updatedAt: nowIso(),
+      promptRules: [
+        "Prefer candidates with positive EV after fees, slippage, and market-buy execution.",
+        "Do not treat market consensus alone as proof; require explicit liquidity, spread, and resolution clarity checks.",
+        "Allow edge-opportunity candidates below 95% only when EV and edge are materially positive.",
+      ],
+    };
+  }
+
+  const buckets = {};
+  const factors = new Map();
+  let brier = 0;
+  let bias = 0;
+
+  for (const trade of closed) {
+    const predicted = Number(trade.aiProbability);
+    const actual = closedOutcome(trade);
+    const error = actual - predicted;
+    brier += (predicted - actual) ** 2;
+    bias += error;
+
+    const bucketKey = probabilityBucket(predicted);
+    buckets[bucketKey] ||= { count: 0, predictedSum: 0, actualSum: 0 };
+    buckets[bucketKey].count += 1;
+    buckets[bucketKey].predictedSum += predicted;
+    buckets[bucketKey].actualSum += actual;
+
+    const postFactors = [
+      ...(trade.postMortem?.optimizationSignals?.factorKeys || []),
+      ...(trade.postMortem?.factorKeysToReward || []),
+      ...(trade.postMortem?.factorKeysToPenalize || []),
+    ];
+    const keys = postFactors.length ? postFactors : analysisFactorKeys({
+      probability: predicted,
+      outcome: trade.outcome,
+      tags: trade.tags || [trade.riskCategory || "general"],
+      spread: trade.spread,
+      liquidity: trade.liquidity,
+      volume24hr: trade.volume24hr,
+      days: trade.daysToResolution,
+      market: { negRisk: false },
+    });
+
+    for (const key of new Set(keys)) {
+      if (!factors.has(key)) factors.set(key, { count: 0, predictedSum: 0, actualSum: 0 });
+      const record = factors.get(key);
+      record.count += 1;
+      record.predictedSum += predicted;
+      record.actualSum += actual;
+    }
+  }
+
+  const bucketCalibration = {};
+  for (const [key, record] of Object.entries(buckets)) {
+    const avgPredicted = record.predictedSum / record.count;
+    const winRate = record.actualSum / record.count;
+    bucketCalibration[key] = {
+      count: record.count,
+      avgPredicted: Number(avgPredicted.toFixed(4)),
+      winRate: Number(winRate.toFixed(4)),
+      calibrationError: Number((winRate - avgPredicted).toFixed(4)),
+    };
+  }
+
+  const factorAdjustments = {};
+  for (const [key, record] of factors) {
+    if (record.count < 2) continue;
+    const avgPredicted = record.predictedSum / record.count;
+    const winRate = record.actualSum / record.count;
+    const adjustment = clamp((winRate - avgPredicted) * 0.2, -0.05, 0.05);
+    factorAdjustments[key] = {
+      count: record.count,
+      avgPredicted: Number(avgPredicted.toFixed(4)),
+      winRate: Number(winRate.toFixed(4)),
+      adjustment: Number(adjustment.toFixed(4)),
+    };
+  }
+
+  const brierScore = brier / closed.length;
+  const calibrationBias = bias / closed.length;
+  const promptRules = [
+    calibrationBias < -0.05 ? "Recent predictions were overconfident; penalize market-consensus-only theses." : "",
+    calibrationBias > 0.05 ? "Recent predictions were too conservative; promote positive-edge opportunities with acceptable liquidity." : "",
+    "Always compute probability against executable market-buy price, not midpoint.",
+    "Prefer lower-probability opportunities only when edge, EV p.a., and post-fee payout all remain positive.",
+    "After a loss, avoid multiplying exposure to the same event, team, or risk group until resolved.",
+  ].filter(Boolean);
+
+  return {
+    version: 1,
+    updatedAt: nowIso(),
+    sampleSize: closed.length,
+    brierScore: Number(brierScore.toFixed(4)),
+    calibrationBias: Number(calibrationBias.toFixed(4)),
+    bucketCalibration,
+    factorAdjustments,
+    promptRules,
+    aiLastRun: OPENAI_API_KEY ? nowIso() : profile.aiLastRun,
+    aiModel: OPENAI_API_KEY ? OPENAI_MODEL : profile.aiModel,
+  };
 }
 
 async function loadMarkets() {
@@ -755,8 +1407,10 @@ async function loadMarkets() {
 async function run() {
   const state = await readState();
   state.trades = await refreshTrades(state.trades);
+  state.trades = await reviewClosedTradesWithAi(state.trades);
+  state.learningProfile = buildLearningProfile(state.trades, state.learningProfile);
   const markets = await loadMarkets();
-  const evaluations = [];
+  let evaluations = [];
 
   for (const market of markets) {
     const outcomes = parseJsonField(market.outcomes);
@@ -770,7 +1424,7 @@ async function run() {
 
       try {
         const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`);
-        const evaluation = evaluateCandidate({ market, outcomeIndex, tokenId, book });
+        const evaluation = evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfile: state.learningProfile });
         if (evaluation) evaluations.push(evaluation);
       } catch (error) {
         evaluations.push({
@@ -787,9 +1441,11 @@ async function run() {
     }
   }
 
+  evaluations = await enrichEvaluationsWithAi(evaluations, state.learningProfile);
   const eligible = evaluations
     .filter((item) => item.status === "ELIGIBLE")
     .sort((a, b) => {
+      if (a.thesisType !== b.thesisType) return a.thesisType === "EDGE_OPPORTUNITY" ? -1 : 1;
       if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
       return b.expectedValueUsdc - a.expectedValueUsdc;
     });
@@ -807,6 +1463,9 @@ async function run() {
     maxStakeUsdc: Number((PORTFOLIO_USDC * MAX_FRACTION).toFixed(2)),
     minProbability: MIN_PROBABILITY,
     minAnnualReturn: MIN_ANNUAL_RETURN,
+    opportunityMinProbability: OPPORTUNITY_MIN_PROBABILITY,
+    opportunityMinEdge: OPPORTUNITY_MIN_EDGE,
+    opportunityMinAnnualReturn: OPPORTUNITY_MIN_ANNUAL_RETURN,
     realizedPnlUsdc: Number(realizedPnl.toFixed(4)),
     realizedPnlPct: pnlPercent(realizedPnl, PORTFOLIO_USDC),
     openPnlUsdc: Number(openPnl.toFixed(4)),
@@ -825,6 +1484,9 @@ async function run() {
     reason: decision.reason,
     tradeId: decision.trade?.id || null,
     riskSkippedCount: decision.skippedForRisk || 0,
+    learningSampleSize: state.learningProfile.sampleSize,
+    brierScore: state.learningProfile.brierScore,
+    calibrationBias: state.learningProfile.calibrationBias,
   };
   state.evaluations = [...evaluations, ...state.evaluations].slice(0, MAX_HISTORY);
   state.runLog = [
@@ -835,6 +1497,8 @@ async function run() {
       action: decision.action,
       reason: decision.reason,
       riskSkippedCount: decision.skippedForRisk || 0,
+      learningSampleSize: state.learningProfile.sampleSize,
+      brierScore: state.learningProfile.brierScore,
     },
     ...state.runLog,
   ].slice(0, 120);

@@ -174,6 +174,14 @@ function tradeStatusNote(trade) {
   return parts.filter(Boolean).join(", ");
 }
 
+function postMortemLine(trade) {
+  const review = trade.postMortem;
+  if (!review) return "";
+  const error = Number(review.predictionError);
+  const errorText = Number.isFinite(error) ? `error ${signedPercent(error)}` : "";
+  return [review.conclusion, errorText].filter(Boolean).join(" ");
+}
+
 function renderTradeRows(trades, emptyText) {
   if (!trades.length) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
   return `
@@ -195,6 +203,7 @@ function renderTradeRows(trades, emptyText) {
             <td>
               ${marketAnchor(trade)}
               <span>${escapeHtml(riskLine(trade))}</span>
+              <span>${escapeHtml(postMortemLine(trade))}</span>
             </td>
             <td>
               ${probability(Number(trade.entryPrice))}
@@ -237,7 +246,20 @@ function analysisBadge(item) {
     ? (item.riskBlockedReason || "risk-blocked by an open correlated paper trade")
     : "";
   const reasons = [riskReason, ...(item.rejectReasons || [])].filter(Boolean).join("; ") || "passes filters";
-  const details = [reasons, item.analysisSummary || ""].filter(Boolean).join("\n\n");
+  const ai = item.aiAnalysis || {};
+  const details = [
+    reasons,
+    item.thesisType ? `Thesis type: ${item.thesisType}` : "",
+    item.probabilityThesis || ai.thesis || "",
+    ai.rawProbability == null ? "" : `Raw probability: ${probability(Number(ai.rawProbability))}`,
+    ai.learningAdjustment == null ? "" : `Learning adjustment: ${signedPercent(Number(ai.learningAdjustment))}`,
+    Array.isArray(ai.appliedLearning) && ai.appliedLearning.length
+      ? `Applied learning: ${ai.appliedLearning.map((entry) => `${entry.key} ${signedPercent(Number(entry.adjustment))}`).join(", ")}`
+      : "",
+    Array.isArray(ai.evidence) && ai.evidence.length ? `Evidence: ${ai.evidence.join(" ")}` : "",
+    Array.isArray(ai.counterEvidence) && ai.counterEvidence.length ? `Counter: ${ai.counterEvidence.join(" ")}` : "",
+    item.analysisSummary || "",
+  ].filter(Boolean).join("\n\n");
   return `
     <span class="analysis-popover">
       <button class="info-button" type="button" aria-label="Show analysis details" title="${escapeHtml(details)}">i</button>
@@ -273,6 +295,7 @@ function renderBotState(botState) {
   state.botState = botState;
   const decision = botState.lastDecision || {};
   const portfolio = botState.portfolio || {};
+  const learning = botState.learningProfile || {};
   const trades = Array.isArray(botState.trades) ? botState.trades : [];
   const closedTrades = trades.filter(isClosedTrade);
   const openTrades = trades.filter((trade) => !isClosedTrade(trade));
@@ -322,7 +345,13 @@ function renderBotState(botState) {
       </div>
       <div>
         <span class="label">Filters</span>
-        <strong>${percent(Number(portfolio.minProbability ?? 0.95))} / ${percent(Number(portfolio.minAnnualReturn ?? 0.05))} p.a.</strong>
+        <strong>${percent(Number(portfolio.minProbability ?? 0.95))} or edge ${percent(Number(portfolio.opportunityMinProbability ?? 0.6))}</strong>
+        <span>${percent(Number(portfolio.minAnnualReturn ?? 0.05))} p.a. / edge ${percent(Number(portfolio.opportunityMinEdge ?? 0.04))}</span>
+      </div>
+      <div>
+        <span class="label">Learning</span>
+        <strong>${Number(learning.sampleSize || 0)} reviewed</strong>
+        <span>Brier ${Number.isFinite(Number(learning.brierScore)) ? Number(learning.brierScore).toFixed(3) : "-"} / bias ${Number.isFinite(Number(learning.calibrationBias)) ? signedPercent(Number(learning.calibrationBias)) : "-"}</span>
       </div>
       <div>
         <span class="label">Decision</span>

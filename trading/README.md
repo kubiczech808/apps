@@ -8,14 +8,9 @@ This PoC keeps public market discovery separate from private order execution.
 
 ## Paper trading workflow
 
-The public UI now has a paper-trading desk with a default 100 USDC portfolio and a hard 5% max allocation per idea.
+The public UI has an autonomous paper-trading desk with a default 100 USDC portfolio and a hard 5% max allocation per idea.
 
-1. Candidate scan: loads active Polymarket markets, checks CLOB orderbooks, and ranks tradeable candidates by liquidity, 24h volume, spread, time-to-resolution, and resolution clarity.
-2. Analysis: uses the selected outcome, current ask, user-entered AI probability, and the 5% allocation cap to calculate break-even probability, edge, expected value, expected ROI, and max drawdown.
-3. Paper entry: only records a paper position when the decision is `PAPER BUY`. Otherwise it blocks the entry as `WAIT`.
-4. Tracking: stores the local paper ledger in browser `localStorage`; positions can be resolved as win/loss for realized P/L tracking.
-
-This first version is deterministic and does not call a private LLM API from the public site. A real AI analyst step should run server-side or in GitHub Actions so model keys stay out of browser code.
+The browser only reads the published `data/paper-state.json`. Analysis, optional AI calls, post-mortems, and optimization all run server-side in GitHub Actions so model keys stay out of browser code.
 
 ## Autonomous paper bot
 
@@ -24,15 +19,26 @@ This first version is deterministic and does not call a private LLM API from the
 The bot:
 
 - evaluates public Polymarket markets and CLOB orderbooks in the background,
-- records every evaluated candidate with price, spread, liquidity, estimated probability, expected value, annualized expected return, rejection reasons, and an analysis summary,
+- records every evaluated candidate with price, spread, liquidity, estimated probability, expected value, annualized expected return, rejection reasons, a YES/NO/OUTCOME thesis, and an analysis summary,
 - simulates market BUY execution through available ask levels for the full 5 USDC stake; expected value uses the average executable price including slippage, not the midpoint,
 - subtracts Polymarket taker fees when the market has `feesEnabled` and a `feeSchedule.rate`; the simulated fee is calculated per fill as `shares * feeRate * price * (1 - price)` and rounded to 5 decimals,
-- requires estimated probability of at least 95%,
+- treats 95%+ probability candidates as high-confidence entries,
+- can also mark lower-probability `EDGE_OPPORTUNITY` candidates as eligible when probability, edge, and annualized EV clear stricter opportunity thresholds,
 - rejects candidates with annualized expected return below 5%,
 - places a 5 USDC simulated stake per idea from a 100 USDC paper portfolio; max paper loss includes any taker fee,
 - opens at most one paper trade per Prague calendar day,
 - skips new entries when available paper capital is exhausted, the same token already has an open paper position, or an open position shares the same event/team risk group,
 - refreshes existing paper positions on every run; open positions are marked to current best bid, while closed/resolved markets are moved to `WON`/`LOST` with realized P/L and P/L percent.
+
+## Optimization loop
+
+The bot now writes a `learningProfile` into `paper-state.json`.
+
+1. Initial analysis creates a thesis for each candidate, stores raw probability, calibrated probability, confidence tier, applied learning adjustments, expected value, and whether the candidate is `HIGH_CONFIDENCE` or `EDGE_OPPORTUNITY`.
+2. After a paper trade resolves, the bot creates a post-mortem that compares the initial thesis and probability against the actual `WON`/`LOST` result.
+3. Resolved trades update calibration buckets, Brier score, global bias, and factor-level adjustments for tags, price buckets, liquidity, spread, horizon, and outcome type.
+4. The next initial analysis applies those calibration adjustments before computing edge and eligibility.
+5. If `OPENAI_API_KEY` is available in GitHub Secrets, the bot asks the configured model for initial candidate review and post-mortem JSON. Without the key, it uses deterministic fallback analysis and keeps running.
 
 This is not live trading. It does not use the Polymarket private key and cannot submit orders.
 
