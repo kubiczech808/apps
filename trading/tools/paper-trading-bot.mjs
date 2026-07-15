@@ -415,10 +415,14 @@ async function markOpenTrade(trade) {
   const prices = parseOutcomePrices(market);
   const resolvedPrice = outcomeIndex >= 0 ? prices[outcomeIndex] : null;
   const eventSlug = marketEventSlug(market);
+  const endDate = market.endDate || trade.endDate || null;
+  const remainingDays = endDate ? daysToEnd(endDate) : null;
   const base = {
     ...trade,
     question: market.question || trade.question,
     eventSlug,
+    endDate,
+    daysToResolution: remainingDays == null ? trade.daysToResolution ?? null : Number(remainingDays.toFixed(2)),
     marketClosed: Boolean(market.closed),
     marketActive: Boolean(market.active),
     acceptingOrders: Boolean(market.acceptingOrders),

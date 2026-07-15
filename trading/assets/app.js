@@ -67,6 +67,12 @@ function signedPercent(value) {
   return `${value >= 0 ? "+" : ""}${percent(value)}`;
 }
 
+function compactDays(value) {
+  if (!Number.isFinite(value)) return "-";
+  if (value < 1) return `${Math.max(0, value).toFixed(1)} d`;
+  return `${value.toFixed(1)} d`;
+}
+
 function pnlClass(value) {
   return Number(value) >= 0 ? "positive" : "negative";
 }
@@ -174,6 +180,81 @@ function tradeStatusNote(trade) {
   return parts.filter(Boolean).join(", ");
 }
 
+function tradeEndDate(trade) {
+  return trade.endDate || trade.closedTime || trade.resolvedAt || null;
+}
+
+function daysBetween(startValue, endValue) {
+  const start = Date.parse(startValue || "");
+  const end = Date.parse(endValue || "");
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return Math.max(0, (end - start) / 86400000);
+}
+
+function daysUntil(value) {
+  const end = Date.parse(value || "");
+  if (!Number.isFinite(end)) return null;
+  return Math.max(0, (end - Date.now()) / 86400000);
+}
+
+function tradeHoldingDays(trade) {
+  const end = isClosedTrade(trade) ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || new Date().toISOString()) : new Date().toISOString();
+  return daysBetween(trade.openedAt || trade.date, end);
+}
+
+function annualizedForPeriod(returnPct, days) {
+  if (!Number.isFinite(returnPct) || !Number.isFinite(days) || days <= 0) return null;
+  return returnPct * (365 / Math.max(days, 1 / 24));
+}
+
+function tradePotentialGain(trade) {
+  const netGain = Number(trade.netGainIfWinUsdc);
+  if (Number.isFinite(netGain)) return netGain;
+  const shares = Number(trade.shares);
+  const stake = Number(trade.stakeUsdc || 0);
+  const fee = Number(trade.takerFeeUsdc || 0);
+  if (Number.isFinite(shares) && shares > 0) return shares - stake - fee;
+  return null;
+}
+
+function tradeCostBasis(trade) {
+  return Number(trade.totalCostUsdc || trade.maxLossUsdc || trade.stakeUsdc || 0);
+}
+
+function resolutionCell(trade) {
+  const endDate = tradeEndDate(trade);
+  const remaining = isClosedTrade(trade) ? null : daysUntil(endDate);
+  const storedDays = Number(trade.daysToResolution);
+  const days = Number.isFinite(remaining) ? remaining : storedDays;
+  return `
+    ${escapeHtml(endDate ? formatDate(endDate) : "-")}
+    <span>${isClosedTrade(trade) ? "resolved" : `${compactDays(days)} left`}</span>
+  `;
+}
+
+function holdingCell(trade) {
+  const heldDays = tradeHoldingDays(trade);
+  const currentReturn = tradePnlPct(trade);
+  const annualized = annualizedForPeriod(currentReturn, heldDays);
+  return `
+    ${compactDays(heldDays)}
+    <span class="${pnlClass(annualized)}">${signedPercent(annualized)} p.a. current</span>
+  `;
+}
+
+function potentialCell(trade) {
+  const gain = tradePotentialGain(trade);
+  const basis = tradeCostBasis(trade);
+  const gainPct = basis > 0 && Number.isFinite(gain) ? gain / basis : null;
+  const endDate = tradeEndDate(trade);
+  const totalPlannedDays = daysBetween(trade.openedAt || trade.date, endDate);
+  const annualized = annualizedForPeriod(gainPct, totalPlannedDays);
+  return `
+    <span class="${pnlClass(gain)}">${signedMoney(gain)}</span>
+    <span class="${pnlClass(gainPct)}">${signedPercent(gainPct)} if win${Number.isFinite(annualized) ? ` / ${signedPercent(annualized)} p.a.` : ""}</span>
+  `;
+}
+
 function postMortemLine(trade) {
   const review = trade.postMortem;
   if (!review) return "";
@@ -191,6 +272,9 @@ function renderTradeRows(trades, emptyText) {
           <th>Opened</th>
           <th>Market</th>
           <th>Entry</th>
+          <th>Resolution</th>
+          <th>Holding</th>
+          <th>Potential</th>
           <th>Status</th>
           <th>P/L</th>
           <th>Stake</th>
@@ -209,6 +293,9 @@ function renderTradeRows(trades, emptyText) {
               ${probability(Number(trade.entryPrice))}
               <span>${[trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`, feeLine(trade)].filter(Boolean).join(", ")}</span>
             </td>
+            <td>${resolutionCell(trade)}</td>
+            <td>${holdingCell(trade)}</td>
+            <td>${potentialCell(trade)}</td>
             <td>
               ${escapeHtml(trade.status || "OPEN")}
               <span>${escapeHtml(tradeStatusNote(trade))}</span>
