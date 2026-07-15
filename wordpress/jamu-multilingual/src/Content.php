@@ -56,6 +56,7 @@ final class Content
         add_filter('option_blogname', fn ($value) => $this->site_option($value, 'blogname'), 20);
         add_filter('option_blogdescription', fn ($value) => $this->site_option($value, 'blogdescription'), 20);
         add_action('wp_head', [$this, 'language_switcher_styles'], 30);
+        add_action('wp_footer', [$this, 'language_switcher_late_styles'], 98);
         add_action('wp_footer', [$this, 'frontend_i18n_fallback'], 99);
     }
 
@@ -586,10 +587,28 @@ final class Content
 .jamu-language-menu__flag{align-items:center;display:inline-flex;line-height:1}
 .jamu-language-menu__flag-icon{border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.15);display:block;height:1rem;width:1.5rem}
 .jamu-language-menu .wp-block-navigation__submenu-icon{margin-left:.2em}
-.jamu-language-menu .wp-block-navigation__submenu-container{background:transparent!important;background-color:transparent!important;border:0!important;box-shadow:none!important;gap:.25rem;margin:0!important;min-width:0!important;padding:.2rem 0 0!important;width:auto!important}
+.jamu-language-menu .wp-block-navigation__submenu-container{background:transparent!important;background-color:transparent!important;background-image:none!important;border:0!important;box-shadow:none!important;gap:.25rem;margin:0!important;min-width:0!important;padding:.2rem 0 0!important;width:auto!important}
 .jamu-language-menu__item,.jamu-language-menu__item .wp-block-navigation-item__content{background:transparent!important;background-color:transparent!important}
 .jamu-language-menu__item .wp-block-navigation-item__content{justify-content:center;min-width:1.75rem;padding:.1rem 0!important}
 @media (min-width:782px){.jamu-language-menu{position:relative}.jamu-language-menu .wp-block-navigation__submenu-container{left:50%!important;right:auto!important;top:100%!important;transform:translateX(-50%)}}
+</style>
+HTML;
+    }
+
+    public function language_switcher_late_styles(): void
+    {
+        if (is_admin() && !wp_doing_ajax()) {
+            return;
+        }
+
+        echo <<<'HTML'
+<style id="jamu-ml-language-switcher-late-style">
+@media (min-width:782px){
+.jamu-language-menu,.jamu-language-menu.has-child,.jamu-language-menu.open-on-hover-click,.jamu-language-menu.wp-block-navigation-submenu{background:transparent!important;background-color:transparent!important;background-image:none!important}
+.jamu-language-menu>.wp-block-navigation__submenu-container,.jamu-language-menu.has-child:not(.open-on-click):hover>.wp-block-navigation__submenu-container,.jamu-language-menu.has-child:not(.open-on-click):focus-within>.wp-block-navigation__submenu-container,.jamu-language-menu .wp-block-navigation__submenu-container.wp-block-navigation-submenu{background:transparent!important;background-color:transparent!important;background-image:none!important;backdrop-filter:none!important;border:0!important;box-shadow:none!important;left:50%!important;margin:0!important;max-width:max-content!important;min-width:0!important;opacity:1!important;outline:0!important;padding:.15rem 0 0!important;right:auto!important;top:100%!important;transform:translateX(-50%)!important;width:max-content!important}
+.jamu-language-menu>.wp-block-navigation__submenu-container:before,.jamu-language-menu>.wp-block-navigation__submenu-container:after{background:transparent!important;content:none!important;display:none!important}
+.jamu-language-menu__item,.jamu-language-menu__item:hover,.jamu-language-menu__item:focus-within,.jamu-language-menu__item>.wp-block-navigation-item__content,.jamu-language-menu__item>.wp-block-navigation-item__content:hover,.jamu-language-menu__item>.wp-block-navigation-item__content:focus{background:transparent!important;background-color:transparent!important;background-image:none!important;box-shadow:none!important}
+}
 </style>
 HTML;
     }
