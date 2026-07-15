@@ -20,6 +20,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const AI_ANALYSIS_LIMIT = Number(process.env.PAPER_AI_ANALYSIS_LIMIT || 10);
 const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
+const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const TZ = "Europe/Prague";
 
 function nowIso() {
@@ -1433,11 +1434,89 @@ async function loadMarkets() {
   return fetchJson(url);
 }
 
+function updatePortfolio(state) {
+  const realizedPnl = state.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
+  const openPnl = state.trades
+    .filter((trade) => trade.status === "OPEN")
+    .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
+  const equity = PORTFOLIO_USDC + realizedPnl + openPnl;
+  state.portfolio = {
+    initialUsdc: PORTFOLIO_USDC,
+    maxFraction: MAX_FRACTION,
+    maxStakeUsdc: Number((PORTFOLIO_USDC * MAX_FRACTION).toFixed(2)),
+    minProbability: MIN_PROBABILITY,
+    minAnnualReturn: MIN_ANNUAL_RETURN,
+    opportunityMinProbability: OPPORTUNITY_MIN_PROBABILITY,
+    opportunityMinEdge: OPPORTUNITY_MIN_EDGE,
+    opportunityMinAnnualReturn: OPPORTUNITY_MIN_ANNUAL_RETURN,
+    realizedPnlUsdc: Number(realizedPnl.toFixed(4)),
+    realizedPnlPct: pnlPercent(realizedPnl, PORTFOLIO_USDC),
+    openPnlUsdc: Number(openPnl.toFixed(4)),
+    openPnlPct: pnlPercent(openPnl, PORTFOLIO_USDC),
+    equityUsdc: Number(equity.toFixed(4)),
+    totalPnlUsdc: Number((realizedPnl + openPnl).toFixed(4)),
+    totalPnlPct: pnlPercent(realizedPnl + openPnl, PORTFOLIO_USDC),
+    openRiskUsdc: Number(openRisk(state.trades).toFixed(2)),
+    freeCapitalUsdc: Number(Math.max(0, PORTFOLIO_USDC - openRisk(state.trades)).toFixed(2)),
+  };
+}
+
+function recordRun(state, { evaluations = [], eligible = [], decision }) {
+  const runAt = state.generatedAt;
+  state.lastDecision = {
+    runAt,
+    evaluatedCount: evaluations.length,
+    eligibleCount: eligible.length,
+    action: decision.action,
+    reason: decision.reason,
+    tradeId: decision.trade?.id || null,
+    riskSkippedCount: decision.skippedForRisk || 0,
+    refreshOnly: REFRESH_ONLY,
+    learningSampleSize: state.learningProfile.sampleSize,
+    brierScore: state.learningProfile.brierScore,
+    calibrationBias: state.learningProfile.calibrationBias,
+  };
+  state.runLog = [
+    {
+      runAt,
+      evaluatedCount: evaluations.length,
+      eligibleCount: eligible.length,
+      action: decision.action,
+      reason: decision.reason,
+      riskSkippedCount: decision.skippedForRisk || 0,
+      refreshOnly: REFRESH_ONLY,
+      learningSampleSize: state.learningProfile.sampleSize,
+      brierScore: state.learningProfile.brierScore,
+    },
+    ...state.runLog,
+  ].slice(0, 120);
+}
+
+async function writeState(state) {
+  await mkdir(dirname(OUTPUT_PATH), { recursive: true });
+  await writeFile(OUTPUT_PATH, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
 async function run() {
   const state = await readState();
   state.trades = await refreshTrades(state.trades);
   state.trades = await reviewClosedTradesWithAi(state.trades);
   state.learningProfile = buildLearningProfile(state.trades, state.learningProfile);
+  state.generatedAt = nowIso();
+  updatePortfolio(state);
+
+  if (REFRESH_ONLY) {
+    recordRun(state, {
+      decision: {
+        action: "REFRESH",
+        reason: "refreshed open positions and resolved markets only",
+      },
+    });
+    await writeState(state);
+    console.log(JSON.stringify(state.lastDecision, null, 2));
+    return;
+  }
+
   const markets = await loadMarkets();
   let evaluations = [];
 
@@ -1481,59 +1560,10 @@ async function run() {
   const decision = maybeOpenDailyTrade(state, eligible);
 
   state.generatedAt = nowIso();
-  const realizedPnl = state.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
-  const openPnl = state.trades
-    .filter((trade) => trade.status === "OPEN")
-    .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
-  const equity = PORTFOLIO_USDC + realizedPnl + openPnl;
-  state.portfolio = {
-    initialUsdc: PORTFOLIO_USDC,
-    maxFraction: MAX_FRACTION,
-    maxStakeUsdc: Number((PORTFOLIO_USDC * MAX_FRACTION).toFixed(2)),
-    minProbability: MIN_PROBABILITY,
-    minAnnualReturn: MIN_ANNUAL_RETURN,
-    opportunityMinProbability: OPPORTUNITY_MIN_PROBABILITY,
-    opportunityMinEdge: OPPORTUNITY_MIN_EDGE,
-    opportunityMinAnnualReturn: OPPORTUNITY_MIN_ANNUAL_RETURN,
-    realizedPnlUsdc: Number(realizedPnl.toFixed(4)),
-    realizedPnlPct: pnlPercent(realizedPnl, PORTFOLIO_USDC),
-    openPnlUsdc: Number(openPnl.toFixed(4)),
-    openPnlPct: pnlPercent(openPnl, PORTFOLIO_USDC),
-    equityUsdc: Number(equity.toFixed(4)),
-    totalPnlUsdc: Number((realizedPnl + openPnl).toFixed(4)),
-    totalPnlPct: pnlPercent(realizedPnl + openPnl, PORTFOLIO_USDC),
-    openRiskUsdc: Number(openRisk(state.trades).toFixed(2)),
-    freeCapitalUsdc: Number(Math.max(0, PORTFOLIO_USDC - openRisk(state.trades)).toFixed(2)),
-  };
-  state.lastDecision = {
-    runAt: state.generatedAt,
-    evaluatedCount: evaluations.length,
-    eligibleCount: eligible.length,
-    action: decision.action,
-    reason: decision.reason,
-    tradeId: decision.trade?.id || null,
-    riskSkippedCount: decision.skippedForRisk || 0,
-    learningSampleSize: state.learningProfile.sampleSize,
-    brierScore: state.learningProfile.brierScore,
-    calibrationBias: state.learningProfile.calibrationBias,
-  };
+  updatePortfolio(state);
   state.evaluations = [...evaluations, ...state.evaluations].slice(0, MAX_HISTORY);
-  state.runLog = [
-    {
-      runAt: state.generatedAt,
-      evaluatedCount: evaluations.length,
-      eligibleCount: eligible.length,
-      action: decision.action,
-      reason: decision.reason,
-      riskSkippedCount: decision.skippedForRisk || 0,
-      learningSampleSize: state.learningProfile.sampleSize,
-      brierScore: state.learningProfile.brierScore,
-    },
-    ...state.runLog,
-  ].slice(0, 120);
-
-  await mkdir(dirname(OUTPUT_PATH), { recursive: true });
-  await writeFile(OUTPUT_PATH, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  recordRun(state, { evaluations, eligible, decision });
+  await writeState(state);
   console.log(JSON.stringify(state.lastDecision, null, 2));
 }
 

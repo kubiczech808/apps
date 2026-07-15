@@ -14,7 +14,12 @@ The browser only reads the published `data/paper-state.json`. Analysis, optional
 
 ## Autonomous paper bot
 
-`.github/workflows/trading-paper-bot.yml` runs every 4 hours and writes `trading/data/paper-state.json` to the public `/trading/data/` directory.
+`.github/workflows/trading-paper-bot.yml` writes `trading/data/paper-state.json` to the public `/trading/data/` directory.
+
+It runs in two modes:
+
+- full analysis every hour at minute 7,
+- refresh-only checks at minutes 22, 37, and 52 to update open positions, resolved markets, post-mortems, and portfolio P/L without opening a new trade or rescanning candidates.
 
 The bot:
 

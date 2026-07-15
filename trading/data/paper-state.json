@@ -1,28 +1,31 @@
 {
-  "schemaVersion": 1,
-  "generatedAt": "2026-07-15T15:03:47.641Z",
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-15T22:13:49.247Z",
   "portfolio": {
     "initialUsdc": 100,
     "maxFraction": 0.05,
     "maxStakeUsdc": 5,
     "minProbability": 0.95,
     "minAnnualReturn": 0.05,
-    "realizedPnlUsdc": 0.2296,
-    "realizedPnlPct": 0.0023,
-    "openPnlUsdc": -0.0212,
-    "openPnlPct": -0.0002,
-    "equityUsdc": 100.2084,
-    "totalPnlUsdc": 0.2084,
-    "totalPnlPct": 0.0021,
-    "openRiskUsdc": 10.02,
-    "freeCapitalUsdc": 89.98
+    "opportunityMinProbability": 0.6,
+    "opportunityMinEdge": 0.04,
+    "opportunityMinAnnualReturn": 0.3,
+    "realizedPnlUsdc": 0.4176,
+    "realizedPnlPct": 0.0042,
+    "openPnlUsdc": -0.0065,
+    "openPnlPct": -0.0001,
+    "equityUsdc": 100.4111,
+    "totalPnlUsdc": 0.4111,
+    "totalPnlPct": 0.0041,
+    "openRiskUsdc": 5.01,
+    "freeCapitalUsdc": 94.99
   },
   "trades": [
     {
       "id": "paper-2026-07-15-24996204541035305722780915374221767374649829191473083752555975864631419926135",
       "openedAt": "2026-07-15T15:02:26.902Z",
       "date": "2026-07-15",
-      "status": "OPEN",
+      "status": "WON",
       "sourceEvaluationId": "2891239-1-1784127743333",
       "question": "Exact Score: England 3 - 1 Argentina?",
       "slug": "fifwc-eng-arg-2026-07-15-exact-score-3-1",
@@ -70,18 +73,60 @@
         }
       ],
       "analysisSummary": "Estimated probability 99.0% vs simulated market-buy entry 96.2%. Best ask 96.2%, slippage 0.0 pts for 5.00 USDC. Polymarket taker fee 0.00950 USDC (5.0% sports_fees_v2). Net gain if win 0.1880 USDC; expected annualized return 972.2% with max paper loss 5.00950 USDC. Market consensus already prices this outcome as near-certain. Tight spread increases confidence in the quoted probability. Liquidity/volume is high enough to treat price as meaningful. Short time to resolution reduces forecast horizon. Resolution wording may need manual review. Negative-risk market: execution needs extra care in live mode.",
-      "marketClosed": false,
+      "marketClosed": true,
       "marketActive": true,
-      "acceptingOrders": true,
-      "umaResolutionStatus": null,
-      "closedTime": null,
-      "lastCheckedAt": "2026-07-15T15:03:40.708Z",
+      "acceptingOrders": false,
+      "umaResolutionStatus": "resolved",
+      "closedTime": "2026-07-15 21:18:17+00",
+      "lastCheckedAt": "2026-07-15T22:13:48.863Z",
       "marketUrlStatus": "use_event_slug",
-      "currentPrice": 0.961,
-      "currentValueUsdc": 4.9948,
-      "unrealizedPnlUsdc": -0.0147,
-      "unrealizedPnlPct": -0.0029,
-      "statusNote": "Marked to current best bid."
+      "currentPrice": 1,
+      "currentValueUsdc": 5.1975,
+      "unrealizedPnlUsdc": 0,
+      "unrealizedPnlPct": 0,
+      "statusNote": "Resolved by Polymarket as No=1.",
+      "aiAnalysis": {
+        "model": "legacy-paper-trade",
+        "thesis": "Estimated probability 99.0% vs simulated market-buy entry 96.2%. Best ask 96.2%, slippage 0.0 pts for 5.00 USDC. Polymarket taker fee 0.00950 USDC (5.0% sports_fees_v2). Net gain if win 0.1880 USDC; expected annualized return 972.2% with max paper loss 5.00950 USDC. Market consensus already prices this outcome as near-certain. Tight spread increases confidence in the quoted probability. Liquidity/volume is high enough to treat price as meaningful. Short time to resolution reduces forecast horizon. Resolution wording may need manual review. Negative-risk market: execution needs extra care in live mode.",
+        "probability": 0.9895,
+        "rawProbability": null,
+        "confidenceTier": null
+      },
+      "probabilityThesis": "",
+      "endDate": "2026-07-15T19:00:00Z",
+      "daysToResolution": 1,
+      "resolvedAt": "2026-07-15 21:18:17+00",
+      "finalOutcomePrice": 1,
+      "realizedPnlUsdc": 0.188,
+      "realizedPnlPct": 0.0375,
+      "postMortem": {
+        "reviewedAt": "2026-07-15T22:13:49.241Z",
+        "model": "heuristic-postmortem-v1",
+        "result": "WON",
+        "actualOutcome": 1,
+        "predictedProbability": 0.9895,
+        "predictionError": 0.0105,
+        "absoluteError": 0.0105,
+        "conclusion": "Puvodni teze byla podporena vysledkem.",
+        "thesisReview": "Estimated probability 99.0% vs simulated market-buy entry 96.2%. Best ask 96.2%, slippage 0.0 pts for 5.00 USDC. Polymarket taker fee 0.00950 USDC (5.0% sports_fees_v2). Net gain if win 0.1880 USDC; expected annualized return 972.2% with max paper loss 5.00950 USDC. Market consensus already prices this outcome as near-certain. Tight spread increases confidence in the quoted probability. Liquidity/volume is high enough to treat price as meaningful. Short time to resolution reduces forecast horizon. Resolution wording may need manual review. Negative-risk market: execution needs extra care in live mode.",
+        "lessons": [
+          "Rizikova skupina: Market: fifwc-eng-arg-2026-07-15-exact-score-3-1, Event: fifwc-eng-arg-2026-07-15, Team: England."
+        ],
+        "optimizationSignals": {
+          "overconfidentLoss": false,
+          "underpricedWin": false,
+          "thesisType": "UNKNOWN",
+          "probabilityBucket": "97-100",
+          "factorKeys": [
+            "tag:general",
+            "bucket:97-100",
+            "outcome:no",
+            "spread:wide",
+            "liquidity:thin",
+            "horizon:short"
+          ]
+        }
+      }
     },
     {
       "id": "paper-2026-07-14-21005232080146912819588519036283574999557774043585211746019489918059412624743",
@@ -129,7 +174,7 @@
       ],
       "analysisSummary": "Estimated probability 99.5% vs simulated market-buy entry 97.4%. Best ask 97.4%, slippage 0.0 pts for 5.00 USDC. Polymarket taker fee 0.00650 USDC (5.0% sports_fees_v2). Net gain if win 0.1270 USDC; expected annualized return 6.7% with max paper loss 5.00650 USDC. Market consensus already prices this outcome as near-certain. Tight spread increases confidence in the quoted probability. Liquidity/volume is high enough to treat price as meaningful. Negative-risk market: execution needs extra care in live mode.",
       "statusNote": "Marked to current best bid.",
-      "lastCheckedAt": "2026-07-15T15:03:41.679Z",
+      "lastCheckedAt": "2026-07-15T22:13:49.028Z",
       "marketUrlStatus": "use_event_slug",
       "eventSlug": "mlb-world-series-champion-2026",
       "marketClosed": false,
@@ -140,7 +185,17 @@
       "currentPrice": 0.974,
       "currentValueUsdc": 5,
       "unrealizedPnlUsdc": -0.0065,
-      "unrealizedPnlPct": -0.0013
+      "unrealizedPnlPct": -0.0013,
+      "aiAnalysis": {
+        "model": "legacy-paper-trade",
+        "thesis": "Estimated probability 99.5% vs simulated market-buy entry 97.4%. Best ask 97.4%, slippage 0.0 pts for 5.00 USDC. Polymarket taker fee 0.00650 USDC (5.0% sports_fees_v2). Net gain if win 0.1270 USDC; expected annualized return 6.7% with max paper loss 5.00650 USDC. Market consensus already prices this outcome as near-certain. Tight spread increases confidence in the quoted probability. Liquidity/volume is high enough to treat price as meaningful. Negative-risk market: execution needs extra care in live mode.",
+        "probability": 0.995,
+        "rawProbability": null,
+        "confidenceTier": null
+      },
+      "probabilityThesis": "",
+      "endDate": "2026-10-31T23:55:00Z",
+      "daysToResolution": 108.07
     },
     {
       "id": "paper-2026-07-13-88750360141157570751897328929802001137892873715465404759582879927201970362369",
@@ -207,7 +262,43 @@
       "unrealizedPnlPct": 0,
       "realizedPnlUsdc": 0.2296,
       "realizedPnlPct": 0.0458,
-      "statusNote": "Resolved by Polymarket as No=1."
+      "statusNote": "Resolved by Polymarket as No=1.",
+      "aiAnalysis": {
+        "model": "legacy-paper-trade",
+        "thesis": "Estimated probability 98.2% vs simulated market-buy entry 95.4%. Best ask 95.4%, slippage 0.0 pts for 5.00 USDC. Polymarket taker fee 0.01150 USDC (5.0% sports_fees_v2). Net gain if win 0.2296 USDC; expected annualized return 732.8% with max paper loss 5.01150 USDC. Market consensus already prices this outcome as near-certain. Tight spread increases confidence in the quoted probability. Liquidity/volume is high enough to treat price as meaningful. Short time to resolution reduces forecast horizon. Resolution wording may need manual review. Negative-risk market: execution needs extra care in live mode.",
+        "probability": 0.9815,
+        "rawProbability": null,
+        "confidenceTier": null
+      },
+      "probabilityThesis": "",
+      "postMortem": {
+        "reviewedAt": "2026-07-15T22:13:49.242Z",
+        "model": "heuristic-postmortem-v1",
+        "result": "WON",
+        "actualOutcome": 1,
+        "predictedProbability": 0.9815,
+        "predictionError": 0.0185,
+        "absoluteError": 0.0185,
+        "conclusion": "Puvodni teze byla podporena vysledkem.",
+        "thesisReview": "Estimated probability 98.2% vs simulated market-buy entry 95.4%. Best ask 95.4%, slippage 0.0 pts for 5.00 USDC. Polymarket taker fee 0.01150 USDC (5.0% sports_fees_v2). Net gain if win 0.2296 USDC; expected annualized return 732.8% with max paper loss 5.01150 USDC. Market consensus already prices this outcome as near-certain. Tight spread increases confidence in the quoted probability. Liquidity/volume is high enough to treat price as meaningful. Short time to resolution reduces forecast horizon. Resolution wording may need manual review. Negative-risk market: execution needs extra care in live mode.",
+        "lessons": [
+          "Rizikova skupina: Market: fifwc-fra-esp-2026-07-14-exact-score-3-1, Event: fifwc-fra-esp-2026-07-14, Team: France."
+        ],
+        "optimizationSignals": {
+          "overconfidentLoss": false,
+          "underpricedWin": false,
+          "thesisType": "UNKNOWN",
+          "probabilityBucket": "97-100",
+          "factorKeys": [
+            "tag:general",
+            "bucket:97-100",
+            "outcome:no",
+            "spread:wide",
+            "liquidity:thin",
+            "horizon:long"
+          ]
+        }
+      }
     }
   ],
   "evaluations": [
@@ -26411,17 +26502,86 @@
       ]
     }
   ],
+  "learningProfile": {
+    "version": 1,
+    "updatedAt": "2026-07-15T22:13:49.246Z",
+    "sampleSize": 2,
+    "brierScore": 0.0002,
+    "calibrationBias": 0.0145,
+    "bucketCalibration": {
+      "97-100": {
+        "count": 2,
+        "avgPredicted": 0.9855,
+        "winRate": 1,
+        "calibrationError": 0.0145
+      }
+    },
+    "factorAdjustments": {
+      "tag:general": {
+        "count": 2,
+        "avgPredicted": 0.9855,
+        "winRate": 1,
+        "adjustment": 0.0029
+      },
+      "bucket:97-100": {
+        "count": 2,
+        "avgPredicted": 0.9855,
+        "winRate": 1,
+        "adjustment": 0.0029
+      },
+      "outcome:no": {
+        "count": 2,
+        "avgPredicted": 0.9855,
+        "winRate": 1,
+        "adjustment": 0.0029
+      },
+      "spread:wide": {
+        "count": 2,
+        "avgPredicted": 0.9855,
+        "winRate": 1,
+        "adjustment": 0.0029
+      },
+      "liquidity:thin": {
+        "count": 2,
+        "avgPredicted": 0.9855,
+        "winRate": 1,
+        "adjustment": 0.0029
+      }
+    },
+    "promptRules": [
+      "Always compute probability against executable market-buy price, not midpoint.",
+      "Prefer lower-probability opportunities only when edge, EV p.a., and post-fee payout all remain positive.",
+      "After a loss, avoid multiplying exposure to the same event, team, or risk group until resolved."
+    ],
+    "aiLastRun": null,
+    "aiModel": null
+  },
   "lastTradeDate": "2026-07-15",
   "lastDecision": {
-    "runAt": "2026-07-15T15:03:47.641Z",
-    "evaluatedCount": 80,
-    "eligibleCount": 11,
-    "action": "SKIP",
-    "reason": "daily paper trade already opened",
+    "runAt": "2026-07-15T22:13:49.247Z",
+    "evaluatedCount": 0,
+    "eligibleCount": 0,
+    "action": "REFRESH",
+    "reason": "refreshed open positions and resolved markets only",
     "tradeId": null,
-    "riskSkippedCount": 0
+    "riskSkippedCount": 0,
+    "refreshOnly": true,
+    "learningSampleSize": 2,
+    "brierScore": 0.0002,
+    "calibrationBias": 0.0145
   },
   "runLog": [
+    {
+      "runAt": "2026-07-15T22:13:49.247Z",
+      "evaluatedCount": 0,
+      "eligibleCount": 0,
+      "action": "REFRESH",
+      "reason": "refreshed open positions and resolved markets only",
+      "riskSkippedCount": 0,
+      "refreshOnly": true,
+      "learningSampleSize": 2,
+      "brierScore": 0.0002
+    },
     {
       "runAt": "2026-07-15T15:03:47.641Z",
       "evaluatedCount": 80,
