@@ -1519,8 +1519,9 @@ function sendOnboardingDemoInvite(PDO $pdo, array $config): string
         return "Onboarding demo invite uz byl odeslan. URL: " . onboardingLeadUrl($lead) . "\n";
     }
     $contacts = onboardingLeadContacts($pdo, (int)$lead['id']);
-    $subject = 'Nasli jsme ' . count($contacts) . ' kontaktu pro vase prvni osloveni';
-    (new SmtpMailer($config))->send((string)$lead['account_email'], $subject, onboardingInviteEmailHtml($lead, $contacts));
+    $language = onboardingInviteLanguage($lead, $contacts, $config);
+    $subject = onboardingInviteSubject(count($contacts), $language);
+    (new SmtpMailer($config))->send((string)$lead['account_email'], $subject, onboardingInviteEmailHtml($lead, $contacts, $language));
     setSetting($pdo, 'onboarding_demo_invite_sent_at', date('c'));
     return "Onboarding demo invite odeslan na " . (string)$lead['account_email'] . ". URL: " . onboardingLeadUrl($lead) . "\n";
 }
@@ -1530,25 +1531,134 @@ function onboardingLeadUrl(array $lead): string
     return appBaseUrl() . '?onboarding=' . rawurlencode((string)$lead['token']);
 }
 
-function onboardingInviteEmailHtml(array $lead, array $contacts): string
+function onboardingInviteLanguage(array $lead, array $contacts, array $config = []): string
+{
+    $scores = ['cs' => 0, 'sk' => 0, 'de' => 0, 'pl' => 0, 'en' => 0];
+    foreach ($contacts as $contact) {
+        $signal = implode(' ', array_map('strval', [
+            $contact['email'] ?? '',
+            $contact['website'] ?? '',
+            $contact['address'] ?? '',
+            $contact['source_label'] ?? '',
+            $contact['source_url'] ?? '',
+            $contact['target_segment'] ?? '',
+        ]));
+        if (preg_match('/(\.cz\b|firmy\.cz|praha|brno|ostrava|česk|cesk|czech|\bcz\b)/iu', $signal)) {
+            $scores['cs'] += 3;
+        }
+        if (preg_match('/(\.sk\b|zoznam\.sk|slovensk|bratislava|košice|kosice|\bsk\b)/iu', $signal)) {
+            $scores['sk'] += 3;
+        }
+        if (preg_match('/(\.de\b|\.at\b|herold\.at|dastelefonbuch\.de|dasoertliche\.de|gelbeseiten\.de|deutschland|germany|österreich|osterreich|wien|vienna|berlin|hamburg|münchen|munchen|\bde\b|\bat\b)/iu', $signal)) {
+            $scores['de'] += 3;
+        }
+        if (preg_match('/(\.pl\b|pkt\.pl|panoramafirm\.pl|polska|warszawa|kraków|krakow|\bpl\b)/iu', $signal)) {
+            $scores['pl'] += 3;
+        }
+        if (preg_match('/(\.com\b|\.ca\b|united states|usa|canada|toronto|vancouver|new york|los angeles)/iu', $signal)) {
+            $scores['en'] += 2;
+        }
+    }
+
+    $leadSignal = implode(' ', array_map('strval', [
+        $lead['account_email'] ?? '',
+        $lead['business_name'] ?? '',
+        $lead['business_type'] ?? '',
+        $lead['audience_label'] ?? '',
+    ]));
+    if (preg_match('/(\.cz\b|česk|cesk|czech)/iu', $leadSignal)) {
+        $scores['cs'] += 1;
+    }
+    if (preg_match('/(\.sk\b|slovensk)/iu', $leadSignal)) {
+        $scores['sk'] += 1;
+    }
+    if (preg_match('/(\.de\b|\.at\b|deutsch|german|österreich|osterreich)/iu', $leadSignal)) {
+        $scores['de'] += 1;
+    }
+    if (preg_match('/(\.pl\b|polsk|polish)/iu', $leadSignal)) {
+        $scores['pl'] += 1;
+    }
+    if (preg_match('/(\.com\b|\.ca\b|english|usa|canada)/iu', $leadSignal)) {
+        $scores['en'] += 1;
+    }
+
+    arsort($scores);
+    $topLanguage = (string)array_key_first($scores);
+    if (($scores[$topLanguage] ?? 0) > 0) {
+        return $topLanguage;
+    }
+
+    $configured = strtolower(substr((string)($config['ui_language'] ?? 'cs'), 0, 2));
+    return in_array($configured, ['cs', 'sk', 'de', 'pl', 'en'], true) ? $configured : 'cs';
+}
+
+function onboardingInviteCopy(string $language): array
+{
+    $copies = [
+        'cs' => [
+            'subject' => 'Našli jsme %d kontaktů pro vaše první oslovení',
+            'headline' => 'Našli jsme %d kontaktů, které dává smysl oslovit',
+            'intro' => 'Připravili jsme pro vás krátký seznam potenciálních zákazníků a návrh prvního e-mailu. Stačí zkontrolovat kontakty, upravit text, připojit SMTP a spustit kampaň.',
+            'cta' => 'Pokračovat oslovením',
+            'footer' => 'Odkaz vás provede první kampaní krok za krokem.',
+        ],
+        'sk' => [
+            'subject' => 'Našli sme %d kontaktov pre vaše prvé oslovenie',
+            'headline' => 'Našli sme %d kontaktov, ktoré dáva zmysel osloviť',
+            'intro' => 'Pripravili sme pre vás krátky zoznam potenciálnych zákazníkov a návrh prvého e-mailu. Stačí skontrolovať kontakty, upraviť text, pripojiť SMTP a spustiť kampaň.',
+            'cta' => 'Pokračovať oslovením',
+            'footer' => 'Odkaz vás prevedie prvou kampaňou krok za krokom.',
+        ],
+        'de' => [
+            'subject' => 'Wir haben %d passende Kontakte für deine erste Ansprache gefunden',
+            'headline' => 'Wir haben %d Kontakte gefunden, die eine Ansprache wert sind',
+            'intro' => 'Wir haben eine kurze Liste potenzieller Kunden und einen Entwurf für die erste E-Mail vorbereitet. Prüfe die Kontakte, passe den Text an, verbinde SMTP und starte die Kampagne.',
+            'cta' => 'Ansprache fortsetzen',
+            'footer' => 'Der Link führt dich Schritt für Schritt durch die erste Kampagne.',
+        ],
+        'pl' => [
+            'subject' => 'Znaleźliśmy %d kontaktów do pierwszej kampanii',
+            'headline' => 'Znaleźliśmy %d kontaktów, do których warto napisać',
+            'intro' => 'Przygotowaliśmy krótką listę potencjalnych klientów oraz szkic pierwszej wiadomości e-mail. Wystarczy sprawdzić kontakty, dostosować treść, podłączyć SMTP i uruchomić kampanię.',
+            'cta' => 'Kontynuuj wysyłkę',
+            'footer' => 'Link przeprowadzi cię krok po kroku przez pierwszą kampanię.',
+        ],
+        'en' => [
+            'subject' => 'We found %d contacts for your first outreach',
+            'headline' => 'We found %d contacts worth reaching out to',
+            'intro' => 'We prepared a short list of potential customers and a draft of the first email. Review the contacts, adjust the text, connect SMTP, and launch the campaign.',
+            'cta' => 'Continue outreach',
+            'footer' => 'The link will guide you through your first campaign step by step.',
+        ],
+    ];
+    return $copies[$language] ?? $copies['en'];
+}
+
+function onboardingInviteSubject(int $count, string $language): string
+{
+    $copy = onboardingInviteCopy($language);
+    return sprintf((string)$copy['subject'], $count);
+}
+
+function onboardingInviteEmailHtml(array $lead, array $contacts, string $language): string
 {
     $url = onboardingLeadUrl($lead);
     $count = count($contacts);
+    $copy = onboardingInviteCopy($language);
     $preview = '';
     foreach (array_slice($contacts, 0, 5) as $contact) {
         $name = trim((string)($contact['subject_name'] ?? ''));
-        $reason = trim((string)($contact['fit_reason'] ?? ''));
         if ($name === '') {
             continue;
         }
-        $preview .= '<li><strong>' . h($name) . '</strong>' . ($reason !== '' ? '<br><span style="color:#67736d">' . h($reason) . '</span>' : '') . '</li>';
+        $preview .= '<li><strong>' . h($name) . '</strong></li>';
     }
     return '<div style="font-family:Arial,sans-serif;line-height:1.5;color:#1e2522;max-width:620px">'
-        . '<h1 style="font-size:24px;margin:0 0 14px">Nasli jsme ' . h((string)$count) . ' kontaktu, ktere davaji smysl oslovit</h1>'
-        . '<p>Pripravili jsme pro vas kratky seznam potencialnich zakazniku a navrh prvniho emailu. Staci zkontrolovat kontakty, upravit text, pripojit SMTP a spustit kampan.</p>'
+        . '<h1 style="font-size:24px;margin:0 0 14px">' . h(sprintf((string)$copy['headline'], $count)) . '</h1>'
+        . '<p>' . h((string)$copy['intro']) . '</p>'
         . ($preview !== '' ? '<ul style="padding-left:20px;margin:14px 0">' . $preview . '</ul>' : '')
-        . '<p><a href="' . h($url) . '" style="display:inline-block;background:#0f7b6c;color:white;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:8px">Pokracovat oslovenim</a></p>'
-        . '<p style="color:#67736d;font-size:13px">Odkaz vas provede prvni kampani krok za krokem.</p>'
+        . '<p><a href="' . h($url) . '" style="display:inline-block;background:#0f7b6c;color:white;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:8px">' . h((string)$copy['cta']) . '</a></p>'
+        . '<p style="color:#67736d;font-size:13px">' . h((string)$copy['footer']) . '</p>'
         . '</div>';
 }
 
