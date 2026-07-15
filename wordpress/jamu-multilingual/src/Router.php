@@ -150,6 +150,9 @@ final class Router
                 $this->set_post_query($wp, (int) $translation->object_id, $translation->object_subtype);
                 return;
             }
+            if ($this->resolve_localized_endpoint($wp, $language, $route)) {
+                return;
+            }
             $post = get_page_by_path($route, OBJECT, ['page', 'post']);
             if ($post instanceof WP_Post) {
                 $this->set_post_query($wp, $post->ID, $post->post_type);
@@ -238,7 +241,8 @@ final class Router
     {
         $path = trim((string) wp_parse_url($requested_url, PHP_URL_PATH), '/');
         foreach ($this->languages->additional() as $language => $config) {
-            if ($path === trim((string) $config['prefix'], '/')) {
+            $prefix = trim((string) $config['prefix'], '/');
+            if ($path === $prefix || str_starts_with($path, $prefix . '/')) {
                 $this->languages->set_current($language);
                 return false;
             }
@@ -263,6 +267,85 @@ final class Router
             return $post->post_name;
         }
         return $path ?: $post->post_name;
+    }
+
+    private function resolve_localized_endpoint(\WP $wp, string $language, string $route): bool
+    {
+        $parts = array_values(array_filter(explode('/', trim($route, '/')), static fn ($part) => $part !== ''));
+        if (count($parts) < 2) {
+            return false;
+        }
+
+        $endpoints = $this->woocommerce_endpoint_query_vars();
+        if (!$endpoints) {
+            return false;
+        }
+
+        for ($index = 1, $count = count($parts); $index < $count; $index++) {
+            $endpoint = $parts[$index];
+            $query_var = array_search($endpoint, $endpoints, true);
+            if ($query_var === false) {
+                continue;
+            }
+
+            $base_route = implode('/', array_slice($parts, 0, $index));
+            $translation = $this->repository->find_content_route($language, $base_route);
+            if (!$translation) {
+                continue;
+            }
+
+            $post = get_post((int) $translation->object_id);
+            if (!$post instanceof WP_Post) {
+                continue;
+            }
+
+            $endpoint_value = implode('/', array_slice($parts, $index + 1));
+            $this->set_post_query($wp, $post->ID, $post->post_type);
+            $wp->query_vars[(string) $query_var] = $endpoint_value;
+            unset($wp->query_vars['jamu_route_type'], $wp->query_vars['jamu_route']);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function woocommerce_endpoint_query_vars(): array
+    {
+        $defaults = [
+            'order-pay' => 'order-pay',
+            'order-received' => 'order-received',
+            'add-payment-method' => 'add-payment-method',
+            'delete-payment-method' => 'delete-payment-method',
+            'set-default-payment-method' => 'set-default-payment-method',
+            'view-order' => 'view-order',
+            'edit-account' => 'edit-account',
+            'edit-address' => 'edit-address',
+            'payment-methods' => 'payment-methods',
+            'lost-password' => 'lost-password',
+            'customer-logout' => 'customer-logout',
+        ];
+
+        if (function_exists('WC')) {
+            $woocommerce = WC();
+            if (is_object($woocommerce) && isset($woocommerce->query) && method_exists($woocommerce->query, 'get_query_vars')) {
+                $woocommerce_query_vars = $woocommerce->query->get_query_vars();
+                if (is_array($woocommerce_query_vars)) {
+                    foreach ($woocommerce_query_vars as $query_var => $endpoint) {
+                        $query_var = (string) $query_var;
+                        $endpoint = trim((string) $endpoint, '/');
+                        if ($query_var !== '' && $endpoint !== '') {
+                            $defaults[$query_var] = $endpoint;
+                        }
+                    }
+                }
+            }
+        }
+
+        return $defaults;
     }
 
     private function set_post_query(\WP $wp, int $post_id, string $post_type): void

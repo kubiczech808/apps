@@ -101,6 +101,19 @@ final class Shipping
         return document.querySelector('form.checkout, form.woocommerce-checkout, form[name="checkout"]') || document.body;
     }
 
+    function hideTechnicalCheckbox(element) {
+        element.hidden = true;
+        element.tabIndex = -1;
+        element.setAttribute('aria-hidden', 'true');
+        element.style.setProperty('display', 'none', 'important');
+        element.style.setProperty('visibility', 'hidden', 'important');
+        element.style.position = 'absolute';
+        element.style.left = '-9999px';
+        element.style.width = '1px';
+        element.style.height = '1px';
+        element.style.overflow = 'hidden';
+    }
+
     function dpdShippingAnchor() {
         const input = document.querySelector('input.shipping_method[value^="doprava_zasilkovna"], input[name^="shipping_method"][value^="doprava_zasilkovna"]');
         if (!input) {
@@ -121,6 +134,9 @@ final class Shipping
     function ensureInput(id, type) {
         let element = document.getElementById(id);
         if (element) {
+            if (type === 'checkbox') {
+                hideTechnicalCheckbox(element);
+            }
             return element;
         }
         element = document.createElement('input');
@@ -128,7 +144,11 @@ final class Shipping
         element.id = id;
         element.name = names[id] || id;
         element.autocomplete = 'off';
-        element.hidden = true;
+        if (type === 'checkbox') {
+            hideTechnicalCheckbox(element);
+        } else {
+            element.hidden = true;
+        }
         checkoutForm().appendChild(element);
         return element;
     }
