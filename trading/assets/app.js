@@ -40,6 +40,7 @@ const els = {
   ledger: document.querySelector("[data-ledger]"),
   clearLedger: document.querySelector("[data-clear-ledger]"),
   botAction: document.querySelector("[data-bot-action]"),
+  botInlineAction: document.querySelector("[data-bot-inline-action]"),
   botStatus: document.querySelector("[data-bot-status]"),
   botTrades: document.querySelector("[data-bot-trades]"),
   botEvaluations: document.querySelector("[data-bot-evaluations]"),
@@ -49,9 +50,18 @@ const els = {
   tabPanels: document.querySelectorAll("[data-tab-panel]"),
   payload: document.querySelector("[data-payload]"),
   copy: document.querySelector("[data-copy]"),
-  sidebarEquity: document.querySelector("[data-sidebar-equity]"),
-  sidebarRisk: document.querySelector("[data-sidebar-risk]"),
-  sidebarPl: document.querySelector("[data-sidebar-pl]"),
+  portfolioEquity: document.querySelector("[data-portfolio-equity]"),
+  portfolioLastRun: document.querySelector("[data-portfolio-last-run]"),
+  portfolioTotalPl: document.querySelector("[data-portfolio-total-pl]"),
+  portfolioTotalPlPct: document.querySelector("[data-portfolio-total-pl-pct]"),
+  portfolioAnnualized: document.querySelector("[data-portfolio-annualized]"),
+  portfolioPeriod: document.querySelector("[data-portfolio-period]"),
+  portfolioRealized: document.querySelector("[data-portfolio-realized]"),
+  portfolioRealizedPct: document.querySelector("[data-portfolio-realized-pct]"),
+  portfolioOpenPl: document.querySelector("[data-portfolio-open-pl]"),
+  portfolioOpenPlPct: document.querySelector("[data-portfolio-open-pl-pct]"),
+  portfolioRisk: document.querySelector("[data-portfolio-risk]"),
+  portfolioFree: document.querySelector("[data-portfolio-free]"),
 };
 
 function readLedger() {
@@ -211,6 +221,22 @@ function tradeStatusNote(trade) {
     trade.marketUrlStatus === "use_event_slug" ? "event link" : "",
   ];
   return parts.filter(Boolean).join(", ");
+}
+
+function portfolioPeriodDays(botState, trades) {
+  const timestamps = trades
+    .map((trade) => Date.parse(trade.openedAt || trade.date || ""))
+    .filter(Number.isFinite);
+  if (!timestamps.length) return null;
+  const start = Math.min(...timestamps);
+  const end = Date.parse(botState.generatedAt || "") || Date.now();
+  return Math.max(1, (end - start) / 86400000);
+}
+
+function annualizedPortfolioReturn(portfolio, days) {
+  const totalPct = Number(portfolio.totalPnlPct);
+  if (!Number.isFinite(totalPct) || !Number.isFinite(days) || days <= 0) return null;
+  return totalPct * (365 / days);
 }
 
 function analysisBadge(item) {
@@ -571,9 +597,11 @@ function renderPortfolio() {
   const openExpectedPnl = open.reduce((sum, item) => sum + Number(item.expectedValue || 0), 0);
   const equity = bankroll + realizedPnl;
 
-  els.sidebarEquity.textContent = money(equity);
-  els.sidebarRisk.textContent = `${money(openRisk)} / ${signedMoney(openExpectedPnl)}`;
-  els.sidebarPl.textContent = `${signedMoney(realizedPnl)} (${signedPercent(bankroll > 0 ? realizedPnl / bankroll : null)})`;
+  if (els.portfolioEquity && !state.botState) els.portfolioEquity.textContent = money(equity);
+  if (els.portfolioRisk && !state.botState) els.portfolioRisk.textContent = `${money(openRisk)} risk`;
+  if (els.portfolioFree && !state.botState) els.portfolioFree.textContent = `${signedMoney(openExpectedPnl)} open EV`;
+  if (els.portfolioRealized && !state.botState) els.portfolioRealized.textContent = signedMoney(realizedPnl);
+  if (els.portfolioRealizedPct && !state.botState) els.portfolioRealizedPct.textContent = signedPercent(bankroll > 0 ? realizedPnl / bankroll : null);
 
   if (!state.ledger.length) {
     els.ledger.innerHTML = '<div class="empty">Zatim zadne paper pozice.</div>';
@@ -631,6 +659,7 @@ async function loadBotState() {
     renderBotState(await statePayload.json());
   } catch (error) {
     els.botAction.textContent = "offline";
+    if (els.botInlineAction) els.botInlineAction.textContent = "offline";
     els.botStatus.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
     els.botTrades.innerHTML = '<div class="empty">Autonomous paper bot state is not available yet.</div>';
     els.botEvaluations.innerHTML = '<div class="empty">No evaluations loaded.</div>';
@@ -642,8 +671,35 @@ function renderBotState(botState) {
   const decision = botState.lastDecision || {};
   const portfolio = botState.portfolio || {};
   const trades = Array.isArray(botState.trades) ? botState.trades : [];
+  const periodDays = portfolioPeriodDays(botState, trades);
+  const annualized = annualizedPortfolioReturn(portfolio, periodDays);
+  const totalPnl = Number(portfolio.totalPnlUsdc || 0);
+  const totalPnlPct = Number(portfolio.totalPnlPct || 0);
+  const realizedPnl = Number(portfolio.realizedPnlUsdc || 0);
+  const realizedPnlPct = Number(portfolio.realizedPnlPct || 0);
+  const openPnl = Number(portfolio.openPnlUsdc || 0);
+  const openPnlPct = Number(portfolio.openPnlPct || 0);
 
   els.botAction.textContent = decision.action || "waiting";
+  if (els.botInlineAction) els.botInlineAction.textContent = decision.action || "waiting";
+  els.portfolioEquity.textContent = money(Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100));
+  els.portfolioEquity.className = pnlClass(totalPnl);
+  els.portfolioLastRun.textContent = `Last run ${botState.generatedAt ? formatDate(botState.generatedAt) : "-"}`;
+  els.portfolioTotalPl.textContent = signedMoney(totalPnl);
+  els.portfolioTotalPl.className = pnlClass(totalPnl);
+  els.portfolioTotalPlPct.textContent = signedPercent(totalPnlPct);
+  els.portfolioAnnualized.textContent = signedPercent(annualized);
+  els.portfolioAnnualized.className = pnlClass(annualized);
+  els.portfolioPeriod.textContent = periodDays == null ? "No trades yet" : `since first trade, ${periodDays.toFixed(1)} days`;
+  els.portfolioRealized.textContent = signedMoney(realizedPnl);
+  els.portfolioRealized.className = pnlClass(realizedPnl);
+  els.portfolioRealizedPct.textContent = signedPercent(realizedPnlPct);
+  els.portfolioOpenPl.textContent = signedMoney(openPnl);
+  els.portfolioOpenPl.className = pnlClass(openPnl);
+  els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
+  els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0));
+  els.portfolioFree.textContent = `${money(Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100))} free`;
+
   els.botStatus.innerHTML = `
     <div class="bot-summary">
       <div>
