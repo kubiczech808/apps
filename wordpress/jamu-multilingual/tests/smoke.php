@@ -97,6 +97,23 @@ if (!str_contains($localized_template->content, 'English template content')) {
     throw new RuntimeException('Block template was not localized.');
 }
 
+add_shortcode('jamu_test_shortcode', static fn (): string => '<span class="jamu-test-shortcode">Shortcode rendered</span>');
+$repository->save([
+    'object_type' => 'template', 'object_subtype' => 'wp_template_part',
+    'object_id' => Identity::stable_id('template:jadro//footer'),
+    'language' => 'en', 'title' => 'English footer',
+    'content' => '<!-- wp:shortcode -->[jamu_test_shortcode]<!-- /wp:shortcode -->',
+    'status' => 'publish',
+]);
+$localized_footer = $content_layer->template_part_block(
+    '<footer class="wp-block-template-part"></footer>',
+    ['blockName' => 'core/template-part', 'attrs' => ['slug' => 'footer', 'theme' => 'jadro']]
+);
+remove_shortcode('jamu_test_shortcode');
+if (!str_contains($localized_footer, 'Shortcode rendered')) {
+    throw new RuntimeException('Localized template-part shortcodes were not rendered.');
+}
+
 $repository->save([
     'object_type' => 'form', 'object_subtype' => 'wpforms', 'object_id' => 55,
     'language' => 'en', 'status' => 'publish',

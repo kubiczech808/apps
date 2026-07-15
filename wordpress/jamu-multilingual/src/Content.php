@@ -279,7 +279,7 @@ final class Content
         }
 
         $this->template_part_guard = true;
-        $rendered = do_blocks($this->localized_markup($translation->content));
+        $rendered = do_shortcode(do_blocks($this->localized_markup($translation->content)));
         $this->template_part_guard = false;
 
         if ($slug === 'header') {
