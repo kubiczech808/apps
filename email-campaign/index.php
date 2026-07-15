@@ -879,6 +879,9 @@ function ensureOnboardingEmailDraft(PDO $pdo, array $config, array $lead): void
         return;
     }
     $contacts = onboardingLeadContacts($pdo, (int)$lead['id']);
+    if (!$contacts) {
+        return;
+    }
     $draft = onboardingGenerateEmailDraft($config, $lead, $contacts);
     $stmt = $pdo->prepare('UPDATE onboarding_leads SET email_subject=?, email_body_html=?, updated_at=? WHERE id=?');
     $stmt->execute([$draft['subject'], $draft['html'], date('c'), (int)$lead['id']]);
@@ -1215,21 +1218,20 @@ function publicOnboardingAudienceLabel(string $businessType): string
     return 'relevantni B2B firmy';
 }
 
-function ensurePublicOnboardingContacts(PDO $pdo, int $leadId, string $businessType, string $audience, array $config = [], array $plan = [], bool $allowQuickScrape = false): void
+function ensurePublicOnboardingContacts(PDO $pdo, int $leadId, string $businessType, string $audience, array $config = [], array $plan = [], bool $allowQuickScrape = false): int
 {
     if (!$plan) {
         $plan = onboardingFallbackLeadPlan($businessType);
     }
-    $contacts = onboardingCandidateContactsFromRecipients($pdo, $plan, $businessType, 10);
-    $contacts = onboardingUniqueValidContacts($contacts);
-    if (count($contacts) < 6 && $allowQuickScrape) {
-        $contacts = array_merge($contacts, onboardingQuickScrapeContacts($plan, 10 - count($contacts)));
-        $contacts = onboardingUniqueValidContacts($contacts);
-    }
-    if (count($contacts) < 6 && $allowQuickScrape) {
-        $fallbackPlan = onboardingFallbackLeadPlan($businessType);
-        $contacts = array_merge($contacts, onboardingQuickScrapeContacts($fallbackPlan, 10 - count($contacts)));
-        $contacts = onboardingUniqueValidContacts($contacts);
+    $contacts = onboardingContactsForPlan($pdo, $plan, $businessType, $allowQuickScrape, 10);
+    if (count($contacts) < 6) {
+        foreach (onboardingAlternativeLeadPlans($config, $businessType, $audience, $plan, 3) as $alternativePlan) {
+            $contacts = array_merge($contacts, onboardingContactsForPlan($pdo, $alternativePlan, $businessType, $allowQuickScrape, 10 - count($contacts)));
+            $contacts = onboardingUniqueValidContacts($contacts);
+            if (count($contacts) >= 6) {
+                break;
+            }
+        }
     }
     if (count($contacts) < 6 && $allowQuickScrape) {
         $contacts = array_merge($contacts, onboardingDemoSeedContacts($businessType, $plan));
@@ -1257,6 +1259,90 @@ function ensurePublicOnboardingContacts(PDO $pdo, int $leadId, string $businessT
             date('c'),
         ]);
     }
+    return count($contacts);
+}
+
+function onboardingContactsForPlan(PDO $pdo, array $plan, string $businessType, bool $allowQuickScrape, int $limit): array
+{
+    if ($limit <= 0) {
+        return [];
+    }
+    $contacts = onboardingCandidateContactsFromRecipients($pdo, $plan, $businessType, $limit);
+    $contacts = onboardingUniqueValidContacts($contacts);
+    if (count($contacts) < min(6, $limit) && $allowQuickScrape) {
+        $contacts = array_merge($contacts, onboardingQuickScrapeContacts($plan, $limit - count($contacts)));
+        $contacts = onboardingUniqueValidContacts($contacts);
+    }
+    return array_slice($contacts, 0, $limit);
+}
+
+function onboardingAlternativeLeadPlans(array $config, string $businessType, string $audience, array $basePlan, int $limit): array
+{
+    $plans = [];
+    $seen = [onboardingLeadPlanSignature($basePlan, $businessType) => true];
+    $fallbackPlan = onboardingFallbackLeadPlan($businessType);
+    $fallbackSignature = onboardingLeadPlanSignature($fallbackPlan, $businessType);
+    if ($fallbackSignature !== '' && !isset($seen[$fallbackSignature])) {
+        $plans[] = $fallbackPlan;
+        $seen[$fallbackSignature] = true;
+    }
+
+    $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
+    if ($apiKey !== '') {
+        $prompt = "Dosavadni lead-generation plan nenasel dostatek validnich kontaktu. Navrhni alternativni relevantni segmenty a jina katalogova klicova slova. "
+            . "Popis nabidky: " . $businessType . ". Puvodni cilova skupina: " . $audience . ". Puvodni plan: " . json_encode($basePlan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+            . "Neopakuj stejna klicova slova. Segmenty musi porad davat obchodni smysl pro nabidku. "
+            . "Vrat pouze JSON {\"plans\":[...]} se strukturou planu: audience_label, rationale, email_angle, target_segments, candidate_terms, scraping_queries. "
+            . "scraping_queries pouziva zdroje firmy_cz, zoznam_sk, herold_at, dastelefonbuch_de, dasoertliche_de, gelbeseiten_de, pkt_pl nebo panoramafirm_pl.";
+        try {
+            $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
+                'x-goog-api-key: ' . $apiKey,
+                'Content-Type: application/json',
+            ], [
+                'model' => trim((string)($config['ai']['gemini_model'] ?? 'gemini-3.5-flash')) ?: 'gemini-3.5-flash',
+                'system_instruction' => 'Jsi analytik B2B akvizice. Pri nulovem vysledku navrhuj jine, ale stale relevantni segmenty a katalogova klicova slova. Vystup je pouze JSON.',
+                'input' => $prompt,
+                'generation_config' => ['temperature' => 0.55],
+            ], 35);
+            $json = parseJsonObjectFromText(geminiInteractionText($response));
+            foreach ((array)($json['plans'] ?? []) as $candidate) {
+                if (!is_array($candidate)) {
+                    continue;
+                }
+                $plan = onboardingNormalizeLeadPlan($candidate, $fallbackPlan);
+                $signature = onboardingLeadPlanSignature($plan, $businessType);
+                if ($signature === '' || isset($seen[$signature])) {
+                    continue;
+                }
+                $plans[] = $plan;
+                $seen[$signature] = true;
+                if (count($plans) >= $limit) {
+                    break;
+                }
+            }
+        } catch (Throwable $e) {
+            error_log('Onboarding alternative lead plan fallback: ' . $e->getMessage());
+        }
+    }
+
+    return array_slice($plans, 0, $limit);
+}
+
+function onboardingLeadPlanSignature(array $plan, string $businessType): string
+{
+    $parts = [];
+    foreach (onboardingCandidateTerms($plan, $businessType) as $term) {
+        $parts[] = strtolower(trim($term));
+    }
+    foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
+        if (!is_array($query)) {
+            continue;
+        }
+        $parts[] = strtolower(trim((string)($query['source'] ?? ''))) . ':' . strtolower(trim((string)($query['keyword'] ?? '')));
+    }
+    $parts = array_values(array_unique(array_filter($parts, static fn($part) => $part !== '')));
+    sort($parts);
+    return implode('|', $parts);
 }
 
 function onboardingCandidateContactsFromRecipients(PDO $pdo, array $plan, string $businessType, int $limit): array
@@ -1519,6 +1605,9 @@ function sendOnboardingDemoInvite(PDO $pdo, array $config): string
         return "Onboarding demo invite uz byl odeslan. URL: " . onboardingLeadUrl($lead) . "\n";
     }
     $contacts = onboardingLeadContacts($pdo, (int)$lead['id']);
+    if (!$contacts) {
+        return "Onboarding demo invite nebyl odeslan: nepodarilo se najit zadne odpovidajici kontakty ani po alternativnim AI planu.\n";
+    }
     $language = onboardingInviteLanguage($lead, $contacts, $config);
     $subject = onboardingInviteSubject(count($contacts), $language);
     (new SmtpMailer($config))->send((string)$lead['account_email'], $subject, onboardingInviteEmailHtml($lead, $contacts, $language));
