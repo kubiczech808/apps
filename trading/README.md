@@ -31,7 +31,8 @@ The bot:
 - rejects candidates with annualized expected return below 5%,
 - places a 5 USDC simulated stake per idea from a 100 USDC paper portfolio; max paper loss includes any taker fee,
 - opens at most one paper trade per Prague calendar day,
-- skips new entries when available paper capital is exhausted, the same token already has an open paper position, or an open position shares the same event/team risk group.
+- skips new entries when available paper capital is exhausted, the same token already has an open paper position, or an open position shares the same event/team risk group,
+- refreshes existing paper positions on every run; open positions are marked to current best bid, while closed/resolved markets are moved to `WON`/`LOST` with realized P/L and P/L percent.
 
 This is not live trading. It does not use the Polymarket private key and cannot submit orders.
 

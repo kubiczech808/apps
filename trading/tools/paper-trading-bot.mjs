@@ -99,7 +99,6 @@ function normalizeState(input) {
 
 function normalizeTrade(trade) {
   if (!trade || typeof trade !== "object") return trade;
-  if (Array.isArray(trade.riskGroupKeys) && trade.riskGroupKeys.length) return trade;
   const risk = riskProfile({
     question: trade.question,
     slug: trade.slug,
@@ -108,8 +107,10 @@ function normalizeTrade(trade) {
   });
   return {
     ...trade,
-    riskGroupKeys: risk.keys,
-    riskGroupLabels: risk.labels,
+    status: trade.status || "OPEN",
+    totalCostUsdc: Number(trade.totalCostUsdc || trade.maxLossUsdc || trade.stakeUsdc || 0),
+    riskGroupKeys: Array.isArray(trade.riskGroupKeys) && trade.riskGroupKeys.length ? trade.riskGroupKeys : risk.keys,
+    riskGroupLabels: Array.isArray(trade.riskGroupLabels) && trade.riskGroupLabels.length ? trade.riskGroupLabels : risk.labels,
   };
 }
 
@@ -233,6 +234,12 @@ function riskProfile({ question, slug, outcome, tags }) {
   };
 }
 
+function marketEventSlug(market) {
+  const events = Array.isArray(market.events) ? market.events : [];
+  const eventSlug = events.find((event) => event?.slug)?.slug;
+  return eventSlug || market.eventSlug || market.slug || "";
+}
+
 function bestBook(book) {
   const bids = Array.isArray(book.bids) ? book.bids : [];
   const asks = Array.isArray(book.asks) ? book.asks : [];
@@ -316,6 +323,147 @@ function takerFeeForFills(fills, feeRate) {
     return sum + size * feeRate * price * (1 - price);
   }, 0);
   return Number(fee.toFixed(5));
+}
+
+function totalCost(trade) {
+  return Number(trade.totalCostUsdc || trade.maxLossUsdc || trade.stakeUsdc || 0);
+}
+
+function pnlPercent(pnl, basis) {
+  const denominator = Number(basis);
+  return denominator > 0 ? Number((Number(pnl || 0) / denominator).toFixed(4)) : null;
+}
+
+function parseOutcomePrices(market) {
+  return parseJsonField(market.outcomePrices).map((price) => Number(price));
+}
+
+function outcomeIndexForTrade(market, trade) {
+  const outcomes = parseJsonField(market.outcomes).map((outcome) => String(outcome));
+  const byOutcome = outcomes.findIndex((outcome) => outcome.toLowerCase() === String(trade.outcome || "").toLowerCase());
+  if (byOutcome >= 0) return byOutcome;
+  const tokenIds = parseJsonField(market.clobTokenIds).map((tokenId) => String(tokenId));
+  return tokenIds.findIndex((tokenId) => tokenId === String(trade.tokenId || ""));
+}
+
+async function fetchMarketBySlug(slug) {
+  if (!slug) return null;
+  for (const closed of ["true", "false"]) {
+    const url = new URL("https://gamma-api.polymarket.com/markets");
+    url.searchParams.set("slug", slug);
+    url.searchParams.set("closed", closed);
+    const markets = await fetchJson(url);
+    if (Array.isArray(markets) && markets[0]) return markets[0];
+  }
+  return null;
+}
+
+async function markOpenTrade(trade) {
+  if (!["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"].includes(trade.status)) return trade;
+
+  const checkedAt = nowIso();
+  const cost = totalCost(trade);
+  let market = null;
+
+  try {
+    market = await fetchMarketBySlug(trade.slug);
+  } catch (error) {
+    return {
+      ...trade,
+      statusNote: `Market refresh failed: ${error.message}`,
+      lastCheckedAt: checkedAt,
+    };
+  }
+
+  if (!market) {
+    return {
+      ...trade,
+      status: "MARKET_NOT_FOUND",
+      statusNote: "Market slug not found in Gamma API.",
+      lastCheckedAt: checkedAt,
+      marketUrlStatus: "not_found",
+    };
+  }
+
+  const outcomeIndex = outcomeIndexForTrade(market, trade);
+  const prices = parseOutcomePrices(market);
+  const resolvedPrice = outcomeIndex >= 0 ? prices[outcomeIndex] : null;
+  const eventSlug = marketEventSlug(market);
+  const base = {
+    ...trade,
+    question: market.question || trade.question,
+    eventSlug,
+    marketClosed: Boolean(market.closed),
+    marketActive: Boolean(market.active),
+    acceptingOrders: Boolean(market.acceptingOrders),
+    umaResolutionStatus: market.umaResolutionStatus || trade.umaResolutionStatus || null,
+    closedTime: market.closedTime || trade.closedTime || null,
+    lastCheckedAt: checkedAt,
+    marketUrlStatus: eventSlug && eventSlug !== trade.slug ? "use_event_slug" : "ok",
+  };
+
+  if (market.closed && Number.isFinite(resolvedPrice)) {
+    const won = resolvedPrice >= 0.999;
+    const lost = resolvedPrice <= 0.001;
+    if (won || lost) {
+      const realizedPnl = won ? Number((Number(trade.shares || 0) - cost).toFixed(4)) : Number((-cost).toFixed(4));
+      return {
+        ...base,
+        status: won ? "WON" : "LOST",
+        resolvedAt: market.closedTime || checkedAt,
+        finalOutcomePrice: Number(resolvedPrice.toFixed(4)),
+        currentPrice: Number(resolvedPrice.toFixed(4)),
+        currentValueUsdc: won ? Number(Number(trade.shares || 0).toFixed(4)) : 0,
+        unrealizedPnlUsdc: 0,
+        unrealizedPnlPct: 0,
+        realizedPnlUsdc: realizedPnl,
+        realizedPnlPct: pnlPercent(realizedPnl, cost),
+        statusNote: `Resolved by Polymarket as ${trade.outcome}=${resolvedPrice}.`,
+      };
+    }
+  }
+
+  if (market.closed) {
+    return {
+      ...base,
+      status: "PENDING_RESOLUTION",
+      finalOutcomePrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : null,
+      statusNote: "Market is closed but outcome price is not final yet.",
+    };
+  }
+
+  try {
+    const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(trade.tokenId)}`);
+    const { bestBid } = bestBook(book);
+    if (Number.isFinite(bestBid)) {
+      const currentValue = Number((Number(trade.shares || 0) * bestBid).toFixed(4));
+      const unrealizedPnl = Number((currentValue - cost).toFixed(4));
+      return {
+        ...base,
+        status: "OPEN",
+        currentPrice: Number(bestBid.toFixed(4)),
+        currentValueUsdc: currentValue,
+        unrealizedPnlUsdc: unrealizedPnl,
+        unrealizedPnlPct: pnlPercent(unrealizedPnl, cost),
+        statusNote: "Marked to current best bid.",
+      };
+    }
+  } catch (error) {
+    return {
+      ...base,
+      statusNote: `Orderbook refresh failed: ${error.message}`,
+    };
+  }
+
+  return base;
+}
+
+async function refreshTrades(trades) {
+  const refreshed = [];
+  for (const trade of trades) {
+    refreshed.push(await markOpenTrade(trade));
+  }
+  return refreshed;
 }
 
 function estimateProbability({ market, outcome, ask, bid, spread, liquidity, volume24hr, tags, days }) {
@@ -417,6 +565,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
     rejectReasons,
     question,
     slug: market.slug || "",
+    eventSlug: marketEventSlug(market),
     outcome,
     tokenId,
     endDate: market.endDate || null,
@@ -485,19 +634,19 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book }) {
 
 function openRisk(trades) {
   return trades
-    .filter((trade) => trade.status === "OPEN")
+    .filter((trade) => ["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"].includes(trade.status))
     .reduce((sum, trade) => sum + Number(trade.maxLossUsdc || trade.stakeUsdc || 0), 0);
 }
 
 function alreadyOpen(trades, tokenId) {
-  return trades.some((trade) => trade.status === "OPEN" && trade.tokenId === tokenId);
+  return trades.some((trade) => ["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"].includes(trade.status) && trade.tokenId === tokenId);
 }
 
 function riskBlock(candidate, trades) {
   const candidateKeys = new Set(Array.isArray(candidate.riskGroupKeys) ? candidate.riskGroupKeys : []);
   if (!candidateKeys.size) return null;
 
-  for (const trade of trades.filter((item) => item.status === "OPEN")) {
+  for (const trade of trades.filter((item) => ["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"].includes(item.status))) {
     const tradeKeys = Array.isArray(trade.riskGroupKeys) ? trade.riskGroupKeys : [];
     const overlap = tradeKeys.filter((key) => candidateKeys.has(key));
     if (overlap.length) {
@@ -556,6 +705,7 @@ function maybeOpenDailyTrade(state, eligible) {
     sourceEvaluationId: best.id,
     question: best.question,
     slug: best.slug,
+    eventSlug: best.eventSlug,
     outcome: best.outcome,
     tokenId: best.tokenId,
     riskCategory: best.riskCategory,
@@ -579,6 +729,10 @@ function maybeOpenDailyTrade(state, eligible) {
     grossGainIfWinUsdc: best.grossGainIfWinUsdc,
     netGainIfWinUsdc: best.netGainIfWinUsdc,
     maxLossUsdc: best.maxLossUsdc,
+    currentPrice: best.marketPrice,
+    currentValueUsdc: Number(stake.toFixed(2)),
+    unrealizedPnlUsdc: 0,
+    unrealizedPnlPct: 0,
     marketFills: best.marketFills,
     analysisSummary: best.analysisSummary,
   };
@@ -600,6 +754,7 @@ async function loadMarkets() {
 
 async function run() {
   const state = await readState();
+  state.trades = await refreshTrades(state.trades);
   const markets = await loadMarkets();
   const evaluations = [];
 
@@ -641,12 +796,24 @@ async function run() {
   const decision = maybeOpenDailyTrade(state, eligible);
 
   state.generatedAt = nowIso();
+  const realizedPnl = state.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
+  const openPnl = state.trades
+    .filter((trade) => trade.status === "OPEN")
+    .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
+  const equity = PORTFOLIO_USDC + realizedPnl + openPnl;
   state.portfolio = {
     initialUsdc: PORTFOLIO_USDC,
     maxFraction: MAX_FRACTION,
     maxStakeUsdc: Number((PORTFOLIO_USDC * MAX_FRACTION).toFixed(2)),
     minProbability: MIN_PROBABILITY,
     minAnnualReturn: MIN_ANNUAL_RETURN,
+    realizedPnlUsdc: Number(realizedPnl.toFixed(4)),
+    realizedPnlPct: pnlPercent(realizedPnl, PORTFOLIO_USDC),
+    openPnlUsdc: Number(openPnl.toFixed(4)),
+    openPnlPct: pnlPercent(openPnl, PORTFOLIO_USDC),
+    equityUsdc: Number(equity.toFixed(4)),
+    totalPnlUsdc: Number((realizedPnl + openPnl).toFixed(4)),
+    totalPnlPct: pnlPercent(realizedPnl + openPnl, PORTFOLIO_USDC),
     openRiskUsdc: Number(openRisk(state.trades).toFixed(2)),
     freeCapitalUsdc: Number(Math.max(0, PORTFOLIO_USDC - openRisk(state.trades)).toFixed(2)),
   };

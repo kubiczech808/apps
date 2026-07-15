@@ -91,6 +91,20 @@ function percent(value) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function signedMoney(value, digits = 2) {
+  if (!Number.isFinite(value)) return "-";
+  return `${value >= 0 ? "+" : ""}${money(value, digits)}`;
+}
+
+function signedPercent(value) {
+  if (!Number.isFinite(value)) return "-";
+  return `${value >= 0 ? "+" : ""}${percent(value)}`;
+}
+
+function pnlClass(value) {
+  return Number(value) >= 0 ? "positive" : "negative";
+}
+
 function formatDate(value) {
   const text = String(value || "");
   const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -165,7 +179,7 @@ function riskLine(item) {
 }
 
 function polymarketUrl(item) {
-  const slug = String(item?.slug || "").trim();
+  const slug = String(item?.eventSlug || item?.slug || "").trim();
   if (/^[a-z0-9-]+$/i.test(slug)) return `https://polymarket.com/event/${slug}`;
   return "https://polymarket.com/";
 }
@@ -178,6 +192,25 @@ function marketAnchor(item) {
       <span>${escapeHtml(item.question)}</span>
     </a>
   `;
+}
+
+function tradePnlValue(trade) {
+  if (["WON", "LOST"].includes(trade.status)) return Number(trade.realizedPnlUsdc);
+  return Number(trade.unrealizedPnlUsdc);
+}
+
+function tradePnlPct(trade) {
+  if (["WON", "LOST"].includes(trade.status)) return Number(trade.realizedPnlPct);
+  return Number(trade.unrealizedPnlPct);
+}
+
+function tradeStatusNote(trade) {
+  const parts = [
+    trade.currentPrice == null ? "" : `mark ${probability(Number(trade.currentPrice))}`,
+    trade.finalOutcomePrice == null ? "" : `final ${probability(Number(trade.finalOutcomePrice))}`,
+    trade.marketUrlStatus === "use_event_slug" ? "event link" : "",
+  ];
+  return parts.filter(Boolean).join(", ");
 }
 
 function analysisBadge(item) {
@@ -525,6 +558,7 @@ function resolvePosition(id, outcome) {
   position.status = outcome === "WIN" ? "WON" : "LOST";
   position.resolvedAt = new Date().toISOString();
   position.realizedPnl = outcome === "WIN" ? Number((position.shares - position.stake).toFixed(2)) : -position.stake;
+  position.realizedPnlPct = position.stake > 0 ? Number((position.realizedPnl / position.stake).toFixed(4)) : null;
   saveLedger();
   renderPortfolio();
 }
@@ -534,11 +568,12 @@ function renderPortfolio() {
   const open = state.ledger.filter((item) => item.status === "OPEN");
   const realizedPnl = state.ledger.reduce((sum, item) => sum + Number(item.realizedPnl || 0), 0);
   const openRisk = open.reduce((sum, item) => sum + Number(item.maxLoss || item.stake || 0), 0);
+  const openExpectedPnl = open.reduce((sum, item) => sum + Number(item.expectedValue || 0), 0);
   const equity = bankroll + realizedPnl;
 
   els.sidebarEquity.textContent = money(equity);
-  els.sidebarRisk.textContent = money(openRisk);
-  els.sidebarPl.textContent = `${realizedPnl >= 0 ? "+" : ""}${money(realizedPnl)}`;
+  els.sidebarRisk.textContent = `${money(openRisk)} / ${signedMoney(openExpectedPnl)}`;
+  els.sidebarPl.textContent = `${signedMoney(realizedPnl)} (${signedPercent(bankroll > 0 ? realizedPnl / bankroll : null)})`;
 
   if (!state.ledger.length) {
     els.ledger.innerHTML = '<div class="empty">Zatim zadne paper pozice.</div>';
@@ -553,6 +588,7 @@ function renderPortfolio() {
           <th>Entry</th>
           <th>Stake</th>
           <th>EV</th>
+          <th>P/L</th>
           <th>Status</th>
           <th></th>
         </tr>
@@ -566,7 +602,12 @@ function renderPortfolio() {
             </td>
             <td>${probability(position.entryPrice)}</td>
             <td>${money(position.stake)}</td>
-            <td class="${position.expectedValue >= 0 ? "positive" : "negative"}">${position.expectedValue >= 0 ? "+" : ""}${money(position.expectedValue)}</td>
+            <td class="${pnlClass(position.expectedValue)}">${signedMoney(position.expectedValue)}</td>
+            <td class="${pnlClass(position.status === "OPEN" ? position.expectedValue : position.realizedPnl)}">
+              ${position.status === "OPEN"
+                ? `${signedMoney(position.expectedValue)} (${signedPercent(position.stake > 0 ? position.expectedValue / position.stake : null)})`
+                : `${signedMoney(position.realizedPnl)} (${signedPercent(Number(position.realizedPnlPct))})`}
+            </td>
             <td>${escapeHtml(position.status)}</td>
             <td>
               ${position.status === "OPEN" ? `
@@ -614,6 +655,11 @@ function renderBotState(botState) {
         <strong>${money(Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100))}</strong>
       </div>
       <div>
+        <span class="label">P/L</span>
+        <strong class="${pnlClass(Number(portfolio.totalPnlUsdc || 0))}">${signedMoney(Number(portfolio.totalPnlUsdc || 0))} (${signedPercent(Number(portfolio.totalPnlPct || 0))})</strong>
+        <span>realized ${signedMoney(Number(portfolio.realizedPnlUsdc || 0))} / open ${signedMoney(Number(portfolio.openPnlUsdc || 0))}</span>
+      </div>
+      <div>
         <span class="label">Filters</span>
         <strong>${percent(Number(portfolio.minProbability ?? 0.95))} / ${percent(Number(portfolio.minAnnualReturn ?? 0.05))} p.a.</strong>
       </div>
@@ -635,8 +681,8 @@ function renderBotState(botState) {
             <th>Opened</th>
             <th>Market</th>
             <th>Entry</th>
-            <th>AI prob.</th>
-            <th>p.a.</th>
+            <th>Status</th>
+            <th>P/L</th>
             <th>Stake</th>
           </tr>
         </thead>
@@ -652,8 +698,14 @@ function renderBotState(botState) {
                 ${probability(Number(trade.entryPrice))}
                 <span>${[trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`, feeLine(trade)].filter(Boolean).join(", ")}</span>
               </td>
-              <td>${probability(Number(trade.aiProbability))}</td>
-              <td class="${Number(trade.annualizedReturn) >= 0 ? "positive" : "negative"}">${percent(Number(trade.annualizedReturn))}</td>
+              <td>
+                ${escapeHtml(trade.status || "OPEN")}
+                <span>${escapeHtml(tradeStatusNote(trade))}</span>
+              </td>
+              <td class="${pnlClass(tradePnlValue(trade))}">
+                ${signedMoney(tradePnlValue(trade))}
+                <span>${signedPercent(tradePnlPct(trade))}</span>
+              </td>
               <td>${money(Number(trade.stakeUsdc || 0))}</td>
             </tr>
           `).join("")}
