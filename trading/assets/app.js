@@ -5,7 +5,10 @@ const state = {
     direction: "desc",
   },
   evaluationStatus: "ELIGIBLE",
+  eligibilityThreshold: null,
 };
+
+const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
 
 const els = {
   botAction: document.querySelector("[data-bot-action]"),
@@ -16,6 +19,8 @@ const els = {
   closedSummary: document.querySelector("[data-closed-summary]"),
   botEvaluations: document.querySelector("[data-bot-evaluations]"),
   evaluationSummary: document.querySelector("[data-evaluation-summary]"),
+  eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
+  eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   tabButtons: document.querySelectorAll("[data-tab-target]"),
   tabPanels: document.querySelectorAll("[data-tab-panel]"),
@@ -385,9 +390,12 @@ function analysisBadge(item) {
   const riskReason = item.selectionStatus === "RISK_BLOCKED"
     ? (item.riskBlockedReason || "risk-blocked by an open correlated paper trade")
     : "";
-  const reasons = [riskReason, ...(item.rejectReasons || [])].filter(Boolean).join("; ") || "passes filters";
+  const reasons = evaluationReasons(item, riskReason).join("; ") || "passes selected filters";
   const ai = item.aiAnalysis || {};
   const details = [
+    `Bot status: ${item.status || "-"}`,
+    `Adjusted status: ${adjustedEvaluationStatus(item)}`,
+    `Selected AI probability threshold: ${probability(currentEligibilityThreshold())}`,
     reasons,
     item.thesisType ? `Thesis type: ${item.thesisType}` : "",
     item.probabilityThesis || ai.thesis || "",
@@ -410,9 +418,81 @@ function analysisBadge(item) {
 }
 
 function evaluationStatusLabel(item) {
-  const status = String(item.status || "-");
+  const status = adjustedEvaluationStatus(item);
   if (item.selectionStatus === "RISK_BLOCKED") return `${status} / RISK BLOCKED`;
+  if (status !== String(item.status || "").toUpperCase()) return `${status} / THRESHOLD`;
   return status;
+}
+
+function storedEligibilityThreshold() {
+  try {
+    const value = Number(localStorage.getItem(ELIGIBILITY_THRESHOLD_STORAGE_KEY));
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveEligibilityThreshold(value) {
+  try {
+    localStorage.setItem(ELIGIBILITY_THRESHOLD_STORAGE_KEY, String(value));
+  } catch {
+    // Ignore localStorage failures; the control still works for this page load.
+  }
+}
+
+function currentEligibilityThreshold() {
+  const configured = Number(state.eligibilityThreshold);
+  if (Number.isFinite(configured)) return configured;
+  const portfolio = state.botState?.portfolio || {};
+  const fallback = Number(portfolio.minProbability ?? 0.95);
+  return Number.isFinite(fallback) ? fallback : 0.95;
+}
+
+function syncEligibilityThresholdControl() {
+  const value = currentEligibilityThreshold();
+  if (els.eligibilityThreshold) {
+    els.eligibilityThreshold.value = String(Math.round(value * 100));
+  }
+  if (els.eligibilityThresholdLabel) {
+    els.eligibilityThresholdLabel.textContent = probability(value);
+  }
+}
+
+function isProbabilityRejectReason(reason) {
+  return /probability .*below|below .*probability|high-confidence threshold|edge-opportunity threshold/i.test(String(reason || ""));
+}
+
+function nonProbabilityRejectReasons(item) {
+  return (Array.isArray(item.rejectReasons) ? item.rejectReasons : []).filter((reason) => !isProbabilityRejectReason(reason));
+}
+
+function adjustedEvaluationStatus(item) {
+  const original = String(item.status || "-").toUpperCase();
+  if (original === "ERROR") return "ERROR";
+  const aiProbability = Number(item.aiProbability);
+  if (!Number.isFinite(aiProbability)) return original;
+  const threshold = currentEligibilityThreshold();
+  if (aiProbability < threshold) return "REJECTED";
+  if (original === "ELIGIBLE") return "ELIGIBLE";
+  if (original === "REJECTED" && nonProbabilityRejectReasons(item).length === 0) return "ELIGIBLE";
+  return original;
+}
+
+function evaluationReasons(item, riskReason = "") {
+  const aiProbability = Number(item.aiProbability);
+  const threshold = currentEligibilityThreshold();
+  const adjustedStatus = adjustedEvaluationStatus(item);
+  const reasons = [];
+  if (riskReason) reasons.push(riskReason);
+  if (Number.isFinite(aiProbability) && aiProbability < threshold) {
+    reasons.push(`AI probability ${probability(aiProbability)} below selected ${probability(threshold)}`);
+  }
+  reasons.push(...nonProbabilityRejectReasons(item));
+  if (adjustedStatus === "ELIGIBLE" && String(item.status || "").toUpperCase() === "REJECTED") {
+    reasons.push("passes selected probability threshold; originally rejected by bot threshold");
+  }
+  return reasons.filter(Boolean);
 }
 
 async function loadBotState() {
@@ -433,6 +513,12 @@ async function loadBotState() {
 
 function renderBotState(botState) {
   state.botState = botState;
+  if (state.eligibilityThreshold == null) {
+    const stored = storedEligibilityThreshold();
+    const portfolioThreshold = Number(botState.portfolio?.minProbability ?? 0.95);
+    state.eligibilityThreshold = stored ?? (Number.isFinite(portfolioThreshold) ? portfolioThreshold : 0.95);
+    syncEligibilityThresholdControl();
+  }
   const decision = botState.lastDecision || {};
   const portfolio = botState.portfolio || {};
   const learning = botState.learningProfile || {};
@@ -515,14 +601,14 @@ function renderBotState(botState) {
 
 function evaluationSortValue(item, key) {
   if (key === "evaluatedAt") return Date.parse(item.evaluatedAt || "") || 0;
-  if (key === "status") return String(item.status || "");
+  if (key === "status") return adjustedEvaluationStatus(item);
   if (key === "market") return `${item.outcome || ""} ${item.question || ""}`.toLowerCase();
   if (key === "marketPrice") return Number(item.marketPrice);
   if (key === "odds") return decimalOdds(item.marketPrice);
   if (key === "gainIfWin") return gainIfWin(item);
   if (key === "aiProbability") return Number(item.aiProbability);
   if (key === "annualizedReturn") return Number(item.annualizedReturn);
-  if (key === "analysis") return `${(item.rejectReasons || []).join("; ")} ${item.analysisSummary || ""}`.toLowerCase();
+  if (key === "analysis") return `${evaluationReasons(item).join("; ")} ${item.analysisSummary || ""}`.toLowerCase();
   return "";
 }
 
@@ -544,7 +630,7 @@ function sortedEvaluations(evaluations) {
 
 function filteredEvaluations(evaluations) {
   if (state.evaluationStatus === "ALL") return evaluations;
-  return evaluations.filter((item) => String(item.status || "").toUpperCase() === state.evaluationStatus);
+  return evaluations.filter((item) => adjustedEvaluationStatus(item) === state.evaluationStatus);
 }
 
 function sortableHeader(key, label) {
@@ -554,12 +640,13 @@ function sortableHeader(key, label) {
 
 function renderBotEvaluations() {
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
-  const eligibleCount = evaluations.filter((item) => item.status === "ELIGIBLE").length;
-  const riskBlockedCount = evaluations.filter((item) => item.selectionStatus === "RISK_BLOCKED").length;
+  const eligibleCount = evaluations.filter((item) => adjustedEvaluationStatus(item) === "ELIGIBLE").length;
+  const botEligibleCount = evaluations.filter((item) => String(item.status || "").toUpperCase() === "ELIGIBLE").length;
+  const riskBlockedCount = evaluations.filter((item) => adjustedEvaluationStatus(item) === "ELIGIBLE" && item.selectionStatus === "RISK_BLOCKED").length;
   const tradableCount = Math.max(0, eligibleCount - riskBlockedCount);
 
   if (els.evaluationSummary) {
-    els.evaluationSummary.textContent = `${tradableCount} tradable / ${eligibleCount} eligible / ${evaluations.length} total`;
+    els.evaluationSummary.textContent = `${tradableCount} tradable / ${eligibleCount} eligible / ${botEligibleCount} bot / ${evaluations.length} total`;
   }
 
   if (!evaluations.length) {
@@ -593,7 +680,7 @@ function renderBotEvaluations() {
         ${visibleEvaluations.map((item) => `
           <tr>
             <td>${escapeHtml(formatDate(item.evaluatedAt || ""))}</td>
-            <td class="${item.status === "ELIGIBLE" && item.selectionStatus !== "RISK_BLOCKED" ? "positive" : "negative"}">${escapeHtml(evaluationStatusLabel(item))}</td>
+            <td class="${adjustedEvaluationStatus(item) === "ELIGIBLE" && item.selectionStatus !== "RISK_BLOCKED" ? "positive" : "negative"}">${escapeHtml(evaluationStatusLabel(item))}</td>
             <td>
               ${marketAnchor(item)}
               <span>${escapeHtml(riskLine(item))}</span>
@@ -643,6 +730,16 @@ els.evaluationStatusButtons.forEach((button) => {
     });
     renderBotEvaluations();
   });
+});
+
+els.eligibilityThreshold?.addEventListener("input", () => {
+  const raw = Number(els.eligibilityThreshold.value);
+  if (!Number.isFinite(raw)) return;
+  const value = Math.min(99, Math.max(1, raw)) / 100;
+  state.eligibilityThreshold = value;
+  saveEligibilityThreshold(value);
+  syncEligibilityThresholdControl();
+  renderBotEvaluations();
 });
 
 els.botEvaluations?.addEventListener("click", (event) => {

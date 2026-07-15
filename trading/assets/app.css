@@ -164,6 +164,41 @@ button {
   gap: 10px;
 }
 
+.threshold-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 4px 8px 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.threshold-control span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.threshold-control input {
+  width: 64px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.threshold-control strong {
+  min-width: 48px;
+  color: var(--accent-dark);
+  font-size: 13px;
+}
+
 .segmented {
   display: inline-flex;
   flex-wrap: wrap;
