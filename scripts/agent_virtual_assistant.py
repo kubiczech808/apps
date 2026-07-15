@@ -3213,6 +3213,44 @@ def xoz_task_record_for_task(state: dict[str, Any], task: dict[str, Any]) -> dic
     return {}
 
 
+def is_misrouted_xoz_dynamic_social_task(task: dict[str, Any]) -> bool:
+    kind = str(task.get("kind") or "")
+    if not kind.startswith("agent-command:"):
+        return False
+    action = kind.removeprefix("agent-command:")
+    action_low = g.normalize_text(action)
+    if not any(term in action_low for term in ("x_social", "x_thread", "xpost", "x_post")):
+        return False
+    target_text = g.normalize_text(" ".join([
+        str(task.get("agent") or ""),
+        str(task.get("instance") or ""),
+        json.dumps(task.get("proof") if isinstance(task.get("proof"), dict) else {}, ensure_ascii=False),
+    ]))
+    return "xoz" in target_text or "osobni zkusenosti" in target_text or "osobnizkusenosti" in target_text
+
+
+def normalize_misrouted_xoz_dynamic_social_task(task: dict[str, Any], now: str) -> bool:
+    if not is_misrouted_xoz_dynamic_social_task(task):
+        return False
+    proof = task.get("proof") if isinstance(task.get("proof"), dict) else {}
+    original_kind = str(task.get("kind") or "")
+    task["agent"] = "Agent XOZ"
+    task["instance"] = "xoz-poster"
+    task["kind"] = "xoz-social-draft"
+    task["runner"] = str(XOZ_INBOX_FILE)
+    task["proof"] = {
+        **proof,
+        "inbox": str(XOZ_INBOX_FILE),
+        "state": str(XOZ_STATE_FILE),
+        "rerouted_from_kind": original_kind,
+    }
+    task["status"] = "ASSIGNED"
+    task["last_observation"] = "Reroutovano do spravneho Agent XOZ X workflow."
+    task["rerouted_to_xoz_at"] = now
+    task["updated_at"] = now
+    return True
+
+
 def find_bybit_affiliate_link(text: str) -> str:
     sources = [text]
     history = g.load_json(g.HISTORY_FILE, [])
@@ -3349,6 +3387,8 @@ def xoz_worker_once(tasks: list[dict[str, Any]] | None = None) -> int:
     for task in tasks:
         if not isinstance(task, dict):
             continue
+        if normalize_misrouted_xoz_dynamic_social_task(task, now):
+            changed += 1
         if str(task.get("kind") or "") != "xoz-social-draft":
             continue
         if str(task.get("status") or "ASSIGNED") in {"DONE", "BLOCKED", "CANCELED"}:
