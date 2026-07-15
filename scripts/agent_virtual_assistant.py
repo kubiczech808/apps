@@ -2557,6 +2557,50 @@ def default_comment_form_entry(text: str) -> dict[str, str] | None:
     }
 
 
+def default_generic_form_entry(text: str) -> dict[str, str] | None:
+    if not is_browser_form_task_text(text):
+        return None
+    low = g.normalize_text(text)
+    any_data = any(term in low for term in (
+        "jakymikoliv daty",
+        "jakakoliv data",
+        "jakykoliv formular",
+        "jakykoliv form",
+        "libovolnymi hodnotami",
+        "libovolnymi daty",
+        "libovolne hodnoty",
+        "libovolna data",
+        "random data",
+        "nahodna data",
+        "hodnoty si vymysli",
+        "data si vymysli",
+        "co chce",
+        "co bude pruchozi",
+    ))
+    generic_form = any(term in low for term in ("formular", "form", "vypln", "odesli", "potvrd"))
+    if not (any_data or generic_form):
+        return None
+    config = gmail_env_config()
+    email_match = re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", text)
+    email = email_match.group(0) if email_match else str(config.get("address") or "mailto.jakub.elias@gmail.com")
+    seed = hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()[:8]
+    message = random_comment_for_form(f"generic|{seed}")
+    return {
+        "kind": "generic",
+        "email": email,
+        "name": "Ema Vale",
+        "firstName": "Ema",
+        "lastName": "Vale",
+        "phone": "+420777123456",
+        "company": "OpenClaw",
+        "website": "https://example.com",
+        "subject": "Dotaz z weboveho formulare",
+        "message": message,
+        "text": message,
+        "comment": message,
+    }
+
+
 def browser_task_paths(task_id: str, index: int) -> dict[str, Path]:
     base = g.AGENT_WORK_DIR / "browser-tasks"
     base.mkdir(parents=True, exist_ok=True)
@@ -2595,6 +2639,30 @@ def review_form_actions(entry: dict[str, str]) -> list[dict[str, Any]]:
     return actions
 
 
+def generic_form_actions(entry: dict[str, str]) -> list[dict[str, Any]]:
+    values = {
+        "email": entry.get("email") or "mailto.jakub.elias@gmail.com",
+        "name": entry.get("name") or "Ema Vale",
+        "firstName": entry.get("firstName") or "Ema",
+        "lastName": entry.get("lastName") or "Vale",
+        "phone": entry.get("phone") or "+420777123456",
+        "company": entry.get("company") or "OpenClaw",
+        "website": entry.get("website") or "https://example.com",
+        "subject": entry.get("subject") or "Dotaz z weboveho formulare",
+        "message": entry.get("message") or entry.get("comment") or random_comment_for_form(json.dumps(entry, ensure_ascii=False)),
+        "text": entry.get("text") or entry.get("message") or entry.get("comment") or "Dobry den, posilam kratkou zpravu pres formular.",
+    }
+    return [{"type": "autofill", "values": values, "submit": True}]
+
+
+def browser_form_actions(entry: dict[str, str]) -> list[dict[str, Any]]:
+    if entry.get("kind") == "review":
+        return review_form_actions(entry)
+    if entry.get("kind") == "generic":
+        return generic_form_actions(entry)
+    return wordpress_comment_actions(entry)
+
+
 def start_playwright_form_task(url: str, entry: dict[str, str], task_id: str, index: int) -> dict[str, str]:
     helper = Path("/home/openclaw2/scripts/virtual_assistant_playwright.mjs")
     paths = browser_task_paths(task_id, index)
@@ -2604,7 +2672,7 @@ def start_playwright_form_task(url: str, entry: dict[str, str], task_id: str, in
         "waitUntil": "commit",
         "timeoutMs": 60000,
         "screenshotPath": str(paths["screenshot"]),
-        "actions": review_form_actions(entry) if entry.get("kind") == "review" else wordpress_comment_actions(entry),
+        "actions": browser_form_actions(entry),
     }
     paths["task"].write_text(json.dumps(task, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     command = (
@@ -2633,6 +2701,9 @@ def parse_browser_form_task_request(text: str) -> str | None:
     if not entries:
         default_comment = default_comment_form_entry(text)
         entries = [default_comment] if default_comment else []
+    if not entries:
+        default_generic = default_generic_form_entry(text)
+        entries = [default_generic] if default_generic else []
     if not entries:
         return "Blokuje me: rozpoznala jsem browser/formular ukol, ale nenasla jsem dost hodnot pro jeho pole."
     task_id = delegation_task_id("Virtualni asistentka", "browser", text.strip(), "browser-form")

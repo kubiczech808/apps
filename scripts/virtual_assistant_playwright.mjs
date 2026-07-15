@@ -117,6 +117,116 @@ async function elementSummary(page) {
   });
 }
 
+async function genericAutofill(page, values = {}, options = {}) {
+  return await page.evaluate(({ values, submit, allowSubmit }) => {
+    const visible = (el) => {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return style && style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+    };
+    const norm = (value) => String(value || "").toLowerCase();
+    const labelText = (el) => {
+      const bits = [
+        el.getAttribute("name"),
+        el.id,
+        el.getAttribute("placeholder"),
+        el.getAttribute("aria-label"),
+        el.getAttribute("autocomplete"),
+      ];
+      if (el.id) {
+        const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+        if (label) bits.push(label.textContent || "");
+      }
+      const parentLabel = el.closest("label");
+      if (parentLabel) bits.push(parentLabel.textContent || "");
+      return norm(bits.filter(Boolean).join(" "));
+    };
+    const pickValue = (el) => {
+      const type = norm(el.getAttribute("type") || el.tagName);
+      const hay = labelText(el);
+      if (type === "email" || hay.includes("email") || hay.includes("e-mail")) return values.email;
+      if (type === "tel" || hay.includes("phone") || hay.includes("telefon") || hay.includes("mobil")) return values.phone;
+      if (type === "url" || hay.includes("web") || hay.includes("url")) return values.website;
+      if (hay.includes("subject") || hay.includes("predmet") || hay.includes("předmět")) return values.subject;
+      if (hay.includes("firma") || hay.includes("company") || hay.includes("spolecnost")) return values.company;
+      if (hay.includes("surname") || hay.includes("lastname") || hay.includes("prijmeni") || hay.includes("příjmení")) return values.lastName;
+      if (hay.includes("firstname") || hay.includes("jmeno") || hay.includes("jméno") || hay.includes("name")) return values.name;
+      if (el.tagName.toLowerCase() === "textarea" || hay.includes("message") || hay.includes("zprava") || hay.includes("zpráva") || hay.includes("comment") || hay.includes("komentar") || hay.includes("komentář")) return values.message;
+      return values.text;
+    };
+    const setValue = (el, value) => {
+      el.focus();
+      el.value = value || "";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    const forms = [...document.querySelectorAll("form")].filter((form) =>
+      visible(form) && [...form.querySelectorAll("input, textarea, select")].some(visible)
+    );
+    const root = forms[0] || document;
+    const filled = [];
+    const skipped = [];
+    const fields = [...root.querySelectorAll("input, textarea, select")].filter(visible);
+    const seenRadio = new Set();
+    for (const el of fields) {
+      const tag = el.tagName.toLowerCase();
+      const type = norm(el.getAttribute("type") || tag);
+      const name = el.getAttribute("name") || el.id || tag;
+      if (["hidden", "submit", "button", "image", "reset", "file", "password"].includes(type)) {
+        skipped.push({ name, type });
+        continue;
+      }
+      if (tag === "select") {
+        const option = [...el.options].find((item) => !item.disabled && item.value) || [...el.options].find((item) => !item.disabled);
+        if (option) {
+          el.value = option.value;
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          filled.push({ name, type: "select", value: option.value });
+        }
+        continue;
+      }
+      if (type === "checkbox") {
+        if (!el.checked) el.click();
+        filled.push({ name, type: "checkbox", value: "checked" });
+        continue;
+      }
+      if (type === "radio") {
+        const group = el.getAttribute("name") || el.id || "__radio";
+        if (!seenRadio.has(group)) {
+          el.click();
+          seenRadio.add(group);
+          filled.push({ name, type: "radio", value: el.value || "selected" });
+        }
+        continue;
+      }
+      const value = pickValue(el);
+      setValue(el, value);
+      filled.push({ name, type, value: String(value || "").slice(0, 80) });
+    }
+    let submitted = false;
+    let blocked = "";
+    if (submit) {
+      const submitter = root.querySelector("button[type='submit'], input[type='submit'], button:not([type]), input[type='button']");
+      if (!allowSubmit) {
+        blocked = "submit blocked because allowSubmit=false";
+      } else if (submitter && visible(submitter)) {
+        submitter.click();
+        submitted = true;
+      } else if (root.tagName && root.tagName.toLowerCase() === "form") {
+        root.requestSubmit ? root.requestSubmit() : root.submit();
+        submitted = true;
+      } else {
+        blocked = "submit control not found";
+      }
+    }
+    return { filled, skipped, submitted, blocked, formFound: Boolean(forms[0]) };
+  }, {
+    values,
+    submit: options.submit !== false,
+    allowSubmit: options.allowSubmit !== false,
+  });
+}
+
 async function run() {
   const taskPath = process.argv[2];
   if (!taskPath) {
@@ -154,10 +264,24 @@ async function run() {
     await page.goto(url, { waitUntil: task.waitUntil || "domcontentloaded", timeout: timeoutMs });
     for (const action of actions) {
       const type = String(action.type || "").toLowerCase();
-      const selector = requireString(action.selector, "action.selector");
+      const selector = type === "autofill" ? "" : requireString(action.selector, "action.selector");
       const note = { type, selector, ok: false };
       try {
-        if (type === "fill") {
+        if (type === "autofill") {
+          note.details = await genericAutofill(page, action.values || {}, {
+            submit: action.submit !== false,
+            allowSubmit,
+          });
+          if (note.details.submitted) {
+            await Promise.race([
+              page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {}),
+              page.waitForTimeout(2500),
+            ]);
+          }
+          note.ok = Array.isArray(note.details.filled) && note.details.filled.length > 0;
+          if (!note.ok) note.blocked = "no visible fields filled";
+          if (note.details.blocked) note.blocked = note.details.blocked;
+        } else if (type === "fill") {
           await page.locator(selector).first().fill(String(action.value ?? ""), { timeout: timeoutMs });
           note.ok = true;
         } else if (type === "check") {
