@@ -14,7 +14,6 @@
           <p class="eyebrow">osobnizkusenosti.cz/trading</p>
           <h1>AI paper-trading desk</h1>
         </div>
-        <button class="primary-button" type="button" data-refresh>Refresh candidates</button>
       </header>
 
       <section class="portfolio-overview panel">
@@ -64,9 +63,6 @@
           <button class="tab-button active" type="button" data-tab-target="daily-picks">Daily picks</button>
           <button class="tab-button" type="button" data-tab-target="closed-trades">Closed trades</button>
           <button class="tab-button" type="button" data-tab-target="evaluation-log">Evaluation log</button>
-          <button class="tab-button" type="button" data-tab-target="manual-analysis">Manual analysis</button>
-          <button class="tab-button" type="button" data-tab-target="local-portfolio">Local portfolio</button>
-          <button class="tab-button" type="button" data-tab-target="dry-run-payload">Dry-run payload</button>
         </div>
 
         <section class="tab-panel active" data-tab-panel="daily-picks">
@@ -114,143 +110,6 @@
               </div>
             </div>
             <div class="ledger" data-bot-evaluations></div>
-          </article>
-        </section>
-
-        <section class="tab-panel" data-tab-panel="manual-analysis">
-          <section class="grid">
-            <article class="panel candidates-panel">
-              <div class="panel-head">
-                <div>
-                  <p class="eyebrow">Step 1</p>
-                  <h2>Kandidati pro sazku</h2>
-                </div>
-                <span class="pill" data-candidate-count>0</span>
-              </div>
-
-              <label class="field-label" for="marketSearch">Tema</label>
-              <div class="search-row">
-                <input id="marketSearch" class="field-control" type="search" placeholder="bitcoin, election, fed, inflation">
-                <button class="secondary-button" type="button" data-search>Search</button>
-              </div>
-
-              <div class="scan-controls">
-                <label>
-                  <span class="field-label">Min. volume 24h</span>
-                  <input class="field-control" data-min-volume type="number" min="0" step="100" value="500">
-                </label>
-                <label>
-                  <span class="field-label">Max spread pts</span>
-                  <input class="field-control" data-max-spread type="number" min="0.1" step="0.1" value="8">
-                </label>
-              </div>
-
-              <div class="candidate-list" data-candidates></div>
-            </article>
-
-            <article class="panel analysis-panel">
-              <div class="panel-head">
-                <div>
-                  <p class="eyebrow">Step 2</p>
-                  <h2 data-selected-title>Vyber kandidata</h2>
-                </div>
-                <span class="pill" data-selected-score>-</span>
-              </div>
-
-              <div class="book-grid">
-                <div>
-                  <span class="label">Outcome</span>
-                  <strong data-outcome-label>-</strong>
-                </div>
-                <div>
-                  <span class="label">Best ask</span>
-                  <strong data-best-ask>-</strong>
-                </div>
-                <div>
-                  <span class="label">Spread</span>
-                  <strong data-spread>-</strong>
-                </div>
-                <div>
-                  <span class="label">Liquidity</span>
-                  <strong data-liquidity>-</strong>
-                </div>
-              </div>
-
-              <div class="form-grid">
-                <label>
-                  <span class="field-label">AI probability</span>
-                  <input class="field-control" data-ai-probability type="number" min="1" max="99" step="0.5" value="55">
-                </label>
-                <label>
-                  <span class="field-label">Portfolio USDC</span>
-                  <input class="field-control" data-bankroll type="number" min="10" step="10" value="100">
-                </label>
-                <label>
-                  <span class="field-label">Allocation %</span>
-                  <input class="field-control" data-allocation type="number" min="0.5" max="5" step="0.5" value="5">
-                </label>
-                <label>
-                  <span class="field-label">Entry price cap</span>
-                  <input class="field-control" data-price-cap type="number" min="0.01" max="0.99" step="0.001" value="0.50">
-                </label>
-              </div>
-
-              <div class="metrics-strip">
-                <div>
-                  <span class="label">Stake</span>
-                  <strong data-stake>$5.00</strong>
-                </div>
-                <div>
-                  <span class="label">EV</span>
-                  <strong data-ev>$0.00</strong>
-                </div>
-                <div>
-                  <span class="label">Max drawdown</span>
-                  <strong data-drawdown>5.0%</strong>
-                </div>
-                <div>
-                  <span class="label">Decision</span>
-                  <strong data-decision>WAIT</strong>
-                </div>
-              </div>
-
-              <div class="memo" data-memo>
-                <div class="empty">Vyber trh vlevo. Potom zadej nasi odhadovanou pravdepodobnost a spust hlubsi analyzu.</div>
-              </div>
-
-              <div class="actions">
-                <button class="secondary-button" type="button" data-build-memo>Run analysis</button>
-                <button class="primary-button" type="button" data-paper-enter>Paper enter</button>
-              </div>
-            </article>
-          </section>
-        </section>
-
-        <section class="tab-panel" data-tab-panel="local-portfolio">
-          <article class="panel">
-            <div class="panel-head">
-              <div>
-                <p class="eyebrow">Manual sandbox</p>
-                <h2>Local paper portfolio</h2>
-              </div>
-              <button class="secondary-button" type="button" data-clear-ledger>Clear ledger</button>
-            </div>
-            <div class="ledger" data-ledger></div>
-          </article>
-        </section>
-
-        <section class="tab-panel" data-tab-panel="dry-run-payload">
-          <article class="panel">
-            <div class="panel-head">
-              <div>
-                <p class="eyebrow">Executor</p>
-                <h2>Dry-run payload</h2>
-              </div>
-            </div>
-            <textarea class="payload" data-payload readonly></textarea>
-            <div class="actions">
-              <button class="secondary-button" type="button" data-copy>Copy payload</button>
-            </div>
           </article>
         </section>
       </section>

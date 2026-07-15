@@ -83,21 +83,6 @@ button {
   margin: 0 0 8px;
 }
 
-.grid,
-.portfolio-grid {
-  display: grid;
-  gap: 16px;
-}
-
-.grid {
-  grid-template-columns: minmax(360px, 0.9fr) minmax(0, 1.35fr);
-}
-
-.portfolio-grid {
-  grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
-  margin-top: 16px;
-}
-
 .portfolio-overview {
   margin-bottom: 16px;
 }
@@ -216,10 +201,6 @@ button {
   box-shadow: var(--shadow);
 }
 
-.full-width {
-  grid-column: 1 / -1;
-}
-
 .panel-head {
   display: flex;
   align-items: flex-start;
@@ -230,124 +211,6 @@ button {
 
 .panel h2 {
   font-size: 24px;
-}
-
-.primary-button,
-.secondary-button,
-.mini-button {
-  min-height: 42px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-weight: 760;
-}
-
-.primary-button {
-  padding: 0 18px;
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #ffffff;
-}
-
-.primary-button:hover {
-  background: var(--accent-dark);
-}
-
-.secondary-button,
-.mini-button {
-  padding: 0 14px;
-  background: #ffffff;
-  color: var(--ink);
-}
-
-.mini-button {
-  min-height: 32px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
-.field-label {
-  display: block;
-  margin-bottom: 7px;
-}
-
-.field-control {
-  width: 100%;
-  min-height: 42px;
-  padding: 0 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
-  color: var(--ink);
-}
-
-.search-row,
-.scan-controls {
-  display: grid;
-  gap: 8px;
-}
-
-.search-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  margin-bottom: 12px;
-}
-
-.scan-controls,
-.form-grid,
-.book-grid,
-.metrics-strip {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.scan-controls {
-  display: grid;
-  margin-bottom: 16px;
-}
-
-.candidate-list {
-  display: grid;
-  gap: 10px;
-  max-height: calc(100vh - 330px);
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.candidate-button {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  gap: 10px;
-  width: 100%;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfdff;
-  color: var(--ink);
-  text-align: left;
-}
-
-.candidate-button:hover,
-.candidate-button.active {
-  border-color: var(--accent);
-}
-
-.candidate-score {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 8px;
-  background: #e0f2fe;
-  color: #075985;
-  font-weight: 850;
-}
-
-.market-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .pill {
@@ -361,89 +224,6 @@ button {
   font-size: 12px;
   font-weight: 850;
   text-transform: uppercase;
-}
-
-.book-grid,
-.metrics-strip,
-.form-grid {
-  display: grid;
-  gap: 10px;
-}
-
-.book-grid,
-.metrics-strip {
-  margin-bottom: 18px;
-}
-
-.book-grid div,
-.metrics-strip div {
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--soft);
-}
-
-.book-grid strong,
-.metrics-strip strong {
-  display: block;
-  margin-top: 8px;
-  font-size: 21px;
-}
-
-.form-grid {
-  margin-bottom: 16px;
-}
-
-.memo {
-  display: grid;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.memo-section {
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfdff;
-}
-
-.memo h3 {
-  margin-bottom: 8px;
-  font-size: 17px;
-}
-
-.memo p {
-  margin: 0 0 8px;
-  color: #344054;
-  line-height: 1.55;
-}
-
-.memo ul {
-  margin: 0;
-  padding-left: 20px;
-  color: #344054;
-  line-height: 1.55;
-}
-
-.payload {
-  width: 100%;
-  min-height: 300px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  resize: vertical;
-  background: #0f172a;
-  color: #d1fae5;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 12px;
 }
 
 .ledger {
@@ -609,18 +389,9 @@ button {
 }
 
 @media (max-width: 1180px) {
-  .grid,
-  .portfolio-grid {
-    grid-template-columns: 1fr;
-  }
-
   .portfolio-cards,
   .bot-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .candidate-list {
-    max-height: none;
   }
 }
 
@@ -640,24 +411,8 @@ button {
     justify-content: flex-start;
   }
 
-  .search-row,
-  .scan-controls,
-  .form-grid,
-  .book-grid,
-  .metrics-strip {
-    grid-template-columns: 1fr;
-  }
-
-  .candidate-button {
-    grid-template-columns: 1fr;
-  }
-
   .portfolio-cards,
   .bot-summary {
     grid-template-columns: 1fr;
-  }
-
-  .actions {
-    flex-direction: column;
   }
 }
