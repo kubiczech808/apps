@@ -198,6 +198,30 @@ if (($_POST['action'] ?? '') === 'start_public_onboarding') {
     }
 }
 
+if (($_POST['action'] ?? '') === 'request_password_reset') {
+    try {
+        $_SESSION['flash'] = ['ok', requestPasswordReset($pdo, $config)];
+        header('Location: ./?auth=forgot');
+        exit;
+    } catch (Throwable $e) {
+        $flash = ['error', $e->getMessage()];
+    }
+}
+
+if (($_POST['action'] ?? '') === 'reset_password') {
+    try {
+        $message = resetPasswordWithToken($pdo, $config);
+        $_SESSION['auth'] = true;
+        $_SESSION['auth_email'] = strtolower(trim((string)($config['admin_email'] ?? '')));
+        $_SESSION['auth_provider'] = 'password';
+        $_SESSION['flash'] = ['ok', $message];
+        header('Location: ./?route=dashboard');
+        exit;
+    } catch (Throwable $e) {
+        $flash = ['error', $e->getMessage()];
+    }
+}
+
 if (($_POST['action'] ?? '') === 'login') {
     $loginEmail = strtolower(trim((string)($_POST['email'] ?? '')));
     $adminEmail = strtolower(trim((string)($config['admin_email'] ?? '')));
@@ -2572,6 +2596,84 @@ function emailAuthBadge(array $report, string $key): string
     $label = strtoupper($key) . ': ' . emailAuthStatusLabel($status);
     $class = $status === 'ok' ? 'good' : ($status === 'warn' || $status === 'fail' ? 'warn' : 'muted');
     return '<span class="badge ' . $class . '">' . h($label) . '</span>';
+}
+
+function requestPasswordReset(PDO $pdo, array $config): string
+{
+    $email = strtolower(trim((string)($_POST['email'] ?? '')));
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        throw new RuntimeException('Zadej platny email.');
+    }
+    $adminEmail = strtolower(trim((string)($config['admin_email'] ?? '')));
+    if ($adminEmail !== '' && hash_equals($adminEmail, $email)) {
+        $token = bin2hex(random_bytes(32));
+        $now = date('c');
+        setSetting($pdo, 'password_reset_token_hash', hash('sha256', $token));
+        setSetting($pdo, 'password_reset_email', $adminEmail);
+        setSetting($pdo, 'password_reset_requested_at', $now);
+        setSetting($pdo, 'password_reset_expires_at', date('c', time() + 3600));
+        setSetting($pdo, 'password_reset_used_at', '');
+        (new SmtpMailer($config))->send(
+            $adminEmail,
+            'Obnova hesla do AI akvizice',
+            passwordResetEmailHtml(passwordResetUrl($token))
+        );
+    }
+    return 'Pokud email odpovida administracnimu uctu, poslali jsme odkaz pro obnovu hesla.';
+}
+
+function resetPasswordWithToken(PDO $pdo, array $config): string
+{
+    $token = trim((string)($_POST['reset_token'] ?? $_GET['token'] ?? ''));
+    $password = (string)($_POST['new_password'] ?? '');
+    $confirm = (string)($_POST['new_password_confirm'] ?? '');
+    if (!passwordResetTokenIsValid($pdo, $token)) {
+        throw new RuntimeException('Odkaz pro obnovu hesla neni platny nebo expiroval.');
+    }
+    if (strlen($password) < 10) {
+        throw new RuntimeException('Nove heslo musi mit alespon 10 znaku.');
+    }
+    if (!hash_equals($password, $confirm)) {
+        throw new RuntimeException('Hesla se neshoduji.');
+    }
+    $adminEmail = strtolower(trim((string)($config['admin_email'] ?? '')));
+    if ($adminEmail === '') {
+        throw new RuntimeException('Administracni email neni nastaven.');
+    }
+    setSetting($pdo, 'app_password_hash', password_hash($password, PASSWORD_DEFAULT));
+    setSetting($pdo, 'password_reset_token_hash', '');
+    setSetting($pdo, 'password_reset_expires_at', '');
+    setSetting($pdo, 'password_reset_used_at', date('c'));
+    return 'Heslo bylo zmeneno a jsi prihlasen.';
+}
+
+function passwordResetTokenIsValid(PDO $pdo, string $token): bool
+{
+    if (!preg_match('/^[a-f0-9]{64}$/i', $token)) {
+        return false;
+    }
+    $settings = loadSettings($pdo);
+    $hash = trim((string)($settings['password_reset_token_hash'] ?? ''));
+    $expiresAt = strtotime((string)($settings['password_reset_expires_at'] ?? ''));
+    if ($hash === '' || !$expiresAt || $expiresAt < time()) {
+        return false;
+    }
+    return hash_equals($hash, hash('sha256', $token));
+}
+
+function passwordResetUrl(string $token): string
+{
+    return appBaseUrl() . '?auth=reset&token=' . rawurlencode($token);
+}
+
+function passwordResetEmailHtml(string $url): string
+{
+    return '<div style="font-family:Arial,sans-serif;line-height:1.5;color:#1e2522;max-width:620px">'
+        . '<h1 style="font-size:24px;margin:0 0 14px">Obnova hesla</h1>'
+        . '<p>Pro nastaveni noveho hesla klikni na tlacitko nize. Odkaz je platny 60 minut.</p>'
+        . '<p><a href="' . h($url) . '" style="display:inline-block;background:#0f7b6c;color:white;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:8px">Nastavit nove heslo</a></p>'
+        . '<p style="color:#67736d;font-size:13px">Pokud jsi o obnovu nepozadal, tento email ignoruj.</p>'
+        . '</div>';
 }
 
 function saveAccountSettings(PDO $pdo, array $config): void
@@ -8788,8 +8890,115 @@ function formatDateTime(string $value): string
     return $time ? date('d.m.Y H:i', $time) : $value;
 }
 
+function publicAuthMode(): string
+{
+    $mode = strtolower(trim((string)($_GET['auth'] ?? 'landing')));
+    return in_array($mode, ['signup', 'login', 'forgot', 'reset'], true) ? $mode : 'landing';
+}
+
+function renderPublicAuthPage(?array $flash, array $config, string $mode): void
+{
+    $googleEnabled = googleAuthEnabled($config);
+    $resetToken = trim((string)($_GET['token'] ?? ''));
+    $title = [
+        'signup' => 'Vyzkouset zdarma',
+        'login' => 'Prihlaseni',
+        'forgot' => 'Obnova hesla',
+        'reset' => 'Nove heslo',
+    ][$mode] ?? 'Prihlaseni';
+    ob_start();
+    ?><!doctype html>
+    <html lang="cs">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title><?= h($title) ?> | AI akvizice B2B</title>
+        <link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>">
+    </head>
+    <body class="public-auth-page">
+        <header class="landing-nav public-auth-nav">
+            <a class="landing-brand" href="./" aria-label="AI akvizice">
+                <span>AI</span>
+                <strong>Akvizice B2B</strong>
+            </a>
+            <nav aria-label="Prihlaseni">
+                <a href="./">Zpet na uvod</a>
+                <a href="?auth=signup">Registrace</a>
+                <a href="?auth=login">Prihlaseni</a>
+                <?php renderLanguageDropdown(null, $config, true); ?>
+            </nav>
+        </header>
+        <main class="public-auth-shell">
+            <section class="public-auth-copy">
+                <span class="landing-kicker">AI lead generation</span>
+                <h1><?= $mode === 'signup' ? 'Zacnete prvnim oslovenim.' : ($mode === 'login' ? 'Vitejte zpet.' : 'Obnovime pristup bez zbytecneho cekani.') ?></h1>
+                <p><?= $mode === 'signup' ? 'Popiste, co prodavate. Aplikace pripravi relevantni kontakty, navrh emailu a provede vas odeslanim.' : 'Pokracujte do aplikace, kde spravujete kontakty, kampane, scraping a vysledky osloveni.' ?></p>
+            </section>
+            <section class="public-auth-card">
+                <?php renderFlash($flash); ?>
+                <?php if ($mode === 'signup'): ?>
+                    <h2>Vyzkouset zdarma</h2>
+                    <form method="post" action="?auth=signup" class="landing-form" autocomplete="off">
+                        <input type="hidden" name="action" value="start_public_onboarding">
+                        <label>Pracovni email<input type="email" name="signup_email" placeholder="napriklad jana@firma.cz" autocomplete="email" required></label>
+                        <label>Nazev firmy <span>volitelne</span><input name="business_name" placeholder="napriklad Oleje Pro" autocomplete="organization"></label>
+                        <label>Co prodavate<textarea name="product_description" rows="5" placeholder="Napriklad: Prodavam profesionalni masazni oleje pro wellness centra." required></textarea></label>
+                        <button>Vyzkouset zdarma</button>
+                    </form>
+                    <p class="public-auth-switch">Uz mate pristup? <a href="?auth=login">Prihlaste se</a></p>
+                <?php elseif ($mode === 'forgot'): ?>
+                    <h2>Zapomenute heslo</h2>
+                    <p class="note">Zadejte administracni email. Pokud odpovida uctu v aplikaci, poslu odkaz pro nastaveni noveho hesla.</p>
+                    <form method="post" action="?auth=forgot" class="landing-login-form">
+                        <input type="hidden" name="action" value="request_password_reset">
+                        <label>Email<input type="email" name="email" autocomplete="username" required></label>
+                        <button type="submit">Poslat odkaz</button>
+                    </form>
+                    <p class="public-auth-switch"><a href="?auth=login">Zpet na prihlaseni</a></p>
+                <?php elseif ($mode === 'reset'): ?>
+                    <h2>Nastavit nove heslo</h2>
+                    <?php if ($resetToken === ''): ?>
+                        <div class="flash error">Odkaz pro obnovu hesla neni kompletni.</div>
+                        <p class="public-auth-switch"><a href="?auth=forgot">Poslat novy odkaz</a></p>
+                    <?php else: ?>
+                        <form method="post" action="?auth=reset&amp;token=<?= h(rawurlencode($resetToken)) ?>" class="landing-login-form" autocomplete="off">
+                            <input type="hidden" name="action" value="reset_password">
+                            <input type="hidden" name="reset_token" value="<?= h($resetToken) ?>">
+                            <label>Nove heslo<input type="password" name="new_password" minlength="10" autocomplete="new-password" required></label>
+                            <label>Potvrzeni hesla<input type="password" name="new_password_confirm" minlength="10" autocomplete="new-password" required></label>
+                            <button type="submit">Nastavit heslo</button>
+                        </form>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <h2>Prihlaseni</h2>
+                    <?php if ($googleEnabled): ?>
+                        <a class="button google-button" href="?auth=google">Pokracovat pres Google</a>
+                        <div class="auth-divider"><span>nebo</span></div>
+                    <?php endif; ?>
+                    <form method="post" action="?auth=login" class="landing-login-form">
+                        <input type="hidden" name="action" value="login">
+                        <label>Email<input type="email" name="email" autocomplete="username" autofocus required></label>
+                        <label>Heslo<input type="password" name="password" autocomplete="current-password" required></label>
+                        <button type="submit">Prihlasit</button>
+                    </form>
+                    <p class="public-auth-switch"><a href="?auth=forgot">Zapomenute heslo?</a></p>
+                    <p class="public-auth-switch">Jeste nemate pristup? <a href="?auth=signup">Vyzkouset zdarma</a></p>
+                <?php endif; ?>
+                <p class="version">Verze <?= h(APP_VERSION) ?></p>
+            </section>
+        </main>
+    </body>
+    </html><?php
+    echo localizeHtml((string)ob_get_clean(), null, $config);
+}
+
 function renderLogin(?array $flash, array $config): void
 {
+    $authMode = publicAuthMode();
+    if ($authMode !== 'landing') {
+        renderPublicAuthPage($flash, $config, $authMode);
+        return;
+    }
     $googleEnabled = googleAuthEnabled($config);
     ob_start();
     ?><!doctype html>
@@ -8810,7 +9019,7 @@ function renderLogin(?array $flash, array $config): void
                 <a href="#how">Jak to funguje</a>
                 <a href="#pricing">Ceník</a>
                 <a href="#faq">FAQ</a>
-                <a class="landing-login-link" href="#login">Přihlásit</a>
+                <a class="landing-login-link" href="?auth=login">Přihlásit</a>
                 <?php renderLanguageDropdown(null, $config, true); ?>
             </nav>
         </header>
@@ -8832,12 +9041,13 @@ function renderLogin(?array $flash, array $config): void
                     <h1>Získejte nové firemní zákazníky během několika minut.</h1>
                     <p>Řekněte nám, co prodáváte. AI sama najde vhodné firmy, napíše personalizované oslovení a odešle ho vaším jménem.</p>
                     <div class="landing-cta-row">
-                        <a class="button landing-primary" href="#signup">Vyzkoušet zdarma</a>
+                        <a class="button landing-primary" href="?auth=signup">Vyzkoušet zdarma</a>
                         <a class="button landing-secondary" href="#how">Podívat se, jak to funguje</a>
                     </div>
                 </div>
             </section>
 
+            <?php if (false): ?>
             <section class="landing-auth-strip" id="signup">
                 <div class="landing-signup-copy">
                     <span class="landing-kicker">Začněte bez marketingových znalostí</span>
@@ -8869,6 +9079,8 @@ function renderLogin(?array $flash, array $config): void
                     </div>
                 </div>
             </section>
+
+            <?php endif; ?>
 
             <section class="landing-section landing-audience">
                 <div class="landing-section-head">
@@ -8979,7 +9191,7 @@ function renderLogin(?array $flash, array $config): void
             <section class="landing-final">
                 <h2>Přestaňte hledat zákazníky ručně.</h2>
                 <p>Nechte AI najít firmy, připravit oslovení a získávat nové obchodní příležitosti za vás.</p>
-                <a class="button landing-primary" href="#signup">Vyzkoušet zdarma</a>
+                <a class="button landing-primary" href="?auth=signup">Vyzkoušet zdarma</a>
             </section>
         </main>
     </body>
