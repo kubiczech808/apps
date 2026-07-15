@@ -254,7 +254,7 @@ button {
 .ledger table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1320px;
+  min-width: 1500px;
 }
 
 .ledger th,
@@ -364,6 +364,18 @@ button {
   text-overflow: ellipsis;
   vertical-align: middle;
   white-space: nowrap;
+}
+
+.trade-analysis-text {
+  display: -webkit-box !important;
+  max-width: 280px !important;
+  margin-top: 6px !important;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .positive {

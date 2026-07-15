@@ -255,6 +255,57 @@ function potentialCell(trade) {
   `;
 }
 
+function tradeAiProbability(trade) {
+  const fromTrade = Number(trade.aiProbability);
+  if (Number.isFinite(fromTrade)) return fromTrade;
+  const fromAnalysis = Number(trade.aiAnalysis?.probability);
+  if (Number.isFinite(fromAnalysis)) return fromAnalysis;
+  const fromEvaluation = Number(trade.sourceEvaluation?.aiProbability);
+  return Number.isFinite(fromEvaluation) ? fromEvaluation : null;
+}
+
+function tradeAnalysisThesis(trade) {
+  return trade.probabilityThesis
+    || trade.aiAnalysis?.thesis
+    || trade.sourceEvaluation?.probabilityThesis
+    || trade.sourceEvaluation?.aiAnalysis?.thesis
+    || "";
+}
+
+function tradeAnalysisDetails(trade) {
+  const ai = trade.aiAnalysis || trade.sourceEvaluation?.aiAnalysis || {};
+  const source = trade.sourceEvaluation || {};
+  const lines = [
+    trade.thesisType || source.thesisType ? `Thesis type: ${trade.thesisType || source.thesisType}` : "",
+    `AI probability: ${probability(tradeAiProbability(trade))}`,
+    trade.rawProbability != null || source.rawProbability != null ? `Raw probability: ${probability(Number(trade.rawProbability ?? source.rawProbability))}` : "",
+    trade.entryPrice != null ? `Entry price: ${probability(Number(trade.entryPrice))}` : "",
+    trade.edge != null || source.edge != null ? `Original edge: ${signedPercent(Number(trade.edge ?? source.edge))}` : "",
+    trade.expectedValueUsdc != null || source.expectedValueUsdc != null ? `Original EV: ${signedMoney(Number(trade.expectedValueUsdc ?? source.expectedValueUsdc), 4)}` : "",
+    trade.annualizedReturn != null || source.annualizedReturn != null ? `Original EV p.a.: ${signedPercent(Number(trade.annualizedReturn ?? source.annualizedReturn))}` : "",
+    tradeAnalysisThesis(trade),
+    Array.isArray(ai.evidence) && ai.evidence.length ? `Evidence: ${ai.evidence.join(" ")}` : "",
+    Array.isArray(ai.counterEvidence) && ai.counterEvidence.length ? `Counter: ${ai.counterEvidence.join(" ")}` : "",
+    trade.analysisSummary || source.analysisSummary || "",
+    trade.postMortem?.thesisReview ? `Post-mortem: ${trade.postMortem.thesisReview}` : "",
+  ];
+  return lines.filter(Boolean).join("\n\n");
+}
+
+function tradeAnalysisCell(trade) {
+  const prob = tradeAiProbability(trade);
+  const thesis = tradeAnalysisThesis(trade) || "No stored thesis";
+  const details = tradeAnalysisDetails(trade);
+  return `
+    <strong>${probability(prob)}</strong>
+    <span class="analysis-popover">
+      <button class="info-button" type="button" aria-label="Show original AI analysis" title="${escapeHtml(details)}">i</button>
+      <span class="analysis-tooltip" role="tooltip">${escapeHtml(details)}</span>
+    </span>
+    <span class="trade-analysis-text">${escapeHtml(thesis)}</span>
+  `;
+}
+
 function postMortemLine(trade) {
   const review = trade.postMortem;
   if (!review) return "";
@@ -272,6 +323,7 @@ function renderTradeRows(trades, emptyText) {
           <th>Opened</th>
           <th>Market</th>
           <th>Entry</th>
+          <th>AI analysis</th>
           <th>Resolution</th>
           <th>Holding</th>
           <th>Potential</th>
@@ -293,6 +345,7 @@ function renderTradeRows(trades, emptyText) {
               ${probability(Number(trade.entryPrice))}
               <span>${[trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`, feeLine(trade)].filter(Boolean).join(", ")}</span>
             </td>
+            <td>${tradeAnalysisCell(trade)}</td>
             <td>${resolutionCell(trade)}</td>
             <td>${holdingCell(trade)}</td>
             <td>${potentialCell(trade)}</td>
