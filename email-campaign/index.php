@@ -473,6 +473,8 @@ function handleOnboardingRequest(PDO $pdo, array $config, ?array $flash): void
         $lead = onboardingLeadByToken($pdo, $token) ?: $lead;
     }
 
+    trackOnboardingVisit($pdo, $lead, $step, onboardingRequestFromInvite());
+    $lead = onboardingLeadByToken($pdo, $token) ?: $lead;
     renderOnboardingWizard($pdo, $config, $lead, $step, $flash);
 }
 
@@ -508,6 +510,105 @@ function onboardingRequestedStep(array $lead): string
         'payment_ready' => 'launch',
         'launched' => 'done',
     ][(string)($lead['status'] ?? 'new')] ?? 'contacts';
+}
+
+function onboardingWizardStepRank(string $step): int
+{
+    return [
+        'contacts' => 1,
+        'email' => 2,
+        'smtp' => 3,
+        'payment' => 4,
+        'launch' => 5,
+        'done' => 6,
+    ][$step] ?? 0;
+}
+
+function onboardingRequestFromInvite(): bool
+{
+    $source = strtolower(trim((string)($_GET['src'] ?? $_GET['utm_source'] ?? '')));
+    if (in_array($source, ['invite', 'onboarding_invite'], true)) {
+        return true;
+    }
+    if (isset($_GET['cta']) && (string)$_GET['cta'] === '1') {
+        return true;
+    }
+    return false;
+}
+
+function trackOnboardingVisit(PDO $pdo, array $lead, string $step, bool $fromInvite): void
+{
+    $step = onboardingWizardStepRank($step) > 0 ? $step : onboardingRequestedStep($lead);
+    $now = date('c');
+    $currentMax = (string)($lead['wizard_max_step'] ?? '');
+    $maxStep = onboardingWizardStepRank($step) >= onboardingWizardStepRank($currentMax) ? $step : $currentMax;
+    $maxStepAt = $maxStep === $step ? $now : (string)($lead['wizard_max_step_at'] ?? '');
+    $completedAt = (string)($lead['wizard_completed_at'] ?? '');
+    if ($step === 'done' && $completedAt === '') {
+        $completedAt = $now;
+    }
+    $userAgent = truncatePlainText((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 500);
+    $ipHash = onboardingIpHash();
+    insertOnboardingEvent($pdo, $lead, $fromInvite ? 'invite_click' : 'wizard_step', $step, $fromInvite ? 'invite' : 'app', $userAgent, $ipHash, $now);
+
+    if ($fromInvite) {
+        $stmt = $pdo->prepare('
+            UPDATE onboarding_leads
+            SET invite_clicked_at=CASE WHEN invite_clicked_at="" THEN ? ELSE invite_clicked_at END,
+                invite_last_clicked_at=?,
+                invite_click_count=invite_click_count+1,
+                invite_last_user_agent=?,
+                invite_last_ip_hash=?,
+                wizard_last_step=?,
+                wizard_last_step_at=?,
+                wizard_max_step=?,
+                wizard_max_step_at=?,
+                wizard_completed_at=?,
+                updated_at=?
+            WHERE id=?
+        ');
+        $stmt->execute([$now, $now, $userAgent, $ipHash, $step, $now, $maxStep, $maxStepAt, $completedAt, $now, (int)$lead['id']]);
+        return;
+    }
+
+    $stmt = $pdo->prepare('
+        UPDATE onboarding_leads
+        SET wizard_last_step=?,
+            wizard_last_step_at=?,
+            wizard_max_step=?,
+            wizard_max_step_at=?,
+            wizard_completed_at=?,
+            updated_at=?
+        WHERE id=?
+    ');
+    $stmt->execute([$step, $now, $maxStep, $maxStepAt, $completedAt, $now, (int)$lead['id']]);
+}
+
+function insertOnboardingEvent(PDO $pdo, array $lead, string $eventType, string $step, string $source, string $userAgent, string $ipHash, string $createdAt): void
+{
+    $stmt = $pdo->prepare('
+        INSERT INTO onboarding_events (lead_id, account_email, event_type, step, source, user_agent, ip_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ');
+    $stmt->execute([
+        (int)$lead['id'],
+        truncatePlainText((string)($lead['account_email'] ?? ''), 320),
+        truncatePlainText($eventType, 40),
+        truncatePlainText($step, 40),
+        truncatePlainText($source, 80),
+        $userAgent,
+        $ipHash,
+        $createdAt,
+    ]);
+}
+
+function onboardingIpHash(): string
+{
+    $ip = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    if ($ip === '') {
+        return '';
+    }
+    return hash('sha256', 'onboarding:' . $ip);
 }
 
 function onboardingRedirect(array $lead, string $step, string $message): void
@@ -1611,13 +1712,37 @@ function sendOnboardingDemoInvite(PDO $pdo, array $config): string
     $language = onboardingInviteLanguage($lead, $contacts, $config);
     $subject = onboardingInviteSubject(count($contacts), $language);
     (new SmtpMailer($config))->send((string)$lead['account_email'], $subject, onboardingInviteEmailHtml($lead, $contacts, $language));
+    markOnboardingInviteSent($pdo, (int)$lead['id']);
     setSetting($pdo, 'onboarding_demo_invite_sent_at', date('c'));
     return "Onboarding demo invite odeslan na " . (string)$lead['account_email'] . ". URL: " . onboardingLeadUrl($lead) . "\n";
 }
 
-function onboardingLeadUrl(array $lead): string
+function markOnboardingInviteSent(PDO $pdo, int $leadId): void
 {
-    return appBaseUrl() . '?onboarding=' . rawurlencode((string)$lead['token']);
+    $now = date('c');
+    $stmt = $pdo->prepare('
+        UPDATE onboarding_leads
+        SET invite_sent_at=CASE WHEN invite_sent_at="" THEN ? ELSE invite_sent_at END,
+            invite_last_sent_at=?,
+            invite_send_count=invite_send_count+1,
+            updated_at=?
+        WHERE id=?
+    ');
+    $stmt->execute([$now, $now, $now, $leadId]);
+}
+
+function onboardingLeadUrl(array $lead, array $params = []): string
+{
+    $query = array_merge(['onboarding' => (string)$lead['token']], $params);
+    return appBaseUrl() . '?' . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+}
+
+function onboardingInviteUrl(array $lead): string
+{
+    return onboardingLeadUrl($lead, [
+        'src' => 'invite',
+        'cta' => '1',
+    ]);
 }
 
 function onboardingInviteLanguage(array $lead, array $contacts, array $config = []): string
@@ -1687,37 +1812,37 @@ function onboardingInviteCopy(string $language): array
         'cs' => [
             'subject' => 'Našli jsme %d kontaktů pro vaše první oslovení',
             'headline' => 'Našli jsme %d kontaktů, které dává smysl oslovit',
-            'intro' => 'Připravili jsme pro vás krátký seznam potenciálních zákazníků a návrh prvního e-mailu. Stačí zkontrolovat kontakty, upravit text, připojit SMTP a spustit kampaň.',
+            'intro' => 'Připravili jsme pro vás první oslovení v aplikaci. Po otevření uvidíte, koho můžete oslovit, upravíte text e-mailu a vše spustíte ze své adresy.',
             'cta' => 'Pokračovat oslovením',
-            'footer' => 'Odkaz vás provede první kampaní krok za krokem.',
+            'footer' => 'Konkrétní kontakty zobrazíme až v aplikaci.',
         ],
         'sk' => [
             'subject' => 'Našli sme %d kontaktov pre vaše prvé oslovenie',
             'headline' => 'Našli sme %d kontaktov, ktoré dáva zmysel osloviť',
-            'intro' => 'Pripravili sme pre vás krátky zoznam potenciálnych zákazníkov a návrh prvého e-mailu. Stačí skontrolovať kontakty, upraviť text, pripojiť SMTP a spustiť kampaň.',
+            'intro' => 'Pripravili sme pre vás prvé oslovenie v aplikácii. Po otvorení uvidíte, koho môžete osloviť, upravíte text e-mailu a všetko spustíte zo svojej adresy.',
             'cta' => 'Pokračovať oslovením',
-            'footer' => 'Odkaz vás prevedie prvou kampaňou krok za krokom.',
+            'footer' => 'Konkrétne kontakty zobrazíme až v aplikácii.',
         ],
         'de' => [
             'subject' => 'Wir haben %d passende Kontakte für deine erste Ansprache gefunden',
             'headline' => 'Wir haben %d Kontakte gefunden, die eine Ansprache wert sind',
-            'intro' => 'Wir haben eine kurze Liste potenzieller Kunden und einen Entwurf für die erste E-Mail vorbereitet. Prüfe die Kontakte, passe den Text an, verbinde SMTP und starte die Kampagne.',
+            'intro' => 'Wir haben die erste Ansprache in der App vorbereitet. Dort siehst du, wen du kontaktieren kannst, du passt den E-Mail-Text an und startest alles von deiner eigenen Adresse.',
             'cta' => 'Ansprache fortsetzen',
-            'footer' => 'Der Link führt dich Schritt für Schritt durch die erste Kampagne.',
+            'footer' => 'Die konkreten Kontakte zeigen wir erst in der App.',
         ],
         'pl' => [
             'subject' => 'Znaleźliśmy %d kontaktów do pierwszej kampanii',
             'headline' => 'Znaleźliśmy %d kontaktów, do których warto napisać',
-            'intro' => 'Przygotowaliśmy krótką listę potencjalnych klientów oraz szkic pierwszej wiadomości e-mail. Wystarczy sprawdzić kontakty, dostosować treść, podłączyć SMTP i uruchomić kampanię.',
+            'intro' => 'Przygotowaliśmy pierwszą kampanię w aplikacji. Po otwarciu zobaczysz, do kogo możesz napisać, dostosujesz treść e-maila i uruchomisz wysyłkę ze swojego adresu.',
             'cta' => 'Kontynuuj wysyłkę',
-            'footer' => 'Link przeprowadzi cię krok po kroku przez pierwszą kampanię.',
+            'footer' => 'Konkretne kontakty pokażemy dopiero w aplikacji.',
         ],
         'en' => [
             'subject' => 'We found %d contacts for your first outreach',
             'headline' => 'We found %d contacts worth reaching out to',
-            'intro' => 'We prepared a short list of potential customers and a draft of the first email. Review the contacts, adjust the text, connect SMTP, and launch the campaign.',
+            'intro' => 'We prepared your first outreach inside the app. Open it to see who you can contact, adjust the email, and launch everything from your own address.',
             'cta' => 'Continue outreach',
-            'footer' => 'The link will guide you through your first campaign step by step.',
+            'footer' => 'The specific contacts are shown only inside the app.',
         ],
     ];
     return $copies[$language] ?? $copies['en'];
@@ -1731,21 +1856,12 @@ function onboardingInviteSubject(int $count, string $language): string
 
 function onboardingInviteEmailHtml(array $lead, array $contacts, string $language): string
 {
-    $url = onboardingLeadUrl($lead);
+    $url = onboardingInviteUrl($lead);
     $count = count($contacts);
     $copy = onboardingInviteCopy($language);
-    $preview = '';
-    foreach (array_slice($contacts, 0, 5) as $contact) {
-        $name = trim((string)($contact['subject_name'] ?? ''));
-        if ($name === '') {
-            continue;
-        }
-        $preview .= '<li><strong>' . h($name) . '</strong></li>';
-    }
     return '<div style="font-family:Arial,sans-serif;line-height:1.5;color:#1e2522;max-width:620px">'
         . '<h1 style="font-size:24px;margin:0 0 14px">' . h(sprintf((string)$copy['headline'], $count)) . '</h1>'
         . '<p>' . h((string)$copy['intro']) . '</p>'
-        . ($preview !== '' ? '<ul style="padding-left:20px;margin:14px 0">' . $preview . '</ul>' : '')
         . '<p><a href="' . h($url) . '" style="display:inline-block;background:#0f7b6c;color:white;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:8px">' . h((string)$copy['cta']) . '</a></p>'
         . '<p style="color:#67736d;font-size:13px">' . h((string)$copy['footer']) . '</p>'
         . '</div>';

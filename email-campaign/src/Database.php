@@ -87,6 +87,20 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'last_scheduled_at', $this->textColumn("''")), 'scraping_containers.last_scheduled_at');
         $this->safeMigrationStep(fn() => $this->ensureSuppressionTable(), 'suppression_list');
         $this->safeMigrationStep(fn() => $this->ensureOnboardingTables(), 'onboarding_tables');
+        $this->safeMigrationStep(fn() => $this->ensureOnboardingEventsTable(), 'onboarding_events');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_sent_at', $this->textColumn("''")), 'onboarding_leads.invite_sent_at');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_last_sent_at', $this->textColumn("''")), 'onboarding_leads.invite_last_sent_at');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_send_count', 'INTEGER NOT NULL DEFAULT 0'), 'onboarding_leads.invite_send_count');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_clicked_at', $this->textColumn("''")), 'onboarding_leads.invite_clicked_at');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_last_clicked_at', $this->textColumn("''")), 'onboarding_leads.invite_last_clicked_at');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_click_count', 'INTEGER NOT NULL DEFAULT 0'), 'onboarding_leads.invite_click_count');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_last_user_agent', $this->textColumn("''")), 'onboarding_leads.invite_last_user_agent');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_last_ip_hash', $this->textColumn("''")), 'onboarding_leads.invite_last_ip_hash');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'wizard_last_step', $this->textColumn("''")), 'onboarding_leads.wizard_last_step');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'wizard_last_step_at', $this->textColumn("''")), 'onboarding_leads.wizard_last_step_at');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'wizard_max_step', $this->textColumn("''")), 'onboarding_leads.wizard_max_step');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'wizard_max_step_at', $this->textColumn("''")), 'onboarding_leads.wizard_max_step_at');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'wizard_completed_at', $this->textColumn("''")), 'onboarding_leads.wizard_completed_at');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_contacts', 'source_label', $this->textColumn("''")), 'onboarding_contacts.source_label');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_contacts', 'source_url', $this->textColumn("''")), 'onboarding_contacts.source_url');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_contacts', 'fit_reason', $this->textColumn("''")), 'onboarding_contacts.fit_reason');
@@ -436,6 +450,19 @@ final class Database
                 monthly_price_usd DECIMAL(8,2) NOT NULL DEFAULT 19.00,
                 list_id INT NOT NULL DEFAULT 0,
                 campaign_id INT NOT NULL DEFAULT 0,
+                invite_sent_at VARCHAR(40) NOT NULL DEFAULT '',
+                invite_last_sent_at VARCHAR(40) NOT NULL DEFAULT '',
+                invite_send_count INT NOT NULL DEFAULT 0,
+                invite_clicked_at VARCHAR(40) NOT NULL DEFAULT '',
+                invite_last_clicked_at VARCHAR(40) NOT NULL DEFAULT '',
+                invite_click_count INT NOT NULL DEFAULT 0,
+                invite_last_user_agent VARCHAR(500) NOT NULL DEFAULT '',
+                invite_last_ip_hash VARCHAR(80) NOT NULL DEFAULT '',
+                wizard_last_step VARCHAR(40) NOT NULL DEFAULT '',
+                wizard_last_step_at VARCHAR(40) NOT NULL DEFAULT '',
+                wizard_max_step VARCHAR(40) NOT NULL DEFAULT '',
+                wizard_max_step_at VARCHAR(40) NOT NULL DEFAULT '',
+                wizard_completed_at VARCHAR(40) NOT NULL DEFAULT '',
                 created_at VARCHAR(40) NOT NULL,
                 updated_at VARCHAR(40) NOT NULL,
                 INDEX onboarding_leads_email_idx (account_email)
@@ -458,6 +485,23 @@ final class Database
                 created_at VARCHAR(40) NOT NULL,
                 UNIQUE KEY onboarding_lead_email (lead_id, email),
                 INDEX onboarding_contacts_lead_idx (lead_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    }
+
+    private function ensureOnboardingEventsTable(): void
+    {
+        $this->pdo->exec("CREATE TABLE IF NOT EXISTS onboarding_events (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                lead_id INT NOT NULL,
+                account_email VARCHAR(320) NOT NULL DEFAULT '',
+                event_type VARCHAR(40) NOT NULL,
+                step VARCHAR(40) NOT NULL DEFAULT '',
+                source VARCHAR(80) NOT NULL DEFAULT '',
+                user_agent VARCHAR(500) NOT NULL DEFAULT '',
+                ip_hash VARCHAR(80) NOT NULL DEFAULT '',
+                created_at VARCHAR(40) NOT NULL,
+                INDEX onboarding_events_lead_idx (lead_id, created_at),
+                INDEX onboarding_events_type_idx (event_type, created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     }
 
