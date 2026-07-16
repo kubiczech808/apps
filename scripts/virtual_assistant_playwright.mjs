@@ -159,6 +159,7 @@ async function genericAutofill(page, values = {}, options = {}) {
       return style && style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
     };
     const norm = (value) => String(value || "").toLowerCase();
+    const includesAny = (hay, terms) => terms.some((term) => hay.includes(term));
     const labelText = (el) => {
       const bits = [
         el.getAttribute("name"),
@@ -166,6 +167,9 @@ async function genericAutofill(page, values = {}, options = {}) {
         el.getAttribute("placeholder"),
         el.getAttribute("aria-label"),
         el.getAttribute("autocomplete"),
+        el.getAttribute("title"),
+        el.getAttribute("data-name"),
+        el.getAttribute("data-label"),
       ];
       if (el.id) {
         const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
@@ -173,6 +177,8 @@ async function genericAutofill(page, values = {}, options = {}) {
       }
       const parentLabel = el.closest("label");
       if (parentLabel) bits.push(parentLabel.textContent || "");
+      const wrapper = el.closest(".form-row, .form-group, .field, .wpcf7-form-control-wrap, p, div");
+      if (wrapper) bits.push((wrapper.textContent || "").slice(0, 240));
       return norm(bits.filter(Boolean).join(" "));
     };
     const pickValue = (el) => {
@@ -186,6 +192,20 @@ async function genericAutofill(page, values = {}, options = {}) {
       if (hay.includes("surname") || hay.includes("lastname") || hay.includes("prijmeni") || hay.includes("příjmení")) return values.lastName;
       if (hay.includes("firstname") || hay.includes("jmeno") || hay.includes("jméno") || hay.includes("name")) return values.name;
       if (el.tagName.toLowerCase() === "textarea" || hay.includes("message") || hay.includes("zprava") || hay.includes("zpráva") || hay.includes("comment") || hay.includes("komentar") || hay.includes("komentář")) return values.message;
+      if (type === "number" || includesAny(hay, ["pocet", "quantity", "amount", "castka"])) return values.number || "1";
+      if (type === "date" || includesAny(hay, ["datum", "date", "termin"])) return values.date || "2026-07-16";
+      if (includesAny(hay, ["subject", "predmet", "nadpis", "title"])) return values.subject;
+      if (includesAny(hay, ["firma", "company", "spolecnost", "organization", "organizace"])) return values.company;
+      if (includesAny(hay, ["surname", "lastname", "last-name", "prijmeni"])) return values.lastName;
+      if (includesAny(hay, ["firstname", "first-name", "krestni"])) return values.firstName;
+      if (includesAny(hay, ["fullname", "full-name", "jmeno a prijmeni"])) return values.name;
+      if (includesAny(hay, ["username", "login", "uzivatel"])) return values.username || values.name;
+      if (includesAny(hay, ["adresa", "address", "street", "ulice"])) return values.address || "Ukazkova 123";
+      if (includesAny(hay, ["mesto", "city"])) return values.city || "Praha";
+      if (includesAny(hay, ["psc", "zip", "postal"])) return values.zip || "11000";
+      if (includesAny(hay, ["country", "stat", "zeme"])) return values.country || "Ceska republika";
+      if (includesAny(hay, ["ico", "ic", "dic", "vat"])) return values.companyId || "12345678";
+      if (includesAny(hay, ["note", "poznamka", "popis", "description"])) return values.message;
       return values.text;
     };
     const setValue = (el, value) => {
@@ -194,24 +214,47 @@ async function genericAutofill(page, values = {}, options = {}) {
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
     };
-    const forms = [...document.querySelectorAll("form")].filter((form) =>
-      visible(form) && [...form.querySelectorAll("input, textarea, select")].some(visible)
-    );
-    const root = forms[0] || document;
+    const fieldSelector = "input, textarea, select";
+    const fieldCandidates = (root) => [...root.querySelectorAll(fieldSelector)].filter(visible);
+    const forms = [...document.querySelectorAll("form")].filter((form) => visible(form) && fieldCandidates(form).length > 0);
+    const scoreRoot = (root) => {
+      const fields = fieldCandidates(root);
+      const text = norm([
+        root.getAttribute?.("id"),
+        root.getAttribute?.("class"),
+        root.getAttribute?.("name"),
+        root.getAttribute?.("action"),
+        root.textContent,
+      ].filter(Boolean).join(" ").slice(0, 4000));
+      let score = fields.length;
+      if (fields.some((el) => el.required || el.getAttribute("aria-required") === "true")) score += 4;
+      if (fields.some((el) => ["email", "tel"].includes(norm(el.getAttribute("type"))))) score += 3;
+      if (fields.some((el) => el.tagName.toLowerCase() === "textarea")) score += 3;
+      if (root.querySelector?.("button[type='submit'], input[type='submit'], button:not([type])")) score += 2;
+      if (includesAny(text, ["contact", "kontakt", "message", "zprava", "comment", "komentar", "review", "recenze", "objednavka", "poptavka"])) score += 5;
+      if (includesAny(text, ["search", "hledat", "newsletter", "login", "prihlaseni"])) score -= 6;
+      return score;
+    };
+    const root = forms.length ? [...forms].sort((a, b) => scoreRoot(b) - scoreRoot(a))[0] : document;
     const filled = [];
     const skipped = [];
-    const fields = [...root.querySelectorAll("input, textarea, select")].filter(visible);
+    const fields = fieldCandidates(root);
     const seenRadio = new Set();
     for (const el of fields) {
       const tag = el.tagName.toLowerCase();
       const type = norm(el.getAttribute("type") || tag);
       const name = el.getAttribute("name") || el.id || tag;
+      const hay = labelText(el);
       if (["hidden", "submit", "button", "image", "reset", "file", "password"].includes(type)) {
         skipped.push({ name, type });
         continue;
       }
+      if (includesAny(hay, ["honeypot", "leave empty", "nevyplnujte", "website-url"])) {
+        skipped.push({ name, type, reason: "honeypot" });
+        continue;
+      }
       if (tag === "select") {
-        const option = [...el.options].find((item) => !item.disabled && item.value) || [...el.options].find((item) => !item.disabled);
+        const option = [...el.options].find((item) => !item.disabled && item.value && !/^[-\s]*$/.test(item.textContent || "")) || [...el.options].find((item) => !item.disabled && item.value) || [...el.options].find((item) => !item.disabled);
         if (option) {
           el.value = option.value;
           el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -220,8 +263,12 @@ async function genericAutofill(page, values = {}, options = {}) {
         continue;
       }
       if (type === "checkbox") {
-        if (!el.checked) el.click();
-        filled.push({ name, type: "checkbox", value: "checked" });
+        if (el.required || includesAny(hay, ["souhlas", "agree", "gdpr", "terms", "podmink", "privacy"])) {
+          if (!el.checked) el.click();
+          filled.push({ name, type: "checkbox", value: "checked" });
+        } else {
+          skipped.push({ name, type: "checkbox", reason: "optional" });
+        }
         continue;
       }
       if (type === "radio") {
@@ -240,7 +287,7 @@ async function genericAutofill(page, values = {}, options = {}) {
     let submitted = false;
     let blocked = "";
     if (submit) {
-      const submitter = root.querySelector("button[type='submit'], input[type='submit'], button:not([type]), input[type='button']");
+      const submitter = root.querySelector("button[type='submit'], input[type='submit'], button:not([type]), input[type='button']") || document.querySelector("button[type='submit'], input[type='submit']");
       if (!allowSubmit) {
         blocked = "submit blocked because allowSubmit=false";
       } else if (submitter && visible(submitter)) {
@@ -253,7 +300,19 @@ async function genericAutofill(page, values = {}, options = {}) {
         blocked = "submit control not found";
       }
     }
-    return { filled, skipped, submitted, blocked, formFound: Boolean(forms[0]) };
+    return {
+      filled,
+      skipped,
+      submitted,
+      blocked,
+      formFound: Boolean(forms[0]),
+      selectedForm: {
+        id: root.id || "",
+        className: root.className || "",
+        action: root.getAttribute?.("action") || "",
+        score: root === document ? 0 : scoreRoot(root),
+      },
+    };
   }, {
     values,
     submit: options.submit !== false,
@@ -314,7 +373,13 @@ async function run() {
           }
           note.ok = Array.isArray(note.details.filled) && note.details.filled.length > 0;
           if (!note.ok) note.blocked = "no visible fields filled";
-          if (note.details.blocked) note.blocked = note.details.blocked;
+          if (note.details.blocked) {
+            note.blocked = note.details.blocked;
+            if (allowSubmit && action.submit !== false) {
+              note.ok = false;
+              note.error = note.details.blocked;
+            }
+          }
         } else if (type === "fill") {
           await page.locator(selector).first().fill(String(action.value ?? ""), { timeout: timeoutMs });
           note.ok = true;
@@ -367,7 +432,7 @@ async function run() {
     result.pageText = await page.evaluate(() => (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, 5000)).catch(() => "");
     result.finalUrl = page.url();
     result.title = await page.title();
-    result.ok = result.actions.every((item) => item.ok || item.blocked);
+    result.ok = result.actions.every((item) => item.ok || (item.blocked && !item.error));
   } finally {
     await browser.close();
   }
