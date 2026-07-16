@@ -1,5 +1,7 @@
 const state = {
+  mode: "paper",
   botState: null,
+  liveState: null,
   evaluationSort: {
     key: "evaluatedAt",
     direction: "desc",
@@ -13,12 +15,17 @@ const state = {
       key: "resolvedAt",
       direction: "desc",
     },
+    live: {
+      key: "openedAt",
+      direction: "desc",
+    },
   },
   evaluationStatus: "ELIGIBLE",
   eligibilityThreshold: null,
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
+const MODE_STORAGE_KEY = "tradingDashboardMode";
 const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
 const MIN_ELIGIBILITY_THRESHOLD = 0.01;
 const MAX_ELIGIBILITY_THRESHOLD = 0.99;
@@ -26,6 +33,9 @@ const MAX_ELIGIBILITY_THRESHOLD = 0.99;
 const els = {
   botAction: document.querySelector("[data-bot-action]"),
   botInlineAction: document.querySelector("[data-bot-inline-action]"),
+  portfolioTitle: document.querySelector("[data-portfolio-title]"),
+  primaryPanelTitle: document.querySelector("[data-primary-panel-title]"),
+  secondaryPanelTitle: document.querySelector("[data-secondary-panel-title]"),
   botStatus: document.querySelector("[data-bot-status]"),
   botTrades: document.querySelector("[data-bot-trades]"),
   closedTrades: document.querySelector("[data-closed-trades]"),
@@ -35,6 +45,8 @@ const els = {
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
+  evaluationControls: document.querySelector("[data-evaluation-controls]"),
+  modeButtons: document.querySelectorAll("[data-mode-toggle]"),
   tabButtons: document.querySelectorAll("[data-tab-target]"),
   tabPanels: document.querySelectorAll("[data-tab-panel]"),
   portfolioEquity: document.querySelector("[data-portfolio-equity]"),
@@ -93,6 +105,36 @@ function compactDays(value) {
 
 function pnlClass(value) {
   return Number(value) >= 0 ? "positive" : "negative";
+}
+
+function storedMode() {
+  try {
+    return localStorage.getItem(MODE_STORAGE_KEY) === "live" ? "live" : "paper";
+  } catch {
+    return "paper";
+  }
+}
+
+function saveMode(mode) {
+  try {
+    localStorage.setItem(MODE_STORAGE_KEY, mode);
+  } catch {
+    // Ignore localStorage failures; the mode switch still works for this page load.
+  }
+}
+
+function syncModeUi() {
+  const live = state.mode === "live";
+  els.modeButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.modeToggle === state.mode);
+  });
+  els.tabButtons.forEach((button) => {
+    button.textContent = live ? button.dataset.liveLabel : button.dataset.paperLabel;
+  });
+  if (els.portfolioTitle) els.portfolioTitle.textContent = live ? "Live Polymarket account" : "Autonomous paper portfolio";
+  if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = live ? "Live positions" : "Daily paper picks";
+  if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = live ? "Live activity" : "Closed paper trades";
+  if (els.evaluationControls) els.evaluationControls.style.display = live ? "none" : "";
 }
 
 function formatDate(value) {
@@ -170,6 +212,8 @@ function riskLine(item) {
 }
 
 function polymarketUrl(item) {
+  const explicitUrl = String(item?.url || item?.marketUrl || "").trim();
+  if (/^https:\/\/polymarket\.com\//i.test(explicitUrl)) return explicitUrl;
   const slug = String(item?.eventSlug || item?.slug || "").trim();
   if (/^[a-z0-9-]+$/i.test(slug)) return `https://polymarket.com/event/${slug}`;
   return "https://polymarket.com/";
@@ -644,9 +688,8 @@ function evaluationReasons(item, riskReason = "") {
 
 async function loadBotState() {
   try {
-    const statePayload = await fetch(`data/paper-state.json?t=${Date.now()}`, { cache: "no-store" });
-    if (!statePayload.ok) throw new Error(`paper-state.json HTTP ${statePayload.status}`);
-    renderBotState(await statePayload.json());
+    const botState = await fetchJson("data/paper-state.json");
+    renderBotState(botState);
   } catch (error) {
     els.botAction.textContent = "offline";
     if (els.botInlineAction) els.botInlineAction.textContent = "offline";
@@ -658,8 +701,49 @@ async function loadBotState() {
   }
 }
 
+async function fetchJson(path) {
+  const statePayload = await fetch(`${path}?t=${Date.now()}`, { cache: "no-store" });
+  if (!statePayload.ok) throw new Error(`${path} HTTP ${statePayload.status}`);
+  return statePayload.json();
+}
+
+async function loadLiveState() {
+  try {
+    const liveState = await fetchJson("data/live-state.json");
+    renderLiveState(liveState);
+  } catch (error) {
+    state.liveState = null;
+    syncModeUi();
+    els.botAction.textContent = "offline";
+    if (els.botInlineAction) els.botInlineAction.textContent = "offline";
+    els.portfolioEquity.textContent = "-";
+    els.portfolioLastRun.textContent = "Live sync not available";
+    els.portfolioTotalPl.textContent = "-";
+    els.portfolioTotalPlPct.textContent = "-";
+    els.portfolioAnnualized.textContent = "-";
+    els.portfolioPeriod.textContent = "No live data";
+    els.portfolioRealized.textContent = "-";
+    els.portfolioRealizedPct.textContent = "-";
+    els.portfolioOpenPl.textContent = "-";
+    els.portfolioOpenPlPct.textContent = "-";
+    els.portfolioRisk.textContent = "-";
+    els.portfolioFree.textContent = "-";
+    els.botStatus.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+    els.botTrades.innerHTML = '<div class="empty">Live Polymarket account state is not available yet.</div>';
+    if (els.closedTrades) els.closedTrades.innerHTML = '<div class="empty">Live activity is not available yet.</div>';
+    if (els.closedSummary) els.closedSummary.textContent = "offline";
+    els.botEvaluations.innerHTML = '<div class="empty">Live sync details are not available yet.</div>';
+  }
+}
+
+function loadDashboardState() {
+  syncModeUi();
+  return state.mode === "live" ? loadLiveState() : loadBotState();
+}
+
 function renderBotState(botState) {
   state.botState = botState;
+  syncModeUi();
   if (state.eligibilityThreshold == null) {
     const stored = storedEligibilityThreshold();
     const portfolioThreshold = Number(botState.portfolio?.minProbability ?? 0.95);
@@ -750,6 +834,165 @@ function renderBotState(botState) {
   }
 
   renderBotEvaluations();
+}
+
+function livePositions(liveState) {
+  return Array.isArray(liveState?.positions) ? liveState.positions : [];
+}
+
+function liveActivity(liveState) {
+  return Array.isArray(liveState?.activity) ? liveState.activity : [];
+}
+
+function renderLiveActivityRows(activity) {
+  if (!activity.length) return '<div class="empty">Zatim zadna live aktivita na napojenem Polymarket uctu.</div>';
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Type</th>
+          <th>Market</th>
+          <th>Outcome</th>
+          <th>Price</th>
+          <th>Size</th>
+          <th>Value</th>
+          <th>Tx</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${activity.map((item) => `
+          <tr>
+            <td>${escapeHtml(formatDate(item.timestamp || item.createdAt || ""))}</td>
+            <td>${escapeHtml(item.type || "-")}</td>
+            <td>${marketAnchor({
+              outcome: item.side || item.outcome || "-",
+              question: item.question || item.title || "-",
+              url: item.url || item.marketUrl,
+              slug: item.slug,
+            })}</td>
+            <td>${escapeHtml(item.outcome || "-")}</td>
+            <td>${probability(Number(item.price))}</td>
+            <td>${Number.isFinite(Number(item.size)) ? Number(item.size).toLocaleString("en-US", { maximumFractionDigits: 4 }) : "-"}</td>
+            <td>${money(Number(item.usdcValue || item.value || item.amount), 4)}</td>
+            <td>${item.transactionHash ? `<a href="https://polygonscan.com/tx/${escapeHtml(item.transactionHash)}" target="_blank" rel="noopener noreferrer">polygonscan</a>` : "-"}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderLiveSyncDetails(liveState) {
+  const sync = liveState.sync || {};
+  const account = liveState.account || {};
+  const sources = Array.isArray(sync.sources) ? sync.sources : [];
+  els.botEvaluations.innerHTML = `
+    <div class="bot-summary">
+      <div>
+        <span class="label">Mode</span>
+        <strong>Live read-only</strong>
+        <span>orders are not submitted from this view</span>
+      </div>
+      <div>
+        <span class="label">Account</span>
+        <strong>${escapeHtml(account.address || "-")}</strong>
+        <span>${escapeHtml(account.label || "Polymarket proxy wallet")}</span>
+      </div>
+      <div>
+        <span class="label">Sync status</span>
+        <strong>${escapeHtml(sync.status || "OK")}</strong>
+        <span>${escapeHtml(sync.message || "latest live snapshot loaded")}</span>
+      </div>
+      <div>
+        <span class="label">Sources</span>
+        <strong>${escapeHtml(sources.join(", ") || "Polymarket Data API")}</strong>
+        <span>${escapeHtml(liveState.generatedAt ? formatDate(liveState.generatedAt) : "-")}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderLiveState(liveState) {
+  state.liveState = liveState;
+  syncModeUi();
+
+  const portfolio = liveState.portfolio || {};
+  const positions = livePositions(liveState);
+  const activity = liveActivity(liveState);
+  const totalPnl = Number(portfolio.totalPnlUsdc);
+  const totalPnlPct = Number(portfolio.totalPnlPct);
+  const realizedPnl = Number(portfolio.realizedPnlUsdc);
+  const realizedPnlPct = Number(portfolio.realizedPnlPct);
+  const openPnl = Number(portfolio.openPnlUsdc);
+  const openPnlPct = Number(portfolio.openPnlPct);
+  const marketValue = Number(portfolio.marketValueUsdc);
+  const cash = Number(portfolio.cashUsdc);
+  const equity = Number.isFinite(Number(portfolio.equityUsdc))
+    ? Number(portfolio.equityUsdc)
+    : (Number.isFinite(marketValue) ? marketValue : 0);
+
+  els.botAction.textContent = "live";
+  if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions`;
+  els.portfolioEquity.textContent = money(equity);
+  els.portfolioEquity.className = pnlClass(totalPnl);
+  els.portfolioLastRun.textContent = `Live sync ${liveState.generatedAt ? formatDate(liveState.generatedAt) : "-"}`;
+  els.portfolioTotalPl.textContent = signedMoney(totalPnl);
+  els.portfolioTotalPl.className = pnlClass(totalPnl);
+  els.portfolioTotalPlPct.textContent = signedPercent(totalPnlPct);
+  els.portfolioAnnualized.textContent = "-";
+  els.portfolioAnnualized.className = "";
+  els.portfolioPeriod.textContent = "based on live account snapshot";
+  els.portfolioRealized.textContent = signedMoney(realizedPnl);
+  els.portfolioRealized.className = pnlClass(realizedPnl);
+  els.portfolioRealizedPct.textContent = signedPercent(realizedPnlPct);
+  els.portfolioOpenPl.textContent = signedMoney(openPnl);
+  els.portfolioOpenPl.className = pnlClass(openPnl);
+  els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
+  els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || marketValue || 0));
+  els.portfolioFree.textContent = Number.isFinite(cash) ? `${money(cash)} cash` : "cash not available";
+
+  els.botStatus.innerHTML = `
+    <div class="bot-summary">
+      <div>
+        <span class="label">Last sync</span>
+        <strong>${escapeHtml(liveState.generatedAt ? formatDate(liveState.generatedAt) : "not yet")}</strong>
+      </div>
+      <div>
+        <span class="label">Positions</span>
+        <strong>${positions.length}</strong>
+        <span>${money(marketValue)} market value</span>
+      </div>
+      <div>
+        <span class="label">Open P/L</span>
+        <strong class="${pnlClass(openPnl)}">${signedMoney(openPnl)} (${signedPercent(openPnlPct)})</strong>
+        <span>from Polymarket live positions</span>
+      </div>
+      <div>
+        <span class="label">Realized P/L</span>
+        <strong class="${pnlClass(realizedPnl)}">${signedMoney(realizedPnl)} (${signedPercent(realizedPnlPct)})</strong>
+        <span>where available from activity data</span>
+      </div>
+      <div>
+        <span class="label">Cash</span>
+        <strong>${Number.isFinite(cash) ? money(cash) : "-"}</strong>
+        <span>not all Polymarket APIs expose idle balance publicly</span>
+      </div>
+      <div>
+        <span class="label">Safety</span>
+        <strong>Read-only</strong>
+        <span>private key stays in GitHub Actions secrets</span>
+      </div>
+    </div>
+  `;
+
+  els.botTrades.innerHTML = renderTradeRows(positions, "Zatim zadne otevrene live pozice na napojenem Polymarket uctu.", {
+    tableKey: "live",
+    showStatus: false,
+  });
+  if (els.closedSummary) els.closedSummary.textContent = `${activity.length} live events`;
+  if (els.closedTrades) els.closedTrades.innerHTML = renderLiveActivityRows(activity);
+  renderLiveSyncDetails(liveState);
 }
 
 function evaluationSortValue(item, key) {
@@ -893,6 +1136,16 @@ els.tabButtons.forEach((button) => {
   });
 });
 
+els.modeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.modeToggle === "live" ? "live" : "paper";
+    if (state.mode === mode) return;
+    state.mode = mode;
+    saveMode(mode);
+    loadDashboardState();
+  });
+});
+
 els.evaluationStatusButtons.forEach((button) => {
   button.addEventListener("click", () => {
     state.evaluationStatus = button.dataset.evaluationStatus;
@@ -939,10 +1192,17 @@ function handleTradeSort(event) {
     state.tradeSort[tableKey].key = key;
     state.tradeSort[tableKey].direction = ["market", "status"].includes(key) ? "asc" : "desc";
   }
-  renderBotState(state.botState);
+  if (state.mode === "live") {
+    if (!state.liveState) return;
+    renderLiveState(state.liveState);
+  } else {
+    if (!state.botState) return;
+    renderBotState(state.botState);
+  }
 }
 
 els.botTrades?.addEventListener("click", handleTradeSort);
 els.closedTrades?.addEventListener("click", handleTradeSort);
 
-loadBotState();
+state.mode = storedMode();
+loadDashboardState();

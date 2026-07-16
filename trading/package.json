@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "order:poc": "node tools/polymarket-order-poc.mjs",
+    "live:account": "node tools/live-account-sync.mjs",
     "paper:bot": "node tools/paper-trading-bot.mjs"
   },
   "dependencies": {

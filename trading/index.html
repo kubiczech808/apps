@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Polymarket Paper Trading</title>
+  <title>Polymarket Trading Desk</title>
   <link rel="stylesheet" href="assets/app.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
       <header class="topbar">
         <div>
           <p class="eyebrow">osobnizkusenosti.cz/trading</p>
-          <h1>AI paper-trading desk</h1>
+          <h1>AI trading desk</h1>
         </div>
       </header>
 
@@ -20,7 +20,11 @@
         <div class="panel-head">
           <div>
             <p class="eyebrow">Portfolio</p>
-            <h2>Autonomous paper portfolio</h2>
+            <h2 data-portfolio-title>Autonomous paper portfolio</h2>
+          </div>
+          <div class="mode-switch" role="group" aria-label="Portfolio mode">
+            <button class="mode-button active" type="button" data-mode-toggle="paper">Paper</button>
+            <button class="mode-button" type="button" data-mode-toggle="live">Live</button>
           </div>
           <span class="pill" data-bot-action>loading</span>
         </div>
@@ -60,9 +64,9 @@
 
       <section class="dashboard-tabs" data-tabs>
         <div class="tab-list" role="tablist" aria-label="Trading dashboard">
-          <button class="tab-button active" type="button" data-tab-target="daily-picks">Daily picks</button>
-          <button class="tab-button" type="button" data-tab-target="closed-trades">Closed trades</button>
-          <button class="tab-button" type="button" data-tab-target="evaluation-log">Evaluation log</button>
+          <button class="tab-button active" type="button" data-tab-target="daily-picks" data-paper-label="Daily picks" data-live-label="Live positions">Daily picks</button>
+          <button class="tab-button" type="button" data-tab-target="closed-trades" data-paper-label="Closed trades" data-live-label="Live activity">Closed trades</button>
+          <button class="tab-button" type="button" data-tab-target="evaluation-log" data-paper-label="Evaluation log" data-live-label="Sync details">Evaluation log</button>
         </div>
 
         <section class="tab-panel active" data-tab-panel="daily-picks">
@@ -70,7 +74,7 @@
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Autonomous bot</p>
-                <h2>Daily paper picks</h2>
+                <h2 data-primary-panel-title>Daily paper picks</h2>
               </div>
               <span class="pill" data-bot-inline-action>loading</span>
             </div>
@@ -84,7 +88,7 @@
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Autonomous bot</p>
-                <h2>Closed paper trades</h2>
+                <h2 data-secondary-panel-title>Closed paper trades</h2>
               </div>
               <span class="pill" data-closed-summary>0 closed</span>
             </div>
@@ -99,7 +103,7 @@
                 <p class="eyebrow">Autonomous bot</p>
                 <h2>Evaluation log</h2>
               </div>
-              <div class="evaluation-head">
+              <div class="evaluation-head" data-evaluation-controls>
                 <span class="pill" data-evaluation-summary>0 / 0 eligible</span>
                 <label class="threshold-control">
                   <span>AI prob. threshold</span>

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "mode": "LIVE",
+  "generatedAt": "2026-07-16T11:58:58.261Z",
+  "account": {
+    "address": "0x3252de913d9323667f21f4d88fa1f996fc282293",
+    "label": "Polymarket account"
+  },
+  "portfolio": {
+    "positionCount": 0,
+    "equityUsdc": 0,
+    "marketValueUsdc": 0,
+    "cashUsdc": null,
+    "openRiskUsdc": 0,
+    "openPnlUsdc": 0,
+    "openPnlPct": null,
+    "realizedPnlUsdc": 0,
+    "realizedPnlPct": null,
+    "totalPnlUsdc": 0,
+    "totalPnlPct": null
+  },
+  "positions": [],
+  "activity": [],
+  "sync": {
+    "status": "OK",
+    "message": "Live Polymarket account snapshot loaded",
+    "sources": [
+      "positions",
+      "value",
+      "activity"
+    ]
+  }
+}
