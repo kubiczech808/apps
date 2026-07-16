@@ -9,6 +9,9 @@ const state = {
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
+const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
+const MIN_ELIGIBILITY_THRESHOLD = 0.01;
+const MAX_ELIGIBILITY_THRESHOLD = 0.99;
 
 const els = {
   botAction: document.querySelector("[data-bot-action]"),
@@ -59,7 +62,7 @@ function probability(value) {
 
 function percent(value) {
   if (!Number.isFinite(value)) return "-";
-  return `${(value * 100).toFixed(1)}%`;
+  return `${(value * 100).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
 }
 
 function signedMoney(value, digits = 2) {
@@ -126,6 +129,16 @@ function gainIfWin(item) {
   const decimal = decimalOdds(price);
   if (decimal == null || !Number.isFinite(stake)) return null;
   return stake * (decimal - 1) - (Number.isFinite(fee) ? fee : 0);
+}
+
+function expectedValue(item) {
+  const value = Number(item.expectedValueUsdc);
+  return Number.isFinite(value) ? value : null;
+}
+
+function daysToResolution(item) {
+  const value = Number(item.daysToResolution);
+  return Number.isFinite(value) ? value : null;
 }
 
 function feeLine(item) {
@@ -427,7 +440,7 @@ function evaluationStatusLabel(item) {
 function storedEligibilityThreshold() {
   try {
     const value = Number(localStorage.getItem(ELIGIBILITY_THRESHOLD_STORAGE_KEY));
-    return Number.isFinite(value) ? value : null;
+    return normalizeEligibilityThreshold(value);
   } catch {
     return null;
   }
@@ -443,14 +456,23 @@ function saveEligibilityThreshold(value) {
 
 function currentEligibilityThreshold() {
   const configured = Number(state.eligibilityThreshold);
-  if (Number.isFinite(configured)) return configured;
+  const normalizedConfigured = normalizeEligibilityThreshold(configured);
+  if (normalizedConfigured != null) return normalizedConfigured;
   const portfolio = state.botState?.portfolio || {};
   const fallback = Number(portfolio.minProbability ?? 0.95);
-  return Number.isFinite(fallback) ? fallback : 0.95;
+  return normalizeEligibilityThreshold(fallback) ?? DEFAULT_ELIGIBILITY_THRESHOLD;
+}
+
+function normalizeEligibilityThreshold(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  if (numeric < MIN_ELIGIBILITY_THRESHOLD || numeric > MAX_ELIGIBILITY_THRESHOLD) return null;
+  return numeric;
 }
 
 function syncEligibilityThresholdControl() {
   const value = currentEligibilityThreshold();
+  state.eligibilityThreshold = value;
   if (els.eligibilityThreshold) {
     els.eligibilityThreshold.value = String(Math.round(value * 100));
   }
@@ -516,7 +538,7 @@ function renderBotState(botState) {
   if (state.eligibilityThreshold == null) {
     const stored = storedEligibilityThreshold();
     const portfolioThreshold = Number(botState.portfolio?.minProbability ?? 0.95);
-    state.eligibilityThreshold = stored ?? (Number.isFinite(portfolioThreshold) ? portfolioThreshold : 0.95);
+    state.eligibilityThreshold = stored ?? normalizeEligibilityThreshold(portfolioThreshold) ?? DEFAULT_ELIGIBILITY_THRESHOLD;
     syncEligibilityThresholdControl();
   }
   const decision = botState.lastDecision || {};
@@ -638,6 +660,27 @@ function sortableHeader(key, label) {
   return `<th><button class="sort-button${active}" type="button" data-evaluation-sort="${key}">${label}${sortArrow(key)}</button></th>`;
 }
 
+function gainCell(item) {
+  const gain = gainIfWin(item);
+  const ev = expectedValue(item);
+  return `
+    <span class="${Number(gain) >= 0 ? "positive" : "negative"}">${signedMoney(gain)}</span>
+    <span>profit if win</span>
+    <span class="${pnlClass(ev)}">EV ${signedMoney(ev, 4)}</span>
+  `;
+}
+
+function annualizedCell(item) {
+  const annualized = Number(item.annualizedReturn);
+  const ev = expectedValue(item);
+  const days = daysToResolution(item);
+  return `
+    <span class="${pnlClass(annualized)}">${signedPercent(annualized)}</span>
+    <span>${Number.isFinite(days) ? `${days.toFixed(1)}d horizon` : "horizon n/a"}</span>
+    <span class="${pnlClass(ev)}">EV ${signedMoney(ev, 4)}</span>
+  `;
+}
+
 function renderBotEvaluations() {
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
   const eligibleCount = evaluations.filter((item) => adjustedEvaluationStatus(item) === "ELIGIBLE").length;
@@ -670,7 +713,7 @@ function renderBotEvaluations() {
           ${sortableHeader("market", "Market")}
           ${sortableHeader("marketPrice", "Mkt entry")}
           ${sortableHeader("odds", "Odds")}
-          ${sortableHeader("gainIfWin", "Gain @ $5")}
+          ${sortableHeader("gainIfWin", "Win @ $5")}
           ${sortableHeader("aiProbability", "AI prob.")}
           ${sortableHeader("annualizedReturn", "EV p.a.")}
           ${sortableHeader("analysis", "Analysis")}
@@ -694,12 +737,9 @@ function renderBotEvaluations() {
               ].filter(Boolean).join(", ")}</span>
             </td>
             <td>${odds(decimalOdds(item.marketPrice))}</td>
-            <td class="${Number(gainIfWin(item)) >= 0 ? "positive" : "negative"}">
-              ${money(gainIfWin(item))}
-              <span>net after fee</span>
-            </td>
+            <td>${gainCell(item)}</td>
             <td>${probability(Number(item.aiProbability))}</td>
-            <td class="${Number(item.annualizedReturn) >= 0 ? "positive" : "negative"}">${percent(Number(item.annualizedReturn))}</td>
+            <td>${annualizedCell(item)}</td>
             <td>
               ${analysisBadge(item)}
             </td>
@@ -735,7 +775,8 @@ els.evaluationStatusButtons.forEach((button) => {
 els.eligibilityThreshold?.addEventListener("input", () => {
   const raw = Number(els.eligibilityThreshold.value);
   if (!Number.isFinite(raw)) return;
-  const value = Math.min(99, Math.max(1, raw)) / 100;
+  const normalized = normalizeEligibilityThreshold(raw / 100);
+  const value = normalized ?? currentEligibilityThreshold();
   state.eligibilityThreshold = value;
   saveEligibilityThreshold(value);
   syncEligibilityThresholdControl();
