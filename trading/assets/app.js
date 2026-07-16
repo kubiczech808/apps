@@ -4,6 +4,16 @@ const state = {
     key: "evaluatedAt",
     direction: "desc",
   },
+  tradeSort: {
+    open: {
+      key: "openedAt",
+      direction: "desc",
+    },
+    closed: {
+      key: "resolvedAt",
+      direction: "desc",
+    },
+  },
   evaluationStatus: "ELIGIBLE",
   eligibilityThreshold: null,
 };
@@ -191,15 +201,50 @@ function isClosedTrade(trade) {
 
 function tradeStatusNote(trade) {
   const parts = [
-    trade.currentPrice == null ? "" : `mark ${probability(Number(trade.currentPrice))}`,
     trade.finalOutcomePrice == null ? "" : `final ${probability(Number(trade.finalOutcomePrice))}`,
     trade.marketUrlStatus === "use_event_slug" ? "event link" : "",
   ];
   return parts.filter(Boolean).join(", ");
 }
 
+function inferredDateFromQuestion(trade) {
+  const question = String(trade.question || "");
+  const match = question.match(/\b(?:by|on|before|through)\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:,\s*(\d{4}))?/i);
+  if (!match) return null;
+  const months = {
+    january: 0,
+    february: 1,
+    march: 2,
+    april: 3,
+    may: 4,
+    june: 5,
+    july: 6,
+    august: 7,
+    september: 8,
+    october: 9,
+    november: 10,
+    december: 11,
+  };
+  const opened = new Date(trade.openedAt || trade.date || Date.now());
+  const fallbackEnd = new Date(trade.endDate || opened);
+  const year = Number(match[3]) || (Number.isFinite(fallbackEnd.getTime()) ? fallbackEnd.getUTCFullYear() : opened.getUTCFullYear());
+  const month = months[match[1].toLowerCase()];
+  const day = Number(match[2]);
+  if (!Number.isInteger(month) || !Number.isFinite(day)) return null;
+  const inferred = new Date(Date.UTC(year, month, day, 23, 59, 59));
+  if (!Number.isFinite(inferred.getTime())) return null;
+  return inferred.toISOString();
+}
+
 function tradeEndDate(trade) {
-  return trade.endDate || trade.closedTime || trade.resolvedAt || null;
+  const stored = trade.endDate || trade.closedTime || trade.resolvedAt || null;
+  const inferred = inferredDateFromQuestion(trade);
+  if (!inferred) return stored;
+  const storedTime = Date.parse(stored || "");
+  const inferredTime = Date.parse(inferred);
+  if (!Number.isFinite(storedTime)) return inferred;
+  if (!isClosedTrade(trade) && inferredTime > storedTime) return inferred;
+  return stored;
 }
 
 function daysBetween(startValue, endValue) {
@@ -239,14 +284,29 @@ function tradeCostBasis(trade) {
   return Number(trade.totalCostUsdc || trade.maxLossUsdc || trade.stakeUsdc || 0);
 }
 
+function tradePotentialGainPct(trade) {
+  const gain = tradePotentialGain(trade);
+  const basis = tradeCostBasis(trade);
+  return basis > 0 && Number.isFinite(gain) ? gain / basis : null;
+}
+
+function tradePotentialAnnualized(trade) {
+  const gainPct = tradePotentialGainPct(trade);
+  const endDate = tradeEndDate(trade);
+  const totalPlannedDays = daysBetween(trade.openedAt || trade.date, endDate);
+  return annualizedForPeriod(gainPct, totalPlannedDays);
+}
+
 function resolutionCell(trade) {
   const endDate = tradeEndDate(trade);
   const remaining = isClosedTrade(trade) ? null : daysUntil(endDate);
   const storedDays = Number(trade.daysToResolution);
-  const days = Number.isFinite(remaining) ? remaining : storedDays;
+  const days = Number.isFinite(remaining) && remaining > 0 ? remaining : storedDays;
+  const inferred = inferredDateFromQuestion(trade);
+  const inferredNote = inferred && trade.endDate && Date.parse(inferred) > Date.parse(trade.endDate) ? "from question" : "";
   return `
     ${escapeHtml(endDate ? formatDate(endDate) : "-")}
-    <span>${isClosedTrade(trade) ? "resolved" : `${compactDays(days)} left`}</span>
+    <span>${isClosedTrade(trade) ? "resolved" : `${compactDays(days)} left${inferredNote ? `, ${inferredNote}` : ""}`}</span>
   `;
 }
 
@@ -260,17 +320,19 @@ function holdingCell(trade) {
   `;
 }
 
-function potentialCell(trade) {
+function potentialGainCell(trade) {
   const gain = tradePotentialGain(trade);
-  const basis = tradeCostBasis(trade);
-  const gainPct = basis > 0 && Number.isFinite(gain) ? gain / basis : null;
-  const endDate = tradeEndDate(trade);
-  const totalPlannedDays = daysBetween(trade.openedAt || trade.date, endDate);
-  const annualized = annualizedForPeriod(gainPct, totalPlannedDays);
-  return `
-    <span class="${pnlClass(gain)}">${signedMoney(gain)}</span>
-    <span class="${pnlClass(gainPct)}">${signedPercent(gainPct)} if win${Number.isFinite(annualized) ? ` / ${signedPercent(annualized)} p.a.` : ""}</span>
-  `;
+  return `<span class="${pnlClass(gain)}">${signedMoney(gain)}</span>`;
+}
+
+function potentialPctCell(trade) {
+  const gainPct = tradePotentialGainPct(trade);
+  return `<span class="${pnlClass(gainPct)}">${signedPercent(gainPct)}</span>`;
+}
+
+function potentialAnnualizedCell(trade) {
+  const annualized = tradePotentialAnnualized(trade);
+  return `<span class="${pnlClass(annualized)}">${signedPercent(annualized)}</span>`;
 }
 
 function tradeAiProbability(trade) {
@@ -332,28 +394,81 @@ function postMortemLine(trade) {
   return [review.conclusion, errorText].filter(Boolean).join(" ");
 }
 
-function renderTradeRows(trades, emptyText) {
+function tradeSortValue(trade, key) {
+  if (key === "openedAt") return Date.parse(trade.openedAt || trade.date || "") || 0;
+  if (key === "market") return `${trade.outcome || ""} ${trade.question || ""}`.toLowerCase();
+  if (key === "entryPrice") return Number(trade.entryPrice);
+  if (key === "currentPrice") return Number(trade.currentPrice);
+  if (key === "aiProbability") return tradeAiProbability(trade);
+  if (key === "resolution") return Date.parse(tradeEndDate(trade) || "") || 0;
+  if (key === "holding") return tradeHoldingDays(trade);
+  if (key === "potentialGain") return tradePotentialGain(trade);
+  if (key === "potentialPct") return tradePotentialGainPct(trade);
+  if (key === "potentialAnnualized") return tradePotentialAnnualized(trade);
+  if (key === "pnl") return tradePnlValue(trade);
+  if (key === "pnlPct") return tradePnlPct(trade);
+  if (key === "stake") return Number(trade.stakeUsdc || 0);
+  if (key === "status") return String(trade.status || "");
+  if (key === "resolvedAt") return Date.parse(trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") || 0;
+  return "";
+}
+
+function sortedTrades(trades, tableKey) {
+  const sort = state.tradeSort[tableKey] || state.tradeSort.open;
+  const direction = sort.direction === "asc" ? 1 : -1;
+  return [...trades].sort((a, b) => {
+    const aValue = tradeSortValue(a, sort.key);
+    const bValue = tradeSortValue(b, sort.key);
+    const aMissing = aValue == null || Number.isNaN(aValue);
+    const bMissing = bValue == null || Number.isNaN(bValue);
+    if (aMissing && bMissing) return 0;
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+    if (typeof aValue === "number" && typeof bValue === "number") return (aValue - bValue) * direction;
+    return String(aValue).localeCompare(String(bValue)) * direction;
+  });
+}
+
+function tradeSortArrow(tableKey, key) {
+  const sort = state.tradeSort[tableKey] || state.tradeSort.open;
+  if (sort.key !== key) return "";
+  return sort.direction === "asc" ? " asc" : " desc";
+}
+
+function tradeHeader(tableKey, key, label) {
+  const sort = state.tradeSort[tableKey] || state.tradeSort.open;
+  const active = sort.key === key ? " active" : "";
+  return `<th><button class="sort-button${active}" type="button" data-trade-sort="${key}" data-trade-table="${tableKey}">${label}${tradeSortArrow(tableKey, key)}</button></th>`;
+}
+
+function renderTradeRows(trades, emptyText, options = {}) {
+  const tableKey = options.tableKey || "open";
+  const showStatus = options.showStatus !== false;
   if (!trades.length) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
+  const rows = sortedTrades(trades, tableKey);
   return `
     <table>
       <thead>
         <tr>
-          <th>Opened</th>
-          <th>Market</th>
-          <th>Entry</th>
-          <th>AI analysis</th>
-          <th>Resolution</th>
-          <th>Holding</th>
-          <th>Potential</th>
-          <th>Status</th>
-          <th>P/L</th>
-          <th>Stake</th>
+          ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
+          ${tradeHeader(tableKey, "market", "Market")}
+          ${tradeHeader(tableKey, "entryPrice", "Entry")}
+          ${tradeHeader(tableKey, "currentPrice", showStatus ? "Final" : "Mark")}
+          ${tradeHeader(tableKey, "aiProbability", "AI prob.")}
+          ${tradeHeader(tableKey, "resolution", "Resolution")}
+          ${tradeHeader(tableKey, "holding", "Holding")}
+          ${tradeHeader(tableKey, "potentialGain", "Win $")}
+          ${tradeHeader(tableKey, "potentialPct", "Win %")}
+          ${tradeHeader(tableKey, "potentialAnnualized", "Win p.a.")}
+          ${showStatus ? tradeHeader(tableKey, "status", "Result") : ""}
+          ${tradeHeader(tableKey, "pnl", "P/L")}
+          ${tradeHeader(tableKey, "stake", "Stake")}
         </tr>
       </thead>
       <tbody>
-        ${trades.map((trade) => `
+        ${rows.map((trade) => `
           <tr>
-            <td>${escapeHtml(formatDate(trade.date || trade.openedAt || ""))}</td>
+            <td>${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.date || trade.openedAt || "")))}</td>
             <td>
               ${marketAnchor(trade)}
               <span>${escapeHtml(riskLine(trade))}</span>
@@ -363,14 +478,24 @@ function renderTradeRows(trades, emptyText) {
               ${probability(Number(trade.entryPrice))}
               <span>${[trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`, feeLine(trade)].filter(Boolean).join(", ")}</span>
             </td>
-            <td>${tradeAnalysisCell(trade)}</td>
+            <td>${probability(Number(trade.currentPrice))}</td>
+            <td>
+              <strong>${probability(tradeAiProbability(trade))}</strong>
+              <span class="analysis-popover">
+                <button class="info-button" type="button" aria-label="Show original AI analysis" title="${escapeHtml(tradeAnalysisDetails(trade))}">i</button>
+                <span class="analysis-tooltip" role="tooltip">${escapeHtml(tradeAnalysisDetails(trade))}</span>
+              </span>
+              <span>${escapeHtml(tradeAnalysisThesis(trade) || "No stored thesis")}</span>
+            </td>
             <td>${resolutionCell(trade)}</td>
             <td>${holdingCell(trade)}</td>
-            <td>${potentialCell(trade)}</td>
-            <td>
+            <td>${potentialGainCell(trade)}</td>
+            <td>${potentialPctCell(trade)}</td>
+            <td>${potentialAnnualizedCell(trade)}</td>
+            ${showStatus ? `<td>
               ${escapeHtml(trade.status || "OPEN")}
               <span>${escapeHtml(tradeStatusNote(trade))}</span>
-            </td>
+            </td>` : ""}
             <td class="${pnlClass(tradePnlValue(trade))}">
               ${signedMoney(tradePnlValue(trade))}
               <span>${signedPercent(tradePnlPct(trade))}</span>
@@ -609,13 +734,19 @@ function renderBotState(botState) {
     </div>
   `;
 
-  els.botTrades.innerHTML = renderTradeRows(openTrades.slice(0, 12), "Zatim zadne otevrene autonomni paper obchody.");
+  els.botTrades.innerHTML = renderTradeRows(openTrades.slice(0, 12), "Zatim zadne otevrene autonomni paper obchody.", {
+    tableKey: "open",
+    showStatus: false,
+  });
   if (els.closedSummary) {
     const closedPnl = closedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
     els.closedSummary.textContent = `${closedTrades.length} closed / ${signedMoney(closedPnl)}`;
   }
   if (els.closedTrades) {
-    els.closedTrades.innerHTML = renderTradeRows(closedTrades, "Zatim zadne ukoncene paper obchody.");
+    els.closedTrades.innerHTML = renderTradeRows(closedTrades, "Zatim zadne ukoncene paper obchody.", {
+      tableKey: "closed",
+      showStatus: true,
+    });
   }
 
   renderBotEvaluations();
@@ -795,5 +926,23 @@ els.botEvaluations?.addEventListener("click", (event) => {
   }
   renderBotEvaluations();
 });
+
+function handleTradeSort(event) {
+  const button = event.target.closest("[data-trade-sort]");
+  if (!button) return;
+  const tableKey = button.dataset.tradeTable || "open";
+  const key = button.dataset.tradeSort;
+  state.tradeSort[tableKey] ||= { key, direction: "desc" };
+  if (state.tradeSort[tableKey].key === key) {
+    state.tradeSort[tableKey].direction = state.tradeSort[tableKey].direction === "asc" ? "desc" : "asc";
+  } else {
+    state.tradeSort[tableKey].key = key;
+    state.tradeSort[tableKey].direction = ["market", "status"].includes(key) ? "asc" : "desc";
+  }
+  renderBotState(state.botState);
+}
+
+els.botTrades?.addEventListener("click", handleTradeSort);
+els.closedTrades?.addEventListener("click", handleTradeSort);
 
 loadBotState();
