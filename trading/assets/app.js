@@ -357,10 +357,10 @@ function resolutionCell(trade) {
 function holdingCell(trade) {
   const heldDays = tradeHoldingDays(trade);
   const currentReturn = tradePnlPct(trade);
-  const annualized = annualizedForPeriod(currentReturn, heldDays);
+  const label = isClosedTrade(trade) ? "realized P/L" : "current P/L";
   return `
     ${compactDays(heldDays)}
-    <span class="${pnlClass(annualized)}">${signedPercent(annualized)} p.a. current</span>
+    <span class="${pnlClass(currentReturn)}">${signedPercent(currentReturn)} ${label}</span>
   `;
 }
 
