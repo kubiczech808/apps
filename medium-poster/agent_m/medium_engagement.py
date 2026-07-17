@@ -68,7 +68,7 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
     raw_candidates: list[dict] = []
     for q in queries[:5]:
         try:
-            raw_candidates.extend(await publisher.search_articles(q, limit=8))
+            raw_candidates.extend(await publisher.search_articles(q, limit=12))
         except Exception as exc:
             log.warning("Medium engagement search failed for %r: %s", q, exc)
 
@@ -77,10 +77,12 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
     # a narrow query may otherwise get stuck with zero inspected candidates.
     # Only pending/posted articles and this week's used profiles are hard
     # blocks.
-    candidates = _rank_candidates(raw_candidates, blocked_articles, blocked_profiles)
+    candidates, prefilter_rejected = _rank_candidates(raw_candidates, blocked_articles, blocked_profiles)
+    if not candidates and prefilter_rejected:
+        candidates = _prefilter_fallback_candidates(prefilter_rejected, limit=max(limit * 6, 8))
     opportunities: list[EngagementOpportunity] = []
     fallback_candidates: list[dict] = []
-    rejected: list[dict] = []
+    rejected: list[dict] = prefilter_rejected[:10] if not candidates else []
     inspected = 0
 
     for candidate in candidates[: max(limit * 8, 12)]:
@@ -455,9 +457,14 @@ async def _build_queries() -> list[str]:
     return _dedupe([q for q in queries if len(q.split()) >= 2])[:6]
 
 
-def _rank_candidates(items: list[dict], seen: set[str], blocked_profiles: set[str] | None = None) -> list[dict]:
+def _rank_candidates(
+    items: list[dict],
+    seen: set[str],
+    blocked_profiles: set[str] | None = None,
+) -> tuple[list[dict], list[dict]]:
     blocked_profiles = blocked_profiles or set()
     ranked = []
+    rejected = []
     seen_this_run = set()
     for item in items:
         url = _clean_url(item.get("url") or item.get("href") or "")
@@ -465,19 +472,35 @@ def _rank_candidates(items: list[dict], seen: set[str], blocked_profiles: set[st
         snippet = _clean_text(item.get("snippet") or item.get("text") or "")
         query = _clean_text(item.get("query") or "")
         if not url or not title:
+            rejected.append({"url": url or item.get("url"), "title": title, "reason": "missing url/title"})
             continue
         if url in seen or url in seen_this_run:
+            rejected.append({"url": url, "title": title, "reason": "duplicate or already used article"})
             continue
         profile = _profile_from_url(url)
         if profile in blocked_profiles:
+            rejected.append({"url": url, "title": title, "reason": f"blocked/recent profile: {profile}"})
             continue
         if any(marker in url for marker in _OWN_MEDIUM_MARKERS):
+            rejected.append({"url": url, "title": title, "reason": "own Medium profile"})
             continue
         if "/me/" in url or "/m/signin" in url or "/p/" in url and "/edit" in url:
+            rejected.append({"url": url, "title": title, "reason": "non-public Medium URL"})
             continue
 
         score, reason = _score_candidate(title, snippet, query)
         if score < 45:
+            rejected.append({
+                "title": title,
+                "url": url,
+                "profile": profile,
+                "snippet": snippet[:900],
+                "query": query,
+                "score": score,
+                "rank_reason": reason,
+                "reason": f"low topical score ({score} < 45): {reason}",
+                "fallback_inspectable": score >= 18,
+            })
             continue
 
         seen_this_run.add(url)
@@ -493,7 +516,36 @@ def _rank_candidates(items: list[dict], seen: set[str], blocked_profiles: set[st
             }
         )
 
-    return sorted(ranked, key=lambda x: x["score"], reverse=True)
+    return sorted(ranked, key=lambda x: x["score"], reverse=True), rejected
+
+
+def _prefilter_fallback_candidates(rejected: list[dict], limit: int) -> list[dict]:
+    candidates = [
+        item for item in rejected
+        if item.get("fallback_inspectable") and item.get("url") and item.get("title")
+    ]
+    candidates.sort(key=lambda item: int(item.get("score") or 0), reverse=True)
+    out = []
+    seen_urls = set()
+    for item in candidates:
+        url = _clean_url(item.get("url") or "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        out.append(
+            {
+                "title": item.get("title") or "",
+                "url": url,
+                "profile": item.get("profile") or _profile_from_url(url),
+                "snippet": item.get("snippet") or "",
+                "query": item.get("query") or "",
+                "score": int(item.get("score") or 0),
+                "reason": f"prefilter fallback: {item.get('rank_reason') or item.get('reason') or 'low score'}",
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _score_candidate(title: str, snippet: str, query: str) -> tuple[int, str]:
