@@ -288,6 +288,112 @@ final class Shipping
         nodes.forEach(translateTextNode);
     }
 
+    function clonePlain(value) {
+        if (!value || typeof value !== 'object') {
+            return value;
+        }
+        if (Array.isArray(value)) {
+            return value.map(clonePlain);
+        }
+        const output = {};
+        Object.keys(value).forEach(function (key) {
+            output[key] = clonePlain(value[key]);
+        });
+        return output;
+    }
+
+    function normalizePacketaWidgetOptions(options) {
+        if (!options || typeof options !== 'object') {
+            return options;
+        }
+
+        const country = String(options.country || '').toLowerCase();
+        const vendors = Array.isArray(options.vendors) ? options.vendors : [];
+        const hasGermanHermesOnly = country === 'de'
+            && vendors.length > 0
+            && vendors.every(function (vendor) {
+                return vendor && String(vendor.carrierId || '') === '6828';
+            });
+
+        if (!hasGermanHermesOnly) {
+            return options;
+        }
+
+        const next = clonePlain(options);
+        if (!Number(next.weight)) {
+            delete next.weight;
+        }
+        next.country = 'de';
+        next.language = next.language || data.language || 'de';
+        next.vendors = [
+            { country: 'de', group: '', selected: true },
+            { country: 'de', group: 'zbox' },
+            { carrierId: '6828' }
+        ];
+        next.jamuMlPatched = true;
+
+        if (window.console && typeof window.console.info === 'function') {
+            window.console.info('JAMU multilingual: expanded Packeta German pickup vendors', next);
+        }
+
+        return next;
+    }
+
+    function patchPacketaWidget(widget) {
+        if (!widget || typeof widget.pick !== 'function' || widget.pick.jamuMlPatched) {
+            return false;
+        }
+
+        const originalPick = widget.pick;
+        widget.pick = function (apiKey, callback, options) {
+            return originalPick.call(this, apiKey, callback, normalizePacketaWidgetOptions(options));
+        };
+        widget.pick.jamuMlPatched = true;
+        return true;
+    }
+
+    function patchPacketaObject(packeta) {
+        if (!packeta || typeof packeta !== 'object') {
+            return false;
+        }
+        return patchPacketaWidget(packeta.Widget);
+    }
+
+    function installPacketaPatch() {
+        let stored = window.Packeta;
+        patchPacketaObject(stored);
+
+        try {
+            const descriptor = Object.getOwnPropertyDescriptor(window, 'Packeta');
+            if (!descriptor || descriptor.configurable !== false) {
+                Object.defineProperty(window, 'Packeta', {
+                    configurable: true,
+                    enumerable: true,
+                    get() {
+                        return stored;
+                    },
+                    set(value) {
+                        stored = value;
+                        patchPacketaObject(stored);
+                    }
+                });
+            }
+        } catch (error) {
+            window.setInterval(function () {
+                patchPacketaObject(window.Packeta);
+            }, 250);
+        }
+
+        let attempts = 0;
+        const timer = window.setInterval(function () {
+            attempts += 1;
+            if (patchPacketaObject(window.Packeta) || attempts >= 80) {
+                window.clearInterval(timer);
+            }
+        }, 250);
+    }
+
+    installPacketaPatch();
     ensureDpdElements();
     translateDpdUi(document.body);
 
