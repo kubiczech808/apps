@@ -9,6 +9,17 @@ defined('ABSPATH') || exit;
 
 final class Content
 {
+    /**
+     * Approximate mid-market display rates used only for labels that mention a
+     * fixed CZK discount in localized payment method names.
+     *
+     * Base: 1 foreign currency unit in CZK, refreshed manually when needed.
+     */
+    private const DISPLAY_CZK_RATES = [
+        'EUR' => 24.25,
+        'PLN' => 5.58,
+    ];
+
     private bool $term_guard = false;
     private bool $template_part_guard = false;
     private bool $language_navigation_inserted = false;
@@ -922,8 +933,35 @@ JS
         );
     }
 
+    private function converted_discount_label(float $czk_amount, string $currency, string $language): string
+    {
+        $currency = strtoupper($currency);
+        if ($currency === 'CZK') {
+            return '-' . number_format($czk_amount, 0, ',', ' ') . ' Kč';
+        }
+
+        $rate = self::DISPLAY_CZK_RATES[$currency] ?? 0.0;
+        if ($rate <= 0) {
+            return '-' . number_format($czk_amount, 0, ',', ' ') . ' Kč';
+        }
+
+        $amount = $czk_amount / $rate;
+        $decimal_separator = $language === 'en' ? '.' : ',';
+        $symbol = match ($currency) {
+            'EUR' => '€',
+            'PLN' => 'zł',
+            default => $currency,
+        };
+
+        return '-' . number_format($amount, 2, $decimal_separator, ' ') . ' ' . $symbol;
+    }
+
     private function frontend_i18n_data(): array
     {
+        $bank_transfer_discount_en = $this->converted_discount_label(10, 'EUR', 'en');
+        $bank_transfer_discount_de = $this->converted_discount_label(10, 'EUR', 'de');
+        $bank_transfer_discount_pl = $this->converted_discount_label(10, 'PLN', 'pl');
+
         $exact = [
             'en' => [
                 'Previous Page' => 'Previous page',
@@ -945,7 +983,7 @@ JS
                 'Payment:' => 'Payment:',
                 'Shipping:' => 'Shipping:',
                 'Total:' => 'Total:',
-                'Bank transfer / QR code (-10 Kč)' => 'Bank transfer / QR code (-10 €)',
+                'Bank transfer / QR code (-10 Kč)' => 'Bank transfer / QR code (' . $bank_transfer_discount_en . ')',
                 'Bankovním převodem:' => 'By bank transfer:',
                 'Rekapitulace objednávky' => 'Order summary',
                 'Platební údaje' => 'Payment details',
@@ -1078,7 +1116,7 @@ JS
                 'Odeslat objednávku' => 'Bestellung aufgeben',
                 'Shipping:' => 'Versand:',
                 'Total:' => 'Gesamtsumme:',
-                'Banküberweisung / QR-Code (-10 Kč)' => 'Banküberweisung / QR-Code (-10 €)',
+                'Banküberweisung / QR-Code (-10 Kč)' => 'Banküberweisung / QR-Code (' . $bank_transfer_discount_de . ')',
                 'Bankovním převodem:' => 'Per Banküberweisung:',
                 'Rekapitulace objednávky' => 'Bestellübersicht',
                 'Rückgabe der Bestellung' => 'Bestellübersicht',
@@ -1224,7 +1262,7 @@ JS
                 'Odeslat objednávku' => 'Złóż zamówienie',
                 'Shipping:' => 'Dostawa:',
                 'Total:' => 'Razem:',
-                'Przelew / kod QR (-10 Kč)' => 'Przelew / kod QR (-10 zł)',
+                'Przelew / kod QR (-10 Kč)' => 'Przelew / kod QR (' . $bank_transfer_discount_pl . ')',
                 'Bankovním převodem:' => 'Przelewem bankowym:',
                 'Rekapitulace objednávky' => 'Podsumowanie zamówienia',
                 'Rekapitacja porządku' => 'Podsumowanie zamówienia',
@@ -1401,7 +1439,7 @@ JS
                 'Dobírka' => 'Cash on delivery',
                 'Platba dobírkou' => 'Cash on delivery',
                 'Platba na dobírku' => 'Cash on delivery',
-                'Převodem / QR kódem (-10 Kč)' => 'Bank transfer / QR code (-10 Kč)',
+                'Převodem / QR kódem (-10 Kč)' => 'Bank transfer / QR code (' . $bank_transfer_discount_en . ')',
                 'Platba převodem' => 'Bank transfer',
                 'Bankovní převod' => 'Bank transfer',
                 'Bankovním převodem' => 'By bank transfer',
@@ -1496,7 +1534,7 @@ JS
                 'Dobírka' => 'Nachnahme',
                 'Platba dobírkou' => 'Zahlung per Nachnahme',
                 'Platba na dobírku' => 'Zahlung per Nachnahme',
-                'Převodem / QR kódem (-10 Kč)' => 'Banküberweisung / QR-Code (-10 Kč)',
+                'Převodem / QR kódem (-10 Kč)' => 'Banküberweisung / QR-Code (' . $bank_transfer_discount_de . ')',
                 'Platba převodem' => 'Banküberweisung',
                 'Bankovní převod' => 'Banküberweisung',
                 'Bankovním převodem' => 'Per Banküberweisung',
@@ -1531,7 +1569,7 @@ JS
                 'privacy policy' => 'polityce prywatności',
                 'I have read and agree to the website' => 'Przeczytałem/am i akceptuję',
                 'terms and conditions' => 'regulamin',
-                'Převodem / QR kódem (-10 Kč)' => 'Przelew / kod QR (-10 Kč)',
+                'Převodem / QR kódem (-10 Kč)' => 'Przelew / kod QR (' . $bank_transfer_discount_pl . ')',
                 'Bankovním převodem' => 'Przelewem bankowym',
             ],
         ];
