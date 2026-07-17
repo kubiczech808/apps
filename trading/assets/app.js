@@ -418,7 +418,6 @@ function tradeAnalysisDetails(trade) {
 
 function tradeAnalysisCell(trade) {
   const prob = tradeAiProbability(trade);
-  const thesis = tradeAnalysisThesis(trade) || "No stored thesis";
   const details = tradeAnalysisDetails(trade);
   return `
     <strong>${probability(prob)}</strong>
@@ -426,7 +425,6 @@ function tradeAnalysisCell(trade) {
       <button class="info-button" type="button" aria-label="Show original AI analysis" title="${escapeHtml(details)}">i</button>
       <span class="analysis-tooltip" role="tooltip">${escapeHtml(details)}</span>
     </span>
-    <span class="trade-analysis-text">${escapeHtml(thesis)}</span>
   `;
 }
 
@@ -529,7 +527,6 @@ function renderTradeRows(trades, emptyText, options = {}) {
                 <button class="info-button" type="button" aria-label="Show original AI analysis" title="${escapeHtml(tradeAnalysisDetails(trade))}">i</button>
                 <span class="analysis-tooltip" role="tooltip">${escapeHtml(tradeAnalysisDetails(trade))}</span>
               </span>
-              <span>${escapeHtml(tradeAnalysisThesis(trade) || "No stored thesis")}</span>
             </td>
             <td>${resolutionCell(trade)}</td>
             <td>${holdingCell(trade)}</td>
