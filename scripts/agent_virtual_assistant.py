@@ -849,7 +849,7 @@ def refresh_telegram_bot_commands(push_to_telegram: bool = False) -> str:
     if not push_to_telegram:
         return "prepared"
     env = g.load_env()
-    token = env.get("TELEGRAM_AGENT_G_BOT_TOKEN") or env.get("TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN") or ""
+    token = env.get("TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN") or env.get("TELEGRAM_AGENT_G_BOT_TOKEN") or ""
     if not token:
         return "missing-token"
     payload = urllib.parse.urlencode({"commands": json.dumps(commands, ensure_ascii=False)}).encode("utf-8")
@@ -4451,8 +4451,8 @@ def gmail_poll_once() -> None:
 
 def telegram_token_chat() -> tuple[str, str]:
     env = g.load_env()
-    token = env.get("TELEGRAM_AGENT_G_BOT_TOKEN") or env.get("TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN") or ""
-    chat_id = env.get("TELEGRAM_AGENT_G_CHAT_ID") or env.get("TELEGRAM_VIRTUAL_ASSISTANT_CHAT_ID") or g.DEFAULT_CHAT_ID
+    token = env.get("TELEGRAM_VIRTUAL_ASSISTANT_BOT_TOKEN") or env.get("TELEGRAM_AGENT_G_BOT_TOKEN") or ""
+    chat_id = env.get("TELEGRAM_VIRTUAL_ASSISTANT_CHAT_ID") or env.get("TELEGRAM_AGENT_G_CHAT_ID") or g.DEFAULT_CHAT_ID
     return token, chat_id
 
 
