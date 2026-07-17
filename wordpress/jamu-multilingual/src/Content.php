@@ -685,11 +685,16 @@ HTML;
             if (!match) {
                 continue;
             }
+            const expand = function (template) {
+                return String(template || '').replace(/\$(\d+)/g, function (placeholder, index) {
+                    return match[Number(index)] || '';
+                });
+            };
             if (item.one && match[1] === '1') {
-                return item.one.replace('$1', match[1]);
+                return expand(item.one);
             }
             if (item.other) {
-                return item.other.replace('$1', match[1] || '');
+                return expand(item.other);
             }
         }
         return '';
@@ -923,6 +928,26 @@ JS
             'en' => [
                 'Previous Page' => 'Previous page',
                 'Next Page' => 'Next page',
+                'Order received' => 'Order received',
+                'Order #' => 'Order #',
+                'Order #:' => 'Order #:',
+                'Date' => 'Date',
+                'Date:' => 'Date:',
+                'Email' => 'Email',
+                'Email:' => 'Email:',
+                'Payment' => 'Payment',
+                'Payment:' => 'Payment:',
+                'Shipping:' => 'Shipping:',
+                'Total:' => 'Total:',
+                'Bank transfer / QR code (-10 Kč)' => 'Bank transfer / QR code (-10 €)',
+                'Bankovním převodem:' => 'By bank transfer:',
+                'Rekapitulace objednávky' => 'Order summary',
+                'Platební údaje' => 'Payment details',
+                'Pro platby v CZK' => 'For payments in CZK',
+                'Pro platby v EUR' => 'For payments in EUR',
+                'Číslo účtu:' => 'Account number:',
+                'Variabilní symbol: číslo objednávky' => 'Variable symbol: order number',
+                'QR kód pro platbu bankovním převodem:' => 'QR code for bank transfer:',
             ],
             'de' => [
                 'Your cart' => 'Ihr Warenkorb',
@@ -1008,6 +1033,15 @@ JS
                 'I have read and agree to the website terms and conditions' => 'Ich habe die Allgemeinen Geschäftsbedingungen der Website gelesen und akzeptiere sie',
                 'Privacy policy' => 'Datenschutzerklärung',
                 'Terms and conditions' => 'Allgemeine Geschäftsbedingungen',
+                'Order received' => 'Bestellung erhalten',
+                'Order #' => 'Bestellnummer',
+                'Order #:' => 'Bestellnummer:',
+                'Date' => 'Datum',
+                'Date:' => 'Datum:',
+                'Email' => 'E-Mail',
+                'Email:' => 'E-Mail:',
+                'Payment' => 'Zahlung',
+                'Payment:' => 'Zahlung:',
                 'Thank you. Your order has been received.' => 'Vielen Dank. Ihre Bestellung ist eingegangen.',
                 'Open cart' => 'Warenkorb öffnen',
                 'Close cart' => 'Warenkorb schließen',
@@ -1030,6 +1064,27 @@ JS
                 'Dodací adresa' => 'Lieferadresse',
                 'Platební metoda' => 'Zahlungsart',
                 'Odeslat objednávku' => 'Bestellung aufgeben',
+                'Shipping:' => 'Versand:',
+                'Total:' => 'Gesamtsumme:',
+                'Banküberweisung / QR-Code (-10 Kč)' => 'Banküberweisung / QR-Code (-10 €)',
+                'Bankovním převodem:' => 'Per Banküberweisung:',
+                'Rekapitulace objednávky' => 'Bestellübersicht',
+                'Rückgabe der Bestellung' => 'Bestellübersicht',
+                'Platební údaje' => 'Zahlungsinformationen',
+                'Zahlungsinformationen' => 'Zahlungsinformationen',
+                'Im Falle der Auswahl der Zahlung Übertragung auf ein Bankkonto ohne Nachschlagewerk, senden Sie den Gesamtbetrag der Bestellung auf eines der Bankkonten nach der gewählten Währung.' => 'Wenn Sie die Zahlung per Banküberweisung gewählt haben, überweisen Sie den Gesamtbetrag der Bestellung bitte auf eines der unten aufgeführten Bankkonten entsprechend der gewählten Währung.',
+                'Übertragung auf ein Bankkonto' => 'Banküberweisung',
+                'Pro platby v CZK' => 'Für Zahlungen in CZK',
+                'Pro platby v EUR' => 'Für Zahlungen in EUR',
+                'Číslo účtu:' => 'Kontonummer:',
+                'Kontonummer:' => 'Kontonummer:',
+                'IBAN: ~ Übersetzt von ~ ~ Korrigiert von Scratch77 ~' => 'IBAN: CZ8220100000002801956909',
+                'IBAN: ~ Übersetzt von ~ ~ Korrigiert von ~' => 'IBAN: CZ5120100000002401956918',
+                '~ Übersetzt von ~ ~ Korrigiert von Scratch77 ~' => 'CZ8220100000002801956909',
+                '~ Übersetzt von ~ ~ Korrigiert von ~' => 'CZ5120100000002401956918',
+                'Variables Symbol: Nummer der Bestellung' => 'Verwendungszweck: Bestellnummer',
+                'Variabilní symbol: číslo objednávky' => 'Verwendungszweck: Bestellnummer',
+                'QR kód pro platbu bankovním převodem:' => 'QR-Code für die Zahlung per Banküberweisung:',
             ],
             'pl' => [
                 'Your cart' => 'Twój koszyk',
@@ -1115,6 +1170,15 @@ JS
                 'I have read and agree to the website terms and conditions' => 'Przeczytałem/am i akceptuję regulamin strony',
                 'Privacy policy' => 'Polityka prywatności',
                 'Terms and conditions' => 'Regulamin',
+                'Order received' => 'Zamówienie otrzymane',
+                'Order #' => 'Numer zamówienia',
+                'Order #:' => 'Numer zamówienia:',
+                'Date' => 'Data',
+                'Date:' => 'Data:',
+                'Email' => 'E-mail',
+                'Email:' => 'E-mail:',
+                'Payment' => 'Płatność',
+                'Payment:' => 'Płatność:',
                 'Thank you. Your order has been received.' => 'Dziękujemy. Twoje zamówienie zostało przyjęte.',
                 'Open cart' => 'Otwórz koszyk',
                 'Close cart' => 'Zamknij koszyk',
@@ -1140,6 +1204,28 @@ JS
                 'Dodací adresa' => 'Adres dostawy',
                 'Platební metoda' => 'Metoda płatności',
                 'Odeslat objednávku' => 'Złóż zamówienie',
+                'Shipping:' => 'Dostawa:',
+                'Total:' => 'Razem:',
+                'Przelew / kod QR (-10 Kč)' => 'Przelew / kod QR (-10 zł)',
+                'Bankovním převodem:' => 'Przelewem bankowym:',
+                'Rekapitulace objednávky' => 'Podsumowanie zamówienia',
+                'Rekapitacja porządku' => 'Podsumowanie zamówienia',
+                'Platební údaje' => 'Dane do płatności',
+                'Dane płatnicze' => 'Dane do płatności',
+                'W przypadku selekcji płatniczej Transfer do konta bankowego Bez pokwitowania, wyślij całkowitą ilość porządku jednemu z rachunków bankowych według wybranej waluty.' => 'W przypadku płatności przelewem bankowym przelej całkowitą kwotę zamówienia na jedno z poniższych kont, zgodnie z wybraną walutą.',
+                'Transfer do konta bankowego' => 'przelew bankowy',
+                'Pro platby v CZK' => 'Dla płatności w CZK',
+                'Pro platby v EUR' => 'Dla płatności w EUR',
+                'Za płatności w CZK' => 'Dla płatności w CZK',
+                'Za płatności w gotówce' => 'Dla płatności w EUR',
+                'Číslo účtu:' => 'Numer konta:',
+                'Numer księgowy:' => 'Numer konta:',
+                'IBAN: CZ822010000000139395' => 'IBAN: CZ8220100000002801956909',
+                'IBAN: CZ5120100000002401-96918' => 'IBAN: CZ5120100000002401956918',
+                'BIC: FIOB LAPPXX' => 'BIC: FIOBCZPPXXX',
+                'Poszukiwany symbol: numer docelowy' => 'Tytuł płatności: numer zamówienia',
+                'Variabilní symbol: číslo objednávky' => 'Tytuł płatności: numer zamówienia',
+                'QR kód pro platbu bankovním převodem:' => 'Kod QR do płatności przelewem bankowym:',
                 'Jméno' => 'Imię',
                 'Jméno (optional)' => 'Imię (opcjonalnie)',
                 'Jméno (volitelné)' => 'Imię (opcjonalnie)',
@@ -1487,6 +1573,7 @@ JS
                 ['match' => '^\\((\\d+) customer reviews\\)$', 'one' => '(1 Kundenbewertung)', 'other' => '($1 Kundenbewertungen)'],
                 ['match' => '^Reviews \\((\\d+)\\)$', 'one' => 'Bewertungen (1)', 'other' => 'Bewertungen ($1)'],
                 ['match' => '^Rated ([0-9,.]+) out of 5$', 'other' => 'Bewertet mit $1 von 5'],
+                ['match' => '^(.+) \\(includes (.+) VAT\\) EUR$', 'other' => '$1 (inkl. $2 MwSt.) EUR'],
             ],
             'pl' => [
                 ['match' => '^Your cart \\(items: (\\d+)\\)$', 'one' => 'Twój koszyk (1 produkt)', 'other' => 'Twój koszyk ($1 produktów)'],
@@ -1499,6 +1586,7 @@ JS
                 ['match' => '^\\((\\d+) customer reviews\\)$', 'one' => '(1 opinia klienta)', 'other' => '($1 opinii klientów)'],
                 ['match' => '^Reviews \\((\\d+)\\)$', 'one' => 'Opinie (1)', 'other' => 'Opinie ($1)'],
                 ['match' => '^Rated ([0-9,.]+) out of 5$', 'other' => 'Oceniono na $1 z 5'],
+                ['match' => '^(.+) \\(includes (.+) VAT\\) (.+)$', 'other' => '$1 (w tym $2 VAT) $3'],
             ],
         ];
 
