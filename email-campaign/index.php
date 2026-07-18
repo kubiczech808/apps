@@ -1692,13 +1692,171 @@ function runAiResearchOnce(PDO $pdo, array $config): string
     if (!$seed) {
         return 'AI research: neni dostupny zadny ulozeny kontakt.';
     }
-    $plan = aiResearchPlan($config, $seed);
-    $contacts = aiResearchFindContacts($plan, 10);
-    $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
-    $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
-    $runId = saveAiResearchRun($pdo, $seed, $plan, $evaluated, $accepted);
+    $basePlan = aiResearchPlan($config, $seed);
+    $plans = [$basePlan];
+    $plans = array_merge($plans, aiResearchFallbackMarketPlans($seed, $basePlan));
+    $bestPlan = $basePlan;
+    $bestEvaluated = [];
+    $bestAccepted = [];
+    $attempts = 0;
+    $seenPlans = [];
+    foreach ($plans as $plan) {
+        $plan = aiResearchEnrichPlan($plan, $seed);
+        $signature = aiResearchPlanSignature($plan);
+        if ($signature !== '' && isset($seenPlans[$signature])) {
+            continue;
+        }
+        $seenPlans[$signature] = true;
+        $attempts++;
+        $contacts = aiResearchFindContacts($pdo, $seed, $plan, 10);
+        $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
+        $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
+        if (count($accepted) > count($bestAccepted) || (count($accepted) === count($bestAccepted) && count($evaluated) > count($bestEvaluated))) {
+            $bestPlan = $plan;
+            $bestEvaluated = $evaluated;
+            $bestAccepted = $accepted;
+        }
+        if (count($bestAccepted) >= 3 || $attempts >= 4) {
+            break;
+        }
+    }
+    if (!$bestAccepted) {
+        foreach (aiResearchAlternativePlans($config, $seed, $bestPlan, array_keys($seenPlans), 3) as $plan) {
+            $attempts++;
+            $contacts = aiResearchFindContacts($pdo, $seed, $plan, 10);
+            $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
+            $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
+            if (count($accepted) > count($bestAccepted) || (count($accepted) === count($bestAccepted) && count($evaluated) > count($bestEvaluated))) {
+                $bestPlan = $plan;
+                $bestEvaluated = $evaluated;
+                $bestAccepted = $accepted;
+            }
+            if (count($bestAccepted) >= 3) {
+                break;
+            }
+        }
+    }
+    $bestPlan['research_attempts'] = $attempts;
+    $runId = saveAiResearchRun($pdo, $seed, $bestPlan, $bestEvaluated, $bestAccepted);
     setSetting($pdo, 'ai_research_last_seed_id', (string)(int)$seed['id']);
-    return 'AI research: beh #' . $runId . ', seed ' . (string)$seed['email'] . ', nalezeno ' . count($evaluated) . ', vhodnych ' . count($accepted) . '.';
+    return 'AI research: beh #' . $runId . ', seed ' . (string)$seed['email'] . ', pokusu ' . $attempts . ', nalezeno ' . count($bestEvaluated) . ', vhodnych ' . count($bestAccepted) . '.';
+}
+
+function aiResearchFallbackMarketPlans(array $seed, array $basePlan): array
+{
+    $source = aiResearchDefaultSourceForSeed($seed);
+    $terms = aiResearchFallbackTerms(
+        (string)($seed['subject_name'] ?? ''),
+        (string)($seed['website'] ?? ''),
+        (string)($seed['address'] ?? ''),
+        aiResearchSeedCountry($seed)
+    );
+    $plans = [];
+    foreach (array_chunk(array_values(array_unique($terms)), 3) as $chunk) {
+        $queries = [];
+        foreach ($chunk as $term) {
+            $term = aiResearchNormalizeCatalogKeyword((string)$term);
+            if ($term === '') {
+                continue;
+            }
+            $queries[] = [
+                'source' => $source,
+                'keyword' => $term,
+                'why' => 'lokalni katalogovy dotaz podle trhu a oboru seed subjektu',
+            ];
+        }
+        if (!$queries) {
+            continue;
+        }
+        $plan = $basePlan;
+        $plan['candidate_terms'] = array_column($queries, 'keyword');
+        $plan['scraping_queries'] = $queries;
+        $plan['rationale'] = trim((string)($plan['rationale'] ?? '')) . ' Fallback dotazy zustavaji ve stejnem trhu a lokalite seed subjektu.';
+        $plans[] = $plan;
+    }
+    return $plans;
+}
+
+function aiResearchAlternativePlans(array $config, array $seed, array $basePlan, array $seenSignatures, int $limit): array
+{
+    $plans = [];
+    $seen = array_fill_keys(array_filter($seenSignatures, static fn($value) => (string)$value !== ''), true);
+    $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
+    if ($apiKey === '') {
+        return [];
+    }
+    $seedCountry = aiResearchSeedCountry($seed);
+    $source = aiResearchDefaultSourceForSeed($seed);
+    $prompt = "Predchozi AI research plan nenasel zadne nebo dost vhodnych kontaktu. "
+        . "Navrhni alternativni B2B cileni a katalogove dotazy, ktere skutecne najdou konkretni firmy k osloveni. "
+        . "Seed kontakt: " . json_encode($seed, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Predchozi plan: " . json_encode($basePlan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Seed country: " . $seedCountry . ", preferovany source: " . $source . ". "
+        . "Zustav ve stejne zemi a u lokalni sluzby ve stejnem meste nebo okoli. Nevracej Prahu pro rakousky/nemecky/slovensky/polsky seed. "
+        . "Keyword je konkretni katalogovy dotaz typu profese/kategorie + lokalita, ne popis potreby. "
+        . "Pokud jde o mobilni masaze na pracovisti, hledej realne kancelarske/provozni firmy v lokalite: IT Firma, Steuerberater, Rechtsanwalt, Callcenter, Hotel apod. "
+        . "Vrat pouze JSON {\"plans\":[{\"audience_label\":\"...\",\"rationale\":\"...\",\"email_angle\":\"...\",\"market_language\":\"cs|sk|de|pl|en\",\"target_segments\":[...],\"candidate_terms\":[...],\"filters\":[...],\"scraping_queries\":[{\"source\":\"...\",\"keyword\":\"...\",\"why\":\"...\"}]}]}.";
+    try {
+        $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
+            'x-goog-api-key: ' . $apiKey,
+            'Content-Type: application/json',
+        ], [
+            'model' => trim((string)($config['ai']['gemini_model'] ?? 'gemini-3.5-flash')) ?: 'gemini-3.5-flash',
+            'system_instruction' => 'Jsi B2B akvizicni strateg. Pri nulovem vysledku zmen segment nebo keyword, ale nikdy trh bez duvodu. Vystup je pouze validni JSON.',
+            'input' => $prompt,
+            'generation_config' => ['temperature' => 0.5],
+        ], 40);
+        $json = parseJsonObjectFromText(geminiInteractionText($response));
+        $fallback = $basePlan ?: onboardingFallbackLeadPlan((string)($seed['subject_name'] ?? ''));
+        foreach ((array)($json['plans'] ?? []) as $candidate) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+            $plan = onboardingNormalizeLeadPlan($candidate, $fallback);
+            $plan['filters'] = array_values(array_filter(array_map('strval', (array)($candidate['filters'] ?? ($plan['filters'] ?? [])))));
+            $language = normalizeAiResearchMarketLanguage((string)($candidate['market_language'] ?? ''));
+            if ($language !== '') {
+                $plan['market_language'] = $language;
+            }
+            $plan = aiResearchEnrichPlan($plan, $seed);
+            $signature = aiResearchPlanSignature($plan);
+            if ($signature === '' || isset($seen[$signature])) {
+                continue;
+            }
+            $seen[$signature] = true;
+            $plans[] = $plan;
+            if (count($plans) >= $limit) {
+                break;
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('AI research alternative plan fallback: ' . $e->getMessage());
+    }
+    return $plans;
+}
+
+function aiResearchPlanSignature(array $plan): string
+{
+    $parts = [];
+    foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
+        if (!is_array($query)) {
+            continue;
+        }
+        $source = normalizeScrapingSourceKey((string)($query['source'] ?? ''));
+        $keyword = aiResearchNormalizeCatalogKeyword((string)($query['keyword'] ?? ''));
+        if ($source !== '' && $keyword !== '') {
+            $parts[] = $source . ':' . strtolower($keyword);
+        }
+    }
+    foreach ((array)($plan['candidate_terms'] ?? []) as $term) {
+        $term = aiResearchNormalizeCatalogKeyword((string)$term);
+        if ($term !== '') {
+            $parts[] = strtolower($term);
+        }
+    }
+    $parts = array_values(array_unique($parts));
+    sort($parts);
+    return implode('|', $parts);
 }
 
 function aiResearchOwnerUserId(PDO $pdo): int
@@ -1749,7 +1907,7 @@ function aiResearchPlan(array $config, array $seed): array
     $fallback['rationale'] = 'AI ma odvodit konkretni B2B potrebu z oboru, webu, lokace a typu sluzby seed byznysu. Cilem nejsou podobne firmy, ale firmy, ktere mohou byt zakaznikem seed byznysu.';
     $fallback['email_angle'] = 'Kratke osloveni ma ukazat konkretni situaci, ve ktere kontaktovana firma muze sluzbu vyuzit, ne jen obecne predstaveni dodavatele.';
     $fallback['candidate_terms'] = array_slice(array_values(array_unique(array_merge(
-        aiResearchFallbackTerms($business, $website, $address),
+        aiResearchFallbackTerms($business, $website, $address, aiResearchSeedCountry($seed)),
         (array)($fallback['candidate_terms'] ?? [])
     ))), 0, 8);
 
@@ -1816,11 +1974,39 @@ function aiResearchPlan(array $config, array $seed): array
     }
 }
 
-function aiResearchFallbackTerms(string $business, string $website, string $address): array
+function aiResearchFallbackTerms(string $business, string $website, string $address, string $country = ''): array
 {
     $haystack = strtolower($business . ' ' . $website . ' ' . $address);
     $city = aiResearchCityFromAddress($address);
     $suffix = $city !== '' ? ' ' . $city : '';
+    $country = strtoupper($country);
+    if ($country === 'AT' || $country === 'DE') {
+        if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
+            return ['IT Firma' . $suffix, 'Steuerberater' . $suffix, 'Rechtsanwalt' . $suffix, 'Callcenter' . $suffix, 'Coworking' . $suffix, 'Hotel' . $suffix, 'Bueroservice' . $suffix];
+        }
+        if (preg_match('/uct|dan|account|bookkeep|steuer|buchhalt/i', $haystack)) {
+            return ['Handwerker' . $suffix, 'Baufirma' . $suffix, 'Online Shop' . $suffix, 'Restaurant' . $suffix, 'Arztpraxis' . $suffix];
+        }
+        if (preg_match('/gastro|restaur|hotel|kavarn|bar/i', $haystack)) {
+            return ['Restaurant' . $suffix, 'Hotel' . $suffix, 'Cafe' . $suffix, 'Catering' . $suffix];
+        }
+        if (preg_match('/software|it|web|marketing|reklam/i', $haystack)) {
+            return ['Hersteller' . $suffix, 'Grosshandel' . $suffix, 'Immobilienmakler' . $suffix, 'Autowerkstatt' . $suffix, 'Online Shop' . $suffix];
+        }
+        return ['Baufirma' . $suffix, 'Hotel' . $suffix, 'Restaurant' . $suffix, 'Autowerkstatt' . $suffix, 'Grosshandel' . $suffix];
+    }
+    if ($country === 'SK') {
+        if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
+            return ['IT firma' . $suffix, 'uctovna kancelaria' . $suffix, 'advokatska kancelaria' . $suffix, 'call centrum' . $suffix, 'coworking' . $suffix];
+        }
+        return ['vyrobna firma' . $suffix, 'velkoobchod' . $suffix, 'stavebna firma' . $suffix, 'autoservis' . $suffix, 'hotel' . $suffix];
+    }
+    if ($country === 'PL') {
+        if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
+            return ['firma IT' . $suffix, 'biuro rachunkowe' . $suffix, 'kancelaria prawna' . $suffix, 'call center' . $suffix, 'coworking' . $suffix];
+        }
+        return ['firma produkcyjna' . $suffix, 'hurtownia' . $suffix, 'firma budowlana' . $suffix, 'warsztat samochodowy' . $suffix, 'hotel' . $suffix];
+    }
     if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
         return ['IT firma' . $suffix, 'ucetni kancelar' . $suffix, 'advokatni kancelar' . $suffix, 'call centrum' . $suffix, 'coworking' . $suffix];
     }
@@ -1995,7 +2181,7 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
 {
     $keyword = aiResearchPrimaryKeyword($plan);
     if ($keyword === '') {
-        $terms = aiResearchFallbackTerms((string)($seed['subject_name'] ?? ''), (string)($seed['website'] ?? ''), (string)($seed['address'] ?? ''));
+        $terms = aiResearchFallbackTerms((string)($seed['subject_name'] ?? ''), (string)($seed['website'] ?? ''), (string)($seed['address'] ?? ''), aiResearchSeedCountry($seed));
         $keyword = $terms[0] ?? 'vyrobni firma';
         $plan['candidate_terms'] = array_values(array_unique(array_merge([$keyword], (array)($plan['candidate_terms'] ?? []))));
     }
@@ -2037,7 +2223,7 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
         $queries[] = ['source' => $source, 'keyword' => $term, 'why' => 'doplnene z AI candidate_terms pro zvyseni sance na nalezeni kontaktu'];
     }
     if (!$queries) {
-        $terms = aiResearchFallbackTerms((string)($seed['subject_name'] ?? ''), (string)($seed['website'] ?? ''), (string)($seed['address'] ?? ''));
+        $terms = aiResearchFallbackTerms((string)($seed['subject_name'] ?? ''), (string)($seed['website'] ?? ''), (string)($seed['address'] ?? ''), aiResearchSeedCountry($seed));
         foreach ($terms as $term) {
             $term = aiResearchNormalizeCatalogKeyword($term);
             if ($term === '') {
@@ -2101,9 +2287,88 @@ function aiResearchDefaultSourceForSeed(array $seed): string
     return 'firmy_cz';
 }
 
-function aiResearchFindContacts(array $plan, int $limit): array
+function aiResearchFindContacts(PDO $pdo, array $seed, array $plan, int $limit): array
 {
-    return array_slice(onboardingUniqueValidContacts(onboardingQuickScrapeContacts($plan, max($limit, 12), 3, 18)), 0, $limit);
+    $contacts = aiResearchCandidateContactsFromRecipients($pdo, $seed, $plan, max($limit, 10));
+    if (count($contacts) < $limit) {
+        $contacts = array_merge($contacts, onboardingQuickScrapeContacts($plan, max($limit, 12), 4, 24));
+    }
+    return array_slice(onboardingUniqueValidContacts($contacts), 0, $limit);
+}
+
+function aiResearchCandidateContactsFromRecipients(PDO $pdo, array $seed, array $plan, int $limit): array
+{
+    $ownerId = aiResearchOwnerUserId($pdo);
+    if ($ownerId < 1 || $limit <= 0) {
+        return [];
+    }
+    $terms = [];
+    foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
+        if (!is_array($query)) {
+            continue;
+        }
+        $keyword = aiResearchNormalizeCatalogKeyword((string)($query['keyword'] ?? ''));
+        if ($keyword !== '') {
+            $terms[] = $keyword;
+        }
+    }
+    foreach ((array)($plan['candidate_terms'] ?? []) as $term) {
+        $term = aiResearchNormalizeCatalogKeyword((string)$term);
+        if ($term !== '') {
+            $terms[] = $term;
+        }
+    }
+    $city = aiResearchCityFromAddress((string)($seed['address'] ?? ''));
+    if ($city !== '') {
+        $terms[] = $city;
+    }
+    $terms = array_values(array_unique(array_filter($terms, static fn($term) => trim((string)$term) !== '')));
+    if (!$terms) {
+        return [];
+    }
+    $conditions = ['r.archived=0', 'r.status="active"', 'r.email!=""', 'd.owner_user_id=?'];
+    $values = [$ownerId];
+    $termConditions = [];
+    foreach (array_slice($terms, 0, 12) as $term) {
+        $like = '%' . $term . '%';
+        $termConditions[] = '(r.subject_name LIKE ? OR r.website LIKE ? OR r.address LIKE ? OR r.source_label LIKE ? OR r.source_url LIKE ?)';
+        array_push($values, $like, $like, $like, $like, $like);
+    }
+    $conditions[] = '(' . implode(' OR ', $termConditions) . ')';
+    $stmt = $pdo->prepare('
+        SELECT r.email, r.subject_name, r.website, r.address, r.name, r.source_label, r.source_url
+        FROM recipients r
+        JOIN contact_databases d ON d.id=r.list_id
+        WHERE ' . implode(' AND ', $conditions) . '
+          AND COALESCE(r.archived,0)=0
+          AND COALESCE(d.archived,0)=0
+          AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
+        ORDER BY CASE WHEN r.source_url!="" THEN 0 ELSE 1 END, r.updated_at DESC, r.id DESC
+        LIMIT ' . max(1, $limit * 3)
+    );
+    $stmt->execute($values);
+    $contacts = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $contact = [
+            'email' => (string)$row['email'],
+            'subject_name' => (string)$row['subject_name'],
+            'website' => (string)$row['website'],
+            'contact_name' => (string)$row['name'],
+            'address' => (string)$row['address'],
+            'phone' => '',
+            'source_label' => (string)$row['source_label'],
+            'source_url' => (string)$row['source_url'],
+            'fit_reason' => 'Kandidat nalezen v ulozene databazi podle AI keywordu/lokality a ceka na AI posouzeni relevance.',
+            'target_segment' => (string)($plan['target_segments'][0] ?? $plan['audience_label'] ?? ''),
+        ];
+        $source = normalizeScrapingSourceKey((string)$row['source_label']);
+        $keyword = aiResearchPrimaryKeyword($plan);
+        if ($source !== '' && !aiResearchQueryMatchesSeedMarket($seed, $source, $keyword)) {
+            continue;
+        }
+        $contacts[] = $contact;
+    }
+    return array_slice(onboardingUniqueValidContacts($contacts), 0, $limit);
 }
 
 function aiResearchEvaluateContacts(array $config, array $seed, array $plan, array $contacts): array
@@ -2124,6 +2389,8 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         . "Plan: " . json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Kontakty: " . json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Vrat pouze JSON {\"contacts\":[{\"email\":\"...\",\"accepted\":true,\"fit_reason\":\"...\",\"subject\":\"...\",\"html\":\"...\"}]}. "
+        . "U kazdeho kontaktu rozhodni, zda je opravdu relevantni pro navrzeny B2B use-case, segment, zemi a lokalitu. Pokud ne, accepted=false a fit_reason konkretne vysvetli proc. "
+        . "Pokud je kontakt vhodny, fit_reason musi rict, proc prave tento typ firmy muze potrebovat seed nabidku a jaky trigger oslovenim resime. "
         . "Vsechny subject/html texty napis jednim jazykem podle market_language v planu (" . (string)($plan['market_language'] ?? 'cs') . "). "
         . "HTML je kratke unikatni obchodni osloveni pro dany kontakt, vecne a bez prehnanych slibu.";
     try {
@@ -2214,6 +2481,9 @@ function saveAiResearchRun(PDO $pdo, array $seed, array $plan, array $evaluated,
     ');
     $status = $accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts');
     $message = $accepted ? 'AI nasla vhodne kontakty a pripravila osloveni.' : ($evaluated ? 'AI nenasla dostatecne vhodny kontakt.' : 'Scraping nenasel zadny kontakt.');
+    if ((int)($plan['research_attempts'] ?? 0) > 1) {
+        $message .= ' Probehlo ' . (int)$plan['research_attempts'] . ' pokusu s alternativnimi keywordy.';
+    }
     $stmt->execute([
         $ownerId,
         (int)$seed['id'],
