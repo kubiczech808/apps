@@ -721,7 +721,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
       <tbody>
         ${rows.map((trade) => `
           <tr>
-            <td>${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.date || trade.openedAt || "")))}</td>
+            <td>${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
             <td>
               ${marketAnchor(trade)}
               <span>${escapeHtml(riskLine(trade))}</span>
