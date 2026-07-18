@@ -2358,6 +2358,31 @@ function aiResearchKeywordWithoutLocation(string $keyword, string $location): st
     return aiResearchNormalizeCatalogKeyword($keyword);
 }
 
+function aiResearchFirmySearchUrl(string $keyword, string $location, int $page = 1): string
+{
+    $cleanLocation = truncatePlainText(trim(preg_replace('/\s+/', ' ', $location) ?? $location), 80);
+    if (preg_match('/^(stejny kraj|stejne mesto|cela cr|ceska republika|lokalni trh|zahranici|cr)$/iu', $cleanLocation)) {
+        $cleanLocation = '';
+    }
+    $queryText = trim(aiResearchKeywordWithoutLocation($keyword, $cleanLocation) . ' ' . $cleanLocation);
+    $query = ['q' => $queryText !== '' ? $queryText : $keyword];
+    if ($page > 1) {
+        $query['page'] = $page;
+    }
+    return 'https://www.firmy.cz/?' . http_build_query($query);
+}
+
+function aiResearchScrapingSearchUrls(string $source, string $keyword, string $location, int $page): array
+{
+    if ($source === 'firmy_cz') {
+        return [[
+            'label' => 'Firmy.cz',
+            'url' => aiResearchFirmySearchUrl($keyword, $location, $page),
+        ]];
+    }
+    return scrapingSearchUrls($source, $keyword, $page);
+}
+
 function aiResearchSeedRegionLabel(array $seed): string
 {
     $address = (string)($seed['address'] ?? '');
@@ -2701,7 +2726,32 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
     }
     $plan['candidate_terms'] = $candidateTerms;
     $plan['primary_keyword'] = aiResearchPrimaryKeyword($plan);
+    $primarySource = aiResearchPrimarySource($plan);
+    $primaryKeyword = aiResearchPrimaryKeyword($plan);
+    if ($primarySource !== '' && $primaryKeyword !== '') {
+        $searchUrls = aiResearchScrapingSearchUrls($primarySource, $primaryKeyword, (string)($plan['target_location'] ?? ''), 1);
+        $plan['search_url'] = (string)($searchUrls[0]['url'] ?? '');
+        $plan['search_params'] = [
+            'source' => $primarySource,
+            'keyword' => $primaryKeyword,
+            'location' => (string)($plan['target_location'] ?? ''),
+        ];
+    }
     return $plan;
+}
+
+function aiResearchPrimarySource(array $plan): string
+{
+    foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
+        if (!is_array($query)) {
+            continue;
+        }
+        $source = normalizeScrapingSourceKey((string)($query['source'] ?? ''));
+        if ($source !== '') {
+            return $source;
+        }
+    }
+    return '';
 }
 
 function normalizeAiResearchMarketLanguage(string $language): string
@@ -2757,11 +2807,59 @@ function aiResearchDefaultSourceForSeed(array $seed): string
 function aiResearchFindContacts(PDO $pdo, array $seed, array $plan, int $limit): array
 {
     $plan = aiResearchPrimaryQueryPlan($plan);
-    $contacts = aiResearchCandidateContactsFromRecipients($pdo, $seed, $plan, max($limit, 10));
+    $contacts = aiResearchQuickScrapeContacts($plan, max($limit, 10), 4, 24);
     if (count($contacts) < $limit) {
-        $contacts = array_merge($contacts, onboardingQuickScrapeContacts($plan, max($limit, 12), 4, 24));
+        $contacts = array_merge($contacts, aiResearchCandidateContactsFromRecipients($pdo, $seed, $plan, max($limit, 10)));
     }
     return array_slice(onboardingUniqueValidContacts($contacts), 0, $limit);
+}
+
+function aiResearchQuickScrapeContacts(array $plan, int $limit, int $pagesPerQuery = 1, int $detailsPerPage = 10): array
+{
+    $contacts = [];
+    $seen = [];
+    foreach (array_slice((array)($plan['scraping_queries'] ?? []), 0, 3) as $query) {
+        if (!is_array($query) || count($contacts) >= $limit) {
+            continue;
+        }
+        $source = normalizeScrapingSourceKey((string)($query['source'] ?? 'firmy_cz'));
+        $keyword = aiResearchKeywordWithoutLocation((string)($query['keyword'] ?? ''), (string)($plan['target_location'] ?? ''));
+        if ($keyword === '' || !scrapingSourceIsActive($source)) {
+            continue;
+        }
+        try {
+            for ($page = 1; $page <= max(1, $pagesPerQuery); $page++) {
+                foreach (aiResearchScrapingSearchUrls($source, $keyword, (string)($plan['target_location'] ?? ''), $page) as $search) {
+                    $searchResponse = fetchScrapingSearch($search);
+                    $html = (string)$searchResponse['html'];
+                    foreach (array_slice(extractCandidateUrls($html, $search['url'], $source), 0, max(1, $detailsPerPage)) as $url) {
+                        try {
+                            $contact = extractContactFromHtml(httpGet($url), $url);
+                        } catch (Throwable $e) {
+                            continue;
+                        }
+                        $email = strtolower(trim((string)($contact['email'] ?? '')));
+                        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || isset($seen[$email])) {
+                            continue;
+                        }
+                        $seen[$email] = true;
+                        $contact = onboardingDecorateCandidateContact($contact, $source, $url, [
+                            'keyword' => $keyword,
+                            'why' => 'Nalezeno scrapingem z ulozene search URL: ' . (string)$search['url'],
+                        ], $plan);
+                        $contact['search_url'] = (string)$search['url'];
+                        $contacts[] = $contact;
+                        if (count($contacts) >= $limit) {
+                            return $contacts;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            error_log('AI research quick scrape skipped [' . $source . ' / ' . $keyword . ']: ' . $e->getMessage());
+        }
+    }
+    return $contacts;
 }
 
 function aiResearchPrimaryQueryPlan(array $plan): array
@@ -12205,6 +12303,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <span>Seed: <?= h((string)$run['seed_business']) ?></span>
                             <span>Databaze: <?= h((string)($run['search_source_label'] ?? '-')) ?></span>
                             <span>Keyword: <?= h((string)($run['scraping_keyword'] ?? '')) ?></span>
+                            <?php if (trim((string)($runPlan['target_location'] ?? '')) !== ''): ?><span>Lokace: <?= h((string)$runPlan['target_location']) ?></span><?php endif; ?>
                             <span>Vhodne kontakty: <?= h((string)$run['accepted_count']) ?></span>
                         </div>
                         <section class="ai-outreach-preview">
@@ -12242,6 +12341,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <p><strong>Databaze:</strong> <?= h((string)($run['search_source_label'] ?? '-')) ?></p>
                                 <p><strong>Klicove slovo:</strong> <?= h((string)($run['scraping_keyword'] ?? '')) ?></p>
                                 <p><strong>Lokace:</strong> <?= h((string)($runPlan['target_location'] ?? '')) ?></p>
+                                <?php if (trim((string)($runPlan['search_url'] ?? '')) !== ''): ?><p><strong>URL hledani:</strong> <a href="<?= h((string)$runPlan['search_url']) ?>" target="_blank" rel="noopener"><?= h((string)$runPlan['search_url']) ?></a></p><?php endif; ?>
                             </section>
                             <section>
                                 <h3>Vzor osloveni</h3>
