@@ -1700,6 +1700,12 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
         return 'AI research: neni dostupny zadny aktivni ulozeny kontakt k vyhodnoceni. Research bere aktivni, nearchivovane kontakty s emailem; kontakty s uz vhodnym AI vysledkem znovu nezpracovava.';
     }
     $basePlan = aiResearchPlan($config, $seed);
+    if (!empty($basePlan['seed_unsuitable'])) {
+        $basePlan['research_attempts'] = 0;
+        $runId = saveAiResearchRun($pdo, $config, $seed, $basePlan, [], []);
+        setSetting($pdo, 'ai_research_last_seed_id', (string)(int)$seed['id']);
+        return 'AI research: beh #' . $runId . ', seed ' . (string)$seed['email'] . ', subjekt nema dostatek weboveho kontextu pro B2B vyhodnoceni.';
+    }
     $plans = [$basePlan];
     $plans = array_merge($plans, aiResearchFallbackMarketPlans($seed, $basePlan));
     $bestPlan = $basePlan;
@@ -1874,7 +1880,6 @@ function aiResearchOwnerUserId(PDO $pdo): int
 
 function selectAiResearchSeedRecipient(PDO $pdo, bool $force = false): ?array
 {
-    $lastId = max(0, (int)(loadSettings($pdo)['ai_research_last_seed_id'] ?? 0));
     $ownerId = aiResearchOwnerUserId($pdo);
     if ($ownerId < 1) {
         return null;
@@ -1890,20 +1895,66 @@ function selectAiResearchSeedRecipient(PDO $pdo, bool $force = false): ?array
           AND COALESCE(r.archived,0)=0
           AND COALESCE(d.archived,0)=0
           AND r.email!=""
-          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND COALESCE(ar.accepted_count,0)>0)
+          AND r.subject_name!=""
+          AND r.website!=""
+          AND (r.source_label LIKE "%Firmy.cz%" OR r.source_url LIKE "%firmy.cz%")
+          AND NOT EXISTS (SELECT 1 FROM app_users au WHERE LOWER(au.email)=LOWER(r.email))
+          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND (COALESCE(ar.accepted_count,0)>0 OR ar.status IN ("done","unsuitable")))
           ' . $recentSql . '
     ';
     $values = $force ? [] : [date('c', time() - 12 * 3600)];
-    $stmt = $pdo->prepare($baseSql . ' AND r.id>? ORDER BY r.id ASC LIMIT 1');
-    $stmt->execute([...$values, $lastId]);
+    $stmt = $pdo->prepare($baseSql . ' ORDER BY RAND() LIMIT 1');
+    $stmt->execute($values);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($row) {
         return $row;
     }
-    $stmt = $pdo->prepare($baseSql . ' ORDER BY r.id ASC LIMIT 1');
+    $fallbackRecentSql = $force ? '' : 'AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar_recent WHERE ar_recent.seed_recipient_id=r.id AND ar_recent.created_at>=?)';
+    $fallbackSql = '
+        SELECT r.id, r.email, r.subject_name, r.website, r.address, r.name, r.source_label, r.source_url,
+               d.owner_user_id seed_owner_user_id,
+               d.name seed_database_name
+        FROM recipients r
+        JOIN contact_databases d ON d.id=r.list_id
+        WHERE r.status="active"
+          AND COALESCE(r.archived,0)=0
+          AND COALESCE(d.archived,0)=0
+          AND r.email!=""
+          AND r.subject_name!=""
+          AND r.website!=""
+          AND (r.source_label LIKE "%Firmy.cz%" OR r.source_url LIKE "%firmy.cz%")
+          AND NOT EXISTS (SELECT 1 FROM app_users au WHERE LOWER(au.email)=LOWER(r.email))
+          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND (COALESCE(ar.accepted_count,0)>0 OR ar.status IN ("done","unsuitable")))
+          ' . $fallbackRecentSql . '
+        ORDER BY RAND()
+        LIMIT 1
+    ';
+    $stmt = $pdo->prepare($fallbackSql);
     $stmt->execute($values);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return $row ?: null;
+}
+
+function aiResearchSeedWebsiteContext(string $website): string
+{
+    $website = normalizeWebsite(trim($website));
+    if ($website === '') {
+        return '';
+    }
+    try {
+        $html = httpGet($website);
+    } catch (Throwable $e) {
+        error_log('AI research seed website context skipped [' . $website . ']: ' . $e->getMessage());
+        return '';
+    }
+    $html = preg_replace('#<(script|style|noscript|svg|iframe)\b[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
+    $text = html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8');
+    $text = preg_replace('/\s+/', ' ', $text) ?? $text;
+    $text = trim($text);
+    if ($text === '') {
+        return '';
+    }
+    return truncatePlainText($text, 1800);
 }
 
 function aiResearchPlan(array $config, array $seed): array
@@ -1911,6 +1962,7 @@ function aiResearchPlan(array $config, array $seed): array
     $business = trim((string)($seed['subject_name'] ?: $seed['email']));
     $website = trim((string)($seed['website'] ?? ''));
     $address = trim((string)($seed['address'] ?? ''));
+    $websiteContext = aiResearchSeedWebsiteContext($website);
     $fallback = onboardingFallbackLeadPlan($business . ' ' . $website . ' ' . $address);
     $fallback['audience_label'] = 'firmy, u kterych ma nabidka ' . $business . ' jasny provozni nebo obchodni prinos';
     $fallback['rationale'] = 'AI ma odvodit konkretni B2B potrebu z oboru, webu, lokace a typu sluzby seed byznysu. Cilem nejsou podobne firmy, ale firmy, ktere mohou byt zakaznikem seed byznysu.';
@@ -1919,6 +1971,19 @@ function aiResearchPlan(array $config, array $seed): array
         aiResearchFallbackTerms($business, $website, $address, aiResearchSeedCountry($seed)),
         (array)($fallback['candidate_terms'] ?? [])
     ))), 0, 8);
+    if ($websiteContext === '') {
+        return [
+            'audience_label' => 'nevyhodnoceno',
+            'rationale' => 'Seed subjekt ma vyplneny web, ale aplikaci se nepodarilo nacist obsah webu nebo z nej ziskat textovy kontext. Bez znalosti predmetu podnikani by AI nemela vymyslet B2B osloveni naslepo.',
+            'email_angle' => 'Bez weboveho kontextu se osloveni negeneruje k rozeslani.',
+            'market_language' => aiResearchDefaultMarketLanguage($seed, []),
+            'target_segments' => [],
+            'candidate_terms' => [],
+            'filters' => ['Seed subjekt musi mit dostupny web s citelnym popisem produktu nebo sluzeb.'],
+            'scraping_queries' => [],
+            'seed_unsuitable' => true,
+        ];
+    }
 
     $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
     if ($apiKey === '') {
@@ -1935,8 +2000,10 @@ function aiResearchPlan(array $config, array $seed): array
             'website' => $website,
             'address' => $address,
             'source' => (string)($seed['source_label'] ?? ''),
+            'website_context' => $websiteContext,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Vrat pouze JSON s klici audience_label, rationale, email_angle, market_language, target_segments, candidate_terms, filters, scraping_queries. "
+        . "Pokud website_context chybi nebo z nej nelze odvodit, co seed firma realne prodava, nehalucinuj. V rationale jasne uved, ze seed nema dostatek podnikatelskeho kontextu, a navrhni prazdne scraping_queries. "
         . "audience_label = kratke lidske pojmenovani idealnich B2B zakazniku. "
         . "rationale = 4-6 konkretnich vet hluboke uvahy, proc prave tyto firmy potrebuji seed byznys; zmin provozni bolest, buying trigger, lokalitu a duvod relevance. "
         . "email_angle = konkretni obchodni uhel oslovení, ktery bude davat smysl prijemci. "
@@ -2515,6 +2582,12 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
 {
     $seedBusiness = trim((string)($seed['subject_name'] ?: $seed['email']));
     $language = (string)($plan['market_language'] ?? aiResearchDefaultMarketLanguage($seed, $plan));
+    if (!empty($plan['seed_unsuitable'])) {
+        return [
+            'subject' => 'Subjekt zatim neni pripraveny k osloveni',
+            'html' => '<p>Tento subjekt zatim nema dostatek citelneho weboveho kontextu, aby AI dokazala zodpovedne urcit predmet podnikani, vhodne B2B cileni a text oslovení.</p><p>Osloveni se proto nema rozesilat, dokud nebude k dispozici funkcni web nebo jiny popis produktu/sluzby.</p>',
+        ];
+    }
     $fallbackTarget = trim((string)($contacts[0]['subject_name'] ?? $plan['audience_label'] ?? ''));
     $fallbackSubject = aiResearchFallbackSubject($language, $fallbackTarget);
     $fallbackHtml = aiResearchFallbackEmailHtml($language, $seedBusiness);
@@ -2564,8 +2637,10 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
         INSERT INTO ai_research_runs (owner_user_id, seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, scraping_keyword, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ');
-    $status = $accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts');
-    $message = $accepted ? 'AI nasla vhodne kontakty a pripravila osloveni.' : ($evaluated ? 'AI nenasla dostatecne vhodny kontakt.' : 'Scraping nenasel zadny kontakt.');
+    $status = !empty($plan['seed_unsuitable']) ? 'unsuitable' : ($accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts'));
+    $message = !empty($plan['seed_unsuitable'])
+        ? 'Seed subjekt nebyl vyhodnocen jako pouzitelny pro B2B research: chybi citelny webovy kontext podnikani.'
+        : ($accepted ? 'AI nasla vhodne kontakty a pripravila osloveni.' : ($evaluated ? 'AI nenasla dostatecne vhodny kontakt.' : 'Scraping nenasel zadny kontakt.'));
     if ((int)($plan['research_attempts'] ?? 0) > 1) {
         $message .= ' Probehlo ' . (int)$plan['research_attempts'] . ' pokusu s alternativnimi keywordy.';
     }
