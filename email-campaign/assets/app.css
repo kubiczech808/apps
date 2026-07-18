@@ -28,8 +28,6 @@ header {
   color: white;
 }
 header a { color: white; }
-.version { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
-header .version { color: #b9c8c2; margin: 0 auto 0 18px; }
 .app-topbar {
   position: sticky;
   top: 0;
@@ -107,11 +105,6 @@ header .version { color: #b9c8c2; margin: 0 auto 0 18px; }
 }
 .app-topbar-actions .language-dropdown-menu {
   top: calc(100% + 10px);
-}
-.app-topbar-actions .version {
-  margin: 0;
-  color: #b9c8c2;
-  white-space: nowrap;
 }
 .logout-link {
   display: inline-flex;
@@ -2241,11 +2234,6 @@ td a {
     gap: 10px;
     flex-wrap: wrap;
   }
-  header .version {
-    order: 3;
-    width: 100%;
-    margin: 0;
-  }
   .app-topbar {
     align-items: stretch;
     padding: 10px 14px;
@@ -2260,9 +2248,6 @@ td a {
   }
   .app-topbar-actions {
     margin-left: auto;
-  }
-  .app-topbar-actions .version {
-    display: none;
   }
   .tabs { padding: 8px 18px; overflow-x: auto; }
   .app-topbar .tabs { padding: 0; }

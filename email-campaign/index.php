@@ -8668,7 +8668,6 @@ function uiTranslationMap(string $language): array
             'Cestina' => 'Tschechisch',
             'English' => 'Englisch',
             'Deutsch' => 'Deutsch',
-            'Verze' => 'Version',
             'Prehled' => 'Uebersicht',
             'Kontakty' => 'Kontakte',
             'Kampane' => 'Kampagnen',
@@ -9220,7 +9219,6 @@ function uiTranslationMap(string $language): array
         'Zkusit znovu' => 'Try Again',
         'Jazyk rozhrani' => 'Interface Language',
         'Cestina' => 'Czech',
-        'Verze' => 'Version',
         'Prehled' => 'Dashboard',
         'Kontakty' => 'Contacts',
         'Kampane' => 'Campaigns',
@@ -9532,7 +9530,6 @@ function renderPublicAuthPage(?array $flash, array $config, string $mode): void
                     <p class="public-auth-switch"><a href="?auth=forgot">Zapomenute heslo?</a></p>
                     <p class="public-auth-switch">Jeste nemate pristup? <a href="?auth=signup">Vyzkouset zdarma</a></p>
                 <?php endif; ?>
-                <p class="version">Verze <?= h(APP_VERSION) ?></p>
             </section>
         </main>
     </body>
@@ -9623,7 +9620,6 @@ function renderLogin(?array $flash, array $config): void
                             <label>Heslo<input type="password" name="password" autocomplete="current-password" required></label>
                             <button type="submit">Přihlásit</button>
                         </form>
-                        <p class="version">Verze <?= h(APP_VERSION) ?></p>
                     </div>
                 </div>
             </section>
@@ -9941,7 +9937,6 @@ function renderApp(PDO $pdo, ?array $flash): void
     </nav>
     <div class="app-topbar-actions">
         <?php renderLanguageDropdown($pdo, $config, true); ?>
-        <span class="version">Verze <?= h(APP_VERSION) ?></span>
         <a class="logout-link" href="?logout=1">Odhlasit</a>
     </div>
 </header>
