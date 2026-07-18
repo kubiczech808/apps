@@ -1127,6 +1127,10 @@ function livePositions(liveState) {
   return Array.isArray(liveState?.positions) ? liveState.positions : [];
 }
 
+function liveOpenOrders(liveState) {
+  return Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
+}
+
 function liveActivity(liveState) {
   return Array.isArray(liveState?.activity) ? liveState.activity : [];
 }
@@ -1135,6 +1139,46 @@ function liveClosedTrades(liveState) {
   if (Array.isArray(liveState?.closedTrades)) return liveState.closedTrades;
   if (Array.isArray(liveState?.trades?.closed)) return liveState.trades.closed;
   return [];
+}
+
+function evaluationByTokenId(tokenId) {
+  const token = String(tokenId || "");
+  if (!token) return null;
+  const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
+  return evaluations.find((item) => String(item.tokenId || item.clobTokenId || "") === token) || null;
+}
+
+function normalizeLiveOpenOrderForTable(order) {
+  const source = evaluationByTokenId(order.tokenId || order.assetId);
+  const price = Number(order.price);
+  const remainingSize = Number(order.remainingSize ?? order.originalSize ?? 0);
+  const notional = Number(order.notionalUsdc);
+  const stake = Number.isFinite(notional) ? notional : (Number.isFinite(price) ? price * remainingSize : 0);
+  return {
+    id: `open-order-${order.id}`,
+    mode: "LIVE_ORDER",
+    status: "LIMIT ORDER",
+    question: source?.question || order.question || "Open live limit order",
+    outcome: source?.outcome || order.outcome || order.side || "-",
+    slug: source?.slug || source?.eventSlug || "",
+    eventSlug: source?.eventSlug || source?.slug || "",
+    url: source ? polymarketUrl(source) : "https://polymarket.com/",
+    tokenId: order.tokenId || order.assetId || null,
+    date: order.createdAt || new Date().toISOString(),
+    openedAt: order.createdAt || new Date().toISOString(),
+    endDate: source?.endDate || null,
+    entryPrice: price,
+    currentPrice: Number(source?.marketPrice),
+    shares: remainingSize,
+    stakeUsdc: stake,
+    totalCostUsdc: stake,
+    netGainIfWinUsdc: Number.isFinite(remainingSize) ? remainingSize - stake : null,
+    unrealizedPnlUsdc: 0,
+    unrealizedPnlPct: 0,
+    aiProbability: Number(source?.aiProbability),
+    sourceEvaluation: source || null,
+    analysisSummary: `Open ${order.side || ""} limit order, ${remainingSize.toLocaleString("en-US", { maximumFractionDigits: 4 })} shares at ${probability(price)}. Matched ${Number(order.sizeMatched || 0).toLocaleString("en-US", { maximumFractionDigits: 4 })} shares.`,
+  };
 }
 
 function liveAccountName(account = {}) {
@@ -1173,6 +1217,11 @@ function renderLiveState(liveState) {
   const balanceAllowance = liveState.balanceAllowance || {};
   const collateral = balanceAllowance.collateral || {};
   const positions = livePositions(liveState);
+  const openOrders = liveOpenOrders(liveState);
+  const openedRows = [
+    ...positions,
+    ...openOrders.map(normalizeLiveOpenOrderForTable),
+  ];
   const activity = liveActivity(liveState);
   const closedTrades = liveClosedTrades(liveState);
   const sync = liveState.sync || {};
@@ -1196,7 +1245,7 @@ function renderLiveState(liveState) {
   syncRiskAllocationControl(liveCapitalBase, Number.isFinite(cash) ? "live pUSD cash" : "live cash once balance sync is available");
 
   els.botAction.textContent = "live";
-  if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions`;
+  if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions / ${openOrders.length} orders`;
   els.portfolioEquity.textContent = money(equity);
   els.portfolioEquity.className = pnlClass(totalPnl);
   els.portfolioLastRun.textContent = `${liveAccountName(account)} / sync ${liveState.generatedAt ? formatDate(liveState.generatedAt) : "-"}`;
@@ -1235,7 +1284,7 @@ function renderLiveState(liveState) {
       <div>
         <span class="label">Positions</span>
         <strong>${positions.length}</strong>
-        <span>${money(marketValue)} market value</span>
+        <span>${money(marketValue)} market value / ${openOrders.length} open orders</span>
       </div>
       <div>
         <span class="label">Max per trade</span>
@@ -1265,7 +1314,7 @@ function renderLiveState(liveState) {
     </div>
   `;
 
-  els.botTrades.innerHTML = renderTradeRows(positions, "Zatim zadne otevrene live pozice na napojenem Polymarket uctu.", {
+  els.botTrades.innerHTML = renderTradeRows(openedRows, "Zatim zadne otevrene live pozice ani limit objednavky na napojenem Polymarket uctu.", {
     tableKey: "live",
     showStatus: false,
   });

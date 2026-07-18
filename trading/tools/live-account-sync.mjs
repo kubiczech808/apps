@@ -223,6 +223,30 @@ function normalizeTradeHistoryItem(item) {
   };
 }
 
+function normalizeOpenOrder(order) {
+  const size = number(order.originalSize ?? order.original_size ?? order.size ?? order.orderSize ?? order.order_size, 0);
+  const matched = number(order.sizeMatched ?? order.size_matched ?? order.matchedSize ?? order.matched_size, 0);
+  const remaining = Math.max(0, size - matched);
+  const price = number(order.price);
+  const tokenId = order.assetId || order.asset_id || order.tokenID || order.tokenId || null;
+  return {
+    id: String(order.id || order.orderID || order.orderId || `${tokenId || "order"}-${price || ""}`),
+    status: order.status || order.orderStatus || "ORDER_STATUS_LIVE",
+    side: order.side || "",
+    tokenId,
+    assetId: tokenId,
+    market: order.market || order.conditionId || null,
+    outcome: order.outcome || "",
+    price,
+    originalSize: size,
+    sizeMatched: matched,
+    remainingSize: remaining,
+    notionalUsdc: price != null ? price * remaining : null,
+    createdAt: isoTime(order.createdAt ?? order.created_at ?? order.insertTime ?? order.createTime),
+    rawStatus: order.status || null,
+  };
+}
+
 function closedTradesFromHistory(trades, activity, generatedAt) {
   const groups = new Map();
 
@@ -398,6 +422,17 @@ async function loadClobBalanceAllowance(sync) {
     sync.warnings.push(`balance-allowance update: ${error?.message || String(error)}`);
   });
   const collateral = await client.getBalanceAllowance(params);
+  let openOrders = [];
+  if (typeof client.getOpenOrders === "function") {
+    try {
+      const orders = await client.getOpenOrders();
+      openOrders = Array.isArray(orders) ? orders.map(normalizeOpenOrder) : [];
+    } catch (error) {
+      sync.warnings.push(`open-orders: ${error?.message || String(error)}`);
+    }
+  } else {
+    sync.warnings.push("open-orders: clob client does not expose getOpenOrders");
+  }
   const allowanceRaw = collateral.allowance
     || Object.values(collateral.allowances || {})[0]
     || null;
@@ -417,6 +452,7 @@ async function loadClobBalanceAllowance(sync) {
       allowances: collateral.allowances || null,
       updatedAt: new Date().toISOString(),
     },
+    openOrders,
   };
 }
 
@@ -501,6 +537,7 @@ async function main() {
       cashSource: balanceAllowance?.status === "OK" ? "clob-balance-allowance" : null,
     },
     balanceAllowance,
+    openOrders: Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
     positions,
     closedTrades,
     tradeHistory,
@@ -514,6 +551,7 @@ async function main() {
     mode: payload.mode,
     account: payload.account.address,
     positions: positions.length,
+    openOrders: payload.openOrders.length,
     cashUsdc: payload.portfolio.cashUsdc,
     closedTrades: closedTrades.length,
     tradeHistory: tradeHistory.length,
