@@ -422,7 +422,7 @@ function tradeAnalysisCell(trade) {
   return `
     <strong>${probability(prob)}</strong>
     <span class="analysis-popover">
-      <button class="info-button" type="button" aria-label="Show original AI analysis" title="${escapeHtml(details)}">i</button>
+      <button class="info-button" type="button" aria-label="Show original AI analysis">i</button>
       <span class="analysis-tooltip" role="tooltip">${escapeHtml(details)}</span>
     </span>
   `;
@@ -524,7 +524,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
             <td>
               <strong>${probability(tradeAiProbability(trade))}</strong>
               <span class="analysis-popover">
-                <button class="info-button" type="button" aria-label="Show original AI analysis" title="${escapeHtml(tradeAnalysisDetails(trade))}">i</button>
+                <button class="info-button" type="button" aria-label="Show original AI analysis">i</button>
                 <span class="analysis-tooltip" role="tooltip">${escapeHtml(tradeAnalysisDetails(trade))}</span>
               </span>
             </td>
@@ -589,7 +589,7 @@ function analysisBadge(item) {
   ].filter(Boolean).join("\n\n");
   return `
     <span class="analysis-popover">
-      <button class="info-button" type="button" aria-label="Show analysis details" title="${escapeHtml(details)}">i</button>
+      <button class="info-button" type="button" aria-label="Show analysis details">i</button>
       <span class="analysis-tooltip" role="tooltip">${escapeHtml(details)}</span>
     </span>
     <span class="analysis-reason">${escapeHtml(reasons)}</span>
@@ -618,6 +618,50 @@ function saveEligibilityThreshold(value) {
   } catch {
     // Ignore localStorage failures; the control still works for this page load.
   }
+}
+
+function analysisModal() {
+  let modal = document.querySelector("[data-analysis-modal]");
+  if (modal) return modal;
+  modal = document.createElement("div");
+  modal.className = "analysis-modal-backdrop";
+  modal.dataset.analysisModal = "";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <section class="analysis-modal" role="dialog" aria-modal="true" aria-labelledby="analysis-modal-title">
+      <div class="analysis-modal-head">
+        <h2 id="analysis-modal-title">Analysis detail</h2>
+        <button class="analysis-modal-close" type="button" data-analysis-modal-close aria-label="Close analysis detail">x</button>
+      </div>
+      <div class="analysis-modal-body" data-analysis-modal-body></div>
+    </section>
+  `;
+  document.body.appendChild(modal);
+  return modal;
+}
+
+function openAnalysisModal(text, trigger) {
+  const modal = analysisModal();
+  const body = modal.querySelector("[data-analysis-modal-body]");
+  if (body) body.textContent = text || "No analysis detail available.";
+  modal.hidden = false;
+  document.body.classList.add("modal-open");
+  modal.querySelector("[data-analysis-modal-close]")?.focus();
+  if (trigger) {
+    modal.dataset.returnFocus = "true";
+    analysisModal.lastTrigger = trigger;
+  }
+}
+
+function closeAnalysisModal() {
+  const modal = document.querySelector("[data-analysis-modal]");
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  document.body.classList.remove("modal-open");
+  if (analysisModal.lastTrigger instanceof HTMLElement) {
+    analysisModal.lastTrigger.focus();
+  }
+  analysisModal.lastTrigger = null;
 }
 
 function currentEligibilityThreshold() {
@@ -1175,6 +1219,28 @@ els.botEvaluations?.addEventListener("click", (event) => {
     state.evaluationSort.direction = ["marketPrice", "odds", "gainIfWin", "aiProbability", "annualizedReturn"].includes(key) ? "desc" : "asc";
   }
   renderBotEvaluations();
+});
+
+document.addEventListener("click", (event) => {
+  const infoButton = event.target.closest(".info-button");
+  if (infoButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const popover = infoButton.closest(".analysis-popover");
+    const detail = popover?.querySelector(".analysis-tooltip")?.textContent || "";
+    openAnalysisModal(detail, infoButton);
+    return;
+  }
+
+  const modal = event.target.closest("[data-analysis-modal]");
+  if (!modal) return;
+  if (event.target === modal || event.target.closest("[data-analysis-modal-close]")) {
+    closeAnalysisModal();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeAnalysisModal();
 });
 
 function handleTradeSort(event) {
