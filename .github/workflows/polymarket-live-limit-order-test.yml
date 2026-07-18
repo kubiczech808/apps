@@ -25,8 +25,8 @@ jobs:
       POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
       POLYMARKET_FUNDER_ADDRESS: "0x3252de913d9323667f21f4d88fa1f996fc282293"
       POLYMARKET_SIGNATURE_TYPE: "1"
-      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/data/paper-state.json
-      LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/data/live-state.json
+      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
+      LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
       MAX_ORDER_FRACTION: "0.05"
       USE_LIMIT_ORDERS: "true"
       POLYMARKET_POST_ONLY: "true"

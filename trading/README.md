@@ -67,6 +67,7 @@ The UI has separate buttons for one-time paper execution and one-time live execu
 The browser calls `api.php?action=workflow`; the PHP endpoint dispatches only these allowlisted GitHub Actions workflows:
 
 - `paper` -> `trading-paper-bot.yml` with `mode=full`,
+- `live-sync` -> `trading-live-account.yml`,
 - `live` -> `polymarket-live-limit-order-test.yml` with `live_confirm=true`.
 
 The live button also requires the browser-side live execution gate to be armed. The workflow itself still performs live preflight revalidation before any order submit: current orderbook, AI probability threshold, EV threshold, spread/liquidity, diversification, capital, minimum order size, and post-only limit-order assumptions.
@@ -77,6 +78,8 @@ Configure these repository secrets for the deploy workflow to generate `trading/
 - `TRADING_TRIGGER_KEY`: shared trigger key requested by the UI before dispatching a workflow.
 
 `trading/config.php` is ignored by git and generated during `Deploy Trading`; without these secrets the buttons stay visible but the backend returns `Workflow trigger is not configured on the server.`
+
+The UI reads paper/live state through `api.php?action=state&target=...` with `Cache-Control: no-store`, so page loads fetch the latest state file available on the hosting server instead of relying on browser/local static cache. `Refresh live account` dispatches the live-account sync workflow and then polls the state again.
 
 ## Local executor
 

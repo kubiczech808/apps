@@ -205,9 +205,13 @@ function syncExecutionButtons() {
     const target = button.dataset.oneTimeExecution;
     const busy = state.executionBusy === target;
     button.disabled = Boolean(state.executionBusy);
-    button.textContent = busy
-      ? (target === "live" ? "Starting live..." : "Starting paper...")
-      : (target === "live" ? "Run live once" : "Run paper once");
+    const labels = {
+      paper: ["Run paper once", "Starting paper..."],
+      live: ["Run live once", "Starting live..."],
+      "live-sync": ["Refresh live account", "Starting sync..."],
+    };
+    const [idleLabel, busyLabel] = labels[target] || ["Run once", "Starting..."];
+    button.textContent = busy ? busyLabel : idleLabel;
   });
 }
 
@@ -1105,13 +1109,19 @@ async function loadBotState() {
 }
 
 async function fetchJson(path) {
-  const statePayload = await fetch(`${path}?t=${Date.now()}`, { cache: "no-store" });
+  const statePath = String(path || "");
+  const stateTarget = statePath === "data/live-state.json" ? "live" : (statePath === "data/paper-state.json" ? "paper" : "");
+  const url = stateTarget
+    ? `api.php?action=state&target=${stateTarget}&t=${Date.now()}`
+    : `${statePath}?t=${Date.now()}`;
+  const statePayload = await fetch(url, { cache: "no-store" });
   if (!statePayload.ok) throw new Error(`${path} HTTP ${statePayload.status}`);
   return statePayload.json();
 }
 
 async function triggerOneTimeExecution(target) {
   const live = target === "live";
+  const liveSync = target === "live-sync";
   if (live && !state.liveExecutionArmed) {
     window.alert("Nejdrive aktivuj live execution gate.");
     return;
@@ -1129,7 +1139,7 @@ async function triggerOneTimeExecution(target) {
 
   state.executionBusy = target;
   syncExecutionButtons();
-  setExecutionStatus(live ? "starting live workflow" : "starting paper workflow");
+  setExecutionStatus(live ? "starting live workflow" : (liveSync ? "starting live sync" : "starting paper workflow"));
 
   try {
     const response = await fetch("api.php?action=workflow", {
@@ -1152,9 +1162,12 @@ async function triggerOneTimeExecution(target) {
       throw new Error(payload.error || `workflow HTTP ${response.status}`);
     }
     setExecutionStatus(`${target} workflow started`);
-    window.setTimeout(() => {
-      loadDashboardState();
-    }, 5000);
+    const reloadDelays = liveSync ? [8000, 22000, 45000] : [5000];
+    reloadDelays.forEach((delay) => {
+      window.setTimeout(() => {
+        loadDashboardState();
+      }, delay);
+    });
   } catch (error) {
     setExecutionStatus(error.message || "workflow failed", "error");
   } finally {

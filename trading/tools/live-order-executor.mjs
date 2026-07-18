@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/data/paper-state.json";
-const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/data/live-state.json";
+const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper";
+const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);

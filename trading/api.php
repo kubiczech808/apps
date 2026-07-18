@@ -90,6 +90,31 @@ function parse_json_field(mixed $value): array
     return [];
 }
 
+function state_payload(string $target): array
+{
+    $files = [
+        'paper' => __DIR__ . '/data/paper-state.json',
+        'live' => __DIR__ . '/data/live-state.json',
+    ];
+    if (!isset($files[$target])) {
+        respond(['ok' => false, 'error' => 'Unknown state target'], 400);
+    }
+
+    $path = $files[$target];
+    if (!is_file($path)) {
+        respond(['ok' => false, 'error' => 'State file is not available yet'], 404);
+    }
+
+    clearstatcache(true, $path);
+    $raw = file_get_contents($path);
+    $data = json_decode(is_string($raw) ? $raw : '', true);
+    if (!is_array($data)) {
+        respond(['ok' => false, 'error' => 'State file contains invalid JSON'], 502);
+    }
+
+    return $data;
+}
+
 function request_payload(): array
 {
     $raw = file_get_contents('php://input');
@@ -140,7 +165,7 @@ function dispatch_workflow(string $workflow, array $inputs): array
     $url = str_replace('%2F', '/', $url);
     $body = json_encode([
         'ref' => $config['ref'],
-        'inputs' => $inputs,
+        'inputs' => (object) $inputs,
     ], JSON_UNESCAPED_SLASHES);
 
     $httpHeaders = [
@@ -239,6 +264,11 @@ try {
                 'inputs' => ['live_confirm' => true],
                 'message' => 'Live one-time execution workflow dispatched.',
             ],
+            'live-sync' => [
+                'workflow' => 'trading-live-account.yml',
+                'inputs' => [],
+                'message' => 'Live account sync workflow dispatched.',
+            ],
         ];
 
         if (!isset($workflows[$target])) {
@@ -254,6 +284,11 @@ try {
             'ref' => $result['ref'],
             'generatedAt' => gmdate('c'),
         ], $result['status'] === 204 ? 202 : 200);
+    }
+
+    if ($action === 'state') {
+        $target = (string) ($_GET['target'] ?? '');
+        respond(state_payload($target));
     }
 
     if ($action === 'markets') {
