@@ -328,10 +328,41 @@ function orderPriceForBook(book, tick) {
 function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
   const budget = Math.min(maxNotional, cash);
   const minNotional = price * minOrderSize;
-  if (minNotional > budget) return null;
-  if (ORDER_SIZE_MODE === "minimum") return Number(minOrderSize.toFixed(4));
+  if (minNotional > cash) {
+    return {
+      size: null,
+      budget,
+      minNotional,
+      minSizeOverride: false,
+      sizingNote: `minimum order ${minOrderSize} shares costs ${minNotional.toFixed(4)} USDC, above cash ${cash.toFixed(4)} USDC`,
+    };
+  }
+  if (minNotional > budget) {
+    return {
+      size: Number(minOrderSize.toFixed(4)),
+      budget,
+      minNotional,
+      minSizeOverride: true,
+      sizingNote: `raised to exchange minimum ${minOrderSize} shares because Polymarket minimum exceeds max-per-trade ${budget.toFixed(4)} USDC`,
+    };
+  }
+  if (ORDER_SIZE_MODE === "minimum") {
+    return {
+      size: Number(minOrderSize.toFixed(4)),
+      budget,
+      minNotional,
+      minSizeOverride: false,
+      sizingNote: "exchange minimum order size",
+    };
+  }
   const size = Math.floor((budget / price) * 10000) / 10000;
-  return size >= minOrderSize ? Number(size.toFixed(4)) : null;
+  return {
+    size: size >= minOrderSize ? Number(size.toFixed(4)) : null,
+    budget,
+    minNotional,
+    minSizeOverride: false,
+    sizingNote: size >= minOrderSize ? "sized from max-per-trade budget" : `budget ${budget.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
+  };
 }
 
 async function revalidateEvaluation(evaluation, liveState, cash, maxNotional) {
@@ -357,12 +388,13 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional) {
     return { candidate: evaluation, eligible: false, rejectReasons: ["post-only limit would cross current ask"] };
   }
 
-  const size = sharesForOrder({ price, minOrderSize, maxNotional, cash });
+  const orderSizing = sharesForOrder({ price, minOrderSize, maxNotional, cash });
+  const size = orderSizing.size;
   if (!Number.isFinite(size)) {
     return {
       candidate: evaluation,
       eligible: false,
-      rejectReasons: [`minimum order ${minOrderSize} shares costs ${(price * minOrderSize).toFixed(4)} USDC, above max ${maxNotional.toFixed(4)} USDC or cash ${cash.toFixed(4)} USDC`],
+      rejectReasons: [orderSizing.sizingNote],
       currentPrice: price,
       minOrderSize,
     };
@@ -425,6 +457,10 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional) {
     orderSize: Number(size.toFixed(4)),
     orderNotionalUsdc: notional,
     minOrderSize,
+    minOrderNotionalUsdc: Number(orderSizing.minNotional.toFixed(5)),
+    maxNotionalBeforeMinimumOverrideUsdc: maxNotional,
+    minSizeOverride: orderSizing.minSizeOverride,
+    sizingNote: orderSizing.sizingNote,
     tickSize: tick,
     negRisk: Boolean(market.negRisk),
     aiProbability: Number(probability.toFixed(4)),
@@ -436,6 +472,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional) {
     totalCostUsdc: Number(totalCost.toFixed(5)),
     tradingFeeUsdc: Number(fee.toFixed(5)),
     feeMode: USE_LIMIT_ORDERS && POST_ONLY ? "post-only maker fee assumed 0" : "taker fee estimate",
+    orderType: USE_LIMIT_ORDERS ? "GTC" : "FAK",
     riskGroupKeys: risk.keys,
     riskGroupLabels: risk.labels,
     score: Number((annualizedReturn + edge).toFixed(6)),
@@ -483,6 +520,22 @@ async function submitOrder(order) {
     signatureType: signatureTypeMap[SIGNATURE_TYPE] ?? SignatureTypeV2.POLY_PROXY,
     funderAddress: FUNDER_ADDRESS,
   });
+  const options = {
+    tickSize: String(order.tickSize || "0.01"),
+    negRisk: Boolean(order.negRisk),
+  };
+  if (!USE_LIMIT_ORDERS) {
+    const marketOrder = await client.createMarketOrder(
+      {
+        tokenID: order.tokenId,
+        price: order.orderPrice,
+        amount: order.orderNotionalUsdc,
+        side: Side.BUY,
+      },
+      options,
+    );
+    return client.postOrder(marketOrder, OrderType.FAK);
+  }
   const signedOrder = await client.createOrder(
     {
       tokenID: order.tokenId,
@@ -490,12 +543,9 @@ async function submitOrder(order) {
       size: order.orderSize,
       side: Side.BUY,
     },
-    {
-      tickSize: String(order.tickSize || "0.01"),
-      negRisk: Boolean(order.negRisk),
-    },
+    options,
   );
-  return client.postOrder(signedOrder, OrderType.GTC, USE_LIMIT_ORDERS && POST_ONLY);
+  return client.postOrder(signedOrder, OrderType.GTC, POST_ONLY);
 }
 
 async function main() {
