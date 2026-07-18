@@ -60,6 +60,16 @@
             <strong data-portfolio-risk>$0.00</strong>
             <span data-portfolio-free>$100.00 free</span>
           </div>
+          <div class="metric-card">
+            <span class="label">Order scan</span>
+            <strong data-next-order-scan>-</strong>
+            <span>paper + live candidate execution</span>
+          </div>
+          <div class="metric-card">
+            <span class="label">Account sync</span>
+            <strong data-account-sync-policy>On page load</strong>
+            <span data-next-account-sync>-</span>
+          </div>
         </div>
         <section class="control-panel" aria-label="Trading controls">
           <div class="control-panel-head">
@@ -73,8 +83,7 @@
             <div class="control-block">
               <span class="label">Manual run</span>
               <div class="execution-actions">
-                <button class="execution-button" type="button" data-one-time-execution="paper">Run paper once</button>
-                <button class="execution-button live" type="button" data-one-time-execution="live">Run live once</button>
+                <button class="execution-button" type="button" data-one-time-execution="current">Run once</button>
               </div>
             </div>
             <div class="control-block">
@@ -97,17 +106,6 @@
                 <input type="checkbox" data-limit-orders>
                 <span>Use limit orders</span>
               </label>
-            </div>
-            <div class="control-block schedule-block">
-              <span class="label">Next runs</span>
-              <div class="schedule-grid">
-                <span>Paper order scan</span>
-                <strong data-next-paper-execution>-</strong>
-                <span>Live order execution</span>
-                <strong data-next-live-execution>-</strong>
-                <span>Live account sync</span>
-                <strong data-next-live-sync>-</strong>
-              </div>
             </div>
           </div>
         </section>

@@ -94,7 +94,7 @@ button:disabled {
 
 .portfolio-cards {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 10px;
 }
 
@@ -122,7 +122,7 @@ button:disabled {
 
 .control-grid {
   display: grid;
-  grid-template-columns: minmax(240px, 1.25fr) minmax(190px, 1fr) minmax(220px, 1fr) minmax(180px, 0.85fr) minmax(260px, 1.35fr);
+  grid-template-columns: minmax(180px, 0.9fr) minmax(190px, 1fr) minmax(220px, 1fr) minmax(180px, 0.85fr);
   gap: 10px;
 }
 
@@ -139,10 +139,6 @@ button:disabled {
   background: #ffffff;
 }
 
-.control-block.schedule-block {
-  grid-column: span 1;
-}
-
 .execution-actions {
   display: flex;
   flex-wrap: wrap;
@@ -153,25 +149,6 @@ button:disabled {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
-}
-
-.schedule-grid {
-  width: 100%;
-  display: grid;
-  grid-template-columns: minmax(110px, 0.75fr) minmax(130px, 1fr);
-  gap: 6px 10px;
-  align-items: baseline;
-}
-
-.schedule-grid span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.schedule-grid strong {
-  color: var(--ink);
-  font-size: 13px;
-  text-align: right;
 }
 
 .order-mode-toggle {
@@ -747,11 +724,4 @@ body.modal-open {
     grid-template-columns: 1fr;
   }
 
-  .schedule-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .schedule-grid strong {
-    text-align: left;
-  }
 }

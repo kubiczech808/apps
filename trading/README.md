@@ -60,9 +60,9 @@ The live snapshot combines public Polymarket account data with authenticated CLO
 
 The public UI never receives `POLYMARKET_PRIVATE_KEY`; GitHub Actions uses it only during snapshot generation and order smoke tests.
 
-## One-time execution buttons
+## One-time execution
 
-The UI has separate buttons for one-time paper execution and one-time live execution.
+The UI has one contextual `Run once` button. It dispatches paper execution on the paper dashboard and live execution on the live dashboard.
 
 The browser calls `api.php?action=workflow`; the PHP endpoint dispatches only these allowlisted GitHub Actions workflows:
 
@@ -74,11 +74,11 @@ The live button also requires the browser-side live execution gate to be armed. 
 Configure these repository secrets for the deploy workflow to generate `trading/config.php` on the hosting server:
 
 - `TRADING_GITHUB_TOKEN`: fine-grained GitHub token with Actions workflow dispatch permission for `kubiczech808/apps`.
-- `TRADING_TRIGGER_KEY`: shared trigger key requested by the UI before dispatching a workflow.
+- `TRADING_TRIGGER_KEY`: shared trigger key requested by the UI before dispatching a manual one-time order workflow.
 
 `trading/config.php` is ignored by git and generated during `Deploy Trading`; without these secrets the buttons stay visible but the backend returns `Workflow trigger is not configured on the server.`
 
-The UI reads paper/live state through `api.php?action=state&target=...` with `Cache-Control: no-store`, so page loads fetch the latest state file available on the hosting server instead of relying on browser/local static cache. Opening the live dashboard calls `api.php?action=live-sync` automatically; that endpoint can dispatch only the live account snapshot workflow and is rate-limited server-side.
+The UI reads paper/live state through `api.php?action=state&target=...` with `Cache-Control: no-store`, so page loads fetch the latest state file available on the hosting server instead of relying on browser/local static cache. Every page load calls `api.php?action=live-sync` automatically; that endpoint can dispatch only the live account snapshot workflow and is rate-limited server-side.
 
 Live order signing is fully server-side in GitHub Actions. `POLYMARKET_PRIVATE_KEY` is read from GitHub Secrets during the workflow run, a fresh live account snapshot is generated immediately before revalidation, and the browser never receives the key. The scheduled live workflow can execute without manually entering a key or token for each trade; the temporary public UI workflow buttons still need `TRADING_GITHUB_TOKEN` and `TRADING_TRIGGER_KEY` until the whole interface is protected by login.
 

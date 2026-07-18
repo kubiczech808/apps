@@ -71,9 +71,9 @@ const els = {
   limitOrders: document.querySelector("[data-limit-orders]"),
   executionButtons: document.querySelectorAll("[data-one-time-execution]"),
   executionStatus: document.querySelector("[data-execution-status]"),
-  nextPaperExecution: document.querySelector("[data-next-paper-execution]"),
-  nextLiveExecution: document.querySelector("[data-next-live-execution]"),
-  nextLiveSync: document.querySelector("[data-next-live-sync]"),
+  nextOrderScan: document.querySelector("[data-next-order-scan]"),
+  accountSyncPolicy: document.querySelector("[data-account-sync-policy]"),
+  nextAccountSync: document.querySelector("[data-next-account-sync]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
   modeButtons: document.querySelectorAll("[data-mode-toggle]"),
@@ -203,9 +203,10 @@ function setExecutionStatus(text, tone = "") {
 
 function syncExecutionButtons() {
   els.executionButtons.forEach((button) => {
-    const target = button.dataset.oneTimeExecution;
+    const target = button.dataset.oneTimeExecution === "current" ? state.mode : button.dataset.oneTimeExecution;
     const busy = state.executionBusy === target;
     button.disabled = Boolean(state.executionBusy);
+    button.classList.toggle("live", state.mode === "live");
     const labels = {
       paper: ["Run paper once", "Starting paper..."],
       live: ["Run live once", "Starting live..."],
@@ -296,14 +297,14 @@ function scheduleLabel(date) {
 }
 
 function updateSchedulePanel() {
-  if (els.nextPaperExecution) {
-    els.nextPaperExecution.textContent = scheduleLabel(nextHourlyMinute(7));
+  if (els.nextOrderScan) {
+    els.nextOrderScan.textContent = scheduleLabel(nextHourlyMinute(7));
   }
-  if (els.nextLiveExecution) {
-    els.nextLiveExecution.textContent = "manual only";
+  if (els.accountSyncPolicy) {
+    els.accountSyncPolicy.textContent = "On page load";
   }
-  if (els.nextLiveSync) {
-    els.nextLiveSync.textContent = scheduleLabel(nextMinuteFromSet([5, 20, 35, 50]));
+  if (els.nextAccountSync) {
+    els.nextAccountSync.textContent = `scheduled backup ${scheduleLabel(nextMinuteFromSet([5, 20, 35, 50]))}`;
   }
 }
 
@@ -1119,10 +1120,11 @@ async function fetchJson(path) {
   return statePayload.json();
 }
 
-async function requestLiveAccountSync() {
+async function requestLiveAccountSync(options = {}) {
   if (state.autoLiveSyncBusy) return;
   state.autoLiveSyncBusy = true;
-  setExecutionStatus("syncing live account");
+  const quiet = Boolean(options.quiet);
+  if (!quiet) setExecutionStatus("syncing live account");
   try {
     const response = await fetch("api.php?action=live-sync&minSeconds=30", {
       method: "POST",
@@ -1134,17 +1136,17 @@ async function requestLiveAccountSync() {
       throw new Error(payload.error || `live sync HTTP ${response.status}`);
     }
     if (payload.action === "DISPATCH") {
-      setExecutionStatus("live sync started");
+      if (!quiet) setExecutionStatus("live sync started");
       [10000, 25000, 45000].forEach((delay) => {
         window.setTimeout(() => {
           loadDashboardState({ skipAutoLiveSync: true });
         }, delay);
       });
     } else {
-      setExecutionStatus("live account current");
+      if (!quiet) setExecutionStatus("live account current");
     }
   } catch (error) {
-    setExecutionStatus(error.message || "live sync failed", "error");
+    if (!quiet) setExecutionStatus(error.message || "live sync failed", "error");
   } finally {
     state.autoLiveSyncBusy = false;
   }
@@ -1791,7 +1793,9 @@ els.liveActivation?.addEventListener("click", () => {
 
 els.executionButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    const target = button.dataset.oneTimeExecution === "live" ? "live" : "paper";
+    const target = button.dataset.oneTimeExecution === "current"
+      ? state.mode
+      : (button.dataset.oneTimeExecution === "live" ? "live" : "paper");
     triggerOneTimeExecution(target);
   });
 });
@@ -1908,4 +1912,6 @@ state.mode = storedMode();
 state.liveExecutionArmed = storedLiveExecutionArmed();
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);
-loadDashboardState();
+loadDashboardState().then(() => {
+  if (state.mode !== "live") requestLiveAccountSync({ quiet: true });
+});
