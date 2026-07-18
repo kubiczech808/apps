@@ -226,22 +226,57 @@ function sortArrow(key) {
   return state.evaluationSort.direction === "asc" ? " asc" : " desc";
 }
 
-function gainIfWin(item) {
-  const netGain = Number(item.netGainIfWinUsdc);
-  if (Number.isFinite(netGain)) return netGain;
+function evaluationStake(item) {
   const stake = Number(item.stakeUsdc || 5);
+  return Number.isFinite(stake) && stake > 0 ? stake : 5;
+}
+
+function evaluationTradingFee(item) {
+  if (currentLimitOrders()) return 0;
   const fee = Number(item.takerFeeUsdc || 0);
+  return Number.isFinite(fee) && fee > 0 ? fee : 0;
+}
+
+function evaluationShares(item) {
   const shares = Number(item.executableShares || item.shares);
+  if (Number.isFinite(shares) && shares > 0) return shares;
+  const stake = evaluationStake(item);
   const price = Number(item.marketPrice || item.entryPrice);
-  if (Number.isFinite(shares) && Number.isFinite(stake)) return shares - stake - (Number.isFinite(fee) ? fee : 0);
   const decimal = decimalOdds(price);
-  if (decimal == null || !Number.isFinite(stake)) return null;
-  return stake * (decimal - 1) - (Number.isFinite(fee) ? fee : 0);
+  return decimal == null ? null : stake * decimal;
+}
+
+function evaluationTotalCost(item) {
+  return evaluationStake(item) + evaluationTradingFee(item);
+}
+
+function gainIfWin(item) {
+  const shares = evaluationShares(item);
+  if (!Number.isFinite(shares)) return null;
+  return shares - evaluationTotalCost(item);
 }
 
 function expectedValue(item) {
-  const value = Number(item.expectedValueUsdc);
-  return Number.isFinite(value) ? value : null;
+  const aiProbability = Number(item.aiProbability);
+  const shares = evaluationShares(item);
+  if (!Number.isFinite(aiProbability) || !Number.isFinite(shares)) return null;
+  return (aiProbability * shares) - evaluationTotalCost(item);
+}
+
+function netYield(item) {
+  const gain = gainIfWin(item);
+  const cost = evaluationTotalCost(item);
+  if (!Number.isFinite(gain) || !Number.isFinite(cost) || cost <= 0) return null;
+  return gain / cost;
+}
+
+function annualizedExpectedReturn(item) {
+  const ev = expectedValue(item);
+  const cost = evaluationTotalCost(item);
+  if (!Number.isFinite(ev) || !Number.isFinite(cost) || cost <= 0) return null;
+  const roi = ev / cost;
+  const days = daysToResolution(item);
+  return Number.isFinite(days) && days > 0 ? roi * (365 / days) : roi;
 }
 
 function daysToResolution(item) {
@@ -265,6 +300,7 @@ function evaluationDaysLeft(item) {
 }
 
 function feeLine(item) {
+  if (currentLimitOrders()) return "maker fee $0.00000 (limit)";
   const fee = Number(item.takerFeeUsdc);
   if (!Number.isFinite(fee) || fee <= 0) return "";
   const rate = Number(item.feeRate);
@@ -1358,8 +1394,9 @@ function evaluationSortValue(item, key) {
   if (key === "marketPrice") return Number(item.marketPrice);
   if (key === "odds") return decimalOdds(item.marketPrice);
   if (key === "gainIfWin") return gainIfWin(item);
+  if (key === "netYield") return netYield(item);
   if (key === "aiProbability") return Number(item.aiProbability);
-  if (key === "annualizedReturn") return Number(item.annualizedReturn);
+  if (key === "annualizedReturn") return annualizedExpectedReturn(item);
   if (key === "analysis") return `${evaluationReasons(item).join("; ")} ${item.analysisSummary || ""}`.toLowerCase();
   return "";
 }
@@ -1393,10 +1430,20 @@ function sortableHeader(key, label) {
 function gainCell(item) {
   const gain = gainIfWin(item);
   const ev = expectedValue(item);
+  const fee = evaluationTradingFee(item);
   return `
     <span class="${Number(gain) >= 0 ? "positive" : "negative"}">${signedMoney(gain)}</span>
     <span>profit if win</span>
+    <span>${currentLimitOrders() ? "limit maker fee $0" : `market taker fee ${money(fee, 5)}`}</span>
     <span class="${pnlClass(ev)}">EV ${signedMoney(ev, 4)}</span>
+  `;
+}
+
+function netYieldCell(item) {
+  const value = netYield(item);
+  return `
+    <span class="${pnlClass(value)}">${signedPercent(value)}</span>
+    <span>${currentLimitOrders() ? "after maker fee" : "after taker fee"}</span>
   `;
 }
 
@@ -1423,7 +1470,7 @@ function evaluationDaysLeftCell(item) {
 }
 
 function annualizedCell(item) {
-  const annualized = Number(item.annualizedReturn);
+  const annualized = annualizedExpectedReturn(item);
   const ev = expectedValue(item);
   const days = daysToResolution(item);
   return `
@@ -1468,6 +1515,7 @@ function renderBotEvaluations() {
           ${sortableHeader("marketPrice", "Mkt entry")}
           ${sortableHeader("odds", "Odds")}
           ${sortableHeader("gainIfWin", "Win @ $5")}
+          ${sortableHeader("netYield", "Net yield %")}
           ${sortableHeader("aiProbability", "AI prob.")}
           ${sortableHeader("annualizedReturn", "EV p.a.")}
           ${sortableHeader("analysis", "Analysis")}
@@ -1494,6 +1542,7 @@ function renderBotEvaluations() {
             </td>
             <td>${odds(decimalOdds(item.marketPrice))}</td>
             <td>${gainCell(item)}</td>
+            <td>${netYieldCell(item)}</td>
             <td>${probability(Number(item.aiProbability))}</td>
             <td>${annualizedCell(item)}</td>
             <td>
@@ -1602,7 +1651,7 @@ els.botEvaluations?.addEventListener("click", (event) => {
     state.evaluationSort.direction = state.evaluationSort.direction === "asc" ? "desc" : "asc";
   } else {
     state.evaluationSort.key = key;
-    state.evaluationSort.direction = ["marketPrice", "odds", "gainIfWin", "aiProbability", "annualizedReturn"].includes(key) ? "desc" : "asc";
+    state.evaluationSort.direction = ["marketPrice", "odds", "gainIfWin", "netYield", "aiProbability", "annualizedReturn"].includes(key) ? "desc" : "asc";
   }
   renderBotEvaluations();
 });
