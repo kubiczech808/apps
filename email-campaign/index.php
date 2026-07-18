@@ -59,6 +59,7 @@ $migrationNotice = null;
 try {
     $config = effectiveConfig($pdo, $baseConfig);
     ensureAppAuthUsers($pdo, $config);
+    $config = effectiveConfig($pdo, $baseConfig);
 } catch (Throwable $e) {
     if ($isMysqlDatabase && databasePermissionDenied($e)) {
         renderDatabaseBootFailure($e);
@@ -345,12 +346,12 @@ function handlePost(PDO $pdo, array $config): ?string
                 'status' => $data[9],
             ]);
             $lastScheduledSql = $resetSchedule ? ', last_scheduled_at=""' : '';
-            $stmt = $pdo->prepare('UPDATE campaigns SET list_id=?, name=?, subject=?, body_html=?, daily_limit=?, batch_limit=?, auto_daily_limit=?, include_previously_contacted=?, schedule_time=?, status=?, updated_at=?' . $lastScheduledSql . ' WHERE id=?');
-            $stmt->execute([...$data, $id]);
+            $stmt = $pdo->prepare('UPDATE campaigns SET list_id=?, name=?, subject=?, body_html=?, daily_limit=?, batch_limit=?, auto_daily_limit=?, include_previously_contacted=?, schedule_time=?, status=?, updated_at=?' . $lastScheduledSql . ' WHERE id=? AND owner_user_id=?');
+            $stmt->execute([...$data, $id, currentAppUserId($pdo)]);
             return 'Kampan ulozena.';
         }
-        $stmt = $pdo->prepare('INSERT INTO campaigns (list_id, name, subject, body_html, daily_limit, batch_limit, auto_daily_limit, include_previously_contacted, schedule_time, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        $stmt->execute([...$data, date('c')]);
+        $stmt = $pdo->prepare('INSERT INTO campaigns (owner_user_id, list_id, name, subject, body_html, daily_limit, batch_limit, auto_daily_limit, include_previously_contacted, schedule_time, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->execute([currentAppUserId($pdo), ...$data, date('c')]);
         return 'Kampan vytvorena.';
     }
 
@@ -978,8 +979,9 @@ function launchOnboardingCampaign(PDO $pdo, array $lead): string
         }
 
         $campaignName = 'Onboarding - ' . trim((string)($lead['business_name'] ?: $lead['account_email']));
-        $stmt = $pdo->prepare('INSERT INTO campaigns (list_id, name, subject, body_html, daily_limit, batch_limit, auto_daily_limit, include_previously_contacted, schedule_time, status, created_at, updated_at) VALUES (?, ?, ?, ?, 100, 100, 1, 0, "09:00", "active", ?, ?)');
+        $stmt = $pdo->prepare('INSERT INTO campaigns (owner_user_id, list_id, name, subject, body_html, daily_limit, batch_limit, auto_daily_limit, include_previously_contacted, schedule_time, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 100, 100, 1, 0, "09:00", "active", ?, ?)');
         $stmt->execute([
+            currentAppUserId($pdo),
             $listId,
             substr($campaignName, 0, 255),
             (string)$lead['email_subject'],
@@ -1700,9 +1702,19 @@ function runAiResearchOnce(PDO $pdo, array $config): string
     return 'AI research: beh #' . $runId . ', seed ' . (string)$seed['email'] . ', nalezeno ' . count($evaluated) . ', vhodnych ' . count($accepted) . '.';
 }
 
+function aiResearchOwnerUserId(PDO $pdo): int
+{
+    $user = appUserByEmail($pdo, AI_RESEARCH_ALLOWED_EMAIL, false);
+    return $user ? (int)$user['id'] : 0;
+}
+
 function selectAiResearchSeedRecipient(PDO $pdo): ?array
 {
     $lastId = max(0, (int)(loadSettings($pdo)['ai_research_last_seed_id'] ?? 0));
+    $ownerId = aiResearchOwnerUserId($pdo);
+    if ($ownerId < 1) {
+        return null;
+    }
     $sql = '
         SELECT r.id, r.email, r.subject_name, r.website, r.address, r.name, r.source_label, r.source_url
         FROM recipients r
@@ -1710,19 +1722,20 @@ function selectAiResearchSeedRecipient(PDO $pdo): ?array
         WHERE r.status="active"
           AND COALESCE(r.archived,0)=0
           AND COALESCE(d.archived,0)=0
+          AND d.owner_user_id=?
           AND r.email!=""
           AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id)
           AND r.id>?
         ORDER BY r.id ASC
         LIMIT 1';
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$lastId]);
+    $stmt->execute([$ownerId, $lastId]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($row) {
         return $row;
     }
     $stmt = $pdo->prepare(str_replace('AND r.id>?', '', $sql));
-    $stmt->execute([]);
+    $stmt->execute([$ownerId]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return $row ?: null;
 }
@@ -1858,13 +1871,15 @@ function saveAiResearchRun(PDO $pdo, array $seed, array $plan, array $evaluated,
     $now = date('c');
     $draftSubject = (string)($accepted[0]['email_subject'] ?? '');
     $draftHtml = (string)($accepted[0]['email_body_html'] ?? '');
+    $ownerId = aiResearchOwnerUserId($pdo);
     $stmt = $pdo->prepare('
-        INSERT INTO ai_research_runs (seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ai_research_runs (owner_user_id, seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ');
     $status = $accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts');
     $message = $accepted ? 'AI nasla vhodne kontakty a pripravila osloveni.' : ($evaluated ? 'AI nenasla dostatecne vhodny kontakt.' : 'Scraping nenasel zadny kontakt.');
     $stmt->execute([
+        $ownerId,
         (int)$seed['id'],
         (string)$seed['email'],
         truncatePlainText((string)($seed['subject_name'] ?: $seed['email']), 255),
@@ -2410,7 +2425,39 @@ function renderDatabaseBootFailure(Throwable $e): void
 
 function effectiveConfig(PDO $pdo, array $config): array
 {
-    $settings = loadSettings($pdo);
+    $userId = currentAppUserId($pdo);
+    if ($userId > 0) {
+        return effectiveConfigForUser($pdo, $config, $userId);
+    }
+    return applySettingsToConfig($config, loadSettings($pdo));
+}
+
+function effectiveConfigForUser(PDO $pdo, array $config, int $userId): array
+{
+    if ($userId > 0) {
+        $config['from_email'] = '';
+        $config['from_name'] = '';
+        $config['smtp'] = [
+            'host' => '',
+            'port' => 587,
+            'username' => '',
+            'password' => '',
+            'encryption' => 'tls',
+            'dkim_selector' => '',
+        ];
+        $config['imap'] = [
+            'host' => '',
+            'port' => 993,
+            'username' => '',
+            'password' => '',
+            'encryption' => 'ssl',
+        ];
+    }
+    return applySettingsToConfig($config, loadSettingsForUser($pdo, $userId));
+}
+
+function applySettingsToConfig(array $config, array $settings): array
+{
     foreach (['app_password_hash', 'admin_email', 'cron_token', 'from_email', 'from_name'] as $key) {
         if ($key === 'cron_token' && !empty($config[$key])) {
             continue;
@@ -2444,15 +2491,27 @@ function effectiveConfig(PDO $pdo, array $config): array
 
 function loadSettings(PDO $pdo): array
 {
+    return loadSettingsForUser($pdo, currentAppUserId($pdo));
+}
+
+function loadSettingsForUser(PDO $pdo, int $userId): array
+{
     $settings = [];
     $rows = $pdo->query('SELECT * FROM settings')->fetchAll(PDO::FETCH_ASSOC);
+    $userPrefix = $userId > 0 ? 'user:' . $userId . ':' : '';
+    $globalKeysForLoggedUser = ['cron_token' => true, 'app_password_hash' => true, 'admin_email' => true];
     foreach ($rows as $row) {
         $key = array_key_exists('key', $row) ? $row['key'] : ($row['KEY'] ?? null);
         if ($key === null && array_key_exists('setting_key', $row)) {
             $key = $row['setting_key'];
         }
         if ($key !== null) {
-            $settings[(string)$key] = (string)$row['value'];
+            $key = (string)$key;
+            if ($userPrefix !== '' && str_starts_with($key, $userPrefix)) {
+                $settings[substr($key, strlen($userPrefix))] = (string)$row['value'];
+            } elseif (!str_starts_with($key, 'user:') && ($userPrefix === '' || isset($globalKeysForLoggedUser[$key]))) {
+                $settings[$key] = (string)$row['value'];
+            }
         }
     }
     return $settings;
@@ -2872,6 +2931,17 @@ function ensureAppAuthUsers(PDO $pdo, array $config): void
     upsertAppUser($pdo, AI_RESEARCH_ALLOWED_EMAIL, $researchHash, true);
     $stmt = $pdo->prepare('UPDATE app_users SET can_access_research=CASE WHEN email=? THEN 1 ELSE 0 END, updated_at=?');
     $stmt->execute([AI_RESEARCH_ALLOWED_EMAIL, date('c')]);
+    $legacyUser = $legacyEmail !== '' ? appUserByEmail($pdo, $legacyEmail, false) : null;
+    $researchUser = appUserByEmail($pdo, AI_RESEARCH_ALLOWED_EMAIL, false);
+    if ($legacyUser) {
+        $legacyOwnerId = (int)$legacyUser['id'];
+        foreach (['contact_databases', 'campaigns', 'import_runs', 'scraping_containers', 'scraping_jobs'] as $table) {
+            $pdo->exec('UPDATE ' . $table . ' SET owner_user_id=' . $legacyOwnerId . ' WHERE owner_user_id=0');
+        }
+    }
+    if ($researchUser) {
+        $pdo->exec('UPDATE ai_research_runs SET owner_user_id=' . (int)$researchUser['id'] . ' WHERE owner_user_id=0');
+    }
 }
 
 function upsertAppUser(PDO $pdo, string $email, string $passwordHash = '', bool $canAccessResearch = false): void
@@ -2913,6 +2983,34 @@ function appUserByEmail(PDO $pdo, string $email, bool $activeOnly = true): ?arra
     $stmt->execute([$email]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return $row ?: null;
+}
+
+function currentAppUser(PDO $pdo): ?array
+{
+    $email = strtolower(trim((string)($_SESSION['auth_email'] ?? '')));
+    return $email !== '' ? appUserByEmail($pdo, $email) : null;
+}
+
+function currentAppUserId(PDO $pdo): int
+{
+    $user = currentAppUser($pdo);
+    return $user ? (int)$user['id'] : 0;
+}
+
+function ownerSql(PDO $pdo, string $alias = ''): string
+{
+    $userId = currentAppUserId($pdo);
+    $prefix = $alias !== '' ? $alias . '.' : '';
+    return $userId > 0 ? $prefix . 'owner_user_id=' . $userId : $prefix . 'owner_user_id=0';
+}
+
+function scopedSettingKey(PDO $pdo, string $key): string
+{
+    $userId = currentAppUserId($pdo);
+    if ($userId <= 0 || in_array($key, ['cron_token', 'app_password_hash', 'admin_email'], true)) {
+        return $key;
+    }
+    return 'user:' . $userId . ':' . $key;
 }
 
 function appUserCanRequestPasswordReset(PDO $pdo, string $email): bool
@@ -3063,6 +3161,20 @@ function saveAccountSettings(PDO $pdo, array $config): void
 
 function setSetting(PDO $pdo, string $key, string $value): void
 {
+    $key = scopedSettingKey($pdo, $key);
+    setSettingRaw($pdo, $key, $value);
+}
+
+function setSettingForUser(PDO $pdo, int $userId, string $key, string $value): void
+{
+    if ($userId > 0 && !in_array($key, ['cron_token', 'app_password_hash', 'admin_email'], true)) {
+        $key = 'user:' . $userId . ':' . $key;
+    }
+    setSettingRaw($pdo, $key, $value);
+}
+
+function setSettingRaw(PDO $pdo, string $key, string $value): void
+{
     $keyColumn = settingKeyColumn($pdo);
     $exists = $pdo->prepare('SELECT COUNT(*) FROM settings WHERE ' . $keyColumn . '=?');
     $exists->execute([$key]);
@@ -3136,12 +3248,29 @@ function testImapConnection(array $imap): void
 
 function syncImapReplies(PDO $pdo, array $config): string
 {
+    $currentUserId = currentAppUserId($pdo);
+    if ($currentUserId > 0) {
+        return syncImapRepliesForUser($pdo, effectiveConfigForUser($pdo, $config, $currentUserId), $currentUserId);
+    }
+    $users = $pdo->query('SELECT id, email FROM app_users WHERE is_active=1 ORDER BY id ASC')->fetchAll(PDO::FETCH_ASSOC);
+    $messages = [];
+    foreach ($users as $user) {
+        $message = trim(syncImapRepliesForUser($pdo, effectiveConfigForUser($pdo, $config, (int)$user['id']), (int)$user['id']));
+        if ($message !== 'IMAP odpovedi: nenastaveno.') {
+            $messages[] = (string)$user['email'] . ': ' . $message;
+        }
+    }
+    return ($messages ? implode("\n", $messages) : 'IMAP odpovedi: nenastaveno.') . "\n";
+}
+
+function syncImapRepliesForUser(PDO $pdo, array $config, int $ownerId): string
+{
     $imap = $config['imap'] ?? [];
     if (!imapConfigured($imap)) {
         return "IMAP odpovedi: nenastaveno.\n";
     }
     $started = time();
-    $lastSync = (string)(loadSettings($pdo)['imap_last_sync_at'] ?? '');
+    $lastSync = (string)(loadSettingsForUser($pdo, $ownerId)['imap_last_sync_at'] ?? '');
     $sinceTime = $lastSync !== '' ? max((int)strtotime($lastSync) - 259200, time() - 2592000) : time() - 2592000;
     $since = date('d-M-Y', $sinceTime);
     try {
@@ -3162,7 +3291,7 @@ function syncImapReplies(PDO $pdo, array $config): string
                 $body = imapCommand($socket, 'a4b', 'FETCH ' . (int)$id . ' (BODY.PEEK[TEXT])');
                 $bouncedEmail = extractBounceEmail($header . "\n" . $body);
                 if ($bouncedEmail !== '') {
-                    $result = markBounceFromEmail($pdo, $bouncedEmail, imapHeaderDate($header) ?: date('c'), 'IMAP bounce');
+                    $result = markBounceFromEmail($pdo, $bouncedEmail, imapHeaderDate($header) ?: date('c'), 'IMAP bounce', $ownerId);
                     $matched += $result['matched'] ? 1 : 0;
                     $marked += $result['marked'] ? 1 : 0;
                     $checked++;
@@ -3174,13 +3303,13 @@ function syncImapReplies(PDO $pdo, array $config): string
             }
             $checked++;
             $replyAt = imapHeaderDate($header) ?: date('c');
-            $result = markReplyFromEmail($pdo, $fromEmail, $replyAt);
+            $result = markReplyFromEmail($pdo, $fromEmail, $replyAt, $ownerId);
             $matched += $result['matched'] ? 1 : 0;
             $marked += $result['marked'] ? 1 : 0;
         }
         imapCommand($socket, 'a5', 'LOGOUT');
         fclose($socket);
-        setSetting($pdo, 'imap_last_sync_at', date('c'));
+        setSettingForUser($pdo, $ownerId, 'imap_last_sync_at', date('c'));
         return 'IMAP odpovedi: zkontrolovano ' . $checked . ' zprav, nalezeno ' . $matched . ' kontaktu, nove oznaceno ' . $marked . ".\n";
     } catch (Throwable $e) {
         return 'IMAP odpovedi: synchronizace selhala: ' . $e->getMessage() . "\n";
@@ -3295,18 +3424,20 @@ function extractEmail(string $value): string
     return '';
 }
 
-function markReplyFromEmail(PDO $pdo, string $email, string $replyAt): array
+function markReplyFromEmail(PDO $pdo, string $email, string $replyAt, int $ownerId = 0): array
 {
     $stmt = $pdo->prepare('
-        SELECT id
-        FROM send_logs
-        WHERE LOWER(email)=?
-          AND status="sent"
-          AND sent_at<=?
-        ORDER BY sent_at DESC, id DESC
+        SELECT l.id
+        FROM send_logs l
+        JOIN campaigns c ON c.id=l.campaign_id
+        WHERE LOWER(l.email)=?
+          AND l.status="sent"
+          AND l.sent_at<=?
+          AND (?=0 OR c.owner_user_id=?)
+        ORDER BY l.sent_at DESC, l.id DESC
         LIMIT 1
     ');
-    $stmt->execute([strtolower($email), $replyAt]);
+    $stmt->execute([strtolower($email), $replyAt, $ownerId, $ownerId]);
     $sendLogId = (int)$stmt->fetchColumn();
     if ($sendLogId < 1) {
         return ['matched' => false, 'marked' => false];
@@ -3322,18 +3453,20 @@ function markReplyFromEmail(PDO $pdo, string $email, string $replyAt): array
     return ['matched' => true, 'marked' => true];
 }
 
-function markBounceFromEmail(PDO $pdo, string $email, string $bounceAt, string $message): array
+function markBounceFromEmail(PDO $pdo, string $email, string $bounceAt, string $message, int $ownerId = 0): array
 {
     $stmt = $pdo->prepare('
-        SELECT id, recipient_id
-        FROM send_logs
-        WHERE LOWER(email)=?
-          AND status="sent"
-          AND sent_at<=?
-        ORDER BY sent_at DESC, id DESC
+        SELECT l.id, l.recipient_id
+        FROM send_logs l
+        JOIN campaigns c ON c.id=l.campaign_id
+        WHERE LOWER(l.email)=?
+          AND l.status="sent"
+          AND l.sent_at<=?
+          AND (?=0 OR c.owner_user_id=?)
+        ORDER BY l.sent_at DESC, l.id DESC
         LIMIT 1
     ');
-    $stmt->execute([strtolower($email), $bounceAt]);
+    $stmt->execute([strtolower($email), $bounceAt, $ownerId, $ownerId]);
     $log = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$log) {
         return ['matched' => false, 'marked' => false];
@@ -3360,8 +3493,8 @@ function importRecipients(PDO $pdo): string
     }
     $originalName = basename((string)($_FILES['csv']['name'] ?? 'import.csv'));
     $now = date('c');
-    $stmt = $pdo->prepare('INSERT INTO import_runs (list_id, list_name, file_name, inserted_count, updated_count, skipped_count, total_rows, status, storage_path, processed_rows, last_message, created_at, updated_at) VALUES (?, ?, ?, 0, 0, 0, 0, "queued", "", 0, ?, ?, ?)');
-    $stmt->execute([$listId, contactListName($pdo, $listId), $originalName, 'Soubor nahran, import ceka na zpracovani.', $now, $now]);
+    $stmt = $pdo->prepare('INSERT INTO import_runs (owner_user_id, list_id, list_name, file_name, inserted_count, updated_count, skipped_count, total_rows, status, storage_path, processed_rows, last_message, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, 0, 0, "queued", "", 0, ?, ?, ?)');
+    $stmt->execute([currentAppUserId($pdo), $listId, contactListName($pdo, $listId), $originalName, 'Soubor nahran, import ceka na zpracovani.', $now, $now]);
     $importRunId = (int)$pdo->lastInsertId();
     $targetPath = $dir . '/import-' . $importRunId . '-' . preg_replace('/[^a-zA-Z0-9._-]+/', '-', $originalName);
     if (!move_uploaded_file($_FILES['csv']['tmp_name'], $targetPath)) {
@@ -3934,15 +4067,21 @@ function ensureScrapingContainers(PDO $pdo): void
     if (!$jobs) {
         return;
     }
-    $find = $pdo->prepare('SELECT id FROM scraping_containers WHERE list_id=? AND source=? AND keyword=? AND status!="deleted" ORDER BY id ASC LIMIT 1');
-    $insert = $pdo->prepare('INSERT INTO scraping_containers (list_id, source, keyword, status, created_at, updated_at) VALUES (?, ?, ?, "active", ?, ?)');
+    $find = $pdo->prepare('SELECT id FROM scraping_containers WHERE owner_user_id=? AND list_id=? AND source=? AND keyword=? AND status!="deleted" ORDER BY id ASC LIMIT 1');
+    $insert = $pdo->prepare('INSERT INTO scraping_containers (owner_user_id, list_id, source, keyword, status, created_at, updated_at) VALUES (?, ?, ?, ?, "active", ?, ?)');
     $update = $pdo->prepare('UPDATE scraping_jobs SET container_id=? WHERE id=?');
     foreach ($jobs as $job) {
-        $find->execute([(int)$job['list_id'], (string)$job['source'], (string)$job['keyword']]);
+        $ownerId = (int)($job['owner_user_id'] ?? 0);
+        if ($ownerId < 1) {
+            $ownerStmt = $pdo->prepare('SELECT owner_user_id FROM contact_databases WHERE id=?');
+            $ownerStmt->execute([(int)$job['list_id']]);
+            $ownerId = (int)$ownerStmt->fetchColumn();
+        }
+        $find->execute([$ownerId, (int)$job['list_id'], (string)$job['source'], (string)$job['keyword']]);
         $containerId = (int)$find->fetchColumn();
         if ($containerId === 0) {
             $created = (string)($job['created_at'] ?? date('c'));
-            $insert->execute([(int)$job['list_id'], (string)$job['source'], (string)$job['keyword'], $created, date('c')]);
+            $insert->execute([$ownerId, (int)$job['list_id'], (string)$job['source'], (string)$job['keyword'], $created, date('c')]);
             $containerId = (int)$pdo->lastInsertId();
         }
         $update->execute([$containerId, (int)$job['id']]);
@@ -4040,7 +4179,7 @@ function scrapingScheduleIsDue(array $container): bool
 
 function scrapingJobParamKey(array $job): string
 {
-    return (int)($job['list_id'] ?? 0) . '|' . (string)($job['source'] ?? '') . '|' . normalizeScrapingKeyword((string)($job['keyword'] ?? ''));
+    return (int)($job['owner_user_id'] ?? 0) . '|' . (int)($job['list_id'] ?? 0) . '|' . (string)($job['source'] ?? '') . '|' . normalizeScrapingKeyword((string)($job['keyword'] ?? ''));
 }
 
 function scrapingRunPriority(array $job): array
@@ -4058,8 +4197,8 @@ function scrapingRunPriority(array $job): array
 
 function activeScrapingRunForParams(PDO $pdo, array $container): int
 {
-    $stmt = $pdo->prepare('SELECT id, keyword FROM scraping_jobs WHERE list_id=? AND source=? AND status IN ("queued","running","paused") ORDER BY id DESC');
-    $stmt->execute([(int)$container['list_id'], (string)$container['source']]);
+    $stmt = $pdo->prepare('SELECT id, keyword FROM scraping_jobs WHERE owner_user_id=? AND list_id=? AND source=? AND status IN ("queued","running","paused") ORDER BY id DESC');
+    $stmt->execute([(int)($container['owner_user_id'] ?? 0), (int)$container['list_id'], (string)$container['source']]);
     $wanted = normalizeScrapingKeyword((string)$container['keyword']);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $job) {
         if (normalizeScrapingKeyword((string)$job['keyword']) === $wanted) {
@@ -4117,8 +4256,9 @@ function createScrapingContainer(PDO $pdo): string
         throw new RuntimeException('Zadej klicove slovo pro scraping.');
     }
     $listId = selectedPostListId($pdo);
-    $find = $pdo->prepare('SELECT id, keyword FROM scraping_containers WHERE list_id=? AND source=? AND status!="deleted" ORDER BY id ASC');
-    $find->execute([$listId, $source]);
+    $ownerId = currentAppUserId($pdo);
+    $find = $pdo->prepare('SELECT id, keyword FROM scraping_containers WHERE list_id=? AND source=? AND owner_user_id=? AND status!="deleted" ORDER BY id ASC');
+    $find->execute([$listId, $source, $ownerId]);
     $wanted = normalizeScrapingKeyword($keyword);
     foreach ($find->fetchAll(PDO::FETCH_ASSOC) as $existing) {
         if (normalizeScrapingKeyword((string)$existing['keyword']) === $wanted) {
@@ -4126,8 +4266,8 @@ function createScrapingContainer(PDO $pdo): string
         }
     }
     $now = date('c');
-    $stmt = $pdo->prepare('INSERT INTO scraping_containers (list_id, source, keyword, status, created_at, updated_at) VALUES (?, ?, ?, "active", ?, ?)');
-    $stmt->execute([$listId, $source, $keyword, $now, $now]);
+    $stmt = $pdo->prepare('INSERT INTO scraping_containers (owner_user_id, list_id, source, keyword, status, created_at, updated_at) VALUES (?, ?, ?, ?, "active", ?, ?)');
+    $stmt->execute([$ownerId, $listId, $source, $keyword, $now, $now]);
     return 'Scraping kontejner vytvoren. Spust novy beh ve sloupci Akce.';
 }
 
@@ -4161,8 +4301,8 @@ function createScrapingRun(PDO $pdo, array $container, string $message = 'Beh ce
     }
     $runType = $runType === 'scheduled' ? 'scheduled' : 'manual';
     $now = date('c');
-    $stmt = $pdo->prepare('INSERT INTO scraping_jobs (container_id, list_id, source, keyword, status, max_pages, max_sites, last_message, run_type, discovery_done, created_at, updated_at) VALUES (?, ?, ?, ?, "queued", ?, ?, ?, ?, 0, ?, ?)');
-    $stmt->execute([(int)$container['id'], (int)$container['list_id'], (string)$container['source'], (string)$container['keyword'], 0, 0, $message, $runType, $now, $now]);
+    $stmt = $pdo->prepare('INSERT INTO scraping_jobs (owner_user_id, container_id, list_id, source, keyword, status, max_pages, max_sites, last_message, run_type, discovery_done, created_at, updated_at) VALUES (?, ?, ?, ?, ?, "queued", ?, ?, ?, ?, 0, ?, ?)');
+    $stmt->execute([(int)($container['owner_user_id'] ?? 0), (int)$container['id'], (int)$container['list_id'], (string)$container['source'], (string)$container['keyword'], 0, 0, $message, $runType, $now, $now]);
     return (int)$pdo->lastInsertId();
 }
 
@@ -4310,8 +4450,14 @@ function deleteScrapingContainer(PDO $pdo, int $containerId): void
 
 function findScrapingContainer(PDO $pdo, int $containerId): array
 {
-    $stmt = $pdo->prepare('SELECT * FROM scraping_containers WHERE id=?');
-    $stmt->execute([$containerId]);
+    $ownerId = currentAppUserId($pdo);
+    if ($ownerId > 0) {
+        $stmt = $pdo->prepare('SELECT * FROM scraping_containers WHERE id=? AND owner_user_id=?');
+        $stmt->execute([$containerId, $ownerId]);
+    } else {
+        $stmt = $pdo->prepare('SELECT * FROM scraping_containers WHERE id=?');
+        $stmt->execute([$containerId]);
+    }
     $container = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$container) {
         throw new RuntimeException('Scraping kontejner nenalezen.');
@@ -4532,8 +4678,14 @@ function runScrapingJobToCompletion(PDO $pdo, int $jobId): string
 
 function findScrapingJob(PDO $pdo, int $jobId): array
 {
-    $stmt = $pdo->prepare('SELECT * FROM scraping_jobs WHERE id=?');
-    $stmt->execute([$jobId]);
+    $ownerId = currentAppUserId($pdo);
+    if ($ownerId > 0) {
+        $stmt = $pdo->prepare('SELECT * FROM scraping_jobs WHERE id=? AND owner_user_id=?');
+        $stmt->execute([$jobId, $ownerId]);
+    } else {
+        $stmt = $pdo->prepare('SELECT * FROM scraping_jobs WHERE id=?');
+        $stmt->execute([$jobId]);
+    }
     $job = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$job) {
         throw new RuntimeException('Scraping job nenalezen.');
@@ -6706,10 +6858,11 @@ function scrapingJobLogMessage(array $job): string
 function logScrapingImportRun(PDO $pdo, array $job): void
 {
     $fileName = 'scraping: ' . scrapingSourceLabel((string)$job['source']) . ' / ' . $job['keyword'];
-    $stmt = $pdo->prepare('INSERT INTO import_runs (list_id, list_name, file_name, inserted_count, updated_count, skipped_count, total_rows, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt = $pdo->prepare('INSERT INTO import_runs (owner_user_id, list_id, list_name, file_name, inserted_count, updated_count, skipped_count, total_rows, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     $stmt->execute([
+        (int)($job['owner_user_id'] ?? 0),
         (int)$job['list_id'],
-        contactListName($pdo, (int)$job['list_id']),
+        contactListName($pdo, (int)$job['list_id'], (int)($job['owner_user_id'] ?? 0)),
         $fileName,
         (int)$job['inserted_count'],
         (int)$job['updated_count'],
@@ -6840,14 +6993,15 @@ function websiteLabel(string $url): string
 function resolveContactList(PDO $pdo, string $name): int
 {
     $name = $name !== '' ? $name : 'Vychozi seznam';
-    $find = $pdo->prepare('SELECT id FROM contact_databases WHERE name=? AND COALESCE(archived, 0)=0');
-    $find->execute([$name]);
+    $ownerId = currentAppUserId($pdo);
+    $find = $pdo->prepare('SELECT id FROM contact_databases WHERE name=? AND owner_user_id=? AND COALESCE(archived, 0)=0');
+    $find->execute([$name, $ownerId]);
     $existing = (int)$find->fetchColumn();
     if ($existing > 0) {
         return $existing;
     }
-    $stmt = $pdo->prepare('INSERT INTO contact_databases (name, created_at) VALUES (?, ?)');
-    $stmt->execute([$name, date('c')]);
+    $stmt = $pdo->prepare('INSERT INTO contact_databases (owner_user_id, name, created_at) VALUES (?, ?, ?)');
+    $stmt->execute([$ownerId, $name, date('c')]);
     return (int)$pdo->lastInsertId();
 }
 
@@ -6867,8 +7021,8 @@ function renameContactDatabase(PDO $pdo, int $id, string $name): void
     if ($name === '') {
         throw new RuntimeException('Zadej novy nazev databaze kontaktu.');
     }
-    $stmt = $pdo->prepare('UPDATE contact_databases SET name=? WHERE id=?');
-    $stmt->execute([$name, $id]);
+    $stmt = $pdo->prepare('UPDATE contact_databases SET name=? WHERE id=? AND owner_user_id=?');
+    $stmt->execute([$name, $id, currentAppUserId($pdo)]);
 }
 
 function archiveContactDatabase(PDO $pdo, int $id): void
@@ -6879,15 +7033,15 @@ function archiveContactDatabase(PDO $pdo, int $id): void
     $now = date('c');
     $pdo->beginTransaction();
     try {
-        $nameStmt = $pdo->prepare('SELECT name FROM contact_databases WHERE id=? AND COALESCE(archived, 0)=0');
-        $nameStmt->execute([$id]);
+        $nameStmt = $pdo->prepare('SELECT name FROM contact_databases WHERE id=? AND owner_user_id=? AND COALESCE(archived, 0)=0');
+        $nameStmt->execute([$id, currentAppUserId($pdo)]);
         $name = (string)$nameStmt->fetchColumn();
         if ($name === '') {
             throw new RuntimeException('Databaze kontaktu nenalezena.');
         }
         $suffix = ' [archiv #' . $id . ']';
         $archivedName = substr($name, 0, max(1, 255 - strlen($suffix))) . $suffix;
-        $pdo->prepare('UPDATE contact_databases SET name=?, archived=1, archived_at=? WHERE id=?')->execute([$archivedName, $now, $id]);
+        $pdo->prepare('UPDATE contact_databases SET name=?, archived=1, archived_at=? WHERE id=? AND owner_user_id=?')->execute([$archivedName, $now, $id, currentAppUserId($pdo)]);
         $pdo->prepare('UPDATE recipients SET archived=1, updated_at=? WHERE list_id=?')->execute([$now, $id]);
         $pdo->prepare('UPDATE campaigns SET status="paused", updated_at=? WHERE list_id=? AND status="active"')->execute([$now, $id]);
         $pdo->prepare('UPDATE scraping_containers SET status="deleted", updated_at=? WHERE list_id=? AND status!="deleted"')->execute([$now, $id]);
@@ -6988,22 +7142,23 @@ function contactPaginationUrl(int $listId, array $page, int $targetPage): string
 
 function contactListExists(PDO $pdo, int $id): bool
 {
-    $stmt = $pdo->prepare('SELECT COUNT(*) FROM contact_databases WHERE id=? AND COALESCE(archived, 0)=0');
-    $stmt->execute([$id]);
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM contact_databases WHERE id=? AND owner_user_id=? AND COALESCE(archived, 0)=0');
+    $stmt->execute([$id, currentAppUserId($pdo)]);
     return (int)$stmt->fetchColumn() > 0;
 }
 
-function contactListName(PDO $pdo, int $id): string
+function contactListName(PDO $pdo, int $id, ?int $ownerId = null): string
 {
-    $stmt = $pdo->prepare('SELECT name FROM contact_databases WHERE id=?');
-    $stmt->execute([$id]);
+    $ownerId = $ownerId ?? currentAppUserId($pdo);
+    $stmt = $pdo->prepare('SELECT name FROM contact_databases WHERE id=? AND owner_user_id=?');
+    $stmt->execute([$id, $ownerId]);
     return (string)($stmt->fetchColumn() ?: 'Vychozi seznam');
 }
 
 function findContactList(PDO $pdo, int $id): ?array
 {
-    $stmt = $pdo->prepare('SELECT * FROM contact_databases WHERE id=? AND COALESCE(archived, 0)=0');
-    $stmt->execute([$id]);
+    $stmt = $pdo->prepare('SELECT * FROM contact_databases WHERE id=? AND owner_user_id=? AND COALESCE(archived, 0)=0');
+    $stmt->execute([$id, currentAppUserId($pdo)]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return $row ?: null;
 }
@@ -7026,8 +7181,8 @@ function toggleCampaignStatus(PDO $pdo, int $campaignId): string
     $campaign = findCampaign($pdo, $campaignId);
     $newStatus = $campaign['status'] === 'active' ? 'paused' : 'active';
     $lastScheduledSql = $newStatus === 'active' ? ', last_scheduled_at=""' : '';
-    $stmt = $pdo->prepare('UPDATE campaigns SET status=?, updated_at=?' . $lastScheduledSql . ' WHERE id=?');
-    $stmt->execute([$newStatus, date('c'), $campaignId]);
+    $stmt = $pdo->prepare('UPDATE campaigns SET status=?, updated_at=?' . $lastScheduledSql . ' WHERE id=? AND owner_user_id=?');
+    $stmt->execute([$newStatus, date('c'), $campaignId, currentAppUserId($pdo)]);
     return $newStatus === 'active' ? 'Kampan spustena.' : 'Kampan pozastavena.';
 }
 
@@ -7240,6 +7395,7 @@ function sendCampaignBatch(PDO $pdo, array $config, array $campaign, int $runId 
     if (!$campaign) {
         return "No active campaign.\n";
     }
+    $config = effectiveConfigForUser($pdo, $config, (int)($campaign['owner_user_id'] ?? 0));
     if ($runId < 1) {
         $runId = createCampaignSendRun($pdo, (int)$campaign['id'], $runType, 'running', 'Odesilani davky zahajeno.');
     } else {
@@ -7405,8 +7561,9 @@ function campaignRemainingWindowSlots(PDO $pdo, array $campaign, ?array $pace = 
         WHERE (l.status="sent" OR l.message LIKE "Bounce:%")
           AND l.sent_at>=?
           AND COALESCE(cl.archived, 0)=0
+          AND c.owner_user_id=?
     ');
-    $senderStmt->execute([$windowStart]);
+    $senderStmt->execute([$windowStart, (int)($campaign['owner_user_id'] ?? currentAppUserId($pdo))]);
     $senderRow = $senderStmt->fetch(PDO::FETCH_ASSOC) ?: [];
     $senderSentInWindow = (int)($senderRow['sent_count'] ?? 0);
     $senderFirstSentAt = (string)($senderRow['first_sent_at'] ?? '');
@@ -7838,9 +7995,10 @@ function campaignDailyLimit(PDO $pdo, array $campaign): array
     ];
 }
 
-function senderHistoricalDailyLimit(PDO $pdo): int
+function senderHistoricalDailyLimit(PDO $pdo, int $ownerId = 0): int
 {
-    $campaignLimit = (int)$pdo->query('SELECT COALESCE(MAX(daily_limit), 0) FROM campaigns')->fetchColumn();
+    $ownerFilter = $ownerId > 0 ? ' AND c.owner_user_id=' . (int)$ownerId : '';
+    $campaignLimit = (int)$pdo->query('SELECT COALESCE(MAX(daily_limit), 0) FROM campaigns c WHERE 1=1' . $ownerFilter)->fetchColumn();
     $historyLimit = (int)$pdo->query('
         SELECT COALESCE(MAX(day_count), 0)
         FROM (
@@ -7850,6 +8008,7 @@ function senderHistoricalDailyLimit(PDO $pdo): int
             JOIN contact_databases cl ON cl.id=c.list_id
             WHERE l.status="sent"
               AND COALESCE(cl.archived, 0)=0
+              ' . $ownerFilter . '
             GROUP BY substr(l.sent_at,1,10)
         ) sent_days
     ')->fetchColumn();
@@ -7858,10 +8017,11 @@ function senderHistoricalDailyLimit(PDO $pdo): int
 
 function senderDailyLimit(PDO $pdo, array $campaign, array $pace): int
 {
+    $ownerId = (int)($campaign['owner_user_id'] ?? currentAppUserId($pdo));
     $candidate = max(
         (int)($pace['sender_limit'] ?? 0),
         (int)($pace['growth_limit'] ?? 0),
-        senderHistoricalDailyLimit($pdo)
+        senderHistoricalDailyLimit($pdo, $ownerId)
     );
     $limit = min(250, max(1, $candidate));
     $recentSent = (int)($pace['recent_sent'] ?? 0);
@@ -7882,8 +8042,14 @@ function senderDailyLimit(PDO $pdo, array $campaign, array $pace): int
 
 function findCampaign(PDO $pdo, int $id): array
 {
-    $stmt = $pdo->prepare('SELECT * FROM campaigns WHERE id=?');
-    $stmt->execute([$id]);
+    $ownerId = currentAppUserId($pdo);
+    if ($ownerId > 0) {
+        $stmt = $pdo->prepare('SELECT * FROM campaigns WHERE id=? AND owner_user_id=?');
+        $stmt->execute([$id, $ownerId]);
+    } else {
+        $stmt = $pdo->prepare('SELECT * FROM campaigns WHERE id=?');
+        $stmt->execute([$id]);
+    }
     $campaign = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$campaign) {
         throw new RuntimeException('Kampan nenalezena.');
@@ -9967,6 +10133,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             WHERE r.status="active"
               AND COALESCE(r.archived, 0)=0
               AND COALESCE(cl.archived, 0)=0
+              AND cl.owner_user_id=' . (int)currentAppUserId($pdo) . '
               AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
         ')->fetchColumn();
         $lists = contactListOptions($pdo);
@@ -9991,7 +10158,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         $importRows = importRows($pdo, $selectedListId);
         $selectedImportId = max(0, (int)($_GET['import_id'] ?? 0));
         $selectedImport = $selectedImportId > 0 ? findImportRun($pdo, $selectedImportId) : null;
-        $selectedImportItems = $selectedImportId > 0 ? importRunItems($pdo, $selectedImportId) : [];
+        $selectedImportItems = $selectedImport ? importRunItems($pdo, $selectedImportId) : [];
         $selectedList = $selectedListId > 0 ? findContactList($pdo, $selectedListId) : null;
         if ($selectedList) {
             foreach ($lists as $list) {
@@ -10030,6 +10197,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 WHERE r.status="active"
                   AND COALESCE(r.archived, 0)=0
                   AND COALESCE(cl.archived, 0)=0
+                  AND cl.owner_user_id=' . (int)currentAppUserId($pdo) . '
                   AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
             ')->fetchColumn();
             $lists = contactListOptions($pdo);
@@ -11025,8 +11193,8 @@ function recipientPage(PDO $pdo, int $listId): array
     if (!isset($sorts[$sort])) {
         $sort = 'created_at';
     }
-    $conditions = ['r.status="active"', 'COALESCE(r.archived, 0)=0', 'r.list_id=?'];
-    $values = [$listId];
+    $conditions = ['r.status="active"', 'COALESCE(r.archived, 0)=0', 'r.list_id=?', 'EXISTS (SELECT 1 FROM contact_databases owner_cl WHERE owner_cl.id=r.list_id AND owner_cl.owner_user_id=? AND COALESCE(owner_cl.archived, 0)=0)'];
+    $values = [$listId, currentAppUserId($pdo)];
     if ($query !== '') {
         $conditions[] = '(r.email LIKE ? OR r.subject_name LIKE ? OR r.website LIKE ? OR r.address LIKE ? OR r.source_label LIKE ? OR r.source_url LIKE ?)';
         $like = '%' . $query . '%';
@@ -11120,6 +11288,7 @@ function contactMetricLabel(string $metric): string
 function campaignRows(PDO $pdo): array
 {
     $windowStart = date('c', time() - 86400);
+    $ownerId = currentAppUserId($pdo);
     $rows = $pdo->query('
         SELECT c.*,
                cl.name list_name,
@@ -11171,6 +11340,7 @@ function campaignRows(PDO $pdo): array
             GROUP BY campaign_id
         ) today ON today.campaign_id=c.id
         WHERE COALESCE(cl.archived, 0)=0
+          AND c.owner_user_id=' . (int)$ownerId . '
         ORDER BY c.id DESC
     ')->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as &$row) {
@@ -11193,7 +11363,11 @@ function campaignRows(PDO $pdo): array
 
 function importRows(PDO $pdo, int $listId = 0): array
 {
-    $where = $listId > 0 ? 'WHERE list_id=' . $listId : '';
+    $filters = ['owner_user_id=' . (int)currentAppUserId($pdo)];
+    if ($listId > 0) {
+        $filters[] = 'list_id=' . (int)$listId;
+    }
+    $where = 'WHERE ' . implode(' AND ', $filters);
     return $pdo->query('
         SELECT *
         FROM import_runs
@@ -11205,6 +11379,7 @@ function importRows(PDO $pdo, int $listId = 0): array
 
 function campaignSendRuns(PDO $pdo): array
 {
+    $ownerId = currentAppUserId($pdo);
     $rows = $pdo->query('
         SELECT r.*,
                COALESCE(log_counts.sent_count, r.sent_count, 0) computed_sent_count,
@@ -11236,6 +11411,7 @@ function campaignSendRuns(PDO $pdo): array
             GROUP BY l.run_id
         ) log_counts ON log_counts.run_id=r.id
         WHERE COALESCE(cl.archived, 0)=0
+          AND c.owner_user_id=' . (int)$ownerId . '
         ORDER BY r.id DESC
         LIMIT 50
     ')->fetchAll(PDO::FETCH_ASSOC);
@@ -11251,6 +11427,7 @@ function campaignSendRuns(PDO $pdo): array
 
 function campaignSendRunSummary(PDO $pdo): array
 {
+    $ownerId = currentAppUserId($pdo);
     $row = $pdo->query('
         SELECT COUNT(DISTINCT r.id) run_count,
                COALESCE(SUM(CASE WHEN l.status="sent" THEN 1 ELSE 0 END), 0) sent_count,
@@ -11269,6 +11446,7 @@ function campaignSendRunSummary(PDO $pdo): array
             GROUP BY send_log_id
         ) events ON events.send_log_id=l.id
         WHERE COALESCE(cl.archived, 0)=0
+          AND c.owner_user_id=' . (int)$ownerId . '
     ')->fetch(PDO::FETCH_ASSOC) ?: [];
     return [
         'run_count' => (int)($row['run_count'] ?? 0),
@@ -11343,8 +11521,8 @@ function sendRunStatusLabel(array $run): string
 
 function findImportRun(PDO $pdo, int $id): ?array
 {
-    $stmt = $pdo->prepare('SELECT * FROM import_runs WHERE id=?');
-    $stmt->execute([$id]);
+    $stmt = $pdo->prepare('SELECT * FROM import_runs WHERE id=? AND owner_user_id=?');
+    $stmt->execute([$id, currentAppUserId($pdo)]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return $row ?: null;
 }
@@ -11427,9 +11605,10 @@ function importItemSourceUrl(array $item): string
 
 function scrapingContainers(PDO $pdo, int $listId = 0): array
 {
+    $ownerId = currentAppUserId($pdo);
     $where = $listId > 0
-        ? 'WHERE c.status!="deleted" AND c.list_id=' . $listId . ' AND COALESCE(cl.archived, 0)=0'
-        : 'WHERE c.status!="deleted" AND COALESCE(cl.archived, 0)=0';
+        ? 'WHERE c.status!="deleted" AND c.owner_user_id=' . (int)$ownerId . ' AND c.list_id=' . (int)$listId . ' AND COALESCE(cl.archived, 0)=0'
+        : 'WHERE c.status!="deleted" AND c.owner_user_id=' . (int)$ownerId . ' AND COALESCE(cl.archived, 0)=0';
     return $pdo->query('
         SELECT c.*,
                cl.name list_name,
@@ -11446,7 +11625,7 @@ function scrapingContainers(PDO $pdo, int $listId = 0): array
 
 function scrapingJobs(PDO $pdo, int $listId = 0, int $containerId = 0): array
 {
-    $filters = [];
+    $filters = ['j.owner_user_id=' . (int)currentAppUserId($pdo)];
     if ($listId > 0) {
         $filters[] = 'j.list_id=' . $listId;
     }
@@ -11471,6 +11650,7 @@ function scrapingJobs(PDO $pdo, int $listId = 0, int $containerId = 0): array
 
 function activeScrapingJobs(PDO $pdo): array
 {
+    $ownerId = currentAppUserId($pdo);
     return $pdo->query('
         SELECT j.*,
                cl.name list_name,
@@ -11480,6 +11660,7 @@ function activeScrapingJobs(PDO $pdo): array
         LEFT JOIN contact_databases cl ON cl.id=j.list_id
         LEFT JOIN scraping_containers c ON c.id=j.container_id
         WHERE j.status IN ("queued", "running")
+          AND j.owner_user_id=' . (int)$ownerId . '
           AND COALESCE(cl.archived, 0)=0
         ORDER BY CASE WHEN j.status="running" THEN 0 ELSE 1 END, j.updated_at DESC, j.id DESC
         LIMIT 30
@@ -11511,9 +11692,11 @@ function scrapingItemsByJob(PDO $pdo, array $jobIds): array
 
 function aiResearchRuns(PDO $pdo): array
 {
+    $ownerId = aiResearchOwnerUserId($pdo);
     return $pdo->query('
         SELECT *
         FROM ai_research_runs
+        WHERE owner_user_id=' . (int)$ownerId . '
         ORDER BY id DESC
         LIMIT 100
     ')->fetchAll(PDO::FETCH_ASSOC);
@@ -11651,7 +11834,10 @@ function scrapingItemReason(array $item): string
 
 function contactLists(PDO $pdo): array
 {
-    $rows = $pdo->query('SELECT id, name FROM contact_databases WHERE COALESCE(archived, 0)=0 ORDER BY id ASC')->fetchAll(PDO::FETCH_ASSOC);
+    $ownerId = currentAppUserId($pdo);
+    $stmt = $pdo->prepare('SELECT id, name FROM contact_databases WHERE owner_user_id=? AND COALESCE(archived, 0)=0 ORDER BY id ASC');
+    $stmt->execute([$ownerId]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $contactsStmt = $pdo->prepare('
         SELECT COUNT(*)
         FROM recipients r
@@ -11696,7 +11882,9 @@ function contactLists(PDO $pdo): array
 
 function contactListOptions(PDO $pdo): array
 {
-    return $pdo->query('SELECT id, name FROM contact_databases WHERE COALESCE(archived, 0)=0 ORDER BY id ASC')->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $pdo->prepare('SELECT id, name FROM contact_databases WHERE owner_user_id=? AND COALESCE(archived, 0)=0 ORDER BY id ASC');
+    $stmt->execute([currentAppUserId($pdo)]);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 function listName(array $lists, int $id): string
@@ -11711,16 +11899,20 @@ function listName(array $lists, int $id): string
 
 function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): array
 {
-    $total = (int)$pdo->query('
+    $ownerId = currentAppUserId($pdo);
+    $stmt = $pdo->prepare('
         SELECT COUNT(*)
         FROM recipients r
         JOIN contact_databases cl ON cl.id=r.list_id
         WHERE r.status="active"
           AND COALESCE(r.archived, 0)=0
           AND COALESCE(cl.archived, 0)=0
+          AND cl.owner_user_id=?
           AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
-    ')->fetchColumn();
-    $contacted = (int)$pdo->query('
+    ');
+    $stmt->execute([$ownerId]);
+    $total = (int)$stmt->fetchColumn();
+    $stmt = $pdo->prepare('
         SELECT COUNT(DISTINCT LOWER(l.email))
         FROM send_logs l
         JOIN campaigns c ON c.id=l.campaign_id
@@ -11728,8 +11920,11 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
         WHERE l.status="sent"
           AND l.email!=""
           AND COALESCE(cl.archived, 0)=0
-    ')->fetchColumn();
-    $opened = (int)$pdo->query('
+          AND c.owner_user_id=?
+    ');
+    $stmt->execute([$ownerId]);
+    $contacted = (int)$stmt->fetchColumn();
+    $stmt = $pdo->prepare('
         SELECT COUNT(DISTINCT LOWER(l.email))
         FROM send_logs l
         JOIN campaigns c ON c.id=l.campaign_id
@@ -11737,8 +11932,11 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
         WHERE l.opened_at!=""
           AND l.email!=""
           AND COALESCE(cl.archived, 0)=0
-    ')->fetchColumn();
-    $clickedContacts = (int)$pdo->query('
+          AND c.owner_user_id=?
+    ');
+    $stmt->execute([$ownerId]);
+    $opened = (int)$stmt->fetchColumn();
+    $stmt = $pdo->prepare('
         SELECT COUNT(DISTINCT LOWER(l.email))
         FROM send_logs l
         JOIN campaigns c ON c.id=l.campaign_id
@@ -11746,8 +11944,11 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
         WHERE l.click_count>0
           AND l.email!=""
           AND COALESCE(cl.archived, 0)=0
-    ')->fetchColumn();
-    $repliedContacts = (int)$pdo->query('
+          AND c.owner_user_id=?
+    ');
+    $stmt->execute([$ownerId]);
+    $clickedContacts = (int)$stmt->fetchColumn();
+    $stmt = $pdo->prepare('
         SELECT COUNT(DISTINCT LOWER(l.email))
         FROM send_logs l
         JOIN campaigns c ON c.id=l.campaign_id
@@ -11755,14 +11956,20 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
         WHERE l.replied_at!=""
           AND l.email!=""
           AND COALESCE(cl.archived, 0)=0
-    ')->fetchColumn();
-    $clicks = (int)$pdo->query('
+          AND c.owner_user_id=?
+    ');
+    $stmt->execute([$ownerId]);
+    $repliedContacts = (int)$stmt->fetchColumn();
+    $stmt = $pdo->prepare('
         SELECT COALESCE(SUM(l.click_count),0)
         FROM send_logs l
         JOIN campaigns c ON c.id=l.campaign_id
         JOIN contact_databases cl ON cl.id=c.list_id
         WHERE COALESCE(cl.archived, 0)=0
-    ')->fetchColumn();
+          AND c.owner_user_id=?
+    ');
+    $stmt->execute([$ownerId]);
+    $clicks = (int)$stmt->fetchColumn();
     $windowStart = date('c', time() - 86400);
     $stmt = $pdo->prepare('
         SELECT COUNT(*) sent_count, MIN(l.sent_at) first_sent_at
@@ -11772,8 +11979,9 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
         WHERE l.status="sent"
           AND l.sent_at>=?
           AND COALESCE(cl.archived, 0)=0
+          AND c.owner_user_id=?
     ');
-    $stmt->execute([$windowStart]);
+    $stmt->execute([$windowStart, $ownerId]);
     $sendWindow = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
     $sentToday = (int)($sendWindow['sent_count'] ?? 0);
     $firstSentAt = (string)($sendWindow['first_sent_at'] ?? '');
@@ -11793,10 +12001,11 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
         WHERE r.status="active"
           AND COALESCE(r.archived, 0)=0
           AND COALESCE(cl.archived, 0)=0
+          AND cl.owner_user_id=?
           AND r.list_id=?
           AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
     ' . $plannedFilter);
-    $plannedStmt->execute([(int)($campaign['list_id'] ?? 1)]);
+    $plannedStmt->execute([$ownerId, (int)($campaign['list_id'] ?? 1)]);
     $planned = (int)$plannedStmt->fetchColumn();
 
     $campaignSent = $campaignOpened = $campaignClicks = $campaignReplied = 0;

@@ -90,6 +90,10 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureOnboardingEventsTable(), 'onboarding_events');
         $this->safeMigrationStep(fn() => $this->ensureAiResearchTables(), 'ai_research_tables');
         $this->safeMigrationStep(fn() => $this->ensureAppUsersTable(), 'app_users');
+        foreach (['contact_databases', 'campaigns', 'import_runs', 'scraping_containers', 'scraping_jobs', 'ai_research_runs'] as $ownedTable) {
+            $this->safeMigrationStep(fn() => $this->ensureColumn($ownedTable, 'owner_user_id', 'INTEGER NOT NULL DEFAULT 0'), $ownedTable . '.owner_user_id');
+        }
+        $this->safeMigrationStep(fn() => $this->ensureContactDatabaseOwnerScope(), 'contact_databases.owner_scope');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_sent_at', $this->textColumn("''")), 'onboarding_leads.invite_sent_at');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_last_sent_at', $this->textColumn("''")), 'onboarding_leads.invite_last_sent_at');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_send_count', 'INTEGER NOT NULL DEFAULT 0'), 'onboarding_leads.invite_send_count');
@@ -132,7 +136,7 @@ final class Database
         $statements = [
             "CREATE TABLE IF NOT EXISTS contact_databases (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL UNIQUE,
+                name VARCHAR(255) NOT NULL,
                 archived INT NOT NULL DEFAULT 0,
                 archived_at VARCHAR(40) NOT NULL DEFAULT '',
                 created_at VARCHAR(40) NOT NULL
@@ -409,6 +413,32 @@ final class Database
             if ((int)$exists === 0) {
                 $this->pdo->exec('ALTER TABLE recipients ADD UNIQUE KEY recipient_list_email (list_id, email)');
             }
+        }
+    }
+
+    private function ensureContactDatabaseOwnerScope(): void
+    {
+        $stmt = $this->pdo->query("
+            SELECT INDEX_NAME
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA=DATABASE()
+              AND TABLE_NAME='contact_databases'
+              AND NON_UNIQUE=0
+            GROUP BY INDEX_NAME
+            HAVING GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX)='name'
+        ");
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $indexName) {
+            $this->pdo->exec('ALTER TABLE contact_databases DROP INDEX ' . $this->quoteIdentifier((string)$indexName));
+        }
+        $exists = $this->pdo->query("
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA=DATABASE()
+              AND TABLE_NAME='contact_databases'
+              AND INDEX_NAME='contact_databases_owner_name'
+        ")->fetchColumn();
+        if ((int)$exists === 0) {
+            $this->pdo->exec('ALTER TABLE contact_databases ADD UNIQUE KEY contact_databases_owner_name (owner_user_id, name)');
         }
     }
 
