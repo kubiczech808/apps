@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-18-firmy-research-flow';
+const APP_VERSION = '2026-07-18-research-minimal-output';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
-const AI_RESEARCH_RESET_VERSION = '2026-07-18-firmy-seed-flow-v1';
+const AI_RESEARCH_RESET_VERSION = '2026-07-18-research-minimal-output-v1';
 
 date_default_timezone_set('Europe/Prague');
 
@@ -2110,11 +2110,7 @@ function aiResearchPlan(array $config, array $seed): array
     $fallback['audience_label'] = 'konkretni firmy, ktere mohou koupit nabidku ' . $business;
     $fallback['rationale'] = 'Research vychazi z firmy nalezene v katalogu Firmy.cz. AI ma pochopit, co seed firma prodava, komu to typicky pomaha a jaka B2B poptavka muze mit nejvyssi obchodni prinos. Cilem nejsou podobne firmy, ale firmy, ktere mohou byt zakaznikem nebo partnerem seed byznysu.';
     $fallback['email_angle'] = 'Kratke osloveni musi ukazat konkretni situaci, ve ktere kontaktovana firma muze nabidku seed firmy vyuzit.';
-    $fallback['business_summary'] = $seedDescription;
-    $fallback['products_services'] = [];
-    $fallback['serves_who'] = [];
-    $fallback['needs_partners'] = [];
-    $fallback['highest_b2b_value'] = '';
+    $fallback['business_understanding'] = $seedDescription;
     $fallback['location_scope'] = 'stejny_kraj';
     $fallback['target_location'] = aiResearchSeedRegionLabel($seed);
     $fallback['seed_description'] = $seedDescription;
@@ -2135,11 +2131,7 @@ function aiResearchPlan(array $config, array $seed): array
             'candidate_terms' => [],
             'filters' => ['Seed subjekt musi mit dostupny web s citelnym popisem produktu nebo sluzeb.'],
             'scraping_queries' => [],
-            'business_summary' => $seedDescription,
-            'products_services' => [],
-            'serves_who' => [],
-            'needs_partners' => [],
-            'highest_b2b_value' => '',
+            'business_understanding' => $seedDescription,
             'location_scope' => 'stejny_kraj',
             'target_location' => aiResearchSeedRegionLabel($seed),
             'seed_description' => $seedDescription,
@@ -2182,9 +2174,9 @@ function aiResearchPlan(array $config, array $seed): array
         . "Pouzij jen aktivni zdroje firmy_cz, zoznam_sk, herold_at, dastelefonbuch_de, dasoertliche_de, gelbeseiten_de, pkt_pl nebo panoramafirm_pl. "
         . "Pokud jde o lokalni sluzbu, zahrn mesto/region ze seed dat. Pokud si nejsi jist oborem, zvol sirsi B2B segment s jasnym triggerem.";
     $prompt = "Seed je realna firma nahodne vybrana z katalogu Firmy.cz v kategorii Vse pro firmy / kraj Praha. Pro tuto firmu mame najit nove B2B zakazniky. "
-        . "Neopisuj seed firmu a nehledame podobne firmy. Udelej obchodni uvahu: co firma prodava, pro koho to dela, s kym potrebuje spolupracovat a kde muze mit nejvyssi B2B prinos. "
-        . "Pak vyber JEDEN nejlepsi katalogovy scraping keyword pro Firmy.cz a jednu lokaci. Scraping keyword je presny text do vyhledavani katalogu, napr. 'e-shop', 'IT firma', 'hotel', 'vyrobni firma', 'ucetni kancelar'. "
-        . "Keyword nesmi byt obecny popis potreby ani marketingova veta. Musi jit o konkretni kategorii firem, ktere maji byt oslovene. "
+        . "Tvym hlavnim vystupem neni interni strategie, ale kratky kontrolni text pro cloveka. Ten text musi dokazat, ze jsi prosla web seed firmy a pochopila, jake konkretni produkty nebo sluzby nabizi. "
+        . "Pak vyber JEDNO klicove slovo bez lokace pro Firmy.cz a JEDNU konkretni lokaci. Keyword je jen kategorie firem bez mesta, napr. 'e-shop', 'IT firma', 'hotel', 'vyrobni firma', 'ucetni kancelar'. "
+        . "Lokace je konkretni misto pro filtraci, napr. 'Nusle', 'Praha', 'Vrsovice' nebo 'Brno'. Nepouzivej hodnoty jako 'stejny kraj', 'cela CR', 'lokalni trh' ani instrukcni text. "
         . "Seed kontakt: " . json_encode([
             'email' => (string)$seed['email'],
             'business' => $business,
@@ -2195,20 +2187,11 @@ function aiResearchPlan(array $config, array $seed): array
             'firmy_description' => $seedDescription,
             'website_context' => $websiteContext,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Vrat pouze JSON s klici audience_label, rationale, email_angle, market_language, business_summary, products_services, serves_who, needs_partners, highest_b2b_value, location_scope, target_location, target_segments, candidate_terms, filters, scraping_queries. "
-        . "Pokud website_context chybi nebo z nej nelze odvodit, co seed firma realne prodava, nehalucinuj. V rationale jasne uved, ze seed nema dostatek podnikatelskeho kontextu, a navrhni prazdne scraping_queries. "
-        . "audience_label = kratke lidske pojmenovani idealnich B2B zakazniku. "
-        . "rationale = 4-6 konkretnich vet hluboke uvahy, proc prave tyto firmy potrebuji seed byznys; zmin provozni bolest, buying trigger, lokaci a duvod relevance. "
-        . "business_summary = co seed firma dela jednou vetou. products_services = seznam konkretnich produktu/sluzeb. serves_who = komu seed firma slouzi. needs_partners = koho muze obchodne potrebovat. highest_b2b_value = nejvetsi konkretni B2B prinos, na ktery se ma zamerit osloveni. "
-        . "email_angle = konkretni obchodni uhel osloveni, ktery bude davat smysl prijemci. market_language = cs. "
-        . "location_scope musi byt presne jedna hodnota: cela_cr, stejne_mesto, stejny_kraj, zahranici. Pro Firmy.cz preferuj stejny_kraj nebo stejne_mesto u lokalnich sluzeb, cela_cr u produktu/sluzeb prodavatelnych celostatne. "
-        . "target_location = konkretni lidsky popis lokace, napr. Praha, Stredocesky kraj nebo cela CR. "
-        . "target_segments = 3-6 konkretnich segmentu zakazniku, ne popis seed firmy. "
-        . "candidate_terms = kratke realne katalogove dotazy bez uvozovek, napr. 'e-shop', 'IT firma', 'hotel', 'ucetni kancelar'. "
-        . "filters = pravidla, podle kterych pozdeji odmitnout nevhodne kontakty. "
-        . "scraping_queries = presne 1 objekt {source:\"firmy_cz\", keyword:\"...\", why:\"...\"}; keyword musi byt konkretni vyhledavaci fraze pro katalog Firmy.cz. "
-        . "Zakazane keywordy: 'relevantni B2B firmy', 'potencialni zakaznici', 'male firmy', 'firmy', 'sluzby pro firmy', 'B2B subjekty', 'vhodne firmy', obecne popisy a marketingove vety. "
-        . "Pokud te napadne obecny segment, preved ho na konkretni kategorii firem k vyhledani. Pokud si nejsi jist oborem, zvol sirsi B2B segment s jasnym triggerem, ale stale konkretni katalogovy keyword.";
+        . "Vrat pouze JSON {\"business_understanding\":\"...\",\"scraping_keyword\":\"...\",\"target_location\":\"...\",\"audience_label\":\"...\",\"email_angle\":\"...\"}. "
+        . "business_understanding: 1-2 kratke vety v cestine, bez instrukci, bez slov 'AI', bez planu. Musi zminit konkretni produkty/sluzby z webu. "
+        . "scraping_keyword: jen kategorie firem bez lokace. target_location: jen konkretni lokalita bez obecnych slov. "
+        . "audience_label: kratke pojmenovani koho hledame. email_angle: jedna veta konkretniho uhlu pro email. "
+        . "Zakazane keywordy: 'relevantni B2B firmy', 'potencialni zakaznici', 'male firmy', 'firmy', 'sluzby pro firmy', 'B2B subjekty', 'vhodne firmy'.";
     try {
         $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
             'x-goog-api-key: ' . $apiKey,
@@ -2225,25 +2208,20 @@ function aiResearchPlan(array $config, array $seed): array
         if ($marketLanguage !== '') {
             $plan['market_language'] = $marketLanguage;
         }
-        foreach (['business_summary', 'highest_b2b_value', 'target_location'] as $key) {
-            $value = truncatePlainText(trim((string)($json[$key] ?? '')), 700);
-            if ($value !== '') {
-                $plan[$key] = $value;
-            }
+        $understanding = truncatePlainText(trim((string)($json['business_understanding'] ?? ($json['business_summary'] ?? ''))), 420);
+        if ($understanding !== '') {
+            $plan['business_understanding'] = $understanding;
         }
-        foreach (['products_services', 'serves_who', 'needs_partners'] as $key) {
-            $values = [];
-            foreach ((array)($json[$key] ?? []) as $value) {
-                $value = truncatePlainText(trim((string)$value), 180);
-                if ($value !== '' && !in_array($value, $values, true)) {
-                    $values[] = $value;
-                }
-            }
-            if ($values) {
-                $plan[$key] = array_slice($values, 0, 8);
-            }
+        $targetLocation = aiResearchNormalizeTargetLocation((string)($json['target_location'] ?? ''), $seed);
+        if ($targetLocation !== '') {
+            $plan['target_location'] = $targetLocation;
+            $plan['location_scope'] = 'konkretni_lokace';
         }
-        $plan['location_scope'] = aiResearchNormalizeLocationScope((string)($json['location_scope'] ?? ($plan['location_scope'] ?? '')));
+        $scrapingKeyword = aiResearchKeywordWithoutLocation((string)($json['scraping_keyword'] ?? aiResearchPrimaryKeyword($plan)), (string)($plan['target_location'] ?? ''));
+        if ($scrapingKeyword !== '') {
+            $plan['candidate_terms'] = [$scrapingKeyword];
+            $plan['scraping_queries'] = [['source' => 'firmy_cz', 'keyword' => $scrapingKeyword, 'why' => 'keyword bez lokace podle pochopeni webu seed firmy']];
+        }
         $plan['seed_description'] = $seedDescription;
         $plan['seed_catalog_url'] = (string)($seed['source_url'] ?? '');
         $filters = [];
@@ -2333,6 +2311,9 @@ function aiResearchNormalizeLocationScope(string $scope): string
         'stejny_kraj' => 'stejny_kraj',
         'kraj' => 'stejny_kraj',
         'same_region' => 'stejny_kraj',
+        'konkretni_lokace' => 'konkretni_lokace',
+        'lokace' => 'konkretni_lokace',
+        'location' => 'konkretni_lokace',
         'zahranici' => 'zahranici',
         'foreign' => 'zahranici',
     ];
@@ -2345,8 +2326,36 @@ function aiResearchLocationScopeLabel(string $scope): string
         'cela_cr' => 'cela CR',
         'stejne_mesto' => 'stejne mesto',
         'stejny_kraj' => 'stejny kraj',
+        'konkretni_lokace' => 'konkretni lokace',
         'zahranici' => 'zahranici',
     ][aiResearchNormalizeLocationScope($scope)] ?? 'stejny kraj';
+}
+
+function aiResearchNormalizeTargetLocation(string $location, array $seed): string
+{
+    $location = truncatePlainText(trim(preg_replace('/\s+/', ' ', $location) ?? $location), 80);
+    $location = trim($location, " \t\n\r\0\x0B,.;:-");
+    if ($location === '' || preg_match('/^(stejny kraj|stejne mesto|cela cr|ceska republika|lokalni trh|zahranici)$/iu', $location)) {
+        $location = aiResearchSeedRegionLabel($seed);
+    }
+    return truncatePlainText($location, 80);
+}
+
+function aiResearchKeywordWithoutLocation(string $keyword, string $location): string
+{
+    $keyword = aiResearchNormalizeCatalogKeyword($keyword);
+    if ($keyword === '') {
+        return '';
+    }
+    $location = trim($location);
+    if ($location !== '') {
+        $keyword = preg_replace('/\b' . preg_quote($location, '/') . '\b/iu', ' ', $keyword) ?? $keyword;
+    }
+    foreach (['Praha', 'Brno', 'Ostrava', 'Plzen', 'Nusle', 'Vrsovice', 'Smichov', 'Karlin', 'Zizkov', 'Vinohrady'] as $place) {
+        $keyword = preg_replace('/\b' . preg_quote($place, '/') . '\b/iu', ' ', $keyword) ?? $keyword;
+    }
+    $keyword = trim(preg_replace('/\s+/', ' ', $keyword) ?? $keyword);
+    return aiResearchNormalizeCatalogKeyword($keyword);
 }
 
 function aiResearchSeedRegionLabel(array $seed): string
@@ -2371,6 +2380,14 @@ function aiResearchContactMatchesLocationScope(array $seed, array $plan, array $
     }
     if ($scope === 'zahranici') {
         return false;
+    }
+    if ($scope === 'konkretni_lokace') {
+        $location = aiResearchFoldText((string)($plan['target_location'] ?? ''));
+        if ($location === '') {
+            return true;
+        }
+        $target = aiResearchFoldText((string)($contact['address'] ?? '') . ' ' . (string)($contact['source_label'] ?? '') . ' ' . (string)($contact['source_url'] ?? ''));
+        return str_contains($target, $location);
     }
     $seedCity = aiResearchCityFromAddress((string)($seed['address'] ?? ''));
     $seedRegion = aiResearchSeedRegionLabel($seed);
@@ -2666,6 +2683,24 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
     if (trim((string)($plan['target_location'] ?? '')) === '') {
         $plan['target_location'] = aiResearchSeedRegionLabel($seed);
     }
+    foreach ((array)($plan['scraping_queries'] ?? []) as $idx => $query) {
+        if (!is_array($query)) {
+            continue;
+        }
+        $cleanKeyword = aiResearchKeywordWithoutLocation((string)($query['keyword'] ?? ''), (string)($plan['target_location'] ?? ''));
+        if ($cleanKeyword !== '') {
+            $plan['scraping_queries'][$idx]['keyword'] = $cleanKeyword;
+        }
+    }
+    $candidateTerms = [];
+    foreach ((array)($plan['candidate_terms'] ?? []) as $term) {
+        $cleanTerm = aiResearchKeywordWithoutLocation((string)$term, (string)($plan['target_location'] ?? ''));
+        if ($cleanTerm !== '' && !in_array($cleanTerm, $candidateTerms, true)) {
+            $candidateTerms[] = $cleanTerm;
+        }
+    }
+    $plan['candidate_terms'] = $candidateTerms;
+    $plan['primary_keyword'] = aiResearchPrimaryKeyword($plan);
     return $plan;
 }
 
@@ -2839,7 +2874,9 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         . "Lokacni pravidlo z planu je povinne: " . aiResearchLocationScopeLabel((string)($plan['location_scope'] ?? '')) . ", cilova lokace " . (string)($plan['target_location'] ?? '') . ". "
         . "Pokud je kontakt vhodny, fit_reason musi rict, proc prave tento typ firmy muze potrebovat seed nabidku a jaky trigger oslovenim resime. "
         . "Vsechny subject/html texty napis jednim jazykem podle market_language v planu (" . (string)($plan['market_language'] ?? 'cs') . "). "
-        . "HTML je kratke unikatni obchodni osloveni pro dany kontakt, vecne a bez prehnanych slibu.";
+        . "HTML je kratke unikatni obchodni osloveni pro dany kontakt, vecne a bez prehnanych slibu. "
+        . "Email nesmi byt obecny. Musi vychazet z tohoto pochopeni seed webu: " . (string)($plan['business_understanding'] ?? '') . ". "
+        . "V emailu konkretne napoj nabidku seed firmy na typ kontaktovane firmy; nepouzivej prazdne vety typu 'vidime konkretni moznost spoluprace'.";
     try {
         $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
             'x-goog-api-key: ' . $apiKey,
@@ -2945,7 +2982,9 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         . "Ukazkove nalezene kontakty: " . json_encode(array_slice($contacts, 0, 3), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Vrat pouze JSON {\"subject\":\"...\",\"html\":\"...\"}. "
         . "Jazyk pouzij podle market_language (" . $language . "). "
-        . "HTML bude kratke, vecne a bude odrazet konkretni B2B use-case, ne obecny spam. Pokud neni konkretni kontakt, oslov segment obecne.";
+        . "HTML bude kratke, vecne a bude odrazet konkretni B2B use-case, ne obecny spam. "
+        . "Musis vyjit z pochopeni webu seed firmy: " . (string)($plan['business_understanding'] ?? '') . ". "
+        . "Nepouzivej obecne vety typu 'mohla by byt relevantni nabidka'. Konkretne napis, co seed firma nabizi a proc to dava smysl pro vybrany typ kontaktu.";
     try {
         $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
             'x-goog-api-key: ' . $apiKey,
@@ -12141,7 +12180,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <button type="submit" name="action" value="run_ai_research_now">Spustit research ted</button>
             </form>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Osloveni</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>AI cileni</th><th>Databaze hledani</th><th>Scraping keyword</th><th>Lokace</th><th>Nalezeno</th><th>Vhodne</th><th>Zprava</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Osloveni</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopeni webu</th><th>Databaze hledani</th><th>Klicove slovo</th><th>Lokace</th><th>Nalezeno</th><th>Vhodne</th><th>Zprava</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
             <tr><td colspan="13">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
@@ -12149,6 +12188,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
             <?php $runLanguage = aiResearchRunLanguage($run, $runContacts); ?>
             <?php $runPlan = json_decode((string)$run['plan_json'], true) ?: []; ?>
+            <?php $runUnderstanding = trim((string)($runPlan['business_understanding'] ?? ($runPlan['business_summary'] ?? ''))); ?>
             <tr class="expandable-row" data-detail-target="ai-research-detail-<?= h((string)$run['id']) ?>" tabindex="0" aria-expanded="false">
                 <td>Zobrazit</td>
                 <td>
@@ -12177,10 +12217,10 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><strong><?= h((string)$run['seed_business']) ?></strong><?php if ($run['seed_website']): ?><br><a href="<?= h((string)$run['seed_website']) ?>" target="_blank" rel="noopener"><?= h((string)$run['seed_website']) ?></a><?php endif; ?></td>
                 <td><?= h((string)$run['seed_email']) ?></td>
                 <td><?= statusBadge((string)$run['status']) ?></td>
-                <td><?= h((string)$run['audience_label']) ?></td>
+                <td><?= h($runUnderstanding !== '' ? $runUnderstanding : (string)$run['audience_label']) ?></td>
                 <td><?= h((string)($run['search_source_label'] ?? '-')) ?></td>
                 <td><?= h((string)($run['scraping_keyword'] ?? '')) ?></td>
-                <td><?= h(aiResearchLocationScopeLabel((string)($runPlan['location_scope'] ?? ''))) ?><?php if (trim((string)($runPlan['target_location'] ?? '')) !== ''): ?><br><span class="muted"><?= h((string)$runPlan['target_location']) ?></span><?php endif; ?></td>
+                <td><?= h((string)($runPlan['target_location'] ?? '')) ?></td>
                 <td><?= h((string)$run['found_count']) ?></td>
                 <td><?= h((string)$run['accepted_count']) ?></td>
                 <td><?= h((string)$run['message']) ?></td>
@@ -12194,29 +12234,14 @@ function renderApp(PDO $pdo, ?array $flash): void
                         </div>
                         <div class="research-plan-grid">
                             <section>
-                                <h3>Co AI vymyslela</h3>
-                                <p><strong>Cileni:</strong> <?= h((string)$run['audience_label']) ?></p>
-                                <p><strong>Databaze hledani:</strong> <?= h((string)($run['search_source_label'] ?? '-')) ?></p>
-                                <p><strong>Scraping keyword:</strong> <?= h((string)($run['scraping_keyword'] ?? '')) ?></p>
-                                <p><strong>Lokace:</strong> <?= h(aiResearchLocationScopeLabel((string)($runPlan['location_scope'] ?? ''))) ?><?php if (trim((string)($runPlan['target_location'] ?? '')) !== ''): ?> / <?= h((string)$runPlan['target_location']) ?><?php endif; ?></p>
-                                <p><strong>Proc:</strong> <?= h((string)$run['rationale']) ?></p>
-                                <p><strong>Uhel emailu:</strong> <?= h((string)$run['email_angle']) ?></p>
+                                <h3>Pochopeni firmy</h3>
+                                <p><?= h($runUnderstanding !== '' ? $runUnderstanding : 'Zatim neni ulozeny kratky popis z webu.') ?></p>
                             </section>
                             <section>
-                                <h3>Lustrace seed firmy</h3>
-                                <p><strong>Popis z katalogu:</strong> <?= h((string)($runPlan['seed_description'] ?? '')) ?></p>
-                                <p><strong>Co dela:</strong> <?= h((string)($runPlan['business_summary'] ?? '')) ?></p>
-                                <p><strong>Produkty/sluzby:</strong> <?= h(implode(', ', array_map('strval', (array)($runPlan['products_services'] ?? [])))) ?></p>
-                                <p><strong>Pro koho:</strong> <?= h(implode(', ', array_map('strval', (array)($runPlan['serves_who'] ?? [])))) ?></p>
-                                <p><strong>Koho potrebuje:</strong> <?= h(implode(', ', array_map('strval', (array)($runPlan['needs_partners'] ?? [])))) ?></p>
-                                <p><strong>Nejvetsi B2B prinos:</strong> <?= h((string)($runPlan['highest_b2b_value'] ?? '')) ?></p>
-                            </section>
-                            <section>
-                                <h3>Filtry a hledani</h3>
-                                <?php $filters = json_decode((string)$run['filters_json'], true) ?: []; ?>
-                                <p><strong>Filtry:</strong> <?= h(implode('; ', array_map('strval', $filters))) ?></p>
-                                <p><strong>Klicova slova:</strong> <?= h(implode(', ', array_map('strval', (array)($runPlan['candidate_terms'] ?? [])))) ?></p>
-                                <p><strong>Zdroje:</strong> <?= h(implode(', ', array_map(static fn($q) => is_array($q) ? scrapingSourceLabel((string)($q['source'] ?? '')) . ' / ' . (string)($q['keyword'] ?? '') : '', (array)($runPlan['scraping_queries'] ?? [])))) ?></p>
+                                <h3>Hledani kontaktu</h3>
+                                <p><strong>Databaze:</strong> <?= h((string)($run['search_source_label'] ?? '-')) ?></p>
+                                <p><strong>Klicove slovo:</strong> <?= h((string)($run['scraping_keyword'] ?? '')) ?></p>
+                                <p><strong>Lokace:</strong> <?= h((string)($runPlan['target_location'] ?? '')) ?></p>
                             </section>
                             <section>
                                 <h3>Vzor osloveni</h3>
