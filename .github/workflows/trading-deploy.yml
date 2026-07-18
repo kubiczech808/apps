@@ -20,6 +20,33 @@ jobs:
             exit 1
           fi
 
+      - name: Build trading server config
+        env:
+          TRADING_GITHUB_TOKEN: ${{ secrets.TRADING_GITHUB_TOKEN }}
+          TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
+          TRADING_GITHUB_REPO: kubiczech808/apps
+          TRADING_GITHUB_REF: claude/energy-consumption-app-Nf7bh
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          def php_string(value):
+              return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+          config = {
+              "github_token": os.environ.get("TRADING_GITHUB_TOKEN", ""),
+              "trigger_key": os.environ.get("TRADING_TRIGGER_KEY", ""),
+              "repo": os.environ.get("TRADING_GITHUB_REPO", "kubiczech808/apps"),
+              "ref": os.environ.get("TRADING_GITHUB_REF", "claude/energy-consumption-app-Nf7bh"),
+          }
+          body = "<?php\n\nreturn [\n"
+          for key, value in config.items():
+              body += f"    {php_string(key)} => {php_string(value)},\n"
+          body += "];\n"
+          Path("trading/config.php").write_text(body, encoding="utf-8")
+          PY
+
       - name: Upload to hosting
         env:
           HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
@@ -62,7 +89,7 @@ jobs:
                   if not path.is_file():
                       continue
                   relative = path.relative_to(local_dir).as_posix()
-                  if relative not in {"index.html", "api.php"} and not relative.startswith("assets/") and not relative.startswith("data/"):
+                  if relative not in {"index.html", "api.php", "config.php"} and not relative.startswith("assets/") and not relative.startswith("data/"):
                       continue
                   if relative in {"data/paper-state.json", "data/live-state.json"}:
                       continue

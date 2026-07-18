@@ -12,6 +12,25 @@ function respond(array $payload, int $status = 200): void
     exit;
 }
 
+function app_config(): array
+{
+    $config = [];
+    $path = __DIR__ . '/config.php';
+    if (is_file($path)) {
+        $loaded = require $path;
+        if (is_array($loaded)) {
+            $config = $loaded;
+        }
+    }
+
+    return [
+        'github_token' => (string) ($config['github_token'] ?? getenv('TRADING_GITHUB_TOKEN') ?: ''),
+        'trigger_key' => (string) ($config['trigger_key'] ?? getenv('TRADING_TRIGGER_KEY') ?: ''),
+        'repo' => (string) ($config['repo'] ?? getenv('TRADING_GITHUB_REPO') ?: 'kubiczech808/apps'),
+        'ref' => (string) ($config['ref'] ?? getenv('TRADING_GITHUB_REF') ?: 'claude/energy-consumption-app-Nf7bh'),
+    ];
+}
+
 function fetch_json(string $url): array
 {
     if (!function_exists('curl_init')) {
@@ -71,8 +90,171 @@ function parse_json_field(mixed $value): array
     return [];
 }
 
+function request_payload(): array
+{
+    $raw = file_get_contents('php://input');
+    $data = json_decode(is_string($raw) ? $raw : '', true);
+    return is_array($data) ? $data : [];
+}
+
+function request_header(string $name): string
+{
+    $normalized = 'HTTP_' . strtoupper(str_replace('-', '_', $name));
+    if (isset($_SERVER[$normalized])) {
+        return (string) $_SERVER[$normalized];
+    }
+
+    if (function_exists('getallheaders')) {
+        $headers = getallheaders();
+        foreach ($headers as $key => $value) {
+            if (strcasecmp((string) $key, $name) === 0) {
+                return (string) $value;
+            }
+        }
+    }
+
+    return '';
+}
+
+function dispatch_workflow(string $workflow, array $inputs): array
+{
+    $config = app_config();
+    if ($config['github_token'] === '' || $config['trigger_key'] === '') {
+        respond([
+            'ok' => false,
+            'error' => 'Workflow trigger is not configured on the server.',
+            'requiredSecrets' => ['TRADING_GITHUB_TOKEN', 'TRADING_TRIGGER_KEY'],
+        ], 503);
+    }
+
+    $providedKey = request_header('X-Trading-Trigger-Key');
+    if ($providedKey === '' || !hash_equals($config['trigger_key'], $providedKey)) {
+        respond(['ok' => false, 'error' => 'Invalid workflow trigger key.'], 403);
+    }
+
+    $url = sprintf(
+        'https://api.github.com/repos/%s/actions/workflows/%s/dispatches',
+        rawurlencode($config['repo']),
+        rawurlencode($workflow)
+    );
+    $url = str_replace('%2F', '/', $url);
+    $body = json_encode([
+        'ref' => $config['ref'],
+        'inputs' => $inputs,
+    ], JSON_UNESCAPED_SLASHES);
+
+    $httpHeaders = [
+        'Accept: application/vnd.github+json',
+        'Authorization: Bearer ' . $config['github_token'],
+        'Content-Type: application/json',
+        'User-Agent: osobnizkusenosti-trading-trigger',
+        'X-GitHub-Api-Version: 2022-11-28',
+    ];
+
+    if (!function_exists('curl_init')) {
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'POST',
+                'header' => implode("\r\n", $httpHeaders) . "\r\n",
+                'content' => $body,
+                'timeout' => 20,
+                'ignore_errors' => true,
+            ],
+        ]);
+        $responseBody = @file_get_contents($url, false, $context);
+        $status = 0;
+        foreach ($http_response_header ?? [] as $header) {
+            if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $header, $matches)) {
+                $status = (int) $matches[1];
+            }
+        }
+        if ($responseBody === false || $status < 200 || $status >= 300) {
+            $decoded = json_decode(is_string($responseBody) ? $responseBody : '', true);
+            $message = "GitHub HTTP {$status}";
+            if (is_array($decoded) && isset($decoded['message'])) {
+                $message .= ': ' . (string) $decoded['message'];
+            }
+            throw new RuntimeException($message);
+        }
+
+        return [
+            'status' => $status,
+            'workflow' => $workflow,
+            'ref' => $config['ref'],
+        ];
+    }
+
+    $ch = curl_init($url);
+    if ($ch === false) {
+        throw new RuntimeException('Unable to initialize GitHub request');
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_CUSTOMREQUEST => 'POST',
+        CURLOPT_POSTFIELDS => $body,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 20,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_HTTPHEADER => $httpHeaders,
+    ]);
+
+    $responseBody = curl_exec($ch);
+    $error = curl_error($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($responseBody === false || $status < 200 || $status >= 300) {
+        $message = $error !== '' ? $error : "GitHub HTTP {$status}";
+        $decoded = json_decode(is_string($responseBody) ? $responseBody : '', true);
+        if (is_array($decoded) && isset($decoded['message'])) {
+            $message .= ': ' . (string) $decoded['message'];
+        }
+        throw new RuntimeException($message);
+    }
+
+    return [
+        'status' => $status,
+        'workflow' => $workflow,
+        'ref' => $config['ref'],
+    ];
+}
+
 try {
     $action = $_GET['action'] ?? 'markets';
+
+    if ($action === 'workflow') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            respond(['ok' => false, 'error' => 'POST is required'], 405);
+        }
+
+        $payload = request_payload();
+        $target = (string) ($payload['target'] ?? '');
+        $workflows = [
+            'paper' => [
+                'workflow' => 'trading-paper-bot.yml',
+                'inputs' => ['mode' => 'full'],
+                'message' => 'Paper bot workflow dispatched.',
+            ],
+            'live' => [
+                'workflow' => 'polymarket-live-limit-order-test.yml',
+                'inputs' => ['live_confirm' => true],
+                'message' => 'Live one-time execution workflow dispatched.',
+            ],
+        ];
+
+        if (!isset($workflows[$target])) {
+            respond(['ok' => false, 'error' => 'Unknown workflow target'], 400);
+        }
+
+        $result = dispatch_workflow($workflows[$target]['workflow'], $workflows[$target]['inputs']);
+        respond([
+            'ok' => true,
+            'target' => $target,
+            'message' => $workflows[$target]['message'],
+            'workflow' => $result['workflow'],
+            'ref' => $result['ref'],
+            'generatedAt' => gmdate('c'),
+        ], $result['status'] === 204 ? 202 : 200);
+    }
 
     if ($action === 'markets') {
         $limit = max(1, min(50, (int) ($_GET['limit'] ?? 20)));

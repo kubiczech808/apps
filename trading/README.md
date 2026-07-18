@@ -60,6 +60,24 @@ The live snapshot combines public Polymarket account data with authenticated CLO
 
 The public UI never receives `POLYMARKET_PRIVATE_KEY`; GitHub Actions uses it only during snapshot generation and order smoke tests.
 
+## One-time execution buttons
+
+The UI has separate buttons for one-time paper execution and one-time live execution.
+
+The browser calls `api.php?action=workflow`; the PHP endpoint dispatches only these allowlisted GitHub Actions workflows:
+
+- `paper` -> `trading-paper-bot.yml` with `mode=full`,
+- `live` -> `polymarket-live-limit-order-test.yml` with `live_confirm=true`.
+
+The live button also requires the browser-side live execution gate to be armed. The workflow itself still performs live preflight revalidation before any order submit: current orderbook, AI probability threshold, EV threshold, spread/liquidity, diversification, capital, minimum order size, and post-only limit-order assumptions.
+
+Configure these repository secrets for the deploy workflow to generate `trading/config.php` on the hosting server:
+
+- `TRADING_GITHUB_TOKEN`: fine-grained GitHub token with Actions workflow dispatch permission for `kubiczech808/apps`.
+- `TRADING_TRIGGER_KEY`: shared trigger key requested by the UI before dispatching a workflow.
+
+`trading/config.php` is ignored by git and generated during `Deploy Trading`; without these secrets the buttons stay visible but the backend returns `Workflow trigger is not configured on the server.`
+
 ## Local executor
 
 Install dependencies inside `trading/`:

@@ -32,6 +32,7 @@ const state = {
   limitOrders: null,
   limitOrdersKey: "",
   liveExecutionArmed: false,
+  executionBusy: null,
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
@@ -39,6 +40,7 @@ const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
 const LIVE_EXECUTION_STORAGE_KEY = "tradingLiveExecutionArmed";
+const WORKFLOW_TRIGGER_KEY_STORAGE_KEY = "tradingWorkflowTriggerKey";
 const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
 const MIN_ELIGIBILITY_THRESHOLD = 0.01;
 const MAX_ELIGIBILITY_THRESHOLD = 0.99;
@@ -66,6 +68,8 @@ const els = {
   riskAllocationValue: document.querySelector("[data-risk-allocation-value]"),
   riskAllocationNote: document.querySelector("[data-risk-allocation-note]"),
   limitOrders: document.querySelector("[data-limit-orders]"),
+  executionButtons: document.querySelectorAll("[data-one-time-execution]"),
+  executionStatus: document.querySelector("[data-execution-status]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
   modeButtons: document.querySelectorAll("[data-mode-toggle]"),
@@ -167,6 +171,43 @@ function saveLiveExecutionArmed(value) {
   }
 }
 
+function workflowTriggerKey() {
+  try {
+    const stored = sessionStorage.getItem(WORKFLOW_TRIGGER_KEY_STORAGE_KEY);
+    if (stored) return stored;
+  } catch {
+    // Fall through to prompt.
+  }
+
+  const entered = window.prompt("Workflow trigger key");
+  const key = String(entered || "").trim();
+  if (!key) return "";
+  try {
+    sessionStorage.setItem(WORKFLOW_TRIGGER_KEY_STORAGE_KEY, key);
+  } catch {
+    // Session storage is a convenience only.
+  }
+  return key;
+}
+
+function setExecutionStatus(text, tone = "") {
+  if (!els.executionStatus) return;
+  els.executionStatus.textContent = text;
+  els.executionStatus.classList.toggle("error", tone === "error");
+  els.executionStatus.classList.toggle("muted", tone !== "error");
+}
+
+function syncExecutionButtons() {
+  els.executionButtons.forEach((button) => {
+    const target = button.dataset.oneTimeExecution;
+    const busy = state.executionBusy === target;
+    button.disabled = Boolean(state.executionBusy);
+    button.textContent = busy
+      ? (target === "live" ? "Starting live..." : "Starting paper...")
+      : (target === "live" ? "Run live once" : "Run paper once");
+  });
+}
+
 function syncLiveActivationUi() {
   if (!els.liveActivation) return;
   const live = state.mode === "live";
@@ -191,6 +232,7 @@ function syncModeUi() {
   if (els.accountSummary) els.accountSummary.hidden = !live;
   if (els.botStatus) els.botStatus.hidden = live;
   syncLiveActivationUi();
+  syncExecutionButtons();
 }
 
 function formatDate(value) {
@@ -1017,6 +1059,59 @@ async function fetchJson(path) {
   return statePayload.json();
 }
 
+async function triggerOneTimeExecution(target) {
+  const live = target === "live";
+  if (live && !state.liveExecutionArmed) {
+    window.alert("Nejdrive aktivuj live execution gate.");
+    return;
+  }
+  if (live) {
+    const confirmed = window.confirm("Spustit jednorazovou LIVE exekuci? Workflow znovu overi kandidaty a muze poslat realny Polymarket order.");
+    if (!confirmed) return;
+  }
+
+  const triggerKey = workflowTriggerKey();
+  if (!triggerKey) {
+    setExecutionStatus("missing trigger key", "error");
+    return;
+  }
+
+  state.executionBusy = target;
+  syncExecutionButtons();
+  setExecutionStatus(live ? "starting live workflow" : "starting paper workflow");
+
+  try {
+    const response = await fetch("api.php?action=workflow", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Trading-Trigger-Key": triggerKey,
+      },
+      body: JSON.stringify({ target }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) {
+      if (response.status === 403) {
+        try {
+          sessionStorage.removeItem(WORKFLOW_TRIGGER_KEY_STORAGE_KEY);
+        } catch {
+          // Ignore storage failures.
+        }
+      }
+      throw new Error(payload.error || `workflow HTTP ${response.status}`);
+    }
+    setExecutionStatus(`${target} workflow started`);
+    window.setTimeout(() => {
+      loadDashboardState();
+    }, 5000);
+  } catch (error) {
+    setExecutionStatus(error.message || "workflow failed", "error");
+  } finally {
+    state.executionBusy = null;
+    syncExecutionButtons();
+  }
+}
+
 async function loadLiveState() {
   try {
     const [liveResult, botResult] = await Promise.allSettled([
@@ -1591,13 +1686,20 @@ els.modeButtons.forEach((button) => {
 
 els.liveActivation?.addEventListener("click", () => {
   if (!state.liveExecutionArmed) {
-    const confirmed = window.confirm("Activate the live execution gate for this browser? This only arms the UI; this version still does not submit live orders automatically.");
+    const confirmed = window.confirm("Activate the live execution gate for this browser? Live one-time execution can submit real Polymarket orders after preflight checks.");
     if (!confirmed) return;
   }
   state.liveExecutionArmed = !state.liveExecutionArmed;
   saveLiveExecutionArmed(state.liveExecutionArmed);
   syncLiveActivationUi();
   if (state.mode === "live" && state.liveState) renderLiveState(state.liveState);
+});
+
+els.executionButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const target = button.dataset.oneTimeExecution === "live" ? "live" : "paper";
+    triggerOneTimeExecution(target);
+  });
 });
 
 els.evaluationStatusButtons.forEach((button) => {

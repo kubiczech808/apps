@@ -38,6 +38,11 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
 .shell {
   min-height: 100vh;
 }
@@ -355,6 +360,33 @@ button {
   color: var(--accent-dark);
 }
 
+.execution-button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.execution-button:hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.execution-button.live {
+  border-color: #bae6fd;
+  color: #0369a1;
+}
+
+.execution-button.live:hover {
+  border-color: #0284c7;
+  color: #075985;
+}
+
 .activation-button {
   min-height: 36px;
   padding: 0 12px;
@@ -389,6 +421,16 @@ button {
   font-size: 12px;
   font-weight: 850;
   text-transform: uppercase;
+}
+
+.pill.muted {
+  background: var(--soft);
+  color: var(--muted);
+}
+
+.pill.error {
+  background: #ffedd5;
+  color: var(--danger);
 }
 
 .ledger {

@@ -3,6 +3,7 @@
 .env.local
 email-campaign/config.php
 email-campaign/storage/*.sqlite
+trading/config.php
 
 # Python
 __pycache__/
