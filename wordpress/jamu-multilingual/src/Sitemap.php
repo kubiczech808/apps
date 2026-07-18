@@ -22,7 +22,7 @@ final class Sitemap
 
     public function maybe_render(): void
     {
-        if (!(int) get_query_var('jamu_sitemap')) {
+        if (!(int) get_query_var('jamu_sitemap') && !$this->is_direct_sitemap_request()) {
             return;
         }
 
@@ -33,6 +33,11 @@ final class Sitemap
         echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">' . "\n";
 
         foreach ($this->group_rows($this->repository->all_published()) as $group) {
+            $alternates = $this->alternate_urls($group);
+            if (!$alternates) {
+                continue;
+            }
+
             foreach ($group['translations'] as $translation) {
                 $url = $this->translation_url($translation);
                 if (!$url) {
@@ -41,15 +46,12 @@ final class Sitemap
                 echo "  <url>\n";
                 echo '    <loc>' . esc_url($url) . "</loc>\n";
                 echo '    <lastmod>' . esc_html(mysql2date('c', $translation->updated_at, false)) . "</lastmod>\n";
-                foreach ($group['translations'] as $alternate) {
-                    $alternate_url = $this->translation_url($alternate);
-                    if ($alternate_url) {
-                        printf(
-                            "    <xhtml:link rel=\"alternate\" hreflang=\"%s\" href=\"%s\" />\n",
-                            esc_attr($alternate->language),
-                            esc_url($alternate_url)
-                        );
-                    }
+                foreach ($alternates as $language => $alternate_url) {
+                    printf(
+                        "    <xhtml:link rel=\"alternate\" hreflang=\"%s\" href=\"%s\" />\n",
+                        esc_attr($language),
+                        esc_url($alternate_url)
+                    );
                 }
                 echo "  </url>\n";
             }
@@ -72,6 +74,12 @@ final class Sitemap
         return $output;
     }
 
+    private function is_direct_sitemap_request(): bool
+    {
+        $path = trim((string) wp_parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH), '/');
+        return $path === 'jamu-localized-sitemap.xml';
+    }
+
     private function group_rows(array $rows): array
     {
         $groups = [];
@@ -80,10 +88,55 @@ final class Sitemap
                 continue;
             }
             $key = $row->object_type . ':' . $row->object_id;
-            $groups[$key] ??= ['translations' => []];
+            $groups[$key] ??= [
+                'object_type' => $row->object_type,
+                'object_subtype' => $row->object_subtype,
+                'object_id' => (int) $row->object_id,
+                'translations' => [],
+            ];
             $groups[$key]['translations'][] = $row;
         }
         return $groups;
+    }
+
+    private function alternate_urls(array $group): array
+    {
+        $urls = [];
+        $type = (string) ($group['object_type'] ?? '');
+        $subtype = (string) ($group['object_subtype'] ?? '');
+        $id = (int) ($group['object_id'] ?? 0);
+        if (!$id) {
+            return [];
+        }
+
+        if ($type === 'post') {
+            $default = $this->router->localized_post_url($id, Languages::DEFAULT);
+        } elseif ($type === 'term') {
+            $default = $this->router->localized_term_url($id, $subtype, Languages::DEFAULT);
+        } else {
+            $default = '';
+        }
+
+        if ($default) {
+            $urls['cs'] = $default;
+        }
+
+        foreach (array_keys($this->languages->additional()) as $language) {
+            if ($type === 'post') {
+                $url = $this->router->localized_post_url($id, $language, true);
+            } else {
+                $url = $this->router->localized_term_url($id, $subtype, $language, true);
+            }
+            if ($url) {
+                $urls[$language] = $url;
+            }
+        }
+
+        if ($default) {
+            $urls['x-default'] = $default;
+        }
+
+        return $urls;
     }
 
     private function translation_url(object $translation): string
@@ -99,4 +152,3 @@ final class Sitemap
         );
     }
 }
-
