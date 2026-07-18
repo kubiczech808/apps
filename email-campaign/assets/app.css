@@ -1954,7 +1954,7 @@ td a {
 .view-scraping .log-table th:nth-child(9),
 .view-scraping .log-table td:nth-child(9) { width: auto; }
 .view-research table {
-  min-width: 1580px;
+  min-width: 1720px;
 }
 .view-research td:nth-child(3),
 .view-research td:nth-child(4),
