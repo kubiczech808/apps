@@ -16,6 +16,7 @@ const OPPORTUNITY_MIN_ANNUAL_RETURN = Number(process.env.LIVE_OPPORTUNITY_MIN_AN
 const MAX_SPREAD = Number(process.env.LIVE_MAX_SPREAD || process.env.PAPER_MAX_SPREAD || 0.08);
 const MIN_VOLUME_24H = Number(process.env.LIVE_MIN_VOLUME_24H || process.env.PAPER_MIN_VOLUME_24H || 100);
 const MAX_ORDER_FRACTION = Number(process.env.MAX_ORDER_FRACTION || process.env.LIVE_MAX_ORDER_FRACTION || 0.05);
+const MAX_ORDER_NOTIONAL_USDC = Number(process.env.MAX_ORDER_NOTIONAL_USDC || process.env.LIVE_MAX_ORDER_NOTIONAL_USDC || Infinity);
 const CANDIDATE_SCAN_LIMIT = Number(process.env.LIVE_CANDIDATE_SCAN_LIMIT || 120);
 const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "minimum").toLowerCase();
 const USE_LIMIT_ORDERS = String(process.env.USE_LIMIT_ORDERS ?? "true").toLowerCase() !== "false";
@@ -503,7 +504,8 @@ async function main() {
     loadJsonResource(LIVE_STATE_URL, "live state"),
   ]);
   const cash = liveCashUsdc(liveState);
-  const maxNotional = Number((cash * MAX_ORDER_FRACTION).toFixed(5));
+  const fractionNotional = cash * MAX_ORDER_FRACTION;
+  const maxNotional = Number(Math.min(fractionNotional, MAX_ORDER_NOTIONAL_USDC).toFixed(5));
   const rawEvaluations = Array.isArray(paperState.evaluations) ? paperState.evaluations : [];
   const baseCandidates = latestUniqueEvaluations(rawEvaluations)
     .filter((item) => Number.isFinite(Number(item.aiProbability)))
@@ -546,6 +548,7 @@ async function main() {
       address: liveState?.account?.address || FUNDER_ADDRESS,
       cashUsdc: cash,
       maxOrderFraction: MAX_ORDER_FRACTION,
+      maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
       maxNotionalUsdc: maxNotional,
       openPositions: Array.isArray(liveState.positions) ? liveState.positions.length : 0,
       openOrders: Array.isArray(liveState.openOrders) ? liveState.openOrders.length : 0,
@@ -558,6 +561,7 @@ async function main() {
       minAnnualReturn: MIN_ANNUAL_RETURN,
       maxSpread: MAX_SPREAD,
       minVolume24hr: MIN_VOLUME_24H,
+      maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
       eligibleCandidates: eligible.length,

@@ -31,7 +31,8 @@ jobs:
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: data/live-state.json
       LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
-      MAX_ORDER_FRACTION: "0.05"
+      MAX_ORDER_FRACTION: "0.10"
+      MAX_ORDER_NOTIONAL_USDC: "0.75"
       USE_LIMIT_ORDERS: "true"
       POLYMARKET_POST_ONLY: "true"
       LIVE_ORDER_SIZE_MODE: minimum
