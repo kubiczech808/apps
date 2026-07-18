@@ -1489,6 +1489,14 @@ form.inline { margin: 0; }
   font-size: 20px;
   line-height: 1;
 }
+.flag-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 1.35em;
+  height: 1.1em;
+  overflow: hidden;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
 .language-dropdown summary strong {
   font-size: 13px;
   letter-spacing: .04em;
@@ -2401,6 +2409,9 @@ td a {
   font-size: 12px;
   font-weight: 800;
   text-transform: uppercase;
+}
+.language-switcher.flags-only > span {
+  display: none;
 }
 
 .language-switcher button.flag-button {

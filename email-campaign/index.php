@@ -8822,12 +8822,11 @@ function renderLanguageFooter(?PDO $pdo = null, array $config = []): void
     $returnTo = (string)($_SERVER['REQUEST_URI'] ?? './');
     ?>
     <footer class="app-footer">
-        <form method="post" class="language-switcher" autocomplete="off">
+        <form method="post" class="language-switcher flags-only" autocomplete="off" aria-label="Jazyk rozhrani">
             <input type="hidden" name="action" value="change_language">
             <input type="hidden" name="return_to" value="<?= h($returnTo) ?>">
-            <span>Jazyk rozhrani</span>
             <?php foreach (supportedUiLanguages() as $code => $language): ?>
-                <button type="submit" name="lang" value="<?= h($code) ?>" class="flag-button <?= $current === $code ? 'active' : '' ?>" aria-label="<?= h($language['label']) ?>" title="<?= h($language['label']) ?>" <?= $current === $code ? 'aria-current="true"' : '' ?>><span aria-hidden="true"><?= uiLanguageFlagHtml($code) ?></span></button>
+                <button type="submit" name="lang" value="<?= h($code) ?>" class="flag-button <?= $current === $code ? 'active' : '' ?>" aria-label="<?= h($language['label']) ?>" title="<?= h($language['label']) ?>" <?= $current === $code ? 'aria-current="true"' : '' ?>><span class="flag-icon" aria-hidden="true"><?= uiLanguageFlagHtml($code) ?></span></button>
             <?php endforeach; ?>
         </form>
     </footer>
@@ -8841,17 +8840,17 @@ function renderLanguageDropdown(?PDO $pdo = null, array $config = [], bool $flag
     $active = $languages[$current] ?? $languages['cs'];
     $returnTo = (string)($_SERVER['REQUEST_URI'] ?? './');
     ?>
-    <form method="post" class="language-dropdown <?= $flagsOnly ? 'flags-only' : '' ?>" autocomplete="off">
+    <form method="post" class="language-dropdown flags-only" autocomplete="off" aria-label="Jazyk rozhrani">
         <input type="hidden" name="action" value="change_language">
         <input type="hidden" name="return_to" value="<?= h($returnTo) ?>">
         <details>
             <summary aria-label="Jazyk rozhrani" title="Jazyk rozhrani">
-                <span aria-hidden="true"><?= uiLanguageFlagHtml($current) ?></span>
+                <span class="flag-icon" aria-hidden="true"><?= uiLanguageFlagHtml($current) ?></span>
             </summary>
             <div class="language-dropdown-menu">
                 <?php foreach ($languages as $code => $language): ?>
                     <button type="submit" name="lang" value="<?= h($code) ?>" class="<?= $current === $code ? 'active' : '' ?>" aria-label="<?= h($language['label']) ?>" title="<?= h($language['label']) ?>" <?= $current === $code ? 'aria-current="true"' : '' ?>>
-                        <span aria-hidden="true"><?= uiLanguageFlagHtml($code) ?></span>
+                        <span class="flag-icon" aria-hidden="true"><?= uiLanguageFlagHtml($code) ?></span>
                     </button>
                 <?php endforeach; ?>
             </div>
