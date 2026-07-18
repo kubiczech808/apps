@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-18-research-minimal-output';
+const APP_VERSION = '2026-07-19-research-website-understanding';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
-const AI_RESEARCH_RESET_VERSION = '2026-07-18-research-minimal-output-v1';
+const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-website-understanding-v1';
 
 date_default_timezone_set('Europe/Prague');
 
@@ -1930,6 +1930,9 @@ function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
             }
             $contact = extractContactFromHtml($detailHtml, $detailUrl);
             $website = normalizeWebsite(trim((string)($contact['website'] ?? '')));
+            if ($website === '' || isBlockedDirectoryWebsite($website)) {
+                continue;
+            }
             if ($website !== '' && aiResearchSeedAlreadySeen($pdo, $website, $detailUrl)) {
                 continue;
             }
@@ -2099,6 +2102,20 @@ function aiResearchSeedWebsiteContext(string $website): string
     return truncatePlainText($text, 1800);
 }
 
+function aiResearchLocalWebsiteUnderstanding(string $websiteContext, string $website): string
+{
+    $websiteContext = trim(preg_replace('/\s+/', ' ', $websiteContext) ?? $websiteContext);
+    if ($websiteContext === '') {
+        return '';
+    }
+    $sentences = preg_split('/(?<=[.!?])\s+/u', $websiteContext) ?: [$websiteContext];
+    $summary = trim(implode(' ', array_slice(array_filter($sentences, static fn($sentence) => strlen(trim((string)$sentence)) > 20), 0, 2)));
+    if ($summary === '') {
+        $summary = $websiteContext;
+    }
+    return truncatePlainText('Web ' . websiteLabel($website) . ' uvadi: ' . $summary, 420);
+}
+
 function aiResearchPlan(array $config, array $seed): array
 {
     $business = trim((string)($seed['subject_name'] ?: $seed['email']));
@@ -2106,16 +2123,19 @@ function aiResearchPlan(array $config, array $seed): array
     $address = trim((string)($seed['address'] ?? ''));
     $seedDescription = trim((string)($seed['seed_description'] ?? ''));
     $websiteContext = aiResearchSeedWebsiteContext($website);
+    $websiteUnderstandingFallback = aiResearchLocalWebsiteUnderstanding($websiteContext, $website);
     $fallback = onboardingFallbackLeadPlan($business . ' ' . $website . ' ' . $address);
     $fallback['audience_label'] = 'konkretni firmy, ktere mohou koupit nabidku ' . $business;
     $fallback['rationale'] = 'Research vychazi z firmy nalezene v katalogu Firmy.cz. AI ma pochopit, co seed firma prodava, komu to typicky pomaha a jaka B2B poptavka muze mit nejvyssi obchodni prinos. Cilem nejsou podobne firmy, ale firmy, ktere mohou byt zakaznikem nebo partnerem seed byznysu.';
     $fallback['email_angle'] = 'Kratke osloveni musi ukazat konkretni situaci, ve ktere kontaktovana firma muze nabidku seed firmy vyuzit.';
-    $fallback['business_understanding'] = $seedDescription;
+    $fallback['business_understanding'] = $websiteUnderstandingFallback;
     $fallback['targeting_reason'] = 'Keyword a lokace jsou odvozene z kategorie, webu a adresy seed firmy.';
     $fallback['location_scope'] = 'stejny_kraj';
     $fallback['target_location'] = aiResearchSeedRegionLabel($seed);
     $fallback['seed_description'] = $seedDescription;
     $fallback['seed_catalog_url'] = (string)($seed['source_url'] ?? '');
+    $fallback['website_url_analyzed'] = $website;
+    $fallback['website_context_excerpt'] = truncatePlainText($websiteContext, 900);
     $fallback['candidate_terms'] = array_slice(array_values(array_unique(array_merge(
         aiResearchFallbackTerms($business, $website, $address, aiResearchSeedCountry($seed)),
         (array)($fallback['candidate_terms'] ?? [])
@@ -2132,12 +2152,14 @@ function aiResearchPlan(array $config, array $seed): array
             'candidate_terms' => [],
             'filters' => ['Seed subjekt musi mit dostupny web s citelnym popisem produktu nebo sluzeb.'],
             'scraping_queries' => [],
-            'business_understanding' => $seedDescription,
+            'business_understanding' => '',
             'targeting_reason' => 'Bez weboveho kontextu nelze zodpovedne vysvetlit keyword ani lokalitu.',
             'location_scope' => 'stejny_kraj',
             'target_location' => aiResearchSeedRegionLabel($seed),
             'seed_description' => $seedDescription,
             'seed_catalog_url' => (string)($seed['source_url'] ?? ''),
+            'website_url_analyzed' => $website,
+            'website_context_excerpt' => '',
             'seed_unsuitable' => true,
         ];
     }
@@ -2185,12 +2207,14 @@ function aiResearchPlan(array $config, array $seed): array
             'website' => $website,
             'address' => $address,
             'source' => (string)($seed['source_label'] ?? ''),
+            'website_url' => $website,
+            'website_context_loaded_from_url' => $website,
             'firmy_detail_url' => (string)($seed['source_url'] ?? ''),
             'firmy_description' => $seedDescription,
             'website_context' => $websiteContext,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Vrat pouze JSON {\"business_understanding\":\"...\",\"scraping_keyword\":\"...\",\"target_location\":\"...\",\"targeting_reason\":\"...\",\"audience_label\":\"...\",\"email_angle\":\"...\"}. "
-        . "business_understanding: 1-2 kratke vety v cestine, bez instrukci, bez slov 'AI', bez planu. Musi zminit konkretni produkty/sluzby z webu. "
+        . "business_understanding: 1-2 kratke vety v cestine, bez instrukci, bez slov 'AI', bez planu. Musi byt shrnuti toho, co subjekt dela, vyhradne podle website_context nacteneho z website_url. Musi zminit konkretni produkty/sluzby z webu. Nepouzivej obecne domenky podle nazvu firmy ani pouze katalogovy popis z Firmy.cz. "
         . "scraping_keyword: jen kategorie firem bez lokace. target_location: jen konkretni lokalita bez obecnych slov. "
         . "targeting_reason: 1-2 konkretni vety, proc prave tato kategorie firem a tato lokalita dava obchodni smysl pro seed firmu. "
         . "audience_label: kratke pojmenovani koho hledame. email_angle: jedna veta konkretniho uhlu pro email. "
@@ -2214,6 +2238,8 @@ function aiResearchPlan(array $config, array $seed): array
         $understanding = truncatePlainText(trim((string)($json['business_understanding'] ?? ($json['business_summary'] ?? ''))), 420);
         if ($understanding !== '') {
             $plan['business_understanding'] = $understanding;
+        } elseif ($websiteUnderstandingFallback !== '') {
+            $plan['business_understanding'] = $websiteUnderstandingFallback;
         }
         $targetingReason = truncatePlainText(trim((string)($json['targeting_reason'] ?? '')), 500);
         if ($targetingReason !== '') {
@@ -2231,6 +2257,8 @@ function aiResearchPlan(array $config, array $seed): array
         }
         $plan['seed_description'] = $seedDescription;
         $plan['seed_catalog_url'] = (string)($seed['source_url'] ?? '');
+        $plan['website_url_analyzed'] = $website;
+        $plan['website_context_excerpt'] = truncatePlainText($websiteContext, 900);
         $filters = [];
         foreach ((array)($json['filters'] ?? []) as $filter) {
             $filter = truncatePlainText(trim(is_array($filter) ? json_encode($filter, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : (string)$filter), 240);
@@ -7946,12 +7974,81 @@ function firmyJsonLd(string $html): array
 function extractFirmyWebsite(string $html, string $jsonUrl): string
 {
     if (preg_match('/class=(["\'])[^"\']*\bdetailWebUrl\b[^"\']*\1[^>]*href=(["\'])(.*?)\2/is', $html, $match)) {
-        return cleanupWebsiteUrl(html_entity_decode($match[3], ENT_QUOTES, 'UTF-8'));
+        $website = cleanupWebsiteUrl(html_entity_decode($match[3], ENT_QUOTES, 'UTF-8'));
+        if ($website !== '' && !isBlockedDirectoryWebsite($website)) {
+            return $website;
+        }
     }
     if ($jsonUrl !== '') {
-        return cleanupWebsiteUrl($jsonUrl);
+        $website = cleanupWebsiteUrl($jsonUrl);
+        if ($website !== '' && !isBlockedDirectoryWebsite($website)) {
+            return $website;
+        }
+    }
+    foreach (extractExternalBusinessWebsiteCandidates($html, 'https://www.firmy.cz/') as $candidate) {
+        return $candidate;
     }
     return '';
+}
+
+function extractExternalBusinessWebsiteCandidates(string $html, string $baseUrl): array
+{
+    $candidates = [];
+    preg_match_all('/<a\b([^>]*)href=(["\'])(.*?)\2([^>]*)>(.*?)<\/a>/is', $html, $matches, PREG_SET_ORDER);
+    foreach ($matches as $match) {
+        $attrs = (string)$match[1] . ' ' . (string)$match[4];
+        $label = trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags((string)$match[5]), ENT_QUOTES, 'UTF-8')) ?? '');
+        $href = html_entity_decode(rawurldecode((string)$match[3]), ENT_QUOTES, 'UTF-8');
+        if ($href === '' || stripos($href, 'mailto:') === 0 || stripos($href, 'tel:') === 0) {
+            continue;
+        }
+        $url = cleanupWebsiteUrl(normalizeSearchResultUrl(normalizeUrl($href, $baseUrl)));
+        if ($url === '' || isBlockedDirectoryWebsite($url)) {
+            continue;
+        }
+        $score = 0;
+        $haystack = aiResearchFoldText($attrs . ' ' . $label . ' ' . $href);
+        if (preg_match('/\b(web|website|language|navstivit|navsitivit)\b/u', $haystack)) {
+            $score += 20;
+        }
+        if (preg_match('/\b(poptavka|nabidka|akce|facebook|instagram|linkedin|youtube)\b/u', $haystack)) {
+            $score -= 10;
+        }
+        $host = strtolower((string)(parse_url($url, PHP_URL_HOST) ?: ''));
+        $key = preg_replace('/^www\./i', '', $host) . '|' . $url;
+        if (!isset($candidates[$key]) || $score > $candidates[$key]['score']) {
+            $candidates[$key] = ['url' => $url, 'score' => $score];
+        }
+    }
+    usort($candidates, static fn($a, $b) => ($b['score'] <=> $a['score']) ?: strcmp($a['url'], $b['url']));
+    return array_values(array_map(static fn($item) => (string)$item['url'], $candidates));
+}
+
+function isBlockedDirectoryWebsite(string $url): bool
+{
+    $host = strtolower((string)(parse_url(normalizeWebsite($url), PHP_URL_HOST) ?: ''));
+    $host = preg_replace('/^www\./i', '', $host) ?? $host;
+    if ($host === '') {
+        return true;
+    }
+    foreach ([
+        'firmy.cz',
+        'seznam.cz',
+        'mapy.com',
+        'facebook.com',
+        'instagram.com',
+        'linkedin.com',
+        'youtube.com',
+        'youtu.be',
+        'twitter.com',
+        'x.com',
+        'tiktok.com',
+    ] as $blocked) {
+        if ($host === $blocked || str_ends_with($host, '.' . $blocked)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function cleanupWebsiteUrl(string $url): string
@@ -12315,7 +12412,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <button type="submit" name="action" value="run_ai_research_now">Spustit research ted</button>
             </form>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Osloveni</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopeni webu</th><th>Databaze hledani</th><th>Klicove slovo</th><th>Lokace</th><th>Nalezeno</th><th>Vhodne</th><th>Zprava</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Osloveni</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopeni firmy</th><th>Databaze hledani</th><th>Klicove slovo</th><th>Lokace</th><th>Nalezeno</th><th>Vhodne</th><th>Zprava</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
             <tr><td colspan="13">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
@@ -12371,6 +12468,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                         <div class="research-plan-grid">
                             <section>
                                 <h3>Pochopeni firmy</h3>
+                                <?php if (trim((string)($runPlan['website_url_analyzed'] ?? $run['seed_website'] ?? '')) !== ''): ?>
+                                    <p><strong>Analyzovany web:</strong> <a href="<?= h((string)($runPlan['website_url_analyzed'] ?? $run['seed_website'])) ?>" target="_blank" rel="noopener"><?= h((string)($runPlan['website_url_analyzed'] ?? $run['seed_website'])) ?></a></p>
+                                <?php endif; ?>
                                 <p><?= h($runUnderstanding !== '' ? $runUnderstanding : 'Zatim neni ulozeny kratky popis z webu.') ?></p>
                             </section>
                             <section>
