@@ -44,3 +44,14 @@ jobs:
           sudo -u openclaw2 -H python3 -m py_compile /home/openclaw2/scripts/x_approve.py
           sudo -u openclaw2 -H python3 -m py_compile /home/openclaw2/.openclaw/x_post.py
           sudo -u openclaw2 -H python3 -m py_compile /home/openclaw2/scripts/btc-dca-blogger.py
+
+      - name: Restart Agent D approval daemon
+        run: |
+          set -euo pipefail
+          if systemctl list-unit-files x-approve.service --no-legend | grep -q '^x-approve.service'; then
+            sudo systemctl restart x-approve.service
+            sudo systemctl is-active --quiet x-approve.service
+            echo "x-approve.service restarted"
+          else
+            echo "x-approve.service not installed; restart skipped"
+          fi
