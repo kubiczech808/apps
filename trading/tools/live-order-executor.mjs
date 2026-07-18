@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { readFile } from "node:fs/promises";
+
 const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
@@ -58,6 +60,16 @@ async function fetchJson(url, label = url) {
     throw new Error(`${label} HTTP ${response.status}${body ? `: ${body.slice(0, 180)}` : ""}`);
   }
   return response.json();
+}
+
+async function loadJsonResource(location, label = location) {
+  const source = String(location || "");
+  if (/^https?:\/\//i.test(source)) {
+    return fetchJson(`${source}${source.includes("?") ? "&" : "?"}t=${Date.now()}`, label);
+  }
+  const path = source.startsWith("file://") ? new URL(source) : source;
+  const raw = await readFile(path, "utf8");
+  return JSON.parse(raw);
 }
 
 function apiUrl(base, path, params = {}) {
@@ -482,8 +494,8 @@ async function submitOrder(order) {
 
 async function main() {
   const [paperState, liveState] = await Promise.all([
-    fetchJson(`${PAPER_STATE_URL}${PAPER_STATE_URL.includes("?") ? "&" : "?"}t=${Date.now()}`, "paper state"),
-    fetchJson(`${LIVE_STATE_URL}${LIVE_STATE_URL.includes("?") ? "&" : "?"}t=${Date.now()}`, "live state"),
+    loadJsonResource(PAPER_STATE_URL, "paper state"),
+    loadJsonResource(LIVE_STATE_URL, "live state"),
   ]);
   const cash = liveCashUsdc(liveState);
   const maxNotional = Number((cash * MAX_ORDER_FRACTION).toFixed(5));

@@ -14,10 +14,12 @@ on:
         required: true
         default: false
         type: boolean
+  schedule:
+    - cron: '7 * * * *'
 
 jobs:
   live-limit-order-test:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[live-limit-order-test]')
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || contains(github.event.head_commit.message, '[live-limit-order-test]')
     runs-on: ubuntu-latest
     env:
       POLYMARKET_HOST: https://clob.polymarket.com
@@ -26,7 +28,8 @@ jobs:
       POLYMARKET_FUNDER_ADDRESS: "0x3252de913d9323667f21f4d88fa1f996fc282293"
       POLYMARKET_SIGNATURE_TYPE: "1"
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
-      LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
+      LIVE_STATE_PATH: data/live-state.json
+      LIVE_STATE_URL: data/live-state.json
       MAX_ORDER_FRACTION: "0.05"
       USE_LIMIT_ORDERS: "true"
       POLYMARKET_POST_ONLY: "true"
@@ -57,9 +60,62 @@ jobs:
             exit 1
           fi
 
+      - name: Generate fresh live account snapshot
+        working-directory: trading
+        run: npm run live:account
+
       - name: Revalidate and maybe submit live order
         working-directory: trading
         env:
-          POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.live_confirm) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
+          POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.live_confirm) || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
         run: |
           npm run live:execute -- --confirm-live
+
+      - name: Refresh live account snapshot after execution
+        if: always()
+        working-directory: trading
+        run: npm run live:account
+
+      - name: Upload live state
+        if: always()
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+          LIVE_STATE_FILE: trading/data/live-state.json
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          from pathlib import Path
+
+          server = os.environ["HOSTING_FTP_SERVER"]
+          username = os.environ["HOSTING_FTP_USERNAME"]
+          password = os.environ["HOSTING_FTP_PASSWORD"]
+          target = os.environ["TRADING_FTP_DIR"].strip("/")
+          state_file = Path(os.environ["LIVE_STATE_FILE"])
+
+          if not state_file.exists():
+              raise SystemExit("live-state.json was not generated")
+
+          def enter_dir(ftp, parts):
+              try:
+                  ftp.cwd("/")
+              except ftplib.all_errors:
+                  pass
+              for part in parts:
+                  if not part:
+                      continue
+                  try:
+                      ftp.cwd(part)
+                  except ftplib.error_perm:
+                      ftp.mkd(part)
+                      ftp.cwd(part)
+
+          with ftplib.FTP(server, timeout=30) as ftp:
+              ftp.login(username, password)
+              enter_dir(ftp, target.split("/"))
+              with state_file.open("rb") as handle:
+                  ftp.storbinary("STOR live-state.json", handle)
+          PY

@@ -81,6 +81,8 @@ Configure these repository secrets for the deploy workflow to generate `trading/
 
 The UI reads paper/live state through `api.php?action=state&target=...` with `Cache-Control: no-store`, so page loads fetch the latest state file available on the hosting server instead of relying on browser/local static cache. `Refresh live account` dispatches the live-account sync workflow and then polls the state again.
 
+Live order signing is fully server-side in GitHub Actions. `POLYMARKET_PRIVATE_KEY` is read from GitHub Secrets during the workflow run, a fresh live account snapshot is generated immediately before revalidation, and the browser never receives the key. The scheduled live workflow can execute without manually entering a key or token for each trade; the temporary public UI workflow buttons still need `TRADING_GITHUB_TOKEN` and `TRADING_TRIGGER_KEY` until the whole interface is protected by login.
+
 ## Local executor
 
 Install dependencies inside `trading/`:
