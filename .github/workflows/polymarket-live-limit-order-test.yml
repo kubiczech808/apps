@@ -30,6 +30,7 @@ jobs:
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: data/live-state.json
+      LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
       MAX_ORDER_FRACTION: "0.05"
       USE_LIMIT_ORDERS: "true"
       POLYMARKET_POST_ONLY: "true"
@@ -84,6 +85,7 @@ jobs:
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
           TRADING_FTP_DIR: /www/trading/data
           LIVE_STATE_FILE: trading/data/live-state.json
+          LIVE_EXECUTION_STATE_FILE: trading/data/live-execution-state.json
         run: |
           python3 - <<'PY'
           import ftplib
@@ -95,6 +97,7 @@ jobs:
           password = os.environ["HOSTING_FTP_PASSWORD"]
           target = os.environ["TRADING_FTP_DIR"].strip("/")
           state_file = Path(os.environ["LIVE_STATE_FILE"])
+          execution_file = Path(os.environ["LIVE_EXECUTION_STATE_FILE"])
 
           if not state_file.exists():
               raise SystemExit("live-state.json was not generated")
@@ -118,4 +121,7 @@ jobs:
               enter_dir(ftp, target.split("/"))
               with state_file.open("rb") as handle:
                   ftp.storbinary("STOR live-state.json", handle)
+              if execution_file.exists():
+                  with execution_file.open("rb") as handle:
+                      ftp.storbinary("STOR live-execution-state.json", handle)
           PY

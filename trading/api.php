@@ -95,6 +95,7 @@ function state_payload(string $target): array
     $files = [
         'paper' => __DIR__ . '/data/paper-state.json',
         'live' => __DIR__ . '/data/live-state.json',
+        'live-execution' => __DIR__ . '/data/live-execution-state.json',
     ];
     if (!isset($files[$target])) {
         respond(['ok' => false, 'error' => 'Unknown state target'], 400);

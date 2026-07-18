@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
@@ -23,6 +24,7 @@ const DRY_RUN = String(process.env.POLYMARKET_DRY_RUN ?? "true").toLowerCase() !
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
 const DEFAULT_FUNDER = "0x3252de913d9323667f21f4d88fa1f996fc282293";
 const FUNDER_ADDRESS = process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || DEFAULT_FUNDER;
+const EXECUTION_STATE_PATH = process.env.LIVE_EXECUTION_STATE_PATH || "";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
 
 function hasFlag(name) {
@@ -439,8 +441,11 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional) {
   };
 }
 
-function printJson(payload) {
+async function emitDecision(payload) {
   console.log(JSON.stringify(payload, null, 2));
+  if (!EXECUTION_STATE_PATH) return;
+  await mkdir(dirname(EXECUTION_STATE_PATH), { recursive: true });
+  await writeFile(EXECUTION_STATE_PATH, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 }
 
 async function submitOrder(order) {
@@ -573,19 +578,27 @@ async function main() {
   };
 
   if (!best || DRY_RUN || !hasFlag("confirm-live")) {
-    printJson(decision);
+    await emitDecision(decision);
     return;
   }
 
   const response = await submitOrder(best);
   if (response?.error || response?.success === false || response?.status === "error") {
-    printJson({ ...decision, action: "REJECTED", response });
+    await emitDecision({ ...decision, action: "REJECTED", response });
     process.exit(1);
   }
-  printJson({ ...decision, action: "SUBMITTED", response });
+  await emitDecision({ ...decision, action: "SUBMITTED", response });
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  if (EXECUTION_STATE_PATH) {
+    await emitDecision({
+      mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
+      action: "ERROR",
+      reason: error?.message || String(error),
+      generatedAt: new Date().toISOString(),
+    }).catch(() => {});
+  }
   console.error(error?.stack || error?.message || String(error));
   process.exit(1);
 });
