@@ -30,6 +30,105 @@ header {
 header a { color: white; }
 .version { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
 header .version { color: #b9c8c2; margin: 0 auto 0 18px; }
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 80;
+  min-height: 64px;
+  height: auto;
+  gap: 18px;
+  padding: 0 28px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  color: white;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.app-logo-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #e8fff5, #78d8c0);
+  color: #0a3d35;
+  font-weight: 900;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.22);
+}
+.app-logo-text {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.app-topbar .tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 4px;
+  padding: 0;
+  overflow-x: auto;
+  background: transparent;
+  border-bottom: 0;
+}
+.app-topbar .tabs a {
+  color: #e6f1ed;
+  white-space: nowrap;
+}
+.app-topbar .tabs a:hover {
+  background: rgba(255,255,255,0.08);
+}
+.app-topbar .tabs a.active {
+  background: #dff2eb;
+  color: var(--accent-dark);
+}
+.app-topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+.app-topbar-actions .language-dropdown summary {
+  min-height: 38px;
+  width: 44px;
+  justify-content: center;
+  padding: 0;
+  border-color: rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.09);
+  color: white;
+  box-shadow: none;
+}
+.app-topbar-actions .language-dropdown summary::after {
+  display: none;
+}
+.app-topbar-actions .language-dropdown-menu {
+  top: calc(100% + 10px);
+}
+.app-topbar-actions .version {
+  margin: 0;
+  color: #b9c8c2;
+  white-space: nowrap;
+}
+.logout-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 13px;
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 8px;
+  color: white;
+  text-decoration: none;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.logout-link:hover {
+  background: rgba(255,255,255,0.08);
+}
 .tabs {
   display: flex;
   gap: 6px;
@@ -2138,7 +2237,26 @@ td a {
     width: 100%;
     margin: 0;
   }
+  .app-topbar {
+    align-items: stretch;
+    padding: 10px 14px;
+  }
+  .app-brand {
+    min-height: 40px;
+  }
+  .app-topbar .tabs {
+    order: 3;
+    flex-basis: 100%;
+    width: 100%;
+  }
+  .app-topbar-actions {
+    margin-left: auto;
+  }
+  .app-topbar-actions .version {
+    display: none;
+  }
   .tabs { padding: 8px 18px; overflow-x: auto; }
+  .app-topbar .tabs { padding: 0; }
   .tabs a { white-space: nowrap; }
   main { padding: 16px 12px; }
   .stats, .grid, .grid.two, .config-grid, .row, .create-database-panel form, .create-campaign-panel form, .campaign-metrics, .info-grid { grid-template-columns: 1fr; }

@@ -7809,7 +7809,7 @@ function supportedUiLanguages(): array
 {
     return [
         'cs' => ['label' => 'Cestina', 'flag' => '🇨🇿'],
-        'en' => ['label' => 'English', 'flag' => '🇬🇧'],
+        'en' => ['label' => 'English', 'flag' => '🇺🇸'],
         'de' => ['label' => 'Deutsch', 'flag' => '🇩🇪'],
     ];
 }
@@ -9632,21 +9632,27 @@ function renderApp(PDO $pdo, ?array $flash): void
     <link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>">
 </head>
 <body class="view-<?= h($view) ?>">
-<header>
-    <strong>Email rozesilac</strong>
-    <span class="version">Verze <?= h(APP_VERSION) ?></span>
-    <a href="?logout=1">Odhlasit</a>
+<header class="app-topbar">
+    <a class="app-brand" href="<?= h(routeUrl('overview')) ?>" aria-label="Email rozesilac">
+        <span class="app-logo-mark" aria-hidden="true">A</span>
+        <span class="app-logo-text">Akvizice AI</span>
+    </a>
+    <nav class="tabs" aria-label="Hlavni navigace">
+        <a class="<?= $view === 'overview' ? 'active' : '' ?>" href="<?= h(routeUrl('overview')) ?>">Prehled</a>
+        <a class="<?= $view === 'contacts' ? 'active' : '' ?>" href="<?= h(routeUrl('contacts')) ?>">Kontakty</a>
+        <a class="<?= $view === 'campaigns' ? 'active' : '' ?>" href="<?= h(routeUrl('campaigns')) ?>">Kampane</a>
+        <a class="<?= $view === 'scraping' ? 'active' : '' ?>" href="<?= h(routeUrl('scraping')) ?>">Scraping</a>
+        <?php if (canAccessAiResearch()): ?>
+        <a class="<?= $view === 'research' ? 'active' : '' ?>" href="<?= h(routeUrl('research')) ?>">AI research</a>
+        <?php endif; ?>
+        <a class="<?= $view === 'config' ? 'active' : '' ?>" href="<?= h(routeUrl('config')) ?>">Konfigurace</a>
+    </nav>
+    <div class="app-topbar-actions">
+        <?php renderLanguageDropdown($pdo, $config, true); ?>
+        <span class="version">Verze <?= h(APP_VERSION) ?></span>
+        <a class="logout-link" href="?logout=1">Odhlasit</a>
+    </div>
 </header>
-<nav class="tabs">
-    <a class="<?= $view === 'overview' ? 'active' : '' ?>" href="<?= h(routeUrl('overview')) ?>">Prehled</a>
-    <a class="<?= $view === 'contacts' ? 'active' : '' ?>" href="<?= h(routeUrl('contacts')) ?>">Kontakty</a>
-    <a class="<?= $view === 'campaigns' ? 'active' : '' ?>" href="<?= h(routeUrl('campaigns')) ?>">Kampane</a>
-    <a class="<?= $view === 'scraping' ? 'active' : '' ?>" href="<?= h(routeUrl('scraping')) ?>">Scraping</a>
-    <?php if (canAccessAiResearch()): ?>
-    <a class="<?= $view === 'research' ? 'active' : '' ?>" href="<?= h(routeUrl('research')) ?>">AI research</a>
-    <?php endif; ?>
-    <a class="<?= $view === 'config' ? 'active' : '' ?>" href="<?= h(routeUrl('config')) ?>">Konfigurace</a>
-</nav>
 <main>
     <?php renderFlash($flash); ?>
 
@@ -10554,7 +10560,6 @@ function renderApp(PDO $pdo, ?array $flash): void
     </dialog>
     <?php endif; ?>
 </main>
-<?php renderLanguageFooter($pdo, $config); ?>
 <script src="<?= h(assetUrl('assets/app.js')) ?>"></script>
 </body></html><?php
     echo localizeHtml((string)ob_get_clean(), $pdo, $config);
