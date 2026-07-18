@@ -1,6 +1,11 @@
 name: Trading Paper Bot
 
 on:
+  push:
+    paths:
+      - 'trading/tools/paper-trading-bot.mjs'
+      - 'trading/package.json'
+      - '.github/workflows/trading-paper-bot.yml'
   workflow_dispatch:
     inputs:
       mode:
