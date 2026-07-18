@@ -122,6 +122,10 @@ async function main() {
   }
 
   const response = await client.postOrder(signedOrder, OrderType[order.orderType]);
+  if (response?.error || response?.success === false || response?.status === "error") {
+    printJson({ mode: "live-submit-rejected", order, response });
+    process.exit(1);
+  }
   printJson({ mode: "live-submit", order, response });
 }
 
