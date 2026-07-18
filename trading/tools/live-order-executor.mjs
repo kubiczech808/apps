@@ -271,6 +271,13 @@ function liveCashUsdc(liveState) {
   return number(liveState?.portfolio?.equityUsdc, 0);
 }
 
+function liveTradingConfig(liveState) {
+  return {
+    funderAddress: liveState?.account?.trading?.funderAddress || liveState?.accountDiscovery?.selectedFunderAddress || FUNDER_ADDRESS,
+    signatureType: number(liveState?.account?.trading?.signatureType ?? liveState?.accountDiscovery?.selectedSignatureType, SIGNATURE_TYPE),
+  };
+}
+
 function openLiveRiskItems(liveState) {
   const positions = Array.isArray(liveState?.positions) ? liveState.positions : [];
   const openOrders = Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
@@ -488,7 +495,9 @@ async function emitDecision(payload) {
 
 async function submitOrder(order) {
   const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
-  if (!privateKey || !FUNDER_ADDRESS) throw new Error("POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER_ADDRESS are required");
+  const funderAddress = order.funderAddress || FUNDER_ADDRESS;
+  const signatureType = number(order.signatureType, SIGNATURE_TYPE);
+  if (!privateKey || !funderAddress) throw new Error("POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER_ADDRESS are required");
   const [{ ClobClient, Side, OrderType, SignatureTypeV2 }, { createWalletClient, custom }, { privateKeyToAccount }] =
     await Promise.all([
       import("@polymarket/clob-client-v2"),
@@ -517,8 +526,8 @@ async function submitOrder(order) {
     chain: CHAIN_ID,
     signer,
     creds,
-    signatureType: signatureTypeMap[SIGNATURE_TYPE] ?? SignatureTypeV2.POLY_PROXY,
-    funderAddress: FUNDER_ADDRESS,
+    signatureType: signatureTypeMap[signatureType] ?? SignatureTypeV2.POLY_PROXY,
+    funderAddress,
   });
   const options = {
     tickSize: String(order.tickSize || "0.01"),
@@ -591,6 +600,7 @@ async function main() {
     loadJsonResource(LIVE_STATE_URL, "live state"),
   ]);
   const cash = liveCashUsdc(liveState);
+  const tradingConfig = liveTradingConfig(liveState);
   const fractionNotional = cash * MAX_ORDER_FRACTION;
   const maxNotional = Number(Math.min(fractionNotional, MAX_ORDER_NOTIONAL_USDC).toFixed(5));
   const rawEvaluations = Array.isArray(paperState.evaluations) ? paperState.evaluations : [];
@@ -619,6 +629,11 @@ async function main() {
 
   const eligible = checked
     .filter((item) => item.status === "ELIGIBLE")
+    .map((item) => ({
+      ...item,
+      funderAddress: tradingConfig.funderAddress,
+      signatureType: tradingConfig.signatureType,
+    }))
     .sort((a, b) => {
       if (a.thesisType !== b.thesisType) return a.thesisType === "EDGE_OPPORTUNITY" ? -1 : 1;
       if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
@@ -633,6 +648,8 @@ async function main() {
     generatedAt: new Date().toISOString(),
     account: {
       address: liveState?.account?.address || FUNDER_ADDRESS,
+      funderAddress: tradingConfig.funderAddress,
+      signatureType: tradingConfig.signatureType,
       cashUsdc: cash,
       maxOrderFraction: MAX_ORDER_FRACTION,
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,

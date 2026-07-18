@@ -6,13 +6,23 @@ import { dirname } from "node:path";
 const DATA_API = process.env.POLYMARKET_DATA_API || "https://data-api.polymarket.com";
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
+const POLYGON_RPC = process.env.POLYGON_RPC_URL || "https://polygon-bor-rpc.publicnode.com";
+const PUSD_TOKEN = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB";
+const USDCE_TOKEN = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const USDC_TOKEN = "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
 const DEFAULT_ADDRESS = "0x3252de913d9323667f21f4d88fa1f996fc282293";
-const ACCOUNT_ADDRESS = (process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || DEFAULT_ADDRESS).toLowerCase();
+const CONFIGURED_ACCOUNT_ADDRESS = (process.env.POLYMARKET_ADDRESS || DEFAULT_ADDRESS).toLowerCase();
+const CONFIGURED_FUNDER_ADDRESS = (process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || DEFAULT_ADDRESS).toLowerCase();
 const STATE_PATH = process.env.LIVE_STATE_PATH || "data/live-state.json";
 const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
 const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
+let ACCOUNT_ADDRESS = CONFIGURED_ACCOUNT_ADDRESS;
+let ACTIVE_FUNDER_ADDRESS = CONFIGURED_FUNDER_ADDRESS;
+let ACTIVE_SIGNATURE_TYPE = SIGNATURE_TYPE;
+let ACTIVE_SIGNER_ADDRESS = null;
+let ACCOUNT_DISCOVERY = null;
 
 function number(value, fallback = null) {
   const numeric = Number(value);
@@ -39,6 +49,22 @@ function rawUnitsToUsdc(value) {
     if (numeric == null) return null;
     return numeric > 10000 ? numeric / 1000000 : numeric;
   }
+}
+
+function uniqueAddresses(values) {
+  const seen = new Set();
+  const result = [];
+  for (const value of values) {
+    const address = String(value || "").trim().toLowerCase();
+    if (!/^0x[a-f0-9]{40}$/.test(address) || seen.has(address)) continue;
+    seen.add(address);
+    result.push(address);
+  }
+  return result;
+}
+
+function uniqueNumbers(values) {
+  return [...new Set(values.map((value) => Number(value)).filter(Number.isFinite))];
 }
 
 function isoTime(value) {
@@ -96,6 +122,54 @@ async function fetchGammaJson(path, params = {}) {
     throw new Error(`${path} HTTP ${response.status}${body ? `: ${body.slice(0, 160)}` : ""}`);
   }
   return response.json();
+}
+
+async function optionalValue(label, promise, fallback = null, warnings = null) {
+  try {
+    return await promise;
+  } catch (error) {
+    if (warnings) warnings.push(`${label}: ${error?.message || String(error)}`);
+    return fallback;
+  }
+}
+
+async function erc20Balance(token, holder) {
+  const data = `0x70a08231000000000000000000000000${String(holder).toLowerCase().replace(/^0x/, "")}`;
+  const response = await fetch(POLYGON_RPC, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "User-Agent": "osobnizkusenosti-trading-live-sync" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "eth_call",
+      params: [{ to: token, data }, "latest"],
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Polygon RPC HTTP ${response.status}${body ? `: ${body.slice(0, 120)}` : ""}`);
+  }
+  const payload = await response.json();
+  if (payload.error) throw new Error(payload.error.message || JSON.stringify(payload.error));
+  return rawUnitsToUsdc(payload.result);
+}
+
+async function loadTokenBalances(address) {
+  const [pUsd, usdcE, usdc] = await Promise.all([
+    optionalValue("pUSD balance", erc20Balance(PUSD_TOKEN, address), null),
+    optionalValue("USDC.e balance", erc20Balance(USDCE_TOKEN, address), null),
+    optionalValue("USDC balance", erc20Balance(USDC_TOKEN, address), null),
+  ]);
+  return {
+    pUsd,
+    usdcE,
+    usdc,
+    tokens: {
+      pUsd: PUSD_TOKEN,
+      usdcE: USDCE_TOKEN,
+      usdc: USDC_TOKEN,
+    },
+  };
 }
 
 function normalizeProfile(profile) {
@@ -373,15 +447,9 @@ function portfolioSummary(positions, valueRows, closedTrades = []) {
   };
 }
 
-async function loadClobBalanceAllowance(sync) {
+async function createClobContext() {
   const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
-  if (!privateKey) {
-    return {
-      status: "SKIPPED",
-      message: "POLYMARKET_PRIVATE_KEY is not available to this workflow",
-      collateral: null,
-    };
-  }
+  if (!privateKey) return null;
 
   const [{ ClobClient, AssetType, SignatureTypeV2 }, { createWalletClient, custom }, { privateKeyToAccount }] =
     await Promise.all([
@@ -408,18 +476,33 @@ async function loadClobBalanceAllowance(sync) {
   });
   const tempClient = new ClobClient({ host: CLOB_HOST, chain: CHAIN_ID, signer });
   const creds = await tempClient.createOrDeriveApiKey();
+  return { ClobClient, AssetType, SignatureTypeV2, signatureTypeMap, account, signer, creds };
+}
+
+async function loadClobBalanceAllowance(sync, options = {}) {
+  const context = options.context || await createClobContext();
+  if (!context) {
+    return {
+      status: "SKIPPED",
+      message: "POLYMARKET_PRIVATE_KEY is not available to this workflow",
+      collateral: null,
+    };
+  }
+  const funderAddress = String(options.funderAddress || ACCOUNT_ADDRESS).toLowerCase();
+  const signatureType = Number(options.signatureType ?? SIGNATURE_TYPE);
+  const { ClobClient, AssetType, SignatureTypeV2, signatureTypeMap, signer, creds } = context;
   const client = new ClobClient({
     host: CLOB_HOST,
     chain: CHAIN_ID,
     signer,
     creds,
-    signatureType: signatureTypeMap[SIGNATURE_TYPE] ?? SignatureTypeV2.POLY_PROXY,
-    funderAddress: ACCOUNT_ADDRESS,
+    signatureType: signatureTypeMap[signatureType] ?? SignatureTypeV2.POLY_PROXY,
+    funderAddress,
   });
 
   const params = { asset_type: AssetType?.COLLATERAL || "COLLATERAL" };
   await client.updateBalanceAllowance(params).catch((error) => {
-    sync.warnings.push(`balance-allowance update: ${error?.message || String(error)}`);
+    sync.warnings.push(`balance-allowance update ${funderAddress}/sig${signatureType}: ${error?.message || String(error)}`);
   });
   const collateral = await client.getBalanceAllowance(params);
   let openOrders = [];
@@ -441,8 +524,9 @@ async function loadClobBalanceAllowance(sync) {
   return {
     status: "OK",
     message: "CLOB collateral balance and allowance loaded",
-    signatureType: SIGNATURE_TYPE,
-    funderAddress: ACCOUNT_ADDRESS,
+    signerAddress: context.account.address.toLowerCase(),
+    signatureType,
+    funderAddress,
     collateral: {
       assetType: "COLLATERAL",
       balanceRaw: collateral.balance ?? null,
@@ -456,6 +540,119 @@ async function loadClobBalanceAllowance(sync) {
   };
 }
 
+async function discoverTradingAccount(sync) {
+  const discoveryWarnings = [];
+  const context = await optionalValue("clob context", createClobContext(), null, discoveryWarnings);
+  const signerAddress = context?.account?.address?.toLowerCase() || null;
+  const envCandidates = uniqueAddresses([
+    CONFIGURED_ACCOUNT_ADDRESS,
+    CONFIGURED_FUNDER_ADDRESS,
+    process.env.POLYMARKET_PROXY_WALLET_ADDRESS,
+    process.env.POLYMARKET_DEPOSIT_WALLET_ADDRESS,
+    signerAddress,
+  ]);
+
+  const profileCache = new Map();
+  async function profileFor(address) {
+    if (profileCache.has(address)) return profileCache.get(address);
+    const profile = await optionalValue(
+      `public-profile ${address}`,
+      fetchGammaJson("/public-profile", { address }),
+      null,
+      discoveryWarnings,
+    );
+    profileCache.set(address, profile && !profile.error ? profile : null);
+    return profileCache.get(address);
+  }
+
+  const expanded = [...envCandidates];
+  for (const address of envCandidates) {
+    const profile = await profileFor(address);
+    if (profile?.proxyWallet) expanded.push(profile.proxyWallet);
+  }
+
+  const addresses = uniqueAddresses(expanded);
+  const signatureTypes = uniqueNumbers([SIGNATURE_TYPE, 3, 1, 2, 0]);
+  const candidates = [];
+
+  for (const address of addresses) {
+    const profile = await profileFor(address);
+    const [valueRows, tokenBalances] = await Promise.all([
+      optionalValue(`value ${address}`, fetchJson("/value", { user: address }), [], discoveryWarnings),
+      optionalValue(`token balances ${address}`, loadTokenBalances(address), null, discoveryWarnings),
+    ]);
+    const dataValue = Array.isArray(valueRows)
+      ? number(valueRows.find((row) => String(row.user || "").toLowerCase() === address)?.value, 0)
+      : 0;
+    const clobChecks = [];
+    if (context) {
+      for (const signatureType of signatureTypes) {
+        const check = await optionalValue(
+          `clob balance ${address}/sig${signatureType}`,
+          loadClobBalanceAllowance(sync, { context, funderAddress: address, signatureType }),
+          null,
+          discoveryWarnings,
+        );
+        clobChecks.push({
+          signatureType,
+          status: check?.status || "ERROR",
+          balanceUsdc: number(check?.collateral?.balanceUsdc, 0),
+          allowanceUsdc: check?.collateral?.allowanceUsdc ?? null,
+          openOrders: Array.isArray(check?.openOrders) ? check.openOrders.length : 0,
+          message: check?.message || null,
+        });
+      }
+    }
+
+    const bestClob = clobChecks
+      .filter((item) => item.status === "OK")
+      .sort((a, b) => b.balanceUsdc - a.balanceUsdc)[0] || null;
+    candidates.push({
+      address,
+      roles: [
+        address === CONFIGURED_ACCOUNT_ADDRESS ? "configured-account" : null,
+        address === CONFIGURED_FUNDER_ADDRESS ? "configured-funder" : null,
+        address === signerAddress ? "private-key-signer" : null,
+        profile?.proxyWallet && String(profile.proxyWallet).toLowerCase() === address ? "profile-proxy-wallet" : null,
+      ].filter(Boolean),
+      profile: normalizeProfile(profile),
+      dataValueUsdc: dataValue,
+      tokenBalances,
+      clobChecks,
+      bestClob,
+      score: number(bestClob?.balanceUsdc, 0) * 1000
+        + number(tokenBalances?.pUsd, 0) * 100
+        + dataValue
+        + (address === CONFIGURED_FUNDER_ADDRESS ? 0.01 : 0),
+    });
+  }
+
+  const selected = [...candidates].sort((a, b) => b.score - a.score)[0] || {
+    address: CONFIGURED_FUNDER_ADDRESS,
+    bestClob: null,
+    score: 0,
+  };
+  ACCOUNT_ADDRESS = selected.address;
+  ACTIVE_FUNDER_ADDRESS = selected.address;
+  ACTIVE_SIGNATURE_TYPE = selected.bestClob?.signatureType ?? SIGNATURE_TYPE;
+  ACTIVE_SIGNER_ADDRESS = signerAddress;
+  ACCOUNT_DISCOVERY = {
+    signerAddress,
+    configuredAccountAddress: CONFIGURED_ACCOUNT_ADDRESS,
+    configuredFunderAddress: CONFIGURED_FUNDER_ADDRESS,
+    selectedAddress: ACCOUNT_ADDRESS,
+    selectedFunderAddress: ACTIVE_FUNDER_ADDRESS,
+    selectedSignatureType: ACTIVE_SIGNATURE_TYPE,
+    selectedReason: selected.score > 0 ? "highest discovered tradeable/data balance" : "configured fallback; no positive balance candidate discovered",
+    candidates,
+    warnings: discoveryWarnings,
+  };
+  if (discoveryWarnings.length) {
+    sync.warnings.push(...discoveryWarnings.map((warning) => `account-discovery: ${warning}`));
+  }
+  return ACCOUNT_DISCOVERY;
+}
+
 async function main() {
   const generatedAt = new Date().toISOString();
   const sync = {
@@ -464,6 +661,7 @@ async function main() {
     sources: ["positions", "value", "activity", "trades", "public-profile", "clob-balance-allowance"],
     warnings: [],
   };
+  await discoverTradingAccount(sync);
 
   let rawPositions = [];
   let rawActivity = [];
@@ -487,7 +685,10 @@ async function main() {
     optional("activity", fetchJson("/activity", { user: ACCOUNT_ADDRESS, limit: ACTIVITY_LIMIT }), []),
     optional("trades", fetchJson("/trades", { user: ACCOUNT_ADDRESS, limit: TRADE_LIMIT }), []),
     optional("public-profile", fetchGammaJson("/public-profile", { address: ACCOUNT_ADDRESS }), { error: "not_available" }),
-    optional("balance-allowance", loadClobBalanceAllowance(sync), {
+    optional("balance-allowance", loadClobBalanceAllowance(sync, {
+      funderAddress: ACTIVE_FUNDER_ADDRESS,
+      signatureType: ACTIVE_SIGNATURE_TYPE,
+    }), {
       status: "ERROR",
       message: "CLOB balance allowance sync failed",
       collateral: null,
@@ -528,8 +729,17 @@ async function main() {
       label: "Polymarket account",
       connectionMode: "Read-only public API sync by proxy wallet address",
       loginMethod: "Polymarket proxy wallet; Gmail/MetaMask login is handled by Polymarket, not this frontend",
+      trading: {
+        signerAddress: ACTIVE_SIGNER_ADDRESS,
+        configuredAccountAddress: CONFIGURED_ACCOUNT_ADDRESS,
+        configuredFunderAddress: CONFIGURED_FUNDER_ADDRESS,
+        funderAddress: ACTIVE_FUNDER_ADDRESS,
+        signatureType: ACTIVE_SIGNATURE_TYPE,
+        discoveryReason: ACCOUNT_DISCOVERY?.selectedReason || null,
+      },
       profile: normalizeProfile(publicProfile?.error ? null : publicProfile),
     },
+    accountDiscovery: ACCOUNT_DISCOVERY,
     portfolio: {
       ...portfolioBase,
       equityUsdc,
