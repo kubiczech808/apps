@@ -98,17 +98,80 @@ button:disabled {
   gap: 10px;
 }
 
-.risk-allocation-control {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+.control-panel {
   margin-top: 12px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--soft);
+}
+
+.control-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.control-panel h3 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.control-grid {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) minmax(240px, 1.3fr) minmax(190px, 1fr) minmax(260px, 1.35fr);
+  gap: 10px;
+}
+
+.control-block {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.control-block.schedule-block {
+  grid-column: span 1;
+}
+
+.execution-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.control-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.schedule-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(110px, 0.75fr) minmax(130px, 1fr);
+  gap: 6px 10px;
+  align-items: baseline;
+}
+
+.schedule-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.schedule-grid strong {
+  color: var(--ink);
+  font-size: 13px;
+  text-align: right;
 }
 
 .order-mode-toggle {
@@ -135,26 +198,6 @@ button:disabled {
 .order-mode-toggle:has(input:checked) {
   border-color: #0f766e;
   color: #115e59;
-}
-
-.risk-allocation-control > div {
-  min-width: 220px;
-  text-align: right;
-}
-
-.risk-allocation-control strong,
-.risk-allocation-control span {
-  display: block;
-}
-
-.risk-allocation-control > div strong {
-  font-size: 18px;
-}
-
-.risk-allocation-control > div span {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .account-summary {
@@ -669,6 +712,7 @@ body.modal-open {
 }
 
 @media (max-width: 1180px) {
+  .control-grid,
   .portfolio-cards,
   .bot-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -691,8 +735,23 @@ body.modal-open {
     justify-content: flex-start;
   }
 
+  .control-panel-head,
+  .execution-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .control-grid,
   .portfolio-cards,
   .bot-summary {
     grid-template-columns: 1fr;
+  }
+
+  .schedule-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-grid strong {
+    text-align: left;
   }
 }

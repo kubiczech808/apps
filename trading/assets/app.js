@@ -70,6 +70,9 @@ const els = {
   limitOrders: document.querySelector("[data-limit-orders]"),
   executionButtons: document.querySelectorAll("[data-one-time-execution]"),
   executionStatus: document.querySelector("[data-execution-status]"),
+  nextPaperExecution: document.querySelector("[data-next-paper-execution]"),
+  nextLiveExecution: document.querySelector("[data-next-live-execution]"),
+  nextLiveSync: document.querySelector("[data-next-live-sync]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
   modeButtons: document.querySelectorAll("[data-mode-toggle]"),
@@ -210,8 +213,7 @@ function syncExecutionButtons() {
 
 function syncLiveActivationUi() {
   if (!els.liveActivation) return;
-  const live = state.mode === "live";
-  els.liveActivation.hidden = !live;
+  els.liveActivation.hidden = false;
   els.liveActivation.classList.toggle("armed", state.liveExecutionArmed);
   els.liveActivation.setAttribute("aria-pressed", state.liveExecutionArmed ? "true" : "false");
   els.liveActivation.textContent = state.liveExecutionArmed ? "Live execution armed" : "Activate live execution";
@@ -250,6 +252,55 @@ function formatDate(value) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function nextHourlyMinute(minute, from = new Date()) {
+  const next = new Date(from);
+  next.setSeconds(0, 0);
+  next.setMinutes(minute);
+  if (next <= from) next.setHours(next.getHours() + 1);
+  return next;
+}
+
+function nextMinuteFromSet(minutes, from = new Date()) {
+  const sorted = [...minutes].sort((a, b) => a - b);
+  for (const minute of sorted) {
+    const candidate = new Date(from);
+    candidate.setSeconds(0, 0);
+    candidate.setMinutes(minute);
+    if (candidate > from) return candidate;
+  }
+  const next = new Date(from);
+  next.setSeconds(0, 0);
+  next.setHours(next.getHours() + 1);
+  next.setMinutes(sorted[0]);
+  return next;
+}
+
+function compactTimeUntil(date, from = new Date()) {
+  const diffMs = date.getTime() - from.getTime();
+  if (!Number.isFinite(diffMs) || diffMs <= 0) return "now";
+  const minutes = Math.ceil(diffMs / 60000);
+  if (minutes < 60) return `in ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `in ${hours}h ${rest}m` : `in ${hours}h`;
+}
+
+function scheduleLabel(date) {
+  return `${formatDate(date.toISOString())} (${compactTimeUntil(date)})`;
+}
+
+function updateSchedulePanel() {
+  if (els.nextPaperExecution) {
+    els.nextPaperExecution.textContent = scheduleLabel(nextHourlyMinute(7));
+  }
+  if (els.nextLiveExecution) {
+    els.nextLiveExecution.textContent = "manual only";
+  }
+  if (els.nextLiveSync) {
+    els.nextLiveSync.textContent = scheduleLabel(nextMinuteFromSet([5, 20, 35, 50]));
+  }
 }
 
 function decimalOdds(price) {
@@ -1812,4 +1863,6 @@ els.closedTrades?.addEventListener("click", handleTradeSort);
 
 state.mode = storedMode();
 state.liveExecutionArmed = storedLiveExecutionArmed();
+updateSchedulePanel();
+window.setInterval(updateSchedulePanel, 60000);
 loadDashboardState();
