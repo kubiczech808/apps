@@ -4031,7 +4031,7 @@ def sanitize_virtual_assistant_reply(reply: str) -> str:
     text = str(reply or "").strip()
     if not text:
         return text
-    if len(text) > 120 and text[-1].isalpha():
+    if len(text) > 90 and text[-1].isalpha():
         sentence_end = max(text.rfind("."), text.rfind("!"), text.rfind("?"))
         trailing = text[sentence_end + 1 :].strip() if sentence_end >= 0 else text
         if sentence_end > 80 and 12 <= len(trailing) <= 180:
