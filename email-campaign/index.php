@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 const APP_VERSION = '2026-07-14-gemini-onboarding';
+const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 
 date_default_timezone_set('Europe/Prague');
 
@@ -2420,6 +2421,7 @@ function effectiveConfig(PDO $pdo, array $config): array
     if (empty($config['admin_email'])) {
         $config['admin_email'] = $settings['from_email'] ?? ($config['from_email'] ?? '');
     }
+    $config['admin_email'] = AI_RESEARCH_ALLOWED_EMAIL;
     foreach (['host', 'port', 'username', 'password', 'encryption', 'dkim_selector'] as $key) {
         $settingKey = 'smtp_' . $key;
         if (array_key_exists($settingKey, $settings) && $settings[$settingKey] !== '') {
@@ -9481,10 +9483,19 @@ function currentView(): string
     $route = trim((string)($_GET['route'] ?? ''), '/');
     $map = ['dashboard' => 'overview', 'contacts' => 'contacts', 'campaigns' => 'campaigns', 'scraping' => 'scraping', 'research' => 'research', 'config' => 'config'];
     if (isset($map[$route])) {
-        return $map[$route];
+        return $map[$route] === 'research' && !canAccessAiResearch() ? 'overview' : $map[$route];
     }
     $view = $_GET['view'] ?? 'overview';
+    if ($view === 'research' && !canAccessAiResearch()) {
+        return 'overview';
+    }
     return in_array($view, ['overview', 'contacts', 'campaigns', 'scraping', 'research', 'config'], true) ? $view : 'overview';
+}
+
+function canAccessAiResearch(): bool
+{
+    $email = strtolower(trim((string)($_SESSION['auth_email'] ?? '')));
+    return $email !== '' && hash_equals(AI_RESEARCH_ALLOWED_EMAIL, $email);
 }
 
 function routeUrl(string $view): string
@@ -9631,7 +9642,9 @@ function renderApp(PDO $pdo, ?array $flash): void
     <a class="<?= $view === 'contacts' ? 'active' : '' ?>" href="<?= h(routeUrl('contacts')) ?>">Kontakty</a>
     <a class="<?= $view === 'campaigns' ? 'active' : '' ?>" href="<?= h(routeUrl('campaigns')) ?>">Kampane</a>
     <a class="<?= $view === 'scraping' ? 'active' : '' ?>" href="<?= h(routeUrl('scraping')) ?>">Scraping</a>
+    <?php if (canAccessAiResearch()): ?>
     <a class="<?= $view === 'research' ? 'active' : '' ?>" href="<?= h(routeUrl('research')) ?>">AI research</a>
+    <?php endif; ?>
     <a class="<?= $view === 'config' ? 'active' : '' ?>" href="<?= h(routeUrl('config')) ?>">Konfigurace</a>
 </nav>
 <main>
