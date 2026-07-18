@@ -103,6 +103,11 @@ function compactDays(value) {
   return `${value.toFixed(1)} d`;
 }
 
+function shortAddress(value) {
+  const text = String(value || "");
+  return /^0x[a-fA-F0-9]{40}$/.test(text) ? `${text.slice(0, 6)}...${text.slice(-4)}` : text || "-";
+}
+
 function pnlClass(value) {
   return Number(value) >= 0 ? "positive" : "negative";
 }
@@ -885,6 +890,30 @@ function liveActivity(liveState) {
   return Array.isArray(liveState?.activity) ? liveState.activity : [];
 }
 
+function liveAccountName(account = {}) {
+  const profile = account.profile || {};
+  return profile.displayName || profile.pseudonym || account.label || shortAddress(account.address);
+}
+
+function liveAccountSubtitle(account = {}) {
+  const profile = account.profile || {};
+  const parts = [
+    profile.xUsername ? `X @${profile.xUsername}` : "",
+    profile.verifiedBadge ? "verified" : "",
+    account.connectionMode || "public API sync",
+  ];
+  return parts.filter(Boolean).join(" / ") || "public profile not published";
+}
+
+function liveAccountProfileLine(account = {}) {
+  const profile = account.profile || {};
+  return [
+    profile.pseudonym ? `pseudonym ${profile.pseudonym}` : "",
+    profile.displayUsernamePublic === false ? "username hidden" : "",
+    account.loginMethod || "",
+  ].filter(Boolean).join(" / ");
+}
+
 function renderLiveActivityRows(activity) {
   if (!activity.length) return '<div class="empty">Zatim zadna live aktivita na napojenem Polymarket uctu.</div>';
   return `
@@ -937,8 +966,8 @@ function renderLiveSyncDetails(liveState) {
       </div>
       <div>
         <span class="label">Account</span>
-        <strong>${escapeHtml(account.address || "-")}</strong>
-        <span>${escapeHtml(account.label || "Polymarket proxy wallet")}</span>
+        <strong>${escapeHtml(liveAccountName(account))}</strong>
+        <span>${escapeHtml(shortAddress(account.address))} / ${escapeHtml(liveAccountProfileLine(account) || "Polymarket proxy wallet")}</span>
       </div>
       <div>
         <span class="label">Sync status</span>
@@ -958,6 +987,7 @@ function renderLiveState(liveState) {
   state.liveState = liveState;
   syncModeUi();
 
+  const account = liveState.account || {};
   const portfolio = liveState.portfolio || {};
   const positions = livePositions(liveState);
   const activity = liveActivity(liveState);
@@ -977,7 +1007,7 @@ function renderLiveState(liveState) {
   if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions`;
   els.portfolioEquity.textContent = money(equity);
   els.portfolioEquity.className = pnlClass(totalPnl);
-  els.portfolioLastRun.textContent = `Live sync ${liveState.generatedAt ? formatDate(liveState.generatedAt) : "-"}`;
+  els.portfolioLastRun.textContent = `${liveAccountName(account)} / sync ${liveState.generatedAt ? formatDate(liveState.generatedAt) : "-"}`;
   els.portfolioTotalPl.textContent = signedMoney(totalPnl);
   els.portfolioTotalPl.className = pnlClass(totalPnl);
   els.portfolioTotalPlPct.textContent = signedPercent(totalPnlPct);
@@ -996,8 +1026,14 @@ function renderLiveState(liveState) {
   els.botStatus.innerHTML = `
     <div class="bot-summary">
       <div>
+        <span class="label">Synced account</span>
+        <strong>${escapeHtml(liveAccountName(account))}</strong>
+        <span>${escapeHtml(shortAddress(account.address))} / ${escapeHtml(liveAccountSubtitle(account))}</span>
+      </div>
+      <div>
         <span class="label">Last sync</span>
         <strong>${escapeHtml(liveState.generatedAt ? formatDate(liveState.generatedAt) : "not yet")}</strong>
+        <span>${escapeHtml(liveAccountProfileLine(account) || "Polymarket proxy wallet")}</span>
       </div>
       <div>
         <span class="label">Positions</span>
