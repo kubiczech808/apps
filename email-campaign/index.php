@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-18-account-auth';
+const APP_VERSION = '2026-07-18-research-allowlist';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 
 date_default_timezone_set('Europe/Prague');
@@ -2870,6 +2870,8 @@ function ensureAppAuthUsers(PDO $pdo, array $config): void
         upsertAppUser($pdo, $legacyEmail, $legacyHashForLegacy, hash_equals($legacyEmail, AI_RESEARCH_ALLOWED_EMAIL));
     }
     upsertAppUser($pdo, AI_RESEARCH_ALLOWED_EMAIL, $researchHash, true);
+    $stmt = $pdo->prepare('UPDATE app_users SET can_access_research=CASE WHEN email=? THEN 1 ELSE 0 END, updated_at=?');
+    $stmt->execute([AI_RESEARCH_ALLOWED_EMAIL, date('c')]);
 }
 
 function upsertAppUser(PDO $pdo, string $email, string $passwordHash = '', bool $canAccessResearch = false): void
@@ -2882,7 +2884,7 @@ function upsertAppUser(PDO $pdo, string $email, string $passwordHash = '', bool 
     $existing = appUserByEmail($pdo, $email, false);
     if ($existing) {
         $fields = ['can_access_research=?', 'is_active=1', 'updated_at=?'];
-        $values = [$canAccessResearch ? 1 : (int)($existing['can_access_research'] ?? 0), $now];
+        $values = [hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL) && $canAccessResearch ? 1 : 0, $now];
         if ($passwordHash !== '' && (string)($existing['password_hash'] ?? '') === '') {
             $fields[] = 'password_hash=?';
             $values[] = $passwordHash;
@@ -2893,7 +2895,7 @@ function upsertAppUser(PDO $pdo, string $email, string $passwordHash = '', bool 
         return;
     }
     $stmt = $pdo->prepare('INSERT INTO app_users (email, password_hash, role, can_access_research, is_active, created_at, updated_at) VALUES (?, ?, "admin", ?, 1, ?, ?)');
-    $stmt->execute([$email, $passwordHash, $canAccessResearch ? 1 : 0, $now, $now]);
+    $stmt->execute([$email, $passwordHash, hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL) && $canAccessResearch ? 1 : 0, $now, $now]);
 }
 
 function appUserByEmail(PDO $pdo, string $email, bool $activeOnly = true): ?array
@@ -3043,7 +3045,7 @@ function saveAccountSettings(PDO $pdo, array $config): void
             throw new RuntimeException('Tento prihlasovaci email uz pouziva jiny ucet.');
         }
         $stmt = $pdo->prepare('UPDATE app_users SET email=?, can_access_research=?, updated_at=? WHERE id=?');
-        $stmt->execute([$adminEmail, hash_equals($adminEmail, AI_RESEARCH_ALLOWED_EMAIL) ? 1 : (int)$currentUser['can_access_research'], date('c'), (int)$currentUser['id']]);
+        $stmt->execute([$adminEmail, hash_equals($adminEmail, AI_RESEARCH_ALLOWED_EMAIL) ? 1 : 0, date('c'), (int)$currentUser['id']]);
         $_SESSION['auth_email'] = $adminEmail;
         if (hash_equals($currentAuthEmail, $legacyAdminEmail)) {
             setSetting($pdo, 'admin_email', $adminEmail);
@@ -9883,8 +9885,18 @@ function currentView(): string
 
 function canAccessAiResearch(): bool
 {
+    global $pdo;
     $email = strtolower(trim((string)($_SESSION['auth_email'] ?? '')));
-    return $email !== '' && hash_equals(AI_RESEARCH_ALLOWED_EMAIL, $email);
+    if ($email === '' || !hash_equals(AI_RESEARCH_ALLOWED_EMAIL, $email)) {
+        return false;
+    }
+    try {
+        $user = appUserByEmail($pdo, $email);
+    } catch (Throwable $e) {
+        error_log('AI research access check failed: ' . $e->getMessage());
+        return false;
+    }
+    return $user !== null && (int)($user['can_access_research'] ?? 0) === 1;
 }
 
 function routeUrl(string $view): string
@@ -10008,8 +10020,27 @@ function renderApp(PDO $pdo, ?array $flash): void
         $activeScrapingJobs = activeScrapingJobs($pdo);
         $scrapingItemsByJob = scrapingItemsByJob($pdo, array_map(fn($job) => (int)$job['id'], $scrapingJobs));
     } elseif ($view === 'research') {
-        $aiResearchRuns = aiResearchRuns($pdo);
-        $aiResearchContactsByRun = aiResearchContactsByRun($pdo, array_map(fn($run) => (int)$run['id'], $aiResearchRuns));
+        if (!canAccessAiResearch()) {
+            $view = 'overview';
+            $campaigns = campaignRows($pdo);
+            $recipients = (int)$pdo->query('
+                SELECT COUNT(*)
+                FROM recipients r
+                JOIN contact_databases cl ON cl.id=r.list_id
+                WHERE r.status="active"
+                  AND COALESCE(r.archived, 0)=0
+                  AND COALESCE(cl.archived, 0)=0
+                  AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
+            ')->fetchColumn();
+            $lists = contactListOptions($pdo);
+            $current = $campaigns[0] ?? $current;
+            $currentListId = max(1, (int)($current['list_id'] ?? 1));
+            $pace = campaignDailyLimit($pdo, $current);
+            $overview = overviewStats($pdo, $current, $pace, $config);
+        } else {
+            $aiResearchRuns = aiResearchRuns($pdo);
+            $aiResearchContactsByRun = aiResearchContactsByRun($pdo, array_map(fn($run) => (int)$run['id'], $aiResearchRuns));
+        }
     }
     ob_start();
     ?><!doctype html>
