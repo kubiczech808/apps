@@ -2399,11 +2399,33 @@ function aiResearchDefaultSourceForSeed(array $seed): string
 
 function aiResearchFindContacts(PDO $pdo, array $seed, array $plan, int $limit): array
 {
+    $plan = aiResearchPrimaryQueryPlan($plan);
     $contacts = aiResearchCandidateContactsFromRecipients($pdo, $seed, $plan, max($limit, 10));
     if (count($contacts) < $limit) {
         $contacts = array_merge($contacts, onboardingQuickScrapeContacts($plan, max($limit, 12), 4, 24));
     }
     return array_slice(onboardingUniqueValidContacts($contacts), 0, $limit);
+}
+
+function aiResearchPrimaryQueryPlan(array $plan): array
+{
+    foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
+        if (!is_array($query)) {
+            continue;
+        }
+        $keyword = aiResearchNormalizeCatalogKeyword((string)($query['keyword'] ?? ''));
+        $source = normalizeScrapingSourceKey((string)($query['source'] ?? ''));
+        if ($keyword === '' || $source === '') {
+            continue;
+        }
+        $query['keyword'] = $keyword;
+        $query['source'] = $source;
+        $plan['scraping_queries'] = [$query];
+        $plan['candidate_terms'] = [$keyword];
+        $plan['primary_keyword'] = $keyword;
+        return $plan;
+    }
+    return $plan;
 }
 
 function aiResearchCandidateContactsFromRecipients(PDO $pdo, array $seed, array $plan, int $limit): array
@@ -2421,16 +2443,6 @@ function aiResearchCandidateContactsFromRecipients(PDO $pdo, array $seed, array 
         if ($keyword !== '') {
             $terms[] = $keyword;
         }
-    }
-    foreach ((array)($plan['candidate_terms'] ?? []) as $term) {
-        $term = aiResearchNormalizeCatalogKeyword((string)$term);
-        if ($term !== '') {
-            $terms[] = $term;
-        }
-    }
-    $city = aiResearchCityFromAddress((string)($seed['address'] ?? ''));
-    if ($city !== '') {
-        $terms[] = $city;
     }
     $terms = array_values(array_unique(array_filter($terms, static fn($term) => trim((string)$term) !== '')));
     if (!$terms) {
@@ -2500,6 +2512,7 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         . "Kontakty: " . json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Vrat pouze JSON {\"contacts\":[{\"email\":\"...\",\"accepted\":true,\"fit_reason\":\"...\",\"subject\":\"...\",\"html\":\"...\"}]}. "
         . "U kazdeho kontaktu rozhodni, zda je opravdu relevantni pro navrzeny B2B use-case, segment, zemi a lokalitu. Pokud ne, accepted=false a fit_reason konkretne vysvetli proc. "
+        . "Kontakt musi odpovidat pouzitemu scraping keywordu nebo jasne odpovidajicimu segmentu z planu. Napriklad pri keywordu 'vyrobni firma' nesmi byt hotel oznacen jako vhodny jen proto, ze je ve stejne lokalite; takovy kontakt oznac accepted=false a uved 'nesoulad s keywordem'. "
         . "Pokud je kontakt vhodny, fit_reason musi rict, proc prave tento typ firmy muze potrebovat seed nabidku a jaky trigger oslovenim resime. "
         . "Vsechny subject/html texty napis jednim jazykem podle market_language v planu (" . (string)($plan['market_language'] ?? 'cs') . "). "
         . "HTML je kratke unikatni obchodni osloveni pro dany kontakt, vecne a bez prehnanych slibu.";
