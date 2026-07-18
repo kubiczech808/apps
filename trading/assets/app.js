@@ -232,6 +232,21 @@ function daysToResolution(item) {
   return Number.isFinite(value) ? value : null;
 }
 
+function evaluationEndDate(item) {
+  return tradeEndDate({
+    ...item,
+    openedAt: item.openedAt || item.evaluatedAt,
+    date: item.date || item.evaluatedAt,
+  });
+}
+
+function evaluationDaysLeft(item) {
+  const endDate = evaluationEndDate(item);
+  const remaining = daysUntil(endDate);
+  if (Number.isFinite(remaining)) return remaining;
+  return daysToResolution(item);
+}
+
 function feeLine(item) {
   const fee = Number(item.takerFeeUsdc);
   if (!Number.isFinite(fee) || fee <= 0) return "";
@@ -1103,6 +1118,8 @@ function evaluationSortValue(item, key) {
   if (key === "evaluatedAt") return Date.parse(item.evaluatedAt || "") || 0;
   if (key === "status") return adjustedEvaluationStatus(item);
   if (key === "market") return `${item.outcome || ""} ${item.question || ""}`.toLowerCase();
+  if (key === "endDate") return Date.parse(evaluationEndDate(item) || "") || 0;
+  if (key === "daysLeft") return evaluationDaysLeft(item);
   if (key === "marketPrice") return Number(item.marketPrice);
   if (key === "odds") return decimalOdds(item.marketPrice);
   if (key === "gainIfWin") return gainIfWin(item);
@@ -1148,6 +1165,28 @@ function gainCell(item) {
   `;
 }
 
+function evaluationEndDateCell(item) {
+  const endDate = evaluationEndDate(item);
+  const inferred = inferredDateFromQuestion({
+    ...item,
+    openedAt: item.openedAt || item.evaluatedAt,
+    date: item.date || item.evaluatedAt,
+  });
+  const inferredNote = inferred && item.endDate && Date.parse(inferred) > Date.parse(item.endDate) ? "from question" : "";
+  return `
+    ${escapeHtml(endDate ? formatDate(endDate) : "-")}
+    <span>${escapeHtml(inferredNote || "final day")}</span>
+  `;
+}
+
+function evaluationDaysLeftCell(item) {
+  const days = evaluationDaysLeft(item);
+  return `
+    ${Number.isFinite(days) ? compactDays(days) : "-"}
+    <span>to final day</span>
+  `;
+}
+
 function annualizedCell(item) {
   const annualized = Number(item.annualizedReturn);
   const ev = expectedValue(item);
@@ -1189,6 +1228,8 @@ function renderBotEvaluations() {
           ${sortableHeader("evaluatedAt", "Time")}
           ${sortableHeader("status", "Status")}
           ${sortableHeader("market", "Market")}
+          ${sortableHeader("endDate", "End date")}
+          ${sortableHeader("daysLeft", "Days left")}
           ${sortableHeader("marketPrice", "Mkt entry")}
           ${sortableHeader("odds", "Odds")}
           ${sortableHeader("gainIfWin", "Win @ $5")}
@@ -1206,6 +1247,8 @@ function renderBotEvaluations() {
               ${marketAnchor(item)}
               <span>${escapeHtml(riskLine(item))}</span>
             </td>
+            <td>${evaluationEndDateCell(item)}</td>
+            <td>${evaluationDaysLeftCell(item)}</td>
             <td>
               ${probability(Number(item.marketPrice))}
               <span>${[

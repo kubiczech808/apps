@@ -347,7 +347,7 @@ button {
 .ledger table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1680px;
+  min-width: 1880px;
 }
 
 .ledger th,
