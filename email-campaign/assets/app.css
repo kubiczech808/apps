@@ -1469,17 +1469,26 @@ form.inline { margin: 0; }
   color: var(--accent-dark);
 }
 .language-dropdown.flags-only .language-dropdown-menu {
-  min-width: 58px;
+  grid-template-columns: repeat(3, 42px);
+  min-width: 0;
+  gap: 6px;
   justify-items: center;
+  padding: 8px;
 }
 .language-dropdown.flags-only button {
   justify-content: center;
   width: 42px;
-  height: 38px;
+  height: 42px;
   padding: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
 }
 .language-dropdown.flags-only button span:first-child {
-  font-size: 22px;
+  font-size: 23px;
+}
+.language-dropdown.flags-only button.active {
+  border-color: #9bcfbd;
+  box-shadow: inset 0 0 0 1px rgba(15, 123, 108, 0.2);
 }
 .onboarding-hero {
   display: grid;
