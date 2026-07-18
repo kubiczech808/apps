@@ -338,7 +338,7 @@ try {
             respond(['ok' => false, 'error' => 'Unknown workflow target'], 400);
         }
 
-        $result = dispatch_workflow($workflows[$target]['workflow'], $workflows[$target]['inputs']);
+        $result = dispatch_workflow($workflows[$target]['workflow'], $workflows[$target]['inputs'], false);
         respond([
             'ok' => true,
             'target' => $target,

@@ -41,7 +41,6 @@ const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
 const LIVE_EXECUTION_STORAGE_KEY = "tradingLiveExecutionArmed";
-const WORKFLOW_TRIGGER_KEY_STORAGE_KEY = "tradingWorkflowTriggerKey";
 const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
 const MIN_ELIGIBILITY_THRESHOLD = 0.01;
 const MAX_ELIGIBILITY_THRESHOLD = 0.99;
@@ -173,25 +172,6 @@ function saveLiveExecutionArmed(value) {
   } catch {
     // Ignore localStorage failures; the guard still works for this page load.
   }
-}
-
-function workflowTriggerKey() {
-  try {
-    const stored = sessionStorage.getItem(WORKFLOW_TRIGGER_KEY_STORAGE_KEY);
-    if (stored) return stored;
-  } catch {
-    // Fall through to prompt.
-  }
-
-  const entered = window.prompt("Workflow trigger key");
-  const key = String(entered || "").trim();
-  if (!key) return "";
-  try {
-    sessionStorage.setItem(WORKFLOW_TRIGGER_KEY_STORAGE_KEY, key);
-  } catch {
-    // Session storage is a convenience only.
-  }
-  return key;
 }
 
 function setExecutionStatus(text, tone = "") {
@@ -1163,12 +1143,6 @@ async function triggerOneTimeExecution(target) {
     if (!confirmed) return;
   }
 
-  const triggerKey = workflowTriggerKey();
-  if (!triggerKey) {
-    setExecutionStatus("missing trigger key", "error");
-    return;
-  }
-
   state.executionBusy = target;
   syncExecutionButtons();
   setExecutionStatus(live ? "starting live workflow" : "starting paper workflow");
@@ -1176,21 +1150,11 @@ async function triggerOneTimeExecution(target) {
   try {
     const response = await fetch("api.php?action=workflow", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Trading-Trigger-Key": triggerKey,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ target }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload.ok === false) {
-      if (response.status === 403) {
-        try {
-          sessionStorage.removeItem(WORKFLOW_TRIGGER_KEY_STORAGE_KEY);
-        } catch {
-          // Ignore storage failures.
-        }
-      }
       throw new Error(payload.error || `workflow HTTP ${response.status}`);
     }
     setExecutionStatus(`${target} workflow started`);
