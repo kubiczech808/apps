@@ -27,15 +27,21 @@ const state = {
   evaluationStatus: "ELIGIBLE",
   eligibilityThreshold: null,
   eligibilityThresholdKey: "",
+  riskAllocation: null,
+  riskAllocationKey: "",
   liveExecutionArmed: false,
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
+const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
 const LIVE_EXECUTION_STORAGE_KEY = "tradingLiveExecutionArmed";
 const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
 const MIN_ELIGIBILITY_THRESHOLD = 0.01;
 const MAX_ELIGIBILITY_THRESHOLD = 0.99;
+const DEFAULT_RISK_ALLOCATION = 0.05;
+const MIN_RISK_ALLOCATION = 0.01;
+const MAX_RISK_ALLOCATION = 0.5;
 
 const els = {
   botAction: document.querySelector("[data-bot-action]"),
@@ -51,6 +57,10 @@ const els = {
   evaluationSummary: document.querySelector("[data-evaluation-summary]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
+  riskAllocation: document.querySelector("[data-risk-allocation]"),
+  riskAllocationLabel: document.querySelector("[data-risk-allocation-label]"),
+  riskAllocationValue: document.querySelector("[data-risk-allocation-value]"),
+  riskAllocationNote: document.querySelector("[data-risk-allocation-note]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
   modeButtons: document.querySelectorAll("[data-mode-toggle]"),
@@ -666,6 +676,19 @@ function eligibilityThresholdStorageKey() {
   return parts.join(":");
 }
 
+function accountScopedStorageKey(baseKey) {
+  const parts = [baseKey, state.mode];
+  if (state.mode === "live") {
+    const address = state.liveState?.account?.address || state.liveState?.account?.proxyWallet || "";
+    if (address) parts.push(String(address).toLowerCase());
+  }
+  return parts.join(":");
+}
+
+function riskAllocationStorageKey() {
+  return accountScopedStorageKey(RISK_ALLOCATION_STORAGE_KEY);
+}
+
 function storedEligibilityThreshold() {
   try {
     const scopedKey = eligibilityThresholdStorageKey();
@@ -698,6 +721,68 @@ function refreshEligibilityThreshold() {
   state.eligibilityThreshold = storedEligibilityThreshold() ?? normalizeEligibilityThreshold(portfolioThreshold) ?? DEFAULT_ELIGIBILITY_THRESHOLD;
   state.eligibilityThresholdKey = key;
   syncEligibilityThresholdControl();
+}
+
+function normalizeRiskAllocation(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  if (numeric < MIN_RISK_ALLOCATION || numeric > MAX_RISK_ALLOCATION) return null;
+  return numeric;
+}
+
+function storedRiskAllocation() {
+  try {
+    const scopedKey = riskAllocationStorageKey();
+    const scopedValue = normalizeRiskAllocation(Number(localStorage.getItem(scopedKey)));
+    if (scopedValue != null) return scopedValue;
+    const legacyValue = normalizeRiskAllocation(Number(localStorage.getItem(RISK_ALLOCATION_STORAGE_KEY)));
+    return legacyValue;
+  } catch {
+    return null;
+  }
+}
+
+function saveRiskAllocation(value) {
+  try {
+    const key = riskAllocationStorageKey();
+    localStorage.setItem(key, String(value));
+    state.riskAllocationKey = key;
+  } catch {
+    // Ignore localStorage failures; the control still works for this page load.
+  }
+}
+
+function currentRiskAllocation() {
+  const configured = Number(state.riskAllocation);
+  return normalizeRiskAllocation(configured) ?? DEFAULT_RISK_ALLOCATION;
+}
+
+function refreshRiskAllocation() {
+  const key = riskAllocationStorageKey();
+  if (state.riskAllocationKey === key && state.riskAllocation != null) {
+    syncRiskAllocationControl();
+    return;
+  }
+  state.riskAllocation = storedRiskAllocation() ?? DEFAULT_RISK_ALLOCATION;
+  state.riskAllocationKey = key;
+  syncRiskAllocationControl();
+}
+
+function syncRiskAllocationControl(availableCapital = null, sourceLabel = "available capital") {
+  const value = currentRiskAllocation();
+  if (els.riskAllocation) {
+    els.riskAllocation.value = String(Math.round(value * 100));
+  }
+  if (els.riskAllocationLabel) {
+    els.riskAllocationLabel.textContent = probability(value);
+  }
+  if (els.riskAllocationValue) {
+    const base = Number(availableCapital);
+    els.riskAllocationValue.textContent = Number.isFinite(base) ? money(base * value) : "-";
+  }
+  if (els.riskAllocationNote) {
+    els.riskAllocationNote.textContent = `maximum stake from ${sourceLabel}`;
+  }
 }
 
 function analysisModal() {
@@ -880,6 +965,7 @@ function renderBotState(botState) {
   state.botState = botState;
   syncModeUi();
   refreshEligibilityThreshold();
+  refreshRiskAllocation();
   const decision = botState.lastDecision || {};
   const portfolio = botState.portfolio || {};
   const learning = botState.learningProfile || {};
@@ -894,6 +980,8 @@ function renderBotState(botState) {
   const realizedPnlPct = Number(portfolio.realizedPnlPct || 0);
   const openPnl = Number(portfolio.openPnlUsdc || 0);
   const openPnlPct = Number(portfolio.openPnlPct || 0);
+  const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
+  syncRiskAllocationControl(freeCapital, "paper free capital");
 
   els.botAction.textContent = decision.action || "waiting";
   if (els.botInlineAction) els.botInlineAction.textContent = decision.action || "waiting";
@@ -913,7 +1001,7 @@ function renderBotState(botState) {
   els.portfolioOpenPl.className = pnlClass(openPnl);
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
   els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0));
-  els.portfolioFree.textContent = `${money(Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100))} free`;
+  els.portfolioFree.textContent = `${money(freeCapital)} free`;
 
   els.botStatus.innerHTML = `
     <div class="bot-summary">
@@ -923,7 +1011,12 @@ function renderBotState(botState) {
       </div>
       <div>
         <span class="label">Free capital</span>
-        <strong>${money(Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100))}</strong>
+        <strong>${money(freeCapital)}</strong>
+      </div>
+      <div>
+        <span class="label">Max per trade</span>
+        <strong>${money(freeCapital * currentRiskAllocation())}</strong>
+        <span>${probability(currentRiskAllocation())} of paper free capital</span>
       </div>
       <div>
         <span class="label">P/L</span>
@@ -1008,9 +1101,12 @@ function renderLiveState(liveState) {
   state.liveState = liveState;
   syncModeUi();
   refreshEligibilityThreshold();
+  refreshRiskAllocation();
 
   const account = liveState.account || {};
   const portfolio = liveState.portfolio || {};
+  const balanceAllowance = liveState.balanceAllowance || {};
+  const collateral = balanceAllowance.collateral || {};
   const positions = livePositions(liveState);
   const activity = liveActivity(liveState);
   const closedTrades = liveClosedTrades(liveState);
@@ -1027,10 +1123,12 @@ function renderLiveState(liveState) {
   const equity = Number.isFinite(Number(portfolio.equityUsdc))
     ? Number(portfolio.equityUsdc)
     : (Number.isFinite(marketValue) ? marketValue : 0);
+  const liveCapitalBase = Number.isFinite(cash) ? cash : null;
   const liveGuardLabel = state.liveExecutionArmed ? "Armed" : "Inactive";
   const liveGuardText = state.liveExecutionArmed
     ? "UI gate enabled; no automatic live order submitter is connected yet"
     : "click Activate live execution before future live order routing";
+  syncRiskAllocationControl(liveCapitalBase, Number.isFinite(cash) ? "live pUSD cash" : "live cash once balance sync is available");
 
   els.botAction.textContent = "live";
   if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions`;
@@ -1075,6 +1173,11 @@ function renderLiveState(liveState) {
         <span>${money(marketValue)} market value</span>
       </div>
       <div>
+        <span class="label">Max per trade</span>
+        <strong>${Number.isFinite(liveCapitalBase) ? money(liveCapitalBase * currentRiskAllocation()) : "-"}</strong>
+        <span>${probability(currentRiskAllocation())} of synced live cash</span>
+      </div>
+      <div>
         <span class="label">Open P/L</span>
         <strong class="${pnlClass(openPnl)}">${signedMoney(openPnl)} (${signedPercent(openPnlPct)})</strong>
         <span>from Polymarket live positions</span>
@@ -1087,7 +1190,7 @@ function renderLiveState(liveState) {
       <div>
         <span class="label">Cash</span>
         <strong>${Number.isFinite(cash) ? money(cash) : "-"}</strong>
-        <span>not all Polymarket APIs expose idle balance publicly</span>
+        <span>${escapeHtml(balanceAllowance.status === "OK" ? `pUSD balance / allowance ${collateral.allowanceUsdc == null ? "-" : money(Number(collateral.allowanceUsdc))}` : (balanceAllowance.message || "CLOB balance sync not available yet"))}</span>
       </div>
       <div>
         <span class="label">Live execution</span>
@@ -1291,6 +1394,8 @@ els.modeButtons.forEach((button) => {
     saveMode(mode);
     state.eligibilityThreshold = null;
     state.eligibilityThresholdKey = "";
+    state.riskAllocation = null;
+    state.riskAllocationKey = "";
     loadDashboardState();
   });
 });
@@ -1325,6 +1430,22 @@ els.eligibilityThreshold?.addEventListener("input", () => {
   saveEligibilityThreshold(value);
   syncEligibilityThresholdControl();
   renderBotEvaluations();
+});
+
+els.riskAllocation?.addEventListener("input", () => {
+  const raw = Number(els.riskAllocation.value);
+  if (!Number.isFinite(raw)) return;
+  const normalized = normalizeRiskAllocation(raw / 100);
+  const value = normalized ?? currentRiskAllocation();
+  state.riskAllocation = value;
+  saveRiskAllocation(value);
+  if (state.mode === "live" && state.liveState) {
+    renderLiveState(state.liveState);
+  } else if (state.botState) {
+    renderBotState(state.botState);
+  } else {
+    syncRiskAllocationControl();
+  }
 });
 
 els.botEvaluations?.addEventListener("click", (event) => {

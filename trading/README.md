@@ -47,6 +47,18 @@ The bot now writes a `learningProfile` into `paper-state.json`.
 
 This is not live trading. It does not use the Polymarket private key and cannot submit orders.
 
+## Live account snapshot
+
+`.github/workflows/trading-live-account.yml` writes `trading/data/live-state.json` to the public `/trading/data/` directory.
+
+The live snapshot combines public Polymarket account data with authenticated CLOB balance checks:
+
+- public Data API for open positions, activity, trade history, and profile metadata,
+- authenticated CLOB `getBalanceAllowance({ asset_type: COLLATERAL })` for pUSD cash balance and allowance,
+- browser-side max-per-trade allocation control from 1% to 50%, defaulting to 5%.
+
+The public UI never receives `POLYMARKET_PRIVATE_KEY`; GitHub Actions uses it only during snapshot generation and order smoke tests.
+
 ## Local executor
 
 Install dependencies inside `trading/`:

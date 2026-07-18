@@ -93,6 +93,39 @@ button {
   gap: 10px;
 }
 
+.risk-allocation-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.risk-allocation-control > div {
+  min-width: 220px;
+  text-align: right;
+}
+
+.risk-allocation-control strong,
+.risk-allocation-control span {
+  display: block;
+}
+
+.risk-allocation-control > div strong {
+  font-size: 18px;
+}
+
+.risk-allocation-control > div span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .metric-card {
   min-width: 0;
   padding: 14px;

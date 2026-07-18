@@ -19,12 +19,17 @@ jobs:
       POLYMARKET_ADDRESS: "0x3252de913d9323667f21f4d88fa1f996fc282293"
       POLYMARKET_FUNDER_ADDRESS: "0x3252de913d9323667f21f4d88fa1f996fc282293"
       POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
+      POLYMARKET_SIGNATURE_TYPE: "1"
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Install trading dependencies
+        working-directory: trading
+        run: npm install
 
       - name: Verify live account target
         run: |

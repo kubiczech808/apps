@@ -5,11 +5,14 @@ import { dirname } from "node:path";
 
 const DATA_API = process.env.POLYMARKET_DATA_API || "https://data-api.polymarket.com";
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
+const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
+const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
 const DEFAULT_ADDRESS = "0x3252de913d9323667f21f4d88fa1f996fc282293";
 const ACCOUNT_ADDRESS = (process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || DEFAULT_ADDRESS).toLowerCase();
 const STATE_PATH = process.env.LIVE_STATE_PATH || "data/live-state.json";
 const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
 const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
+const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
 
 function number(value, fallback = null) {
   const numeric = Number(value);
@@ -20,6 +23,22 @@ function ratio(value) {
   const numeric = number(value);
   if (numeric == null) return null;
   return Math.abs(numeric) > 2 ? numeric / 100 : numeric;
+}
+
+function rawUnitsToUsdc(value) {
+  if (value == null || value === "") return null;
+  const text = String(value);
+  if (text.includes(".")) return number(text);
+  try {
+    const raw = BigInt(text);
+    const whole = raw / 1000000n;
+    const fraction = raw % 1000000n;
+    return Number(whole) + Number(fraction) / 1000000;
+  } catch {
+    const numeric = number(value);
+    if (numeric == null) return null;
+    return numeric > 10000 ? numeric / 1000000 : numeric;
+  }
 }
 
 function isoTime(value) {
@@ -330,12 +349,83 @@ function portfolioSummary(positions, valueRows, closedTrades = []) {
   };
 }
 
+async function loadClobBalanceAllowance(sync) {
+  const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
+  if (!privateKey) {
+    return {
+      status: "SKIPPED",
+      message: "POLYMARKET_PRIVATE_KEY is not available to this workflow",
+      collateral: null,
+    };
+  }
+
+  const [{ ClobClient, AssetType, SignatureTypeV2 }, { createWalletClient, custom }, { privateKeyToAccount }] =
+    await Promise.all([
+      import("@polymarket/clob-client-v2"),
+      import("viem"),
+      import("viem/accounts"),
+    ]);
+
+  const signatureTypeMap = {
+    0: SignatureTypeV2.EOA,
+    1: SignatureTypeV2.POLY_PROXY,
+    2: SignatureTypeV2.GNOSIS_SAFE,
+    3: SignatureTypeV2.POLY_1271,
+  };
+
+  const account = privateKeyToAccount(privateKey);
+  const signer = createWalletClient({
+    account,
+    transport: custom({
+      request: async ({ method }) => {
+        throw new Error(`Unexpected JSON-RPC request while syncing Polymarket balance: ${method}`);
+      },
+    }),
+  });
+  const tempClient = new ClobClient({ host: CLOB_HOST, chain: CHAIN_ID, signer });
+  const creds = await tempClient.createOrDeriveApiKey();
+  const client = new ClobClient({
+    host: CLOB_HOST,
+    chain: CHAIN_ID,
+    signer,
+    creds,
+    signatureType: signatureTypeMap[SIGNATURE_TYPE] ?? SignatureTypeV2.POLY_PROXY,
+    funderAddress: ACCOUNT_ADDRESS,
+  });
+
+  const params = { asset_type: AssetType?.COLLATERAL || "COLLATERAL" };
+  await client.updateBalanceAllowance(params).catch((error) => {
+    sync.warnings.push(`balance-allowance update: ${error?.message || String(error)}`);
+  });
+  const collateral = await client.getBalanceAllowance(params);
+  const allowanceRaw = collateral.allowance
+    || Object.values(collateral.allowances || {})[0]
+    || null;
+  const normalizedAllowance = allowanceRaw && String(allowanceRaw).length > 24 ? null : rawUnitsToUsdc(allowanceRaw);
+
+  return {
+    status: "OK",
+    message: "CLOB collateral balance and allowance loaded",
+    signatureType: SIGNATURE_TYPE,
+    funderAddress: ACCOUNT_ADDRESS,
+    collateral: {
+      assetType: "COLLATERAL",
+      balanceRaw: collateral.balance ?? null,
+      balanceUsdc: rawUnitsToUsdc(collateral.balance),
+      allowanceRaw,
+      allowanceUsdc: normalizedAllowance,
+      allowances: collateral.allowances || null,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
+
 async function main() {
   const generatedAt = new Date().toISOString();
   const sync = {
     status: "OK",
     message: "Live Polymarket account snapshot loaded",
-    sources: ["positions", "value", "activity", "trades", "public-profile"],
+    sources: ["positions", "value", "activity", "trades", "public-profile", "clob-balance-allowance"],
     warnings: [],
   };
 
@@ -344,6 +434,7 @@ async function main() {
   let rawTrades = [];
   let valueRows = [];
   let publicProfile = null;
+  let balanceAllowance = null;
 
   async function optional(label, promise, fallback) {
     try {
@@ -354,12 +445,17 @@ async function main() {
     }
   }
 
-  [rawPositions, valueRows, rawActivity, rawTrades, publicProfile] = await Promise.all([
+  [rawPositions, valueRows, rawActivity, rawTrades, publicProfile, balanceAllowance] = await Promise.all([
     optional("positions", fetchJson("/positions", { user: ACCOUNT_ADDRESS, limit: 500 }), []),
     optional("value", fetchJson("/value", { user: ACCOUNT_ADDRESS }), []),
     optional("activity", fetchJson("/activity", { user: ACCOUNT_ADDRESS, limit: ACTIVITY_LIMIT }), []),
     optional("trades", fetchJson("/trades", { user: ACCOUNT_ADDRESS, limit: TRADE_LIMIT }), []),
     optional("public-profile", fetchGammaJson("/public-profile", { address: ACCOUNT_ADDRESS }), { error: "not_available" }),
+    optional("balance-allowance", loadClobBalanceAllowance(sync), {
+      status: "ERROR",
+      message: "CLOB balance allowance sync failed",
+      collateral: null,
+    }),
   ]);
 
   if (sync.warnings.length && !Array.isArray(rawPositions)) {
@@ -380,6 +476,11 @@ async function main() {
     ? rawTrades.map(normalizeTradeHistoryItem).filter((item) => item.timestamp || item.question !== "-")
     : [];
   const closedTrades = closedTradesFromHistory(tradeHistory, activity, generatedAt);
+  const portfolioBase = portfolioSummary(positions, valueRows, closedTrades);
+  const cashUsdc = number(balanceAllowance?.collateral?.balanceUsdc);
+  const equityUsdc = cashUsdc == null
+    ? portfolioBase.equityUsdc
+    : cashUsdc + number(portfolioBase.marketValueUsdc, 0);
 
   const payload = {
     schemaVersion: 1,
@@ -393,7 +494,13 @@ async function main() {
       loginMethod: "Polymarket proxy wallet; Gmail/MetaMask login is handled by Polymarket, not this frontend",
       profile: normalizeProfile(publicProfile?.error ? null : publicProfile),
     },
-    portfolio: portfolioSummary(positions, valueRows, closedTrades),
+    portfolio: {
+      ...portfolioBase,
+      equityUsdc,
+      cashUsdc,
+      cashSource: balanceAllowance?.status === "OK" ? "clob-balance-allowance" : null,
+    },
+    balanceAllowance,
     positions,
     closedTrades,
     tradeHistory,
@@ -407,6 +514,7 @@ async function main() {
     mode: payload.mode,
     account: payload.account.address,
     positions: positions.length,
+    cashUsdc: payload.portfolio.cashUsdc,
     closedTrades: closedTrades.length,
     tradeHistory: tradeHistory.length,
     activity: activity.length,
