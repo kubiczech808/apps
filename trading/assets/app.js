@@ -221,9 +221,15 @@ function odds(value) {
   return `${value.toFixed(2)}x`;
 }
 
+function sortDirectionIndicator(direction) {
+  const descending = direction === "desc";
+  const label = descending ? "Razeno sestupne" : "Razeno vzestupne";
+  return `<span class="sort-arrow" aria-hidden="true" title="${label}">${descending ? "↓" : "↑"}</span>`;
+}
+
 function sortArrow(key) {
   if (state.evaluationSort.key !== key) return "";
-  return state.evaluationSort.direction === "asc" ? " asc" : " desc";
+  return sortDirectionIndicator(state.evaluationSort.direction);
 }
 
 function evaluationStake(item) {
@@ -581,7 +587,7 @@ function sortedTrades(trades, tableKey) {
 function tradeSortArrow(tableKey, key) {
   const sort = state.tradeSort[tableKey] || state.tradeSort.open;
   if (sort.key !== key) return "";
-  return sort.direction === "asc" ? " asc" : " desc";
+  return sortDirectionIndicator(sort.direction);
 }
 
 function tradeHeader(tableKey, key, label) {

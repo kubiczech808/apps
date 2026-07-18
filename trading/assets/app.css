@@ -439,6 +439,7 @@ button {
 .sort-button {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   min-height: 28px;
   padding: 0;
   border: 0;
@@ -453,6 +454,17 @@ button {
 .sort-button:hover,
 .sort-button.active {
   color: var(--accent-dark);
+}
+
+.sort-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--accent-dark);
+  font-size: 14px;
+  line-height: 1;
 }
 
 .ledger td span {
