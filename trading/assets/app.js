@@ -19,13 +19,20 @@ const state = {
       key: "openedAt",
       direction: "desc",
     },
+    liveClosed: {
+      key: "resolvedAt",
+      direction: "desc",
+    },
   },
   evaluationStatus: "ELIGIBLE",
   eligibilityThreshold: null,
+  eligibilityThresholdKey: "",
+  liveExecutionArmed: false,
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
+const LIVE_EXECUTION_STORAGE_KEY = "tradingLiveExecutionArmed";
 const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
 const MIN_ELIGIBILITY_THRESHOLD = 0.01;
 const MAX_ELIGIBILITY_THRESHOLD = 0.99;
@@ -47,6 +54,7 @@ const els = {
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
   modeButtons: document.querySelectorAll("[data-mode-toggle]"),
+  liveActivation: document.querySelector("[data-live-activation]"),
   tabButtons: document.querySelectorAll("[data-tab-target]"),
   tabPanels: document.querySelectorAll("[data-tab-panel]"),
   portfolioEquity: document.querySelector("[data-portfolio-equity]"),
@@ -128,6 +136,31 @@ function saveMode(mode) {
   }
 }
 
+function storedLiveExecutionArmed() {
+  try {
+    return localStorage.getItem(LIVE_EXECUTION_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveLiveExecutionArmed(value) {
+  try {
+    localStorage.setItem(LIVE_EXECUTION_STORAGE_KEY, value ? "true" : "false");
+  } catch {
+    // Ignore localStorage failures; the guard still works for this page load.
+  }
+}
+
+function syncLiveActivationUi() {
+  if (!els.liveActivation) return;
+  const live = state.mode === "live";
+  els.liveActivation.hidden = !live;
+  els.liveActivation.classList.toggle("armed", state.liveExecutionArmed);
+  els.liveActivation.setAttribute("aria-pressed", state.liveExecutionArmed ? "true" : "false");
+  els.liveActivation.textContent = state.liveExecutionArmed ? "Live execution armed" : "Activate live execution";
+}
+
 function syncModeUi() {
   const live = state.mode === "live";
   els.modeButtons.forEach((button) => {
@@ -137,9 +170,10 @@ function syncModeUi() {
     button.textContent = live ? button.dataset.liveLabel : button.dataset.paperLabel;
   });
   if (els.portfolioTitle) els.portfolioTitle.textContent = live ? "Live Polymarket account" : "Autonomous paper portfolio";
-  if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = live ? "Live positions" : "Daily paper picks";
-  if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = live ? "Live activity" : "Closed paper trades";
-  if (els.evaluationControls) els.evaluationControls.style.display = live ? "none" : "";
+  if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = live ? "Opened live trades" : "Opened paper trades";
+  if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = live ? "Closed live trades" : "Closed paper trades";
+  if (els.evaluationControls) els.evaluationControls.style.display = "";
+  syncLiveActivationUi();
 }
 
 function formatDate(value) {
@@ -235,17 +269,17 @@ function marketAnchor(item) {
 }
 
 function tradePnlValue(trade) {
-  if (["WON", "LOST"].includes(trade.status)) return Number(trade.realizedPnlUsdc);
+  if (isClosedTrade(trade)) return Number(trade.realizedPnlUsdc);
   return Number(trade.unrealizedPnlUsdc);
 }
 
 function tradePnlPct(trade) {
-  if (["WON", "LOST"].includes(trade.status)) return Number(trade.realizedPnlPct);
+  if (isClosedTrade(trade)) return Number(trade.realizedPnlPct);
   return Number(trade.unrealizedPnlPct);
 }
 
 function isClosedTrade(trade) {
-  return ["WON", "LOST"].includes(String(trade.status || "").toUpperCase());
+  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD"].includes(String(trade.status || "").toUpperCase());
 }
 
 function tradeStatusNote(trade) {
@@ -608,10 +642,22 @@ function evaluationStatusLabel(item) {
   return status;
 }
 
+function eligibilityThresholdStorageKey() {
+  const parts = [ELIGIBILITY_THRESHOLD_STORAGE_KEY, state.mode];
+  if (state.mode === "live") {
+    const address = state.liveState?.account?.address || state.liveState?.account?.proxyWallet || "";
+    if (address) parts.push(String(address).toLowerCase());
+  }
+  return parts.join(":");
+}
+
 function storedEligibilityThreshold() {
   try {
-    const value = Number(localStorage.getItem(ELIGIBILITY_THRESHOLD_STORAGE_KEY));
-    return normalizeEligibilityThreshold(value);
+    const scopedKey = eligibilityThresholdStorageKey();
+    const scopedValue = normalizeEligibilityThreshold(Number(localStorage.getItem(scopedKey)));
+    if (scopedValue != null) return scopedValue;
+    const legacyValue = normalizeEligibilityThreshold(Number(localStorage.getItem(ELIGIBILITY_THRESHOLD_STORAGE_KEY)));
+    return legacyValue;
   } catch {
     return null;
   }
@@ -619,10 +665,24 @@ function storedEligibilityThreshold() {
 
 function saveEligibilityThreshold(value) {
   try {
-    localStorage.setItem(ELIGIBILITY_THRESHOLD_STORAGE_KEY, String(value));
+    const key = eligibilityThresholdStorageKey();
+    localStorage.setItem(key, String(value));
+    state.eligibilityThresholdKey = key;
   } catch {
     // Ignore localStorage failures; the control still works for this page load.
   }
+}
+
+function refreshEligibilityThreshold() {
+  const key = eligibilityThresholdStorageKey();
+  if (state.eligibilityThresholdKey === key && state.eligibilityThreshold != null) {
+    syncEligibilityThresholdControl();
+    return;
+  }
+  const portfolioThreshold = Number(state.botState?.portfolio?.minProbability ?? DEFAULT_ELIGIBILITY_THRESHOLD);
+  state.eligibilityThreshold = storedEligibilityThreshold() ?? normalizeEligibilityThreshold(portfolioThreshold) ?? DEFAULT_ELIGIBILITY_THRESHOLD;
+  state.eligibilityThresholdKey = key;
+  syncEligibilityThresholdControl();
 }
 
 function analysisModal() {
@@ -737,13 +797,14 @@ async function loadBotState() {
     const botState = await fetchJson("data/paper-state.json");
     renderBotState(botState);
   } catch (error) {
+    state.botState = null;
     els.botAction.textContent = "offline";
     if (els.botInlineAction) els.botInlineAction.textContent = "offline";
     els.botStatus.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
     els.botTrades.innerHTML = '<div class="empty">Autonomous paper bot state is not available yet.</div>';
     if (els.closedTrades) els.closedTrades.innerHTML = '<div class="empty">Closed paper trades are not available yet.</div>';
     if (els.closedSummary) els.closedSummary.textContent = "offline";
-    els.botEvaluations.innerHTML = '<div class="empty">No evaluations loaded.</div>';
+    els.botEvaluations.innerHTML = '<div class="empty">No common evaluation log loaded.</div>';
   }
 }
 
@@ -755,8 +816,17 @@ async function fetchJson(path) {
 
 async function loadLiveState() {
   try {
-    const liveState = await fetchJson("data/live-state.json");
+    const [liveResult, botResult] = await Promise.allSettled([
+      fetchJson("data/live-state.json"),
+      fetchJson("data/paper-state.json"),
+    ]);
+    if (liveResult.status === "rejected") throw liveResult.reason;
+    state.botState = botResult.status === "fulfilled" ? botResult.value : null;
+    const liveState = liveResult.value;
     renderLiveState(liveState);
+    if (botResult.status === "rejected") {
+      els.botEvaluations.innerHTML = `<div class="empty">Common evaluation log is not available: ${escapeHtml(botResult.reason?.message || String(botResult.reason))}</div>`;
+    }
   } catch (error) {
     state.liveState = null;
     syncModeUi();
@@ -776,9 +846,13 @@ async function loadLiveState() {
     els.portfolioFree.textContent = "-";
     els.botStatus.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
     els.botTrades.innerHTML = '<div class="empty">Live Polymarket account state is not available yet.</div>';
-    if (els.closedTrades) els.closedTrades.innerHTML = '<div class="empty">Live activity is not available yet.</div>';
+    if (els.closedTrades) els.closedTrades.innerHTML = '<div class="empty">Closed live trades are not available yet.</div>';
     if (els.closedSummary) els.closedSummary.textContent = "offline";
-    els.botEvaluations.innerHTML = '<div class="empty">Live sync details are not available yet.</div>';
+    if (state.botState) {
+      renderBotEvaluations();
+    } else {
+      els.botEvaluations.innerHTML = '<div class="empty">Common evaluation log is not available yet.</div>';
+    }
   }
 }
 
@@ -790,12 +864,7 @@ function loadDashboardState() {
 function renderBotState(botState) {
   state.botState = botState;
   syncModeUi();
-  if (state.eligibilityThreshold == null) {
-    const stored = storedEligibilityThreshold();
-    const portfolioThreshold = Number(botState.portfolio?.minProbability ?? 0.95);
-    state.eligibilityThreshold = stored ?? normalizeEligibilityThreshold(portfolioThreshold) ?? DEFAULT_ELIGIBILITY_THRESHOLD;
-    syncEligibilityThresholdControl();
-  }
+  refreshEligibilityThreshold();
   const decision = botState.lastDecision || {};
   const portfolio = botState.portfolio || {};
   const learning = botState.learningProfile || {};
@@ -890,6 +959,12 @@ function liveActivity(liveState) {
   return Array.isArray(liveState?.activity) ? liveState.activity : [];
 }
 
+function liveClosedTrades(liveState) {
+  if (Array.isArray(liveState?.closedTrades)) return liveState.closedTrades;
+  if (Array.isArray(liveState?.trades?.closed)) return liveState.trades.closed;
+  return [];
+}
+
 function liveAccountName(account = {}) {
   const profile = account.profile || {};
   return profile.displayName || profile.pseudonym || account.label || shortAddress(account.address);
@@ -914,83 +989,18 @@ function liveAccountProfileLine(account = {}) {
   ].filter(Boolean).join(" / ");
 }
 
-function renderLiveActivityRows(activity) {
-  if (!activity.length) return '<div class="empty">Zatim zadna live aktivita na napojenem Polymarket uctu.</div>';
-  return `
-    <table>
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Type</th>
-          <th>Market</th>
-          <th>Outcome</th>
-          <th>Price</th>
-          <th>Size</th>
-          <th>Value</th>
-          <th>Tx</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${activity.map((item) => `
-          <tr>
-            <td>${escapeHtml(formatDate(item.timestamp || item.createdAt || ""))}</td>
-            <td>${escapeHtml(item.type || "-")}</td>
-            <td>${marketAnchor({
-              outcome: item.side || item.outcome || "-",
-              question: item.question || item.title || "-",
-              url: item.url || item.marketUrl,
-              slug: item.slug,
-            })}</td>
-            <td>${escapeHtml(item.outcome || "-")}</td>
-            <td>${probability(Number(item.price))}</td>
-            <td>${Number.isFinite(Number(item.size)) ? Number(item.size).toLocaleString("en-US", { maximumFractionDigits: 4 }) : "-"}</td>
-            <td>${money(Number(item.usdcValue || item.value || item.amount), 4)}</td>
-            <td>${item.transactionHash ? `<a href="https://polygonscan.com/tx/${escapeHtml(item.transactionHash)}" target="_blank" rel="noopener noreferrer">polygonscan</a>` : "-"}</td>
-          </tr>
-        `).join("")}
-      </tbody>
-    </table>
-  `;
-}
-
-function renderLiveSyncDetails(liveState) {
-  const sync = liveState.sync || {};
-  const account = liveState.account || {};
-  const sources = Array.isArray(sync.sources) ? sync.sources : [];
-  els.botEvaluations.innerHTML = `
-    <div class="bot-summary">
-      <div>
-        <span class="label">Mode</span>
-        <strong>Live read-only</strong>
-        <span>orders are not submitted from this view</span>
-      </div>
-      <div>
-        <span class="label">Account</span>
-        <strong>${escapeHtml(liveAccountName(account))}</strong>
-        <span>${escapeHtml(shortAddress(account.address))} / ${escapeHtml(liveAccountProfileLine(account) || "Polymarket proxy wallet")}</span>
-      </div>
-      <div>
-        <span class="label">Sync status</span>
-        <strong>${escapeHtml(sync.status || "OK")}</strong>
-        <span>${escapeHtml(sync.message || "latest live snapshot loaded")}</span>
-      </div>
-      <div>
-        <span class="label">Sources</span>
-        <strong>${escapeHtml(sources.join(", ") || "Polymarket Data API")}</strong>
-        <span>${escapeHtml(liveState.generatedAt ? formatDate(liveState.generatedAt) : "-")}</span>
-      </div>
-    </div>
-  `;
-}
-
 function renderLiveState(liveState) {
   state.liveState = liveState;
   syncModeUi();
+  refreshEligibilityThreshold();
 
   const account = liveState.account || {};
   const portfolio = liveState.portfolio || {};
   const positions = livePositions(liveState);
   const activity = liveActivity(liveState);
+  const closedTrades = liveClosedTrades(liveState);
+  const sync = liveState.sync || {};
+  const sources = Array.isArray(sync.sources) ? sync.sources : [];
   const totalPnl = Number(portfolio.totalPnlUsdc);
   const totalPnlPct = Number(portfolio.totalPnlPct);
   const realizedPnl = Number(portfolio.realizedPnlUsdc);
@@ -1002,6 +1012,10 @@ function renderLiveState(liveState) {
   const equity = Number.isFinite(Number(portfolio.equityUsdc))
     ? Number(portfolio.equityUsdc)
     : (Number.isFinite(marketValue) ? marketValue : 0);
+  const liveGuardLabel = state.liveExecutionArmed ? "Armed" : "Inactive";
+  const liveGuardText = state.liveExecutionArmed
+    ? "UI gate enabled; no automatic live order submitter is connected yet"
+    : "click Activate live execution before future live order routing";
 
   els.botAction.textContent = "live";
   if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions`;
@@ -1036,6 +1050,11 @@ function renderLiveState(liveState) {
         <span>${escapeHtml(liveAccountProfileLine(account) || "Polymarket proxy wallet")}</span>
       </div>
       <div>
+        <span class="label">Sync status</span>
+        <strong>${escapeHtml(sync.status || "OK")}</strong>
+        <span>${escapeHtml([sync.message || "latest live snapshot loaded", sources.join(", ")].filter(Boolean).join(" / "))}</span>
+      </div>
+      <div>
         <span class="label">Positions</span>
         <strong>${positions.length}</strong>
         <span>${money(marketValue)} market value</span>
@@ -1056,9 +1075,9 @@ function renderLiveState(liveState) {
         <span>not all Polymarket APIs expose idle balance publicly</span>
       </div>
       <div>
-        <span class="label">Safety</span>
-        <strong>Read-only</strong>
-        <span>private key stays in GitHub Actions secrets</span>
+        <span class="label">Live execution</span>
+        <strong>${escapeHtml(liveGuardLabel)}</strong>
+        <span>${escapeHtml(liveGuardText)}</span>
       </div>
     </div>
   `;
@@ -1067,9 +1086,17 @@ function renderLiveState(liveState) {
     tableKey: "live",
     showStatus: false,
   });
-  if (els.closedSummary) els.closedSummary.textContent = `${activity.length} live events`;
-  if (els.closedTrades) els.closedTrades.innerHTML = renderLiveActivityRows(activity);
-  renderLiveSyncDetails(liveState);
+  if (els.closedSummary) {
+    const closedPnl = closedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
+    els.closedSummary.textContent = `${closedTrades.length} closed / ${activity.length} events / ${signedMoney(closedPnl)}`;
+  }
+  if (els.closedTrades) {
+    els.closedTrades.innerHTML = renderTradeRows(closedTrades, "Zatim zadne ukoncene live obchody na napojenem Polymarket uctu.", {
+      tableKey: "liveClosed",
+      showStatus: true,
+    });
+  }
+  renderBotEvaluations();
 }
 
 function evaluationSortValue(item, key) {
@@ -1219,8 +1246,21 @@ els.modeButtons.forEach((button) => {
     if (state.mode === mode) return;
     state.mode = mode;
     saveMode(mode);
+    state.eligibilityThreshold = null;
+    state.eligibilityThresholdKey = "";
     loadDashboardState();
   });
+});
+
+els.liveActivation?.addEventListener("click", () => {
+  if (!state.liveExecutionArmed) {
+    const confirmed = window.confirm("Activate the live execution gate for this browser? This only arms the UI; this version still does not submit live orders automatically.");
+    if (!confirmed) return;
+  }
+  state.liveExecutionArmed = !state.liveExecutionArmed;
+  saveLiveExecutionArmed(state.liveExecutionArmed);
+  syncLiveActivationUi();
+  if (state.mode === "live" && state.liveState) renderLiveState(state.liveState);
 });
 
 els.evaluationStatusButtons.forEach((button) => {
@@ -1304,4 +1344,5 @@ els.botTrades?.addEventListener("click", handleTradeSort);
 els.closedTrades?.addEventListener("click", handleTradeSort);
 
 state.mode = storedMode();
+state.liveExecutionArmed = storedLiveExecutionArmed();
 loadDashboardState();

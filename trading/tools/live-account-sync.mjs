@@ -9,6 +9,7 @@ const DEFAULT_ADDRESS = "0x3252de913d9323667f21f4d88fa1f996fc282293";
 const ACCOUNT_ADDRESS = (process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || DEFAULT_ADDRESS).toLowerCase();
 const STATE_PATH = process.env.LIVE_STATE_PATH || "data/live-state.json";
 const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
+const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
 
 function number(value, fallback = null) {
   const numeric = Number(value);
@@ -167,6 +168,8 @@ function normalizeActivity(item) {
     outcome: item.outcome || "",
     slug,
     url,
+    tokenId: item.asset || item.tokenId || null,
+    conditionId: item.conditionId || null,
     price: number(item.price),
     size: number(item.size ?? item.shares),
     usdcValue: number(item.usdcSize ?? item.value ?? item.amount),
@@ -174,12 +177,141 @@ function normalizeActivity(item) {
   };
 }
 
-function portfolioSummary(positions, valueRows) {
+function normalizeTradeHistoryItem(item) {
+  const slug = item.eventSlug || item.slug || "";
+  const url = /^[a-z0-9-]+$/i.test(String(slug)) ? `https://polymarket.com/event/${slug}` : "https://polymarket.com/";
+  const size = number(item.size ?? item.shares ?? item.amount, 0);
+  const price = number(item.price ?? item.avgPrice);
+  const timestamp = isoTime(item.timestamp ?? item.createdAt ?? item.updatedAt);
+  const side = String(item.side || item.type || item.action || "").toUpperCase();
+  const notional = number(item.usdcSize ?? item.value ?? item.amountUsdc ?? (price != null ? price * size : null), 0);
+
+  return {
+    id: String(item.transactionHash || item.tradeId || item.id || `${item.asset || item.tokenId || item.conditionId || slug}-${timestamp || ""}-${side}`),
+    timestamp,
+    side,
+    question: item.title || item.question || item.market || "-",
+    outcome: item.outcome || item.name || "",
+    slug,
+    eventSlug: item.eventSlug || item.slug || "",
+    url,
+    tokenId: item.asset || item.tokenId || null,
+    conditionId: item.conditionId || null,
+    price,
+    size,
+    usdcValue: notional,
+    transactionHash: item.transactionHash || item.txHash || "",
+  };
+}
+
+function closedTradesFromHistory(trades, activity, generatedAt) {
+  const groups = new Map();
+
+  function groupKey(item) {
+    return String(item.tokenId || `${item.conditionId || item.slug || item.question}:${item.outcome || ""}`);
+  }
+
+  for (const trade of trades) {
+    const key = groupKey(trade);
+    if (!key || key === "null") continue;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        id: key,
+        mode: "LIVE",
+        status: "CLOSED",
+        question: trade.question,
+        outcome: trade.outcome || trade.side || "-",
+        slug: trade.slug,
+        eventSlug: trade.eventSlug,
+        url: trade.url,
+        tokenId: trade.tokenId,
+        conditionId: trade.conditionId,
+        openedAt: trade.timestamp,
+        resolvedAt: trade.timestamp,
+        entryPrice: null,
+        currentPrice: null,
+        sharesBought: 0,
+        sharesSold: 0,
+        buyCost: 0,
+        sellProceeds: 0,
+        latestPrice: null,
+      });
+    }
+    const group = groups.get(key);
+    const size = number(trade.size, 0);
+    const value = number(trade.usdcValue, 0);
+    const side = String(trade.side || "").toUpperCase();
+    if (!group.openedAt || Date.parse(trade.timestamp || "") < Date.parse(group.openedAt || "")) group.openedAt = trade.timestamp;
+    if (!group.resolvedAt || Date.parse(trade.timestamp || "") > Date.parse(group.resolvedAt || "")) group.resolvedAt = trade.timestamp;
+    if (number(trade.price) != null) group.latestPrice = number(trade.price);
+    if (side.includes("BUY")) {
+      group.sharesBought += size;
+      group.buyCost += value;
+    } else if (side.includes("SELL")) {
+      group.sharesSold += size;
+      group.sellProceeds += value;
+    }
+  }
+
+  for (const item of activity) {
+    const type = String(item.type || "").toUpperCase();
+    if (!type.includes("REDEEM")) continue;
+    const key = groupKey(item);
+    const group = groups.get(key);
+    if (!group) continue;
+    group.sellProceeds += number(item.usdcValue, 0);
+    if (!group.resolvedAt || Date.parse(item.timestamp || "") > Date.parse(group.resolvedAt || "")) group.resolvedAt = item.timestamp;
+    group.status = "REDEEMED";
+  }
+
+  return [...groups.values()]
+    .filter((group) => group.buyCost > 0 && (Math.abs(group.sharesBought - group.sharesSold) < 0.000001 || group.status === "REDEEMED"))
+    .map((group) => {
+      const realizedPnl = group.sellProceeds - group.buyCost;
+      const entryPrice = group.sharesBought > 0 ? group.buyCost / group.sharesBought : null;
+      const exitPrice = group.sharesSold > 0
+        ? group.sellProceeds / group.sharesSold
+        : (group.sharesBought > 0 && group.status === "REDEEMED" ? group.sellProceeds / group.sharesBought : group.latestPrice);
+      return {
+        id: group.id,
+        mode: "LIVE",
+        status: group.status,
+        question: group.question || "-",
+        outcome: group.outcome || "-",
+        slug: group.slug || group.eventSlug || "",
+        eventSlug: group.eventSlug || group.slug || "",
+        url: group.url,
+        tokenId: group.tokenId,
+        conditionId: group.conditionId,
+        date: group.openedAt || generatedAt,
+        openedAt: group.openedAt || generatedAt,
+        resolvedAt: group.resolvedAt || generatedAt,
+        endDate: group.resolvedAt || generatedAt,
+        entryPrice,
+        currentPrice: exitPrice,
+        finalOutcomePrice: exitPrice,
+        shares: group.sharesBought,
+        stakeUsdc: group.buyCost,
+        totalCostUsdc: group.buyCost,
+        netGainIfWinUsdc: group.sharesBought - group.buyCost,
+        realizedPnlUsdc: realizedPnl,
+        realizedPnlPct: group.buyCost > 0 ? realizedPnl / group.buyCost : null,
+        unrealizedPnlUsdc: 0,
+        unrealizedPnlPct: 0,
+        analysisSummary: "Derived from public Polymarket trade history; realized P/L is estimated from buys, sells and redemption-like activity where available.",
+      };
+    });
+}
+
+function portfolioSummary(positions, valueRows, closedTrades = []) {
   const valueRow = Array.isArray(valueRows) ? valueRows.find((row) => String(row.user || "").toLowerCase() === ACCOUNT_ADDRESS) : null;
   const marketValue = positions.reduce((sum, item) => sum + number(item.currentValueUsdc, 0), 0);
   const openRisk = positions.reduce((sum, item) => sum + number(item.totalCostUsdc, 0), 0);
   const openPnl = positions.reduce((sum, item) => sum + number(item.unrealizedPnlUsdc, 0), 0);
-  const realizedPnl = positions.reduce((sum, item) => sum + number(item.realizedPnlUsdc, 0), 0);
+  const realizedPnl = positions.reduce((sum, item) => sum + number(item.realizedPnlUsdc, 0), 0)
+    + closedTrades.reduce((sum, item) => sum + number(item.realizedPnlUsdc, 0), 0);
+  const closedRisk = closedTrades.reduce((sum, item) => sum + number(item.totalCostUsdc || item.stakeUsdc, 0), 0);
+  const totalRisk = openRisk + closedRisk;
   const equity = number(valueRow?.value, marketValue);
   const totalPnl = openPnl + realizedPnl;
 
@@ -192,9 +324,9 @@ function portfolioSummary(positions, valueRows) {
     openPnlUsdc: openPnl,
     openPnlPct: openRisk > 0 ? openPnl / openRisk : null,
     realizedPnlUsdc: realizedPnl,
-    realizedPnlPct: openRisk > 0 ? realizedPnl / openRisk : null,
+    realizedPnlPct: closedRisk > 0 ? realizedPnl / closedRisk : null,
     totalPnlUsdc: totalPnl,
-    totalPnlPct: openRisk > 0 ? totalPnl / openRisk : null,
+    totalPnlPct: totalRisk > 0 ? totalPnl / totalRisk : null,
   };
 }
 
@@ -203,24 +335,39 @@ async function main() {
   const sync = {
     status: "OK",
     message: "Live Polymarket account snapshot loaded",
-    sources: ["positions", "value", "activity", "public-profile"],
+    sources: ["positions", "value", "activity", "trades", "public-profile"],
+    warnings: [],
   };
 
   let rawPositions = [];
   let rawActivity = [];
+  let rawTrades = [];
   let valueRows = [];
   let publicProfile = null;
 
-  try {
-    [rawPositions, valueRows, rawActivity, publicProfile] = await Promise.all([
-      fetchJson("/positions", { user: ACCOUNT_ADDRESS, limit: 500 }),
-      fetchJson("/value", { user: ACCOUNT_ADDRESS }),
-      fetchJson("/activity", { user: ACCOUNT_ADDRESS, limit: ACTIVITY_LIMIT }),
-      fetchGammaJson("/public-profile", { address: ACCOUNT_ADDRESS }).catch((error) => ({ error: error.message })),
-    ]);
-  } catch (error) {
+  async function optional(label, promise, fallback) {
+    try {
+      return await promise;
+    } catch (error) {
+      sync.warnings.push(`${label}: ${error?.message || String(error)}`);
+      return fallback;
+    }
+  }
+
+  [rawPositions, valueRows, rawActivity, rawTrades, publicProfile] = await Promise.all([
+    optional("positions", fetchJson("/positions", { user: ACCOUNT_ADDRESS, limit: 500 }), []),
+    optional("value", fetchJson("/value", { user: ACCOUNT_ADDRESS }), []),
+    optional("activity", fetchJson("/activity", { user: ACCOUNT_ADDRESS, limit: ACTIVITY_LIMIT }), []),
+    optional("trades", fetchJson("/trades", { user: ACCOUNT_ADDRESS, limit: TRADE_LIMIT }), []),
+    optional("public-profile", fetchGammaJson("/public-profile", { address: ACCOUNT_ADDRESS }), { error: "not_available" }),
+  ]);
+
+  if (sync.warnings.length && !Array.isArray(rawPositions)) {
     sync.status = "ERROR";
-    sync.message = error?.message || String(error);
+    sync.message = sync.warnings.join(" | ");
+  } else if (sync.warnings.length) {
+    sync.status = "PARTIAL";
+    sync.message = `Live snapshot loaded with warnings: ${sync.warnings.join(" | ")}`;
   }
 
   const positions = Array.isArray(rawPositions)
@@ -229,6 +376,10 @@ async function main() {
   const activity = Array.isArray(rawActivity)
     ? rawActivity.map(normalizeActivity).filter((item) => item.timestamp || item.question !== "-")
     : [];
+  const tradeHistory = Array.isArray(rawTrades)
+    ? rawTrades.map(normalizeTradeHistoryItem).filter((item) => item.timestamp || item.question !== "-")
+    : [];
+  const closedTrades = closedTradesFromHistory(tradeHistory, activity, generatedAt);
 
   const payload = {
     schemaVersion: 1,
@@ -242,8 +393,10 @@ async function main() {
       loginMethod: "Polymarket proxy wallet; Gmail/MetaMask login is handled by Polymarket, not this frontend",
       profile: normalizeProfile(publicProfile?.error ? null : publicProfile),
     },
-    portfolio: portfolioSummary(positions, valueRows),
+    portfolio: portfolioSummary(positions, valueRows, closedTrades),
     positions,
+    closedTrades,
+    tradeHistory,
     activity,
     sync,
   };
@@ -254,6 +407,8 @@ async function main() {
     mode: payload.mode,
     account: payload.account.address,
     positions: positions.length,
+    closedTrades: closedTrades.length,
+    tradeHistory: tradeHistory.length,
     activity: activity.length,
     status: sync.status,
   }));

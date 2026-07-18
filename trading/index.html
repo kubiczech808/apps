@@ -22,11 +22,14 @@
             <p class="eyebrow">Portfolio</p>
             <h2 data-portfolio-title>Autonomous paper portfolio</h2>
           </div>
-          <div class="mode-switch" role="group" aria-label="Portfolio mode">
-            <button class="mode-button active" type="button" data-mode-toggle="paper">Paper</button>
-            <button class="mode-button" type="button" data-mode-toggle="live">Live</button>
+          <div class="portfolio-actions">
+            <div class="mode-switch" role="group" aria-label="Portfolio mode">
+              <button class="mode-button active" type="button" data-mode-toggle="paper">Paper</button>
+              <button class="mode-button" type="button" data-mode-toggle="live">Live</button>
+            </div>
+            <button class="activation-button" type="button" data-live-activation hidden aria-pressed="false">Activate live execution</button>
+            <span class="pill" data-bot-action>loading</span>
           </div>
-          <span class="pill" data-bot-action>loading</span>
         </div>
         <div class="portfolio-cards">
           <div class="metric-card">
@@ -64,9 +67,9 @@
 
       <section class="dashboard-tabs" data-tabs>
         <div class="tab-list" role="tablist" aria-label="Trading dashboard">
-          <button class="tab-button active" type="button" data-tab-target="daily-picks" data-paper-label="Daily picks" data-live-label="Live positions">Daily picks</button>
-          <button class="tab-button" type="button" data-tab-target="closed-trades" data-paper-label="Closed trades" data-live-label="Live activity">Closed trades</button>
-          <button class="tab-button" type="button" data-tab-target="evaluation-log" data-paper-label="Evaluation log" data-live-label="Sync details">Evaluation log</button>
+          <button class="tab-button active" type="button" data-tab-target="daily-picks" data-paper-label="Opened trades" data-live-label="Opened trades">Opened trades</button>
+          <button class="tab-button" type="button" data-tab-target="closed-trades" data-paper-label="Closed trades" data-live-label="Closed trades">Closed trades</button>
+          <button class="tab-button" type="button" data-tab-target="evaluation-log" data-paper-label="Evaluation log" data-live-label="Evaluation log">Evaluation log</button>
         </div>
 
         <section class="tab-panel active" data-tab-panel="daily-picks">
@@ -74,7 +77,7 @@
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Autonomous bot</p>
-                <h2 data-primary-panel-title>Daily paper picks</h2>
+                <h2 data-primary-panel-title>Opened paper trades</h2>
               </div>
               <span class="pill" data-bot-inline-action>loading</span>
             </div>
