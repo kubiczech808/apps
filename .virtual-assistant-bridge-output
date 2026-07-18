@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-18T08:05:23Z
+checked_at_utc=2026-07-18T11:45:19Z
 shared_brain_intro_telegram_sent=not_requested
 xoz_comment_test_requested=false
 playwright_install=ok
@@ -92,36 +92,36 @@ routing_smoke_sanitized_reply= Zadano Agentovi OZ jako draft, bez publikace.
 routing_smoke_filtered_output_urls= ['https://osobnizkusenosti.cz/?p=123']
 delegation_monitor_available= True
 orchestration_tasks_file= /home/openclaw2/.openclaw/virtual-assistant/ORCHESTRATION_TASKS.json
-agent_g_raw_token_keys_present= TELEGRAM_AGENT_G_BOT_TOKEN
+agent_g_raw_token_keys_present= TELEGRAM_AGENT_G_BOT_TOKEN,G_TELEGRAM_TOKEN
 agent_g_raw_chat_keys_present= TELEGRAM_VIRTUAL_ASSISTANT_CHAT_ID
 agent_g_token_available= True
 agent_g_chat_available= True
 agent_g_escalated_blockers_summary= 0
-agent_g_escalated_log_blockers_summary= 0
+agent_g_escalated_log_blockers_summary= 1
 agent_g_handoffs_written_summary= 0
-[2026-07-18 10:05:23] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-[2026-07-18 10:05:26] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T08:05:24.537546Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "Your session has ended
+[2026-07-18 13:45:21] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+[2026-07-18 13:45:23] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T11:45:21.707886Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "Your session has ended
 ai_smoke_ok= True
 gmail_google_meta_1=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_2=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
 gmail_setup_poll=ok
-telegram_state_offset= 309697083
+telegram_state_offset= 309697085
 virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 1
+virtual_assistant_lock_age_sec= 11
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-07-18T08:05:26Z
-virtual_assistant_log_signal_1=[2026-07-18 10:00:18] Agent G daemon started
-virtual_assistant_log_signal_2=[2026-07-18 10:00:18] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_3=[2026-07-18 10:00:22] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_4=[2026-07-18 10:00:25] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T08:00:23.418802Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "You
-virtual_assistant_log_signal_5=[2026-07-18 10:03:38] Virtual Assistant email worker started
-virtual_assistant_log_signal_6=[2026-07-18 10:03:38] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_7=[2026-07-18 10:03:38] Agent G daemon started
-virtual_assistant_log_signal_8=[2026-07-18 10:03:38] Virtual Assistant telegram recovery worker started
-virtual_assistant_log_signal_9=[2026-07-18 10:03:38] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_10=[2026-07-18 10:03:41] XOZ approval Telegram media send failed: RuntimeError: media unavailable
-virtual_assistant_log_signal_11=[2026-07-18 10:05:23] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_12=[2026-07-18 10:05:26] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T08:05:24.537546Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "You
+virtual_assistant_log_mtime_utc= 2026-07-18T11:45:23Z
+virtual_assistant_log_signal_1=[2026-07-18 10:11:47] Agent G daemon started
+virtual_assistant_log_signal_2=[2026-07-18 10:11:47] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_3=[2026-07-18 13:12:10] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_4=[2026-07-18 13:12:13] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T11:12:11.125868Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "You
+virtual_assistant_log_signal_5=[2026-07-18 13:15:04] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+virtual_assistant_log_signal_6=[2026-07-18 13:45:16] Virtual Assistant email worker started
+virtual_assistant_log_signal_7=[2026-07-18 13:45:16] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_8=[2026-07-18 13:45:16] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_9=[2026-07-18 13:45:16] Agent G daemon started
+virtual_assistant_log_signal_10=[2026-07-18 13:45:17] Telegram bot commands refresh: sent
+virtual_assistant_log_signal_11=[2026-07-18 13:45:21] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_12=[2026-07-18 13:45:23] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T11:45:21.707886Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "You
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
@@ -152,46 +152,46 @@ va_2026_06_29_log_27=[2026-06-29 12:29:43] Model route: gpt-5.4-mini tier=cheap 
 va_2026_06_29_log_28=[2026-06-29 12:30:20] -> Hotovo:
 va_2026_06_29_log_29=[2026-06-29 13:42:33] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_30=[2026-06-29 13:42:59] Email processed and replied: from=<email>@google.com trusted=False subject=Další informace o aktualizovaných smluvních podmínkách
-va_today_log_1=[2026-07-18 07:17:47] Virtual Assistant email worker started
-va_today_log_2=[2026-07-18 08:13:29] Virtual Assistant email worker started
-va_today_log_3=[2026-07-18 08:13:29] Virtual Assistant delegation monitor started
-va_today_log_4=[2026-07-18 08:30:51] <- vygeneruj obrazek pres gemini
-va_today_log_5=[2026-07-18 08:30:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_6=[2026-07-18 08:31:31] -> Jelikož v rámci OpenClaw instance nemám přímý interaktivní přístup k "Gemini" jako uživatel s prohlížečem, ale využívám 
-va_today_log_7=[2026-07-18 08:32:48] <- je to jen test. dodej mi rychle nejak obrazek jen sem do telegramu
-va_today_log_8=[2026-07-18 08:32:48] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_9=[2026-07-18 08:33:05] -> Tady je rychlý testovací obrázek vygenerovaný podle tvého zadání (infografika s robotem, bez lidí a s čistým designem):
-va_today_log_10=[2026-07-18 08:34:30] <- hezky, pres jaky api klic nebo ucet / jakym agentem je to vygenerovane?
-va_today_log_11=[2026-07-18 08:34:30] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_12=[2026-07-18 08:34:38] -> Vygenerovala jsem to já (**Virtuální asistentka**) přímo pro náš chat. 
-va_today_log_13=[2026-07-18 08:35:54] <- to ano, mohla bys to zkusit zadat G, at tuto cestu implementuje u agenta D pro jeho generovani prispevku na X?
-va_today_log_14=[2026-07-18 08:35:54] Model route: gpt-5.4 tier=medium reason=delsi kontext, komplexni klicova slova sandbox=danger-full-access
-va_today_log_15=[2026-07-18 08:36:11] -> Skvělý nápad! Pro rychlé příspěvky na X (Twitter) je tento bezplatný endpoint naprosto dostačující, ušetří nám to kredit
-va_today_log_16=[2026-07-18 08:36:27] <- vygeneruj mi jeste jeden obrazek, ale tentokrat pres gemini API
-va_today_log_17=[2026-07-18 08:36:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_18=[2026-07-18 08:36:54] -> Standardní vývojářské **Gemini API** (které používáme pro psaní textů u našich blogovacích agentů) bohužel ve své základ
-va_today_log_19=[2026-07-18 08:37:35] <- chci to jako nahradu, takze vychozi metodu
-va_today_log_20=[2026-07-18 08:37:36] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_21=[2026-07-18 08:37:52] -> Rozumím, nastaveno. Upravila jsem zadání pro **Agenta G** – bezplatný endpoint Pollinations bude pro **Agenta D** nastav
-va_today_log_22=[2026-07-18 09:21:03] Virtual Assistant email worker started
-va_today_log_23=[2026-07-18 09:21:03] Virtual Assistant delegation monitor started
-va_today_log_24=[2026-07-18 09:21:58] VA handoff Agent D Pollinations handled: status=DONE summary=Agent D ma prepnute generovani obrazku na Pollinations runtime s overenym smoke testem a x-approve.service bezi.
-va_today_log_25=[2026-07-18 09:22:03] -> Hotovo: Agent D ma prepnute generovani obrazku na Pollinations runtime s overenym smoke testem a x-approve.service bezi.
-va_today_log_26=[2026-07-18 09:33:27] <- ale mne nedorazila zadna zprava do telegramu od agenta D, muzes ho vyzvat k okamzite tvorbe navrhu prispevku na tema "ti
-va_today_log_27=[2026-07-18 09:33:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_28=[2026-07-18 09:33:37] -> Rozumím, Agent D běžně čeká na svůj denní plán (workflow), proto ti od něj zatím nic nepřišlo. 
-va_today_log_29=[2026-07-18 09:47:58] Virtual Assistant email worker started
-va_today_log_30=[2026-07-18 09:47:58] Virtual Assistant delegation monitor started
-va_today_log_31=[2026-07-18 09:48:02] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_32=[2026-07-18 09:53:28] Virtual Assistant email worker started
-va_today_log_33=[2026-07-18 09:53:28] Virtual Assistant delegation monitor started
-va_today_log_34=[2026-07-18 09:55:14] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_35=[2026-07-18 10:00:18] Virtual Assistant delegation monitor started
-va_today_log_36=[2026-07-18 10:00:18] Virtual Assistant email worker started
-va_today_log_37=[2026-07-18 10:00:22] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_38=[2026-07-18 10:03:38] Virtual Assistant email worker started
-va_today_log_39=[2026-07-18 10:03:38] Virtual Assistant delegation monitor started
-va_today_log_40=[2026-07-18 10:05:23] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_1=[2026-07-18 08:35:54] Model route: gpt-5.4 tier=medium reason=delsi kontext, komplexni klicova slova sandbox=danger-full-access
+va_today_log_2=[2026-07-18 08:36:11] -> Skvělý nápad! Pro rychlé příspěvky na X (Twitter) je tento bezplatný endpoint naprosto dostačující, ušetří nám to kredit
+va_today_log_3=[2026-07-18 08:36:27] <- vygeneruj mi jeste jeden obrazek, ale tentokrat pres gemini API
+va_today_log_4=[2026-07-18 08:36:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_5=[2026-07-18 08:36:54] -> Standardní vývojářské **Gemini API** (které používáme pro psaní textů u našich blogovacích agentů) bohužel ve své základ
+va_today_log_6=[2026-07-18 08:37:35] <- chci to jako nahradu, takze vychozi metodu
+va_today_log_7=[2026-07-18 08:37:36] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_8=[2026-07-18 08:37:52] -> Rozumím, nastaveno. Upravila jsem zadání pro **Agenta G** – bezplatný endpoint Pollinations bude pro **Agenta D** nastav
+va_today_log_9=[2026-07-18 09:21:03] Virtual Assistant email worker started
+va_today_log_10=[2026-07-18 09:21:03] Virtual Assistant delegation monitor started
+va_today_log_11=[2026-07-18 09:21:58] VA handoff Agent D Pollinations handled: status=DONE summary=Agent D ma prepnute generovani obrazku na Pollinations runtime s overenym smoke testem a x-approve.service bezi.
+va_today_log_12=[2026-07-18 09:22:03] -> Hotovo: Agent D ma prepnute generovani obrazku na Pollinations runtime s overenym smoke testem a x-approve.service bezi.
+va_today_log_13=[2026-07-18 09:33:27] <- ale mne nedorazila zadna zprava do telegramu od agenta D, muzes ho vyzvat k okamzite tvorbe navrhu prispevku na tema "ti
+va_today_log_14=[2026-07-18 09:33:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_15=[2026-07-18 09:33:37] -> Rozumím, Agent D běžně čeká na svůj denní plán (workflow), proto ti od něj zatím nic nepřišlo. 
+va_today_log_16=[2026-07-18 09:47:58] Virtual Assistant email worker started
+va_today_log_17=[2026-07-18 09:47:58] Virtual Assistant delegation monitor started
+va_today_log_18=[2026-07-18 09:48:02] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_19=[2026-07-18 09:53:28] Virtual Assistant email worker started
+va_today_log_20=[2026-07-18 09:53:28] Virtual Assistant delegation monitor started
+va_today_log_21=[2026-07-18 09:55:14] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_22=[2026-07-18 10:00:18] Virtual Assistant delegation monitor started
+va_today_log_23=[2026-07-18 10:00:18] Virtual Assistant email worker started
+va_today_log_24=[2026-07-18 10:00:22] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_25=[2026-07-18 10:03:38] Virtual Assistant email worker started
+va_today_log_26=[2026-07-18 10:03:38] Virtual Assistant delegation monitor started
+va_today_log_27=[2026-07-18 10:05:23] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_28=[2026-07-18 10:11:47] Virtual Assistant email worker started
+va_today_log_29=[2026-07-18 10:11:47] Virtual Assistant delegation monitor started
+va_today_log_30=[2026-07-18 11:46:01] <- necht D vygeneruje prispevek pro x na tema: time beats timing s obrazkem: karikatura rafickovych hodin zapasi v ringu s 
+va_today_log_31=[2026-07-18 11:46:47] -> Doruceno: Agent D ma zadani.
+va_today_log_32=[2026-07-18 12:46:48] Agent D blocker escalated to Agent G: 1cc5b3966464eb5d
+va_today_log_33=[2026-07-18 12:47:48] -> Blocker: Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup.
+va_today_log_34=[2026-07-18 13:12:10] <- to je divne ne? udelej s tim neco
+va_today_log_35=[2026-07-18 13:12:10] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_36=[2026-07-18 13:12:22] -> Máš pravdu, Agent D je nastavený jako tichý robot na pozadí (běží přes systémové crony a skripty), takže sám od sebe kon
+va_today_log_37=[2026-07-18 13:15:04] Daemon poll error: <urlopen error [Errno 104] Connection reset by peer>
+va_today_log_38=[2026-07-18 13:45:16] Virtual Assistant email worker started
+va_today_log_39=[2026-07-18 13:45:16] Virtual Assistant delegation monitor started
+va_today_log_40=[2026-07-18 13:45:21] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_today_03_04_log_1=[2026-07-18 03:11:50] Daemon poll error: HTTP Error 502: Bad Gateway
 va_today_03_04_log_2=[2026-07-18 03:11:51] Daemon poll error: HTTP Error 502: Bad Gateway
 va_today_03_04_log_3=[2026-07-18 03:12:12] Daemon poll error: The read operation timed out
@@ -257,127 +257,131 @@ va_2026_07_02_18_log_57=[2026-07-02 18:59:56] Daemon poll error: HTTP Error 401:
 va_2026_07_02_18_log_58=[2026-07-02 18:59:57] Daemon poll error: HTTP Error 401: Unauthorized
 va_2026_07_02_18_log_59=[2026-07-02 18:59:58] Daemon poll error: HTTP Error 401: Unauthorized
 va_2026_07_02_18_log_60=[2026-07-02 18:59:59] Daemon poll error: HTTP Error 401: Unauthorized
-orchestration_task_1=id=042e50e8ee48ea47 created=2026-07-03T04:45:39+02:00 status=DONE delivery= reported=2026-07-03T09:07:35+02:00 agent=oz instance=osobnizkusenosti-cz kind=blogger-draft topic=ai agenti observation=oz ma overeny vystup: https://www.osobnizkusenosti.cz/?p=6067
-orchestration_task_1_proof_keys=config,default_post_status,domain,log,requires_link,site_url,state,wants_link
-orchestration_task_1_state_keys=date,errors,images,keywords,phases_done,topic
+orchestration_task_1=id=c1cb0f52421333f1 created=2026-07-03T10:19:58+02:00 status=CANCELED delivery=2026-07-03T10:21:26+02:00 reported=2026-07-03T12:47:27+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvaleni observation=Zadani pro Agent D zruseno; spravny cil je Agent XOZ.
+orchestration_task_1_proof_keys=state,workflow_output
+orchestration_task_1_state_keys=custom_instructions,virtual_assistant_last_assignment
 orchestration_task_1_state_post_id=
 orchestration_task_1_state_urls=
-orchestration_task_2=id=c1cb0f52421333f1 created=2026-07-03T10:19:58+02:00 status=CANCELED delivery=2026-07-03T10:21:26+02:00 reported=2026-07-03T12:47:27+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvaleni observation=Zadani pro Agent D zruseno; spravny cil je Agent XOZ.
+orchestration_task_1_agent_g_escalated_at=
+orchestration_task_1_agent_g_escalation_id=
+orchestration_task_2=id=d6813a85acb88ebc created=2026-07-03T10:23:40+02:00 status=CANCELED delivery=2026-07-03T10:25:26+02:00 reported=2026-07-03T12:47:27+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvalen observation=Zadani pro Agent D zruseno; spravny cil je Agent XOZ.
 orchestration_task_2_proof_keys=state,workflow_output
-orchestration_task_2_state_keys=custom_instructions
+orchestration_task_2_state_keys=custom_instructions,virtual_assistant_last_assignment
 orchestration_task_2_state_post_id=
 orchestration_task_2_state_urls=
 orchestration_task_2_agent_g_escalated_at=
 orchestration_task_2_agent_g_escalation_id=
-orchestration_task_3=id=d6813a85acb88ebc created=2026-07-03T10:23:40+02:00 status=CANCELED delivery=2026-07-03T10:25:26+02:00 reported=2026-07-03T12:47:27+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=ne, toto je prikaz k tomu, abys delegovala vytvoreni prispevku na X pro Osobnizkusenosti a poslala mi nahled ke schvalen observation=Zadani pro Agent D zruseno; spravny cil je Agent XOZ.
-orchestration_task_3_proof_keys=state,workflow_output
-orchestration_task_3_state_keys=custom_instructions
+orchestration_task_3=id=d6201923d1ac5e8b created=2026-07-03T12:42:47+02:00 status=DONE delivery=2026-07-03T12:42:48+02:00 reported=2026-07-13T13:30:47+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=chci navrh prispevku na X OZ ke schvaleni observation=Agent XOZ navrhl X prispevek: Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. Kdyz je jasne, kdo ma co prevzit, jak se overi vys
+orchestration_task_3_proof_keys=inbox,state
+orchestration_task_3_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_3_state_post_id=
 orchestration_task_3_state_urls=
-orchestration_task_3_agent_g_escalated_at=
-orchestration_task_3_agent_g_escalation_id=
-orchestration_task_4=id=d6201923d1ac5e8b created=2026-07-03T12:42:47+02:00 status=DONE delivery=2026-07-03T12:42:48+02:00 reported=2026-07-13T13:30:47+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=chci navrh prispevku na X OZ ke schvaleni observation=Agent XOZ navrhl X prispevek: Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. Kdyz je jasne, kdo ma co prevzit, jak se overi vys
-orchestration_task_4_proof_keys=inbox,state
-orchestration_task_4_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
-orchestration_task_4_state_post_id=
-orchestration_task_4_state_urls=
-orchestration_task_4_xoz_status=CANCELED_BY_JAKUB
-orchestration_task_4_xoz_accepted_at=2026-07-03T12:59:13+02:00
-orchestration_task_4_xoz_in_progress_at=2026-07-03T12:59:13+02:00
-orchestration_task_4_xoz_output_at=2026-07-03T12:59:13+02:00
-orchestration_task_4_xoz_output=Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. Kdyz je jasne, kdo ma co prevzit, jak se overi vysledek a kdy se vratit se stavem, prestanou ukoly mizet mezi radky.
-orchestration_task_5=id=0a01255ac576e7ab created=2026-07-03T14:19:55+02:00 status=VERIFYING delivery=2026-07-03T14:19:56+02:00 reported= agent=Agent G instance=operations kind=technical-blocker topic=Vyres Agent D X blocker z logu: Agent D assignment se nepropsal do state souboru. observation=Agent G resi technicky blocker.
+orchestration_task_3_xoz_status=CANCELED_BY_JAKUB
+orchestration_task_3_xoz_accepted_at=2026-07-03T12:59:13+02:00
+orchestration_task_3_xoz_in_progress_at=2026-07-03T12:59:13+02:00
+orchestration_task_3_xoz_output_at=2026-07-03T12:59:13+02:00
+orchestration_task_3_xoz_output=Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. Kdyz je jasne, kdo ma co prevzit, jak se overi vysledek a kdy se vratit se stavem, prestanou ukoly mizet mezi radky.
+orchestration_task_4=id=0a01255ac576e7ab created=2026-07-03T14:19:55+02:00 status=VERIFYING delivery=2026-07-03T14:19:56+02:00 reported= agent=Agent G instance=operations kind=technical-blocker topic=Vyres Agent D X blocker z logu: Agent D assignment se nepropsal do state souboru. observation=Agent G resi technicky blocker.
+orchestration_task_4_proof_keys=blocked_agent,handoff,handoffs,history,inbox,source
+orchestration_task_5=id=48bedd2d973fac68 created=2026-07-03T14:19:55+02:00 status=VERIFYING delivery=2026-07-03T14:19:57+02:00 reported= agent=Agent G instance=operations kind=technical-blocker topic=Vyres Agent D X blocker z logu: Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup. observation=Agent G resi technicky blocker.
 orchestration_task_5_proof_keys=blocked_agent,handoff,handoffs,history,inbox,source
-orchestration_task_6=id=48bedd2d973fac68 created=2026-07-03T14:19:55+02:00 status=VERIFYING delivery=2026-07-03T14:19:57+02:00 reported= agent=Agent G instance=operations kind=technical-blocker topic=Vyres Agent D X blocker z logu: Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup. observation=Agent G resi technicky blocker.
-orchestration_task_6_proof_keys=blocked_agent,handoff,handoffs,history,inbox,source
-orchestration_task_7=id=f13fb9d465f77608 created=2026-07-04T05:52:08+02:00 status=DONE delivery= reported=2026-07-13T13:30:48+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=dodej mi navrh prispevku na X Osobni zkusenosti observation=Agent XOZ navrhl X prispevek: Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. Kdyz je jasne, kdo ma co prevzit, jak se overi vys
-orchestration_task_7_proof_keys=inbox,state
+orchestration_task_6=id=f13fb9d465f77608 created=2026-07-04T05:52:08+02:00 status=DONE delivery= reported=2026-07-13T13:30:48+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=dodej mi navrh prispevku na X Osobni zkusenosti observation=Agent XOZ navrhl X prispevek: Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. Kdyz je jasne, kdo ma co prevzit, jak se overi vys
+orchestration_task_6_proof_keys=inbox,state
+orchestration_task_6_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
+orchestration_task_6_state_post_id=
+orchestration_task_6_state_urls=
+orchestration_task_6_xoz_status=CANCELED_BY_JAKUB
+orchestration_task_6_xoz_accepted_at=2026-07-04T05:52:46+02:00
+orchestration_task_6_xoz_in_progress_at=2026-07-04T05:52:46+02:00
+orchestration_task_6_xoz_output_at=2026-07-04T05:52:46+02:00
+orchestration_task_6_xoz_output=Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. Kdyz je jasne, kdo ma co prevzit, jak se overi vysledek a kdy se vratit se stavem, prestanou ukoly mizet mezi radky.
+orchestration_task_7=id=4f53c9be0161c7f2 created=2026-07-05T07:01:08+02:00 status=BLOCKED delivery=2026-07-05T07:02:05+02:00 reported=2026-07-05T08:01:28+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=Agent XOZ pridej 1 komentar na X pro Osobni zkusenosti jako test activity logu a zapis overitelny vysledek. observation=Agent XOZ nedodal overitelny komentar do activity logu do 60 minut.
+orchestration_task_7_proof_keys=activity_log,control_inbox,state
 orchestration_task_7_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_7_state_post_id=
 orchestration_task_7_state_urls=
-orchestration_task_7_xoz_status=CANCELED_BY_JAKUB
-orchestration_task_7_xoz_accepted_at=2026-07-04T05:52:46+02:00
-orchestration_task_7_xoz_in_progress_at=2026-07-04T05:52:46+02:00
-orchestration_task_7_xoz_output_at=2026-07-04T05:52:46+02:00
-orchestration_task_7_xoz_output=Osobni zkusenost: nejlepsi veci v praci casto nevzniknou z dalsiho nastroje, ale z dobreho procesu. Kdyz je jasne, kdo ma co prevzit, jak se overi vysledek a kdy se vratit se stavem, prestanou ukoly mizet mezi radky.
-orchestration_task_8=id=4f53c9be0161c7f2 created=2026-07-05T07:01:08+02:00 status=BLOCKED delivery=2026-07-05T07:02:05+02:00 reported=2026-07-05T08:01:28+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=Agent XOZ pridej 1 komentar na X pro Osobni zkusenosti jako test activity logu a zapis overitelny vysledek. observation=Agent XOZ nedodal overitelny komentar do activity logu do 60 minut.
+orchestration_task_8=id=0f8c6c82be68f7cd created=2026-07-05T07:24:51+02:00 status=CANCELED delivery=2026-07-05T07:25:51+02:00 reported=2026-07-05T14:10:00+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou adresou pavel@zdavle.cz, jmeno bude ajk  observation=Zruseno: WordPress/formularovy komentar patri VA browser Playwright workflow, ne Agentu XOZ.
 orchestration_task_8_proof_keys=activity_log,control_inbox,state
 orchestration_task_8_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_8_state_post_id=
 orchestration_task_8_state_urls=
-orchestration_task_9=id=0f8c6c82be68f7cd created=2026-07-05T07:24:51+02:00 status=CANCELED delivery=2026-07-05T07:25:51+02:00 reported=2026-07-05T14:10:00+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou adresou pavel@zdavle.cz, jmeno bude ajk  observation=Zruseno: WordPress/formularovy komentar patri VA browser Playwright workflow, ne Agentu XOZ.
+orchestration_task_9=id=69b8287731059f49 created=2026-07-05T07:27:52+02:00 status=CANCELED delivery=2026-07-05T07:28:51+02:00 reported=2026-07-05T14:10:00+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou observation=Zruseno: WordPress/formularovy komentar patri VA browser Playwright workflow, ne Agentu XOZ.
 orchestration_task_9_proof_keys=activity_log,control_inbox,state
 orchestration_task_9_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_9_state_post_id=
 orchestration_task_9_state_urls=
-orchestration_task_10=id=69b8287731059f49 created=2026-07-05T07:27:52+02:00 status=CANCELED delivery=2026-07-05T07:28:51+02:00 reported=2026-07-05T14:10:00+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=https://www.osobnizkusenosti.cz/proc-jsem-zacal-platit-platebni-kartou-bybit/ pridej komentar pod prispevek s emailovou observation=Zruseno: WordPress/formularovy komentar patri VA browser Playwright workflow, ne Agentu XOZ.
-orchestration_task_10_proof_keys=activity_log,control_inbox,state
+orchestration_task_10=id=80c4d5eeadfdbecf created=2026-07-05T07:35:31+02:00 status=CANCELED delivery= reported=2026-07-13T13:30:48+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=Osobni zkusenosti X navrh ke schvaleni na tema Bybit. Vytvor hotovy text a obrazovy podklad/prompt. Nepublikuj bez schvaleni. Format preference: Bez kratkeho oz observation=XOZ navrh zrusen tlacitkem.
+orchestration_task_10_proof_keys=inbox,state
 orchestration_task_10_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_10_state_post_id=
 orchestration_task_10_state_urls=
-orchestration_task_11=id=80c4d5eeadfdbecf created=2026-07-05T07:35:31+02:00 status=CANCELED delivery= reported=2026-07-13T13:30:48+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=Osobni zkusenosti X navrh ke schvaleni na tema Bybit. Vytvor hotovy text a obrazovy podklad/prompt. Nepublikuj bez schvaleni. Format preference: Bez kratkeho oz observation=XOZ navrh zrusen tlacitkem.
+orchestration_task_10_xoz_status=CANCELED_BY_JAKUB
+orchestration_task_10_xoz_accepted_at=2026-07-05T07:35:31+02:00
+orchestration_task_10_xoz_in_progress_at=2026-07-05T07:35:31+02:00
+orchestration_task_10_xoz_output_at=2026-07-05T07:35:31+02:00
+orchestration_task_10_xoz_output=Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. Bybit muze byt uzitecny pro pokrocilejsi praci s kryptem, ale porad plati: nejdriv pravidla, limity a jasny plan.
+orchestration_task_11=id=9f5536693ed271c1 created=2026-07-05T14:10:04+02:00 status=DONE delivery= reported=2026-07-13T13:30:48+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=Osobni zkusenosti X navrh ke schvaleni na tema bybit. Vytvor hotovy text a obrazovy podklad/prompt. Nepublikuj bez schvaleni. Format preference: Bez kratkeho oz observation=Agent XOZ navrhl X prispevek: Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. Bybit muze byt uzitecny pro pokroc
 orchestration_task_11_proof_keys=inbox,state
 orchestration_task_11_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_11_state_post_id=
 orchestration_task_11_state_urls=
-orchestration_task_11_xoz_status=CANCELED_BY_JAKUB
-orchestration_task_11_xoz_accepted_at=2026-07-05T07:35:31+02:00
-orchestration_task_11_xoz_in_progress_at=2026-07-05T07:35:31+02:00
-orchestration_task_11_xoz_output_at=2026-07-05T07:35:31+02:00
+orchestration_task_11_xoz_status=READY_FOR_APPROVAL
+orchestration_task_11_xoz_accepted_at=2026-07-05T14:10:04+02:00
+orchestration_task_11_xoz_in_progress_at=2026-07-05T14:10:04+02:00
+orchestration_task_11_xoz_output_at=2026-07-05T14:10:04+02:00
 orchestration_task_11_xoz_output=Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. Bybit muze byt uzitecny pro pokrocilejsi praci s kryptem, ale porad plati: nejdriv pravidla, limity a jasny plan.
-orchestration_task_12=id=9f5536693ed271c1 created=2026-07-05T14:10:04+02:00 status=DONE delivery= reported=2026-07-13T13:30:48+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=Osobni zkusenosti X navrh ke schvaleni na tema bybit. Vytvor hotovy text a obrazovy podklad/prompt. Nepublikuj bez schvaleni. Format preference: Bez kratkeho oz observation=Agent XOZ navrhl X prispevek: Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. Bybit muze byt uzitecny pro pokroc
-orchestration_task_12_proof_keys=inbox,state
-orchestration_task_12_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
+orchestration_task_12=id=728fe0de5bbe39ed created=2026-07-05T18:36:09+02:00 status=CANCELED delivery=2026-07-05T18:36:24+02:00 reported=2026-07-05T23:26:39+02:00 agent=oz instance=osobnizkusenosti-cz kind=blogger-draft topic=reposty xoz observation=Zruseno: slo o dotaz na XOZ aktivitu, ne o zadani clanku.
+orchestration_task_12_proof_keys=config,default_post_status,domain,log,requires_link,site_url,state,wants_link
+orchestration_task_12_state_keys=date,errors,images,keywords,phases_done,topic
 orchestration_task_12_state_post_id=
 orchestration_task_12_state_urls=
-orchestration_task_12_xoz_status=READY_FOR_APPROVAL
-orchestration_task_12_xoz_accepted_at=2026-07-05T14:10:04+02:00
-orchestration_task_12_xoz_in_progress_at=2026-07-05T14:10:04+02:00
-orchestration_task_12_xoz_output_at=2026-07-05T14:10:04+02:00
-orchestration_task_12_xoz_output=Osobni zkusenost: u krypta mi dava nejvetsi smysl mit burzu jako nastroj, ne jako misto pro impulzivni rozhodovani. Bybit muze byt uzitecny pro pokrocilejsi praci s kryptem, ale porad plati: nejdriv pravidla, limity a jasny plan.
-orchestration_task_13=id=728fe0de5bbe39ed created=2026-07-05T18:36:09+02:00 status=CANCELED delivery=2026-07-05T18:36:24+02:00 reported=2026-07-05T23:26:39+02:00 agent=oz instance=osobnizkusenosti-cz kind=blogger-draft topic=reposty xoz observation=Zruseno: slo o dotaz na XOZ aktivitu, ne o zadani clanku.
-orchestration_task_13_proof_keys=config,default_post_status,domain,log,requires_link,site_url,state,wants_link
-orchestration_task_13_state_keys=date,errors,images,keywords,phases_done,topic
-orchestration_task_13_state_post_id=
-orchestration_task_13_state_urls=
-orchestration_task_14=id=8c85a229609b65a3 created=2026-07-06T08:07:29+02:00 status=BLOCKED delivery= reported=2026-07-06T08:08:27+02:00 agent=Virtualni asistentka instance=browser kind=browser-form topic=https://tajemstvijamu.cz/produkt/bali-moon-face-krem/#reviews`. tak to zkus znova, vypln ten formular ted uz doopravdy vypln tento formular Hotovo: - Playwright observation=Browser formular se nepodarilo dokoncit: nejde precist result: JSONDecodeError
-orchestration_task_14_proof_keys=entries,tasks,url
-orchestration_task_15=id=848c94dc9dc1cbf0 created=2026-07-07T16:42:21+02:00 status=DONE delivery= reported=2026-07-07T16:58:24+02:00 agent=Agent OZ instance=osobnizkusenosti-cz kind=blogger-draft topic=postni draft na oz o produktivite. napis, ze je dobre si delat poznamky do mobilu hned jak prijde myslenka, uvolnit mozek tim, ze si davas upominky do kalendare observation=Agent OZ ma overeny vystup: https://www.osobnizkusenosti.cz/?p=6077
+orchestration_task_13=id=8c85a229609b65a3 created=2026-07-06T08:07:29+02:00 status=BLOCKED delivery= reported=2026-07-06T08:08:27+02:00 agent=Virtualni asistentka instance=browser kind=browser-form topic=https://tajemstvijamu.cz/produkt/bali-moon-face-krem/#reviews`. tak to zkus znova, vypln ten formular ted uz doopravdy vypln tento formular Hotovo: - Playwright observation=Browser formular se nepodarilo dokoncit: nejde precist result: JSONDecodeError
+orchestration_task_13_proof_keys=entries,tasks,url
+orchestration_task_14=id=848c94dc9dc1cbf0 created=2026-07-07T16:42:21+02:00 status=DONE delivery= reported=2026-07-07T16:58:24+02:00 agent=Agent OZ instance=osobnizkusenosti-cz kind=blogger-draft topic=postni draft na oz o produktivite. napis, ze je dobre si delat poznamky do mobilu hned jak prijde myslenka, uvolnit mozek tim, ze si davas upominky do kalendare observation=Agent OZ ma overeny vystup: https://www.osobnizkusenosti.cz/?p=6077
+orchestration_task_14_proof_keys=config,default_post_status,domain,log,requires_link,site_url,state,wants_link
+orchestration_task_14_state_keys=date,errors,images,keywords,phases_done,topic
+orchestration_task_14_state_post_id=
+orchestration_task_14_state_urls=
+orchestration_task_15=id=021e53e3be9b6192 created=2026-07-13T13:30:45+02:00 status=VERIFYING delivery=2026-07-13T13:30:48+02:00 reported=2026-07-18T01:49:17+02:00 agent=oz instance=osobnizkusenosti-cz kind=blogger-draft topic=Prakticky navod z osobni zkusenosti observation=oz dobehl bez chyby, cekam jeste na vystup ve state/logu.
 orchestration_task_15_proof_keys=config,default_post_status,domain,log,requires_link,site_url,state,wants_link
 orchestration_task_15_state_keys=date,errors,images,keywords,phases_done,topic
 orchestration_task_15_state_post_id=
 orchestration_task_15_state_urls=
-orchestration_task_16=id=021e53e3be9b6192 created=2026-07-13T13:30:45+02:00 status=VERIFYING delivery=2026-07-13T13:30:48+02:00 reported=2026-07-18T01:49:17+02:00 agent=oz instance=osobnizkusenosti-cz kind=blogger-draft topic=Prakticky navod z osobni zkusenosti observation=oz dobehl bez chyby, cekam jeste na vystup ve state/logu.
-orchestration_task_16_proof_keys=config,default_post_status,domain,log,requires_link,site_url,state,wants_link
-orchestration_task_16_state_keys=date,errors,images,keywords,phases_done,topic
+orchestration_task_16=id=c765085b93052d9f created=2026-07-15T23:29:34+02:00 status=CANCELED delivery= reported=2026-07-15T23:30:06+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=o ohromnem zvyseni efektivity pomoci AI s dostupnymi naklady pro kazdeho jednotlivce popr. i zdarma pres Claude, chatGPT i Gemini. Hledani, inspirace, vyhledava observation=XOZ navrh zrusen tlacitkem.
+orchestration_task_16_proof_keys=inbox,state
+orchestration_task_16_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
 orchestration_task_16_state_post_id=
 orchestration_task_16_state_urls=
-orchestration_task_17=id=c765085b93052d9f created=2026-07-15T23:29:34+02:00 status=CANCELED delivery= reported=2026-07-15T23:30:06+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-social-draft topic=o ohromnem zvyseni efektivity pomoci AI s dostupnymi naklady pro kazdeho jednotlivce popr. i zdarma pres Claude, chatGPT i Gemini. Hledani, inspirace, vyhledava observation=XOZ navrh zrusen tlacitkem.
-orchestration_task_17_proof_keys=inbox,state
-orchestration_task_17_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
-orchestration_task_17_state_post_id=
-orchestration_task_17_state_urls=
-orchestration_task_17_xoz_status=CANCELED_BY_JAKUB
-orchestration_task_17_xoz_accepted_at=2026-07-15T23:30:06+02:00
-orchestration_task_17_xoz_in_progress_at=2026-07-15T23:30:06+02:00
-orchestration_task_17_xoz_output_at=2026-07-15T23:30:06+02:00
-orchestration_task_17_xoz_output=Osobni zkusenost: nejvetsi rozdil v praci s AI agenty neni v tom, ze neco napisou za me. Je v tom, ze drzi kontext, hlidaji navaznosti a nenechaji ukoly vysumet. Tam zacina realna uspora casu.
-orchestration_task_18=id=41473ea91f4062c8 created=2026-07-16T00:11:14+02:00 status=BLOCKED delivery=2026-07-16T00:11:50+02:00 reported=2026-07-16T00:12:50+02:00 agent=Virtualni asistentka instance=browser kind=browser-form topic=vloz komentar s emailem ej.akub@seznam.cz na https://tajemstvijamu.cz/produkt/dharma-korenena-smes-k-priprave-napoje/ observation=Browser formular se nepodarilo dokoncit: Playwright skoncil s exit code 1
-orchestration_task_18_proof_keys=entries,tasks,url
-orchestration_task_19=id=dcdf9b850209c6e4 created=2026-07-17T06:56:10+02:00 status=BLOCKED delivery=2026-07-17T06:56:14+02:00 reported=2026-07-17T18:52:43+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=Agent XOZ pridej komentar na X: off observation=Agent XOZ nedodal overitelny komentar do activity logu do 60 minut.
-orchestration_task_19_proof_keys=activity_log,control_inbox,state
-orchestration_task_19_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
-orchestration_task_19_state_post_id=
-orchestration_task_19_state_urls=
-orchestration_task_20=id=ff04daedb2e6a831 created=2026-07-18T09:21:51+02:00 status=DONE delivery= reported=2026-07-18T09:22:03+02:00 agent=Agent G instance=operations kind=technical-blocker topic=Agent G: nahrad u Agenta D / x-poster generovani obrazku na Pollinations. Prover aktualni runtime, pouzij bezpecny allowlistovany patch, otestuj realny smoke im observation=Agent D ma prepnute generovani obrazku na Pollinations runtime s overenym smoke testem a x-approve.service bezi.
-orchestration_task_20_proof_keys=blocked_agent,handoff,handoff_id,handoffs,inbox,results
-agent_g_handoff_delivered_count=3
+orchestration_task_16_xoz_status=CANCELED_BY_JAKUB
+orchestration_task_16_xoz_accepted_at=2026-07-15T23:30:06+02:00
+orchestration_task_16_xoz_in_progress_at=2026-07-15T23:30:06+02:00
+orchestration_task_16_xoz_output_at=2026-07-15T23:30:06+02:00
+orchestration_task_16_xoz_output=Osobni zkusenost: nejvetsi rozdil v praci s AI agenty neni v tom, ze neco napisou za me. Je v tom, ze drzi kontext, hlidaji navaznosti a nenechaji ukoly vysumet. Tam zacina realna uspora casu.
+orchestration_task_17=id=41473ea91f4062c8 created=2026-07-16T00:11:14+02:00 status=BLOCKED delivery=2026-07-16T00:11:50+02:00 reported=2026-07-16T00:12:50+02:00 agent=Virtualni asistentka instance=browser kind=browser-form topic=vloz komentar s emailem ej.akub@seznam.cz na https://tajemstvijamu.cz/produkt/dharma-korenena-smes-k-priprave-napoje/ observation=Browser formular se nepodarilo dokoncit: Playwright skoncil s exit code 1
+orchestration_task_17_proof_keys=entries,tasks,url
+orchestration_task_18=id=dcdf9b850209c6e4 created=2026-07-17T06:56:10+02:00 status=BLOCKED delivery=2026-07-17T06:56:14+02:00 reported=2026-07-17T18:52:43+02:00 agent=Agent XOZ instance=xoz-poster kind=xoz-control topic=Agent XOZ pridej komentar na X: off observation=Agent XOZ nedodal overitelny komentar do activity logu do 60 minut.
+orchestration_task_18_proof_keys=activity_log,control_inbox,state
+orchestration_task_18_state_keys=assignments,channels,contract,control_requests,draft_format_preferences,draft_format_preferences_updated_at,last_control_request,last_output,task_status,virtual_assistant_last_assi
+orchestration_task_18_state_post_id=
+orchestration_task_18_state_urls=
+orchestration_task_19=id=ff04daedb2e6a831 created=2026-07-18T09:21:51+02:00 status=DONE delivery= reported=2026-07-18T09:22:03+02:00 agent=Agent G instance=operations kind=technical-blocker topic=Agent G: nahrad u Agenta D / x-poster generovani obrazku na Pollinations. Prover aktualni runtime, pouzij bezpecny allowlistovany patch, otestuj realny smoke im observation=Agent D ma prepnute generovani obrazku na Pollinations runtime s overenym smoke testem a x-approve.service bezi.
+orchestration_task_19_proof_keys=blocked_agent,handoff,handoff_id,handoffs,inbox,results
+orchestration_task_20=id=1cc5b3966464eb5d created=2026-07-18T11:46:01+02:00 status=BLOCKED delivery=2026-07-18T11:46:47+02:00 reported=2026-07-18T12:47:48+02:00 agent=Agent D instance=x-poster kind=x-social-draft topic=necht D vygeneruje prispevek pro x na tema: time beats timing s obrazkem: karikatura rafickovych hodin zapasi v ringu s karikaturou bitcoinoveho loga. oba maji  observation=Agent D ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup.
+orchestration_task_20_proof_keys=state,workflow_output
+orchestration_task_20_state_keys=custom_instructions,virtual_assistant_last_assignment
+orchestration_task_20_state_post_id=
+orchestration_task_20_state_urls=
+orchestration_task_20_agent_g_escalated_at=2026-07-18T12:46:48+02:00
+orchestration_task_20_agent_g_escalation_id=f7a81a6e1d9ca423
+agent_g_handoff_delivered_count=4
 agent_g_handoff_1=id=f201fbe4fc41510e memory=deduped history=deduped telegram=sent version=agent-g-telegram-chat-fallback-v3
 agent_g_handoff_1_paths=history=/home/openclaw2/.openclaw/g-agent-history.json memory=/home/openclaw2/.openclaw/agent-g/MEMORY.md
 agent_g_handoff_2=id=383dfe7bfb70469f memory=deduped history=deduped telegram=sent version=agent-g-telegram-chat-fallback-v3
 agent_g_handoff_2_paths=history=/home/openclaw2/.openclaw/g-agent-history.json memory=/home/openclaw2/.openclaw/agent-g/MEMORY.md
 agent_g_handoff_3=id=ff04daedb2e6a831 memory=deduped history=written telegram=sent version=agent-g-telegram-chat-fallback-v3
 agent_g_handoff_3_paths=history=/home/openclaw2/.openclaw/g-agent-history.json memory=/home/openclaw2/.openclaw/agent-g/MEMORY.md
+agent_g_handoff_4=id=f7a81a6e1d9ca423 memory=deduped history=written telegram=sent version=agent-g-telegram-chat-fallback-v3
+agent_g_handoff_4_paths=history=/home/openclaw2/.openclaw/g-agent-history.json memory=/home/openclaw2/.openclaw/agent-g/MEMORY.md
 agent_g_history_exists=True
 agent_g_handoffs_file_exists=True
 xoz_activity_log_exists=True
@@ -389,7 +393,9 @@ telegram_recovery_attempt_count=0
 blogger_config_1=instance=btc-dca agent=btc-dca site=https://www.btc-dca.com status=publish
 blogger_config_2=instance=osobnizkusenosti-cz agent=oz site=https://osobnizkusenosti.cz status=draft
 blogger_config_3=instance=tajemstvijamu-cz agent=tajemstvijamu-cz site=https://tajemstvijamu.cz status=draft
-agent_d_custom_instruction_count=0
+agent_d_last_va_assignment_at=2026-07-18T11:46:01+02:00
+agent_d_last_va_assignment_text=necht D vygeneruje prispevek pro x na tema: time beats timing s obrazkem: karikatura rafickovych hodin zapasi v ringu s karikaturou bitcoinoveho loga. oba maji zapaleny vyraz a jsou celkem unaveni uprostred souboje, zadne dalsi texty nebo znaky v obrazku
+agent_d_custom_instruction_count=1
 delegation_log_virtual-assistant-btc-dca-delegation.log_1=[2026-06-30 16:42:34] BTC-DCA Blogger — instance=btc-dca phase=article force=True fix_cover=False fix_inline=None telegram=False
 delegation_log_virtual-assistant-btc-dca-delegation.log_2=[2026-06-30 16:42:34] PHASE: article
 delegation_log_virtual-assistant-osobnizkusenosti-cz-delegation.log_1=[2026-07-07 16:42:36] Manual topic assignment loaded: postni draft na oz o produktivite. napis, ze je dobre si delat poznamky do mobilu hned jak prijde myslenka, uvolnit mozek tim, ze si davas upominky do kalendare
