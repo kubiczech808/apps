@@ -116,6 +116,24 @@ function state_payload(string $target): array
     return $data;
 }
 
+function live_state_age_seconds(): ?int
+{
+    $path = __DIR__ . '/data/live-state.json';
+    if (!is_file($path)) {
+        return null;
+    }
+
+    $raw = file_get_contents($path);
+    $data = json_decode(is_string($raw) ? $raw : '', true);
+    $generatedAt = is_array($data) ? (string) ($data['generatedAt'] ?? '') : '';
+    $generatedTime = $generatedAt !== '' ? strtotime($generatedAt) : false;
+    if ($generatedTime === false) {
+        $generatedTime = filemtime($path);
+    }
+
+    return $generatedTime ? max(0, time() - $generatedTime) : null;
+}
+
 function request_payload(): array
 {
     $raw = file_get_contents('php://input');
@@ -142,20 +160,22 @@ function request_header(string $name): string
     return '';
 }
 
-function dispatch_workflow(string $workflow, array $inputs): array
+function dispatch_workflow(string $workflow, array $inputs, bool $requireTriggerKey = true): array
 {
     $config = app_config();
-    if ($config['github_token'] === '' || $config['trigger_key'] === '') {
+    if ($config['github_token'] === '' || ($requireTriggerKey && $config['trigger_key'] === '')) {
         respond([
             'ok' => false,
             'error' => 'Workflow trigger is not configured on the server.',
-            'requiredSecrets' => ['TRADING_GITHUB_TOKEN', 'TRADING_TRIGGER_KEY'],
+            'requiredSecrets' => $requireTriggerKey ? ['TRADING_GITHUB_TOKEN', 'TRADING_TRIGGER_KEY'] : ['TRADING_GITHUB_TOKEN'],
         ], 503);
     }
 
-    $providedKey = request_header('X-Trading-Trigger-Key');
-    if ($providedKey === '' || !hash_equals($config['trigger_key'], $providedKey)) {
-        respond(['ok' => false, 'error' => 'Invalid workflow trigger key.'], 403);
+    if ($requireTriggerKey) {
+        $providedKey = request_header('X-Trading-Trigger-Key');
+        if ($providedKey === '' || !hash_equals($config['trigger_key'], $providedKey)) {
+            respond(['ok' => false, 'error' => 'Invalid workflow trigger key.'], 403);
+        }
     }
 
     $url = sprintf(
@@ -247,6 +267,53 @@ function dispatch_workflow(string $workflow, array $inputs): array
 try {
     $action = $_GET['action'] ?? 'markets';
 
+    if ($action === 'live-sync') {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            respond(['ok' => false, 'error' => 'POST is required'], 405);
+        }
+
+        $minSeconds = max(30, min(900, (int) ($_GET['minSeconds'] ?? 60)));
+        $ageSeconds = live_state_age_seconds();
+        $lockPath = __DIR__ . '/data/.live-sync-request.json';
+        $lastRequest = null;
+        if (is_file($lockPath)) {
+            $rawLock = file_get_contents($lockPath);
+            $lockData = json_decode(is_string($rawLock) ? $rawLock : '', true);
+            $lastRequest = is_array($lockData) ? (int) ($lockData['requestedAt'] ?? 0) : null;
+        }
+
+        $recentRequest = $lastRequest !== null && time() - $lastRequest < $minSeconds;
+        if ($recentRequest) {
+            respond([
+                'ok' => true,
+                'target' => 'live-sync',
+                'action' => 'SKIP',
+                'reason' => 'live sync was requested recently',
+                'ageSeconds' => $ageSeconds,
+                'minSeconds' => $minSeconds,
+                'generatedAt' => gmdate('c'),
+            ]);
+        }
+
+        $result = dispatch_workflow('trading-live-account.yml', [], false);
+        @file_put_contents($lockPath, json_encode([
+            'requestedAt' => time(),
+            'generatedAt' => gmdate('c'),
+            'workflow' => $result['workflow'],
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+        respond([
+            'ok' => true,
+            'target' => 'live-sync',
+            'action' => 'DISPATCH',
+            'message' => 'Live account sync workflow dispatched.',
+            'workflow' => $result['workflow'],
+            'ref' => $result['ref'],
+            'ageSeconds' => $ageSeconds,
+            'minSeconds' => $minSeconds,
+            'generatedAt' => gmdate('c'),
+        ], $result['status'] === 204 ? 202 : 200);
+    }
+
     if ($action === 'workflow') {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             respond(['ok' => false, 'error' => 'POST is required'], 405);
@@ -264,11 +331,6 @@ try {
                 'workflow' => 'polymarket-live-limit-order-test.yml',
                 'inputs' => ['live_confirm' => true],
                 'message' => 'Live one-time execution workflow dispatched.',
-            ],
-            'live-sync' => [
-                'workflow' => 'trading-live-account.yml',
-                'inputs' => [],
-                'message' => 'Live account sync workflow dispatched.',
             ],
         ];
 

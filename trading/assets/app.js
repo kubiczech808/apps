@@ -33,6 +33,7 @@ const state = {
   limitOrdersKey: "",
   liveExecutionArmed: false,
   executionBusy: null,
+  autoLiveSyncBusy: false,
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
@@ -208,7 +209,6 @@ function syncExecutionButtons() {
     const labels = {
       paper: ["Run paper once", "Starting paper..."],
       live: ["Run live once", "Starting live..."],
-      "live-sync": ["Refresh live account", "Starting sync..."],
     };
     const [idleLabel, busyLabel] = labels[target] || ["Run once", "Starting..."];
     button.textContent = busy ? busyLabel : idleLabel;
@@ -1119,9 +1119,39 @@ async function fetchJson(path) {
   return statePayload.json();
 }
 
+async function requestLiveAccountSync() {
+  if (state.autoLiveSyncBusy) return;
+  state.autoLiveSyncBusy = true;
+  setExecutionStatus("syncing live account");
+  try {
+    const response = await fetch("api.php?action=live-sync&minSeconds=30", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.error || `live sync HTTP ${response.status}`);
+    }
+    if (payload.action === "DISPATCH") {
+      setExecutionStatus("live sync started");
+      [10000, 25000, 45000].forEach((delay) => {
+        window.setTimeout(() => {
+          loadDashboardState({ skipAutoLiveSync: true });
+        }, delay);
+      });
+    } else {
+      setExecutionStatus("live account current");
+    }
+  } catch (error) {
+    setExecutionStatus(error.message || "live sync failed", "error");
+  } finally {
+    state.autoLiveSyncBusy = false;
+  }
+}
+
 async function triggerOneTimeExecution(target) {
   const live = target === "live";
-  const liveSync = target === "live-sync";
   if (live && !state.liveExecutionArmed) {
     window.alert("Nejdrive aktivuj live execution gate.");
     return;
@@ -1139,7 +1169,7 @@ async function triggerOneTimeExecution(target) {
 
   state.executionBusy = target;
   syncExecutionButtons();
-  setExecutionStatus(live ? "starting live workflow" : (liveSync ? "starting live sync" : "starting paper workflow"));
+  setExecutionStatus(live ? "starting live workflow" : "starting paper workflow");
 
   try {
     const response = await fetch("api.php?action=workflow", {
@@ -1162,12 +1192,9 @@ async function triggerOneTimeExecution(target) {
       throw new Error(payload.error || `workflow HTTP ${response.status}`);
     }
     setExecutionStatus(`${target} workflow started`);
-    const reloadDelays = liveSync ? [8000, 22000, 45000] : [5000];
-    reloadDelays.forEach((delay) => {
-      window.setTimeout(() => {
-        loadDashboardState();
-      }, delay);
-    });
+    window.setTimeout(() => {
+      loadDashboardState();
+    }, 5000);
   } catch (error) {
     setExecutionStatus(error.message || "workflow failed", "error");
   } finally {
@@ -1176,7 +1203,7 @@ async function triggerOneTimeExecution(target) {
   }
 }
 
-async function loadLiveState() {
+async function loadLiveState(options = {}) {
   try {
     const [liveResult, botResult] = await Promise.allSettled([
       fetchJson("data/live-state.json"),
@@ -1186,6 +1213,9 @@ async function loadLiveState() {
     state.botState = botResult.status === "fulfilled" ? botResult.value : null;
     const liveState = liveResult.value;
     renderLiveState(liveState);
+    if (!options.skipAutoLiveSync) {
+      requestLiveAccountSync();
+    }
     if (botResult.status === "rejected") {
       els.botEvaluations.innerHTML = `<div class="empty">Common evaluation log is not available: ${escapeHtml(botResult.reason?.message || String(botResult.reason))}</div>`;
     }
@@ -1223,9 +1253,9 @@ async function loadLiveState() {
   }
 }
 
-function loadDashboardState() {
+function loadDashboardState(options = {}) {
   syncModeUi();
-  return state.mode === "live" ? loadLiveState() : loadBotState();
+  return state.mode === "live" ? loadLiveState(options) : loadBotState();
 }
 
 function renderBotState(botState) {

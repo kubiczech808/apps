@@ -67,7 +67,6 @@ The UI has separate buttons for one-time paper execution and one-time live execu
 The browser calls `api.php?action=workflow`; the PHP endpoint dispatches only these allowlisted GitHub Actions workflows:
 
 - `paper` -> `trading-paper-bot.yml` with `mode=full`,
-- `live-sync` -> `trading-live-account.yml`,
 - `live` -> `polymarket-live-limit-order-test.yml` with `live_confirm=true`.
 
 The live button also requires the browser-side live execution gate to be armed. The workflow itself still performs live preflight revalidation before any order submit: current orderbook, AI probability threshold, EV threshold, spread/liquidity, diversification, capital, minimum order size, and post-only limit-order assumptions.
@@ -79,7 +78,7 @@ Configure these repository secrets for the deploy workflow to generate `trading/
 
 `trading/config.php` is ignored by git and generated during `Deploy Trading`; without these secrets the buttons stay visible but the backend returns `Workflow trigger is not configured on the server.`
 
-The UI reads paper/live state through `api.php?action=state&target=...` with `Cache-Control: no-store`, so page loads fetch the latest state file available on the hosting server instead of relying on browser/local static cache. `Refresh live account` dispatches the live-account sync workflow and then polls the state again.
+The UI reads paper/live state through `api.php?action=state&target=...` with `Cache-Control: no-store`, so page loads fetch the latest state file available on the hosting server instead of relying on browser/local static cache. Opening the live dashboard calls `api.php?action=live-sync` automatically; that endpoint can dispatch only the live account snapshot workflow and is rate-limited server-side.
 
 Live order signing is fully server-side in GitHub Actions. `POLYMARKET_PRIVATE_KEY` is read from GitHub Secrets during the workflow run, a fresh live account snapshot is generated immediately before revalidation, and the browser never receives the key. The scheduled live workflow can execute without manually entering a key or token for each trade; the temporary public UI workflow buttons still need `TRADING_GITHUB_TOKEN` and `TRADING_TRIGGER_KEY` until the whole interface is protected by login.
 
