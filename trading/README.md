@@ -56,6 +56,7 @@ The live snapshot combines public Polymarket account data with authenticated CLO
 - public Data API for open positions, activity, trade history, and profile metadata,
 - authenticated CLOB `getBalanceAllowance({ asset_type: COLLATERAL })` for pUSD cash balance and allowance,
 - browser-side max-per-trade allocation control from 1% to 50%, defaulting to 5%.
+- browser-side execution preference for market vs. limit orders; live accounts default to limit orders.
 
 The public UI never receives `POLYMARKET_PRIVATE_KEY`; GitHub Actions uses it only during snapshot generation and order smoke tests.
 

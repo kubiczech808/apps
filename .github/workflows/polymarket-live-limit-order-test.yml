@@ -1,0 +1,85 @@
+name: Polymarket Live Limit Order Test
+
+on:
+  push:
+    paths:
+      - '.github/workflows/polymarket-live-limit-order-test.yml'
+      - 'trading/tools/polymarket-order-poc.mjs'
+  workflow_dispatch:
+
+jobs:
+  live-limit-order-test:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[live-limit-order-test]')
+    runs-on: ubuntu-latest
+    env:
+      POLYMARKET_HOST: https://clob.polymarket.com
+      POLYMARKET_CHAIN_ID: "137"
+      POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
+      POLYMARKET_FUNDER_ADDRESS: "0x3252de913d9323667f21f4d88fa1f996fc282293"
+      POLYMARKET_SIGNATURE_TYPE: "1"
+      TRADING_BANKROLL_USDC: "4.10"
+      MAX_ORDER_FRACTION: "0.05"
+      ORDER_TOKEN_ID: "77899117691320282255084926855068126399522814425967645821251701722727475314950"
+      ORDER_SIDE: BUY
+      ORDER_PRICE: "0.040"
+      ORDER_SIZE: "5"
+      ORDER_TICK_SIZE: "0.001"
+      ORDER_NEG_RISK: "true"
+      ORDER_TYPE: GTC
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install trading dependencies
+        working-directory: trading
+        run: npm install
+
+      - name: Confirm live limit order guard
+        run: |
+          NOTIONAL=$(python3 - <<'PY'
+          import os
+          print(float(os.environ["ORDER_PRICE"]) * float(os.environ["ORDER_SIZE"]))
+          PY
+          )
+          MAX_NOTIONAL=$(python3 - <<'PY'
+          import os
+          print(float(os.environ["TRADING_BANKROLL_USDC"]) * float(os.environ["MAX_ORDER_FRACTION"]))
+          PY
+          )
+          echo "Live limit order test requested."
+          echo "token_id=${ORDER_TOKEN_ID}"
+          echo "side=${ORDER_SIDE}"
+          echo "price=${ORDER_PRICE}"
+          echo "size=${ORDER_SIZE}"
+          echo "notional=${NOTIONAL}"
+          echo "max_notional=${MAX_NOTIONAL}"
+          python3 - <<'PY'
+          import os
+          notional = float(os.environ["ORDER_PRICE"]) * float(os.environ["ORDER_SIZE"])
+          max_notional = float(os.environ["TRADING_BANKROLL_USDC"]) * float(os.environ["MAX_ORDER_FRACTION"])
+          if notional > max_notional:
+              raise SystemExit(f"Notional {notional:.6f} exceeds max per trade {max_notional:.6f}")
+          PY
+
+      - name: Submit live limit order
+        working-directory: trading
+        env:
+          POLYMARKET_DRY_RUN: "false"
+        run: |
+          EXTRA_ARGS=""
+          if [ "$ORDER_NEG_RISK" = "true" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --neg-risk true"
+          fi
+
+          npm run order:poc -- \
+            --token-id "$ORDER_TOKEN_ID" \
+            --side "$ORDER_SIDE" \
+            --price "$ORDER_PRICE" \
+            --size "$ORDER_SIZE" \
+            --tick-size "$ORDER_TICK_SIZE" \
+            --order-type "$ORDER_TYPE" \
+            --confirm-live \
+            $EXTRA_ARGS

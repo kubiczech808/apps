@@ -29,11 +29,14 @@ const state = {
   eligibilityThresholdKey: "",
   riskAllocation: null,
   riskAllocationKey: "",
+  limitOrders: null,
+  limitOrdersKey: "",
   liveExecutionArmed: false,
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
+const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
 const LIVE_EXECUTION_STORAGE_KEY = "tradingLiveExecutionArmed";
 const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
@@ -61,6 +64,7 @@ const els = {
   riskAllocationLabel: document.querySelector("[data-risk-allocation-label]"),
   riskAllocationValue: document.querySelector("[data-risk-allocation-value]"),
   riskAllocationNote: document.querySelector("[data-risk-allocation-note]"),
+  limitOrders: document.querySelector("[data-limit-orders]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
   modeButtons: document.querySelectorAll("[data-mode-toggle]"),
@@ -689,6 +693,10 @@ function riskAllocationStorageKey() {
   return accountScopedStorageKey(RISK_ALLOCATION_STORAGE_KEY);
 }
 
+function limitOrdersStorageKey() {
+  return accountScopedStorageKey(LIMIT_ORDERS_STORAGE_KEY);
+}
+
 function storedEligibilityThreshold() {
   try {
     const scopedKey = eligibilityThresholdStorageKey();
@@ -782,6 +790,56 @@ function syncRiskAllocationControl(availableCapital = null, sourceLabel = "avail
   }
   if (els.riskAllocationNote) {
     els.riskAllocationNote.textContent = `maximum stake from ${sourceLabel}`;
+  }
+}
+
+function defaultLimitOrdersForMode() {
+  return state.mode === "live";
+}
+
+function storedLimitOrders() {
+  try {
+    const key = limitOrdersStorageKey();
+    const scoped = localStorage.getItem(key);
+    if (scoped === "true") return true;
+    if (scoped === "false") return false;
+    const legacy = localStorage.getItem(LIMIT_ORDERS_STORAGE_KEY);
+    if (legacy === "true") return true;
+    if (legacy === "false") return false;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLimitOrders(value) {
+  try {
+    const key = limitOrdersStorageKey();
+    localStorage.setItem(key, value ? "true" : "false");
+    state.limitOrdersKey = key;
+  } catch {
+    // Ignore localStorage failures; the control still works for this page load.
+  }
+}
+
+function currentLimitOrders() {
+  return typeof state.limitOrders === "boolean" ? state.limitOrders : defaultLimitOrdersForMode();
+}
+
+function refreshLimitOrders() {
+  const key = limitOrdersStorageKey();
+  if (state.limitOrdersKey === key && typeof state.limitOrders === "boolean") {
+    syncLimitOrdersControl();
+    return;
+  }
+  state.limitOrders = storedLimitOrders() ?? defaultLimitOrdersForMode();
+  state.limitOrdersKey = key;
+  syncLimitOrdersControl();
+}
+
+function syncLimitOrdersControl() {
+  if (els.limitOrders) {
+    els.limitOrders.checked = currentLimitOrders();
   }
 }
 
@@ -966,6 +1024,7 @@ function renderBotState(botState) {
   syncModeUi();
   refreshEligibilityThreshold();
   refreshRiskAllocation();
+  refreshLimitOrders();
   const decision = botState.lastDecision || {};
   const portfolio = botState.portfolio || {};
   const learning = botState.learningProfile || {};
@@ -1017,6 +1076,11 @@ function renderBotState(botState) {
         <span class="label">Max per trade</span>
         <strong>${money(freeCapital * currentRiskAllocation())}</strong>
         <span>${probability(currentRiskAllocation())} of paper free capital</span>
+      </div>
+      <div>
+        <span class="label">Order mode</span>
+        <strong>${currentLimitOrders() ? "Limit" : "Market"}</strong>
+        <span>paper execution preference</span>
       </div>
       <div>
         <span class="label">P/L</span>
@@ -1102,6 +1166,7 @@ function renderLiveState(liveState) {
   syncModeUi();
   refreshEligibilityThreshold();
   refreshRiskAllocation();
+  refreshLimitOrders();
 
   const account = liveState.account || {};
   const portfolio = liveState.portfolio || {};
@@ -1195,7 +1260,7 @@ function renderLiveState(liveState) {
       <div>
         <span class="label">Live execution</span>
         <strong>${escapeHtml(liveGuardLabel)}</strong>
-        <span>${escapeHtml(liveGuardText)}</span>
+        <span>${escapeHtml(`${liveGuardText}; ${currentLimitOrders() ? "limit orders preferred" : "market orders preferred"}`)}</span>
       </div>
     </div>
   `;
@@ -1396,6 +1461,8 @@ els.modeButtons.forEach((button) => {
     state.eligibilityThresholdKey = "";
     state.riskAllocation = null;
     state.riskAllocationKey = "";
+    state.limitOrders = null;
+    state.limitOrdersKey = "";
     loadDashboardState();
   });
 });
@@ -1445,6 +1512,18 @@ els.riskAllocation?.addEventListener("input", () => {
     renderBotState(state.botState);
   } else {
     syncRiskAllocationControl();
+  }
+});
+
+els.limitOrders?.addEventListener("change", () => {
+  state.limitOrders = Boolean(els.limitOrders.checked);
+  saveLimitOrders(state.limitOrders);
+  if (state.mode === "live" && state.liveState) {
+    renderLiveState(state.liveState);
+  } else if (state.botState) {
+    renderBotState(state.botState);
+  } else {
+    syncLimitOrdersControl();
   }
 });
 
