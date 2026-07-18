@@ -1558,6 +1558,7 @@ function evaluationSortValue(item, key) {
   if (key === "netYield") return netYield(item);
   if (key === "aiProbability") return Number(item.aiProbability);
   if (key === "annualizedReturn") return annualizedExpectedReturn(item);
+  if (key === "updates") return Number(item.evaluationCount || 1);
   if (key === "analysis") return `${evaluationReasons(item).join("; ")} ${item.analysisSummary || ""}`.toLowerCase();
   return "";
 }
@@ -1641,6 +1642,32 @@ function annualizedCell(item) {
   `;
 }
 
+function updateHistoryCell(item) {
+  const count = Number(item.evaluationCount || 1);
+  const history = Array.isArray(item.updateHistory) ? item.updateHistory : [];
+  const detail = [
+    `Evaluations: ${count}`,
+    item.firstEvaluatedAt ? `First: ${formatDate(item.firstEvaluatedAt)}` : "",
+    item.lastSeenAt ? `Last: ${formatDate(item.lastSeenAt)}` : "",
+    ...history.slice(0, 8).map((entry) => {
+      const changes = Array.isArray(entry.changes) ? entry.changes : [];
+      const lines = changes.slice(0, 8).map((change) => `${change.field}: ${change.from ?? "-"} -> ${change.to ?? "-"}`);
+      return [`${formatDate(entry.changedAt || "")}:`, ...lines].join("\n");
+    }),
+  ].filter(Boolean).join("\n\n");
+
+  return `
+    <span>${count.toLocaleString("en-US")}</span>
+    <span>${history.length ? `${history.length} changed` : "no material change"}</span>
+    ${history.length ? `
+      <span class="analysis-popover">
+        <button class="info-button" type="button" aria-label="Show evaluation update history">i</button>
+        <span class="analysis-tooltip" role="tooltip">${escapeHtml(detail)}</span>
+      </span>
+    ` : ""}
+  `;
+}
+
 function renderBotEvaluations() {
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
   const eligibleCount = evaluations.filter((item) => adjustedEvaluationStatus(item) === "ELIGIBLE").length;
@@ -1679,6 +1706,7 @@ function renderBotEvaluations() {
           ${sortableHeader("netYield", "Net yield %")}
           ${sortableHeader("aiProbability", "AI prob.")}
           ${sortableHeader("annualizedReturn", "EV p.a.")}
+          ${sortableHeader("updates", "Updates")}
           ${sortableHeader("analysis", "Analysis")}
         </tr>
       </thead>
@@ -1706,6 +1734,7 @@ function renderBotEvaluations() {
             <td>${netYieldCell(item)}</td>
             <td>${probability(Number(item.aiProbability))}</td>
             <td>${annualizedCell(item)}</td>
+            <td>${updateHistoryCell(item)}</td>
             <td>
               ${analysisBadge(item)}
             </td>

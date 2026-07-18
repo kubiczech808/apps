@@ -155,7 +155,7 @@ function normalizeState(input) {
       opportunityMinAnnualReturn: Number(input.portfolio?.opportunityMinAnnualReturn || OPPORTUNITY_MIN_ANNUAL_RETURN),
     },
     trades: Array.isArray(input.trades) ? input.trades.map(normalizeTrade) : [],
-    evaluations: Array.isArray(input.evaluations) ? input.evaluations : [],
+    evaluations: mergeEvaluationLists(Array.isArray(input.evaluations) ? input.evaluations : []),
     learningProfile: normalizeLearningProfile(input.learningProfile),
     lastTradeDate: input.lastTradeDate || null,
     lastDecision: input.lastDecision || null,
@@ -177,6 +177,23 @@ function tradeUpdateTime(trade) {
   );
 }
 
+function evaluationKey(item) {
+  const tokenId = String(item?.tokenId || item?.clobTokenId || "").trim();
+  if (tokenId) return `token:${tokenId}`;
+  const slug = String(item?.slug || item?.eventSlug || "").trim().toLowerCase();
+  const outcome = String(item?.outcome || "").trim().toLowerCase();
+  if (slug && outcome) return `market:${slug}:${outcome}`;
+  return String(item?.id || "").trim();
+}
+
+function evaluationUpdateTime(item) {
+  return Math.max(
+    Date.parse(item?.evaluatedAt || "") || 0,
+    Date.parse(item?.lastSeenAt || "") || 0,
+    Date.parse(item?.updatedAt || "") || 0,
+  );
+}
+
 function mergeUniqueById(items, idFn, limit = Infinity) {
   const byId = new Map();
   for (const item of items) {
@@ -185,6 +202,103 @@ function mergeUniqueById(items, idFn, limit = Infinity) {
     if (!byId.has(id)) byId.set(id, item);
   }
   return [...byId.values()].slice(0, limit);
+}
+
+const EVALUATION_CHANGE_FIELDS = [
+  "status",
+  "selectionStatus",
+  "thesisType",
+  "marketPrice",
+  "bestAsk",
+  "bestBid",
+  "spread",
+  "liquidity",
+  "volume24hr",
+  "aiProbability",
+  "rawProbability",
+  "edge",
+  "expectedValueUsdc",
+  "annualizedReturn",
+  "netGainIfWinUsdc",
+  "endDate",
+  "probabilityThesis",
+];
+
+function comparableEvaluationValue(value) {
+  if (value == null || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? Number(value.toFixed(6)) : null;
+  if (Array.isArray(value)) return value.map(comparableEvaluationValue);
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function changedEvaluationFields(previous, next) {
+  const changes = [];
+  for (const field of EVALUATION_CHANGE_FIELDS) {
+    const from = comparableEvaluationValue(previous?.[field]);
+    const to = comparableEvaluationValue(next?.[field]);
+    if (JSON.stringify(from) === JSON.stringify(to)) continue;
+    changes.push({ field, from, to });
+  }
+  return changes;
+}
+
+function mergeEvaluation(previous, next) {
+  if (!previous) {
+    const key = evaluationKey(next);
+    return {
+      ...next,
+      id: key || next.id,
+      firstEvaluatedAt: next.firstEvaluatedAt || next.evaluatedAt || nowIso(),
+      lastSeenAt: next.lastSeenAt || next.evaluatedAt || nowIso(),
+      evaluationCount: Number(next.evaluationCount || 1),
+      updateHistory: Array.isArray(next.updateHistory) ? next.updateHistory.slice(0, 30) : [],
+    };
+  }
+  if (!next) return previous;
+
+  const incomingIsNewer = evaluationUpdateTime(next) >= evaluationUpdateTime(previous);
+  const latest = incomingIsNewer ? next : previous;
+  const older = incomingIsNewer ? previous : next;
+  const changes = changedEvaluationFields(older, latest);
+  const sameObservation = (previous.evaluatedAt || previous.lastSeenAt || "") === (next.evaluatedAt || next.lastSeenAt || "")
+    && changes.length === 0;
+  const previousHistory = Array.isArray(previous.updateHistory) ? previous.updateHistory : [];
+  const incomingHistory = Array.isArray(next.updateHistory) ? next.updateHistory : [];
+  const changeEntry = changes.length
+    ? [{
+        changedAt: latest.evaluatedAt || latest.lastSeenAt || nowIso(),
+        previousEvaluatedAt: older.evaluatedAt || older.lastSeenAt || null,
+        changes: changes.slice(0, 20),
+      }]
+    : [];
+
+  return {
+    ...older,
+    ...latest,
+    id: evaluationKey(latest) || latest.id || previous.id,
+    firstEvaluatedAt: previous.firstEvaluatedAt || next.firstEvaluatedAt || previous.evaluatedAt || next.evaluatedAt || nowIso(),
+    previousEvaluatedAt: older.evaluatedAt || older.lastSeenAt || null,
+    lastSeenAt: latest.evaluatedAt || latest.lastSeenAt || nowIso(),
+    evaluationCount: sameObservation
+      ? Math.max(Number(previous.evaluationCount || 1), Number(next.evaluationCount || 1))
+      : Number(previous.evaluationCount || 1) + Number(next.evaluationCount || 1),
+    updateHistory: [...changeEntry, ...incomingHistory, ...previousHistory].slice(0, 30),
+    lastChanges: changes,
+  };
+}
+
+function mergeEvaluationLists(primary = [], secondary = [], limit = MAX_HISTORY) {
+  const byKey = new Map();
+  const ordered = [...secondary, ...primary].sort((a, b) => evaluationUpdateTime(a) - evaluationUpdateTime(b));
+  for (const item of ordered) {
+    const key = evaluationKey(item);
+    if (!key) continue;
+    byKey.set(key, mergeEvaluation(byKey.get(key), item));
+  }
+  return [...byKey.values()]
+    .sort((a, b) => evaluationUpdateTime(b) - evaluationUpdateTime(a))
+    .slice(0, limit);
 }
 
 function mergeTrade(existing, incoming) {
@@ -207,7 +321,7 @@ function mergeStates(primary, secondary) {
   return {
     ...base,
     trades: [...tradesById.values()].sort((a, b) => tradeUpdateTime(b) - tradeUpdateTime(a)),
-    evaluations: mergeUniqueById([...(base.evaluations || []), ...(other.evaluations || [])], (item) => item.id, MAX_HISTORY),
+    evaluations: mergeEvaluationLists(base.evaluations || [], other.evaluations || []),
     runLog: mergeUniqueById([...(base.runLog || []), ...(other.runLog || [])], (item) => item.runAt, 120),
   };
 }
@@ -918,7 +1032,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   });
 
   return {
-    id: `${market.id}-${outcomeIndex}-${Date.now()}`,
+    id: `token:${tokenId}`,
     evaluatedAt: nowIso(),
     status: economics.status,
     thesisType: economics.thesisType,
@@ -1692,6 +1806,10 @@ async function loadMarkets() {
   return fetchJson(url);
 }
 
+function marketHasNewOutcome(market, knownEvaluationKeys) {
+  return parseJsonField(market.clobTokenIds).some((tokenId) => tokenId && !knownEvaluationKeys.has(`token:${tokenId}`));
+}
+
 function updatePortfolio(state) {
   const realizedPnl = state.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
   const openPnl = state.trades
@@ -1776,7 +1894,13 @@ async function run() {
     return;
   }
 
-  const markets = await loadMarkets();
+  const knownEvaluationKeys = new Set((state.evaluations || []).map(evaluationKey).filter(Boolean));
+  const markets = (await loadMarkets()).sort((a, b) => {
+    const aNew = marketHasNewOutcome(a, knownEvaluationKeys) ? 1 : 0;
+    const bNew = marketHasNewOutcome(b, knownEvaluationKeys) ? 1 : 0;
+    if (aNew !== bNew) return bNew - aNew;
+    return Number(b.volume24hr || 0) - Number(a.volume24hr || 0);
+  });
   let evaluations = [];
 
   for (const market of markets) {
@@ -1795,7 +1919,7 @@ async function run() {
         if (evaluation) evaluations.push(evaluation);
       } catch (error) {
         evaluations.push({
-          id: `${market.id}-${outcomeIndex}-${Date.now()}`,
+          id: tokenId ? `token:${tokenId}` : `market:${market.slug || market.id || "unknown"}:${outcomes[outcomeIndex] || outcomeIndex}`,
           evaluatedAt: nowIso(),
           status: "ERROR",
           question: market.question || "",
@@ -1820,7 +1944,7 @@ async function run() {
 
   state.generatedAt = nowIso();
   updatePortfolio(state);
-  state.evaluations = [...evaluations, ...state.evaluations].slice(0, MAX_HISTORY);
+  state.evaluations = mergeEvaluationLists(evaluations, state.evaluations);
   recordRun(state, { evaluations, eligible, decision });
   await writeState(state);
   console.log(JSON.stringify(state.lastDecision, null, 2));
