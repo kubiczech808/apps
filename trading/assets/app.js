@@ -1094,7 +1094,7 @@ async function loadBotState() {
     renderBotState(botState);
   } catch (error) {
     state.botState = null;
-    els.botAction.textContent = "offline";
+    if (els.botAction) els.botAction.textContent = "offline";
     if (els.botInlineAction) els.botInlineAction.textContent = "offline";
     els.botStatus.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
     els.botTrades.innerHTML = '<div class="empty">Autonomous paper bot state is not available yet.</div>';
@@ -1179,7 +1179,7 @@ async function loadLiveState() {
   } catch (error) {
     state.liveState = null;
     syncModeUi();
-    els.botAction.textContent = "offline";
+    if (els.botAction) els.botAction.textContent = "offline";
     if (els.botInlineAction) els.botInlineAction.textContent = "offline";
     els.portfolioEquity.textContent = "-";
     els.portfolioLastRun.textContent = "Live sync not available";
@@ -1243,7 +1243,7 @@ function renderBotState(botState) {
   const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
   syncRiskAllocationControl(freeCapital, "paper free capital");
 
-  els.botAction.textContent = decision.action || "waiting";
+  if (els.botAction) els.botAction.textContent = decision.action || "waiting";
   if (els.botInlineAction) els.botInlineAction.textContent = decision.action || "waiting";
   els.portfolioEquity.textContent = money(Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100));
   els.portfolioEquity.className = pnlClass(totalPnl);
@@ -1445,7 +1445,7 @@ function renderLiveState(liveState) {
     : "click Activate live execution before future live order routing";
   syncRiskAllocationControl(liveCapitalBase, Number.isFinite(cash) ? "live pUSD cash" : "live cash once balance sync is available");
 
-  els.botAction.textContent = "live";
+  if (els.botAction) els.botAction.textContent = "live";
   if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions / ${openOrders.length} orders`;
   els.portfolioEquity.textContent = money(equity);
   els.portfolioEquity.className = pnlClass(totalPnl);

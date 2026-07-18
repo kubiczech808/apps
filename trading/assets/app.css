@@ -122,7 +122,7 @@ button:disabled {
 
 .control-grid {
   display: grid;
-  grid-template-columns: minmax(130px, 0.7fr) minmax(240px, 1.3fr) minmax(190px, 1fr) minmax(260px, 1.35fr);
+  grid-template-columns: minmax(240px, 1.25fr) minmax(190px, 1fr) minmax(220px, 1fr) minmax(180px, 0.85fr) minmax(260px, 1.35fr);
   gap: 10px;
 }
 

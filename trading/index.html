@@ -23,7 +23,10 @@
             <h2 data-portfolio-title>Autonomous paper portfolio</h2>
           </div>
           <div class="portfolio-actions">
-            <span class="pill" data-bot-action>loading</span>
+            <div class="mode-switch" role="group" aria-label="Portfolio mode">
+              <button class="mode-button active" type="button" data-mode-toggle="paper">Paper</button>
+              <button class="mode-button" type="button" data-mode-toggle="live">Live</button>
+            </div>
           </div>
         </div>
         <div class="portfolio-cards">
@@ -67,13 +70,6 @@
             <span class="pill muted" data-execution-status>ready</span>
           </div>
           <div class="control-grid">
-            <div class="control-block">
-              <span class="label">Mode</span>
-              <div class="mode-switch" role="group" aria-label="Portfolio mode">
-                <button class="mode-button active" type="button" data-mode-toggle="paper">Paper</button>
-                <button class="mode-button" type="button" data-mode-toggle="live">Live</button>
-              </div>
-            </div>
             <div class="control-block">
               <span class="label">Manual run</span>
               <div class="execution-actions">
