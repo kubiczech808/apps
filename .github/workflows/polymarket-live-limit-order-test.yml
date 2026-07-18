@@ -25,8 +25,8 @@ jobs:
       POLYMARKET_HOST: https://clob.polymarket.com
       POLYMARKET_CHAIN_ID: "137"
       POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
-      POLYMARKET_FUNDER_ADDRESS: "0x3252de913d9323667f21f4d88fa1f996fc282293"
-      POLYMARKET_SIGNATURE_TYPE: "1"
+      POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
+      POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '1' }}
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: data/live-state.json
