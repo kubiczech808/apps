@@ -674,6 +674,12 @@ function tradeHeader(tableKey, key, label) {
   return `<th><button class="sort-button${active}" type="button" data-trade-sort="${key}" data-trade-table="${tableKey}">${label}${tradeSortArrow(tableKey, key)}</button></th>`;
 }
 
+function tradeTypeBadge(trade) {
+  if (trade.mode === "LIVE_ORDER") return '<span class="order-chip">Limit order waiting</span>';
+  if (trade.mode === "LIVE") return '<span class="order-chip filled">Open position</span>';
+  return "";
+}
+
 function renderTradeRows(trades, emptyText, options = {}) {
   const tableKey = options.tableKey || "open";
   const showStatus = options.showStatus !== false;
@@ -703,6 +709,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
           <tr>
             <td>${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
             <td>
+              ${tradeTypeBadge(trade)}
               ${marketAnchor(trade)}
               <span>${escapeHtml(riskLine(trade))}</span>
               <span>${escapeHtml(postMortemLine(trade))}</span>
@@ -1010,6 +1017,131 @@ function closeAnalysisModal() {
   analysisModal.lastTrigger = null;
 }
 
+function executionModal() {
+  let modal = document.querySelector("[data-execution-modal]");
+  if (modal) return modal;
+  modal = document.createElement("div");
+  modal.className = "analysis-modal-backdrop execution-modal-backdrop";
+  modal.dataset.executionModal = "";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <section class="analysis-modal execution-modal" role="dialog" aria-modal="true" aria-labelledby="execution-modal-title">
+      <div class="analysis-modal-head">
+        <h2 id="execution-modal-title">Execution progress</h2>
+        <button class="analysis-modal-close" type="button" data-execution-modal-close aria-label="Close execution progress">x</button>
+      </div>
+      <div class="analysis-modal-body execution-modal-body" data-execution-modal-body></div>
+    </section>
+  `;
+  document.body.appendChild(modal);
+  return modal;
+}
+
+function openExecutionModal(target) {
+  const modal = executionModal();
+  modal.hidden = false;
+  modal.dataset.target = target;
+  modal.dataset.done = "false";
+  document.body.classList.add("modal-open");
+  renderExecutionSteps([{ tone: "active", text: `${target === "live" ? "Live" : "Paper"} run requested` }]);
+  modal.querySelector("[data-execution-modal-close]")?.focus();
+}
+
+function closeExecutionModal() {
+  const modal = document.querySelector("[data-execution-modal]");
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+function renderExecutionSteps(steps) {
+  const modal = executionModal();
+  const body = modal.querySelector("[data-execution-modal-body]");
+  if (!body) return;
+  body.innerHTML = `
+    <div class="execution-steps">
+      ${steps.map((step) => `
+        <div class="execution-step ${escapeHtml(step.tone || "")}">
+          <strong>${escapeHtml(step.title || step.text || "")}</strong>
+          ${step.detail ? `<span>${escapeHtml(step.detail)}</span>` : ""}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function addExecutionStep(steps, title, detail = "", tone = "") {
+  const next = [...steps, { title, detail, tone }];
+  renderExecutionSteps(next);
+  return next;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function runMatchesStart(run, startedAt) {
+  const created = Date.parse(run?.createdAt || "");
+  const start = Date.parse(startedAt || "");
+  return !Number.isFinite(start) || !Number.isFinite(created) || created >= start - 120000;
+}
+
+function workflowStatusText(run) {
+  if (!run) return "waiting for GitHub workflow to appear";
+  if (run.status === "completed") return `completed${run.conclusion ? ` / ${run.conclusion}` : ""}`;
+  return run.status || "queued";
+}
+
+async function waitForWorkflowRun(target, startedAt, steps) {
+  let latest = null;
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const status = await fetchApiJson(`api.php?action=workflow-status&target=${encodeURIComponent(target)}&since=${encodeURIComponent(startedAt)}`);
+    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || status.latest || null;
+    const detail = latest?.htmlUrl ? `${workflowStatusText(latest)} / ${latest.htmlUrl}` : workflowStatusText(latest);
+    steps = addExecutionStep(steps, attempt === 0 ? "Workflow status" : "Workflow update", detail, latest?.status === "completed" ? "done" : "active");
+    if (latest?.status === "completed") return { run: latest, steps };
+    await sleep(4000);
+  }
+  return { run: latest, steps };
+}
+
+function liveExecutionSummary(execution) {
+  if (!execution || typeof execution !== "object") return "Live execution state is not available yet.";
+  const selected = execution.selected || {};
+  const response = execution.response || {};
+  const attempts = Array.isArray(execution.attempts) ? execution.attempts : [];
+  const lastAttempt = attempts[attempts.length - 1] || {};
+  const lines = [
+    `Action: ${execution.action || "-"}`,
+    execution.reason ? `Reason: ${execution.reason}` : "",
+    selected.question ? `Selected: ${selected.question} / ${selected.outcome || "-"}` : "",
+    selected.orderType ? `Order: ${selected.orderType} ${selected.orderSize || "-"} @ ${probability(Number(selected.orderPrice))}` : "",
+    response.orderID ? `Order ID: ${response.orderID}` : "",
+    response.status ? `Polymarket status: ${response.status}` : "",
+    lastAttempt.rejectReason ? `Last reject: ${lastAttempt.rejectReason}` : "",
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+async function waitForExecutionResult(target, startedAt, steps) {
+  const stateTarget = target === "live" ? "live-execution" : "paper";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const payload = await fetchApiJson(`api.php?action=state&target=${stateTarget}`);
+    const generated = Date.parse(payload.generatedAt || payload.lastDecision?.runAt || "");
+    const start = Date.parse(startedAt || "");
+    if (!Number.isFinite(start) || (Number.isFinite(generated) && generated >= start - 120000)) {
+      const detail = target === "live"
+        ? liveExecutionSummary(payload)
+        : `Paper action: ${payload.lastDecision?.action || "-"} / ${payload.lastDecision?.reason || "-"}`;
+      steps = addExecutionStep(steps, "Execution result", detail, "done");
+      return { payload, steps };
+    }
+    await sleep(3000);
+  }
+  steps = addExecutionStep(steps, "Execution result", "Result state has not updated yet; dashboard will keep refreshing.", "active");
+  return { payload: null, steps };
+}
+
 function currentEligibilityThreshold() {
   const configured = Number(state.eligibilityThreshold);
   const normalizedConfigured = normalizeEligibilityThreshold(configured);
@@ -1100,6 +1232,18 @@ async function fetchJson(path) {
   return statePayload.json();
 }
 
+async function fetchApiJson(url, options = {}) {
+  const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`, {
+    cache: "no-store",
+    ...options,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || `${url} HTTP ${response.status}`);
+  }
+  return payload;
+}
+
 async function requestLiveAccountSync(options = {}) {
   if (state.autoLiveSyncBusy) return;
   state.autoLiveSyncBusy = true;
@@ -1146,6 +1290,16 @@ async function triggerOneTimeExecution(target) {
   state.executionBusy = target;
   syncExecutionButtons();
   setExecutionStatus(live ? "starting live workflow" : "starting paper workflow");
+  const startedAt = new Date().toISOString();
+  openExecutionModal(target);
+  let steps = [
+    {
+      title: live ? "Live execution requested" : "Paper execution requested",
+      detail: `Started ${formatDate(startedAt)}`,
+      tone: "active",
+    },
+  ];
+  renderExecutionSteps(steps);
 
   try {
     const response = await fetch("api.php?action=workflow", {
@@ -1157,11 +1311,25 @@ async function triggerOneTimeExecution(target) {
     if (!response.ok || payload.ok === false) {
       throw new Error(payload.error || `workflow HTTP ${response.status}`);
     }
+    steps = addExecutionStep(steps, "Workflow dispatched", payload.workflow || payload.message || "GitHub Actions accepted the request", "done");
     setExecutionStatus(`${target} workflow started`);
-    window.setTimeout(() => {
-      loadDashboardState();
-    }, 5000);
+    steps = addExecutionStep(steps, "Revalidation running", live
+      ? "The runner refreshes account state, revalidates candidates, checks risk diversification, then submits an order only if criteria still pass."
+      : "The paper bot scans markets, prioritizes new opportunities, updates known evaluations, and may open one paper trade.", "active");
+    const workflow = await waitForWorkflowRun(target, startedAt, steps);
+    steps = workflow.steps;
+    if (workflow.run?.conclusion && workflow.run.conclusion !== "success") {
+      steps = addExecutionStep(steps, "Workflow finished with warning", `Conclusion: ${workflow.run.conclusion}`, "error");
+      setExecutionStatus(`${target} workflow ${workflow.run.conclusion}`, "error");
+      return;
+    }
+    const result = await waitForExecutionResult(target, startedAt, steps);
+    steps = result.steps;
+    steps = addExecutionStep(steps, "Dashboard refreshed", "Open positions and limit orders are shown in the tables below.", "done");
+    setExecutionStatus(`${target} workflow completed`);
+    await loadDashboardState();
   } catch (error) {
+    steps = addExecutionStep(steps, "Execution failed", error.message || "workflow failed", "error");
     setExecutionStatus(error.message || "workflow failed", "error");
   } finally {
     state.executionBusy = null;
@@ -1856,6 +2024,14 @@ els.botEvaluations?.addEventListener("click", (event) => {
 });
 
 document.addEventListener("click", (event) => {
+  const execution = event.target.closest("[data-execution-modal]");
+  if (execution) {
+    if (event.target === execution || event.target.closest("[data-execution-modal-close]")) {
+      closeExecutionModal();
+    }
+    return;
+  }
+
   const infoButton = event.target.closest(".info-button");
   if (infoButton) {
     event.preventDefault();
@@ -1874,7 +2050,10 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeAnalysisModal();
+  if (event.key === "Escape") {
+    closeExecutionModal();
+    closeAnalysisModal();
+  }
 });
 
 function handleTradeSort(event) {

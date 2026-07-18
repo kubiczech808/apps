@@ -264,6 +264,132 @@ function dispatch_workflow(string $workflow, array $inputs, bool $requireTrigger
     ];
 }
 
+function github_json_request(string $url): array
+{
+    $config = app_config();
+    if ($config['github_token'] === '') {
+        respond([
+            'ok' => false,
+            'error' => 'GitHub workflow status is not configured on the server.',
+            'requiredSecrets' => ['POLY_TRADING_GITHUB_TOKEN'],
+        ], 503);
+    }
+
+    $headers = [
+        'Accept: application/vnd.github+json',
+        'Authorization: Bearer ' . $config['github_token'],
+        'User-Agent: osobnizkusenosti-trading-trigger',
+        'X-GitHub-Api-Version: 2022-11-28',
+    ];
+
+    if (!function_exists('curl_init')) {
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'header' => implode("\r\n", $headers) . "\r\n",
+                'timeout' => 20,
+                'ignore_errors' => true,
+            ],
+        ]);
+        $body = @file_get_contents($url, false, $context);
+        $status = 0;
+        foreach ($http_response_header ?? [] as $header) {
+            if (preg_match('/^HTTP\/\S+\s+(\d{3})/', $header, $matches)) {
+                $status = (int) $matches[1];
+            }
+        }
+        if ($body === false || $status < 200 || $status >= 300) {
+            throw new RuntimeException("GitHub HTTP {$status}");
+        }
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded)) {
+            throw new RuntimeException('GitHub returned invalid JSON');
+        }
+        return $decoded;
+    }
+
+    $ch = curl_init($url);
+    if ($ch === false) {
+        throw new RuntimeException('Unable to initialize GitHub request');
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 20,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_HTTPHEADER => $headers,
+    ]);
+    $body = curl_exec($ch);
+    $error = curl_error($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($body === false || $status < 200 || $status >= 300) {
+        throw new RuntimeException($error !== '' ? $error : "GitHub HTTP {$status}");
+    }
+    $decoded = json_decode(is_string($body) ? $body : '', true);
+    if (!is_array($decoded)) {
+        throw new RuntimeException('GitHub returned invalid JSON');
+    }
+    return $decoded;
+}
+
+function workflow_status_payload(string $target): array
+{
+    $config = app_config();
+    $workflows = [
+        'paper' => 'trading-paper-bot.yml',
+        'live' => 'polymarket-live-limit-order-test.yml',
+        'live-sync' => 'trading-live-account.yml',
+    ];
+    if (!isset($workflows[$target])) {
+        respond(['ok' => false, 'error' => 'Unknown workflow target'], 400);
+    }
+
+    $workflow = $workflows[$target];
+    $url = sprintf(
+        'https://api.github.com/repos/%s/actions/workflows/%s/runs?%s',
+        rawurlencode($config['repo']),
+        rawurlencode($workflow),
+        http_build_query([
+            'branch' => $config['ref'],
+            'event' => 'workflow_dispatch',
+            'per_page' => 5,
+        ])
+    );
+    $url = str_replace('%2F', '/', $url);
+    $payload = github_json_request($url);
+    $since = strtotime((string) ($_GET['since'] ?? '')) ?: 0;
+    $runs = [];
+    foreach (($payload['workflow_runs'] ?? []) as $run) {
+        if (!is_array($run)) {
+            continue;
+        }
+        $created = strtotime((string) ($run['created_at'] ?? '')) ?: 0;
+        if ($since > 0 && $created > 0 && $created + 120 < $since) {
+            continue;
+        }
+        $runs[] = [
+            'id' => $run['id'] ?? null,
+            'name' => $run['name'] ?? '',
+            'event' => $run['event'] ?? '',
+            'status' => $run['status'] ?? '',
+            'conclusion' => $run['conclusion'] ?? null,
+            'createdAt' => $run['created_at'] ?? null,
+            'updatedAt' => $run['updated_at'] ?? null,
+            'htmlUrl' => $run['html_url'] ?? null,
+        ];
+    }
+
+    return [
+        'ok' => true,
+        'target' => $target,
+        'workflow' => $workflow,
+        'generatedAt' => gmdate('c'),
+        'runs' => $runs,
+        'latest' => $runs[0] ?? null,
+    ];
+}
+
 try {
     $action = $_GET['action'] ?? 'markets';
 
@@ -347,6 +473,11 @@ try {
             'ref' => $result['ref'],
             'generatedAt' => gmdate('c'),
         ], $result['status'] === 204 ? 202 : 200);
+    }
+
+    if ($action === 'workflow-status') {
+        $target = (string) ($_GET['target'] ?? '');
+        respond(workflow_status_payload($target));
     }
 
     if ($action === 'state') {

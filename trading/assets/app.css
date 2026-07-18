@@ -644,6 +644,72 @@ body.modal-open {
   white-space: pre-line;
 }
 
+.execution-modal {
+  width: min(820px, 100%);
+}
+
+.execution-modal-body {
+  white-space: normal;
+}
+
+.execution-steps {
+  display: grid;
+  gap: 10px;
+}
+
+.execution-step {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--muted);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.execution-step strong {
+  font-size: 13px;
+}
+
+.execution-step span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.execution-step.active {
+  border-left-color: var(--accent);
+}
+
+.execution-step.done {
+  border-left-color: var(--good);
+}
+
+.execution-step.error {
+  border-left-color: var(--bad);
+}
+
+.order-chip {
+  display: inline-flex !important;
+  width: fit-content;
+  margin: 0 0 6px !important;
+  padding: 3px 7px;
+  border: 1px solid #f59e0b;
+  border-radius: 999px;
+  background: #fffbeb;
+  color: #92400e !important;
+  font-size: 11px !important;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.order-chip.filled {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-dark) !important;
+}
+
 .analysis-reason {
   display: inline-block !important;
   max-width: 220px !important;
