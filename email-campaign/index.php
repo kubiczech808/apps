@@ -10038,7 +10038,22 @@ function renderApp(PDO $pdo, ?array $flash): void
     </nav>
     <div class="app-topbar-actions">
         <?php renderLanguageDropdown($pdo, $config, true); ?>
-        <a class="logout-link" href="?logout=1">Odhlasit</a>
+        <?php
+            $authEmail = strtolower(trim((string)($_SESSION['auth_email'] ?? '')));
+            $accountInitial = $authEmail !== '' ? strtoupper(substr($authEmail, 0, 1)) : 'U';
+        ?>
+        <div class="account-dropdown">
+            <details>
+                <summary aria-label="Uživatelský účet" title="Uživatelský účet">
+                    <span class="account-avatar" aria-hidden="true"><?= h($accountInitial) ?></span>
+                </summary>
+                <div class="account-dropdown-menu">
+                    <span>Přihlášený účet</span>
+                    <strong><?= h($authEmail !== '' ? $authEmail : 'neznámý účet') ?></strong>
+                    <a href="?logout=1">Odhlásit</a>
+                </div>
+            </details>
+        </div>
     </div>
 </header>
 <main>
