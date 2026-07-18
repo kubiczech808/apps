@@ -1252,12 +1252,12 @@ function onboardingFallbackLeadPlan(string $businessType): array
             'rationale' => 'U techto firem dava smysl prevence bolesti zad, regenerace a benefit pro zamestnance primo na pracovisti.',
             'email_angle' => 'Firemni masaze jako jednoduchy benefit pro lidi, kteri vetsinu dne sedi u pocitace.',
             'target_segments' => ['IT firmy', 'ucetni a danove kancelare', 'advokatni kancelare', 'call centra', 'administrativni centra', 'coworkingy'],
-            'candidate_terms' => ['IT firma Praha', 'ucetni kancelar Praha', 'advokatni kancelar Praha', 'call centrum Praha', 'coworking Praha', 'administrativni sluzby Praha'],
+            'candidate_terms' => ['IT firma', 'ucetni kancelar', 'advokatni kancelar', 'call centrum', 'coworking', 'administrativni sluzby'],
             'scraping_queries' => [
-                ['source' => 'firmy_cz', 'keyword' => 'IT firma Praha', 'why' => 'sedava prace u pocitace'],
-                ['source' => 'firmy_cz', 'keyword' => 'ucetni kancelar Praha', 'why' => 'administrativni tymy se sedavou praci'],
-                ['source' => 'firmy_cz', 'keyword' => 'advokatni kancelar Praha', 'why' => 'kancelarska prace a benefit pro tym'],
-                ['source' => 'firmy_cz', 'keyword' => 'call centrum Praha', 'why' => 'vysoka zatez zad a krku pri sedave praci'],
+                ['source' => 'firmy_cz', 'keyword' => 'IT firma', 'why' => 'sedava prace u pocitace'],
+                ['source' => 'firmy_cz', 'keyword' => 'ucetni kancelar', 'why' => 'administrativni tymy se sedavou praci'],
+                ['source' => 'firmy_cz', 'keyword' => 'advokatni kancelar', 'why' => 'kancelarska prace a benefit pro tym'],
+                ['source' => 'firmy_cz', 'keyword' => 'call centrum', 'why' => 'vysoka zatez zad a krku pri sedave praci'],
             ],
         ];
     }
@@ -1761,6 +1761,7 @@ function aiResearchPlan(array $config, array $seed): array
         . "Neopisuj seed firmu. Udelej obchodni uvahu: co pravdepodobne prodava, jaka firma ma realnou potrebu to koupit, jaky problem nebo trigger u ni resi, kdo rozhoduje, a proc je kontaktovani legitimni a relevantni. "
         . "Potom navrhni konkretni katalogove vyhledavaci dotazy pro scraping firem, ktere jsou potencialni zakaznici seed firmy. "
         . "Scraping keyword je presne text, ktery se napise do vyhledavani katalogu firem. Musi to byt konkretni kategorie subjektu, profese nebo obor, pripadne s mestem/regionem. "
+        . "Nejdriv urci trh a lokalitu seed firmy podle emailove domeny, webu, zdroje a adresy. Vyhledavej ve stejne zemi a u lokalnich sluzeb ve stejnem meste nebo rozumnem okoli, ne v nahodne jine zemi. "
         . "Seed kontakt: " . json_encode([
             'email' => (string)$seed['email'],
             'business' => $business,
@@ -1774,11 +1775,13 @@ function aiResearchPlan(array $config, array $seed): array
         . "email_angle = konkretni obchodni uhel oslovení, ktery bude davat smysl prijemci. "
         . "market_language = jeden jazyk pro osloveni vsech vybranych subjektu: cs, sk, de, pl nebo en; nevybirej mix jazyku. "
         . "target_segments = 3-6 konkretnich segmentu zakazniku, ne popis seed firmy. "
-        . "candidate_terms = kratke realne katalogove dotazy bez uvozovek, napr. 'ucetni kancelar Praha', 'hotely Brno', 'fyzioterapie Wien', 'stavebni firma Krakow'. "
+        . "candidate_terms = kratke realne katalogove dotazy bez uvozovek, napr. 'IT firma Wien', 'hotely Brno', 'fyzioterapie Salzburg', 'stavebni firma Krakow'. "
         . "filters = pravidla, podle kterych pozdeji odmitnout nevhodne kontakty. "
-        . "scraping_queries = 3-6 objektu {source, keyword, why}; keyword musi byt konkretni vyhledavaci fraze pro katalog, napr. 'ucetni kancelar Praha', ne obecna veta. "
+        . "scraping_queries = 3-6 objektu {source, keyword, why}; keyword musi byt konkretni vyhledavaci fraze pro katalog, napr. 'ucetni kancelar Wien', ne obecna veta. "
         . "Zakazane keywordy: 'relevantni B2B firmy', 'potencialni zakaznici', 'male firmy', 'firmy', 'sluzby pro firmy', 'B2B subjekty', 'vhodne firmy', obecne popisy a marketingove vety. "
-        . "Pokud te napadne obecny segment, preved ho na konkretni kategorii firem k vyhledani: napr. misto 'firmy se sedavou praci' pouzij 'IT firma Praha', 'ucetni kancelar Praha' nebo 'call centrum Praha'. "
+        . "Pokud te napadne obecny segment, preved ho na konkretni kategorii firem k vyhledani a zachovej lokalitu seed firmy: misto 'firmy se sedavou praci' pouzij napriklad 'IT firma Wien', 'ucetni kancelar Wien' nebo 'call centrum Wien' pro rakousky subjekt z Vidne. "
+        . "Pro rakousky masazni subjekt nepouzivej Prahu ani Firmy.cz; pouzij Herold.at a rakouske mesto/oblast. Pro nemecky subjekt pouzij nemecke zdroje, pro slovensky Zoznam.sk, pro polsky polske zdroje a pro cesky Firmy.cz. "
+        . "Pokud seed firma nabizi mobilni sluzbu na pracovisti, hledej firmy, kde dava sluzba smysl provozne: kancelare, IT firmy, ucetni, advokatni kancelare, call centra, hotely nebo provozy ve stejnem meste/okoli. "
         . "Pouzij jen aktivni zdroje firmy_cz, zoznam_sk, herold_at, dastelefonbuch_de, dasoertliche_de, gelbeseiten_de, pkt_pl nebo panoramafirm_pl. "
         . "Pokud jde o lokalni sluzbu, zahrn mesto/region ze seed dat. Pokud si nejsi jist oborem, zvol sirsi B2B segment s jasnym triggerem.";
     try {
@@ -1903,6 +1906,91 @@ function aiResearchIsGenericCatalogKeyword(string $keyword): bool
     return false;
 }
 
+function aiResearchSeedCountry(array $seed): string
+{
+    $haystack = strtolower(
+        (string)($seed['email'] ?? '') . ' '
+        . (string)($seed['website'] ?? '') . ' '
+        . (string)($seed['source_url'] ?? '') . ' '
+        . (string)($seed['source_label'] ?? '') . ' '
+        . (string)($seed['address'] ?? '')
+    );
+    if (preg_match('/(\.at\b|herold|austria|rakous|wien|vienna|graz|linz|salzburg|innsbruck|klagenfurt|langenlois)/i', $haystack)) {
+        return 'AT';
+    }
+    if (preg_match('/(\.de\b|dastelefonbuch|dasoertliche|gelbeseiten|germany|nemeck|berlin|munich|muenchen|hamburg|koln|koeln|frankfurt)/i', $haystack)) {
+        return 'DE';
+    }
+    if (preg_match('/(\.sk\b|zoznam|slovak|slovensko|bratislava|kosice|nitra|zilina)/i', $haystack)) {
+        return 'SK';
+    }
+    if (preg_match('/(\.pl\b|pkt|panoramafirm|poland|polsk|warsz|krak|wroclaw|poznan|gdansk)/i', $haystack)) {
+        return 'PL';
+    }
+    if (preg_match('/(\.cz\b|firmy\.cz|cesk|praha|brno|ostrava|plzen|olomouc|liberec)/i', $haystack)) {
+        return 'CZ';
+    }
+    return '';
+}
+
+function aiResearchSourceCountry(string $source): string
+{
+    $source = normalizeScrapingSourceKey($source);
+    if ($source === 'herold_at') {
+        return 'AT';
+    }
+    if (in_array($source, ['dastelefonbuch_de', 'dasoertliche_de', 'gelbeseiten_de'], true)) {
+        return 'DE';
+    }
+    if ($source === 'zoznam_sk') {
+        return 'SK';
+    }
+    if (in_array($source, ['pkt_pl', 'panoramafirm_pl'], true)) {
+        return 'PL';
+    }
+    if ($source === 'firmy_cz') {
+        return 'CZ';
+    }
+    return '';
+}
+
+function aiResearchKeywordCountryHint(string $keyword): string
+{
+    $value = strtolower($keyword);
+    $cityHints = [
+        'CZ' => ['praha', 'brno', 'ostrava', 'plzen', 'plzeň', 'olomouc', 'liberec', 'hradec kralove', 'hradec králové', 'pardubice', 'ceske budejovice', 'české budějovice'],
+        'AT' => ['wien', 'vienna', 'graz', 'linz', 'salzburg', 'innsbruck', 'klagenfurt', 'langenlois', 'st polten', 'sankt polten', 'sankt pölten'],
+        'DE' => ['berlin', 'hamburg', 'munich', 'muenchen', 'münchen', 'koln', 'koeln', 'köln', 'frankfurt', 'stuttgart', 'dusseldorf', 'düsseldorf'],
+        'SK' => ['bratislava', 'kosice', 'košice', 'nitra', 'zilina', 'žilina', 'trnava', 'presov', 'prešov'],
+        'PL' => ['warszawa', 'warsaw', 'krakow', 'kraków', 'wroclaw', 'wrocław', 'poznan', 'poznań', 'gdansk', 'gdańsk', 'lodz', 'łódź'],
+    ];
+    foreach ($cityHints as $country => $hints) {
+        foreach ($hints as $hint) {
+            if (preg_match('/(^|[\s,])' . preg_quote($hint, '/') . '($|[\s,])/u', $value)) {
+                return $country;
+            }
+        }
+    }
+    return '';
+}
+
+function aiResearchQueryMatchesSeedMarket(array $seed, string $source, string $keyword): bool
+{
+    $seedCountry = aiResearchSeedCountry($seed);
+    if ($seedCountry === '') {
+        return true;
+    }
+    $sourceCountry = aiResearchSourceCountry($source);
+    if ($sourceCountry !== '' && $sourceCountry !== $seedCountry) {
+        return false;
+    }
+    $keywordCountry = aiResearchKeywordCountryHint($keyword);
+    if ($keywordCountry !== '' && $keywordCountry !== $seedCountry) {
+        return false;
+    }
+    return true;
+}
+
 function aiResearchEnrichPlan(array $plan, array $seed): array
 {
     $keyword = aiResearchPrimaryKeyword($plan);
@@ -1912,7 +2000,7 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
         $plan['candidate_terms'] = array_values(array_unique(array_merge([$keyword], (array)($plan['candidate_terms'] ?? []))));
     }
     if (empty($plan['scraping_queries'])) {
-        $plan['scraping_queries'] = [['source' => 'firmy_cz', 'keyword' => $keyword, 'why' => 'fallback dotaz podle odvozeneho idealniho zakaznickeho segmentu']];
+        $plan['scraping_queries'] = [['source' => aiResearchDefaultSourceForSeed($seed), 'keyword' => $keyword, 'why' => 'fallback dotaz podle odvozeneho idealniho zakaznickeho segmentu']];
     }
     $queries = [];
     $seen = [];
@@ -1922,7 +2010,7 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
         }
         $source = normalizeScrapingSourceKey((string)($query['source'] ?? 'firmy_cz'));
         $queryKeyword = aiResearchNormalizeCatalogKeyword((string)($query['keyword'] ?? ''));
-        if ($queryKeyword === '' || !scrapingSourceIsActive($source)) {
+        if ($queryKeyword === '' || !scrapingSourceIsActive($source) || !aiResearchQueryMatchesSeedMarket($seed, $source, $queryKeyword)) {
             continue;
         }
         $key = $source . '|' . strtolower($queryKeyword);
@@ -1942,7 +2030,7 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
         }
         $source = aiResearchDefaultSourceForSeed($seed);
         $key = $source . '|' . strtolower($term);
-        if (isset($seen[$key]) || !scrapingSourceIsActive($source)) {
+        if (isset($seen[$key]) || !scrapingSourceIsActive($source) || !aiResearchQueryMatchesSeedMarket($seed, $source, $term)) {
             continue;
         }
         $seen[$key] = true;
