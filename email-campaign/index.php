@@ -1760,6 +1760,7 @@ function aiResearchPlan(array $config, array $seed): array
     $prompt = "Vybrany ulozeny kontakt ber jako firmu, ktere chceme najit nove B2B zakazniky. "
         . "Neopisuj seed firmu. Udelej obchodni uvahu: co pravdepodobne prodava, jaka firma ma realnou potrebu to koupit, jaky problem nebo trigger u ni resi, kdo rozhoduje, a proc je kontaktovani legitimni a relevantni. "
         . "Potom navrhni konkretni katalogove vyhledavaci dotazy pro scraping firem, ktere jsou potencialni zakaznici seed firmy. "
+        . "Scraping keyword je presne text, ktery se napise do vyhledavani katalogu firem. Musi to byt konkretni kategorie subjektu, profese nebo obor, pripadne s mestem/regionem. "
         . "Seed kontakt: " . json_encode([
             'email' => (string)$seed['email'],
             'business' => $business,
@@ -1773,9 +1774,11 @@ function aiResearchPlan(array $config, array $seed): array
         . "email_angle = konkretni obchodni uhel oslovení, ktery bude davat smysl prijemci. "
         . "market_language = jeden jazyk pro osloveni vsech vybranych subjektu: cs, sk, de, pl nebo en; nevybirej mix jazyku. "
         . "target_segments = 3-6 konkretnich segmentu zakazniku, ne popis seed firmy. "
-        . "candidate_terms = kratke realne katalogove dotazy bez uvozovek. "
+        . "candidate_terms = kratke realne katalogove dotazy bez uvozovek, napr. 'ucetni kancelar Praha', 'hotely Brno', 'fyzioterapie Wien', 'stavebni firma Krakow'. "
         . "filters = pravidla, podle kterych pozdeji odmitnout nevhodne kontakty. "
         . "scraping_queries = 3-6 objektu {source, keyword, why}; keyword musi byt konkretni vyhledavaci fraze pro katalog, napr. 'ucetni kancelar Praha', ne obecna veta. "
+        . "Zakazane keywordy: 'relevantni B2B firmy', 'potencialni zakaznici', 'male firmy', 'firmy', 'sluzby pro firmy', 'B2B subjekty', 'vhodne firmy', obecne popisy a marketingove vety. "
+        . "Pokud te napadne obecny segment, preved ho na konkretni kategorii firem k vyhledani: napr. misto 'firmy se sedavou praci' pouzij 'IT firma Praha', 'ucetni kancelar Praha' nebo 'call centrum Praha'. "
         . "Pouzij jen aktivni zdroje firmy_cz, zoznam_sk, herold_at, dastelefonbuch_de, dasoertliche_de, gelbeseiten_de, pkt_pl nebo panoramafirm_pl. "
         . "Pokud jde o lokalni sluzbu, zahrn mesto/region ze seed dat. Pokud si nejsi jist oborem, zvol sirsi B2B segment s jasnym triggerem.";
     try {
@@ -1827,7 +1830,7 @@ function aiResearchFallbackTerms(string $business, string $website, string $addr
     if (preg_match('/software|it|web|marketing|reklam/i', $haystack)) {
         return ['vyrobni firma' . $suffix, 'velkoobchod' . $suffix, 'realitni kancelar' . $suffix, 'autoservis' . $suffix, 'e-shop' . $suffix];
     }
-    return ['male firmy' . $suffix, 'vyrobni firma' . $suffix, 'velkoobchod' . $suffix, 'sluzby pro firmy' . $suffix];
+    return ['vyrobni firma' . $suffix, 'velkoobchod' . $suffix, 'stavebni firma' . $suffix, 'autoservis' . $suffix, 'hotel' . $suffix, 'restaurace' . $suffix];
 }
 
 function aiResearchCityFromAddress(string $address): string
@@ -1841,12 +1844,15 @@ function aiResearchCityFromAddress(string $address): string
 function aiResearchPrimaryKeyword(array $plan): string
 {
     foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
-        if (is_array($query) && trim((string)($query['keyword'] ?? '')) !== '') {
-            return trim((string)$query['keyword']);
+        if (is_array($query)) {
+            $keyword = aiResearchNormalizeCatalogKeyword((string)($query['keyword'] ?? ''));
+            if ($keyword !== '') {
+                return $keyword;
+            }
         }
     }
     foreach ((array)($plan['candidate_terms'] ?? []) as $term) {
-        $term = trim((string)$term);
+        $term = aiResearchNormalizeCatalogKeyword((string)$term);
         if ($term !== '') {
             return $term;
         }
@@ -1854,12 +1860,55 @@ function aiResearchPrimaryKeyword(array $plan): string
     return '';
 }
 
+function aiResearchNormalizeCatalogKeyword(string $keyword): string
+{
+    $keyword = truncatePlainText(trim(preg_replace('/\s+/', ' ', $keyword) ?? $keyword), 120);
+    if ($keyword === '' || aiResearchIsGenericCatalogKeyword($keyword)) {
+        return '';
+    }
+    return $keyword;
+}
+
+function aiResearchIsGenericCatalogKeyword(string $keyword): bool
+{
+    $value = strtolower(trim($keyword));
+    $value = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $value) ?? $value;
+    $value = preg_replace('/\s+/', ' ', $value) ?? $value;
+    $generic = [
+        'relevantni b2b firmy',
+        'relevantni firmy',
+        'b2b firmy',
+        'b2b subjekty',
+        'potencialni zakaznici',
+        'potencialni b2b zakaznici',
+        'vhodne firmy',
+        'male firmy',
+        'firmy',
+        'spolecnosti',
+        'subjekty',
+        'sluzby pro firmy',
+        'zakaznici',
+        'idealni zakaznici',
+    ];
+    if (in_array($value, $generic, true)) {
+        return true;
+    }
+    if (preg_match('/\b(relevantni|vhodne|potencialni|idealni)\b.*\b(firmy|subjekty|zakaznici|b2b)\b/u', $value)) {
+        return true;
+    }
+    if (str_word_count(str_replace(['á','č','ď','é','ě','í','ň','ó','ř','š','ť','ú','ů','ý','ž'], ['a','c','d','e','e','i','n','o','r','s','t','u','u','y','z'], $value)) < 2
+        && in_array($value, ['firmy', 'subjekty', 'zakaznici', 'spolecnosti'], true)) {
+        return true;
+    }
+    return false;
+}
+
 function aiResearchEnrichPlan(array $plan, array $seed): array
 {
     $keyword = aiResearchPrimaryKeyword($plan);
     if ($keyword === '') {
         $terms = aiResearchFallbackTerms((string)($seed['subject_name'] ?? ''), (string)($seed['website'] ?? ''), (string)($seed['address'] ?? ''));
-        $keyword = $terms[0] ?? 'sluzby pro firmy';
+        $keyword = $terms[0] ?? 'vyrobni firma';
         $plan['candidate_terms'] = array_values(array_unique(array_merge([$keyword], (array)($plan['candidate_terms'] ?? []))));
     }
     if (empty($plan['scraping_queries'])) {
@@ -1872,7 +1921,7 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
             continue;
         }
         $source = normalizeScrapingSourceKey((string)($query['source'] ?? 'firmy_cz'));
-        $queryKeyword = truncatePlainText(trim((string)($query['keyword'] ?? '')), 120);
+        $queryKeyword = aiResearchNormalizeCatalogKeyword((string)($query['keyword'] ?? ''));
         if ($queryKeyword === '' || !scrapingSourceIsActive($source)) {
             continue;
         }
@@ -1887,7 +1936,7 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
         if (count($queries) >= 6) {
             break;
         }
-        $term = truncatePlainText(trim((string)$term), 120);
+        $term = aiResearchNormalizeCatalogKeyword((string)$term);
         if ($term === '') {
             continue;
         }
@@ -1899,8 +1948,24 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
         $seen[$key] = true;
         $queries[] = ['source' => $source, 'keyword' => $term, 'why' => 'doplnene z AI candidate_terms pro zvyseni sance na nalezeni kontaktu'];
     }
+    if (!$queries) {
+        $terms = aiResearchFallbackTerms((string)($seed['subject_name'] ?? ''), (string)($seed['website'] ?? ''), (string)($seed['address'] ?? ''));
+        foreach ($terms as $term) {
+            $term = aiResearchNormalizeCatalogKeyword($term);
+            if ($term === '') {
+                continue;
+            }
+            $source = aiResearchDefaultSourceForSeed($seed);
+            if (!scrapingSourceIsActive($source)) {
+                $source = 'firmy_cz';
+            }
+            $queries[] = ['source' => $source, 'keyword' => $term, 'why' => 'konkretni fallback katalogova kategorie podle odhadnuteho trhu'];
+            $keyword = $term;
+            break;
+        }
+    }
     $plan['scraping_queries'] = $queries;
-    $plan['primary_keyword'] = $keyword;
+    $plan['primary_keyword'] = aiResearchNormalizeCatalogKeyword($keyword) ?: aiResearchPrimaryKeyword(['scraping_queries' => $queries, 'candidate_terms' => []]);
     $plan['market_language'] = normalizeAiResearchMarketLanguage((string)($plan['market_language'] ?? '')) ?: aiResearchDefaultMarketLanguage($seed, $plan);
     return $plan;
 }
