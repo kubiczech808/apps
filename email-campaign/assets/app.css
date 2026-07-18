@@ -1946,12 +1946,39 @@ td a {
 .view-scraping .log-table th:nth-child(9),
 .view-scraping .log-table td:nth-child(9) { width: auto; }
 .view-research table {
-  min-width: 1320px;
+  min-width: 1580px;
 }
 .view-research td:nth-child(3),
-.view-research td:nth-child(6),
-.view-research td:nth-child(9) {
+.view-research td:nth-child(4),
+.view-research td:nth-child(7),
+.view-research td:nth-child(8),
+.view-research td:nth-child(11) {
   max-width: 280px;
+}
+.ai-outreach-modal {
+  max-width: min(820px, calc(100vw - 28px));
+}
+.ai-outreach-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 16px;
+}
+.ai-outreach-meta span {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #eef5f2;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+.ai-outreach-preview {
+  display: grid;
+  gap: 10px;
+}
+.ai-outreach-preview h3 {
+  margin: 0;
+  font-size: 18px;
 }
 .detail-row td {
   background: #f8faf7;

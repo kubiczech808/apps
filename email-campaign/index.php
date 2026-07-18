@@ -1545,11 +1545,11 @@ function onboardingCandidateTerms(array $plan, string $businessType): array
     return $terms;
 }
 
-function onboardingQuickScrapeContacts(array $plan, int $limit): array
+function onboardingQuickScrapeContacts(array $plan, int $limit, int $pagesPerQuery = 1, int $detailsPerPage = 10): array
 {
     $contacts = [];
     $seen = [];
-    foreach (array_slice((array)($plan['scraping_queries'] ?? []), 0, 3) as $query) {
+    foreach (array_slice((array)($plan['scraping_queries'] ?? []), 0, 5) as $query) {
         if (!is_array($query) || count($contacts) >= $limit) {
             continue;
         }
@@ -1559,7 +1559,7 @@ function onboardingQuickScrapeContacts(array $plan, int $limit): array
             continue;
         }
         try {
-            foreach (scrapingSearchUrls($source, $keyword, 1) as $search) {
+            foreach (scrapingSearchUrls($source, $keyword, max(1, $pagesPerQuery)) as $search) {
                 $searchResponse = fetchScrapingSearch($search);
                 $html = (string)$searchResponse['html'];
                 $directContacts = [];
@@ -1579,7 +1579,7 @@ function onboardingQuickScrapeContacts(array $plan, int $limit): array
                         return $contacts;
                     }
                 }
-                foreach (array_slice(extractCandidateUrls($html, $search['url'], $source), 0, 10) as $url) {
+                foreach (array_slice(extractCandidateUrls($html, $search['url'], $source), 0, max(1, $detailsPerPage)) as $url) {
                     try {
                         $contact = extractContactFromHtml(httpGet($url), $url);
                     } catch (Throwable $e) {
@@ -1595,7 +1595,6 @@ function onboardingQuickScrapeContacts(array $plan, int $limit): array
                         return $contacts;
                     }
                 }
-                break;
             }
         } catch (Throwable $e) {
             error_log('Onboarding quick scrape skipped [' . $source . ' / ' . $keyword . ']: ' . $e->getMessage());
@@ -1746,18 +1745,21 @@ function aiResearchPlan(array $config, array $seed): array
     $website = trim((string)($seed['website'] ?? ''));
     $address = trim((string)($seed['address'] ?? ''));
     $fallback = onboardingFallbackLeadPlan($business . ' ' . $website . ' ' . $address);
-    $fallback['audience_label'] = 'B2B subjekty vhodne pro nabidku firmy ' . $business;
+    $fallback['audience_label'] = 'firmy, u kterych ma nabidka ' . $business . ' jasny provozni nebo obchodni prinos';
+    $fallback['rationale'] = 'AI ma odvodit konkretni B2B potrebu z oboru, webu, lokace a typu sluzby seed byznysu. Cilem nejsou podobne firmy, ale firmy, ktere mohou byt zakaznikem seed byznysu.';
+    $fallback['email_angle'] = 'Kratke osloveni ma ukazat konkretni situaci, ve ktere kontaktovana firma muze sluzbu vyuzit, ne jen obecne predstaveni dodavatele.';
     $fallback['candidate_terms'] = array_slice(array_values(array_unique(array_merge(
-        [(string)$business],
+        aiResearchFallbackTerms($business, $website, $address),
         (array)($fallback['candidate_terms'] ?? [])
     ))), 0, 8);
 
     $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
     if ($apiKey === '') {
-        return $fallback;
+        return aiResearchEnrichPlan($fallback, $seed);
     }
-    $prompt = "Vybrany ulozeny kontakt ma pravdepodobne ziskavat nove B2B zakazniky. "
-        . "Navrhni, koho by mel tento byznys oslovovat, jake filtry pouzit a jaka klicova slova pouzit pro hledani kontaktu. "
+    $prompt = "Vybrany ulozeny kontakt ber jako firmu, ktere chceme najit nove B2B zakazniky. "
+        . "Neopisuj seed firmu. Udelej obchodni uvahu: co pravdepodobne prodava, jaka firma ma realnou potrebu to koupit, jaky problem nebo trigger u ni resi, kdo rozhoduje, a proc je kontaktovani legitimni a relevantni. "
+        . "Potom navrhni konkretni katalogove vyhledavaci dotazy pro scraping firem, ktere jsou potencialni zakaznici seed firmy. "
         . "Seed kontakt: " . json_encode([
             'email' => (string)$seed['email'],
             'business' => $business,
@@ -1765,8 +1767,17 @@ function aiResearchPlan(array $config, array $seed): array
             'address' => $address,
             'source' => (string)($seed['source_label'] ?? ''),
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Vrat pouze JSON s klici audience_label, rationale, email_angle, target_segments, candidate_terms, filters, scraping_queries. "
-        . "filters je pole pravidel pro overeni vhodnosti kontaktu. scraping_queries pouziva zdroje firmy_cz, zoznam_sk, herold_at, dastelefonbuch_de, dasoertliche_de, gelbeseiten_de, pkt_pl nebo panoramafirm_pl.";
+        . "Vrat pouze JSON s klici audience_label, rationale, email_angle, market_language, target_segments, candidate_terms, filters, scraping_queries. "
+        . "audience_label = kratke lidske pojmenovani idealnich B2B zakazniku. "
+        . "rationale = 4-6 konkretnich vet hluboke uvahy, proc prave tyto firmy potrebuji seed byznys; zmin provozni bolest, buying trigger, lokalitu a duvod relevance. "
+        . "email_angle = konkretni obchodni uhel oslovení, ktery bude davat smysl prijemci. "
+        . "market_language = jeden jazyk pro osloveni vsech vybranych subjektu: cs, sk, de, pl nebo en; nevybirej mix jazyku. "
+        . "target_segments = 3-6 konkretnich segmentu zakazniku, ne popis seed firmy. "
+        . "candidate_terms = kratke realne katalogove dotazy bez uvozovek. "
+        . "filters = pravidla, podle kterych pozdeji odmitnout nevhodne kontakty. "
+        . "scraping_queries = 3-6 objektu {source, keyword, why}; keyword musi byt konkretni vyhledavaci fraze pro katalog, napr. 'ucetni kancelar Praha', ne obecna veta. "
+        . "Pouzij jen aktivni zdroje firmy_cz, zoznam_sk, herold_at, dastelefonbuch_de, dasoertliche_de, gelbeseiten_de, pkt_pl nebo panoramafirm_pl. "
+        . "Pokud jde o lokalni sluzbu, zahrn mesto/region ze seed dat. Pokud si nejsi jist oborem, zvol sirsi B2B segment s jasnym triggerem.";
     try {
         $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
             'x-goog-api-key: ' . $apiKey,
@@ -1779,6 +1790,10 @@ function aiResearchPlan(array $config, array $seed): array
         ], 35);
         $json = parseJsonObjectFromText(geminiInteractionText($response));
         $plan = onboardingNormalizeLeadPlan($json, $fallback);
+        $marketLanguage = normalizeAiResearchMarketLanguage((string)($json['market_language'] ?? ''));
+        if ($marketLanguage !== '') {
+            $plan['market_language'] = $marketLanguage;
+        }
         $filters = [];
         foreach ((array)($json['filters'] ?? []) as $filter) {
             $filter = truncatePlainText(trim(is_array($filter) ? json_encode($filter, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : (string)$filter), 240);
@@ -1787,16 +1802,155 @@ function aiResearchPlan(array $config, array $seed): array
             }
         }
         $plan['filters'] = $filters ?: ['Kontakt musi odpovidat navrzenemu B2B segmentu a mit dohledatelny email.'];
+        $plan = aiResearchEnrichPlan($plan, $seed);
         return $plan;
     } catch (Throwable $e) {
         error_log('AI research plan fallback: ' . $e->getMessage());
-        return $fallback + ['filters' => ['Kontakt musi odpovidat navrzenemu B2B segmentu a mit dohledatelny email.']];
+        return aiResearchEnrichPlan($fallback + ['filters' => ['Kontakt musi odpovidat navrzenemu B2B segmentu a mit dohledatelny email.']], $seed);
     }
+}
+
+function aiResearchFallbackTerms(string $business, string $website, string $address): array
+{
+    $haystack = strtolower($business . ' ' . $website . ' ' . $address);
+    $city = aiResearchCityFromAddress($address);
+    $suffix = $city !== '' ? ' ' . $city : '';
+    if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
+        return ['IT firma' . $suffix, 'ucetni kancelar' . $suffix, 'advokatni kancelar' . $suffix, 'call centrum' . $suffix, 'coworking' . $suffix];
+    }
+    if (preg_match('/uct|dan|account|bookkeep/i', $haystack)) {
+        return ['remeslnici' . $suffix, 'stavebni firma' . $suffix, 'e-shop' . $suffix, 'restaurace' . $suffix, 'ordinace' . $suffix];
+    }
+    if (preg_match('/gastro|restaur|hotel|kavarn|bar/i', $haystack)) {
+        return ['restaurace' . $suffix, 'hotel' . $suffix, 'kavarna' . $suffix, 'catering' . $suffix];
+    }
+    if (preg_match('/software|it|web|marketing|reklam/i', $haystack)) {
+        return ['vyrobni firma' . $suffix, 'velkoobchod' . $suffix, 'realitni kancelar' . $suffix, 'autoservis' . $suffix, 'e-shop' . $suffix];
+    }
+    return ['male firmy' . $suffix, 'vyrobni firma' . $suffix, 'velkoobchod' . $suffix, 'sluzby pro firmy' . $suffix];
+}
+
+function aiResearchCityFromAddress(string $address): string
+{
+    $parts = array_values(array_filter(array_map('trim', explode(',', $address))));
+    $candidate = $parts ? end($parts) : '';
+    $candidate = preg_replace('/\d{3}\s*\d{2}/', '', (string)$candidate) ?? '';
+    return truncatePlainText(trim($candidate), 80);
+}
+
+function aiResearchPrimaryKeyword(array $plan): string
+{
+    foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
+        if (is_array($query) && trim((string)($query['keyword'] ?? '')) !== '') {
+            return trim((string)$query['keyword']);
+        }
+    }
+    foreach ((array)($plan['candidate_terms'] ?? []) as $term) {
+        $term = trim((string)$term);
+        if ($term !== '') {
+            return $term;
+        }
+    }
+    return '';
+}
+
+function aiResearchEnrichPlan(array $plan, array $seed): array
+{
+    $keyword = aiResearchPrimaryKeyword($plan);
+    if ($keyword === '') {
+        $terms = aiResearchFallbackTerms((string)($seed['subject_name'] ?? ''), (string)($seed['website'] ?? ''), (string)($seed['address'] ?? ''));
+        $keyword = $terms[0] ?? 'sluzby pro firmy';
+        $plan['candidate_terms'] = array_values(array_unique(array_merge([$keyword], (array)($plan['candidate_terms'] ?? []))));
+    }
+    if (empty($plan['scraping_queries'])) {
+        $plan['scraping_queries'] = [['source' => 'firmy_cz', 'keyword' => $keyword, 'why' => 'fallback dotaz podle odvozeneho idealniho zakaznickeho segmentu']];
+    }
+    $queries = [];
+    $seen = [];
+    foreach ((array)$plan['scraping_queries'] as $query) {
+        if (!is_array($query)) {
+            continue;
+        }
+        $source = normalizeScrapingSourceKey((string)($query['source'] ?? 'firmy_cz'));
+        $queryKeyword = truncatePlainText(trim((string)($query['keyword'] ?? '')), 120);
+        if ($queryKeyword === '' || !scrapingSourceIsActive($source)) {
+            continue;
+        }
+        $key = $source . '|' . strtolower($queryKeyword);
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $queries[] = ['source' => $source, 'keyword' => $queryKeyword, 'why' => truncatePlainText(trim((string)($query['why'] ?? '')), 240)];
+    }
+    foreach ((array)($plan['candidate_terms'] ?? []) as $term) {
+        if (count($queries) >= 6) {
+            break;
+        }
+        $term = truncatePlainText(trim((string)$term), 120);
+        if ($term === '') {
+            continue;
+        }
+        $source = aiResearchDefaultSourceForSeed($seed);
+        $key = $source . '|' . strtolower($term);
+        if (isset($seen[$key]) || !scrapingSourceIsActive($source)) {
+            continue;
+        }
+        $seen[$key] = true;
+        $queries[] = ['source' => $source, 'keyword' => $term, 'why' => 'doplnene z AI candidate_terms pro zvyseni sance na nalezeni kontaktu'];
+    }
+    $plan['scraping_queries'] = $queries;
+    $plan['primary_keyword'] = $keyword;
+    $plan['market_language'] = normalizeAiResearchMarketLanguage((string)($plan['market_language'] ?? '')) ?: aiResearchDefaultMarketLanguage($seed, $plan);
+    return $plan;
+}
+
+function normalizeAiResearchMarketLanguage(string $language): string
+{
+    $language = strtolower(trim($language));
+    $language = substr(str_replace('_', '-', $language), 0, 2);
+    return in_array($language, ['cs', 'sk', 'de', 'pl', 'en'], true) ? $language : '';
+}
+
+function aiResearchDefaultMarketLanguage(array $seed, array $plan = []): string
+{
+    $haystack = strtolower((string)($seed['address'] ?? '') . ' ' . (string)($seed['source_label'] ?? '') . ' ' . (string)($seed['source_url'] ?? '') . ' ' . json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    if (preg_match('/slovak|slovensko|bratislava|kosice|zoznam|\\.sk/i', $haystack)) {
+        return 'sk';
+    }
+    if (preg_match('/austria|rakous|wien|vienna|herold|\\.at|germany|nemeck|berlin|munich|hamburg|dastelefonbuch|dasoertliche|gelbeseiten|\\.de/i', $haystack)) {
+        return 'de';
+    }
+    if (preg_match('/poland|polsk|warsz|krak|pkt|panoramafirm|\\.pl/i', $haystack)) {
+        return 'pl';
+    }
+    if (preg_match('/usa|canada|united states|merchantcircle|yellowpages|\\.com|\\.ca/i', $haystack)) {
+        return 'en';
+    }
+    return 'cs';
+}
+
+function aiResearchDefaultSourceForSeed(array $seed): string
+{
+    $haystack = strtolower((string)($seed['address'] ?? '') . ' ' . (string)($seed['source_label'] ?? '') . ' ' . (string)($seed['source_url'] ?? ''));
+    if (preg_match('/slovak|slovensko|sk\b|bratislava|kosice|zoznam/i', $haystack)) {
+        return 'zoznam_sk';
+    }
+    if (preg_match('/austria|rakous|wien|vienna|herold|\\.at/i', $haystack)) {
+        return 'herold_at';
+    }
+    if (preg_match('/poland|polsk|warsz|krak|pkt|panoramafirm|\\.pl/i', $haystack)) {
+        return 'panoramafirm_pl';
+    }
+    if (preg_match('/germany|nemeck|berlin|munich|hamburg|dastelefonbuch|dasoertliche|gelbeseiten|\\.de/i', $haystack)) {
+        return 'gelbeseiten_de';
+    }
+    return 'firmy_cz';
 }
 
 function aiResearchFindContacts(array $plan, int $limit): array
 {
-    return array_slice(onboardingUniqueValidContacts(onboardingQuickScrapeContacts($plan, $limit)), 0, $limit);
+    return array_slice(onboardingUniqueValidContacts(onboardingQuickScrapeContacts($plan, max($limit, 12), 3, 18)), 0, $limit);
 }
 
 function aiResearchEvaluateContacts(array $config, array $seed, array $plan, array $contacts): array
@@ -1817,6 +1971,7 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         . "Plan: " . json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Kontakty: " . json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Vrat pouze JSON {\"contacts\":[{\"email\":\"...\",\"accepted\":true,\"fit_reason\":\"...\",\"subject\":\"...\",\"html\":\"...\"}]}. "
+        . "Vsechny subject/html texty napis jednim jazykem podle market_language v planu (" . (string)($plan['market_language'] ?? 'cs') . "). "
         . "HTML je kratke unikatni obchodni osloveni pro dany kontakt, vecne a bez prehnanych slibu.";
     try {
         $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
@@ -1853,10 +2008,10 @@ function aiResearchDecorateContact(array $seed, array $plan, array $contact, boo
     $seedBusiness = trim((string)($seed['subject_name'] ?: $seed['email']));
     $targetName = trim((string)($contact['subject_name'] ?? $contact['email'] ?? ''));
     if ($subject === '') {
-        $subject = 'Mozna spoluprace pro ' . ($targetName !== '' ? $targetName : 'vasi firmu');
+        $subject = aiResearchFallbackSubject((string)($plan['market_language'] ?? 'cs'), $targetName);
     }
     if ($html === '') {
-        $html = '<p>Dobry den,</p><p>narazili jsme na vas kontakt a myslime si, ze by pro vas mohla byt relevantni nabidka firmy ' . h($seedBusiness) . '.</p><p>Rad bych kratce ukazal konkretni moznost spoluprace. Mohu poslat vice informaci?</p>';
+        $html = aiResearchFallbackEmailHtml((string)($plan['market_language'] ?? 'cs'), $seedBusiness);
     }
     return array_merge($contact, [
         'status' => $accepted ? 'accepted' : 'rejected',
@@ -1866,15 +2021,43 @@ function aiResearchDecorateContact(array $seed, array $plan, array $contact, boo
     ]);
 }
 
+function aiResearchFallbackSubject(string $language, string $targetName): string
+{
+    $target = $targetName !== '' ? $targetName : [
+        'de' => 'Ihr Unternehmen',
+        'pl' => 'Panstwa firmy',
+        'sk' => 'vasu firmu',
+        'en' => 'your company',
+    ][$language] ?? 'vasi firmu';
+    return [
+        'de' => 'Moegliche Zusammenarbeit fuer ' . $target,
+        'pl' => 'Mozliwa wspolpraca dla ' . $target,
+        'sk' => 'Mozna spolupraca pre ' . $target,
+        'en' => 'Possible cooperation for ' . $target,
+    ][$language] ?? 'Mozna spoluprace pro ' . $target;
+}
+
+function aiResearchFallbackEmailHtml(string $language, string $seedBusiness): string
+{
+    $business = h($seedBusiness);
+    return [
+        'de' => '<p>Guten Tag,</p><p>wir sind auf Ihr Unternehmen aufmerksam geworden und sehen einen konkreten B2B-Anknuepfungspunkt fuer das Angebot von ' . $business . '.</p><p>Gern wuerde ich kurz zeigen, wo die Zusammenarbeit fuer Sie praktisch relevant sein koennte. Darf ich Ihnen weitere Informationen senden?</p>',
+        'pl' => '<p>Dzien dobry,</p><p>znalezlismy Panstwa firme i widzimy konkretny powod, dla ktorego oferta ' . $business . ' moze byc dla Panstwa przydatna.</p><p>Chetnie przesle krotka propozycje wspolpracy. Czy moge wyslac wiecej informacji?</p>',
+        'sk' => '<p>Dobry den,</p><p>nasli sme vas kontakt a myslime si, ze ponuka firmy ' . $business . ' moze byt pre vas relevantna.</p><p>Rad by som kratko ukazal konkretnu moznost spoluprace. Mozem poslat viac informacii?</p>',
+        'en' => '<p>Hello,</p><p>we came across your company and see a concrete B2B reason why ' . $business . ' could be relevant for you.</p><p>I would be happy to briefly show where cooperation could make practical sense. May I send more details?</p>',
+    ][$language] ?? '<p>Dobry den,</p><p>narazili jsme na vas kontakt a myslime si, ze by pro vas mohla byt relevantni nabidka firmy ' . $business . '.</p><p>Rad bych kratce ukazal konkretni moznost spoluprace. Mohu poslat vice informaci?</p>';
+}
+
 function saveAiResearchRun(PDO $pdo, array $seed, array $plan, array $evaluated, array $accepted): int
 {
     $now = date('c');
     $draftSubject = (string)($accepted[0]['email_subject'] ?? '');
     $draftHtml = (string)($accepted[0]['email_body_html'] ?? '');
     $ownerId = aiResearchOwnerUserId($pdo);
+    $scrapingKeyword = aiResearchPrimaryKeyword($plan);
     $stmt = $pdo->prepare('
-        INSERT INTO ai_research_runs (owner_user_id, seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ai_research_runs (owner_user_id, seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, scraping_keyword, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ');
     $status = $accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts');
     $message = $accepted ? 'AI nasla vhodne kontakty a pripravila osloveni.' : ($evaluated ? 'AI nenasla dostatecne vhodny kontakt.' : 'Scraping nenasel zadny kontakt.');
@@ -1891,6 +2074,7 @@ function saveAiResearchRun(PDO $pdo, array $seed, array $plan, array $evaluated,
         truncatePlainText((string)($plan['audience_label'] ?? ''), 500),
         (string)($plan['rationale'] ?? ''),
         (string)($plan['email_angle'] ?? ''),
+        truncatePlainText($scrapingKeyword, 255),
         json_encode((array)($plan['filters'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]',
         json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
         $draftSubject,
@@ -8090,6 +8274,15 @@ function normalizeUiLanguage(string $language): string
     return array_key_exists($language, supportedUiLanguages()) ? $language : 'cs';
 }
 
+function uiLanguageFlagHtml(string $code): string
+{
+    return [
+        'cs' => '&#127464;&#127487;',
+        'en' => '&#127482;&#127480;',
+        'de' => '&#127465;&#127466;',
+    ][$code] ?? '&#127987;';
+}
+
 function defaultUiLanguage(): string
 {
     $header = strtolower((string)($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? ''));
@@ -8169,7 +8362,7 @@ function renderLanguageFooter(?PDO $pdo = null, array $config = []): void
             <input type="hidden" name="return_to" value="<?= h($returnTo) ?>">
             <span>Jazyk rozhrani</span>
             <?php foreach (supportedUiLanguages() as $code => $language): ?>
-                <button type="submit" name="lang" value="<?= h($code) ?>" class="flag-button <?= $current === $code ? 'active' : '' ?>" aria-label="<?= h($language['label']) ?>" title="<?= h($language['label']) ?>" <?= $current === $code ? 'aria-current="true"' : '' ?>><span aria-hidden="true"><?= h($language['flag']) ?></span></button>
+                <button type="submit" name="lang" value="<?= h($code) ?>" class="flag-button <?= $current === $code ? 'active' : '' ?>" aria-label="<?= h($language['label']) ?>" title="<?= h($language['label']) ?>" <?= $current === $code ? 'aria-current="true"' : '' ?>><span aria-hidden="true"><?= uiLanguageFlagHtml($code) ?></span></button>
             <?php endforeach; ?>
         </form>
     </footer>
@@ -8188,14 +8381,12 @@ function renderLanguageDropdown(?PDO $pdo = null, array $config = [], bool $flag
         <input type="hidden" name="return_to" value="<?= h($returnTo) ?>">
         <details>
             <summary aria-label="Jazyk rozhrani" title="Jazyk rozhrani">
-                <span aria-hidden="true"><?= h($active['flag']) ?></span>
-                <?php if (!$flagsOnly): ?><strong><?= h(strtoupper($current)) ?></strong><?php endif; ?>
+                <span aria-hidden="true"><?= uiLanguageFlagHtml($current) ?></span>
             </summary>
             <div class="language-dropdown-menu">
                 <?php foreach ($languages as $code => $language): ?>
                     <button type="submit" name="lang" value="<?= h($code) ?>" class="<?= $current === $code ? 'active' : '' ?>" aria-label="<?= h($language['label']) ?>" title="<?= h($language['label']) ?>" <?= $current === $code ? 'aria-current="true"' : '' ?>>
-                        <span aria-hidden="true"><?= h($language['flag']) ?></span>
-                        <?php if (!$flagsOnly): ?><span><?= h($language['label']) ?></span><?php endif; ?>
+                        <span aria-hidden="true"><?= uiLanguageFlagHtml($code) ?></span>
                     </button>
                 <?php endforeach; ?>
             </div>
@@ -9139,6 +9330,42 @@ function uiTranslationMap(string $language): array
             'nenapojeno' => 'nicht verbunden',
             'Odhlaseno' => 'Abgemeldet',
             'nebo' => 'oder',
+            'Vyzkouset zdarma | AI akvizice B2B' => 'Kostenlos testen | KI-B2B-Akquise',
+            'Prihlaseni | AI akvizice B2B' => 'Anmeldung | KI-B2B-Akquise',
+            'Obnova hesla | AI akvizice B2B' => 'Passwort wiederherstellen | KI-B2B-Akquise',
+            'Nove heslo | AI akvizice B2B' => 'Neues Passwort | KI-B2B-Akquise',
+            'AI akvizice' => 'KI-Akquise',
+            'Prihlaseni' => 'Anmeldung',
+            'Zpet na uvod' => 'Zurueck zur Startseite',
+            'Registrace' => 'Registrierung',
+            'Zacnete prvnim oslovenim.' => 'Starten Sie mit der ersten Ansprache.',
+            'Vitejte zpet.' => 'Willkommen zurueck.',
+            'Obnovime pristup bez zbytecneho cekani.' => 'Wir stellen den Zugang ohne unnoetiges Warten wieder her.',
+            'Popiste, co prodavate. Aplikace pripravi relevantni kontakty, navrh emailu a provede vas odeslanim.' => 'Beschreiben Sie, was Sie verkaufen. Die App bereitet relevante Kontakte, einen E-Mail-Entwurf und den Versandablauf vor.',
+            'Pokracujte do aplikace, kde spravujete kontakty, kampane, scraping a vysledky osloveni.' => 'Weiter zur App, wo Sie Kontakte, Kampagnen, Scraping und Ergebnisse verwalten.',
+            'nebo popiste nabidku' => 'oder beschreiben Sie Ihr Angebot',
+            'Pracovni email' => 'Geschaeftliche E-Mail',
+            'Nazev firmy' => 'Firmenname',
+            'Co prodavate' => 'Was verkaufen Sie',
+            'Uz mate pristup?' => 'Haben Sie bereits Zugang?',
+            'Prihlaste se' => 'Melden Sie sich an',
+            'Zapomenute heslo' => 'Passwort vergessen',
+            'Zadejte administracni email. Pokud odpovida uctu v aplikaci, poslu odkaz pro nastaveni noveho hesla.' => 'Geben Sie die Administrator-E-Mail ein. Wenn sie zu einem Konto gehoert, senden wir einen Link zum Setzen eines neuen Passworts.',
+            'Poslat odkaz' => 'Link senden',
+            'Zpet na prihlaseni' => 'Zurueck zur Anmeldung',
+            'Nastavit nove heslo' => 'Neues Passwort setzen',
+            'Odkaz pro obnovu hesla neni kompletni.' => 'Der Wiederherstellungslink ist unvollstaendig.',
+            'Poslat novy odkaz' => 'Neuen Link senden',
+            'Nove heslo' => 'Neues Passwort',
+            'Potvrzeni hesla' => 'Passwort bestaetigen',
+            'Heslo' => 'Passwort',
+            'Zapomenute heslo?' => 'Passwort vergessen?',
+            'Jeste nemate pristup?' => 'Noch keinen Zugang?',
+            'AI navrh osloveni' => 'KI-Entwurf der Ansprache',
+            'Zobrazit AI navrh osloveni' => 'KI-Entwurf der Ansprache anzeigen',
+            'Zavrit' => 'Schliessen',
+            'Vhodne kontakty' => 'Passende Kontakte',
+            'Bez predmetu' => 'Ohne Betreff',
         ];
         uksort($map, static fn(string $a, string $b): int => strlen($b) <=> strlen($a));
         return $map;
@@ -9690,6 +9917,42 @@ function uiTranslationMap(string $language): array
         'nenapojeno' => 'not connected',
         'Odhlaseno' => 'Unsubscribed',
         'nebo' => 'or',
+        'Vyzkouset zdarma | AI akvizice B2B' => 'Try for free | AI B2B acquisition',
+        'Prihlaseni | AI akvizice B2B' => 'Sign in | AI B2B acquisition',
+        'Obnova hesla | AI akvizice B2B' => 'Password recovery | AI B2B acquisition',
+        'Nove heslo | AI akvizice B2B' => 'New password | AI B2B acquisition',
+        'AI akvizice' => 'AI acquisition',
+        'Prihlaseni' => 'Sign in',
+        'Zpet na uvod' => 'Back to home',
+        'Registrace' => 'Sign up',
+        'Zacnete prvnim oslovenim.' => 'Start with your first outreach.',
+        'Vitejte zpet.' => 'Welcome back.',
+        'Obnovime pristup bez zbytecneho cekani.' => 'We will restore access without unnecessary waiting.',
+        'Popiste, co prodavate. Aplikace pripravi relevantni kontakty, navrh emailu a provede vas odeslanim.' => 'Describe what you sell. The app prepares relevant contacts, an email draft and guides you through sending.',
+        'Pokracujte do aplikace, kde spravujete kontakty, kampane, scraping a vysledky osloveni.' => 'Continue to the app where you manage contacts, campaigns, scraping and outreach results.',
+        'nebo popiste nabidku' => 'or describe your offer',
+        'Pracovni email' => 'Work email',
+        'Nazev firmy' => 'Company name',
+        'Co prodavate' => 'What do you sell',
+        'Uz mate pristup?' => 'Already have access?',
+        'Prihlaste se' => 'Sign in',
+        'Zapomenute heslo' => 'Forgot password',
+        'Zadejte administracni email. Pokud odpovida uctu v aplikaci, poslu odkaz pro nastaveni noveho hesla.' => 'Enter the admin email. If it matches an app account, we will send a link to set a new password.',
+        'Poslat odkaz' => 'Send link',
+        'Zpet na prihlaseni' => 'Back to sign in',
+        'Nastavit nove heslo' => 'Set new password',
+        'Odkaz pro obnovu hesla neni kompletni.' => 'The password recovery link is incomplete.',
+        'Poslat novy odkaz' => 'Send a new link',
+        'Nove heslo' => 'New password',
+        'Potvrzeni hesla' => 'Confirm password',
+        'Heslo' => 'Password',
+        'Zapomenute heslo?' => 'Forgot password?',
+        'Jeste nemate pristup?' => 'No access yet?',
+        'AI navrh osloveni' => 'AI outreach draft',
+        'Zobrazit AI navrh osloveni' => 'Show AI outreach draft',
+        'Zavrit' => 'Close',
+        'Vhodne kontakty' => 'Suitable contacts',
+        'Bez predmetu' => 'No subject',
     ];
     uksort($map, static fn(string $a, string $b): int => strlen($b) <=> strlen($a));
     return $map;
@@ -10950,26 +11213,48 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <p>Kazdou hodinu agent vybere jeden ulozeny kontakt, navrhne B2B cileni, najde max. 10 kontaktu, vyhodnoti relevanci a ulozi navrh osloveni.</p>
             </div>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>AI cileni</th><th>Nalezeno</th><th>Vhodne</th><th>Zprava</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Osloveni</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>AI cileni</th><th>Scraping keyword</th><th>Nalezeno</th><th>Vhodne</th><th>Zprava</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
-            <tr><td colspan="9">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="11">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
-            <tr class="<?= $runContacts ? 'expandable-row' : '' ?>" <?php if ($runContacts): ?>data-detail-target="ai-research-detail-<?= h((string)$run['id']) ?>" tabindex="0" aria-expanded="false"<?php endif; ?>>
-                <td><?= $runContacts ? 'Zobrazit' : '-' ?></td>
+            <?php $runLanguage = aiResearchRunLanguage($run, $runContacts); ?>
+            <tr class="expandable-row" data-detail-target="ai-research-detail-<?= h((string)$run['id']) ?>" tabindex="0" aria-expanded="false">
+                <td>Zobrazit</td>
+                <td>
+                    <button type="button" class="secondary icon" data-dialog-open="ai-outreach-<?= h((string)$run['id']) ?>" aria-label="Zobrazit AI navrh osloveni" title="Zobrazit AI navrh osloveni">&#9993;</button>
+                    <dialog class="modal ai-outreach-modal" id="ai-outreach-<?= h((string)$run['id']) ?>">
+                        <div class="modal-header">
+                            <div>
+                                <h2>AI navrh osloveni</h2>
+                                <p><?= h(aiResearchLanguageLabel($runLanguage)) ?>, <?= h((string)($run['audience_label'] ?? '')) ?></p>
+                            </div>
+                            <button type="button" class="secondary icon" data-dialog-close>Zavrit</button>
+                        </div>
+                        <div class="ai-outreach-meta">
+                            <span>Seed: <?= h((string)$run['seed_business']) ?></span>
+                            <span>Keyword: <?= h((string)($run['scraping_keyword'] ?? '')) ?></span>
+                            <span>Vhodne kontakty: <?= h((string)$run['accepted_count']) ?></span>
+                        </div>
+                        <section class="ai-outreach-preview">
+                            <h3><?= h((string)($run['email_subject'] ?: 'Bez predmetu')) ?></h3>
+                            <div class="email-preview"><?= cleanHtml((string)$run['email_body_html']) ?></div>
+                        </section>
+                    </dialog>
+                </td>
                 <td><?= h(formatDateTime((string)$run['created_at'])) ?></td>
                 <td><strong><?= h((string)$run['seed_business']) ?></strong><?php if ($run['seed_website']): ?><br><a href="<?= h((string)$run['seed_website']) ?>" target="_blank" rel="noopener"><?= h((string)$run['seed_website']) ?></a><?php endif; ?></td>
                 <td><?= h((string)$run['seed_email']) ?></td>
                 <td><?= statusBadge((string)$run['status']) ?></td>
                 <td><?= h((string)$run['audience_label']) ?></td>
+                <td><?= h((string)($run['scraping_keyword'] ?? '')) ?></td>
                 <td><?= h((string)$run['found_count']) ?></td>
                 <td><?= h((string)$run['accepted_count']) ?></td>
                 <td><?= h((string)$run['message']) ?></td>
             </tr>
-            <?php if ($runContacts): ?>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="9">
+                <td colspan="11">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
@@ -10979,6 +11264,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <section>
                                 <h3>Co AI vymyslela</h3>
                                 <p><strong>Cileni:</strong> <?= h((string)$run['audience_label']) ?></p>
+                                <p><strong>Scraping keyword:</strong> <?= h((string)($run['scraping_keyword'] ?? '')) ?></p>
                                 <p><strong>Proc:</strong> <?= h((string)$run['rationale']) ?></p>
                                 <p><strong>Uhel emailu:</strong> <?= h((string)$run['email_angle']) ?></p>
                             </section>
@@ -11023,7 +11309,6 @@ function renderApp(PDO $pdo, ?array $flash): void
                     </div>
                 </td>
             </tr>
-            <?php endif; ?>
         <?php endforeach; ?>
         </tbody></table>
     </section>
@@ -11693,13 +11978,48 @@ function scrapingItemsByJob(PDO $pdo, array $jobIds): array
 function aiResearchRuns(PDO $pdo): array
 {
     $ownerId = aiResearchOwnerUserId($pdo);
-    return $pdo->query('
+    $rows = $pdo->query('
         SELECT *
         FROM ai_research_runs
         WHERE owner_user_id=' . (int)$ownerId . '
         ORDER BY id DESC
         LIMIT 100
     ')->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$row) {
+        if (trim((string)($row['scraping_keyword'] ?? '')) === '') {
+            $plan = json_decode((string)($row['plan_json'] ?? ''), true);
+            $row['scraping_keyword'] = is_array($plan) ? aiResearchPrimaryKeyword($plan) : '';
+        }
+    }
+    unset($row);
+    return $rows;
+}
+
+function aiResearchRunLanguage(array $run, array $contacts = []): string
+{
+    $plan = json_decode((string)($run['plan_json'] ?? ''), true);
+    if (is_array($plan)) {
+        $language = normalizeAiResearchMarketLanguage((string)($plan['market_language'] ?? ''));
+        if ($language !== '') {
+            return $language;
+        }
+    }
+    $haystack = strtolower((string)($run['seed_address'] ?? '') . ' ' . (string)($run['seed_source_label'] ?? '') . ' ' . (string)($run['seed_source_url'] ?? ''));
+    foreach ($contacts as $contact) {
+        $haystack .= ' ' . strtolower((string)($contact['address'] ?? '') . ' ' . (string)($contact['source_label'] ?? '') . ' ' . (string)($contact['source_url'] ?? '') . ' ' . (string)($contact['website'] ?? ''));
+    }
+    return aiResearchDefaultMarketLanguage(['address' => $haystack, 'source_label' => $haystack, 'source_url' => $haystack], is_array($plan) ? $plan : []);
+}
+
+function aiResearchLanguageLabel(string $language): string
+{
+    return [
+        'cs' => 'cesky',
+        'sk' => 'slovensky',
+        'de' => 'nemecky',
+        'pl' => 'polsky',
+        'en' => 'anglicky',
+    ][$language] ?? $language;
 }
 
 function aiResearchContactsByRun(PDO $pdo, array $runIds): array

@@ -552,6 +552,7 @@ final class Database
                 audience_label VARCHAR(500) NOT NULL DEFAULT '',
                 rationale TEXT NOT NULL,
                 email_angle TEXT NOT NULL,
+                scraping_keyword VARCHAR(255) NOT NULL DEFAULT '',
                 filters_json MEDIUMTEXT NOT NULL,
                 plan_json MEDIUMTEXT NOT NULL,
                 email_subject VARCHAR(255) NOT NULL DEFAULT '',
@@ -583,6 +584,7 @@ final class Database
                 INDEX ai_research_contacts_run_idx (run_id),
                 INDEX ai_research_contacts_email_idx (email)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $this->ensureColumn('ai_research_runs', 'scraping_keyword', "VARCHAR(255) NOT NULL DEFAULT ''");
     }
 
     private function ensureAppUsersTable(): void
