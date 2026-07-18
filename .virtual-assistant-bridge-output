@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-18T07:55:13Z
+checked_at_utc=2026-07-18T08:05:23Z
 shared_brain_intro_telegram_sent=not_requested
 xoz_comment_test_requested=false
 playwright_install=ok
@@ -99,29 +99,29 @@ agent_g_chat_available= True
 agent_g_escalated_blockers_summary= 0
 agent_g_escalated_log_blockers_summary= 0
 agent_g_handoffs_written_summary= 0
-[2026-07-18 09:55:14] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-[2026-07-18 09:55:17] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T07:55:15.106457Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "Your session has ended
+[2026-07-18 10:05:23] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+[2026-07-18 10:05:26] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T08:05:24.537546Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "Your session has ended
 ai_smoke_ok= True
 gmail_google_meta_1=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_2=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
 gmail_setup_poll=ok
 telegram_state_offset= 309697083
 virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 2
+virtual_assistant_lock_age_sec= 1
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-07-18T07:55:17Z
-virtual_assistant_log_signal_1=[2026-07-18 09:47:58] Agent G daemon started
-virtual_assistant_log_signal_2=[2026-07-18 09:47:59] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_3=[2026-07-18 09:48:02] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_4=[2026-07-18 09:48:06] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T07:48:03.852698Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "You
-virtual_assistant_log_signal_5=[2026-07-18 09:53:28] Virtual Assistant email worker started
-virtual_assistant_log_signal_6=[2026-07-18 09:53:28] Virtual Assistant telegram recovery worker started
-virtual_assistant_log_signal_7=[2026-07-18 09:53:28] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_8=[2026-07-18 09:53:28] Agent G daemon started
-virtual_assistant_log_signal_9=[2026-07-18 09:53:29] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_10=[2026-07-18 09:53:31] XOZ approval Telegram media send failed: RuntimeError: media unavailable
-virtual_assistant_log_signal_11=[2026-07-18 09:55:14] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_12=[2026-07-18 09:55:17] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T07:55:15.106457Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "You
+virtual_assistant_log_mtime_utc= 2026-07-18T08:05:26Z
+virtual_assistant_log_signal_1=[2026-07-18 10:00:18] Agent G daemon started
+virtual_assistant_log_signal_2=[2026-07-18 10:00:18] Telegram bot commands refresh: sent
+virtual_assistant_log_signal_3=[2026-07-18 10:00:22] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_4=[2026-07-18 10:00:25] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T08:00:23.418802Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "You
+virtual_assistant_log_signal_5=[2026-07-18 10:03:38] Virtual Assistant email worker started
+virtual_assistant_log_signal_6=[2026-07-18 10:03:38] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_7=[2026-07-18 10:03:38] Agent G daemon started
+virtual_assistant_log_signal_8=[2026-07-18 10:03:38] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_9=[2026-07-18 10:03:38] Telegram bot commands refresh: sent
+virtual_assistant_log_signal_10=[2026-07-18 10:03:41] XOZ approval Telegram media send failed: RuntimeError: media unavailable
+virtual_assistant_log_signal_11=[2026-07-18 10:05:23] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_12=[2026-07-18 10:05:26] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-18T08:05:24.537546Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "You
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
@@ -152,46 +152,46 @@ va_2026_06_29_log_27=[2026-06-29 12:29:43] Model route: gpt-5.4-mini tier=cheap 
 va_2026_06_29_log_28=[2026-06-29 12:30:20] -> Hotovo:
 va_2026_06_29_log_29=[2026-06-29 13:42:33] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_30=[2026-06-29 13:42:59] Email processed and replied: from=<email>@google.com trusted=False subject=Další informace o aktualizovaných smluvních podmínkách
-va_today_log_1=[2026-07-18 04:47:40] Virtual Assistant email worker started
-va_today_log_2=[2026-07-18 05:47:41] Virtual Assistant email worker started
-va_today_log_3=[2026-07-18 05:47:41] Virtual Assistant delegation monitor started
-va_today_log_4=[2026-07-18 06:47:44] Virtual Assistant delegation monitor started
-va_today_log_5=[2026-07-18 06:47:44] Virtual Assistant email worker started
-va_today_log_6=[2026-07-18 07:17:47] Virtual Assistant delegation monitor started
-va_today_log_7=[2026-07-18 07:17:47] Virtual Assistant email worker started
-va_today_log_8=[2026-07-18 08:13:29] Virtual Assistant email worker started
-va_today_log_9=[2026-07-18 08:13:29] Virtual Assistant delegation monitor started
-va_today_log_10=[2026-07-18 08:30:51] <- vygeneruj obrazek pres gemini
-va_today_log_11=[2026-07-18 08:30:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_12=[2026-07-18 08:31:31] -> Jelikož v rámci OpenClaw instance nemám přímý interaktivní přístup k "Gemini" jako uživatel s prohlížečem, ale využívám 
-va_today_log_13=[2026-07-18 08:32:48] <- je to jen test. dodej mi rychle nejak obrazek jen sem do telegramu
-va_today_log_14=[2026-07-18 08:32:48] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_15=[2026-07-18 08:33:05] -> Tady je rychlý testovací obrázek vygenerovaný podle tvého zadání (infografika s robotem, bez lidí a s čistým designem):
-va_today_log_16=[2026-07-18 08:34:30] <- hezky, pres jaky api klic nebo ucet / jakym agentem je to vygenerovane?
-va_today_log_17=[2026-07-18 08:34:30] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_18=[2026-07-18 08:34:38] -> Vygenerovala jsem to já (**Virtuální asistentka**) přímo pro náš chat. 
-va_today_log_19=[2026-07-18 08:35:54] <- to ano, mohla bys to zkusit zadat G, at tuto cestu implementuje u agenta D pro jeho generovani prispevku na X?
-va_today_log_20=[2026-07-18 08:35:54] Model route: gpt-5.4 tier=medium reason=delsi kontext, komplexni klicova slova sandbox=danger-full-access
-va_today_log_21=[2026-07-18 08:36:11] -> Skvělý nápad! Pro rychlé příspěvky na X (Twitter) je tento bezplatný endpoint naprosto dostačující, ušetří nám to kredit
-va_today_log_22=[2026-07-18 08:36:27] <- vygeneruj mi jeste jeden obrazek, ale tentokrat pres gemini API
-va_today_log_23=[2026-07-18 08:36:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_24=[2026-07-18 08:36:54] -> Standardní vývojářské **Gemini API** (které používáme pro psaní textů u našich blogovacích agentů) bohužel ve své základ
-va_today_log_25=[2026-07-18 08:37:35] <- chci to jako nahradu, takze vychozi metodu
-va_today_log_26=[2026-07-18 08:37:36] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_27=[2026-07-18 08:37:52] -> Rozumím, nastaveno. Upravila jsem zadání pro **Agenta G** – bezplatný endpoint Pollinations bude pro **Agenta D** nastav
-va_today_log_28=[2026-07-18 09:21:03] Virtual Assistant email worker started
-va_today_log_29=[2026-07-18 09:21:03] Virtual Assistant delegation monitor started
-va_today_log_30=[2026-07-18 09:21:58] VA handoff Agent D Pollinations handled: status=DONE summary=Agent D ma prepnute generovani obrazku na Pollinations runtime s overenym smoke testem a x-approve.service bezi.
-va_today_log_31=[2026-07-18 09:22:03] -> Hotovo: Agent D ma prepnute generovani obrazku na Pollinations runtime s overenym smoke testem a x-approve.service bezi.
-va_today_log_32=[2026-07-18 09:33:27] <- ale mne nedorazila zadna zprava do telegramu od agenta D, muzes ho vyzvat k okamzite tvorbe navrhu prispevku na tema "ti
-va_today_log_33=[2026-07-18 09:33:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_34=[2026-07-18 09:33:37] -> Rozumím, Agent D běžně čeká na svůj denní plán (workflow), proto ti od něj zatím nic nepřišlo. 
-va_today_log_35=[2026-07-18 09:47:58] Virtual Assistant email worker started
-va_today_log_36=[2026-07-18 09:47:58] Virtual Assistant delegation monitor started
-va_today_log_37=[2026-07-18 09:48:02] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-va_today_log_38=[2026-07-18 09:53:28] Virtual Assistant email worker started
-va_today_log_39=[2026-07-18 09:53:28] Virtual Assistant delegation monitor started
-va_today_log_40=[2026-07-18 09:55:14] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_1=[2026-07-18 07:17:47] Virtual Assistant email worker started
+va_today_log_2=[2026-07-18 08:13:29] Virtual Assistant email worker started
+va_today_log_3=[2026-07-18 08:13:29] Virtual Assistant delegation monitor started
+va_today_log_4=[2026-07-18 08:30:51] <- vygeneruj obrazek pres gemini
+va_today_log_5=[2026-07-18 08:30:52] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_6=[2026-07-18 08:31:31] -> Jelikož v rámci OpenClaw instance nemám přímý interaktivní přístup k "Gemini" jako uživatel s prohlížečem, ale využívám 
+va_today_log_7=[2026-07-18 08:32:48] <- je to jen test. dodej mi rychle nejak obrazek jen sem do telegramu
+va_today_log_8=[2026-07-18 08:32:48] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_9=[2026-07-18 08:33:05] -> Tady je rychlý testovací obrázek vygenerovaný podle tvého zadání (infografika s robotem, bez lidí a s čistým designem):
+va_today_log_10=[2026-07-18 08:34:30] <- hezky, pres jaky api klic nebo ucet / jakym agentem je to vygenerovane?
+va_today_log_11=[2026-07-18 08:34:30] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_12=[2026-07-18 08:34:38] -> Vygenerovala jsem to já (**Virtuální asistentka**) přímo pro náš chat. 
+va_today_log_13=[2026-07-18 08:35:54] <- to ano, mohla bys to zkusit zadat G, at tuto cestu implementuje u agenta D pro jeho generovani prispevku na X?
+va_today_log_14=[2026-07-18 08:35:54] Model route: gpt-5.4 tier=medium reason=delsi kontext, komplexni klicova slova sandbox=danger-full-access
+va_today_log_15=[2026-07-18 08:36:11] -> Skvělý nápad! Pro rychlé příspěvky na X (Twitter) je tento bezplatný endpoint naprosto dostačující, ušetří nám to kredit
+va_today_log_16=[2026-07-18 08:36:27] <- vygeneruj mi jeste jeden obrazek, ale tentokrat pres gemini API
+va_today_log_17=[2026-07-18 08:36:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_18=[2026-07-18 08:36:54] -> Standardní vývojářské **Gemini API** (které používáme pro psaní textů u našich blogovacích agentů) bohužel ve své základ
+va_today_log_19=[2026-07-18 08:37:35] <- chci to jako nahradu, takze vychozi metodu
+va_today_log_20=[2026-07-18 08:37:36] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_21=[2026-07-18 08:37:52] -> Rozumím, nastaveno. Upravila jsem zadání pro **Agenta G** – bezplatný endpoint Pollinations bude pro **Agenta D** nastav
+va_today_log_22=[2026-07-18 09:21:03] Virtual Assistant email worker started
+va_today_log_23=[2026-07-18 09:21:03] Virtual Assistant delegation monitor started
+va_today_log_24=[2026-07-18 09:21:58] VA handoff Agent D Pollinations handled: status=DONE summary=Agent D ma prepnute generovani obrazku na Pollinations runtime s overenym smoke testem a x-approve.service bezi.
+va_today_log_25=[2026-07-18 09:22:03] -> Hotovo: Agent D ma prepnute generovani obrazku na Pollinations runtime s overenym smoke testem a x-approve.service bezi.
+va_today_log_26=[2026-07-18 09:33:27] <- ale mne nedorazila zadna zprava do telegramu od agenta D, muzes ho vyzvat k okamzite tvorbe navrhu prispevku na tema "ti
+va_today_log_27=[2026-07-18 09:33:27] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_28=[2026-07-18 09:33:37] -> Rozumím, Agent D běžně čeká na svůj denní plán (workflow), proto ti od něj zatím nic nepřišlo. 
+va_today_log_29=[2026-07-18 09:47:58] Virtual Assistant email worker started
+va_today_log_30=[2026-07-18 09:47:58] Virtual Assistant delegation monitor started
+va_today_log_31=[2026-07-18 09:48:02] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_32=[2026-07-18 09:53:28] Virtual Assistant email worker started
+va_today_log_33=[2026-07-18 09:53:28] Virtual Assistant delegation monitor started
+va_today_log_34=[2026-07-18 09:55:14] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_35=[2026-07-18 10:00:18] Virtual Assistant delegation monitor started
+va_today_log_36=[2026-07-18 10:00:18] Virtual Assistant email worker started
+va_today_log_37=[2026-07-18 10:00:22] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_38=[2026-07-18 10:03:38] Virtual Assistant email worker started
+va_today_log_39=[2026-07-18 10:03:38] Virtual Assistant delegation monitor started
+va_today_log_40=[2026-07-18 10:05:23] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_today_03_04_log_1=[2026-07-18 03:11:50] Daemon poll error: HTTP Error 502: Bad Gateway
 va_today_03_04_log_2=[2026-07-18 03:11:51] Daemon poll error: HTTP Error 502: Bad Gateway
 va_today_03_04_log_3=[2026-07-18 03:12:12] Daemon poll error: The read operation timed out
