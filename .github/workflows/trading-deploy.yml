@@ -22,6 +22,7 @@ jobs:
 
       - name: Build trading server config
         env:
+          POLY_TRADING_GITHUB_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN }}
           TRADING_GITHUB_TOKEN: ${{ secrets.TRADING_GITHUB_TOKEN }}
           TRADING_TRIGGER_KEY: ${{ secrets.TRADING_TRIGGER_KEY }}
           TRADING_GITHUB_REPO: kubiczech808/apps
@@ -35,7 +36,7 @@ jobs:
               return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
 
           config = {
-              "github_token": os.environ.get("TRADING_GITHUB_TOKEN", ""),
+              "github_token": os.environ.get("POLY_TRADING_GITHUB_TOKEN") or os.environ.get("TRADING_GITHUB_TOKEN", ""),
               "trigger_key": os.environ.get("TRADING_TRIGGER_KEY", ""),
               "repo": os.environ.get("TRADING_GITHUB_REPO", "kubiczech808/apps"),
               "ref": os.environ.get("TRADING_GITHUB_REF", "claude/energy-consumption-app-Nf7bh"),

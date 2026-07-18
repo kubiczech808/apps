@@ -24,7 +24,7 @@ function app_config(): array
     }
 
     return [
-        'github_token' => (string) ($config['github_token'] ?? getenv('TRADING_GITHUB_TOKEN') ?: ''),
+        'github_token' => (string) ($config['github_token'] ?? getenv('POLY_TRADING_GITHUB_TOKEN') ?: getenv('TRADING_GITHUB_TOKEN') ?: ''),
         'trigger_key' => (string) ($config['trigger_key'] ?? getenv('TRADING_TRIGGER_KEY') ?: ''),
         'repo' => (string) ($config['repo'] ?? getenv('TRADING_GITHUB_REPO') ?: 'kubiczech808/apps'),
         'ref' => (string) ($config['ref'] ?? getenv('TRADING_GITHUB_REF') ?: 'claude/energy-consumption-app-Nf7bh'),
@@ -167,7 +167,7 @@ function dispatch_workflow(string $workflow, array $inputs, bool $requireTrigger
         respond([
             'ok' => false,
             'error' => 'Workflow trigger is not configured on the server.',
-            'requiredSecrets' => $requireTriggerKey ? ['TRADING_GITHUB_TOKEN', 'TRADING_TRIGGER_KEY'] : ['TRADING_GITHUB_TOKEN'],
+            'requiredSecrets' => $requireTriggerKey ? ['POLY_TRADING_GITHUB_TOKEN', 'TRADING_TRIGGER_KEY'] : ['POLY_TRADING_GITHUB_TOKEN'],
         ], 503);
     }
 

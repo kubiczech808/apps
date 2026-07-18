@@ -73,14 +73,14 @@ The live button also requires the browser-side live execution gate to be armed. 
 
 Configure these repository secrets for the deploy workflow to generate `trading/config.php` on the hosting server:
 
-- `TRADING_GITHUB_TOKEN`: fine-grained GitHub token with Actions workflow dispatch permission for `kubiczech808/apps`.
+- `POLY_TRADING_GITHUB_TOKEN`: fine-grained GitHub token with Actions workflow dispatch permission for `kubiczech808/apps`.
 - `TRADING_TRIGGER_KEY`: shared trigger key requested by the UI before dispatching a manual one-time order workflow.
 
 `trading/config.php` is ignored by git and generated during `Deploy Trading`; without these secrets the buttons stay visible but the backend returns `Workflow trigger is not configured on the server.`
 
 The UI reads paper/live state through `api.php?action=state&target=...` with `Cache-Control: no-store`, so page loads fetch the latest state file available on the hosting server instead of relying on browser/local static cache. Every page load calls `api.php?action=live-sync` automatically; that endpoint can dispatch only the live account snapshot workflow and is rate-limited server-side.
 
-Live order signing is fully server-side in GitHub Actions. `POLYMARKET_PRIVATE_KEY` is read from GitHub Secrets during the workflow run, a fresh live account snapshot is generated immediately before revalidation, and the browser never receives the key. The scheduled live workflow can execute without manually entering a key or token for each trade; the temporary public UI workflow buttons still need `TRADING_GITHUB_TOKEN` and `TRADING_TRIGGER_KEY` until the whole interface is protected by login.
+Live order signing is fully server-side in GitHub Actions. `POLYMARKET_PRIVATE_KEY` is read from GitHub Secrets during the workflow run, a fresh live account snapshot is generated immediately before revalidation, and the browser never receives the key. The scheduled live workflow can execute without manually entering a key or token for each trade; the temporary public UI workflow buttons still need `POLY_TRADING_GITHUB_TOKEN` and `TRADING_TRIGGER_KEY` until the whole interface is protected by login.
 
 ## Local executor
 

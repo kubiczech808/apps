@@ -44,6 +44,7 @@ jobs:
       LIVE_MAX_SPREAD: "0.08"
       LIVE_MIN_VOLUME_24H: "100"
       LIVE_CANDIDATE_SCAN_LIMIT: "120"
+      LIVE_EXECUTION_SOURCE: github-actions
     steps:
       - uses: actions/checkout@v4
 
