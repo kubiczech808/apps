@@ -27,6 +27,7 @@ function readOrderArgs() {
   const tickSize = String(arg("tick-size", "0.01"));
   const negRisk = String(arg("neg-risk", "false")).toLowerCase() === "true";
   const orderType = String(arg("order-type", "GTC")).toUpperCase();
+  const postOnly = hasFlag("post-only") || String(process.env.POLYMARKET_POST_ONLY || "").toLowerCase() === "true";
 
   if (!tokenID || !/^\d+$/.test(tokenID)) fail("--token-id must be a Polymarket CLOB token id");
   if (!["BUY", "SELL"].includes(side)) fail("--side must be BUY or SELL");
@@ -41,7 +42,7 @@ function readOrderArgs() {
     fail(`Order notional ${notional.toFixed(2)} exceeds max allocation ${(bankroll * maxFraction).toFixed(2)}`);
   }
 
-  return { tokenID, side, price, size, tickSize, negRisk, orderType, notional };
+  return { tokenID, side, price, size, tickSize, negRisk, orderType, postOnly, notional };
 }
 
 function printJson(payload) {
@@ -121,7 +122,7 @@ async function main() {
     return;
   }
 
-  const response = await client.postOrder(signedOrder, OrderType[order.orderType]);
+  const response = await client.postOrder(signedOrder, OrderType[order.orderType], order.postOnly);
   if (response?.error || response?.success === false || response?.status === "error") {
     printJson({ mode: "live-submit-rejected", order, response });
     process.exit(1);
