@@ -11798,9 +11798,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <button type="submit" name="action" value="run_ai_research_now">Spustit research ted</button>
             </form>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Osloveni</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>AI cileni</th><th>Scraping keyword</th><th>Nalezeno</th><th>Vhodne</th><th>Zprava</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Osloveni</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>AI cileni</th><th>Databaze hledani</th><th>Scraping keyword</th><th>Nalezeno</th><th>Vhodne</th><th>Zprava</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
-            <tr><td colspan="11">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="12">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
@@ -11819,6 +11819,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                         </div>
                         <div class="ai-outreach-meta">
                             <span>Seed: <?= h((string)$run['seed_business']) ?></span>
+                            <span>Databaze: <?= h((string)($run['search_source_label'] ?? '-')) ?></span>
                             <span>Keyword: <?= h((string)($run['scraping_keyword'] ?? '')) ?></span>
                             <span>Vhodne kontakty: <?= h((string)$run['accepted_count']) ?></span>
                         </div>
@@ -11833,13 +11834,14 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><?= h((string)$run['seed_email']) ?></td>
                 <td><?= statusBadge((string)$run['status']) ?></td>
                 <td><?= h((string)$run['audience_label']) ?></td>
+                <td><?= h((string)($run['search_source_label'] ?? '-')) ?></td>
                 <td><?= h((string)($run['scraping_keyword'] ?? '')) ?></td>
                 <td><?= h((string)$run['found_count']) ?></td>
                 <td><?= h((string)$run['accepted_count']) ?></td>
                 <td><?= h((string)$run['message']) ?></td>
             </tr>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="11">
+                <td colspan="12">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
@@ -11849,6 +11851,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <section>
                                 <h3>Co AI vymyslela</h3>
                                 <p><strong>Cileni:</strong> <?= h((string)$run['audience_label']) ?></p>
+                                <p><strong>Databaze hledani:</strong> <?= h((string)($run['search_source_label'] ?? '-')) ?></p>
                                 <p><strong>Scraping keyword:</strong> <?= h((string)($run['scraping_keyword'] ?? '')) ?></p>
                                 <p><strong>Proc:</strong> <?= h((string)$run['rationale']) ?></p>
                                 <p><strong>Uhel emailu:</strong> <?= h((string)$run['email_angle']) ?></p>
@@ -12596,9 +12599,24 @@ function aiResearchRuns(PDO $pdo): array
         if (trim((string)($row['scraping_keyword'] ?? '')) === '') {
             $row['scraping_keyword'] = is_array($plan) ? aiResearchPrimaryKeyword($plan) : '';
         }
+        $row['search_source_label'] = is_array($plan) ? aiResearchPrimarySourceLabel($plan) : '';
     }
     unset($row);
     return $rows;
+}
+
+function aiResearchPrimarySourceLabel(array $plan): string
+{
+    foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
+        if (!is_array($query)) {
+            continue;
+        }
+        $source = normalizeScrapingSourceKey((string)($query['source'] ?? ''));
+        if ($source !== '') {
+            return scrapingSourceLabel($source);
+        }
+    }
+    return '';
 }
 
 function aiResearchSeedFromRun(array $run): array
