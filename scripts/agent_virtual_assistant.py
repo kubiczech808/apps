@@ -207,6 +207,7 @@ Modely a backend:
 - Pro kratke Telegram odpovedi pouzivej rychly model.
 - Pro planovani, analyzu, psani a technickou praci pouzivej stredni model.
 - Pro slozite rozhodovani nebo hluboky research pouzivej silny model.
+- Telegram odpoved musi byt kompletni a kratka. Pokud by presahla zhruba 3500 znaku, zkrat ji na stav + dalsi krok, nebo ji rozdel na jasne ocislovane casti. Nikdy neposilej vetu useknutou uprostred slova.
 
 Mas vlastni zapisovatelny workspace:
 /home/openclaw2/.openclaw/virtual-assistant
@@ -228,6 +229,7 @@ def virtual_assistant_templates() -> dict[Path, str]:
             "",
             "Samostatna virtualni asistentka na OpenClaw instanci.",
             "Pracuje cesky, strucne, prakticky a lidsky.",
+            "Telegram odpovedi posila kompletni: kdyz je vystup dlouhy, zkrati ho nebo rozdeli na ocislovane casti, nikdy neposila useknutou vetu.",
             "Jeji poslani je byt najimatelnou asistentkou pro klienty: hledat vhodnou praci, pripravovat nabidky po schvaleni a vykonavat asistentske ukoly.",
             "Pomaha s organizaci, prioritami, drafty, shrnutimi, navazujicimi kroky, researchi, klientskymi podklady a koordinaci.",
             "Umi fungovat jako orchestrace Jakubovych agentu: rozpadne kampan na ukoly, vybere cil podle ziveho AGENT_REGISTRY a overi vysledky.",
@@ -1390,14 +1392,10 @@ def send_confirmation_request(action_id: str, label: str) -> int | None:
         return None
     try:
         message = f"Rozumim to jako: {label}\n\nSpustit?"
-        result = telegram_api_post("sendMessage", {
-            "chat_id": chat_id,
-            "text": message,
-            "reply_markup": confirmation_keyboard(action_id),
-        })
-        if result.get("ok"):
+        ok = telegram_send_text(chat_id, message, reply_markup=confirmation_keyboard(action_id))
+        if ok:
             g.log(f"-> {message[:500]}")
-            return int((result.get("result") or {}).get("message_id") or 0) or None
+            return 1
         return None
     except Exception as exc:
         g.log(f"Confirmation request send failed: {type(exc).__name__}: {exc}")
@@ -2955,12 +2953,18 @@ def agent_g_telegram_notify(text: str) -> str:
     token, chat_id = agent_g_token_and_chat()
     if not token or not chat_id:
         return "missing-token-or-chat"
-    payload = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=payload)
     try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            result = json.loads(response.read().decode("utf-8", errors="replace"))
-        return "sent" if result.get("ok") else "failed"
+        chunks = telegram_text_chunks(text)
+        if not chunks:
+            return "failed:empty"
+        for idx, chunk in enumerate(chunks):
+            payload = urllib.parse.urlencode({"chat_id": chat_id, "text": chunk}).encode()
+            req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=payload)
+            with urllib.request.urlopen(req, timeout=20) as response:
+                result = json.loads(response.read().decode("utf-8", errors="replace"))
+            if not result.get("ok"):
+                return f"failed:chunk-{idx + 1}"
+        return "sent"
     except Exception as exc:
         g.log(f"Agent G Telegram handoff failed: {type(exc).__name__}: {exc}")
         return f"failed:{type(exc).__name__}"
@@ -3023,7 +3027,7 @@ def deliver_agent_g_handoff(item: dict[str, Any]) -> dict[str, str]:
     append_jsonl(AGENT_G_HANDOFFS_FILE, {**item, "handoff_text": text, "handoff_created_at": dt.datetime.now().astimezone().isoformat(timespec="seconds")})
     memory_status = append_agent_g_memory_line(f"- VA handoff {handoff_id}: {item.get('blocked_agent')} / {item.get('blocker')}")
     history_status = append_agent_g_history_message(text)
-    telegram_status = agent_g_telegram_notify("VA handoff: mam pro tebe technicky blocker.\n\n" + text[:3200])
+    telegram_status = agent_g_telegram_notify("VA handoff: mam pro tebe technicky blocker.\n\n" + text)
     result = {
         "handoff_id": handoff_id,
         "handoffs": "written",
@@ -4466,14 +4470,54 @@ def telegram_api_post(method: str, payload: dict[str, Any], timeout: int = 20) -
         return json.loads(response.read().decode("utf-8", errors="replace"))
 
 
+TELEGRAM_SAFE_TEXT_LIMIT = 3600
+
+
+def telegram_text_chunks(text: str, limit: int = TELEGRAM_SAFE_TEXT_LIMIT) -> list[str]:
+    clean = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not clean:
+        return []
+    chunks: list[str] = []
+    remaining = clean
+    while len(remaining) > limit:
+        window = remaining[:limit]
+        split_at = max(window.rfind("\n\n"), window.rfind("\n"), window.rfind(". "), window.rfind("; "), window.rfind(", "), window.rfind(" "))
+        if split_at < int(limit * 0.55):
+            split_at = limit
+        chunk = remaining[:split_at].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].strip()
+    if remaining:
+        chunks.append(remaining)
+    if len(chunks) <= 1:
+        return chunks
+    total = len(chunks)
+    return [f"Cast {idx}/{total}:\n{chunk}" for idx, chunk in enumerate(chunks, 1)]
+
+
+def telegram_send_text(chat_id: str, text: str, reply_markup: dict[str, Any] | None = None, timeout: int = 20) -> bool:
+    chunks = telegram_text_chunks(text)
+    if not chunks:
+        return False
+    for idx, chunk in enumerate(chunks):
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+        if reply_markup and idx == len(chunks) - 1:
+            payload["reply_markup"] = reply_markup
+        result = telegram_api_post("sendMessage", payload, timeout=timeout)
+        if not result.get("ok"):
+            g.log(f"Telegram send failed on chunk {idx + 1}/{len(chunks)}: {str(result)[:240]}")
+            return False
+    return True
+
+
 def telegram_notify(text: str) -> bool:
     token, chat_id = telegram_token_chat()
     if not token or not chat_id:
         g.log("Delegation monitor notification skipped: Telegram token/chat missing")
         return False
     try:
-        result = telegram_api_post("sendMessage", {"chat_id": chat_id, "text": text})
-        return bool(result.get("ok"))
+        return telegram_send_text(chat_id, text)
     except Exception as exc:
         g.log(f"Delegation monitor Telegram notification failed: {type(exc).__name__}: {exc}")
         return False
@@ -4514,11 +4558,7 @@ def telegram_notify_xoz_approval(task: dict[str, Any], note: str) -> str:
                 "reply_markup": keyboard,
             }, timeout=30)
         else:
-            result = telegram_api_post("sendMessage", {
-                "chat_id": chat_id,
-                "text": caption,
-                "reply_markup": keyboard,
-            }, timeout=20)
+            result = {"ok": telegram_send_text(chat_id, caption, reply_markup=keyboard, timeout=20)}
         if result.get("ok"):
             message_id = ((result.get("result") or {}) or {}).get("message_id")
             if message_id:
@@ -4528,15 +4568,7 @@ def telegram_notify_xoz_approval(task: dict[str, Any], note: str) -> str:
     except Exception as exc:
         g.log(f"XOZ approval Telegram media send failed: {type(exc).__name__}: {exc}")
     try:
-        result = telegram_api_post("sendMessage", {
-            "chat_id": chat_id,
-            "text": caption,
-            "reply_markup": keyboard,
-        }, timeout=20)
-        if result.get("ok"):
-            message_id = ((result.get("result") or {}) or {}).get("message_id")
-            if message_id:
-                task["approval_keyboard_message_id"] = str(message_id)
+        if telegram_send_text(chat_id, caption, reply_markup=keyboard, timeout=20):
             task["approval_keyboard_reported_at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
             return "sent"
     except Exception as exc:
