@@ -548,6 +548,43 @@ async function submitOrder(order) {
   return client.postOrder(signedOrder, OrderType.GTC, POST_ONLY);
 }
 
+function orderResponseError(response) {
+  if (!response) return "";
+  return String(response.error || response.errorMsg || response.message || "");
+}
+
+function successfulOrderResponse(response) {
+  if (!response || response.error || response.success === false || response.status === "error") return false;
+  return ["live", "matched", "delayed", "unmatched"].includes(String(response.status || "").toLowerCase()) || response.success === true || Boolean(response.orderID);
+}
+
+function nonRetryableOrderFailure(response) {
+  const text = orderResponseError(response).toLowerCase();
+  const status = Number(response?.status);
+  if (status === 401 || status === 403) return "account or region rejected the order";
+  if (/region|restricted|geoblock|geo/.test(text)) return "account or region rejected the order";
+  if (/auth|signature|api key|private key|unauthorized|forbidden/.test(text)) return "authentication/signing failed";
+  if (/not enough balance|insufficient|allowance/.test(text)) return "insufficient balance or allowance";
+  return "";
+}
+
+function orderAttemptSummary(candidate, response = null, extra = {}) {
+  return {
+    question: candidate.question,
+    outcome: candidate.outcome,
+    tokenId: candidate.tokenId,
+    orderType: candidate.orderType,
+    orderPrice: candidate.orderPrice,
+    orderSize: candidate.orderSize,
+    orderNotionalUsdc: candidate.orderNotionalUsdc,
+    totalCostUsdc: candidate.totalCostUsdc,
+    minSizeOverride: candidate.minSizeOverride,
+    sizingNote: candidate.sizingNote,
+    response,
+    ...extra,
+  };
+}
+
 async function main() {
   const [paperState, liveState] = await Promise.all([
     loadJsonResource(PAPER_STATE_URL, "paper state"),
@@ -632,16 +669,61 @@ async function main() {
   };
 
   if (!best || DRY_RUN || !hasFlag("confirm-live")) {
-    await emitDecision(decision);
+    await emitDecision({ ...decision, attempts: best ? [orderAttemptSummary(best, null, { action: decision.action })] : [] });
     return;
   }
 
-  const response = await submitOrder(best);
-  if (response?.error || response?.success === false || response?.status === "error") {
-    await emitDecision({ ...decision, action: "REJECTED", response });
-    process.exit(1);
+  const attempts = [];
+  for (const candidate of eligible) {
+    let response = null;
+    try {
+      response = await submitOrder(candidate);
+    } catch (error) {
+      response = {
+        error: error?.message || String(error),
+        status: "exception",
+      };
+    }
+    if (successfulOrderResponse(response)) {
+      await emitDecision({
+        ...decision,
+        action: "SUBMITTED",
+        reason: "live order accepted by Polymarket",
+        selected: candidate,
+        response,
+        attempts: [...attempts, orderAttemptSummary(candidate, response, { action: "SUBMITTED" })],
+      });
+      return;
+    }
+
+    const stopReason = nonRetryableOrderFailure(response);
+    const attempt = orderAttemptSummary(candidate, response, {
+      action: stopReason ? "STOP" : "RETRY_NEXT",
+      rejectReason: orderResponseError(response) || "order was rejected",
+      stopReason,
+    });
+    attempts.push(attempt);
+    if (stopReason) {
+      await emitDecision({
+        ...decision,
+        action: "REJECTED",
+        reason: stopReason,
+        selected: candidate,
+        response,
+        attempts,
+      });
+      process.exit(1);
+    }
   }
-  await emitDecision({ ...decision, action: "SUBMITTED", response });
+
+  await emitDecision({
+    ...decision,
+    action: "REJECTED",
+    reason: "all revalidated candidates were rejected by order submission",
+    response: attempts.at(-1)?.response || null,
+    attempts,
+  });
+  process.exit(1);
 }
 
 main().catch(async (error) => {

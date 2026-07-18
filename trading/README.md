@@ -71,6 +71,8 @@ The browser calls `api.php?action=workflow`; the PHP endpoint dispatches only th
 
 The live button also requires the browser-side live execution gate to be armed. The workflow itself still performs live preflight revalidation before any order submit: current orderbook, AI probability threshold, EV threshold, spread/liquidity, diversification, capital, minimum order size, and post-only limit-order assumptions.
 
+During live execution, revalidated candidates are tried in score order. If an order is rejected for a candidate-specific reason, the executor records the attempt and moves to the next eligible candidate; account-wide failures such as geoblock, authentication, signing, balance, or allowance errors stop the run immediately.
+
 Configure these repository secrets for the deploy workflow to generate `trading/config.php` on the hosting server:
 
 - `POLY_TRADING_GITHUB_TOKEN`: fine-grained GitHub token with Actions workflow dispatch permission for `kubiczech808/apps`.
