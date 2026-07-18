@@ -1737,7 +1737,7 @@ function runAiResearchOnce(PDO $pdo, array $config): string
         }
     }
     $bestPlan['research_attempts'] = $attempts;
-    $runId = saveAiResearchRun($pdo, $seed, $bestPlan, $bestEvaluated, $bestAccepted);
+    $runId = saveAiResearchRun($pdo, $config, $seed, $bestPlan, $bestEvaluated, $bestAccepted);
     setSetting($pdo, 'ai_research_last_seed_id', (string)(int)$seed['id']);
     return 'AI research: beh #' . $runId . ', seed ' . (string)$seed['email'] . ', pokusu ' . $attempts . ', nalezeno ' . count($bestEvaluated) . ', vhodnych ' . count($bestAccepted) . '.';
 }
@@ -2468,11 +2468,53 @@ function aiResearchFallbackEmailHtml(string $language, string $seedBusiness): st
     ][$language] ?? '<p>Dobry den,</p><p>narazili jsme na vas kontakt a myslime si, ze by pro vas mohla byt relevantni nabidka firmy ' . $business . '.</p><p>Rad bych kratce ukazal konkretni moznost spoluprace. Mohu poslat vice informaci?</p>';
 }
 
-function saveAiResearchRun(PDO $pdo, array $seed, array $plan, array $evaluated, array $accepted): int
+function aiResearchRunDraft(array $config, array $seed, array $plan, array $contacts): array
+{
+    $seedBusiness = trim((string)($seed['subject_name'] ?: $seed['email']));
+    $language = (string)($plan['market_language'] ?? aiResearchDefaultMarketLanguage($seed, $plan));
+    $fallbackTarget = trim((string)($contacts[0]['subject_name'] ?? $plan['audience_label'] ?? ''));
+    $fallbackSubject = aiResearchFallbackSubject($language, $fallbackTarget);
+    $fallbackHtml = aiResearchFallbackEmailHtml($language, $seedBusiness);
+    $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
+    if ($apiKey === '') {
+        return ['subject' => $fallbackSubject, 'html' => $fallbackHtml];
+    }
+    $prompt = "Priprav vzor obchodniho osloveni pro AI research beh. "
+        . "Vzor ma byt pouzitelny jako ukazka strategie i v pripade, ze zatim nebyl prijat zadny konkretni kontakt. "
+        . "Seed byznys: " . json_encode($seed, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Plan cileni: " . json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Ukazkove nalezene kontakty: " . json_encode(array_slice($contacts, 0, 3), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+        . "Vrat pouze JSON {\"subject\":\"...\",\"html\":\"...\"}. "
+        . "Jazyk pouzij podle market_language (" . $language . "). "
+        . "HTML bude kratke, vecne a bude odrazet konkretni B2B use-case, ne obecny spam. Pokud neni konkretni kontakt, oslov segment obecne.";
+    try {
+        $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
+            'x-goog-api-key: ' . $apiKey,
+            'Content-Type: application/json',
+        ], [
+            'model' => trim((string)($config['ai']['gemini_model'] ?? 'gemini-3.5-flash')) ?: 'gemini-3.5-flash',
+            'system_instruction' => 'Jsi B2B obchodnik. Vystup je pouze validni JSON bez markdownu.',
+            'input' => $prompt,
+            'generation_config' => ['temperature' => 0.45],
+        ], 35);
+        $json = parseJsonObjectFromText(geminiInteractionText($response));
+        $subject = truncatePlainText(trim((string)($json['subject'] ?? '')), 255);
+        $html = cleanHtml((string)($json['html'] ?? ''));
+        if ($subject !== '' && trim(strip_tags($html)) !== '') {
+            return ['subject' => $subject, 'html' => $html];
+        }
+    } catch (Throwable $e) {
+        error_log('AI research run draft fallback: ' . $e->getMessage());
+    }
+    return ['subject' => $fallbackSubject, 'html' => $fallbackHtml];
+}
+
+function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, array $evaluated, array $accepted): int
 {
     $now = date('c');
-    $draftSubject = (string)($accepted[0]['email_subject'] ?? '');
-    $draftHtml = (string)($accepted[0]['email_body_html'] ?? '');
+    $draft = aiResearchRunDraft($config, $seed, $plan, $accepted ?: $evaluated);
+    $draftSubject = trim((string)($accepted[0]['email_subject'] ?? '')) !== '' ? (string)$accepted[0]['email_subject'] : (string)$draft['subject'];
+    $draftHtml = trim(strip_tags((string)($accepted[0]['email_body_html'] ?? ''))) !== '' ? (string)$accepted[0]['email_body_html'] : (string)$draft['html'];
     $ownerId = aiResearchOwnerUserId($pdo);
     $scrapingKeyword = aiResearchPrimaryKeyword($plan);
     $stmt = $pdo->prepare('
