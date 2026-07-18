@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 const DATA_API = process.env.POLYMARKET_DATA_API || "https://data-api.polymarket.com";
+const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
 const DEFAULT_ADDRESS = "0x3252de913d9323667f21f4d88fa1f996fc282293";
 const ACCOUNT_ADDRESS = (process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || DEFAULT_ADDRESS).toLowerCase();
 const STATE_PATH = process.env.LIVE_STATE_PATH || "data/live-state.json";
@@ -43,6 +44,14 @@ function apiUrl(path, params = {}) {
   return url;
 }
 
+function gammaUrl(path, params = {}) {
+  const url = new URL(path, GAMMA_API);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value != null && value !== "") url.searchParams.set(key, String(value));
+  });
+  return url;
+}
+
 async function fetchJson(path, params = {}) {
   const response = await fetch(apiUrl(path, params), {
     headers: { "User-Agent": "osobnizkusenosti-trading-live-sync" },
@@ -56,6 +65,49 @@ async function fetchJson(path, params = {}) {
   if (Array.isArray(payload?.data)) return payload.data;
   if (Array.isArray(payload?.value)) return payload.value;
   return payload;
+}
+
+async function fetchGammaJson(path, params = {}) {
+  const response = await fetch(gammaUrl(path, params), {
+    headers: { "User-Agent": "osobnizkusenosti-trading-live-sync" },
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`${path} HTTP ${response.status}${body ? `: ${body.slice(0, 160)}` : ""}`);
+  }
+  return response.json();
+}
+
+function normalizeProfile(profile) {
+  if (!profile || typeof profile !== "object") {
+    return {
+      displayName: null,
+      pseudonym: null,
+      xUsername: null,
+      displayUsernamePublic: null,
+      verifiedBadge: false,
+      profileUrl: `https://polymarket.com/profile/${ACCOUNT_ADDRESS}`,
+      source: "gamma-public-profile",
+      status: "not_available",
+    };
+  }
+  const pseudonym = profile.pseudonym || null;
+  const rawName = profile.displayUsernamePublic === false ? null : (profile.name || null);
+  const name = /^0x[a-fA-F0-9]{40}-\d+$/.test(String(rawName || "")) ? null : rawName;
+  const xUsername = profile.displayUsernamePublic === false ? null : (profile.xUsername || null);
+  return {
+    displayName: name || pseudonym || null,
+    pseudonym,
+    xUsername,
+    displayUsernamePublic: profile.displayUsernamePublic ?? null,
+    verifiedBadge: Boolean(profile.verifiedBadge),
+    profileImage: profile.profileImage || null,
+    createdAt: isoTime(profile.createdAt),
+    userIds: Array.isArray(profile.users) ? profile.users.map((user) => String(user.id)).filter(Boolean) : [],
+    profileUrl: `https://polymarket.com/profile/${profile.proxyWallet || ACCOUNT_ADDRESS}`,
+    source: "gamma-public-profile",
+    status: "ok",
+  };
 }
 
 function positionUrl(position) {
@@ -151,18 +203,20 @@ async function main() {
   const sync = {
     status: "OK",
     message: "Live Polymarket account snapshot loaded",
-    sources: ["positions", "value", "activity"],
+    sources: ["positions", "value", "activity", "public-profile"],
   };
 
   let rawPositions = [];
   let rawActivity = [];
   let valueRows = [];
+  let publicProfile = null;
 
   try {
-    [rawPositions, valueRows, rawActivity] = await Promise.all([
+    [rawPositions, valueRows, rawActivity, publicProfile] = await Promise.all([
       fetchJson("/positions", { user: ACCOUNT_ADDRESS, limit: 500 }),
       fetchJson("/value", { user: ACCOUNT_ADDRESS }),
       fetchJson("/activity", { user: ACCOUNT_ADDRESS, limit: ACTIVITY_LIMIT }),
+      fetchGammaJson("/public-profile", { address: ACCOUNT_ADDRESS }).catch((error) => ({ error: error.message })),
     ]);
   } catch (error) {
     sync.status = "ERROR";
@@ -182,7 +236,11 @@ async function main() {
     generatedAt,
     account: {
       address: ACCOUNT_ADDRESS,
+      proxyWallet: publicProfile?.proxyWallet || ACCOUNT_ADDRESS,
       label: "Polymarket account",
+      connectionMode: "Read-only public API sync by proxy wallet address",
+      loginMethod: "Polymarket proxy wallet; Gmail/MetaMask login is handled by Polymarket, not this frontend",
+      profile: normalizeProfile(publicProfile?.error ? null : publicProfile),
     },
     portfolio: portfolioSummary(positions, valueRows),
     positions,

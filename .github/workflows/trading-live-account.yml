@@ -1,6 +1,11 @@
 name: Trading Live Account
 
 on:
+  push:
+    paths:
+      - 'trading/tools/live-account-sync.mjs'
+      - 'trading/package.json'
+      - '.github/workflows/trading-live-account.yml'
   workflow_dispatch:
   schedule:
     - cron: '5,20,35,50 * * * *'
