@@ -12,7 +12,7 @@ on:
 
 jobs:
   live-account:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64]
     env:
       LIVE_STATE_PATH: data/live-state.json
       LIVE_ACTIVITY_LIMIT: "80"

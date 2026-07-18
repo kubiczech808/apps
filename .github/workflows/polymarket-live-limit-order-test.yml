@@ -20,7 +20,7 @@ on:
 jobs:
   live-limit-order-test:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || contains(github.event.head_commit.message, '[live-limit-order-test]')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, ARM64]
     env:
       POLYMARKET_HOST: https://clob.polymarket.com
       POLYMARKET_CHAIN_ID: "137"
@@ -44,7 +44,7 @@ jobs:
       LIVE_MAX_SPREAD: "0.08"
       LIVE_MIN_VOLUME_24H: "100"
       LIVE_CANDIDATE_SCAN_LIMIT: "120"
-      LIVE_EXECUTION_SOURCE: github-actions
+      LIVE_EXECUTION_SOURCE: rpi-self-hosted
     steps:
       - uses: actions/checkout@v4
 
