@@ -89,6 +89,7 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureOnboardingTables(), 'onboarding_tables');
         $this->safeMigrationStep(fn() => $this->ensureOnboardingEventsTable(), 'onboarding_events');
         $this->safeMigrationStep(fn() => $this->ensureAiResearchTables(), 'ai_research_tables');
+        $this->safeMigrationStep(fn() => $this->ensureAppUsersTable(), 'app_users');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_sent_at', $this->textColumn("''")), 'onboarding_leads.invite_sent_at');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_last_sent_at', $this->textColumn("''")), 'onboarding_leads.invite_last_sent_at');
         $this->safeMigrationStep(fn() => $this->ensureColumn('onboarding_leads', 'invite_send_count', 'INTEGER NOT NULL DEFAULT 0'), 'onboarding_leads.invite_send_count');
@@ -551,6 +552,26 @@ final class Database
                 created_at VARCHAR(40) NOT NULL,
                 INDEX ai_research_contacts_run_idx (run_id),
                 INDEX ai_research_contacts_email_idx (email)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    }
+
+    private function ensureAppUsersTable(): void
+    {
+        $this->pdo->exec("CREATE TABLE IF NOT EXISTS app_users (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                email VARCHAR(320) NOT NULL,
+                password_hash VARCHAR(255) NOT NULL DEFAULT '',
+                role VARCHAR(40) NOT NULL DEFAULT 'admin',
+                can_access_research TINYINT(1) NOT NULL DEFAULT 0,
+                is_active TINYINT(1) NOT NULL DEFAULT 1,
+                password_reset_token_hash VARCHAR(128) NOT NULL DEFAULT '',
+                password_reset_requested_at VARCHAR(40) NOT NULL DEFAULT '',
+                password_reset_expires_at VARCHAR(40) NOT NULL DEFAULT '',
+                password_reset_used_at VARCHAR(40) NOT NULL DEFAULT '',
+                created_at VARCHAR(40) NOT NULL,
+                updated_at VARCHAR(40) NOT NULL,
+                UNIQUE KEY app_users_email_unique (email),
+                INDEX app_users_reset_idx (password_reset_token_hash, password_reset_expires_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     }
 

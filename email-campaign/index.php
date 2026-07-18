@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-14-gemini-onboarding';
+const APP_VERSION = '2026-07-18-account-auth';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 
 date_default_timezone_set('Europe/Prague');
@@ -58,6 +58,7 @@ if (shouldRunStartupMaintenance()) {
 $migrationNotice = null;
 try {
     $config = effectiveConfig($pdo, $baseConfig);
+    ensureAppAuthUsers($pdo, $config);
 } catch (Throwable $e) {
     if ($isMysqlDatabase && databasePermissionDenied($e)) {
         renderDatabaseBootFailure($e);
@@ -212,11 +213,11 @@ if (($_POST['action'] ?? '') === 'request_password_reset') {
 
 if (($_POST['action'] ?? '') === 'reset_password') {
     try {
-        $message = resetPasswordWithToken($pdo, $config);
+        $reset = resetPasswordWithToken($pdo, $config);
         $_SESSION['auth'] = true;
-        $_SESSION['auth_email'] = strtolower(trim((string)($config['admin_email'] ?? '')));
+        $_SESSION['auth_email'] = $reset['email'];
         $_SESSION['auth_provider'] = 'password';
-        $_SESSION['flash'] = ['ok', $message];
+        $_SESSION['flash'] = ['ok', $reset['message']];
         header('Location: ./?route=dashboard');
         exit;
     } catch (Throwable $e) {
@@ -226,10 +227,10 @@ if (($_POST['action'] ?? '') === 'reset_password') {
 
 if (($_POST['action'] ?? '') === 'login') {
     $loginEmail = strtolower(trim((string)($_POST['email'] ?? '')));
-    $adminEmail = strtolower(trim((string)($config['admin_email'] ?? '')));
-    if ($loginEmail !== '' && $adminEmail !== '' && hash_equals($adminEmail, $loginEmail) && password_verify((string)$_POST['password'], (string)$config['app_password_hash'])) {
+    $user = $loginEmail !== '' ? appUserByEmail($pdo, $loginEmail) : null;
+    if ($user && (string)($user['password_hash'] ?? '') !== '' && password_verify((string)$_POST['password'], (string)$user['password_hash'])) {
         $_SESSION['auth'] = true;
-        $_SESSION['auth_email'] = $adminEmail;
+        $_SESSION['auth_email'] = strtolower((string)$user['email']);
         $_SESSION['auth_provider'] = 'password';
         header('Location: ./?route=dashboard');
         exit;
@@ -2421,7 +2422,6 @@ function effectiveConfig(PDO $pdo, array $config): array
     if (empty($config['admin_email'])) {
         $config['admin_email'] = $settings['from_email'] ?? ($config['from_email'] ?? '');
     }
-    $config['admin_email'] = AI_RESEARCH_ALLOWED_EMAIL;
     foreach (['host', 'port', 'username', 'password', 'encryption', 'dkim_selector'] as $key) {
         $settingKey = 'smtp_' . $key;
         if (array_key_exists($settingKey, $settings) && $settings[$settingKey] !== '') {
@@ -2557,11 +2557,13 @@ function handleGoogleAuthCallback(PDO $pdo, array $config): void
     }
 
     if (!isConfigured($config)) {
+        $hash = password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT);
         setSetting($pdo, 'admin_email', $email);
-        setSetting($pdo, 'app_password_hash', password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT));
+        setSetting($pdo, 'app_password_hash', $hash);
         if (trim((string)($config['cron_token'] ?? '')) === '') {
             setSetting($pdo, 'cron_token', bin2hex(random_bytes(24)));
         }
+        upsertAppUser($pdo, $email, $hash, hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL));
         $_SESSION['auth'] = true;
         $_SESSION['auth_email'] = $email;
         $_SESSION['auth_provider'] = 'google';
@@ -2693,9 +2695,11 @@ function saveSetup(PDO $pdo): void
         throw new RuntimeException('Heslo musi mit alespon 10 znaku.');
     }
     $token = bin2hex(random_bytes(24));
+    $hash = password_hash($password, PASSWORD_DEFAULT);
     setSetting($pdo, 'admin_email', $email);
-    setSetting($pdo, 'app_password_hash', password_hash($password, PASSWORD_DEFAULT));
+    setSetting($pdo, 'app_password_hash', $hash);
     setSetting($pdo, 'cron_token', $token);
+    upsertAppUser($pdo, $email, $hash, hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL));
 }
 
 function saveSmtpSettings(PDO $pdo): void
@@ -2850,23 +2854,89 @@ function emailAuthBadge(array $report, string $key): string
     return '<span class="badge ' . $class . '">' . h($label) . '</span>';
 }
 
+function ensureAppAuthUsers(PDO $pdo, array $config): void
+{
+    $legacyEmail = strtolower(trim((string)($config['admin_email'] ?? '')));
+    $legacyHash = trim((string)($config['app_password_hash'] ?? ''));
+    $settings = loadSettings($pdo);
+    $lastResetEmail = strtolower(trim((string)($settings['password_reset_email'] ?? '')));
+    $lastResetUsed = trim((string)($settings['password_reset_used_at'] ?? '')) !== '';
+    $legacyHashForLegacy = $legacyHash;
+    if ($lastResetUsed && $lastResetEmail !== '' && $legacyEmail !== '' && !hash_equals($lastResetEmail, $legacyEmail)) {
+        $legacyHashForLegacy = '';
+    }
+    $researchHash = ($lastResetUsed && hash_equals($lastResetEmail, AI_RESEARCH_ALLOWED_EMAIL)) ? $legacyHash : '';
+    if ($legacyEmail !== '' && filter_var($legacyEmail, FILTER_VALIDATE_EMAIL)) {
+        upsertAppUser($pdo, $legacyEmail, $legacyHashForLegacy, hash_equals($legacyEmail, AI_RESEARCH_ALLOWED_EMAIL));
+    }
+    upsertAppUser($pdo, AI_RESEARCH_ALLOWED_EMAIL, $researchHash, true);
+}
+
+function upsertAppUser(PDO $pdo, string $email, string $passwordHash = '', bool $canAccessResearch = false): void
+{
+    $email = strtolower(trim($email));
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        return;
+    }
+    $now = date('c');
+    $existing = appUserByEmail($pdo, $email, false);
+    if ($existing) {
+        $fields = ['can_access_research=?', 'is_active=1', 'updated_at=?'];
+        $values = [$canAccessResearch ? 1 : (int)($existing['can_access_research'] ?? 0), $now];
+        if ($passwordHash !== '' && (string)($existing['password_hash'] ?? '') === '') {
+            $fields[] = 'password_hash=?';
+            $values[] = $passwordHash;
+        }
+        $values[] = (int)$existing['id'];
+        $stmt = $pdo->prepare('UPDATE app_users SET ' . implode(', ', $fields) . ' WHERE id=?');
+        $stmt->execute($values);
+        return;
+    }
+    $stmt = $pdo->prepare('INSERT INTO app_users (email, password_hash, role, can_access_research, is_active, created_at, updated_at) VALUES (?, ?, "admin", ?, 1, ?, ?)');
+    $stmt->execute([$email, $passwordHash, $canAccessResearch ? 1 : 0, $now, $now]);
+}
+
+function appUserByEmail(PDO $pdo, string $email, bool $activeOnly = true): ?array
+{
+    $email = strtolower(trim($email));
+    if ($email === '') {
+        return null;
+    }
+    $sql = 'SELECT * FROM app_users WHERE email=?';
+    if ($activeOnly) {
+        $sql .= ' AND is_active=1';
+    }
+    $sql .= ' LIMIT 1';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([$email]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+function appUserCanRequestPasswordReset(PDO $pdo, string $email): bool
+{
+    $user = appUserByEmail($pdo, $email);
+    return $user !== null || hash_equals(AI_RESEARCH_ALLOWED_EMAIL, strtolower(trim($email)));
+}
+
 function requestPasswordReset(PDO $pdo, array $config): string
 {
     $email = strtolower(trim((string)($_POST['email'] ?? '')));
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         throw new RuntimeException('Zadej platny email.');
     }
-    $adminEmail = strtolower(trim((string)($config['admin_email'] ?? '')));
-    if ($adminEmail !== '' && hash_equals($adminEmail, $email)) {
+    if (appUserCanRequestPasswordReset($pdo, $email)) {
+        upsertAppUser($pdo, $email, '', hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL));
+        $user = appUserByEmail($pdo, $email);
+        if (!$user) {
+            throw new RuntimeException('Ucet pro obnovu hesla se nepodarilo pripravit.');
+        }
         $token = bin2hex(random_bytes(32));
         $now = date('c');
-        setSetting($pdo, 'password_reset_token_hash', hash('sha256', $token));
-        setSetting($pdo, 'password_reset_email', $adminEmail);
-        setSetting($pdo, 'password_reset_requested_at', $now);
-        setSetting($pdo, 'password_reset_expires_at', date('c', time() + 3600));
-        setSetting($pdo, 'password_reset_used_at', '');
+        $stmt = $pdo->prepare('UPDATE app_users SET password_reset_token_hash=?, password_reset_requested_at=?, password_reset_expires_at=?, password_reset_used_at="", updated_at=? WHERE id=?');
+        $stmt->execute([hash('sha256', $token), $now, date('c', time() + 3600), $now, (int)$user['id']]);
         (new SmtpMailer($config))->send(
-            $adminEmail,
+            $email,
             'Obnova hesla do AI akvizice',
             passwordResetEmailHtml(passwordResetUrl($token))
         );
@@ -2874,12 +2944,13 @@ function requestPasswordReset(PDO $pdo, array $config): string
     return 'Pokud email odpovida administracnimu uctu, poslali jsme odkaz pro obnovu hesla.';
 }
 
-function resetPasswordWithToken(PDO $pdo, array $config): string
+function resetPasswordWithToken(PDO $pdo, array $config): array
 {
     $token = trim((string)($_POST['reset_token'] ?? $_GET['token'] ?? ''));
     $password = (string)($_POST['new_password'] ?? '');
     $confirm = (string)($_POST['new_password_confirm'] ?? '');
-    if (!passwordResetTokenIsValid($pdo, $token)) {
+    $user = passwordResetUserForToken($pdo, $token);
+    if (!$user) {
         throw new RuntimeException('Odkaz pro obnovu hesla neni platny nebo expiroval.');
     }
     if (strlen($password) < 10) {
@@ -2888,29 +2959,41 @@ function resetPasswordWithToken(PDO $pdo, array $config): string
     if (!hash_equals($password, $confirm)) {
         throw new RuntimeException('Hesla se neshoduji.');
     }
-    $adminEmail = strtolower(trim((string)($config['admin_email'] ?? '')));
-    if ($adminEmail === '') {
-        throw new RuntimeException('Administracni email neni nastaven.');
+    $hash = password_hash($password, PASSWORD_DEFAULT);
+    $now = date('c');
+    $stmt = $pdo->prepare('UPDATE app_users SET password_hash=?, password_reset_token_hash="", password_reset_expires_at="", password_reset_used_at=?, updated_at=? WHERE id=?');
+    $stmt->execute([$hash, $now, $now, (int)$user['id']]);
+    if (hash_equals(strtolower((string)$user['email']), strtolower(trim((string)($config['admin_email'] ?? ''))))) {
+        setSetting($pdo, 'app_password_hash', $hash);
     }
-    setSetting($pdo, 'app_password_hash', password_hash($password, PASSWORD_DEFAULT));
-    setSetting($pdo, 'password_reset_token_hash', '');
-    setSetting($pdo, 'password_reset_expires_at', '');
-    setSetting($pdo, 'password_reset_used_at', date('c'));
-    return 'Heslo bylo zmeneno a jsi prihlasen.';
+    return ['message' => 'Heslo bylo zmeneno a jsi prihlasen.', 'email' => strtolower((string)$user['email'])];
 }
 
 function passwordResetTokenIsValid(PDO $pdo, string $token): bool
 {
+    return passwordResetUserForToken($pdo, $token) !== null;
+}
+
+function passwordResetUserForToken(PDO $pdo, string $token): ?array
+{
     if (!preg_match('/^[a-f0-9]{64}$/i', $token)) {
-        return false;
+        return null;
     }
-    $settings = loadSettings($pdo);
-    $hash = trim((string)($settings['password_reset_token_hash'] ?? ''));
-    $expiresAt = strtotime((string)($settings['password_reset_expires_at'] ?? ''));
-    if ($hash === '' || !$expiresAt || $expiresAt < time()) {
-        return false;
+    $stmt = $pdo->prepare('
+        SELECT *
+        FROM app_users
+        WHERE password_reset_token_hash=?
+          AND password_reset_token_hash<>""
+          AND is_active=1
+        LIMIT 1
+    ');
+    $stmt->execute([hash('sha256', $token)]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$user) {
+        return null;
     }
-    return hash_equals($hash, hash('sha256', $token));
+    $expiresAt = strtotime((string)($user['password_reset_expires_at'] ?? ''));
+    return $expiresAt && $expiresAt >= time() ? $user : null;
 }
 
 function passwordResetUrl(string $token): string
@@ -2930,10 +3013,15 @@ function passwordResetEmailHtml(string $url): string
 
 function saveAccountSettings(PDO $pdo, array $config): void
 {
-    $currentAdminEmail = strtolower(trim((string)($config['admin_email'] ?? '')));
-    $adminEmail = strtolower(trim((string)($_POST['admin_email'] ?? $currentAdminEmail)));
+    $currentAuthEmail = strtolower(trim((string)($_SESSION['auth_email'] ?? '')));
+    $currentUser = $currentAuthEmail !== '' ? appUserByEmail($pdo, $currentAuthEmail) : null;
+    if (!$currentUser) {
+        throw new RuntimeException('Prihlaseny uzivatel nebyl nalezen.');
+    }
+    $legacyAdminEmail = strtolower(trim((string)($config['admin_email'] ?? '')));
+    $adminEmail = strtolower(trim((string)($_POST['admin_email'] ?? $currentAuthEmail)));
     $newPassword = (string)($_POST['new_password'] ?? '');
-    $accountChanged = $adminEmail !== $currentAdminEmail || $newPassword !== '';
+    $accountChanged = $adminEmail !== $currentAuthEmail || $newPassword !== '';
     if ($accountChanged) {
         if (!filter_var($adminEmail, FILTER_VALIDATE_EMAIL)) {
             throw new RuntimeException('Admin email neni platny.');
@@ -2941,8 +3029,8 @@ function saveAccountSettings(PDO $pdo, array $config): void
         $currentPassword = (string)($_POST['current_password'] ?? '');
         $googleSession = !empty($_SESSION['auth'])
             && (string)($_SESSION['auth_provider'] ?? '') === 'google'
-            && hash_equals($currentAdminEmail, strtolower(trim((string)($_SESSION['auth_email'] ?? ''))));
-        if (!$googleSession && !password_verify($currentPassword, (string)($config['app_password_hash'] ?? ''))) {
+            && hash_equals($currentAuthEmail, strtolower(trim((string)($_SESSION['auth_email'] ?? ''))));
+        if (!$googleSession && !password_verify($currentPassword, (string)($currentUser['password_hash'] ?? ''))) {
             throw new RuntimeException('Pro zmenu prihlasovacich udaju zadej soucasne heslo.');
         }
         if ($newPassword !== '' && strlen($newPassword) < 10) {
@@ -2950,11 +3038,24 @@ function saveAccountSettings(PDO $pdo, array $config): void
         }
     }
     if ($accountChanged) {
-        setSetting($pdo, 'admin_email', $adminEmail);
+        $conflict = appUserByEmail($pdo, $adminEmail);
+        if ($conflict && (int)$conflict['id'] !== (int)$currentUser['id']) {
+            throw new RuntimeException('Tento prihlasovaci email uz pouziva jiny ucet.');
+        }
+        $stmt = $pdo->prepare('UPDATE app_users SET email=?, can_access_research=?, updated_at=? WHERE id=?');
+        $stmt->execute([$adminEmail, hash_equals($adminEmail, AI_RESEARCH_ALLOWED_EMAIL) ? 1 : (int)$currentUser['can_access_research'], date('c'), (int)$currentUser['id']]);
         $_SESSION['auth_email'] = $adminEmail;
+        if (hash_equals($currentAuthEmail, $legacyAdminEmail)) {
+            setSetting($pdo, 'admin_email', $adminEmail);
+        }
     }
     if ($newPassword !== '') {
-        setSetting($pdo, 'app_password_hash', password_hash($newPassword, PASSWORD_DEFAULT));
+        $hash = password_hash($newPassword, PASSWORD_DEFAULT);
+        $stmt = $pdo->prepare('UPDATE app_users SET password_hash=?, updated_at=? WHERE email=?');
+        $stmt->execute([$hash, date('c'), $adminEmail]);
+        if (hash_equals($currentAuthEmail, $legacyAdminEmail)) {
+            setSetting($pdo, 'app_password_hash', $hash);
+        }
     }
 }
 
@@ -10777,7 +10878,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             </section>
             <section class="subpanel">
                 <h2>Prihlaseni do aplikace</h2>
-                <p><?= h((string)($config['admin_email'] ?? '')) ?></p>
+                <p><?= h(strtolower(trim((string)($_SESSION['auth_email'] ?? '')))) ?></p>
                 <div class="actions-row">
                     <button type="button" data-dialog-open="account-settings-dialog">Upravit prihlaseni</button>
                 </div>
@@ -10835,7 +10936,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <h2>Prihlaseni do aplikace</h2>
                 <button type="button" class="secondary icon" data-dialog-close>Zavrit</button>
             </div>
-            <label>Admin email<input type="email" name="admin_email" autocomplete="off" data-lpignore="true" data-1p-ignore="true" value="<?= h((string)($config['admin_email'] ?? '')) ?>" required></label>
+            <label>Admin email<input type="email" name="admin_email" autocomplete="off" data-lpignore="true" data-1p-ignore="true" value="<?= h(strtolower(trim((string)($_SESSION['auth_email'] ?? '')))) ?>" required></label>
             <label>Soucasne heslo<input type="password" name="current_password" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" placeholder="Jen pri zmene prihlaseni"></label>
             <label>Nove heslo<input type="password" name="new_password" minlength="10" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" placeholder="Nechat prazdne = nemenit"></label>
             <div class="note">Soucasne heslo je potreba pouze pri zmene admin emailu nebo hesla.</div>
