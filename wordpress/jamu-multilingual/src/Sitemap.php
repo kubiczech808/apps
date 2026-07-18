@@ -32,7 +32,12 @@ final class Sitemap
         echo '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
         echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">' . "\n";
 
+        $seen_urls = [];
         foreach ($this->group_rows($this->repository->all_published()) as $group) {
+            if (!$this->is_indexable_group($group)) {
+                continue;
+            }
+
             $alternates = $this->alternate_urls($group);
             if (!$alternates) {
                 continue;
@@ -43,6 +48,11 @@ final class Sitemap
                 if (!$url) {
                     continue;
                 }
+                if (isset($seen_urls[$url])) {
+                    continue;
+                }
+                $seen_urls[$url] = true;
+
                 echo "  <url>\n";
                 echo '    <loc>' . esc_url($url) . "</loc>\n";
                 echo '    <lastmod>' . esc_html(mysql2date('c', $translation->updated_at, false)) . "</lastmod>\n";
@@ -97,6 +107,31 @@ final class Sitemap
             $groups[$key]['translations'][] = $row;
         }
         return $groups;
+    }
+
+    private function is_indexable_group(array $group): bool
+    {
+        if (($group['object_type'] ?? '') !== 'post') {
+            return true;
+        }
+
+        $id = (int) ($group['object_id'] ?? 0);
+        if (!$id) {
+            return false;
+        }
+
+        $post = get_post($id);
+        if (!$post || $post->post_status !== 'publish') {
+            return false;
+        }
+
+        $excluded_page_ids = array_filter(array_map('absint', [
+            get_option('woocommerce_cart_page_id'),
+            get_option('woocommerce_checkout_page_id'),
+            get_option('woocommerce_myaccount_page_id'),
+        ]));
+
+        return !in_array($id, $excluded_page_ids, true);
     }
 
     private function alternate_urls(array $group): array
