@@ -22,6 +22,46 @@ const AI_ANALYSIS_LIMIT = Number(process.env.PAPER_AI_ANALYSIS_LIMIT || 10);
 const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const TZ = "Europe/Prague";
+const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
+
+const LEDGER_RECOVERY_ANCHORS = [
+  {
+    reason: "Recovered after static deploy overwrote bot-generated paper-state.json",
+    id: "paper-2026-07-17-77899117691320282255084926855068126399522814425967645821251701722727475314950",
+    sourceEvaluationId: "2941983-1-1784239888264",
+    openedAt: "2026-07-16T22:11:30.509Z",
+    date: "2026-07-17",
+    tokenId: "77899117691320282255084926855068126399522814425967645821251701722727475314950",
+    question: "Exact Score: France 0 - 0 England?",
+    slug: "fifwc-fra-eng-2026-07-18-exact-score-0-0",
+    eventSlug: "fifwc-fra-eng-2026-07-18-exact-score",
+    outcome: "No",
+    entryPrice: 0.964,
+    shares: 5.1867,
+    takerFeeUsdc: 0.009,
+    totalCostUsdc: 5.009,
+    netGainIfWinUsdc: 0.1777,
+    maxLossUsdc: 5.009,
+  },
+  {
+    reason: "Recovered after static deploy overwrote bot-generated paper-state.json",
+    id: "paper-2026-07-18-46234664383113214034787313853742859435218314985155582830237659971348787896010",
+    sourceEvaluationId: "2507607-1-1784325742533",
+    openedAt: "2026-07-17T22:02:25.422Z",
+    date: "2026-07-18",
+    tokenId: "46234664383113214034787313853742859435218314985155582830237659971348787896010",
+    question: "Kharg Island no longer under Iranian control by July 31?",
+    slug: "kharg-island-no-longer-under-iranian-control-by-july-31",
+    eventSlug: "kharg-island-no-longer-under-iranian-control-by-march-31",
+    outcome: "No",
+    entryPrice: 0.973,
+    shares: 5.1387,
+    takerFeeUsdc: 0,
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 0.1387,
+    maxLossUsdc: 5,
+  },
+];
 
 function nowIso() {
   return new Date().toISOString();
@@ -68,21 +108,35 @@ async function readState() {
     return normalizeState({});
   }
 
+  let remoteError = null;
   if (REMOTE_STATE_URL) {
     try {
       const remote = await fetchJson(`${REMOTE_STATE_URL}?t=${Date.now()}`);
       if (remote && typeof remote === "object" && Array.isArray(remote.trades)) {
-        return normalizeState(remote);
+        const remoteState = normalizeState(remote);
+        try {
+          const rawLocal = await readFile(OUTPUT_PATH, "utf8");
+          return mergeStates(remoteState, normalizeState(JSON.parse(rawLocal)));
+        } catch {
+          return remoteState;
+        }
       }
-    } catch {
-      // Fall back to repository state when the public data file does not exist yet.
+      remoteError = new Error("Remote state did not contain a trades array");
+    } catch (error) {
+      remoteError = error;
     }
   }
 
   try {
     const raw = await readFile(OUTPUT_PATH, "utf8");
+    if (REMOTE_STATE_URL && remoteError) {
+      throw new Error(`Refusing to use repository paper-state fallback because remote state is unavailable: ${remoteError.message}`);
+    }
     return normalizeState(JSON.parse(raw));
   } catch {
+    if (REMOTE_STATE_URL && remoteError) {
+      throw remoteError;
+    }
     return normalizeState({});
   }
 }
@@ -106,6 +160,55 @@ function normalizeState(input) {
     lastTradeDate: input.lastTradeDate || null,
     lastDecision: input.lastDecision || null,
     runLog: Array.isArray(input.runLog) ? input.runLog : [],
+  };
+}
+
+function stateTime(state) {
+  const time = Date.parse(state?.generatedAt || "");
+  return Number.isFinite(time) ? time : 0;
+}
+
+function tradeUpdateTime(trade) {
+  return Math.max(
+    Date.parse(trade?.resolvedAt || "") || 0,
+    Date.parse(trade?.closedTime || "") || 0,
+    Date.parse(trade?.lastCheckedAt || "") || 0,
+    Date.parse(trade?.openedAt || trade?.date || "") || 0,
+  );
+}
+
+function mergeUniqueById(items, idFn, limit = Infinity) {
+  const byId = new Map();
+  for (const item of items) {
+    const id = idFn(item);
+    if (!id) continue;
+    if (!byId.has(id)) byId.set(id, item);
+  }
+  return [...byId.values()].slice(0, limit);
+}
+
+function mergeTrade(existing, incoming) {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  const existingClosed = ["WON", "LOST"].includes(String(existing.status || "").toUpperCase());
+  const incomingClosed = ["WON", "LOST"].includes(String(incoming.status || "").toUpperCase());
+  if (incomingClosed && !existingClosed) return incoming;
+  if (existingClosed && !incomingClosed) return existing;
+  return tradeUpdateTime(incoming) >= tradeUpdateTime(existing) ? incoming : existing;
+}
+
+function mergeStates(primary, secondary) {
+  const base = stateTime(primary) >= stateTime(secondary) ? primary : secondary;
+  const other = base === primary ? secondary : primary;
+  const tradesById = new Map();
+  for (const trade of [...(other.trades || []), ...(base.trades || [])]) {
+    tradesById.set(trade.id, mergeTrade(tradesById.get(trade.id), trade));
+  }
+  return {
+    ...base,
+    trades: [...tradesById.values()].sort((a, b) => tradeUpdateTime(b) - tradeUpdateTime(a)),
+    evaluations: mergeUniqueById([...(base.evaluations || []), ...(other.evaluations || [])], (item) => item.id, MAX_HISTORY),
+    runLog: mergeUniqueById([...(base.runLog || []), ...(other.runLog || [])], (item) => item.runAt, 120),
   };
 }
 
@@ -154,6 +257,41 @@ function daysToEnd(endDate) {
   const end = Date.parse(endDate || "");
   if (!Number.isFinite(end)) return null;
   return Math.max(1, (end - Date.now()) / 86400000);
+}
+
+function inferredEndDateFromQuestion(question, fallbackDate = null) {
+  const match = String(question || "").match(/\b(?:by|on|before|through)\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:,\s*(\d{4}))?/i);
+  if (!match) return null;
+  const months = {
+    january: 0,
+    february: 1,
+    march: 2,
+    april: 3,
+    may: 4,
+    june: 5,
+    july: 6,
+    august: 7,
+    september: 8,
+    october: 9,
+    november: 10,
+    december: 11,
+  };
+  const fallback = new Date(fallbackDate || Date.now());
+  const year = Number(match[3]) || (Number.isFinite(fallback.getTime()) ? fallback.getUTCFullYear() : new Date().getUTCFullYear());
+  const month = months[match[1].toLowerCase()];
+  const day = Number(match[2]);
+  if (!Number.isInteger(month) || !Number.isFinite(day)) return null;
+  const inferred = new Date(Date.UTC(year, month, day, 23, 59, 59));
+  return Number.isFinite(inferred.getTime()) ? inferred.toISOString() : null;
+}
+
+function correctedEndDate(question, rawEndDate, fallbackDate = null) {
+  const inferred = inferredEndDateFromQuestion(question, rawEndDate || fallbackDate);
+  if (!inferred) return rawEndDate || null;
+  const rawTime = Date.parse(rawEndDate || "");
+  const inferredTime = Date.parse(inferred);
+  if (!Number.isFinite(rawTime) || inferredTime > rawTime) return inferred;
+  return rawEndDate || inferred;
 }
 
 function tagQuestion(question) {
@@ -395,7 +533,7 @@ async function fetchMarketBySlug(slug) {
 }
 
 async function markOpenTrade(trade) {
-  if (!["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"].includes(trade.status)) return trade;
+  if (!OPEN_STATUSES.has(trade.status)) return trade;
 
   const checkedAt = nowIso();
   const cost = totalCost(trade);
@@ -425,7 +563,7 @@ async function markOpenTrade(trade) {
   const prices = parseOutcomePrices(market);
   const resolvedPrice = outcomeIndex >= 0 ? prices[outcomeIndex] : null;
   const eventSlug = marketEventSlug(market);
-  const endDate = market.endDate || trade.endDate || null;
+  const endDate = correctedEndDate(market.question || trade.question, market.endDate || trade.endDate || null, trade.openedAt || trade.date);
   const remainingDays = endDate ? daysToEnd(endDate) : null;
   const base = {
     ...trade,
@@ -729,7 +867,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   const liquidity = Number(market.liquidity || 0);
   const tags = tagQuestion(question);
   const risk = riskProfile({ question, slug: market.slug, outcome, tags });
-  const days = daysToEnd(market.endDate);
+  const days = daysToEnd(correctedEndDate(question, market.endDate, market.createdAt || market.updatedAt));
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
   const execution = simulateMarketBuy(asks, stake);
   const fees = feeConfig(market);
@@ -1059,19 +1197,19 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
 
 function openRisk(trades) {
   return trades
-    .filter((trade) => ["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"].includes(trade.status))
+    .filter((trade) => OPEN_STATUSES.has(trade.status))
     .reduce((sum, trade) => sum + Number(trade.maxLossUsdc || trade.stakeUsdc || 0), 0);
 }
 
 function alreadyOpen(trades, tokenId) {
-  return trades.some((trade) => ["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"].includes(trade.status) && trade.tokenId === tokenId);
+  return trades.some((trade) => OPEN_STATUSES.has(trade.status) && trade.tokenId === tokenId);
 }
 
 function riskBlock(candidate, trades) {
   const candidateKeys = new Set(Array.isArray(candidate.riskGroupKeys) ? candidate.riskGroupKeys : []);
   if (!candidateKeys.size) return null;
 
-  for (const trade of trades.filter((item) => ["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"].includes(item.status))) {
+  for (const trade of trades.filter((item) => OPEN_STATUSES.has(item.status))) {
     const tradeKeys = Array.isArray(trade.riskGroupKeys) ? trade.riskGroupKeys : [];
     const overlap = tradeKeys.filter((key) => candidateKeys.has(key));
     if (overlap.length) {
@@ -1192,6 +1330,126 @@ function maybeOpenDailyTrade(state, eligible) {
   state.trades.unshift(trade);
   state.lastTradeDate = today;
   return { action: "OPENED", reason: "best eligible non-correlated candidate", trade, available: available - stake, skippedForRisk };
+}
+
+function recoveryEvaluation(state, anchor) {
+  const evaluations = Array.isArray(state.evaluations) ? state.evaluations : [];
+  const candidates = evaluations.filter((item) => String(item.tokenId || "") === String(anchor.tokenId));
+  if (!candidates.length) return null;
+  const targetTime = Date.parse(anchor.openedAt || "");
+  return candidates.sort((a, b) => {
+    if (a.id === anchor.sourceEvaluationId) return -1;
+    if (b.id === anchor.sourceEvaluationId) return 1;
+    const aDistance = Math.abs((Date.parse(a.evaluatedAt || "") || targetTime || 0) - (targetTime || 0));
+    const bDistance = Math.abs((Date.parse(b.evaluatedAt || "") || targetTime || 0) - (targetTime || 0));
+    return aDistance - bDistance;
+  })[0];
+}
+
+function recoveredTradeFromAnchor(state, anchor) {
+  const evaluation = recoveryEvaluation(state, anchor) || {};
+  const entryPrice = Number(anchor.entryPrice ?? evaluation.marketPrice);
+  const stake = Number(evaluation.stakeUsdc || PORTFOLIO_USDC * MAX_FRACTION);
+  const shares = Number(anchor.shares ?? evaluation.executableShares ?? (Number.isFinite(entryPrice) && entryPrice > 0 ? stake / entryPrice : 0));
+  const takerFee = Number(anchor.takerFeeUsdc ?? evaluation.takerFeeUsdc ?? 0);
+  const totalCostUsdc = Number(anchor.totalCostUsdc ?? evaluation.totalCostUsdc ?? (stake + takerFee));
+  const netGainIfWin = Number(anchor.netGainIfWinUsdc ?? evaluation.netGainIfWinUsdc ?? (shares - totalCostUsdc));
+  const sourceEvaluation = {
+    id: anchor.sourceEvaluationId || evaluation.id || null,
+    evaluatedAt: evaluation.evaluatedAt || null,
+    status: evaluation.status || "ELIGIBLE",
+    thesisType: evaluation.thesisType || null,
+    aiProbability: evaluation.aiProbability ?? null,
+    rawProbability: evaluation.rawProbability ?? null,
+    marketPrice: Number.isFinite(entryPrice) ? entryPrice : evaluation.marketPrice,
+    edge: evaluation.edge ?? null,
+    expectedValueUsdc: evaluation.expectedValueUsdc ?? null,
+    annualizedReturn: evaluation.annualizedReturn ?? null,
+    probabilityThesis: evaluation.probabilityThesis || "",
+    analysisSummary: evaluation.analysisSummary || "",
+    aiAnalysis: evaluation.aiAnalysis || null,
+    evidence: evaluation.evidence || [],
+  };
+
+  return normalizeTrade({
+    id: anchor.id,
+    openedAt: anchor.openedAt,
+    date: anchor.date,
+    status: "OPEN",
+    recoveredAt: nowIso(),
+    recoveryReason: anchor.reason,
+    sourceEvaluationId: sourceEvaluation.id,
+    sourceEvaluation,
+    question: anchor.question || evaluation.question,
+    slug: anchor.slug || evaluation.slug,
+    eventSlug: anchor.eventSlug || evaluation.eventSlug,
+    outcome: anchor.outcome || evaluation.outcome,
+    tokenId: anchor.tokenId,
+    tags: evaluation.tags || [],
+    riskCategory: evaluation.riskCategory,
+    riskPrimaryEntity: evaluation.riskPrimaryEntity,
+    riskGroupKeys: evaluation.riskGroupKeys,
+    riskGroupLabels: evaluation.riskGroupLabels,
+    executionMode: evaluation.executionMode || "MARKET_BUY",
+    entryPrice,
+    bestAsk: Number(anchor.entryPrice ?? evaluation.bestAsk ?? evaluation.marketPrice),
+    bestBid: evaluation.bestBid,
+    spread: evaluation.spread,
+    slippage: evaluation.slippage ?? 0,
+    liquidity: evaluation.liquidity,
+    volume24hr: evaluation.volume24hr,
+    daysToResolution: evaluation.daysToResolution,
+    aiProbability: evaluation.aiProbability,
+    rawProbability: evaluation.rawProbability,
+    thesisType: evaluation.thesisType,
+    annualizedReturn: evaluation.annualizedReturn,
+    expectedValueUsdc: evaluation.expectedValueUsdc,
+    stakeUsdc: Number(stake.toFixed(2)),
+    shares: Number(shares.toFixed(4)),
+    feesEnabled: evaluation.feesEnabled ?? takerFee > 0,
+    feeType: evaluation.feeType || (takerFee > 0 ? "sports_fees_v2" : "fee_free"),
+    feeRate: evaluation.feeRate ?? 0,
+    takerFeeUsdc: takerFee,
+    totalCostUsdc,
+    grossGainIfWinUsdc: Number((shares - stake).toFixed(4)),
+    netGainIfWinUsdc: netGainIfWin,
+    maxLossUsdc: Number(anchor.maxLossUsdc ?? evaluation.maxLossUsdc ?? totalCostUsdc),
+    currentPrice: entryPrice,
+    currentValueUsdc: Number(stake.toFixed(2)),
+    unrealizedPnlUsdc: 0,
+    unrealizedPnlPct: 0,
+    marketFills: evaluation.marketFills || [{ price: entryPrice, size: Number(shares.toFixed(4)), costUsdc: Number(stake.toFixed(2)) }],
+    aiAnalysis: evaluation.aiAnalysis,
+    probabilityThesis: evaluation.probabilityThesis,
+    analysisModel: evaluation.analysisModel,
+    analysisSummary: evaluation.analysisSummary,
+    statusNote: "Recovered into ledger before market refresh.",
+  });
+}
+
+function recoverLedgerGaps(state) {
+  let recovered = 0;
+  for (const anchor of LEDGER_RECOVERY_ANCHORS) {
+    const exists = state.trades.some((trade) => trade.id === anchor.id || String(trade.tokenId || "") === String(anchor.tokenId));
+    if (exists) continue;
+    state.trades.unshift(recoveredTradeFromAnchor(state, anchor));
+    recovered += 1;
+  }
+  if (recovered > 0) {
+    state.runLog = [
+      {
+        runAt: nowIso(),
+        evaluatedCount: 0,
+        eligibleCount: 0,
+        action: "RECOVER_LEDGER",
+        reason: `recovered ${recovered} paper trade(s) missing after state regression`,
+        riskSkippedCount: 0,
+        refreshOnly: true,
+      },
+      ...state.runLog,
+    ].slice(0, 120);
+  }
+  return recovered;
 }
 
 function closedOutcome(trade) {
@@ -1499,6 +1757,7 @@ async function writeState(state) {
 
 async function run() {
   const state = await readState();
+  recoverLedgerGaps(state);
   state.trades = await refreshTrades(state.trades);
   state.trades = await reviewClosedTradesWithAi(state.trades);
   state.learningProfile = buildLearningProfile(state.trades, state.learningProfile);

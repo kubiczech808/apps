@@ -64,6 +64,8 @@ jobs:
                   relative = path.relative_to(local_dir).as_posix()
                   if relative not in {"index.html", "api.php"} and not relative.startswith("assets/") and not relative.startswith("data/"):
                       continue
+                  if relative in {"data/paper-state.json", "data/live-state.json"}:
+                      continue
                   remote_parts = target_parts + relative.split("/")[:-1]
                   enter_dir(ftp, remote_parts)
                   with path.open("rb") as handle:
