@@ -98,6 +98,9 @@ AGENT_G_HANDOFF_STATE_FILE = g.AGENT_WORK_DIR / "AGENT_G_HANDOFF_STATE.json"
 AGENT_G_HISTORY_FILE = BASE_AGENT_G_HISTORY_FILE
 AGENT_G_MEMORY_FILE = BASE_AGENT_G_MEMORY_FILE
 AGENT_G_HANDOFF_VERSION = "agent-g-telegram-chat-fallback-v3"
+AGENT_D_RECHECK_AFTER_SECONDS = 5 * 60
+AGENT_D_ESCALATE_AFTER_SECONDS = 10 * 60
+DELEGATION_STALE_AFTER_SECONDS = 60 * 60
 g.MODE_TIMEOUTS = {
     "fast": 180,
     "balanced": 300,
@@ -126,6 +129,7 @@ Samostatnost a styl prace:
 - Kdyz narazis na realnou prekazku, nedavej opakovane otazky. Rozdel odpoved na: "Hotovo/pripraveno", "Blokuje me", "Jeden dalsi krok pro schvaleni".
 - Ptej se maximalne na jednu vec najednou a jen kdyz bez ni nejde pokracovat bez rizika.
 - Klientovi mas praci ulehcit: nos hotove navrhy, ne seznam moznosti bez doporuceni.
+- Kdyz delegovany agent nedoda vystup nebo se chova divne, prioritou je zprostredkovat reseni: recheck, reassign, eskalace Agentovi G, overeni vystupu. Klientovi posli kratky stav typu "Resim: predano Agentovi G, vystup overim.", ne omluvy a dlouhe technicke vysvetleni.
 - U navrhu nepouzivej ton "schval to". Lepsi default je: "Tady je navrh. Chces neco upravit, nebo to mam brat jako schvalene?".
 - Feedback od klienta je pracovni pravidlo, ne jen zprava v chatu. Kdyz Jakub nebo klient upozorni na ton, styl, proces, samostatnost nebo empatii, okamzite to ber jako preferenci pro priste.
 - Na feedback reaguj empaticky: kratce uznej smysl pripominky, rekni jak upravis chovani, a dal uz to v dalsich odpovedich dodrzuj. Neobhajuj se, nepitvej to a nevyzaduj dalsi vysvetleni, pokud neni nutne.
@@ -1684,6 +1688,9 @@ def parse_settings_command(text: str) -> str | None:
         xoz_activity_reply = parse_xoz_activity_request(text)
         if xoz_activity_reply:
             return xoz_activity_reply
+        intervention_reply = parse_delegation_intervention_request(text)
+        if intervention_reply:
+            return intervention_reply
         status_reply = parse_delegation_status_request(text)
         if status_reply:
             return status_reply
@@ -2110,8 +2117,18 @@ def load_orchestration_tasks() -> list[dict[str, Any]]:
 
 
 def save_orchestration_tasks(tasks: list[dict[str, Any]]) -> None:
+    try:
+        existing = json.loads(ORCHESTRATION_TASKS_FILE.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        existing = []
+    merged = [item for item in tasks if isinstance(item, dict)]
+    known_ids = {str(item.get("id") or "") for item in merged}
+    if isinstance(existing, list):
+        for item in existing:
+            if isinstance(item, dict) and str(item.get("id") or "") not in known_ids:
+                merged.append(item)
     ORCHESTRATION_TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ORCHESTRATION_TASKS_FILE.write_text(json.dumps(tasks[-200:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    ORCHESTRATION_TASKS_FILE.write_text(json.dumps(merged[-200:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def upsert_orchestration_task(
@@ -3625,6 +3642,39 @@ def parse_delegation_status_request(text: str) -> str | None:
     return f"Predchozi delegace jeste nema overeny vystup: {note}"
 
 
+def parse_delegation_intervention_request(text: str) -> str | None:
+    low = g.normalize_text(text)
+    if not any(term in low for term in ("udelej s tim neco", "vyres to", "popozen", "popohnat", "to je divne", "res to", "oprav to")):
+        return None
+    tasks = load_orchestration_tasks()
+    candidates = [
+        item for item in tasks
+        if isinstance(item, dict)
+        and str(item.get("status") or "") in {"ASSIGNED", "VERIFYING", "BLOCKED"}
+        and str(item.get("kind") or "") in {"x-social-draft", "xoz-social-draft", "technical-blocker"}
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+    task = candidates[0]
+    status, note = observe_delegation_task(task)
+    now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    task["status"] = "VERIFYING" if status == "BLOCKED" else status
+    task["last_observation"] = note
+    task["updated_at"] = now
+    agent = str(task.get("agent") or "agent")
+    if should_auto_escalate_to_agent_g(task, note):
+        escalated = escalate_task_to_agent_g(task, note)
+        task["status"] = "VERIFYING"
+        task["last_observation"] = "Predano Agentovi G k technicke oprave a overeni vystupu."
+        save_orchestration_tasks(tasks)
+        if escalated:
+            return "Resim: predano Agentovi G k oprave workflow Agent D. Vystup overim a poslu az konkretni vysledek."
+        return "Resim: Agent G uz ma tento blocker, overuji vystup."
+    save_orchestration_tasks(tasks)
+    return f"Resim: {agent} rechecknuty, vystup overim a poslu az konkretni vysledek."
+
+
 def parse_general_delegation_request(text: str) -> str | None:
     low = g.normalize_text(text)
     asks_delegation = any(term in low for term in (
@@ -4034,7 +4084,7 @@ def sanitize_virtual_assistant_reply(reply: str) -> str:
     if len(text) > 90 and text[-1].isalpha():
         sentence_end = max(text.rfind("."), text.rfind("!"), text.rfind("?"))
         trailing = text[sentence_end + 1 :].strip() if sentence_end >= 0 else text
-        if sentence_end > 80 and 12 <= len(trailing) <= 180:
+        if sentence_end > 40 and 12 <= len(trailing) <= 180:
             text = text[: sentence_end + 1].strip() + "\n\nPokracuju a poslu dalsi stav."
     technical_markers = (
         "Instance:",
@@ -4634,7 +4684,17 @@ def should_auto_escalate_to_agent_g(task: dict[str, Any], note: str = "") -> boo
     if kind != "x-social-draft" or agent != "Agent D":
         return False
     haystack = g.normalize_text(f"{note} {task.get('last_observation') or ''}")
-    return any(term in haystack for term in ("nevznikl overitelny x vystup", "assignment se nepropsal", "runner", "chyba", "blocker"))
+    return any(term in haystack for term in ("nevznikl overitelny x vystup", "rychly recheck", "pripravu eskalace", "assignment se nepropsal", "runner", "chyba", "blocker"))
+
+
+def agent_d_needs_proactive_recheck(task: dict[str, Any], note: str = "") -> bool:
+    if task.get("escalated_to_agent_g_at"):
+        return False
+    if str(task.get("kind") or "") != "x-social-draft" or str(task.get("agent") or "") != "Agent D":
+        return False
+    if task_age_seconds(task) <= AGENT_D_ESCALATE_AFTER_SECONDS:
+        return False
+    return should_auto_escalate_to_agent_g(task, note or str(task.get("last_observation") or ""))
 
 
 def escalate_task_to_agent_g(task: dict[str, Any], note: str) -> bool:
@@ -4968,8 +5028,13 @@ def x_task_observation(task: dict[str, Any]) -> tuple[str, str]:
     if isinstance(assignment, dict):
         assignment_text = str(assignment.get("text") or assignment.get("task") or "").strip()
     if assignment_text == str(task.get("topic") or "").strip():
-        if task_age_seconds(task) > 3600:
+        age = task_age_seconds(task)
+        if agent == "Agent D" and age > AGENT_D_ESCALATE_AFTER_SECONDS:
+            return "BLOCKED", f"{agent} ma zadani ulozene, ale do 10 minut nevznikl overitelny X vystup."
+        if age > DELEGATION_STALE_AFTER_SECONDS:
             return "BLOCKED", f"{agent} ma zadani ulozene, ale do 60 minut nevznikl overitelny X vystup."
+        if agent == "Agent D" and age > AGENT_D_RECHECK_AFTER_SECONDS:
+            return "VERIFYING", f"{agent} ma zadani ulozene, provadim rychly recheck a pripravu eskalace."
         return "VERIFYING", f"{agent} ma zadani ulozene, cekam na navrh nebo overitelny vystup."
     if task_age_seconds(task) > 900:
         return "BLOCKED", f"{agent} assignment se nepropsal do state souboru."
@@ -5073,7 +5138,12 @@ def delegation_monitor_once() -> None:
                 if escalate_task_to_agent_g(task, note):
                     g.log(f"Agent D blocker escalated to Agent G: {str(task.get('id') or '')}")
                 new_status = "VERIFYING"
-                note = "Agent D ma blocker; predano Agentovi G k technicke oprave."
+                note = "Resim: Agent D nedodal vystup vcas, predano Agentovi G k oprave. Vystup overim."
+                notify_result = telegram_notify_deduped(note, window_seconds=900)
+                if notify_result == "sent":
+                    g.log(f"-> {note}")
+                task["last_reported_status"] = "VERIFYING"
+                task["reported_at"] = now
             if new_status != status or note != task.get("last_observation"):
                 task["status"] = new_status
                 task["last_observation"] = note
@@ -5095,6 +5165,21 @@ def delegation_monitor_once() -> None:
             should_report = task.get("last_reported_status") != new_status or (
                 rechecking_reported_link and new_status == "DONE" and "http" in note
             ) or rechecking_xoz_buttons
+            if agent_d_needs_proactive_recheck(task, note):
+                if escalate_task_to_agent_g(task, note):
+                    g.log(f"Agent D proactive recheck escalated to Agent G: {str(task.get('id') or '')}")
+                    note = "Resim: Agent D nedodal vystup vcas, predano Agentovi G k oprave. Vystup overim."
+                    task["status"] = "VERIFYING"
+                    task["last_observation"] = note
+                    task["updated_at"] = now
+                    new_status = "VERIFYING"
+                    notify_result = telegram_notify_deduped(note, window_seconds=900)
+                    if notify_result == "sent":
+                        g.log(f"-> {note}")
+                    task["last_reported_status"] = "VERIFYING"
+                    task["reported_at"] = now
+                    changed = True
+                    should_report = True
             if new_status in {"DONE", "BLOCKED"} and should_report:
                 verb = "Hotovo" if new_status == "DONE" else "Blocker"
                 message = f"{verb}: {note}"
