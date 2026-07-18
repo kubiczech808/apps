@@ -2111,6 +2111,7 @@ function aiResearchPlan(array $config, array $seed): array
     $fallback['rationale'] = 'Research vychazi z firmy nalezene v katalogu Firmy.cz. AI ma pochopit, co seed firma prodava, komu to typicky pomaha a jaka B2B poptavka muze mit nejvyssi obchodni prinos. Cilem nejsou podobne firmy, ale firmy, ktere mohou byt zakaznikem nebo partnerem seed byznysu.';
     $fallback['email_angle'] = 'Kratke osloveni musi ukazat konkretni situaci, ve ktere kontaktovana firma muze nabidku seed firmy vyuzit.';
     $fallback['business_understanding'] = $seedDescription;
+    $fallback['targeting_reason'] = 'Keyword a lokace jsou odvozene z kategorie, webu a adresy seed firmy.';
     $fallback['location_scope'] = 'stejny_kraj';
     $fallback['target_location'] = aiResearchSeedRegionLabel($seed);
     $fallback['seed_description'] = $seedDescription;
@@ -2132,6 +2133,7 @@ function aiResearchPlan(array $config, array $seed): array
             'filters' => ['Seed subjekt musi mit dostupny web s citelnym popisem produktu nebo sluzeb.'],
             'scraping_queries' => [],
             'business_understanding' => $seedDescription,
+            'targeting_reason' => 'Bez weboveho kontextu nelze zodpovedne vysvetlit keyword ani lokalitu.',
             'location_scope' => 'stejny_kraj',
             'target_location' => aiResearchSeedRegionLabel($seed),
             'seed_description' => $seedDescription,
@@ -2187,9 +2189,10 @@ function aiResearchPlan(array $config, array $seed): array
             'firmy_description' => $seedDescription,
             'website_context' => $websiteContext,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Vrat pouze JSON {\"business_understanding\":\"...\",\"scraping_keyword\":\"...\",\"target_location\":\"...\",\"audience_label\":\"...\",\"email_angle\":\"...\"}. "
+        . "Vrat pouze JSON {\"business_understanding\":\"...\",\"scraping_keyword\":\"...\",\"target_location\":\"...\",\"targeting_reason\":\"...\",\"audience_label\":\"...\",\"email_angle\":\"...\"}. "
         . "business_understanding: 1-2 kratke vety v cestine, bez instrukci, bez slov 'AI', bez planu. Musi zminit konkretni produkty/sluzby z webu. "
         . "scraping_keyword: jen kategorie firem bez lokace. target_location: jen konkretni lokalita bez obecnych slov. "
+        . "targeting_reason: 1-2 konkretni vety, proc prave tato kategorie firem a tato lokalita dava obchodni smysl pro seed firmu. "
         . "audience_label: kratke pojmenovani koho hledame. email_angle: jedna veta konkretniho uhlu pro email. "
         . "Zakazane keywordy: 'relevantni B2B firmy', 'potencialni zakaznici', 'male firmy', 'firmy', 'sluzby pro firmy', 'B2B subjekty', 'vhodne firmy'.";
     try {
@@ -2211,6 +2214,10 @@ function aiResearchPlan(array $config, array $seed): array
         $understanding = truncatePlainText(trim((string)($json['business_understanding'] ?? ($json['business_summary'] ?? ''))), 420);
         if ($understanding !== '') {
             $plan['business_understanding'] = $understanding;
+        }
+        $targetingReason = truncatePlainText(trim((string)($json['targeting_reason'] ?? '')), 500);
+        if ($targetingReason !== '') {
+            $plan['targeting_reason'] = $targetingReason;
         }
         $targetLocation = aiResearchNormalizeTargetLocation((string)($json['target_location'] ?? ''), $seed);
         if ($targetLocation !== '') {
@@ -2974,6 +2981,8 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         . "Vsechny subject/html texty napis jednim jazykem podle market_language v planu (" . (string)($plan['market_language'] ?? 'cs') . "). "
         . "HTML je kratke unikatni obchodni osloveni pro dany kontakt, vecne a bez prehnanych slibu. "
         . "Email nesmi byt obecny. Musi vychazet z tohoto pochopeni seed webu: " . (string)($plan['business_understanding'] ?? '') . ". "
+        . "Zohledni take proc byl vybran keyword a lokace: " . (string)($plan['targeting_reason'] ?? '') . ". "
+        . "V emailu konkretne vyuzij keyword '" . aiResearchPrimaryKeyword($plan) . "' a lokaci '" . (string)($plan['target_location'] ?? '') . "' jen pokud to pusobi prirozene pro prijemce. "
         . "V emailu konkretne napoj nabidku seed firmy na typ kontaktovane firmy; nepouzivej prazdne vety typu 'vidime konkretni moznost spoluprace'.";
     try {
         $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
@@ -3073,16 +3082,44 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
     if ($apiKey === '') {
         return ['subject' => $fallbackSubject, 'html' => $fallbackHtml];
     }
-    $prompt = "Priprav vzor obchodniho osloveni pro AI research beh. "
-        . "Vzor ma byt pouzitelny jako ukazka strategie i v pripade, ze zatim nebyl prijat zadny konkretni kontakt. "
-        . "Seed byznys: " . json_encode($seed, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Plan cileni: " . json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Ukazkove nalezene kontakty: " . json_encode(array_slice($contacts, 0, 3), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
+    $acceptedContacts = array_values(array_filter($contacts, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
+    $sampleContacts = array_slice($acceptedContacts ?: $contacts, 0, 5);
+    $promptContext = [
+        'seed_business' => [
+            'name' => $seedBusiness,
+            'email' => (string)($seed['email'] ?? ''),
+            'website' => (string)($seed['website'] ?? ''),
+            'address' => (string)($seed['address'] ?? ''),
+            'source_url' => (string)($seed['source_url'] ?? ''),
+        ],
+        'business_understanding' => (string)($plan['business_understanding'] ?? ''),
+        'scraping_keyword' => aiResearchPrimaryKeyword($plan),
+        'target_location' => (string)($plan['target_location'] ?? ''),
+        'targeting_reason' => (string)($plan['targeting_reason'] ?? ''),
+        'audience_label' => (string)($plan['audience_label'] ?? ''),
+        'email_angle' => (string)($plan['email_angle'] ?? ''),
+        'search_url' => (string)($plan['search_url'] ?? ''),
+        'found_contacts' => array_map(static function ($contact): array {
+            return [
+                'email' => (string)($contact['email'] ?? ''),
+                'business' => (string)($contact['subject_name'] ?? ''),
+                'website' => (string)($contact['website'] ?? ''),
+                'address' => (string)($contact['address'] ?? ''),
+                'source_url' => (string)($contact['source_url'] ?? ''),
+                'fit_reason' => (string)($contact['fit_reason'] ?? ''),
+            ];
+        }, $sampleContacts),
+    ];
+    $prompt = "Priprav finalni navrh obchodniho osloveni pro AI research beh. "
+        . "Tento text vznikne pres API a ma byt vyslednym doporucenim, jak oslovit nalezene kontakty a s cim konkretne. "
+        . "Vstupni kontext: " . json_encode($promptContext, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Vrat pouze JSON {\"subject\":\"...\",\"html\":\"...\"}. "
         . "Jazyk pouzij podle market_language (" . $language . "). "
-        . "HTML bude kratke, vecne a bude odrazet konkretni B2B use-case, ne obecny spam. "
-        . "Musis vyjit z pochopeni webu seed firmy: " . (string)($plan['business_understanding'] ?? '') . ". "
-        . "Nepouzivej obecne vety typu 'mohla by byt relevantni nabidka'. Konkretne napis, co seed firma nabizi a proc to dava smysl pro vybrany typ kontaktu.";
+        . "HTML bude kratke, vecne, personalizovatelne pro nalezeny typ kontaktu a bez prehnanych slibu. "
+        . "Musis propojit tri veci: co seed firma realne dela podle business_understanding, proc bylo vybrane scraping_keyword + target_location podle targeting_reason, a jaka konkretni nabidka nebo use-case dava smysl pro nalezene kontakty. "
+        . "Nepis interní uvahu ani instrukce. Nepis obecne vety typu 'mohla by byt relevantni nabidka' nebo 'vidime moznost spoluprace'. "
+        . "Napis konkretne, s cim seed firma kontakt oslovuje, proc to souvisi s jeho typem byznysu, a navrhni jednoduchy dalsi krok. "
+        . "Pokud ve vzorku kontaktu neni zadny prijaty kontakt, stale vytvor text pro audience_label, ale jasne ho ukotvi v keywordu a lokaci.";
     try {
         $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
             'x-goog-api-key: ' . $apiKey,
@@ -3109,8 +3146,8 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
 {
     $now = date('c');
     $draft = aiResearchRunDraft($config, $seed, $plan, $accepted ?: $evaluated);
-    $draftSubject = trim((string)($accepted[0]['email_subject'] ?? '')) !== '' ? (string)$accepted[0]['email_subject'] : (string)$draft['subject'];
-    $draftHtml = trim(strip_tags((string)($accepted[0]['email_body_html'] ?? ''))) !== '' ? (string)$accepted[0]['email_body_html'] : (string)$draft['html'];
+    $draftSubject = (string)$draft['subject'];
+    $draftHtml = (string)$draft['html'];
     $ownerId = aiResearchOwnerUserId($pdo);
     $scrapingKeyword = aiResearchPrimaryKeyword($plan);
     $stmt = $pdo->prepare('
@@ -12341,6 +12378,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <p><strong>Databaze:</strong> <?= h((string)($run['search_source_label'] ?? '-')) ?></p>
                                 <p><strong>Klicove slovo:</strong> <?= h((string)($run['scraping_keyword'] ?? '')) ?></p>
                                 <p><strong>Lokace:</strong> <?= h((string)($runPlan['target_location'] ?? '')) ?></p>
+                                <?php if (trim((string)($runPlan['targeting_reason'] ?? '')) !== ''): ?><p><strong>Důvod cílení:</strong> <?= h((string)$runPlan['targeting_reason']) ?></p><?php endif; ?>
                                 <?php if (trim((string)($runPlan['search_url'] ?? '')) !== ''): ?><p><strong>URL hledani:</strong> <a href="<?= h((string)$runPlan['search_url']) ?>" target="_blank" rel="noopener"><?= h((string)$runPlan['search_url']) ?></a></p><?php endif; ?>
                             </section>
                             <section>
