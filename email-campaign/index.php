@@ -314,6 +314,13 @@ function handlePost(PDO $pdo, array $config): ?string
         return trim(syncImapReplies($pdo, $config));
     }
 
+    if ($action === 'run_ai_research_now') {
+        if (!canAccessAiResearch()) {
+            throw new RuntimeException('AI research neni pro tento ucet dostupny.');
+        }
+        return runAiResearchOnce($pdo, $config);
+    }
+
     if ($action === 'save_campaign') {
         $id = (int)($_POST['id'] ?? 0);
         $dailyLimit = max(1, min(500, (int)$_POST['daily_limit']));
@@ -1881,18 +1888,19 @@ function selectAiResearchSeedRecipient(PDO $pdo): ?array
           AND COALESCE(d.archived,0)=0
           AND d.owner_user_id=?
           AND r.email!=""
-          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id)
+          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND COALESCE(ar.accepted_count,0)>0)
+          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar_recent WHERE ar_recent.seed_recipient_id=r.id AND ar_recent.created_at>=?)
           AND r.id>?
         ORDER BY r.id ASC
         LIMIT 1';
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$ownerId, $lastId]);
+    $stmt->execute([$ownerId, date('c', time() - 12 * 3600), $lastId]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($row) {
         return $row;
     }
     $stmt = $pdo->prepare(str_replace('AND r.id>?', '', $sql));
-    $stmt->execute([$ownerId]);
+    $stmt->execute([$ownerId, date('c', time() - 12 * 3600)]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return $row ?: null;
 }
@@ -2121,6 +2129,22 @@ function aiResearchSeedCountry(array $seed): string
 
 function aiResearchSourceCountry(string $source): string
 {
+    $raw = strtolower($source);
+    if (preg_match('/herold|\.at|austria|rakous/u', $raw)) {
+        return 'AT';
+    }
+    if (preg_match('/dastelefonbuch|dasoertliche|gelbeseiten|\.de|germany|nemeck/u', $raw)) {
+        return 'DE';
+    }
+    if (preg_match('/zoznam|\.sk|slovak|slovensko/u', $raw)) {
+        return 'SK';
+    }
+    if (preg_match('/pkt|panoramafirm|\.pl|poland|polsk/u', $raw)) {
+        return 'PL';
+    }
+    if (preg_match('/firmy\.cz|firmy_cz|\.cz|cesk/u', $raw)) {
+        return 'CZ';
+    }
     $source = normalizeScrapingSourceKey($source);
     if ($source === 'herold_at') {
         return 'AT';
@@ -2138,6 +2162,17 @@ function aiResearchSourceCountry(string $source): string
         return 'CZ';
     }
     return '';
+}
+
+function aiResearchDefaultSourceForCountry(string $country): string
+{
+    return [
+        'AT' => 'herold_at',
+        'DE' => 'gelbeseiten_de',
+        'SK' => 'zoznam_sk',
+        'PL' => 'panoramafirm_pl',
+        'CZ' => 'firmy_cz',
+    ][strtoupper(trim($country))] ?? 'firmy_cz';
 }
 
 function aiResearchKeywordCountryHint(string $keyword): string
@@ -2231,7 +2266,7 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
             }
             $source = aiResearchDefaultSourceForSeed($seed);
             if (!scrapingSourceIsActive($source)) {
-                $source = 'firmy_cz';
+                continue;
             }
             $queries[] = ['source' => $source, 'keyword' => $term, 'why' => 'konkretni fallback katalogova kategorie podle odhadnuteho trhu'];
             $keyword = $term;
@@ -2253,7 +2288,7 @@ function normalizeAiResearchMarketLanguage(string $language): string
 
 function aiResearchDefaultMarketLanguage(array $seed, array $plan = []): string
 {
-    $haystack = strtolower((string)($seed['address'] ?? '') . ' ' . (string)($seed['source_label'] ?? '') . ' ' . (string)($seed['source_url'] ?? '') . ' ' . json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    $haystack = strtolower((string)($seed['email'] ?? '') . ' ' . (string)($seed['website'] ?? '') . ' ' . (string)($seed['address'] ?? '') . ' ' . (string)($seed['source_label'] ?? '') . ' ' . (string)($seed['source_url'] ?? '') . ' ' . json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     if (preg_match('/slovak|slovensko|bratislava|kosice|zoznam|\\.sk/i', $haystack)) {
         return 'sk';
     }
@@ -2271,7 +2306,14 @@ function aiResearchDefaultMarketLanguage(array $seed, array $plan = []): string
 
 function aiResearchDefaultSourceForSeed(array $seed): string
 {
-    $haystack = strtolower((string)($seed['address'] ?? '') . ' ' . (string)($seed['source_label'] ?? '') . ' ' . (string)($seed['source_url'] ?? ''));
+    $country = aiResearchSeedCountry($seed);
+    if ($country !== '') {
+        $source = aiResearchDefaultSourceForCountry($country);
+        if (scrapingSourceIsActive($source)) {
+            return $source;
+        }
+    }
+    $haystack = strtolower((string)($seed['email'] ?? '') . ' ' . (string)($seed['subject_name'] ?? '') . ' ' . (string)($seed['website'] ?? '') . ' ' . (string)($seed['address'] ?? '') . ' ' . (string)($seed['source_label'] ?? '') . ' ' . (string)($seed['source_url'] ?? ''));
     if (preg_match('/slovak|slovensko|sk\b|bratislava|kosice|zoznam/i', $haystack)) {
         return 'zoznam_sk';
     }
@@ -11676,6 +11718,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <h2>AI research administrace</h2>
                 <p>Kazdou hodinu agent vybere jeden ulozeny kontakt, navrhne B2B cileni, najde max. 10 kontaktu, vyhodnoti relevanci a ulozi navrh osloveni.</p>
             </div>
+            <form method="post" class="inline">
+                <button type="submit" name="action" value="run_ai_research_now">Spustit research ted</button>
+            </form>
         </div>
         <table class="research-table"><thead><tr><th>Detail</th><th>Osloveni</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>AI cileni</th><th>Scraping keyword</th><th>Nalezeno</th><th>Vhodne</th><th>Zprava</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
@@ -12450,13 +12495,38 @@ function aiResearchRuns(PDO $pdo): array
         LIMIT 100
     ')->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as &$row) {
+        $plan = json_decode((string)($row['plan_json'] ?? ''), true);
+        if (is_array($plan)) {
+            $seed = aiResearchSeedFromRun($row);
+            $fixedPlan = aiResearchEnrichPlan($plan, $seed);
+            if (aiResearchPlanSignature($fixedPlan) !== aiResearchPlanSignature($plan)) {
+                $row['plan_json'] = json_encode($fixedPlan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: (string)$row['plan_json'];
+                $row['scraping_keyword'] = aiResearchPrimaryKeyword($fixedPlan);
+                $plan = $fixedPlan;
+                if ((string)($row['message'] ?? '') !== '') {
+                    $row['message'] .= ' Zobrazeni planu bylo prepocitano podle zeme seed subjektu.';
+                }
+            }
+        }
         if (trim((string)($row['scraping_keyword'] ?? '')) === '') {
-            $plan = json_decode((string)($row['plan_json'] ?? ''), true);
             $row['scraping_keyword'] = is_array($plan) ? aiResearchPrimaryKeyword($plan) : '';
         }
     }
     unset($row);
     return $rows;
+}
+
+function aiResearchSeedFromRun(array $run): array
+{
+    return [
+        'id' => (int)($run['seed_recipient_id'] ?? 0),
+        'email' => (string)($run['seed_email'] ?? ''),
+        'subject_name' => (string)($run['seed_business'] ?? ''),
+        'website' => (string)($run['seed_website'] ?? ''),
+        'address' => (string)($run['seed_address'] ?? ''),
+        'source_label' => (string)($run['seed_source_label'] ?? ''),
+        'source_url' => (string)($run['seed_source_url'] ?? ''),
+    ];
 }
 
 function aiResearchRunLanguage(array $run, array $contacts = []): string
