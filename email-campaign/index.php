@@ -318,7 +318,7 @@ function handlePost(PDO $pdo, array $config): ?string
         if (!canAccessAiResearch()) {
             throw new RuntimeException('AI research neni pro tento ucet dostupny.');
         }
-        return runAiResearchOnce($pdo, $config);
+        return runAiResearchOnce($pdo, $config, true);
     }
 
     if ($action === 'save_campaign') {
@@ -1693,11 +1693,11 @@ function runCronAiResearch(PDO $pdo, array $config): string
     }
 }
 
-function runAiResearchOnce(PDO $pdo, array $config): string
+function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
 {
-    $seed = selectAiResearchSeedRecipient($pdo);
+    $seed = selectAiResearchSeedRecipient($pdo, $force);
     if (!$seed) {
-        return 'AI research: neni dostupny zadny ulozeny kontakt.';
+        return 'AI research: neni dostupny zadny aktivni ulozeny kontakt k vyhodnoceni. Research bere aktivni, nearchivovane kontakty s emailem; kontakty s uz vhodnym AI vysledkem znovu nezpracovava.';
     }
     $basePlan = aiResearchPlan($config, $seed);
     $plans = [$basePlan];
@@ -1872,35 +1872,36 @@ function aiResearchOwnerUserId(PDO $pdo): int
     return $user ? (int)$user['id'] : 0;
 }
 
-function selectAiResearchSeedRecipient(PDO $pdo): ?array
+function selectAiResearchSeedRecipient(PDO $pdo, bool $force = false): ?array
 {
     $lastId = max(0, (int)(loadSettings($pdo)['ai_research_last_seed_id'] ?? 0));
     $ownerId = aiResearchOwnerUserId($pdo);
     if ($ownerId < 1) {
         return null;
     }
-    $sql = '
-        SELECT r.id, r.email, r.subject_name, r.website, r.address, r.name, r.source_label, r.source_url
+    $recentSql = $force ? '' : 'AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar_recent WHERE ar_recent.seed_recipient_id=r.id AND ar_recent.created_at>=?)';
+    $baseSql = '
+        SELECT r.id, r.email, r.subject_name, r.website, r.address, r.name, r.source_label, r.source_url,
+               d.owner_user_id seed_owner_user_id,
+               d.name seed_database_name
         FROM recipients r
         JOIN contact_databases d ON d.id=r.list_id
         WHERE r.status="active"
           AND COALESCE(r.archived,0)=0
           AND COALESCE(d.archived,0)=0
-          AND d.owner_user_id=?
           AND r.email!=""
           AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND COALESCE(ar.accepted_count,0)>0)
-          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar_recent WHERE ar_recent.seed_recipient_id=r.id AND ar_recent.created_at>=?)
-          AND r.id>?
-        ORDER BY r.id ASC
-        LIMIT 1';
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute([$ownerId, date('c', time() - 12 * 3600), $lastId]);
+          ' . $recentSql . '
+    ';
+    $values = $force ? [] : [date('c', time() - 12 * 3600)];
+    $stmt = $pdo->prepare($baseSql . ' AND r.id>? ORDER BY r.id ASC LIMIT 1');
+    $stmt->execute([...$values, $lastId]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($row) {
         return $row;
     }
-    $stmt = $pdo->prepare(str_replace('AND r.id>?', '', $sql));
-    $stmt->execute([$ownerId, date('c', time() - 12 * 3600)]);
+    $stmt = $pdo->prepare($baseSql . ' ORDER BY r.id ASC LIMIT 1');
+    $stmt->execute($values);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     return $row ?: null;
 }
@@ -2368,8 +2369,8 @@ function aiResearchCandidateContactsFromRecipients(PDO $pdo, array $seed, array 
     if (!$terms) {
         return [];
     }
-    $conditions = ['r.archived=0', 'r.status="active"', 'r.email!=""', 'd.owner_user_id=?'];
-    $values = [$ownerId];
+    $conditions = ['r.archived=0', 'r.status="active"', 'r.email!=""', 'r.id<>?'];
+    $values = [(int)($seed['id'] ?? 0)];
     $termConditions = [];
     foreach (array_slice($terms, 0, 12) as $term) {
         $like = '%' . $term . '%';
@@ -11795,6 +11796,15 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <section class="scraping-result-group">
                                 <div class="scraping-result-group-head"><strong>Nalezene kontakty</strong><span><?= h((string)count($runContacts)) ?></span></div>
                                 <div class="scraping-result-list">
+                                    <?php if (!$runContacts): ?>
+                                    <article class="scraping-result-item">
+                                        <div class="scraping-result-title">
+                                            <strong>Kontakt nenalezen</strong>
+                                            <?= statusBadge((string)$run['status']) ?>
+                                        </div>
+                                        <p><?= h((string)($run['message'] ?: 'Hledani probehlo, ale nebyl nalezen zadny kontakt, ktery by AI mohla vyhodnotit jako vhodny.')) ?></p>
+                                    </article>
+                                    <?php endif; ?>
                                     <?php foreach ($runContacts as $contact): ?>
                                     <article class="scraping-result-item">
                                         <div class="scraping-result-title">
