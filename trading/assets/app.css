@@ -152,6 +152,19 @@ button {
   font-size: 12px;
 }
 
+.account-summary {
+  margin-top: 12px;
+}
+
+.account-summary[hidden],
+.bot-status[hidden] {
+  display: none;
+}
+
+.account-summary .bot-summary {
+  margin-bottom: 0;
+}
+
 .metric-card {
   min-width: 0;
   padding: 14px;

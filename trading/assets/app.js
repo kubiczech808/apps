@@ -53,6 +53,7 @@ const els = {
   primaryPanelTitle: document.querySelector("[data-primary-panel-title]"),
   secondaryPanelTitle: document.querySelector("[data-secondary-panel-title]"),
   botStatus: document.querySelector("[data-bot-status]"),
+  accountSummary: document.querySelector("[data-account-summary]"),
   botTrades: document.querySelector("[data-bot-trades]"),
   closedTrades: document.querySelector("[data-closed-trades]"),
   closedSummary: document.querySelector("[data-closed-summary]"),
@@ -187,6 +188,8 @@ function syncModeUi() {
   if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = live ? "Opened live trades" : "Opened paper trades";
   if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = live ? "Closed live trades" : "Closed paper trades";
   if (els.evaluationControls) els.evaluationControls.style.display = "";
+  if (els.accountSummary) els.accountSummary.hidden = !live;
+  if (els.botStatus) els.botStatus.hidden = live;
   syncLiveActivationUi();
 }
 
@@ -1002,7 +1005,12 @@ async function loadLiveState() {
     els.portfolioOpenPlPct.textContent = "-";
     els.portfolioRisk.textContent = "-";
     els.portfolioFree.textContent = "-";
-    els.botStatus.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+    if (els.accountSummary) {
+      els.accountSummary.hidden = false;
+      els.accountSummary.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+    }
+    els.botStatus.innerHTML = "";
+    els.botStatus.hidden = true;
     els.botTrades.innerHTML = '<div class="empty">Live Polymarket account state is not available yet.</div>';
     if (els.closedTrades) els.closedTrades.innerHTML = '<div class="empty">Closed live trades are not available yet.</div>';
     if (els.closedSummary) els.closedSummary.textContent = "offline";
@@ -1022,6 +1030,11 @@ function loadDashboardState() {
 function renderBotState(botState) {
   state.botState = botState;
   syncModeUi();
+  if (els.accountSummary) {
+    els.accountSummary.hidden = true;
+    els.accountSummary.innerHTML = "";
+  }
+  els.botStatus.hidden = false;
   refreshEligibilityThreshold();
   refreshRiskAllocation();
   refreshLimitOrders();
@@ -1264,7 +1277,9 @@ function renderLiveState(liveState) {
   els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || marketValue || 0));
   els.portfolioFree.textContent = Number.isFinite(cash) ? `${money(cash)} cash` : "cash not available";
 
-  els.botStatus.innerHTML = `
+  if (els.accountSummary) {
+    els.accountSummary.hidden = false;
+    els.accountSummary.innerHTML = `
     <div class="bot-summary">
       <div>
         <span class="label">Synced account</span>
@@ -1313,6 +1328,9 @@ function renderLiveState(liveState) {
       </div>
     </div>
   `;
+  }
+  els.botStatus.innerHTML = "";
+  els.botStatus.hidden = true;
 
   els.botTrades.innerHTML = renderTradeRows(openedRows, "Zatim zadne otevrene live pozice ani limit objednavky na napojenem Polymarket uctu.", {
     tableKey: "live",
