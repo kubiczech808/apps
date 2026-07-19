@@ -11,6 +11,11 @@ final class AiResearchTemporaryException extends RuntimeException
 {
 }
 
+function isAiResearchAdminEmail(string $email): bool
+{
+    return hash_equals(AI_RESEARCH_ALLOWED_EMAIL, strtolower(trim($email)));
+}
+
 date_default_timezone_set('Europe/Prague');
 
 session_start();
@@ -72,6 +77,7 @@ $migrationNotice = null;
 try {
     $config = effectiveConfig($pdo, $baseConfig);
     ensureAppAuthUsers($pdo, $config);
+    hardenAppUserRoles($pdo);
     resetAiResearchDataIfNeeded($pdo);
     releaseAiResearchRunsWithFixedWebsiteContext($pdo);
     markStaleAiResearchRuns($pdo);
@@ -5373,7 +5379,7 @@ function handleGoogleAuthCallback(PDO $pdo, array $config): void
         if (trim((string)($config['cron_token'] ?? '')) === '') {
             setSetting($pdo, 'cron_token', bin2hex(random_bytes(24)));
         }
-        upsertAppUser($pdo, $email, $hash, hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL));
+        upsertAppUser($pdo, $email, $hash, isAiResearchAdminEmail($email));
         $_SESSION['auth'] = true;
         $_SESSION['auth_email'] = $email;
         $_SESSION['auth_provider'] = 'google';
@@ -5509,7 +5515,7 @@ function saveSetup(PDO $pdo): void
     setSetting($pdo, 'admin_email', $email);
     setSetting($pdo, 'app_password_hash', $hash);
     setSetting($pdo, 'cron_token', $token);
-    upsertAppUser($pdo, $email, $hash, hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL));
+    upsertAppUser($pdo, $email, $hash, isAiResearchAdminEmail($email));
 }
 
 function saveSmtpSettings(PDO $pdo): void
@@ -5675,9 +5681,9 @@ function ensureAppAuthUsers(PDO $pdo, array $config): void
     if ($lastResetUsed && $lastResetEmail !== '' && $legacyEmail !== '' && !hash_equals($lastResetEmail, $legacyEmail)) {
         $legacyHashForLegacy = '';
     }
-    $researchHash = ($lastResetUsed && hash_equals($lastResetEmail, AI_RESEARCH_ALLOWED_EMAIL)) ? $legacyHash : '';
+    $researchHash = ($lastResetUsed && isAiResearchAdminEmail($lastResetEmail)) ? $legacyHash : '';
     if ($legacyEmail !== '' && filter_var($legacyEmail, FILTER_VALIDATE_EMAIL)) {
-        upsertAppUser($pdo, $legacyEmail, $legacyHashForLegacy, hash_equals($legacyEmail, AI_RESEARCH_ALLOWED_EMAIL));
+        upsertAppUser($pdo, $legacyEmail, $legacyHashForLegacy, isAiResearchAdminEmail($legacyEmail));
     }
     upsertAppUser($pdo, AI_RESEARCH_ALLOWED_EMAIL, $researchHash, true);
     $stmt = $pdo->prepare('UPDATE app_users SET can_access_research=CASE WHEN email=? THEN 1 ELSE 0 END, updated_at=?');
@@ -5695,6 +5701,28 @@ function ensureAppAuthUsers(PDO $pdo, array $config): void
     }
 }
 
+function hardenAppUserRoles(PDO $pdo): void
+{
+    $now = date('c');
+    $stmt = $pdo->prepare('
+        UPDATE app_users
+        SET
+            role=CASE WHEN LOWER(email)=LOWER(?) THEN "admin" ELSE "user" END,
+            can_access_research=CASE WHEN LOWER(email)=LOWER(?) THEN 1 ELSE 0 END,
+            updated_at=?
+        WHERE
+            (LOWER(email)=LOWER(?) AND (role<>"admin" OR can_access_research<>1))
+            OR (LOWER(email)<>LOWER(?) AND (role<>"user" OR can_access_research<>0))
+    ');
+    $stmt->execute([
+        AI_RESEARCH_ALLOWED_EMAIL,
+        AI_RESEARCH_ALLOWED_EMAIL,
+        $now,
+        AI_RESEARCH_ALLOWED_EMAIL,
+        AI_RESEARCH_ALLOWED_EMAIL,
+    ]);
+}
+
 function upsertAppUser(PDO $pdo, string $email, string $passwordHash = '', bool $canAccessResearch = false): void
 {
     $email = strtolower(trim($email));
@@ -5702,10 +5730,11 @@ function upsertAppUser(PDO $pdo, string $email, string $passwordHash = '', bool 
         return;
     }
     $now = date('c');
+    $isAdmin = isAiResearchAdminEmail($email);
     $existing = appUserByEmail($pdo, $email, false);
     if ($existing) {
-        $fields = ['can_access_research=?', 'is_active=1', 'updated_at=?'];
-        $values = [hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL) && $canAccessResearch ? 1 : 0, $now];
+        $fields = ['role=?', 'can_access_research=?', 'is_active=1', 'updated_at=?'];
+        $values = [$isAdmin ? 'admin' : 'user', $isAdmin && $canAccessResearch ? 1 : 0, $now];
         if ($passwordHash !== '' && (string)($existing['password_hash'] ?? '') === '') {
             $fields[] = 'password_hash=?';
             $values[] = $passwordHash;
@@ -5715,8 +5744,8 @@ function upsertAppUser(PDO $pdo, string $email, string $passwordHash = '', bool 
         $stmt->execute($values);
         return;
     }
-    $stmt = $pdo->prepare('INSERT INTO app_users (email, password_hash, role, can_access_research, is_active, created_at, updated_at) VALUES (?, ?, "admin", ?, 1, ?, ?)');
-    $stmt->execute([$email, $passwordHash, hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL) && $canAccessResearch ? 1 : 0, $now, $now]);
+    $stmt = $pdo->prepare('INSERT INTO app_users (email, password_hash, role, can_access_research, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)');
+    $stmt->execute([$email, $passwordHash, $isAdmin ? 'admin' : 'user', $isAdmin && $canAccessResearch ? 1 : 0, $now, $now]);
 }
 
 function upsertCustomerAppUser(PDO $pdo, string $email): ?array
@@ -5725,13 +5754,13 @@ function upsertCustomerAppUser(PDO $pdo, string $email): ?array
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         return null;
     }
-    if (hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL)) {
+    if (isAiResearchAdminEmail($email)) {
         return null;
     }
     $now = date('c');
     $existing = appUserByEmail($pdo, $email, false);
     if ($existing) {
-        $stmt = $pdo->prepare('UPDATE app_users SET role=CASE WHEN role="" THEN "user" ELSE role END, can_access_research=0, is_active=1, updated_at=? WHERE id=?');
+        $stmt = $pdo->prepare('UPDATE app_users SET role="user", can_access_research=0, is_active=1, updated_at=? WHERE id=?');
         $stmt->execute([$now, (int)$existing['id']]);
         return appUserByEmail($pdo, $email, false);
     }
@@ -5772,7 +5801,7 @@ function currentAppUserId(PDO $pdo): int
 function canSwitchAppUsers(PDO $pdo): bool
 {
     $adminEmail = strtolower(trim((string)($_SESSION['admin_auth_email'] ?? $_SESSION['auth_email'] ?? '')));
-    if ($adminEmail === '' || !hash_equals(AI_RESEARCH_ALLOWED_EMAIL, $adminEmail)) {
+    if ($adminEmail === '' || !isAiResearchAdminEmail($adminEmail)) {
         return false;
     }
     $user = appUserByEmail($pdo, $adminEmail);
@@ -5902,7 +5931,7 @@ function scopedSettingKey(PDO $pdo, string $key): string
 function appUserCanRequestPasswordReset(PDO $pdo, string $email): bool
 {
     $user = appUserByEmail($pdo, $email);
-    return $user !== null || hash_equals(AI_RESEARCH_ALLOWED_EMAIL, strtolower(trim($email)));
+    return $user !== null || isAiResearchAdminEmail($email);
 }
 
 function requestPasswordReset(PDO $pdo, array $config): string
@@ -5912,7 +5941,7 @@ function requestPasswordReset(PDO $pdo, array $config): string
         throw new RuntimeException('Zadej platny email.');
     }
     if (appUserCanRequestPasswordReset($pdo, $email)) {
-        upsertAppUser($pdo, $email, '', hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL));
+        upsertAppUser($pdo, $email, '', isAiResearchAdminEmail($email));
         $user = appUserByEmail($pdo, $email);
         if (!$user) {
             throw new RuntimeException('Ucet pro obnovu hesla se nepodarilo pripravit.');
@@ -6028,8 +6057,9 @@ function saveAccountSettings(PDO $pdo, array $config): void
         if ($conflict && (int)$conflict['id'] !== (int)$currentUser['id']) {
             throw new RuntimeException('Tento prihlasovaci email uz pouziva jiny ucet.');
         }
-        $stmt = $pdo->prepare('UPDATE app_users SET email=?, can_access_research=?, updated_at=? WHERE id=?');
-        $stmt->execute([$adminEmail, hash_equals($adminEmail, AI_RESEARCH_ALLOWED_EMAIL) ? 1 : 0, date('c'), (int)$currentUser['id']]);
+        $isAdmin = isAiResearchAdminEmail($adminEmail);
+        $stmt = $pdo->prepare('UPDATE app_users SET email=?, role=?, can_access_research=?, updated_at=? WHERE id=?');
+        $stmt->execute([$adminEmail, $isAdmin ? 'admin' : 'user', $isAdmin ? 1 : 0, date('c'), (int)$currentUser['id']]);
         $_SESSION['auth_email'] = $adminEmail;
         if (hash_equals($currentAuthEmail, $legacyAdminEmail)) {
             setSetting($pdo, 'admin_email', $adminEmail);
@@ -13242,7 +13272,7 @@ function canAccessAiResearch(): bool
 {
     global $pdo;
     $email = strtolower(trim((string)($_SESSION['auth_email'] ?? '')));
-    if ($email === '' || !hash_equals(AI_RESEARCH_ALLOWED_EMAIL, $email)) {
+    if ($email === '' || !isAiResearchAdminEmail($email)) {
         return false;
     }
     try {
