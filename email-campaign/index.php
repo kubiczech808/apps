@@ -15331,6 +15331,11 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
     $keyword = aiResearchPrimaryKeyword($plan);
     $targetArea = aiResearchTargetAreaLabel($plan);
     $source = aiResearchPrimarySourceLabel($plan);
+    $businessUnderstanding = trim((string)($plan['business_understanding'] ?? ''));
+    $targetingReason = trim((string)($plan['targeting_reason'] ?? ''));
+    $emailAngle = trim((string)($plan['email_angle'] ?? ''));
+    $mainUseCase = trim((string)($plan['main_use_case'] ?? ''));
+    $decisionMaker = trim((string)($plan['decision_maker'] ?? ''));
     $unsubscribeUrl = aiResearchSeedOutreachUnsubscribeUrl($run);
     $unsubscribeHtmlCs = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Pokud už od nás podobné obchodní sdělení nechcete dostávat, můžete se <a href="' . h($unsubscribeUrl) . '">odhlásit zde</a>.</p>' : '';
     $unsubscribeHtmlSk = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Ak už od nás podobné obchodné oznámenia nechcete dostávať, môžete sa <a href="' . h($unsubscribeUrl) . '">odhlásiť tu</a>.</p>' : '';
@@ -15385,13 +15390,23 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . '<p>Czy chca Panstwo przejsc dalej i zobaczyc przygotowana kampanie?</p>'
             . $unsubscribeHtmlPl;
     } else {
-        $subject = 'Našli jsme relevantní B2B kontakty pro ' . $business;
+        $subject = 'Našli jsme nové B2B příležitosti pro ' . $business;
         $html = '<p>Dobrý den,</p>'
-            . '<p>prošli jsme společnost <strong>' . h($business) . '</strong> a připravili jsme konkrétní směr B2B oslovení podle toho, co vaše firma nabízí.</p>'
-            . '<p>Aktuálně jsme pro vás našli <strong>' . h($countLabel) . '</strong> relevantních kontaktů. Vyhledávání cílí na <strong>' . h($audience) . '</strong>, podle klíčového slova <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
-            . ($sampleText !== '' ? '<p>Ukázky nalezených subjektů: ' . h($sampleText) . '.</p>' : '')
-            . '<p>V aplikaci uvidíte celý seznam kontaktů, návrh emailu i nastavení kampaně ještě před tím, než by se cokoliv odeslalo.</p>'
-            . '<p>Chcete pokračovat a zkontrolovat připravené oslovení?</p>'
+            . '<p>podívali jsme se na <strong>' . h($business) . '</strong> a na základě toho, co firma nabízí, jsme připravili konkrétní směr B2B oslovení.</p>'
+            . ($businessUnderstanding !== '' ? '<p>' . h($businessUnderstanding) . '</p>' : '')
+            . '<p>Pro podobný typ nabídky dává smysl oslovit <strong>' . h($audience !== '' ? $audience : 'vybrané B2B kontakty') . '</strong>' . ($targetArea !== '' && $targetArea !== '-' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '. Aktuálně jsme našli <strong>' . h($countLabel) . '</strong> kontaktů, u kterých vidíme reálný důvod k oslovení.</p>'
+            . '<p>V návrhu jsme pro vás připravili:</p>'
+            . '<ul>'
+            . '<li><strong>cílový segment</strong> podle toho, kdo může vaši nabídku prakticky využít, ne jen podle obecné podobnosti firem,</li>'
+            . '<li><strong>vyhledávací logiku</strong> postavenou na klíčovém slově <strong>' . h($keyword !== '' ? $keyword : 'vybraný segment') . '</strong>,</li>'
+            . '<li><strong>návrh oslovení</strong>, který pracuje s konkrétním problémem cílových firem a nepůsobí jako obecný hromadný e-mail.</li>'
+            . '</ul>'
+            . ($targetingReason !== '' ? '<p>' . h($targetingReason) . '</p>' : '')
+            . ($emailAngle !== '' ? '<p>Úhel oslovení: <strong>' . h($emailAngle) . '</strong></p>' : '')
+            . (($mainUseCase !== '' || $decisionMaker !== '') ? '<p>' . ($mainUseCase !== '' ? 'Hlavní use-case: <strong>' . h($mainUseCase) . '</strong>. ' : '') . ($decisionMaker !== '' ? 'Typicky dává smysl mířit na roli: <strong>' . h($decisionMaker) . '</strong>.' : '') . '</p>' : '')
+            . '<p>V aplikaci uvidíte celý seznam nalezených firem, připravený text e-mailu i nastavení kampaně ještě před tím, než by se cokoliv odeslalo.</p>'
+            . '<p>Chcete se podívat na připravené příležitosti a rozhodnout, jestli je chcete oslovit?</p>'
+            . '<p>S pozdravem,<br>tým osobnizkusenosti.cz</p>'
             . $unsubscribeHtmlCs;
     }
 
