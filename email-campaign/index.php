@@ -51,6 +51,7 @@ if (shouldRunStartupMaintenance()) {
         reconcileAiResearchProcessFilteredContacts($pdo);
         reconcileAiResearchProvisionedWorkspaces($pdo);
         ensureAiResearchSeedOutreachTokens($pdo);
+        normalizeAiResearchSeedOutreachStatuses($pdo);
         reconcileAiResearchSeedOutreachDuplicates($pdo);
     } catch (Throwable $e) {
         if ($isMysqlDatabase && databasePermissionDenied($e)) {
@@ -3230,6 +3231,11 @@ function ensureAiResearchSeedOutreachTokens(PDO $pdo): void
     }
 }
 
+function normalizeAiResearchSeedOutreachStatuses(PDO $pdo): void
+{
+    $pdo->exec('UPDATE ai_research_runs SET seed_outreach_status="done", updated_at=' . $pdo->quote(date('c')) . ' WHERE seed_outreach_status="sent"');
+}
+
 function reconcileAiResearchSeedOutreachDuplicates(PDO $pdo): void
 {
     $rows = $pdo->query('
@@ -3241,7 +3247,7 @@ function reconcileAiResearchSeedOutreachDuplicates(PDO $pdo): void
         ORDER BY seed_email ASC, scraping_keyword ASC, id ASC
     ')->fetchAll(PDO::FETCH_ASSOC);
     $seen = [];
-    $mark = $pdo->prepare('UPDATE ai_research_runs SET seed_outreach_status="skipped_duplicate", updated_at=? WHERE id=? AND seed_outreach_status NOT IN ("sent","unsubscribed","skipped_duplicate")');
+    $mark = $pdo->prepare('UPDATE ai_research_runs SET seed_outreach_status="skipped_duplicate", updated_at=? WHERE id=? AND seed_outreach_status NOT IN ("done","sent","unsubscribed","skipped_duplicate")');
     foreach ($rows as $row) {
         $key = strtolower(trim((string)$row['seed_email'])) . '|' . aiResearchFoldText((string)$row['scraping_keyword']);
         if ($key === '|') {
@@ -5366,7 +5372,7 @@ function markAiResearchSeedOutreachSent(PDO $pdo, int $runId): string
     $now = date('c');
     $update = $pdo->prepare('
         UPDATE ai_research_runs
-        SET seed_outreach_status="sent",
+        SET seed_outreach_status="done",
             seed_outreach_sent_at=CASE WHEN seed_outreach_sent_at="" THEN ? ELSE seed_outreach_sent_at END,
             updated_at=?
         WHERE LOWER(seed_email)=LOWER(?)
@@ -13652,7 +13658,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                         <form method="post" class="actions-row">
                             <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
                             <button type="submit" name="action" value="test_seed_outreach_send" class="secondary">Poslat test adminovi</button>
-                            <?php if (!in_array((string)($run['seed_outreach_status'] ?? ''), ['sent', 'unsubscribed', 'skipped_duplicate'], true)): ?>
+                            <?php if (!in_array((string)($run['seed_outreach_status'] ?? ''), ['done', 'sent', 'unsubscribed', 'skipped_duplicate'], true)): ?>
                             <button type="submit" name="action" value="mark_seed_outreach_sent" class="secondary">Označit jako oslovené</button>
                             <?php endif; ?>
                         </form>
@@ -14677,12 +14683,13 @@ function aiResearchLanguageLabel(string $language): string
 function aiResearchSeedOutreachStatusLabel(string $status): string
 {
     return [
-        'not_ready' => 'nepřipraveno',
-        'ready' => 'připraveno',
-        'sent' => 'osloveno',
-        'unsubscribed' => 'odhlášeno',
-        'skipped_duplicate' => 'duplicitní',
-    ][trim($status)] ?? 'připraveno';
+        'not_ready' => 'not_ready',
+        'ready' => 'ready',
+        'sent' => 'done',
+        'done' => 'done',
+        'unsubscribed' => 'unsubscribed',
+        'skipped_duplicate' => 'skipped_duplicate',
+    ][trim($status)] ?? 'ready';
 }
 
 function aiResearchSeedOutreachUnsubscribeUrl(array $run): string
@@ -15249,11 +15256,11 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
 
 function statusBadge(string $text): string
 {
-    $class = in_array($text, ['ano', 'smtp prijato', 'vlozeno', 'aktualizovano', 'finished', 'hotovo', 'bezi', 'Active', 'active', 'připraveno', 'osloveno'], true) || substr($text, -1) === 'x' ? 'good' : 'muted';
-    if (in_array($text, ['nezjisteno', 'nenapojeno', 'preskoceno', 'failed', 'chyba', 'paused', 'Paused', 'pozastaveno', 'nepřipraveno'], true)) {
+    $class = in_array($text, ['ano', 'smtp prijato', 'vlozeno', 'aktualizovano', 'finished', 'hotovo', 'bezi', 'Active', 'active', 'ready', 'done', 'připraveno', 'osloveno'], true) || substr($text, -1) === 'x' ? 'good' : 'muted';
+    if (in_array($text, ['nezjisteno', 'nenapojeno', 'preskoceno', 'failed', 'chyba', 'paused', 'Paused', 'pozastaveno', 'not_ready', 'nepřipraveno'], true)) {
         $class = 'warn';
     }
-    if (in_array($text, ['cancelled', 'zruseno', 'odhlášeno', 'duplicitní'], true)) {
+    if (in_array($text, ['cancelled', 'zruseno', 'unsubscribed', 'skipped_duplicate', 'odhlášeno', 'duplicitní'], true)) {
         $class = 'muted';
     }
     if (in_array($text, ['bezi', 'ceka'], true)) {
