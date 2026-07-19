@@ -124,10 +124,14 @@ if (isset($_GET['cron'])) {
         exit("Forbidden\n");
     }
     if (function_exists('set_time_limit')) {
-        @set_time_limit(110);
+        @set_time_limit(isset($_GET['ai_research']) ? 260 : 110);
     }
     if (isset($_GET['send_onboarding_demo'])) {
         echo sendOnboardingDemoInvite($pdo, $config);
+        exit;
+    }
+    if (isset($_GET['ai_research'])) {
+        echo runCronAiResearch($pdo, $config);
         exit;
     }
     echo sendBatch($pdo, $config);

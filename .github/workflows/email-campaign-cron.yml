@@ -48,4 +48,11 @@ jobs:
             cat /tmp/email-campaign-cron-body.txt
             test "$http_code" -ge 200 -a "$http_code" -lt 400
           }
+          call_ai_research() {
+            http_code=$(curl --show-error --silent --max-time 300 --output /tmp/email-campaign-ai-research-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&ai_research=1")
+            echo "AI research HTTP ${http_code}"
+            cat /tmp/email-campaign-ai-research-body.txt
+            test "$http_code" -ge 200 -a "$http_code" -lt 400
+          }
+          call_ai_research
           call_cron
