@@ -146,18 +146,37 @@ function pnlClass(value) {
 
 function storedMode() {
   try {
-    return localStorage.getItem(MODE_STORAGE_KEY) === "live" ? "live" : "paper";
+    const value = localStorage.getItem(MODE_STORAGE_KEY);
+    if (value === "live" || value === "paper-highReward" || value === "paper-conservative") return value;
+    return "paper-conservative";
   } catch {
-    return "paper";
+    return "paper-conservative";
   }
 }
 
 function saveMode(mode) {
   try {
-    localStorage.setItem(MODE_STORAGE_KEY, mode);
+    localStorage.setItem(MODE_STORAGE_KEY, normalizeMode(mode));
   } catch {
     // Ignore localStorage failures; the mode switch still works for this page load.
   }
+}
+
+function normalizeMode(mode) {
+  if (mode === "live" || mode === "paper-highReward" || mode === "paper-conservative") return mode;
+  return mode === "paper" ? "paper-conservative" : "paper-conservative";
+}
+
+function isLiveMode() {
+  return state.mode === "live";
+}
+
+function paperStrategyIdFromMode(mode = state.mode) {
+  return mode === "paper-highReward" ? "highReward" : "conservative";
+}
+
+function paperModeLabel(mode = state.mode) {
+  return paperStrategyIdFromMode(mode) === "highReward" ? "High reward" : "Conservative";
 }
 
 function storedLiveExecutionArmed() {
@@ -185,10 +204,10 @@ function setExecutionStatus(text, tone = "") {
 
 function syncExecutionButtons() {
   els.executionButtons.forEach((button) => {
-    const target = button.dataset.oneTimeExecution === "current" ? state.mode : button.dataset.oneTimeExecution;
+    const target = button.dataset.oneTimeExecution === "current" ? (isLiveMode() ? "live" : "paper") : button.dataset.oneTimeExecution;
     const busy = state.executionBusy === target;
     button.disabled = Boolean(state.executionBusy);
-    button.classList.toggle("live", state.mode === "live");
+    button.classList.toggle("live", isLiveMode());
     const labels = {
       paper: ["Run paper once", "Starting paper..."],
       live: ["Run live once", "Starting live..."],
@@ -207,16 +226,16 @@ function syncLiveActivationUi() {
 }
 
 function syncModeUi() {
-  const live = state.mode === "live";
+  const live = isLiveMode();
   els.modeButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.modeToggle === state.mode);
   });
   els.tabButtons.forEach((button) => {
     button.textContent = live ? button.dataset.liveLabel : button.dataset.paperLabel;
   });
-  if (els.portfolioTitle) els.portfolioTitle.textContent = live ? "Live Polymarket account" : "Autonomous paper portfolios";
-  if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = live ? "Opened live trades" : "Opened paper trades";
-  if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = live ? "Closed live trades" : "Closed paper trades";
+  if (els.portfolioTitle) els.portfolioTitle.textContent = live ? "Live Polymarket account" : `Paper - ${paperModeLabel()}`;
+  if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = live ? "Opened live trades" : `Opened ${paperModeLabel()} trades`;
+  if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = live ? "Closed live trades" : `Closed ${paperModeLabel()} trades`;
   if (els.evaluationControls) els.evaluationControls.style.display = "";
   if (els.accountSummary) els.accountSummary.hidden = !live;
   if (els.botStatus) els.botStatus.hidden = live;
@@ -842,7 +861,7 @@ function evaluationStatusLabel(item) {
 
 function eligibilityThresholdStorageKey() {
   const parts = [ELIGIBILITY_THRESHOLD_STORAGE_KEY, state.mode];
-  if (state.mode === "live") {
+  if (isLiveMode()) {
     const address = state.liveState?.account?.address || state.liveState?.account?.proxyWallet || "";
     if (address) parts.push(String(address).toLowerCase());
   }
@@ -851,7 +870,7 @@ function eligibilityThresholdStorageKey() {
 
 function accountScopedStorageKey(baseKey) {
   const parts = [baseKey, state.mode];
-  if (state.mode === "live") {
+  if (isLiveMode()) {
     const address = state.liveState?.account?.address || state.liveState?.account?.proxyWallet || "";
     if (address) parts.push(String(address).toLowerCase());
   }
@@ -963,7 +982,7 @@ function syncRiskAllocationControl(availableCapital = null, sourceLabel = "avail
 }
 
 function defaultLimitOrdersForMode() {
-  return state.mode === "live";
+  return isLiveMode();
 }
 
 function storedLimitOrders() {
@@ -1430,7 +1449,7 @@ async function loadLiveState(options = {}) {
 
 function loadDashboardState(options = {}) {
   syncModeUi();
-  return state.mode === "live" ? loadLiveState(options) : loadBotState();
+  return isLiveMode() ? loadLiveState(options) : loadBotState();
 }
 
 function paperPortfolioList(botState) {
@@ -1449,6 +1468,12 @@ function paperPortfolioList(botState) {
   }];
 }
 
+function selectedPaperPortfolio(botState) {
+  const portfolios = paperPortfolioList(botState);
+  const strategyId = paperStrategyIdFromMode();
+  return portfolios.find((item) => item.id === strategyId) || portfolios[0] || {};
+}
+
 function paperPortfolioTrades(portfolioState) {
   return (Array.isArray(portfolioState?.trades) ? portfolioState.trades : [])
     .map((trade) => ({
@@ -1456,26 +1481,6 @@ function paperPortfolioTrades(portfolioState) {
       strategyId: trade.strategyId || portfolioState.id,
       strategyLabel: trade.strategyLabel || portfolioState.label,
     }));
-}
-
-function renderPaperPortfolioComparison(portfolios) {
-  return portfolios.map((portfolioState) => {
-    const portfolio = portfolioState.portfolio || {};
-    const trades = paperPortfolioTrades(portfolioState);
-    const decision = portfolioState.lastDecision || {};
-    const totalPnl = Number(portfolio.totalPnlUsdc || 0);
-    const openPnl = Number(portfolio.openPnlUsdc || 0);
-    const rr = averageRiskReward(trades, tradeRiskReward);
-    return `
-      <div>
-        <span class="label">${escapeHtml(portfolioState.label || portfolioState.id || "Paper")}</span>
-        <strong class="${pnlClass(totalPnl)}">${signedMoney(totalPnl)} (${signedPercent(Number(portfolio.totalPnlPct || 0))})</strong>
-        <span>${escapeHtml(portfolioState.selectionMetric || "-")} / equity ${money(Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100))}</span>
-        <span>${trades.length} trades / open ${signedMoney(openPnl)} / R/R ${riskReward(rr)}</span>
-        <span>${escapeHtml(decision.action || "waiting")}: ${escapeHtml(decision.reason || "no decision yet")}</span>
-      </div>
-    `;
-  }).join("");
 }
 
 function renderBotState(botState) {
@@ -1489,12 +1494,11 @@ function renderBotState(botState) {
   refreshEligibilityThreshold();
   refreshRiskAllocation();
   refreshLimitOrders();
-  const portfolios = paperPortfolioList(botState);
-  const conservativePortfolio = portfolios.find((item) => item.id === "conservative") || portfolios[0] || {};
-  const decision = conservativePortfolio.lastDecision || botState.lastDecision || {};
-  const portfolio = conservativePortfolio.portfolio || botState.portfolio || {};
+  const portfolioState = selectedPaperPortfolio(botState);
+  const decision = portfolioState.lastDecision || botState.lastDecision || {};
+  const portfolio = portfolioState.portfolio || botState.portfolio || {};
   const learning = botState.learningProfile || {};
-  const trades = portfolios.flatMap(paperPortfolioTrades);
+  const trades = paperPortfolioTrades(portfolioState);
   const closedTrades = trades.filter(isClosedTrade);
   const openTrades = trades.filter((trade) => !isClosedTrade(trade));
   const portfolioRiskReward = averageRiskReward(trades, tradeRiskReward);
@@ -1538,7 +1542,6 @@ function renderBotState(botState) {
 
   els.botStatus.innerHTML = `
     <div class="bot-summary">
-      ${renderPaperPortfolioComparison(portfolios)}
       <div>
         <span class="label">Last run</span>
         <strong>${escapeHtml(botState.generatedAt ? formatDate(botState.generatedAt) : "not yet")}</strong>
@@ -2063,7 +2066,7 @@ els.tabButtons.forEach((button) => {
 
 els.modeButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    const mode = button.dataset.modeToggle === "live" ? "live" : "paper";
+    const mode = normalizeMode(button.dataset.modeToggle);
     if (state.mode === mode) return;
     state.mode = mode;
     saveMode(mode);
@@ -2085,13 +2088,13 @@ els.liveActivation?.addEventListener("click", () => {
   state.liveExecutionArmed = !state.liveExecutionArmed;
   saveLiveExecutionArmed(state.liveExecutionArmed);
   syncLiveActivationUi();
-  if (state.mode === "live" && state.liveState) renderLiveState(state.liveState);
+  if (isLiveMode() && state.liveState) renderLiveState(state.liveState);
 });
 
 els.executionButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const target = button.dataset.oneTimeExecution === "current"
-      ? state.mode
+      ? (isLiveMode() ? "live" : "paper")
       : (button.dataset.oneTimeExecution === "live" ? "live" : "paper");
     triggerOneTimeExecution(target);
   });
@@ -2125,7 +2128,7 @@ els.riskAllocation?.addEventListener("input", () => {
   const value = normalized ?? currentRiskAllocation();
   state.riskAllocation = value;
   saveRiskAllocation(value);
-  if (state.mode === "live" && state.liveState) {
+  if (isLiveMode() && state.liveState) {
     renderLiveState(state.liveState);
   } else if (state.botState) {
     renderBotState(state.botState);
@@ -2137,7 +2140,7 @@ els.riskAllocation?.addEventListener("input", () => {
 els.limitOrders?.addEventListener("change", () => {
   state.limitOrders = Boolean(els.limitOrders.checked);
   saveLimitOrders(state.limitOrders);
-  if (state.mode === "live" && state.liveState) {
+  if (isLiveMode() && state.liveState) {
     renderLiveState(state.liveState);
   } else if (state.botState) {
     renderBotState(state.botState);
@@ -2204,7 +2207,7 @@ function handleTradeSort(event) {
     state.tradeSort[tableKey].key = key;
     state.tradeSort[tableKey].direction = ["market", "status"].includes(key) ? "asc" : "desc";
   }
-  if (state.mode === "live") {
+  if (isLiveMode()) {
     if (!state.liveState) return;
     renderLiveState(state.liveState);
   } else {
@@ -2221,5 +2224,5 @@ state.liveExecutionArmed = storedLiveExecutionArmed();
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);
 loadDashboardState().then(() => {
-  if (state.mode !== "live") requestLiveAccountSync({ quiet: true });
+  if (!isLiveMode()) requestLiveAccountSync({ quiet: true });
 });
