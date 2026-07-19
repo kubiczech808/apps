@@ -39,7 +39,7 @@ jobs:
       PAPER_AI_ANALYSIS_LIMIT: "10"
       PAPER_AI_POSTMORTEM_LIMIT: "8"
       PAPER_REFRESH_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule != '7 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh') }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET }}
       GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
       PAPER_PRIMARY_AI_PROVIDER: gemini
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
