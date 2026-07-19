@@ -5,6 +5,7 @@ declare(strict_types=1);
 const APP_VERSION = '2026-07-19-seed-outreach-status';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
+const AI_RESEARCH_CONTEXT_FIX_VERSION = '2026-07-19-emporo-context-v1';
 
 final class AiResearchTemporaryException extends RuntimeException
 {
@@ -57,6 +58,7 @@ if (shouldRunStartupMaintenance()) {
         ensureAiResearchSeedOutreachTokens($pdo);
         normalizeAiResearchSeedOutreachStatuses($pdo);
         reconcileAiResearchSeedOutreachDuplicates($pdo);
+        releaseAiResearchRunsWithFixedWebsiteContext($pdo);
     } catch (Throwable $e) {
         if ($isMysqlDatabase && databasePermissionDenied($e)) {
             $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Startovni udrzba databaze byla preskocena kvuli docasne DB chybe: ' . $e->getMessage());
@@ -70,6 +72,7 @@ try {
     $config = effectiveConfig($pdo, $baseConfig);
     ensureAppAuthUsers($pdo, $config);
     resetAiResearchDataIfNeeded($pdo);
+    releaseAiResearchRunsWithFixedWebsiteContext($pdo);
     $config = effectiveConfig($pdo, $baseConfig);
 } catch (Throwable $e) {
     if ($isMysqlDatabase && databasePermissionDenied($e)) {
@@ -2241,6 +2244,43 @@ function resetAiResearchDataIfNeeded(PDO $pdo): void
     setSetting($pdo, 'ai_research_reset_version', AI_RESEARCH_RESET_VERSION);
 }
 
+function releaseAiResearchRunsWithFixedWebsiteContext(PDO $pdo): void
+{
+    $settings = loadSettings($pdo);
+    if ((string)($settings['ai_research_context_fix_version'] ?? '') === AI_RESEARCH_CONTEXT_FIX_VERSION) {
+        return;
+    }
+    $stmt = $pdo->prepare('
+        SELECT id
+        FROM ai_research_runs
+        WHERE status="unsuitable"
+          AND message LIKE ?
+          AND (
+              seed_website LIKE ?
+              OR seed_website LIKE ?
+              OR seed_source_url LIKE ?
+              OR seed_business LIKE ?
+          )
+        LIMIT 100
+    ');
+    $stmt->execute([
+        '%citelny webovy kontext%',
+        '%emporo.cz%',
+        '%www.emporo.cz%',
+        '%emporo%',
+        '%Emporo%',
+    ]);
+    $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+    if ($ids) {
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $deleteContacts = $pdo->prepare('DELETE FROM ai_research_contacts WHERE run_id IN (' . $placeholders . ')');
+        $deleteContacts->execute($ids);
+        $deleteRuns = $pdo->prepare('DELETE FROM ai_research_runs WHERE id IN (' . $placeholders . ')');
+        $deleteRuns->execute($ids);
+    }
+    setSetting($pdo, 'ai_research_context_fix_version', AI_RESEARCH_CONTEXT_FIX_VERSION);
+}
+
 function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
 {
     $pages = range(1, 12);
@@ -2427,13 +2467,17 @@ function aiResearchSeedWebsiteContext(string $website): string
     }
     $pages = [];
     try {
-        $html = httpGet($website);
+        [$html, $loadedWebsite] = aiResearchFetchSeedWebsiteHtml($website);
     } catch (Throwable $e) {
         error_log('AI research seed website context skipped [' . $website . ']: ' . $e->getMessage());
         return '';
     }
-    $pages[$website] = aiResearchImportantWebsiteText(aiResearchReadableWebsiteText($html), 1300);
-    foreach (array_slice(aiResearchRelevantInternalUrls($html, $website), 0, 8) as $url) {
+    $homeText = aiResearchReadableWebsiteText($html);
+    $pages[$loadedWebsite] = aiResearchImportantWebsiteText($homeText, 1300);
+    if ($pages[$loadedWebsite] === '' && aiResearchTextLength($homeText) >= 250) {
+        $pages[$loadedWebsite] = truncatePlainText($homeText, 1300);
+    }
+    foreach (array_slice(aiResearchRelevantInternalUrls($html, $loadedWebsite), 0, 10) as $url) {
         if (isset($pages[$url])) {
             continue;
         }
@@ -2460,6 +2504,39 @@ function aiResearchSeedWebsiteContext(string $website): string
         return '';
     }
     return truncatePlainText($context, 7200);
+}
+
+function aiResearchFetchSeedWebsiteHtml(string $website): array
+{
+    $website = normalizeWebsite(trim($website));
+    $candidates = [$website];
+    $parts = parse_url($website);
+    $host = strtolower((string)($parts['host'] ?? ''));
+    if ($host !== '') {
+        $path = (string)($parts['path'] ?? '');
+        $query = isset($parts['query']) ? '?' . (string)$parts['query'] : '';
+        $hostVariants = [$host];
+        $withoutWww = preg_replace('/^www\./i', '', $host) ?? $host;
+        if ($withoutWww !== $host) {
+            $hostVariants[] = $withoutWww;
+        } else {
+            $hostVariants[] = 'www.' . $host;
+        }
+        foreach (array_unique($hostVariants) as $hostVariant) {
+            foreach (['https', 'http'] as $scheme) {
+                $candidates[] = $scheme . '://' . $hostVariant . $path . $query;
+            }
+        }
+    }
+    $lastError = '';
+    foreach (array_values(array_unique($candidates)) as $candidate) {
+        try {
+            return [httpGet($candidate), $candidate];
+        } catch (Throwable $e) {
+            $lastError = $e->getMessage();
+        }
+    }
+    throw new RuntimeException($lastError !== '' ? $lastError : 'web se nepodarilo nacist');
 }
 
 function aiResearchReadableWebsiteText(string $html): string
@@ -2506,6 +2583,10 @@ function aiResearchRelevantInternalUrls(string $html, string $baseUrl): array
             'produkty' => 35,
             'products' => 35,
             'produkt' => 30,
+            'sortiment' => 35,
+            'kategorie' => 20,
+            'eshop' => 25,
+            'e-shop' => 25,
             'nase sluzby' => 60,
             'ceny' => 45,
             'cenik' => 45,
@@ -2539,6 +2620,21 @@ function aiResearchRelevantInternalUrls(string $html, string $baseUrl): array
             'golf' => 25,
             'o nas' => 15,
             'about' => 15,
+            'vybaveni pro firmy' => 55,
+            'prumyslovy nabytek' => 50,
+            'prumyslove vybaveni' => 50,
+            'kovovy nabytek' => 45,
+            'regaly' => 45,
+            'skrine' => 30,
+            'manipulace' => 35,
+            'transport' => 35,
+            'paletove voziky' => 45,
+            'prepravky' => 30,
+            'kontejnery' => 35,
+            'bezpecnost prace' => 40,
+            'kancelarsky nabytek' => 35,
+            'sklad' => 25,
+            'dilna' => 25,
         ] as $term => $weight) {
             if (str_contains($signal, $term)) {
                 $score += $weight;
@@ -2626,6 +2722,27 @@ function aiResearchImportantWebsiteText(string $text, int $maxLength): string
             'odevy' => 30,
             'sluzby' => 18,
             'produkty' => 18,
+            'sortiment' => 25,
+            'kategorie' => 12,
+            'eshop' => 18,
+            'e-shop' => 18,
+            'vybaveni pro firmy' => 55,
+            'prumyslovy nabytek' => 55,
+            'prumyslove vybaveni' => 50,
+            'kovovy nabytek' => 45,
+            'regaly' => 45,
+            'skrine' => 25,
+            'manipulace' => 35,
+            'transport' => 35,
+            'paletove voziky' => 45,
+            'prepravky' => 30,
+            'kontejnery' => 35,
+            'bezpecnost prace' => 40,
+            'kancelarsky nabytek' => 35,
+            'sklad' => 25,
+            'dilna' => 25,
+            'doprava zdarma' => 10,
+            'nakup na firmu' => 20,
         ] as $term => $weight) {
             if (str_contains($folded, $term)) {
                 $score += $weight;
@@ -2860,6 +2977,9 @@ function aiResearchFallbackTerms(string $business, string $website, string $addr
     }
     if (preg_match('/textil|odev|odevy|uniform|pracovn|reklamn|golf|hotel|lekar|lazn/i', $haystack)) {
         return ['hotel' . $suffix, 'golfovy klub' . $suffix, 'ordinace' . $suffix, 'lazne' . $suffix, 'stavebni firma' . $suffix, 'wellness centrum' . $suffix];
+    }
+    if (preg_match('/vybaveni pro firmy|prumyslov|kovovy nabyt|regal|regaly|skrin|skrine|manipulac|transport|paletov|prepravk|kontejner|bezpecnost prace|sklad|dilna|dilensky|esd/i', $haystack)) {
+        return ['vyrobni podnik' . $suffix, 'sklad' . $suffix, 'stavebni firma' . $suffix, 'autoservis' . $suffix, 'logisticka firma' . $suffix, 'velkoobchod' . $suffix];
     }
     if ($country === 'AT' || $country === 'DE') {
         if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
