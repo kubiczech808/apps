@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-19-research-scope-normalization';
+const APP_VERSION = '2026-07-19-research-tenant-provisioning';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 
@@ -49,6 +49,7 @@ if (shouldRunStartupMaintenance()) {
         reconcileInterruptedScrapingRuns($pdo);
         reconcileDuplicateScrapingRuns($pdo);
         reconcileAiResearchProcessFilteredContacts($pdo);
+        reconcileAiResearchProvisionedWorkspaces($pdo);
     } catch (Throwable $e) {
         if ($isMysqlDatabase && databasePermissionDenied($e)) {
             $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Startovni udrzba databaze byla preskocena kvuli docasne DB chybe: ' . $e->getMessage());
@@ -240,6 +241,7 @@ if (($_POST['action'] ?? '') === 'login') {
         $_SESSION['auth'] = true;
         $_SESSION['auth_email'] = strtolower((string)$user['email']);
         $_SESSION['auth_provider'] = 'password';
+        unset($_SESSION['admin_auth_email']);
         header('Location: ./?route=dashboard');
         exit;
     }
@@ -326,6 +328,14 @@ function handlePost(PDO $pdo, array $config): ?string
             throw new RuntimeException('AI research neni pro tento ucet dostupny.');
         }
         return runAiResearchOnce($pdo, $config, true);
+    }
+
+    if ($action === 'switch_app_user') {
+        return switchAppUser($pdo, (int)($_POST['user_id'] ?? 0));
+    }
+
+    if ($action === 'restore_admin_user') {
+        return restoreAdminUser($pdo);
     }
 
     if ($action === 'save_campaign') {
@@ -3143,6 +3153,47 @@ function reconcileAiResearchProcessFilteredContacts(PDO $pdo): void
     }
 }
 
+function reconcileAiResearchProvisionedWorkspaces(PDO $pdo): void
+{
+    $runs = $pdo->query('
+        SELECT *
+        FROM ai_research_runs
+        WHERE accepted_count>0
+          AND seed_email<>""
+          AND status IN ("done","no_match")
+        ORDER BY id DESC
+        LIMIT 80
+    ')->fetchAll(PDO::FETCH_ASSOC);
+    if (!$runs) {
+        return;
+    }
+    $contactsStmt = $pdo->prepare('SELECT * FROM ai_research_contacts WHERE run_id=? AND status="accepted" ORDER BY id ASC');
+    foreach ($runs as $run) {
+        $plan = json_decode((string)($run['plan_json'] ?? ''), true);
+        if (!is_array($plan)) {
+            continue;
+        }
+        $contactsStmt->execute([(int)$run['id']]);
+        $accepted = $contactsStmt->fetchAll(PDO::FETCH_ASSOC);
+        if (!$accepted) {
+            continue;
+        }
+        try {
+            provisionAiResearchCustomerWorkspace(
+                $pdo,
+                (int)$run['id'],
+                aiResearchSeedFromRun($run),
+                $plan,
+                $accepted,
+                (string)($run['email_subject'] ?? ''),
+                (string)($run['email_body_html'] ?? '')
+            );
+        } catch (Throwable $e) {
+            error_log('AI research customer workspace reconcile skipped for run #' . (int)$run['id'] . ': ' . $e->getMessage());
+        }
+    }
+}
+
 function aiResearchPrimaryKeyword(array $plan): string
 {
     foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
@@ -3919,7 +3970,158 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
             $now,
         ]);
     }
+    if ($accepted) {
+        try {
+            provisionAiResearchCustomerWorkspace($pdo, $runId, $seed, $plan, $accepted, $draftSubject, $draftHtml);
+        } catch (Throwable $e) {
+            error_log('AI research customer workspace provisioning failed for run #' . $runId . ': ' . $e->getMessage());
+        }
+    }
     return $runId;
+}
+
+function provisionAiResearchCustomerWorkspace(PDO $pdo, int $runId, array $seed, array $plan, array $acceptedContacts, string $subject, string $bodyHtml): void
+{
+    $customer = upsertCustomerAppUser($pdo, (string)($seed['email'] ?? ''));
+    if (!$customer) {
+        return;
+    }
+    $ownerId = (int)$customer['id'];
+    $keyword = aiResearchPrimaryKeyword($plan);
+    $source = aiResearchPrimarySourceKey($plan) ?: aiResearchDefaultSourceForSeed($seed);
+    if ($keyword === '' || $source === '') {
+        return;
+    }
+    $databaseName = aiResearchProvisionDatabaseName($keyword, $plan);
+    $listId = aiResearchEnsureContactDatabase($pdo, $ownerId, $databaseName);
+    $sourceLabel = scrapingSourceLabel($source) . ' / AI research #' . $runId;
+
+    $inserted = 0;
+    $updated = 0;
+    $skipped = 0;
+    $normalizedContacts = [];
+    foreach ($acceptedContacts as $contact) {
+        $normalized = [
+            'email' => strtolower(trim((string)($contact['email'] ?? ''))),
+            'subject_name' => (string)($contact['subject_name'] ?? ''),
+            'website' => (string)($contact['website'] ?? ''),
+            'address' => (string)($contact['address'] ?? ''),
+            'name' => (string)($contact['contact_name'] ?? $contact['name'] ?? ''),
+            'phone' => (string)($contact['phone'] ?? ''),
+            'contacted_before' => 0,
+            'source_label' => $sourceLabel,
+            'source_url' => (string)($contact['source_url'] ?? ''),
+            'fit_reason' => (string)($contact['fit_reason'] ?? ''),
+        ];
+        if (!filter_var($normalized['email'], FILTER_VALIDATE_EMAIL)) {
+            continue;
+        }
+        $result = upsertRecipient($pdo, $listId, $normalized);
+        if ($result['result'] === 'inserted') {
+            $inserted++;
+        } elseif ($result['result'] === 'updated') {
+            $updated++;
+        } else {
+            $skipped++;
+        }
+        $normalized['provision_result'] = (string)$result['result'];
+        $normalized['provision_message'] = (string)$result['message'];
+        $normalizedContacts[] = $normalized;
+    }
+
+    aiResearchEnsureScrapingContainerAndLog($pdo, $ownerId, $listId, $source, $keyword, $runId, $normalizedContacts, $inserted, $updated, $skipped);
+    aiResearchEnsurePausedCampaign($pdo, $ownerId, $listId, $seed, $plan, $subject, $bodyHtml);
+    setSettingForUser($pdo, $ownerId, 'from_email', strtolower(trim((string)($seed['email'] ?? ''))));
+    setSettingForUser($pdo, $ownerId, 'from_name', truncatePlainText((string)($seed['subject_name'] ?: $seed['email']), 255));
+}
+
+function aiResearchProvisionDatabaseName(string $keyword, array $plan): string
+{
+    $area = aiResearchTargetAreaLabel($plan);
+    $name = trim($keyword . ($area !== '' && $area !== 'cela CR' ? ' - ' . $area : ''));
+    return truncatePlainText($name !== '' ? $name : 'AI nalezene kontakty', 255);
+}
+
+function aiResearchEnsureContactDatabase(PDO $pdo, int $ownerId, string $name): int
+{
+    $stmt = $pdo->prepare('SELECT id FROM contact_databases WHERE owner_user_id=? AND name=? AND COALESCE(archived,0)=0 ORDER BY id ASC LIMIT 1');
+    $stmt->execute([$ownerId, $name]);
+    $id = (int)$stmt->fetchColumn();
+    if ($id > 0) {
+        return $id;
+    }
+    $stmt = $pdo->prepare('INSERT INTO contact_databases (owner_user_id, name, created_at) VALUES (?, ?, ?)');
+    $stmt->execute([$ownerId, $name, date('c')]);
+    return (int)$pdo->lastInsertId();
+}
+
+function aiResearchEnsureScrapingContainerAndLog(PDO $pdo, int $ownerId, int $listId, string $source, string $keyword, int $runId, array $contacts, int $inserted, int $updated, int $skipped): void
+{
+    $now = date('c');
+    $stmt = $pdo->prepare('SELECT id FROM scraping_containers WHERE owner_user_id=? AND list_id=? AND source=? AND keyword=? AND status!="deleted" ORDER BY id ASC LIMIT 1');
+    $stmt->execute([$ownerId, $listId, $source, $keyword]);
+    $containerId = (int)$stmt->fetchColumn();
+    if ($containerId === 0) {
+        $stmt = $pdo->prepare('
+            INSERT INTO scraping_containers (owner_user_id, list_id, source, keyword, status, schedule_enabled, schedule_time, schedule_frequency, schedule_weekday, last_scheduled_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, "active", 0, "09:00", "daily", 1, "", ?, ?)
+        ');
+        $stmt->execute([$ownerId, $listId, $source, $keyword, $now, $now]);
+        $containerId = (int)$pdo->lastInsertId();
+    } else {
+        $stmt = $pdo->prepare('UPDATE scraping_containers SET schedule_enabled=0, updated_at=? WHERE id=?');
+        $stmt->execute([$now, $containerId]);
+    }
+
+    $exists = $pdo->prepare('SELECT id FROM scraping_jobs WHERE container_id=? AND last_message LIKE ? ORDER BY id ASC LIMIT 1');
+    $exists->execute([$containerId, '%AI research #' . $runId . '%']);
+    if ((int)$exists->fetchColumn() > 0) {
+        return;
+    }
+
+    $processed = count($contacts);
+    $stmt = $pdo->prepare('
+        INSERT INTO scraping_jobs (owner_user_id, container_id, list_id, source, keyword, status, current_page, max_pages, max_sites, discovered_count, processed_count, inserted_count, updated_count, skipped_count, last_message, run_type, discovery_done, created_at, started_at, updated_at, finished_at)
+        VALUES (?, ?, ?, ?, ?, "finished", 1, 0, 0, ?, ?, ?, ?, ?, ?, "ai_research", 1, ?, ?, ?, ?)
+    ');
+    $message = 'Predvyplneno z AI research #' . $runId . '.';
+    $stmt->execute([$ownerId, $containerId, $listId, $source, $keyword, $processed, $processed, $inserted, $updated, $skipped, $message, $now, $now, $now, $now]);
+    $jobId = (int)$pdo->lastInsertId();
+    $item = $pdo->prepare('INSERT IGNORE INTO scraping_job_items (job_id, url, status, email, subject_name, website, address, message, created_at, processed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    foreach ($contacts as $contact) {
+        $item->execute([
+            $jobId,
+            truncatePlainText((string)($contact['source_url'] ?: $contact['website'] ?: $contact['email']), 1000),
+            (string)($contact['provision_result'] ?? 'inserted'),
+            (string)$contact['email'],
+            truncatePlainText((string)$contact['subject_name'], 255),
+            truncatePlainText(normalizeWebsite((string)$contact['website']), 500),
+            truncatePlainText((string)$contact['address'], 500),
+            truncatePlainText((string)((trim((string)($contact['fit_reason'] ?? '')) !== '') ? $contact['fit_reason'] : ($contact['provision_message'] ?? '')), 500),
+            $now,
+            $now,
+        ]);
+    }
+}
+
+function aiResearchEnsurePausedCampaign(PDO $pdo, int $ownerId, int $listId, array $seed, array $plan, string $subject, string $bodyHtml): void
+{
+    $name = truncatePlainText('AI oslovení: ' . aiResearchPrimaryKeyword($plan), 255);
+    $stmt = $pdo->prepare('SELECT id FROM campaigns WHERE owner_user_id=? AND list_id=? AND name=? ORDER BY id ASC LIMIT 1');
+    $stmt->execute([$ownerId, $listId, $name]);
+    if ((int)$stmt->fetchColumn() > 0) {
+        return;
+    }
+    $now = date('c');
+    $body = cleanHtml($bodyHtml);
+    if (trim(strip_tags($body)) === '') {
+        $body = aiResearchFallbackEmailHtml((string)($plan['market_language'] ?? 'cs'), (string)($seed['subject_name'] ?: $seed['email']));
+    }
+    $stmt = $pdo->prepare('
+        INSERT INTO campaigns (owner_user_id, list_id, name, subject, body_html, daily_limit, batch_limit, auto_daily_limit, include_previously_contacted, schedule_time, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 100, 100, 1, 0, "09:00", "paused", ?, ?)
+    ');
+    $stmt->execute([$ownerId, $listId, $name, truncatePlainText($subject !== '' ? $subject : aiResearchFallbackSubject((string)($plan['market_language'] ?? 'cs'), ''), 255), $body, $now, $now]);
 }
 
 function ensureDemoOnboardingLead(PDO $pdo, array $config, bool $force = false): array
@@ -4964,6 +5166,27 @@ function upsertAppUser(PDO $pdo, string $email, string $passwordHash = '', bool 
     $stmt->execute([$email, $passwordHash, hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL) && $canAccessResearch ? 1 : 0, $now, $now]);
 }
 
+function upsertCustomerAppUser(PDO $pdo, string $email): ?array
+{
+    $email = strtolower(trim($email));
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        return null;
+    }
+    if (hash_equals($email, AI_RESEARCH_ALLOWED_EMAIL)) {
+        return null;
+    }
+    $now = date('c');
+    $existing = appUserByEmail($pdo, $email, false);
+    if ($existing) {
+        $stmt = $pdo->prepare('UPDATE app_users SET role=CASE WHEN role="" THEN "user" ELSE role END, can_access_research=0, is_active=1, updated_at=? WHERE id=?');
+        $stmt->execute([$now, (int)$existing['id']]);
+        return appUserByEmail($pdo, $email, false);
+    }
+    $stmt = $pdo->prepare('INSERT INTO app_users (email, password_hash, role, can_access_research, is_active, created_at, updated_at) VALUES (?, "", "user", 0, 1, ?, ?)');
+    $stmt->execute([$email, $now, $now]);
+    return appUserByEmail($pdo, $email, false);
+}
+
 function appUserByEmail(PDO $pdo, string $email, bool $activeOnly = true): ?array
 {
     $email = strtolower(trim($email));
@@ -4991,6 +5214,64 @@ function currentAppUserId(PDO $pdo): int
 {
     $user = currentAppUser($pdo);
     return $user ? (int)$user['id'] : 0;
+}
+
+function canSwitchAppUsers(PDO $pdo): bool
+{
+    $adminEmail = strtolower(trim((string)($_SESSION['admin_auth_email'] ?? $_SESSION['auth_email'] ?? '')));
+    if ($adminEmail === '' || !hash_equals(AI_RESEARCH_ALLOWED_EMAIL, $adminEmail)) {
+        return false;
+    }
+    $user = appUserByEmail($pdo, $adminEmail);
+    return $user !== null && (int)($user['can_access_research'] ?? 0) === 1;
+}
+
+function switchableAppUsers(PDO $pdo): array
+{
+    if (!canSwitchAppUsers($pdo)) {
+        return [];
+    }
+    return $pdo->query('
+        SELECT id, email, role
+        FROM app_users
+        WHERE is_active=1
+        ORDER BY CASE WHEN email=' . $pdo->quote(AI_RESEARCH_ALLOWED_EMAIL) . ' THEN 0 ELSE 1 END, email ASC
+    ')->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function switchAppUser(PDO $pdo, int $userId): string
+{
+    if (!canSwitchAppUsers($pdo)) {
+        throw new RuntimeException('Prepinani uctu je dostupne pouze adminovi.');
+    }
+    $stmt = $pdo->prepare('SELECT * FROM app_users WHERE id=? AND is_active=1 LIMIT 1');
+    $stmt->execute([$userId]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$user) {
+        throw new RuntimeException('Vybrany ucet nebyl nalezen.');
+    }
+    if (empty($_SESSION['admin_auth_email'])) {
+        $_SESSION['admin_auth_email'] = strtolower(trim((string)($_SESSION['auth_email'] ?? '')));
+    }
+    $_SESSION['auth_email'] = strtolower((string)$user['email']);
+    $_SESSION['auth_provider'] = 'admin_switch';
+    return 'Prepnuto do uctu ' . strtolower((string)$user['email']) . '.';
+}
+
+function restoreAdminUser(PDO $pdo): string
+{
+    if (!canSwitchAppUsers($pdo)) {
+        throw new RuntimeException('Navrat do admin uctu neni dostupny.');
+    }
+    $adminEmail = strtolower(trim((string)($_SESSION['admin_auth_email'] ?? AI_RESEARCH_ALLOWED_EMAIL)));
+    $user = appUserByEmail($pdo, $adminEmail);
+    if (!$user) {
+        throw new RuntimeException('Admin ucet nebyl nalezen.');
+    }
+    $_SESSION['auth_email'] = strtolower((string)$user['email']);
+    $_SESSION['auth_provider'] = 'password';
+    unset($_SESSION['admin_auth_email']);
+    return 'Zpet v admin uctu.';
 }
 
 function ownerSql(PDO $pdo, string $alias = ''): string
@@ -12383,6 +12664,8 @@ function renderApp(PDO $pdo, ?array $flash): void
         <?php
             $authEmail = strtolower(trim((string)($_SESSION['auth_email'] ?? '')));
             $accountInitial = $authEmail !== '' ? strtoupper(substr($authEmail, 0, 1)) : 'U';
+            $adminSwitchEmail = strtolower(trim((string)($_SESSION['admin_auth_email'] ?? '')));
+            $switchUsers = switchableAppUsers($pdo);
         ?>
         <div class="account-dropdown">
             <details>
@@ -12392,6 +12675,24 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <div class="account-dropdown-menu">
                     <span>Přihlášený účet</span>
                     <strong><?= h($authEmail !== '' ? $authEmail : 'neznámý účet') ?></strong>
+                    <?php if ($adminSwitchEmail !== ''): ?>
+                        <small>Admin režim: <?= h($adminSwitchEmail) ?></small>
+                        <form method="post">
+                            <button type="submit" name="action" value="restore_admin_user" class="secondary">Zpět do admin účtu</button>
+                        </form>
+                    <?php endif; ?>
+                    <?php if ($switchUsers): ?>
+                        <form method="post" class="account-switch-form">
+                            <label>Přepnout do účtu
+                                <select name="user_id">
+                                    <?php foreach ($switchUsers as $switchUser): ?>
+                                        <option value="<?= h((string)$switchUser['id']) ?>" <?= (int)$switchUser['id'] === currentAppUserId($pdo) ? 'selected' : '' ?>><?= h((string)$switchUser['email']) ?><?= (string)($switchUser['role'] ?? '') !== '' ? ' (' . h((string)$switchUser['role']) . ')' : '' ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </label>
+                            <button type="submit" name="action" value="switch_app_user" class="secondary">Přepnout</button>
+                        </form>
+                    <?php endif; ?>
                     <a href="?logout=1">Odhlásit</a>
                 </div>
             </details>
@@ -13110,9 +13411,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <button type="submit" name="action" value="run_ai_research_now">Spustit research teď</button>
             </form>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Oslovení</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopení firmy</th><th>Důvod cílení</th><th>Koho oslovit</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th><th>Zpráva</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopení firmy</th><th>Důvod cílení</th><th>Koho oslovit</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th><th>Zpráva</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
-            <tr><td colspan="15">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="16">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
@@ -13120,6 +13421,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <?php $runPlan = json_decode((string)$run['plan_json'], true) ?: []; ?>
             <?php $runUnderstanding = trim((string)($runPlan['business_understanding'] ?? ($runPlan['business_summary'] ?? ''))); ?>
             <?php $modelAudit = aiResearchNormalizeModelAudit($runPlan['ai_model_audit'] ?? []); ?>
+            <?php $provisionUser = aiResearchProvisionedUser($pdo, $run); ?>
             <tr class="expandable-row" data-detail-target="ai-research-detail-<?= h((string)$run['id']) ?>" tabindex="0" aria-expanded="false">
                 <td>Zobrazit</td>
                 <td>
@@ -13146,6 +13448,15 @@ function renderApp(PDO $pdo, ?array $flash): void
                         </section>
                     </dialog>
                 </td>
+                <td>
+                    <?php if ($provisionUser): ?>
+                        <?= statusBadge('hotovo') ?><br><small><?= h((string)$provisionUser['email']) ?></small>
+                    <?php elseif ((int)$run['accepted_count'] > 0): ?>
+                        <?= statusBadge('queued') ?><br><small>připraví se po načtení</small>
+                    <?php else: ?>
+                        -
+                    <?php endif; ?>
+                </td>
                 <td><?= h(formatDateTime((string)$run['created_at'])) ?></td>
                 <td><strong><?= h((string)$run['seed_business']) ?></strong><?php if ($run['seed_website']): ?><br><a href="<?= h((string)$run['seed_website']) ?>" target="_blank" rel="noopener"><?= h((string)$run['seed_website']) ?></a><?php endif; ?></td>
                 <td><?= h((string)$run['seed_email']) ?></td>
@@ -13161,7 +13472,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><?= h((string)$run['message']) ?></td>
             </tr>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="15">
+                <td colspan="16">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
@@ -14015,13 +14326,19 @@ function aiResearchRuns(PDO $pdo): array
 
 function aiResearchPrimarySourceLabel(array $plan): string
 {
+    $source = aiResearchPrimarySourceKey($plan);
+    return $source !== '' ? scrapingSourceLabel($source) : '';
+}
+
+function aiResearchPrimarySourceKey(array $plan): string
+{
     foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
         if (!is_array($query)) {
             continue;
         }
         $source = normalizeScrapingSourceKey((string)($query['source'] ?? ''));
         if ($source !== '') {
-            return scrapingSourceLabel($source);
+            return $source;
         }
     }
     return '';
@@ -14038,6 +14355,16 @@ function aiResearchSeedFromRun(array $run): array
         'source_label' => (string)($run['seed_source_label'] ?? ''),
         'source_url' => (string)($run['seed_source_url'] ?? ''),
     ];
+}
+
+function aiResearchProvisionedUser(PDO $pdo, array $run): ?array
+{
+    $email = strtolower(trim((string)($run['seed_email'] ?? '')));
+    if ($email === '') {
+        return null;
+    }
+    $user = appUserByEmail($pdo, $email, false);
+    return $user && (int)($user['is_active'] ?? 0) === 1 ? $user : null;
 }
 
 function aiResearchRunLanguage(array $run, array $contacts = []): string
