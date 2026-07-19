@@ -29,31 +29,41 @@ jobs:
       - name: Roll back image quality hardening
         run: |
           set -euo pipefail
-          restore_if_marked() {
-            target="$1"
-            if ! sudo -u openclaw2 -H test -f "$target"; then
-              echo "missing: $target"
-              return 0
-            fi
-            if ! sudo -u openclaw2 -H grep -Eq '2026-07-18-no-text-clean-images-v1|IMAGE_QUALITY_POLICY_VERSION' "$target"; then
-              echo "skip unchanged: $target"
-              return 0
-            fi
-            backup="$(sudo find "$(dirname "$target")" -maxdepth 1 -name "$(basename "$target").bak-image-quality-*" -printf '%T@ %p\n' | sort -n | tail -n 1 | cut -d' ' -f2-)"
-            if [ -z "$backup" ] || [ ! -f "$backup" ]; then
-              echo "backup not found for $target" >&2
-              return 1
-            fi
-            stamp="$(date +%Y%m%d%H%M%S)"
-            sudo cp -p "$target" "${target}.pre-image-quality-rollback-${stamp}"
-            sudo cp -p "$backup" "$target"
-            sudo chown openclaw2:openclaw2 "$target"
-            echo "restored: $target from $backup"
-          }
+          sudo -u openclaw2 -H python3 - <<'PY'
+          import datetime as dt
+          import shutil
+          from pathlib import Path
 
-          restore_if_marked /home/openclaw2/scripts/x_approve.py
-          restore_if_marked /home/openclaw2/.openclaw/x_post.py
-          restore_if_marked /home/openclaw2/scripts/btc-dca-blogger.py
+          markers = ("2026-07-18-no-text-clean-images-v1", "IMAGE_QUALITY_POLICY_VERSION")
+          targets = [
+              Path("/home/openclaw2/scripts/x_approve.py"),
+              Path("/home/openclaw2/.openclaw/x_post.py"),
+              Path("/home/openclaw2/scripts/btc-dca-blogger.py"),
+          ]
+          stamp = dt.datetime.now().strftime("%Y%m%d%H%M%S")
+          changed = []
+          for target in targets:
+              if not target.exists():
+                  print(f"missing: {target}")
+                  continue
+              text = target.read_text(encoding="utf-8", errors="replace")
+              if not any(marker in text for marker in markers):
+                  print(f"skip unchanged: {target}")
+                  continue
+              backups = sorted(
+                  target.parent.glob(target.name + ".bak-image-quality-*"),
+                  key=lambda p: p.stat().st_mtime,
+              )
+              if not backups:
+                  raise SystemExit(f"backup not found for {target}")
+              backup = backups[-1]
+              pre = target.with_name(target.name + f".pre-image-quality-rollback-{stamp}")
+              shutil.copy2(target, pre)
+              shutil.copy2(backup, target)
+              changed.append(str(target))
+              print(f"restored: {target} from {backup}")
+          print("changed files: " + (", ".join(changed) if changed else "none"))
+          PY
 
           sudo -u openclaw2 -H python3 -m py_compile /home/openclaw2/scripts/x_approve.py
           sudo -u openclaw2 -H python3 -m py_compile /home/openclaw2/.openclaw/x_post.py
