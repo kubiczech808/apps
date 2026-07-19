@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-19-research-strategy-score';
+const APP_VERSION = '2026-07-19-research-area-label';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 
@@ -2802,6 +2802,22 @@ function aiResearchLocationScopeLabel(string $scope): string
         'konkretni_lokace' => 'konkretni lokace',
         'zahranici' => 'zahranici',
     ][aiResearchNormalizeLocationScope($scope)] ?? 'stejny kraj';
+}
+
+function aiResearchTargetAreaLabel(array $plan): string
+{
+    $scope = aiResearchNormalizeLocationScope((string)($plan['location_scope'] ?? ''));
+    $location = trim((string)($plan['target_location'] ?? ''));
+    if ($scope === 'cela_cr') {
+        return 'cela CR';
+    }
+    if ($scope === 'zahranici') {
+        return $location !== '' ? $location : 'zahranici';
+    }
+    if ($location !== '') {
+        return $location;
+    }
+    return aiResearchLocationScopeLabel($scope);
 }
 
 function aiResearchNormalizeTargetLocation(string $location, array $seed): string
@@ -12899,9 +12915,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <button type="submit" name="action" value="run_ai_research_now">Spustit research teď</button>
             </form>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Oslovení</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopení firmy</th><th>Důvod cílení</th><th>Koho oslovit</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Dosah</th><th>Lokace</th><th>Nalezeno</th><th>Vhodné</th><th>Zpráva</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Oslovení</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopení firmy</th><th>Důvod cílení</th><th>Koho oslovit</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th><th>Zpráva</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
-            <tr><td colspan="16">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="15">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
@@ -12924,8 +12940,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <span>Seed: <?= h((string)$run['seed_business']) ?></span>
                             <span>Databaze: <?= h((string)($run['search_source_label'] ?? '-')) ?></span>
                             <span>Keyword: <?= h((string)($run['scraping_keyword'] ?? '')) ?></span>
-                            <span>Dosah: <?= h(aiResearchLocationScopeLabel((string)($runPlan['location_scope'] ?? ''))) ?></span>
-                            <?php if (trim((string)($runPlan['target_location'] ?? '')) !== ''): ?><span>Lokace: <?= h((string)$runPlan['target_location']) ?></span><?php endif; ?>
+                            <span>Lokalita: <?= h(aiResearchTargetAreaLabel($runPlan)) ?></span>
                             <span>Vhodne kontakty: <?= h((string)$run['accepted_count']) ?></span>
                         </div>
                         <section class="ai-outreach-preview">
@@ -12943,14 +12958,13 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><?= h((string)$run['audience_label']) ?></td>
                 <td><?= h((string)($run['search_source_label'] ?? '-')) ?></td>
                 <td><?= h((string)($run['scraping_keyword'] ?? '')) ?></td>
-                <td><?= h(aiResearchLocationScopeLabel((string)($runPlan['location_scope'] ?? ''))) ?></td>
-                <td><?= h(trim((string)($runPlan['target_location'] ?? '')) !== '' ? (string)$runPlan['target_location'] : '-') ?></td>
+                <td><?= h(aiResearchTargetAreaLabel($runPlan)) ?></td>
                 <td><?= h((string)$run['found_count']) ?></td>
                 <td><?= h((string)$run['accepted_count']) ?></td>
                 <td><?= h((string)$run['message']) ?></td>
             </tr>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="16">
+                <td colspan="15">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
@@ -12983,8 +12997,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <p><strong>Databaze:</strong> <?= h((string)($run['search_source_label'] ?? '-')) ?></p>
                                 <p><strong>Klicove slovo:</strong> <?= h((string)($run['scraping_keyword'] ?? '')) ?></p>
                                 <?php if ($secondaryKeywords): ?><p><strong>Doplňkové keywordy:</strong> <?= h(implode(', ', $secondaryKeywords)) ?></p><?php endif; ?>
-                                <p><strong>Dosah:</strong> <?= h(aiResearchLocationScopeLabel((string)($runPlan['location_scope'] ?? ''))) ?></p>
-                                <p><strong>Lokace:</strong> <?= h(trim((string)($runPlan['target_location'] ?? '')) !== '' ? (string)$runPlan['target_location'] : '-') ?></p>
+                                <p><strong>Lokalita:</strong> <?= h(aiResearchTargetAreaLabel($runPlan)) ?></p>
                                 <?php if (trim((string)($runPlan['search_url'] ?? '')) !== ''): ?><p><strong>URL hledani:</strong> <a href="<?= h((string)$runPlan['search_url']) ?>" target="_blank" rel="noopener"><?= h((string)$runPlan['search_url']) ?></a></p><?php endif; ?>
                             </section>
                             <section>
