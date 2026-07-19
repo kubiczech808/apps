@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-19-research-contact-table';
+const APP_VERSION = '2026-07-19-research-scope-normalization';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 
@@ -48,6 +48,7 @@ if (shouldRunStartupMaintenance()) {
         markStaleScrapingRunsQueued($pdo);
         reconcileInterruptedScrapingRuns($pdo);
         reconcileDuplicateScrapingRuns($pdo);
+        reconcileAiResearchProcessFilteredContacts($pdo);
     } catch (Throwable $e) {
         if ($isMysqlDatabase && databasePermissionDenied($e)) {
             $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Startovni udrzba databaze byla preskocena kvuli docasne DB chybe: ' . $e->getMessage());
@@ -2866,13 +2867,15 @@ function aiResearchCityFromAddress(string $address): string
 
 function aiResearchNormalizeLocationScope(string $scope): string
 {
-    $scope = strtolower(trim($scope));
+    $scope = aiResearchFoldText($scope);
     $scope = str_replace([' ', '-', '.'], '_', $scope);
     $aliases = [
         'cela_cr' => 'cela_cr',
         'celacr' => 'cela_cr',
         'cr' => 'cela_cr',
+        'cesko' => 'cela_cr',
         'ceska_republika' => 'cela_cr',
+        'czech_republic' => 'cela_cr',
         'celostatne' => 'cela_cr',
         'celostatni' => 'cela_cr',
         'nationwide' => 'cela_cr',
@@ -3061,6 +3064,83 @@ function aiResearchContactMatchesPrimaryKeyword(array $plan, array $contact): bo
         }
     }
     return false;
+}
+
+function aiResearchContactProcessFilterReason(array $seed, array $plan, array $contact): string
+{
+    $locationMatches = aiResearchContactMatchesLocationScope($seed, $plan, $contact);
+    $keywordMatches = aiResearchContactMatchesPrimaryKeyword($plan, $contact);
+    if ($locationMatches && $keywordMatches) {
+        return '';
+    }
+    if (!$locationMatches && !$keywordMatches) {
+        return 'Kontakt byl odmitnut procesnim filtrem: nesoulad s keywordem i lokalitou.';
+    }
+    if (!$locationMatches) {
+        return 'Kontakt byl odmitnut procesnim filtrem: nesoulad s lokalitou.';
+    }
+    return 'Kontakt byl odmitnut procesnim filtrem: nesoulad s keywordem.';
+}
+
+function reconcileAiResearchProcessFilteredContacts(PDO $pdo): void
+{
+    $stmt = $pdo->query('
+        SELECT c.id, c.run_id, c.email, c.subject_name, c.website, c.address, c.phone, c.source_label, c.source_url, c.fit_reason,
+               r.seed_email, r.seed_business, r.seed_website, r.seed_address, r.seed_source_label, r.seed_source_url, r.plan_json
+        FROM ai_research_contacts c
+        JOIN ai_research_runs r ON r.id=c.run_id
+        WHERE c.status="rejected"
+          AND c.fit_reason LIKE "%procesnim filtrem%"
+        ORDER BY c.id DESC
+        LIMIT 500
+    ');
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) {
+        return;
+    }
+
+    $updateContact = $pdo->prepare('UPDATE ai_research_contacts SET status=?, fit_reason=? WHERE id=?');
+    $touchedRunIds = [];
+    foreach ($rows as $row) {
+        $plan = json_decode((string)($row['plan_json'] ?? ''), true);
+        if (!is_array($plan)) {
+            continue;
+        }
+        $seed = [
+            'email' => (string)($row['seed_email'] ?? ''),
+            'subject_name' => (string)($row['seed_business'] ?? ''),
+            'website' => (string)($row['seed_website'] ?? ''),
+            'address' => (string)($row['seed_address'] ?? ''),
+            'source_label' => (string)($row['seed_source_label'] ?? ''),
+            'source_url' => (string)($row['seed_source_url'] ?? ''),
+        ];
+        $contact = [
+            'email' => (string)($row['email'] ?? ''),
+            'subject_name' => (string)($row['subject_name'] ?? ''),
+            'website' => (string)($row['website'] ?? ''),
+            'address' => (string)($row['address'] ?? ''),
+            'phone' => (string)($row['phone'] ?? ''),
+            'source_label' => (string)($row['source_label'] ?? ''),
+            'source_url' => (string)($row['source_url'] ?? ''),
+            'target_segment' => (string)($plan['primary_segment'] ?? $plan['audience_label'] ?? ''),
+        ];
+        $reason = aiResearchContactProcessFilterReason($seed, $plan, $contact);
+        if ($reason === '') {
+            $updateContact->execute(['accepted', 'Kontakt odpovida navrzenemu segmentu, keywordu a lokalite podle dostupnych dat. Stav byl opraven po aktualizaci normalizace rozsahu hledani.', (int)$row['id']]);
+        } else {
+            $updateContact->execute(['rejected', $reason, (int)$row['id']]);
+        }
+        $touchedRunIds[(int)$row['run_id']] = true;
+    }
+
+    $countStmt = $pdo->prepare('SELECT COUNT(*) AS found_count, SUM(CASE WHEN status="accepted" THEN 1 ELSE 0 END) AS accepted_count FROM ai_research_contacts WHERE run_id=?');
+    $updateRun = $pdo->prepare('UPDATE ai_research_runs SET found_count=?, accepted_count=?, status=CASE WHEN ? > 0 AND status IN ("no_match","no_contacts") THEN "done" ELSE status END, updated_at=? WHERE id=?');
+    foreach (array_keys($touchedRunIds) as $runId) {
+        $countStmt->execute([$runId]);
+        $counts = $countStmt->fetch(PDO::FETCH_ASSOC) ?: ['found_count' => 0, 'accepted_count' => 0];
+        $acceptedCount = (int)($counts['accepted_count'] ?? 0);
+        $updateRun->execute([(int)($counts['found_count'] ?? 0), $acceptedCount, $acceptedCount, date('c'), $runId]);
+    }
 }
 
 function aiResearchPrimaryKeyword(array $plan): string
@@ -3567,8 +3647,9 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
     }
     $fallback = [];
     foreach ($contacts as $contact) {
-        $accepted = aiResearchContactMatchesLocationScope($seed, $plan, $contact) && aiResearchContactMatchesPrimaryKeyword($plan, $contact);
-        $decorated = aiResearchDecorateContact($seed, $plan, $contact, $accepted, $accepted ? 'Kontakt odpovida navrzenemu segmentu, keywordu a lokaci podle dostupnych dat.' : 'Kontakt byl odmitnut procesnim filtrem: nesoulad s keywordem nebo lokaci.');
+        $filterReason = aiResearchContactProcessFilterReason($seed, $plan, $contact);
+        $accepted = $filterReason === '';
+        $decorated = aiResearchDecorateContact($seed, $plan, $contact, $accepted, $accepted ? 'Kontakt odpovida navrzenemu segmentu, keywordu a lokaci podle dostupnych dat.' : $filterReason);
         $decorated['ai_validation_status'] = 'fallback_process_filter';
         $fallback[] = $decorated;
     }
@@ -3610,11 +3691,12 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         foreach ($contacts as $contact) {
             $email = strtolower(trim((string)($contact['email'] ?? '')));
             $ai = $byEmail[$email] ?? [];
-            $processAccepted = aiResearchContactMatchesLocationScope($seed, $plan, $contact) && aiResearchContactMatchesPrimaryKeyword($plan, $contact);
+            $filterReason = aiResearchContactProcessFilterReason($seed, $plan, $contact);
+            $processAccepted = $filterReason === '';
             $accepted = $processAccepted && (bool)($ai['accepted'] ?? true);
             $reason = (string)($ai['fit_reason'] ?? '');
             if (!$processAccepted) {
-                $reason = 'Kontakt byl odmitnut procesnim filtrem: nesoulad s keywordem nebo lokaci.';
+                $reason = $filterReason;
             }
             $decorated = aiResearchDecorateContact($seed, $plan, $contact, $accepted, $reason);
             $decorated['ai_validation_status'] = $ai ? 'used' : 'missing_ai_row';
