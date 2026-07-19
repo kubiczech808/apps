@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-19-admin-database-catalog';
+const APP_VERSION = '2026-07-19-seed-outreach-review';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 
@@ -13425,7 +13425,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <button type="submit" name="action" value="run_ai_research_now">Spustit research teď</button>
             </form>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopení firmy</th><th>Důvod cílení</th><th>Koho oslovit</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th><th>Zpráva</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopení firmy</th><th>Důvod cílení</th><th>Koho oslovit</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th><th>Zpráva</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
             <tr><td colspan="16">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
@@ -13436,14 +13436,16 @@ function renderApp(PDO $pdo, ?array $flash): void
             <?php $runUnderstanding = trim((string)($runPlan['business_understanding'] ?? ($runPlan['business_summary'] ?? ''))); ?>
             <?php $modelAudit = aiResearchNormalizeModelAudit($runPlan['ai_model_audit'] ?? []); ?>
             <?php $provisionUser = aiResearchProvisionedUser($pdo, $run); ?>
+            <?php $seedOutreachDraft = aiResearchSeedOutreachDraft($run, $runContacts, $runPlan, $runLanguage); ?>
             <tr class="expandable-row" data-detail-target="ai-research-detail-<?= h((string)$run['id']) ?>" tabindex="0" aria-expanded="false">
                 <td>Zobrazit</td>
                 <td>
-                    <button type="button" class="secondary icon" data-dialog-open="ai-outreach-<?= h((string)$run['id']) ?>" aria-label="Zobrazit AI navrh osloveni" title="Zobrazit AI navrh osloveni">&#9993;</button>
+                    <div class="research-draft-actions">
+                    <button type="button" class="secondary small" data-dialog-open="ai-outreach-<?= h((string)$run['id']) ?>" aria-label="Zobrazit navrh kampane pro nalezene kontakty" title="Zobrazit navrh kampane pro nalezene kontakty">Kampaň</button>
                     <dialog class="modal ai-outreach-modal" id="ai-outreach-<?= h((string)$run['id']) ?>">
                         <div class="modal-header">
                             <div>
-                                <h2>AI navrh osloveni</h2>
+                                <h2>AI navrh kampane</h2>
                                 <p><?= h(aiResearchLanguageLabel($runLanguage)) ?>, <?= h((string)($run['audience_label'] ?? '')) ?></p>
                             </div>
                             <button type="button" class="secondary icon" data-dialog-close>Zavrit</button>
@@ -13461,6 +13463,28 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <div class="email-preview"><?= cleanHtml((string)$run['email_body_html']) ?></div>
                         </section>
                     </dialog>
+                    <button type="button" class="secondary small" data-dialog-open="seed-outreach-<?= h((string)$run['id']) ?>" aria-label="Zobrazit navrh naseho osloveni primarniho subjektu" title="Zobrazit navrh naseho osloveni primarniho subjektu">Naše</button>
+                    <dialog class="modal ai-outreach-modal" id="seed-outreach-<?= h((string)$run['id']) ?>">
+                        <div class="modal-header">
+                            <div>
+                                <h2>Návrh našeho oslovení</h2>
+                                <p><?= h((string)$run['seed_business']) ?>, <?= h((string)$run['seed_email']) ?></p>
+                            </div>
+                            <button type="button" class="secondary icon" data-dialog-close>Zavřít</button>
+                        </div>
+                        <div class="ai-outreach-meta">
+                            <span>Nalezeno kontaktů: <?= h((string)$seedOutreachDraft['accepted_count']) ?></span>
+                            <span>Cílovka: <?= h((string)$seedOutreachDraft['audience']) ?></span>
+                            <span>Lokalita: <?= h((string)$seedOutreachDraft['target_area']) ?></span>
+                            <span>Keyword: <?= h((string)$seedOutreachDraft['keyword']) ?></span>
+                            <span>Zdroj: <?= h((string)$seedOutreachDraft['source']) ?></span>
+                        </div>
+                        <section class="ai-outreach-preview">
+                            <h3><?= h((string)$seedOutreachDraft['subject']) ?></h3>
+                            <div class="email-preview"><?= cleanHtml((string)$seedOutreachDraft['html']) ?></div>
+                        </section>
+                    </dialog>
+                    </div>
                 </td>
                 <td>
                     <?php if ($provisionUser): ?>
@@ -14470,6 +14494,85 @@ function aiResearchLanguageLabel(string $language): string
         'pl' => 'polsky',
         'en' => 'anglicky',
     ][$language] ?? $language;
+}
+
+function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, string $language): array
+{
+    $acceptedContacts = array_values(array_filter($contacts, static fn($contact) => (string)($contact['status'] ?? '') === 'accepted'));
+    $acceptedCount = count($acceptedContacts);
+    $business = trim((string)($run['seed_business'] ?? ''));
+    if ($business === '') {
+        $business = trim((string)($run['seed_email'] ?? ''));
+    }
+    $audience = trim((string)($run['audience_label'] ?? ''));
+    if ($audience === '') {
+        $audience = trim((string)($plan['primary_segment'] ?? aiResearchPrimaryKeyword($plan)));
+    }
+    $keyword = aiResearchPrimaryKeyword($plan);
+    $targetArea = aiResearchTargetAreaLabel($plan);
+    $source = aiResearchPrimarySourceLabel($plan);
+    $sampleNames = [];
+    foreach (array_slice($acceptedContacts, 0, 4) as $contact) {
+        $name = trim((string)($contact['subject_name'] ?? ''));
+        if ($name !== '') {
+            $sampleNames[] = $name;
+        }
+    }
+    $sampleText = $sampleNames ? implode(', ', $sampleNames) : '';
+    $countLabel = (string)$acceptedCount;
+    $language = normalizeAiResearchMarketLanguage($language) ?: 'cs';
+
+    if ($language === 'de') {
+        $subject = 'Wir haben relevante B2B-Kontakte fuer ' . $business . ' gefunden';
+        $html = '<p>Guten Tag,</p>'
+            . '<p>wir haben uns Ihr Unternehmen <strong>' . h($business) . '</strong> angesehen und daraus abgeleitet, welche B2B-Zielgruppe fuer Ihre Akquise am sinnvollsten sein koennte.</p>'
+            . '<p>Aktuell haben wir fuer Sie <strong>' . h($countLabel) . '</strong> passende Kontakte vorbereitet. Die Suche zielt auf <strong>' . h($audience) . '</strong> ab, mit dem Suchbegriff <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' und dem Gebiet <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
+            . ($sampleText !== '' ? '<p>Beispiele gefundener Kontakte: ' . h($sampleText) . '.</p>' : '')
+            . '<p>In der App sehen Sie die komplette Liste, den vorbereiteten E-Mail-Entwurf und koennen vor dem Versand alles pruefen.</p>'
+            . '<p>Moechten Sie fortfahren und die Ansprache pruefen?</p>';
+    } elseif ($language === 'en') {
+        $subject = 'We found relevant B2B contacts for ' . $business;
+        $html = '<p>Hello,</p>'
+            . '<p>we reviewed <strong>' . h($business) . '</strong> and prepared a concrete B2B outreach direction based on what your company offers.</p>'
+            . '<p>We have currently found <strong>' . h($countLabel) . '</strong> relevant contacts for you. The search focuses on <strong>' . h($audience) . '</strong>, using the keyword <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' in <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
+            . ($sampleText !== '' ? '<p>Examples of found companies: ' . h($sampleText) . '.</p>' : '')
+            . '<p>Inside the app you can review the full contact list, the prepared outreach email and all campaign settings before anything is sent.</p>'
+            . '<p>Would you like to continue and review the prepared campaign?</p>';
+    } elseif ($language === 'sk') {
+        $subject = 'Nasli sme relevantne B2B kontakty pre ' . $business;
+        $html = '<p>Dobrý deň,</p>'
+            . '<p>pozreli sme sa na spoločnosť <strong>' . h($business) . '</strong> a pripravili sme konkrétny smer B2B oslovenia podľa toho, čo ponúkate.</p>'
+            . '<p>Aktuálne sme pre vás našli <strong>' . h($countLabel) . '</strong> relevantných kontaktov. Vyhľadávanie cieli na <strong>' . h($audience) . '</strong>, podľa kľúčového slova <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
+            . ($sampleText !== '' ? '<p>Príklady nájdených subjektov: ' . h($sampleText) . '.</p>' : '')
+            . '<p>V aplikácii uvidíte celý zoznam kontaktov, návrh emailu aj nastavenie kampane ešte pred odoslaním.</p>'
+            . '<p>Chcete pokračovať a pozrieť si pripravené oslovenie?</p>';
+    } elseif ($language === 'pl') {
+        $subject = 'Znalezlismy relevantne kontakty B2B dla ' . $business;
+        $html = '<p>Dzien dobry,</p>'
+            . '<p>przeanalizowalismy firme <strong>' . h($business) . '</strong> i przygotowalismy konkretny kierunek akwizycji B2B na podstawie Panstwa oferty.</p>'
+            . '<p>Aktualnie znalezlismy <strong>' . h($countLabel) . '</strong> pasujacych kontaktow. Wyszukiwanie celuje w <strong>' . h($audience) . '</strong>, przy slowie kluczowym <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' w obszarze <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
+            . ($sampleText !== '' ? '<p>Przyklady znalezionych firm: ' . h($sampleText) . '.</p>' : '')
+            . '<p>W aplikacji mozna sprawdzic pelna liste kontaktow, tresc emaila i ustawienia kampanii przed wysylka.</p>'
+            . '<p>Czy chca Panstwo przejsc dalej i zobaczyc przygotowana kampanie?</p>';
+    } else {
+        $subject = 'Našli jsme relevantní B2B kontakty pro ' . $business;
+        $html = '<p>Dobrý den,</p>'
+            . '<p>prošli jsme společnost <strong>' . h($business) . '</strong> a připravili jsme konkrétní směr B2B oslovení podle toho, co vaše firma nabízí.</p>'
+            . '<p>Aktuálně jsme pro vás našli <strong>' . h($countLabel) . '</strong> relevantních kontaktů. Vyhledávání cílí na <strong>' . h($audience) . '</strong>, podle klíčového slova <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
+            . ($sampleText !== '' ? '<p>Ukázky nalezených subjektů: ' . h($sampleText) . '.</p>' : '')
+            . '<p>V aplikaci uvidíte celý seznam kontaktů, návrh emailu i nastavení kampaně ještě před tím, než by se cokoliv odeslalo.</p>'
+            . '<p>Chcete pokračovat a zkontrolovat připravené oslovení?</p>';
+    }
+
+    return [
+        'subject' => truncatePlainText($subject, 255),
+        'html' => $html,
+        'accepted_count' => $acceptedCount,
+        'audience' => $audience !== '' ? $audience : '-',
+        'target_area' => $targetArea !== '' ? $targetArea : '-',
+        'keyword' => $keyword !== '' ? $keyword : '-',
+        'source' => $source !== '' ? $source : '-',
+    ];
 }
 
 function aiResearchContactsByRun(PDO $pdo, array $runIds): array

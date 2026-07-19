@@ -2162,6 +2162,15 @@ td a {
   overflow-wrap: normal;
   word-break: normal;
 }
+.research-draft-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.research-draft-actions button {
+  min-height: 32px;
+  padding: 7px 10px;
+}
 .admin-database-catalog-table {
   min-width: 1280px;
   table-layout: fixed;
