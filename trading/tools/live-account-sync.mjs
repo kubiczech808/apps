@@ -718,6 +718,7 @@ async function main() {
   const equityUsdc = cashUsdc == null
     ? portfolioBase.equityUsdc
     : cashUsdc + number(portfolioBase.marketValueUsdc, 0);
+  const depositedUsdc = number((equityUsdc - number(portfolioBase.totalPnlUsdc, 0)).toFixed(6));
 
   const payload = {
     schemaVersion: 1,
@@ -744,6 +745,9 @@ async function main() {
       ...portfolioBase,
       equityUsdc,
       cashUsdc,
+      depositedUsdc,
+      depositedSource: "equity minus tracked Polymarket P/L",
+      depositedNote: "Estimated original account capital currently visible to this app; deposits/withdrawals are not itemized by the public activity API.",
       cashSource: balanceAllowance?.status === "OK" ? "clob-balance-allowance" : null,
     },
     balanceAllowance,

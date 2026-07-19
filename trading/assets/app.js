@@ -1615,6 +1615,10 @@ function renderLiveState(liveState) {
   const equity = Number.isFinite(Number(portfolio.equityUsdc))
     ? Number(portfolio.equityUsdc)
     : (Number.isFinite(marketValue) ? marketValue : 0);
+  const deposited = Number(portfolio.depositedUsdc);
+  const depositedLine = Number.isFinite(deposited)
+    ? `Deposited/original value ${money(deposited)}`
+    : "Deposited/original value not available";
   const liveCapitalBase = Number.isFinite(cash) ? cash : null;
   const liveGuardLabel = state.liveExecutionArmed ? "Armed" : "Inactive";
   const liveGuardText = state.liveExecutionArmed
@@ -1626,7 +1630,10 @@ function renderLiveState(liveState) {
   if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions / ${openOrders.length} orders`;
   els.portfolioEquity.textContent = money(equity);
   els.portfolioEquity.className = pnlClass(totalPnl);
-  els.portfolioLastRun.textContent = `${liveAccountName(account)} / sync ${liveState.generatedAt ? formatDate(liveState.generatedAt) : "-"}`;
+  els.portfolioLastRun.innerHTML = `
+    ${escapeHtml(liveAccountName(account))} / sync ${escapeHtml(liveState.generatedAt ? formatDate(liveState.generatedAt) : "-")}
+    <small class="metric-note">${escapeHtml(depositedLine)}</small>
+  `;
   els.portfolioTotalPl.textContent = signedMoney(totalPnl);
   els.portfolioTotalPl.className = pnlClass(totalPnl);
   els.portfolioTotalPlPct.textContent = signedPercent(totalPnlPct);
@@ -1685,6 +1692,11 @@ function renderLiveState(liveState) {
         <span class="label">Cash</span>
         <strong>${Number.isFinite(cash) ? money(cash) : "-"}</strong>
         <span>${escapeHtml(balanceAllowance.status === "OK" ? `pUSD balance / allowance ${collateral.allowanceUsdc == null ? "-" : money(Number(collateral.allowanceUsdc))}` : (balanceAllowance.message || "CLOB balance sync not available yet"))}</span>
+      </div>
+      <div>
+        <span class="label">Original value</span>
+        <strong>${Number.isFinite(deposited) ? money(deposited) : "-"}</strong>
+        <span>${escapeHtml(portfolio.depositedSource || "estimated from equity and tracked P/L")}</span>
       </div>
       <div>
         <span class="label">Live execution</span>
