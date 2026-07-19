@@ -3981,8 +3981,8 @@ def _call_gemini(history: list[dict[str, str]], api_key: str) -> str:
     models = [item.strip() for item in configured_models.split(",") if item.strip()]
     if not models:
         models = [
-            "gemini-flash-latest",
             "gemini-3.5-flash",
+            "gemini-flash-latest",
             "gemini-3.1-flash-lite",
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",

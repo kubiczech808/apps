@@ -1,0 +1,57 @@
+name: OpenClaw Gemini Model Upgrade
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - scripts/upgrade_openclaw_gemini_models.py
+      - scripts/agent_virtual_assistant.py
+      - .github/workflows/openclaw-gemini-model-upgrade.yml
+      - .github/openclaw-gemini-model-trigger.txt
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openclaw-gemini-model-upgrade
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: self-hosted
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install updated virtual assistant script
+        run: |
+          set -euo pipefail
+          sudo install -d -o openclaw2 -g openclaw2 -m 0755 /home/openclaw2/scripts
+          sudo install -o openclaw2 -g openclaw2 -m 0755 scripts/agent_virtual_assistant.py /home/openclaw2/scripts/agent_virtual_assistant.py
+
+      - name: Install Gemini model upgrade helper
+        run: |
+          set -euo pipefail
+          sudo install -o openclaw2 -g openclaw2 -m 0755 scripts/upgrade_openclaw_gemini_models.py /home/openclaw2/scripts/upgrade_openclaw_gemini_models.py
+
+      - name: Apply Gemini model preference
+        run: |
+          set -euo pipefail
+          sudo -u openclaw2 -H python3 /home/openclaw2/scripts/upgrade_openclaw_gemini_models.py
+
+      - name: Restart long-running agent services
+        run: |
+          set -euo pipefail
+          for service in virtual-assistant.service x-approve.service agent-g.service; do
+            if systemctl list-unit-files "$service" --no-legend | grep -q "^$service"; then
+              sudo systemctl restart "$service"
+              systemctl is-active --quiet "$service"
+              echo "restarted: $service"
+            else
+              echo "missing: $service"
+            fi
+          done
