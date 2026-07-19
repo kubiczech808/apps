@@ -6,6 +6,10 @@ const APP_VERSION = '2026-07-19-seed-outreach-status';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 
+final class AiResearchTemporaryException extends RuntimeException
+{
+}
+
 date_default_timezone_set('Europe/Prague');
 
 session_start();
@@ -1438,12 +1442,18 @@ function aiModelName(array $config, string $provider = 'gemini'): string
     return trim((string)($config['ai']['gemini_model'] ?? 'gemini-3.5-flash')) ?: 'gemini-3.5-flash';
 }
 
+function aiResearchModelName(array $config): string
+{
+    return trim((string)($config['ai']['gemini_research_model'] ?? '')) ?: aiModelName($config, 'gemini');
+}
+
 function aiModelAuditEntry(array $config, string $step, string $provider = 'gemini', string $status = 'used'): array
 {
+    $model = $provider === 'gemini_research' ? aiResearchModelName($config) : aiModelName($config, $provider);
     return [
         'step' => $step,
-        'provider' => $provider,
-        'model' => aiModelName($config, $provider),
+        'provider' => $provider === 'gemini_research' ? 'gemini' : $provider,
+        'model' => $model,
         'status' => $status,
         'at' => date('c'),
     ];
@@ -1992,6 +2002,9 @@ function runCronAiResearch(PDO $pdo, array $config): string
         setSetting($pdo, 'ai_research_last_run_at', (string)time());
         setSetting($pdo, 'ai_research_lock_until', '');
         return $message;
+    } catch (AiResearchTemporaryException $e) {
+        setSetting($pdo, 'ai_research_lock_until', '');
+        return 'AI research odlozen: ' . $e->getMessage();
     } catch (Throwable $e) {
         setSetting($pdo, 'ai_research_lock_until', '');
         return 'AI research selhal: ' . $e->getMessage();
@@ -2035,7 +2048,7 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
             $attempts++;
             $contacts = aiResearchFindContacts($pdo, $seed, $plan, 10);
             $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
-            $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'contact_validation', 'gemini', aiResearchEvaluationAiStatus($evaluated)));
+            $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'contact_validation', 'gemini_research', aiResearchEvaluationAiStatus($evaluated)));
             $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
             if (count($accepted) > count($bestAccepted) || (count($accepted) === count($bestAccepted) && count($evaluated) > count($bestEvaluated))) {
                 $bestPlan = $plan;
@@ -2051,7 +2064,7 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
                 $attempts++;
                 $contacts = aiResearchFindContacts($pdo, $seed, $plan, 10);
                 $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
-                $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'contact_validation', 'gemini', aiResearchEvaluationAiStatus($evaluated)));
+                $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'contact_validation', 'gemini_research', aiResearchEvaluationAiStatus($evaluated)));
                 $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
                 if (count($accepted) > count($bestAccepted) || (count($accepted) === count($bestAccepted) && count($evaluated) > count($bestEvaluated))) {
                     $bestPlan = $plan;
@@ -2147,7 +2160,7 @@ function aiResearchAlternativePlans(array $config, array $seed, array $basePlan,
             'x-goog-api-key: ' . $apiKey,
             'Content-Type: application/json',
         ], [
-            'model' => aiModelName($config, 'gemini'),
+            'model' => aiResearchModelName($config),
             'system_instruction' => 'Jsi B2B akvizicni strateg. Pri nulovem vysledku zmen segment nebo keyword, ale nikdy trh bez duvodu. Vystup je pouze validni JSON.',
             'input' => $prompt,
             'generation_config' => ['temperature' => 0.5],
@@ -2160,7 +2173,7 @@ function aiResearchAlternativePlans(array $config, array $seed, array $basePlan,
             }
             $plan = onboardingNormalizeLeadPlan($candidate, $fallback);
             $plan = aiResearchApplyStrategicFields($plan, $candidate);
-            $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'alternative_plan_generation', 'gemini'));
+            $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'alternative_plan_generation', 'gemini_research'));
             $plan['filters'] = array_values(array_filter(array_map('strval', (array)($candidate['filters'] ?? ($plan['filters'] ?? [])))));
             $language = normalizeAiResearchMarketLanguage((string)($candidate['market_language'] ?? ''));
             if ($language !== '') {
@@ -2713,7 +2726,7 @@ function aiResearchPlan(array $config, array $seed): array
 
     $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
     if ($apiKey === '') {
-        return aiResearchAppendModelAudit(aiResearchEnrichPlan($fallback, $seed), aiModelAuditEntry($config, 'plan_generation', 'gemini', 'fallback_no_key'));
+        throw new AiResearchTemporaryException('AI research nema nastaveny Gemini API klic, beh se neulozil jako fallback.');
     }
     $prompt = "Seed je realna firma nahodne vybrana z katalogu Firmy.cz v kategorii Vse pro firmy / kraj Praha. Pro tuto firmu mame najit nove B2B zakazniky. "
         . "Tvym ukolem neni pouze najit segment, ktery by sluzbu mohl vyuzit. Musis vybrat segment, ktery ji pravdepodobne koupi, zaplati a muze nakupovat opakovane. "
@@ -2761,7 +2774,7 @@ function aiResearchPlan(array $config, array $seed): array
             'x-goog-api-key: ' . $apiKey,
             'Content-Type: application/json',
         ], [
-            'model' => aiModelName($config, 'gemini'),
+            'model' => aiResearchModelName($config),
             'system_instruction' => 'Jsi seniorni B2B akvizicni strateg a kriticky hodnotitel segmentu. Vybiras segment podle nakupni pravdepodobnosti, ekonomiky a dosazitelnosti. Vystup je pouze validni JSON bez markdownu.',
             'input' => $prompt,
             'generation_config' => ['temperature' => 0.25],
@@ -2769,7 +2782,7 @@ function aiResearchPlan(array $config, array $seed): array
         $json = parseJsonObjectFromText(geminiInteractionText($response));
         $plan = onboardingNormalizeLeadPlan($json, $fallback);
         $plan = aiResearchApplyStrategicFields($plan, $json);
-        $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'plan_generation', 'gemini'));
+        $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'plan_generation', 'gemini_research'));
         $marketLanguage = normalizeAiResearchMarketLanguage((string)($json['market_language'] ?? ''));
         if ($marketLanguage !== '') {
             $plan['market_language'] = $marketLanguage;
@@ -2828,13 +2841,11 @@ function aiResearchPlan(array $config, array $seed): array
         }
         $plan['filters'] = $filters ?: ['Kontakt musi odpovidat navrzenemu B2B segmentu a mit dohledatelny email.'];
         $plan = aiResearchEnrichPlan($plan, $seed);
+        aiResearchAssertPlanQuality($plan);
         return $plan;
     } catch (Throwable $e) {
         error_log('AI research plan fallback: ' . $e->getMessage());
-        return aiResearchAppendModelAudit(
-            aiResearchEnrichPlan($fallback + ['filters' => ['Kontakt musi odpovidat navrzenemu B2B segmentu a mit dohledatelny email.']], $seed),
-            aiModelAuditEntry($config, 'plan_generation', 'gemini', 'fallback_error')
-        );
+        throw new AiResearchTemporaryException('AI plan_generation se nepodarilo zpracovat kvalitnim modelem: ' . $e->getMessage(), 0, $e);
     }
 }
 
@@ -2890,6 +2901,96 @@ function aiResearchFallbackTerms(string $business, string $website, string $addr
         return ['realitni kancelar' . $suffix, 'autoservis' . $suffix, 'hotel' . $suffix, 'zubni ordinace' . $suffix, 'e-shop' . $suffix];
     }
     return ['restaurace' . $suffix, 'hotel' . $suffix, 'autoservis' . $suffix, 'zubni ordinace' . $suffix, 'kavarna' . $suffix, 'fitness centrum' . $suffix];
+}
+
+function aiResearchAssertPlanQuality(array $plan): void
+{
+    $understanding = trim((string)($plan['business_understanding'] ?? ''));
+    $reason = trim((string)($plan['targeting_reason'] ?? ''));
+    $audience = trim((string)($plan['audience_label'] ?? ''));
+    $keyword = aiResearchPrimaryKeyword($plan);
+    $candidateSegments = (array)($plan['candidate_segments'] ?? []);
+    if (aiResearchTextLength($understanding) < 80 || aiResearchTextLength($reason) < 120) {
+        throw new AiResearchTemporaryException('AI plan_generation vratil prilis obecne pochopeni firmy nebo duvod cileni.');
+    }
+    if (aiResearchTextLooksGeneric($understanding . ' ' . $reason . ' ' . $audience)) {
+        throw new AiResearchTemporaryException('AI plan_generation vratil obecny text podobny fallbacku.');
+    }
+    if (aiResearchKeywordIsBanned($keyword)) {
+        throw new AiResearchTemporaryException('AI plan_generation vratil zakazane nebo prilis obecne klicove slovo: ' . $keyword);
+    }
+    if (count($candidateSegments) < 3) {
+        throw new AiResearchTemporaryException('AI plan_generation neporovnal dostatek kandidatnich segmentu.');
+    }
+}
+
+function aiResearchAssertDraftQuality(string $subject, string $html, array $plan): void
+{
+    $plain = trim(html_entity_decode(strip_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $html)), ENT_QUOTES, 'UTF-8'));
+    if (aiResearchTextLength($plain) < 220) {
+        throw new AiResearchTemporaryException('AI outreach_draft vratil prilis kratky text.');
+    }
+    if (aiResearchTextLooksGeneric($subject . ' ' . $plain)) {
+        throw new AiResearchTemporaryException('AI outreach_draft vratil obecny fallbackovy text.');
+    }
+    $keyword = aiResearchFoldText(aiResearchPrimaryKeyword($plan));
+    $audience = aiResearchFoldText((string)($plan['audience_label'] ?? ''));
+    $haystack = aiResearchFoldText($plain . ' ' . $subject);
+    if ($keyword !== '' && !str_contains($haystack, $keyword) && $audience !== '' && !str_contains($haystack, $audience)) {
+        throw new AiResearchTemporaryException('AI outreach_draft neobsahuje konkretni vazbu na vybrany segment nebo keyword.');
+    }
+}
+
+function aiResearchTextLooksGeneric(string $text): bool
+{
+    $folded = aiResearchFoldText($text);
+    $genericPhrases = [
+        'mohla by byt relevantni',
+        'mohla byt pro vas relevantni',
+        'vidime konkretni b2b navaznost',
+        'vidime moznost spoluprace',
+        'mozna spoluprace',
+        'nasli jsme vas kontakt',
+        'rad bych kratce ukazal',
+        'konkretni moznost spoluprace',
+        'konkretni b2b anknuepfungspunkt',
+        'possible cooperation',
+        'could be relevant for you',
+        'may i send more details',
+    ];
+    foreach ($genericPhrases as $phrase) {
+        if (str_contains($folded, aiResearchFoldText($phrase))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function aiResearchTextLength(string $text): int
+{
+    return function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8') : strlen($text);
+}
+
+function aiResearchKeywordIsBanned(string $keyword): bool
+{
+    $keyword = aiResearchFoldText($keyword);
+    if ($keyword === '') {
+        return true;
+    }
+    $banned = [
+        'relevantni b2b firmy',
+        'potencialni zakaznici',
+        'male firmy',
+        'firmy',
+        'sluzby pro firmy',
+        'b2b subjekty',
+        'vhodne firmy',
+        'vyrobni firma',
+        'vyrobce',
+        'prumyslova firma',
+        'podniky',
+    ];
+    return in_array($keyword, $banned, true);
 }
 
 function aiResearchCityFromAddress(string $address): string
@@ -3784,7 +3885,7 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
     }
     $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
     if ($apiKey === '') {
-        return $fallback;
+        throw new AiResearchTemporaryException('AI contact_validation nema nastaveny Gemini API klic, beh se neulozil jako fallback.');
     }
     $prompt = "Vyhodnot nalezene kontakty pro B2B osloveni seed byznysu. "
         . "Seed: " . json_encode($seed, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
@@ -3804,7 +3905,7 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
             'x-goog-api-key: ' . $apiKey,
             'Content-Type: application/json',
         ], [
-            'model' => aiModelName($config, 'gemini'),
+            'model' => aiResearchModelName($config),
             'system_instruction' => 'Jsi B2B obchodnik a hodnotitel relevance. Vystup je pouze validni JSON.',
             'input' => $prompt,
             'generation_config' => ['temperature' => 0.45],
@@ -3815,6 +3916,12 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
             if (is_array($row) && isset($row['email'])) {
                 $byEmail[strtolower(trim((string)$row['email']))] = $row;
             }
+        }
+        if (!$byEmail) {
+            throw new AiResearchTemporaryException('AI contact_validation nevratil zadne hodnotitelne radky.');
+        }
+        if (count($byEmail) < max(1, (int)floor(count($contacts) * 0.6))) {
+            throw new AiResearchTemporaryException('AI contact_validation vyhodnotil prilis malo kontaktu proti nalezenemu seznamu.');
         }
         $out = [];
         foreach ($contacts as $contact) {
@@ -3834,7 +3941,7 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         return $out;
     } catch (Throwable $e) {
         error_log('AI research evaluate fallback: ' . $e->getMessage());
-        return $fallback;
+        throw new AiResearchTemporaryException('AI contact_validation se nepodarilo zpracovat kvalitnim modelem: ' . $e->getMessage(), 0, $e);
     }
 }
 
@@ -3901,7 +4008,7 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         return [
             'subject' => 'Subjekt zatim neni pripraveny k osloveni',
             'html' => '<p>Tento subjekt zatim nema dostatek citelneho weboveho kontextu, aby AI dokazala zodpovedne urcit predmet podnikani, vhodne B2B cileni a text oslovení.</p><p>Osloveni se proto nema rozesilat, dokud nebude k dispozici funkcni web nebo jiny popis produktu/sluzby.</p>',
-            'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini', 'skipped_seed_unsuitable'),
+            'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini_research', 'skipped_seed_unsuitable'),
         ];
     }
     $fallbackTarget = trim((string)($contacts[0]['subject_name'] ?? $plan['audience_label'] ?? ''));
@@ -3909,7 +4016,7 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
     $fallbackHtml = aiResearchFallbackEmailHtml($language, $seedBusiness);
     $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
     if ($apiKey === '') {
-        return ['subject' => $fallbackSubject, 'html' => $fallbackHtml, 'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini', 'fallback_no_key')];
+        throw new AiResearchTemporaryException('AI outreach_draft nema nastaveny Gemini API klic, beh se neulozil jako fallback.');
     }
     $acceptedContacts = array_values(array_filter($contacts, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
     $sampleContacts = array_slice($acceptedContacts ?: $contacts, 0, 5);
@@ -3963,7 +4070,7 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
             'x-goog-api-key: ' . $apiKey,
             'Content-Type: application/json',
         ], [
-            'model' => aiModelName($config, 'gemini'),
+            'model' => aiResearchModelName($config),
             'system_instruction' => 'Jsi B2B obchodnik. Vystup je pouze validni JSON bez markdownu.',
             'input' => $prompt,
             'generation_config' => ['temperature' => 0.45],
@@ -3972,12 +4079,14 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         $subject = truncatePlainText(trim((string)($json['subject'] ?? '')), 255);
         $html = cleanHtml((string)($json['html'] ?? ''));
         if ($subject !== '' && trim(strip_tags($html)) !== '') {
-            return ['subject' => $subject, 'html' => $html, 'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini')];
+            aiResearchAssertDraftQuality($subject, $html, $plan);
+            return ['subject' => $subject, 'html' => $html, 'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini_research')];
         }
     } catch (Throwable $e) {
         error_log('AI research run draft fallback: ' . $e->getMessage());
+        throw new AiResearchTemporaryException('AI outreach_draft se nepodarilo zpracovat kvalitnim modelem: ' . $e->getMessage(), 0, $e);
     }
-    return ['subject' => $fallbackSubject, 'html' => $fallbackHtml, 'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini', 'fallback_error')];
+    throw new AiResearchTemporaryException('AI outreach_draft vratil prazdny nebo neplatny vystup, beh se neulozil jako fallback.');
 }
 
 function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, array $evaluated, array $accepted): int

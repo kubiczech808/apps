@@ -32,6 +32,7 @@ return [
         'openai_model' => 'gpt-4.1',
         'gemini_api_key' => '',
         'gemini_model' => 'gemini-3.5-flash',
+        'gemini_research_model' => 'gemini-3.5-flash',
     ],
     'database' => [
         'driver' => 'mysql',
