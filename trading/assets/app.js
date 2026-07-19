@@ -600,11 +600,9 @@ function resolutionCell(trade) {
 
 function holdingCell(trade) {
   const heldDays = tradeHoldingDays(trade);
-  const currentReturn = tradePnlPct(trade);
-  const label = isClosedTrade(trade) ? "realized P/L" : "current P/L";
   return `
     ${compactDays(heldDays)}
-    <span class="${pnlClass(currentReturn)}">${signedPercent(currentReturn)} ${label}</span>
+    <span>${isClosedTrade(trade) ? "closed holding" : "open holding"}</span>
   `;
 }
 
@@ -1626,8 +1624,65 @@ function evaluationByTokenId(tokenId) {
   return evaluations.find((item) => String(item.tokenId || item.clobTokenId || "") === token) || null;
 }
 
+function normalizedMatchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function evaluationByTrade(item) {
+  const byToken = evaluationByTokenId(item?.tokenId || item?.assetId || item?.asset);
+  if (byToken) return byToken;
+
+  const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
+  const outcome = normalizedMatchText(item?.outcome || item?.side);
+  const slug = normalizedMatchText(item?.eventSlug || item?.slug);
+  const question = normalizedMatchText(item?.question || item?.title || item?.market);
+  if (!outcome) return null;
+
+  return evaluations.find((candidate) => {
+    const candidateOutcome = normalizedMatchText(candidate.outcome);
+    if (candidateOutcome !== outcome) return false;
+    const candidateSlug = normalizedMatchText(candidate.eventSlug || candidate.slug);
+    if (slug && candidateSlug && slug === candidateSlug) return true;
+    const candidateQuestion = normalizedMatchText(candidate.question);
+    return question && candidateQuestion && question === candidateQuestion;
+  }) || null;
+}
+
+function decorateLiveTradeForTable(trade) {
+  if (trade.sourceEvaluation || Number.isFinite(Number(trade.aiProbability))) return trade;
+  const source = evaluationByTrade(trade);
+  if (!source) {
+    return {
+      ...trade,
+      analysisSummary: trade.analysisSummary || "No matching AI evaluation was found for this live Polymarket row. Treat this as an audit gap until the order/execution ledger links it back to an evaluated candidate.",
+    };
+  }
+  return {
+    ...trade,
+    aiProbability: Number(source.aiProbability),
+    rawProbability: Number(source.rawProbability),
+    thesisType: source.thesisType,
+    annualizedReturn: trade.annualizedReturn ?? source.annualizedReturn,
+    expectedValueUsdc: trade.expectedValueUsdc ?? source.expectedValueUsdc,
+    edge: trade.edge ?? source.edge,
+    sourceEvaluation: source,
+    aiAnalysis: trade.aiAnalysis || source.aiAnalysis || null,
+    probabilityThesis: trade.probabilityThesis || source.probabilityThesis || source.aiAnalysis?.thesis || "",
+    analysisModel: trade.analysisModel || source.analysisModel || source.aiAnalysis?.model || "",
+    analysisSummary: [
+      trade.analysisSummary || "",
+      source.analysisSummary ? `Original AI evaluation: ${source.analysisSummary}` : "",
+    ].filter(Boolean).join(" "),
+  };
+}
+
 function normalizeLiveOpenOrderForTable(order) {
-  const source = evaluationByTokenId(order.tokenId || order.assetId);
+  const source = evaluationByTrade(order);
   const price = Number(order.price);
   const remainingSize = Number(order.remainingSize ?? order.originalSize ?? 0);
   const notional = Number(order.notionalUsdc);
@@ -1694,14 +1749,14 @@ function renderLiveState(liveState) {
   const portfolio = liveState.portfolio || {};
   const balanceAllowance = liveState.balanceAllowance || {};
   const collateral = balanceAllowance.collateral || {};
-  const positions = livePositions(liveState);
+  const positions = livePositions(liveState).map(decorateLiveTradeForTable);
   const openOrders = liveOpenOrders(liveState);
   const openedRows = [
     ...positions,
     ...openOrders.map(normalizeLiveOpenOrderForTable),
   ];
   const activity = liveActivity(liveState);
-  const closedTrades = liveClosedTrades(liveState);
+  const closedTrades = liveClosedTrades(liveState).map(decorateLiveTradeForTable);
   const portfolioRiskReward = averageRiskReward([...openedRows, ...closedTrades], tradeRiskReward);
   const sync = liveState.sync || {};
   const reconciliation = liveState.reconciliation || {};
