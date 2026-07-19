@@ -360,7 +360,7 @@ function evaluationRiskReward(item) {
   const risk = evaluationTotalCost(item);
   const reward = gainIfWin(item);
   if (!Number.isFinite(risk) || !Number.isFinite(reward) || risk <= 0 || reward <= 0) return null;
-  return risk / reward;
+  return reward / risk;
 }
 
 function annualizedExpectedReturn(item) {
@@ -538,7 +538,7 @@ function tradeRiskReward(trade) {
   const risk = tradeCostBasis(trade);
   const reward = tradePotentialGain(trade);
   if (!Number.isFinite(risk) || !Number.isFinite(reward) || risk <= 0 || reward <= 0) return null;
-  return risk / reward;
+  return reward / risk;
 }
 
 function riskReward(value) {
@@ -548,8 +548,8 @@ function riskReward(value) {
 
 function riskRewardClass(value) {
   if (!Number.isFinite(value)) return "";
-  if (value <= 1) return "positive";
-  if (value <= 3) return "";
+  if (value >= 1) return "positive";
+  if (value >= 0.33) return "";
   return "negative";
 }
 
@@ -1857,7 +1857,7 @@ function evaluationRiskRewardCell(item) {
   const value = evaluationRiskReward(item);
   return `
     <span class="${riskRewardClass(value)}">${riskReward(value)}</span>
-    <span>risk / reward</span>
+    <span>reward / risk</span>
   `;
 }
 
@@ -2152,7 +2152,7 @@ function handleTradeSort(event) {
     state.tradeSort[tableKey].direction = state.tradeSort[tableKey].direction === "asc" ? "desc" : "asc";
   } else {
     state.tradeSort[tableKey].key = key;
-    state.tradeSort[tableKey].direction = ["market", "status", "riskReward"].includes(key) ? "asc" : "desc";
+    state.tradeSort[tableKey].direction = ["market", "status"].includes(key) ? "asc" : "desc";
   }
   if (state.mode === "live") {
     if (!state.liveState) return;
