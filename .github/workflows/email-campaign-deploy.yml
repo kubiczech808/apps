@@ -42,7 +42,7 @@ jobs:
           STRIPE_PRICE_ID: ${{ secrets.STRIPE_PRICE_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
-          GEMINI_API_KEY_M: ${{ secrets.GEMINI_API_KEY_M }}
+          GEMINI_API_KEY_EMAILING: ${{ secrets.GEMINI_API_KEY_EMAILING }}
           GEMINI_MODEL: gemini-3.5-flash
         run: |
           if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
@@ -90,7 +90,7 @@ jobs:
               'ai' => [
                   'openai_api_key' => {s(os.environ.get("OPENAI_API_KEY"))},
                   'openai_model' => {s(os.environ.get("OPENAI_MODEL") or "gpt-4.1")},
-                  'gemini_api_key' => {s(os.environ.get("GEMINI_API_KEY_M"))},
+                  'gemini_api_key' => {s(os.environ.get("GEMINI_API_KEY_EMAILING"))},
                   'gemini_model' => {s(os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash")},
               ],
               'database' => [
