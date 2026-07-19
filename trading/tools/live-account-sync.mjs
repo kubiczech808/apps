@@ -324,6 +324,7 @@ function normalizeOpenOrder(order) {
 function closedTradesFromHistory(trades, activity, generatedAt) {
   const groups = new Map();
   const groupsByQuestion = new Map();
+  const seenTradeKeys = new Set();
 
   function questionKey(item) {
     return String(item.question || "")
@@ -336,6 +337,15 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
 
   function groupKey(item) {
     return String(item.tokenId || `${item.conditionId || item.slug || item.question}:${item.outcome || ""}`);
+  }
+
+  function tradeIdentity(item) {
+    return [
+      item.transactionHash || "",
+      item.tokenId || item.conditionId || "",
+      String(item.side || "").toUpperCase(),
+      item.timestamp || "",
+    ].join(":");
   }
 
   function indexGroup(group) {
@@ -362,9 +372,12 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
       })[0] || candidates[0];
   }
 
-  for (const trade of trades) {
+  function ingestTrade(trade) {
+    const identity = tradeIdentity(trade);
+    if (seenTradeKeys.has(identity)) return;
+    seenTradeKeys.add(identity);
     const key = groupKey(trade);
-    if (!key || key === "null") continue;
+    if (!key || key === "null") return;
     if (!groups.has(key)) {
       groups.set(key, {
         id: key,
@@ -403,6 +416,16 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
       group.sharesSold += size;
       group.sellProceeds += value;
     }
+  }
+
+  for (const trade of trades) {
+    ingestTrade(trade);
+  }
+
+  for (const item of activity) {
+    const type = String(item.type || "").toUpperCase();
+    if (!type.includes("TRADE")) continue;
+    ingestTrade(item);
   }
 
   for (const item of activity) {
