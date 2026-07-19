@@ -12637,14 +12637,28 @@ function renderApp(PDO $pdo, ?array $flash): void
     <?php endif; ?>
 
     <?php if ($view === 'research'): ?>
+    <?php
+        $researchSettings = loadSettings($pdo);
+        $lastResearchRunAt = (int)($researchSettings['ai_research_last_run_at'] ?? 0);
+        $researchLockUntil = (int)($researchSettings['ai_research_lock_until'] ?? 0);
+        $nextResearchRunAt = $lastResearchRunAt > 0 ? $lastResearchRunAt + 3600 : 0;
+        $researchAutomationStatus = $researchLockUntil > time()
+            ? 'Právě běží, zámek do ' . formatDateTime(date('c', $researchLockUntil))
+            : 'Připraveno k dalšímu běhu.';
+        $researchNextRunLabel = $nextResearchRunAt > time()
+            ? formatDateTime(date('c', $nextResearchRunAt))
+            : 'při nejbližší kontrole cronu';
+    ?>
     <section class="panel">
         <div class="section-header">
             <div>
                 <h2>AI research administrace</h2>
-                <p>Kazdou hodinu agent vybere novou firmu z Firmy.cz / Vse pro firmy / Praha, projde jeji web, navrhne nejvhodnejsi B2B cileni, najde max. 10 kontaktu a ulozi navrh osloveni.</p>
+                <p>Každou hodinu agent vybere novou firmu z Firmy.cz / Vše pro firmy / Praha, projde její web, navrhne nejvhodnější B2B cílení, najde max. 10 kontaktů a uloží návrh oslovení.</p>
+                <p class="muted">Automatika se kontroluje cronem každých 5 minut, nový AI research se ale spustí nejvýš 1x za hodinu. Samostatný hodinový GitHub workflow běží v 17. minutě každé hodiny.</p>
+                <p class="muted">Poslední automatický běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Další nejdříve: <?= h($researchNextRunLabel) ?>. Stav: <?= h($researchAutomationStatus) ?></p>
             </div>
             <form method="post" class="inline">
-                <button type="submit" name="action" value="run_ai_research_now">Spustit research ted</button>
+                <button type="submit" name="action" value="run_ai_research_now">Spustit research teď</button>
             </form>
         </div>
         <table class="research-table"><thead><tr><th>Detail</th><th>Oslovení</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopení firmy</th><th>Důvod cílení</th><th>Koho oslovit</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Dosah</th><th>Lokace</th><th>Nalezeno</th><th>Vhodné</th><th>Zpráva</th></tr></thead><tbody>
