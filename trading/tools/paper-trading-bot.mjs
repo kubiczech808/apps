@@ -347,6 +347,37 @@ function mergeEvaluationLists(primary = [], secondary = [], limit = MAX_HISTORY)
     .slice(0, limit);
 }
 
+function expirePastEvaluations(evaluations = []) {
+  return evaluations.map((item) => {
+    const status = String(item.status || "").toUpperCase();
+    const end = Date.parse(item.endDate || "");
+    if (status !== "ELIGIBLE" || !Number.isFinite(end) || end > Date.now()) return item;
+
+    const rejectReasons = Array.isArray(item.rejectReasons) ? [...item.rejectReasons] : [];
+    if (!rejectReasons.some((reason) => /end date|past|closed|accepting orders/i.test(String(reason || "")))) {
+      rejectReasons.unshift("event end date is in the past");
+    }
+    const changedAt = nowIso();
+    const changes = changedEvaluationFields(item, { ...item, status: "REJECTED", rejectReasons });
+    return {
+      ...item,
+      status: "REJECTED",
+      thesisType: item.thesisType === "HIGH_CONFIDENCE" || item.thesisType === "EDGE_OPPORTUNITY" ? "EXPIRED" : item.thesisType,
+      rejectReasons,
+      lastSeenAt: item.lastSeenAt || changedAt,
+      lastChanges: changes,
+      updateHistory: [
+        {
+          changedAt,
+          previousEvaluatedAt: item.evaluatedAt || item.lastSeenAt || null,
+          changes: changes.length ? changes : [{ field: "status", from: "ELIGIBLE", to: "REJECTED" }],
+        },
+        ...(Array.isArray(item.updateHistory) ? item.updateHistory : []),
+      ].slice(0, 30),
+    };
+  });
+}
+
 function mergeTrade(existing, incoming) {
   if (!existing) return incoming;
   if (!incoming) return existing;
@@ -2083,6 +2114,7 @@ async function writeState(state) {
 async function run() {
   const state = await readState();
   syncLegacyPaperAliases(state);
+  state.evaluations = expirePastEvaluations(state.evaluations || []);
   recoverLedgerGaps(state);
   for (const portfolioState of Object.values(state.paperPortfolios)) {
     portfolioState.trades = await refreshTrades(portfolioState.trades);
@@ -2161,7 +2193,7 @@ async function run() {
 
   state.generatedAt = nowIso();
   updatePortfolio(state);
-  state.evaluations = mergeEvaluationLists(evaluations, state.evaluations);
+  state.evaluations = expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations));
   recordRun(state, { evaluations, eligible, decisions });
   await writeState(state);
   console.log(JSON.stringify({
