@@ -323,9 +323,43 @@ function normalizeOpenOrder(order) {
 
 function closedTradesFromHistory(trades, activity, generatedAt) {
   const groups = new Map();
+  const groupsByQuestion = new Map();
+
+  function questionKey(item) {
+    return String(item.question || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
 
   function groupKey(item) {
     return String(item.tokenId || `${item.conditionId || item.slug || item.question}:${item.outcome || ""}`);
+  }
+
+  function indexGroup(group) {
+    const key = questionKey(group);
+    if (!key) return;
+    if (!groupsByQuestion.has(key)) groupsByQuestion.set(key, []);
+    const list = groupsByQuestion.get(key);
+    if (!list.includes(group)) list.push(group);
+  }
+
+  function bestRedeemGroup(item) {
+    const direct = groups.get(groupKey(item));
+    if (direct) return direct;
+    const candidates = groupsByQuestion.get(questionKey(item)) || [];
+    if (!candidates.length) return null;
+    const redeemSize = number(item.size, 0);
+    return [...candidates]
+      .filter((group) => group.buyCost > 0 && group.status !== "REDEEMED")
+      .sort((a, b) => {
+        const aSizeDelta = Math.abs(number(a.sharesBought, 0) - redeemSize);
+        const bSizeDelta = Math.abs(number(b.sharesBought, 0) - redeemSize);
+        if (aSizeDelta !== bSizeDelta) return aSizeDelta - bSizeDelta;
+        return (Date.parse(b.openedAt || "") || 0) - (Date.parse(a.openedAt || "") || 0);
+      })[0] || candidates[0];
   }
 
   for (const trade of trades) {
@@ -353,6 +387,7 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
         sellProceeds: 0,
         latestPrice: null,
       });
+      indexGroup(groups.get(key));
     }
     const group = groups.get(key);
     const size = number(trade.size, 0);
@@ -373,10 +408,10 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
   for (const item of activity) {
     const type = String(item.type || "").toUpperCase();
     if (!type.includes("REDEEM")) continue;
-    const key = groupKey(item);
-    const group = groups.get(key);
+    const group = bestRedeemGroup(item);
     if (!group) continue;
     group.sellProceeds += number(item.usdcValue, 0);
+    group.redeemedShares = number(group.redeemedShares, 0) + number(item.size, 0);
     if (!group.resolvedAt || Date.parse(item.timestamp || "") > Date.parse(group.resolvedAt || "")) group.resolvedAt = item.timestamp;
     group.status = "REDEEMED";
   }
@@ -408,6 +443,7 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
         currentPrice: exitPrice,
         finalOutcomePrice: exitPrice,
         shares: group.sharesBought,
+        redeemedShares: number(group.redeemedShares),
         stakeUsdc: group.buyCost,
         totalCostUsdc: group.buyCost,
         netGainIfWinUsdc: group.sharesBought - group.buyCost,
