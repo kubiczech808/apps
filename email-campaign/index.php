@@ -2255,12 +2255,7 @@ function resetAiResearchDataIfNeeded(PDO $pdo): void
     if ((string)($settings['ai_research_reset_version'] ?? '') === AI_RESEARCH_RESET_VERSION) {
         return;
     }
-    $pdo->exec('DELETE FROM ai_research_contacts');
-    $pdo->exec('DELETE FROM ai_research_runs');
-    setSetting($pdo, 'ai_research_last_run_at', '');
     setSetting($pdo, 'ai_research_lock_until', '');
-    setSetting($pdo, 'ai_research_last_seed_id', '');
-    setSetting($pdo, 'ai_research_last_seed_source_url', '');
     setSetting($pdo, 'ai_research_reset_version', AI_RESEARCH_RESET_VERSION);
 }
 
@@ -2293,10 +2288,14 @@ function releaseAiResearchRunsWithFixedWebsiteContext(PDO $pdo): void
     $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
     if ($ids) {
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
-        $deleteContacts = $pdo->prepare('DELETE FROM ai_research_contacts WHERE run_id IN (' . $placeholders . ')');
-        $deleteContacts->execute($ids);
-        $deleteRuns = $pdo->prepare('DELETE FROM ai_research_runs WHERE id IN (' . $placeholders . ')');
-        $deleteRuns->execute($ids);
+        $updateRuns = $pdo->prepare('
+            UPDATE ai_research_runs
+            SET status="deferred",
+                message="Puvodni vyhodnoceni bylo odlozeno kvuli oprave nacitani weboveho kontextu; data zustala zachovana a subjekt muze byt zpracovan znovu.",
+                updated_at=?
+            WHERE id IN (' . $placeholders . ')
+        ');
+        $updateRuns->execute(array_merge([date('c')], $ids));
     }
     setSetting($pdo, 'ai_research_context_fix_version', AI_RESEARCH_CONTEXT_FIX_VERSION);
 }
@@ -2326,6 +2325,10 @@ function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
                 continue;
             }
             $contact = extractContactFromHtml($detailHtml, $detailUrl);
+            $email = strtolower(trim((string)($contact['email'] ?? '')));
+            if ($email !== '' && (appUserByEmail($pdo, $email, false) || isSuppressed($pdo, $email))) {
+                continue;
+            }
             $website = normalizeWebsite(trim((string)($contact['website'] ?? '')));
             if ($website === '' || isBlockedDirectoryWebsite($website)) {
                 continue;
@@ -2340,7 +2343,7 @@ function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
             }
             return [
                 'id' => 0,
-                'email' => strtolower(trim((string)($contact['email'] ?? ''))),
+                'email' => $email,
                 'subject_name' => $subjectName,
                 'website' => $website,
                 'address' => trim((string)($contact['address'] ?? '')),
@@ -10899,6 +10902,17 @@ function addSuppression(PDO $pdo, string $email, string $reason, string $source)
     }
     $stmt = $pdo->prepare('INSERT OR REPLACE INTO suppression_list (email, reason, source, created_at) VALUES (?, ?, ?, ?)');
     $stmt->execute([$email, $reason, $source, date('c')]);
+}
+
+function isSuppressed(PDO $pdo, string $email): bool
+{
+    $email = strtolower(trim($email));
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        return false;
+    }
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM suppression_list WHERE email=?');
+    $stmt->execute([$email]);
+    return (int)$stmt->fetchColumn() > 0;
 }
 
 function findSendLogByToken(PDO $pdo, string $token): ?array
