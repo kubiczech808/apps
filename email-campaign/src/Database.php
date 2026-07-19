@@ -89,6 +89,7 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureOnboardingTables(), 'onboarding_tables');
         $this->safeMigrationStep(fn() => $this->ensureOnboardingEventsTable(), 'onboarding_events');
         $this->safeMigrationStep(fn() => $this->ensureAiResearchTables(), 'ai_research_tables');
+        $this->safeMigrationStep(fn() => $this->ensureAiResearchOutreachColumns(), 'ai_research_outreach_columns');
         $this->safeMigrationStep(fn() => $this->ensureAppUsersTable(), 'app_users');
         foreach (['contact_databases', 'campaigns', 'import_runs', 'scraping_containers', 'scraping_jobs', 'ai_research_runs'] as $ownedTable) {
             $this->safeMigrationStep(fn() => $this->ensureColumn($ownedTable, 'owner_user_id', 'INTEGER NOT NULL DEFAULT 0'), $ownedTable . '.owner_user_id');
@@ -585,6 +586,14 @@ final class Database
                 INDEX ai_research_contacts_email_idx (email)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $this->ensureColumn('ai_research_runs', 'scraping_keyword', "VARCHAR(255) NOT NULL DEFAULT ''");
+    }
+
+    private function ensureAiResearchOutreachColumns(): void
+    {
+        $this->ensureColumn('ai_research_runs', 'seed_outreach_status', "VARCHAR(40) NOT NULL DEFAULT 'ready'");
+        $this->ensureColumn('ai_research_runs', 'seed_outreach_token', "VARCHAR(80) NOT NULL DEFAULT ''");
+        $this->ensureColumn('ai_research_runs', 'seed_outreach_sent_at', "VARCHAR(40) NOT NULL DEFAULT ''");
+        $this->ensureColumn('ai_research_runs', 'seed_outreach_unsubscribed_at', "VARCHAR(40) NOT NULL DEFAULT ''");
     }
 
     private function ensureAppUsersTable(): void

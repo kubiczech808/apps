@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-19-seed-outreach-review';
+const APP_VERSION = '2026-07-19-seed-outreach-status';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 
@@ -50,6 +50,8 @@ if (shouldRunStartupMaintenance()) {
         reconcileDuplicateScrapingRuns($pdo);
         reconcileAiResearchProcessFilteredContacts($pdo);
         reconcileAiResearchProvisionedWorkspaces($pdo);
+        ensureAiResearchSeedOutreachTokens($pdo);
+        reconcileAiResearchSeedOutreachDuplicates($pdo);
     } catch (Throwable $e) {
         if ($isMysqlDatabase && databasePermissionDenied($e)) {
             $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Startovni udrzba databaze byla preskocena kvuli docasne DB chybe: ' . $e->getMessage());
@@ -116,6 +118,11 @@ if (isset($_GET['click'], $_GET['u'])) {
 
 if (isset($_GET['unsubscribe'])) {
     unsubscribeRecipient($pdo, (string)$_GET['unsubscribe']);
+    exit;
+}
+
+if (isset($_GET['seed_unsubscribe'])) {
+    unsubscribeAiResearchSeed($pdo, (string)$_GET['seed_unsubscribe']);
     exit;
 }
 
@@ -328,6 +335,13 @@ function handlePost(PDO $pdo, array $config): ?string
             throw new RuntimeException('AI research neni pro tento ucet dostupny.');
         }
         return runAiResearchOnce($pdo, $config, true);
+    }
+
+    if ($action === 'mark_seed_outreach_sent') {
+        if (!canAccessAiResearch()) {
+            throw new RuntimeException('Oznaceni naseho osloveni je dostupne pouze adminovi.');
+        }
+        return markAiResearchSeedOutreachSent($pdo, (int)($_POST['run_id'] ?? 0));
     }
 
     if ($action === 'switch_app_user') {
@@ -2345,6 +2359,7 @@ function selectAiResearchSeedRecipient(PDO $pdo, bool $force = false): ?array
           AND r.website!=""
           AND (r.source_label LIKE "%Firmy.cz%" OR r.source_url LIKE "%firmy.cz%")
           AND NOT EXISTS (SELECT 1 FROM app_users au WHERE LOWER(au.email)=LOWER(r.email))
+          AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
           AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND (COALESCE(ar.accepted_count,0)>0 OR ar.status IN ("done","unsuitable")))
           ' . $recentSql . '
     ';
@@ -2370,6 +2385,7 @@ function selectAiResearchSeedRecipient(PDO $pdo, bool $force = false): ?array
           AND r.website!=""
           AND (r.source_label LIKE "%Firmy.cz%" OR r.source_url LIKE "%firmy.cz%")
           AND NOT EXISTS (SELECT 1 FROM app_users au WHERE LOWER(au.email)=LOWER(r.email))
+          AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
           AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND (COALESCE(ar.accepted_count,0)>0 OR ar.status IN ("done","unsuitable")))
           ' . $fallbackRecentSql . '
         ORDER BY RAND()
@@ -3194,6 +3210,54 @@ function reconcileAiResearchProvisionedWorkspaces(PDO $pdo): void
     }
 }
 
+function ensureAiResearchSeedOutreachTokens(PDO $pdo): void
+{
+    $rows = $pdo->query('SELECT id, accepted_count, seed_outreach_status, seed_outreach_token FROM ai_research_runs WHERE seed_outreach_token="" OR seed_outreach_status="" ORDER BY id DESC LIMIT 500')->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) {
+        return;
+    }
+    $stmt = $pdo->prepare('UPDATE ai_research_runs SET seed_outreach_token=?, seed_outreach_status=CASE WHEN seed_outreach_status="" THEN ? ELSE seed_outreach_status END, updated_at=? WHERE id=?');
+    foreach ($rows as $row) {
+        $status = (int)($row['accepted_count'] ?? 0) > 0 ? 'ready' : 'not_ready';
+        $stmt->execute([aiResearchSeedOutreachToken($pdo), $status, date('c'), (int)$row['id']]);
+    }
+}
+
+function reconcileAiResearchSeedOutreachDuplicates(PDO $pdo): void
+{
+    $rows = $pdo->query('
+        SELECT id, seed_email, scraping_keyword, seed_outreach_status
+        FROM ai_research_runs
+        WHERE accepted_count>0
+          AND seed_email<>""
+          AND scraping_keyword<>""
+        ORDER BY seed_email ASC, scraping_keyword ASC, id ASC
+    ')->fetchAll(PDO::FETCH_ASSOC);
+    $seen = [];
+    $mark = $pdo->prepare('UPDATE ai_research_runs SET seed_outreach_status="skipped_duplicate", updated_at=? WHERE id=? AND seed_outreach_status NOT IN ("sent","unsubscribed","skipped_duplicate")');
+    foreach ($rows as $row) {
+        $key = strtolower(trim((string)$row['seed_email'])) . '|' . aiResearchFoldText((string)$row['scraping_keyword']);
+        if ($key === '|') {
+            continue;
+        }
+        if (!isset($seen[$key])) {
+            $seen[$key] = (int)$row['id'];
+            continue;
+        }
+        $mark->execute([date('c'), (int)$row['id']]);
+    }
+}
+
+function aiResearchSeedOutreachToken(PDO $pdo): string
+{
+    do {
+        $token = bin2hex(random_bytes(18));
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM ai_research_runs WHERE seed_outreach_token=?');
+        $stmt->execute([$token]);
+    } while ((int)$stmt->fetchColumn() > 0);
+    return $token;
+}
+
 function aiResearchPrimaryKeyword(array $plan): string
 {
     foreach ((array)($plan['scraping_queries'] ?? []) as $query) {
@@ -3913,9 +3977,11 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
     }
     $ownerId = aiResearchOwnerUserId($pdo);
     $scrapingKeyword = aiResearchPrimaryKeyword($plan);
+    $seedOutreachStatus = $accepted ? 'ready' : 'not_ready';
+    $seedOutreachToken = aiResearchSeedOutreachToken($pdo);
     $stmt = $pdo->prepare('
-        INSERT INTO ai_research_runs (owner_user_id, seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, scraping_keyword, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ai_research_runs (owner_user_id, seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, scraping_keyword, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at, seed_outreach_status, seed_outreach_token)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ');
     $status = !empty($plan['seed_unsuitable']) ? 'unsuitable' : ($accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts'));
     $message = !empty($plan['seed_unsuitable'])
@@ -3947,6 +4013,8 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
         $message,
         $now,
         $now,
+        $seedOutreachStatus,
+        $seedOutreachToken,
     ]);
     $runId = (int)$pdo->lastInsertId();
     $item = $pdo->prepare('
@@ -5272,6 +5340,34 @@ function restoreAdminUser(PDO $pdo): string
     $_SESSION['auth_provider'] = 'password';
     unset($_SESSION['admin_auth_email']);
     return 'Zpet v admin uctu.';
+}
+
+function markAiResearchSeedOutreachSent(PDO $pdo, int $runId): string
+{
+    if ($runId <= 0) {
+        throw new RuntimeException('Neplatny research beh.');
+    }
+    $stmt = $pdo->prepare('SELECT * FROM ai_research_runs WHERE id=? LIMIT 1');
+    $stmt->execute([$runId]);
+    $run = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$run) {
+        throw new RuntimeException('Research beh nebyl nalezen.');
+    }
+    if ((string)($run['seed_outreach_status'] ?? '') === 'unsubscribed') {
+        throw new RuntimeException('Subjekt je odhlaseny, nelze ho oznacit jako osloveny.');
+    }
+    $now = date('c');
+    $update = $pdo->prepare('
+        UPDATE ai_research_runs
+        SET seed_outreach_status="sent",
+            seed_outreach_sent_at=CASE WHEN seed_outreach_sent_at="" THEN ? ELSE seed_outreach_sent_at END,
+            updated_at=?
+        WHERE LOWER(seed_email)=LOWER(?)
+          AND scraping_keyword=?
+          AND seed_outreach_status NOT IN ("unsubscribed","skipped_duplicate")
+    ');
+    $update->execute([$now, $now, (string)$run['seed_email'], (string)$run['scraping_keyword']]);
+    return 'Primarni subjekt oznacen jako osloveny pro keyword ' . (string)$run['scraping_keyword'] . '.';
 }
 
 function ownerSql(PDO $pdo, string $alias = ''): string
@@ -10135,6 +10231,40 @@ function unsubscribeRecipient(PDO $pdo, string $token): void
     echo localizeHtml((string)ob_get_clean(), $pdo);
 }
 
+function unsubscribeAiResearchSeed(PDO $pdo, string $token): void
+{
+    if (!preg_match('/^[a-f0-9]{36}$/i', $token)) {
+        http_response_code(404);
+        echo 'Odhlaseni nebylo nalezeno.';
+        return;
+    }
+    $stmt = $pdo->prepare('SELECT * FROM ai_research_runs WHERE seed_outreach_token=? LIMIT 1');
+    $stmt->execute([$token]);
+    $run = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$run) {
+        http_response_code(404);
+        echo 'Odhlaseni nebylo nalezeno.';
+        return;
+    }
+    $email = strtolower(trim((string)($run['seed_email'] ?? '')));
+    $keyword = trim((string)($run['scraping_keyword'] ?? ''));
+    $now = date('c');
+    $update = $pdo->prepare('
+        UPDATE ai_research_runs
+        SET seed_outreach_status="unsubscribed",
+            seed_outreach_unsubscribed_at=CASE WHEN seed_outreach_unsubscribed_at="" THEN ? ELSE seed_outreach_unsubscribed_at END,
+            updated_at=?
+        WHERE LOWER(seed_email)=LOWER(?)
+          AND scraping_keyword=?
+    ');
+    $update->execute([$now, $now, $email, $keyword]);
+    addSuppression($pdo, $email, 'seed_unsubscribe', 'ai_research_link');
+    header('Content-Type: text/html; charset=utf-8');
+    ob_start();
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Odhlášeno</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body><main><section class="panel narrow"><h1>Odhlášeno</h1><p>Email <?= h($email) ?> už nebudeme používat pro naše další obchodní sdělení k této nabídce.</p></section></main><?php renderLanguageFooter($pdo); ?></body></html><?php
+    echo localizeHtml((string)ob_get_clean(), $pdo);
+}
+
 function addSuppression(PDO $pdo, string $email, string $reason, string $source): void
 {
     $email = strtolower(trim($email));
@@ -13425,9 +13555,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <button type="submit" name="action" value="run_ai_research_now">Spustit research teď</button>
             </form>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopení firmy</th><th>Důvod cílení</th><th>Koho oslovit</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th><th>Zpráva</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Stav našeho oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopení firmy</th><th>Důvod cílení</th><th>Koho oslovit</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th><th>Zpráva</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
-            <tr><td colspan="16">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="17">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
@@ -13478,13 +13608,25 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <span>Lokalita: <?= h((string)$seedOutreachDraft['target_area']) ?></span>
                             <span>Keyword: <?= h((string)$seedOutreachDraft['keyword']) ?></span>
                             <span>Zdroj: <?= h((string)$seedOutreachDraft['source']) ?></span>
+                            <span>Stav: <?= h(aiResearchSeedOutreachStatusLabel((string)($run['seed_outreach_status'] ?? ''))) ?></span>
                         </div>
                         <section class="ai-outreach-preview">
                             <h3><?= h((string)$seedOutreachDraft['subject']) ?></h3>
                             <div class="email-preview"><?= cleanHtml((string)$seedOutreachDraft['html']) ?></div>
                         </section>
+                        <?php if (!in_array((string)($run['seed_outreach_status'] ?? ''), ['sent', 'unsubscribed', 'skipped_duplicate'], true)): ?>
+                        <form method="post" class="actions-row">
+                            <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
+                            <button type="submit" name="action" value="mark_seed_outreach_sent" class="secondary">Označit jako oslovené</button>
+                        </form>
+                        <?php endif; ?>
                     </dialog>
                     </div>
+                </td>
+                <td>
+                    <?= statusBadge(aiResearchSeedOutreachStatusLabel((string)($run['seed_outreach_status'] ?? ''))) ?>
+                    <?php if ((string)($run['seed_outreach_sent_at'] ?? '') !== ''): ?><br><small>odesláno <?= h(formatDateTime((string)$run['seed_outreach_sent_at'])) ?></small><?php endif; ?>
+                    <?php if ((string)($run['seed_outreach_unsubscribed_at'] ?? '') !== ''): ?><br><small>odhlášeno <?= h(formatDateTime((string)$run['seed_outreach_unsubscribed_at'])) ?></small><?php endif; ?>
                 </td>
                 <td>
                     <?php if ($provisionUser): ?>
@@ -13510,7 +13652,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><?= h((string)$run['message']) ?></td>
             </tr>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="16">
+                <td colspan="17">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
@@ -14496,6 +14638,26 @@ function aiResearchLanguageLabel(string $language): string
     ][$language] ?? $language;
 }
 
+function aiResearchSeedOutreachStatusLabel(string $status): string
+{
+    return [
+        'not_ready' => 'nepřipraveno',
+        'ready' => 'připraveno',
+        'sent' => 'osloveno',
+        'unsubscribed' => 'odhlášeno',
+        'skipped_duplicate' => 'duplicitní',
+    ][trim($status)] ?? 'připraveno';
+}
+
+function aiResearchSeedOutreachUnsubscribeUrl(array $run): string
+{
+    $token = trim((string)($run['seed_outreach_token'] ?? ''));
+    if ($token === '') {
+        return '';
+    }
+    return appBaseUrl() . '?seed_unsubscribe=' . rawurlencode($token);
+}
+
 function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, string $language): array
 {
     $acceptedContacts = array_values(array_filter($contacts, static fn($contact) => (string)($contact['status'] ?? '') === 'accepted'));
@@ -14511,6 +14673,12 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
     $keyword = aiResearchPrimaryKeyword($plan);
     $targetArea = aiResearchTargetAreaLabel($plan);
     $source = aiResearchPrimarySourceLabel($plan);
+    $unsubscribeUrl = aiResearchSeedOutreachUnsubscribeUrl($run);
+    $unsubscribeHtmlCs = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Pokud už od nás podobné obchodní sdělení nechcete dostávat, můžete se <a href="' . h($unsubscribeUrl) . '">odhlásit zde</a>.</p>' : '';
+    $unsubscribeHtmlSk = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Ak už od nás podobné obchodné oznámenia nechcete dostávať, môžete sa <a href="' . h($unsubscribeUrl) . '">odhlásiť tu</a>.</p>' : '';
+    $unsubscribeHtmlDe = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Wenn Sie keine weiteren aehnlichen geschäftlichen Nachrichten von uns erhalten moechten, koennen Sie sich <a href="' . h($unsubscribeUrl) . '">hier abmelden</a>.</p>' : '';
+    $unsubscribeHtmlEn = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">If you do not want to receive similar business messages from us, you can <a href="' . h($unsubscribeUrl) . '">unsubscribe here</a>.</p>' : '';
+    $unsubscribeHtmlPl = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Jesli nie chca Panstwo otrzymywac podobnych wiadomosci handlowych od nas, mozna <a href="' . h($unsubscribeUrl) . '">zrezygnowac tutaj</a>.</p>' : '';
     $sampleNames = [];
     foreach (array_slice($acceptedContacts, 0, 4) as $contact) {
         $name = trim((string)($contact['subject_name'] ?? ''));
@@ -14529,7 +14697,8 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . '<p>Aktuell haben wir fuer Sie <strong>' . h($countLabel) . '</strong> passende Kontakte vorbereitet. Die Suche zielt auf <strong>' . h($audience) . '</strong> ab, mit dem Suchbegriff <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' und dem Gebiet <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Beispiele gefundener Kontakte: ' . h($sampleText) . '.</p>' : '')
             . '<p>In der App sehen Sie die komplette Liste, den vorbereiteten E-Mail-Entwurf und koennen vor dem Versand alles pruefen.</p>'
-            . '<p>Moechten Sie fortfahren und die Ansprache pruefen?</p>';
+            . '<p>Moechten Sie fortfahren und die Ansprache pruefen?</p>'
+            . $unsubscribeHtmlDe;
     } elseif ($language === 'en') {
         $subject = 'We found relevant B2B contacts for ' . $business;
         $html = '<p>Hello,</p>'
@@ -14537,7 +14706,8 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . '<p>We have currently found <strong>' . h($countLabel) . '</strong> relevant contacts for you. The search focuses on <strong>' . h($audience) . '</strong>, using the keyword <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' in <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Examples of found companies: ' . h($sampleText) . '.</p>' : '')
             . '<p>Inside the app you can review the full contact list, the prepared outreach email and all campaign settings before anything is sent.</p>'
-            . '<p>Would you like to continue and review the prepared campaign?</p>';
+            . '<p>Would you like to continue and review the prepared campaign?</p>'
+            . $unsubscribeHtmlEn;
     } elseif ($language === 'sk') {
         $subject = 'Nasli sme relevantne B2B kontakty pre ' . $business;
         $html = '<p>Dobrý deň,</p>'
@@ -14545,7 +14715,8 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . '<p>Aktuálne sme pre vás našli <strong>' . h($countLabel) . '</strong> relevantných kontaktov. Vyhľadávanie cieli na <strong>' . h($audience) . '</strong>, podľa kľúčového slova <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Príklady nájdených subjektov: ' . h($sampleText) . '.</p>' : '')
             . '<p>V aplikácii uvidíte celý zoznam kontaktov, návrh emailu aj nastavenie kampane ešte pred odoslaním.</p>'
-            . '<p>Chcete pokračovať a pozrieť si pripravené oslovenie?</p>';
+            . '<p>Chcete pokračovať a pozrieť si pripravené oslovenie?</p>'
+            . $unsubscribeHtmlSk;
     } elseif ($language === 'pl') {
         $subject = 'Znalezlismy relevantne kontakty B2B dla ' . $business;
         $html = '<p>Dzien dobry,</p>'
@@ -14553,7 +14724,8 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . '<p>Aktualnie znalezlismy <strong>' . h($countLabel) . '</strong> pasujacych kontaktow. Wyszukiwanie celuje w <strong>' . h($audience) . '</strong>, przy slowie kluczowym <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' w obszarze <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Przyklady znalezionych firm: ' . h($sampleText) . '.</p>' : '')
             . '<p>W aplikacji mozna sprawdzic pelna liste kontaktow, tresc emaila i ustawienia kampanii przed wysylka.</p>'
-            . '<p>Czy chca Panstwo przejsc dalej i zobaczyc przygotowana kampanie?</p>';
+            . '<p>Czy chca Panstwo przejsc dalej i zobaczyc przygotowana kampanie?</p>'
+            . $unsubscribeHtmlPl;
     } else {
         $subject = 'Našli jsme relevantní B2B kontakty pro ' . $business;
         $html = '<p>Dobrý den,</p>'
@@ -14561,7 +14733,8 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . '<p>Aktuálně jsme pro vás našli <strong>' . h($countLabel) . '</strong> relevantních kontaktů. Vyhledávání cílí na <strong>' . h($audience) . '</strong>, podle klíčového slova <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Ukázky nalezených subjektů: ' . h($sampleText) . '.</p>' : '')
             . '<p>V aplikaci uvidíte celý seznam kontaktů, návrh emailu i nastavení kampaně ještě před tím, než by se cokoliv odeslalo.</p>'
-            . '<p>Chcete pokračovat a zkontrolovat připravené oslovení?</p>';
+            . '<p>Chcete pokračovat a zkontrolovat připravené oslovení?</p>'
+            . $unsubscribeHtmlCs;
     }
 
     return [
@@ -14572,6 +14745,7 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
         'target_area' => $targetArea !== '' ? $targetArea : '-',
         'keyword' => $keyword !== '' ? $keyword : '-',
         'source' => $source !== '' ? $source : '-',
+        'unsubscribe_url' => $unsubscribeUrl,
     ];
 }
 
@@ -15039,11 +15213,11 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
 
 function statusBadge(string $text): string
 {
-    $class = in_array($text, ['ano', 'smtp prijato', 'vlozeno', 'aktualizovano', 'finished', 'hotovo', 'bezi', 'Active', 'active'], true) || substr($text, -1) === 'x' ? 'good' : 'muted';
-    if (in_array($text, ['nezjisteno', 'nenapojeno', 'preskoceno', 'failed', 'chyba', 'paused', 'Paused', 'pozastaveno'], true)) {
+    $class = in_array($text, ['ano', 'smtp prijato', 'vlozeno', 'aktualizovano', 'finished', 'hotovo', 'bezi', 'Active', 'active', 'připraveno', 'osloveno'], true) || substr($text, -1) === 'x' ? 'good' : 'muted';
+    if (in_array($text, ['nezjisteno', 'nenapojeno', 'preskoceno', 'failed', 'chyba', 'paused', 'Paused', 'pozastaveno', 'nepřipraveno'], true)) {
         $class = 'warn';
     }
-    if (in_array($text, ['cancelled', 'zruseno'], true)) {
+    if (in_array($text, ['cancelled', 'zruseno', 'odhlášeno', 'duplicitní'], true)) {
         $class = 'muted';
     }
     if (in_array($text, ['bezi', 'ceka'], true)) {
