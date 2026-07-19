@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-19-research-tenant-provisioning';
+const APP_VERSION = '2026-07-19-admin-database-catalog';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 
@@ -12462,15 +12462,15 @@ function renderFlash(?array $flash): void
 function currentView(): string
 {
     $route = trim((string)($_GET['route'] ?? ''), '/');
-    $map = ['dashboard' => 'overview', 'contacts' => 'contacts', 'campaigns' => 'campaigns', 'scraping' => 'scraping', 'research' => 'research', 'config' => 'config'];
+    $map = ['dashboard' => 'overview', 'contacts' => 'contacts', 'campaigns' => 'campaigns', 'scraping' => 'scraping', 'research' => 'research', 'database-catalog' => 'database_catalog', 'config' => 'config'];
     if (isset($map[$route])) {
-        return $map[$route] === 'research' && !canAccessAiResearch() ? 'overview' : $map[$route];
+        return in_array($map[$route], ['research', 'database_catalog'], true) && !canAccessAiResearch() ? 'overview' : $map[$route];
     }
     $view = $_GET['view'] ?? 'overview';
-    if ($view === 'research' && !canAccessAiResearch()) {
+    if (in_array($view, ['research', 'database_catalog'], true) && !canAccessAiResearch()) {
         return 'overview';
     }
-    return in_array($view, ['overview', 'contacts', 'campaigns', 'scraping', 'research', 'config'], true) ? $view : 'overview';
+    return in_array($view, ['overview', 'contacts', 'campaigns', 'scraping', 'research', 'database_catalog', 'config'], true) ? $view : 'overview';
 }
 
 function canAccessAiResearch(): bool
@@ -12491,7 +12491,7 @@ function canAccessAiResearch(): bool
 
 function routeUrl(string $view): string
 {
-    $map = ['overview' => './?route=dashboard', 'contacts' => './?route=contacts', 'campaigns' => './?route=campaigns', 'scraping' => './?route=scraping', 'research' => './?route=research', 'config' => './?route=config'];
+    $map = ['overview' => './?route=dashboard', 'contacts' => './?route=contacts', 'campaigns' => './?route=campaigns', 'scraping' => './?route=scraping', 'research' => './?route=research', 'database_catalog' => './?route=database-catalog', 'config' => './?route=config'];
     return $map[$view] ?? './?route=dashboard';
 }
 
@@ -12542,6 +12542,7 @@ function renderApp(PDO $pdo, ?array $flash): void
     $scrapingItemsByJob = [];
     $aiResearchRuns = [];
     $aiResearchContactsByRun = [];
+    $adminDatabaseCatalogRows = [];
     $selectedList = null;
     $current = ['id' => 0, 'list_id' => 1, 'name' => '', 'subject' => '', 'body_html' => '<p>Dobry den,</p><p>...</p>', 'daily_limit' => 300, 'batch_limit' => 10, 'auto_daily_limit' => 1, 'include_previously_contacted' => 0, 'schedule_time' => '09:00', 'status' => 'draft'];
     $currentListId = 1;
@@ -12633,6 +12634,18 @@ function renderApp(PDO $pdo, ?array $flash): void
             $aiResearchRuns = aiResearchRuns($pdo);
             $aiResearchContactsByRun = aiResearchContactsByRun($pdo, array_map(fn($run) => (int)$run['id'], $aiResearchRuns));
         }
+    } elseif ($view === 'database_catalog') {
+        if (!canAccessAiResearch()) {
+            $view = 'overview';
+            $campaigns = campaignRows($pdo);
+            $lists = contactListOptions($pdo);
+            $current = $campaigns[0] ?? $current;
+            $currentListId = max(1, (int)($current['list_id'] ?? 1));
+            $pace = campaignDailyLimit($pdo, $current);
+            $overview = overviewStats($pdo, $current, $pace, $config);
+        } else {
+            $adminDatabaseCatalogRows = adminDatabaseCatalogRows($pdo);
+        }
     }
     ob_start();
     ?><!doctype html>
@@ -12656,6 +12669,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         <a class="<?= $view === 'scraping' ? 'active' : '' ?>" href="<?= h(routeUrl('scraping')) ?>">Scraping</a>
         <?php if (canAccessAiResearch()): ?>
         <a class="<?= $view === 'research' ? 'active' : '' ?>" href="<?= h(routeUrl('research')) ?>">AI research</a>
+        <a class="<?= $view === 'database_catalog' ? 'active' : '' ?>" href="<?= h(routeUrl('database_catalog')) ?>">Katalog databází</a>
         <?php endif; ?>
         <a class="<?= $view === 'config' ? 'active' : '' ?>" href="<?= h(routeUrl('config')) ?>">Konfigurace</a>
     </nav>
@@ -13630,6 +13644,70 @@ function renderApp(PDO $pdo, ?array $flash): void
     </section>
     <?php endif; ?>
 
+    <?php if ($view === 'database_catalog'): ?>
+    <section class="panel admin-database-catalog">
+        <div class="section-header">
+            <div>
+                <h2>Katalog databází</h2>
+                <p>Admin přehled již založených databází podle účtu, zdroje dat, klíčového slova a lokality. Slouží k rozhodnutí, zda má smysl spouštět nový plný scraping, nebo použít už nasbíranou databázi a jen ji filtrovat.</p>
+            </div>
+        </div>
+        <div class="table-shell">
+            <table class="admin-database-catalog-table">
+                <thead>
+                    <tr>
+                        <th>Účet</th>
+                        <th>Databáze</th>
+                        <th>Zdroj dat</th>
+                        <th>Klíčové slovo</th>
+                        <th>Lokalita / filtr</th>
+                        <th>Kontakty</th>
+                        <th>Scraping</th>
+                        <th>Kampaň</th>
+                        <th>Poslední běh</th>
+                        <th>Akce</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php if (!$adminDatabaseCatalogRows): ?>
+                    <tr><td colspan="10">Zatím není založena žádná katalogová databáze.</td></tr>
+                <?php endif; ?>
+                <?php foreach ($adminDatabaseCatalogRows as $row): ?>
+                    <tr>
+                        <td><strong><?= h((string)$row['owner_email']) ?></strong><br><small><?= h((string)$row['owner_role']) ?></small></td>
+                        <td><strong><?= h((string)$row['database_name']) ?></strong><br><small>ID <?= h((string)$row['database_id']) ?></small></td>
+                        <td><?= h((string)$row['source_label']) ?></td>
+                        <td><strong><?= h((string)($row['keyword'] ?: '-')) ?></strong></td>
+                        <td>
+                            <strong><?= h((string)($row['target_area'] ?: '-')) ?></strong>
+                            <?php if ((string)($row['search_url'] ?? '') !== ''): ?>
+                                <a class="sub-link" href="<?= h((string)$row['search_url']) ?>" target="_blank" rel="noopener"><?= h((string)$row['search_url']) ?></a>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <strong><?= h((string)$row['contact_count']) ?></strong>
+                            <small><?= h((string)$row['unique_domains']) ?> webů, <?= h((string)$row['source_url_count']) ?> zdrojových URL</small>
+                        </td>
+                        <td>
+                            <span><?= h((string)$row['scraping_runs']) ?> běhů</span><br>
+                            <small><?= h((string)$row['inserted_count']) ?> vloženo, <?= h((string)$row['updated_count']) ?> aktualizováno, <?= h((string)$row['skipped_count']) ?> přeskočeno</small>
+                        </td>
+                        <td><?= h((string)$row['campaign_status_summary']) ?></td>
+                        <td><?= (string)$row['last_run_at'] !== '' ? h(formatDateTime((string)$row['last_run_at'])) : '-' ?></td>
+                        <td class="actions-cell">
+                            <form method="post" class="inline">
+                                <input type="hidden" name="user_id" value="<?= h((string)$row['owner_user_id']) ?>">
+                                <button type="submit" name="action" value="switch_app_user" class="secondary">Přepnout</button>
+                            </form>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </section>
+    <?php endif; ?>
+
     <?php if ($view === 'config'): ?>
     <section class="panel">
         <div class="section-header">
@@ -14570,6 +14648,125 @@ function contactLists(PDO $pdo): array
     }
     unset($row);
     return $rows;
+}
+
+function adminDatabaseCatalogRows(PDO $pdo): array
+{
+    if (!canAccessAiResearch()) {
+        return [];
+    }
+    $rows = $pdo->query('
+        SELECT d.id database_id,
+               d.name database_name,
+               d.owner_user_id,
+               COALESCE(u.email, "") owner_email,
+               COALESCE(u.role, "") owner_role,
+               COALESCE(c.id, 0) container_id,
+               COALESCE(c.source, "") source,
+               COALESCE(c.keyword, "") keyword,
+               COALESCE(c.schedule_enabled, 0) schedule_enabled,
+               COALESCE(MAX(NULLIF(r.source_label, "")), "") sample_source_label,
+               COUNT(DISTINCT r.id) contact_count,
+               COUNT(DISTINCT NULLIF(r.website, "")) unique_domains,
+               COUNT(DISTINCT NULLIF(r.source_url, "")) source_url_count
+        FROM contact_databases d
+        LEFT JOIN app_users u ON u.id=d.owner_user_id
+        LEFT JOIN scraping_containers c ON c.list_id=d.id AND c.owner_user_id=d.owner_user_id AND c.status!="deleted"
+        LEFT JOIN recipients r ON r.list_id=d.id AND r.status="active" AND COALESCE(r.archived, 0)=0
+        WHERE COALESCE(d.archived, 0)=0
+        GROUP BY d.id, d.name, d.owner_user_id, u.email, u.role, c.id, c.source, c.keyword, c.schedule_enabled
+        ORDER BY contact_count DESC, d.id DESC
+        LIMIT 300
+    ')->fetchAll(PDO::FETCH_ASSOC);
+
+    $jobRows = $pdo->query('
+        SELECT owner_user_id,
+               list_id,
+               source,
+               keyword,
+               COUNT(*) scraping_runs,
+               COALESCE(SUM(inserted_count), 0) inserted_count,
+               COALESCE(SUM(updated_count), 0) updated_count,
+               COALESCE(SUM(skipped_count), 0) skipped_count,
+               MAX(COALESCE(NULLIF(finished_at, ""), NULLIF(started_at, ""), created_at)) last_run_at
+        FROM scraping_jobs
+        GROUP BY owner_user_id, list_id, source, keyword
+    ')->fetchAll(PDO::FETCH_ASSOC);
+    $jobsByKey = [];
+    foreach ($jobRows as $job) {
+        $jobsByKey[adminDatabaseCatalogKey((int)$job['owner_user_id'], (int)$job['list_id'], (string)$job['source'], (string)$job['keyword'])] = $job;
+    }
+
+    $campaignRows = $pdo->query('
+        SELECT owner_user_id, list_id, status, COUNT(*) campaign_count
+        FROM campaigns
+        GROUP BY owner_user_id, list_id, status
+    ')->fetchAll(PDO::FETCH_ASSOC);
+    $campaignsByList = [];
+    foreach ($campaignRows as $campaign) {
+        $key = (int)$campaign['owner_user_id'] . '|' . (int)$campaign['list_id'];
+        $campaignsByList[$key][] = (string)$campaign['status'] . ': ' . (int)$campaign['campaign_count'];
+    }
+
+    $researchPlans = adminDatabaseCatalogResearchPlans($pdo);
+    foreach ($rows as &$row) {
+        $source = normalizeScrapingSourceKey((string)($row['source'] ?? ''));
+        if ($source === '') {
+            $source = normalizeScrapingSourceKey((string)($row['sample_source_label'] ?? ''));
+        }
+        $keyword = trim((string)($row['keyword'] ?? ''));
+        $ownerEmail = strtolower(trim((string)($row['owner_email'] ?? '')));
+        $plan = $researchPlans[$ownerEmail . '|' . aiResearchFoldText($keyword)] ?? $researchPlans[$ownerEmail] ?? null;
+        $jobKey = adminDatabaseCatalogKey((int)$row['owner_user_id'], (int)$row['database_id'], $source, $keyword);
+        $job = $jobsByKey[$jobKey] ?? [];
+        $row['source_label'] = $source !== '' ? scrapingSourceLabel($source) : ((string)($row['sample_source_label'] ?? '') ?: '-');
+        $row['target_area'] = is_array($plan) ? aiResearchTargetAreaLabel($plan) : '';
+        $row['search_url'] = is_array($plan) ? (string)($plan['search_url'] ?? '') : '';
+        $row['scraping_runs'] = (int)($job['scraping_runs'] ?? 0);
+        $row['inserted_count'] = (int)($job['inserted_count'] ?? 0);
+        $row['updated_count'] = (int)($job['updated_count'] ?? 0);
+        $row['skipped_count'] = (int)($job['skipped_count'] ?? 0);
+        $row['last_run_at'] = (string)($job['last_run_at'] ?? '');
+        $campaignKey = (int)$row['owner_user_id'] . '|' . (int)$row['database_id'];
+        $row['campaign_status_summary'] = isset($campaignsByList[$campaignKey]) ? implode(', ', $campaignsByList[$campaignKey]) : '-';
+        $row['owner_email'] = (string)($row['owner_email'] ?: 'owner #' . (int)$row['owner_user_id']);
+        $row['owner_role'] = (string)($row['owner_role'] ?: 'user');
+    }
+    unset($row);
+    return $rows;
+}
+
+function adminDatabaseCatalogKey(int $ownerId, int $listId, string $source, string $keyword): string
+{
+    return $ownerId . '|' . $listId . '|' . normalizeScrapingSourceKey($source) . '|' . aiResearchFoldText($keyword);
+}
+
+function adminDatabaseCatalogResearchPlans(PDO $pdo): array
+{
+    $plans = [];
+    $rows = $pdo->query('
+        SELECT seed_email, scraping_keyword, plan_json
+        FROM ai_research_runs
+        WHERE accepted_count>0
+          AND seed_email<>""
+        ORDER BY id DESC
+        LIMIT 300
+    ')->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as $row) {
+        $email = strtolower(trim((string)$row['seed_email']));
+        $plan = json_decode((string)$row['plan_json'], true);
+        if ($email === '' || !is_array($plan)) {
+            continue;
+        }
+        if (!isset($plans[$email])) {
+            $plans[$email] = $plan;
+        }
+        $keyword = aiResearchFoldText((string)($row['scraping_keyword'] ?? aiResearchPrimaryKeyword($plan)));
+        if ($keyword !== '' && !isset($plans[$email . '|' . $keyword])) {
+            $plans[$email . '|' . $keyword] = $plan;
+        }
+    }
+    return $plans;
 }
 
 function contactListOptions(PDO $pdo): array

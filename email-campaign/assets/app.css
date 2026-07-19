@@ -2162,6 +2162,36 @@ td a {
   overflow-wrap: normal;
   word-break: normal;
 }
+.admin-database-catalog-table {
+  min-width: 1280px;
+  table-layout: fixed;
+}
+.admin-database-catalog-table th:nth-child(1),
+.admin-database-catalog-table td:nth-child(1) { width: 220px; }
+.admin-database-catalog-table th:nth-child(2),
+.admin-database-catalog-table td:nth-child(2) { width: 220px; }
+.admin-database-catalog-table th:nth-child(3),
+.admin-database-catalog-table td:nth-child(3) { width: 150px; }
+.admin-database-catalog-table th:nth-child(4),
+.admin-database-catalog-table td:nth-child(4) { width: 180px; }
+.admin-database-catalog-table th:nth-child(5),
+.admin-database-catalog-table td:nth-child(5) { width: 260px; }
+.admin-database-catalog-table th:nth-child(6),
+.admin-database-catalog-table td:nth-child(6) { width: 130px; }
+.admin-database-catalog-table th:nth-child(7),
+.admin-database-catalog-table td:nth-child(7) { width: 210px; }
+.admin-database-catalog-table th:nth-child(8),
+.admin-database-catalog-table td:nth-child(8) { width: 140px; }
+.admin-database-catalog-table th:nth-child(9),
+.admin-database-catalog-table td:nth-child(9) { width: 150px; }
+.admin-database-catalog-table th:nth-child(10),
+.admin-database-catalog-table td:nth-child(10) { width: 120px; }
+.admin-database-catalog-table small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.35;
+}
 .scraping-result-group {
   border: 1px solid var(--line);
   border-radius: 8px;
