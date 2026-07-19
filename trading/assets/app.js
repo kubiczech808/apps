@@ -1373,7 +1373,10 @@ async function triggerOneTimeExecution(target) {
     const response = await fetch("api.php?action=workflow", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target }),
+      body: JSON.stringify({
+        target,
+        ...(live ? { min_probability: currentEligibilityThreshold() } : {}),
+      }),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload.ok === false) {

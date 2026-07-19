@@ -311,7 +311,7 @@ function riskBlock(candidate, liveState) {
 }
 
 function scoreEconomics({ probability, annualizedReturn, edge, spread, volume24hr, liquidity, endOk }) {
-  const highConfidenceOk = probability >= MIN_PROBABILITY;
+  const probabilityOk = probability >= MIN_PROBABILITY;
   const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
     && edge >= OPPORTUNITY_MIN_EDGE
     && annualizedReturn >= OPPORTUNITY_MIN_ANNUAL_RETURN;
@@ -319,11 +319,11 @@ function scoreEconomics({ probability, annualizedReturn, edge, spread, volume24h
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   return {
-    eligible: endOk && (highConfidenceOk || opportunityOk) && returnOk && spreadOk && volumeOk,
-    thesisType: highConfidenceOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY" : "REJECTED"),
+    eligible: endOk && probabilityOk && returnOk && spreadOk && volumeOk,
+    thesisType: probabilityOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY_BELOW_LIVE_THRESHOLD" : "REJECTED"),
     rejectReasons: [
       endOk ? null : "event end date is in the past",
-      highConfidenceOk || opportunityOk ? null : `probability ${(probability * 100).toFixed(1)}% below thresholds`,
+      probabilityOk ? null : `AI probability ${(probability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`,
       returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`,
       spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
       volumeOk ? null : "liquidity/volume too low",

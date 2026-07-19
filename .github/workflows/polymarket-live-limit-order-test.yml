@@ -14,6 +14,11 @@ on:
         required: true
         default: false
         type: boolean
+      live_min_probability:
+        description: Minimum AI probability required for live execution, as decimal 0-1
+        required: false
+        default: "0.95"
+        type: string
   schedule:
     - cron: '7 * * * *'
 
@@ -36,7 +41,7 @@ jobs:
       USE_LIMIT_ORDERS: "true"
       POLYMARKET_POST_ONLY: "true"
       LIVE_ORDER_SIZE_MODE: minimum
-      LIVE_MIN_PROBABILITY: "0.95"
+      LIVE_MIN_PROBABILITY: ${{ github.event.inputs.live_min_probability || '0.95' }}
       LIVE_MIN_ANNUAL_RETURN: "0.05"
       LIVE_OPPORTUNITY_MIN_PROBABILITY: "0.60"
       LIVE_OPPORTUNITY_MIN_EDGE: "0.04"

@@ -534,6 +534,21 @@ function workflow_status_payload(string $target): array
     ];
 }
 
+function normalized_probability_input($value): ?string
+{
+    if (!is_numeric($value)) {
+        return null;
+    }
+    $probability = (float) $value;
+    if ($probability > 1) {
+        $probability /= 100;
+    }
+    if ($probability < 0.01 || $probability > 1) {
+        return null;
+    }
+    return rtrim(rtrim(number_format($probability, 4, '.', ''), '0'), '.');
+}
+
 try {
     $action = $_GET['action'] ?? 'markets';
 
@@ -591,6 +606,7 @@ try {
 
         $payload = request_payload();
         $target = (string) ($payload['target'] ?? '');
+        $liveMinProbability = normalized_probability_input($payload['min_probability'] ?? $payload['live_min_probability'] ?? null);
         $workflows = [
             'paper' => [
                 'workflow' => 'trading-paper-bot.yml',
@@ -599,7 +615,10 @@ try {
             ],
             'live' => [
                 'workflow' => 'polymarket-live-limit-order-test.yml',
-                'inputs' => ['live_confirm' => true],
+                'inputs' => array_filter([
+                    'live_confirm' => true,
+                    'live_min_probability' => $liveMinProbability,
+                ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
             ],
         ];
