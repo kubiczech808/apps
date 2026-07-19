@@ -443,6 +443,11 @@ function daysToEnd(endDate) {
   return Math.max(1, (end - Date.now()) / 86400000);
 }
 
+function endDateIsFuture(endDate) {
+  const end = Date.parse(endDate || "");
+  return Number.isFinite(end) && end > Date.now();
+}
+
 function inferredEndDateFromQuestion(question, fallbackDate = null) {
   const match = String(question || "").match(/\b(?:by|on|before|through)\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:,\s*(\d{4}))?/i);
   if (!match) return null;
@@ -948,17 +953,18 @@ function buildHeuristicAnalysis({
   };
 }
 
-function scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk }) {
+function scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk, endOk }) {
   const highConfidenceOk = probability >= MIN_PROBABILITY;
   const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
     && edge >= OPPORTUNITY_MIN_EDGE
     && annualizedReturn >= OPPORTUNITY_MIN_ANNUAL_RETURN;
   const returnOk = annualizedReturn >= MIN_ANNUAL_RETURN;
-  const eligible = (highConfidenceOk || opportunityOk) && returnOk && spreadOk && volumeOk && depthOk;
+  const eligible = endOk && (highConfidenceOk || opportunityOk) && returnOk && spreadOk && volumeOk && depthOk;
   return {
     status: eligible ? "ELIGIBLE" : "REJECTED",
     thesisType: highConfidenceOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY" : "REJECTED"),
     rejectReasons: [
+      endOk ? null : "event end date is in the past",
       highConfidenceOk || opportunityOk ? null : `probability ${(probability * 100).toFixed(1)}% below high-confidence threshold and edge-opportunity threshold`,
       returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`,
       spreadOk ? null : "spread too wide",
@@ -968,13 +974,13 @@ function scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, 
   };
 }
 
-function economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk }) {
+function economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk, endOk }) {
   const executionPrice = execution.avgPrice;
   const expectedValue = probability * execution.shares - stake - takerFee;
   const expectedRoi = totalCost > 0 ? expectedValue / totalCost : 0;
   const annualizedReturn = days ? expectedRoi * (365 / days) : expectedRoi;
   const edge = probability - executionPrice;
-  const scored = scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk });
+  const scored = scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk, endOk });
   return {
     expectedValue,
     expectedRoi,
@@ -1051,7 +1057,9 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   const liquidity = Number(market.liquidity || 0);
   const tags = tagQuestion(question);
   const risk = riskProfile({ question, slug: market.slug, outcome, tags });
-  const days = daysToEnd(correctedEndDate(question, market.endDate, market.createdAt || market.updatedAt));
+  const endDate = correctedEndDate(question, market.endDate, market.createdAt || market.updatedAt);
+  const days = daysToEnd(endDate);
+  const endOk = endDateIsFuture(endDate);
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
   const execution = simulateMarketBuy(asks, stake);
   const fees = feeConfig(market);
@@ -1081,7 +1089,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   const depthOk = execution.fillable;
-  const economics = economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk });
+  const economics = economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk, endOk });
   const rejectReasons = economics.rejectReasons.map((reason) => {
     if (reason === "spread too wide") return `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`;
     if (reason === "insufficient ask depth for market buy") return `insufficient ask depth for ${stake.toFixed(2)} USDC market buy`;
@@ -1112,7 +1120,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     eventSlug: marketEventSlug(market),
     outcome,
     tokenId,
-    endDate: market.endDate || null,
+    endDate,
     tags,
     riskCategory: risk.category,
     riskPrimaryEntity: risk.primaryEntity,

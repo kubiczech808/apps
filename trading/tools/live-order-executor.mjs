@@ -204,6 +204,11 @@ function daysToEnd(endDate) {
   return Math.max(1, (end - Date.now()) / 86400000);
 }
 
+function endDateIsFuture(endDate) {
+  const end = Date.parse(endDate || "");
+  return Number.isFinite(end) && end > Date.now();
+}
+
 function bestBook(book) {
   const bids = Array.isArray(book.bids) ? book.bids : [];
   const asks = Array.isArray(book.asks) ? book.asks : [];
@@ -305,7 +310,7 @@ function riskBlock(candidate, liveState) {
   return null;
 }
 
-function scoreEconomics({ probability, annualizedReturn, edge, spread, volume24hr, liquidity }) {
+function scoreEconomics({ probability, annualizedReturn, edge, spread, volume24hr, liquidity, endOk }) {
   const highConfidenceOk = probability >= MIN_PROBABILITY;
   const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
     && edge >= OPPORTUNITY_MIN_EDGE
@@ -314,9 +319,10 @@ function scoreEconomics({ probability, annualizedReturn, edge, spread, volume24h
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   return {
-    eligible: (highConfidenceOk || opportunityOk) && returnOk && spreadOk && volumeOk,
+    eligible: endOk && (highConfidenceOk || opportunityOk) && returnOk && spreadOk && volumeOk,
     thesisType: highConfidenceOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY" : "REJECTED"),
     rejectReasons: [
+      endOk ? null : "event end date is in the past",
       highConfidenceOk || opportunityOk ? null : `probability ${(probability * 100).toFixed(1)}% below thresholds`,
       returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`,
       spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
@@ -426,7 +432,9 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional) {
   }
 
   const probability = number(evaluation.aiProbability);
-  const days = daysToEnd(correctedEndDate(market.question || evaluation.question, market.endDate, market.createdAt || market.updatedAt));
+  const endDate = correctedEndDate(market.question || evaluation.question, market.endDate, market.createdAt || market.updatedAt);
+  const days = daysToEnd(endDate);
+  const endOk = endDateIsFuture(endDate);
   const volume24hr = number(market.volume24hr, number(evaluation.volume24hr, 0));
   const liquidity = number(market.liquidity, number(evaluation.liquidity, 0));
   const notional = Number((price * size).toFixed(5));
@@ -443,6 +451,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional) {
     spread: book.spread,
     volume24hr,
     liquidity,
+    endOk,
   });
 
   return {
@@ -455,7 +464,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional) {
     slug: market.slug || evaluation.slug,
     eventSlug: marketEventSlug(market),
     outcome: outcomes[tokenIndex] || evaluation.outcome,
-    endDate: market.endDate || evaluation.endDate || null,
+    endDate,
     currentBestBid: book.bestBid,
     currentBestAsk: book.bestAsk,
     currentSpread: book.spread,

@@ -411,6 +411,11 @@ function evaluationDaysLeft(item) {
   return daysToResolution(item);
 }
 
+function evaluationEnded(item) {
+  const end = Date.parse(evaluationEndDate(item) || "");
+  return Number.isFinite(end) && end <= Date.now();
+}
+
 function feeLine(item) {
   if (currentLimitOrders()) return "maker fee $0.00000 (limit)";
   const fee = Number(item.takerFeeUsdc);
@@ -459,7 +464,7 @@ function tradePnlPct(trade) {
 }
 
 function isClosedTrade(trade) {
-  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD"].includes(String(trade.status || "").toUpperCase());
+  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED"].includes(String(trade.status || "").toUpperCase());
 }
 
 function tradeStatusNote(trade) {
@@ -729,6 +734,8 @@ function tradeHeader(tableKey, key, label) {
 function tradeTypeBadge(trade) {
   if (trade.mode === "LIVE_ORDER") return '<span class="order-chip">Limit order waiting</span>';
   if (trade.mode === "LIVE_RECONCILIATION") return '<span class="order-chip warning">Sync gap</span>';
+  if (String(trade.status || "").toUpperCase() === "REDEEM_REQUIRED") return '<span class="order-chip warning">Redeem needed</span>';
+  if (isClosedTrade(trade) && trade.mode === "LIVE") return '<span class="order-chip filled">Settled position</span>';
   if (trade.mode === "LIVE") return '<span class="order-chip filled">Open position</span>';
   if (trade.strategyLabel) return `<span class="order-chip paper">${escapeHtml(trade.strategyLabel)}</span>`;
   return "";
@@ -1230,12 +1237,17 @@ function isProbabilityRejectReason(reason) {
 }
 
 function nonProbabilityRejectReasons(item) {
-  return (Array.isArray(item.rejectReasons) ? item.rejectReasons : []).filter((reason) => !isProbabilityRejectReason(reason));
+  const reasons = (Array.isArray(item.rejectReasons) ? item.rejectReasons : []).filter((reason) => !isProbabilityRejectReason(reason));
+  if (evaluationEnded(item) && !reasons.some((reason) => /end date|past|closed|accepting orders/i.test(String(reason || "")))) {
+    reasons.push("event end date is in the past");
+  }
+  return reasons;
 }
 
 function adjustedEvaluationStatus(item) {
   const original = String(item.status || "-").toUpperCase();
   if (original === "ERROR") return "ERROR";
+  if (evaluationEnded(item)) return "REJECTED";
   const aiProbability = Number(item.aiProbability);
   if (!Number.isFinite(aiProbability)) return original;
   const threshold = currentEligibilityThreshold();
@@ -1600,7 +1612,7 @@ function renderBotState(botState) {
 }
 
 function livePositions(liveState) {
-  return Array.isArray(liveState?.positions) ? liveState.positions : [];
+  return Array.isArray(liveState?.positions) ? liveState.positions.filter((trade) => !isClosedTrade(trade)) : [];
 }
 
 function liveOpenOrders(liveState) {

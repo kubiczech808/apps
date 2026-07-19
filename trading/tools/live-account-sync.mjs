@@ -515,10 +515,73 @@ function compactText(value, fallback = "-") {
   return text || fallback;
 }
 
+function normalizedKeyText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function liveItemKeys(item) {
+  const tokenId = String(item.tokenId || item.assetId || item.asset || "").trim();
+  const conditionId = String(item.conditionId || item.market || "").trim();
+  const outcome = normalizedKeyText(item.outcome || item.side);
+  const question = normalizedKeyText(item.question || item.title || item.market);
+  const keys = new Set();
+  if (tokenId) keys.add(`token:${tokenId}`);
+  if (conditionId && outcome) keys.add(`condition:${conditionId}:${outcome}`);
+  if (question && outcome) keys.add(`question:${question}:${outcome}`);
+  return keys;
+}
+
+function anySharedKey(item, knownKeys) {
+  return [...liveItemKeys(item)].some((key) => knownKeys.has(key));
+}
+
 function redeemAlertId(prefix, item) {
   const marketKey = compactText(item.tokenId || item.conditionId || item.slug || item.question, "market").toLowerCase();
   const outcome = compactText(item.outcome, "outcome").toLowerCase();
   return `${prefix}:${marketKey}:${outcome}`;
+}
+
+function positionLooksResolved(position) {
+  const currentPrice = number(position.currentPrice);
+  const currentValue = number(position.currentValueUsdc, 0);
+  return Boolean(position.redeemable || position.resolved)
+    || (currentPrice != null && currentPrice >= 0.995 && currentValue > 0);
+}
+
+function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt) {
+  return positions
+    .filter((position) => positionLooksResolved(position) && !anySharedKey(position, knownClosedKeys))
+    .map((position) => {
+      const currentValue = number(position.currentValueUsdc, 0);
+      const stake = number(position.totalCostUsdc || position.stakeUsdc, 0);
+      const realizedPnl = currentValue - stake;
+      const status = position.redeemable || position.resolved ? "REDEEM_REQUIRED" : "RESOLVED";
+      return {
+        ...position,
+        id: `resolved-position-${position.id}`,
+        status,
+        resolvedAt: generatedAt,
+        closedAt: generatedAt,
+        exitPrice: number(position.currentPrice),
+        finalOutcomePrice: number(position.currentPrice),
+        exitValueUsdc: currentValue,
+        realizedPnlUsdc: realizedPnl,
+        realizedPnlPct: stake > 0 ? realizedPnl / stake : null,
+        unrealizedPnlUsdc: 0,
+        unrealizedPnlPct: 0,
+        analysisSummary: [
+          position.analysisSummary || "",
+          status === "REDEEM_REQUIRED"
+            ? "Polymarket still exposes this position as redeemable/claimable, so it is classified outside opened trades until redeem is completed."
+            : "Polymarket mark price indicates the position is resolved; it is classified outside opened trades until activity confirms final settlement.",
+        ].filter(Boolean).join(" "),
+      };
+    });
 }
 
 function redeemNotifications(positions, closedTrades, previousState, generatedAt) {
@@ -1079,17 +1142,24 @@ async function main() {
   const tradeHistory = Array.isArray(rawTrades)
     ? rawTrades.map(normalizeTradeHistoryItem).filter((item) => item.timestamp || item.question !== "-")
     : [];
-  const closedTrades = closedTradesFromHistory(tradeHistory, activity, generatedAt);
+  const historyClosedTrades = closedTradesFromHistory(tradeHistory, activity, generatedAt);
+  const knownClosedKeys = new Set();
+  for (const item of historyClosedTrades) {
+    for (const key of liveItemKeys(item)) knownClosedKeys.add(key);
+  }
+  const resolvedPositionRows = closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt);
+  const openApiPositions = positions.filter((position) => !positionLooksResolved(position) && !anySharedKey(position, knownClosedKeys));
+  const closedTrades = [...historyClosedTrades, ...resolvedPositionRows];
   const reconciliation = ledgerReconciliationFallbacks(
     tradeHistory,
     activity,
-    positions,
+    openApiPositions,
     closedTrades,
     Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
     generatedAt,
   );
   const reconciledPositions = [
-    ...positions,
+    ...openApiPositions,
     ...reconciliation.orphanedTrades,
   ];
   if (reconciliation.orphanedCount > 0) {
@@ -1138,7 +1208,8 @@ async function main() {
     balanceAllowance,
     openOrders: Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
     positions: reconciledPositions,
-    apiPositions: positions,
+    apiPositions: openApiPositions,
+    resolvedApiPositions: resolvedPositionRows,
     reconciliation,
     closedTrades,
     notifications,
