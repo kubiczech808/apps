@@ -16,8 +16,11 @@ const MAX_EVALUATIONS_PER_RUN = Number(process.env.PAPER_MAX_EVALUATIONS_PER_RUN
 const MAX_SPREAD = Number(process.env.PAPER_MAX_SPREAD || 0.08);
 const MIN_VOLUME_24H = Number(process.env.PAPER_MIN_VOLUME_24H || 100);
 const MAX_HISTORY = Number(process.env.PAPER_MAX_HISTORY || 1200);
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").toLowerCase();
 const AI_ANALYSIS_LIMIT = Number(process.env.PAPER_AI_ANALYSIS_LIMIT || 10);
 const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
@@ -404,6 +407,7 @@ function normalizeLearningProfile(profile = {}) {
     promptRules: Array.isArray(profile.promptRules) ? profile.promptRules : [],
     aiLastRun: profile.aiLastRun || null,
     aiModel: profile.aiModel || null,
+    aiProvider: profile.aiProvider || null,
   };
 }
 
@@ -1227,6 +1231,78 @@ async function callOpenAiJson(messages) {
   }
 }
 
+function messagesToGeminiText(messages) {
+  return messages
+    .map((message) => {
+      const role = message.role === "system" ? "System" : "User";
+      return `${role}:\n${message.content}`;
+    })
+    .join("\n\n");
+}
+
+async function callGeminiJson(messages) {
+  if (!GEMINI_API_KEY) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+    const response = await fetch(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: "application/json",
+        },
+        contents: [{
+          role: "user",
+          parts: [{
+            text: `${messagesToGeminiText(messages)}\n\nReturn only one valid JSON object.`,
+          }],
+        }],
+      }),
+    });
+    if (!response.ok) throw new Error(`Gemini HTTP ${response.status}`);
+    const payload = await response.json();
+    const text = payload?.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text || "")
+      .join("")
+      .trim();
+    return parseJsonObject(text);
+  } catch (error) {
+    return { error: error.message || String(error), provider: "gemini", model: GEMINI_MODEL };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function callAiJson(messages) {
+  const providers = PRIMARY_AI_PROVIDER === "openai"
+    ? ["openai", "gemini"]
+    : ["gemini", "openai"];
+  let lastError = null;
+
+  for (const provider of providers) {
+    const result = provider === "gemini"
+      ? await callGeminiJson(messages)
+      : await callOpenAiJson(messages);
+    if (!result) continue;
+    if (!result.error) {
+      return {
+        ...result,
+        _model: provider === "gemini" ? GEMINI_MODEL : OPENAI_MODEL,
+        _provider: provider,
+      };
+    }
+    lastError = result;
+  }
+
+  return lastError || null;
+}
+
 function refreshEvaluationAfterProbability(evaluation, probability, modelName, modelAnalysis) {
   const stake = Number(evaluation.stakeUsdc || PORTFOLIO_USDC * MAX_FRACTION);
   const takerFee = Number(evaluation.takerFeeUsdc || 0);
@@ -1269,6 +1345,7 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
     annualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
     confidenceTier: modelAnalysis?.confidenceTier || confidenceTier(probability),
+    provider: modelAnalysis?._provider || modelAnalysis?.provider || null,
   };
 
   return {
@@ -1296,7 +1373,7 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
 }
 
 async function enrichEvaluationsWithAi(evaluations, learningProfile) {
-  if (!OPENAI_API_KEY || AI_ANALYSIS_LIMIT <= 0) return evaluations;
+  if ((!GEMINI_API_KEY && !OPENAI_API_KEY) || AI_ANALYSIS_LIMIT <= 0) return evaluations;
   const candidates = [...evaluations]
     .filter((item) => item.status !== "ERROR")
     .sort((a, b) => {
@@ -1346,7 +1423,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
         counterEvidence: ["short bullet"],
       },
     };
-    const result = await callOpenAiJson([
+    const result = await callAiJson([
       { role: "system", content: "You are a cautious prediction-market analyst. Return only valid JSON." },
       { role: "user", content: JSON.stringify(prompt) },
     ]);
@@ -1362,13 +1439,14 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
     }
     const probability = clamp(Number(result.probability), 0.01, 0.995);
     if (!Number.isFinite(probability)) continue;
-    byId.set(candidate.id, refreshEvaluationAfterProbability(candidate, probability, OPENAI_MODEL, {
+    byId.set(candidate.id, refreshEvaluationAfterProbability(candidate, probability, result._model || OPENAI_MODEL, {
       direction: result.direction || outcomeKind(candidate.outcome),
       thesis: result.thesis || candidate.probabilityThesis,
       confidenceTier: result.confidenceTier || confidenceTier(probability),
       evidence: Array.isArray(result.evidence) ? result.evidence.slice(0, 6) : [],
       counterEvidence: Array.isArray(result.counterEvidence) ? result.counterEvidence.slice(0, 6) : [],
-      source: "openai-initial-analysis",
+      source: `${result._provider || "ai"}-initial-analysis`,
+      _provider: result._provider || null,
     }));
   }
 
@@ -1686,7 +1764,7 @@ function deterministicPostMortem(trade) {
 
   return {
     reviewedAt: nowIso(),
-    model: OPENAI_API_KEY ? "heuristic-fallback-after-ai-error" : "heuristic-postmortem-v1",
+    model: (GEMINI_API_KEY || OPENAI_API_KEY) ? "heuristic-fallback-after-ai-error" : "heuristic-postmortem-v1",
     result: trade.status,
     actualOutcome: actual,
     predictedProbability: Number.isFinite(predicted) ? Number(predicted.toFixed(4)) : null,
@@ -1725,7 +1803,7 @@ async function reviewClosedTradesWithAi(trades) {
     }
 
     const fallback = deterministicPostMortem(trade);
-    if (!OPENAI_API_KEY || remaining <= 0) {
+    if ((!GEMINI_API_KEY && !OPENAI_API_KEY) || remaining <= 0) {
       reviewed.push({ ...trade, postMortem: fallback });
       continue;
     }
@@ -1756,7 +1834,7 @@ async function reviewClosedTradesWithAi(trades) {
         factorKeysToPenalize: ["factor:key"],
       },
     };
-    const result = await callOpenAiJson([
+    const result = await callAiJson([
       { role: "system", content: "You are a prediction-market calibration reviewer. Return only valid JSON." },
       { role: "user", content: JSON.stringify(prompt) },
     ]);
@@ -1768,7 +1846,8 @@ async function reviewClosedTradesWithAi(trades) {
       ...trade,
       postMortem: {
         ...fallback,
-        model: OPENAI_MODEL,
+        model: result._model || OPENAI_MODEL,
+        provider: result._provider || null,
         conclusion: result.conclusion || fallback.conclusion,
         thesisReview: result.thesisReview || fallback.thesisReview,
         lessons: Array.isArray(result.lessons) && result.lessons.length ? result.lessons.slice(0, 6) : fallback.lessons,
@@ -1885,8 +1964,9 @@ function buildLearningProfile(trades, previousProfile = {}) {
     bucketCalibration,
     factorAdjustments,
     promptRules,
-    aiLastRun: OPENAI_API_KEY ? nowIso() : profile.aiLastRun,
-    aiModel: OPENAI_API_KEY ? OPENAI_MODEL : profile.aiModel,
+    aiLastRun: (GEMINI_API_KEY || OPENAI_API_KEY) ? nowIso() : profile.aiLastRun,
+    aiModel: (GEMINI_API_KEY || OPENAI_API_KEY) ? (GEMINI_API_KEY ? GEMINI_MODEL : OPENAI_MODEL) : profile.aiModel,
+    aiProvider: (GEMINI_API_KEY || OPENAI_API_KEY) ? (GEMINI_API_KEY ? "gemini" : "openai") : profile.aiProvider,
   };
 }
 

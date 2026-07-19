@@ -43,7 +43,7 @@ The bot now writes a `learningProfile` into `paper-state.json`.
 2. After a paper trade resolves, the bot creates a post-mortem that compares the initial thesis and probability against the actual `WON`/`LOST` result.
 3. Resolved trades update calibration buckets, Brier score, global bias, and factor-level adjustments for tags, price buckets, liquidity, spread, horizon, and outcome type.
 4. The next initial analysis applies those calibration adjustments before computing edge and eligibility.
-5. If `OPENAI_API_KEY` is available in GitHub Secrets, the bot asks the configured model for initial candidate review and post-mortem JSON. Without the key, it uses deterministic fallback analysis and keeps running.
+5. If `GEMINI_API_KEY` is available in GitHub Secrets, the bot uses Gemini as the primary AI reviewer; `GEMINI_MODEL` defaults to `gemini-3.5-flash`. `OPENAI_API_KEY` / `OPENAI_MODEL` remain a fallback. Without either key, it uses deterministic fallback analysis and keeps running.
 
 This is not live trading. It does not use the Polymarket private key and cannot submit orders.
 
