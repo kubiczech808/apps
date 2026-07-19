@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-19-research-specific-keywords';
+const APP_VERSION = '2026-07-19-research-service-pages';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
-const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-specific-keywords-v1';
+const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 
 date_default_timezone_set('Europe/Prague');
 
@@ -1258,7 +1258,23 @@ function onboardingNormalizeLeadPlan(array $json, array $fallback): array
 
 function onboardingFallbackLeadPlan(string $businessType): array
 {
-    $value = strtolower($businessType);
+    $value = aiResearchFoldText($businessType);
+    if (preg_match('/textil|odev|odevy|uniform|pracovn|reklamn|golf|hotel|lekar|lazn/i', $value)) {
+        return [
+            'audience_label' => 'hotely, golfove kluby, ordinace, lazne a stavebni firmy, ktere potrebuji pracovni nebo reprezentativni textil',
+            'rationale' => 'Tyto segmenty pravidelne resi jednotny vzhled tymu, odolne pracovni obleceni nebo textil s vlastnim brandingem. U hotelu, laznich a ordinaci je dulezita reprezentace a hygiena, u stavebnich firem funkcnost a odolnost.',
+            'email_angle' => 'Nabidka zakazkoveho pracovniho a reprezentativniho textilu pro tymy, provozy a pobocky.',
+            'target_segments' => ['hotely', 'golfove kluby', 'ordinace', 'lazne', 'stavebni firmy', 'wellness centra'],
+            'candidate_terms' => ['hotel', 'golfovy klub', 'ordinace', 'lazne', 'stavebni firma', 'wellness centrum'],
+            'scraping_queries' => [
+                ['source' => 'firmy_cz', 'keyword' => 'hotel', 'why' => 'hotely potrebuji reprezentativni textil pro personal a provoz'],
+                ['source' => 'firmy_cz', 'keyword' => 'golfovy klub', 'why' => 'golfove kluby casto resi branded obleceni a klubovy textil'],
+                ['source' => 'firmy_cz', 'keyword' => 'ordinace', 'why' => 'ordinace potrebuji zdravotnicky nebo byznys textil'],
+                ['source' => 'firmy_cz', 'keyword' => 'lazne', 'why' => 'lazne potrebuji textil pro personal, wellness provoz a klientskou zkusenost'],
+                ['source' => 'firmy_cz', 'keyword' => 'stavebni firma', 'why' => 'stavebni firmy potrebuji odolne pracovni odevy pro tymy'],
+            ],
+        ];
+    }
     if (preg_match('/mas|masaz|wellness|fyzi|rehab|pracovist|sedav|office|kancel/i', $value)) {
         return [
             'audience_label' => 'firmy s kancelarskou praci a sedavym zamestnanim ve stejnem meste',
@@ -2090,20 +2106,193 @@ function aiResearchSeedWebsiteContext(string $website): string
     if ($website === '') {
         return '';
     }
+    $pages = [];
     try {
         $html = httpGet($website);
     } catch (Throwable $e) {
         error_log('AI research seed website context skipped [' . $website . ']: ' . $e->getMessage());
         return '';
     }
+    $pages[$website] = aiResearchImportantWebsiteText(aiResearchReadableWebsiteText($html), 1300);
+    foreach (array_slice(aiResearchRelevantInternalUrls($html, $website), 0, 5) as $url) {
+        if (isset($pages[$url])) {
+            continue;
+        }
+        try {
+            $pageHtml = httpGet($url);
+        } catch (Throwable $e) {
+            error_log('AI research seed subpage skipped [' . $url . ']: ' . $e->getMessage());
+            continue;
+        }
+        $text = aiResearchImportantWebsiteText(aiResearchReadableWebsiteText($pageHtml), 1100);
+        if ($text !== '') {
+            $pages[$url] = $text;
+        }
+    }
+    $parts = [];
+    foreach ($pages as $url => $text) {
+        $text = trim($text);
+        if ($text !== '') {
+            $parts[] = 'URL ' . $url . ': ' . $text;
+        }
+    }
+    $context = trim(implode("\n\n", $parts));
+    if ($context === '') {
+        return '';
+    }
+    return truncatePlainText($context, 5200);
+}
+
+function aiResearchReadableWebsiteText(string $html): string
+{
     $html = preg_replace('#<(script|style|noscript|svg|iframe)\b[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
+    $html = preg_replace('#<(nav|header|footer|form)\b[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
+    $html = preg_replace('#</?(h[1-6]|p|li|br|div|section|article|tr|td|th)\b[^>]*>#i', '. ', $html) ?? $html;
     $text = html_entity_decode(strip_tags($html), ENT_QUOTES, 'UTF-8');
     $text = preg_replace('/\s+/', ' ', $text) ?? $text;
-    $text = trim($text);
+    return trim($text);
+}
+
+function aiResearchRelevantInternalUrls(string $html, string $baseUrl): array
+{
+    $baseHost = strtolower((string)(parse_url($baseUrl, PHP_URL_HOST) ?: ''));
+    $baseHost = preg_replace('/^www\./i', '', $baseHost) ?? $baseHost;
+    if ($baseHost === '') {
+        return [];
+    }
+    $candidates = [];
+    preg_match_all('/<a\b([^>]*)href=(["\'])(.*?)\2([^>]*)>(.*?)<\/a>/is', $html, $matches, PREG_SET_ORDER);
+    foreach ($matches as $match) {
+        $href = trim(html_entity_decode((string)$match[3], ENT_QUOTES, 'UTF-8'));
+        if ($href === '' || str_starts_with($href, '#') || stripos($href, 'mailto:') === 0 || stripos($href, 'tel:') === 0) {
+            continue;
+        }
+        $url = normalizeUrl($href, $baseUrl);
+        $host = strtolower((string)(parse_url($url, PHP_URL_HOST) ?: ''));
+        $host = preg_replace('/^www\./i', '', $host) ?? $host;
+        if ($host !== $baseHost) {
+            continue;
+        }
+        $path = strtolower((string)(parse_url($url, PHP_URL_PATH) ?: ''));
+        if ($path === '' || $path === '/' || preg_match('/\.(pdf|jpg|jpeg|png|gif|webp|zip|rar|docx?|xlsx?)$/i', $path)) {
+            continue;
+        }
+        $label = trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags((string)$match[5]), ENT_QUOTES, 'UTF-8')) ?? '');
+        $signal = aiResearchFoldText($path . ' ' . $label . ' ' . $href);
+        $score = 0;
+        foreach ([
+            'sluzby' => 50,
+            'services' => 50,
+            'servis' => 20,
+            'produkty' => 35,
+            'products' => 35,
+            'produkt' => 30,
+            'nase sluzby' => 60,
+            'textil' => 45,
+            'odevy' => 45,
+            'pracovni' => 35,
+            'reklamni' => 30,
+            'uniform' => 35,
+            'hotel' => 25,
+            'lekar' => 25,
+            'lazne' => 25,
+            'golf' => 25,
+            'reference' => 20,
+            'realizace' => 20,
+            'o nas' => 15,
+            'about' => 15,
+        ] as $term => $weight) {
+            if (str_contains($signal, $term)) {
+                $score += $weight;
+            }
+        }
+        if ($score < 15) {
+            continue;
+        }
+        $cleanUrl = strtok($url, '#') ?: $url;
+        if (!isset($candidates[$cleanUrl]) || $score > $candidates[$cleanUrl]) {
+            $candidates[$cleanUrl] = $score;
+        }
+    }
+    arsort($candidates);
+    return array_keys($candidates);
+}
+
+function aiResearchImportantWebsiteText(string $text, int $maxLength): string
+{
+    $text = trim(preg_replace('/\s+/', ' ', $text) ?? $text);
     if ($text === '') {
         return '';
     }
-    return truncatePlainText($text, 1800);
+    $chunks = preg_split('/(?<=[.!?])\s+|\s+[|•]\s+|\s+-\s+/u', $text) ?: [$text];
+    $scored = [];
+    $fallback = [];
+    foreach ($chunks as $idx => $chunk) {
+        $chunk = trim(preg_replace('/\s+/', ' ', (string)$chunk) ?? '');
+        if (strlen($chunk) < 25) {
+            continue;
+        }
+        $folded = aiResearchFoldText($chunk);
+        if (preg_match('/\b(cookie|cookies|gdpr|menu|facebook|instagram|linkedin|newsletter|copyright|kontakt|english|close projects)\b/u', $folded)
+            && !preg_match('/\b(sluzby|textil|odev|odevy|pracovni|reklamni|hotel|lekar|lazne|golf|zakazkova|vyroba)\b/u', $folded)) {
+            continue;
+        }
+        $score = 0;
+        foreach ([
+            'nabiz' => 25,
+            'poskyt' => 22,
+            'specializ' => 22,
+            'dodav' => 22,
+            'vyrab' => 22,
+            'zakazkova vyroba' => 45,
+            'aplikace na textil' => 45,
+            'textil' => 35,
+            'pracovni odev' => 55,
+            'pracovni odevy' => 55,
+            'pracovni textil' => 55,
+            'reklamni textil' => 50,
+            'byznys textil' => 50,
+            'golfovy textil' => 50,
+            'hotel' => 35,
+            'hotely' => 35,
+            'lekar' => 35,
+            'lekare' => 35,
+            'lazne' => 35,
+            'golf' => 35,
+            'staveb' => 30,
+            'uniform' => 30,
+            'odev' => 30,
+            'odevy' => 30,
+            'sluzby' => 18,
+            'produkty' => 18,
+        ] as $term => $weight) {
+            if (str_contains($folded, $term)) {
+                $score += $weight;
+            }
+        }
+        if ($score > 0) {
+            $scored[] = ['score' => $score, 'idx' => $idx, 'text' => $chunk];
+        } else {
+            $fallback[] = ['idx' => $idx, 'text' => $chunk];
+        }
+    }
+    usort($scored, static fn($a, $b) => ($b['score'] <=> $a['score']) ?: ($a['idx'] <=> $b['idx']));
+    $selected = array_slice($scored, 0, 8);
+    if (!$selected) {
+        $selected = array_slice($fallback, 0, 4);
+    }
+    usort($selected, static fn($a, $b) => $a['idx'] <=> $b['idx']);
+    $out = [];
+    $seen = [];
+    foreach ($selected as $item) {
+        $key = aiResearchFoldText((string)$item['text']);
+        if ($key === '' || isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $out[] = (string)$item['text'];
+    }
+    return truncatePlainText(implode(' ', $out), $maxLength);
 }
 
 function aiResearchLocalWebsiteUnderstanding(string $websiteContext, string $website): string
@@ -2112,12 +2301,11 @@ function aiResearchLocalWebsiteUnderstanding(string $websiteContext, string $web
     if ($websiteContext === '') {
         return '';
     }
-    $sentences = preg_split('/(?<=[.!?])\s+/u', $websiteContext) ?: [$websiteContext];
-    $summary = trim(implode(' ', array_slice(array_filter($sentences, static fn($sentence) => strlen(trim((string)$sentence)) > 20), 0, 2)));
+    $summary = aiResearchImportantWebsiteText($websiteContext, 380);
     if ($summary === '') {
         $summary = $websiteContext;
     }
-    return truncatePlainText('Web ' . websiteLabel($website) . ' uvadi: ' . $summary, 420);
+    return truncatePlainText('Web ' . websiteLabel($website) . ' uvadi: ' . $summary, 520);
 }
 
 function aiResearchPlan(array $config, array $seed): array
@@ -2128,10 +2316,17 @@ function aiResearchPlan(array $config, array $seed): array
     $seedDescription = trim((string)($seed['seed_description'] ?? ''));
     $websiteContext = aiResearchSeedWebsiteContext($website);
     $websiteUnderstandingFallback = aiResearchLocalWebsiteUnderstanding($websiteContext, $website);
-    $fallback = onboardingFallbackLeadPlan($business . ' ' . $website . ' ' . $address);
-    $fallback['audience_label'] = 'konkretni firmy, ktere mohou koupit nabidku ' . $business;
-    $fallback['rationale'] = 'Research vychazi z firmy nalezene v katalogu Firmy.cz. AI ma pochopit, co seed firma prodava, komu to typicky pomaha a jaka B2B poptavka muze mit nejvyssi obchodni prinos. Cilem nejsou podobne firmy, ale firmy, ktere mohou byt zakaznikem nebo partnerem seed byznysu.';
-    $fallback['email_angle'] = 'Kratke osloveni musi ukazat konkretni situaci, ve ktere kontaktovana firma muze nabidku seed firmy vyuzit.';
+    $businessContextForFallback = $business . ' ' . $website . ' ' . $address . ' ' . $websiteUnderstandingFallback . ' ' . truncatePlainText($websiteContext, 1400);
+    $fallback = onboardingFallbackLeadPlan($businessContextForFallback);
+    if (trim((string)($fallback['audience_label'] ?? '')) === '') {
+        $fallback['audience_label'] = 'konkretni firmy, ktere mohou koupit nabidku ' . $business;
+    }
+    if (trim((string)($fallback['rationale'] ?? '')) === '') {
+        $fallback['rationale'] = 'Research vychazi z firmy nalezene v katalogu Firmy.cz. AI ma pochopit, co seed firma prodava, komu to typicky pomaha a jaka B2B poptavka muze mit nejvyssi obchodni prinos. Cilem nejsou podobne firmy, ale firmy, ktere mohou byt zakaznikem nebo partnerem seed byznysu.';
+    }
+    if (trim((string)($fallback['email_angle'] ?? '')) === '') {
+        $fallback['email_angle'] = 'Kratke osloveni musi ukazat konkretni situaci, ve ktere kontaktovana firma muze nabidku seed firmy vyuzit.';
+    }
     $fallback['business_understanding'] = $websiteUnderstandingFallback;
     $fallback['targeting_reason'] = 'Keyword a trzni dosah jsou odvozene z webu, typu nabidky a adresy seed firmy.';
     $fallback['location_scope'] = 'stejne_mesto';
@@ -2141,7 +2336,7 @@ function aiResearchPlan(array $config, array $seed): array
     $fallback['website_url_analyzed'] = $website;
     $fallback['website_context_excerpt'] = truncatePlainText($websiteContext, 900);
     $fallback['candidate_terms'] = array_slice(array_values(array_unique(array_merge(
-        aiResearchFallbackTerms($business, $website, $address, aiResearchSeedCountry($seed)),
+        aiResearchFallbackTerms($business . ' ' . $websiteUnderstandingFallback . ' ' . truncatePlainText($websiteContext, 1400), $website, $address, aiResearchSeedCountry($seed)),
         (array)($fallback['candidate_terms'] ?? [])
     ))), 0, 8);
     if ($website === '' || $websiteContext === '') {
@@ -2203,6 +2398,8 @@ function aiResearchPlan(array $config, array $seed): array
         . "Pokud jde o lokalni sluzbu, zahrn mesto/region ze seed dat. Pokud si nejsi jist oborem, zvol sirsi B2B segment s jasnym triggerem.";
     $prompt = "Seed je realna firma nahodne vybrana z katalogu Firmy.cz v kategorii Vse pro firmy / kraj Praha. Pro tuto firmu mame najit nove B2B zakazniky. "
         . "Tvym hlavnim vystupem neni interni strategie, ale kratky kontrolni text pro cloveka. Ten text musi dokazat, ze jsi prosla web seed firmy a pochopila, jake konkretni produkty nebo sluzby nabizi. "
+        . "website_context muze obsahovat vice URL vcetne podstranek typu sluzby, produkty, reference nebo o nas. Nevyhodnocuj jen navigaci z homepage. Vyhledej v kontextu konkretni produktove/sluzbove vety a segmenty zakazniku, ktere web sam zminuje. "
+        . "Pokud web uvadi napr. pracovni, reklamni, golfovy, byznys textil nebo textil pro hotely, lekare ci lazne, musi se to objevit v business_understanding a segmenty pro osloveni musi vychazet z techto slov: hotely, golfove kluby, ordinace/lekari, lazne, wellness nebo stavebni firmy pro pracovni odevy. "
         . "Pak postupuj v tomto poradi: 1) definuj konkretni duvod cileni, 2) z nej odvod koho presne oslovit, 3) az nakonec z toho odvod JEDNO konkretni klicove slovo bez lokace pro Firmy.cz a rozumny trzni dosah. Keyword je katalogova kategorie konkretniho typu firmy bez mesta, napr. 'zubni ordinace', 'autoservis', 'hotel', 'kavarna', 'fitness centrum', 'ucetni kancelar', 'realitni kancelar'. "
         . "Lokalitu neprebirej mechanicky z adresy seed firmy. To, ze subjekt sidli napr. v Libni, Nuslich nebo Vrsovicich, neznamena, ze ma smysl hledat jen tam. "
         . "Nejdriv posud podle webu, zda nabidka funguje hyperlokalne, pro cele mesto, pro cely region, nebo celostatne. Lokace ma byt obchodne obhajitelna: u fyzicke lokalni sluzby typicky mesto/rozumne okoli, u e-shopu/software/velkoobchodu/online sluzby klidne cela CR bez konkretni ctvrti. "
@@ -2222,11 +2419,12 @@ function aiResearchPlan(array $config, array $seed): array
         . "Vrat pouze JSON {\"business_understanding\":\"...\",\"scraping_keyword\":\"...\",\"location_scope\":\"...\",\"target_location\":\"...\",\"targeting_reason\":\"...\",\"audience_label\":\"...\",\"email_angle\":\"...\"}. "
         . "business_understanding: 1-2 kratke vety v cestine, bez instrukci, bez slov 'AI', bez planu. Musi byt shrnuti toho, co subjekt dela, vyhradne podle website_context nacteneho z website_url. Musi zminit konkretni produkty/sluzby z webu. Nepouzivej obecne domenky podle nazvu firmy ani pouze katalogovy popis z Firmy.cz. "
         . "scraping_keyword: jen kategorie firem bez lokace. location_scope: jedna z hodnot konkretni_lokace, stejne_mesto, stejny_kraj nebo cela_cr. target_location: konkretni lokalita jen pokud location_scope neni cela_cr. "
-        . "targeting_reason: 1-2 konkretni vety, proc urcity typ firem muze realne potrebovat produkt/sluzbu seed firmy a proc dava zvoleny geograficky dosah smysl. Z tohoto duvodu musi byt jasne odvoditelne audience_label i scraping_keyword. "
+        . "targeting_reason: 1-2 konkretni vety, proc urcity typ firem muze realne potrebovat produkt/sluzbu seed firmy a proc dava zvoleny geograficky dosah smysl. Musi obsahovat konkretni vazbu nabidka -> potreba ciloveho segmentu. Z tohoto duvodu musi byt jasne odvoditelne audience_label i scraping_keyword. "
         . "audience_label: kratke pojmenovani koho presne oslovit, napr. 'autoservisy, ktere potrebuji pravidelne resit firemni textil', ne obecne 'firmy'. "
         . "email_angle: jedna veta konkretniho uhlu pro email. "
         . "Zakazane keywordy: 'relevantni B2B firmy', 'potencialni zakaznici', 'male firmy', 'firmy', 'sluzby pro firmy', 'B2B subjekty', 'vhodne firmy', 'vyrobni firma', 'vyrobce', 'prumyslova firma', 'podniky'. "
-        . "Keyword nesmi byt obecny nadrazeny pojem. Pokud te napadne 'vyrobni firma', musis ho zkonkretizovat podle realne spoluprace, napr. 'pekárna', 'truhlářství', 'kovovýroba', 'potravinářství', 'autoservis', 'hotel' nebo jina presna kategorie podle kontextu.";
+        . "Keyword nesmi byt obecny nadrazeny pojem ani nahodny segment. Pokud existuje na webu explicitni segment zakazniku, preferuj ho pred odhadem. Restaurace pouzij jen pokud web nabizi produkt pro gastro provozy obecne nebo pokud umi aplikace jednoduse rozlisit relevantni subset; jinak preferuj presnejsi segmenty jako hotel, golfovy klub, ordinace, lazne nebo stavebni firma. "
+        . "Pokud te napadne 'vyrobni firma', musis ho zkonkretizovat podle realne spoluprace, napr. 'pekárna', 'truhlářství', 'kovovýroba', 'potravinářství', 'autoservis', 'hotel' nebo jina presna kategorie podle kontextu.";
     try {
         $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
             'x-goog-api-key: ' . $apiKey,
@@ -2291,10 +2489,13 @@ function aiResearchPlan(array $config, array $seed): array
 
 function aiResearchFallbackTerms(string $business, string $website, string $address, string $country = ''): array
 {
-    $haystack = strtolower($business . ' ' . $website . ' ' . $address);
+    $haystack = aiResearchFoldText($business . ' ' . $website . ' ' . $address);
     $city = aiResearchCityFromAddress($address);
     $suffix = $city !== '' ? ' ' . $city : '';
     $country = strtoupper($country);
+    if (preg_match('/textil|odev|odevy|uniform|pracovn|reklamn|golf|hotel|lekar|lazn/i', $haystack)) {
+        return ['hotel' . $suffix, 'golfovy klub' . $suffix, 'ordinace' . $suffix, 'lazne' . $suffix, 'stavebni firma' . $suffix, 'wellness centrum' . $suffix];
+    }
     if ($country === 'AT' || $country === 'DE') {
         if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
             return ['IT Firma' . $suffix, 'Steuerberater' . $suffix, 'Rechtsanwalt' . $suffix, 'Callcenter' . $suffix, 'Coworking' . $suffix, 'Hotel' . $suffix, 'Bueroservice' . $suffix];
