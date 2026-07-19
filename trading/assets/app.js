@@ -91,6 +91,8 @@ const els = {
   portfolioOpenPlPct: document.querySelector("[data-portfolio-open-pl-pct]"),
   portfolioRisk: document.querySelector("[data-portfolio-risk]"),
   portfolioFree: document.querySelector("[data-portfolio-free]"),
+  portfolioRr: document.querySelector("[data-portfolio-rr]"),
+  portfolioRrNote: document.querySelector("[data-portfolio-rr-note]"),
 };
 
 function escapeHtml(value) {
@@ -354,6 +356,13 @@ function netYield(item) {
   return gain / cost;
 }
 
+function evaluationRiskReward(item) {
+  const risk = evaluationTotalCost(item);
+  const reward = gainIfWin(item);
+  if (!Number.isFinite(risk) || !Number.isFinite(reward) || risk <= 0 || reward <= 0) return null;
+  return risk / reward;
+}
+
 function annualizedExpectedReturn(item) {
   const ev = expectedValue(item);
   const cost = evaluationTotalCost(item);
@@ -525,6 +534,31 @@ function tradePotentialGainPct(trade) {
   return basis > 0 && Number.isFinite(gain) ? gain / basis : null;
 }
 
+function tradeRiskReward(trade) {
+  const risk = tradeCostBasis(trade);
+  const reward = tradePotentialGain(trade);
+  if (!Number.isFinite(risk) || !Number.isFinite(reward) || risk <= 0 || reward <= 0) return null;
+  return risk / reward;
+}
+
+function riskReward(value) {
+  if (!Number.isFinite(value)) return "-";
+  return `${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}:1`;
+}
+
+function riskRewardClass(value) {
+  if (!Number.isFinite(value)) return "";
+  if (value <= 1) return "positive";
+  if (value <= 3) return "";
+  return "negative";
+}
+
+function averageRiskReward(items, mapper) {
+  const values = items.map(mapper).filter(Number.isFinite);
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
 function tradePotentialAnnualized(trade) {
   const gainPct = tradePotentialGainPct(trade);
   const endDate = tradeEndDate(trade);
@@ -637,6 +671,7 @@ function tradeSortValue(trade, key) {
   if (key === "holding") return tradeHoldingDays(trade);
   if (key === "potentialGain") return tradePotentialGain(trade);
   if (key === "potentialPct") return tradePotentialGainPct(trade);
+  if (key === "riskReward") return tradeRiskReward(trade);
   if (key === "potentialAnnualized") return tradePotentialAnnualized(trade);
   if (key === "pnl") return tradePnlValue(trade);
   if (key === "pnlPct") return tradePnlPct(trade);
@@ -699,6 +734,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
           ${tradeHeader(tableKey, "holding", "Holding")}
           ${tradeHeader(tableKey, "potentialGain", "Win $")}
           ${tradeHeader(tableKey, "potentialPct", "Win %")}
+          ${tradeHeader(tableKey, "riskReward", "R/R")}
           ${tradeHeader(tableKey, "potentialAnnualized", "Win p.a.")}
           ${showStatus ? tradeHeader(tableKey, "status", "Result") : ""}
           ${tradeHeader(tableKey, "pnl", "P/L")}
@@ -731,6 +767,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
             <td>${holdingCell(trade)}</td>
             <td>${potentialGainCell(trade)}</td>
             <td>${potentialPctCell(trade)}</td>
+            <td><span class="${riskRewardClass(tradeRiskReward(trade))}">${riskReward(tradeRiskReward(trade))}</span></td>
             <td>${potentialAnnualizedCell(trade)}</td>
             ${showStatus ? `<td>
               ${escapeHtml(trade.status || "OPEN")}
@@ -1371,6 +1408,8 @@ async function loadLiveState(options = {}) {
     els.portfolioOpenPlPct.textContent = "-";
     els.portfolioRisk.textContent = "-";
     els.portfolioFree.textContent = "-";
+    if (els.portfolioRr) els.portfolioRr.textContent = "-";
+    if (els.portfolioRrNote) els.portfolioRrNote.textContent = "live data not available";
     if (els.accountSummary) {
       els.accountSummary.hidden = false;
       els.accountSummary.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
@@ -1410,6 +1449,7 @@ function renderBotState(botState) {
   const trades = Array.isArray(botState.trades) ? botState.trades : [];
   const closedTrades = trades.filter(isClosedTrade);
   const openTrades = trades.filter((trade) => !isClosedTrade(trade));
+  const openRiskReward = averageRiskReward(openTrades, tradeRiskReward);
   const periodDays = portfolioPeriodDays(botState, trades);
   const annualized = annualizedPortfolioReturn(portfolio, periodDays);
   const totalPnl = Number(portfolio.totalPnlUsdc || 0);
@@ -1440,6 +1480,13 @@ function renderBotState(botState) {
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
   els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0));
   els.portfolioFree.textContent = `${money(freeCapital)} free`;
+  if (els.portfolioRr) {
+    els.portfolioRr.textContent = riskReward(openRiskReward);
+    els.portfolioRr.className = riskRewardClass(openRiskReward);
+  }
+  if (els.portfolioRrNote) {
+    els.portfolioRrNote.textContent = openTrades.length ? `avg open, ${openTrades.length} trades` : "no open trades";
+  }
 
   els.botStatus.innerHTML = `
     <div class="bot-summary">
@@ -1601,6 +1648,7 @@ function renderLiveState(liveState) {
     ...positions,
     ...openOrders.map(normalizeLiveOpenOrderForTable),
   ];
+  const openRiskReward = averageRiskReward(openedRows, tradeRiskReward);
   const activity = liveActivity(liveState);
   const closedTrades = liveClosedTrades(liveState);
   const sync = liveState.sync || {};
@@ -1651,6 +1699,13 @@ function renderLiveState(liveState) {
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
   els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || marketValue || 0));
   els.portfolioFree.textContent = Number.isFinite(cash) ? `${money(cash)} cash` : "cash not available";
+  if (els.portfolioRr) {
+    els.portfolioRr.textContent = riskReward(openRiskReward);
+    els.portfolioRr.className = riskRewardClass(openRiskReward);
+  }
+  if (els.portfolioRrNote) {
+    els.portfolioRrNote.textContent = openedRows.length ? `avg open, ${openedRows.length} rows` : "no open rows";
+  }
 
   if (els.accountSummary) {
     els.accountSummary.hidden = false;
@@ -1744,6 +1799,7 @@ function evaluationSortValue(item, key) {
   if (key === "odds") return decimalOdds(item.marketPrice);
   if (key === "gainIfWin") return gainIfWin(item);
   if (key === "netYield") return netYield(item);
+  if (key === "riskReward") return evaluationRiskReward(item);
   if (key === "aiProbability") return Number(item.aiProbability);
   if (key === "annualizedReturn") return annualizedExpectedReturn(item);
   if (key === "updates") return Number(item.evaluationCount || 1);
@@ -1794,6 +1850,14 @@ function netYieldCell(item) {
   return `
     <span class="${pnlClass(value)}">${signedPercent(value)}</span>
     <span>${currentLimitOrders() ? "after maker fee" : "after taker fee"}</span>
+  `;
+}
+
+function evaluationRiskRewardCell(item) {
+  const value = evaluationRiskReward(item);
+  return `
+    <span class="${riskRewardClass(value)}">${riskReward(value)}</span>
+    <span>risk / reward</span>
   `;
 }
 
@@ -1892,6 +1956,7 @@ function renderBotEvaluations() {
           ${sortableHeader("odds", "Odds")}
           ${sortableHeader("gainIfWin", "Win @ $5")}
           ${sortableHeader("netYield", "Net yield %")}
+          ${sortableHeader("riskReward", "R/R")}
           ${sortableHeader("aiProbability", "AI prob.")}
           ${sortableHeader("annualizedReturn", "EV p.a.")}
           ${sortableHeader("updates", "Updates")}
@@ -1920,6 +1985,7 @@ function renderBotEvaluations() {
             <td>${odds(decimalOdds(item.marketPrice))}</td>
             <td>${gainCell(item)}</td>
             <td>${netYieldCell(item)}</td>
+            <td>${evaluationRiskRewardCell(item)}</td>
             <td>${probability(Number(item.aiProbability))}</td>
             <td>${annualizedCell(item)}</td>
             <td>${updateHistoryCell(item)}</td>
@@ -2086,7 +2152,7 @@ function handleTradeSort(event) {
     state.tradeSort[tableKey].direction = state.tradeSort[tableKey].direction === "asc" ? "desc" : "asc";
   } else {
     state.tradeSort[tableKey].key = key;
-    state.tradeSort[tableKey].direction = ["market", "status"].includes(key) ? "asc" : "desc";
+    state.tradeSort[tableKey].direction = ["market", "status", "riskReward"].includes(key) ? "asc" : "desc";
   }
   if (state.mode === "live") {
     if (!state.liveState) return;
