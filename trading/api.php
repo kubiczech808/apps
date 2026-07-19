@@ -116,6 +116,150 @@ function state_payload(string $target): array
     return $data;
 }
 
+function live_state_path(): string
+{
+    return __DIR__ . '/data/live-state.json';
+}
+
+function money_text($value): string
+{
+    if (!is_numeric($value)) {
+        return '-';
+    }
+
+    return '$' . number_format((float) $value, 2, '.', ',');
+}
+
+function percent_text($value): string
+{
+    if (!is_numeric($value)) {
+        return '-';
+    }
+
+    return number_format(((float) $value) * 100, 1, '.', ',') . '%';
+}
+
+function send_redeem_alert_email(array $alert): bool
+{
+    if (!function_exists('mail')) {
+        throw new RuntimeException('PHP mail() is not available on this hosting.');
+    }
+
+    $recipient = 'jakub.elias88@gmail.com';
+    $subject = 'Polymarket winning position / redeem alert';
+    $type = (string) ($alert['type'] ?? '');
+    $headline = $type === 'REDEEM_CONFIRMED'
+        ? 'Vyherni Polymarket pozice byla nalezena jako redeemed.'
+        : 'Polymarket pozice vypada jako vyherne vyhodnocena a muze vyzadovat manualni redeem.';
+    $lines = [
+        $headline,
+        '',
+        'Market: ' . (string) ($alert['question'] ?? '-'),
+        'Outcome: ' . (string) ($alert['outcome'] ?? '-'),
+        'URL: ' . (string) ($alert['url'] ?? 'https://polymarket.com/'),
+        'Stake: ' . money_text($alert['stakeUsdc'] ?? null),
+        'Current value: ' . money_text($alert['currentValueUsdc'] ?? null),
+        'Realized P/L: ' . money_text($alert['realizedPnlUsdc'] ?? null),
+        'Realized P/L %: ' . percent_text($alert['realizedPnlPct'] ?? null),
+        'Reason: ' . (string) ($alert['reason'] ?? '-'),
+        'Detected at: ' . (string) ($alert['detectedAt'] ?? gmdate('c')),
+        '',
+        'Pokud neni redeem automaticky proveden Polymarketem/API, otevri pozici a udelej redeem manualne.',
+    ];
+    $body = implode("\n", $lines);
+    $headers = [
+        'From: Trading Bot <noreply@osobnizkusenosti.cz>',
+        'Reply-To: noreply@osobnizkusenosti.cz',
+        'Content-Type: text/plain; charset=UTF-8',
+        'X-Auto-Response-Suppress: All',
+    ];
+
+    return mail($recipient, $subject, $body, implode("\r\n", $headers));
+}
+
+function send_redeem_alerts(): array
+{
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        respond(['ok' => false, 'error' => 'POST is required'], 405);
+    }
+
+    $path = live_state_path();
+    if (!is_file($path)) {
+        respond(['ok' => false, 'error' => 'Live state file is not available yet'], 404);
+    }
+
+    $raw = file_get_contents($path);
+    $state = json_decode(is_string($raw) ? $raw : '', true);
+    if (!is_array($state)) {
+        respond(['ok' => false, 'error' => 'Live state file contains invalid JSON'], 502);
+    }
+
+    $notifications = is_array($state['notifications'] ?? null) ? $state['notifications'] : [];
+    $alerts = is_array($notifications['redeemAlerts'] ?? null) ? $notifications['redeemAlerts'] : [];
+    $sentKeys = [];
+    foreach ((array) ($notifications['sentRedeemAlertKeys'] ?? []) as $key) {
+        $sentKeys[(string) $key] = true;
+    }
+
+    $sent = [];
+    $failed = [];
+    foreach ($alerts as $index => $alert) {
+        if (!is_array($alert)) {
+            continue;
+        }
+        $key = (string) ($alert['key'] ?? '');
+        if ($key === '' || isset($sentKeys[$key])) {
+            continue;
+        }
+        try {
+            if (!send_redeem_alert_email($alert)) {
+                throw new RuntimeException('PHP mail() returned false.');
+            }
+            $sentKeys[$key] = true;
+            $alerts[$index]['sent'] = true;
+            $alerts[$index]['sentAt'] = gmdate('c');
+            $sent[] = [
+                'key' => $key,
+                'type' => (string) ($alert['type'] ?? ''),
+                'question' => (string) ($alert['question'] ?? ''),
+                'sentAt' => $alerts[$index]['sentAt'],
+            ];
+        } catch (Throwable $e) {
+            $failed[] = [
+                'key' => $key,
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    $notifications['redeemAlerts'] = $alerts;
+    $notifications['unsentRedeemAlerts'] = array_values(array_filter(
+        $alerts,
+        static fn ($alert): bool => is_array($alert) && empty($alert['sent'])
+    ));
+    $notifications['sentRedeemAlertKeys'] = array_keys($sentKeys);
+    $notifications['lastEmailCheckAt'] = gmdate('c');
+    $notifications['lastEmailSent'] = $sent;
+    $notifications['lastEmailFailures'] = $failed;
+    $state['notifications'] = $notifications;
+
+    $encoded = json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($encoded) || file_put_contents($path, $encoded . "\n", LOCK_EX) === false) {
+        respond(['ok' => false, 'error' => 'Unable to persist notification ledger'], 500);
+    }
+
+    return [
+        'ok' => $failed === [],
+        'generatedAt' => gmdate('c'),
+        'recipient' => 'jakub.elias88@gmail.com',
+        'checked' => count($alerts),
+        'sentCount' => count($sent),
+        'failedCount' => count($failed),
+        'sent' => $sent,
+        'failed' => $failed,
+    ];
+}
+
 function live_state_age_seconds(): ?int
 {
     $path = __DIR__ . '/data/live-state.json';
@@ -478,6 +622,10 @@ try {
     if ($action === 'workflow-status') {
         $target = (string) ($_GET['target'] ?? '');
         respond(workflow_status_payload($target));
+    }
+
+    if ($action === 'send-redeem-alerts') {
+        respond(send_redeem_alerts());
     }
 
     if ($action === 'state') {

@@ -15,6 +15,7 @@ jobs:
     runs-on: [self-hosted, Linux, ARM64]
     env:
       LIVE_STATE_PATH: data/live-state.json
+      LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
       LIVE_ACTIVITY_LIMIT: "80"
       POLYMARKET_ADDRESS: ${{ secrets.POLYMARKET_ADDRESS || secrets.POLYMARKET_FUNDER_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
       POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
@@ -84,3 +85,7 @@ jobs:
               with state_file.open("rb") as handle:
                   ftp.storbinary("STOR live-state.json", handle)
           PY
+
+      - name: Send redeem alert emails
+        run: |
+          curl --fail --show-error --silent --max-time 60 -X POST "https://osobnizkusenosti.cz/trading/api.php?action=send-redeem-alerts"

@@ -15,6 +15,7 @@ const DEFAULT_ADDRESS = "0x3252de913d9323667f21f4d88fa1f996fc282293";
 const CONFIGURED_ACCOUNT_ADDRESS = (process.env.POLYMARKET_ADDRESS || DEFAULT_ADDRESS).toLowerCase();
 const CONFIGURED_FUNDER_ADDRESS = (process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || DEFAULT_ADDRESS).toLowerCase();
 const STATE_PATH = process.env.LIVE_STATE_PATH || "data/live-state.json";
+const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "";
 const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
 const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
@@ -133,6 +134,26 @@ async function optionalValue(label, promise, fallback = null, warnings = null) {
   }
 }
 
+async function loadPreviousLiveState(sync) {
+  if (!LIVE_STATE_URL) return null;
+  try {
+    const url = new URL(LIVE_STATE_URL);
+    url.searchParams.set("_sync", String(Date.now()));
+    const response = await fetch(url, {
+      headers: { "User-Agent": "osobnizkusenosti-trading-live-sync" },
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`HTTP ${response.status}${body ? `: ${body.slice(0, 120)}` : ""}`);
+    }
+    const payload = await response.json();
+    return payload && typeof payload === "object" ? payload : null;
+  } catch (error) {
+    sync.warnings.push(`previous-live-state: ${error?.message || String(error)}`);
+    return null;
+  }
+}
+
 async function erc20Balance(token, holder) {
   const data = `0x70a08231000000000000000000000000${String(holder).toLowerCase().replace(/^0x/, "")}`;
   const response = await fetch(POLYGON_RPC, {
@@ -219,6 +240,8 @@ function normalizePosition(position, generatedAt) {
   const pnlPct = ratio(position.percentPnl ?? position.pnlPercent ?? (initialValue > 0 ? cashPnl / initialValue : null));
   const realizedPnl = number(position.realizedPnl ?? position.cashPnlRealized, 0);
   const endDate = isoTime(position.endDate ?? position.endDateIso ?? position.resolutionDate);
+  const redeemable = Boolean(position.redeemable ?? position.claimable ?? position.canRedeem ?? position.conditionRedeemable ?? false);
+  const resolved = Boolean(position.resolved ?? position.isResolved ?? position.closed ?? false);
 
   return {
     id: String(position.asset ?? position.tokenId ?? position.conditionId ?? `${position.slug || position.title || "position"}-${position.outcome || ""}`),
@@ -245,6 +268,8 @@ function normalizePosition(position, generatedAt) {
     unrealizedPnlPct: pnlPct,
     realizedPnlUsdc: realizedPnl,
     realizedPnlPct: ratio(position.percentRealizedPnl),
+    redeemable,
+    resolved,
     size,
   };
 }
@@ -483,6 +508,94 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
         analysisSummary: "Derived from public Polymarket trade history; realized P/L is estimated from buys, sells and redemption-like activity where available.",
       };
     });
+}
+
+function compactText(value, fallback = "-") {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text || fallback;
+}
+
+function redeemAlertId(prefix, item) {
+  const marketKey = compactText(item.tokenId || item.conditionId || item.slug || item.question, "market").toLowerCase();
+  const outcome = compactText(item.outcome, "outcome").toLowerCase();
+  return `${prefix}:${marketKey}:${outcome}`;
+}
+
+function redeemNotifications(positions, closedTrades, previousState, generatedAt) {
+  const previousNotifications = previousState?.notifications && typeof previousState.notifications === "object"
+    ? previousState.notifications
+    : {};
+  const sentKeys = new Set(Array.isArray(previousNotifications.sentRedeemAlertKeys)
+    ? previousNotifications.sentRedeemAlertKeys.map(String)
+    : []);
+  const alerts = [];
+
+  function addAlert(alert) {
+    if (!alert.key || alerts.some((item) => item.key === alert.key)) return;
+    alerts.push({
+      ...alert,
+      sent: sentKeys.has(alert.key),
+    });
+  }
+
+  for (const position of positions) {
+    const currentPrice = number(position.currentPrice);
+    const currentValue = number(position.currentValueUsdc, 0);
+    const redeemable = Boolean(position.redeemable || position.claimable || position.resolved);
+    const looksLikeWinningResolution = currentPrice != null && currentPrice >= 0.995 && currentValue > 0;
+    if (!redeemable && !looksLikeWinningResolution) continue;
+    addAlert({
+      key: redeemAlertId("redeem-required", position),
+      type: "REDEEM_REQUIRED",
+      title: "Winning Polymarket position may need redeem",
+      message: "Pozice vypada jako vyherne vyhodnocena. Pokud Polymarket neumozni automaticky redeem, otevri ji a proved redeem manualne.",
+      question: position.question,
+      outcome: position.outcome,
+      url: position.url,
+      tokenId: position.tokenId,
+      conditionId: position.conditionId,
+      openedAt: position.openedAt,
+      detectedAt: generatedAt,
+      currentPrice,
+      currentValueUsdc: currentValue,
+      stakeUsdc: number(position.stakeUsdc),
+      unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
+      reason: redeemable ? "Polymarket position is marked redeemable/claimable/resolved" : "Current mark price is effectively 1.00 with positive value",
+    });
+  }
+
+  for (const trade of closedTrades) {
+    const realizedPnl = number(trade.realizedPnlUsdc, 0);
+    const status = String(trade.status || "").toUpperCase();
+    if (realizedPnl <= 0 || status !== "REDEEMED") continue;
+    addAlert({
+      key: redeemAlertId("redeem-confirmed", trade),
+      type: "REDEEM_CONFIRMED",
+      title: "Winning Polymarket position was redeemed",
+      message: "Pozice byla v historii uctu nalezena jako vyherni/redeemed. Zkontroluj pripadne volne prostredky pro dalsi obchody.",
+      question: trade.question,
+      outcome: trade.outcome,
+      url: trade.url,
+      tokenId: trade.tokenId,
+      conditionId: trade.conditionId,
+      openedAt: trade.openedAt,
+      closedAt: trade.closedAt,
+      detectedAt: generatedAt,
+      stakeUsdc: number(trade.stakeUsdc),
+      exitValueUsdc: number(trade.exitValueUsdc),
+      realizedPnlUsdc: realizedPnl,
+      realizedPnlPct: ratio(trade.realizedPnlPct),
+      reason: "Public activity contains redeem-like event with positive realized P/L",
+    });
+  }
+
+  return {
+    emailRecipient: "jakub.elias88@gmail.com",
+    generatedAt,
+    sentRedeemAlertKeys: [...sentKeys],
+    redeemAlerts: alerts,
+    unsentRedeemAlerts: alerts.filter((alert) => !alert.sent),
+  };
 }
 
 function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades, openOrders, generatedAt) {
@@ -915,6 +1028,7 @@ async function main() {
     warnings: [],
   };
   await discoverTradingAccount(sync);
+  const previousLiveState = await loadPreviousLiveState(sync);
 
   let rawPositions = [];
   let rawActivity = [];
@@ -984,6 +1098,7 @@ async function main() {
     sync.message = `Live snapshot loaded with ledger reconciliation warnings: ${sync.warnings.join(" | ")}`;
   }
   const portfolioBase = portfolioSummary(reconciledPositions, valueRows, closedTrades);
+  const notifications = redeemNotifications(reconciledPositions, closedTrades, previousLiveState, generatedAt);
   const cashUsdc = number(balanceAllowance?.collateral?.balanceUsdc);
   const equityUsdc = cashUsdc == null
     ? portfolioBase.equityUsdc
@@ -1026,6 +1141,7 @@ async function main() {
     apiPositions: positions,
     reconciliation,
     closedTrades,
+    notifications,
     tradeHistory,
     activity,
     sync,
@@ -1042,6 +1158,8 @@ async function main() {
     openOrders: payload.openOrders.length,
     cashUsdc: payload.portfolio.cashUsdc,
     closedTrades: closedTrades.length,
+    redeemAlerts: notifications.redeemAlerts.length,
+    unsentRedeemAlerts: notifications.unsentRedeemAlerts.length,
     tradeHistory: tradeHistory.length,
     activity: activity.length,
     status: sync.status,
