@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-19-ai-model-audit';
+const APP_VERSION = '2026-07-19-research-contact-table';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 
@@ -3580,7 +3580,7 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         . "Seed: " . json_encode($seed, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Plan: " . json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Kontakty: " . json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Vrat pouze JSON {\"contacts\":[{\"email\":\"...\",\"accepted\":true,\"fit_reason\":\"...\",\"subject\":\"...\",\"html\":\"...\"}]}. "
+        . "Vrat pouze JSON {\"contacts\":[{\"email\":\"...\",\"accepted\":true,\"fit_reason\":\"...\"}]}. "
         . "U kazdeho kontaktu rozhodni, zda je opravdu relevantni pro navrzeny B2B use-case, primarni segment, zemi a lokalitu. Pokud ne, accepted=false a fit_reason konkretne vysvetli proc. "
         . "Pouzij i povinne filtry z planu. Kontakt schval jen tehdy, kdyz z nazvu, webu, adresy nebo zdrojove URL dava smysl, ze patri do zvolene cilovky a ma pravdepodobnou potrebu, rozpocet nebo opakovany trigger popsany v targeting_reason. "
         . "Neoznacuj kontakt jako vhodny jen proto, ze by teoreticky mohl sluzbu nekdy vyuzit. Musi jit o typ firmy, u ktere je rozumna nakupni pravdepodobnost, platebni schopnost a jasny use-case. "
@@ -3588,12 +3588,7 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         . "Lokacni pravidlo z planu je povinne: " . aiResearchLocationScopeLabel((string)($plan['location_scope'] ?? '')) . ", cilova lokace " . (string)($plan['target_location'] ?? '') . ". "
         . "Pokud je kontakt vhodny, fit_reason musi rict, proc prave tento typ firmy muze potrebovat seed nabidku a jaky trigger oslovenim resime. "
         . "Pokud plan rozlisuje rozhodovaci osobu, zohledni, zda je kontaktovany subjekt typ firmy, kde takova role realisticky existuje. "
-        . "Vsechny subject/html texty napis jednim jazykem podle market_language v planu (" . (string)($plan['market_language'] ?? 'cs') . "). "
-        . "HTML je kratke unikatni obchodni osloveni pro dany kontakt, vecne a bez prehnanych slibu. "
-        . "Email nesmi byt obecny. Musi vychazet z tohoto pochopeni seed webu: " . (string)($plan['business_understanding'] ?? '') . ". "
-        . "Zohledni take proc byl vybran keyword a lokace: " . (string)($plan['targeting_reason'] ?? '') . ". "
-        . "V emailu konkretne vyuzij keyword '" . aiResearchPrimaryKeyword($plan) . "' a lokaci '" . (string)($plan['target_location'] ?? '') . "' jen pokud to pusobi prirozene pro prijemce. "
-        . "V emailu konkretne napoj nabidku seed firmy na typ kontaktovane firmy; nepouzivej prazdne vety typu 'vidime konkretni moznost spoluprace'.";
+        . "Negeneruj subject ani html pro jednotlive kontakty. Osloveni je jedno spolecne pro cely segment a je ulozene na urovni research behu.";
     try {
         $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
             'x-goog-api-key: ' . $apiKey,
@@ -3621,7 +3616,7 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
             if (!$processAccepted) {
                 $reason = 'Kontakt byl odmitnut procesnim filtrem: nesoulad s keywordem nebo lokaci.';
             }
-            $decorated = aiResearchDecorateContact($seed, $plan, $contact, $accepted, $reason, (string)($ai['subject'] ?? ''), (string)($ai['html'] ?? ''));
+            $decorated = aiResearchDecorateContact($seed, $plan, $contact, $accepted, $reason);
             $decorated['ai_validation_status'] = $ai ? 'used' : 'missing_ai_row';
             $out[] = $decorated;
         }
@@ -3652,14 +3647,6 @@ function aiResearchEvaluationAiStatus(array $evaluated): string
 
 function aiResearchDecorateContact(array $seed, array $plan, array $contact, bool $accepted, string $reason = '', string $subject = '', string $html = ''): array
 {
-    $seedBusiness = trim((string)($seed['subject_name'] ?: $seed['email']));
-    $targetName = trim((string)($contact['subject_name'] ?? $contact['email'] ?? ''));
-    if ($subject === '') {
-        $subject = aiResearchFallbackSubject((string)($plan['market_language'] ?? 'cs'), $targetName);
-    }
-    if ($html === '') {
-        $html = aiResearchFallbackEmailHtml((string)($plan['market_language'] ?? 'cs'), $seedBusiness);
-    }
     return array_merge($contact, [
         'status' => $accepted ? 'accepted' : 'rejected',
         'fit_reason' => $reason !== '' ? $reason : (string)($plan['rationale'] ?? ''),
@@ -13187,34 +13174,59 @@ function renderApp(PDO $pdo, ?array $flash): void
                         <div class="scraping-result-grid">
                             <section class="scraping-result-group">
                                 <div class="scraping-result-group-head"><strong>Nalezene kontakty</strong><span><?= h((string)count($runContacts)) ?></span></div>
-                                <div class="scraping-result-list">
-                                    <?php if (!$runContacts): ?>
-                                    <article class="scraping-result-item">
-                                        <div class="scraping-result-title">
-                                            <strong>Kontakt nenalezen</strong>
-                                            <?= statusBadge((string)$run['status']) ?>
-                                        </div>
-                                        <p><?= h((string)($run['message'] ?: 'Hledani probehlo, ale nebyl nalezen zadny kontakt, ktery by AI mohla vyhodnotit jako vhodny.')) ?></p>
-                                    </article>
-                                    <?php endif; ?>
-                                    <?php foreach ($runContacts as $contact): ?>
-                                    <article class="scraping-result-item">
-                                        <div class="scraping-result-title">
-                                            <strong><?= h((string)($contact['subject_name'] ?: $contact['email'])) ?></strong>
-                                            <?= statusBadge((string)$contact['status']) ?>
-                                        </div>
-                                        <div class="scraping-result-meta">
-                                            <?php if ($contact['email'] !== ''): ?><span><?= h((string)$contact['email']) ?></span><?php endif; ?>
-                                            <?php if ($contact['address'] !== ''): ?><span><?= h((string)$contact['address']) ?></span><?php endif; ?>
-                                            <?php if ($contact['website'] !== ''): ?><a href="<?= h((string)$contact['website']) ?>" target="_blank" rel="noopener"><?= h((string)$contact['website']) ?></a><?php endif; ?>
-                                        </div>
-                                        <?php if ($contact['source_url'] !== ''): ?><div class="scraping-source-url"><span>Zdrojova URL</span><a href="<?= h((string)$contact['source_url']) ?>" target="_blank" rel="noopener"><?= h((string)$contact['source_url']) ?></a></div><?php endif; ?>
-                                        <p><?= h((string)$contact['fit_reason']) ?></p>
-                                        <p><strong><?= h((string)$contact['email_subject']) ?></strong></p>
-                                        <div class="email-preview"><?= cleanHtml((string)$contact['email_body_html']) ?></div>
-                                    </article>
-                                    <?php endforeach; ?>
-                                </div>
+                                <?php if (!$runContacts): ?>
+                                    <div class="scraping-result-list">
+                                        <article class="scraping-result-item">
+                                            <div class="scraping-result-title">
+                                                <strong>Kontakt nenalezen</strong>
+                                                <?= statusBadge((string)$run['status']) ?>
+                                            </div>
+                                            <p><?= h((string)($run['message'] ?: 'Hledani probehlo, ale nebyl nalezen zadny kontakt, ktery by AI mohla vyhodnotit jako vhodny.')) ?></p>
+                                        </article>
+                                    </div>
+                                <?php else: ?>
+                                    <div class="table-shell research-contacts-shell">
+                                        <table class="research-contacts-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Stav</th>
+                                                    <th>Subjekt</th>
+                                                    <th>Email</th>
+                                                    <th>Web</th>
+                                                    <th>Adresa</th>
+                                                    <th>Telefon</th>
+                                                    <th>Zdroj</th>
+                                                    <th>Vyhodnoceni</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <?php foreach ($runContacts as $contact): ?>
+                                                <tr>
+                                                    <td><?= statusBadge((string)$contact['status']) ?></td>
+                                                    <td><strong><?= h((string)($contact['subject_name'] ?: $contact['email'])) ?></strong></td>
+                                                    <td><?= h((string)$contact['email']) ?></td>
+                                                    <td>
+                                                        <?php if ($contact['website'] !== ''): ?>
+                                                            <a class="sub-link" href="<?= h((string)$contact['website']) ?>" target="_blank" rel="noopener"><?= h((string)$contact['website']) ?></a>
+                                                        <?php else: ?>
+                                                            <span class="muted">-</span>
+                                                        <?php endif; ?>
+                                                    </td>
+                                                    <td><?= h((string)($contact['address'] ?: '-')) ?></td>
+                                                    <td><?= h((string)($contact['phone'] ?: '-')) ?></td>
+                                                    <td>
+                                                        <strong><?= h((string)($contact['source_label'] ?: $run['search_source_label'] ?: '-')) ?></strong>
+                                                        <?php if ($contact['source_url'] !== ''): ?>
+                                                            <a class="sub-link" href="<?= h((string)$contact['source_url']) ?>" target="_blank" rel="noopener"><?= h((string)$contact['source_url']) ?></a>
+                                                        <?php endif; ?>
+                                                    </td>
+                                                    <td><?= h((string)($contact['fit_reason'] ?: '-')) ?></td>
+                                                </tr>
+                                                <?php endforeach; ?>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                <?php endif; ?>
                             </section>
                         </div>
                     </div>
