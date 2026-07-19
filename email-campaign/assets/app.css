@@ -1107,6 +1107,17 @@ main > .panel + .panel { margin-top: 16px; }
   padding-top: 8px;
 }
 label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-size: 13px; }
+.form-grid {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 13px;
+}
+.form-grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.form-grid label {
+  margin-bottom: 0;
+}
 .check {
   display: flex;
   align-items: center;
@@ -2484,7 +2495,7 @@ td a {
   .app-topbar .tabs { padding: 0; }
   .tabs a { white-space: nowrap; }
   main { padding: 16px 12px; }
-  .stats, .grid, .grid.two, .config-grid, .row, .create-database-panel form, .create-campaign-panel form, .campaign-metrics, .info-grid { grid-template-columns: 1fr; }
+  .stats, .grid, .grid.two, .config-grid, .row, .create-database-panel form, .create-campaign-panel form, .campaign-metrics, .info-grid, .form-grid.two { grid-template-columns: 1fr; }
   .stats strong { font-size: 24px; }
   .panel { padding: 14px; }
   .section-header { display: grid; }

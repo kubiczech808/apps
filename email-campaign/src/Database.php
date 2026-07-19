@@ -80,11 +80,15 @@ final class Database
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'started_at', $this->textColumn("''")), 'scraping_jobs.started_at');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'run_type', $this->textColumn("'manual'")), 'scraping_jobs.run_type');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'discovery_done', 'INTEGER NOT NULL DEFAULT 0'), 'scraping_jobs.discovery_done');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'location_scope', $this->textColumn("'cela_cr'")), 'scraping_jobs.location_scope');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_jobs', 'target_location', $this->textColumn("''")), 'scraping_jobs.target_location');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'schedule_enabled', 'INTEGER NOT NULL DEFAULT 0'), 'scraping_containers.schedule_enabled');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'schedule_time', $this->textColumn("'09:00'")), 'scraping_containers.schedule_time');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'schedule_frequency', $this->textColumn("'daily'")), 'scraping_containers.schedule_frequency');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'schedule_weekday', 'INTEGER NOT NULL DEFAULT 1'), 'scraping_containers.schedule_weekday');
         $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'last_scheduled_at', $this->textColumn("''")), 'scraping_containers.last_scheduled_at');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'location_scope', $this->textColumn("'cela_cr'")), 'scraping_containers.location_scope');
+        $this->safeMigrationStep(fn() => $this->ensureColumn('scraping_containers', 'target_location', $this->textColumn("''")), 'scraping_containers.target_location');
         $this->safeMigrationStep(fn() => $this->ensureSuppressionTable(), 'suppression_list');
         $this->safeMigrationStep(fn() => $this->ensureOnboardingTables(), 'onboarding_tables');
         $this->safeMigrationStep(fn() => $this->ensureOnboardingEventsTable(), 'onboarding_events');
@@ -256,6 +260,8 @@ final class Database
                 list_id INT NOT NULL,
                 source VARCHAR(80) NOT NULL,
                 keyword VARCHAR(255) NOT NULL,
+                location_scope VARCHAR(40) NOT NULL DEFAULT 'cela_cr',
+                target_location VARCHAR(255) NOT NULL DEFAULT '',
                 status VARCHAR(40) NOT NULL DEFAULT 'active',
                 schedule_enabled INT NOT NULL DEFAULT 0,
                 schedule_time VARCHAR(5) NOT NULL DEFAULT '09:00',
@@ -278,6 +284,8 @@ final class Database
                 list_id INT NOT NULL,
                 source VARCHAR(80) NOT NULL,
                 keyword VARCHAR(255) NOT NULL,
+                location_scope VARCHAR(40) NOT NULL DEFAULT 'cela_cr',
+                target_location VARCHAR(255) NOT NULL DEFAULT '',
                 status VARCHAR(40) NOT NULL DEFAULT 'queued',
                 current_page INT NOT NULL DEFAULT 1,
                 max_pages INT NOT NULL DEFAULT 5,

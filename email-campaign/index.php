@@ -1869,8 +1869,9 @@ function onboardingQuickScrapeContacts(array $plan, int $limit, int $pagesPerQue
         if ($keyword === '' || !scrapingSourceIsActive($source)) {
             continue;
         }
+        $location = trim((string)($query['location'] ?? $query['target_location'] ?? $plan['target_location'] ?? ''));
         try {
-            foreach (scrapingSearchUrls($source, $keyword, max(1, $pagesPerQuery)) as $search) {
+            foreach (scrapingSearchUrls($source, $keyword, max(1, $pagesPerQuery), $location) as $search) {
                 $searchResponse = fetchScrapingSearch($search);
                 $html = (string)$searchResponse['html'];
                 $directContacts = [];
@@ -3006,7 +3007,7 @@ function aiResearchScrapingSearchUrls(string $source, string $keyword, string $l
             'url' => aiResearchFirmySearchUrl($keyword, $location, $page),
         ]];
     }
-    return scrapingSearchUrls($source, $keyword, $page);
+    return scrapingSearchUrls($source, $keyword, $page, $location);
 }
 
 function aiResearchSeedRegionLabel(array $seed): string
@@ -4110,7 +4111,7 @@ function provisionAiResearchCustomerWorkspace(PDO $pdo, int $runId, array $seed,
         $normalizedContacts[] = $normalized;
     }
 
-    aiResearchEnsureScrapingContainerAndLog($pdo, $ownerId, $listId, $source, $keyword, $runId, $normalizedContacts, $inserted, $updated, $skipped);
+    aiResearchEnsureScrapingContainerAndLog($pdo, $ownerId, $listId, $source, $keyword, $plan, $runId, $normalizedContacts, $inserted, $updated, $skipped);
     aiResearchEnsurePausedCampaign($pdo, $ownerId, $listId, $seed, $plan, $subject, $bodyHtml);
     setSettingForUser($pdo, $ownerId, 'from_email', strtolower(trim((string)($seed['email'] ?? ''))));
     setSettingForUser($pdo, $ownerId, 'from_name', truncatePlainText((string)($seed['subject_name'] ?: $seed['email']), 255));
@@ -4136,18 +4137,20 @@ function aiResearchEnsureContactDatabase(PDO $pdo, int $ownerId, string $name): 
     return (int)$pdo->lastInsertId();
 }
 
-function aiResearchEnsureScrapingContainerAndLog(PDO $pdo, int $ownerId, int $listId, string $source, string $keyword, int $runId, array $contacts, int $inserted, int $updated, int $skipped): void
+function aiResearchEnsureScrapingContainerAndLog(PDO $pdo, int $ownerId, int $listId, string $source, string $keyword, array $plan, int $runId, array $contacts, int $inserted, int $updated, int $skipped): void
 {
     $now = date('c');
-    $stmt = $pdo->prepare('SELECT id FROM scraping_containers WHERE owner_user_id=? AND list_id=? AND source=? AND keyword=? AND status!="deleted" ORDER BY id ASC LIMIT 1');
-    $stmt->execute([$ownerId, $listId, $source, $keyword]);
+    $locationScope = scrapingNormalizeLocationScope((string)($plan['location_scope'] ?? 'cela_cr'));
+    $targetLocation = in_array($locationScope, ['cela_cr', 'zahranici'], true) ? '' : trim((string)($plan['target_location'] ?? ''));
+    $stmt = $pdo->prepare('SELECT id FROM scraping_containers WHERE owner_user_id=? AND list_id=? AND source=? AND keyword=? AND location_scope=? AND target_location=? AND status!="deleted" ORDER BY id ASC LIMIT 1');
+    $stmt->execute([$ownerId, $listId, $source, $keyword, $locationScope, $targetLocation]);
     $containerId = (int)$stmt->fetchColumn();
     if ($containerId === 0) {
         $stmt = $pdo->prepare('
-            INSERT INTO scraping_containers (owner_user_id, list_id, source, keyword, status, schedule_enabled, schedule_time, schedule_frequency, schedule_weekday, last_scheduled_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, "active", 0, "09:00", "daily", 1, "", ?, ?)
+            INSERT INTO scraping_containers (owner_user_id, list_id, source, keyword, location_scope, target_location, status, schedule_enabled, schedule_time, schedule_frequency, schedule_weekday, last_scheduled_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, "active", 0, "09:00", "daily", 1, "", ?, ?)
         ');
-        $stmt->execute([$ownerId, $listId, $source, $keyword, $now, $now]);
+        $stmt->execute([$ownerId, $listId, $source, $keyword, $locationScope, $targetLocation, $now, $now]);
         $containerId = (int)$pdo->lastInsertId();
     } else {
         $stmt = $pdo->prepare('UPDATE scraping_containers SET schedule_enabled=0, updated_at=? WHERE id=?');
@@ -4162,11 +4165,11 @@ function aiResearchEnsureScrapingContainerAndLog(PDO $pdo, int $ownerId, int $li
 
     $processed = count($contacts);
     $stmt = $pdo->prepare('
-        INSERT INTO scraping_jobs (owner_user_id, container_id, list_id, source, keyword, status, current_page, max_pages, max_sites, discovered_count, processed_count, inserted_count, updated_count, skipped_count, last_message, run_type, discovery_done, created_at, started_at, updated_at, finished_at)
-        VALUES (?, ?, ?, ?, ?, "finished", 1, 0, 0, ?, ?, ?, ?, ?, ?, "ai_research", 1, ?, ?, ?, ?)
+        INSERT INTO scraping_jobs (owner_user_id, container_id, list_id, source, keyword, location_scope, target_location, status, current_page, max_pages, max_sites, discovered_count, processed_count, inserted_count, updated_count, skipped_count, last_message, run_type, discovery_done, created_at, started_at, updated_at, finished_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, "finished", 1, 0, 0, ?, ?, ?, ?, ?, ?, "ai_research", 1, ?, ?, ?, ?)
     ');
     $message = 'Predvyplneno z AI research #' . $runId . '.';
-    $stmt->execute([$ownerId, $containerId, $listId, $source, $keyword, $processed, $processed, $inserted, $updated, $skipped, $message, $now, $now, $now, $now]);
+    $stmt->execute([$ownerId, $containerId, $listId, $source, $keyword, $locationScope, $targetLocation, $processed, $processed, $inserted, $updated, $skipped, $message, $now, $now, $now, $now]);
     $jobId = (int)$pdo->lastInsertId();
     $item = $pdo->prepare('INSERT IGNORE INTO scraping_job_items (job_id, url, status, email, subject_name, website, address, message, created_at, processed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     foreach ($contacts as $contact) {
@@ -6481,8 +6484,8 @@ function ensureScrapingContainers(PDO $pdo): void
     if (!$jobs) {
         return;
     }
-    $find = $pdo->prepare('SELECT id FROM scraping_containers WHERE owner_user_id=? AND list_id=? AND source=? AND keyword=? AND status!="deleted" ORDER BY id ASC LIMIT 1');
-    $insert = $pdo->prepare('INSERT INTO scraping_containers (owner_user_id, list_id, source, keyword, status, created_at, updated_at) VALUES (?, ?, ?, ?, "active", ?, ?)');
+    $find = $pdo->prepare('SELECT id FROM scraping_containers WHERE owner_user_id=? AND list_id=? AND source=? AND keyword=? AND location_scope=? AND target_location=? AND status!="deleted" ORDER BY id ASC LIMIT 1');
+    $insert = $pdo->prepare('INSERT INTO scraping_containers (owner_user_id, list_id, source, keyword, location_scope, target_location, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, "active", ?, ?)');
     $update = $pdo->prepare('UPDATE scraping_jobs SET container_id=? WHERE id=?');
     foreach ($jobs as $job) {
         $ownerId = (int)($job['owner_user_id'] ?? 0);
@@ -6491,11 +6494,13 @@ function ensureScrapingContainers(PDO $pdo): void
             $ownerStmt->execute([(int)$job['list_id']]);
             $ownerId = (int)$ownerStmt->fetchColumn();
         }
-        $find->execute([$ownerId, (int)$job['list_id'], (string)$job['source'], (string)$job['keyword']]);
+        $locationScope = scrapingNormalizeLocationScope((string)($job['location_scope'] ?? 'cela_cr'));
+        $targetLocation = in_array($locationScope, ['cela_cr', 'zahranici'], true) ? '' : trim((string)($job['target_location'] ?? ''));
+        $find->execute([$ownerId, (int)$job['list_id'], (string)$job['source'], (string)$job['keyword'], $locationScope, $targetLocation]);
         $containerId = (int)$find->fetchColumn();
         if ($containerId === 0) {
             $created = (string)($job['created_at'] ?? date('c'));
-            $insert->execute([$ownerId, (int)$job['list_id'], (string)$job['source'], (string)$job['keyword'], $created, date('c')]);
+            $insert->execute([$ownerId, (int)$job['list_id'], (string)$job['source'], (string)$job['keyword'], $locationScope, $targetLocation, $created, date('c')]);
             $containerId = (int)$pdo->lastInsertId();
         }
         $update->execute([$containerId, (int)$job['id']]);
@@ -6562,6 +6567,16 @@ function scrapingWeekdays(): array
     ];
 }
 
+function scrapingLocationScopes(): array
+{
+    return [
+        'cela_cr' => 'Bez omezeni',
+        'konkretni_lokace' => 'Konkretni lokalita',
+        'stejne_mesto' => 'Stejne mesto',
+        'stejny_kraj' => 'Stejny kraj',
+    ];
+}
+
 function scrapingScheduleLabel(array $container): string
 {
     $time = (string)($container['schedule_time'] ?? '09:00');
@@ -6570,6 +6585,68 @@ function scrapingScheduleLabel(array $container): string
         return 'Tydne ' . ($days[scrapingScheduleWeekday($container)] ?? 'pondeli') . ' ' . $time;
     }
     return 'Denne ' . $time;
+}
+
+function scrapingNormalizeLocationScope(string $scope): string
+{
+    $scope = aiResearchNormalizeLocationScope($scope);
+    return in_array($scope, ['cela_cr', 'konkretni_lokace', 'stejne_mesto', 'stejny_kraj', 'zahranici'], true) ? $scope : 'cela_cr';
+}
+
+function scrapingTargetLocationFromPost(string $scope): string
+{
+    $location = truncatePlainText(trim(preg_replace('/\s+/', ' ', (string)($_POST['target_location'] ?? '')) ?? ''), 80);
+    $location = trim($location, " \t\n\r\0\x0B,.;:-");
+    if (in_array($scope, ['cela_cr', 'zahranici'], true)) {
+        return '';
+    }
+    if ($location === '') {
+        throw new RuntimeException('Pro omezeni na lokalitu zadej konkretni mesto, kraj nebo oblast.');
+    }
+    return $location;
+}
+
+function scrapingContainerLocationLabel(array $container): string
+{
+    $scope = scrapingNormalizeLocationScope((string)($container['location_scope'] ?? 'cela_cr'));
+    $location = trim((string)($container['target_location'] ?? ''));
+    if ($scope === 'cela_cr') {
+        return 'bez omezeni';
+    }
+    if ($scope === 'zahranici') {
+        return 'zahranici';
+    }
+    return ($location !== '' ? $location : aiResearchLocationScopeLabel($scope));
+}
+
+function scrapingLocationKey(array $row): string
+{
+    $scope = scrapingNormalizeLocationScope((string)($row['location_scope'] ?? 'cela_cr'));
+    $location = $scope === 'cela_cr' || $scope === 'zahranici' ? '' : normalizeScrapingKeyword((string)($row['target_location'] ?? ''));
+    return $scope . '|' . $location;
+}
+
+function scrapingSearchLocation(array $row): string
+{
+    $scope = scrapingNormalizeLocationScope((string)($row['location_scope'] ?? 'cela_cr'));
+    return in_array($scope, ['cela_cr', 'zahranici'], true) ? '' : trim((string)($row['target_location'] ?? ''));
+}
+
+function scrapingContactMatchesLocation(array $job, array $contact): bool
+{
+    $scope = scrapingNormalizeLocationScope((string)($job['location_scope'] ?? 'cela_cr'));
+    if ($scope === 'cela_cr') {
+        return true;
+    }
+    if ($scope === 'zahranici') {
+        return false;
+    }
+    $location = aiResearchFoldText((string)($job['target_location'] ?? ''));
+    if ($location === '') {
+        return true;
+    }
+    $target = aiResearchFoldText((string)($contact['address'] ?? '') . ' ' . (string)($contact['source_label'] ?? '') . ' ' . (string)($contact['source_url'] ?? '') . ' ' . (string)($contact['website'] ?? ''));
+    return str_contains($target, $location);
 }
 
 function scrapingScheduleIsDue(array $container): bool
@@ -6593,7 +6670,7 @@ function scrapingScheduleIsDue(array $container): bool
 
 function scrapingJobParamKey(array $job): string
 {
-    return (int)($job['owner_user_id'] ?? 0) . '|' . (int)($job['list_id'] ?? 0) . '|' . (string)($job['source'] ?? '') . '|' . normalizeScrapingKeyword((string)($job['keyword'] ?? ''));
+    return (int)($job['owner_user_id'] ?? 0) . '|' . (int)($job['list_id'] ?? 0) . '|' . (string)($job['source'] ?? '') . '|' . normalizeScrapingKeyword((string)($job['keyword'] ?? '')) . '|' . scrapingLocationKey($job);
 }
 
 function scrapingRunPriority(array $job): array
@@ -6611,11 +6688,12 @@ function scrapingRunPriority(array $job): array
 
 function activeScrapingRunForParams(PDO $pdo, array $container): int
 {
-    $stmt = $pdo->prepare('SELECT id, keyword FROM scraping_jobs WHERE owner_user_id=? AND list_id=? AND source=? AND status IN ("queued","running","paused") ORDER BY id DESC');
+    $stmt = $pdo->prepare('SELECT id, keyword, location_scope, target_location FROM scraping_jobs WHERE owner_user_id=? AND list_id=? AND source=? AND status IN ("queued","running","paused") ORDER BY id DESC');
     $stmt->execute([(int)($container['owner_user_id'] ?? 0), (int)$container['list_id'], (string)$container['source']]);
     $wanted = normalizeScrapingKeyword((string)$container['keyword']);
+    $wantedLocation = scrapingLocationKey($container);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $job) {
-        if (normalizeScrapingKeyword((string)$job['keyword']) === $wanted) {
+        if (normalizeScrapingKeyword((string)$job['keyword']) === $wanted && scrapingLocationKey($job) === $wantedLocation) {
             return (int)$job['id'];
         }
     }
@@ -6669,19 +6747,22 @@ function createScrapingContainer(PDO $pdo): string
     if ($keyword === '') {
         throw new RuntimeException('Zadej klicove slovo pro scraping.');
     }
+    $locationScope = scrapingNormalizeLocationScope((string)($_POST['location_scope'] ?? 'cela_cr'));
+    $targetLocation = scrapingTargetLocationFromPost($locationScope);
     $listId = selectedPostListId($pdo);
     $ownerId = currentAppUserId($pdo);
-    $find = $pdo->prepare('SELECT id, keyword FROM scraping_containers WHERE list_id=? AND source=? AND owner_user_id=? AND status!="deleted" ORDER BY id ASC');
+    $find = $pdo->prepare('SELECT id, keyword, location_scope, target_location FROM scraping_containers WHERE list_id=? AND source=? AND owner_user_id=? AND status!="deleted" ORDER BY id ASC');
     $find->execute([$listId, $source, $ownerId]);
     $wanted = normalizeScrapingKeyword($keyword);
+    $wantedLocation = scrapingLocationKey(['location_scope' => $locationScope, 'target_location' => $targetLocation]);
     foreach ($find->fetchAll(PDO::FETCH_ASSOC) as $existing) {
-        if (normalizeScrapingKeyword((string)$existing['keyword']) === $wanted) {
+        if (normalizeScrapingKeyword((string)$existing['keyword']) === $wanted && scrapingLocationKey($existing) === $wantedLocation) {
             return 'Scraping kontejner se stejnymi parametry uz existuje.';
         }
     }
     $now = date('c');
-    $stmt = $pdo->prepare('INSERT INTO scraping_containers (owner_user_id, list_id, source, keyword, status, created_at, updated_at) VALUES (?, ?, ?, ?, "active", ?, ?)');
-    $stmt->execute([$ownerId, $listId, $source, $keyword, $now, $now]);
+    $stmt = $pdo->prepare('INSERT INTO scraping_containers (owner_user_id, list_id, source, keyword, location_scope, target_location, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, "active", ?, ?)');
+    $stmt->execute([$ownerId, $listId, $source, $keyword, $locationScope, $targetLocation, $now, $now]);
     return 'Scraping kontejner vytvoren. Spust novy beh ve sloupci Akce.';
 }
 
@@ -6715,8 +6796,10 @@ function createScrapingRun(PDO $pdo, array $container, string $message = 'Beh ce
     }
     $runType = $runType === 'scheduled' ? 'scheduled' : 'manual';
     $now = date('c');
-    $stmt = $pdo->prepare('INSERT INTO scraping_jobs (owner_user_id, container_id, list_id, source, keyword, status, max_pages, max_sites, last_message, run_type, discovery_done, created_at, updated_at) VALUES (?, ?, ?, ?, ?, "queued", ?, ?, ?, ?, 0, ?, ?)');
-    $stmt->execute([(int)($container['owner_user_id'] ?? 0), (int)$container['id'], (int)$container['list_id'], (string)$container['source'], (string)$container['keyword'], 0, 0, $message, $runType, $now, $now]);
+    $locationScope = scrapingNormalizeLocationScope((string)($container['location_scope'] ?? 'cela_cr'));
+    $targetLocation = in_array($locationScope, ['cela_cr', 'zahranici'], true) ? '' : trim((string)($container['target_location'] ?? ''));
+    $stmt = $pdo->prepare('INSERT INTO scraping_jobs (owner_user_id, container_id, list_id, source, keyword, location_scope, target_location, status, max_pages, max_sites, last_message, run_type, discovery_done, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, "queued", ?, ?, ?, ?, 0, ?, ?)');
+    $stmt->execute([(int)($container['owner_user_id'] ?? 0), (int)$container['id'], (int)$container['list_id'], (string)$container['source'], (string)$container['keyword'], $locationScope, $targetLocation, 0, 0, $message, $runType, $now, $now]);
     return (int)$pdo->lastInsertId();
 }
 
@@ -6756,16 +6839,20 @@ function saveScrapingSchedule(PDO $pdo, int $containerId): string
     $newTime = sprintf('%02d:%02d', $hour, $minute);
     $frequency = in_array((string)($_POST['schedule_frequency'] ?? 'daily'), ['daily', 'weekly'], true) ? (string)$_POST['schedule_frequency'] : 'daily';
     $weekday = max(1, min(7, (int)($_POST['schedule_weekday'] ?? 1)));
+    $locationScope = scrapingNormalizeLocationScope((string)($_POST['location_scope'] ?? ($container['location_scope'] ?? 'cela_cr')));
+    $targetLocation = scrapingTargetLocationFromPost($locationScope);
     $changed = $newTime !== (string)($container['schedule_time'] ?? '')
         || $frequency !== scrapingScheduleFrequency($container)
-        || $weekday !== scrapingScheduleWeekday($container);
+        || $weekday !== scrapingScheduleWeekday($container)
+        || $locationScope !== scrapingNormalizeLocationScope((string)($container['location_scope'] ?? 'cela_cr'))
+        || $targetLocation !== trim((string)($container['target_location'] ?? ''));
     if ($changed) {
-        $stmt = $pdo->prepare('UPDATE scraping_containers SET schedule_time=?, schedule_frequency=?, schedule_weekday=?, last_scheduled_at="", updated_at=? WHERE id=?');
-        $stmt->execute([$newTime, $frequency, $weekday, date('c'), $containerId]);
+        $stmt = $pdo->prepare('UPDATE scraping_containers SET schedule_time=?, schedule_frequency=?, schedule_weekday=?, location_scope=?, target_location=?, last_scheduled_at="", updated_at=? WHERE id=?');
+        $stmt->execute([$newTime, $frequency, $weekday, $locationScope, $targetLocation, date('c'), $containerId]);
         return 'Plan scrapingu ulozen. Posledni planovane spusteni bylo resetovano, aby se nove nastaveni mohlo vyhodnotit znovu.';
     }
-    $stmt = $pdo->prepare('UPDATE scraping_containers SET schedule_time=?, schedule_frequency=?, schedule_weekday=?, updated_at=? WHERE id=?');
-    $stmt->execute([$newTime, $frequency, $weekday, date('c'), $containerId]);
+    $stmt = $pdo->prepare('UPDATE scraping_containers SET schedule_time=?, schedule_frequency=?, schedule_weekday=?, location_scope=?, target_location=?, updated_at=? WHERE id=?');
+    $stmt->execute([$newTime, $frequency, $weekday, $locationScope, $targetLocation, date('c'), $containerId]);
     return 'Plan scrapingu ulozen.';
 }
 
@@ -7243,7 +7330,7 @@ function discoverScrapingPage(PDO $pdo, array $job): string
     $successfulFetch = false;
     $hasNextPage = false;
     $directProcessed = 0;
-    foreach (scrapingSearchUrls((string)$job['source'], (string)$job['keyword'], $page) as $search) {
+    foreach (scrapingSearchUrls((string)$job['source'], (string)$job['keyword'], $page, scrapingSearchLocation($job)) as $search) {
         try {
             $searchResponse = fetchScrapingSearch($search);
             $html = $searchResponse['html'];
@@ -7446,6 +7533,12 @@ function recordScrapingContactItem(PDO $pdo, array $job, array $contact, string 
     }
     $contact['source_label'] = contactSourceFromScrapingJob($job);
     $contact['source_url'] = $url;
+    if (!scrapingContactMatchesLocation($job, $contact)) {
+        $message = 'Preskoceno: kontakt neodpovida lokacnimu filtru ' . scrapingContainerLocationLabel($job) . '.';
+        markScrapingItem($pdo, $itemId, 'skipped', $contact, $message);
+        incrementScrapingJob($pdo, (int)$job['id'], 'processed_count', 'skipped_count', $message . ' ' . $contact['email']);
+        return true;
+    }
     $upsert = upsertRecipient($pdo, (int)$job['list_id'], $contact);
     $result = $upsert['result'];
     $message = $upsert['message'] !== '' ? $upsert['message'] : scrapingResultMessage($result);
@@ -7490,6 +7583,12 @@ function processScrapingItem(PDO $pdo, array $job, array $item): string
         }
         $contact['source_label'] = contactSourceFromScrapingJob($job);
         $contact['source_url'] = (string)$item['url'];
+        if (!scrapingContactMatchesLocation($job, $contact)) {
+            $message = 'Preskoceno: kontakt neodpovida lokacnimu filtru ' . scrapingContainerLocationLabel($job) . '.';
+            markScrapingItem($pdo, (int)$item['id'], 'skipped', $contact, $message);
+            incrementScrapingJob($pdo, (int)$job['id'], 'processed_count', 'skipped_count', $message . ' ' . $contact['email']);
+            return 'Mimo lokalitu: ' . $contact['email'];
+        }
         $upsert = upsertRecipient($pdo, (int)$job['list_id'], $contact);
         $result = $upsert['result'];
         $message = $upsert['message'] !== '' ? $upsert['message'] : scrapingResultMessage($result);
@@ -7623,10 +7722,21 @@ function scrapingSourceIsActive(string $source): bool
     return array_key_exists($source, scrapingSources());
 }
 
-function scrapingSearchUrls(string $source, string $keyword, int $page): array
+function scrapingSearchQueryText(string $keyword, string $location = ''): string
 {
+    $keyword = normalizeScrapingKeyword($keyword);
+    $location = truncatePlainText(trim(preg_replace('/\s+/', ' ', $location) ?? $location), 80);
+    if ($location === '') {
+        return $keyword;
+    }
+    return trim($keyword . ' ' . $location);
+}
+
+function scrapingSearchUrls(string $source, string $keyword, int $page, string $location = ''): array
+{
+    $queryText = scrapingSearchQueryText($keyword, $location);
     if ($source === 'firmy_cz') {
-        $query = ['q' => $keyword];
+        $query = ['q' => $queryText];
         if ($page > 1) {
             $query['page'] = $page;
         }
@@ -7639,7 +7749,7 @@ function scrapingSearchUrls(string $source, string $keyword, int $page): array
     }
 
     if ($source === 'herold_at') {
-        $slug = heroldKeywordSlug($keyword);
+        $slug = heroldKeywordSlug($queryText);
         $urls = [
             [
                 'label' => 'Herold.at',
@@ -7665,13 +7775,13 @@ function scrapingSearchUrls(string $source, string $keyword, int $page): array
         return [
             [
                 'label' => 'Zoznam.sk',
-                'url' => 'https://www.zoznam.sk/hladaj.fcgi?' . zoznamSearchQuery($keyword, $page),
+                'url' => 'https://www.zoznam.sk/hladaj.fcgi?' . zoznamSearchQuery($queryText, $page),
             ],
         ];
     }
 
     if ($source === 'dastelefonbuch_de') {
-        $path = '/Suche/' . rawurlencode(normalizeScrapingKeyword($keyword));
+        $path = '/Suche/' . rawurlencode($queryText);
         if ($page > 1) {
             $path .= '/' . $page;
         }
@@ -7685,7 +7795,7 @@ function scrapingSearchUrls(string $source, string $keyword, int $page): array
 
     if ($source === 'dasoertliche_de') {
         $query = [
-            'kw' => normalizeScrapingKeyword($keyword),
+            'kw' => $queryText,
             'form_name' => 'search_nat',
         ];
         if ($page > 1) {
@@ -7700,7 +7810,7 @@ function scrapingSearchUrls(string $source, string $keyword, int $page): array
     }
 
     if ($source === 'gelbeseiten_de') {
-        $keyword = normalizeScrapingKeyword($keyword);
+        $keyword = $queryText;
         if ($page === 1) {
             return [
                 [
@@ -7727,7 +7837,7 @@ function scrapingSearchUrls(string $source, string $keyword, int $page): array
     }
 
     if ($source === 'pkt_pl') {
-        $path = '/szukaj/' . rawurlencode(normalizeScrapingKeyword($keyword));
+        $path = '/szukaj/' . rawurlencode($queryText);
         if ($page > 1) {
             $path .= '/' . $page;
         }
@@ -7740,7 +7850,7 @@ function scrapingSearchUrls(string $source, string $keyword, int $page): array
     }
 
     if ($source === 'panoramafirm_pl') {
-        $path = '/' . rawurlencode(normalizeScrapingKeyword($keyword));
+        $path = '/' . rawurlencode($queryText);
         if ($page > 1) {
             $path .= '/firmy,' . $page . '.html';
         }
@@ -7756,7 +7866,7 @@ function scrapingSearchUrls(string $source, string $keyword, int $page): array
         $query = [
             'pagesize' => 20,
             'q' => normalizeScrapingKeyword($keyword),
-            'qn' => 'United States',
+            'qn' => $location !== '' ? $location : 'United States',
         ];
         if ($page > 1) {
             $query['start'] = ($page - 1) * 20;
@@ -7777,7 +7887,7 @@ function scrapingSearchUrls(string $source, string $keyword, int $page): array
         return [
             [
                 'label' => 'YellowPages.ca',
-                'url' => 'https://www.yellowpages.ca/search/si/' . max(1, $page) . '/' . rawurlencode($keyword) . '/Canada',
+                'url' => 'https://www.yellowpages.ca/search/si/' . max(1, $page) . '/' . rawurlencode($keyword) . '/' . rawurlencode($location !== '' ? $location : 'Canada'),
             ],
         ];
     }
@@ -9341,6 +9451,10 @@ function scrapingJobLogMessage(array $job): string
 function logScrapingImportRun(PDO $pdo, array $job): void
 {
     $fileName = 'scraping: ' . scrapingSourceLabel((string)$job['source']) . ' / ' . $job['keyword'];
+    $locationLabel = scrapingContainerLocationLabel($job);
+    if ($locationLabel !== 'bez omezeni') {
+        $fileName .= ' / ' . $locationLabel;
+    }
     $stmt = $pdo->prepare('INSERT INTO import_runs (owner_user_id, list_id, list_name, file_name, inserted_count, updated_count, skipped_count, total_rows, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     $stmt->execute([
         (int)($job['owner_user_id'] ?? 0),
@@ -13367,15 +13481,16 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <p>Prehled behu, ktere prave bezi nebo cekaji ve fronte napric vsemi scraping kontejnery.</p>
             </div>
         </div>
-        <table class="active-jobs-table"><thead><tr><th>ID</th><th>Zdroj</th><th>Klicove slovo</th><th>Databaze</th><th>Stav</th><th>Spusteno</th><th>Zprac.</th><th>Vlozeno</th><th>Aktualiz.</th><th>Presk.</th><th>Vysledek</th><th>Akce</th></tr></thead><tbody>
+        <table class="active-jobs-table"><thead><tr><th>ID</th><th>Zdroj</th><th>Klicove slovo</th><th>Lokalita</th><th>Databaze</th><th>Stav</th><th>Spusteno</th><th>Zprac.</th><th>Vlozeno</th><th>Aktualiz.</th><th>Presk.</th><th>Vysledek</th><th>Akce</th></tr></thead><tbody>
         <?php if (!$activeScrapingJobs): ?>
-            <tr><td colspan="12">Ted nebezi ani neceka zadny scraping beh.</td></tr>
+            <tr><td colspan="13">Ted nebezi ani neceka zadny scraping beh.</td></tr>
         <?php endif; ?>
         <?php foreach ($activeScrapingJobs as $job): ?>
             <tr class="link-row" data-href="<?= h(routeUrl('scraping') . '&container_id=' . (int)$job['container_id']) ?>" tabindex="0">
                 <td><?= h((string)$job['id']) ?></td>
                 <td><?= h(scrapingSourceLabel((string)$job['display_source'])) ?></td>
                 <td><?= h($job['display_keyword']) ?></td>
+                <td><?= h(scrapingContainerLocationLabel($job)) ?></td>
                 <td><?= h($job['list_name'] ?: 'Vychozi seznam') ?></td>
                 <td><?= statusBadge(scrapingStatusLabel((string)$job['status'], 'job')) ?></td>
                 <td><?= h(formatDateTime((string)($job['started_at'] ?: $job['created_at']))) ?></td>
@@ -13403,15 +13518,16 @@ function renderApp(PDO $pdo, ?array $flash): void
             </div>
             <button type="button" data-dialog-open="new-scraping-dialog">Novy scraping</button>
         </div>
-        <table class="container-table"><thead><tr><th>ID</th><th>Zdroj</th><th>Klicove slovo</th><th>Databaze</th><th>Spusteni</th><th>Posledni beh</th><th>Vlozeno</th><th>Aktualizovano</th><th>Akce</th></tr></thead><tbody>
+        <table class="container-table"><thead><tr><th>ID</th><th>Zdroj</th><th>Klicove slovo</th><th>Lokalita</th><th>Databaze</th><th>Spusteni</th><th>Posledni beh</th><th>Vlozeno</th><th>Aktualizovano</th><th>Akce</th></tr></thead><tbody>
         <?php if (!$scrapingContainers): ?>
-            <tr><td colspan="9">Zatim neni zalozeny zadny scraping kontejner.</td></tr>
+            <tr><td colspan="10">Zatim neni zalozeny zadny scraping kontejner.</td></tr>
         <?php endif; ?>
         <?php foreach ($scrapingContainers as $container): ?>
             <tr class="link-row" data-href="<?= h(routeUrl('scraping') . '&container_id=' . (int)$container['id']) ?>" tabindex="0">
                 <td><?= h((string)$container['id']) ?></td>
                 <td><?= h(scrapingSourceLabel((string)$container['source'])) ?></td>
                 <td><?= h($container['keyword']) ?></td>
+                <td><?= h(scrapingContainerLocationLabel($container)) ?></td>
                 <td><?= h($container['list_name'] ?: 'Vychozi seznam') ?></td>
                 <td>
                     <div class="schedule-status">
@@ -13445,6 +13561,16 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <button type="button" class="secondary icon" data-dialog-close>Zavrit</button>
                             </div>
                             <p><?= h(scrapingSourceLabel((string)$container['source'])) ?> / <?= h($container['keyword']) ?> / <?= h($container['list_name'] ?: 'Vychozi seznam') ?></p>
+                            <div class="form-grid two">
+                                <label>Omezeni lokace
+                                    <select name="location_scope">
+                                        <?php foreach (scrapingLocationScopes() as $scopeKey => $scopeLabel): ?>
+                                            <option value="<?= h($scopeKey) ?>" <?= scrapingNormalizeLocationScope((string)($container['location_scope'] ?? 'cela_cr')) === $scopeKey ? 'selected' : '' ?>><?= h($scopeLabel) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </label>
+                                <label>Lokalita<input name="target_location" value="<?= h((string)($container['target_location'] ?? '')) ?>" placeholder="Napriklad Praha, Brno, Wien"></label>
+                            </div>
                             <label>Frekvence
                                 <select name="schedule_frequency">
                                     <option value="daily" <?= scrapingScheduleFrequency($container) === 'daily' ? 'selected' : '' ?>>Denne</option>
@@ -13482,8 +13608,18 @@ function renderApp(PDO $pdo, ?array $flash): void
                 </select>
             </label>
             <label>Klicove slovo<input name="keyword" placeholder="Napriklad: masaze, massage, Massagen, masaz" required></label>
+            <div class="form-grid two">
+                <label>Omezeni lokace
+                    <select name="location_scope">
+                        <?php foreach (scrapingLocationScopes() as $scopeKey => $scopeLabel): ?>
+                            <option value="<?= h($scopeKey) ?>"><?= h($scopeLabel) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label>Lokalita<input name="target_location" placeholder="Napriklad Praha, Brno, Wien"></label>
+            </div>
             <label>Cilova databaze kontaktu<select name="list_id"><?php foreach ($lists as $list) echo '<option value="'.h((string)$list['id']).'" '.($selectedListId===(int)$list['id']?'selected':'').'>'.h($list['name']).'</option>'; ?></select></label>
-            <div class="note">Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Podporovane jsou Firmy.cz, Herold.at, Zoznam.sk, DasTelefonbuch.de, DasOertliche.de, GelbeSeiten.de, Pkt.pl a PanoramaFirm.pl. Z nalezenych detailu pak hleda email, nazev, web a adresu.</div>
+            <div class="note">Backend prochazi stranky vysledku postupne, dokud zdroj vraci dalsi zaznamy. Pokud zadas lokalitu, pouzije se ve vyhledavani a zaroven jako filtr pred ulozenim kontaktu do cilove databaze uzivatele. Nalezene, ale neodpovidajici kontakty zustanou v logu scrapingu jako preskocene.</div>
             <div class="modal-actions">
                 <button>Vytvorit kontejner</button>
             </div>
@@ -13494,7 +13630,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         <div class="section-header">
             <div>
                 <h2>Log scraping behu</h2>
-                <p><?= h(scrapingSourceLabel((string)$selectedScrapingContainer['source']) . ' / ' . $selectedScrapingContainer['keyword'] . ' / ' . ($selectedScrapingContainer['list_name'] ?: 'Vychozi seznam')) ?></p>
+                <p><?= h(scrapingSourceLabel((string)$selectedScrapingContainer['source']) . ' / ' . $selectedScrapingContainer['keyword'] . ' / ' . scrapingContainerLocationLabel($selectedScrapingContainer) . ' / ' . ($selectedScrapingContainer['list_name'] ?: 'Vychozi seznam')) ?></p>
             </div>
             <a class="button small secondary" href="<?= h(routeUrl('scraping')) ?>">Zpet na vsechny kontejnery</a>
         </div>
