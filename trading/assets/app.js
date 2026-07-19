@@ -1449,7 +1449,7 @@ function renderBotState(botState) {
   const trades = Array.isArray(botState.trades) ? botState.trades : [];
   const closedTrades = trades.filter(isClosedTrade);
   const openTrades = trades.filter((trade) => !isClosedTrade(trade));
-  const openRiskReward = averageRiskReward(openTrades, tradeRiskReward);
+  const portfolioRiskReward = averageRiskReward(trades, tradeRiskReward);
   const periodDays = portfolioPeriodDays(botState, trades);
   const annualized = annualizedPortfolioReturn(portfolio, periodDays);
   const totalPnl = Number(portfolio.totalPnlUsdc || 0);
@@ -1481,11 +1481,11 @@ function renderBotState(botState) {
   els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0));
   els.portfolioFree.textContent = `${money(freeCapital)} free`;
   if (els.portfolioRr) {
-    els.portfolioRr.textContent = riskReward(openRiskReward);
-    els.portfolioRr.className = riskRewardClass(openRiskReward);
+    els.portfolioRr.textContent = riskReward(portfolioRiskReward);
+    els.portfolioRr.className = riskRewardClass(portfolioRiskReward);
   }
   if (els.portfolioRrNote) {
-    els.portfolioRrNote.textContent = openTrades.length ? `avg open, ${openTrades.length} trades` : "no open trades";
+    els.portfolioRrNote.textContent = trades.length ? `avg all, ${trades.length} trades` : "no trades";
   }
 
   els.botStatus.innerHTML = `
@@ -1648,9 +1648,9 @@ function renderLiveState(liveState) {
     ...positions,
     ...openOrders.map(normalizeLiveOpenOrderForTable),
   ];
-  const openRiskReward = averageRiskReward(openedRows, tradeRiskReward);
   const activity = liveActivity(liveState);
   const closedTrades = liveClosedTrades(liveState);
+  const portfolioRiskReward = averageRiskReward([...openedRows, ...closedTrades], tradeRiskReward);
   const sync = liveState.sync || {};
   const reconciliation = liveState.reconciliation || {};
   const reconciliationGaps = Number(reconciliation.orphanedCount || 0);
@@ -1700,11 +1700,12 @@ function renderLiveState(liveState) {
   els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || marketValue || 0));
   els.portfolioFree.textContent = Number.isFinite(cash) ? `${money(cash)} cash` : "cash not available";
   if (els.portfolioRr) {
-    els.portfolioRr.textContent = riskReward(openRiskReward);
-    els.portfolioRr.className = riskRewardClass(openRiskReward);
+    els.portfolioRr.textContent = riskReward(portfolioRiskReward);
+    els.portfolioRr.className = riskRewardClass(portfolioRiskReward);
   }
   if (els.portfolioRrNote) {
-    els.portfolioRrNote.textContent = openedRows.length ? `avg open, ${openedRows.length} rows` : "no open rows";
+    const portfolioRows = openedRows.length + closedTrades.length;
+    els.portfolioRrNote.textContent = portfolioRows ? `avg all, ${portfolioRows} rows` : "no rows";
   }
 
   if (els.accountSummary) {
