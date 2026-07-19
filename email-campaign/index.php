@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-const APP_VERSION = '2026-07-19-research-service-pages';
+const APP_VERSION = '2026-07-19-research-strategy-score';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 
@@ -1256,9 +1256,165 @@ function onboardingNormalizeLeadPlan(array $json, array $fallback): array
     return $plan;
 }
 
+function aiResearchNormalizeStringList(mixed $values, int $limit = 8, int $maxLength = 180): array
+{
+    $out = [];
+    foreach ((array)$values as $value) {
+        if (is_array($value)) {
+            $value = (string)($value['text'] ?? $value['value'] ?? $value['name'] ?? json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        }
+        $value = truncatePlainText(trim((string)$value), $maxLength);
+        if ($value !== '' && !in_array($value, $out, true)) {
+            $out[] = $value;
+        }
+        if (count($out) >= $limit) {
+            break;
+        }
+    }
+    return $out;
+}
+
+function aiResearchNormalizeEvidenceSummary(array $json): array
+{
+    $raw = is_array($json['evidence_summary'] ?? null) ? $json['evidence_summary'] : [];
+    $claimKeys = ['claimed_by_website', 'website_claims', 'claimed', 'claims'];
+    $supportedKeys = ['supported_by_specific_pages', 'supported', 'proof', 'evidence'];
+    $inferenceKeys = ['business_inferences', 'inferences', 'commercial_inference'];
+    $pick = static function (array $keys) use ($raw, $json): array {
+        foreach ($keys as $key) {
+            if (isset($raw[$key])) {
+                return aiResearchNormalizeStringList($raw[$key], 5, 220);
+            }
+            if (isset($json[$key])) {
+                return aiResearchNormalizeStringList($json[$key], 5, 220);
+            }
+        }
+        return [];
+    };
+    return [
+        'claimed_by_website' => $pick($claimKeys),
+        'supported_by_specific_pages' => $pick($supportedKeys),
+        'business_inferences' => $pick($inferenceKeys),
+    ];
+}
+
+function aiResearchNormalizeCandidateSegments(mixed $segments): array
+{
+    $out = [];
+    foreach ((array)$segments as $segment) {
+        if (is_string($segment)) {
+            $name = truncatePlainText(trim($segment), 160);
+            if ($name === '') {
+                continue;
+            }
+            $out[] = ['segment' => $name, 'score' => null, 'reason' => ''];
+        } elseif (is_array($segment)) {
+            $name = truncatePlainText(trim((string)($segment['segment'] ?? $segment['name'] ?? $segment['audience'] ?? '')), 160);
+            if ($name === '') {
+                continue;
+            }
+            $score = isset($segment['score']) ? max(0, min(100, (int)$segment['score'])) : null;
+            $criteria = is_array($segment['criteria'] ?? null) ? $segment['criteria'] : [];
+            foreach (['offer_fit', 'urgency', 'budget_value', 'repeatability', 'targeting_ease', 'sales_cycle', 'cost_pass_through', 'legal_risk'] as $key) {
+                if (isset($segment[$key]) && !isset($criteria[$key])) {
+                    $criteria[$key] = $segment[$key];
+                }
+            }
+            $out[] = [
+                'segment' => $name,
+                'score' => $score,
+                'use_case' => truncatePlainText(trim((string)($segment['use_case'] ?? '')), 220),
+                'decision_maker' => truncatePlainText(trim((string)($segment['decision_maker'] ?? '')), 160),
+                'keyword' => aiResearchNormalizeCatalogKeyword((string)($segment['keyword'] ?? $segment['scraping_keyword'] ?? '')),
+                'reason' => truncatePlainText(trim((string)($segment['reason'] ?? $segment['rationale'] ?? '')), 260),
+                'criteria' => $criteria,
+            ];
+        }
+        if (count($out) >= 6) {
+            break;
+        }
+    }
+    return $out;
+}
+
+function aiResearchNormalizeRejectedAlternatives(mixed $alternatives): array
+{
+    $out = [];
+    foreach ((array)$alternatives as $alternative) {
+        if (is_array($alternative)) {
+            $segment = truncatePlainText(trim((string)($alternative['segment'] ?? $alternative['name'] ?? '')), 160);
+            $reason = truncatePlainText(trim((string)($alternative['reason'] ?? $alternative['why'] ?? '')), 260);
+        } else {
+            $segment = truncatePlainText(trim((string)$alternative), 160);
+            $reason = '';
+        }
+        if ($segment !== '') {
+            $out[] = ['segment' => $segment, 'reason' => $reason];
+        }
+        if (count($out) >= 4) {
+            break;
+        }
+    }
+    return $out;
+}
+
+function aiResearchApplyStrategicFields(array $plan, array $json): array
+{
+    foreach ([
+        'primary_segment' => 180,
+        'main_use_case' => 320,
+        'decision_maker' => 180,
+        'payer' => 180,
+        'user_role' => 180,
+        'reseller_channel' => 220,
+        'confidence_notes' => 260,
+    ] as $key => $maxLength) {
+        $value = truncatePlainText(trim((string)($json[$key] ?? '')), $maxLength);
+        if ($value !== '') {
+            $plan[$key] = $value;
+        }
+    }
+    $confidence = isset($json['confidence']) ? (int)$json['confidence'] : (isset($json['confidence_percent']) ? (int)$json['confidence_percent'] : null);
+    if ($confidence !== null) {
+        $plan['confidence'] = max(0, min(100, $confidence));
+    }
+    $evidence = aiResearchNormalizeEvidenceSummary($json);
+    if ($evidence['claimed_by_website'] || $evidence['supported_by_specific_pages'] || $evidence['business_inferences']) {
+        $plan['evidence_summary'] = $evidence;
+    }
+    $candidateSegments = aiResearchNormalizeCandidateSegments($json['candidate_segments'] ?? $json['scored_segments'] ?? []);
+    if ($candidateSegments) {
+        $plan['candidate_segments'] = $candidateSegments;
+    }
+    $rejectedAlternatives = aiResearchNormalizeRejectedAlternatives($json['rejected_alternatives'] ?? []);
+    if ($rejectedAlternatives) {
+        $plan['rejected_alternatives'] = $rejectedAlternatives;
+    }
+    $secondaryKeywords = aiResearchNormalizeStringList($json['secondary_keywords'] ?? $json['additional_keywords'] ?? [], 6, 120);
+    if ($secondaryKeywords) {
+        $plan['secondary_keywords'] = array_values(array_filter(array_map('aiResearchNormalizeCatalogKeyword', $secondaryKeywords)));
+    }
+    return $plan;
+}
+
 function onboardingFallbackLeadPlan(string $businessType): array
 {
     $value = aiResearchFoldText($businessType);
+    if (preg_match('/osint|due diligence|dohledav|majet|pravni|advokat|spor|spory|pohledav|insolven|podvod|aml|kyc|kyt|blockchain|forenz|reputac|vysetrov|intelligence|krypto/i', $value)) {
+        return [
+            'audience_label' => 'advokatni kancelare pro obchodni spory, vymahani pohledavek a insolvence',
+            'rationale' => 'Tento segment resi pripady, kde maji kvalitni verejne dohledane informace primou financni hodnotu: majetek dluznika, skryte vazby, dukazy pro spor nebo prevereni protistrany. Zakazky jsou pripadove, nalehave a casto se opakuji; naklad lze obvykle zahrnout do sluzeb pro klienta.',
+            'email_angle' => 'Zakazkove OSINT setreni a podklady pro pravni spory, vymahani pohledavek a insolvencni pripady.',
+            'target_segments' => ['advokatni kancelare pro obchodni spory', 'vymahani pohledavek', 'insolvencni spravci', 'advokati pro hospodarskou kriminalitu', 'financni instituce'],
+            'candidate_terms' => ['vymahani pohledavek', 'insolvencni spravce', 'advokatni kancelar', 'advokatni kancelar insolvence', 'advokat obchodni spory'],
+            'scraping_queries' => [
+                ['source' => 'firmy_cz', 'keyword' => 'vymahani pohledavek', 'why' => 'prime napojeni na dohledavani majetku, prevereni protistrany a dukazy pro spor'],
+                ['source' => 'firmy_cz', 'keyword' => 'insolvencni spravce', 'why' => 'insolvencni a pohledavkove pripady mohou opakovane potrebovat dohledavani majetku a vazeb'],
+                ['source' => 'firmy_cz', 'keyword' => 'advokatni kancelar insolvence', 'why' => 'specializovane kancelare maji vyssi hodnotu pripadu a rozhodovaci pravomoc'],
+            ],
+            'filters' => ['Preferovat weby, ktere uvadeji obchodni spory, vymahani pohledavek, insolvence, exekuce, zastupovani veritelu nebo hospodarskou kriminalitu.', 'Vyraď poradny zaměřené jen na oddlužení spotřebitelů a obecné kanceláře bez relevantní specializace.'],
+        ];
+    }
     if (preg_match('/textil|odev|odevy|uniform|pracovn|reklamn|golf|hotel|lekar|lazn/i', $value)) {
         return [
             'audience_label' => 'hotely, golfove kluby, ordinace, lazne a stavebni firmy, ktere potrebuji pracovni nebo reprezentativni textil',
@@ -1789,12 +1945,27 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
 function aiResearchFallbackMarketPlans(array $seed, array $basePlan): array
 {
     $source = aiResearchDefaultSourceForSeed($seed);
-    $terms = aiResearchFallbackTerms(
-        (string)($seed['subject_name'] ?? ''),
+    $planTerms = [];
+    foreach ((array)($basePlan['scraping_queries'] ?? []) as $query) {
+        if (is_array($query)) {
+            $planTerms[] = (string)($query['keyword'] ?? '');
+        }
+    }
+    $planTerms = array_merge(
+        $planTerms,
+        (array)($basePlan['candidate_terms'] ?? []),
+        (array)($basePlan['secondary_keywords'] ?? [])
+    );
+    $terms = array_merge($planTerms, aiResearchFallbackTerms(
+        (string)($seed['subject_name'] ?? '') . ' '
+            . (string)($basePlan['business_understanding'] ?? '') . ' '
+            . (string)($basePlan['targeting_reason'] ?? '') . ' '
+            . (string)($basePlan['main_use_case'] ?? '') . ' '
+            . implode(' ', (array)($basePlan['filters'] ?? [])),
         (string)($seed['website'] ?? ''),
         (string)($seed['address'] ?? ''),
         aiResearchSeedCountry($seed)
-    );
+    ));
     $plans = [];
     foreach (array_chunk(array_values(array_unique($terms)), 3) as $chunk) {
         $queries = [];
@@ -1837,9 +2008,11 @@ function aiResearchAlternativePlans(array $config, array $seed, array $basePlan,
         . "Predchozi plan: " . json_encode($basePlan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Seed country: " . $seedCountry . ", preferovany source: " . $source . ". "
         . "Zustav ve stejne zemi a u lokalni sluzby ve stejnem meste nebo okoli. Nevracej Prahu pro rakousky/nemecky/slovensky/polsky seed. "
-        . "Keyword je konkretni katalogovy dotaz typu profese/kategorie + lokalita, ne popis potreby. "
+        . "Nezmen segment nahodne. Znovu posud 4-6 kandidatskych segmentu podle shody s nabidkou, nalehavosti, rozpoctu, opakovatelnosti, presnosti databaze, delky prodeje, moznosti prenest naklad a rizika. "
+        . "Keyword je konkretni katalogovy dotaz typu profese/kategorie + lokalita, ne popis potreby. Nesmí byt tak siroky, ze vetsina vysledku nebude odpovidat cilove firme. "
+        . "Pokud je puvodni keyword prilis siroky nebo vraci spatne firmy, zvol presnejsi kategorii a pridej filters, ktere maji nevhodne kontakty odmitnout. "
         . "Pokud jde o mobilni masaze na pracovisti, hledej realne kancelarske/provozni firmy v lokalite: IT Firma, Steuerberater, Rechtsanwalt, Callcenter, Hotel apod. "
-        . "Vrat pouze JSON {\"plans\":[{\"audience_label\":\"...\",\"rationale\":\"...\",\"email_angle\":\"...\",\"market_language\":\"cs|sk|de|pl|en\",\"target_segments\":[...],\"candidate_terms\":[...],\"filters\":[...],\"scraping_queries\":[{\"source\":\"...\",\"keyword\":\"...\",\"why\":\"...\"}]}]}.";
+        . "Vrat pouze JSON {\"plans\":[{\"audience_label\":\"...\",\"rationale\":\"...\",\"email_angle\":\"...\",\"market_language\":\"cs|sk|de|pl|en\",\"target_segments\":[...],\"candidate_terms\":[...],\"filters\":[...],\"scraping_queries\":[{\"source\":\"...\",\"keyword\":\"...\",\"why\":\"...\"}],\"primary_segment\":\"...\",\"main_use_case\":\"...\",\"decision_maker\":\"...\",\"rejected_alternatives\":[{\"segment\":\"...\",\"reason\":\"...\"}],\"confidence\":0}]}.";
     try {
         $response = jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
             'x-goog-api-key: ' . $apiKey,
@@ -1857,6 +2030,7 @@ function aiResearchAlternativePlans(array $config, array $seed, array $basePlan,
                 continue;
             }
             $plan = onboardingNormalizeLeadPlan($candidate, $fallback);
+            $plan = aiResearchApplyStrategicFields($plan, $candidate);
             $plan['filters'] = array_values(array_filter(array_map('strval', (array)($candidate['filters'] ?? ($plan['filters'] ?? [])))));
             $language = normalizeAiResearchMarketLanguage((string)($candidate['market_language'] ?? ''));
             if ($language !== '') {
@@ -2114,7 +2288,7 @@ function aiResearchSeedWebsiteContext(string $website): string
         return '';
     }
     $pages[$website] = aiResearchImportantWebsiteText(aiResearchReadableWebsiteText($html), 1300);
-    foreach (array_slice(aiResearchRelevantInternalUrls($html, $website), 0, 5) as $url) {
+    foreach (array_slice(aiResearchRelevantInternalUrls($html, $website), 0, 8) as $url) {
         if (isset($pages[$url])) {
             continue;
         }
@@ -2140,7 +2314,7 @@ function aiResearchSeedWebsiteContext(string $website): string
     if ($context === '') {
         return '';
     }
-    return truncatePlainText($context, 5200);
+    return truncatePlainText($context, 7200);
 }
 
 function aiResearchReadableWebsiteText(string $html): string
@@ -2188,6 +2362,27 @@ function aiResearchRelevantInternalUrls(string $html, string $baseUrl): array
             'products' => 35,
             'produkt' => 30,
             'nase sluzby' => 60,
+            'ceny' => 45,
+            'cenik' => 45,
+            'pricing' => 45,
+            'price' => 35,
+            'pripad' => 42,
+            'pripadove studie' => 55,
+            'case' => 35,
+            'case-study' => 55,
+            'reference' => 35,
+            'realizace' => 30,
+            'pravni' => 40,
+            'spory' => 38,
+            'pohledav' => 42,
+            'insolven' => 42,
+            'osint' => 42,
+            'due diligence' => 42,
+            'aml' => 35,
+            'kyc' => 35,
+            'kyt' => 35,
+            'blockchain' => 35,
+            'forenz' => 35,
             'textil' => 45,
             'odevy' => 45,
             'pracovni' => 35,
@@ -2197,8 +2392,6 @@ function aiResearchRelevantInternalUrls(string $html, string $baseUrl): array
             'lekar' => 25,
             'lazne' => 25,
             'golf' => 25,
-            'reference' => 20,
-            'realizace' => 20,
             'o nas' => 15,
             'about' => 15,
         ] as $term => $weight) {
@@ -2234,7 +2427,7 @@ function aiResearchImportantWebsiteText(string $text, int $maxLength): string
         }
         $folded = aiResearchFoldText($chunk);
         if (preg_match('/\b(cookie|cookies|gdpr|menu|facebook|instagram|linkedin|newsletter|copyright|kontakt|english|close projects)\b/u', $folded)
-            && !preg_match('/\b(sluzby|textil|odev|odevy|pracovni|reklamni|hotel|lekar|lazne|golf|zakazkova|vyroba)\b/u', $folded)) {
+            && !preg_match('/\b(sluzby|produkty|ceny|cenik|reference|pripad|textil|odev|odevy|pracovni|reklamni|hotel|lekar|lazne|golf|zakazkova|vyroba|osint|due diligence|pravni|spory|pohledav|insolven|aml|kyc|kyt|blockchain|forenz|podvod|majet)\b/u', $folded)) {
             continue;
         }
         $score = 0;
@@ -2244,6 +2437,29 @@ function aiResearchImportantWebsiteText(string $text, int $maxLength): string
             'specializ' => 22,
             'dodav' => 22,
             'vyrab' => 22,
+            'ceny' => 35,
+            'cenik' => 35,
+            'sazba' => 25,
+            'eur' => 20,
+            'pripadova studie' => 45,
+            'pripadove studie' => 45,
+            'reference' => 25,
+            'klient' => 18,
+            'pravni' => 40,
+            'advokat' => 35,
+            'spory' => 35,
+            'pohledav' => 42,
+            'insolven' => 42,
+            'majet' => 35,
+            'osint' => 45,
+            'due diligence' => 45,
+            'aml' => 35,
+            'kyc' => 35,
+            'kyt' => 35,
+            'blockchain' => 35,
+            'forenz' => 35,
+            'podvod' => 35,
+            'reputac' => 30,
             'zakazkova vyroba' => 45,
             'aplikace na textil' => 45,
             'textil' => 35,
@@ -2367,40 +2583,18 @@ function aiResearchPlan(array $config, array $seed): array
     if ($apiKey === '') {
         return aiResearchEnrichPlan($fallback, $seed);
     }
-    $prompt = "Vybrany ulozeny kontakt ber jako firmu, ktere chceme najit nove B2B zakazniky. "
-        . "Neopisuj seed firmu. Udelej obchodni uvahu: co pravdepodobne prodava, jaka firma ma realnou potrebu to koupit, jaky problem nebo trigger u ni resi, kdo rozhoduje, a proc je kontaktovani legitimni a relevantni. "
-        . "Potom navrhni konkretni katalogove vyhledavaci dotazy pro scraping firem, ktere jsou potencialni zakaznici seed firmy. "
-        . "Scraping keyword je presne text, ktery se napise do vyhledavani katalogu firem. Musi to byt konkretni kategorie subjektu, profese nebo obor, pripadne s mestem/regionem. "
-        . "Nejdriv urci trh a lokalitu seed firmy podle emailove domeny, webu, zdroje a adresy. Vyhledavej ve stejne zemi a u lokalnich sluzeb ve stejnem meste nebo rozumnem okoli, ne v nahodne jine zemi. "
-        . "Seed kontakt: " . json_encode([
-            'email' => (string)$seed['email'],
-            'business' => $business,
-            'website' => $website,
-            'address' => $address,
-            'source' => (string)($seed['source_label'] ?? ''),
-            'website_context' => $websiteContext,
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Vrat pouze JSON s klici audience_label, rationale, email_angle, market_language, target_segments, candidate_terms, filters, scraping_queries. "
-        . "Pokud website_context chybi nebo z nej nelze odvodit, co seed firma realne prodava, nehalucinuj. V rationale jasne uved, ze seed nema dostatek podnikatelskeho kontextu, a navrhni prazdne scraping_queries. "
-        . "audience_label = kratke lidske pojmenovani idealnich B2B zakazniku. "
-        . "rationale = 4-6 konkretnich vet hluboke uvahy, proc prave tyto firmy potrebuji seed byznys; zmin provozni bolest, buying trigger, lokalitu a duvod relevance. "
-        . "email_angle = konkretni obchodni uhel oslovení, ktery bude davat smysl prijemci. "
-        . "market_language = jeden jazyk pro osloveni vsech vybranych subjektu: cs, sk, de, pl nebo en; nevybirej mix jazyku. "
-        . "target_segments = 3-6 konkretnich segmentu zakazniku, ne popis seed firmy. "
-        . "candidate_terms = kratke realne katalogove dotazy bez uvozovek, napr. 'IT firma Wien', 'hotely Brno', 'fyzioterapie Salzburg', 'stavebni firma Krakow'. "
-        . "filters = pravidla, podle kterych pozdeji odmitnout nevhodne kontakty. "
-        . "scraping_queries = 3-6 objektu {source, keyword, why}; keyword musi byt konkretni vyhledavaci fraze pro katalog, napr. 'ucetni kancelar Wien', ne obecna veta. "
-        . "Zakazane keywordy: 'relevantni B2B firmy', 'potencialni zakaznici', 'male firmy', 'firmy', 'sluzby pro firmy', 'B2B subjekty', 'vhodne firmy', obecne popisy a marketingove vety. "
-        . "Pokud te napadne obecny segment, preved ho na konkretni kategorii firem k vyhledani a zachovej lokalitu seed firmy: misto 'firmy se sedavou praci' pouzij napriklad 'IT firma Wien', 'ucetni kancelar Wien' nebo 'call centrum Wien' pro rakousky subjekt z Vidne. "
-        . "Pro rakousky masazni subjekt nepouzivej Prahu ani Firmy.cz; pouzij Herold.at a rakouske mesto/oblast. Pro nemecky subjekt pouzij nemecke zdroje, pro slovensky Zoznam.sk, pro polsky polske zdroje a pro cesky Firmy.cz. "
-        . "Pokud seed firma nabizi mobilni sluzbu na pracovisti, hledej firmy, kde dava sluzba smysl provozne: kancelare, IT firmy, ucetni, advokatni kancelare, call centra, hotely nebo provozy ve stejnem meste/okoli. "
-        . "Pouzij jen aktivni zdroje firmy_cz, zoznam_sk, herold_at, dastelefonbuch_de, dasoertliche_de, gelbeseiten_de, pkt_pl nebo panoramafirm_pl. "
-        . "Pokud jde o lokalni sluzbu, zahrn mesto/region ze seed dat. Pokud si nejsi jist oborem, zvol sirsi B2B segment s jasnym triggerem.";
     $prompt = "Seed je realna firma nahodne vybrana z katalogu Firmy.cz v kategorii Vse pro firmy / kraj Praha. Pro tuto firmu mame najit nove B2B zakazniky. "
+        . "Tvym ukolem neni pouze najit segment, ktery by sluzbu mohl vyuzit. Musis vybrat segment, ktery ji pravdepodobne koupi, zaplati a muze nakupovat opakovane. "
         . "Tvym hlavnim vystupem neni interni strategie, ale kratky kontrolni text pro cloveka. Ten text musi dokazat, ze jsi prosla web seed firmy a pochopila, jake konkretni produkty nebo sluzby nabizi. "
-        . "website_context muze obsahovat vice URL vcetne podstranek typu sluzby, produkty, reference nebo o nas. Nevyhodnocuj jen navigaci z homepage. Vyhledej v kontextu konkretni produktove/sluzbove vety a segmenty zakazniku, ktere web sam zminuje. "
+        . "website_context muze obsahovat vice URL vcetne podstranek typu sluzby, produkty, reference, ceny, pripadove studie nebo o nas. Nevyhodnocuj jen navigaci z homepage. Vyhledej konkretni produktove/sluzbove vety, ceny, vystupy prace, reference, use-cases a segmenty zakazniku, ktere web sam zminuje. "
+        . "Oddeluj, co seed firma na webu tvrdi, co je dolozeno konkretni sluzbou/cenou/pripadovou studii a co je tvoje obchodni inference. Tvrzeni z webu nevydavej za nezavisle overeny fakt. "
+        . "Nezvol cilovku podle jedne dilci stranky sluzby. Nejprve porovnej 4-6 realnych kandidatskych B2B segmentu podle vah: shoda s nabidkou 25 %, nalehavost problemu 15 %, rozpocet a hodnota zakazky 15 %, opakovatelnost 15 %, snadnost cileni a ziskani kontaktu 10 %, delka prodejniho cyklu 10 %, moznost prenest naklad na klienta 5 %, pravni a reputacni riziko 5 %. "
+        . "Vyber prave jeden primarni segment s nejlepsi kombinaci potreby, rozpoctu, dosazitelnosti, opakovatelnosti a obchodni pravdepodobnosti. Vysvetli, proc je lepsi nez alespon dve hlavni alternativy. "
+        . "Rozlisuj uzivatele sluzby, rozhodovaci osobu, platce a pripadny partnersky nebo reseller kanal. Pokud je sluzba draha, specializovana nebo pripadova, preferuj segmenty s vyssi hodnotou zakazky a schopnosti prenest naklad na vlastniho klienta. "
         . "Pokud web uvadi napr. pracovni, reklamni, golfovy, byznys textil nebo textil pro hotely, lekare ci lazne, musi se to objevit v business_understanding a segmenty pro osloveni musi vychazet z techto slov: hotely, golfove kluby, ordinace/lekari, lazne, wellness nebo stavebni firmy pro pracovni odevy. "
+        . "Pokud web uvadi OSINT, due diligence, dohledavani majetku, pravni spory, vymahani pohledavek, podvody, AML/KYC/KYT, reputacni monitoring nebo blockchainovou forenziku, nevyber automaticky personalni agentury jen proto, ze existuje HR sluzba. Porovnej advokatni kancelare pro obchodni spory/vymahani/insolvence, insolvencni spravce, financni instituce, kryptofirmy, pojistovny a HR/executive-search; jako primarni segment zvol ten s nejvyssi nakupni pravdepodobnosti a ekonomickou hodnotou. "
         . "Pak postupuj v tomto poradi: 1) definuj konkretni duvod cileni, 2) z nej odvod koho presne oslovit, 3) az nakonec z toho odvod JEDNO konkretni klicove slovo bez lokace pro Firmy.cz a rozumny trzni dosah. Keyword je katalogova kategorie konkretniho typu firmy bez mesta, napr. 'zubni ordinace', 'autoservis', 'hotel', 'kavarna', 'fitness centrum', 'ucetni kancelar', 'realitni kancelar'. "
+        . "Keyword over z pohledu kvality vysledku. Nesmi byt tak siroky, ze vetsina nalezenych firem nebude odpovidat cilovemu zakaznikovi. Pokud je sirsi keyword prakticky nutny, stanov povinne filtrovani podle webu, specializace nebo obchodniho modelu kontaktu. "
         . "Lokalitu neprebirej mechanicky z adresy seed firmy. To, ze subjekt sidli napr. v Libni, Nuslich nebo Vrsovicich, neznamena, ze ma smysl hledat jen tam. "
         . "Nejdriv posud podle webu, zda nabidka funguje hyperlokalne, pro cele mesto, pro cely region, nebo celostatne. Lokace ma byt obchodne obhajitelna: u fyzicke lokalni sluzby typicky mesto/rozumne okoli, u e-shopu/software/velkoobchodu/online sluzby klidne cela CR bez konkretni ctvrti. "
         . "target_location vypln jen kdyz dava smysl omezit hledani na konkretni oblast; preferuj sirsi 'Praha' pred ctvrti typu 'Libeň', pokud neni ctvrť obchodne dulezita. Pro celostatni hledani vrat prazdny target_location. "
@@ -2416,11 +2610,16 @@ function aiResearchPlan(array $config, array $seed): array
             'firmy_description' => $seedDescription,
             'website_context' => $websiteContext,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Vrat pouze JSON {\"business_understanding\":\"...\",\"scraping_keyword\":\"...\",\"location_scope\":\"...\",\"target_location\":\"...\",\"targeting_reason\":\"...\",\"audience_label\":\"...\",\"email_angle\":\"...\"}. "
+        . "Vrat pouze JSON {\"business_understanding\":\"...\",\"evidence_summary\":{\"claimed_by_website\":[...],\"supported_by_specific_pages\":[...],\"business_inferences\":[...]},\"candidate_segments\":[{\"segment\":\"...\",\"score\":0,\"use_case\":\"...\",\"decision_maker\":\"...\",\"keyword\":\"...\",\"reason\":\"...\",\"criteria\":{\"offer_fit\":0,\"urgency\":0,\"budget_value\":0,\"repeatability\":0,\"targeting_ease\":0,\"sales_cycle\":0,\"cost_pass_through\":0,\"legal_risk\":0}}],\"primary_segment\":\"...\",\"main_use_case\":\"...\",\"decision_maker\":\"...\",\"payer\":\"...\",\"user_role\":\"...\",\"reseller_channel\":\"...\",\"scraping_keyword\":\"...\",\"secondary_keywords\":[...],\"location_scope\":\"...\",\"target_location\":\"...\",\"targeting_reason\":\"...\",\"audience_label\":\"...\",\"email_angle\":\"...\",\"market_language\":\"cs\",\"filters\":[...],\"rejected_alternatives\":[{\"segment\":\"...\",\"reason\":\"...\"}],\"confidence\":0,\"confidence_notes\":\"...\"}. "
+        . "Ve skutecnem vystupu nikdy nepouzivej tri tecky ani komentare; dosad skutecne stringy, cisla a pole, aby odpoved byla parsovatelny JSON. "
         . "business_understanding: 1-2 kratke vety v cestine, bez instrukci, bez slov 'AI', bez planu. Musi byt shrnuti toho, co subjekt dela, vyhradne podle website_context nacteneho z website_url. Musi zminit konkretni produkty/sluzby z webu. Nepouzivej obecne domenky podle nazvu firmy ani pouze katalogovy popis z Firmy.cz. "
         . "scraping_keyword: jen kategorie firem bez lokace. location_scope: jedna z hodnot konkretni_lokace, stejne_mesto, stejny_kraj nebo cela_cr. target_location: konkretni lokalita jen pokud location_scope neni cela_cr. "
-        . "targeting_reason: 1-2 konkretni vety, proc urcity typ firem muze realne potrebovat produkt/sluzbu seed firmy a proc dava zvoleny geograficky dosah smysl. Musi obsahovat konkretni vazbu nabidka -> potreba ciloveho segmentu. Z tohoto duvodu musi byt jasne odvoditelne audience_label i scraping_keyword. "
+        . "targeting_reason: 2-4 konkretni vety, proc vybrany typ firem muze realne potrebovat produkt/sluzbu seed firmy, proc ma rozpocet/nalehavost/opakovatelnost a proc dava zvoleny geograficky dosah smysl. Musi obsahovat konkretni vazbu nabidka -> potreba ciloveho segmentu. Z tohoto duvodu musi byt jasne odvoditelne audience_label i scraping_keyword. "
         . "audience_label: kratke pojmenovani koho presne oslovit, napr. 'autoservisy, ktere potrebuji pravidelne resit firemni textil', ne obecne 'firmy'. "
+        . "candidate_segments musi mit 4-6 polozek a score 0-100 podle vah vyse; v primary_segment musi byt vitezny segment. rejected_alternatives musi vysvetlit alespon dve zamitnute cilovky. "
+        . "decision_maker, payer a user_role vypln tak, aby bylo jasne, kdo sluzbu pouziva, kdo rozhoduje a kdo plati. "
+        . "market_language = jeden jazyk pro osloveni vsech vybranych subjektu: cs, sk, de, pl nebo en. "
+        . "filters: povinna pravidla pro odmitnuti nevhodnych kontaktu; uveď, co musi byt na webu kontaktu zrejme, aby byl opravdu vhodny. "
         . "email_angle: jedna veta konkretniho uhlu pro email. "
         . "Zakazane keywordy: 'relevantni B2B firmy', 'potencialni zakaznici', 'male firmy', 'firmy', 'sluzby pro firmy', 'B2B subjekty', 'vhodne firmy', 'vyrobni firma', 'vyrobce', 'prumyslova firma', 'podniky'. "
         . "Keyword nesmi byt obecny nadrazeny pojem ani nahodny segment. Pokud existuje na webu explicitni segment zakazniku, preferuj ho pred odhadem. Restaurace pouzij jen pokud web nabizi produkt pro gastro provozy obecne nebo pokud umi aplikace jednoduse rozlisit relevantni subset; jinak preferuj presnejsi segmenty jako hotel, golfovy klub, ordinace, lazne nebo stavebni firma. "
@@ -2431,12 +2630,13 @@ function aiResearchPlan(array $config, array $seed): array
             'Content-Type: application/json',
         ], [
             'model' => trim((string)($config['ai']['gemini_model'] ?? 'gemini-3.5-flash')) ?: 'gemini-3.5-flash',
-            'system_instruction' => 'Jsi B2B akvizicni strateg. Vystup je pouze validni JSON bez markdownu.',
+            'system_instruction' => 'Jsi seniorni B2B akvizicni strateg a kriticky hodnotitel segmentu. Vybiras segment podle nakupni pravdepodobnosti, ekonomiky a dosazitelnosti. Vystup je pouze validni JSON bez markdownu.',
             'input' => $prompt,
-            'generation_config' => ['temperature' => 0.35],
+            'generation_config' => ['temperature' => 0.25],
         ], 35);
         $json = parseJsonObjectFromText(geminiInteractionText($response));
         $plan = onboardingNormalizeLeadPlan($json, $fallback);
+        $plan = aiResearchApplyStrategicFields($plan, $json);
         $marketLanguage = normalizeAiResearchMarketLanguage((string)($json['market_language'] ?? ''));
         if ($marketLanguage !== '') {
             $plan['market_language'] = $marketLanguage;
@@ -2464,8 +2664,23 @@ function aiResearchPlan(array $config, array $seed): array
         }
         $scrapingKeyword = aiResearchKeywordWithoutLocation((string)($json['scraping_keyword'] ?? aiResearchPrimaryKeyword($plan)), (string)($plan['target_location'] ?? ''));
         if ($scrapingKeyword !== '') {
-            $plan['candidate_terms'] = [$scrapingKeyword];
-            $plan['scraping_queries'] = [['source' => 'firmy_cz', 'keyword' => $scrapingKeyword, 'why' => 'keyword bez lokace podle pochopeni webu seed firmy']];
+            $secondaryKeywords = aiResearchNormalizeStringList((array)($json['secondary_keywords'] ?? []), 6, 120);
+            $terms = [];
+            foreach (array_merge([$scrapingKeyword], $secondaryKeywords) as $term) {
+                $term = aiResearchKeywordWithoutLocation((string)$term, (string)($plan['target_location'] ?? ''));
+                if ($term !== '' && !in_array($term, $terms, true)) {
+                    $terms[] = $term;
+                }
+            }
+            $source = aiResearchDefaultSourceForSeed($seed);
+            $plan['candidate_terms'] = $terms;
+            $plan['scraping_queries'] = array_map(fn(string $term): array => [
+                'source' => $source,
+                'keyword' => $term,
+                'why' => $term === $scrapingKeyword
+                    ? 'primarni keyword bez lokace podle obchodniho vyberu ciloveho segmentu'
+                    : 'doplnkovy keyword pro alternativni overeni stejneho obchodniho segmentu',
+            ], $terms);
         }
         $plan['seed_description'] = $seedDescription;
         $plan['seed_catalog_url'] = (string)($seed['source_url'] ?? '');
@@ -2493,6 +2708,9 @@ function aiResearchFallbackTerms(string $business, string $website, string $addr
     $city = aiResearchCityFromAddress($address);
     $suffix = $city !== '' ? ' ' . $city : '';
     $country = strtoupper($country);
+    if (preg_match('/osint|due diligence|dohledav|majet|pravni|advokat|spor|spory|pohledav|insolven|podvod|aml|kyc|kyt|blockchain|forenz|reputac|vysetrov|intelligence|krypto/i', $haystack)) {
+        return ['vymahani pohledavek', 'insolvencni spravce', 'advokatni kancelar', 'advokatni kancelar insolvence', 'advokat obchodni spory'];
+    }
     if (preg_match('/textil|odev|odevy|uniform|pracovn|reklamn|golf|hotel|lekar|lazn/i', $haystack)) {
         return ['hotel' . $suffix, 'golfovy klub' . $suffix, 'ordinace' . $suffix, 'lazne' . $suffix, 'stavebni firma' . $suffix, 'wellness centrum' . $suffix];
     }
@@ -2712,7 +2930,15 @@ function aiResearchContactMatchesPrimaryKeyword(array $plan, array $contact): bo
     if (!$tokens) {
         return true;
     }
-    $haystack = aiResearchFoldText((string)($contact['subject_name'] ?? '') . ' ' . (string)($contact['website'] ?? ''));
+    $haystack = aiResearchFoldText(
+        (string)($contact['subject_name'] ?? '') . ' '
+        . (string)($contact['website'] ?? '') . ' '
+        . (string)($contact['source_label'] ?? '') . ' '
+        . (string)($contact['source_url'] ?? '') . ' '
+        . (string)($contact['search_url'] ?? '') . ' '
+        . (string)($contact['target_segment'] ?? '') . ' '
+        . (string)($contact['fit_reason'] ?? '')
+    );
     foreach ($tokens as $token) {
         if (str_contains($haystack, $token)) {
             return true;
@@ -3237,10 +3463,13 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         . "Plan: " . json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Kontakty: " . json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
         . "Vrat pouze JSON {\"contacts\":[{\"email\":\"...\",\"accepted\":true,\"fit_reason\":\"...\",\"subject\":\"...\",\"html\":\"...\"}]}. "
-        . "U kazdeho kontaktu rozhodni, zda je opravdu relevantni pro navrzeny B2B use-case, segment, zemi a lokalitu. Pokud ne, accepted=false a fit_reason konkretne vysvetli proc. "
+        . "U kazdeho kontaktu rozhodni, zda je opravdu relevantni pro navrzeny B2B use-case, primarni segment, zemi a lokalitu. Pokud ne, accepted=false a fit_reason konkretne vysvetli proc. "
+        . "Pouzij i povinne filtry z planu. Kontakt schval jen tehdy, kdyz z nazvu, webu, adresy nebo zdrojove URL dava smysl, ze patri do zvolene cilovky a ma pravdepodobnou potrebu, rozpocet nebo opakovany trigger popsany v targeting_reason. "
+        . "Neoznacuj kontakt jako vhodny jen proto, ze by teoreticky mohl sluzbu nekdy vyuzit. Musi jit o typ firmy, u ktere je rozumna nakupni pravdepodobnost, platebni schopnost a jasny use-case. "
         . "Kontakt musi odpovidat pouzitemu scraping keywordu nebo jasne odpovidajicimu segmentu z planu. Napriklad pri keywordu 'autoservis' nesmi byt hotel oznacen jako vhodny jen proto, ze je ve stejne lokalite; takovy kontakt oznac accepted=false a uved 'nesoulad s keywordem'. "
         . "Lokacni pravidlo z planu je povinne: " . aiResearchLocationScopeLabel((string)($plan['location_scope'] ?? '')) . ", cilova lokace " . (string)($plan['target_location'] ?? '') . ". "
         . "Pokud je kontakt vhodny, fit_reason musi rict, proc prave tento typ firmy muze potrebovat seed nabidku a jaky trigger oslovenim resime. "
+        . "Pokud plan rozlisuje rozhodovaci osobu, zohledni, zda je kontaktovany subjekt typ firmy, kde takova role realisticky existuje. "
         . "Vsechny subject/html texty napis jednim jazykem podle market_language v planu (" . (string)($plan['market_language'] ?? 'cs') . "). "
         . "HTML je kratke unikatni obchodni osloveni pro dany kontakt, vecne a bez prehnanych slibu. "
         . "Email nesmi byt obecny. Musi vychazet z tohoto pochopeni seed webu: " . (string)($plan['business_understanding'] ?? '') . ". "
@@ -3361,6 +3590,13 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         'targeting_reason' => (string)($plan['targeting_reason'] ?? ''),
         'audience_label' => (string)($plan['audience_label'] ?? ''),
         'email_angle' => (string)($plan['email_angle'] ?? ''),
+        'primary_segment' => (string)($plan['primary_segment'] ?? ''),
+        'main_use_case' => (string)($plan['main_use_case'] ?? ''),
+        'decision_maker' => (string)($plan['decision_maker'] ?? ''),
+        'payer' => (string)($plan['payer'] ?? ''),
+        'user_role' => (string)($plan['user_role'] ?? ''),
+        'mandatory_filters' => (array)($plan['filters'] ?? []),
+        'rejected_alternatives' => (array)($plan['rejected_alternatives'] ?? []),
         'search_url' => (string)($plan['search_url'] ?? ''),
         'found_contacts' => array_map(static function ($contact): array {
             return [
@@ -3380,6 +3616,8 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         . "Jazyk pouzij podle market_language (" . $language . "). "
         . "HTML bude kratke, vecne, personalizovatelne pro nalezeny typ kontaktu a bez prehnanych slibu. "
         . "Musis propojit tri veci: co seed firma realne dela podle business_understanding, proc bylo vybrane scraping_keyword + target_location podle targeting_reason, a jaka konkretni nabidka nebo use-case dava smysl pro nalezene kontakty. "
+        . "Pouzij primarni segment, main_use_case a decision_maker; text ma mluvit k realne rozhodovaci osobe nebo vlastnikovi problemu, ne neurcite k 'firmam'. "
+        . "Nekopiruj marketingove formulace ze seed webu. Preved je do konkretniho obchodniho prinosu pro vybrany segment. "
         . "Nepis interní uvahu ani instrukce. Nepis obecne vety typu 'mohla by byt relevantni nabidka' nebo 'vidime moznost spoluprace'. "
         . "Napis konkretne, s cim seed firma kontakt oslovuje, proc to souvisi s jeho typem byznysu, a navrhni jednoduchy dalsi krok. "
         . "Pokud ve vzorku kontaktu neni zadny prijaty kontakt, stale vytvor text pro audience_label, ale jasne ho ukotvi v keywordu a lokaci.";
@@ -12718,6 +12956,15 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
                             <span><?= h((string)$run['accepted_count']) ?> vhodnych z <?= h((string)$run['found_count']) ?> nalezenych</span>
                         </div>
+                        <?php
+                            $candidateSegments = aiResearchNormalizeCandidateSegments($runPlan['candidate_segments'] ?? []);
+                            $rejectedAlternatives = aiResearchNormalizeRejectedAlternatives($runPlan['rejected_alternatives'] ?? []);
+                            $evidenceSummary = is_array($runPlan['evidence_summary'] ?? null) ? (array)$runPlan['evidence_summary'] : [];
+                            $claimedEvidence = aiResearchNormalizeStringList($evidenceSummary['claimed_by_website'] ?? [], 5, 220);
+                            $supportedEvidence = aiResearchNormalizeStringList($evidenceSummary['supported_by_specific_pages'] ?? [], 5, 220);
+                            $inferredEvidence = aiResearchNormalizeStringList($evidenceSummary['business_inferences'] ?? [], 5, 220);
+                            $secondaryKeywords = aiResearchNormalizeStringList($runPlan['secondary_keywords'] ?? [], 6, 120);
+                        ?>
                         <div class="research-plan-grid">
                             <section>
                                 <h3>Pochopeni firmy</h3>
@@ -12729,9 +12976,13 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <section>
                                 <h3>Hledani kontaktu</h3>
                                 <p><strong>Koho oslovit:</strong> <?= h((string)($run['audience_label'] ?? '')) ?></p>
+                                <?php if (trim((string)($runPlan['primary_segment'] ?? '')) !== ''): ?><p><strong>Primární segment:</strong> <?= h((string)$runPlan['primary_segment']) ?></p><?php endif; ?>
+                                <?php if (trim((string)($runPlan['main_use_case'] ?? '')) !== ''): ?><p><strong>Use-case:</strong> <?= h((string)$runPlan['main_use_case']) ?></p><?php endif; ?>
                                 <?php if (trim((string)($runPlan['targeting_reason'] ?? '')) !== ''): ?><p><strong>Důvod cílení:</strong> <?= h((string)$runPlan['targeting_reason']) ?></p><?php endif; ?>
+                                <?php if (trim((string)($runPlan['decision_maker'] ?? '')) !== ''): ?><p><strong>Rozhoduje:</strong> <?= h((string)$runPlan['decision_maker']) ?></p><?php endif; ?>
                                 <p><strong>Databaze:</strong> <?= h((string)($run['search_source_label'] ?? '-')) ?></p>
                                 <p><strong>Klicove slovo:</strong> <?= h((string)($run['scraping_keyword'] ?? '')) ?></p>
+                                <?php if ($secondaryKeywords): ?><p><strong>Doplňkové keywordy:</strong> <?= h(implode(', ', $secondaryKeywords)) ?></p><?php endif; ?>
                                 <p><strong>Dosah:</strong> <?= h(aiResearchLocationScopeLabel((string)($runPlan['location_scope'] ?? ''))) ?></p>
                                 <p><strong>Lokace:</strong> <?= h(trim((string)($runPlan['target_location'] ?? '')) !== '' ? (string)$runPlan['target_location'] : '-') ?></p>
                                 <?php if (trim((string)($runPlan['search_url'] ?? '')) !== ''): ?><p><strong>URL hledani:</strong> <a href="<?= h((string)$runPlan['search_url']) ?>" target="_blank" rel="noopener"><?= h((string)$runPlan['search_url']) ?></a></p><?php endif; ?>
@@ -12741,6 +12992,46 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <p><strong><?= h((string)$run['email_subject']) ?></strong></p>
                                 <div class="email-preview"><?= cleanHtml((string)$run['email_body_html']) ?></div>
                             </section>
+                            <?php if ($candidateSegments): ?>
+                            <section class="research-wide">
+                                <h3>Obchodní výběr cílovky</h3>
+                                <div class="table-shell compact">
+                                    <table>
+                                        <thead><tr><th>Segment</th><th>Skóre</th><th>Use-case</th><th>Rozhoduje</th><th>Keyword</th><th>Důvod</th></tr></thead>
+                                        <tbody>
+                                        <?php foreach ($candidateSegments as $segment): ?>
+                                            <tr>
+                                                <td><?= h((string)($segment['segment'] ?? '')) ?></td>
+                                                <td><?= isset($segment['score']) && $segment['score'] !== null ? h((string)$segment['score']) : '-' ?></td>
+                                                <td><?= h((string)($segment['use_case'] ?? '')) ?></td>
+                                                <td><?= h((string)($segment['decision_maker'] ?? '')) ?></td>
+                                                <td><?= h((string)($segment['keyword'] ?? '')) ?></td>
+                                                <td><?= h((string)($segment['reason'] ?? '')) ?></td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
+                            <?php endif; ?>
+                            <?php if ($claimedEvidence || $supportedEvidence || $inferredEvidence || $rejectedAlternatives || !empty($runPlan['filters'])): ?>
+                            <section class="research-wide">
+                                <h3>Důkazy, filtry a zamítnuté alternativy</h3>
+                                <div class="research-evidence-grid">
+                                    <?php if ($claimedEvidence): ?><div><strong>Tvrzení z webu</strong><ul><?php foreach ($claimedEvidence as $item): ?><li><?= h($item) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
+                                    <?php if ($supportedEvidence): ?><div><strong>Podpořeno konkrétní stránkou</strong><ul><?php foreach ($supportedEvidence as $item): ?><li><?= h($item) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
+                                    <?php if ($inferredEvidence): ?><div><strong>Obchodní inference</strong><ul><?php foreach ($inferredEvidence as $item): ?><li><?= h($item) ?></li><?php endforeach; ?></ul></div><?php endif; ?>
+                                </div>
+                                <?php if (!empty($runPlan['filters'])): ?><p><strong>Povinné filtrování:</strong> <?= h(implode(' | ', aiResearchNormalizeStringList($runPlan['filters'], 8, 220))) ?></p><?php endif; ?>
+                                <?php if ($rejectedAlternatives): ?>
+                                    <p><strong>Zamítnuté alternativy:</strong></p>
+                                    <ul>
+                                        <?php foreach ($rejectedAlternatives as $alternative): ?><li><?= h((string)$alternative['segment']) ?><?= trim((string)$alternative['reason']) !== '' ? ': ' . h((string)$alternative['reason']) : '' ?></li><?php endforeach; ?>
+                                    </ul>
+                                <?php endif; ?>
+                                <?php if (isset($runPlan['confidence'])): ?><p><strong>Jistota:</strong> <?= h((string)$runPlan['confidence']) ?> %<?= trim((string)($runPlan['confidence_notes'] ?? '')) !== '' ? ' - ' . h((string)$runPlan['confidence_notes']) : '' ?></p><?php endif; ?>
+                            </section>
+                            <?php endif; ?>
                         </div>
                         <div class="scraping-result-grid">
                             <section class="scraping-result-group">
