@@ -23,6 +23,20 @@ const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
+const PAPER_STRATEGIES = {
+  conservative: {
+    id: "conservative",
+    label: "Conservative",
+    selectionMetric: "EV p.a.",
+    description: "Prioritizes eligible opportunities by EV p.a. and expected value.",
+  },
+  highReward: {
+    id: "highReward",
+    label: "High reward",
+    selectionMetric: "Reward / risk",
+    description: "Prioritizes eligible opportunities by highest reward against risk.",
+  },
+};
 
 const LEDGER_RECOVERY_ANCHORS = [
   {
@@ -142,9 +156,38 @@ async function readState() {
 }
 
 function normalizeState(input) {
+  const conservativeInput = input.paperPortfolios?.conservative || {
+    portfolio: input.portfolio,
+    trades: input.trades,
+    lastTradeDate: input.lastTradeDate,
+    lastDecision: input.lastDecision,
+    runLog: input.runLog,
+  };
+  const highRewardInput = input.paperPortfolios?.highReward || {};
+  const paperPortfolios = {
+    conservative: normalizePaperPortfolio(PAPER_STRATEGIES.conservative, conservativeInput),
+    highReward: normalizePaperPortfolio(PAPER_STRATEGIES.highReward, highRewardInput),
+  };
   return {
     schemaVersion: 2,
     generatedAt: input.generatedAt || null,
+    paperPortfolios,
+    portfolio: paperPortfolios.conservative.portfolio,
+    trades: paperPortfolios.conservative.trades,
+    evaluations: mergeEvaluationLists(Array.isArray(input.evaluations) ? input.evaluations : []),
+    learningProfile: normalizeLearningProfile(input.learningProfile),
+    lastTradeDate: paperPortfolios.conservative.lastTradeDate,
+    lastDecision: paperPortfolios.conservative.lastDecision,
+    runLog: paperPortfolios.conservative.runLog,
+  };
+}
+
+function normalizePaperPortfolio(strategy, input = {}) {
+  return {
+    id: strategy.id,
+    label: strategy.label,
+    selectionMetric: strategy.selectionMetric,
+    description: strategy.description,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
       maxFraction: Number(input.portfolio?.maxFraction || MAX_FRACTION),
@@ -154,9 +197,9 @@ function normalizeState(input) {
       opportunityMinEdge: Number(input.portfolio?.opportunityMinEdge || OPPORTUNITY_MIN_EDGE),
       opportunityMinAnnualReturn: Number(input.portfolio?.opportunityMinAnnualReturn || OPPORTUNITY_MIN_ANNUAL_RETURN),
     },
-    trades: Array.isArray(input.trades) ? input.trades.map(normalizeTrade) : [],
-    evaluations: mergeEvaluationLists(Array.isArray(input.evaluations) ? input.evaluations : []),
-    learningProfile: normalizeLearningProfile(input.learningProfile),
+    trades: Array.isArray(input.trades)
+      ? input.trades.map((trade) => normalizeTrade({ ...trade, strategyId: trade.strategyId || strategy.id, strategyLabel: trade.strategyLabel || strategy.label }))
+      : [],
     lastTradeDate: input.lastTradeDate || null,
     lastDecision: input.lastDecision || null,
     runLog: Array.isArray(input.runLog) ? input.runLog : [],
@@ -314,16 +357,39 @@ function mergeTrade(existing, incoming) {
 function mergeStates(primary, secondary) {
   const base = stateTime(primary) >= stateTime(secondary) ? primary : secondary;
   const other = base === primary ? secondary : primary;
-  const tradesById = new Map();
-  for (const trade of [...(other.trades || []), ...(base.trades || [])]) {
-    tradesById.set(trade.id, mergeTrade(tradesById.get(trade.id), trade));
-  }
-  return {
+  const merged = {
     ...base,
-    trades: [...tradesById.values()].sort((a, b) => tradeUpdateTime(b) - tradeUpdateTime(a)),
     evaluations: mergeEvaluationLists(base.evaluations || [], other.evaluations || []),
-    runLog: mergeUniqueById([...(base.runLog || []), ...(other.runLog || [])], (item) => item.runAt, 120),
   };
+  merged.paperPortfolios = {};
+  for (const strategy of Object.values(PAPER_STRATEGIES)) {
+    const basePortfolio = base.paperPortfolios?.[strategy.id] || normalizePaperPortfolio(strategy, {});
+    const otherPortfolio = other.paperPortfolios?.[strategy.id] || normalizePaperPortfolio(strategy, {});
+    const tradesById = new Map();
+    for (const trade of [...(otherPortfolio.trades || []), ...(basePortfolio.trades || [])]) {
+      tradesById.set(trade.id, mergeTrade(tradesById.get(trade.id), trade));
+    }
+    merged.paperPortfolios[strategy.id] = {
+      ...basePortfolio,
+      trades: [...tradesById.values()].sort((a, b) => tradeUpdateTime(b) - tradeUpdateTime(a)),
+      runLog: mergeUniqueById([...(basePortfolio.runLog || []), ...(otherPortfolio.runLog || [])], (item) => `${item.runAt || ""}:${item.strategyId || strategy.id}`, 120),
+    };
+  }
+  syncLegacyPaperAliases(merged);
+  return merged;
+}
+
+function syncLegacyPaperAliases(state) {
+  const conservative = state.paperPortfolios?.conservative || normalizePaperPortfolio(PAPER_STRATEGIES.conservative, {});
+  state.paperPortfolios ||= {};
+  state.paperPortfolios.conservative = conservative;
+  state.paperPortfolios.highReward ||= normalizePaperPortfolio(PAPER_STRATEGIES.highReward, {});
+  state.portfolio = conservative.portfolio;
+  state.trades = conservative.trades;
+  state.lastTradeDate = conservative.lastTradeDate;
+  state.lastDecision = conservative.lastDecision;
+  state.runLog = conservative.runLog;
+  return state;
 }
 
 function normalizeLearningProfile(profile = {}) {
@@ -1344,22 +1410,47 @@ function riskBlockReason(block) {
   return `open correlated paper trade ${block.tradeId} already covers ${overlap}`;
 }
 
-function maybeOpenDailyTrade(state, eligible) {
+function rewardRiskRatio(item) {
+  const reward = Number(item.netGainIfWinUsdc ?? item.grossGainIfWinUsdc);
+  const risk = Number(item.totalCostUsdc || item.maxLossUsdc || item.stakeUsdc || 0);
+  if (!Number.isFinite(reward) || !Number.isFinite(risk) || reward <= 0 || risk <= 0) return null;
+  return reward / risk;
+}
+
+function sortEligibleForStrategy(eligible, strategyId) {
+  const rows = [...eligible];
+  if (strategyId === "highReward") {
+    return rows.sort((a, b) => {
+      const aRatio = rewardRiskRatio(a) ?? -Infinity;
+      const bRatio = rewardRiskRatio(b) ?? -Infinity;
+      if (bRatio !== aRatio) return bRatio - aRatio;
+      if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
+      return b.expectedValueUsdc - a.expectedValueUsdc;
+    });
+  }
+  return rows.sort((a, b) => {
+    if (a.thesisType !== b.thesisType) return a.thesisType === "EDGE_OPPORTUNITY" ? -1 : 1;
+    if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
+    return b.expectedValueUsdc - a.expectedValueUsdc;
+  });
+}
+
+function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative) {
   const today = pragueDateKey();
-  const available = Math.max(0, PORTFOLIO_USDC - openRisk(state.trades));
+  const available = Math.max(0, PORTFOLIO_USDC - openRisk(portfolioState.trades));
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
   let skippedForRisk = 0;
 
-  if (state.lastTradeDate === today) {
-    return { action: "SKIP", reason: "daily paper trade already opened", available };
+  if (portfolioState.lastTradeDate === today) {
+    return { action: "SKIP", reason: "daily paper trade already opened", available, strategyId: strategy.id };
   }
   if (available < stake) {
-    return { action: "SKIP", reason: "not enough free paper capital", available };
+    return { action: "SKIP", reason: "not enough free paper capital", available, strategyId: strategy.id };
   }
 
   const best = eligible.find((item) => {
-    if (alreadyOpen(state.trades, item.tokenId)) return false;
-    const block = riskBlock(item, state.trades);
+    if (alreadyOpen(portfolioState.trades, item.tokenId)) return false;
+    const block = riskBlock(item, portfolioState.trades);
     if (!block) return true;
     skippedForRisk += 1;
     item.selectionStatus = "RISK_BLOCKED";
@@ -1371,11 +1462,14 @@ function maybeOpenDailyTrade(state, eligible) {
     const reason = skippedForRisk > 0
       ? "no eligible non-correlated candidate"
       : "no eligible non-duplicate candidate";
-    return { action: "SKIP", reason, available, skippedForRisk };
+    return { action: "SKIP", reason, available, skippedForRisk, strategyId: strategy.id };
   }
 
   const trade = {
-    id: `paper-${today}-${best.tokenId}`,
+    id: `paper-${strategy.id}-${today}-${best.tokenId}`,
+    strategyId: strategy.id,
+    strategyLabel: strategy.label,
+    selectionMetric: strategy.selectionMetric,
     openedAt: nowIso(),
     date: today,
     status: "OPEN",
@@ -1441,9 +1535,9 @@ function maybeOpenDailyTrade(state, eligible) {
     analysisSummary: best.analysisSummary,
   };
 
-  state.trades.unshift(trade);
-  state.lastTradeDate = today;
-  return { action: "OPENED", reason: "best eligible non-correlated candidate", trade, available: available - stake, skippedForRisk };
+  portfolioState.trades.unshift(trade);
+  portfolioState.lastTradeDate = today;
+  return { action: "OPENED", reason: `best ${strategy.selectionMetric} non-correlated candidate`, trade, available: available - stake, skippedForRisk, strategyId: strategy.id };
 }
 
 function recoveryEvaluation(state, anchor) {
@@ -1810,13 +1904,14 @@ function marketHasNewOutcome(market, knownEvaluationKeys) {
   return parseJsonField(market.clobTokenIds).some((tokenId) => tokenId && !knownEvaluationKeys.has(`token:${tokenId}`));
 }
 
-function updatePortfolio(state) {
-  const realizedPnl = state.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
-  const openPnl = state.trades
+function updatePaperPortfolio(portfolioState) {
+  const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
+  const openPnl = portfolioState.trades
     .filter((trade) => trade.status === "OPEN")
     .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
   const equity = PORTFOLIO_USDC + realizedPnl + openPnl;
-  state.portfolio = {
+  portfolioState.portfolio = {
+    ...(portfolioState.portfolio || {}),
     initialUsdc: PORTFOLIO_USDC,
     maxFraction: MAX_FRACTION,
     maxStakeUsdc: Number((PORTFOLIO_USDC * MAX_FRACTION).toFixed(2)),
@@ -1832,15 +1927,27 @@ function updatePortfolio(state) {
     equityUsdc: Number(equity.toFixed(4)),
     totalPnlUsdc: Number((realizedPnl + openPnl).toFixed(4)),
     totalPnlPct: pnlPercent(realizedPnl + openPnl, PORTFOLIO_USDC),
-    openRiskUsdc: Number(openRisk(state.trades).toFixed(2)),
-    freeCapitalUsdc: Number(Math.max(0, PORTFOLIO_USDC - openRisk(state.trades)).toFixed(2)),
+    openRiskUsdc: Number(openRisk(portfolioState.trades).toFixed(2)),
+    freeCapitalUsdc: Number(Math.max(0, PORTFOLIO_USDC - openRisk(portfolioState.trades)).toFixed(2)),
   };
 }
 
-function recordRun(state, { evaluations = [], eligible = [], decision }) {
+function updatePortfolio(state) {
+  state.paperPortfolios ||= {};
+  for (const strategy of Object.values(PAPER_STRATEGIES)) {
+    state.paperPortfolios[strategy.id] ||= normalizePaperPortfolio(strategy, {});
+    updatePaperPortfolio(state.paperPortfolios[strategy.id]);
+  }
+  syncLegacyPaperAliases(state);
+}
+
+function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible = [], decision }) {
   const runAt = state.generatedAt;
-  state.lastDecision = {
+  portfolioState.lastDecision = {
     runAt,
+    strategyId: portfolioState.id,
+    strategyLabel: portfolioState.label,
+    selectionMetric: portfolioState.selectionMetric,
     evaluatedCount: evaluations.length,
     eligibleCount: eligible.length,
     action: decision.action,
@@ -1852,9 +1959,12 @@ function recordRun(state, { evaluations = [], eligible = [], decision }) {
     brierScore: state.learningProfile.brierScore,
     calibrationBias: state.learningProfile.calibrationBias,
   };
-  state.runLog = [
+  portfolioState.runLog = [
     {
       runAt,
+      strategyId: portfolioState.id,
+      strategyLabel: portfolioState.label,
+      selectionMetric: portfolioState.selectionMetric,
       evaluatedCount: evaluations.length,
       eligibleCount: eligible.length,
       action: decision.action,
@@ -1864,8 +1974,17 @@ function recordRun(state, { evaluations = [], eligible = [], decision }) {
       learningSampleSize: state.learningProfile.sampleSize,
       brierScore: state.learningProfile.brierScore,
     },
-    ...state.runLog,
+    ...portfolioState.runLog,
   ].slice(0, 120);
+  syncLegacyPaperAliases(state);
+}
+
+function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
+  for (const decision of decisions) {
+    const portfolioState = state.paperPortfolios?.[decision.strategyId] || state.paperPortfolios?.conservative;
+    if (!portfolioState) continue;
+    recordPortfolioRun(state, portfolioState, { evaluations, eligible, decision });
+  }
 }
 
 async function writeState(state) {
@@ -1875,22 +1994,34 @@ async function writeState(state) {
 
 async function run() {
   const state = await readState();
+  syncLegacyPaperAliases(state);
   recoverLedgerGaps(state);
-  state.trades = await refreshTrades(state.trades);
-  state.trades = await reviewClosedTradesWithAi(state.trades);
-  state.learningProfile = buildLearningProfile(state.trades, state.learningProfile);
+  for (const portfolioState of Object.values(state.paperPortfolios)) {
+    portfolioState.trades = await refreshTrades(portfolioState.trades);
+    portfolioState.trades = await reviewClosedTradesWithAi(portfolioState.trades);
+  }
+  const allTrades = Object.values(state.paperPortfolios).flatMap((portfolioState) => portfolioState.trades || []);
+  state.learningProfile = buildLearningProfile(allTrades, state.learningProfile);
   state.generatedAt = nowIso();
   updatePortfolio(state);
 
   if (REFRESH_ONLY) {
+    const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
+      strategyId: portfolioState.id,
+      action: "REFRESH",
+      reason: "refreshed open positions and resolved markets only",
+    }));
     recordRun(state, {
-      decision: {
-        action: "REFRESH",
-        reason: "refreshed open positions and resolved markets only",
-      },
+      decisions,
+      eligible: [],
+      evaluations: [],
     });
     await writeState(state);
-    console.log(JSON.stringify(state.lastDecision, null, 2));
+    console.log(JSON.stringify({
+        action: "REFRESH",
+        reason: "refreshed open positions and resolved markets only",
+        strategies: decisions.map((decision) => decision.strategyId),
+      }, null, 2));
     return;
   }
 
@@ -1933,21 +2064,26 @@ async function run() {
   }
 
   evaluations = await enrichEvaluationsWithAi(evaluations, state.learningProfile);
-  const eligible = evaluations
-    .filter((item) => item.status === "ELIGIBLE")
-    .sort((a, b) => {
-      if (a.thesisType !== b.thesisType) return a.thesisType === "EDGE_OPPORTUNITY" ? -1 : 1;
-      if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
-      return b.expectedValueUsdc - a.expectedValueUsdc;
-    });
-  const decision = maybeOpenDailyTrade(state, eligible);
+  const eligible = evaluations.filter((item) => item.status === "ELIGIBLE");
+  const decisions = Object.values(PAPER_STRATEGIES).map((strategy) => {
+    const portfolioState = state.paperPortfolios[strategy.id];
+    const rankedEligible = sortEligibleForStrategy(eligible, strategy.id);
+    return maybeOpenDailyTrade(portfolioState, rankedEligible, strategy);
+  });
 
   state.generatedAt = nowIso();
   updatePortfolio(state);
   state.evaluations = mergeEvaluationLists(evaluations, state.evaluations);
-  recordRun(state, { evaluations, eligible, decision });
+  recordRun(state, { evaluations, eligible, decisions });
   await writeState(state);
-  console.log(JSON.stringify(state.lastDecision, null, 2));
+  console.log(JSON.stringify({
+    generatedAt: state.generatedAt,
+    decisions: Object.fromEntries(decisions.map((decision) => [decision.strategyId, {
+      action: decision.action,
+      reason: decision.reason,
+      tradeId: decision.trade?.id || null,
+    }])),
+  }, null, 2));
 }
 
 run().catch((error) => {

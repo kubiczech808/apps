@@ -724,6 +724,12 @@ body.modal-open {
   color: var(--bad) !important;
 }
 
+.order-chip.paper {
+  border-color: var(--line);
+  background: #f8fafc;
+  color: var(--muted) !important;
+}
+
 .analysis-reason {
   display: inline-block !important;
   max-width: 220px !important;

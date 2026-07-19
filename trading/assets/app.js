@@ -214,7 +214,7 @@ function syncModeUi() {
   els.tabButtons.forEach((button) => {
     button.textContent = live ? button.dataset.liveLabel : button.dataset.paperLabel;
   });
-  if (els.portfolioTitle) els.portfolioTitle.textContent = live ? "Live Polymarket account" : "Autonomous paper portfolio";
+  if (els.portfolioTitle) els.portfolioTitle.textContent = live ? "Live Polymarket account" : "Autonomous paper portfolios";
   if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = live ? "Opened live trades" : "Opened paper trades";
   if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = live ? "Closed live trades" : "Closed paper trades";
   if (els.evaluationControls) els.evaluationControls.style.display = "";
@@ -713,6 +713,7 @@ function tradeTypeBadge(trade) {
   if (trade.mode === "LIVE_ORDER") return '<span class="order-chip">Limit order waiting</span>';
   if (trade.mode === "LIVE_RECONCILIATION") return '<span class="order-chip warning">Sync gap</span>';
   if (trade.mode === "LIVE") return '<span class="order-chip filled">Open position</span>';
+  if (trade.strategyLabel) return `<span class="order-chip paper">${escapeHtml(trade.strategyLabel)}</span>`;
   return "";
 }
 
@@ -1432,6 +1433,51 @@ function loadDashboardState(options = {}) {
   return state.mode === "live" ? loadLiveState(options) : loadBotState();
 }
 
+function paperPortfolioList(botState) {
+  const portfolios = botState?.paperPortfolios && typeof botState.paperPortfolios === "object"
+    ? Object.values(botState.paperPortfolios)
+    : [];
+  if (portfolios.length) return portfolios;
+  return [{
+    id: "conservative",
+    label: "Conservative",
+    selectionMetric: "EV p.a.",
+    description: "Prioritizes eligible opportunities by EV p.a. and expected value.",
+    portfolio: botState?.portfolio || {},
+    trades: Array.isArray(botState?.trades) ? botState.trades : [],
+    lastDecision: botState?.lastDecision || null,
+  }];
+}
+
+function paperPortfolioTrades(portfolioState) {
+  return (Array.isArray(portfolioState?.trades) ? portfolioState.trades : [])
+    .map((trade) => ({
+      ...trade,
+      strategyId: trade.strategyId || portfolioState.id,
+      strategyLabel: trade.strategyLabel || portfolioState.label,
+    }));
+}
+
+function renderPaperPortfolioComparison(portfolios) {
+  return portfolios.map((portfolioState) => {
+    const portfolio = portfolioState.portfolio || {};
+    const trades = paperPortfolioTrades(portfolioState);
+    const decision = portfolioState.lastDecision || {};
+    const totalPnl = Number(portfolio.totalPnlUsdc || 0);
+    const openPnl = Number(portfolio.openPnlUsdc || 0);
+    const rr = averageRiskReward(trades, tradeRiskReward);
+    return `
+      <div>
+        <span class="label">${escapeHtml(portfolioState.label || portfolioState.id || "Paper")}</span>
+        <strong class="${pnlClass(totalPnl)}">${signedMoney(totalPnl)} (${signedPercent(Number(portfolio.totalPnlPct || 0))})</strong>
+        <span>${escapeHtml(portfolioState.selectionMetric || "-")} / equity ${money(Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100))}</span>
+        <span>${trades.length} trades / open ${signedMoney(openPnl)} / R/R ${riskReward(rr)}</span>
+        <span>${escapeHtml(decision.action || "waiting")}: ${escapeHtml(decision.reason || "no decision yet")}</span>
+      </div>
+    `;
+  }).join("");
+}
+
 function renderBotState(botState) {
   state.botState = botState;
   syncModeUi();
@@ -1443,10 +1489,12 @@ function renderBotState(botState) {
   refreshEligibilityThreshold();
   refreshRiskAllocation();
   refreshLimitOrders();
-  const decision = botState.lastDecision || {};
-  const portfolio = botState.portfolio || {};
+  const portfolios = paperPortfolioList(botState);
+  const conservativePortfolio = portfolios.find((item) => item.id === "conservative") || portfolios[0] || {};
+  const decision = conservativePortfolio.lastDecision || botState.lastDecision || {};
+  const portfolio = conservativePortfolio.portfolio || botState.portfolio || {};
   const learning = botState.learningProfile || {};
-  const trades = Array.isArray(botState.trades) ? botState.trades : [];
+  const trades = portfolios.flatMap(paperPortfolioTrades);
   const closedTrades = trades.filter(isClosedTrade);
   const openTrades = trades.filter((trade) => !isClosedTrade(trade));
   const portfolioRiskReward = averageRiskReward(trades, tradeRiskReward);
@@ -1490,6 +1538,7 @@ function renderBotState(botState) {
 
   els.botStatus.innerHTML = `
     <div class="bot-summary">
+      ${renderPaperPortfolioComparison(portfolios)}
       <div>
         <span class="label">Last run</span>
         <strong>${escapeHtml(botState.generatedAt ? formatDate(botState.generatedAt) : "not yet")}</strong>
