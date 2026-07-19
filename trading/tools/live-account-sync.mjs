@@ -443,10 +443,12 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
     .filter((group) => group.buyCost > 0 && (Math.abs(group.sharesBought - group.sharesSold) < 0.000001 || group.status === "REDEEMED"))
     .map((group) => {
       const realizedPnl = group.sellProceeds - group.buyCost;
+      const realizedPct = group.buyCost > 0 ? realizedPnl / group.buyCost : null;
       const entryPrice = group.sharesBought > 0 ? group.buyCost / group.sharesBought : null;
       const exitPrice = group.sharesSold > 0
         ? group.sellProceeds / group.sharesSold
         : (group.sharesBought > 0 && group.status === "REDEEMED" ? group.sellProceeds / group.sharesBought : group.latestPrice);
+      const closedAt = group.resolvedAt || generatedAt;
       return {
         id: group.id,
         mode: "LIVE",
@@ -460,18 +462,22 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
         conditionId: group.conditionId,
         date: group.openedAt || generatedAt,
         openedAt: group.openedAt || generatedAt,
-        resolvedAt: group.resolvedAt || generatedAt,
-        endDate: group.resolvedAt || generatedAt,
+        resolvedAt: closedAt,
+        closedAt,
+        endDate: closedAt,
         entryPrice,
+        exitPrice,
         currentPrice: exitPrice,
         finalOutcomePrice: exitPrice,
         shares: group.sharesBought,
         redeemedShares: number(group.redeemedShares),
         stakeUsdc: group.buyCost,
         totalCostUsdc: group.buyCost,
+        exitValueUsdc: group.sellProceeds,
         netGainIfWinUsdc: group.sharesBought - group.buyCost,
         realizedPnlUsdc: realizedPnl,
-        realizedPnlPct: group.buyCost > 0 ? realizedPnl / group.buyCost : null,
+        realizedPnlPct: realizedPct,
+        realizedPct,
         unrealizedPnlUsdc: 0,
         unrealizedPnlPct: 0,
         analysisSummary: "Derived from public Polymarket trade history; realized P/L is estimated from buys, sells and redemption-like activity where available.",
