@@ -344,6 +344,13 @@ function handlePost(PDO $pdo, array $config): ?string
         return markAiResearchSeedOutreachSent($pdo, (int)($_POST['run_id'] ?? 0));
     }
 
+    if ($action === 'test_seed_outreach_send') {
+        if (!canAccessAiResearch()) {
+            throw new RuntimeException('Test naseho osloveni je dostupny pouze adminovi.');
+        }
+        return sendAiResearchSeedOutreachTest($pdo, $config, (int)($_POST['run_id'] ?? 0));
+    }
+
     if ($action === 'switch_app_user') {
         return switchAppUser($pdo, (int)($_POST['user_id'] ?? 0));
     }
@@ -5368,6 +5375,34 @@ function markAiResearchSeedOutreachSent(PDO $pdo, int $runId): string
     ');
     $update->execute([$now, $now, (string)$run['seed_email'], (string)$run['scraping_keyword']]);
     return 'Primarni subjekt oznacen jako osloveny pro keyword ' . (string)$run['scraping_keyword'] . '.';
+}
+
+function sendAiResearchSeedOutreachTest(PDO $pdo, array $config, int $runId): string
+{
+    if ($runId <= 0) {
+        throw new RuntimeException('Neplatny research beh.');
+    }
+    $stmt = $pdo->prepare('SELECT * FROM ai_research_runs WHERE id=? LIMIT 1');
+    $stmt->execute([$runId]);
+    $run = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$run) {
+        throw new RuntimeException('Research beh nebyl nalezen.');
+    }
+    $contactsStmt = $pdo->prepare('SELECT * FROM ai_research_contacts WHERE run_id=? ORDER BY status ASC, id ASC LIMIT 50');
+    $contactsStmt->execute([$runId]);
+    $contacts = $contactsStmt->fetchAll(PDO::FETCH_ASSOC);
+    $plan = json_decode((string)($run['plan_json'] ?? ''), true) ?: [];
+    $language = aiResearchRunLanguage($run, $contacts);
+    $draft = aiResearchSeedOutreachDraft($run, $contacts, $plan, $language);
+    $subject = '[TEST] ' . (string)$draft['subject'];
+    $html = '<p style="font-size:12px;color:#67736d"><strong>Testovaci odeslani.</strong> Cilovy subjekt: '
+        . h((string)($run['seed_business'] ?? '')) . ' &lt;' . h((string)($run['seed_email'] ?? '')) . '&gt;.</p>'
+        . (string)$draft['html'];
+    (new SmtpMailer($config))->send(AI_RESEARCH_ALLOWED_EMAIL, $subject, $html, [
+        'email' => AI_RESEARCH_ALLOWED_EMAIL,
+        'name' => 'Admin test',
+    ]);
+    return 'Test naseho osloveni odeslan na ' . AI_RESEARCH_ALLOWED_EMAIL . '. Stav subjektu se tim nezmenil.';
 }
 
 function ownerSql(PDO $pdo, string $alias = ''): string
@@ -13614,12 +13649,13 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <h3><?= h((string)$seedOutreachDraft['subject']) ?></h3>
                             <div class="email-preview"><?= cleanHtml((string)$seedOutreachDraft['html']) ?></div>
                         </section>
-                        <?php if (!in_array((string)($run['seed_outreach_status'] ?? ''), ['sent', 'unsubscribed', 'skipped_duplicate'], true)): ?>
                         <form method="post" class="actions-row">
                             <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
+                            <button type="submit" name="action" value="test_seed_outreach_send" class="secondary">Poslat test adminovi</button>
+                            <?php if (!in_array((string)($run['seed_outreach_status'] ?? ''), ['sent', 'unsubscribed', 'skipped_duplicate'], true)): ?>
                             <button type="submit" name="action" value="mark_seed_outreach_sent" class="secondary">Označit jako oslovené</button>
+                            <?php endif; ?>
                         </form>
-                        <?php endif; ?>
                     </dialog>
                     </div>
                 </td>
