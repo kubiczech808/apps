@@ -34,7 +34,7 @@ jobs:
       WP_PASSWORD_SECRET: ${{ secrets.BTCDCA_WP_PASSWORD }}
       AGENT_C_CONFIG: /home/openclaw2/.openclaw/btc-dca-blogger-config.json
       AGENT_C_STATE: /home/openclaw2/.openclaw/btc-dca-blogger-state.json
-      AGENT_C_SCRIPT: /home/openclaw2/scripts/btc-dca-blogger.py
+      AGENT_C_SCRIPT: /home/jakub/btc-dca-blogger.py
       MODE: ${{ github.event.inputs.mode || 'complete-current' }}
 
     steps:
