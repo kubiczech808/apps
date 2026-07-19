@@ -59,6 +59,7 @@ if (shouldRunStartupMaintenance()) {
         normalizeAiResearchSeedOutreachStatuses($pdo);
         reconcileAiResearchSeedOutreachDuplicates($pdo);
         releaseAiResearchRunsWithFixedWebsiteContext($pdo);
+        markStaleAiResearchRuns($pdo);
     } catch (Throwable $e) {
         if ($isMysqlDatabase && databasePermissionDenied($e)) {
             $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Startovni udrzba databaze byla preskocena kvuli docasne DB chybe: ' . $e->getMessage());
@@ -73,6 +74,7 @@ try {
     ensureAppAuthUsers($pdo, $config);
     resetAiResearchDataIfNeeded($pdo);
     releaseAiResearchRunsWithFixedWebsiteContext($pdo);
+    markStaleAiResearchRuns($pdo);
     $config = effectiveConfig($pdo, $baseConfig);
 } catch (Throwable $e) {
     if ($isMysqlDatabase && databasePermissionDenied($e)) {
@@ -2006,6 +2008,7 @@ function runCronAiResearch(PDO $pdo, array $config): string
         setSetting($pdo, 'ai_research_lock_until', '');
         return $message;
     } catch (AiResearchTemporaryException $e) {
+        setSetting($pdo, 'ai_research_last_run_at', (string)time());
         setSetting($pdo, 'ai_research_lock_until', '');
         return 'AI research odlozen: ' . $e->getMessage();
     } catch (Throwable $e) {
@@ -2036,53 +2039,70 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
         }
         $plans = [$basePlan];
         $plans = array_merge($plans, aiResearchFallbackMarketPlans($seed, $basePlan));
+        $runId = startAiResearchRun($pdo, $seed, aiResearchEnrichPlan($basePlan, $seed), 'AI research bezi: plan je pripraveny, zacinam hledat kontakty.');
+        setSetting($pdo, 'ai_research_last_seed_source_url', (string)($seed['source_url'] ?? ''));
         $bestPlan = $basePlan;
         $bestEvaluated = [];
         $bestAccepted = [];
         $attempts = 0;
         $seenPlans = [];
-        foreach ($plans as $plan) {
-            $plan = aiResearchEnrichPlan($plan, $seed);
-            $signature = aiResearchPlanSignature($plan);
-            if ($signature !== '' && isset($seenPlans[$signature])) {
-                continue;
-            }
-            $seenPlans[$signature] = true;
-            $attempts++;
-            $contacts = aiResearchFindContacts($pdo, $seed, $plan, 10);
-            $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
-            $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'contact_validation', 'gemini_research', aiResearchEvaluationAiStatus($evaluated)));
-            $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
-            if (count($accepted) > count($bestAccepted) || (count($accepted) === count($bestAccepted) && count($evaluated) > count($bestEvaluated))) {
-                $bestPlan = $plan;
-                $bestEvaluated = $evaluated;
-                $bestAccepted = $accepted;
-            }
-            if (count($bestAccepted) >= 3 || $attempts >= 4) {
-                break;
-            }
-        }
-        if (!$bestAccepted) {
-            foreach (aiResearchAlternativePlans($config, $seed, $bestPlan, array_keys($seenPlans), 3) as $plan) {
+        try {
+            foreach ($plans as $plan) {
+                $plan = aiResearchEnrichPlan($plan, $seed);
+                $signature = aiResearchPlanSignature($plan);
+                if ($signature !== '' && isset($seenPlans[$signature])) {
+                    continue;
+                }
+                $seenPlans[$signature] = true;
                 $attempts++;
-                $contacts = aiResearchFindContacts($pdo, $seed, $plan, 10);
+                updateAiResearchRunProgress($pdo, $runId, $plan, 'AI research bezi: zkousim keyword "' . aiResearchPrimaryKeyword($plan) . '".');
+                $contacts = aiResearchFindContacts($pdo, $seed, $plan, 10, $runId);
                 $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
+                upsertAiResearchRunContacts($pdo, $runId, $evaluated, 'pending');
                 $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'contact_validation', 'gemini_research', aiResearchEvaluationAiStatus($evaluated)));
                 $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
                 if (count($accepted) > count($bestAccepted) || (count($accepted) === count($bestAccepted) && count($evaluated) > count($bestEvaluated))) {
                     $bestPlan = $plan;
                     $bestEvaluated = $evaluated;
                     $bestAccepted = $accepted;
+                    updateAiResearchRunProgress($pdo, $runId, $bestPlan, 'AI research bezi: nalezeno ' . count($bestEvaluated) . ' kontaktu, vhodnych zatim ' . count($bestAccepted) . '.');
                 }
-                if (count($bestAccepted) >= 3) {
+                if (count($bestAccepted) >= 3 || $attempts >= 4) {
                     break;
                 }
             }
+            if (!$bestAccepted) {
+                foreach (aiResearchAlternativePlans($config, $seed, $bestPlan, array_keys($seenPlans), 3) as $plan) {
+                    $attempts++;
+                    $plan = aiResearchEnrichPlan($plan, $seed);
+                    updateAiResearchRunProgress($pdo, $runId, $plan, 'AI research bezi: zkousim alternativni keyword "' . aiResearchPrimaryKeyword($plan) . '".');
+                    $contacts = aiResearchFindContacts($pdo, $seed, $plan, 10, $runId);
+                    $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
+                    upsertAiResearchRunContacts($pdo, $runId, $evaluated, 'pending');
+                    $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'contact_validation', 'gemini_research', aiResearchEvaluationAiStatus($evaluated)));
+                    $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
+                    if (count($accepted) > count($bestAccepted) || (count($accepted) === count($bestAccepted) && count($evaluated) > count($bestEvaluated))) {
+                        $bestPlan = $plan;
+                        $bestEvaluated = $evaluated;
+                        $bestAccepted = $accepted;
+                        updateAiResearchRunProgress($pdo, $runId, $bestPlan, 'AI research bezi: nalezeno ' . count($bestEvaluated) . ' kontaktu, vhodnych zatim ' . count($bestAccepted) . '.');
+                    }
+                    if (count($bestAccepted) >= 3) {
+                        break;
+                    }
+                }
+            }
+            $bestPlan['research_attempts'] = $attempts;
+            finalizeAiResearchRun($pdo, $config, $runId, $seed, $bestPlan, $bestEvaluated, $bestAccepted);
+            setSetting($pdo, 'ai_research_last_seed_source_url', (string)($seed['source_url'] ?? ''));
+            return 'AI research: beh #' . $runId . ', seed ' . (string)$seed['email'] . ', pokusu ' . $attempts . ', nalezeno ' . count($bestEvaluated) . ', vhodnych ' . count($bestAccepted) . '.';
+        } catch (AiResearchTemporaryException $e) {
+            markAiResearchRunDeferred($pdo, $runId, 'AI research odlozen: ' . $e->getMessage());
+            throw $e;
+        } catch (Throwable $e) {
+            markAiResearchRunFailed($pdo, $runId, 'AI research selhal: ' . $e->getMessage());
+            throw $e;
         }
-        $bestPlan['research_attempts'] = $attempts;
-        $runId = saveAiResearchRun($pdo, $config, $seed, $bestPlan, $bestEvaluated, $bestAccepted);
-        setSetting($pdo, 'ai_research_last_seed_source_url', (string)($seed['source_url'] ?? ''));
-        return 'AI research: beh #' . $runId . ', seed ' . (string)$seed['email'] . ', pokusu ' . $attempts . ', nalezeno ' . count($bestEvaluated) . ', vhodnych ' . count($bestAccepted) . '.';
     }
     return $lastMessage !== '' ? $lastMessage : 'AI research: nepodarilo se najit pouzitelny seed subjekt.';
 }
@@ -2366,7 +2386,7 @@ function aiResearchSeedAlreadySeen(PDO $pdo, string $website, string $sourceUrl)
         $values[] = 'http://www.' . $websiteKey . '%';
         $values[] = 'https://www.' . $websiteKey . '%';
     }
-    $stmt = $pdo->prepare('SELECT COUNT(*) FROM ai_research_runs WHERE ' . implode(' OR ', $conditions));
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM ai_research_runs WHERE status NOT IN ("deferred","failed") AND (' . implode(' OR ', $conditions) . ')');
     $stmt->execute($values);
     return (int)$stmt->fetchColumn() > 0;
 }
@@ -2422,7 +2442,7 @@ function selectAiResearchSeedRecipient(PDO $pdo, bool $force = false): ?array
           AND (r.source_label LIKE "%Firmy.cz%" OR r.source_url LIKE "%firmy.cz%")
           AND NOT EXISTS (SELECT 1 FROM app_users au WHERE LOWER(au.email)=LOWER(r.email))
           AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
-          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND (COALESCE(ar.accepted_count,0)>0 OR ar.status IN ("done","unsuitable")))
+          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND (ar.status IN ("done","unsuitable","running") OR (COALESCE(ar.accepted_count,0)>0 AND ar.status NOT IN ("deferred","failed"))))
           ' . $recentSql . '
     ';
     $values = $force ? [] : [date('c', time() - 12 * 3600)];
@@ -2448,7 +2468,7 @@ function selectAiResearchSeedRecipient(PDO $pdo, bool $force = false): ?array
           AND (r.source_label LIKE "%Firmy.cz%" OR r.source_url LIKE "%firmy.cz%")
           AND NOT EXISTS (SELECT 1 FROM app_users au WHERE LOWER(au.email)=LOWER(r.email))
           AND NOT EXISTS (SELECT 1 FROM suppression_list s WHERE s.email=LOWER(r.email))
-          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND (COALESCE(ar.accepted_count,0)>0 OR ar.status IN ("done","unsuitable")))
+          AND NOT EXISTS (SELECT 1 FROM ai_research_runs ar WHERE ar.seed_recipient_id=r.id AND (ar.status IN ("done","unsuitable","running") OR (COALESCE(ar.accepted_count,0)>0 AND ar.status NOT IN ("deferred","failed"))))
           ' . $fallbackRecentSql . '
         ORDER BY RAND()
         LIMIT 1
@@ -3846,17 +3866,20 @@ function aiResearchDefaultSourceForSeed(array $seed): string
     return 'firmy_cz';
 }
 
-function aiResearchFindContacts(PDO $pdo, array $seed, array $plan, int $limit): array
+function aiResearchFindContacts(PDO $pdo, array $seed, array $plan, int $limit, int $runId = 0): array
 {
     $plan = aiResearchPrimaryQueryPlan($plan);
-    $contacts = aiResearchQuickScrapeContacts($plan, max($limit, 10), 4, 24);
+    $contacts = aiResearchQuickScrapeContacts($plan, max($limit, 10), 4, 24, $pdo, $runId);
     if (count($contacts) < $limit) {
         $contacts = array_merge($contacts, aiResearchCandidateContactsFromRecipients($pdo, $seed, $plan, max($limit, 10)));
+        if ($runId > 0) {
+            upsertAiResearchRunContacts($pdo, $runId, $contacts, 'pending');
+        }
     }
     return array_slice(onboardingUniqueValidContacts($contacts), 0, $limit);
 }
 
-function aiResearchQuickScrapeContacts(array $plan, int $limit, int $pagesPerQuery = 1, int $detailsPerPage = 10): array
+function aiResearchQuickScrapeContacts(array $plan, int $limit, int $pagesPerQuery = 1, int $detailsPerPage = 10, ?PDO $pdo = null, int $runId = 0): array
 {
     $contacts = [];
     $seen = [];
@@ -3891,6 +3914,9 @@ function aiResearchQuickScrapeContacts(array $plan, int $limit, int $pagesPerQue
                         ], $plan);
                         $contact['search_url'] = (string)$search['url'];
                         $contacts[] = $contact;
+                        if ($pdo && $runId > 0) {
+                            upsertAiResearchRunContacts($pdo, $runId, [$contact], 'pending');
+                        }
                         if (count($contacts) >= $limit) {
                             return $contacts;
                         }
@@ -4207,6 +4233,217 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         throw new AiResearchTemporaryException('AI outreach_draft se nepodarilo zpracovat kvalitnim modelem: ' . $e->getMessage(), 0, $e);
     }
     throw new AiResearchTemporaryException('AI outreach_draft vratil prazdny nebo neplatny vystup, beh se neulozil jako fallback.');
+}
+
+function startAiResearchRun(PDO $pdo, array $seed, array $plan, string $message): int
+{
+    $now = date('c');
+    $ownerId = aiResearchOwnerUserId($pdo);
+    $scrapingKeyword = aiResearchPrimaryKeyword($plan);
+    $stmt = $pdo->prepare('
+        INSERT INTO ai_research_runs (owner_user_id, seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, scraping_keyword, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at, seed_outreach_status, seed_outreach_token)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, "running", ?, ?, ?, ?, ?, ?, "", "", 0, 0, ?, ?, ?, "not_ready", ?)
+    ');
+    $stmt->execute([
+        $ownerId,
+        (int)($seed['id'] ?? 0),
+        (string)($seed['email'] ?? ''),
+        truncatePlainText((string)($seed['subject_name'] ?: ($seed['email'] ?? '')), 255),
+        truncatePlainText(normalizeWebsite((string)($seed['website'] ?? '')), 500),
+        truncatePlainText((string)($seed['address'] ?? ''), 500),
+        truncatePlainText((string)($seed['source_label'] ?? ''), 500),
+        truncatePlainText((string)($seed['source_url'] ?? ''), 500),
+        truncatePlainText((string)($plan['audience_label'] ?? ''), 500),
+        (string)($plan['rationale'] ?? ''),
+        (string)($plan['email_angle'] ?? ''),
+        truncatePlainText($scrapingKeyword, 255),
+        json_encode((array)($plan['filters'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]',
+        json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
+        truncatePlainText($message, 500),
+        $now,
+        $now,
+        aiResearchSeedOutreachToken($pdo),
+    ]);
+    return (int)$pdo->lastInsertId();
+}
+
+function updateAiResearchRunProgress(PDO $pdo, int $runId, array $plan, string $message): void
+{
+    if ($runId <= 0) {
+        return;
+    }
+    $stmt = $pdo->prepare('
+        UPDATE ai_research_runs
+        SET audience_label=?,
+            rationale=?,
+            email_angle=?,
+            scraping_keyword=?,
+            filters_json=?,
+            plan_json=?,
+            found_count=(SELECT COUNT(*) FROM ai_research_contacts WHERE run_id=?),
+            message=?,
+            updated_at=?
+        WHERE id=? AND status="running"
+    ');
+    $stmt->execute([
+        truncatePlainText((string)($plan['audience_label'] ?? ''), 500),
+        (string)($plan['rationale'] ?? ''),
+        (string)($plan['email_angle'] ?? ''),
+        truncatePlainText(aiResearchPrimaryKeyword($plan), 255),
+        json_encode((array)($plan['filters'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]',
+        json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
+        $runId,
+        truncatePlainText($message, 500),
+        date('c'),
+        $runId,
+    ]);
+}
+
+function upsertAiResearchRunContacts(PDO $pdo, int $runId, array $contacts, string $defaultStatus = 'pending'): void
+{
+    if ($runId <= 0 || !$contacts) {
+        return;
+    }
+    $now = date('c');
+    $find = $pdo->prepare('SELECT id FROM ai_research_contacts WHERE run_id=? AND email=? LIMIT 1');
+    $insert = $pdo->prepare('
+        INSERT INTO ai_research_contacts (run_id, email, subject_name, website, address, phone, source_label, source_url, status, fit_reason, email_subject, email_body_html, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ');
+    $update = $pdo->prepare('
+        UPDATE ai_research_contacts
+        SET subject_name=?, website=?, address=?, phone=?, source_label=?, source_url=?, status=?, fit_reason=?, email_subject=?, email_body_html=?
+        WHERE id=?
+    ');
+    foreach ($contacts as $contact) {
+        $email = strtolower(trim((string)($contact['email'] ?? '')));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            continue;
+        }
+        $status = trim((string)($contact['status'] ?? '')) !== '' ? (string)$contact['status'] : $defaultStatus;
+        $values = [
+            truncatePlainText((string)($contact['subject_name'] ?? ''), 255),
+            truncatePlainText(normalizeWebsite((string)($contact['website'] ?? '')), 500),
+            truncatePlainText((string)($contact['address'] ?? ''), 500),
+            truncatePlainText((string)($contact['phone'] ?? ''), 80),
+            truncatePlainText((string)($contact['source_label'] ?? ''), 500),
+            truncatePlainText((string)($contact['source_url'] ?? ''), 500),
+            truncatePlainText($status, 40),
+            truncatePlainText((string)($contact['fit_reason'] ?? ''), 500),
+            truncatePlainText((string)($contact['email_subject'] ?? ''), 255),
+            cleanHtml((string)($contact['email_body_html'] ?? '')),
+        ];
+        $find->execute([$runId, $email]);
+        $existingId = (int)$find->fetchColumn();
+        if ($existingId > 0) {
+            $update->execute(array_merge($values, [$existingId]));
+        } else {
+            $insert->execute(array_merge([$runId, $email], $values, [$now]));
+        }
+    }
+    refreshAiResearchRunCounts($pdo, $runId);
+}
+
+function refreshAiResearchRunCounts(PDO $pdo, int $runId): void
+{
+    $stmt = $pdo->prepare('
+        UPDATE ai_research_runs
+        SET found_count=(SELECT COUNT(*) FROM ai_research_contacts WHERE run_id=?),
+            accepted_count=(SELECT COUNT(*) FROM ai_research_contacts WHERE run_id=? AND status="accepted"),
+            updated_at=?
+        WHERE id=?
+    ');
+    $stmt->execute([$runId, $runId, date('c'), $runId]);
+}
+
+function finalizeAiResearchRun(PDO $pdo, array $config, int $runId, array $seed, array $plan, array $evaluated, array $accepted): void
+{
+    $now = date('c');
+    upsertAiResearchRunContacts($pdo, $runId, $evaluated, 'pending');
+    $draft = aiResearchRunDraft($config, $seed, $plan, $accepted ?: $evaluated);
+    $draftSubject = (string)$draft['subject'];
+    $draftHtml = (string)$draft['html'];
+    if (is_array($draft['audit'] ?? null)) {
+        $plan = aiResearchAppendModelAudit($plan, (array)$draft['audit']);
+    }
+    $status = $accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts');
+    $message = $accepted ? 'AI nasla vhodne kontakty a pripravila osloveni.' : ($evaluated ? 'AI nenasla dostatecne vhodny kontakt.' : 'Scraping nenasel zadny kontakt.');
+    if ((int)($plan['research_attempts'] ?? 0) > 1) {
+        $message .= ' Probehlo ' . (int)$plan['research_attempts'] . ' pokusu s alternativnimi keywordy.';
+    }
+    $stmt = $pdo->prepare('
+        UPDATE ai_research_runs
+        SET status=?,
+            audience_label=?,
+            rationale=?,
+            email_angle=?,
+            scraping_keyword=?,
+            filters_json=?,
+            plan_json=?,
+            email_subject=?,
+            email_body_html=?,
+            found_count=(SELECT COUNT(*) FROM ai_research_contacts WHERE run_id=?),
+            accepted_count=(SELECT COUNT(*) FROM ai_research_contacts WHERE run_id=? AND status="accepted"),
+            message=?,
+            updated_at=?,
+            seed_outreach_status=?
+        WHERE id=?
+    ');
+    $stmt->execute([
+        $status,
+        truncatePlainText((string)($plan['audience_label'] ?? ''), 500),
+        (string)($plan['rationale'] ?? ''),
+        (string)($plan['email_angle'] ?? ''),
+        truncatePlainText(aiResearchPrimaryKeyword($plan), 255),
+        json_encode((array)($plan['filters'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]',
+        json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
+        $draftSubject,
+        $draftHtml,
+        $runId,
+        $runId,
+        $message,
+        $now,
+        $accepted ? 'ready' : 'not_ready',
+        $runId,
+    ]);
+    if ($accepted) {
+        try {
+            provisionAiResearchCustomerWorkspace($pdo, $runId, $seed, $plan, $accepted, $draftSubject, $draftHtml);
+        } catch (Throwable $e) {
+            error_log('AI research customer workspace provisioning failed for run #' . $runId . ': ' . $e->getMessage());
+        }
+    }
+}
+
+function markAiResearchRunDeferred(PDO $pdo, int $runId, string $message): void
+{
+    if ($runId <= 0) {
+        return;
+    }
+    $stmt = $pdo->prepare('UPDATE ai_research_runs SET status="deferred", message=?, updated_at=? WHERE id=? AND status="running"');
+    $stmt->execute([truncatePlainText($message, 500), date('c'), $runId]);
+}
+
+function markAiResearchRunFailed(PDO $pdo, int $runId, string $message): void
+{
+    if ($runId <= 0) {
+        return;
+    }
+    $stmt = $pdo->prepare('UPDATE ai_research_runs SET status="failed", message=?, updated_at=? WHERE id=? AND status="running"');
+    $stmt->execute([truncatePlainText($message, 500), date('c'), $runId]);
+}
+
+function markStaleAiResearchRuns(PDO $pdo): void
+{
+    $stmt = $pdo->prepare('
+        UPDATE ai_research_runs
+        SET status="deferred",
+            message="AI research byl prerusen timeoutem nebo ukoncenim requestu; pri dalsim behu se vybere dalsi subjekt.",
+            updated_at=?
+        WHERE status="running"
+          AND updated_at<?
+    ');
+    $stmt->execute([date('c'), date('c', time() - 30 * 60)]);
 }
 
 function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, array $evaluated, array $accepted): int
@@ -14047,7 +14284,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><?= h(formatDateTime((string)$run['created_at'])) ?></td>
                 <td><strong><?= h((string)$run['seed_business']) ?></strong><?php if ($run['seed_website']): ?><br><a href="<?= h((string)$run['seed_website']) ?>" target="_blank" rel="noopener"><?= h((string)$run['seed_website']) ?></a><?php endif; ?></td>
                 <td><?= h((string)$run['seed_email']) ?></td>
-                <td><?= statusBadge((string)$run['status']) ?></td>
+                <td><?= statusBadge(aiResearchRunStatusLabel((string)$run['status'])) ?></td>
                 <td><?= h($runUnderstanding !== '' ? $runUnderstanding : (string)$run['audience_label']) ?></td>
                 <td><?= h(truncatePlainText((string)($runPlan['targeting_reason'] ?? ''), 220)) ?></td>
                 <td><?= h((string)$run['audience_label']) ?></td>
@@ -14159,7 +14396,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                                         <article class="scraping-result-item">
                                             <div class="scraping-result-title">
                                                 <strong>Kontakt nenalezen</strong>
-                                                <?= statusBadge((string)$run['status']) ?>
+                                                <?= statusBadge(aiResearchRunStatusLabel((string)$run['status'])) ?>
                                             </div>
                                             <p><?= h((string)($run['message'] ?: 'Hledani probehlo, ale nebyl nalezen zadny kontakt, ktery by AI mohla vyhodnotit jako vhodny.')) ?></p>
                                         </article>
@@ -15045,6 +15282,19 @@ function aiResearchLanguageLabel(string $language): string
     ][$language] ?? $language;
 }
 
+function aiResearchRunStatusLabel(string $status): string
+{
+    return [
+        'running' => 'bezi...',
+        'done' => 'hotovo',
+        'no_match' => 'bez shody',
+        'no_contacts' => 'bez kontaktu',
+        'unsuitable' => 'nevhodny',
+        'deferred' => 'odlozeno',
+        'failed' => 'chyba',
+    ][$status] ?? $status;
+}
+
 function aiResearchSeedOutreachStatusLabel(string $status): string
 {
     return [
@@ -15628,7 +15878,7 @@ function statusBadge(string $text): string
     if (in_array($text, ['cancelled', 'zruseno', 'unsubscribed', 'skipped_duplicate', 'odhlášeno', 'duplicitní'], true)) {
         $class = 'muted';
     }
-    if (in_array($text, ['bezi', 'ceka'], true)) {
+    if (in_array($text, ['bezi', 'bezi...', 'ceka'], true)) {
         $class .= ' live';
     }
     return '<span class="badge ' . $class . '">' . h($text) . '</span>';
