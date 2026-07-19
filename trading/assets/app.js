@@ -676,6 +676,7 @@ function tradeHeader(tableKey, key, label) {
 
 function tradeTypeBadge(trade) {
   if (trade.mode === "LIVE_ORDER") return '<span class="order-chip">Limit order waiting</span>';
+  if (trade.mode === "LIVE_RECONCILIATION") return '<span class="order-chip warning">Sync gap</span>';
   if (trade.mode === "LIVE") return '<span class="order-chip filled">Open position</span>';
   return "";
 }
@@ -1603,6 +1604,8 @@ function renderLiveState(liveState) {
   const activity = liveActivity(liveState);
   const closedTrades = liveClosedTrades(liveState);
   const sync = liveState.sync || {};
+  const reconciliation = liveState.reconciliation || {};
+  const reconciliationGaps = Number(reconciliation.orphanedCount || 0);
   const sources = Array.isArray(sync.sources) ? sync.sources : [];
   const totalPnl = Number(portfolio.totalPnlUsdc);
   const totalPnlPct = Number(portfolio.totalPnlPct);
@@ -1671,7 +1674,12 @@ function renderLiveState(liveState) {
       <div>
         <span class="label">Positions</span>
         <strong>${positions.length}</strong>
-        <span>${money(marketValue)} market value / ${openOrders.length} open orders</span>
+        <span>${money(marketValue)} market value / ${openOrders.length} open orders${reconciliationGaps ? ` / ${reconciliationGaps} sync gap` : ""}</span>
+      </div>
+      <div>
+        <span class="label">Ledger check</span>
+        <strong class="${reconciliationGaps ? "negative" : ""}">${escapeHtml(reconciliation.status || "OK")}</strong>
+        <span>${escapeHtml(reconciliationGaps ? `${reconciliationGaps} known trade kept visible as reconciliation row` : (reconciliation.invariant || "all known trades are classified"))}</span>
       </div>
       <div>
         <span class="label">Max per trade</span>

@@ -718,6 +718,12 @@ body.modal-open {
   color: var(--accent-dark) !important;
 }
 
+.order-chip.warning {
+  border-color: var(--bad);
+  background: #fef2f2;
+  color: var(--bad) !important;
+}
+
 .analysis-reason {
   display: inline-block !important;
   max-width: 220px !important;

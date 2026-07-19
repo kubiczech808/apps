@@ -485,6 +485,194 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
     });
 }
 
+function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades, openOrders, generatedAt) {
+  const groups = new Map();
+  const groupsByQuestion = new Map();
+  const seenTradeKeys = new Set();
+
+  function questionKey(item) {
+    return String(item.question || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
+
+  function groupKey(item) {
+    return String(item.tokenId || `${item.conditionId || item.slug || item.question}:${item.outcome || ""}`);
+  }
+
+  function tradeIdentity(item) {
+    return [
+      item.transactionHash || item.id || "",
+      item.tokenId || item.conditionId || item.slug || "",
+      String(item.side || "").toUpperCase(),
+      item.timestamp || "",
+    ].join(":");
+  }
+
+  function addKnownKeys(set, item) {
+    const tokenId = String(item.tokenId || item.assetId || item.asset || "").trim();
+    const conditionId = String(item.conditionId || item.market || "").trim();
+    const outcome = String(item.outcome || item.side || "").trim().toLowerCase();
+    const question = questionKey(item);
+    if (tokenId) set.add(`token:${tokenId}`);
+    if (conditionId && outcome) set.add(`condition:${conditionId}:${outcome}`);
+    if (conditionId && !outcome) set.add(`condition:${conditionId}`);
+    if (question && outcome) set.add(`question:${question}:${outcome}`);
+  }
+
+  function itemKeys(item) {
+    const keys = new Set();
+    addKnownKeys(keys, item);
+    return keys;
+  }
+
+  function isKnown(group, knownKeys) {
+    const keys = itemKeys(group);
+    return [...keys].some((key) => knownKeys.has(key));
+  }
+
+  function indexGroup(group) {
+    const key = questionKey(group);
+    if (!key) return;
+    if (!groupsByQuestion.has(key)) groupsByQuestion.set(key, []);
+    const list = groupsByQuestion.get(key);
+    if (!list.includes(group)) list.push(group);
+  }
+
+  function ensureGroup(item) {
+    const key = groupKey(item);
+    if (!key || key === "null") return null;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        id: key,
+        question: item.question,
+        outcome: item.outcome || item.side || "-",
+        slug: item.slug,
+        eventSlug: item.eventSlug || item.slug || "",
+        url: item.url,
+        tokenId: item.tokenId,
+        conditionId: item.conditionId,
+        openedAt: item.timestamp,
+        lastActivityAt: item.timestamp,
+        sharesBought: 0,
+        sharesSold: 0,
+        redeemedShares: 0,
+        buyCost: 0,
+        sellProceeds: 0,
+        latestPrice: null,
+      });
+      indexGroup(groups.get(key));
+    }
+    return groups.get(key);
+  }
+
+  function ingestTrade(item) {
+    const identity = tradeIdentity(item);
+    if (seenTradeKeys.has(identity)) return;
+    seenTradeKeys.add(identity);
+    const group = ensureGroup(item);
+    if (!group) return;
+    const timestamp = Date.parse(item.timestamp || "") || 0;
+    if (!group.openedAt || timestamp < (Date.parse(group.openedAt || "") || Infinity)) group.openedAt = item.timestamp;
+    if (!group.lastActivityAt || timestamp > (Date.parse(group.lastActivityAt || "") || 0)) group.lastActivityAt = item.timestamp;
+    if (number(item.price) != null) group.latestPrice = number(item.price);
+
+    const size = number(item.size, 0);
+    const value = number(item.usdcValue, 0);
+    const side = String(item.side || "").toUpperCase();
+    if (side.includes("BUY")) {
+      group.sharesBought += size;
+      group.buyCost += value;
+    } else if (side.includes("SELL")) {
+      group.sharesSold += size;
+      group.sellProceeds += value;
+    }
+  }
+
+  function bestRedeemGroup(item) {
+    const direct = groups.get(groupKey(item));
+    if (direct) return direct;
+    const candidates = groupsByQuestion.get(questionKey(item)) || [];
+    if (!candidates.length) return null;
+    const redeemSize = number(item.size, 0);
+    return [...candidates]
+      .sort((a, b) => {
+        const aSizeDelta = Math.abs(number(a.sharesBought, 0) - redeemSize);
+        const bSizeDelta = Math.abs(number(b.sharesBought, 0) - redeemSize);
+        if (aSizeDelta !== bSizeDelta) return aSizeDelta - bSizeDelta;
+        return (Date.parse(b.openedAt || "") || 0) - (Date.parse(a.openedAt || "") || 0);
+      })[0] || null;
+  }
+
+  for (const trade of trades) ingestTrade(trade);
+  for (const item of activity) {
+    if (String(item.type || "").toUpperCase().includes("TRADE")) ingestTrade(item);
+  }
+  for (const item of activity) {
+    if (!String(item.type || "").toUpperCase().includes("REDEEM")) continue;
+    const group = bestRedeemGroup(item);
+    if (!group) continue;
+    group.redeemedShares += number(item.size, 0);
+    group.sellProceeds += number(item.usdcValue, 0);
+    group.lastActivityAt = item.timestamp || group.lastActivityAt;
+  }
+
+  const knownKeys = new Set();
+  for (const item of [...positions, ...closedTrades, ...openOrders]) addKnownKeys(knownKeys, item);
+
+  const orphanedTrades = [...groups.values()]
+    .filter((group) => {
+      const netShares = number(group.sharesBought, 0) - number(group.sharesSold, 0) - number(group.redeemedShares, 0);
+      const netCost = number(group.buyCost, 0) - number(group.sellProceeds, 0);
+      return netShares > 0.000001 && netCost > 0.000001 && !isKnown(group, knownKeys);
+    })
+    .map((group) => {
+      const netShares = number(group.sharesBought, 0) - number(group.sharesSold, 0) - number(group.redeemedShares, 0);
+      const netCost = Math.max(0, number(group.buyCost, 0) - number(group.sellProceeds, 0));
+      const entryPrice = netShares > 0 ? netCost / netShares : null;
+      return {
+        id: `ledger-gap-${group.id}`,
+        mode: "LIVE_RECONCILIATION",
+        status: "SYNC GAP",
+        question: group.question || "-",
+        outcome: group.outcome || "-",
+        slug: group.slug || group.eventSlug || "",
+        eventSlug: group.eventSlug || group.slug || "",
+        url: group.url,
+        tokenId: group.tokenId,
+        conditionId: group.conditionId,
+        date: group.openedAt || generatedAt,
+        openedAt: group.openedAt || generatedAt,
+        lastActivityAt: group.lastActivityAt || generatedAt,
+        endDate: null,
+        entryPrice,
+        currentPrice: group.latestPrice,
+        shares: netShares,
+        stakeUsdc: netCost,
+        totalCostUsdc: netCost,
+        currentValueUsdc: group.latestPrice == null ? null : group.latestPrice * netShares,
+        netGainIfWinUsdc: netShares - netCost,
+        unrealizedPnlUsdc: 0,
+        unrealizedPnlPct: 0,
+        realizedPnlUsdc: 0,
+        realizedPnlPct: 0,
+        size: netShares,
+        analysisSummary: "Ledger consistency fallback: public trade/activity history shows an open net buy that was not present in current Polymarket positions, open orders, or closed trades. Keep it visible until the next sync classifies it.",
+      };
+    });
+
+  return {
+    status: orphanedTrades.length ? "WARNING" : "OK",
+    orphanedTrades,
+    orphanedCount: orphanedTrades.length,
+    checkedGroups: groups.size,
+    invariant: "Every known live buy is represented in open positions/orders, closed trades, or ledger fallback rows.",
+  };
+}
+
 function portfolioSummary(positions, valueRows, closedTrades = []) {
   const valueRow = Array.isArray(valueRows) ? valueRows.find((row) => String(row.user || "").toLowerCase() === ACCOUNT_ADDRESS) : null;
   const marketValue = positions.reduce((sum, item) => sum + number(item.currentValueUsdc, 0), 0);
@@ -778,7 +966,24 @@ async function main() {
     ? rawTrades.map(normalizeTradeHistoryItem).filter((item) => item.timestamp || item.question !== "-")
     : [];
   const closedTrades = closedTradesFromHistory(tradeHistory, activity, generatedAt);
-  const portfolioBase = portfolioSummary(positions, valueRows, closedTrades);
+  const reconciliation = ledgerReconciliationFallbacks(
+    tradeHistory,
+    activity,
+    positions,
+    closedTrades,
+    Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
+    generatedAt,
+  );
+  const reconciledPositions = [
+    ...positions,
+    ...reconciliation.orphanedTrades,
+  ];
+  if (reconciliation.orphanedCount > 0) {
+    sync.status = sync.status === "ERROR" ? "ERROR" : "PARTIAL";
+    sync.warnings.push(`${reconciliation.orphanedCount} live ledger trade(s) are visible only via activity/trade history and were kept as open reconciliation rows`);
+    sync.message = `Live snapshot loaded with ledger reconciliation warnings: ${sync.warnings.join(" | ")}`;
+  }
+  const portfolioBase = portfolioSummary(reconciledPositions, valueRows, closedTrades);
   const cashUsdc = number(balanceAllowance?.collateral?.balanceUsdc);
   const equityUsdc = cashUsdc == null
     ? portfolioBase.equityUsdc
@@ -817,7 +1022,9 @@ async function main() {
     },
     balanceAllowance,
     openOrders: Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
-    positions,
+    positions: reconciledPositions,
+    apiPositions: positions,
+    reconciliation,
     closedTrades,
     tradeHistory,
     activity,
@@ -829,7 +1036,9 @@ async function main() {
   console.log(JSON.stringify({
     mode: payload.mode,
     account: payload.account.address,
-    positions: positions.length,
+    positions: payload.positions.length,
+    apiPositions: positions.length,
+    reconciliationGaps: reconciliation.orphanedCount,
     openOrders: payload.openOrders.length,
     cashUsdc: payload.portfolio.cashUsdc,
     closedTrades: closedTrades.length,
