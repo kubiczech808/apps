@@ -20,7 +20,7 @@ const MAX_ORDER_NOTIONAL_USDC = Number(process.env.MAX_ORDER_NOTIONAL_USDC || pr
 const CANDIDATE_SCAN_LIMIT = Number(process.env.LIVE_CANDIDATE_SCAN_LIMIT || 120);
 const SHORT_HORIZON_DAYS = Number(process.env.LIVE_SHORT_HORIZON_DAYS || process.env.PAPER_SHORT_HORIZON_DAYS || 7);
 const MEDIUM_HORIZON_DAYS = Number(process.env.LIVE_MEDIUM_HORIZON_DAYS || process.env.PAPER_MEDIUM_HORIZON_DAYS || 14);
-const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "minimum").toLowerCase();
+const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "stake_fraction").toLowerCase();
 const USE_LIMIT_ORDERS = String(process.env.USE_LIMIT_ORDERS ?? "true").toLowerCase() !== "false";
 const POST_ONLY = String(process.env.POLYMARKET_POST_ONLY ?? "true").toLowerCase() !== "false";
 const DRY_RUN = String(process.env.POLYMARKET_DRY_RUN ?? "true").toLowerCase() !== "false";
@@ -405,42 +405,42 @@ function orderPriceForBook(book, tick) {
 }
 
 function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
-  const budget = Math.min(maxNotional, cash);
+  const targetStake = Math.min(maxNotional, cash);
   const minNotional = price * minOrderSize;
   if (minNotional > cash) {
     return {
       size: null,
-      budget,
+      targetStake,
       minNotional,
       minSizeOverride: false,
       sizingNote: `minimum order ${minOrderSize} shares costs ${minNotional.toFixed(4)} USDC, above cash ${cash.toFixed(4)} USDC`,
     };
   }
-  if (minNotional > budget) {
+  if (minNotional > targetStake) {
     return {
-      size: Number(minOrderSize.toFixed(4)),
-      budget,
+      size: null,
+      targetStake,
       minNotional,
-      minSizeOverride: true,
-      sizingNote: `raised to exchange minimum ${minOrderSize} shares because Polymarket minimum exceeds max-per-trade ${budget.toFixed(4)} USDC`,
+      minSizeOverride: false,
+      sizingNote: `target stake ${targetStake.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
     };
   }
   if (ORDER_SIZE_MODE === "minimum") {
     return {
       size: Number(minOrderSize.toFixed(4)),
-      budget,
+      targetStake,
       minNotional,
       minSizeOverride: false,
-      sizingNote: "exchange minimum order size",
+      sizingNote: "legacy minimum-share sizing; use LIVE_ORDER_SIZE_MODE=stake_fraction for equal stake sizing",
     };
   }
-  const size = Math.floor((budget / price) * 10000) / 10000;
+  const size = Math.floor((targetStake / price) * 10000) / 10000;
   return {
     size: size >= minOrderSize ? Number(size.toFixed(4)) : null,
-    budget,
+    targetStake,
     minNotional,
     minSizeOverride: false,
-    sizingNote: size >= minOrderSize ? "sized from max-per-trade budget" : `budget ${budget.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
+    sizingNote: size >= minOrderSize ? "sized from target stake percentage" : `target stake ${targetStake.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
   };
 }
 
@@ -539,6 +539,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     orderPrice: Number(price.toFixed(4)),
     orderSize: Number(size.toFixed(4)),
     orderNotionalUsdc: notional,
+    targetStakeUsdc: Number(orderSizing.targetStake.toFixed(5)),
     minOrderSize,
     minOrderNotionalUsdc: Number(orderSizing.minNotional.toFixed(5)),
     maxNotionalBeforeMinimumOverrideUsdc: maxNotional,

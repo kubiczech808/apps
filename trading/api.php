@@ -549,6 +549,21 @@ function normalized_probability_input($value): ?string
     return rtrim(rtrim(number_format($probability, 4, '.', ''), '0'), '.');
 }
 
+function normalized_fraction_input($value): ?string
+{
+    if (!is_numeric($value)) {
+        return null;
+    }
+    $fraction = (float) $value;
+    if ($fraction > 1) {
+        $fraction /= 100;
+    }
+    if ($fraction < 0.01 || $fraction > 0.50) {
+        return null;
+    }
+    return rtrim(rtrim(number_format($fraction, 4, '.', ''), '0'), '.');
+}
+
 try {
     $action = $_GET['action'] ?? 'markets';
 
@@ -607,6 +622,7 @@ try {
         $payload = request_payload();
         $target = (string) ($payload['target'] ?? '');
         $liveMinProbability = normalized_probability_input($payload['min_probability'] ?? $payload['live_min_probability'] ?? null);
+        $liveMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['live_max_order_fraction'] ?? null);
         $workflows = [
             'paper' => [
                 'workflow' => 'trading-paper-bot.yml',
@@ -618,6 +634,7 @@ try {
                 'inputs' => array_filter([
                     'live_confirm' => true,
                     'live_min_probability' => $liveMinProbability,
+                    'live_max_order_fraction' => $liveMaxOrderFraction,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
             ],

@@ -19,6 +19,11 @@ on:
         required: false
         default: "0.95"
         type: string
+      live_max_order_fraction:
+        description: Maximum stake per trade as fraction of current live cash, decimal 0.01-0.50
+        required: false
+        default: "0.10"
+        type: string
   schedule:
     - cron: '7 * * * *'
 
@@ -36,11 +41,11 @@ jobs:
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: data/live-state.json
       LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
-      MAX_ORDER_FRACTION: "0.10"
+      MAX_ORDER_FRACTION: ${{ github.event.inputs.live_max_order_fraction || '0.10' }}
       MAX_ORDER_NOTIONAL_USDC: "0.75"
       USE_LIMIT_ORDERS: "true"
       POLYMARKET_POST_ONLY: "true"
-      LIVE_ORDER_SIZE_MODE: minimum
+      LIVE_ORDER_SIZE_MODE: stake_fraction
       LIVE_MIN_PROBABILITY: ${{ github.event.inputs.live_min_probability || '0.95' }}
       LIVE_MIN_ANNUAL_RETURN: "0.05"
       LIVE_OPPORTUNITY_MIN_PROBABILITY: "0.60"

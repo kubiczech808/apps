@@ -1378,7 +1378,10 @@ async function triggerOneTimeExecution(target) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target,
-        ...(live ? { min_probability: currentEligibilityThreshold() } : {}),
+        ...(live ? {
+          min_probability: currentEligibilityThreshold(),
+          max_order_fraction: currentRiskAllocation(),
+        } : {}),
       }),
     });
     const payload = await response.json().catch(() => ({}));
