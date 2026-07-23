@@ -2192,17 +2192,17 @@ td a {
 .research-contacts-table th:nth-child(2),
 .research-contacts-table td:nth-child(2) { width: 210px; }
 .research-contacts-table th:nth-child(3),
-.research-contacts-table td:nth-child(3) { width: 210px; }
+.research-contacts-table td:nth-child(3) { width: 340px; }
 .research-contacts-table th:nth-child(4),
-.research-contacts-table td:nth-child(4) { width: 180px; }
+.research-contacts-table td:nth-child(4) { width: 210px; }
 .research-contacts-table th:nth-child(5),
-.research-contacts-table td:nth-child(5) { width: 190px; }
+.research-contacts-table td:nth-child(5) { width: 180px; }
 .research-contacts-table th:nth-child(6),
-.research-contacts-table td:nth-child(6) { width: 120px; }
+.research-contacts-table td:nth-child(6) { width: 190px; }
 .research-contacts-table th:nth-child(7),
-.research-contacts-table td:nth-child(7) { width: 210px; }
+.research-contacts-table td:nth-child(7) { width: 120px; }
 .research-contacts-table th:nth-child(8),
-.research-contacts-table td:nth-child(8) { width: 320px; }
+.research-contacts-table td:nth-child(8) { width: 210px; }
 .research-contacts-table td {
   vertical-align: top;
 }

@@ -3355,16 +3355,20 @@ function aiResearchContactProcessFilterReason(array $seed, array $plan, array $c
 {
     $locationMatches = aiResearchContactMatchesLocationScope($seed, $plan, $contact);
     $keywordMatches = aiResearchContactMatchesPrimaryKeyword($plan, $contact);
+    $keyword = aiResearchPrimaryKeyword($plan);
+    $scope = aiResearchLocationScopeLabel((string)($plan['location_scope'] ?? ''));
+    $targetLocation = trim((string)($plan['target_location'] ?? ''));
+    $locationText = $targetLocation !== '' ? $scope . ' (' . $targetLocation . ')' : $scope;
     if ($locationMatches && $keywordMatches) {
         return '';
     }
     if (!$locationMatches && !$keywordMatches) {
-        return 'Kontakt byl odmitnut procesnim filtrem: nesoulad s keywordem i lokalitou.';
+        return 'Kontakt byl odmitnut procesnim filtrem: podle dostupnych dat neodpovida hledanemu keywordu "' . $keyword . '" ani lokacnimu omezeni ' . $locationText . '.';
     }
     if (!$locationMatches) {
-        return 'Kontakt byl odmitnut procesnim filtrem: nesoulad s lokalitou.';
+        return 'Kontakt byl odmitnut procesnim filtrem: podle adresy neodpovida lokacnimu omezeni ' . $locationText . '.';
     }
-    return 'Kontakt byl odmitnut procesnim filtrem: nesoulad s keywordem.';
+    return 'Kontakt byl odmitnut procesnim filtrem: podle nazvu, webu, zdrojove URL ani segmentu neni jasne, ze odpovida hledanemu keywordu "' . $keyword . '".';
 }
 
 function reconcileAiResearchProcessFilteredContacts(PDO $pdo): void
@@ -4050,7 +4054,8 @@ function aiResearchEvaluateContacts(array $config, array $seed, array $plan, arr
         . "U kazdeho kontaktu rozhodni, zda je opravdu relevantni pro navrzeny B2B use-case, primarni segment, zemi a lokalitu. Pokud ne, accepted=false a fit_reason konkretne vysvetli proc. "
         . "Pouzij i povinne filtry z planu. Kontakt schval jen tehdy, kdyz z nazvu, webu, adresy nebo zdrojove URL dava smysl, ze patri do zvolene cilovky a ma pravdepodobnou potrebu, rozpocet nebo opakovany trigger popsany v targeting_reason. "
         . "Neoznacuj kontakt jako vhodny jen proto, ze by teoreticky mohl sluzbu nekdy vyuzit. Musi jit o typ firmy, u ktere je rozumna nakupni pravdepodobnost, platebni schopnost a jasny use-case. "
-        . "Kontakt musi odpovidat pouzitemu scraping keywordu nebo jasne odpovidajicimu segmentu z planu. Napriklad pri keywordu 'autoservis' nesmi byt hotel oznacen jako vhodny jen proto, ze je ve stejne lokalite; takovy kontakt oznac accepted=false a uved 'nesoulad s keywordem'. "
+        . "Pokud byl kontakt vracen katalogem primo z vyhledavani podle scraping keywordu/search_url, ber to jako silny signal, ze keyword splnil; neodmitej ho jen proto, ze doslovny keyword neni v nazvu firmy. Odmitni ho pouze tehdy, kdyz z nazvu, webu, kategorie nebo zdrojove URL plyne zjevny rozpor s cilovym segmentem, a konkretne vysvetli rozpor. "
+        . "Kontakt musi odpovidat pouzitemu scraping keywordu nebo jasne odpovidajicimu segmentu z planu. Napriklad pri keywordu 'autoservis' nesmi byt hotel oznacen jako vhodny jen proto, ze je ve stejne lokalite; takovy kontakt oznac accepted=false a uved konkretni duvod, napr. 'hotel neni autoservis ani servisni provoz'. "
         . "Lokacni pravidlo z planu je povinne: " . aiResearchLocationScopeLabel((string)($plan['location_scope'] ?? '')) . ", cilova lokace " . (string)($plan['target_location'] ?? '') . ". "
         . "Pokud je kontakt vhodny, fit_reason musi rict, proc prave tento typ firmy muze potrebovat seed nabidku a jaky trigger oslovenim resime. "
         . "Pokud plan rozlisuje rozhodovaci osobu, zohledni, zda je kontaktovany subjekt typ firmy, kde takova role realisticky existuje. "
@@ -14572,6 +14577,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                         <div class="scraping-result-grid">
                             <section class="scraping-result-group">
                                 <div class="scraping-result-group-head"><strong>Nalezene kontakty</strong><span><?= h((string)count($runContacts)) ?></span></div>
+                                <?php if ($runContacts && (int)$run['accepted_count'] === 0): ?>
+                                    <p class="note">Zadne kontakty nebyly oznaceny jako vhodne. Duvod je uvedeny u kazdeho radku ve sloupci Vyhodnoceni.</p>
+                                <?php endif; ?>
                                 <?php if (!$runContacts): ?>
                                     <div class="scraping-result-list">
                                         <article class="scraping-result-item">
@@ -14589,12 +14597,12 @@ function renderApp(PDO $pdo, ?array $flash): void
                                                 <tr>
                                                     <th>Stav</th>
                                                     <th>Subjekt</th>
+                                                    <th>Vyhodnoceni</th>
                                                     <th>Email</th>
                                                     <th>Web</th>
                                                     <th>Adresa</th>
                                                     <th>Telefon</th>
                                                     <th>Zdroj</th>
-                                                    <th>Vyhodnoceni</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -14602,6 +14610,10 @@ function renderApp(PDO $pdo, ?array $flash): void
                                                 <tr>
                                                     <td><?= statusBadge((string)$contact['status']) ?></td>
                                                     <td><strong><?= h((string)($contact['subject_name'] ?: $contact['email'])) ?></strong></td>
+                                                    <td>
+                                                        <strong><?= (string)$contact['status'] === 'rejected' ? 'Duvod odmitnuti' : 'Duvod vhodnosti' ?></strong><br>
+                                                        <?= h((string)($contact['fit_reason'] ?: '-')) ?>
+                                                    </td>
                                                     <td><?= h((string)$contact['email']) ?></td>
                                                     <td>
                                                         <?php if ($contact['website'] !== ''): ?>
@@ -14618,7 +14630,6 @@ function renderApp(PDO $pdo, ?array $flash): void
                                                             <a class="sub-link" href="<?= h((string)$contact['source_url']) ?>" target="_blank" rel="noopener"><?= h((string)$contact['source_url']) ?></a>
                                                         <?php endif; ?>
                                                     </td>
-                                                    <td><?= h((string)($contact['fit_reason'] ?: '-')) ?></td>
                                                 </tr>
                                                 <?php endforeach; ?>
                                             </tbody>
