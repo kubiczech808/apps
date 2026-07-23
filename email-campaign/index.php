@@ -4137,7 +4137,7 @@ function aiResearchFallbackSubject(string $language, string $targetName): string
         'en' => 'your company',
     ][$language] ?? 'vasi firmu';
     return [
-        'de' => 'Moegliche Zusammenarbeit fuer ' . $target,
+        'de' => 'Mögliche Zusammenarbeit für ' . $target,
         'pl' => 'Mozliwa wspolpraca dla ' . $target,
         'sk' => 'Mozna spolupraca pre ' . $target,
         'en' => 'Possible cooperation for ' . $target,
@@ -4148,7 +4148,7 @@ function aiResearchFallbackEmailHtml(string $language, string $seedBusiness): st
 {
     $business = h($seedBusiness);
     return [
-        'de' => '<p>Guten Tag,</p><p>wir sind auf Ihr Unternehmen aufmerksam geworden und sehen einen konkreten B2B-Anknuepfungspunkt fuer das Angebot von ' . $business . '.</p><p>Gern wuerde ich kurz zeigen, wo die Zusammenarbeit fuer Sie praktisch relevant sein koennte. Darf ich Ihnen weitere Informationen senden?</p>',
+        'de' => '<p>Guten Tag,</p><p>wir sind auf Ihr Unternehmen aufmerksam geworden und sehen einen konkreten B2B-Anknüpfungspunkt für das Angebot von ' . $business . '.</p><p>Gern würde ich kurz zeigen, wo die Zusammenarbeit für Sie praktisch relevant sein könnte. Darf ich Ihnen weitere Informationen senden?</p>',
         'pl' => '<p>Dzien dobry,</p><p>znalezlismy Panstwa firme i widzimy konkretny powod, dla ktorego oferta ' . $business . ' moze byc dla Panstwa przydatna.</p><p>Chetnie przesle krotka propozycje wspolpracy. Czy moge wyslac wiecej informacji?</p>',
         'sk' => '<p>Dobry den,</p><p>nasli sme vas kontakt a myslime si, ze ponuka firmy ' . $business . ' moze byt pre vas relevantna.</p><p>Rad by som kratko ukazal konkretnu moznost spoluprace. Mozem poslat viac informacii?</p>',
         'en' => '<p>Hello,</p><p>we came across your company and see a concrete B2B reason why ' . $business . ' could be relevant for you.</p><p>I would be happy to briefly show where cooperation could make practical sense. May I send more details?</p>',
@@ -11737,6 +11737,111 @@ function translateHtmlAttributes(string $tag, array $map): string
     ) ?? $tag;
 }
 
+function normalizeGermanUiText(string $text): string
+{
+    return strtr($text, [
+        'Anknuepfungspunkt' => 'Anknüpfungspunkt',
+        'Geschaeftschancen' => 'Geschäftschancen',
+        'Geschaeftliche' => 'Geschäftliche',
+        'Geschaefts' => 'Geschäfts',
+        'Geschaeft' => 'Geschäft',
+        'geschäftlichen' => 'geschäftlichen',
+        'Massageoele' => 'Massageöle',
+        'Massageoel' => 'Massageöl',
+        'Selbststaendige' => 'Selbstständige',
+        'Oberflaeche' => 'Oberfläche',
+        'Verschluesselung' => 'Verschlüsselung',
+        'oeffentlicher Schluessel' => 'öffentlicher Schlüssel',
+        'Geoeffnet' => 'Geöffnet',
+        'geoeffnet' => 'geöffnet',
+        'oeffnest' => 'öffnest',
+        'Schluessel' => 'Schlüssel',
+        'Uebersprungene' => 'Übersprungene',
+        'uebersprungen' => 'übersprungen',
+        'Uebersicht' => 'Übersicht',
+        'Uebliche' => 'Übliche',
+        'Ueber' => 'Über',
+        'ueber' => 'über',
+        'Laeufe' => 'Läufe',
+        'laeuft' => 'läuft',
+        'laeuft...' => 'läuft...',
+        'Plaene' => 'Pläne',
+        'Eintraege' => 'Einträge',
+        'unterstuetzt' => 'unterstützt',
+        'Unterstuetzt' => 'Unterstützt',
+        'zurueck' => 'zurück',
+        'Zurueck' => 'Zurück',
+        'fuer' => 'für',
+        'Fuer' => 'Für',
+        'koennen' => 'können',
+        'Koennen' => 'Können',
+        'koennte' => 'könnte',
+        'koennten' => 'könnten',
+        'kuendbar' => 'kündbar',
+        'gekuendigt' => 'gekündigt',
+        'waehlt' => 'wählt',
+        'Waehle' => 'Wähle',
+        'vorausgewaehlt' => 'vorausgewählt',
+        'ausgewaehlte' => 'ausgewählte',
+        'ausgewaehlt' => 'ausgewählt',
+        'gewaehlte' => 'gewählte',
+        'erklaert' => 'erklärt',
+        'Gespraeche' => 'Gespräche',
+        'zufaelligen' => 'zufälligen',
+        'muessen' => 'müssen',
+        'fuehrt' => 'führt',
+        'fuege' => 'füge',
+        'Fuege' => 'Füge',
+        'hinzufuegen' => 'hinzufügen',
+        'Hinzugefuegte' => 'Hinzugefügte',
+        'Eingefuegt' => 'Eingefügt',
+        'eingefuegt' => 'eingefügt',
+        'ausgefuellt' => 'ausgefüllt',
+        'haeufige' => 'häufige',
+        'pruefen' => 'prüfen',
+        'pruefe' => 'prüfe',
+        'Pruefe' => 'Prüfe',
+        'Pruefung' => 'Prüfung',
+        'prueft' => 'prüft',
+        'Hoeren' => 'Hören',
+        'gueltig' => 'gültig',
+        'ungueltig' => 'ungültig',
+        'Aenderung' => 'Änderung',
+        'Aendern' => 'Ändern',
+        'aendern' => 'ändern',
+        'geändert' => 'geändert',
+        'Geaendert' => 'Geändert',
+        'Schliesse' => 'Schließe',
+        'Schliessen' => 'Schließen',
+        'schliessen' => 'schließen',
+        'benoetigt' => 'benötigt',
+        'unnoetiges' => 'unnötiges',
+        'gehoert' => 'gehört',
+        'vollstaendig' => 'vollständig',
+        'bestaetigen' => 'bestätigen',
+        'spaeter' => 'später',
+        'beruecksichtigt' => 'berücksichtigt',
+        'erhaelt' => 'erhält',
+        'Ergaenzung' => 'Ergänzung',
+        'temporaeren' => 'temporären',
+        'verfuegbar' => 'verfügbar',
+        'verfuegbare' => 'verfügbare',
+        'naechste' => 'nächste',
+        'naechsten' => 'nächsten',
+        'Taegliche' => 'Tägliche',
+        'Taeglich' => 'Täglich',
+        'taeglich' => 'täglich',
+        'Woechentlich' => 'Wöchentlich',
+        'Empfaenger' => 'Empfänger',
+        'moechte' => 'möchte',
+        'Moechten' => 'Möchten',
+        'Moegliche' => 'Mögliche',
+        'moeglich' => 'möglich',
+        'Loeschen' => 'Löschen',
+        'weiss' => 'weiß',
+    ]);
+}
+
 function uiTranslationMap(string $language): array
 {
     if ($language === 'de') {
@@ -12323,6 +12428,7 @@ function uiTranslationMap(string $language): array
             'Vhodne kontakty' => 'Passende Kontakte',
             'Bez predmetu' => 'Ohne Betreff',
         ];
+        $map = array_map('normalizeGermanUiText', $map);
         uksort($map, static fn(string $a, string $b): int => strlen($b) <=> strlen($a));
         return $map;
     }
@@ -15383,7 +15489,7 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
     $unsubscribeUrl = aiResearchSeedOutreachUnsubscribeUrl($run);
     $unsubscribeHtmlCs = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Pokud už od nás podobné obchodní sdělení nechcete dostávat, můžete se <a href="' . h($unsubscribeUrl) . '">odhlásit zde</a>.</p>' : '';
     $unsubscribeHtmlSk = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Ak už od nás podobné obchodné oznámenia nechcete dostávať, môžete sa <a href="' . h($unsubscribeUrl) . '">odhlásiť tu</a>.</p>' : '';
-    $unsubscribeHtmlDe = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Wenn Sie keine weiteren aehnlichen geschäftlichen Nachrichten von uns erhalten moechten, koennen Sie sich <a href="' . h($unsubscribeUrl) . '">hier abmelden</a>.</p>' : '';
+    $unsubscribeHtmlDe = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Wenn Sie keine weiteren ähnlichen geschäftlichen Nachrichten von uns erhalten möchten, können Sie sich <a href="' . h($unsubscribeUrl) . '">hier abmelden</a>.</p>' : '';
     $unsubscribeHtmlEn = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">If you do not want to receive similar business messages from us, you can <a href="' . h($unsubscribeUrl) . '">unsubscribe here</a>.</p>' : '';
     $unsubscribeHtmlPl = $unsubscribeUrl !== '' ? '<p style="font-size:12px;color:#67736d">Jesli nie chca Panstwo otrzymywac podobnych wiadomosci handlowych od nas, mozna <a href="' . h($unsubscribeUrl) . '">zrezygnowac tutaj</a>.</p>' : '';
     $sampleNames = [];
@@ -15398,13 +15504,13 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
     $language = normalizeAiResearchMarketLanguage($language) ?: 'cs';
 
     if ($language === 'de') {
-        $subject = 'Wir haben relevante B2B-Kontakte fuer ' . $business . ' gefunden';
+        $subject = 'Wir haben relevante B2B-Kontakte für ' . $business . ' gefunden';
         $html = '<p>Guten Tag,</p>'
-            . '<p>wir haben uns Ihr Unternehmen <strong>' . h($business) . '</strong> angesehen und daraus abgeleitet, welche B2B-Zielgruppe fuer Ihre Akquise am sinnvollsten sein koennte.</p>'
-            . '<p>Aktuell haben wir fuer Sie <strong>' . h($countLabel) . '</strong> passende Kontakte vorbereitet. Die Suche zielt auf <strong>' . h($audience) . '</strong> ab, mit dem Suchbegriff <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' und dem Gebiet <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
+            . '<p>wir haben uns Ihr Unternehmen <strong>' . h($business) . '</strong> angesehen und daraus abgeleitet, welche B2B-Zielgruppe für Ihre Akquise am sinnvollsten sein könnte.</p>'
+            . '<p>Aktuell haben wir für Sie <strong>' . h($countLabel) . '</strong> passende Kontakte vorbereitet. Die Suche zielt auf <strong>' . h($audience) . '</strong> ab, mit dem Suchbegriff <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' und dem Gebiet <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Beispiele gefundener Kontakte: ' . h($sampleText) . '.</p>' : '')
-            . '<p>In der App sehen Sie die komplette Liste, den vorbereiteten E-Mail-Entwurf und koennen vor dem Versand alles pruefen.</p>'
-            . '<p>Moechten Sie fortfahren und die Ansprache pruefen?</p>'
+            . '<p>In der App sehen Sie die komplette Liste, den vorbereiteten E-Mail-Entwurf und können vor dem Versand alles prüfen.</p>'
+            . '<p>Möchten Sie fortfahren und die Ansprache prüfen?</p>'
             . $unsubscribeHtmlDe;
     } elseif ($language === 'en') {
         $subject = 'We found relevant B2B contacts for ' . $business;
