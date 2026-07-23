@@ -150,7 +150,21 @@ function extractTeams(question) {
   return teams;
 }
 
-function riskProfile({ question, slug, outcome, tags }) {
+function topicRiskClusters({ question, slug, eventSlug }) {
+  const text = normalizedSlug(`${question || ""} ${slug || ""} ${eventSlug || ""}`).replace(/-/g, " ");
+  const clusters = [];
+  if (/\b(iran|iranian|hormuz|kharg|strait of hormuz|israel|israeli|tehran|nuclear)\b/.test(text)) {
+    clusters.push(["topic:iran-war", "Topic: Iran war / Gulf escalation"]);
+  }
+  if (/\b(fed|federal reserve|interest rates?|rate cut|rate hike|bps|fomc)\b/.test(text)) {
+    const month = text.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/)?.[1] || "meeting";
+    const year = text.match(/\b(20\d{2})\b/)?.[1] || "";
+    clusters.push([`topic:fed-${month}${year ? `-${year}` : ""}`, `Topic: Fed ${month}${year ? ` ${year}` : ""} meeting`]);
+  }
+  return clusters;
+}
+
+function riskProfile({ question, slug, eventSlug, outcome, tags }) {
   const keys = new Set();
   const labels = new Map();
   const addKey = (key, label) => {
@@ -160,8 +174,11 @@ function riskProfile({ question, slug, outcome, tags }) {
   };
   const marketSlug = normalizedSlug(slug);
   if (marketSlug) addKey(`market:${marketSlug}`, `Market: ${marketSlug}`);
-  const eventKey = eventSlugKey(slug);
+  const normalizedEventSlug = normalizedSlug(eventSlug);
+  if (normalizedEventSlug) addKey(`event:${normalizedEventSlug}`, `Event: ${normalizedEventSlug}`);
+  const eventKey = eventSlugKey(eventSlug || slug);
   if (eventKey) addKey(`event:${eventKey}`, `Event: ${eventKey}`);
+  for (const [key, label] of topicRiskClusters({ question, slug, eventSlug })) addKey(key, label);
   const teams = extractTeams(question);
   for (const [teamKey, label] of teams) addKey(`team:${teamKey}`, `Team: ${label}`);
   if (teams.size >= 2) {
@@ -317,24 +334,39 @@ function liveTradingConfig(liveState) {
   };
 }
 
-function openLiveRiskItems(liveState) {
+function openLiveRiskItems(liveState, evaluationByToken = new Map()) {
   const positions = Array.isArray(liveState?.positions) ? liveState.positions : [];
   const openOrders = Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
-  return [...positions, ...openOrders].filter((item) => {
-    const status = String(item.status || item.rawStatus || "OPEN").toUpperCase();
-    return OPEN_STATUSES.has(status) || !["WON", "LOST", "CLOSED", "REDEEMED", "CANCELED", "CANCELLED"].includes(status);
-  });
+  return [...positions, ...openOrders]
+    .filter((item) => {
+      const status = String(item.status || item.rawStatus || "OPEN").toUpperCase();
+      return OPEN_STATUSES.has(status) || !["WON", "LOST", "CLOSED", "REDEEMED", "CANCELED", "CANCELLED"].includes(status);
+    })
+    .map((item) => {
+      const source = evaluationByToken.get(String(item.tokenId || item.assetId || ""));
+      return source ? {
+        ...source,
+        ...item,
+        question: item.question || source.question,
+        outcome: item.outcome || source.outcome,
+        slug: item.slug || source.slug,
+        eventSlug: item.eventSlug || source.eventSlug,
+        tags: Array.isArray(item.tags) && item.tags.length ? item.tags : source.tags,
+        sourceEvaluation: source,
+      } : item;
+    });
 }
 
-function riskBlock(candidate, liveState) {
+function riskBlock(candidate, liveState, evaluationByToken = new Map()) {
   const candidateKeys = new Set(candidate.riskGroupKeys || []);
-  for (const item of openLiveRiskItems(liveState)) {
+  for (const item of openLiveRiskItems(liveState, evaluationByToken)) {
     if (String(item.tokenId || item.assetId || "") === String(candidate.tokenId || "")) {
       return { reason: "duplicate token already open", overlap: [String(candidate.tokenId)] };
     }
     const itemRisk = riskProfile({
       question: item.question || "",
-      slug: item.slug || item.eventSlug || "",
+      slug: item.slug || "",
+      eventSlug: item.eventSlug || "",
       outcome: item.outcome || "",
       tags: item.tags || tagQuestion(item.question || ""),
     });
@@ -412,7 +444,7 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
   };
 }
 
-async function revalidateEvaluation(evaluation, liveState, cash, maxNotional) {
+async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, evaluationByToken = new Map()) {
   const market = await fetchMarket(evaluation);
   if (!market) return { candidate: evaluation, eligible: false, rejectReasons: ["market not found in Gamma"] };
   const outcomes = parseJsonField(market.outcomes).map(String);
@@ -451,10 +483,11 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional) {
   const risk = riskProfile({
     question: market.question || evaluation.question,
     slug: market.slug || evaluation.slug,
+    eventSlug: marketEventSlug(market),
     outcome: outcomes[tokenIndex] || evaluation.outcome,
     tags,
   });
-  const block = riskBlock({ ...evaluation, riskGroupKeys: risk.keys }, liveState);
+  const block = riskBlock({ ...evaluation, riskGroupKeys: risk.keys }, liveState, evaluationByToken);
   if (block) {
     return {
       candidate: evaluation,
@@ -647,14 +680,16 @@ async function main() {
   const fractionNotional = cash * MAX_ORDER_FRACTION;
   const maxNotional = Number(Math.min(fractionNotional, MAX_ORDER_NOTIONAL_USDC).toFixed(5));
   const rawEvaluations = Array.isArray(paperState.evaluations) ? paperState.evaluations : [];
-  const baseCandidates = latestUniqueEvaluations(rawEvaluations)
+  const latestEvaluations = latestUniqueEvaluations(rawEvaluations);
+  const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
+  const baseCandidates = latestEvaluations
     .filter((item) => Number.isFinite(Number(item.aiProbability)))
     .filter((item) => String(item.status || "").toUpperCase() !== "ERROR");
 
   const checked = [];
   for (const evaluation of baseCandidates) {
     try {
-      checked.push(await revalidateEvaluation(evaluation, liveState, cash, maxNotional));
+      checked.push(await revalidateEvaluation(evaluation, liveState, cash, maxNotional, evaluationByToken));
     } catch (error) {
       checked.push({
         candidate: {

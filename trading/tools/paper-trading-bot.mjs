@@ -449,9 +449,12 @@ function normalizeTrade(trade) {
   const risk = riskProfile({
     question: trade.question,
     slug: trade.slug,
+    eventSlug: trade.eventSlug,
     outcome: trade.outcome,
     tags: trade.tags,
   });
+  const existingRiskKeys = Array.isArray(trade.riskGroupKeys) ? trade.riskGroupKeys : [];
+  const existingRiskLabels = Array.isArray(trade.riskGroupLabels) ? trade.riskGroupLabels : [];
   return {
     ...trade,
     status: trade.status || "OPEN",
@@ -465,8 +468,8 @@ function normalizeTrade(trade) {
     },
     probabilityThesis: trade.probabilityThesis || trade.aiAnalysis?.thesis || "",
     analysisSummary: trade.analysisSummary || trade.aiAnalysis?.thesis || "",
-    riskGroupKeys: Array.isArray(trade.riskGroupKeys) && trade.riskGroupKeys.length ? trade.riskGroupKeys : risk.keys,
-    riskGroupLabels: Array.isArray(trade.riskGroupLabels) && trade.riskGroupLabels.length ? trade.riskGroupLabels : risk.labels,
+    riskGroupKeys: [...new Set([...existingRiskKeys, ...risk.keys])],
+    riskGroupLabels: [...new Set([...existingRiskLabels, ...risk.labels])],
   };
 }
 
@@ -595,7 +598,21 @@ function eventSlugKey(slug) {
   return dated ? dated[1] : "";
 }
 
-function riskProfile({ question, slug, outcome, tags }) {
+function topicRiskClusters({ question, slug, eventSlug }) {
+  const text = normalizeRiskText(`${question || ""} ${slug || ""} ${eventSlug || ""}`);
+  const clusters = [];
+  if (/\b(iran|iranian|hormuz|kharg|strait of hormuz|israel|israeli|tehran|nuclear)\b/.test(text)) {
+    clusters.push(["topic:iran-war", "Topic: Iran war / Gulf escalation"]);
+  }
+  if (/\b(fed|federal reserve|interest rates?|rate cut|rate hike|bps|fomc)\b/.test(text)) {
+    const month = text.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/)?.[1] || "meeting";
+    const year = text.match(/\b(20\d{2})\b/)?.[1] || "";
+    clusters.push([`topic:fed-${month}${year ? `-${year}` : ""}`, `Topic: Fed ${month}${year ? ` ${year}` : ""} meeting`]);
+  }
+  return clusters;
+}
+
+function riskProfile({ question, slug, eventSlug, outcome, tags }) {
   const keys = new Set();
   const labels = new Map();
   const addKey = (key, label) => {
@@ -607,8 +624,11 @@ function riskProfile({ question, slug, outcome, tags }) {
   const normalizedSlug = normalizeRiskText(slug).replace(/\s+/g, "-");
   if (normalizedSlug) addKey(`market:${normalizedSlug}`, `Market: ${normalizedSlug}`);
 
-  const eventKey = eventSlugKey(slug);
+  const normalizedEventSlug = normalizeRiskText(eventSlug).replace(/\s+/g, "-");
+  if (normalizedEventSlug) addKey(`event:${normalizedEventSlug}`, `Event: ${normalizedEventSlug}`);
+  const eventKey = eventSlugKey(eventSlug || slug);
   if (eventKey) addKey(`event:${eventKey}`, `Event: ${eventKey}`);
+  for (const [key, label] of topicRiskClusters({ question, slug, eventSlug })) addKey(key, label);
 
   const teams = extractTeams(question);
   for (const [teamKey, label] of teams) {
@@ -1089,7 +1109,8 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   const volume24hr = Number(market.volume24hr || 0);
   const liquidity = Number(market.liquidity || 0);
   const tags = tagQuestion(question);
-  const risk = riskProfile({ question, slug: market.slug, outcome, tags });
+  const eventSlug = marketEventSlug(market);
+  const risk = riskProfile({ question, slug: market.slug, eventSlug, outcome, tags });
   const endDate = correctedEndDate(question, market.endDate, market.createdAt || market.updatedAt);
   const days = daysToEnd(endDate);
   const endOk = endDateIsFuture(endDate);
@@ -1150,7 +1171,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     rejectReasons,
     question,
     slug: market.slug || "",
-    eventSlug: marketEventSlug(market),
+    eventSlug,
     outcome,
     tokenId,
     endDate,
