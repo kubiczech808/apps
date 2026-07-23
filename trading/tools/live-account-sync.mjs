@@ -578,16 +578,18 @@ function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt
     .map((position) => {
       const currentValue = number(position.currentValueUsdc, 0);
       const stake = number(position.totalCostUsdc || position.stakeUsdc, 0);
+      const currentPrice = number(position.currentPrice);
+      const winningResolved = currentValue > 0.000001 || (currentPrice != null && currentPrice >= 0.995);
       const realizedPnl = currentValue - stake;
-      const status = position.redeemable || position.resolved ? "REDEEM_REQUIRED" : "RESOLVED";
+      const status = winningResolved && (position.redeemable || position.resolved) ? "REDEEM_REQUIRED" : (winningResolved ? "RESOLVED" : "LOST");
       return {
         ...position,
         id: `resolved-position-${position.id}`,
         status,
         resolvedAt: generatedAt,
         closedAt: generatedAt,
-        exitPrice: number(position.currentPrice),
-        finalOutcomePrice: number(position.currentPrice),
+        exitPrice: currentPrice,
+        finalOutcomePrice: currentPrice,
         exitValueUsdc: currentValue,
         realizedPnlUsdc: realizedPnl,
         realizedPnlPct: stake > 0 ? realizedPnl / stake : null,
@@ -595,7 +597,9 @@ function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt
         unrealizedPnlPct: 0,
         analysisSummary: [
           position.analysisSummary || "",
-          status === "REDEEM_REQUIRED"
+          status === "LOST"
+            ? "Polymarket exposes this resolved position with zero value, so it is classified as a settled losing position rather than a redeem-needed winner."
+            : status === "REDEEM_REQUIRED"
             ? "Polymarket still exposes this position as redeemable/claimable, so it is classified outside opened trades until redeem is completed."
             : "Polymarket mark price indicates the position is resolved; it is classified outside opened trades until activity confirms final settlement.",
         ].filter(Boolean).join(" "),
