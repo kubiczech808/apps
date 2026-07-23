@@ -18,6 +18,8 @@ const MIN_VOLUME_24H = Number(process.env.LIVE_MIN_VOLUME_24H || process.env.PAP
 const MAX_ORDER_FRACTION = Number(process.env.MAX_ORDER_FRACTION || process.env.LIVE_MAX_ORDER_FRACTION || 0.05);
 const MAX_ORDER_NOTIONAL_USDC = Number(process.env.MAX_ORDER_NOTIONAL_USDC || process.env.LIVE_MAX_ORDER_NOTIONAL_USDC || Infinity);
 const CANDIDATE_SCAN_LIMIT = Number(process.env.LIVE_CANDIDATE_SCAN_LIMIT || 120);
+const SHORT_HORIZON_DAYS = Number(process.env.LIVE_SHORT_HORIZON_DAYS || process.env.PAPER_SHORT_HORIZON_DAYS || 7);
+const MEDIUM_HORIZON_DAYS = Number(process.env.LIVE_MEDIUM_HORIZON_DAYS || process.env.PAPER_MEDIUM_HORIZON_DAYS || 14);
 const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "minimum").toLowerCase();
 const USE_LIMIT_ORDERS = String(process.env.USE_LIMIT_ORDERS ?? "true").toLowerCase() !== "false";
 const POST_ONLY = String(process.env.POLYMARKET_POST_ONLY ?? "true").toLowerCase() !== "false";
@@ -274,6 +276,38 @@ function liveCashUsdc(liveState) {
   const cash = number(liveState?.portfolio?.cashUsdc);
   if (cash != null) return cash;
   return number(liveState?.portfolio?.equityUsdc, 0);
+}
+
+function daysValue(item) {
+  const days = Number(item.daysToResolution);
+  return Number.isFinite(days) ? days : Infinity;
+}
+
+function horizonBucket(item) {
+  const days = daysValue(item);
+  if (days <= SHORT_HORIZON_DAYS) return 0;
+  if (days <= MEDIUM_HORIZON_DAYS) return 1;
+  return 2;
+}
+
+function horizonBucketLabel(bucket) {
+  if (bucket === 0) return `<=${SHORT_HORIZON_DAYS}d`;
+  if (bucket === 1) return `<=${MEDIUM_HORIZON_DAYS}d`;
+  return `>${MEDIUM_HORIZON_DAYS}d`;
+}
+
+function preferredHorizonCandidates(items) {
+  if (!items.length) return { rows: items, bucket: null };
+  const bucket = Math.min(...items.map(horizonBucket));
+  return {
+    rows: items.filter((item) => horizonBucket(item) === bucket),
+    bucket,
+  };
+}
+
+function compareShorterHorizon(a, b) {
+  const delta = daysValue(a) - daysValue(b);
+  return Number.isFinite(delta) ? delta : 0;
 }
 
 function liveTradingConfig(liveState) {
@@ -636,16 +670,19 @@ async function main() {
     }
   }
 
-  const eligible = checked
+  const allEligible = checked
     .filter((item) => item.status === "ELIGIBLE")
     .map((item) => ({
       ...item,
       funderAddress: tradingConfig.funderAddress,
       signatureType: tradingConfig.signatureType,
-    }))
+    }));
+  const preferredHorizon = preferredHorizonCandidates(allEligible);
+  const eligible = preferredHorizon.rows
     .sort((a, b) => {
-      if (a.thesisType !== b.thesisType) return a.thesisType === "EDGE_OPPORTUNITY" ? -1 : 1;
       if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
+      const horizon = compareShorterHorizon(a, b);
+      if (horizon !== 0) return horizon;
       return b.expectedValueUsdc - a.expectedValueUsdc;
     });
 
@@ -674,10 +711,14 @@ async function main() {
       minAnnualReturn: MIN_ANNUAL_RETURN,
       maxSpread: MAX_SPREAD,
       minVolume24hr: MIN_VOLUME_24H,
+      shortHorizonDays: SHORT_HORIZON_DAYS,
+      mediumHorizonDays: MEDIUM_HORIZON_DAYS,
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
-      eligibleCandidates: eligible.length,
+      eligibleCandidates: allEligible.length,
+      preferredHorizonEligibleCandidates: eligible.length,
+      selectedHorizonBucket: preferredHorizon.bucket == null ? null : horizonBucketLabel(preferredHorizon.bucket),
     },
     selected: best,
     topRejected: checked

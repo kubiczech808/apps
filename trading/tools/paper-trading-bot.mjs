@@ -23,6 +23,8 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").toLowerCase();
 const AI_ANALYSIS_LIMIT = Number(process.env.PAPER_AI_ANALYSIS_LIMIT || 10);
 const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
+const SHORT_HORIZON_DAYS = Number(process.env.PAPER_SHORT_HORIZON_DAYS || 7);
+const MEDIUM_HORIZON_DAYS = Number(process.env.PAPER_MEDIUM_HORIZON_DAYS || 14);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
@@ -31,13 +33,13 @@ const PAPER_STRATEGIES = {
     id: "conservative",
     label: "Conservative",
     selectionMetric: "EV p.a.",
-    description: "Prioritizes eligible opportunities by EV p.a. and expected value.",
+    description: "Prioritizes eligible opportunities by EV p.a., preferring short settlement horizons first.",
   },
   highReward: {
     id: "highReward",
     label: "High reward",
     selectionMetric: "Reward / risk",
-    description: "Prioritizes eligible opportunities by highest reward against risk.",
+    description: "Prioritizes eligible opportunities by highest reward against risk, preferring short settlement horizons first.",
   },
 };
 
@@ -1417,7 +1419,10 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
     .filter((item) => item.status !== "ERROR")
     .sort((a, b) => {
       if (a.status !== b.status) return a.status === "ELIGIBLE" ? -1 : 1;
+      if (horizonBucket(a) !== horizonBucket(b)) return horizonBucket(a) - horizonBucket(b);
       if (b.expectedValueUsdc !== a.expectedValueUsdc) return b.expectedValueUsdc - a.expectedValueUsdc;
+      const horizon = compareShorterHorizon(a, b);
+      if (horizon !== 0) return horizon;
       return b.annualizedReturn - a.annualizedReturn;
     })
     .slice(0, AI_ANALYSIS_LIMIT);
@@ -1534,13 +1539,44 @@ function rewardRiskRatio(item) {
   return reward / risk;
 }
 
+function daysValue(item) {
+  const days = Number(item.daysToResolution);
+  return Number.isFinite(days) ? days : Infinity;
+}
+
+function horizonBucket(item) {
+  const days = daysValue(item);
+  if (days <= SHORT_HORIZON_DAYS) return 0;
+  if (days <= MEDIUM_HORIZON_DAYS) return 1;
+  return 2;
+}
+
+function horizonBucketLabel(bucket) {
+  if (bucket === 0) return `<=${SHORT_HORIZON_DAYS}d`;
+  if (bucket === 1) return `<=${MEDIUM_HORIZON_DAYS}d`;
+  return `>${MEDIUM_HORIZON_DAYS}d`;
+}
+
+function preferredHorizonCandidates(items) {
+  if (!items.length) return items;
+  const bestBucket = Math.min(...items.map(horizonBucket));
+  return items.filter((item) => horizonBucket(item) === bestBucket);
+}
+
+function compareShorterHorizon(a, b) {
+  const delta = daysValue(a) - daysValue(b);
+  return Number.isFinite(delta) ? delta : 0;
+}
+
 function sortEligibleForStrategy(eligible, strategyId) {
-  const rows = [...eligible];
+  const rows = preferredHorizonCandidates([...eligible]);
   if (strategyId === "highReward") {
     return rows.sort((a, b) => {
       const aRatio = rewardRiskRatio(a) ?? -Infinity;
       const bRatio = rewardRiskRatio(b) ?? -Infinity;
       if (bRatio !== aRatio) return bRatio - aRatio;
+      const horizon = compareShorterHorizon(a, b);
+      if (horizon !== 0) return horizon;
       if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
       return b.expectedValueUsdc - a.expectedValueUsdc;
     });
@@ -1548,6 +1584,8 @@ function sortEligibleForStrategy(eligible, strategyId) {
   return rows.sort((a, b) => {
     if (a.thesisType !== b.thesisType) return a.thesisType === "EDGE_OPPORTUNITY" ? -1 : 1;
     if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
+    const horizon = compareShorterHorizon(a, b);
+    if (horizon !== 0) return horizon;
     return b.expectedValueUsdc - a.expectedValueUsdc;
   });
 }
@@ -1654,7 +1692,14 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
 
   portfolioState.trades.unshift(trade);
   portfolioState.lastTradeDate = today;
-  return { action: "OPENED", reason: `best ${strategy.selectionMetric} non-correlated candidate`, trade, available: available - stake, skippedForRisk, strategyId: strategy.id };
+  return {
+    action: "OPENED",
+    reason: `best ${strategy.selectionMetric} non-correlated candidate in ${horizonBucketLabel(horizonBucket(best))} horizon bucket`,
+    trade,
+    available: available - stake,
+    skippedForRisk,
+    strategyId: strategy.id,
+  };
 }
 
 function recoveryEvaluation(state, anchor) {
@@ -2039,6 +2084,8 @@ function updatePaperPortfolio(portfolioState) {
     opportunityMinProbability: OPPORTUNITY_MIN_PROBABILITY,
     opportunityMinEdge: OPPORTUNITY_MIN_EDGE,
     opportunityMinAnnualReturn: OPPORTUNITY_MIN_ANNUAL_RETURN,
+    shortHorizonDays: SHORT_HORIZON_DAYS,
+    mediumHorizonDays: MEDIUM_HORIZON_DAYS,
     realizedPnlUsdc: Number(realizedPnl.toFixed(4)),
     realizedPnlPct: pnlPercent(realizedPnl, PORTFOLIO_USDC),
     openPnlUsdc: Number(openPnl.toFixed(4)),
@@ -2072,6 +2119,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
     action: decision.action,
     reason: decision.reason,
     tradeId: decision.trade?.id || null,
+    selectedHorizonDays: decision.trade?.daysToResolution ?? null,
     riskSkippedCount: decision.skippedForRisk || 0,
     refreshOnly: REFRESH_ONLY,
     learningSampleSize: state.learningProfile.sampleSize,

@@ -36,6 +36,8 @@ jobs:
       PAPER_MAX_EVALUATIONS_PER_RUN: "80"
       PAPER_MAX_SPREAD: "0.08"
       PAPER_MIN_VOLUME_24H: "100"
+      PAPER_SHORT_HORIZON_DAYS: "7"
+      PAPER_MEDIUM_HORIZON_DAYS: "14"
       PAPER_AI_ANALYSIS_LIMIT: "10"
       PAPER_AI_POSTMORTEM_LIMIT: "8"
       PAPER_REFRESH_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule != '7 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh') }}
