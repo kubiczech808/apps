@@ -4155,6 +4155,25 @@ function aiResearchFallbackEmailHtml(string $language, string $seedBusiness): st
     ][$language] ?? '<p>Dobry den,</p><p>narazili jsme na vas kontakt a myslime si, ze by pro vas mohla byt relevantni nabidka firmy ' . $business . '.</p><p>Rad bych kratce ukazal konkretni moznost spoluprace. Mohu poslat vice informaci?</p>';
 }
 
+function aiResearchOfferSummaryForOutreach(array $plan, string $fallbackAudience = ''): string
+{
+    $candidates = [
+        (string)($plan['main_use_case'] ?? ''),
+        (string)($plan['email_angle'] ?? ''),
+        (string)($plan['business_understanding'] ?? ($plan['business_summary'] ?? '')),
+    ];
+    foreach ($candidates as $candidate) {
+        $candidate = trim(preg_replace('/\s+/u', ' ', strip_tags($candidate)) ?? '');
+        if ($candidate === '') {
+            continue;
+        }
+        $candidate = preg_replace('/^(firma|spolecnost|společnost|web|seed subjekt)\s+[^,.]{1,80}\s+(nabizi|nabízí|dodava|dodává|poskytuje|se zameruje|se zaměřuje)\s+/iu', '$2 ', $candidate) ?? $candidate;
+        return truncatePlainText($candidate, 190);
+    }
+    $fallbackAudience = trim($fallbackAudience);
+    return $fallbackAudience !== '' ? 'nabídku relevantní pro segment ' . $fallbackAudience : 'konkrétní produkt nebo službu';
+}
+
 function aiResearchRunDraft(array $config, array $seed, array $plan, array $contacts): array
 {
     $seedBusiness = trim((string)($seed['subject_name'] ?: $seed['email']));
@@ -15514,49 +15533,50 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
     $sampleText = $sampleNames ? implode(', ', $sampleNames) : '';
     $countLabel = (string)$acceptedCount;
     $language = normalizeAiResearchMarketLanguage($language) ?: 'cs';
+    $offerSummary = aiResearchOfferSummaryForOutreach($plan, $audience);
+    $targetLabel = $audience !== '' ? $audience : 'vybrané B2B kontakty';
 
     if ($language === 'de') {
-        $subject = 'Wir haben relevante B2B-Kontakte für ' . $business . ' gefunden';
+        $subject = 'Wir haben ' . $countLabel . ' passende B2B-Kontakte vorbereitet';
         $html = '<p>Guten Tag,</p>'
-            . '<p>wir haben uns Ihr Unternehmen <strong>' . h($business) . '</strong> angesehen und daraus abgeleitet, welche B2B-Zielgruppe für Ihre Akquise am sinnvollsten sein könnte.</p>'
+            . '<p>wir haben uns auf eine konkrete Leistung aus Ihrem Angebot gestützt: <strong>' . h($offerSummary) . '</strong>.</p>'
             . '<p>Aktuell haben wir für Sie <strong>' . h($countLabel) . '</strong> passende Kontakte vorbereitet. Die Suche zielt auf <strong>' . h($audience) . '</strong> ab, mit dem Suchbegriff <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' und dem Gebiet <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Beispiele gefundener Kontakte: ' . h($sampleText) . '.</p>' : '')
             . '<p>In der App sehen Sie die komplette Liste, den vorbereiteten E-Mail-Entwurf und können vor dem Versand alles prüfen.</p>'
             . '<p>Möchten Sie fortfahren und die Ansprache prüfen?</p>'
             . $unsubscribeHtmlDe;
     } elseif ($language === 'en') {
-        $subject = 'We found relevant B2B contacts for ' . $business;
+        $subject = 'We found ' . $countLabel . ' relevant B2B contacts';
         $html = '<p>Hello,</p>'
-            . '<p>we reviewed <strong>' . h($business) . '</strong> and prepared a concrete B2B outreach direction based on what your company offers.</p>'
+            . '<p>we focused on a concrete product or service from your offer: <strong>' . h($offerSummary) . '</strong>.</p>'
             . '<p>We have currently found <strong>' . h($countLabel) . '</strong> relevant contacts for you. The search focuses on <strong>' . h($audience) . '</strong>, using the keyword <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' in <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Examples of found companies: ' . h($sampleText) . '.</p>' : '')
             . '<p>Inside the app you can review the full contact list, the prepared outreach email and all campaign settings before anything is sent.</p>'
             . '<p>Would you like to continue and review the prepared campaign?</p>'
             . $unsubscribeHtmlEn;
     } elseif ($language === 'sk') {
-        $subject = 'Nasli sme relevantne B2B kontakty pre ' . $business;
+        $subject = 'Našli sme ' . $countLabel . ' relevantných B2B kontaktov';
         $html = '<p>Dobrý deň,</p>'
-            . '<p>pozreli sme sa na spoločnosť <strong>' . h($business) . '</strong> a pripravili sme konkrétny smer B2B oslovenia podľa toho, čo ponúkate.</p>'
+            . '<p>opreli sme sa o konkrétny produkt alebo službu z vašej ponuky: <strong>' . h($offerSummary) . '</strong>.</p>'
             . '<p>Aktuálne sme pre vás našli <strong>' . h($countLabel) . '</strong> relevantných kontaktov. Vyhľadávanie cieli na <strong>' . h($audience) . '</strong>, podľa kľúčového slova <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Príklady nájdených subjektov: ' . h($sampleText) . '.</p>' : '')
             . '<p>V aplikácii uvidíte celý zoznam kontaktov, návrh emailu aj nastavenie kampane ešte pred odoslaním.</p>'
             . '<p>Chcete pokračovať a pozrieť si pripravené oslovenie?</p>'
             . $unsubscribeHtmlSk;
     } elseif ($language === 'pl') {
-        $subject = 'Znalezlismy relevantne kontakty B2B dla ' . $business;
+        $subject = 'Znalezlismy ' . $countLabel . ' pasujacych kontaktow B2B';
         $html = '<p>Dzien dobry,</p>'
-            . '<p>przeanalizowalismy firme <strong>' . h($business) . '</strong> i przygotowalismy konkretny kierunek akwizycji B2B na podstawie Panstwa oferty.</p>'
+            . '<p>oparlismy sie na konkretnym produkcie lub usludze z Panstwa oferty: <strong>' . h($offerSummary) . '</strong>.</p>'
             . '<p>Aktualnie znalezlismy <strong>' . h($countLabel) . '</strong> pasujacych kontaktow. Wyszukiwanie celuje w <strong>' . h($audience) . '</strong>, przy slowie kluczowym <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' w obszarze <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Przyklady znalezionych firm: ' . h($sampleText) . '.</p>' : '')
             . '<p>W aplikacji mozna sprawdzic pelna liste kontaktow, tresc emaila i ustawienia kampanii przed wysylka.</p>'
             . '<p>Czy chca Panstwo przejsc dalej i zobaczyc przygotowana kampanie?</p>'
             . $unsubscribeHtmlPl;
     } else {
-        $subject = 'Našli jsme nové B2B příležitosti pro ' . $business;
+        $subject = 'Našli jsme ' . $countLabel . ' relevantních B2B kontaktů';
         $html = '<p>Dobrý den,</p>'
-            . '<p>podívali jsme se na <strong>' . h($business) . '</strong> a na základě toho, co firma nabízí, jsme připravili konkrétní směr B2B oslovení.</p>'
-            . ($businessUnderstanding !== '' ? '<p>' . h($businessUnderstanding) . '</p>' : '')
-            . '<p>Pro podobný typ nabídky dává smysl oslovit <strong>' . h($audience !== '' ? $audience : 'vybrané B2B kontakty') . '</strong>' . ($targetArea !== '' && $targetArea !== '-' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '. Aktuálně jsme našli <strong>' . h($countLabel) . '</strong> kontaktů, u kterých vidíme reálný důvod k oslovení.</p>'
+            . '<p>opřeli jsme se o konkrétní produkt nebo službu z vaší nabídky: <strong>' . h($offerSummary) . '</strong>.</p>'
+            . '<p>Na tomto základě jsme připravili oslovení pro <strong>' . h($countLabel) . '</strong> kontaktů ze segmentu <strong>' . h($targetLabel) . '</strong>' . ($targetArea !== '' && $targetArea !== '-' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . '<p>V návrhu jsme pro vás připravili:</p>'
             . '<ul>'
             . '<li><strong>cílový segment</strong> podle toho, kdo může vaši nabídku prakticky využít, ne jen podle obecné podobnosti firem,</li>'
