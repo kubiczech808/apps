@@ -47,6 +47,8 @@ const MAX_ELIGIBILITY_THRESHOLD = 0.99;
 const DEFAULT_RISK_ALLOCATION = 0.05;
 const MIN_RISK_ALLOCATION = 0.01;
 const MAX_RISK_ALLOCATION = 0.5;
+const LIVE_STATE_REFRESH_MS = 15000;
+const LIVE_SYNC_REQUEST_MS = 30000;
 
 const els = {
   botAction: document.querySelector("[data-bot-action]"),
@@ -1316,9 +1318,10 @@ async function requestLiveAccountSync(options = {}) {
   if (state.autoLiveSyncBusy) return;
   state.autoLiveSyncBusy = true;
   const quiet = Boolean(options.quiet);
+  const minSeconds = Math.max(30, Math.round(Number(options.minSeconds || LIVE_SYNC_REQUEST_MS / 1000)));
   if (!quiet) setExecutionStatus("syncing live account");
   try {
-    const response = await fetch("api.php?action=live-sync&minSeconds=30", {
+    const response = await fetch(`api.php?action=live-sync&minSeconds=${encodeURIComponent(minSeconds)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       cache: "no-store",
@@ -1329,7 +1332,7 @@ async function requestLiveAccountSync(options = {}) {
     }
     if (payload.action === "DISPATCH") {
       if (!quiet) setExecutionStatus("live sync started");
-      [10000, 25000, 45000].forEach((delay) => {
+      [8000, 16000, 30000, 45000].forEach((delay) => {
         window.setTimeout(() => {
           loadDashboardState({ skipAutoLiveSync: true });
         }, delay);
@@ -2294,5 +2297,11 @@ state.liveExecutionArmed = storedLiveExecutionArmed();
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);
 loadDashboardState().then(() => {
-  if (!isLiveMode()) requestLiveAccountSync({ quiet: true });
+  if (isLiveMode()) requestLiveAccountSync({ quiet: true });
 });
+
+window.setInterval(() => {
+  if (!isLiveMode()) return;
+  loadDashboardState({ skipAutoLiveSync: true });
+  requestLiveAccountSync({ quiet: true, minSeconds: LIVE_SYNC_REQUEST_MS / 1000 });
+}, LIVE_STATE_REFRESH_MS);

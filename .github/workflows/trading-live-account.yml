@@ -10,6 +10,10 @@ on:
   schedule:
     - cron: '5,20,35,50 * * * *'
 
+concurrency:
+  group: trading-live-account-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   live-account:
     runs-on: [self-hosted, Linux, ARM64]

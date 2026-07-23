@@ -346,6 +346,25 @@ function normalizeOpenOrder(order) {
   };
 }
 
+function isActiveOpenOrder(order) {
+  const status = String(order.status || order.rawStatus || "").toUpperCase();
+  const closedStatuses = new Set([
+    "CANCELED",
+    "CANCELLED",
+    "CANCELLED_BY_USER",
+    "FILLED",
+    "MATCHED",
+    "EXPIRED",
+    "ORDER_STATUS_CANCELED",
+    "ORDER_STATUS_CANCELLED",
+    "ORDER_STATUS_FILLED",
+    "ORDER_STATUS_EXPIRED",
+  ]);
+  if (closedStatuses.has(status)) return false;
+  const remaining = number(order.remainingSize, 0);
+  return remaining > 0.000001;
+}
+
 function closedTradesFromHistory(trades, activity, generatedAt) {
   const groups = new Map();
   const groupsByQuestion = new Map();
@@ -938,7 +957,7 @@ async function loadClobBalanceAllowance(sync, options = {}) {
   if (typeof client.getOpenOrders === "function") {
     try {
       const orders = await client.getOpenOrders();
-      openOrders = Array.isArray(orders) ? orders.map(normalizeOpenOrder) : [];
+      openOrders = Array.isArray(orders) ? orders.map(normalizeOpenOrder).filter(isActiveOpenOrder) : [];
     } catch (error) {
       sync.warnings.push(`open-orders: ${error?.message || String(error)}`);
     }
