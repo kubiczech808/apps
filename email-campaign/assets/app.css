@@ -1530,6 +1530,13 @@ form.inline { margin: 0; }
   overflow: hidden;
   font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
 }
+.flag-icon svg {
+  display: block;
+  width: 28px;
+  height: 19px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(16, 35, 31, 0.16);
+}
 .language-dropdown summary strong {
   font-size: 13px;
   letter-spacing: .04em;

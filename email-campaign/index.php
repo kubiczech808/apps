@@ -11234,10 +11234,10 @@ function normalizeUiLanguage(string $language): string
 function uiLanguageFlagHtml(string $code): string
 {
     return [
-        'cs' => '&#127464;&#127487;',
-        'en' => '&#127482;&#127480;',
-        'de' => '&#127465;&#127466;',
-    ][$code] ?? '&#127987;';
+        'cs' => '<svg viewBox="0 0 30 20" role="img" aria-label="Cesky" focusable="false"><rect width="30" height="10" y="0" fill="#fff"/><rect width="30" height="10" y="10" fill="#d7141a"/><path d="M0 0 15 10 0 20Z" fill="#11457e"/></svg>',
+        'en' => '<svg viewBox="0 0 30 20" role="img" aria-label="English" focusable="false"><rect width="30" height="20" fill="#b22234"/><path d="M0 2.2h30M0 5.4h30M0 8.6h30M0 11.8h30M0 15h30M0 18.2h30" stroke="#fff" stroke-width="1.55"/><rect width="12.8" height="10.8" fill="#3c3b6e"/><g fill="#fff"><circle cx="2" cy="2" r=".45"/><circle cx="5" cy="2" r=".45"/><circle cx="8" cy="2" r=".45"/><circle cx="11" cy="2" r=".45"/><circle cx="3.5" cy="4" r=".45"/><circle cx="6.5" cy="4" r=".45"/><circle cx="9.5" cy="4" r=".45"/><circle cx="2" cy="6" r=".45"/><circle cx="5" cy="6" r=".45"/><circle cx="8" cy="6" r=".45"/><circle cx="11" cy="6" r=".45"/><circle cx="3.5" cy="8" r=".45"/><circle cx="6.5" cy="8" r=".45"/><circle cx="9.5" cy="8" r=".45"/></g></svg>',
+        'de' => '<svg viewBox="0 0 30 20" role="img" aria-label="Deutsch" focusable="false"><rect width="30" height="6.67" y="0" fill="#000"/><rect width="30" height="6.67" y="6.67" fill="#dd0000"/><rect width="30" height="6.66" y="13.34" fill="#ffce00"/></svg>',
+    ][$code] ?? '<svg viewBox="0 0 30 20" role="img" aria-label="Language" focusable="false"><rect width="30" height="20" fill="#eef3f0"/></svg>';
 }
 
 function defaultUiLanguage(): string
