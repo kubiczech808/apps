@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   live-account:
-    runs-on: [self-hosted, Linux, ARM64]
+    runs-on: ubuntu-latest
     env:
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
