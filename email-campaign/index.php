@@ -14348,9 +14348,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <button type="submit" name="action" value="run_ai_research_now">Spustit research teď</button>
             </form>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Stav našeho oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Pochopení firmy</th><th>Důvod cílení</th><th>Koho oslovit</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th><th>Zpráva</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
-            <tr><td colspan="17">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="13">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
@@ -14432,21 +14432,17 @@ function renderApp(PDO $pdo, ?array $flash): void
                     <?php endif; ?>
                 </td>
                 <td><?= h(formatDateTime((string)$run['created_at'])) ?></td>
-                <td><strong><?= h((string)$run['seed_business']) ?></strong><?php if ($run['seed_website']): ?><br><a href="<?= h((string)$run['seed_website']) ?>" target="_blank" rel="noopener"><?= h((string)$run['seed_website']) ?></a><?php endif; ?></td>
+                <td><strong><?= h((string)$run['seed_business']) ?></strong></td>
                 <td><?= h((string)$run['seed_email']) ?></td>
                 <td><?= statusBadge(aiResearchRunStatusLabel((string)$run['status'])) ?></td>
-                <td><?= h($runUnderstanding !== '' ? $runUnderstanding : (string)$run['audience_label']) ?></td>
-                <td><?= h(truncatePlainText((string)($runPlan['targeting_reason'] ?? ''), 220)) ?></td>
-                <td><?= h((string)$run['audience_label']) ?></td>
                 <td><?= h((string)($run['search_source_label'] ?? '-')) ?></td>
                 <td><?= h((string)($run['scraping_keyword'] ?? '')) ?></td>
                 <td><?= h(aiResearchTargetAreaLabel($runPlan)) ?></td>
                 <td><?= h((string)$run['found_count']) ?></td>
                 <td><?= h((string)$run['accepted_count']) ?></td>
-                <td><?= h((string)$run['message']) ?></td>
             </tr>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="17">
+                <td colspan="13">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
@@ -14472,6 +14468,22 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 </div>
                             </section>
                             <?php endif; ?>
+                            <section class="research-wide">
+                                <h3>Souhrn z přehledu</h3>
+                                <div class="ai-outreach-meta">
+                                    <span>Stav: <?= h(aiResearchRunStatusLabel((string)$run['status'])) ?></span>
+                                    <span>Nalezeno: <?= h((string)$run['found_count']) ?></span>
+                                    <span>Vhodné: <?= h((string)$run['accepted_count']) ?></span>
+                                    <span>Zdroj: <?= h((string)($run['search_source_label'] ?? '-')) ?></span>
+                                    <span>Keyword: <?= h((string)($run['scraping_keyword'] ?? '')) ?></span>
+                                    <span>Lokalita: <?= h(aiResearchTargetAreaLabel($runPlan)) ?></span>
+                                </div>
+                                <?php if ($run['seed_website']): ?><p><strong>Seed web:</strong> <a href="<?= h((string)$run['seed_website']) ?>" target="_blank" rel="noopener"><?= h((string)$run['seed_website']) ?></a></p><?php endif; ?>
+                                <?php if ($provisionUser): ?><p><strong>Založený účet:</strong> <?= h((string)$provisionUser['email']) ?></p><?php elseif ((int)$run['accepted_count'] > 0): ?><p><strong>Založený účet:</strong> připraví se po načtení.</p><?php endif; ?>
+                                <?php if ((string)($run['seed_outreach_sent_at'] ?? '') !== ''): ?><p><strong>Naše oslovení odesláno:</strong> <?= h(formatDateTime((string)$run['seed_outreach_sent_at'])) ?></p><?php endif; ?>
+                                <?php if ((string)($run['seed_outreach_unsubscribed_at'] ?? '') !== ''): ?><p><strong>Odhlášeno:</strong> <?= h(formatDateTime((string)$run['seed_outreach_unsubscribed_at'])) ?></p><?php endif; ?>
+                                <?php if (trim((string)$run['message']) !== ''): ?><p><strong>Zpráva:</strong> <?= h((string)$run['message']) ?></p><?php endif; ?>
+                            </section>
                             <section>
                                 <h3>Pochopeni firmy</h3>
                                 <?php if (trim((string)($runPlan['website_url_analyzed'] ?? $run['seed_website'] ?? '')) !== ''): ?>

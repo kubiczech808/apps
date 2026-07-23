@@ -1994,14 +1994,45 @@ td a {
 .view-scraping .log-table th:nth-child(9),
 .view-scraping .log-table td:nth-child(9) { width: auto; }
 .view-research table {
-  min-width: 1720px;
+  min-width: 1480px;
 }
-.view-research td:nth-child(3),
-.view-research td:nth-child(4),
-.view-research td:nth-child(7),
-.view-research td:nth-child(8),
-.view-research td:nth-child(11) {
-  max-width: 280px;
+.view-research .research-table {
+  table-layout: fixed;
+}
+.view-research .research-table > tbody > tr.expandable-row > td {
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.view-research .research-table > tbody > tr.expandable-row > td br,
+.view-research .research-table > tbody > tr.expandable-row > td small {
+  display: none;
+}
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(1) { width: 76px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(2) { width: 108px; overflow: visible; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(3) { width: 136px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(4) { width: 86px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(5) { width: 128px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(6) { width: 230px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(7) { width: 210px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(8) { width: 108px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(9) { width: 140px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(10) { width: 160px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(11) { width: 120px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(12),
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(13) {
+  width: 86px;
+  text-align: right;
+}
+.view-research .research-table .detail-row td {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.research-draft-actions {
+  white-space: nowrap;
 }
 .ai-outreach-modal {
   max-width: min(820px, calc(100vw - 28px));
@@ -2182,7 +2213,7 @@ td a {
 }
 .research-draft-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
 }
 .research-draft-actions button {
