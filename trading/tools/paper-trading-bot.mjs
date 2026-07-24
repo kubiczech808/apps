@@ -25,6 +25,7 @@ const AI_ANALYSIS_LIMIT = Number(process.env.PAPER_AI_ANALYSIS_LIMIT || 10);
 const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
 const SHORT_HORIZON_DAYS = Number(process.env.PAPER_SHORT_HORIZON_DAYS || 7);
 const MEDIUM_HORIZON_DAYS = Number(process.env.PAPER_MEDIUM_HORIZON_DAYS || 14);
+const MORE_PROBABLE_MIN_LIQUIDITY_USDC = Number(process.env.PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC || 500000);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
@@ -44,8 +45,21 @@ const PAPER_STRATEGIES = {
     selectionMetric: "Reward / risk",
     minProbability: OPPORTUNITY_MIN_PROBABILITY,
     maxResolutionDays: null,
+    minLiquidityUsdc: null,
+    requireMostProbableOutcome: false,
     selectionOrder: "highest_reward_risk_first",
     description: "Prioritizes eligible opportunities by highest reward against risk, preferring short settlement horizons first.",
+  },
+  moreProbable: {
+    id: "moreProbable",
+    label: "More probable",
+    selectionMetric: "Reward / risk",
+    minProbability: OPPORTUNITY_MIN_PROBABILITY,
+    maxResolutionDays: SHORT_HORIZON_DAYS,
+    minLiquidityUsdc: MORE_PROBABLE_MIN_LIQUIDITY_USDC,
+    requireMostProbableOutcome: true,
+    selectionOrder: "highest_reward_risk_first",
+    description: "Requires AI probability >= 60%, resolution within 7 days, deep liquidity, and the most probable outcome in each market.",
   },
 };
 
@@ -175,9 +189,11 @@ function normalizeState(input) {
     runLog: input.runLog,
   };
   const highRewardInput = input.paperPortfolios?.highReward || {};
+  const moreProbableInput = input.paperPortfolios?.moreProbable || {};
   const paperPortfolios = {
     conservative: normalizePaperPortfolio(PAPER_STRATEGIES.conservative, conservativeInput),
     highReward: normalizePaperPortfolio(PAPER_STRATEGIES.highReward, highRewardInput),
+    moreProbable: normalizePaperPortfolio(PAPER_STRATEGIES.moreProbable, moreProbableInput),
   };
   return {
     schemaVersion: 2,
@@ -201,6 +217,8 @@ function normalizePaperPortfolio(strategy, input = {}) {
     selectionOrder: strategy.selectionOrder,
     minProbability: strategy.minProbability,
     maxResolutionDays: strategy.maxResolutionDays,
+    minLiquidityUsdc: strategy.minLiquidityUsdc,
+    requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     description: strategy.description,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
@@ -211,6 +229,8 @@ function normalizePaperPortfolio(strategy, input = {}) {
       opportunityMinEdge: Number(input.portfolio?.opportunityMinEdge || OPPORTUNITY_MIN_EDGE),
       opportunityMinAnnualReturn: Number(input.portfolio?.opportunityMinAnnualReturn || OPPORTUNITY_MIN_ANNUAL_RETURN),
       maxResolutionDays: strategy.maxResolutionDays == null ? null : Number(strategy.maxResolutionDays),
+      minLiquidityUsdc: strategy.minLiquidityUsdc == null ? null : Number(strategy.minLiquidityUsdc),
+      requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     },
     trades: Array.isArray(input.trades)
       ? input.trades.map((trade) => normalizeTrade({ ...trade, strategyId: trade.strategyId || strategy.id, strategyLabel: trade.strategyLabel || strategy.label }))
@@ -430,6 +450,7 @@ function syncLegacyPaperAliases(state) {
   state.paperPortfolios ||= {};
   state.paperPortfolios.conservative = conservative;
   state.paperPortfolios.highReward ||= normalizePaperPortfolio(PAPER_STRATEGIES.highReward, {});
+  state.paperPortfolios.moreProbable ||= normalizePaperPortfolio(PAPER_STRATEGIES.moreProbable, {});
   state.portfolio = conservative.portfolio;
   state.trades = conservative.trades;
   state.lastTradeDate = conservative.lastTradeDate;
@@ -1613,19 +1634,33 @@ function compareShorterHorizon(a, b) {
 }
 
 function strategyEligibleCandidates(eligible, strategy) {
-  return [...eligible].filter((item) => {
+  let rows = [...eligible].filter((item) => {
     const minProbability = Number(strategy.minProbability);
     if (Number.isFinite(minProbability) && Number(item.aiProbability) < minProbability) return false;
     const maxResolutionDays = Number(strategy.maxResolutionDays);
     if (Number.isFinite(maxResolutionDays) && daysValue(item) > maxResolutionDays) return false;
+    const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
+    if (Number.isFinite(minLiquidityUsdc) && Number(item.liquidity || 0) < minLiquidityUsdc) return false;
     return true;
   });
+  if (strategy.requireMostProbableOutcome) {
+    const bestByMarket = new Map();
+    for (const item of rows) {
+      const key = item.slug || item.eventSlug || item.question || item.id;
+      const previous = bestByMarket.get(key);
+      if (!previous || Number(item.aiProbability || 0) > Number(previous.aiProbability || 0)) {
+        bestByMarket.set(key, item);
+      }
+    }
+    rows = [...bestByMarket.values()];
+  }
+  return rows;
 }
 
 function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservative) {
   const strategyRows = strategyEligibleCandidates(eligible, strategy);
   const rows = strategy.maxResolutionDays == null ? preferredHorizonCandidates(strategyRows) : strategyRows;
-  if (strategy.id === "highReward") {
+  if (strategy.selectionOrder === "highest_reward_risk_first") {
     return rows.sort((a, b) => {
       const aRatio = rewardRiskRatio(a) ?? -Infinity;
       const bRatio = rewardRiskRatio(b) ?? -Infinity;
@@ -2146,6 +2181,8 @@ function updatePaperPortfolio(portfolioState) {
     shortHorizonDays: SHORT_HORIZON_DAYS,
     mediumHorizonDays: MEDIUM_HORIZON_DAYS,
     maxResolutionDays: portfolioState.maxResolutionDays == null ? null : Number(portfolioState.maxResolutionDays),
+    minLiquidityUsdc: portfolioState.minLiquidityUsdc == null ? null : Number(portfolioState.minLiquidityUsdc),
+    requireMostProbableOutcome: Boolean(portfolioState.requireMostProbableOutcome),
     realizedPnlUsdc: Number(realizedPnl.toFixed(4)),
     realizedPnlPct: pnlPercent(realizedPnl, PORTFOLIO_USDC),
     openPnlUsdc: Number(openPnl.toFixed(4)),

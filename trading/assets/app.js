@@ -149,7 +149,7 @@ function pnlClass(value) {
 function storedMode() {
   try {
     const value = localStorage.getItem(MODE_STORAGE_KEY);
-    if (value === "live" || value === "paper-highReward" || value === "paper-conservative") return value;
+    if (value === "live" || value === "paper-highReward" || value === "paper-moreProbable" || value === "paper-conservative") return value;
     return "paper-conservative";
   } catch {
     return "paper-conservative";
@@ -165,7 +165,7 @@ function saveMode(mode) {
 }
 
 function normalizeMode(mode) {
-  if (mode === "live" || mode === "paper-highReward" || mode === "paper-conservative") return mode;
+  if (mode === "live" || mode === "paper-highReward" || mode === "paper-moreProbable" || mode === "paper-conservative") return mode;
   return mode === "paper" ? "paper-conservative" : "paper-conservative";
 }
 
@@ -174,11 +174,16 @@ function isLiveMode() {
 }
 
 function paperStrategyIdFromMode(mode = state.mode) {
-  return mode === "paper-highReward" ? "highReward" : "conservative";
+  if (mode === "paper-highReward") return "highReward";
+  if (mode === "paper-moreProbable") return "moreProbable";
+  return "conservative";
 }
 
 function paperModeLabel(mode = state.mode) {
-  return paperStrategyIdFromMode(mode) === "highReward" ? "High reward" : "Conservative";
+  const strategyId = paperStrategyIdFromMode(mode);
+  if (strategyId === "highReward") return "High reward";
+  if (strategyId === "moreProbable") return "More probable";
+  return "Conservative";
 }
 
 function storedLiveExecutionArmed() {
@@ -1504,6 +1509,21 @@ function paperPortfolioTrades(portfolioState) {
     }));
 }
 
+function portfolioRuleLine(portfolio) {
+  const parts = [];
+  const orderLabel = portfolio.selectionOrder === "highest_reward_risk_first"
+    ? "Highest R/R first"
+    : "Highest EV p.a. first";
+  const maxResolutionDays = Number(portfolio.maxResolutionDays);
+  const minLiquidityUsdc = Number(portfolio.minLiquidityUsdc);
+  parts.push(orderLabel);
+  if (Number.isFinite(maxResolutionDays)) parts.push(`<= ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`);
+  else parts.push("preferred shortest horizon bucket");
+  if (Number.isFinite(minLiquidityUsdc)) parts.push(`liquidity >= ${money(minLiquidityUsdc)}`);
+  if (portfolio.requireMostProbableOutcome) parts.push("most probable outcome per market");
+  return parts.join(" / ");
+}
+
 function renderBotState(botState) {
   state.botState = botState;
   syncModeUi();
@@ -1533,9 +1553,6 @@ function renderBotState(botState) {
   const openPnlPct = Number(portfolio.openPnlPct || 0);
   const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
   const maxResolutionDays = Number(portfolio.maxResolutionDays);
-  const strategyOrderLabel = portfolio.selectionOrder === "highest_reward_risk_first"
-    ? "Highest R/R first"
-    : "Highest EV p.a. first";
   const resolutionLabel = Number.isFinite(maxResolutionDays)
     ? `No later than ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`
     : "Best available horizon";
@@ -1596,7 +1613,7 @@ function renderBotState(botState) {
       <div>
         <span class="label">Portfolio parameters</span>
         <strong>${percent(Number(portfolio.minProbability ?? 0.95))} AI threshold</strong>
-        <span>${escapeHtml(strategyOrderLabel)} / ${escapeHtml(resolutionLabel)}</span>
+        <span>${escapeHtml(portfolioRuleLine(portfolio) || resolutionLabel)}</span>
       </div>
       <div>
         <span class="label">Learning</span>
@@ -1903,6 +1920,11 @@ function renderLiveState(liveState) {
         <span class="label">Live execution</span>
         <strong>${escapeHtml(liveGuardLabel)}</strong>
         <span>${escapeHtml(`${liveGuardText}; ${currentLimitOrders() ? "limit orders preferred" : "market orders preferred"}`)}</span>
+      </div>
+      <div>
+        <span class="label">Portfolio parameters</span>
+        <strong>${percent(currentEligibilityThreshold())} AI threshold</strong>
+        <span>${escapeHtml(`Revalidate first / risk-diversified / ${currentLimitOrders() ? "limit" : "market"} orders / ${probability(currentRiskAllocation())} cash stake`)}</span>
       </div>
     </div>
   `;
