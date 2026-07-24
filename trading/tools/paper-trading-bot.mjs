@@ -30,8 +30,10 @@ const ROTATION_MIN_SCORE_IMPROVEMENT = Number(process.env.PAPER_ROTATION_MIN_SCO
 const ROTATION_MIN_EV_USDC_IMPROVEMENT = Number(process.env.PAPER_ROTATION_MIN_EV_USDC_IMPROVEMENT || 0.02);
 const ROTATION_MIN_HOLD_HOURS = Number(process.env.PAPER_ROTATION_MIN_HOLD_HOURS || 6);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
+const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
 const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
+const REPORT_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
 const PAPER_STRATEGIES = {
   conservative: {
     id: "conservative",
@@ -206,6 +208,8 @@ function normalizeState(input) {
     trades: paperPortfolios.conservative.trades,
     evaluations: mergeEvaluationLists(Array.isArray(input.evaluations) ? input.evaluations : []),
     evaluationRunLog: Array.isArray(input.evaluationRunLog) ? input.evaluationRunLog.slice(0, 80) : [],
+    calculationReports: Array.isArray(input.calculationReports) ? input.calculationReports.slice(0, 30) : [],
+    latestCalculationReport: input.latestCalculationReport || (Array.isArray(input.calculationReports) ? input.calculationReports[0] || null : null),
     learningProfile: normalizeLearningProfile(input.learningProfile),
     lastTradeDate: paperPortfolios.conservative.lastTradeDate,
     lastDecision: paperPortfolios.conservative.lastDecision,
@@ -431,7 +435,11 @@ function mergeStates(primary, secondary) {
     ...base,
     evaluations: mergeEvaluationLists(base.evaluations || [], other.evaluations || []),
     evaluationRunLog: mergeUniqueById([...(base.evaluationRunLog || []), ...(other.evaluationRunLog || [])], (item) => item.runAt || item.id || "", 80),
+    calculationReports: mergeUniqueById([...(base.calculationReports || []), ...(other.calculationReports || [])], (item) => item.id || item.generatedAt || "", 60)
+      .sort((a, b) => (Date.parse(b.generatedAt || "") || 0) - (Date.parse(a.generatedAt || "") || 0))
+      .slice(0, 30),
   };
+  merged.latestCalculationReport = merged.calculationReports?.[0] || base.latestCalculationReport || other.latestCalculationReport || null;
   merged.paperPortfolios = {};
   for (const strategy of Object.values(PAPER_STRATEGIES)) {
     const basePortfolio = base.paperPortfolios?.[strategy.id] || normalizePaperPortfolio(strategy, {});
@@ -784,6 +792,11 @@ function totalCost(trade) {
 function pnlPercent(pnl, basis) {
   const denominator = Number(basis);
   return denominator > 0 ? Number((Number(pnl || 0) / denominator).toFixed(4)) : null;
+}
+
+function average(values) {
+  const rows = values.filter((value) => Number.isFinite(Number(value))).map(Number);
+  return rows.length ? rows.reduce((sum, value) => sum + value, 0) / rows.length : null;
 }
 
 function parseOutcomePrices(market) {
@@ -2351,6 +2364,159 @@ function marketHasNewOutcome(market, knownEvaluationKeys) {
   return parseJsonField(market.clobTokenIds).some((tokenId) => tokenId && !knownEvaluationKeys.has(`token:${tokenId}`));
 }
 
+function reportMarketType(item) {
+  const question = String(item?.question || "");
+  const slug = String(item?.eventSlug || item?.slug || "");
+  if (/(^|[-\s])(exact-score|correct-score|winner|group-winner|nominee|award|primary|election)([-\s]|$)/i.test(`${slug} ${question}`)) {
+    return "multi";
+  }
+  if (/^(which|who|what|how many)\b/i.test(question)) return "multi";
+  const kind = outcomeKind(item?.outcome);
+  if (kind !== "OUTCOME") return "binary";
+  if (/^(will|is|are|can|does|do|did|has|have|was|were)\b/i.test(question)) return "binary";
+  return "multi";
+}
+
+function reportPolymarketProbability(item) {
+  const value = Number(item?.entryPrice ?? item?.marketPrice ?? item?.currentPrice);
+  return Number.isFinite(value) && value > 0 && value < 1 ? value : null;
+}
+
+function reportProbability(item, source) {
+  const ai = Number(item?.aiProbability);
+  const poly = reportPolymarketProbability(item);
+  if (source === "ai") return Number.isFinite(ai) ? ai : null;
+  if (source === "polymarket") return poly;
+  if (Number.isFinite(ai) && Number.isFinite(poly)) return (ai + poly) / 2;
+  return null;
+}
+
+function reportTradeKey(trade) {
+  return [
+    trade.strategyId || "paper",
+    trade.tokenId || trade.id || "",
+    trade.openedAt || trade.date || "",
+  ].join(":");
+}
+
+function closedTradesForCalculation(state) {
+  const rows = [];
+  for (const portfolioState of Object.values(state.paperPortfolios || {})) {
+    for (const trade of portfolioState.trades || []) {
+      if (closedOutcome(trade) == null) continue;
+      rows.push({
+        ...trade,
+        strategyId: trade.strategyId || portfolioState.id,
+        strategyLabel: trade.strategyLabel || portfolioState.label,
+      });
+    }
+  }
+  return mergeUniqueById(rows, reportTradeKey, 5000);
+}
+
+function tradeSimulationPnl(trade) {
+  const realized = Number(trade.realizedPnlUsdc);
+  if (Number.isFinite(realized)) return realized;
+  const cost = totalCost(trade);
+  const actual = closedOutcome(trade);
+  if (actual == null) return 0;
+  return actual ? Number((Number(trade.shares || 0) - cost).toFixed(4)) : Number((-cost).toFixed(4));
+}
+
+function summarizeTradesForReport(trades) {
+  const stake = trades.reduce((sum, trade) => sum + totalCost(trade), 0);
+  const pnl = trades.reduce((sum, trade) => sum + tradeSimulationPnl(trade), 0);
+  const wins = trades.filter((trade) => closedOutcome(trade) === 1).length;
+  const avgAi = average(trades.map((trade) => Number(trade.aiProbability)).filter(Number.isFinite));
+  const avgPoly = average(trades.map(reportPolymarketProbability).filter(Number.isFinite));
+  return {
+    trades: trades.length,
+    wins,
+    losses: trades.length - wins,
+    stakeUsdc: Number(stake.toFixed(4)),
+    pnlUsdc: Number(pnl.toFixed(4)),
+    roi: stake > 0 ? Number((pnl / stake).toFixed(4)) : null,
+    winRate: trades.length ? Number((wins / trades.length).toFixed(4)) : null,
+    avgAiProbability: avgAi == null ? null : Number(avgAi.toFixed(4)),
+    avgPolymarketProbability: avgPoly == null ? null : Number(avgPoly.toFixed(4)),
+  };
+}
+
+function buildCalculationReport(state) {
+  const trades = closedTradesForCalculation(state);
+  const generatedAt = state.generatedAt || nowIso();
+  const portfolioSummaries = Object.values(state.paperPortfolios || {}).map((portfolioState) => {
+    const closed = (portfolioState.trades || []).filter((trade) => closedOutcome(trade) != null);
+    return {
+      strategyId: portfolioState.id,
+      strategyLabel: portfolioState.label,
+      selectionMetric: portfolioState.selectionMetric,
+      minProbability: portfolioState.portfolio?.minProbability ?? portfolioState.minProbability ?? null,
+      maxResolutionDays: portfolioState.portfolio?.maxResolutionDays ?? portfolioState.maxResolutionDays ?? null,
+      minLiquidityUsdc: portfolioState.portfolio?.minLiquidityUsdc ?? portfolioState.minLiquidityUsdc ?? null,
+      selectionOrder: portfolioState.selectionOrder,
+      ...summarizeTradesForReport(closed),
+    };
+  });
+
+  const thresholdSummaries = [];
+  for (const source of ["ai", "polymarket", "combined"]) {
+    for (const marketType of ["binary", "multi"]) {
+      const typedTrades = trades.filter((trade) => reportMarketType(trade) === marketType);
+      for (const threshold of REPORT_THRESHOLDS) {
+        const selected = typedTrades.filter((trade) => {
+          const probability = reportProbability(trade, source);
+          return Number.isFinite(probability) && probability >= threshold;
+        });
+        thresholdSummaries.push({
+          source,
+          marketType,
+          threshold,
+          ...summarizeTradesForReport(selected),
+        });
+      }
+    }
+  }
+
+  return {
+    id: `calculation-report-${generatedAt}`,
+    generatedAt,
+    sampleSize: trades.length,
+    resolvedBinaryCount: trades.filter((trade) => reportMarketType(trade) === "binary").length,
+    resolvedMultiCount: trades.filter((trade) => reportMarketType(trade) === "multi").length,
+    sourceNotes: {
+      ai: "Uses our stored AI probability at evaluation/open time.",
+      polymarket: "Uses the executable Polymarket entry probability for the selected outcome.",
+      combined: "Uses the average of AI and Polymarket probabilities as a neutral blended filter.",
+    },
+    portfolioSummaries,
+    thresholdSummaries,
+    examples: trades.slice(0, 80).map((trade) => ({
+      id: trade.id,
+      strategyId: trade.strategyId,
+      strategyLabel: trade.strategyLabel,
+      marketType: reportMarketType(trade),
+      question: trade.question,
+      outcome: trade.outcome,
+      url: `https://polymarket.com/event/${trade.eventSlug || trade.slug || ""}`,
+      resolvedAt: trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || null,
+      status: trade.status,
+      aiProbability: Number.isFinite(Number(trade.aiProbability)) ? Number(Number(trade.aiProbability).toFixed(4)) : null,
+      polymarketProbability: reportPolymarketProbability(trade),
+      pnlUsdc: tradeSimulationPnl(trade),
+      stakeUsdc: totalCost(trade),
+    })),
+  };
+}
+
+function updateCalculationReport(state) {
+  const report = buildCalculationReport(state);
+  state.calculationReports = mergeUniqueById([report, ...(state.calculationReports || [])], (item) => item.id || item.generatedAt || "", 30)
+    .sort((a, b) => (Date.parse(b.generatedAt || "") || 0) - (Date.parse(a.generatedAt || "") || 0));
+  state.latestCalculationReport = state.calculationReports[0] || report;
+  return report;
+}
+
 function updatePaperPortfolio(portfolioState) {
   const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
   const openPnl = portfolioState.trades
@@ -2418,6 +2584,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
     selectedHorizonDays: decision.trade?.daysToResolution ?? null,
     riskSkippedCount: decision.skippedForRisk || 0,
     refreshOnly: REFRESH_ONLY,
+    reportOnly: REPORT_ONLY,
     learningSampleSize: state.learningProfile.sampleSize,
     brierScore: state.learningProfile.brierScore,
     calibrationBias: state.learningProfile.calibrationBias,
@@ -2440,6 +2607,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
       insufficientCapital: Boolean(decision.insufficientCapital),
       riskSkippedCount: decision.skippedForRisk || 0,
       refreshOnly: REFRESH_ONLY,
+      reportOnly: REPORT_ONLY,
       learningSampleSize: state.learningProfile.sampleSize,
       brierScore: state.learningProfile.brierScore,
     },
@@ -2459,6 +2627,7 @@ function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
       id: `evaluation-run-${state.generatedAt}`,
       runAt: state.generatedAt,
       refreshOnly: REFRESH_ONLY,
+      reportOnly: REPORT_ONLY,
       evaluatedCount: evaluations.length,
       eligibleCount: eligible.length,
       rejectedCount: evaluations.filter((item) => String(item.status || "").toUpperCase() === "REJECTED").length,
@@ -2531,6 +2700,28 @@ async function run() {
   state.learningProfile = buildLearningProfile(allTrades, state.learningProfile);
   state.generatedAt = nowIso();
   updatePortfolio(state);
+  updateCalculationReport(state);
+
+  if (REPORT_ONLY) {
+    const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
+      strategyId: portfolioState.id,
+      action: "REPORT",
+      reason: "nightly resolved-event portfolio replay calculations updated",
+    }));
+    recordRun(state, {
+      decisions,
+      eligible: [],
+      evaluations: [],
+    });
+    await writeState(state);
+    console.log(JSON.stringify({
+      action: "REPORT",
+      reason: "nightly resolved-event portfolio replay calculations updated",
+      sampleSize: state.latestCalculationReport?.sampleSize || 0,
+      strategies: decisions.map((decision) => decision.strategyId),
+    }, null, 2));
+    return;
+  }
 
   if (REFRESH_ONLY) {
     const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
@@ -2601,6 +2792,7 @@ async function run() {
   state.generatedAt = nowIso();
   updatePortfolio(state);
   state.evaluations = expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations));
+  updateCalculationReport(state);
   recordRun(state, { evaluations, eligible, decisions });
   await writeState(state);
   console.log(JSON.stringify({

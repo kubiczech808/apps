@@ -759,6 +759,117 @@ body.modal-open {
   gap: 12px;
 }
 
+.settings-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.settings-panel-body {
+  display: grid;
+  gap: 16px;
+}
+
+.calculation-controls {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.calculation-controls h3,
+.calculation-section h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.calculation-controls p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.calculation-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.calculation-report {
+  display: grid;
+  gap: 16px;
+}
+
+.calculation-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.calculation-summary > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.calculation-summary strong,
+.calculation-summary span {
+  display: block;
+}
+
+.calculation-summary span:not(.label) {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.calculation-section {
+  display: grid;
+  gap: 10px;
+}
+
+.calculation-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.calculation-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+}
+
+.calculation-table th,
+.calculation-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  font-size: 13px;
+}
+
+.calculation-table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.calculation-table tr:last-child td {
+  border-bottom: 0;
+}
+
 .run-card {
   min-width: 0;
   border: 1px solid var(--line);
@@ -1015,14 +1126,20 @@ body.modal-open {
   }
 
   .control-panel-head,
-  .execution-actions {
+  .execution-actions,
+  .calculation-controls {
     align-items: stretch;
     flex-direction: column;
   }
 
   .control-grid,
-  .bot-summary {
+  .bot-summary,
+  .calculation-summary {
     grid-template-columns: 1fr;
+  }
+
+  .calculation-filter-group {
+    justify-content: flex-start;
   }
 
   .portfolio-cards {

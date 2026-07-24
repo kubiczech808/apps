@@ -35,6 +35,9 @@ const state = {
   liveExecutionState: null,
   executionBusy: null,
   autoLiveSyncBusy: false,
+  settingsSection: "runs",
+  calculationSource: "all",
+  calculationMarket: "all",
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
@@ -66,6 +69,11 @@ const els = {
   evaluationSummary: document.querySelector("[data-evaluation-summary]"),
   runLog: document.querySelector("[data-run-log]"),
   runLogSummary: document.querySelector("[data-run-log-summary]"),
+  settingsSectionButtons: document.querySelectorAll("[data-settings-section]"),
+  settingsPanels: document.querySelectorAll("[data-settings-panel]"),
+  calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
+  calculationMarketButtons: document.querySelectorAll("[data-calculation-market]"),
+  calculationReport: document.querySelector("[data-calculation-report]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   riskAllocation: document.querySelector("[data-risk-allocation]"),
@@ -1758,6 +1766,7 @@ function renderBotState(botState) {
 
   renderBotEvaluations();
   renderRunLog();
+  renderCalculationReport();
 }
 
 function livePositions(liveState) {
@@ -2081,6 +2090,7 @@ function renderLiveState(liveState) {
   }
   renderBotEvaluations();
   renderRunLog();
+  renderCalculationReport();
 }
 
 function evaluationSortValue(item, key) {
@@ -2358,12 +2368,13 @@ function renderRunLog() {
     const errorCount = Number(run.errorCount || status.ERROR || 0);
     const evaluatedCount = Number(run.evaluatedCount || events.length || 0);
     const aiProbabilityCount = events.filter((event) => Number.isFinite(Number(event.aiProbability))).length;
+    const runType = run.reportOnly ? "night calculation" : (run.refreshOnly ? "refresh-only" : "full evaluation");
     return `
       <section class="run-card">
         <div class="run-card-head">
           <div>
             <strong>${escapeHtml(formatDate(run.runAt || ""))}</strong>
-            <span>${run.refreshOnly ? "refresh-only" : "full evaluation"} / ${Number(run.evaluatedCount || events.length)} evaluated</span>
+            <span>${runType} / ${Number(run.evaluatedCount || events.length)} evaluated</span>
           </div>
           <div class="run-counts">
             <span class="pill">${evaluatedCount} evaluated</span>
@@ -2386,6 +2397,124 @@ function renderRunLog() {
   }).join("");
 }
 
+function calculationSourceLabel(source) {
+  if (source === "ai") return "AI probability";
+  if (source === "polymarket") return "Polymarket probability";
+  if (source === "combined") return "AI + Polymarket";
+  return source || "-";
+}
+
+function calculationMarketLabel(type) {
+  if (type === "binary") return "Yes/No";
+  if (type === "multi") return "Multi-outcome";
+  return "All markets";
+}
+
+function calculationRows(report) {
+  const rows = Array.isArray(report?.thresholdSummaries) ? report.thresholdSummaries : [];
+  return rows.filter((row) => {
+    const sourceOk = state.calculationSource === "all" || row.source === state.calculationSource;
+    const marketOk = state.calculationMarket === "all" || row.marketType === state.calculationMarket;
+    return sourceOk && marketOk;
+  });
+}
+
+function renderCalculationReport() {
+  if (!els.calculationReport) return;
+  const report = state.botState?.latestCalculationReport
+    || (Array.isArray(state.botState?.calculationReports) ? state.botState.calculationReports[0] : null);
+
+  if (!report) {
+    els.calculationReport.innerHTML = `
+      <div class="empty">No nightly calculation report yet. It will be created by the scheduled report run and refreshed here automatically.</div>
+    `;
+    return;
+  }
+
+  const rows = calculationRows(report);
+  const portfolios = Array.isArray(report.portfolioSummaries) ? report.portfolioSummaries : [];
+  const sample = Number(report.sampleSize || 0);
+  const binary = Number(report.resolvedBinaryCount || 0);
+  const multi = Number(report.resolvedMultiCount || 0);
+
+  els.calculationReport.innerHTML = `
+    <div class="calculation-summary">
+      <div>
+        <span class="label">Last calculation</span>
+        <strong>${escapeHtml(report.generatedAt ? formatDate(report.generatedAt) : "-")}</strong>
+        <span>night report mode / ${sample} resolved evaluated trades</span>
+      </div>
+      <div>
+        <span class="label">Market split</span>
+        <strong>${binary} Yes/No / ${multi} multi</strong>
+        <span>filters below do not recalculate, they select report rows</span>
+      </div>
+    </div>
+    <div class="calculation-section">
+      <h3>Portfolio settings replay</h3>
+      <div class="calculation-table-wrap">
+        <table class="calculation-table">
+          <thead>
+            <tr>
+              <th>Portfolio</th>
+              <th>Rule</th>
+              <th>Trades</th>
+              <th>Accuracy</th>
+              <th>P/L</th>
+              <th>ROI</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${portfolios.length ? portfolios.map((row) => `
+              <tr>
+                <td><strong>${escapeHtml(row.strategyLabel || row.strategyId || "-")}</strong></td>
+                <td>${escapeHtml(row.selectionMetric || row.selectionOrder || "-")} / ${probability(Number(row.minProbability))}</td>
+                <td>${Number(row.trades || 0)}</td>
+                <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
+                <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
+              </tr>
+            `).join("") : '<tr><td colspan="6">No closed trades available for portfolio replay yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="calculation-section">
+      <h3>Probability threshold simulation</h3>
+      <div class="calculation-table-wrap">
+        <table class="calculation-table">
+          <thead>
+            <tr>
+              <th>Probability source</th>
+              <th>Market type</th>
+              <th>Threshold</th>
+              <th>Trades</th>
+              <th>Accuracy</th>
+              <th>P/L</th>
+              <th>ROI</th>
+              <th>Avg AI / PM</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.length ? rows.map((row) => `
+              <tr>
+                <td>${escapeHtml(calculationSourceLabel(row.source))}</td>
+                <td>${escapeHtml(calculationMarketLabel(row.marketType))}</td>
+                <td>${probability(Number(row.threshold))}</td>
+                <td>${Number(row.trades || 0)}</td>
+                <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
+                <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
+                <td>${probability(Number(row.avgAiProbability))} / ${probability(Number(row.avgPolymarketProbability))}</td>
+              </tr>
+            `).join("") : '<tr><td colspan="8">No rows match the current report filters.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 els.tabButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const target = button.dataset.tabTarget;
@@ -2395,6 +2524,38 @@ els.tabButtons.forEach((button) => {
     els.tabPanels.forEach((panel) => {
       panel.classList.toggle("active", panel.dataset.tabPanel === target);
     });
+  });
+});
+
+els.settingsSectionButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.settingsSection = button.dataset.settingsSection || "runs";
+    els.settingsSectionButtons.forEach((item) => {
+      item.classList.toggle("active", item === button);
+    });
+    els.settingsPanels.forEach((panel) => {
+      panel.hidden = panel.dataset.settingsPanel !== state.settingsSection;
+    });
+  });
+});
+
+els.calculationSourceButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.calculationSource = button.dataset.calculationSource || "all";
+    els.calculationSourceButtons.forEach((item) => {
+      item.classList.toggle("active", item === button);
+    });
+    renderCalculationReport();
+  });
+});
+
+els.calculationMarketButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.calculationMarket = button.dataset.calculationMarket || "all";
+    els.calculationMarketButtons.forEach((item) => {
+      item.classList.toggle("active", item === button);
+    });
+    renderCalculationReport();
   });
 });
 

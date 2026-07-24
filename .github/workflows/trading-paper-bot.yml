@@ -16,6 +16,7 @@ on:
         options:
           - full
           - refresh
+          - report
       paper_max_order_fraction:
         description: "Maximum stake per paper trade as fraction of portfolio, decimal 0.01-0.50"
         required: false
@@ -24,6 +25,7 @@ on:
   schedule:
     - cron: '7 * * * *'
     - cron: '22,37,52 * * * *'
+    - cron: '17 1 * * *'
 
 jobs:
   paper:
@@ -45,7 +47,8 @@ jobs:
       PAPER_MEDIUM_HORIZON_DAYS: "14"
       PAPER_AI_ANALYSIS_LIMIT: "10"
       PAPER_AI_POSTMORTEM_LIMIT: "8"
-      PAPER_REFRESH_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule != '7 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh') }}
+      PAPER_REPORT_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report') }}
+      PAPER_REFRESH_ONLY: ${{ !((github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report')) && ((github.event_name == 'schedule' && github.event.schedule != '7 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh')) }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET }}
       GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
       PAPER_PRIMARY_AI_PROVIDER: gemini

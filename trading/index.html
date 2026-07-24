@@ -198,11 +198,40 @@
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Settings</p>
-                <h2>Evaluation runs</h2>
+                <h2>Automation audit</h2>
               </div>
               <span class="pill" data-run-log-summary>0 runs</span>
             </div>
-            <div class="run-log" data-run-log></div>
+            <div class="settings-subtabs" role="tablist" aria-label="Settings sections">
+              <button class="segment-button active" type="button" data-settings-section="runs">Run log</button>
+              <button class="segment-button" type="button" data-settings-section="calculations">Night calculations</button>
+            </div>
+            <div data-settings-panel="runs">
+              <div class="run-log" data-run-log></div>
+            </div>
+            <div class="settings-panel-body" data-settings-panel="calculations" hidden>
+              <div class="calculation-controls">
+                <div>
+                  <p class="eyebrow">Nightly portfolio replay</p>
+                  <h3>Resolved-event calculations</h3>
+                  <p>Compares how different probability rules would have performed after evaluated events are resolved.</p>
+                </div>
+                <div class="calculation-filter-group">
+                  <div class="segmented" data-calculation-source-filter>
+                    <button class="segment-button active" type="button" data-calculation-source="all">All</button>
+                    <button class="segment-button" type="button" data-calculation-source="ai">AI prob.</button>
+                    <button class="segment-button" type="button" data-calculation-source="polymarket">Polymarket prob.</button>
+                    <button class="segment-button" type="button" data-calculation-source="combined">Combined</button>
+                  </div>
+                  <div class="segmented" data-calculation-market-filter>
+                    <button class="segment-button active" type="button" data-calculation-market="all">All markets</button>
+                    <button class="segment-button" type="button" data-calculation-market="binary">Yes/No</button>
+                    <button class="segment-button" type="button" data-calculation-market="multi">Multi-outcome</button>
+                  </div>
+                </div>
+              </div>
+              <div class="calculation-report" data-calculation-report></div>
+            </div>
           </article>
         </section>
       </section>
