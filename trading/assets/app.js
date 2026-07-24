@@ -1561,8 +1561,8 @@ async function loadLiveState(options = {}) {
     els.portfolioLastRun.textContent = "Live sync not available";
     els.portfolioTotalPl.textContent = "-";
     els.portfolioTotalPlPct.textContent = "-";
-    els.portfolioAnnualized.textContent = "-";
-    els.portfolioPeriod.textContent = "No live data";
+    if (els.portfolioAnnualized) els.portfolioAnnualized.textContent = "-";
+    if (els.portfolioPeriod) els.portfolioPeriod.textContent = "No live data";
     els.portfolioRealized.textContent = "-";
     els.portfolioRealizedPct.textContent = "-";
     renderClosedAccuracy([]);
@@ -1686,9 +1686,13 @@ function renderBotState(botState) {
   els.portfolioTotalPl.textContent = signedMoney(totalPnl);
   els.portfolioTotalPl.className = pnlClass(totalPnl);
   els.portfolioTotalPlPct.textContent = signedPercent(totalPnlPct);
-  els.portfolioAnnualized.textContent = signedPercent(annualized);
-  els.portfolioAnnualized.className = pnlClass(annualized);
-  els.portfolioPeriod.textContent = periodDays == null ? "No trades yet" : `since first trade, ${periodDays.toFixed(1)} days`;
+  if (els.portfolioAnnualized) {
+    els.portfolioAnnualized.textContent = signedPercent(annualized);
+    els.portfolioAnnualized.className = pnlClass(annualized);
+  }
+  if (els.portfolioPeriod) {
+    els.portfolioPeriod.textContent = periodDays == null ? "No trades yet" : `since first trade, ${periodDays.toFixed(1)} days`;
+  }
   els.portfolioRealized.textContent = signedMoney(realizedPnl);
   els.portfolioRealized.className = pnlClass(realizedPnl);
   els.portfolioRealizedPct.textContent = signedPercent(realizedPnlPct);
@@ -1978,9 +1982,11 @@ function renderLiveState(liveState) {
   els.portfolioTotalPl.textContent = signedMoney(totalPnl);
   els.portfolioTotalPl.className = pnlClass(totalPnl);
   els.portfolioTotalPlPct.textContent = signedPercent(totalPnlPct);
-  els.portfolioAnnualized.textContent = "-";
-  els.portfolioAnnualized.className = "";
-  els.portfolioPeriod.textContent = "based on live account snapshot";
+  if (els.portfolioAnnualized) {
+    els.portfolioAnnualized.textContent = "-";
+    els.portfolioAnnualized.className = "";
+  }
+  if (els.portfolioPeriod) els.portfolioPeriod.textContent = "based on live account snapshot";
   els.portfolioRealized.textContent = signedMoney(realizedPnl);
   els.portfolioRealized.className = pnlClass(realizedPnl);
   els.portfolioRealizedPct.textContent = signedPercent(realizedPnlPct);
