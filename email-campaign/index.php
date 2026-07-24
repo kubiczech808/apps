@@ -11,6 +11,70 @@ final class AiResearchTemporaryException extends RuntimeException
 {
 }
 
+function aiResearchRetryDelaySeconds(string $message): int
+{
+    $maxDelay = 0;
+    if (preg_match_all('/retry\s+in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hour|hours)\b/i', $message, $matches, PREG_SET_ORDER)) {
+        foreach ($matches as $match) {
+            $value = (float)$match[1];
+            $unit = strtolower($match[2]);
+            if ($unit === 'ms') {
+                $seconds = (int)ceil($value / 1000);
+            } elseif (in_array($unit, ['m', 'min', 'mins', 'minute', 'minutes'], true)) {
+                $seconds = (int)ceil($value * 60);
+            } elseif (in_array($unit, ['h', 'hour', 'hours'], true)) {
+                $seconds = (int)ceil($value * 3600);
+            } else {
+                $seconds = (int)ceil($value);
+            }
+            $maxDelay = max($maxDelay, $seconds);
+        }
+    }
+    if (preg_match_all('/retry-after:\s*([0-9]+)/i', $message, $matches)) {
+        foreach ($matches[1] as $seconds) {
+            $maxDelay = max($maxDelay, (int)$seconds);
+        }
+    }
+    return $maxDelay;
+}
+
+function aiResearchTemporaryBackoffUntil(Throwable $e): int
+{
+    $messages = [];
+    for ($current = $e; $current; $current = $current->getPrevious()) {
+        $messages[] = $current->getMessage();
+    }
+    $message = implode(' ', $messages);
+    $delay = aiResearchRetryDelaySeconds($message);
+    $isQuotaLike = (bool)preg_match('/quota|rate.?limit|too many requests|resource exhausted|exceeded/i', $message);
+    if ($delay <= 0 && !$isQuotaLike) {
+        return 0;
+    }
+    return time() + max(0, $delay) + 5 * 60;
+}
+
+function scheduleAiResearchTemporaryBackoff(PDO $pdo, Throwable $e): int
+{
+    $until = aiResearchTemporaryBackoffUntil($e);
+    if ($until <= 0) {
+        return 0;
+    }
+    $settings = loadSettings($pdo);
+    $existingUntil = (int)($settings['ai_research_next_allowed_at'] ?? 0);
+    if ($existingUntil > time()) {
+        $until = max($until, $existingUntil + 5 * 60);
+    }
+    setSetting($pdo, 'ai_research_next_allowed_at', (string)$until);
+    $delay = max(0, $until - time());
+    setSetting($pdo, 'ai_research_last_run_at', (string)(time() - 3600 + $delay));
+    return $until;
+}
+
+function aiResearchBackoffLabel(int $timestamp): string
+{
+    return $timestamp > time() ? formatDateTime(date('c', $timestamp)) : '';
+}
+
 function isAiResearchAdminEmail(string $email): bool
 {
     return hash_equals(AI_RESEARCH_ALLOWED_EMAIL, strtolower(trim($email)));
@@ -350,7 +414,15 @@ function handlePost(PDO $pdo, array $config): ?string
         if (!canAccessAiResearch()) {
             throw new RuntimeException('AI research neni pro tento ucet dostupny.');
         }
-        return runAiResearchOnce($pdo, $config, true);
+        try {
+            $message = runAiResearchOnce($pdo, $config, true);
+            setSetting($pdo, 'ai_research_next_allowed_at', '');
+            return $message;
+        } catch (AiResearchTemporaryException $e) {
+            $nextAllowedAt = scheduleAiResearchTemporaryBackoff($pdo, $e);
+            return 'AI research odlozen: ' . $e->getMessage()
+                . ($nextAllowedAt > 0 ? ' Dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.' : '');
+        }
     }
 
     if ($action === 'mark_seed_outreach_sent') {
@@ -1999,6 +2071,10 @@ function onboardingDemoSeedContacts(string $businessType, array $plan): array
 function runCronAiResearch(PDO $pdo, array $config): string
 {
     $settings = loadSettings($pdo);
+    $nextAllowedAt = (int)($settings['ai_research_next_allowed_at'] ?? 0);
+    if ($nextAllowedAt > time()) {
+        return 'AI research: Gemini je docasne omezeny, dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.';
+    }
     $lastRun = (int)($settings['ai_research_last_run_at'] ?? 0);
     if ($lastRun > 0 && time() - $lastRun < 3600) {
         return 'AI research: dalsi beh jeste neni na rade.';
@@ -2012,11 +2088,16 @@ function runCronAiResearch(PDO $pdo, array $config): string
         $message = runAiResearchOnce($pdo, $config);
         setSetting($pdo, 'ai_research_last_run_at', (string)time());
         setSetting($pdo, 'ai_research_lock_until', '');
+        setSetting($pdo, 'ai_research_next_allowed_at', '');
         return $message;
     } catch (AiResearchTemporaryException $e) {
-        setSetting($pdo, 'ai_research_last_run_at', (string)time());
+        $nextAllowedAt = scheduleAiResearchTemporaryBackoff($pdo, $e);
+        if ($nextAllowedAt <= 0) {
+            setSetting($pdo, 'ai_research_last_run_at', (string)time());
+        }
         setSetting($pdo, 'ai_research_lock_until', '');
-        return 'AI research odlozen: ' . $e->getMessage();
+        return 'AI research odlozen: ' . $e->getMessage()
+            . ($nextAllowedAt > 0 ? ' Dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.' : '');
     } catch (Throwable $e) {
         setSetting($pdo, 'ai_research_lock_until', '');
         return 'AI research selhal: ' . $e->getMessage();
@@ -2262,6 +2343,7 @@ function resetAiResearchDataIfNeeded(PDO $pdo): void
         return;
     }
     setSetting($pdo, 'ai_research_lock_until', '');
+    setSetting($pdo, 'ai_research_next_allowed_at', '');
     setSetting($pdo, 'ai_research_reset_version', AI_RESEARCH_RESET_VERSION);
 }
 
@@ -14352,10 +14434,15 @@ function renderApp(PDO $pdo, ?array $flash): void
         $researchSettings = loadSettings($pdo);
         $lastResearchRunAt = (int)($researchSettings['ai_research_last_run_at'] ?? 0);
         $researchLockUntil = (int)($researchSettings['ai_research_lock_until'] ?? 0);
+        $researchAiNextAllowedAt = (int)($researchSettings['ai_research_next_allowed_at'] ?? 0);
         $nextResearchRunAt = $lastResearchRunAt > 0 ? $lastResearchRunAt + 3600 : 0;
+        $nextResearchRunAt = max($nextResearchRunAt, $researchAiNextAllowedAt);
         $researchAutomationStatus = $researchLockUntil > time()
             ? 'Právě běží, zámek do ' . formatDateTime(date('c', $researchLockUntil))
             : 'Připraveno k dalšímu běhu.';
+        if ($researchLockUntil <= time() && $researchAiNextAllowedAt > time()) {
+            $researchAutomationStatus = 'Gemini je po quota/rate-limit odpovědi odložený do ' . formatDateTime(date('c', $researchAiNextAllowedAt)) . '.';
+        }
         $researchNextRunLabel = $nextResearchRunAt > time()
             ? formatDateTime(date('c', $nextResearchRunAt))
             : 'při nejbližší kontrole cronu';
