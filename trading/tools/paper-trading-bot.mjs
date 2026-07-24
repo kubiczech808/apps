@@ -26,6 +26,9 @@ const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
 const SHORT_HORIZON_DAYS = Number(process.env.PAPER_SHORT_HORIZON_DAYS || 7);
 const MEDIUM_HORIZON_DAYS = Number(process.env.PAPER_MEDIUM_HORIZON_DAYS || 14);
 const MORE_PROBABLE_MIN_LIQUIDITY_USDC = Number(process.env.PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC || 500000);
+const ROTATION_MIN_SCORE_IMPROVEMENT = Number(process.env.PAPER_ROTATION_MIN_SCORE_IMPROVEMENT || 0.15);
+const ROTATION_MIN_EV_USDC_IMPROVEMENT = Number(process.env.PAPER_ROTATION_MIN_EV_USDC_IMPROVEMENT || 0.02);
+const ROTATION_MIN_HOLD_HOURS = Number(process.env.PAPER_ROTATION_MIN_HOLD_HOURS || 6);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
@@ -1606,6 +1609,64 @@ function rewardRiskRatio(item) {
   return reward / risk;
 }
 
+function remainingDaysValue(item) {
+  const endTime = Date.parse(item.endDate || "");
+  if (Number.isFinite(endTime)) return Math.max(1 / 24, (endTime - Date.now()) / 86400000);
+  return Math.max(1 / 24, daysValue(item));
+}
+
+function tradeCurrentValue(trade) {
+  const stored = Number(trade.currentValueUsdc);
+  if (Number.isFinite(stored) && stored >= 0) return stored;
+  const shares = Number(trade.shares);
+  const price = Number(trade.currentPrice ?? trade.entryPrice);
+  if (Number.isFinite(shares) && Number.isFinite(price) && shares >= 0 && price >= 0) {
+    return shares * price;
+  }
+  return null;
+}
+
+function tradeContinuationEconomics(trade, strategy = PAPER_STRATEGIES.conservative) {
+  const currentValue = tradeCurrentValue(trade);
+  const shares = Number(trade.shares);
+  const probability = Number(trade.aiProbability ?? trade.sourceEvaluation?.aiProbability);
+  const remainingDays = remainingDaysValue(trade);
+  const reward = Number.isFinite(shares) && Number.isFinite(currentValue) ? Math.max(0, shares - currentValue) : null;
+  const expectedValue = Number.isFinite(probability) && Number.isFinite(shares) && Number.isFinite(currentValue)
+    ? (probability * shares) - currentValue
+    : Number(trade.expectedValueUsdc);
+  const expectedRoi = Number.isFinite(expectedValue) && Number.isFinite(currentValue) && currentValue > 0
+    ? expectedValue / currentValue
+    : null;
+  const annualizedReturn = Number.isFinite(expectedRoi) ? expectedRoi * (365 / remainingDays) : Number(trade.annualizedReturn);
+  const rewardRisk = Number.isFinite(reward) && Number.isFinite(currentValue) && currentValue > 0 ? reward / currentValue : null;
+  const score = strategy.selectionOrder === "highest_reward_risk_first" ? rewardRisk : annualizedReturn;
+  return {
+    currentValue,
+    reward,
+    expectedValue,
+    annualizedReturn,
+    rewardRisk,
+    score,
+  };
+}
+
+function candidateRotationScore(candidate, strategy = PAPER_STRATEGIES.conservative) {
+  return strategy.selectionOrder === "highest_reward_risk_first"
+    ? rewardRiskRatio(candidate)
+    : Number(candidate.annualizedReturn);
+}
+
+function openTrades(trades) {
+  return trades.filter((trade) => OPEN_STATUSES.has(trade.status));
+}
+
+function heldHours(trade) {
+  const opened = Date.parse(trade.openedAt || trade.date || "");
+  if (!Number.isFinite(opened)) return Infinity;
+  return Math.max(0, (Date.now() - opened) / 3600000);
+}
+
 function daysValue(item) {
   const days = Number(item.daysToResolution);
   return Number.isFinite(days) ? days : Infinity;
@@ -1681,37 +1742,8 @@ function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservat
   });
 }
 
-function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative) {
-  const today = pragueDateKey();
-  const available = Math.max(0, PORTFOLIO_USDC - openRisk(portfolioState.trades));
-  const stake = PORTFOLIO_USDC * MAX_FRACTION;
-  let skippedForRisk = 0;
-
-  if (portfolioState.lastTradeDate === today) {
-    return { action: "SKIP", reason: "daily paper trade already opened", available, strategyId: strategy.id };
-  }
-  if (available < stake) {
-    return { action: "SKIP", reason: "not enough free paper capital", available, strategyId: strategy.id };
-  }
-
-  const best = eligible.find((item) => {
-    if (alreadyOpen(portfolioState.trades, item.tokenId)) return false;
-    const block = riskBlock(item, portfolioState.trades);
-    if (!block) return true;
-    skippedForRisk += 1;
-    item.selectionStatus = "RISK_BLOCKED";
-    item.riskBlockedByTradeId = block.tradeId;
-    item.riskBlockedReason = riskBlockReason(block);
-    return false;
-  });
-  if (!best) {
-    const reason = skippedForRisk > 0
-      ? "no eligible non-correlated candidate"
-      : "no eligible non-duplicate candidate";
-    return { action: "SKIP", reason, available, skippedForRisk, strategyId: strategy.id };
-  }
-
-  const trade = {
+function paperTradeFromCandidate(best, strategy, today, stake) {
+  return {
     id: `paper-${strategy.id}-${today}-${best.tokenId}`,
     strategyId: strategy.id,
     strategyLabel: strategy.label,
@@ -1780,6 +1812,157 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
     analysisModel: best.analysisModel,
     analysisSummary: best.analysisSummary,
   };
+}
+
+function findFirstOpenCandidate(portfolioState, eligible, excludedTradeId = null) {
+  let skippedForRisk = 0;
+  const activeTrades = excludedTradeId
+    ? portfolioState.trades.filter((trade) => trade.id !== excludedTradeId)
+    : portfolioState.trades;
+
+  const best = eligible.find((item) => {
+    if (alreadyOpen(activeTrades, item.tokenId)) return false;
+    const block = riskBlock(item, activeTrades);
+    if (!block) return true;
+    skippedForRisk += 1;
+    item.selectionStatus = "RISK_BLOCKED";
+    item.riskBlockedByTradeId = block.tradeId;
+    item.riskBlockedReason = riskBlockReason(block);
+    return false;
+  });
+
+  return { best: best || null, skippedForRisk };
+}
+
+function rotationReview(portfolioState, eligible, strategy, available, stake) {
+  const openRows = openTrades(portfolioState.trades)
+    .filter((trade) => trade.status === "OPEN")
+    .filter((trade) => heldHours(trade) >= ROTATION_MIN_HOLD_HOURS);
+  if (!openRows.length) return null;
+
+  let bestReview = null;
+  for (const trade of openRows) {
+    const candidate = findFirstOpenCandidate(portfolioState, eligible, trade.id).best;
+    if (!candidate) continue;
+    if (String(candidate.tokenId || "") === String(trade.tokenId || "")) continue;
+    const capitalAfterExit = available + Number(trade.maxLossUsdc || trade.stakeUsdc || 0);
+    if (capitalAfterExit < stake) continue;
+
+    const hold = tradeContinuationEconomics(trade, strategy);
+    const candidateScore = candidateRotationScore(candidate, strategy);
+    const candidateEv = Number(candidate.expectedValueUsdc);
+    const holdEv = Number(hold.expectedValue);
+    if (!Number.isFinite(candidateScore) || !Number.isFinite(hold.score)) continue;
+    if (!Number.isFinite(candidateEv) || !Number.isFinite(holdEv)) continue;
+
+    const scoreDelta = candidateScore - hold.score;
+    const evDelta = candidateEv - holdEv;
+    if (scoreDelta < ROTATION_MIN_SCORE_IMPROVEMENT || evDelta < ROTATION_MIN_EV_USDC_IMPROVEMENT) continue;
+
+    const review = {
+      trade,
+      candidate,
+      hold,
+      candidateScore,
+      candidateEv,
+      scoreDelta,
+      evDelta,
+      capitalAfterExit,
+    };
+    if (!bestReview || review.scoreDelta > bestReview.scoreDelta || (review.scoreDelta === bestReview.scoreDelta && review.evDelta > bestReview.evDelta)) {
+      bestReview = review;
+    }
+  }
+  return bestReview;
+}
+
+function closeTradeForRotation(trade, review, strategy) {
+  const closedAt = nowIso();
+  const currentValue = Number(review.hold.currentValue || 0);
+  const cost = Number(trade.totalCostUsdc || trade.maxLossUsdc || trade.stakeUsdc || 0);
+  const realizedPnl = Number((currentValue - cost).toFixed(4));
+  const realizedPnlPct = pnlPercent(realizedPnl, cost);
+  const metric = strategy.selectionMetric;
+  const note = [
+    `Predcasne uzavreno pred vyhodnocenim kvuli lepsi paper prilezitosti.`,
+    `Nova prilezitost ma ${metric} ${strategy.selectionOrder === "highest_reward_risk_first" ? review.candidateScore.toFixed(2) : `${(review.candidateScore * 100).toFixed(1)}%`} oproti drzeni ${strategy.selectionOrder === "highest_reward_risk_first" ? review.hold.score.toFixed(2) : `${(review.hold.score * 100).toFixed(1)}%`}.`,
+    `Realizovany P/L pri vystupu je ${realizedPnl >= 0 ? "+" : ""}${realizedPnl.toFixed(4)} USDC; ocekavane EV se zlepsuje o ${review.evDelta >= 0 ? "+" : ""}${review.evDelta.toFixed(4)} USDC.`,
+  ].join(" ");
+
+  return {
+    ...trade,
+    status: "SOLD",
+    closedAt,
+    resolvedAt: closedAt,
+    exitReason: "ROTATED_TO_BETTER_CANDIDATE",
+    exitPrice: Number(trade.currentPrice ?? trade.entryPrice ?? 0),
+    currentValueUsdc: Number(currentValue.toFixed(4)),
+    unrealizedPnlUsdc: 0,
+    unrealizedPnlPct: 0,
+    realizedPnlUsdc: realizedPnl,
+    realizedPnlPct,
+    statusNote: note,
+    rotationReview: {
+      strategyId: strategy.id,
+      strategyMetric: strategy.selectionMetric,
+      closedForQuestion: review.candidate.question,
+      closedForOutcome: review.candidate.outcome,
+      closedForTokenId: review.candidate.tokenId,
+      previousScore: Number(review.hold.score.toFixed(6)),
+      newScore: Number(review.candidateScore.toFixed(6)),
+      scoreDelta: Number(review.scoreDelta.toFixed(6)),
+      previousExpectedValueUsdc: Number(review.hold.expectedValue.toFixed(4)),
+      newExpectedValueUsdc: Number(review.candidateEv.toFixed(4)),
+      expectedValueDeltaUsdc: Number(review.evDelta.toFixed(4)),
+      realizedPnlUsdc: realizedPnl,
+      note,
+    },
+  };
+}
+
+function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative) {
+  const today = pragueDateKey();
+  const available = Math.max(0, PORTFOLIO_USDC - openRisk(portfolioState.trades));
+  const stake = PORTFOLIO_USDC * MAX_FRACTION;
+
+  if (portfolioState.lastTradeDate === today) {
+    return { action: "SKIP", reason: "daily paper trade already opened", available, strategyId: strategy.id };
+  }
+
+  const rotation = rotationReview(portfolioState, eligible, strategy, available, stake);
+  if (rotation) {
+    const closedTrade = closeTradeForRotation(rotation.trade, rotation, strategy);
+    portfolioState.trades = portfolioState.trades.map((trade) => trade.id === closedTrade.id ? closedTrade : trade);
+    const newTrade = paperTradeFromCandidate(rotation.candidate, strategy, today, stake);
+    newTrade.openedAfterRotationOfTradeId = closedTrade.id;
+    newTrade.rotationEntryReason = closedTrade.rotationReview?.note || "";
+    portfolioState.trades.unshift(newTrade);
+    portfolioState.lastTradeDate = today;
+    return {
+      action: "ROTATED_OPENED",
+      reason: `closed weaker open paper trade and opened better ${strategy.selectionMetric} candidate`,
+      trade: newTrade,
+      closedTrade,
+      available: rotation.capitalAfterExit - stake,
+      skippedForRisk: 0,
+      rotationReview: closedTrade.rotationReview,
+      strategyId: strategy.id,
+    };
+  }
+
+  if (available < stake) {
+    return { action: "SKIP", reason: "not enough free paper capital", available, strategyId: strategy.id };
+  }
+
+  const { best, skippedForRisk } = findFirstOpenCandidate(portfolioState, eligible);
+  if (!best) {
+    const reason = skippedForRisk > 0
+      ? "no eligible non-correlated candidate"
+      : "no eligible non-duplicate candidate";
+    return { action: "SKIP", reason, available, skippedForRisk, strategyId: strategy.id };
+  }
+
+  const trade = paperTradeFromCandidate(best, strategy, today, stake);
 
   portfolioState.trades.unshift(trade);
   portfolioState.lastTradeDate = today;
@@ -2218,6 +2401,8 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
     action: decision.action,
     reason: decision.reason,
     tradeId: decision.trade?.id || null,
+    closedTradeId: decision.closedTrade?.id || null,
+    rotationReview: decision.rotationReview || null,
     selectedHorizonDays: decision.trade?.daysToResolution ?? null,
     riskSkippedCount: decision.skippedForRisk || 0,
     refreshOnly: REFRESH_ONLY,
@@ -2235,6 +2420,9 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
       eligibleCount: eligible.length,
       action: decision.action,
       reason: decision.reason,
+      tradeId: decision.trade?.id || null,
+      closedTradeId: decision.closedTrade?.id || null,
+      rotationReview: decision.rotationReview || null,
       riskSkippedCount: decision.skippedForRisk || 0,
       refreshOnly: REFRESH_ONLY,
       learningSampleSize: state.learningProfile.sampleSize,
@@ -2270,6 +2458,8 @@ function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
         action: decision.action,
         reason: decision.reason,
         tradeId: decision.trade?.id || null,
+        closedTradeId: decision.closedTrade?.id || null,
+        rotationReview: decision.rotationReview || null,
       })),
       events: evaluations.map((item) => ({
         id: item.id,

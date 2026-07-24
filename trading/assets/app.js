@@ -704,6 +704,8 @@ function tradeAnalysisDetails(trade) {
     Array.isArray(ai.evidence) && ai.evidence.length ? `Evidence: ${ai.evidence.join(" ")}` : "",
     Array.isArray(ai.counterEvidence) && ai.counterEvidence.length ? `Counter: ${ai.counterEvidence.join(" ")}` : "",
     trade.analysisSummary || source.analysisSummary || "",
+    trade.rotationReview?.note ? `Rotation review: ${trade.rotationReview.note}` : "",
+    trade.rotationEntryReason ? `Opened after rotation: ${trade.rotationEntryReason}` : "",
     trade.postMortem?.thesisReview ? `Post-mortem: ${trade.postMortem.thesisReview}` : "",
   ];
   return lines.filter(Boolean).join("\n\n");
@@ -722,6 +724,8 @@ function tradeAnalysisCell(trade) {
 }
 
 function postMortemLine(trade) {
+  if (trade.rotationReview?.note) return trade.rotationReview.note;
+  if (trade.rotationEntryReason) return trade.rotationEntryReason;
   const review = trade.postMortem;
   if (!review) return "";
   const error = Number(review.predictionError);
