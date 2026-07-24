@@ -92,6 +92,8 @@ const els = {
   portfolioPeriod: document.querySelector("[data-portfolio-period]"),
   portfolioRealized: document.querySelector("[data-portfolio-realized]"),
   portfolioRealizedPct: document.querySelector("[data-portfolio-realized-pct]"),
+  portfolioAccuracy: document.querySelector("[data-portfolio-accuracy]"),
+  portfolioAccuracyNote: document.querySelector("[data-portfolio-accuracy-note]"),
   portfolioOpenPl: document.querySelector("[data-portfolio-open-pl]"),
   portfolioOpenPlPct: document.querySelector("[data-portfolio-open-pl-pct]"),
   portfolioRisk: document.querySelector("[data-portfolio-risk]"),
@@ -475,6 +477,39 @@ function tradePnlPct(trade) {
 
 function isClosedTrade(trade) {
   return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED"].includes(String(trade.status || "").toUpperCase());
+}
+
+function closedTradeWasCorrect(trade) {
+  const status = String(trade.status || "").toUpperCase();
+  if (["WON", "REDEEMED"].includes(status)) return true;
+  if (status === "LOST") return false;
+  const realized = Number(trade.realizedPnlUsdc);
+  if (Number.isFinite(realized)) return realized > 0;
+  const finalPrice = Number(trade.finalPrice ?? trade.currentPrice);
+  if (Number.isFinite(finalPrice)) return finalPrice >= 0.995;
+  return false;
+}
+
+function closedAccuracyStats(closedTrades) {
+  const rows = Array.isArray(closedTrades) ? closedTrades.filter(isClosedTrade) : [];
+  const correct = rows.filter(closedTradeWasCorrect).length;
+  const total = rows.length;
+  return {
+    correct,
+    total,
+    rate: total ? correct / total : null,
+  };
+}
+
+function renderClosedAccuracy(closedTrades) {
+  const stats = closedAccuracyStats(closedTrades);
+  if (els.portfolioAccuracy) {
+    els.portfolioAccuracy.textContent = stats.rate == null ? "-" : probability(stats.rate);
+    els.portfolioAccuracy.className = stats.rate == null ? "" : (stats.rate >= 0.5 ? "positive" : "negative");
+  }
+  if (els.portfolioAccuracyNote) {
+    els.portfolioAccuracyNote.textContent = `${stats.correct} / ${stats.total} closed`;
+  }
 }
 
 function tradeStatusNote(trade) {
@@ -1484,6 +1519,7 @@ async function loadLiveState(options = {}) {
     els.portfolioPeriod.textContent = "No live data";
     els.portfolioRealized.textContent = "-";
     els.portfolioRealizedPct.textContent = "-";
+    renderClosedAccuracy([]);
     els.portfolioOpenPl.textContent = "-";
     els.portfolioOpenPlPct.textContent = "-";
     els.portfolioRisk.textContent = "-";
@@ -1606,6 +1642,7 @@ function renderBotState(botState) {
   els.portfolioRealized.textContent = signedMoney(realizedPnl);
   els.portfolioRealized.className = pnlClass(realizedPnl);
   els.portfolioRealizedPct.textContent = signedPercent(realizedPnlPct);
+  renderClosedAccuracy(closedTrades);
   els.portfolioOpenPl.textContent = signedMoney(openPnl);
   els.portfolioOpenPl.className = pnlClass(openPnl);
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
@@ -1893,6 +1930,7 @@ function renderLiveState(liveState) {
   els.portfolioRealized.textContent = signedMoney(realizedPnl);
   els.portfolioRealized.className = pnlClass(realizedPnl);
   els.portfolioRealizedPct.textContent = signedPercent(realizedPnlPct);
+  renderClosedAccuracy(closedTrades);
   els.portfolioOpenPl.textContent = signedMoney(openPnl);
   els.portfolioOpenPl.className = pnlClass(openPnl);
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
