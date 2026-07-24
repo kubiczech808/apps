@@ -110,6 +110,7 @@
         <div class="tab-list" role="tablist" aria-label="Trading dashboard">
           <button class="tab-button active" type="button" data-tab-target="daily-picks" data-paper-label="Opened trades" data-live-label="Opened trades">Opened trades</button>
           <button class="tab-button" type="button" data-tab-target="closed-trades" data-paper-label="Closed trades" data-live-label="Closed trades">Closed trades</button>
+          <button class="tab-button" type="button" data-tab-target="run-log" data-paper-label="Run log" data-live-label="Run log">Run log</button>
         </div>
 
         <section class="tab-panel active" data-tab-panel="daily-picks">
@@ -139,6 +140,19 @@
           </article>
         </section>
 
+        <section class="tab-panel" data-tab-panel="run-log">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Automated trading</p>
+                <h2 data-run-log-title>Portfolio run log</h2>
+              </div>
+              <span class="pill" data-run-log-summary>0 runs</span>
+            </div>
+            <div class="run-log" data-run-log></div>
+          </article>
+        </section>
+
         <section class="tab-panel" data-tab-panel="settings-runs">
           <article class="panel">
             <div class="panel-head">
@@ -146,11 +160,9 @@
                 <p class="eyebrow">Settings</p>
                 <h2>Automation settings</h2>
               </div>
-              <span class="pill" data-run-log-summary>0 runs</span>
             </div>
             <div class="settings-subtabs" role="tablist" aria-label="Settings sections">
               <button class="segment-button active" type="button" data-settings-section="evaluation-log">Evaluation log</button>
-              <button class="segment-button" type="button" data-settings-section="runs">Run log</button>
               <button class="segment-button" type="button" data-settings-section="calculations">Night calculations</button>
             </div>
             <div class="settings-panel-body" data-settings-panel="evaluation-log">
@@ -171,9 +183,6 @@
                 </div>
               </div>
               <div class="ledger" data-bot-evaluations></div>
-            </div>
-            <div data-settings-panel="runs" hidden>
-              <div class="run-log" data-run-log></div>
             </div>
             <div class="settings-panel-body" data-settings-panel="calculations" hidden>
               <div class="calculation-controls">

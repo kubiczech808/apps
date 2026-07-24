@@ -38,6 +38,7 @@ const state = {
   settingsSection: "evaluation-log",
   calculationSource: "all",
   calculationMarket: "all",
+  displayedRunLog: [],
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
@@ -69,6 +70,7 @@ const els = {
   evaluationSummary: document.querySelector("[data-evaluation-summary]"),
   runLog: document.querySelector("[data-run-log]"),
   runLogSummary: document.querySelector("[data-run-log-summary]"),
+  runLogTitle: document.querySelector("[data-run-log-title]"),
   settingsSectionButtons: document.querySelectorAll("[data-settings-section]"),
   settingsPanels: document.querySelectorAll("[data-settings-panel]"),
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
@@ -2467,92 +2469,118 @@ function tradeBatchDetail(batch) {
   ].join("\n");
 }
 
-function renderRunLog() {
-  const runs = Array.isArray(state.botState?.evaluationRunLog) ? state.botState.evaluationRunLog : [];
-  const liveBatch = state.liveExecutionState?.batchLog || null;
-  if (els.runLogSummary) {
-    els.runLogSummary.textContent = `${runs.length} runs${liveBatch ? " + live batch" : ""}`;
+function liveRunLogRows() {
+  const rows = [];
+  const fromLiveState = Array.isArray(state.liveState?.runLog) ? state.liveState.runLog : [];
+  rows.push(...fromLiveState);
+  if (state.liveExecutionState?.batchLog) rows.unshift(state.liveExecutionState.batchLog);
+  return mergeUniqueByRun(rows).slice(0, 120);
+}
+
+function mergeUniqueByRun(rows = []) {
+  const seen = new Set();
+  const merged = [];
+  for (const row of rows) {
+    const key = row?.id || `${row?.runAt || ""}:${row?.strategyId || ""}:${row?.action || ""}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
   }
+  return merged;
+}
+
+function currentPortfolioRunLog() {
+  if (isLiveMode()) return liveRunLogRows();
+  const portfolio = selectedPaperPortfolio(state.botState || {});
+  return Array.isArray(portfolio.runLog) ? portfolio.runLog : [];
+}
+
+function runActionClass(action) {
+  const value = String(action || "").toUpperCase();
+  if (["OPEN", "OPENED", "SUBMIT", "SUBMITTED", "DRY_RUN_READY", "ROTATE", "ROTATED"].includes(value)) return "positive";
+  if (["SKIP", "REJECTED", "ERROR"].includes(value)) return "negative";
+  return "";
+}
+
+function runCapitalNote(run = {}) {
+  const available = Number(run.availableCapitalUsdc ?? run.capital?.availableUsdc);
+  const required = Number(run.requiredStakeUsdc ?? run.capital?.requiredStakeUsdc);
+  const hasCapitalData = Number.isFinite(available) || Number.isFinite(required);
+  const blocked = Boolean(run.insufficientCapital || run.capital?.insufficientCapital);
+  const parts = [
+    Number.isFinite(available) ? `${money(available)} available` : "",
+    Number.isFinite(required) ? `${money(required)} required` : "",
+    blocked ? "capital blocked" : (hasCapitalData ? "capital ok" : ""),
+  ];
+  return parts.filter(Boolean).join(" / ");
+}
+
+function runDecisionSummary(run = {}) {
+  const batch = run.batchLog || run;
+  const counts = batch.counts || {};
+  const evaluated = Number(run.evaluatedCount ?? counts.scannedCandidates ?? counts.revalidatedCandidates);
+  const eligible = Number(run.eligibleCount ?? counts.rankedEligible ?? counts.eligibleCandidates);
+  const riskSkipped = Number(run.riskSkippedCount ?? counts.skippedForRisk);
+  const countParts = [
+    Number.isFinite(evaluated) ? `${evaluated} evaluated` : "",
+    Number.isFinite(eligible) ? `${eligible} eligible` : "",
+    Number.isFinite(riskSkipped) ? `${riskSkipped} risk skipped` : "",
+  ].filter(Boolean).join(" / ");
+  return [run.reason || batch.reason || "-", countParts, runCapitalNote(run)].filter(Boolean).join(" / ");
+}
+
+function portfolioRunDetail(run = {}) {
+  const batch = run.batchLog || run;
+  const base = tradeBatchDetail(batch);
+  const extra = [
+    "",
+    "Portfolio run row",
+    `Run time: ${run.runAt ? formatDate(run.runAt) : "-"}`,
+    `Portfolio: ${run.strategyLabel || run.strategyId || "-"}`,
+    `Action: ${run.action || batch.action || "-"}`,
+    `Reason: ${run.reason || batch.reason || "-"}`,
+    `Evaluated: ${Number(run.evaluatedCount ?? batch.counts?.scannedCandidates ?? 0)}`,
+    `Eligible for this portfolio: ${Number(run.eligibleCount ?? batch.counts?.eligibleCandidates ?? 0)}`,
+    `Risk skipped: ${Number(run.riskSkippedCount ?? batch.counts?.skippedForRisk ?? 0)}`,
+    `Capital: ${runCapitalNote(run) || "-"}`,
+    run.rotationReview?.note ? `Rotation review: ${run.rotationReview.note}` : "",
+    run.refreshOnly ? "Refresh-only run: yes" : "",
+    run.reportOnly ? "Report-only run: yes" : "",
+  ].filter(Boolean).join("\n");
+  return `${base}\n${extra}`;
+}
+
+function renderRunLog() {
   if (!els.runLog) return;
-  if (!runs.length && !liveBatch) {
-    els.runLog.innerHTML = '<div class="empty">Evaluation run log is not available yet. It will appear after the next evaluation run.</div>';
+  const runs = currentPortfolioRunLog();
+  state.displayedRunLog = runs;
+  const label = isLiveMode() ? "Live" : paperModeLabel();
+  if (els.runLogTitle) {
+    els.runLogTitle.textContent = `${label} run log`;
+  }
+  if (els.runLogSummary) {
+    els.runLogSummary.textContent = `${runs.length} runs`;
+  }
+  if (!runs.length) {
+    els.runLog.innerHTML = `<div class="empty">No ${escapeHtml(label)} trading decision runs recorded yet.</div>`;
     return;
   }
 
-  const liveBatchHtml = liveBatch ? `
-    <section class="run-card">
-      <div class="run-card-head">
-        <div>
-          <strong>Live execution batch</strong>
-          <span>${escapeHtml(liveBatch.runAt ? formatDate(liveBatch.runAt) : "-")}</span>
-        </div>
-        <div class="run-counts">
-          <span class="pill">${Number(liveBatch.counts?.eligibleCandidates || 0)} eligible</span>
-          <span class="pill muted">${Number(liveBatch.counts?.rejectedCandidates || 0)} rejected by revalidation</span>
-        </div>
-      </div>
-      <div class="trade-batches">
-        <button class="trade-batch" type="button" data-live-batch>
-          <span class="${liveBatch.action === "SKIP" || liveBatch.action === "REJECTED" ? "negative" : "positive"}">${escapeHtml(liveBatch.action || "-")}</span>
-          <strong>${escapeHtml(liveBatch.strategyLabel || "Live")}</strong>
-          <span>${escapeHtml(liveBatch.reason || "-")}</span>
-          <em>${Number(liveBatch.counts?.revalidatedCandidates || 0)} revalidated / ${Number(liveBatch.counts?.preferredHorizonEligibleCandidates || 0)} preferred</em>
-        </button>
-      </div>
-    </section>
-  ` : "";
-
-  const paperRunsHtml = runs.slice(0, 30).map((run, runIndex) => {
-    const events = Array.isArray(run.events) ? run.events : [];
-    const decisions = Array.isArray(run.decisions) ? run.decisions : [];
-    const status = run.statusCounts || {};
-    const errorCount = Number(run.errorCount || status.ERROR || 0);
-    const evaluatedCount = Number(run.evaluatedCount || events.length || 0);
-    const aiProbabilityCount = events.filter((event) => Number.isFinite(Number(event.aiProbability))).length;
-    const runType = run.reportOnly ? "night calculation" : (run.refreshOnly ? "refresh-only" : "full evaluation");
-    return `
-      <section class="run-card">
-        <div class="run-card-head">
-          <div>
-            <strong>${escapeHtml(formatDate(run.runAt || ""))}</strong>
-            <span>${runType} / ${Number(run.evaluatedCount || events.length)} evaluated</span>
-          </div>
-          <div class="run-counts">
-            <span class="pill">${evaluatedCount} evaluated</span>
-            <span class="pill muted">${aiProbabilityCount} with AI prob.</span>
-            ${errorCount ? `<span class="pill error">${errorCount} error</span>` : ""}
-          </div>
-        </div>
-        ${decisions.length ? `
-          <div class="trade-batches">
-            ${decisions.map((decision, decisionIndex) => {
-              const batch = decision.batchLog || {};
-              const counts = batch.counts || {};
-              return `
-                <button class="trade-batch" type="button" data-run-batch="${runIndex}:${decisionIndex}">
-                  <span class="${decision.action === "SKIP" || decision.action === "REJECTED" ? "negative" : "positive"}">${escapeHtml(decision.action || "-")}</span>
-                  <strong>${escapeHtml(batch.strategyLabel || decision.strategyId || "-")}</strong>
-                  <span>${escapeHtml(decision.reason || "-")}</span>
-                  <em>${Number(counts.rankedEligible || 0)} candidates / ${Number(counts.skippedForRisk || 0)} risk skipped / ${decision.insufficientCapital ? "capital blocked" : "capital ok"}</em>
-                </button>
-              `;
-            }).join("")}
-          </div>
-        ` : ""}
-        <div class="run-events">
-          ${events.length ? events.slice(0, 80).map((event, eventIndex) => `
-            <button class="run-event" type="button" data-run-event="${runIndex}:${eventIndex}">
-              <span class="${runEventResultClass(event)}">${escapeHtml(runEventResultLabel(event))}</span>
-              <strong>${escapeHtml(event.outcome || "-")}</strong>
-              <span>${escapeHtml(event.question || "-")}</span>
-              <em>${probability(Number(event.aiProbability))} AI / ${signedPercent(Number(event.annualizedReturn))} EV p.a.</em>
-            </button>
-          `).join("") : '<div class="run-empty">No market evaluations in this refresh-only run.</div>'}
-        </div>
-      </section>
-    `;
-  }).join("");
-  els.runLog.innerHTML = `${liveBatchHtml}${paperRunsHtml}`;
+  els.runLog.innerHTML = `
+    <div class="trade-batches portfolio-run-list">
+      ${runs.slice(0, 120).map((run, index) => {
+        const batch = run.batchLog || run;
+        return `
+          <button class="trade-batch portfolio-run-row" type="button" data-portfolio-run="${index}">
+            <span class="${runActionClass(run.action || batch.action)}">${escapeHtml(run.action || batch.action || "-")}</span>
+            <strong>${escapeHtml(run.runAt ? formatDate(run.runAt) : "-")}</strong>
+            <span>${escapeHtml(runDecisionSummary(run))}</span>
+            <em>${escapeHtml(run.strategyLabel || batch.strategyLabel || run.strategyId || "-")}</em>
+          </button>
+        `;
+      }).join("")}
+    </div>
+  `;
 }
 
 function calculationSourceLabel(source) {
@@ -2839,6 +2867,14 @@ document.addEventListener("click", (event) => {
     const run = (Array.isArray(state.botState?.evaluationRunLog) ? state.botState.evaluationRunLog : [])[Number(runIndexRaw)];
     const runEvent = Array.isArray(run?.events) ? run.events[Number(eventIndexRaw)] : null;
     openAnalysisModal(runEventDetail(runEvent || {}), runEventButton);
+    return;
+  }
+
+  const portfolioRunButton = event.target.closest("[data-portfolio-run]");
+  if (portfolioRunButton) {
+    event.preventDefault();
+    const run = state.displayedRunLog[Number(portfolioRunButton.dataset.portfolioRun)];
+    openAnalysisModal(portfolioRunDetail(run || {}), portfolioRunButton);
     return;
   }
 
