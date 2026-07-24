@@ -461,8 +461,17 @@ function orderPriceForBook(book, tick) {
 }
 
 function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
-  const targetStake = Math.min(maxNotional, cash);
+  const targetStake = maxNotional;
   const minNotional = price * minOrderSize;
+  if (targetStake > cash) {
+    return {
+      size: null,
+      targetStake,
+      minNotional,
+      minSizeOverride: false,
+      sizingNote: `target stake ${targetStake.toFixed(4)} USDC is based on total portfolio value, above available cash ${cash.toFixed(4)} USDC`,
+    };
+  }
   if (minNotional > cash) {
     return {
       size: null,
@@ -498,6 +507,15 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
     minSizeOverride: false,
     sizingNote: size >= minOrderSize ? "sized from target stake percentage" : `target stake ${targetStake.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
   };
+}
+
+function livePortfolioValue(liveState, cash) {
+  const portfolio = liveState?.portfolio || {};
+  const equity = number(portfolio.equityUsdc);
+  if (equity != null && equity > 0) return equity;
+  const marketValue = number(portfolio.marketValueUsdc, 0);
+  if (cash != null && cash >= 0) return cash + marketValue;
+  return marketValue;
 }
 
 async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, evaluationByToken = new Map()) {
@@ -756,11 +774,12 @@ async function main() {
   ]);
   const cash = liveCashUsdc(liveState);
   const tradingConfig = liveTradingConfig(liveState);
-  const fractionNotional = cash * MAX_ORDER_FRACTION;
+  const portfolioValue = livePortfolioValue(liveState, cash);
+  const fractionNotional = portfolioValue * MAX_ORDER_FRACTION;
   const monitoring = liveCashMonitoring(previousExecution, cash);
   const regularMaxNotional = Math.min(fractionNotional, MAX_ORDER_NOTIONAL_USDC);
   const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, cash - IDLE_CASH_MAX_USDC) : 0;
-  const maxNotional = Number(Math.min(cash, Math.max(regularMaxNotional, idleUtilizationNotional)).toFixed(5));
+  const maxNotional = Number(regularMaxNotional.toFixed(5));
   const rawEvaluations = Array.isArray(paperState.evaluations) ? paperState.evaluations : [];
   const latestEvaluations = latestUniqueEvaluations(rawEvaluations);
   const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
@@ -817,6 +836,7 @@ async function main() {
       funderAddress: tradingConfig.funderAddress,
       signatureType: tradingConfig.signatureType,
       cashUsdc: cash,
+      portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
       maxOrderFraction: MAX_ORDER_FRACTION,
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
       maxNotionalUsdc: maxNotional,
@@ -873,8 +893,9 @@ async function main() {
       },
       capital: {
         availableUsdc: cash,
+        portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
         requiredStakeUsdc: maxNotional,
-        insufficientCapital: !Number.isFinite(maxNotional) || maxNotional <= 0,
+        insufficientCapital: !Number.isFinite(maxNotional) || maxNotional <= 0 || cash + 0.000001 < maxNotional,
       },
       counts: {
         scannedCandidates: baseCandidates.length,

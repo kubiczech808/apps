@@ -2001,8 +2001,13 @@ function closeTradeForRotation(trade, review, strategy) {
 
 function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative) {
   const today = pragueDateKey();
-  const available = Math.max(0, PORTFOLIO_USDC - openRisk(portfolioState.trades));
-  const stake = PORTFOLIO_USDC * MAX_FRACTION;
+  const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
+  const openPnl = portfolioState.trades
+    .filter((trade) => trade.status === "OPEN")
+    .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
+  const portfolioValue = Math.max(0, PORTFOLIO_USDC + realizedPnl + openPnl);
+  const available = Math.max(0, PORTFOLIO_USDC + realizedPnl - openRisk(portfolioState.trades));
+  const stake = portfolioValue * MAX_FRACTION;
 
   if (portfolioState.lastTradeDate === today) {
     const reason = "daily paper trade already opened";
@@ -2661,7 +2666,9 @@ function updatePaperPortfolio(portfolioState) {
   const openPnl = portfolioState.trades
     .filter((trade) => trade.status === "OPEN")
     .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
+  const openRiskValue = openRisk(portfolioState.trades);
   const equity = PORTFOLIO_USDC + realizedPnl + openPnl;
+  const freeCapital = Math.max(0, PORTFOLIO_USDC + realizedPnl - openRiskValue);
   portfolioState.portfolio = {
     ...(portfolioState.portfolio || {}),
     strategyId: portfolioState.id,
@@ -2671,7 +2678,7 @@ function updatePaperPortfolio(portfolioState) {
     strategyDescription: portfolioState.description,
     initialUsdc: PORTFOLIO_USDC,
     maxFraction: MAX_FRACTION,
-    maxStakeUsdc: Number((PORTFOLIO_USDC * MAX_FRACTION).toFixed(2)),
+    maxStakeUsdc: Number((equity * MAX_FRACTION).toFixed(2)),
     minProbability: Number(portfolioState.minProbability ?? MIN_PROBABILITY),
     minAnnualReturn: MIN_ANNUAL_RETURN,
     opportunityMinProbability: OPPORTUNITY_MIN_PROBABILITY,
@@ -2689,8 +2696,8 @@ function updatePaperPortfolio(portfolioState) {
     equityUsdc: Number(equity.toFixed(4)),
     totalPnlUsdc: Number((realizedPnl + openPnl).toFixed(4)),
     totalPnlPct: pnlPercent(realizedPnl + openPnl, PORTFOLIO_USDC),
-    openRiskUsdc: Number(openRisk(portfolioState.trades).toFixed(2)),
-    freeCapitalUsdc: Number(Math.max(0, PORTFOLIO_USDC - openRisk(portfolioState.trades)).toFixed(2)),
+    openRiskUsdc: Number(openRiskValue.toFixed(2)),
+    freeCapitalUsdc: Number(freeCapital.toFixed(2)),
   };
 }
 

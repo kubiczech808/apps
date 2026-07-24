@@ -1668,12 +1668,12 @@ function renderBotState(botState) {
   const openPnl = Number(portfolio.openPnlUsdc || 0);
   const openPnlPct = Number(portfolio.openPnlPct || 0);
   const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
-  const paperCapitalBase = Number(portfolio.initialUsdc ?? 100);
+  const paperCapitalBase = Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100);
   const maxResolutionDays = Number(portfolio.maxResolutionDays);
   const resolutionLabel = Number.isFinite(maxResolutionDays)
     ? `No later than ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`
     : "Best available horizon";
-  syncRiskAllocationControl(freeCapital, "paper portfolio", {
+  syncRiskAllocationControl(freeCapital, "paper portfolio equity", {
     baseCapital: paperCapitalBase,
     cadenceLabel: "next paper execution",
   });
@@ -1718,8 +1718,8 @@ function renderBotState(botState) {
       </div>
       <div>
         <span class="label">Max per trade</span>
-        <strong>${money(freeCapital * currentRiskAllocation())}</strong>
-        <span>${probability(currentRiskAllocation())} of paper free capital</span>
+        <strong>${money(paperCapitalBase * currentRiskAllocation())}</strong>
+        <span>${probability(currentRiskAllocation())} of paper portfolio equity</span>
       </div>
       <div>
         <span class="label">Order mode</span>
@@ -1957,12 +1957,12 @@ function renderLiveState(liveState) {
   const depositedLine = Number.isFinite(deposited)
     ? `Deposited/original value ${money(deposited)}`
     : "Deposited/original value not available";
-  const liveCapitalBase = Number.isFinite(cash) ? cash : null;
+  const liveCapitalBase = Number.isFinite(equity) ? equity : null;
   const liveGuardLabel = state.liveExecutionArmed ? "Armed" : "Inactive";
   const liveGuardText = state.liveExecutionArmed
     ? "UI gate enabled; no automatic live order submitter is connected yet"
     : "click Activate live execution before future live order routing";
-  syncRiskAllocationControl(liveCapitalBase, Number.isFinite(cash) ? "live pUSD cash" : "live cash once balance sync is available", {
+  syncRiskAllocationControl(Number.isFinite(cash) ? cash : null, "live portfolio equity", {
     baseCapital: liveCapitalBase,
     cadenceLabel: "next live execution",
   });
@@ -2031,7 +2031,7 @@ function renderLiveState(liveState) {
       <div>
         <span class="label">Max per trade</span>
         <strong>${Number.isFinite(liveCapitalBase) ? money(liveCapitalBase * currentRiskAllocation()) : "-"}</strong>
-        <span>${probability(currentRiskAllocation())} of synced live cash</span>
+        <span>${probability(currentRiskAllocation())} of live equity; cash must cover it</span>
       </div>
       <div>
         <span class="label">Open P/L</span>
@@ -2066,7 +2066,7 @@ function renderLiveState(liveState) {
       <div>
         <span class="label">Portfolio parameters</span>
         <strong>${percent(currentEligibilityThreshold())} AI threshold</strong>
-        <span>${escapeHtml(`Revalidate first / risk-diversified / ${currentLimitOrders() ? "limit" : "market"} orders / ${probability(currentRiskAllocation())} cash stake`)}</span>
+        <span>${escapeHtml(`Revalidate first / risk-diversified / ${currentLimitOrders() ? "limit" : "market"} orders / ${probability(currentRiskAllocation())} equity stake`)}</span>
       </div>
     </div>
   `;
