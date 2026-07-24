@@ -17,7 +17,7 @@ final class Content
      */
     private const DISPLAY_CZK_RATES = [
         'EUR' => 24.25,
-        'PLN' => 5.58,
+        'PLN' => 5.65,
     ];
 
     private bool $term_guard = false;
