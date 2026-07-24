@@ -18,10 +18,11 @@ const MIN_VOLUME_24H = Number(process.env.PAPER_MIN_VOLUME_24H || 100);
 const MAX_HISTORY = Number(process.env.PAPER_MAX_HISTORY || 1200);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").toLowerCase();
-const AI_ANALYSIS_LIMIT = Number(process.env.PAPER_AI_ANALYSIS_LIMIT || 10);
+const AI_ANALYSIS_LIMIT = Number(process.env.PAPER_AI_ANALYSIS_LIMIT || MAX_EVALUATIONS_PER_RUN);
 const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
 const SHORT_HORIZON_DAYS = Number(process.env.PAPER_SHORT_HORIZON_DAYS || 7);
 const MEDIUM_HORIZON_DAYS = Number(process.env.PAPER_MEDIUM_HORIZON_DAYS || 14);
@@ -1384,40 +1385,73 @@ function messagesToGeminiText(messages) {
 
 async function callGeminiJson(messages) {
   if (!GEMINI_API_KEY) return null;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25000);
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-    const response = await fetch(url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: "application/json",
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const requestBody = (jsonMode = true) => ({
+    generationConfig: jsonMode ? {
+      responseMimeType: "application/json",
+    } : undefined,
+    tools: GEMINI_SEARCH_GROUNDING ? [{ google_search: {} }] : undefined,
+    contents: [{
+      role: "user",
+      parts: [{
+        text: `${messagesToGeminiText(messages)}\n\nReturn only one valid JSON object.`,
+      }],
+    }],
+  });
+
+  async function send(jsonMode) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
         },
-        contents: [{
-          role: "user",
-          parts: [{
-            text: `${messagesToGeminiText(messages)}\n\nReturn only one valid JSON object.`,
-          }],
-        }],
-      }),
-    });
-    if (!response.ok) throw new Error(`Gemini HTTP ${response.status}`);
-    const payload = await response.json();
+        body: JSON.stringify(requestBody(jsonMode)),
+      });
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(`Gemini HTTP ${response.status}${detail ? `: ${detail.slice(0, 240)}` : ""}`);
+      }
+      return response.json();
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  try {
+    let payload;
+    try {
+      payload = await send(true);
+    } catch (error) {
+      if (!GEMINI_SEARCH_GROUNDING || !/Gemini HTTP 400/.test(String(error.message || ""))) throw error;
+      payload = await send(false);
+    }
     const text = payload?.candidates?.[0]?.content?.parts
       ?.map((part) => part.text || "")
       .join("")
       .trim();
-    return parseJsonObject(text);
+    const parsed = parseJsonObject(text);
+    if (!parsed || typeof parsed !== "object") return parsed;
+    const grounding = payload?.candidates?.[0]?.groundingMetadata || null;
+    return {
+      ...parsed,
+      _grounding: grounding ? {
+        webSearchQueries: Array.isArray(grounding.webSearchQueries) ? grounding.webSearchQueries.slice(0, 8) : [],
+        sources: Array.isArray(grounding.groundingChunks)
+          ? grounding.groundingChunks
+              .map((chunk) => chunk.web)
+              .filter(Boolean)
+              .map((web) => ({ title: web.title || "", uri: web.uri || "" }))
+              .filter((source) => source.uri)
+              .slice(0, 8)
+          : [],
+      } : null,
+    };
   } catch (error) {
     return { error: error.message || String(error), provider: "gemini", model: GEMINI_MODEL };
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -1482,6 +1516,7 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     ...modelAnalysis,
     model: modelName,
     probability: Number(probability.toFixed(4)),
+    probabilityMethod: "independent-public-research",
     marketImpliedProbability: Number(evaluation.marketPrice),
     edge: Number(economics.edge.toFixed(4)),
     expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
@@ -1505,10 +1540,11 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     analysisModel: modelName,
     analysisSummary: [
       aiAnalysis.thesis || evaluation.probabilityThesis || "AI analysis produced no thesis.",
-      `Model probability ${(probability * 100).toFixed(1)}% vs market-buy entry ${(Number(evaluation.marketPrice) * 100).toFixed(1)}%.`,
+      `Independent AI probability ${(probability * 100).toFixed(1)}%; Polymarket entry is used only after the AI estimate for EV calculation.`,
       `Edge ${(economics.edge * 100).toFixed(1)} pts; expected annualized return ${(economics.annualizedReturn * 100).toFixed(1)}%; thesis type ${economics.thesisType}.`,
       modelAnalysis?.evidence ? `Evidence: ${[].concat(modelAnalysis.evidence).join(" ")}` : "",
       modelAnalysis?.counterEvidence ? `Counter evidence: ${[].concat(modelAnalysis.counterEvidence).join(" ")}` : "",
+      modelAnalysis?.groundingSources?.length ? `Sources: ${modelAnalysis.groundingSources.map((source) => source.title || source.uri).join("; ")}` : "",
       evaluation.analysisSummary || "",
     ].filter(Boolean).join(" "),
   };
@@ -1531,27 +1567,22 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
 
   for (const candidate of candidates) {
     const prompt = {
-      task: "Analyze a Polymarket paper-trading candidate. Estimate whether the selected outcome thesis should be YES/NO/OUTCOME, assign calibrated probability, and explain edge. Use only supplied market/orderbook data; do not invent external facts.",
+      task: "Deep-research this prediction-market event and estimate the true probability of the selected outcome using public evidence only.",
+      strictRules: [
+        "Do not search for, infer from, mention, or use Polymarket prices, odds, order books, volume, liquidity, market-implied probability, or betting consensus.",
+        "The probability must be independent of Polymarket. Treat market pricing as unavailable.",
+        "Use verified public information with strong causal relevance to the event outcome: official sources, primary data, reputable news, match/event schedules, statements, results, or authoritative statistics.",
+        "Search the web if needed. Prefer recent and primary sources. If evidence is weak or conflicting, lower confidence instead of copying market intuition.",
+        "For YES/NO markets, estimate the probability that the selected outcome is true by resolution time. For multi-outcome markets, estimate the selected outcome only.",
+        "Return calibrated probability, not trade recommendation. EV is calculated later outside the model.",
+      ],
       candidate: {
         question: candidate.question,
         outcome: candidate.outcome,
-        marketPrice: candidate.marketPrice,
-        bestBid: candidate.bestBid,
-        bestAsk: candidate.bestAsk,
-        spread: candidate.spread,
-        slippage: candidate.slippage,
-        liquidity: candidate.liquidity,
-        volume24hr: candidate.volume24hr,
+        endDate: candidate.endDate,
         daysToResolution: candidate.daysToResolution,
-        takerFeeUsdc: candidate.takerFeeUsdc,
-        netGainIfWinUsdc: candidate.netGainIfWinUsdc,
-        expectedValueUsdc: candidate.expectedValueUsdc,
-        annualizedReturn: candidate.annualizedReturn,
-        heuristicProbability: candidate.aiProbability,
-        rawProbability: candidate.rawProbability,
         tags: candidate.tags,
         riskGroupLabels: candidate.riskGroupLabels,
-        currentThesis: candidate.probabilityThesis,
       },
       learningProfile: {
         sampleSize: learningProfile.sampleSize,
@@ -1564,34 +1595,42 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
         probability: "number from 0.01 to 0.995",
         thesis: "one sentence",
         confidenceTier: "near-certain | high | edge-watch | uncertain | long-shot",
-        evidence: ["short bullet"],
-        counterEvidence: ["short bullet"],
+        evidence: ["short bullet with the public fact used"],
+        counterEvidence: ["short bullet with uncertainty or contrary public fact"],
+        researchSummary: "2-4 concise sentences explaining the public evidence chain",
+        sourceQuality: "primary | reputable-news | mixed | weak",
       },
     };
-    const result = await callAiJson([
-      { role: "system", content: "You are a cautious prediction-market analyst. Return only valid JSON." },
+    const result = GEMINI_API_KEY
+      ? await callGeminiJson([
+      { role: "system", content: "You are a cautious forecasting analyst doing source-grounded public research. You must ignore prediction-market pricing and betting consensus. Return only valid JSON." },
       { role: "user", content: JSON.stringify(prompt) },
-    ]);
+      ])
+      : { error: "Gemini API key is not configured; independent public-research probability was not run." };
     if (!result || result.error) {
       byId.set(candidate.id, {
         ...candidate,
         aiAnalysis: {
           ...(candidate.aiAnalysis || {}),
-          aiModelError: result?.error || "OpenAI analysis unavailable",
+          aiModelError: result?.error || "Gemini public-research analysis unavailable",
         },
       });
       continue;
     }
     const probability = clamp(Number(result.probability), 0.01, 0.995);
     if (!Number.isFinite(probability)) continue;
-    byId.set(candidate.id, refreshEvaluationAfterProbability(candidate, probability, result._model || OPENAI_MODEL, {
+    byId.set(candidate.id, refreshEvaluationAfterProbability(candidate, probability, result._model || GEMINI_MODEL, {
       direction: result.direction || outcomeKind(candidate.outcome),
       thesis: result.thesis || candidate.probabilityThesis,
       confidenceTier: result.confidenceTier || confidenceTier(probability),
       evidence: Array.isArray(result.evidence) ? result.evidence.slice(0, 6) : [],
       counterEvidence: Array.isArray(result.counterEvidence) ? result.counterEvidence.slice(0, 6) : [],
-      source: `${result._provider || "ai"}-initial-analysis`,
-      _provider: result._provider || null,
+      researchSummary: result.researchSummary || "",
+      sourceQuality: result.sourceQuality || "",
+      groundingQueries: result._grounding?.webSearchQueries || [],
+      groundingSources: result._grounding?.sources || [],
+      source: "gemini-grounded-public-research",
+      _provider: "gemini",
     }));
   }
 
@@ -2495,7 +2534,8 @@ function buildLearningProfile(trades, previousProfile = {}) {
   const promptRules = [
     calibrationBias < -0.05 ? "Recent predictions were overconfident; penalize market-consensus-only theses." : "",
     calibrationBias > 0.05 ? "Recent predictions were too conservative; promote positive-edge opportunities with acceptable liquidity." : "",
-    "Always compute probability against executable market-buy price, not midpoint.",
+    "Estimate AI probability from independent public evidence only; never use Polymarket price, odds, order book, volume, liquidity, or betting consensus as evidence.",
+    "Use market-buy price only after the independent probability is set, solely for EV, edge, and sizing calculations.",
     "Prefer lower-probability opportunities only when edge, EV p.a., and post-fee payout all remain positive.",
     "After a loss, avoid multiplying exposure to the same event, team, or risk group until resolved.",
   ].filter(Boolean);
