@@ -1076,6 +1076,7 @@ function analysisBadge(item) {
 function evaluationStatusLabel(item) {
   const status = portfolioEvaluationStatus(item);
   if (status === "ERROR") return "ERROR";
+  if (status === "RESOLVED") return "RESOLVED";
   if (status === "ELIGIBLE") return "ELIGIBLE";
   if (item.selectionStatus === "RISK_BLOCKED") return "NOT ELIGIBLE / RISK BLOCKED";
   return "NOT ELIGIBLE";
@@ -1084,6 +1085,7 @@ function evaluationStatusLabel(item) {
 function evaluationStatusClass(item) {
   const status = portfolioEvaluationStatus(item);
   if (status === "ERROR") return "negative";
+  if (status === "RESOLVED") return "muted";
   if (status === "ELIGIBLE") return "positive";
   return "";
 }
@@ -1091,6 +1093,7 @@ function evaluationStatusClass(item) {
 function evaluationFilterLabel(value) {
   if (value === "ELIGIBLE") return "eligible";
   if (value === "REJECTED") return "not eligible";
+  if (value === "RESOLVED") return "resolved";
   if (value === "ERROR") return "error";
   return "evaluated";
 }
@@ -1526,17 +1529,15 @@ function isProbabilityRejectReason(reason) {
 }
 
 function nonProbabilityRejectReasons(item) {
-  const reasons = (Array.isArray(item.rejectReasons) ? item.rejectReasons : []).filter((reason) => !isProbabilityRejectReason(reason));
-  if (evaluationEnded(item) && !reasons.some((reason) => /end date|past|closed|accepting orders/i.test(String(reason || "")))) {
-    reasons.push("event end date is in the past");
-  }
-  return reasons;
+  return (Array.isArray(item.rejectReasons) ? item.rejectReasons : [])
+    .filter((reason) => !isProbabilityRejectReason(reason))
+    .filter((reason) => !/end date|past|closed|accepting orders/i.test(String(reason || "")));
 }
 
 function adjustedEvaluationStatus(item) {
   const original = String(item.status || "-").toUpperCase();
   if (original === "ERROR") return "ERROR";
-  if (evaluationEnded(item)) return "REJECTED";
+  if (original === "RESOLVED" || evaluationEnded(item)) return "RESOLVED";
   const aiProbability = Number(item.aiProbability);
   if (!Number.isFinite(aiProbability)) return original;
   const threshold = currentEligibilityThreshold();
@@ -1549,6 +1550,7 @@ function adjustedEvaluationStatus(item) {
 function portfolioEvaluationStatus(item) {
   const status = adjustedEvaluationStatus(item);
   if (status === "ERROR") return "ERROR";
+  if (status === "RESOLVED") return "RESOLVED";
   if (status === "ELIGIBLE" && item.selectionStatus !== "RISK_BLOCKED") return "ELIGIBLE";
   return "REJECTED";
 }
@@ -1559,6 +1561,9 @@ function evaluationReasons(item, riskReason = "") {
   const adjustedStatus = adjustedEvaluationStatus(item);
   const reasons = [];
   if (riskReason) reasons.push(riskReason);
+  if (portfolioEvaluationStatus(item) === "RESOLVED") {
+    reasons.push("event end date has passed; excluded from new trade selection and waiting for/following resolution sync");
+  }
   if (Number.isFinite(aiProbability) && aiProbability < threshold) {
     reasons.push(`AI probability ${probability(aiProbability)} below selected ${probability(threshold)}`);
   }
@@ -2314,11 +2319,12 @@ function updateHistoryCell(item) {
 function renderBotEvaluations() {
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
   const eligibleCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "ELIGIBLE").length;
+  const resolvedCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "RESOLVED").length;
   const errorCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "ERROR").length;
-  const notEligibleCount = Math.max(0, evaluations.length - eligibleCount - errorCount);
+  const notEligibleCount = Math.max(0, evaluations.length - eligibleCount - resolvedCount - errorCount);
 
   if (els.evaluationSummary) {
-    els.evaluationSummary.textContent = `${eligibleCount} eligible / ${notEligibleCount} not eligible / ${errorCount} errors / ${evaluations.length} evaluated`;
+    els.evaluationSummary.textContent = `${eligibleCount} eligible / ${notEligibleCount} not eligible / ${resolvedCount} resolved / ${errorCount} errors / ${evaluations.length} evaluated`;
   }
 
   if (!evaluations.length) {

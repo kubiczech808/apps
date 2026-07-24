@@ -407,18 +407,19 @@ function expirePastEvaluations(evaluations = []) {
   return evaluations.map((item) => {
     const status = String(item.status || "").toUpperCase();
     const end = Date.parse(item.endDate || "");
-    if (status !== "ELIGIBLE" || !Number.isFinite(end) || end > Date.now()) return item;
+    if (!["ELIGIBLE", "REJECTED"].includes(status) || !Number.isFinite(end) || end > Date.now()) return item;
 
     const rejectReasons = Array.isArray(item.rejectReasons) ? [...item.rejectReasons] : [];
     if (!rejectReasons.some((reason) => /end date|past|closed|accepting orders/i.test(String(reason || "")))) {
-      rejectReasons.unshift("event end date is in the past");
+      rejectReasons.unshift("event end date is in the past; awaiting resolution sync");
     }
     const changedAt = nowIso();
-    const changes = changedEvaluationFields(item, { ...item, status: "REJECTED", rejectReasons });
+    const changes = changedEvaluationFields(item, { ...item, status: "RESOLVED", rejectReasons });
     return {
       ...item,
-      status: "REJECTED",
-      thesisType: item.thesisType === "HIGH_CONFIDENCE" || item.thesisType === "EDGE_OPPORTUNITY" ? "EXPIRED" : item.thesisType,
+      status: "RESOLVED",
+      thesisType: item.thesisType === "HIGH_CONFIDENCE" || item.thesisType === "EDGE_OPPORTUNITY" || item.thesisType === "REJECTED" ? "RESOLVED" : item.thesisType,
+      resolutionStatus: item.resolutionStatus || "PENDING_RESULT",
       rejectReasons,
       lastSeenAt: item.lastSeenAt || changedAt,
       lastChanges: changes,
@@ -426,7 +427,7 @@ function expirePastEvaluations(evaluations = []) {
         {
           changedAt,
           previousEvaluatedAt: item.evaluatedAt || item.lastSeenAt || null,
-          changes: changes.length ? changes : [{ field: "status", from: "ELIGIBLE", to: "REJECTED" }],
+          changes: changes.length ? changes : [{ field: "status", from: status || "ELIGIBLE", to: "RESOLVED" }],
         },
         ...(Array.isArray(item.updateHistory) ? item.updateHistory : []),
       ].slice(0, 30),
