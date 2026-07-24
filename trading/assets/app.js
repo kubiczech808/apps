@@ -244,7 +244,9 @@ function syncModeUi() {
     button.classList.toggle("active", button.dataset.modeToggle === state.mode);
   });
   els.tabButtons.forEach((button) => {
-    button.textContent = live ? button.dataset.liveLabel : button.dataset.paperLabel;
+    if (button.dataset.paperLabel || button.dataset.liveLabel) {
+      button.textContent = live ? button.dataset.liveLabel : button.dataset.paperLabel;
+    }
   });
   if (els.portfolioTitle) els.portfolioTitle.textContent = live ? "Live Polymarket account" : `Paper - ${paperModeLabel()}`;
   if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = live ? "Opened live trades" : `Opened ${paperModeLabel()} trades`;

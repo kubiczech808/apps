@@ -76,6 +76,36 @@ button:disabled {
   line-height: 0.96;
 }
 
+.settings-tab-button {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+}
+
+.settings-tab-button:hover,
+.settings-tab-button.active {
+  border-color: var(--accent);
+  background: #ccfbf1;
+  color: #115e59;
+}
+
+.settings-tab-button svg {
+  display: block;
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
 .eyebrow,
 .label,
 .field-label {
@@ -926,6 +956,17 @@ body.modal-open {
     flex-direction: column;
     gap: 10px;
     margin-bottom: 12px;
+  }
+
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    align-items: start;
+  }
+
+  .settings-tab-button {
+    align-self: start;
+    justify-self: end;
   }
 
   .portfolio-actions {
