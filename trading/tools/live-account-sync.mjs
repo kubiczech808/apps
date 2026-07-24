@@ -242,13 +242,16 @@ function normalizePosition(position, generatedAt) {
   const endDate = isoTime(position.endDate ?? position.endDateIso ?? position.resolutionDate);
   const redeemable = Boolean(position.redeemable ?? position.claimable ?? position.canRedeem ?? position.conditionRedeemable ?? false);
   const resolved = Boolean(position.resolved ?? position.isResolved ?? position.closed ?? false);
+  const claimable = Boolean(position.claimable ?? position.canRedeem ?? false);
+  const resolvedAt = isoTime(position.resolvedAt ?? position.closedAt ?? position.closedTime ?? position.redeemedAt);
 
   const openedAt = isoTime(position.createdAt ?? position.timestamp);
+  const pendingResolution = !redeemable && !resolved && endDate && Date.parse(endDate) <= Date.now();
 
   return {
     id: String(position.asset ?? position.tokenId ?? position.conditionId ?? `${position.slug || position.title || "position"}-${position.outcome || ""}`),
     mode: "LIVE",
-    status: "OPEN",
+    status: pendingResolution ? "PENDING_RESOLUTION" : "OPEN",
     question: position.title || position.question || position.market || "-",
     outcome: position.outcome || position.side || "-",
     slug: position.slug || position.eventSlug || "",
@@ -260,6 +263,7 @@ function normalizePosition(position, generatedAt) {
     openedAt,
     openedAtSource: openedAt ? "positions-api" : "unknown",
     endDate,
+    resolvedAt,
     entryPrice: avgPrice,
     currentPrice,
     shares: size,
@@ -273,6 +277,8 @@ function normalizePosition(position, generatedAt) {
     realizedPnlPct: ratio(position.percentRealizedPnl),
     redeemable,
     resolved,
+    claimable,
+    officialResolutionStatus: resolved || redeemable || claimable ? "polymarket-resolved-or-redeemable" : (pendingResolution ? "pending-polymarket-resolution" : "open"),
     size,
   };
 }
@@ -622,11 +628,12 @@ function redeemAlertId(prefix, item) {
   return `${prefix}:${marketKey}:${outcome}`;
 }
 
+function positionOfficiallyResolved(position) {
+  return Boolean(position.redeemable || position.claimable || position.resolved);
+}
+
 function positionLooksResolved(position) {
-  const currentPrice = number(position.currentPrice);
-  const currentValue = number(position.currentValueUsdc, 0);
-  return Boolean(position.redeemable || position.resolved)
-    || (currentPrice != null && currentPrice >= 0.995 && currentValue > 0);
+  return positionOfficiallyResolved(position);
 }
 
 function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt) {
@@ -638,13 +645,14 @@ function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt
       const currentPrice = number(position.currentPrice);
       const winningResolved = currentValue > 0.000001 || (currentPrice != null && currentPrice >= 0.995);
       const realizedPnl = currentValue - stake;
-      const status = winningResolved && (position.redeemable || position.resolved) ? "REDEEM_REQUIRED" : (winningResolved ? "RESOLVED" : "LOST");
+      const status = winningResolved ? "REDEEM_REQUIRED" : "LOST";
+      const officialClosedAt = position.resolvedAt || generatedAt;
       return {
         ...position,
         id: `resolved-position-${position.id}`,
         status,
-        resolvedAt: generatedAt,
-        closedAt: generatedAt,
+        resolvedAt: officialClosedAt,
+        closedAt: officialClosedAt,
         exitPrice: currentPrice,
         finalOutcomePrice: currentPrice,
         exitValueUsdc: currentValue,
@@ -656,9 +664,7 @@ function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt
           position.analysisSummary || "",
           status === "LOST"
             ? "Polymarket exposes this resolved position with zero value, so it is classified as a settled losing position rather than a redeem-needed winner."
-            : status === "REDEEM_REQUIRED"
-            ? "Polymarket still exposes this position as redeemable/claimable, so it is classified outside opened trades until redeem is completed."
-            : "Polymarket mark price indicates the position is resolved; it is classified outside opened trades until activity confirms final settlement.",
+            : "Polymarket exposes this position as redeemable/claimable/resolved, so it is classified outside opened trades until redeem is completed.",
         ].filter(Boolean).join(" "),
       };
     });
@@ -684,9 +690,8 @@ function redeemNotifications(positions, closedTrades, previousState, generatedAt
   for (const position of positions) {
     const currentPrice = number(position.currentPrice);
     const currentValue = number(position.currentValueUsdc, 0);
-    const redeemable = Boolean(position.redeemable || position.claimable || position.resolved);
-    const looksLikeWinningResolution = currentPrice != null && currentPrice >= 0.995 && currentValue > 0;
-    if (!redeemable && !looksLikeWinningResolution) continue;
+    const redeemable = positionOfficiallyResolved(position);
+    if (!redeemable) continue;
     addAlert({
       key: redeemAlertId("redeem-required", position),
       type: "REDEEM_REQUIRED",
@@ -703,7 +708,7 @@ function redeemNotifications(positions, closedTrades, previousState, generatedAt
       currentValueUsdc: currentValue,
       stakeUsdc: number(position.stakeUsdc),
       unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
-      reason: redeemable ? "Polymarket position is marked redeemable/claimable/resolved" : "Current mark price is effectively 1.00 with positive value",
+      reason: "Polymarket position is marked redeemable/claimable/resolved",
     });
   }
 
