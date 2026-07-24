@@ -674,26 +674,181 @@ function tradeAnalysisThesis(trade) {
     || "";
 }
 
+function cloneAnalysisSnapshot(item = {}) {
+  return {
+    ...item,
+    aiAnalysis: item.aiAnalysis ? { ...item.aiAnalysis } : item.aiAnalysis,
+  };
+}
+
+function originalAnalysisSnapshot(item = {}) {
+  const snapshot = cloneAnalysisSnapshot(item);
+  const history = Array.isArray(item.updateHistory) ? item.updateHistory : [];
+  for (const entry of history) {
+    const changes = Array.isArray(entry.changes) ? entry.changes : [];
+    for (const change of changes) {
+      if (!change?.field) continue;
+      snapshot[change.field] = change.from;
+      if (change.field === "rawProbability") {
+        snapshot.aiAnalysis = { ...(snapshot.aiAnalysis || {}), rawProbability: change.from };
+      }
+      if (change.field === "aiProbability") {
+        snapshot.aiAnalysis = { ...(snapshot.aiAnalysis || {}), probability: change.from };
+      }
+      if (change.field === "probabilityThesis") {
+        snapshot.aiAnalysis = { ...(snapshot.aiAnalysis || {}), thesis: change.from };
+      }
+    }
+  }
+  return {
+    ...snapshot,
+    evaluatedAt: item.firstEvaluatedAt || history[history.length - 1]?.previousEvaluatedAt || snapshot.evaluatedAt || snapshot.date || "",
+  };
+}
+
+function analysisDate(item = {}) {
+  return item.lastSeenAt || item.evaluatedAt || item.openedAt || item.date || "";
+}
+
+function analysisProbability(item = {}) {
+  const direct = Number(item.aiProbability);
+  if (Number.isFinite(direct)) return direct;
+  const nested = Number(item.aiAnalysis?.probability);
+  return Number.isFinite(nested) ? nested : null;
+}
+
+function analysisRawProbability(item = {}) {
+  const direct = Number(item.rawProbability);
+  if (Number.isFinite(direct)) return direct;
+  const nested = Number(item.aiAnalysis?.rawProbability);
+  return Number.isFinite(nested) ? nested : null;
+}
+
+function analysisThesis(item = {}) {
+  return item.probabilityThesis || item.aiAnalysis?.thesis || "";
+}
+
+function analysisModel(item = {}) {
+  return item.analysisModel || item.aiAnalysis?.model || "";
+}
+
+function normalizedDetailText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function sameDetailValue(a, b, type = "text") {
+  if (type === "number") {
+    const left = Number(a);
+    const right = Number(b);
+    if (!Number.isFinite(left) && !Number.isFinite(right)) return true;
+    if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+    return Math.abs(left - right) < 0.000001;
+  }
+  return normalizedDetailText(a) === normalizedDetailText(b);
+}
+
+function detailNumber(label, current, original, formatter) {
+  const currentValue = Number(current);
+  if (!Number.isFinite(currentValue)) return `${label}: -`;
+  const changed = !sameDetailValue(currentValue, original, "number");
+  const suffix = changed ? "" : " (unchanged)";
+  return `${label}: ${formatter(currentValue)}${suffix}`;
+}
+
+function detailText(label, current, original) {
+  const text = normalizedDetailText(current);
+  if (!text) return `${label}: -`;
+  if (sameDetailValue(current, original, "text")) return `${label}: same as original`;
+  return `${label}: ${text}`;
+}
+
+function detailEvidence(label, current, original) {
+  const currentText = Array.isArray(current) ? current.join(" ") : current;
+  const originalText = Array.isArray(original) ? original.join(" ") : original;
+  return detailText(label, currentText, originalText);
+}
+
+function currentAnalysisSnapshot(item = {}) {
+  return cloneAnalysisSnapshot(item);
+}
+
+function structuredAnalysisDetails(item = {}, options = {}) {
+  const source = item.sourceEvaluation || {};
+  const originalBase = Object.keys(source).length ? source : item;
+  const original = originalAnalysisSnapshot(originalBase);
+  const current = currentAnalysisSnapshot({ ...original, ...source, ...item });
+  const originalAi = original.aiAnalysis || {};
+  const currentAi = current.aiAnalysis || {};
+  const risk = Array.isArray(current.riskGroupLabels) && current.riskGroupLabels.length
+    ? current.riskGroupLabels.join(", ")
+    : "-";
+  const reasons = Array.isArray(current.rejectReasons) && current.rejectReasons.length
+    ? current.rejectReasons.join("; ")
+    : (options.filterNote || "No portfolio filter note recorded.");
+  const originalLines = [
+    options.title || `${current.outcome || "-"} - ${current.question || "-"}`,
+    `Original analysis time: ${analysisDate(original) ? formatDate(analysisDate(original)) : "-"}`,
+    `AI probability: ${probability(analysisProbability(original))}`,
+    `Raw probability: ${probability(analysisRawProbability(original))}`,
+    original.marketPrice != null || original.entryPrice != null ? `Market entry: ${probability(Number(original.marketPrice ?? original.entryPrice))}` : "",
+    original.edge != null ? `Edge: ${signedPercent(Number(original.edge))}` : "",
+    original.expectedValueUsdc != null ? `Expected value: ${signedMoney(Number(original.expectedValueUsdc), 4)}` : "",
+    original.annualizedReturn != null ? `EV p.a.: ${signedPercent(Number(original.annualizedReturn))}` : "",
+    original.netGainIfWinUsdc != null ? `Win if correct: ${signedMoney(Number(original.netGainIfWinUsdc), 4)}` : "",
+    original.riskReward != null ? `R/R: ${riskReward(Number(original.riskReward))}` : "",
+    original.liquidity != null ? `Liquidity: ${money(Number(original.liquidity || 0))}` : "",
+    original.volume24hr != null ? `24h volume: ${money(Number(original.volume24hr || 0))}` : "",
+    original.endDate ? `End date: ${formatDate(original.endDate)}` : "",
+    original.daysToResolution != null ? `Days to resolution: ${Number.isFinite(Number(original.daysToResolution)) ? Number(original.daysToResolution).toFixed(2) : "-"}` : "",
+    original.thesisType ? `Thesis type: ${original.thesisType}` : "",
+    analysisModel(original) ? `Model: ${analysisModel(original)}` : "",
+    `Thesis: ${analysisThesis(original) || "-"}`,
+    original.analysisSummary ? `AI analysis: ${original.analysisSummary}` : "",
+    Array.isArray(originalAi.evidence) && originalAi.evidence.length ? `Evidence: ${originalAi.evidence.join(" ")}` : "",
+    Array.isArray(originalAi.counterEvidence) && originalAi.counterEvidence.length ? `Counter: ${originalAi.counterEvidence.join(" ")}` : "",
+  ].filter(Boolean);
+  const currentLines = [
+    `Current reassessment time: ${analysisDate(current) ? formatDate(analysisDate(current)) : "-"}`,
+    detailNumber("AI probability", analysisProbability(current), analysisProbability(original), probability),
+    detailNumber("Raw probability", analysisRawProbability(current), analysisRawProbability(original), probability),
+    current.marketPrice != null || current.entryPrice != null ? detailNumber("Market entry", Number(current.marketPrice ?? current.entryPrice), Number(original.marketPrice ?? original.entryPrice), probability) : "",
+    current.currentPrice != null ? `Current mark: ${probability(Number(current.currentPrice))}` : "",
+    current.unrealizedPnlUsdc != null ? `Current P/L: ${signedMoney(Number(current.unrealizedPnlUsdc))} / ${signedPercent(Number(current.unrealizedPnlPct))}` : "",
+    current.edge != null ? detailNumber("Edge", Number(current.edge), Number(original.edge), signedPercent) : "",
+    current.expectedValueUsdc != null ? detailNumber("Expected value", Number(current.expectedValueUsdc), Number(original.expectedValueUsdc), (value) => signedMoney(value, 4)) : "",
+    current.annualizedReturn != null ? detailNumber("EV p.a.", Number(current.annualizedReturn), Number(original.annualizedReturn), signedPercent) : "",
+    current.netGainIfWinUsdc != null ? detailNumber("Win if correct", Number(current.netGainIfWinUsdc), Number(original.netGainIfWinUsdc), (value) => signedMoney(value, 4)) : "",
+    current.riskReward != null ? detailNumber("R/R", Number(current.riskReward), Number(original.riskReward), riskReward) : "",
+    current.liquidity != null ? detailNumber("Liquidity", Number(current.liquidity || 0), Number(original.liquidity || 0), money) : "",
+    current.volume24hr != null ? detailNumber("24h volume", Number(current.volume24hr || 0), Number(original.volume24hr || 0), money) : "",
+    current.endDate ? detailText("End date", formatDate(current.endDate), original.endDate ? formatDate(original.endDate) : "") : "",
+    current.daysToResolution != null ? detailNumber("Days to resolution", Number(current.daysToResolution), Number(original.daysToResolution), (value) => value.toFixed(2)) : "",
+    current.thesisType ? detailText("Thesis type", current.thesisType, original.thesisType) : "",
+    analysisModel(current) ? detailText("Model", analysisModel(current), analysisModel(original)) : "",
+    detailText("Current thesis", analysisThesis(current), analysisThesis(original)),
+    current.analysisSummary ? detailText("Current AI analysis", current.analysisSummary, original.analysisSummary) : "",
+    detailEvidence("Evidence", currentAi.evidence, originalAi.evidence),
+    detailEvidence("Counter", currentAi.counterEvidence, originalAi.counterEvidence),
+    `Risk groups: ${risk}`,
+    `Portfolio filter notes: ${reasons}`,
+    current.rotationReview?.note ? `Rotation review: ${current.rotationReview.note}` : "",
+    current.rotationEntryReason ? `Opened after rotation: ${current.rotationEntryReason}` : "",
+    current.postMortem?.thesisReview ? `Post-mortem: ${current.postMortem.thesisReview}` : "",
+    `Polymarket: ${current.url || polymarketUrl(current)}`,
+  ].filter(Boolean);
+  return [
+    "Original AI probability decision",
+    ...originalLines,
+    "",
+    "Current reassessment",
+    ...currentLines,
+  ].join("\n");
+}
+
 function tradeAnalysisDetails(trade) {
-  const ai = trade.aiAnalysis || trade.sourceEvaluation?.aiAnalysis || {};
-  const source = trade.sourceEvaluation || {};
-  const lines = [
-    trade.thesisType || source.thesisType ? `Thesis type: ${trade.thesisType || source.thesisType}` : "",
-    `AI probability: ${probability(tradeAiProbability(trade))}`,
-    trade.rawProbability != null || source.rawProbability != null ? `Raw probability: ${probability(Number(trade.rawProbability ?? source.rawProbability))}` : "",
-    trade.entryPrice != null ? `Entry price: ${probability(Number(trade.entryPrice))}` : "",
-    trade.edge != null || source.edge != null ? `Original edge: ${signedPercent(Number(trade.edge ?? source.edge))}` : "",
-    trade.expectedValueUsdc != null || source.expectedValueUsdc != null ? `Original EV: ${signedMoney(Number(trade.expectedValueUsdc ?? source.expectedValueUsdc), 4)}` : "",
-    trade.annualizedReturn != null || source.annualizedReturn != null ? `Original EV p.a.: ${signedPercent(Number(trade.annualizedReturn ?? source.annualizedReturn))}` : "",
-    tradeAnalysisThesis(trade),
-    Array.isArray(ai.evidence) && ai.evidence.length ? `Evidence: ${ai.evidence.join(" ")}` : "",
-    Array.isArray(ai.counterEvidence) && ai.counterEvidence.length ? `Counter: ${ai.counterEvidence.join(" ")}` : "",
-    trade.analysisSummary || source.analysisSummary || "",
-    trade.rotationReview?.note ? `Rotation review: ${trade.rotationReview.note}` : "",
-    trade.rotationEntryReason ? `Opened after rotation: ${trade.rotationEntryReason}` : "",
-    trade.postMortem?.thesisReview ? `Post-mortem: ${trade.postMortem.thesisReview}` : "",
-  ];
-  return lines.filter(Boolean).join("\n\n");
+  return structuredAnalysisDetails(trade, {
+    title: `${trade.outcome || "-"} - ${trade.question || "-"}`,
+  });
 }
 
 function tradeAnalysisCell(trade) {
@@ -901,23 +1056,15 @@ function analysisBadge(item) {
     ? (item.riskBlockedReason || "risk-blocked by an open correlated paper trade")
     : "";
   const reasons = evaluationReasons(item, riskReason).join("; ") || "passes selected filters";
-  const ai = item.aiAnalysis || {};
-  const details = [
-    `Portfolio status: ${evaluationStatusLabel(item)}`,
-    `Stored pipeline status: ${item.status || "-"}`,
-    `Selected AI probability threshold: ${probability(currentEligibilityThreshold())}`,
-    reasons,
-    item.thesisType ? `Thesis type: ${item.thesisType}` : "",
-    item.probabilityThesis || ai.thesis || "",
-    ai.rawProbability == null ? "" : `Raw probability: ${probability(Number(ai.rawProbability))}`,
-    ai.learningAdjustment == null ? "" : `Learning adjustment: ${signedPercent(Number(ai.learningAdjustment))}`,
-    Array.isArray(ai.appliedLearning) && ai.appliedLearning.length
-      ? `Applied learning: ${ai.appliedLearning.map((entry) => `${entry.key} ${signedPercent(Number(entry.adjustment))}`).join(", ")}`
-      : "",
-    Array.isArray(ai.evidence) && ai.evidence.length ? `Evidence: ${ai.evidence.join(" ")}` : "",
-    Array.isArray(ai.counterEvidence) && ai.counterEvidence.length ? `Counter: ${ai.counterEvidence.join(" ")}` : "",
-    item.analysisSummary || "",
-  ].filter(Boolean).join("\n\n");
+  const details = structuredAnalysisDetails(item, {
+    title: `${item.outcome || "-"} - ${item.question || "-"}`,
+    filterNote: [
+      `Portfolio status: ${evaluationStatusLabel(item)}`,
+      `Stored pipeline status: ${item.status || "-"}`,
+      `Selected AI probability threshold: ${probability(currentEligibilityThreshold())}`,
+      reasons,
+    ].join(" / "),
+  });
   return `
     <span class="analysis-popover">
       <button class="info-button" type="button" aria-label="Show analysis details">i</button>
@@ -2240,37 +2387,15 @@ function runEventDetail(event) {
   const reasons = Array.isArray(event.rejectReasons) && event.rejectReasons.length
     ? event.rejectReasons.join("; ")
     : "No portfolio filter note recorded.";
-  const risk = Array.isArray(event.riskGroupLabels) && event.riskGroupLabels.length
-    ? event.riskGroupLabels.join(", ")
-    : "-";
-  return [
-    `${event.outcome || "-"} - ${event.question || "-"}`,
-    "",
-    `Evaluation result: ${runEventResultLabel(event)}`,
-    `Portfolio filter status at run time: ${event.portfolioFilterStatus || event.status || "-"}`,
-    `Portfolio eligibility is applied separately by the active portfolio rules.`,
-    `AI probability: ${probability(Number(event.aiProbability))}`,
-    `Raw probability: ${probability(Number(event.rawProbability))}`,
-    `Market entry: ${probability(Number(event.marketPrice))}`,
-    `EV p.a.: ${signedPercent(Number(event.annualizedReturn))}`,
-    `Expected value: ${signedMoney(Number(event.expectedValueUsdc), 4)}`,
-    `Win if correct: ${signedMoney(Number(event.netGainIfWinUsdc), 4)}`,
-    `R/R: ${riskReward(Number(event.riskReward))}`,
-    `Liquidity: ${money(Number(event.liquidity || 0))}`,
-    `24h volume: ${money(Number(event.volume24hr || 0))}`,
-    `End date: ${event.endDate ? formatDate(event.endDate) : "-"}`,
-    `Days to resolution: ${Number.isFinite(Number(event.daysToResolution)) ? Number(event.daysToResolution).toFixed(2) : "-"}`,
-    `Model: ${event.analysisModel || "-"}`,
-    `Risk groups: ${risk}`,
-    "",
-    `Thesis: ${event.probabilityThesis || "-"}`,
-    "",
-    `AI analysis: ${event.analysisSummary || "-"}`,
-    "",
-    `Portfolio filter notes: ${reasons}`,
-    "",
-    `Polymarket: ${event.url || polymarketUrl(event)}`,
-  ].join("\n");
+  return structuredAnalysisDetails(event, {
+    title: `${event.outcome || "-"} - ${event.question || "-"}`,
+    filterNote: [
+      `Evaluation result: ${runEventResultLabel(event)}`,
+      `Portfolio filter status at run time: ${event.portfolioFilterStatus || event.status || "-"}`,
+      "Portfolio eligibility is applied separately by the active portfolio rules.",
+      reasons,
+    ].join(" / "),
+  });
 }
 
 function runEventResultLabel(event) {
