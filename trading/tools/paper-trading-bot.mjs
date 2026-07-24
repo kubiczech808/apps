@@ -33,12 +33,18 @@ const PAPER_STRATEGIES = {
     id: "conservative",
     label: "Conservative",
     selectionMetric: "EV p.a.",
-    description: "Prioritizes eligible opportunities by EV p.a., preferring short settlement horizons first.",
+    minProbability: MIN_PROBABILITY,
+    maxResolutionDays: SHORT_HORIZON_DAYS,
+    selectionOrder: "highest_ev_pa_first",
+    description: "Requires AI probability >= 95% and resolution within 7 days, then selects the highest EV p.a.",
   },
   highReward: {
     id: "highReward",
     label: "High reward",
     selectionMetric: "Reward / risk",
+    minProbability: OPPORTUNITY_MIN_PROBABILITY,
+    maxResolutionDays: null,
+    selectionOrder: "highest_reward_risk_first",
     description: "Prioritizes eligible opportunities by highest reward against risk, preferring short settlement horizons first.",
   },
 };
@@ -192,15 +198,19 @@ function normalizePaperPortfolio(strategy, input = {}) {
     id: strategy.id,
     label: strategy.label,
     selectionMetric: strategy.selectionMetric,
+    selectionOrder: strategy.selectionOrder,
+    minProbability: strategy.minProbability,
+    maxResolutionDays: strategy.maxResolutionDays,
     description: strategy.description,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
       maxFraction: Number(input.portfolio?.maxFraction || MAX_FRACTION),
-      minProbability: Number(input.portfolio?.minProbability || MIN_PROBABILITY),
+      minProbability: Number(strategy.minProbability ?? input.portfolio?.minProbability ?? MIN_PROBABILITY),
       minAnnualReturn: Number(input.portfolio?.minAnnualReturn || MIN_ANNUAL_RETURN),
       opportunityMinProbability: Number(input.portfolio?.opportunityMinProbability || OPPORTUNITY_MIN_PROBABILITY),
       opportunityMinEdge: Number(input.portfolio?.opportunityMinEdge || OPPORTUNITY_MIN_EDGE),
       opportunityMinAnnualReturn: Number(input.portfolio?.opportunityMinAnnualReturn || OPPORTUNITY_MIN_ANNUAL_RETURN),
+      maxResolutionDays: strategy.maxResolutionDays == null ? null : Number(strategy.maxResolutionDays),
     },
     trades: Array.isArray(input.trades)
       ? input.trades.map((trade) => normalizeTrade({ ...trade, strategyId: trade.strategyId || strategy.id, strategyLabel: trade.strategyLabel || strategy.label }))
@@ -1589,9 +1599,20 @@ function compareShorterHorizon(a, b) {
   return Number.isFinite(delta) ? delta : 0;
 }
 
-function sortEligibleForStrategy(eligible, strategyId) {
-  const rows = preferredHorizonCandidates([...eligible]);
-  if (strategyId === "highReward") {
+function strategyEligibleCandidates(eligible, strategy) {
+  return [...eligible].filter((item) => {
+    const minProbability = Number(strategy.minProbability);
+    if (Number.isFinite(minProbability) && Number(item.aiProbability) < minProbability) return false;
+    const maxResolutionDays = Number(strategy.maxResolutionDays);
+    if (Number.isFinite(maxResolutionDays) && daysValue(item) > maxResolutionDays) return false;
+    return true;
+  });
+}
+
+function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservative) {
+  const strategyRows = strategyEligibleCandidates(eligible, strategy);
+  const rows = strategy.maxResolutionDays == null ? preferredHorizonCandidates(strategyRows) : strategyRows;
+  if (strategy.id === "highReward") {
     return rows.sort((a, b) => {
       const aRatio = rewardRiskRatio(a) ?? -Infinity;
       const bRatio = rewardRiskRatio(b) ?? -Infinity;
@@ -1603,7 +1624,6 @@ function sortEligibleForStrategy(eligible, strategyId) {
     });
   }
   return rows.sort((a, b) => {
-    if (a.thesisType !== b.thesisType) return a.thesisType === "EDGE_OPPORTUNITY" ? -1 : 1;
     if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
     const horizon = compareShorterHorizon(a, b);
     if (horizon !== 0) return horizon;
@@ -2097,16 +2117,22 @@ function updatePaperPortfolio(portfolioState) {
   const equity = PORTFOLIO_USDC + realizedPnl + openPnl;
   portfolioState.portfolio = {
     ...(portfolioState.portfolio || {}),
+    strategyId: portfolioState.id,
+    strategyLabel: portfolioState.label,
+    selectionMetric: portfolioState.selectionMetric,
+    selectionOrder: portfolioState.selectionOrder,
+    strategyDescription: portfolioState.description,
     initialUsdc: PORTFOLIO_USDC,
     maxFraction: MAX_FRACTION,
     maxStakeUsdc: Number((PORTFOLIO_USDC * MAX_FRACTION).toFixed(2)),
-    minProbability: MIN_PROBABILITY,
+    minProbability: Number(portfolioState.minProbability ?? MIN_PROBABILITY),
     minAnnualReturn: MIN_ANNUAL_RETURN,
     opportunityMinProbability: OPPORTUNITY_MIN_PROBABILITY,
     opportunityMinEdge: OPPORTUNITY_MIN_EDGE,
     opportunityMinAnnualReturn: OPPORTUNITY_MIN_ANNUAL_RETURN,
     shortHorizonDays: SHORT_HORIZON_DAYS,
     mediumHorizonDays: MEDIUM_HORIZON_DAYS,
+    maxResolutionDays: portfolioState.maxResolutionDays == null ? null : Number(portfolioState.maxResolutionDays),
     realizedPnlUsdc: Number(realizedPnl.toFixed(4)),
     realizedPnlPct: pnlPercent(realizedPnl, PORTFOLIO_USDC),
     openPnlUsdc: Number(openPnl.toFixed(4)),
@@ -2256,7 +2282,7 @@ async function run() {
   const eligible = evaluations.filter((item) => item.status === "ELIGIBLE");
   const decisions = Object.values(PAPER_STRATEGIES).map((strategy) => {
     const portfolioState = state.paperPortfolios[strategy.id];
-    const rankedEligible = sortEligibleForStrategy(eligible, strategy.id);
+    const rankedEligible = sortEligibleForStrategy(eligible, strategy);
     return maybeOpenDailyTrade(portfolioState, rankedEligible, strategy);
   });
 

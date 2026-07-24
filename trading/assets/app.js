@@ -1530,6 +1530,13 @@ function renderBotState(botState) {
   const openPnl = Number(portfolio.openPnlUsdc || 0);
   const openPnlPct = Number(portfolio.openPnlPct || 0);
   const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
+  const maxResolutionDays = Number(portfolio.maxResolutionDays);
+  const strategyOrderLabel = portfolio.selectionOrder === "highest_reward_risk_first"
+    ? "Highest R/R first"
+    : "Highest EV p.a. first";
+  const resolutionLabel = Number.isFinite(maxResolutionDays)
+    ? `No later than ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`
+    : "Best available horizon";
   syncRiskAllocationControl(freeCapital, "paper free capital");
 
   if (els.botAction) els.botAction.textContent = decision.action || "waiting";
@@ -1585,9 +1592,9 @@ function renderBotState(botState) {
         <span>realized ${signedMoney(realizedPnl)} / open ${signedMoney(openPnl)}</span>
       </div>
       <div>
-        <span class="label">Filters</span>
-        <strong>${percent(Number(portfolio.minProbability ?? 0.95))} or edge ${percent(Number(portfolio.opportunityMinProbability ?? 0.6))}</strong>
-        <span>${percent(Number(portfolio.minAnnualReturn ?? 0.05))} p.a. / edge ${percent(Number(portfolio.opportunityMinEdge ?? 0.04))}</span>
+        <span class="label">Portfolio parameters</span>
+        <strong>${percent(Number(portfolio.minProbability ?? 0.95))} AI threshold</strong>
+        <span>${escapeHtml(strategyOrderLabel)} / ${escapeHtml(resolutionLabel)}</span>
       </div>
       <div>
         <span class="label">Learning</span>
