@@ -1645,6 +1645,38 @@ function portfolioRuleLine(portfolio) {
   return parts.join(" / ");
 }
 
+function portfolioRulesSummary(portfolio = {}) {
+  const threshold = Number(portfolio.minProbability ?? currentEligibilityThreshold());
+  const maxResolutionDays = Number(portfolio.maxResolutionDays);
+  const minLiquidityUsdc = Number(portfolio.minLiquidityUsdc);
+  const priority = portfolio.selectionOrder === "highest_reward_risk_first"
+    ? "prioritizes highest reward/risk, then shorter resolution and EV"
+    : "prioritizes highest EV p.a., then shorter resolution and EV";
+  const resolution = Number.isFinite(maxResolutionDays)
+    ? `max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days to resolution`
+    : "prefers the shortest available resolution bucket";
+  const extras = [
+    Number.isFinite(minLiquidityUsdc) ? `liquidity >= ${money(minLiquidityUsdc)}` : "",
+    portfolio.requireMostProbableOutcome ? "only the most probable outcome per market" : "",
+  ].filter(Boolean);
+  return [
+    `${percent(threshold)} AI threshold`,
+    resolution,
+    priority,
+    ...extras,
+  ].join("; ");
+}
+
+function livePortfolioRulesSummary() {
+  return [
+    `${percent(currentEligibilityThreshold())} AI threshold`,
+    "max 7 days preferred, then 14 days before longer horizons",
+    "revalidates current order book first",
+    "prioritizes highest EV p.a., then shorter resolution and EV",
+    "risk-diversified before submit",
+  ].join("; ");
+}
+
 function renderBotState(botState) {
   state.botState = botState;
   syncModeUi();
@@ -1742,8 +1774,8 @@ function renderBotState(botState) {
       </div>
       <div>
         <span class="label">Portfolio parameters</span>
-        <strong>${percent(Number(portfolio.minProbability ?? 0.95))} AI threshold</strong>
-        <span>${escapeHtml(portfolioRuleLine(portfolio) || resolutionLabel)}</span>
+        <strong>${escapeHtml(portfolioState.label || "Paper portfolio")}</strong>
+        <span>${escapeHtml(portfolioRulesSummary({ ...portfolioState, ...portfolio }) || portfolioRuleLine(portfolio) || resolutionLabel)}</span>
       </div>
       <div>
         <span class="label">Learning</span>
@@ -2076,8 +2108,8 @@ function renderLiveState(liveState) {
       </div>
       <div>
         <span class="label">Portfolio parameters</span>
-        <strong>${percent(currentEligibilityThreshold())} AI threshold</strong>
-        <span>${escapeHtml(`Revalidate first / risk-diversified / ${currentLimitOrders() ? "limit" : "market"} orders / ${probability(currentRiskAllocation())} equity stake`)}</span>
+        <strong>Live portfolio</strong>
+        <span>${escapeHtml(`${livePortfolioRulesSummary()}; ${currentLimitOrders() ? "limit" : "market"} orders; ${probability(currentRiskAllocation())} equity stake`)}</span>
       </div>
     </div>
   `;
