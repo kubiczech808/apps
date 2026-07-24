@@ -242,6 +242,20 @@ function syncExecutionButtons() {
   });
 }
 
+function currentRouteTab() {
+  const path = window.location.pathname.replace(/\/+$/, "/");
+  return path.endsWith("/trading/settings/") || path.endsWith("/settings/") ? "settings-runs" : null;
+}
+
+function activateTab(target) {
+  els.tabButtons.forEach((item) => {
+    item.classList.toggle("active", item.dataset.tabTarget === target);
+  });
+  els.tabPanels.forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.tabPanel === target);
+  });
+}
+
 function syncLiveActivationUi() {
   if (!els.liveActivation) return;
   els.liveActivation.hidden = false;
@@ -2702,14 +2716,12 @@ function renderCalculationReport() {
 }
 
 els.tabButtons.forEach((button) => {
-  button.addEventListener("click", () => {
+  button.addEventListener("click", (event) => {
     const target = button.dataset.tabTarget;
-    els.tabButtons.forEach((item) => {
-      item.classList.toggle("active", item === button);
-    });
-    els.tabPanels.forEach((panel) => {
-      panel.classList.toggle("active", panel.dataset.tabPanel === target);
-    });
+    const isSettingsLink = target === "settings-runs" && button.tagName === "A";
+    if (isSettingsLink && !currentRouteTab()) return;
+    event.preventDefault();
+    activateTab(target);
   });
 });
 
@@ -2953,6 +2965,7 @@ els.closedTrades?.addEventListener("click", handleTradeSort);
 
 state.mode = storedMode();
 state.liveExecutionArmed = storedLiveExecutionArmed();
+activateTab(currentRouteTab() || "daily-picks");
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);
 loadDashboardState().then(() => {
