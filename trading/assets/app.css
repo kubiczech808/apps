@@ -519,6 +519,7 @@ button:disabled {
   max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 
 .bot-summary {
@@ -545,7 +546,7 @@ button:disabled {
 .ledger table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 1980px;
+  min-width: 1380px;
 }
 
 .ledger th,
@@ -582,6 +583,13 @@ button:disabled {
   color: var(--accent-dark);
 }
 
+.th-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .sort-arrow {
   display: inline-flex;
   align-items: center;
@@ -602,6 +610,10 @@ button:disabled {
   line-height: 1.35;
 }
 
+.ledger td > span:only-child {
+  margin-top: 0;
+}
+
 .market-link {
   display: block;
   color: inherit;
@@ -612,12 +624,16 @@ button:disabled {
   color: var(--accent-dark);
 }
 
-.ledger td .analysis-popover {
+.ledger .analysis-popover {
   position: relative;
   display: inline-flex;
   max-width: none;
   margin: 0;
   vertical-align: middle;
+}
+
+.ledger th .analysis-popover {
+  flex: 0 0 auto;
 }
 
 .info-button {
@@ -633,7 +649,7 @@ button:disabled {
   font-weight: 900;
 }
 
-.ledger td .analysis-tooltip {
+.ledger .analysis-tooltip {
   display: none;
 }
 
@@ -1024,16 +1040,6 @@ body.modal-open {
   color: var(--muted) !important;
 }
 
-.analysis-reason {
-  display: inline-block !important;
-  max-width: 220px !important;
-  margin: 0 0 0 8px !important;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: middle;
-  white-space: nowrap;
-}
-
 .trade-analysis-text {
   display: -webkit-box !important;
   max-width: 280px !important;
@@ -1241,59 +1247,34 @@ body.modal-open {
   }
 
   .ledger {
-    overflow-x: visible;
-  }
-
-  .ledger table,
-  .ledger thead,
-  .ledger tbody,
-  .ledger tr,
-  .ledger th,
-  .ledger td {
-    display: block;
+    overflow-x: auto;
   }
 
   .ledger table {
-    min-width: 0;
-    border-collapse: separate;
-    border-spacing: 0;
+    display: table;
+    min-width: 1180px;
+    border-collapse: collapse;
   }
 
   .ledger thead {
-    display: none;
+    display: table-header-group;
   }
 
   .ledger tr {
-    margin-bottom: 10px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: #ffffff;
-    overflow: hidden;
+    display: table-row;
+    margin-bottom: 0;
+    border: 0;
+    border-radius: 0;
   }
 
   .ledger td {
-    display: grid;
-    grid-template-columns: minmax(84px, 32%) minmax(0, 1fr);
-    gap: 8px;
-    padding: 9px 10px;
+    display: table-cell;
+    padding: 9px 8px;
     border-bottom: 1px solid var(--line);
   }
 
-  .ledger td[data-label="Market"],
-  .ledger td[data-label="Analysis"] {
-    grid-template-columns: 1fr;
-  }
-
-  .ledger td:last-child {
-    border-bottom: 0;
-  }
-
   .ledger td::before {
-    content: attr(data-label);
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 850;
-    text-transform: uppercase;
+    content: none;
   }
 
   .ledger td a,
@@ -1307,7 +1288,6 @@ body.modal-open {
     max-width: 100%;
   }
 
-  .analysis-reason,
   .trade-analysis-text {
     max-width: 100% !important;
   }
@@ -1339,6 +1319,6 @@ body.modal-open {
   }
 
   .ledger td {
-    grid-template-columns: 1fr;
+    padding: 8px 7px;
   }
 }

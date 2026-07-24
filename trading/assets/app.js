@@ -439,25 +439,6 @@ function evaluationEnded(item) {
   return Number.isFinite(end) && end <= Date.now();
 }
 
-function feeLine(item) {
-  if (currentLimitOrders()) return "maker fee $0.00000 (limit)";
-  const fee = Number(item.takerFeeUsdc);
-  if (!Number.isFinite(fee) || fee <= 0) return "";
-  const rate = Number(item.feeRate);
-  const type = item.feeType ? ` ${item.feeType}` : "";
-  const rateText = Number.isFinite(rate) && rate > 0 ? `, ${(rate * 100).toFixed(1)}%${type}` : type;
-  return `fee ${money(fee, 5)}${rateText}`;
-}
-
-function riskLine(item) {
-  const labels = Array.isArray(item.riskGroupLabels) ? item.riskGroupLabels : [];
-  const visible = labels
-    .filter((label) => /^(Team|Match|Event):/i.test(label))
-    .slice(0, 3);
-  if (!visible.length) return "";
-  return `risk: ${visible.join(", ")}`;
-}
-
 function polymarketUrl(item) {
   const explicitUrl = String(item?.url || item?.marketUrl || "").trim();
   if (/^https:\/\/polymarket\.com\//i.test(explicitUrl)) return explicitUrl;
@@ -521,15 +502,6 @@ function renderClosedAccuracy(closedTrades) {
   if (els.portfolioAccuracyNote) {
     els.portfolioAccuracyNote.textContent = `${stats.correct} / ${stats.total} closed`;
   }
-}
-
-function tradeStatusNote(trade) {
-  const parts = [
-    trade.statusNote || "",
-    trade.finalOutcomePrice == null ? "" : `final ${probability(Number(trade.finalOutcomePrice))}`,
-    trade.marketUrlStatus === "use_event_slug" ? "event link" : "",
-  ];
-  return parts.filter(Boolean).join(", ");
 }
 
 function inferredDateFromQuestion(trade) {
@@ -786,10 +758,51 @@ function tradeSortArrow(tableKey, key) {
   return sortDirectionIndicator(sort.direction);
 }
 
+const TRADE_HEADER_INFO = {
+  market: "Market links directly to Polymarket. Row-specific risk notes and AI thesis are available from the AI probability info popup.",
+  entryPrice: "Entry price used for paper/live accounting. Execution fees and slippage are included in stored cost fields where available.",
+  currentPrice: "Current mark for open rows or final outcome price for closed rows.",
+  aiProbability: "Original AI probability and thesis from the evaluation that selected this opportunity.",
+  resolution: "Expected or observed resolution/end date for the market.",
+  holding: "Time since opening for open rows, or time from open to close for closed rows.",
+  potentialGain: "Nominal profit if the selected outcome resolves in our favor.",
+  potentialPct: "Potential profit divided by stake/cost.",
+  riskReward: "Reward divided by risk. Higher means more upside per dollar at risk.",
+  potentialAnnualized: "Potential return annualized by days to resolution.",
+  pnl: "Current or realized profit/loss for the row.",
+  stake: "USDC committed to the position or order.",
+  status: "Closed trade result/status.",
+};
+
+const EVALUATION_HEADER_INFO = {
+  status: "Evaluated means the market was analyzed. Portfolio eligibility is derived from the active portfolio rules and selected threshold.",
+  market: "Market links directly to Polymarket. Risk grouping is used internally for diversification.",
+  endDate: "Final day used for resolution timing. If the question implies a later date, that corrected date is used.",
+  daysLeft: "Days remaining until the final day/resolution date.",
+  marketPrice: "Executable entry estimate, using the current order book rather than midpoint.",
+  gainIfWin: "Profit at the standard $5 evaluation stake, after the currently selected fee mode.",
+  netYield: "Profit if correct divided by evaluation stake/cost, after expected trading fees.",
+  riskReward: "Reward divided by risk at the evaluated entry.",
+  aiProbability: "AI-estimated probability for the selected outcome.",
+  annualizedReturn: "Expected value annualized by days to resolution, after fees.",
+  updates: "How many times this market/outcome was evaluated. Click row info for changes.",
+  analysis: "AI thesis, evidence, counter-evidence, and portfolio filter notes.",
+};
+
+function headerInfoButton(info) {
+  if (!info) return "";
+  return `
+    <span class="analysis-popover header-info">
+      <button class="info-button" type="button" aria-label="Show column info">i</button>
+      <span class="analysis-tooltip" role="tooltip">${escapeHtml(info)}</span>
+    </span>
+  `;
+}
+
 function tradeHeader(tableKey, key, label) {
   const sort = state.tradeSort[tableKey] || state.tradeSort.open;
   const active = sort.key === key ? " active" : "";
-  return `<th><button class="sort-button${active}" type="button" data-trade-sort="${key}" data-trade-table="${tableKey}">${label}${tradeSortArrow(tableKey, key)}</button></th>`;
+  return `<th><div class="th-content"><button class="sort-button${active}" type="button" data-trade-sort="${key}" data-trade-table="${tableKey}">${label}${tradeSortArrow(tableKey, key)}</button>${headerInfoButton(TRADE_HEADER_INFO[key])}</div></th>`;
 }
 
 function tradeTypeBadge(trade) {
@@ -835,13 +848,8 @@ function renderTradeRows(trades, emptyText, options = {}) {
             <td data-label="Market">
               ${tradeTypeBadge(trade)}
               ${marketAnchor(trade)}
-              <span>${escapeHtml(riskLine(trade))}</span>
-              <span>${escapeHtml(postMortemLine(trade))}</span>
             </td>
-            <td data-label="Entry">
-              ${probability(Number(trade.entryPrice))}
-              <span>${[trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`, feeLine(trade)].filter(Boolean).join(", ")}</span>
-            </td>
+            <td data-label="Entry">${probability(Number(trade.entryPrice))}</td>
             <td data-label="${showStatus ? "Final" : "Mark"}">${probability(Number(trade.currentPrice))}</td>
             <td data-label="AI prob.">
               <strong>${probability(tradeAiProbability(trade))}</strong>
@@ -858,11 +866,9 @@ function renderTradeRows(trades, emptyText, options = {}) {
             <td data-label="Win p.a.">${potentialAnnualizedCell(trade)}</td>
             ${showStatus ? `<td data-label="Result">
               ${escapeHtml(trade.status || "OPEN")}
-              <span>${escapeHtml(tradeStatusNote(trade))}</span>
             </td>` : ""}
             <td data-label="P/L" class="${pnlClass(tradePnlValue(trade))}">
               ${signedMoney(tradePnlValue(trade))}
-              <span>${signedPercent(tradePnlPct(trade))}</span>
             </td>
             <td data-label="Stake">${money(Number(trade.stakeUsdc || 0))}</td>
           </tr>
@@ -915,7 +921,6 @@ function analysisBadge(item) {
       <button class="info-button" type="button" aria-label="Show analysis details">i</button>
       <span class="analysis-tooltip" role="tooltip">${escapeHtml(details)}</span>
     </span>
-    <span class="analysis-reason">${escapeHtml(reasons)}</span>
   `;
 }
 
@@ -2140,68 +2145,37 @@ function filteredEvaluations(evaluations) {
 
 function sortableHeader(key, label) {
   const active = state.evaluationSort.key === key ? " active" : "";
-  return `<th><button class="sort-button${active}" type="button" data-evaluation-sort="${key}">${label}${sortArrow(key)}</button></th>`;
+  return `<th><div class="th-content"><button class="sort-button${active}" type="button" data-evaluation-sort="${key}">${label}${sortArrow(key)}</button>${headerInfoButton(EVALUATION_HEADER_INFO[key])}</div></th>`;
 }
 
 function gainCell(item) {
   const gain = gainIfWin(item);
-  const ev = expectedValue(item);
-  const fee = evaluationTradingFee(item);
-  return `
-    <span class="${Number(gain) >= 0 ? "positive" : "negative"}">${signedMoney(gain)}</span>
-    <span>profit if win</span>
-    <span>${currentLimitOrders() ? "limit maker fee $0" : `market taker fee ${money(fee, 5)}`}</span>
-    <span class="${pnlClass(ev)}">EV ${signedMoney(ev, 4)}</span>
-  `;
+  return `<span class="${Number(gain) >= 0 ? "positive" : "negative"}">${signedMoney(gain)}</span>`;
 }
 
 function netYieldCell(item) {
   const value = netYield(item);
-  return `
-    <span class="${pnlClass(value)}">${signedPercent(value)}</span>
-    <span>${currentLimitOrders() ? "after maker fee" : "after taker fee"}</span>
-  `;
+  return `<span class="${pnlClass(value)}">${signedPercent(value)}</span>`;
 }
 
 function evaluationRiskRewardCell(item) {
   const value = evaluationRiskReward(item);
-  return `
-    <span class="${riskRewardClass(value)}">${riskReward(value)}</span>
-    <span>reward / risk</span>
-  `;
+  return `<span class="${riskRewardClass(value)}">${riskReward(value)}</span>`;
 }
 
 function evaluationEndDateCell(item) {
   const endDate = evaluationEndDate(item);
-  const inferred = inferredDateFromQuestion({
-    ...item,
-    openedAt: item.openedAt || item.evaluatedAt,
-    date: item.date || item.evaluatedAt,
-  });
-  const inferredNote = inferred && item.endDate && Date.parse(inferred) > Date.parse(item.endDate) ? "from question" : "";
-  return `
-    ${escapeHtml(endDate ? formatDate(endDate) : "-")}
-    <span>${escapeHtml(inferredNote || "final day")}</span>
-  `;
+  return `<span>${escapeHtml(endDate ? formatDate(endDate) : "-")}</span>`;
 }
 
 function evaluationDaysLeftCell(item) {
   const days = evaluationDaysLeft(item);
-  return `
-    ${Number.isFinite(days) ? compactDays(days) : "-"}
-    <span>to final day</span>
-  `;
+  return Number.isFinite(days) ? compactDays(days) : "-";
 }
 
 function annualizedCell(item) {
   const annualized = annualizedExpectedReturn(item);
-  const ev = expectedValue(item);
-  const days = daysToResolution(item);
-  return `
-    <span class="${pnlClass(annualized)}">${signedPercent(annualized)}</span>
-    <span>${Number.isFinite(days) ? `${days.toFixed(1)}d horizon` : "horizon n/a"}</span>
-    <span class="${pnlClass(ev)}">EV ${signedMoney(ev, 4)}</span>
-  `;
+  return `<span class="${pnlClass(annualized)}">${signedPercent(annualized)}</span>`;
 }
 
 function updateHistoryCell(item) {
@@ -2220,7 +2194,6 @@ function updateHistoryCell(item) {
 
   return `
     <span>${count.toLocaleString("en-US")}</span>
-    <span>${history.length ? `${history.length} changed` : "no material change"}</span>
     ${history.length ? `
       <span class="analysis-popover">
         <button class="info-button" type="button" aria-label="Show evaluation update history">i</button>
@@ -2279,17 +2252,11 @@ function renderBotEvaluations() {
             <td data-label="Status" class="${evaluationStatusClass(item)}">${escapeHtml(evaluationStatusLabel(item))}</td>
             <td data-label="Market">
               ${marketAnchor(item)}
-              <span>${escapeHtml(riskLine(item))}</span>
             </td>
             <td data-label="End date">${evaluationEndDateCell(item)}</td>
             <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
             <td data-label="Mkt entry">
               ${probability(Number(item.marketPrice))}
-              <span>${[
-                item.bestAsk == null ? "" : `ask ${probability(Number(item.bestAsk))}`,
-                item.slippage == null ? "" : `slip ${(Number(item.slippage) * 100).toFixed(1)} pts`,
-                feeLine(item),
-              ].filter(Boolean).join(", ")}</span>
             </td>
             <td data-label="Odds">${odds(decimalOdds(item.marketPrice))}</td>
             <td data-label="Win @ $5">${gainCell(item)}</td>
