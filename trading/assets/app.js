@@ -63,6 +63,7 @@ const els = {
   secondaryPanelTitle: document.querySelector("[data-secondary-panel-title]"),
   botStatus: document.querySelector("[data-bot-status]"),
   accountSummary: document.querySelector("[data-account-summary]"),
+  portfolioRules: document.querySelector("[data-portfolio-rules]"),
   botTrades: document.querySelector("[data-bot-trades]"),
   closedTrades: document.querySelector("[data-closed-trades]"),
   closedSummary: document.querySelector("[data-closed-summary]"),
@@ -1635,6 +1636,8 @@ async function loadBotState() {
     state.botState = null;
     if (els.botAction) els.botAction.textContent = "offline";
     if (els.botInlineAction) els.botInlineAction.textContent = "offline";
+    if (els.portfolioRules) els.portfolioRules.innerHTML = "";
+    els.botStatus.hidden = false;
     els.botStatus.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
     els.botTrades.innerHTML = '<div class="empty">Autonomous paper portfolio state is not available yet.</div>';
     if (els.closedTrades) els.closedTrades.innerHTML = '<div class="empty">Closed paper trades are not available yet.</div>';
@@ -1982,11 +1985,15 @@ function renderBotState(botState) {
     els.portfolioRrNote.textContent = trades.length ? `avg all, ${trades.length} trades` : "no trades";
   }
 
-  els.botStatus.innerHTML = `
+  if (els.portfolioRules) {
+    els.portfolioRules.innerHTML = `
     <div class="bot-summary">
       ${renderPortfolioRulesCard(portfolioState.label || "Paper portfolio", portfolioRuleRows({ ...portfolioState, ...portfolio }))}
     </div>
   `;
+  }
+  els.botStatus.innerHTML = "";
+  els.botStatus.hidden = true;
 
   els.botTrades.innerHTML = renderTradeRows(openTrades.slice(0, 12), "Zatim zadne otevrene autonomni paper obchody.", {
     tableKey: "open",
@@ -2241,8 +2248,11 @@ function renderLiveState(liveState) {
   }
 
   if (els.accountSummary) {
-    els.accountSummary.hidden = false;
-    els.accountSummary.innerHTML = `
+    els.accountSummary.hidden = true;
+    els.accountSummary.innerHTML = "";
+  }
+  if (els.portfolioRules) {
+    els.portfolioRules.innerHTML = `
     <div class="bot-summary">
       ${renderPortfolioRulesCard("Live portfolio", livePortfolioRuleRows())}
     </div>

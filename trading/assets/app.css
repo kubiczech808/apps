@@ -137,6 +137,14 @@ button:disabled {
   gap: 10px;
 }
 
+.portfolio-rules-slot {
+  margin-top: 12px;
+}
+
+.portfolio-rules-slot .bot-summary {
+  margin-bottom: 0;
+}
+
 .control-panel {
   margin-top: 12px;
   padding: 12px;
