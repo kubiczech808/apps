@@ -76,6 +76,12 @@ button:disabled {
   line-height: 0.96;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .settings-tab-button {
   display: inline-grid;
   flex: 0 0 auto;

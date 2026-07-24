@@ -242,9 +242,22 @@ function syncExecutionButtons() {
   });
 }
 
-function currentRouteTab() {
+function currentRouteState() {
   const path = window.location.pathname.replace(/\/+$/, "/");
-  return path.endsWith("/trading/settings/") || path.endsWith("/settings/") ? "settings-runs" : null;
+  if (path.endsWith("/trading/opportunities/") || path.endsWith("/opportunities/")) {
+    return {
+      tab: "settings-runs",
+      settingsSection: "evaluation-log",
+      evaluationStatus: "ELIGIBLE",
+    };
+  }
+  if (path.endsWith("/trading/settings/") || path.endsWith("/settings/")) {
+    return {
+      tab: "settings-runs",
+      settingsSection: "evaluation-log",
+    };
+  }
+  return null;
 }
 
 function activateTab(target) {
@@ -254,6 +267,31 @@ function activateTab(target) {
   els.tabPanels.forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.tabPanel === target);
   });
+}
+
+function setSettingsSection(section) {
+  state.settingsSection = section || "evaluation-log";
+  els.settingsSectionButtons.forEach((item) => {
+    item.classList.toggle("active", item.dataset.settingsSection === state.settingsSection);
+  });
+  els.settingsPanels.forEach((panel) => {
+    panel.hidden = panel.dataset.settingsPanel !== state.settingsSection;
+  });
+}
+
+function setEvaluationStatus(status) {
+  state.evaluationStatus = status || "ELIGIBLE";
+  els.evaluationStatusButtons.forEach((item) => {
+    item.classList.toggle("active", item.dataset.evaluationStatus === state.evaluationStatus);
+  });
+  renderBotEvaluations();
+}
+
+function applyInitialRoute() {
+  const route = currentRouteState();
+  if (route?.settingsSection) setSettingsSection(route.settingsSection);
+  if (route?.evaluationStatus) setEvaluationStatus(route.evaluationStatus);
+  activateTab(route?.tab || "daily-picks");
 }
 
 function syncLiveActivationUi() {
@@ -2717,9 +2755,8 @@ function renderCalculationReport() {
 
 els.tabButtons.forEach((button) => {
   button.addEventListener("click", (event) => {
+    if (button.tagName === "A") return;
     const target = button.dataset.tabTarget;
-    const isSettingsLink = target === "settings-runs" && button.tagName === "A";
-    if (isSettingsLink && !currentRouteTab()) return;
     event.preventDefault();
     activateTab(target);
   });
@@ -2727,13 +2764,7 @@ els.tabButtons.forEach((button) => {
 
 els.settingsSectionButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    state.settingsSection = button.dataset.settingsSection || "runs";
-    els.settingsSectionButtons.forEach((item) => {
-      item.classList.toggle("active", item === button);
-    });
-    els.settingsPanels.forEach((panel) => {
-      panel.hidden = panel.dataset.settingsPanel !== state.settingsSection;
-    });
+    setSettingsSection(button.dataset.settingsSection || "evaluation-log");
   });
 });
 
@@ -2795,11 +2826,7 @@ els.executionButtons.forEach((button) => {
 
 els.evaluationStatusButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    state.evaluationStatus = button.dataset.evaluationStatus;
-    els.evaluationStatusButtons.forEach((item) => {
-      item.classList.toggle("active", item === button);
-    });
-    renderBotEvaluations();
+    setEvaluationStatus(button.dataset.evaluationStatus);
   });
 });
 
@@ -2965,7 +2992,7 @@ els.closedTrades?.addEventListener("click", handleTradeSort);
 
 state.mode = storedMode();
 state.liveExecutionArmed = storedLiveExecutionArmed();
-activateTab(currentRouteTab() || "daily-picks");
+applyInitialRoute();
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);
 loadDashboardState().then(() => {
