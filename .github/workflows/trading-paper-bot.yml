@@ -16,6 +16,11 @@ on:
         options:
           - full
           - refresh
+      paper_max_order_fraction:
+        description: "Maximum stake per paper trade as fraction of portfolio, decimal 0.01-0.50"
+        required: false
+        default: "0.05"
+        type: string
   schedule:
     - cron: '7 * * * *'
     - cron: '22,37,52 * * * *'
@@ -27,7 +32,7 @@ jobs:
       PAPER_STATE_PATH: data/paper-state.json
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/data/paper-state.json
       PAPER_PORTFOLIO_USDC: "100"
-      PAPER_MAX_FRACTION: "0.05"
+      PAPER_MAX_FRACTION: ${{ github.event.inputs.paper_max_order_fraction || '0.05' }}
       PAPER_MIN_PROBABILITY: "0.95"
       PAPER_MIN_ANNUAL_RETURN: "0.05"
       PAPER_OPPORTUNITY_MIN_PROBABILITY: "0.60"

@@ -72,6 +72,7 @@ const els = {
   riskAllocationLabel: document.querySelector("[data-risk-allocation-label]"),
   riskAllocationValue: document.querySelector("[data-risk-allocation-value]"),
   riskAllocationNote: document.querySelector("[data-risk-allocation-note]"),
+  capitalStatus: document.querySelector("[data-capital-status]"),
   limitOrders: document.querySelector("[data-limit-orders]"),
   executionButtons: document.querySelectorAll("[data-one-time-execution]"),
   executionStatus: document.querySelector("[data-execution-status]"),
@@ -1035,8 +1036,32 @@ function refreshRiskAllocation() {
   syncRiskAllocationControl();
 }
 
-function syncRiskAllocationControl(availableCapital = null, sourceLabel = "available capital") {
+function syncCapitalStatus({ availableCapital = null, baseCapital = null, stake = null, cadenceLabel = "next scheduled run" } = {}) {
+  if (!els.capitalStatus) return;
+  const available = Number(availableCapital);
+  const orderStake = Number(stake);
+  if (!Number.isFinite(available) || !Number.isFinite(orderStake) || orderStake <= 0) {
+    els.capitalStatus.textContent = "Capital status is not available yet.";
+    els.capitalStatus.className = "capital-status muted";
+    return;
+  }
+  if (available + 0.000001 < orderStake) {
+    els.capitalStatus.textContent = `Dalsi obchod se ted nerealizuje: k dispozici je ${money(available)}, ale jedna obchodni davka podle diverzifikace vyzaduje ${money(orderStake)}.`;
+    els.capitalStatus.className = "capital-status negative";
+    return;
+  }
+  const idleAfterNext = Math.max(0, available - orderStake);
+  const base = Number(baseCapital);
+  const baseText = Number.isFinite(base) ? ` / base ${money(base)}` : "";
+  els.capitalStatus.textContent = `K dispozici pro ${cadenceLabel}: ${money(available)}; dalsi obchodni davka ${money(orderStake)}${baseText}; po dalsim obchodu zustane cca ${money(idleAfterNext)}.`;
+  els.capitalStatus.className = idleAfterNext > orderStake ? "capital-status warning" : "capital-status positive";
+}
+
+function syncRiskAllocationControl(availableCapital = null, sourceLabel = "available capital", options = {}) {
   const value = currentRiskAllocation();
+  const base = Number(options.baseCapital ?? availableCapital);
+  const available = Number(availableCapital);
+  const stake = Number.isFinite(base) ? base * value : null;
   if (els.riskAllocation) {
     els.riskAllocation.value = String(Math.round(value * 100));
   }
@@ -1044,12 +1069,17 @@ function syncRiskAllocationControl(availableCapital = null, sourceLabel = "avail
     els.riskAllocationLabel.textContent = probability(value);
   }
   if (els.riskAllocationValue) {
-    const base = Number(availableCapital);
-    els.riskAllocationValue.textContent = Number.isFinite(base) ? money(base * value) : "-";
+    els.riskAllocationValue.textContent = Number.isFinite(stake) ? money(stake) : "-";
   }
   if (els.riskAllocationNote) {
     els.riskAllocationNote.textContent = `maximum stake from ${sourceLabel}`;
   }
+  syncCapitalStatus({
+    availableCapital: Number.isFinite(available) ? available : null,
+    baseCapital: Number.isFinite(base) ? base : null,
+    stake,
+    cadenceLabel: options.cadenceLabel || "next scheduled run",
+  });
 }
 
 function defaultLimitOrdersForMode() {
@@ -1455,10 +1485,12 @@ async function triggerOneTimeExecution(target) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target,
-        ...(live ? {
+        ...(!live ? {
+          max_order_fraction: currentRiskAllocation(),
+        } : {
           min_probability: currentEligibilityThreshold(),
           max_order_fraction: currentRiskAllocation(),
-        } : {}),
+        }),
       }),
     });
     const payload = await response.json().catch(() => ({}));
@@ -1626,11 +1658,15 @@ function renderBotState(botState) {
   const openPnl = Number(portfolio.openPnlUsdc || 0);
   const openPnlPct = Number(portfolio.openPnlPct || 0);
   const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
+  const paperCapitalBase = Number(portfolio.initialUsdc ?? 100);
   const maxResolutionDays = Number(portfolio.maxResolutionDays);
   const resolutionLabel = Number.isFinite(maxResolutionDays)
     ? `No later than ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`
     : "Best available horizon";
-  syncRiskAllocationControl(freeCapital, "paper free capital");
+  syncRiskAllocationControl(freeCapital, "paper portfolio", {
+    baseCapital: paperCapitalBase,
+    cadenceLabel: "next paper execution",
+  });
 
   if (els.botAction) els.botAction.textContent = decision.action || "waiting";
   if (els.botInlineAction) els.botInlineAction.textContent = decision.action || "waiting";
@@ -1915,7 +1951,10 @@ function renderLiveState(liveState) {
   const liveGuardText = state.liveExecutionArmed
     ? "UI gate enabled; no automatic live order submitter is connected yet"
     : "click Activate live execution before future live order routing";
-  syncRiskAllocationControl(liveCapitalBase, Number.isFinite(cash) ? "live pUSD cash" : "live cash once balance sync is available");
+  syncRiskAllocationControl(liveCapitalBase, Number.isFinite(cash) ? "live pUSD cash" : "live cash once balance sync is available", {
+    baseCapital: liveCapitalBase,
+    cadenceLabel: "next live execution",
+  });
 
   if (els.botAction) els.botAction.textContent = "live";
   if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions / ${openOrders.length} orders`;

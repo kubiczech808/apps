@@ -153,6 +153,26 @@ button:disabled {
   line-height: 1.35;
 }
 
+.capital-status {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.capital-status.positive {
+  color: var(--good);
+}
+
+.capital-status.warning {
+  color: var(--warning);
+}
+
+.capital-status.negative {
+  color: var(--danger);
+}
+
 .order-mode-toggle {
   display: inline-flex;
   align-items: center;

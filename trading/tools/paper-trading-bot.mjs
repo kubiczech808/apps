@@ -1926,7 +1926,7 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
 
   if (portfolioState.lastTradeDate === today) {
-    return { action: "SKIP", reason: "daily paper trade already opened", available, strategyId: strategy.id };
+    return { action: "SKIP", reason: "daily paper trade already opened", available, requiredStake: stake, strategyId: strategy.id };
   }
 
   const rotation = rotationReview(portfolioState, eligible, strategy, available, stake);
@@ -1944,6 +1944,7 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
       trade: newTrade,
       closedTrade,
       available: rotation.capitalAfterExit - stake,
+      requiredStake: stake,
       skippedForRisk: 0,
       rotationReview: closedTrade.rotationReview,
       strategyId: strategy.id,
@@ -1951,7 +1952,14 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
   }
 
   if (available < stake) {
-    return { action: "SKIP", reason: "not enough free paper capital", available, strategyId: strategy.id };
+    return {
+      action: "SKIP",
+      reason: `not enough free paper capital for next ${strategy.label} trade: ${available.toFixed(2)} USDC available, ${stake.toFixed(2)} USDC required by diversification settings`,
+      available,
+      requiredStake: stake,
+      insufficientCapital: true,
+      strategyId: strategy.id,
+    };
   }
 
   const { best, skippedForRisk } = findFirstOpenCandidate(portfolioState, eligible);
@@ -1959,7 +1967,7 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
     const reason = skippedForRisk > 0
       ? "no eligible non-correlated candidate"
       : "no eligible non-duplicate candidate";
-    return { action: "SKIP", reason, available, skippedForRisk, strategyId: strategy.id };
+    return { action: "SKIP", reason, available, requiredStake: stake, skippedForRisk, strategyId: strategy.id };
   }
 
   const trade = paperTradeFromCandidate(best, strategy, today, stake);
@@ -1971,6 +1979,7 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
     reason: `best ${strategy.selectionMetric} non-correlated candidate in ${horizonBucketLabel(horizonBucket(best))} horizon bucket`,
     trade,
     available: available - stake,
+    requiredStake: stake,
     skippedForRisk,
     strategyId: strategy.id,
   };
@@ -2403,6 +2412,9 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
     tradeId: decision.trade?.id || null,
     closedTradeId: decision.closedTrade?.id || null,
     rotationReview: decision.rotationReview || null,
+    availableCapitalUsdc: decision.available == null ? null : Number(Number(decision.available).toFixed(4)),
+    requiredStakeUsdc: decision.requiredStake == null ? null : Number(Number(decision.requiredStake).toFixed(4)),
+    insufficientCapital: Boolean(decision.insufficientCapital),
     selectedHorizonDays: decision.trade?.daysToResolution ?? null,
     riskSkippedCount: decision.skippedForRisk || 0,
     refreshOnly: REFRESH_ONLY,
@@ -2423,6 +2435,9 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
       tradeId: decision.trade?.id || null,
       closedTradeId: decision.closedTrade?.id || null,
       rotationReview: decision.rotationReview || null,
+      availableCapitalUsdc: decision.available == null ? null : Number(Number(decision.available).toFixed(4)),
+      requiredStakeUsdc: decision.requiredStake == null ? null : Number(Number(decision.requiredStake).toFixed(4)),
+      insufficientCapital: Boolean(decision.insufficientCapital),
       riskSkippedCount: decision.skippedForRisk || 0,
       refreshOnly: REFRESH_ONLY,
       learningSampleSize: state.learningProfile.sampleSize,
@@ -2460,6 +2475,9 @@ function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
         tradeId: decision.trade?.id || null,
         closedTradeId: decision.closedTrade?.id || null,
         rotationReview: decision.rotationReview || null,
+        availableCapitalUsdc: decision.available == null ? null : Number(Number(decision.available).toFixed(4)),
+        requiredStakeUsdc: decision.requiredStake == null ? null : Number(Number(decision.requiredStake).toFixed(4)),
+        insufficientCapital: Boolean(decision.insufficientCapital),
       })),
       events: evaluations.map((item) => ({
         id: item.id,

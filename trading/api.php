@@ -623,10 +623,14 @@ try {
         $target = (string) ($payload['target'] ?? '');
         $liveMinProbability = normalized_probability_input($payload['min_probability'] ?? $payload['live_min_probability'] ?? null);
         $liveMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['live_max_order_fraction'] ?? null);
+        $paperMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['paper_max_order_fraction'] ?? null);
         $workflows = [
             'paper' => [
                 'workflow' => 'trading-paper-bot.yml',
-                'inputs' => ['mode' => 'full'],
+                'inputs' => array_filter([
+                    'mode' => 'full',
+                    'paper_max_order_fraction' => $paperMaxOrderFraction,
+                ], static fn ($value): bool => $value !== null),
                 'message' => 'Paper bot workflow dispatched.',
             ],
             'live' => [
