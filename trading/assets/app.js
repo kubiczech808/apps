@@ -32,6 +32,7 @@ const state = {
   limitOrders: null,
   limitOrdersKey: "",
   liveExecutionArmed: false,
+  liveExecutionState: null,
   executionBusy: null,
   autoLiveSyncBusy: false,
 };
@@ -1183,11 +1184,17 @@ function liveExecutionSummary(execution) {
   if (!execution || typeof execution !== "object") return "Live execution state is not available yet.";
   const selected = execution.selected || {};
   const response = execution.response || {};
+  const monitoring = execution.monitoring || {};
   const attempts = Array.isArray(execution.attempts) ? execution.attempts : [];
   const lastAttempt = attempts[attempts.length - 1] || {};
+  const idleCashLimit = Number(monitoring.idleCashLimitUsdc);
+  const idleCashHours = Number(monitoring.idleCashHours);
   const lines = [
     `Action: ${execution.action || "-"}`,
     execution.reason ? `Reason: ${execution.reason}` : "",
+    Number.isFinite(idleCashLimit)
+      ? `Idle cash: ${monitoring.idleCashOverdue ? "overdue" : "monitored"} / limit ${money(idleCashLimit)} / ${Number.isFinite(idleCashHours) ? `${idleCashHours.toFixed(1)}h` : "-"}`
+      : "",
     selected.question ? `Selected: ${selected.question} / ${selected.outcome || "-"}` : "",
     selected.orderType ? `Order: ${selected.orderType} ${selected.orderSize || "-"} @ ${probability(Number(selected.orderPrice))}` : "",
     response.orderID ? `Order ID: ${response.orderID}` : "",
@@ -1425,12 +1432,14 @@ async function triggerOneTimeExecution(target) {
 
 async function loadLiveState(options = {}) {
   try {
-    const [liveResult, botResult] = await Promise.allSettled([
+    const [liveResult, botResult, executionResult] = await Promise.allSettled([
       fetchJson("data/live-state.json"),
       fetchJson("data/paper-state.json"),
+      fetchJson("data/live-execution-state.json"),
     ]);
     if (liveResult.status === "rejected") throw liveResult.reason;
     state.botState = botResult.status === "fulfilled" ? botResult.value : null;
+    state.liveExecutionState = executionResult.status === "fulfilled" ? executionResult.value : null;
     const liveState = liveResult.value;
     renderLiveState(liveState);
     if (!options.skipAutoLiveSync) {
@@ -1441,6 +1450,7 @@ async function loadLiveState(options = {}) {
     }
   } catch (error) {
     state.liveState = null;
+    state.liveExecutionState = null;
     syncModeUi();
     if (els.botAction) els.botAction.textContent = "offline";
     if (els.botInlineAction) els.botInlineAction.textContent = "offline";
@@ -1820,6 +1830,15 @@ function renderLiveState(liveState) {
   const openPnlPct = Number(portfolio.openPnlPct);
   const marketValue = Number(portfolio.marketValueUsdc);
   const cash = Number(portfolio.cashUsdc);
+  const executionState = state.liveExecutionState || {};
+  const monitoring = executionState.monitoring || {};
+  const idleCashLimit = Number(monitoring.idleCashLimitUsdc);
+  const idleCashHours = Number(monitoring.idleCashHours);
+  const idleCashOverdue = Boolean(monitoring.idleCashOverdue);
+  const idleCashStatus = idleCashOverdue ? "Overdue" : (monitoring.cashAboveIdleLimit ? "Grace period" : "OK");
+  const idleCashDetail = Number.isFinite(idleCashLimit)
+    ? `${Number.isFinite(cash) ? money(cash) : "-"} cash / limit ${money(idleCashLimit)} / idle ${Number.isFinite(idleCashHours) ? `${idleCashHours.toFixed(1)}h` : "-"}`
+    : "live execution monitor not available yet";
   const equity = Number.isFinite(Number(portfolio.equityUsdc))
     ? Number(portfolio.equityUsdc)
     : (Number.isFinite(marketValue) ? marketValue : 0);
@@ -1913,6 +1932,11 @@ function renderLiveState(liveState) {
         <span class="label">Cash</span>
         <strong>${Number.isFinite(cash) ? money(cash) : "-"}</strong>
         <span>${escapeHtml(balanceAllowance.status === "OK" ? `pUSD balance / allowance ${collateral.allowanceUsdc == null ? "-" : money(Number(collateral.allowanceUsdc))}` : (balanceAllowance.message || "CLOB balance sync not available yet"))}</span>
+      </div>
+      <div>
+        <span class="label">Idle cash guard</span>
+        <strong class="${idleCashOverdue ? "negative" : ""}">${escapeHtml(idleCashStatus)}</strong>
+        <span>${escapeHtml(idleCashDetail)}</span>
       </div>
       <div>
         <span class="label">Original value</span>

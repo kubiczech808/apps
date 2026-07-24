@@ -41,8 +41,12 @@ jobs:
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: data/live-state.json
       LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
+      LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
       MAX_ORDER_FRACTION: ${{ github.event.inputs.live_max_order_fraction || '0.10' }}
       MAX_ORDER_NOTIONAL_USDC: "0.75"
+      LIVE_IDLE_CASH_MAX_USDC: "5"
+      LIVE_IDLE_CASH_GRACE_HOURS: "24"
+      LIVE_ONE_TRADE_PER_DAY: "true"
       USE_LIMIT_ORDERS: "true"
       POLYMARKET_POST_ONLY: "true"
       LIVE_ORDER_SIZE_MODE: stake_fraction

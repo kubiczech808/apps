@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 
 const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
+const LIVE_EXECUTION_STATE_URL = process.env.LIVE_EXECUTION_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution";
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
@@ -28,7 +29,11 @@ const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
 const DEFAULT_FUNDER = "0x3252de913d9323667f21f4d88fa1f996fc282293";
 const FUNDER_ADDRESS = process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLYMARKET_ADDRESS || DEFAULT_FUNDER;
 const EXECUTION_STATE_PATH = process.env.LIVE_EXECUTION_STATE_PATH || "";
+const IDLE_CASH_MAX_USDC = Number(process.env.LIVE_IDLE_CASH_MAX_USDC || 5);
+const IDLE_CASH_GRACE_HOURS = Number(process.env.LIVE_IDLE_CASH_GRACE_HOURS || 24);
+const ONE_TRADE_PER_DAY = String(process.env.LIVE_ONE_TRADE_PER_DAY ?? "true").toLowerCase() !== "false";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
+const TZ = "Europe/Prague";
 
 function hasFlag(name) {
   return process.argv.includes(`--${name}`);
@@ -75,6 +80,57 @@ async function loadJsonResource(location, label = location) {
   const path = source.startsWith("file://") ? new URL(source) : source;
   const raw = await readFile(path, "utf8");
   return JSON.parse(raw);
+}
+
+async function loadOptionalJsonResource(location, label = location) {
+  try {
+    return await loadJsonResource(location, label);
+  } catch {
+    return null;
+  }
+}
+
+function pragueDateKey(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function hoursSince(value, now = new Date()) {
+  const time = Date.parse(value || "");
+  if (!Number.isFinite(time)) return null;
+  return Math.max(0, (now.getTime() - time) / 3600000);
+}
+
+function liveCashMonitoring(previousExecution, cash, now = new Date()) {
+  const previousMonitoring = previousExecution?.monitoring || {};
+  const previousCash = number(previousExecution?.account?.cashUsdc);
+  const cashAboveLimit = Number.isFinite(cash) && cash > IDLE_CASH_MAX_USDC;
+  const idleCashSince = cashAboveLimit
+    ? (previousCash != null && previousCash > IDLE_CASH_MAX_USDC ? previousMonitoring.idleCashSince : null) || now.toISOString()
+    : null;
+  const idleHours = idleCashSince ? hoursSince(idleCashSince, now) : 0;
+  const lastSubmittedAt = previousExecution?.action === "SUBMITTED"
+    ? previousExecution.generatedAt
+    : previousMonitoring.lastSubmittedAt || null;
+  const submittedToday = ONE_TRADE_PER_DAY
+    && lastSubmittedAt
+    && pragueDateKey(new Date(lastSubmittedAt)) === pragueDateKey(now);
+
+  return {
+    idleCashLimitUsdc: IDLE_CASH_MAX_USDC,
+    idleCashGraceHours: IDLE_CASH_GRACE_HOURS,
+    cashAboveIdleLimit: cashAboveLimit,
+    idleCashSince,
+    idleCashHours: idleHours == null ? null : Number(idleHours.toFixed(2)),
+    idleCashOverdue: cashAboveLimit && Number(idleHours || 0) >= IDLE_CASH_GRACE_HOURS,
+    lastSubmittedAt,
+    submittedToday,
+    oneTradePerDay: ONE_TRADE_PER_DAY,
+  };
 }
 
 function apiUrl(base, path, params = {}) {
@@ -672,14 +728,18 @@ function orderAttemptSummary(candidate, response = null, extra = {}) {
 }
 
 async function main() {
-  const [paperState, liveState] = await Promise.all([
+  const [paperState, liveState, previousExecution] = await Promise.all([
     loadJsonResource(PAPER_STATE_URL, "paper state"),
     loadJsonResource(LIVE_STATE_URL, "live state"),
+    loadOptionalJsonResource(LIVE_EXECUTION_STATE_URL, "previous live execution state"),
   ]);
   const cash = liveCashUsdc(liveState);
   const tradingConfig = liveTradingConfig(liveState);
   const fractionNotional = cash * MAX_ORDER_FRACTION;
-  const maxNotional = Number(Math.min(fractionNotional, MAX_ORDER_NOTIONAL_USDC).toFixed(5));
+  const monitoring = liveCashMonitoring(previousExecution, cash);
+  const regularMaxNotional = Math.min(fractionNotional, MAX_ORDER_NOTIONAL_USDC);
+  const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, cash - IDLE_CASH_MAX_USDC) : 0;
+  const maxNotional = Number(Math.min(cash, Math.max(regularMaxNotional, idleUtilizationNotional)).toFixed(5));
   const rawEvaluations = Array.isArray(paperState.evaluations) ? paperState.evaluations : [];
   const latestEvaluations = latestUniqueEvaluations(rawEvaluations);
   const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
@@ -723,10 +783,13 @@ async function main() {
     });
 
   const best = eligible[0] || null;
+  const dailyBlocked = Boolean(monitoring.submittedToday);
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
-    action: best ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
-    reason: best ? "best currently revalidated executable candidate" : "no currently executable candidate after live revalidation",
+    action: best && !dailyBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
+    reason: dailyBlocked
+      ? "daily live trade already submitted"
+      : (best ? "best currently revalidated executable candidate" : "no currently executable candidate after live revalidation"),
     generatedAt: new Date().toISOString(),
     account: {
       address: liveState?.account?.address || FUNDER_ADDRESS,
@@ -736,9 +799,12 @@ async function main() {
       maxOrderFraction: MAX_ORDER_FRACTION,
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
       maxNotionalUsdc: maxNotional,
+      regularMaxNotionalUsdc: Number(regularMaxNotional.toFixed(5)),
+      idleUtilizationNotionalUsdc: Number(idleUtilizationNotional.toFixed(5)),
       openPositions: Array.isArray(liveState.positions) ? liveState.positions.length : 0,
       openOrders: Array.isArray(liveState.openOrders) ? liveState.openOrders.length : 0,
     },
+    monitoring,
     settings: {
       useLimitOrders: USE_LIMIT_ORDERS,
       postOnly: POST_ONLY,
@@ -750,6 +816,10 @@ async function main() {
       shortHorizonDays: SHORT_HORIZON_DAYS,
       mediumHorizonDays: MEDIUM_HORIZON_DAYS,
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
+      idleCashMaxUsdc: IDLE_CASH_MAX_USDC,
+      idleCashGraceHours: IDLE_CASH_GRACE_HOURS,
+      oneTradePerDay: ONE_TRADE_PER_DAY,
+      capitalUtilizationOverride: monitoring.idleCashOverdue,
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
       eligibleCandidates: allEligible.length,
@@ -771,7 +841,7 @@ async function main() {
       })),
   };
 
-  if (!best || DRY_RUN || !hasFlag("confirm-live")) {
+  if (!best || dailyBlocked || DRY_RUN || !hasFlag("confirm-live")) {
     await emitDecision({ ...decision, attempts: best ? [orderAttemptSummary(best, null, { action: decision.action })] : [] });
     return;
   }
@@ -792,6 +862,11 @@ async function main() {
         ...decision,
         action: "SUBMITTED",
         reason: "live order accepted by Polymarket",
+        monitoring: {
+          ...monitoring,
+          lastSubmittedAt: new Date().toISOString(),
+          estimatedCashAfterOrderUsdc: Number(Math.max(0, cash - Number(candidate.totalCostUsdc || candidate.orderNotionalUsdc || 0)).toFixed(5)),
+        },
         selected: candidate,
         response,
         attempts: [...attempts, orderAttemptSummary(candidate, response, { action: "SUBMITTED" })],
