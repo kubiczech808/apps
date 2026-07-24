@@ -120,6 +120,19 @@ function pragueDateKey(date = new Date()) {
   }).format(date);
 }
 
+function pragueHourKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}T${values.hour}`;
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -190,6 +203,7 @@ function normalizeState(input) {
     portfolio: input.portfolio,
     trades: input.trades,
     lastTradeDate: input.lastTradeDate,
+    lastTradeHour: input.lastTradeHour,
     lastDecision: input.lastDecision,
     runLog: input.runLog,
   };
@@ -212,6 +226,7 @@ function normalizeState(input) {
     latestCalculationReport: input.latestCalculationReport || (Array.isArray(input.calculationReports) ? input.calculationReports[0] || null : null),
     learningProfile: normalizeLearningProfile(input.learningProfile),
     lastTradeDate: paperPortfolios.conservative.lastTradeDate,
+    lastTradeHour: paperPortfolios.conservative.lastTradeHour,
     lastDecision: paperPortfolios.conservative.lastDecision,
     runLog: paperPortfolios.conservative.runLog,
   };
@@ -244,6 +259,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       ? input.trades.map((trade) => normalizeTrade({ ...trade, strategyId: trade.strategyId || strategy.id, strategyLabel: trade.strategyLabel || strategy.label }))
       : [],
     lastTradeDate: input.lastTradeDate || null,
+    lastTradeHour: input.lastTradeHour || null,
     lastDecision: input.lastDecision || null,
     runLog: Array.isArray(input.runLog) ? input.runLog : [],
   };
@@ -467,6 +483,7 @@ function syncLegacyPaperAliases(state) {
   state.portfolio = conservative.portfolio;
   state.trades = conservative.trades;
   state.lastTradeDate = conservative.lastTradeDate;
+  state.lastTradeHour = conservative.lastTradeHour;
   state.lastDecision = conservative.lastDecision;
   state.runLog = conservative.runLog;
   return state;
@@ -1851,7 +1868,7 @@ function tradeBatchCandidateSummary(item) {
   };
 }
 
-function buildTradeBatchLog({ portfolioState, strategy, eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, dailyBlocked = false, rotationReview = null }) {
+function buildTradeBatchLog({ portfolioState, strategy, eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, cadenceBlocked = false, rotationReview = null }) {
   const evaluated = Array.isArray(eligible) ? eligible : [];
   const ranked = Array.isArray(rankedEligible) ? rankedEligible : evaluated;
   const blocked = ranked.filter((item) => item.selectionStatus === "RISK_BLOCKED" || item.riskBlockedReason);
@@ -1884,7 +1901,7 @@ function buildTradeBatchLog({ portfolioState, strategy, eligible, rankedEligible
       skippedForRisk,
       riskBlocked: blocked.length,
       openTrades: openTrades(portfolioState.trades || []).length,
-      dailyBlocked: Boolean(dailyBlocked),
+      cadenceBlocked: Boolean(cadenceBlocked),
     },
     selected: tradeBatchCandidateSummary(selected),
     topCandidates: ranked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
@@ -1999,8 +2016,9 @@ function closeTradeForRotation(trade, review, strategy) {
   };
 }
 
-function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative) {
+function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative) {
   const today = pragueDateKey();
+  const currentHour = pragueHourKey();
   const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
   const openPnl = portfolioState.trades
     .filter((trade) => trade.status === "OPEN")
@@ -2009,8 +2027,8 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
   const available = Math.max(0, PORTFOLIO_USDC + realizedPnl - openRisk(portfolioState.trades));
   const stake = portfolioValue * MAX_FRACTION;
 
-  if (portfolioState.lastTradeDate === today) {
-    const reason = "daily paper trade already opened";
+  if (portfolioState.lastTradeHour === currentHour) {
+    const reason = "hourly paper trade already opened";
     return {
       action: "SKIP",
       reason,
@@ -2026,7 +2044,7 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
         reason,
         available,
         stake,
-        dailyBlocked: true,
+        cadenceBlocked: true,
       }),
     };
   }
@@ -2040,6 +2058,7 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
     newTrade.rotationEntryReason = closedTrade.rotationReview?.note || "";
     portfolioState.trades.unshift(newTrade);
     portfolioState.lastTradeDate = today;
+    portfolioState.lastTradeHour = currentHour;
     return {
       action: "ROTATED_OPENED",
       reason: `closed weaker open paper trade and opened better ${strategy.selectionMetric} candidate`,
@@ -2118,6 +2137,7 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
 
   portfolioState.trades.unshift(trade);
   portfolioState.lastTradeDate = today;
+  portfolioState.lastTradeHour = currentHour;
   const reason = `best ${strategy.selectionMetric} non-correlated candidate in ${horizonBucketLabel(horizonBucket(best))} horizon bucket`;
   return {
     action: "OPENED",
@@ -2935,7 +2955,7 @@ async function run() {
   const decisions = Object.values(PAPER_STRATEGIES).map((strategy) => {
     const portfolioState = state.paperPortfolios[strategy.id];
     const rankedEligible = sortEligibleForStrategy(eligible, strategy);
-    return maybeOpenDailyTrade(portfolioState, rankedEligible, strategy);
+    return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy);
   });
 
   state.generatedAt = nowIso();
