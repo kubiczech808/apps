@@ -727,6 +727,27 @@ function orderAttemptSummary(candidate, response = null, extra = {}) {
   };
 }
 
+function liveBatchCandidateSummary(item) {
+  const source = item?.candidate || item || {};
+  return {
+    question: item?.question || source.question || "",
+    outcome: item?.outcome || source.outcome || "",
+    tokenId: item?.tokenId || source.tokenId || null,
+    evaluatedAt: item?.evaluatedAt || source.evaluatedAt || null,
+    status: item?.status || source.status || null,
+    aiProbability: number(item?.aiProbability ?? source.aiProbability),
+    marketPrice: number(item?.marketPrice ?? source.marketPrice ?? item?.currentPrice),
+    annualizedReturn: number(item?.annualizedReturn ?? source.annualizedReturn),
+    expectedValueUsdc: number(item?.expectedValueUsdc ?? source.expectedValueUsdc),
+    orderPrice: number(item?.orderPrice),
+    orderSize: number(item?.orderSize),
+    orderNotionalUsdc: number(item?.orderNotionalUsdc),
+    rejectReasons: Array.isArray(item?.rejectReasons) ? item.rejectReasons.slice(0, 6) : [],
+    sizingNote: item?.sizingNote || null,
+    url: `https://polymarket.com/event/${item?.eventSlug || source.eventSlug || item?.slug || source.slug || ""}`,
+  };
+}
+
 async function main() {
   const [paperState, liveState, previousExecution] = await Promise.all([
     loadJsonResource(PAPER_STATE_URL, "paper state"),
@@ -827,6 +848,46 @@ async function main() {
       selectedHorizonBucket: preferredHorizon.bucket == null ? null : horizonBucketLabel(preferredHorizon.bucket),
     },
     selected: best,
+    batchLog: {
+      id: `live-trade-batch-${new Date().toISOString()}`,
+      runAt: new Date().toISOString(),
+      strategyId: "live",
+      strategyLabel: "Live",
+      selectionMetric: "EV p.a.",
+      action: best && !dailyBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
+      reason: dailyBlocked
+        ? "daily live trade already submitted"
+        : (best ? "best currently revalidated executable candidate" : "no currently executable candidate after live revalidation"),
+      explanation: best && !dailyBlocked
+        ? "Live batch found an executable candidate after revalidation."
+        : (dailyBlocked ? "No live order was submitted because the one-trade-per-day rule is already satisfied." : "No live order was submitted because all revalidated candidates failed current execution criteria."),
+      settings: {
+        minProbability: MIN_PROBABILITY,
+        minAnnualReturn: MIN_ANNUAL_RETURN,
+        maxSpread: MAX_SPREAD,
+        minVolume24hr: MIN_VOLUME_24H,
+        shortHorizonDays: SHORT_HORIZON_DAYS,
+        mediumHorizonDays: MEDIUM_HORIZON_DAYS,
+        useLimitOrders: USE_LIMIT_ORDERS,
+        maxOrderFraction: MAX_ORDER_FRACTION,
+      },
+      capital: {
+        availableUsdc: cash,
+        requiredStakeUsdc: maxNotional,
+        insufficientCapital: !Number.isFinite(maxNotional) || maxNotional <= 0,
+      },
+      counts: {
+        scannedCandidates: baseCandidates.length,
+        revalidatedCandidates: checked.length,
+        eligibleCandidates: allEligible.length,
+        preferredHorizonEligibleCandidates: eligible.length,
+        rejectedCandidates: checked.filter((item) => item.status !== "ELIGIBLE").length,
+        dailyBlocked,
+      },
+      selected: best ? liveBatchCandidateSummary(best) : null,
+      topCandidates: eligible.slice(0, 8).map(liveBatchCandidateSummary),
+      topRejected: checked.filter((item) => item.status !== "ELIGIBLE").slice(0, 8).map(liveBatchCandidateSummary),
+    },
     topRejected: checked
       .filter((item) => item.status !== "ELIGIBLE")
       .slice(0, 8)
@@ -862,6 +923,13 @@ async function main() {
         ...decision,
         action: "SUBMITTED",
         reason: "live order accepted by Polymarket",
+        batchLog: {
+          ...decision.batchLog,
+          action: "SUBMITTED",
+          reason: "live order accepted by Polymarket",
+          explanation: "Live batch revalidated candidates and Polymarket accepted the selected order.",
+          selected: liveBatchCandidateSummary(candidate),
+        },
         monitoring: {
           ...monitoring,
           lastSubmittedAt: new Date().toISOString(),
@@ -886,6 +954,13 @@ async function main() {
         ...decision,
         action: "REJECTED",
         reason: stopReason,
+        batchLog: {
+          ...decision.batchLog,
+          action: "REJECTED",
+          reason: stopReason,
+          explanation: `Live order was not opened because submission stopped: ${stopReason}.`,
+          selected: liveBatchCandidateSummary(candidate),
+        },
         selected: candidate,
         response,
         attempts,
@@ -898,6 +973,12 @@ async function main() {
     ...decision,
     action: "REJECTED",
     reason: "all revalidated candidates were rejected by order submission",
+    batchLog: {
+      ...decision.batchLog,
+      action: "REJECTED",
+      reason: "all revalidated candidates were rejected by order submission",
+      explanation: "Live order was not opened because every revalidated candidate failed during order submission.",
+    },
     response: attempts.at(-1)?.response || null,
     attempts,
   });

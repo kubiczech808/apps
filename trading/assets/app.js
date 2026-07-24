@@ -2351,19 +2351,95 @@ function runEventResultClass(event) {
   return runEventResultLabel(event) === "ERROR" ? "negative" : "positive";
 }
 
+function tradeBatchDetail(batch) {
+  if (!batch) return "No trade batch detail available.";
+  const settings = batch.settings || {};
+  const capital = batch.capital || {};
+  const counts = batch.counts || {};
+  const selected = batch.selected;
+  const candidates = Array.isArray(batch.topCandidates) ? batch.topCandidates : [];
+  const blocked = Array.isArray(batch.riskBlocked) ? batch.riskBlocked : [];
+  const candidateLines = candidates.length
+    ? candidates.map((item, index) => [
+        `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
+        `   AI ${probability(Number(item.aiProbability))} / entry ${probability(Number(item.marketPrice))} / EV p.a. ${signedPercent(Number(item.annualizedReturn))} / EV ${signedMoney(Number(item.expectedValueUsdc), 4)}`,
+        item.riskBlockedReason ? `   Risk blocked: ${item.riskBlockedReason}` : "",
+        Array.isArray(item.rejectReasons) && item.rejectReasons.length ? `   Notes: ${item.rejectReasons.join("; ")}` : "",
+        item.url ? `   Polymarket: ${item.url}` : "",
+      ].filter(Boolean).join("\n")).join("\n\n")
+    : "No ranked candidates in this batch.";
+  const blockedLines = blocked.length
+    ? blocked.map((item) => `- ${item.outcome || "-"} / ${item.question || "-"}: ${item.riskBlockedReason || "risk overlap"}`).join("\n")
+    : "-";
+
+  return [
+    `${batch.strategyLabel || batch.strategyId || "Portfolio"} trade batch`,
+    "",
+    `Run time: ${batch.runAt ? formatDate(batch.runAt) : "-"}`,
+    `Action: ${batch.action || "-"}`,
+    `Reason: ${batch.reason || "-"}`,
+    `Explanation: ${batch.explanation || "-"}`,
+    "",
+    `Rules:`,
+    `AI threshold: ${probability(Number(settings.minProbability))}`,
+    `Max resolution days: ${settings.maxResolutionDays == null ? "-" : settings.maxResolutionDays}`,
+    `Min liquidity: ${settings.minLiquidityUsdc == null ? "-" : money(Number(settings.minLiquidityUsdc))}`,
+    `Selection order: ${settings.selectionOrder || "-"}`,
+    `Max stake: ${money(Number(settings.maxStakeUsdc || 0))}`,
+    "",
+    `Capital: ${money(Number(capital.availableUsdc || 0))} available / ${money(Number(capital.requiredStakeUsdc || 0))} required`,
+    `Insufficient capital: ${capital.insufficientCapital ? "yes" : "no"}`,
+    "",
+    `Counts: ${Number(counts.rankedEligible || 0)} ranked eligible / ${Number(counts.skippedForRisk || 0)} skipped for risk / ${Number(counts.openTrades || 0)} open trades`,
+    "",
+    selected ? `Selected: ${selected.outcome || "-"} - ${selected.question || "-"}` : "Selected: none",
+    "",
+    `Risk-blocked candidates:`,
+    blockedLines,
+    "",
+    `Top candidates checked:`,
+    candidateLines,
+  ].join("\n");
+}
+
 function renderRunLog() {
   const runs = Array.isArray(state.botState?.evaluationRunLog) ? state.botState.evaluationRunLog : [];
+  const liveBatch = state.liveExecutionState?.batchLog || null;
   if (els.runLogSummary) {
-    els.runLogSummary.textContent = `${runs.length} runs`;
+    els.runLogSummary.textContent = `${runs.length} runs${liveBatch ? " + live batch" : ""}`;
   }
   if (!els.runLog) return;
-  if (!runs.length) {
+  if (!runs.length && !liveBatch) {
     els.runLog.innerHTML = '<div class="empty">Evaluation run log is not available yet. It will appear after the next evaluation run.</div>';
     return;
   }
 
-  els.runLog.innerHTML = runs.slice(0, 30).map((run, runIndex) => {
+  const liveBatchHtml = liveBatch ? `
+    <section class="run-card">
+      <div class="run-card-head">
+        <div>
+          <strong>Live execution batch</strong>
+          <span>${escapeHtml(liveBatch.runAt ? formatDate(liveBatch.runAt) : "-")}</span>
+        </div>
+        <div class="run-counts">
+          <span class="pill">${Number(liveBatch.counts?.eligibleCandidates || 0)} eligible</span>
+          <span class="pill muted">${Number(liveBatch.counts?.rejectedCandidates || 0)} rejected by revalidation</span>
+        </div>
+      </div>
+      <div class="trade-batches">
+        <button class="trade-batch" type="button" data-live-batch>
+          <span class="${liveBatch.action === "SKIP" || liveBatch.action === "REJECTED" ? "negative" : "positive"}">${escapeHtml(liveBatch.action || "-")}</span>
+          <strong>${escapeHtml(liveBatch.strategyLabel || "Live")}</strong>
+          <span>${escapeHtml(liveBatch.reason || "-")}</span>
+          <em>${Number(liveBatch.counts?.revalidatedCandidates || 0)} revalidated / ${Number(liveBatch.counts?.preferredHorizonEligibleCandidates || 0)} preferred</em>
+        </button>
+      </div>
+    </section>
+  ` : "";
+
+  const paperRunsHtml = runs.slice(0, 30).map((run, runIndex) => {
     const events = Array.isArray(run.events) ? run.events : [];
+    const decisions = Array.isArray(run.decisions) ? run.decisions : [];
     const status = run.statusCounts || {};
     const errorCount = Number(run.errorCount || status.ERROR || 0);
     const evaluatedCount = Number(run.evaluatedCount || events.length || 0);
@@ -2382,6 +2458,22 @@ function renderRunLog() {
             ${errorCount ? `<span class="pill error">${errorCount} error</span>` : ""}
           </div>
         </div>
+        ${decisions.length ? `
+          <div class="trade-batches">
+            ${decisions.map((decision, decisionIndex) => {
+              const batch = decision.batchLog || {};
+              const counts = batch.counts || {};
+              return `
+                <button class="trade-batch" type="button" data-run-batch="${runIndex}:${decisionIndex}">
+                  <span class="${decision.action === "SKIP" || decision.action === "REJECTED" ? "negative" : "positive"}">${escapeHtml(decision.action || "-")}</span>
+                  <strong>${escapeHtml(batch.strategyLabel || decision.strategyId || "-")}</strong>
+                  <span>${escapeHtml(decision.reason || "-")}</span>
+                  <em>${Number(counts.rankedEligible || 0)} candidates / ${Number(counts.skippedForRisk || 0)} risk skipped / ${decision.insufficientCapital ? "capital blocked" : "capital ok"}</em>
+                </button>
+              `;
+            }).join("")}
+          </div>
+        ` : ""}
         <div class="run-events">
           ${events.length ? events.slice(0, 80).map((event, eventIndex) => `
             <button class="run-event" type="button" data-run-event="${runIndex}:${eventIndex}">
@@ -2395,6 +2487,7 @@ function renderRunLog() {
       </section>
     `;
   }).join("");
+  els.runLog.innerHTML = `${liveBatchHtml}${paperRunsHtml}`;
 }
 
 function calculationSourceLabel(source) {
@@ -2673,6 +2766,23 @@ document.addEventListener("click", (event) => {
     const run = (Array.isArray(state.botState?.evaluationRunLog) ? state.botState.evaluationRunLog : [])[Number(runIndexRaw)];
     const runEvent = Array.isArray(run?.events) ? run.events[Number(eventIndexRaw)] : null;
     openAnalysisModal(runEventDetail(runEvent || {}), runEventButton);
+    return;
+  }
+
+  const runBatchButton = event.target.closest("[data-run-batch]");
+  if (runBatchButton) {
+    event.preventDefault();
+    const [runIndexRaw, decisionIndexRaw] = String(runBatchButton.dataset.runBatch || "").split(":");
+    const run = (Array.isArray(state.botState?.evaluationRunLog) ? state.botState.evaluationRunLog : [])[Number(runIndexRaw)];
+    const decision = Array.isArray(run?.decisions) ? run.decisions[Number(decisionIndexRaw)] : null;
+    openAnalysisModal(tradeBatchDetail(decision?.batchLog || decision || {}), runBatchButton);
+    return;
+  }
+
+  const liveBatchButton = event.target.closest("[data-live-batch]");
+  if (liveBatchButton) {
+    event.preventDefault();
+    openAnalysisModal(tradeBatchDetail(state.liveExecutionState?.batchLog || state.liveExecutionState || {}), liveBatchButton);
     return;
   }
 

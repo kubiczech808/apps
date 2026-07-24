@@ -1827,6 +1827,72 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
   };
 }
 
+function tradeBatchCandidateSummary(item) {
+  if (!item) return null;
+  return {
+    id: item.id || null,
+    question: item.question || "",
+    outcome: item.outcome || "",
+    tokenId: item.tokenId || null,
+    evaluatedAt: item.evaluatedAt || null,
+    status: item.status || null,
+    selectionStatus: item.selectionStatus || null,
+    aiProbability: Number.isFinite(Number(item.aiProbability)) ? Number(Number(item.aiProbability).toFixed(4)) : null,
+    marketPrice: Number.isFinite(Number(item.marketPrice)) ? Number(Number(item.marketPrice).toFixed(4)) : null,
+    annualizedReturn: Number.isFinite(Number(item.annualizedReturn)) ? Number(Number(item.annualizedReturn).toFixed(4)) : null,
+    expectedValueUsdc: Number.isFinite(Number(item.expectedValueUsdc)) ? Number(Number(item.expectedValueUsdc).toFixed(4)) : null,
+    daysToResolution: Number.isFinite(Number(item.daysToResolution)) ? Number(Number(item.daysToResolution).toFixed(2)) : null,
+    liquidity: Number.isFinite(Number(item.liquidity)) ? Number(Number(item.liquidity).toFixed(2)) : null,
+    riskGroupLabels: Array.isArray(item.riskGroupLabels) ? item.riskGroupLabels.slice(0, 5) : [],
+    rejectReasons: Array.isArray(item.rejectReasons) ? item.rejectReasons.slice(0, 6) : [],
+    riskBlockedByTradeId: item.riskBlockedByTradeId || null,
+    riskBlockedReason: item.riskBlockedReason || null,
+    url: `https://polymarket.com/event/${item.eventSlug || item.slug || ""}`,
+  };
+}
+
+function buildTradeBatchLog({ portfolioState, strategy, eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, dailyBlocked = false, rotationReview = null }) {
+  const evaluated = Array.isArray(eligible) ? eligible : [];
+  const ranked = Array.isArray(rankedEligible) ? rankedEligible : evaluated;
+  const blocked = ranked.filter((item) => item.selectionStatus === "RISK_BLOCKED" || item.riskBlockedReason);
+  return {
+    id: `trade-batch-${strategy.id}-${nowIso()}`,
+    runAt: nowIso(),
+    strategyId: strategy.id,
+    strategyLabel: strategy.label,
+    selectionMetric: strategy.selectionMetric,
+    action,
+    reason,
+    explanation: selected
+      ? `Opened ${selected.outcome || "selected outcome"} because it was the first non-duplicate, non-correlated candidate after ${strategy.label} rules.`
+      : `No ${strategy.label} trade was opened: ${reason}.`,
+    settings: {
+      minProbability: strategy.minProbability,
+      maxResolutionDays: strategy.maxResolutionDays ?? null,
+      minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
+      selectionOrder: strategy.selectionOrder,
+      requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
+      maxStakeUsdc: Number(stake.toFixed(2)),
+    },
+    capital: {
+      availableUsdc: Number(available.toFixed(4)),
+      requiredStakeUsdc: Number(stake.toFixed(4)),
+      insufficientCapital: Boolean(insufficientCapital),
+    },
+    counts: {
+      rankedEligible: ranked.length,
+      skippedForRisk,
+      riskBlocked: blocked.length,
+      openTrades: openTrades(portfolioState.trades || []).length,
+      dailyBlocked: Boolean(dailyBlocked),
+    },
+    selected: tradeBatchCandidateSummary(selected),
+    topCandidates: ranked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
+    riskBlocked: blocked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
+    rotationReview: rotationReview || null,
+  };
+}
+
 function findFirstOpenCandidate(portfolioState, eligible, excludedTradeId = null) {
   let skippedForRisk = 0;
   const activeTrades = excludedTradeId
@@ -1939,7 +2005,25 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
 
   if (portfolioState.lastTradeDate === today) {
-    return { action: "SKIP", reason: "daily paper trade already opened", available, requiredStake: stake, strategyId: strategy.id };
+    const reason = "daily paper trade already opened";
+    return {
+      action: "SKIP",
+      reason,
+      available,
+      requiredStake: stake,
+      strategyId: strategy.id,
+      batchLog: buildTradeBatchLog({
+        portfolioState,
+        strategy,
+        eligible,
+        rankedEligible: eligible,
+        action: "SKIP",
+        reason,
+        available,
+        stake,
+        dailyBlocked: true,
+      }),
+    };
   }
 
   const rotation = rotationReview(portfolioState, eligible, strategy, available, stake);
@@ -1961,17 +2045,41 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
       skippedForRisk: 0,
       rotationReview: closedTrade.rotationReview,
       strategyId: strategy.id,
+      batchLog: buildTradeBatchLog({
+        portfolioState,
+        strategy,
+        eligible,
+        rankedEligible: eligible,
+        action: "ROTATED_OPENED",
+        reason: `closed weaker open paper trade and opened better ${strategy.selectionMetric} candidate`,
+        available: rotation.capitalAfterExit,
+        stake,
+        selected: rotation.candidate,
+        rotationReview: closedTrade.rotationReview,
+      }),
     };
   }
 
   if (available < stake) {
+    const reason = `not enough free paper capital for next ${strategy.label} trade: ${available.toFixed(2)} USDC available, ${stake.toFixed(2)} USDC required by diversification settings`;
     return {
       action: "SKIP",
-      reason: `not enough free paper capital for next ${strategy.label} trade: ${available.toFixed(2)} USDC available, ${stake.toFixed(2)} USDC required by diversification settings`,
+      reason,
       available,
       requiredStake: stake,
       insufficientCapital: true,
       strategyId: strategy.id,
+      batchLog: buildTradeBatchLog({
+        portfolioState,
+        strategy,
+        eligible,
+        rankedEligible: eligible,
+        action: "SKIP",
+        reason,
+        available,
+        stake,
+        insufficientCapital: true,
+      }),
     };
   }
 
@@ -1980,21 +2088,52 @@ function maybeOpenDailyTrade(portfolioState, eligible, strategy = PAPER_STRATEGI
     const reason = skippedForRisk > 0
       ? "no eligible non-correlated candidate"
       : "no eligible non-duplicate candidate";
-    return { action: "SKIP", reason, available, requiredStake: stake, skippedForRisk, strategyId: strategy.id };
+    return {
+      action: "SKIP",
+      reason,
+      available,
+      requiredStake: stake,
+      skippedForRisk,
+      strategyId: strategy.id,
+      batchLog: buildTradeBatchLog({
+        portfolioState,
+        strategy,
+        eligible,
+        rankedEligible: eligible,
+        action: "SKIP",
+        reason,
+        available,
+        stake,
+        skippedForRisk,
+      }),
+    };
   }
 
   const trade = paperTradeFromCandidate(best, strategy, today, stake);
 
   portfolioState.trades.unshift(trade);
   portfolioState.lastTradeDate = today;
+  const reason = `best ${strategy.selectionMetric} non-correlated candidate in ${horizonBucketLabel(horizonBucket(best))} horizon bucket`;
   return {
     action: "OPENED",
-    reason: `best ${strategy.selectionMetric} non-correlated candidate in ${horizonBucketLabel(horizonBucket(best))} horizon bucket`,
+    reason,
     trade,
     available: available - stake,
     requiredStake: stake,
     skippedForRisk,
     strategyId: strategy.id,
+    batchLog: buildTradeBatchLog({
+      portfolioState,
+      strategy,
+      eligible,
+      rankedEligible: eligible,
+      action: "OPENED",
+      reason,
+      available,
+      stake,
+      selected: best,
+      skippedForRisk,
+    }),
   };
 }
 
@@ -2578,6 +2717,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
     tradeId: decision.trade?.id || null,
     closedTradeId: decision.closedTrade?.id || null,
     rotationReview: decision.rotationReview || null,
+    batchLog: decision.batchLog || null,
     availableCapitalUsdc: decision.available == null ? null : Number(Number(decision.available).toFixed(4)),
     requiredStakeUsdc: decision.requiredStake == null ? null : Number(Number(decision.requiredStake).toFixed(4)),
     insufficientCapital: Boolean(decision.insufficientCapital),
@@ -2602,6 +2742,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
       tradeId: decision.trade?.id || null,
       closedTradeId: decision.closedTrade?.id || null,
       rotationReview: decision.rotationReview || null,
+      batchLog: decision.batchLog || null,
       availableCapitalUsdc: decision.available == null ? null : Number(Number(decision.available).toFixed(4)),
       requiredStakeUsdc: decision.requiredStake == null ? null : Number(Number(decision.requiredStake).toFixed(4)),
       insufficientCapital: Boolean(decision.insufficientCapital),
@@ -2644,6 +2785,7 @@ function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
         tradeId: decision.trade?.id || null,
         closedTradeId: decision.closedTrade?.id || null,
         rotationReview: decision.rotationReview || null,
+        batchLog: decision.batchLog || null,
         availableCapitalUsdc: decision.available == null ? null : Number(Number(decision.available).toFixed(4)),
         requiredStakeUsdc: decision.requiredStake == null ? null : Number(Number(decision.requiredStake).toFixed(4)),
         insufficientCapital: Boolean(decision.insufficientCapital),
