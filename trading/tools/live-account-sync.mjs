@@ -243,6 +243,8 @@ function normalizePosition(position, generatedAt) {
   const redeemable = Boolean(position.redeemable ?? position.claimable ?? position.canRedeem ?? position.conditionRedeemable ?? false);
   const resolved = Boolean(position.resolved ?? position.isResolved ?? position.closed ?? false);
 
+  const openedAt = isoTime(position.createdAt ?? position.timestamp);
+
   return {
     id: String(position.asset ?? position.tokenId ?? position.conditionId ?? `${position.slug || position.title || "position"}-${position.outcome || ""}`),
     mode: "LIVE",
@@ -254,8 +256,9 @@ function normalizePosition(position, generatedAt) {
     url: positionUrl(position),
     tokenId: position.asset || position.tokenId || null,
     conditionId: position.conditionId || null,
-    date: isoTime(position.createdAt ?? position.timestamp) || generatedAt,
-    openedAt: isoTime(position.createdAt ?? position.timestamp) || generatedAt,
+    date: openedAt,
+    openedAt,
+    openedAtSource: openedAt ? "positions-api" : "unknown",
     endDate,
     entryPrice: avgPrice,
     currentPrice,
@@ -557,6 +560,60 @@ function liveItemKeys(item) {
 
 function anySharedKey(item, knownKeys) {
   return [...liveItemKeys(item)].some((key) => knownKeys.has(key));
+}
+
+function enrichOpenTimesFromHistory(positions, historyItems, previousState = null) {
+  const historyByKey = new Map();
+  const previousByKey = new Map();
+
+  function addToIndex(index, item, value) {
+    const timestamp = isoTime(value);
+    if (!timestamp) return;
+    for (const key of liveItemKeys(item)) {
+      const existing = index.get(key);
+      if (!existing || Date.parse(timestamp) < Date.parse(existing)) index.set(key, timestamp);
+    }
+  }
+
+  for (const item of historyItems) {
+    const side = String(item.side || item.type || "").toUpperCase();
+    if (side && !side.includes("BUY") && !side.includes("TRADE")) continue;
+    addToIndex(historyByKey, item, item.timestamp || item.createdAt || item.openedAt || item.date);
+  }
+
+  const previousRows = [
+    ...(Array.isArray(previousState?.positions) ? previousState.positions : []),
+    ...(Array.isArray(previousState?.openOrders) ? previousState.openOrders : []),
+  ];
+  for (const item of previousRows) {
+    const source = String(item.openedAtSource || "").toLowerCase();
+    if (source === "sync-generated-fallback") continue;
+    addToIndex(previousByKey, item, item.openedAt || item.date || item.createdAt);
+  }
+
+  return positions.map((position) => {
+    if (isoTime(position.openedAt)) return position;
+    const keys = [...liveItemKeys(position)];
+    const historyTime = keys.map((key) => historyByKey.get(key)).filter(Boolean).sort()[0] || null;
+    if (historyTime) {
+      return {
+        ...position,
+        date: historyTime,
+        openedAt: historyTime,
+        openedAtSource: "trade-history",
+      };
+    }
+    const previousTime = keys.map((key) => previousByKey.get(key)).filter(Boolean).sort()[0] || null;
+    if (previousTime) {
+      return {
+        ...position,
+        date: previousTime,
+        openedAt: previousTime,
+        openedAtSource: "previous-live-state",
+      };
+    }
+    return position;
+  });
 }
 
 function redeemAlertId(prefix, item) {
@@ -1156,7 +1213,7 @@ async function main() {
     sync.message = `Live snapshot loaded with warnings: ${sync.warnings.join(" | ")}`;
   }
 
-  const positions = Array.isArray(rawPositions)
+  const rawPositionRows = Array.isArray(rawPositions)
     ? rawPositions.map((position) => normalizePosition(position, generatedAt))
     : [];
   const activity = Array.isArray(rawActivity)
@@ -1165,6 +1222,7 @@ async function main() {
   const tradeHistory = Array.isArray(rawTrades)
     ? rawTrades.map(normalizeTradeHistoryItem).filter((item) => item.timestamp || item.question !== "-")
     : [];
+  const positions = enrichOpenTimesFromHistory(rawPositionRows, [...tradeHistory, ...activity], previousLiveState);
   const historyClosedTrades = closedTradesFromHistory(tradeHistory, activity, generatedAt);
   const knownClosedKeys = new Set();
   for (const item of historyClosedTrades) {
