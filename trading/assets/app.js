@@ -24,7 +24,7 @@ const state = {
       direction: "desc",
     },
   },
-  evaluationStatus: "ELIGIBLE",
+  evaluationStatus: "EVALUATED",
   eligibilityThreshold: null,
   eligibilityThresholdKey: "",
   riskAllocation: null,
@@ -248,7 +248,7 @@ function currentRouteState() {
     return {
       tab: "settings-runs",
       settingsSection: "evaluation-log",
-      evaluationStatus: "ELIGIBLE",
+      evaluationStatus: "EVALUATED",
     };
   }
   if (path.endsWith("/trading/settings/") || path.endsWith("/settings/")) {
@@ -280,7 +280,7 @@ function setSettingsSection(section) {
 }
 
 function setEvaluationStatus(status) {
-  state.evaluationStatus = status || "ELIGIBLE";
+  state.evaluationStatus = status || "EVALUATED";
   els.evaluationStatusButtons.forEach((item) => {
     item.classList.toggle("active", item.dataset.evaluationStatus === state.evaluationStatus);
   });
@@ -1113,7 +1113,7 @@ function analysisBadge(item) {
   const details = structuredAnalysisDetails(item, {
     title: `${item.outcome || "-"} - ${item.question || "-"}`,
     filterNote: [
-      `Portfolio status: ${evaluationStatusLabel(item)}`,
+      `Evaluation status: ${evaluationStatusLabel(item)}`,
       `Stored pipeline status: ${item.status || "-"}`,
       `Selected AI probability threshold: ${probability(currentEligibilityThreshold())}`,
       reasons,
@@ -1131,22 +1131,19 @@ function evaluationStatusLabel(item) {
   const status = portfolioEvaluationStatus(item);
   if (status === "ERROR") return "ERROR";
   if (status === "RESOLVED") return "RESOLVED";
-  if (status === "ELIGIBLE") return "ELIGIBLE";
-  if (item.selectionStatus === "RISK_BLOCKED") return "NOT ELIGIBLE / RISK BLOCKED";
-  return "NOT ELIGIBLE";
+  return "EVALUATED";
 }
 
 function evaluationStatusClass(item) {
   const status = portfolioEvaluationStatus(item);
   if (status === "ERROR") return "negative";
   if (status === "RESOLVED") return "muted";
-  if (status === "ELIGIBLE") return "positive";
+  if (status === "EVALUATED") return "positive";
   return "";
 }
 
 function evaluationFilterLabel(value) {
-  if (value === "ELIGIBLE") return "eligible";
-  if (value === "REJECTED") return "not eligible";
+  if (value === "EVALUATED") return "evaluated";
   if (value === "RESOLVED") return "resolved";
   if (value === "ERROR") return "error";
   return "evaluated";
@@ -1592,38 +1589,30 @@ function adjustedEvaluationStatus(item) {
   const original = String(item.status || "-").toUpperCase();
   if (original === "ERROR") return "ERROR";
   if (original === "RESOLVED" || evaluationEnded(item)) return "RESOLVED";
-  const aiProbability = Number(item.aiProbability);
-  if (!Number.isFinite(aiProbability)) return original;
-  const threshold = currentEligibilityThreshold();
-  if (aiProbability < threshold) return "REJECTED";
-  if (original === "ELIGIBLE") return "ELIGIBLE";
-  if (original === "REJECTED" && nonProbabilityRejectReasons(item).length === 0) return "ELIGIBLE";
-  return original;
+  return "EVALUATED";
 }
 
 function portfolioEvaluationStatus(item) {
   const status = adjustedEvaluationStatus(item);
   if (status === "ERROR") return "ERROR";
   if (status === "RESOLVED") return "RESOLVED";
-  if (status === "ELIGIBLE" && item.selectionStatus !== "RISK_BLOCKED") return "ELIGIBLE";
-  return "REJECTED";
+  return "EVALUATED";
 }
 
 function evaluationReasons(item, riskReason = "") {
   const aiProbability = Number(item.aiProbability);
   const threshold = currentEligibilityThreshold();
-  const adjustedStatus = adjustedEvaluationStatus(item);
   const reasons = [];
   if (riskReason) reasons.push(riskReason);
   if (portfolioEvaluationStatus(item) === "RESOLVED") {
     reasons.push("event end date has passed; excluded from new trade selection and waiting for/following resolution sync");
   }
   if (Number.isFinite(aiProbability) && aiProbability < threshold) {
-    reasons.push(`AI probability ${probability(aiProbability)} below selected ${probability(threshold)}`);
+    reasons.push(`portfolio filter: AI probability ${probability(aiProbability)} below selected ${probability(threshold)}`);
   }
   reasons.push(...nonProbabilityRejectReasons(item));
-  if (adjustedStatus === "ELIGIBLE" && String(item.status || "").toUpperCase() === "REJECTED") {
-    reasons.push("passes selected probability threshold after current portfolio settings");
+  if (Number.isFinite(aiProbability) && aiProbability >= threshold) {
+    reasons.push(`portfolio filter: AI probability passes selected ${probability(threshold)} threshold`);
   }
   return reasons.filter(Boolean);
 }
@@ -2372,13 +2361,12 @@ function updateHistoryCell(item) {
 
 function renderBotEvaluations() {
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
-  const eligibleCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "ELIGIBLE").length;
+  const evaluatedCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "EVALUATED").length;
   const resolvedCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "RESOLVED").length;
   const errorCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "ERROR").length;
-  const notEligibleCount = Math.max(0, evaluations.length - eligibleCount - resolvedCount - errorCount);
 
   if (els.evaluationSummary) {
-    els.evaluationSummary.textContent = `${eligibleCount} eligible / ${notEligibleCount} not eligible / ${resolvedCount} resolved / ${errorCount} errors / ${evaluations.length} evaluated`;
+    els.evaluationSummary.textContent = `${evaluatedCount} active evaluated / ${resolvedCount} resolved / ${errorCount} errors / ${evaluations.length} total`;
   }
 
   if (!evaluations.length) {
