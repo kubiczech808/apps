@@ -4355,6 +4355,56 @@ function startAiResearchRun(PDO $pdo, array $seed, array $plan, string $message)
     $now = date('c');
     $ownerId = aiResearchOwnerUserId($pdo);
     $scrapingKeyword = aiResearchPrimaryKeyword($plan);
+    $runId = aiResearchReusableRunId($pdo, $seed);
+    if ($runId > 0) {
+        $stmt = $pdo->prepare('
+            UPDATE ai_research_runs
+            SET owner_user_id=?,
+                seed_recipient_id=?,
+                seed_email=?,
+                seed_business=?,
+                seed_website=?,
+                seed_address=?,
+                seed_source_label=?,
+                seed_source_url=?,
+                status="running",
+                audience_label=?,
+                rationale=?,
+                email_angle=?,
+                scraping_keyword=?,
+                filters_json=?,
+                plan_json=?,
+                email_subject="",
+                email_body_html="",
+                found_count=0,
+                accepted_count=0,
+                message=?,
+                updated_at=?,
+                seed_outreach_status="not_ready"
+            WHERE id=? AND status IN ("deferred","failed")
+        ');
+        $stmt->execute([
+            $ownerId,
+            (int)($seed['id'] ?? 0),
+            (string)($seed['email'] ?? ''),
+            truncatePlainText((string)($seed['subject_name'] ?: ($seed['email'] ?? '')), 255),
+            truncatePlainText(normalizeWebsite((string)($seed['website'] ?? '')), 500),
+            truncatePlainText((string)($seed['address'] ?? ''), 500),
+            truncatePlainText((string)($seed['source_label'] ?? ''), 500),
+            truncatePlainText((string)($seed['source_url'] ?? ''), 500),
+            truncatePlainText((string)($plan['audience_label'] ?? ''), 500),
+            (string)($plan['rationale'] ?? ''),
+            (string)($plan['email_angle'] ?? ''),
+            truncatePlainText($scrapingKeyword, 255),
+            json_encode((array)($plan['filters'] ?? []), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]',
+            json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
+            truncatePlainText($message, 500),
+            $now,
+            $runId,
+        ]);
+        $pdo->prepare('DELETE FROM ai_research_contacts WHERE run_id=?')->execute([$runId]);
+        return $runId;
+    }
     $stmt = $pdo->prepare('
         INSERT INTO ai_research_runs (owner_user_id, seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, scraping_keyword, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at, seed_outreach_status, seed_outreach_token)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, "running", ?, ?, ?, ?, ?, ?, "", "", 0, 0, ?, ?, ?, "not_ready", ?)
@@ -4561,6 +4611,49 @@ function markStaleAiResearchRuns(PDO $pdo): void
     $stmt->execute([date('c'), date('c', time() - 30 * 60)]);
 }
 
+function aiResearchSeedLookupConditions(array $seed): array
+{
+    $conditions = [];
+    $values = [];
+    $recipientId = (int)($seed['id'] ?? 0);
+    if ($recipientId > 0) {
+        $conditions[] = 'seed_recipient_id=?';
+        $values[] = $recipientId;
+    }
+    $sourceUrl = truncatePlainText(trim((string)($seed['source_url'] ?? '')), 500);
+    if ($sourceUrl !== '') {
+        $conditions[] = 'seed_source_url=?';
+        $values[] = $sourceUrl;
+    }
+    $websiteKey = aiResearchWebsiteKey((string)($seed['website'] ?? ''));
+    if ($websiteKey !== '') {
+        $conditions[] = '(seed_website LIKE ? OR seed_website LIKE ? OR seed_website LIKE ? OR seed_website LIKE ?)';
+        $values[] = 'http://' . $websiteKey . '%';
+        $values[] = 'https://' . $websiteKey . '%';
+        $values[] = 'http://www.' . $websiteKey . '%';
+        $values[] = 'https://www.' . $websiteKey . '%';
+    }
+    return [$conditions, $values];
+}
+
+function aiResearchReusableRunId(PDO $pdo, array $seed): int
+{
+    [$conditions, $values] = aiResearchSeedLookupConditions($seed);
+    if (!$conditions) {
+        return 0;
+    }
+    $stmt = $pdo->prepare('
+        SELECT id
+        FROM ai_research_runs
+        WHERE status IN ("deferred","failed")
+          AND (' . implode(' OR ', $conditions) . ')
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+    ');
+    $stmt->execute($values);
+    return (int)$stmt->fetchColumn();
+}
+
 function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, array $evaluated, array $accepted): int
 {
     $now = date('c');
@@ -4573,11 +4666,6 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
     $ownerId = aiResearchOwnerUserId($pdo);
     $scrapingKeyword = aiResearchPrimaryKeyword($plan);
     $seedOutreachStatus = $accepted ? 'ready' : 'not_ready';
-    $seedOutreachToken = aiResearchSeedOutreachToken($pdo);
-    $stmt = $pdo->prepare('
-        INSERT INTO ai_research_runs (owner_user_id, seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, scraping_keyword, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at, seed_outreach_status, seed_outreach_token)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ');
     $status = !empty($plan['seed_unsuitable']) ? 'unsuitable' : ($accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts'));
     $message = !empty($plan['seed_unsuitable'])
         ? 'Seed subjekt nebyl vyhodnocen jako pouzitelny pro B2B research: chybi citelny webovy kontext podnikani.'
@@ -4585,7 +4673,7 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
     if ((int)($plan['research_attempts'] ?? 0) > 1) {
         $message .= ' Probehlo ' . (int)$plan['research_attempts'] . ' pokusu s alternativnimi keywordy.';
     }
-    $stmt->execute([
+    $commonValues = [
         $ownerId,
         (int)$seed['id'],
         (string)$seed['email'],
@@ -4608,10 +4696,28 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
         $message,
         $now,
         $now,
-        $seedOutreachStatus,
-        $seedOutreachToken,
-    ]);
-    $runId = (int)$pdo->lastInsertId();
+    ];
+    $runId = aiResearchReusableRunId($pdo, $seed);
+    if ($runId > 0) {
+        $updateValues = array_merge(array_slice($commonValues, 0, 20), [$now]);
+        $stmt = $pdo->prepare('
+            UPDATE ai_research_runs
+            SET owner_user_id=?, seed_recipient_id=?, seed_email=?, seed_business=?, seed_website=?, seed_address=?, seed_source_label=?, seed_source_url=?,
+                status=?, audience_label=?, rationale=?, email_angle=?, scraping_keyword=?, filters_json=?, plan_json=?, email_subject=?, email_body_html=?,
+                found_count=?, accepted_count=?, message=?, created_at=created_at, updated_at=?, seed_outreach_status=?
+            WHERE id=? AND status IN ("deferred","failed")
+        ');
+        $stmt->execute(array_merge($updateValues, [$seedOutreachStatus, $runId]));
+        $pdo->prepare('DELETE FROM ai_research_contacts WHERE run_id=?')->execute([$runId]);
+    } else {
+        $seedOutreachToken = aiResearchSeedOutreachToken($pdo);
+        $stmt = $pdo->prepare('
+            INSERT INTO ai_research_runs (owner_user_id, seed_recipient_id, seed_email, seed_business, seed_website, seed_address, seed_source_label, seed_source_url, status, audience_label, rationale, email_angle, scraping_keyword, filters_json, plan_json, email_subject, email_body_html, found_count, accepted_count, message, created_at, updated_at, seed_outreach_status, seed_outreach_token)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ');
+        $stmt->execute(array_merge($commonValues, [$seedOutreachStatus, $seedOutreachToken]));
+        $runId = (int)$pdo->lastInsertId();
+    }
     $item = $pdo->prepare('
         INSERT INTO ai_research_contacts (run_id, email, subject_name, website, address, phone, source_label, source_url, status, fit_reason, email_subject, email_body_html, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
