@@ -2482,6 +2482,8 @@ function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
       events: evaluations.map((item) => ({
         id: item.id,
         evaluatedAt: item.evaluatedAt,
+        evaluationResult: String(item.status || "").toUpperCase() === "ERROR" ? "ERROR" : "EVALUATED",
+        portfolioFilterStatus: item.status,
         status: item.status,
         question: item.question,
         outcome: item.outcome,

@@ -2293,15 +2293,16 @@ function renderBotEvaluations() {
 function runEventDetail(event) {
   const reasons = Array.isArray(event.rejectReasons) && event.rejectReasons.length
     ? event.rejectReasons.join("; ")
-    : "No filter reason recorded.";
+    : "No portfolio filter note recorded.";
   const risk = Array.isArray(event.riskGroupLabels) && event.riskGroupLabels.length
     ? event.riskGroupLabels.join(", ")
     : "-";
   return [
     `${event.outcome || "-"} - ${event.question || "-"}`,
     "",
-    `Portfolio status: ${String(event.status || "").toUpperCase() === "ELIGIBLE" ? "ELIGIBLE" : "NOT ELIGIBLE"}`,
-    `Stored pipeline status: ${event.status || "-"}`,
+    `Evaluation result: ${runEventResultLabel(event)}`,
+    `Portfolio filter status at run time: ${event.portfolioFilterStatus || event.status || "-"}`,
+    `Portfolio eligibility is applied separately by the active portfolio rules.`,
     `AI probability: ${probability(Number(event.aiProbability))}`,
     `Raw probability: ${probability(Number(event.rawProbability))}`,
     `Market entry: ${probability(Number(event.marketPrice))}`,
@@ -2320,10 +2321,22 @@ function runEventDetail(event) {
     "",
     `AI analysis: ${event.analysisSummary || "-"}`,
     "",
-    `Filter reasons: ${reasons}`,
+    `Portfolio filter notes: ${reasons}`,
     "",
     `Polymarket: ${event.url || polymarketUrl(event)}`,
   ].join("\n");
+}
+
+function runEventResultLabel(event) {
+  const result = String(event.evaluationResult || "").toUpperCase();
+  if (result === "ERROR") return "ERROR";
+  const status = String(event.status || "").toUpperCase();
+  if (status === "ERROR") return "ERROR";
+  return "EVALUATED";
+}
+
+function runEventResultClass(event) {
+  return runEventResultLabel(event) === "ERROR" ? "negative" : "positive";
 }
 
 function renderRunLog() {
@@ -2340,6 +2353,9 @@ function renderRunLog() {
   els.runLog.innerHTML = runs.slice(0, 30).map((run, runIndex) => {
     const events = Array.isArray(run.events) ? run.events : [];
     const status = run.statusCounts || {};
+    const errorCount = Number(run.errorCount || status.ERROR || 0);
+    const evaluatedCount = Number(run.evaluatedCount || events.length || 0);
+    const aiProbabilityCount = events.filter((event) => Number.isFinite(Number(event.aiProbability))).length;
     return `
       <section class="run-card">
         <div class="run-card-head">
@@ -2348,15 +2364,15 @@ function renderRunLog() {
             <span>${run.refreshOnly ? "refresh-only" : "full evaluation"} / ${Number(run.evaluatedCount || events.length)} evaluated</span>
           </div>
           <div class="run-counts">
-            <span class="pill">${Number(run.eligibleCount || status.ELIGIBLE || 0)} eligible</span>
-            <span class="pill muted">${Number(run.rejectedCount || status.REJECTED || 0)} not eligible</span>
-            ${Number(run.errorCount || status.ERROR || 0) ? `<span class="pill error">${Number(run.errorCount || status.ERROR || 0)} error</span>` : ""}
+            <span class="pill">${evaluatedCount} evaluated</span>
+            <span class="pill muted">${aiProbabilityCount} with AI prob.</span>
+            ${errorCount ? `<span class="pill error">${errorCount} error</span>` : ""}
           </div>
         </div>
         <div class="run-events">
           ${events.length ? events.slice(0, 80).map((event, eventIndex) => `
             <button class="run-event" type="button" data-run-event="${runIndex}:${eventIndex}">
-              <span class="${String(event.status || "").toUpperCase() === "ELIGIBLE" ? "positive" : ""}">${escapeHtml(String(event.status || "").toUpperCase() === "ELIGIBLE" ? "ELIGIBLE" : "NOT ELIGIBLE")}</span>
+              <span class="${runEventResultClass(event)}">${escapeHtml(runEventResultLabel(event))}</span>
               <strong>${escapeHtml(event.outcome || "-")}</strong>
               <span>${escapeHtml(event.question || "-")}</span>
               <em>${probability(Number(event.aiProbability))} AI / ${signedPercent(Number(event.annualizedReturn))} EV p.a.</em>
