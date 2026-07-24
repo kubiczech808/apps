@@ -10,17 +10,6 @@ final class Currency
     private const YAY_SWITCHER_COOKIE = 'yay_currency_do_change_switcher';
     private const BANK_TRANSFER_DISCOUNT_CZK = 10.0;
 
-    /**
-     * Approximate display/business rates used for converting the fixed CZK
-     * bank-transfer discount into the currency forced by the current language.
-     *
-     * Base: 1 foreign currency unit in CZK.
-     */
-    private const CZK_RATES = [
-        'EUR' => 24.25,
-        'PLN' => 5.58,
-    ];
-
     private const CHECKOUT_GATEWAY_IDS = [
         'bacs',
         'cod',
@@ -238,12 +227,13 @@ JS
             return;
         }
 
-        $discount = $this->converted_bank_transfer_discount($currency);
-        if ($discount <= 0) {
-            return;
-        }
-
-        $amount = -1 * $discount;
+        /*
+         * YayCurrency converts WooCommerce's base CZK cart amounts to the
+         * active display/order currency. Keep the fee itself in base CZK;
+         * otherwise the discount is converted twice (for example -0.41 EUR
+         * would become roughly -0.02 EUR).
+         */
+        $amount = -1 * self::BANK_TRANSFER_DISCOUNT_CZK;
         $found = false;
 
         if (method_exists($cart, 'fees_api') && $cart->fees_api()) {
@@ -427,16 +417,6 @@ JS
         }
 
         return '';
-    }
-
-    private function converted_bank_transfer_discount(string $currency): float
-    {
-        $rate = self::CZK_RATES[$currency] ?? 0.0;
-        if ($rate <= 0) {
-            return 0.0;
-        }
-
-        return round(self::BANK_TRANSFER_DISCOUNT_CZK / $rate, 2);
     }
 
     private function is_bank_transfer_discount_fee(object $fee): bool
