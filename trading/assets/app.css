@@ -529,7 +529,7 @@ button:disabled {
   margin-bottom: 14px;
 }
 
-.bot-summary div {
+.bot-summary > div {
   min-width: 0;
   padding: 14px;
   border: 1px solid var(--line);
@@ -537,9 +537,47 @@ button:disabled {
   background: var(--soft);
 }
 
-.bot-summary strong {
+.bot-summary > div > strong {
   display: block;
   margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.portfolio-rules-card {
+  grid-column: 1 / -1;
+}
+
+.portfolio-rules-card > strong {
+  margin-top: 0;
+  font-size: 18px;
+}
+
+.portfolio-rule-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.portfolio-rule-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.35fr) minmax(0, 1fr);
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.portfolio-rule-row span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.portfolio-rule-row em {
+  min-width: 0;
+  color: var(--ink);
+  font-style: normal;
+  font-weight: 750;
   overflow-wrap: anywhere;
 }
 
@@ -1185,6 +1223,11 @@ body.modal-open {
     grid-template-columns: 1fr;
   }
 
+  .portfolio-rule-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
   .calculation-filter-group {
     justify-content: flex-start;
   }
@@ -1200,7 +1243,7 @@ body.modal-open {
 
   .control-block,
   .metric-card,
-  .bot-summary div {
+  .bot-summary > div {
     padding: 10px;
   }
 

@@ -1630,51 +1630,52 @@ function paperPortfolioTrades(portfolioState) {
     }));
 }
 
-function portfolioRuleLine(portfolio) {
-  const parts = [];
-  const orderLabel = portfolio.selectionOrder === "highest_reward_risk_first"
-    ? "Highest R/R first"
-    : "Highest EV p.a. first";
-  const maxResolutionDays = Number(portfolio.maxResolutionDays);
-  const minLiquidityUsdc = Number(portfolio.minLiquidityUsdc);
-  parts.push(orderLabel);
-  if (Number.isFinite(maxResolutionDays)) parts.push(`<= ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`);
-  else parts.push("preferred shortest horizon bucket");
-  if (Number.isFinite(minLiquidityUsdc)) parts.push(`liquidity >= ${money(minLiquidityUsdc)}`);
-  if (portfolio.requireMostProbableOutcome) parts.push("most probable outcome per market");
-  return parts.join(" / ");
-}
-
-function portfolioRulesSummary(portfolio = {}) {
+function portfolioRuleRows(portfolio = {}) {
   const threshold = Number(portfolio.minProbability ?? currentEligibilityThreshold());
   const maxResolutionDays = Number(portfolio.maxResolutionDays);
   const minLiquidityUsdc = Number(portfolio.minLiquidityUsdc);
   const priority = portfolio.selectionOrder === "highest_reward_risk_first"
-    ? "prioritizes highest reward/risk, then shorter resolution and EV"
-    : "prioritizes highest EV p.a., then shorter resolution and EV";
+    ? "Highest reward/risk, then shorter resolution and EV"
+    : "Highest EV p.a., then shorter resolution and EV";
   const resolution = Number.isFinite(maxResolutionDays)
-    ? `max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days to resolution`
-    : "prefers the shortest available resolution bucket";
-  const extras = [
-    Number.isFinite(minLiquidityUsdc) ? `liquidity >= ${money(minLiquidityUsdc)}` : "",
-    portfolio.requireMostProbableOutcome ? "only the most probable outcome per market" : "",
-  ].filter(Boolean);
-  return [
-    `${percent(threshold)} AI threshold`,
-    resolution,
-    priority,
-    ...extras,
-  ].join("; ");
+    ? `Max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`
+    : "Shortest available horizon bucket";
+  const rows = [
+    ["AI probability threshold", percent(threshold)],
+    ["Resolution filter", resolution],
+    ["Trade priority", priority],
+  ];
+  if (Number.isFinite(minLiquidityUsdc)) rows.push(["Liquidity filter", `>= ${money(minLiquidityUsdc)}`]);
+  if (portfolio.requireMostProbableOutcome) rows.push(["Outcome filter", "Only the most probable outcome per market"]);
+  return rows;
 }
 
-function livePortfolioRulesSummary() {
+function livePortfolioRuleRows() {
   return [
-    `${percent(currentEligibilityThreshold())} AI threshold`,
-    "max 7 days preferred, then 14 days before longer horizons",
-    "revalidates current order book first",
-    "prioritizes highest EV p.a., then shorter resolution and EV",
-    "risk-diversified before submit",
-  ].join("; ");
+    ["AI probability threshold", percent(currentEligibilityThreshold())],
+    ["Resolution filter", "Max 7 days preferred, then 14 days before longer horizons"],
+    ["Trade priority", "Highest EV p.a., then shorter resolution and EV"],
+    ["Pre-trade check", "Revalidate current order book first"],
+    ["Risk control", "Risk-diversified before submit"],
+    ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
+    ["Stake sizing", `${probability(currentRiskAllocation())} of live equity`],
+  ];
+}
+
+function renderPortfolioRulesCard(title, rows) {
+  return `
+    <div class="portfolio-rules-card">
+      <strong>${escapeHtml(title)}</strong>
+      <div class="portfolio-rule-list">
+        ${rows.map(([label, value]) => `
+          <div class="portfolio-rule-row">
+            <span>${escapeHtml(label)}</span>
+            <em>${escapeHtml(value)}</em>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function renderBotState(botState) {
@@ -1706,10 +1707,6 @@ function renderBotState(botState) {
   const openPnlPct = Number(portfolio.openPnlPct || 0);
   const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
   const paperCapitalBase = Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100);
-  const maxResolutionDays = Number(portfolio.maxResolutionDays);
-  const resolutionLabel = Number.isFinite(maxResolutionDays)
-    ? `No later than ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`
-    : "Best available horizon";
   syncRiskAllocationControl(freeCapital, "paper portfolio equity", {
     baseCapital: paperCapitalBase,
     cadenceLabel: "next paper execution",
@@ -1749,44 +1746,7 @@ function renderBotState(botState) {
 
   els.botStatus.innerHTML = `
     <div class="bot-summary">
-      <div>
-        <span class="label">Last run</span>
-        <strong>${escapeHtml(botState.generatedAt ? formatDate(botState.generatedAt) : "not yet")}</strong>
-      </div>
-      <div>
-        <span class="label">Free capital</span>
-        <strong>${money(freeCapital)}</strong>
-      </div>
-      <div>
-        <span class="label">Max per trade</span>
-        <strong>${money(paperCapitalBase * currentRiskAllocation())}</strong>
-        <span>${probability(currentRiskAllocation())} of paper portfolio equity</span>
-      </div>
-      <div>
-        <span class="label">Order mode</span>
-        <strong>${currentLimitOrders() ? "Limit" : "Market"}</strong>
-        <span>paper execution preference</span>
-      </div>
-      <div>
-        <span class="label">P/L</span>
-        <strong class="${pnlClass(totalPnl)}">${signedMoney(totalPnl)} (${signedPercent(totalPnlPct)})</strong>
-        <span>realized ${signedMoney(realizedPnl)} / open ${signedMoney(openPnl)}</span>
-      </div>
-      <div>
-        <span class="label">Portfolio parameters</span>
-        <strong>${escapeHtml(portfolioState.label || "Paper portfolio")}</strong>
-        <span>${escapeHtml(portfolioRulesSummary({ ...portfolioState, ...portfolio }) || portfolioRuleLine(portfolio) || resolutionLabel)}</span>
-      </div>
-      <div>
-        <span class="label">Learning</span>
-        <strong>${Number(learning.sampleSize || 0)} reviewed</strong>
-        <span>Brier ${Number.isFinite(Number(learning.brierScore)) ? Number(learning.brierScore).toFixed(3) : "-"} / bias ${Number.isFinite(Number(learning.calibrationBias)) ? signedPercent(Number(learning.calibrationBias)) : "-"}</span>
-      </div>
-      <div>
-        <span class="label">Decision</span>
-        <strong>${escapeHtml(decision.reason || "-")}</strong>
-        <span>${Number(decision.riskSkippedCount || 0) ? `${decision.riskSkippedCount} risk-blocked` : ""}</span>
-      </div>
+      ${renderPortfolioRulesCard(portfolioState.label || "Paper portfolio", portfolioRuleRows({ ...portfolioState, ...portfolio }))}
     </div>
   `;
 
@@ -2046,71 +2006,7 @@ function renderLiveState(liveState) {
     els.accountSummary.hidden = false;
     els.accountSummary.innerHTML = `
     <div class="bot-summary">
-      <div>
-        <span class="label">Synced account</span>
-        <strong>${escapeHtml(liveAccountName(account))}</strong>
-        <span>${escapeHtml(shortAddress(account.address))} / ${escapeHtml(liveAccountSubtitle(account))}</span>
-      </div>
-      <div>
-        <span class="label">Last sync</span>
-        <strong>${escapeHtml(liveState.generatedAt ? formatDate(liveState.generatedAt) : "not yet")}</strong>
-        <span>${escapeHtml(liveAccountProfileLine(account) || "Polymarket proxy wallet")}</span>
-      </div>
-      <div>
-        <span class="label">Sync status</span>
-        <strong>${escapeHtml(sync.status || "OK")}</strong>
-        <span>${escapeHtml([sync.message || "latest live snapshot loaded", sources.join(", ")].filter(Boolean).join(" / "))}</span>
-      </div>
-      <div>
-        <span class="label">Positions</span>
-        <strong>${positions.length}</strong>
-        <span>${money(marketValue)} market value / ${openOrders.length} open orders${reconciliationGaps ? ` / ${reconciliationGaps} sync gap` : ""}</span>
-      </div>
-      <div>
-        <span class="label">Ledger check</span>
-        <strong class="${reconciliationGaps ? "negative" : ""}">${escapeHtml(reconciliation.status || "OK")}</strong>
-        <span>${escapeHtml(reconciliationGaps ? `${reconciliationGaps} known trade kept visible as reconciliation row` : (reconciliation.invariant || "all known trades are classified"))}</span>
-      </div>
-      <div>
-        <span class="label">Max per trade</span>
-        <strong>${Number.isFinite(liveCapitalBase) ? money(liveCapitalBase * currentRiskAllocation()) : "-"}</strong>
-        <span>${probability(currentRiskAllocation())} of live equity; cash must cover it</span>
-      </div>
-      <div>
-        <span class="label">Open P/L</span>
-        <strong class="${pnlClass(openPnl)}">${signedMoney(openPnl)} (${signedPercent(openPnlPct)})</strong>
-        <span>from Polymarket live positions</span>
-      </div>
-      <div>
-        <span class="label">Realized P/L</span>
-        <strong class="${pnlClass(realizedPnl)}">${signedMoney(realizedPnl)} (${signedPercent(realizedPnlPct)})</strong>
-        <span>where available from activity data</span>
-      </div>
-      <div>
-        <span class="label">Cash</span>
-        <strong>${Number.isFinite(cash) ? money(cash) : "-"}</strong>
-        <span>${escapeHtml(balanceAllowance.status === "OK" ? `pUSD balance / allowance ${collateral.allowanceUsdc == null ? "-" : money(Number(collateral.allowanceUsdc))}` : (balanceAllowance.message || "CLOB balance sync not available yet"))}</span>
-      </div>
-      <div>
-        <span class="label">Idle cash guard</span>
-        <strong class="${idleCashOverdue ? "negative" : ""}">${escapeHtml(idleCashStatus)}</strong>
-        <span>${escapeHtml(idleCashDetail)}</span>
-      </div>
-      <div>
-        <span class="label">Original value</span>
-        <strong>${Number.isFinite(deposited) ? money(deposited) : "-"}</strong>
-        <span>${escapeHtml(portfolio.depositedSource || "estimated from equity and tracked P/L")}</span>
-      </div>
-      <div>
-        <span class="label">Live execution</span>
-        <strong>${escapeHtml(liveGuardLabel)}</strong>
-        <span>${escapeHtml(`${liveGuardText}; ${currentLimitOrders() ? "limit orders preferred" : "market orders preferred"}`)}</span>
-      </div>
-      <div>
-        <span class="label">Portfolio parameters</span>
-        <strong>Live portfolio</strong>
-        <span>${escapeHtml(`${livePortfolioRulesSummary()}; ${currentLimitOrders() ? "limit" : "market"} orders; ${probability(currentRiskAllocation())} equity stake`)}</span>
-      </div>
+      ${renderPortfolioRulesCard("Live portfolio", livePortfolioRuleRows())}
     </div>
   `;
   }
