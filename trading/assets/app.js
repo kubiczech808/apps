@@ -778,40 +778,40 @@ function renderTradeRows(trades, emptyText, options = {}) {
       <tbody>
         ${rows.map((trade) => `
           <tr>
-            <td>${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
-            <td>
+            <td data-label="${showStatus ? "Closed" : "Opened"}">${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
+            <td data-label="Market">
               ${tradeTypeBadge(trade)}
               ${marketAnchor(trade)}
               <span>${escapeHtml(riskLine(trade))}</span>
               <span>${escapeHtml(postMortemLine(trade))}</span>
             </td>
-            <td>
+            <td data-label="Entry">
               ${probability(Number(trade.entryPrice))}
               <span>${[trade.slippage == null ? "" : `slip ${(Number(trade.slippage) * 100).toFixed(1)} pts`, feeLine(trade)].filter(Boolean).join(", ")}</span>
             </td>
-            <td>${probability(Number(trade.currentPrice))}</td>
-            <td>
+            <td data-label="${showStatus ? "Final" : "Mark"}">${probability(Number(trade.currentPrice))}</td>
+            <td data-label="AI prob.">
               <strong>${probability(tradeAiProbability(trade))}</strong>
               <span class="analysis-popover">
                 <button class="info-button" type="button" aria-label="Show original AI analysis">i</button>
                 <span class="analysis-tooltip" role="tooltip">${escapeHtml(tradeAnalysisDetails(trade))}</span>
               </span>
             </td>
-            <td>${resolutionCell(trade)}</td>
-            <td>${holdingCell(trade)}</td>
-            <td>${potentialGainCell(trade)}</td>
-            <td>${potentialPctCell(trade)}</td>
-            <td><span class="${riskRewardClass(tradeRiskReward(trade))}">${riskReward(tradeRiskReward(trade))}</span></td>
-            <td>${potentialAnnualizedCell(trade)}</td>
-            ${showStatus ? `<td>
+            <td data-label="Resolution">${resolutionCell(trade)}</td>
+            <td data-label="Holding">${holdingCell(trade)}</td>
+            <td data-label="Win $">${potentialGainCell(trade)}</td>
+            <td data-label="Win %">${potentialPctCell(trade)}</td>
+            <td data-label="R/R"><span class="${riskRewardClass(tradeRiskReward(trade))}">${riskReward(tradeRiskReward(trade))}</span></td>
+            <td data-label="Win p.a.">${potentialAnnualizedCell(trade)}</td>
+            ${showStatus ? `<td data-label="Result">
               ${escapeHtml(trade.status || "OPEN")}
               <span>${escapeHtml(tradeStatusNote(trade))}</span>
             </td>` : ""}
-            <td class="${pnlClass(tradePnlValue(trade))}">
+            <td data-label="P/L" class="${pnlClass(tradePnlValue(trade))}">
               ${signedMoney(tradePnlValue(trade))}
               <span>${signedPercent(tradePnlPct(trade))}</span>
             </td>
-            <td>${money(Number(trade.stakeUsdc || 0))}</td>
+            <td data-label="Stake">${money(Number(trade.stakeUsdc || 0))}</td>
           </tr>
         `).join("")}
       </tbody>
@@ -2126,15 +2126,15 @@ function renderBotEvaluations() {
       <tbody>
         ${visibleEvaluations.map((item) => `
           <tr>
-            <td>${escapeHtml(formatDate(item.evaluatedAt || ""))}</td>
-            <td class="${adjustedEvaluationStatus(item) === "ELIGIBLE" && item.selectionStatus !== "RISK_BLOCKED" ? "positive" : "negative"}">${escapeHtml(evaluationStatusLabel(item))}</td>
-            <td>
+            <td data-label="Time">${escapeHtml(formatDate(item.evaluatedAt || ""))}</td>
+            <td data-label="Status" class="${adjustedEvaluationStatus(item) === "ELIGIBLE" && item.selectionStatus !== "RISK_BLOCKED" ? "positive" : "negative"}">${escapeHtml(evaluationStatusLabel(item))}</td>
+            <td data-label="Market">
               ${marketAnchor(item)}
               <span>${escapeHtml(riskLine(item))}</span>
             </td>
-            <td>${evaluationEndDateCell(item)}</td>
-            <td>${evaluationDaysLeftCell(item)}</td>
-            <td>
+            <td data-label="End date">${evaluationEndDateCell(item)}</td>
+            <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
+            <td data-label="Mkt entry">
               ${probability(Number(item.marketPrice))}
               <span>${[
                 item.bestAsk == null ? "" : `ask ${probability(Number(item.bestAsk))}`,
@@ -2142,14 +2142,14 @@ function renderBotEvaluations() {
                 feeLine(item),
               ].filter(Boolean).join(", ")}</span>
             </td>
-            <td>${odds(decimalOdds(item.marketPrice))}</td>
-            <td>${gainCell(item)}</td>
-            <td>${netYieldCell(item)}</td>
-            <td>${evaluationRiskRewardCell(item)}</td>
-            <td>${probability(Number(item.aiProbability))}</td>
-            <td>${annualizedCell(item)}</td>
-            <td>${updateHistoryCell(item)}</td>
-            <td>
+            <td data-label="Odds">${odds(decimalOdds(item.marketPrice))}</td>
+            <td data-label="Win @ $5">${gainCell(item)}</td>
+            <td data-label="Net yield %">${netYieldCell(item)}</td>
+            <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
+            <td data-label="AI prob.">${probability(Number(item.aiProbability))}</td>
+            <td data-label="EV p.a.">${annualizedCell(item)}</td>
+            <td data-label="Updates">${updateHistoryCell(item)}</td>
+            <td data-label="Analysis">
               ${analysisBadge(item)}
             </td>
           </tr>
