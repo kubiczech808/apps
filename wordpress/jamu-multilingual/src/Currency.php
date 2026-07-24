@@ -8,6 +8,18 @@ final class Currency
 {
     private const YAY_CURRENCY_COOKIE = 'yay_currency_widget';
     private const YAY_SWITCHER_COOKIE = 'yay_currency_do_change_switcher';
+    private const BANK_TRANSFER_DISCOUNT_CZK = 10.0;
+
+    /**
+     * Approximate display/business rates used for converting the fixed CZK
+     * bank-transfer discount into the currency forced by the current language.
+     *
+     * Base: 1 foreign currency unit in CZK.
+     */
+    private const CZK_RATES = [
+        'EUR' => 24.25,
+        'PLN' => 5.58,
+    ];
 
     private const CHECKOUT_GATEWAY_IDS = [
         'bacs',
@@ -33,6 +45,8 @@ final class Currency
     {
         $this->set_request_currency();
         add_action('init', [$this, 'set_request_currency'], 0);
+        add_filter('wc_get_price_decimals', [$this, 'price_decimals'], 20);
+        add_action('woocommerce_cart_calculate_fees', [$this, 'normalize_bank_transfer_discount_fee'], PHP_INT_MAX);
         add_filter('woocommerce_available_payment_gateways', [$this, 'available_payment_gateways'], PHP_INT_MAX);
         add_action('wp_footer', [$this, 'payment_gateway_frontend_guard'], 5);
         add_action('wp_footer', [$this, 'frontend_fallback'], 90);
@@ -200,6 +214,57 @@ JS
         return $this->sort_gateways($gateways);
     }
 
+    public function price_decimals(int $decimals): int
+    {
+        $target = $this->target();
+        $currency = is_array($target) ? (string) ($target['code'] ?? '') : '';
+
+        if (in_array($currency, ['EUR', 'PLN'], true)) {
+            return max(2, $decimals);
+        }
+
+        return $decimals;
+    }
+
+    public function normalize_bank_transfer_discount_fee($cart): void
+    {
+        if (!$this->should_apply() || !is_object($cart)) {
+            return;
+        }
+
+        $target = $this->target();
+        $currency = is_array($target) ? (string) ($target['code'] ?? '') : '';
+        if (!in_array($currency, ['EUR', 'PLN'], true)) {
+            return;
+        }
+
+        $discount = $this->converted_bank_transfer_discount($currency);
+        if ($discount <= 0) {
+            return;
+        }
+
+        $amount = -1 * $discount;
+        $found = false;
+
+        if (method_exists($cart, 'fees_api') && $cart->fees_api()) {
+            foreach ($cart->fees_api()->get_fees() as $fee) {
+                if (!$this->is_bank_transfer_discount_fee($fee)) {
+                    continue;
+                }
+
+                $fee->amount = $amount;
+                $fee->total = $amount;
+                $fee->tax = 0.0;
+                $fee->tax_data = [];
+                $found = true;
+            }
+        }
+
+        if (!$found && $this->selected_payment_method() === 'bacs' && method_exists($cart, 'add_fee')) {
+            $cart->add_fee($this->bank_transfer_discount_label($currency), $amount, false);
+        }
+    }
+
     public function payment_gateway_frontend_guard(): void
     {
         if (!$this->should_apply() || !$this->uses_pln_currency()) {
@@ -341,6 +406,68 @@ JS
         }
 
         return true;
+    }
+
+    private function selected_payment_method(): string
+    {
+        if (isset($_POST['payment_method'])) {
+            return sanitize_key(wp_unslash((string) $_POST['payment_method']));
+        }
+
+        if (isset($_POST['post_data'])) {
+            $post_data = [];
+            parse_str(wp_unslash((string) $_POST['post_data']), $post_data);
+            if (isset($post_data['payment_method'])) {
+                return sanitize_key((string) $post_data['payment_method']);
+            }
+        }
+
+        if (function_exists('WC') && WC() && WC()->session) {
+            return sanitize_key((string) WC()->session->get('chosen_payment_method'));
+        }
+
+        return '';
+    }
+
+    private function converted_bank_transfer_discount(string $currency): float
+    {
+        $rate = self::CZK_RATES[$currency] ?? 0.0;
+        if ($rate <= 0) {
+            return 0.0;
+        }
+
+        return round(self::BANK_TRANSFER_DISCOUNT_CZK / $rate, 2);
+    }
+
+    private function is_bank_transfer_discount_fee(object $fee): bool
+    {
+        $amount = isset($fee->amount) ? (float) $fee->amount : 0.0;
+        if ($amount > 0) {
+            return false;
+        }
+
+        $name = strtolower(remove_accents(wp_strip_all_tags((string) ($fee->name ?? ''))));
+        if ($name === '') {
+            return false;
+        }
+
+        foreach (['bank', 'prevod', 'preved', 'przelew', 'uberweisung', 'qr'] as $needle) {
+            if (str_contains($name, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function bank_transfer_discount_label(string $currency): string
+    {
+        return match ($this->languages->current()) {
+            'de' => 'Per Banküberweisung',
+            'pl' => 'Przelewem bankowym',
+            'en' => 'By bank transfer',
+            default => $currency === 'PLN' ? 'Przelewem bankowym' : 'By bank transfer',
+        };
     }
 
     private function sort_gateways(array $gateways): array
