@@ -202,6 +202,7 @@ function normalizeState(input) {
     portfolio: paperPortfolios.conservative.portfolio,
     trades: paperPortfolios.conservative.trades,
     evaluations: mergeEvaluationLists(Array.isArray(input.evaluations) ? input.evaluations : []),
+    evaluationRunLog: Array.isArray(input.evaluationRunLog) ? input.evaluationRunLog.slice(0, 80) : [],
     learningProfile: normalizeLearningProfile(input.learningProfile),
     lastTradeDate: paperPortfolios.conservative.lastTradeDate,
     lastDecision: paperPortfolios.conservative.lastDecision,
@@ -426,6 +427,7 @@ function mergeStates(primary, secondary) {
   const merged = {
     ...base,
     evaluations: mergeEvaluationLists(base.evaluations || [], other.evaluations || []),
+    evaluationRunLog: mergeUniqueById([...(base.evaluationRunLog || []), ...(other.evaluationRunLog || [])], (item) => item.runAt || item.id || "", 80),
   };
   merged.paperPortfolios = {};
   for (const strategy of Object.values(PAPER_STRATEGIES)) {
@@ -2249,6 +2251,56 @@ function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
     if (!portfolioState) continue;
     recordPortfolioRun(state, portfolioState, { evaluations, eligible, decision });
   }
+  state.evaluationRunLog = [
+    {
+      id: `evaluation-run-${state.generatedAt}`,
+      runAt: state.generatedAt,
+      refreshOnly: REFRESH_ONLY,
+      evaluatedCount: evaluations.length,
+      eligibleCount: eligible.length,
+      rejectedCount: evaluations.filter((item) => String(item.status || "").toUpperCase() === "REJECTED").length,
+      errorCount: evaluations.filter((item) => String(item.status || "").toUpperCase() === "ERROR").length,
+      statusCounts: evaluations.reduce((counts, item) => {
+        const status = String(item.status || "UNKNOWN").toUpperCase();
+        counts[status] = Number(counts[status] || 0) + 1;
+        return counts;
+      }, {}),
+      decisions: decisions.map((decision) => ({
+        strategyId: decision.strategyId,
+        action: decision.action,
+        reason: decision.reason,
+        tradeId: decision.trade?.id || null,
+      })),
+      events: evaluations.map((item) => ({
+        id: item.id,
+        evaluatedAt: item.evaluatedAt,
+        status: item.status,
+        question: item.question,
+        outcome: item.outcome,
+        slug: item.slug,
+        eventSlug: item.eventSlug,
+        tokenId: item.tokenId,
+        url: `https://polymarket.com/event/${item.eventSlug || item.slug || ""}`,
+        aiProbability: item.aiProbability,
+        rawProbability: item.rawProbability,
+        marketPrice: item.marketPrice,
+        annualizedReturn: item.annualizedReturn,
+        expectedValueUsdc: item.expectedValueUsdc,
+        netGainIfWinUsdc: item.netGainIfWinUsdc,
+        riskReward: rewardRiskRatio(item),
+        liquidity: item.liquidity,
+        volume24hr: item.volume24hr,
+        endDate: item.endDate,
+        daysToResolution: item.daysToResolution,
+        rejectReasons: item.rejectReasons,
+        analysisSummary: item.analysisSummary,
+        probabilityThesis: item.probabilityThesis,
+        analysisModel: item.analysisModel,
+        riskGroupLabels: item.riskGroupLabels,
+      })),
+    },
+    ...(state.evaluationRunLog || []),
+  ].slice(0, 80);
 }
 
 async function writeState(state) {

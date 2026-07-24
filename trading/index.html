@@ -124,6 +124,7 @@
           <button class="tab-button active" type="button" data-tab-target="daily-picks" data-paper-label="Opened trades" data-live-label="Opened trades">Opened trades</button>
           <button class="tab-button" type="button" data-tab-target="closed-trades" data-paper-label="Closed trades" data-live-label="Closed trades">Closed trades</button>
           <button class="tab-button" type="button" data-tab-target="evaluation-log" data-paper-label="Evaluation log" data-live-label="Evaluation log">Evaluation log</button>
+          <button class="tab-button" type="button" data-tab-target="settings-runs" data-paper-label="Settings / runs" data-live-label="Settings / runs">Settings / runs</button>
         </div>
 
         <section class="tab-panel active" data-tab-panel="daily-picks">
@@ -176,6 +177,19 @@
               </div>
             </div>
             <div class="ledger" data-bot-evaluations></div>
+          </article>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="settings-runs">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Settings</p>
+                <h2>Evaluation runs</h2>
+              </div>
+              <span class="pill" data-run-log-summary>0 runs</span>
+            </div>
+            <div class="run-log" data-run-log></div>
           </article>
         </section>
       </section>

@@ -63,6 +63,8 @@ const els = {
   closedSummary: document.querySelector("[data-closed-summary]"),
   botEvaluations: document.querySelector("[data-bot-evaluations]"),
   evaluationSummary: document.querySelector("[data-evaluation-summary]"),
+  runLog: document.querySelector("[data-run-log]"),
+  runLogSummary: document.querySelector("[data-run-log-summary]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   riskAllocation: document.querySelector("[data-risk-allocation]"),
@@ -1644,6 +1646,7 @@ function renderBotState(botState) {
   }
 
   renderBotEvaluations();
+  renderRunLog();
 }
 
 function livePositions(liveState) {
@@ -1947,6 +1950,7 @@ function renderLiveState(liveState) {
     });
   }
   renderBotEvaluations();
+  renderRunLog();
 }
 
 function evaluationSortValue(item, key) {
@@ -2159,6 +2163,83 @@ function renderBotEvaluations() {
   `;
 }
 
+function runEventDetail(event) {
+  const reasons = Array.isArray(event.rejectReasons) && event.rejectReasons.length
+    ? event.rejectReasons.join("; ")
+    : "No reject reason recorded.";
+  const risk = Array.isArray(event.riskGroupLabels) && event.riskGroupLabels.length
+    ? event.riskGroupLabels.join(", ")
+    : "-";
+  return [
+    `${event.outcome || "-"} - ${event.question || "-"}`,
+    "",
+    `Status: ${event.status || "-"}`,
+    `AI probability: ${probability(Number(event.aiProbability))}`,
+    `Raw probability: ${probability(Number(event.rawProbability))}`,
+    `Market entry: ${probability(Number(event.marketPrice))}`,
+    `EV p.a.: ${signedPercent(Number(event.annualizedReturn))}`,
+    `Expected value: ${signedMoney(Number(event.expectedValueUsdc), 4)}`,
+    `Win if correct: ${signedMoney(Number(event.netGainIfWinUsdc), 4)}`,
+    `R/R: ${riskReward(Number(event.riskReward))}`,
+    `Liquidity: ${money(Number(event.liquidity || 0))}`,
+    `24h volume: ${money(Number(event.volume24hr || 0))}`,
+    `End date: ${event.endDate ? formatDate(event.endDate) : "-"}`,
+    `Days to resolution: ${Number.isFinite(Number(event.daysToResolution)) ? Number(event.daysToResolution).toFixed(2) : "-"}`,
+    `Model: ${event.analysisModel || "-"}`,
+    `Risk groups: ${risk}`,
+    "",
+    `Thesis: ${event.probabilityThesis || "-"}`,
+    "",
+    `AI analysis: ${event.analysisSummary || "-"}`,
+    "",
+    `Reject / filter reasons: ${reasons}`,
+    "",
+    `Polymarket: ${event.url || polymarketUrl(event)}`,
+  ].join("\n");
+}
+
+function renderRunLog() {
+  const runs = Array.isArray(state.botState?.evaluationRunLog) ? state.botState.evaluationRunLog : [];
+  if (els.runLogSummary) {
+    els.runLogSummary.textContent = `${runs.length} runs`;
+  }
+  if (!els.runLog) return;
+  if (!runs.length) {
+    els.runLog.innerHTML = '<div class="empty">Evaluation run log is not available yet. It will appear after the next paper bot run.</div>';
+    return;
+  }
+
+  els.runLog.innerHTML = runs.slice(0, 30).map((run, runIndex) => {
+    const events = Array.isArray(run.events) ? run.events : [];
+    const status = run.statusCounts || {};
+    return `
+      <section class="run-card">
+        <div class="run-card-head">
+          <div>
+            <strong>${escapeHtml(formatDate(run.runAt || ""))}</strong>
+            <span>${run.refreshOnly ? "refresh-only" : "full evaluation"} / ${Number(run.evaluatedCount || events.length)} evaluated</span>
+          </div>
+          <div class="run-counts">
+            <span class="pill">${Number(run.eligibleCount || status.ELIGIBLE || 0)} eligible</span>
+            <span class="pill muted">${Number(run.rejectedCount || status.REJECTED || 0)} rejected</span>
+            ${Number(run.errorCount || status.ERROR || 0) ? `<span class="pill error">${Number(run.errorCount || status.ERROR || 0)} error</span>` : ""}
+          </div>
+        </div>
+        <div class="run-events">
+          ${events.length ? events.slice(0, 80).map((event, eventIndex) => `
+            <button class="run-event" type="button" data-run-event="${runIndex}:${eventIndex}">
+              <span class="${String(event.status || "").toUpperCase() === "ELIGIBLE" ? "positive" : "negative"}">${escapeHtml(event.status || "-")}</span>
+              <strong>${escapeHtml(event.outcome || "-")}</strong>
+              <span>${escapeHtml(event.question || "-")}</span>
+              <em>${probability(Number(event.aiProbability))} AI / ${signedPercent(Number(event.annualizedReturn))} EV p.a.</em>
+            </button>
+          `).join("") : '<div class="run-empty">No market evaluations in this refresh-only run.</div>'}
+        </div>
+      </section>
+    `;
+  }).join("");
+}
+
 els.tabButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const target = button.dataset.tabTarget;
@@ -2275,6 +2356,16 @@ document.addEventListener("click", (event) => {
     if (event.target === execution || event.target.closest("[data-execution-modal-close]")) {
       closeExecutionModal();
     }
+    return;
+  }
+
+  const runEventButton = event.target.closest("[data-run-event]");
+  if (runEventButton) {
+    event.preventDefault();
+    const [runIndexRaw, eventIndexRaw] = String(runEventButton.dataset.runEvent || "").split(":");
+    const run = (Array.isArray(state.botState?.evaluationRunLog) ? state.botState.evaluationRunLog : [])[Number(runIndexRaw)];
+    const runEvent = Array.isArray(run?.events) ? run.events[Number(eventIndexRaw)] : null;
+    openAnalysisModal(runEventDetail(runEvent || {}), runEventButton);
     return;
   }
 
