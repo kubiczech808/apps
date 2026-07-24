@@ -136,8 +136,8 @@ async function readState() {
   let remoteError = null;
   if (REMOTE_STATE_URL) {
     try {
-      const remote = await fetchJson(`${REMOTE_STATE_URL}?t=${Date.now()}`);
-      if (remote && typeof remote === "object" && Array.isArray(remote.trades)) {
+      const remote = await fetchJson(`${REMOTE_STATE_URL}${REMOTE_STATE_URL.includes("?") ? "&" : "?"}t=${Date.now()}`);
+      if (remote && typeof remote === "object" && (Array.isArray(remote.trades) || remote.paperPortfolios)) {
         const remoteState = normalizeState(remote);
         try {
           const rawLocal = await readFile(OUTPUT_PATH, "utf8");
@@ -486,7 +486,7 @@ function normalizeTrade(trade) {
 function daysToEnd(endDate) {
   const end = Date.parse(endDate || "");
   if (!Number.isFinite(end)) return null;
-  return Math.max(1, (end - Date.now()) / 86400000);
+  return (end - Date.now()) / 86400000;
 }
 
 function endDateIsFuture(endDate) {
@@ -859,6 +859,19 @@ async function markOpenTrade(trade) {
       status: "PENDING_RESOLUTION",
       finalOutcomePrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : null,
       statusNote: "Market is closed but outcome price is not final yet.",
+    };
+  }
+
+  if (remainingDays != null && remainingDays <= 0) {
+    return {
+      ...base,
+      status: "PENDING_RESOLUTION",
+      finalOutcomePrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : null,
+      currentPrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : trade.currentPrice ?? null,
+      currentValueUsdc: trade.currentValueUsdc ?? null,
+      unrealizedPnlUsdc: trade.unrealizedPnlUsdc ?? 0,
+      unrealizedPnlPct: trade.unrealizedPnlPct ?? 0,
+      statusNote: "Event end date has passed; waiting for Polymarket resolution.",
     };
   }
 

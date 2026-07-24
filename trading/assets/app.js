@@ -471,6 +471,7 @@ function isClosedTrade(trade) {
 
 function tradeStatusNote(trade) {
   const parts = [
+    trade.statusNote || "",
     trade.finalOutcomePrice == null ? "" : `final ${probability(Number(trade.finalOutcomePrice))}`,
     trade.marketUrlStatus === "use_event_slug" ? "event link" : "",
   ];
@@ -737,6 +738,7 @@ function tradeTypeBadge(trade) {
   if (trade.mode === "LIVE_ORDER") return '<span class="order-chip">Limit order waiting</span>';
   if (trade.mode === "LIVE_RECONCILIATION") return '<span class="order-chip warning">Sync gap</span>';
   if (String(trade.status || "").toUpperCase() === "REDEEM_REQUIRED") return '<span class="order-chip warning">Redeem needed</span>';
+  if (String(trade.status || "").toUpperCase() === "PENDING_RESOLUTION") return '<span class="order-chip warning">Pending resolution</span>';
   if (isClosedTrade(trade) && trade.mode === "LIVE") return '<span class="order-chip filled">Settled position</span>';
   if (trade.mode === "LIVE") return '<span class="order-chip filled">Open position</span>';
   if (trade.strategyLabel) return `<span class="order-chip paper">${escapeHtml(trade.strategyLabel)}</span>`;
