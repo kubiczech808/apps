@@ -48,6 +48,12 @@ jobs:
           Path("trading/config.php").write_text(body, encoding="utf-8")
           PY
 
+      - name: Build static route fallbacks
+        run: |
+          mkdir -p trading/settings trading/opportunities
+          cp trading/index.html trading/settings/index.html
+          cp trading/index.html trading/opportunities/index.html
+
       - name: Upload to hosting
         env:
           HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
@@ -90,7 +96,7 @@ jobs:
                   if not path.is_file():
                       continue
                   relative = path.relative_to(local_dir).as_posix()
-                  if relative not in {"index.html", "api.php", "config.php"} and not relative.startswith("assets/") and not relative.startswith("data/"):
+                  if relative not in {"index.html", "api.php", "config.php", "settings/index.html", "opportunities/index.html"} and not relative.startswith("assets/") and not relative.startswith("data/"):
                       continue
                   if relative in {"data/paper-state.json", "data/live-state.json"}:
                       continue
