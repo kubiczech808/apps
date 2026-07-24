@@ -35,7 +35,7 @@ const state = {
   liveExecutionState: null,
   executionBusy: null,
   autoLiveSyncBusy: false,
-  settingsSection: "runs",
+  settingsSection: "evaluation-log",
   calculationSource: "all",
   calculationMarket: "all",
 };
@@ -89,6 +89,8 @@ const els = {
   nextAccountSync: document.querySelector("[data-next-account-sync]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
+  parameterModal: document.querySelector("[data-parameter-modal]"),
+  parameterModalClose: document.querySelector("[data-parameter-modal-close]"),
   modeButtons: document.querySelectorAll("[data-mode-toggle]"),
   liveActivation: document.querySelector("[data-live-activation]"),
   tabButtons: document.querySelectorAll("[data-tab-target]"),
@@ -1147,6 +1149,29 @@ function syncLimitOrdersControl() {
   }
 }
 
+function openParameterModal(trigger) {
+  if (!els.parameterModal) return;
+  refreshEligibilityThreshold();
+  refreshRiskAllocation();
+  refreshLimitOrders();
+  els.parameterModal.hidden = false;
+  document.body.classList.add("modal-open");
+  els.parameterModalClose?.focus();
+  if (trigger) {
+    openParameterModal.lastTrigger = trigger;
+  }
+}
+
+function closeParameterModal() {
+  if (!els.parameterModal || els.parameterModal.hidden) return;
+  els.parameterModal.hidden = true;
+  document.body.classList.remove("modal-open");
+  if (openParameterModal.lastTrigger instanceof HTMLElement) {
+    openParameterModal.lastTrigger.focus();
+  }
+  openParameterModal.lastTrigger = null;
+}
+
 function analysisModal() {
   let modal = document.querySelector("[data-analysis-modal]");
   if (modal) return modal;
@@ -1665,7 +1690,15 @@ function livePortfolioRuleRows() {
 function renderPortfolioRulesCard(title, rows) {
   return `
     <div class="portfolio-rules-card">
-      <strong>${escapeHtml(title)}</strong>
+      <div class="portfolio-rules-head">
+        <strong>${escapeHtml(title)}</strong>
+        <button class="portfolio-rules-edit" type="button" data-portfolio-parameters-edit aria-label="Edit portfolio parameters" title="Edit portfolio parameters">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"></path>
+          </svg>
+        </button>
+      </div>
       <div class="portfolio-rule-list">
         ${rows.map(([label, value]) => `
           <div class="portfolio-rule-row">
@@ -2652,6 +2685,14 @@ els.botEvaluations?.addEventListener("click", (event) => {
 });
 
 document.addEventListener("click", (event) => {
+  const parameterModal = event.target.closest("[data-parameter-modal]");
+  if (parameterModal) {
+    if (event.target === parameterModal || event.target.closest("[data-parameter-modal-close]")) {
+      closeParameterModal();
+    }
+    return;
+  }
+
   const execution = event.target.closest("[data-execution-modal]");
   if (execution) {
     if (event.target === execution || event.target.closest("[data-execution-modal-close]")) {
@@ -2687,6 +2728,13 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const parameterEditButton = event.target.closest("[data-portfolio-parameters-edit]");
+  if (parameterEditButton) {
+    event.preventDefault();
+    openParameterModal(parameterEditButton);
+    return;
+  }
+
   const infoButton = event.target.closest(".info-button");
   if (infoButton) {
     event.preventDefault();
@@ -2708,6 +2756,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeExecutionModal();
     closeAnalysisModal();
+    closeParameterModal();
   }
 });
 

@@ -14,7 +14,7 @@
           <p class="eyebrow">osobnizkusenosti.cz/trading</p>
           <h1>AI trading desk</h1>
         </div>
-        <button class="settings-tab-button" type="button" data-tab-target="settings-runs" aria-label="Open settings and run log" title="Settings / runs">
+        <button class="settings-tab-button" type="button" data-tab-target="settings-runs" aria-label="Open settings" title="Settings">
           <span aria-hidden="true">
             <svg viewBox="0 0 24 24" focusable="false">
               <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path>
@@ -101,23 +101,6 @@
               <button class="activation-button" type="button" data-live-activation hidden aria-pressed="false">Activate live execution</button>
               <span class="control-note">required for live one-time execution</span>
             </div>
-            <div class="control-block">
-              <label class="threshold-control">
-                <span>Max per trade</span>
-                <input type="number" min="1" max="50" step="1" value="5" data-risk-allocation>
-                <strong data-risk-allocation-label>5%</strong>
-              </label>
-              <strong data-risk-allocation-value>$5.00</strong>
-              <span class="control-note" data-risk-allocation-note>maximum stake from available capital</span>
-              <span class="capital-status" data-capital-status>Capital status pending.</span>
-            </div>
-            <div class="control-block">
-              <span class="label">Order type</span>
-              <label class="order-mode-toggle">
-                <input type="checkbox" data-limit-orders>
-                <span>Use limit orders</span>
-              </label>
-            </div>
           </div>
         </section>
         <div class="account-summary" data-account-summary hidden></div>
@@ -127,7 +110,6 @@
         <div class="tab-list" role="tablist" aria-label="Trading dashboard">
           <button class="tab-button active" type="button" data-tab-target="daily-picks" data-paper-label="Opened trades" data-live-label="Opened trades">Opened trades</button>
           <button class="tab-button" type="button" data-tab-target="closed-trades" data-paper-label="Closed trades" data-live-label="Closed trades">Closed trades</button>
-          <button class="tab-button" type="button" data-tab-target="evaluation-log" data-paper-label="Evaluation log" data-live-label="Evaluation log">Evaluation log</button>
         </div>
 
         <section class="tab-panel active" data-tab-panel="daily-picks">
@@ -157,46 +139,39 @@
           </article>
         </section>
 
-        <section class="tab-panel" data-tab-panel="evaluation-log">
-          <article class="panel">
-            <div class="panel-head">
-              <div>
-                <p class="eyebrow">Market evaluation</p>
-                <h2>Evaluation log</h2>
-              </div>
-              <div class="evaluation-head" data-evaluation-controls>
-                <span class="pill" data-evaluation-summary>0 eligible / 0 evaluated</span>
-                <label class="threshold-control">
-                  <span>AI prob. threshold</span>
-                  <input type="number" min="1" max="99" step="1" value="95" data-eligibility-threshold>
-                  <strong data-eligibility-threshold-label>95%</strong>
-                </label>
-                <div class="segmented" data-evaluation-filter>
-                  <button class="segment-button active" type="button" data-evaluation-status="ELIGIBLE">Eligible</button>
-                  <button class="segment-button" type="button" data-evaluation-status="REJECTED">Not eligible</button>
-                  <button class="segment-button" type="button" data-evaluation-status="ERROR">Error</button>
-                  <button class="segment-button" type="button" data-evaluation-status="ALL">All evaluated</button>
-                </div>
-              </div>
-            </div>
-            <div class="ledger" data-bot-evaluations></div>
-          </article>
-        </section>
-
         <section class="tab-panel" data-tab-panel="settings-runs">
           <article class="panel">
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Settings</p>
-                <h2>Automation audit</h2>
+                <h2>Automation settings</h2>
               </div>
               <span class="pill" data-run-log-summary>0 runs</span>
             </div>
             <div class="settings-subtabs" role="tablist" aria-label="Settings sections">
-              <button class="segment-button active" type="button" data-settings-section="runs">Run log</button>
+              <button class="segment-button active" type="button" data-settings-section="evaluation-log">Evaluation log</button>
+              <button class="segment-button" type="button" data-settings-section="runs">Run log</button>
               <button class="segment-button" type="button" data-settings-section="calculations">Night calculations</button>
             </div>
-            <div data-settings-panel="runs">
+            <div class="settings-panel-body" data-settings-panel="evaluation-log">
+              <div class="panel-head evaluation-settings-head">
+                <div>
+                  <p class="eyebrow">Market evaluation</p>
+                  <h2>Evaluation log</h2>
+                </div>
+                <div class="evaluation-head" data-evaluation-controls>
+                  <span class="pill" data-evaluation-summary>0 eligible / 0 evaluated</span>
+                  <div class="segmented" data-evaluation-filter>
+                    <button class="segment-button active" type="button" data-evaluation-status="ELIGIBLE">Eligible</button>
+                    <button class="segment-button" type="button" data-evaluation-status="REJECTED">Not eligible</button>
+                    <button class="segment-button" type="button" data-evaluation-status="ERROR">Error</button>
+                    <button class="segment-button" type="button" data-evaluation-status="ALL">All evaluated</button>
+                  </div>
+                </div>
+              </div>
+              <div class="ledger" data-bot-evaluations></div>
+            </div>
+            <div data-settings-panel="runs" hidden>
               <div class="run-log" data-run-log></div>
             </div>
             <div class="settings-panel-body" data-settings-panel="calculations" hidden>
@@ -228,6 +203,39 @@
 
     </section>
   </main>
+  <div class="analysis-modal-backdrop" data-parameter-modal hidden>
+    <section class="analysis-modal parameter-modal" role="dialog" aria-modal="true" aria-labelledby="parameter-modal-title">
+      <div class="analysis-modal-head">
+        <div>
+          <p class="eyebrow">Portfolio</p>
+          <h2 id="parameter-modal-title">Portfolio parameters</h2>
+        </div>
+        <button class="analysis-modal-close" type="button" data-parameter-modal-close aria-label="Close portfolio parameters">x</button>
+      </div>
+      <div class="analysis-modal-body parameter-modal-body">
+        <label class="parameter-control">
+          <span>AI probability threshold</span>
+          <input type="number" min="1" max="99" step="1" value="95" data-eligibility-threshold>
+          <strong data-eligibility-threshold-label>95%</strong>
+        </label>
+        <label class="parameter-control">
+          <span>Max per trade</span>
+          <input type="number" min="1" max="50" step="1" value="5" data-risk-allocation>
+          <strong data-risk-allocation-label>5%</strong>
+        </label>
+        <div class="parameter-control parameter-control-readout">
+          <span>Calculated stake</span>
+          <strong data-risk-allocation-value>$5.00</strong>
+          <em data-risk-allocation-note>maximum stake from available capital</em>
+          <em class="capital-status" data-capital-status>Capital status pending.</em>
+        </div>
+        <label class="parameter-control order-mode-toggle">
+          <input type="checkbox" data-limit-orders>
+          <span>Use limit orders</span>
+        </label>
+      </div>
+    </section>
+  </div>
 
   <script src="assets/app.js"></script>
 </body>

@@ -154,7 +154,7 @@ button:disabled {
 
 .control-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 0.9fr) minmax(190px, 1fr) minmax(220px, 1fr) minmax(180px, 0.85fr);
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
   gap: 10px;
 }
 
@@ -547,9 +547,43 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
-.portfolio-rules-card > strong {
+.portfolio-rules-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.portfolio-rules-head > strong {
   margin-top: 0;
   font-size: 18px;
+}
+
+.portfolio-rules-edit {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+}
+
+.portfolio-rules-edit:hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+}
+
+.portfolio-rules-edit svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .portfolio-rule-list {
@@ -764,6 +798,66 @@ body.modal-open {
 
 .execution-modal {
   width: min(820px, 100%);
+}
+
+.parameter-modal {
+  width: min(620px, 100%);
+}
+
+.parameter-modal-body {
+  display: grid;
+  gap: 12px;
+  white-space: normal;
+}
+
+.parameter-control {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(84px, auto) minmax(52px, auto);
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.parameter-control > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.parameter-control input[type="number"] {
+  width: 84px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font: inherit;
+  font-weight: 800;
+}
+
+.parameter-control strong {
+  font-weight: 900;
+  color: var(--accent-dark);
+}
+
+.parameter-control em {
+  grid-column: 2 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.parameter-control-readout {
+  grid-template-columns: minmax(150px, 1fr) minmax(0, auto);
+}
+
+.parameter-control.order-mode-toggle {
+  display: flex;
+  justify-content: flex-start;
+  background: #ffffff;
 }
 
 .execution-modal-body {
@@ -1221,6 +1315,15 @@ body.modal-open {
   .bot-summary,
   .calculation-summary {
     grid-template-columns: 1fr;
+  }
+
+  .parameter-control,
+  .parameter-control-readout {
+    grid-template-columns: 1fr;
+  }
+
+  .parameter-control em {
+    grid-column: auto;
   }
 
   .portfolio-rule-row {
