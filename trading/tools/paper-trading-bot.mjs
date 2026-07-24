@@ -24,6 +24,7 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").toLowerCase();
 const AI_ANALYSIS_LIMIT = Number(process.env.PAPER_AI_ANALYSIS_LIMIT || MAX_EVALUATIONS_PER_RUN);
 const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
+const AI_STOP_ON_QUOTA_ERROR = String(process.env.PAPER_AI_STOP_ON_QUOTA_ERROR ?? "true").toLowerCase() !== "false";
 const SHORT_HORIZON_DAYS = Number(process.env.PAPER_SHORT_HORIZON_DAYS || 7);
 const MEDIUM_HORIZON_DAYS = Number(process.env.PAPER_MEDIUM_HORIZON_DAYS || 14);
 const MORE_PROBABLE_MIN_LIQUIDITY_USDC = Number(process.env.PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC || 500000);
@@ -1550,11 +1551,20 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
   };
 }
 
+function hasIndependentResearch(item) {
+  return item?.aiAnalysis?.probabilityMethod === "independent-public-research";
+}
+
+function isQuotaError(result) {
+  return /quota|rate limit|429/i.test(String(result?.error || ""));
+}
+
 async function enrichEvaluationsWithAi(evaluations, learningProfile) {
-  if ((!GEMINI_API_KEY && !OPENAI_API_KEY) || AI_ANALYSIS_LIMIT <= 0) return evaluations;
+  if (!GEMINI_API_KEY || AI_ANALYSIS_LIMIT <= 0) return evaluations;
   const candidates = [...evaluations]
     .filter((item) => item.status !== "ERROR")
     .sort((a, b) => {
+      if (hasIndependentResearch(a) !== hasIndependentResearch(b)) return hasIndependentResearch(a) ? 1 : -1;
       if (a.status !== b.status) return a.status === "ELIGIBLE" ? -1 : 1;
       if (horizonBucket(a) !== horizonBucket(b)) return horizonBucket(a) - horizonBucket(b);
       if (b.expectedValueUsdc !== a.expectedValueUsdc) return b.expectedValueUsdc - a.expectedValueUsdc;
@@ -1601,12 +1611,10 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
         sourceQuality: "primary | reputable-news | mixed | weak",
       },
     };
-    const result = GEMINI_API_KEY
-      ? await callGeminiJson([
+    const result = await callGeminiJson([
       { role: "system", content: "You are a cautious forecasting analyst doing source-grounded public research. You must ignore prediction-market pricing and betting consensus. Return only valid JSON." },
       { role: "user", content: JSON.stringify(prompt) },
-      ])
-      : { error: "Gemini API key is not configured; independent public-research probability was not run." };
+    ]);
     if (!result || result.error) {
       byId.set(candidate.id, {
         ...candidate,
@@ -1615,6 +1623,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
           aiModelError: result?.error || "Gemini public-research analysis unavailable",
         },
       });
+      if (AI_STOP_ON_QUOTA_ERROR && isQuotaError(result)) break;
       continue;
     }
     const probability = clamp(Number(result.probability), 0.01, 0.995);

@@ -45,7 +45,8 @@ jobs:
       PAPER_MIN_VOLUME_24H: "100"
       PAPER_SHORT_HORIZON_DAYS: "7"
       PAPER_MEDIUM_HORIZON_DAYS: "14"
-      PAPER_AI_ANALYSIS_LIMIT: "80"
+      PAPER_AI_ANALYSIS_LIMIT: "6"
+      PAPER_AI_STOP_ON_QUOTA_ERROR: "true"
       PAPER_AI_POSTMORTEM_LIMIT: "8"
       PAPER_REPORT_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report') }}
       PAPER_REFRESH_ONLY: ${{ !((github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report')) && ((github.event_name == 'schedule' && github.event.schedule != '7 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh')) }}
