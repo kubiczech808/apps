@@ -845,8 +845,8 @@ function analysisBadge(item) {
   const reasons = evaluationReasons(item, riskReason).join("; ") || "passes selected filters";
   const ai = item.aiAnalysis || {};
   const details = [
-    `Bot status: ${item.status || "-"}`,
-    `Adjusted status: ${adjustedEvaluationStatus(item)}`,
+    `Portfolio status: ${evaluationStatusLabel(item)}`,
+    `Stored pipeline status: ${item.status || "-"}`,
     `Selected AI probability threshold: ${probability(currentEligibilityThreshold())}`,
     reasons,
     item.thesisType ? `Thesis type: ${item.thesisType}` : "",
@@ -870,10 +870,25 @@ function analysisBadge(item) {
 }
 
 function evaluationStatusLabel(item) {
-  const status = adjustedEvaluationStatus(item);
-  if (item.selectionStatus === "RISK_BLOCKED") return `${status} / RISK BLOCKED`;
-  if (status !== String(item.status || "").toUpperCase()) return `${status} / THRESHOLD`;
-  return status;
+  const status = portfolioEvaluationStatus(item);
+  if (status === "ERROR") return "ERROR";
+  if (status === "ELIGIBLE") return "ELIGIBLE";
+  if (item.selectionStatus === "RISK_BLOCKED") return "NOT ELIGIBLE / RISK BLOCKED";
+  return "NOT ELIGIBLE";
+}
+
+function evaluationStatusClass(item) {
+  const status = portfolioEvaluationStatus(item);
+  if (status === "ERROR") return "negative";
+  if (status === "ELIGIBLE") return "positive";
+  return "";
+}
+
+function evaluationFilterLabel(value) {
+  if (value === "ELIGIBLE") return "eligible";
+  if (value === "REJECTED") return "not eligible";
+  if (value === "ERROR") return "error";
+  return "evaluated";
 }
 
 function eligibilityThresholdStorageKey() {
@@ -1275,6 +1290,13 @@ function adjustedEvaluationStatus(item) {
   return original;
 }
 
+function portfolioEvaluationStatus(item) {
+  const status = adjustedEvaluationStatus(item);
+  if (status === "ERROR") return "ERROR";
+  if (status === "ELIGIBLE" && item.selectionStatus !== "RISK_BLOCKED") return "ELIGIBLE";
+  return "REJECTED";
+}
+
 function evaluationReasons(item, riskReason = "") {
   const aiProbability = Number(item.aiProbability);
   const threshold = currentEligibilityThreshold();
@@ -1286,7 +1308,7 @@ function evaluationReasons(item, riskReason = "") {
   }
   reasons.push(...nonProbabilityRejectReasons(item));
   if (adjustedStatus === "ELIGIBLE" && String(item.status || "").toUpperCase() === "REJECTED") {
-    reasons.push("passes selected probability threshold; originally rejected by bot threshold");
+    reasons.push("passes selected probability threshold after current portfolio settings");
   }
   return reasons.filter(Boolean);
 }
@@ -1300,7 +1322,7 @@ async function loadBotState() {
     if (els.botAction) els.botAction.textContent = "offline";
     if (els.botInlineAction) els.botInlineAction.textContent = "offline";
     els.botStatus.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
-    els.botTrades.innerHTML = '<div class="empty">Autonomous paper bot state is not available yet.</div>';
+    els.botTrades.innerHTML = '<div class="empty">Autonomous paper portfolio state is not available yet.</div>';
     if (els.closedTrades) els.closedTrades.innerHTML = '<div class="empty">Closed paper trades are not available yet.</div>';
     if (els.closedSummary) els.closedSummary.textContent = "offline";
     els.botEvaluations.innerHTML = '<div class="empty">No common evaluation log loaded.</div>';
@@ -1408,7 +1430,7 @@ async function triggerOneTimeExecution(target) {
     setExecutionStatus(`${target} workflow started`);
     steps = addExecutionStep(steps, "Revalidation running", live
       ? "The runner refreshes account state, revalidates candidates, checks risk diversification, then submits an order only if criteria still pass."
-      : "The paper bot scans markets, prioritizes new opportunities, updates known evaluations, and may open one paper trade.", "active");
+      : "The evaluation engine scans markets, prioritizes new opportunities, updates known evaluations, and may open one paper trade.", "active");
     const workflow = await waitForWorkflowRun(target, startedAt, steps);
     steps = workflow.steps;
     if (workflow.run?.conclusion && workflow.run.conclusion !== "success") {
@@ -1980,7 +2002,7 @@ function renderLiveState(liveState) {
 
 function evaluationSortValue(item, key) {
   if (key === "evaluatedAt") return Date.parse(item.evaluatedAt || "") || 0;
-  if (key === "status") return adjustedEvaluationStatus(item);
+  if (key === "status") return portfolioEvaluationStatus(item);
   if (key === "market") return `${item.outcome || ""} ${item.question || ""}`.toLowerCase();
   if (key === "endDate") return Date.parse(evaluationEndDate(item) || "") || 0;
   if (key === "daysLeft") return evaluationDaysLeft(item);
@@ -2014,7 +2036,7 @@ function sortedEvaluations(evaluations) {
 
 function filteredEvaluations(evaluations) {
   if (state.evaluationStatus === "ALL") return evaluations;
-  return evaluations.filter((item) => adjustedEvaluationStatus(item) === state.evaluationStatus);
+  return evaluations.filter((item) => portfolioEvaluationStatus(item) === state.evaluationStatus);
 }
 
 function sortableHeader(key, label) {
@@ -2111,13 +2133,12 @@ function updateHistoryCell(item) {
 
 function renderBotEvaluations() {
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
-  const eligibleCount = evaluations.filter((item) => adjustedEvaluationStatus(item) === "ELIGIBLE").length;
-  const botEligibleCount = evaluations.filter((item) => String(item.status || "").toUpperCase() === "ELIGIBLE").length;
-  const riskBlockedCount = evaluations.filter((item) => adjustedEvaluationStatus(item) === "ELIGIBLE" && item.selectionStatus === "RISK_BLOCKED").length;
-  const tradableCount = Math.max(0, eligibleCount - riskBlockedCount);
+  const eligibleCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "ELIGIBLE").length;
+  const errorCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "ERROR").length;
+  const notEligibleCount = Math.max(0, evaluations.length - eligibleCount - errorCount);
 
   if (els.evaluationSummary) {
-    els.evaluationSummary.textContent = `${tradableCount} tradable / ${eligibleCount} eligible / ${botEligibleCount} bot / ${evaluations.length} total`;
+    els.evaluationSummary.textContent = `${eligibleCount} eligible / ${notEligibleCount} not eligible / ${errorCount} errors / ${evaluations.length} evaluated`;
   }
 
   if (!evaluations.length) {
@@ -2128,7 +2149,7 @@ function renderBotEvaluations() {
   const visibleEvaluations = sortedEvaluations(filteredEvaluations(evaluations)).slice(0, 80);
 
   if (!visibleEvaluations.length) {
-    els.botEvaluations.innerHTML = `<div class="empty">No ${state.evaluationStatus.toLowerCase()} evaluations in the latest log.</div>`;
+    els.botEvaluations.innerHTML = `<div class="empty">No ${evaluationFilterLabel(state.evaluationStatus)} markets in the latest evaluation log.</div>`;
     return;
   }
 
@@ -2156,7 +2177,7 @@ function renderBotEvaluations() {
         ${visibleEvaluations.map((item) => `
           <tr>
             <td data-label="Time">${escapeHtml(formatDate(item.evaluatedAt || ""))}</td>
-            <td data-label="Status" class="${adjustedEvaluationStatus(item) === "ELIGIBLE" && item.selectionStatus !== "RISK_BLOCKED" ? "positive" : "negative"}">${escapeHtml(evaluationStatusLabel(item))}</td>
+            <td data-label="Status" class="${evaluationStatusClass(item)}">${escapeHtml(evaluationStatusLabel(item))}</td>
             <td data-label="Market">
               ${marketAnchor(item)}
               <span>${escapeHtml(riskLine(item))}</span>
@@ -2191,14 +2212,15 @@ function renderBotEvaluations() {
 function runEventDetail(event) {
   const reasons = Array.isArray(event.rejectReasons) && event.rejectReasons.length
     ? event.rejectReasons.join("; ")
-    : "No reject reason recorded.";
+    : "No filter reason recorded.";
   const risk = Array.isArray(event.riskGroupLabels) && event.riskGroupLabels.length
     ? event.riskGroupLabels.join(", ")
     : "-";
   return [
     `${event.outcome || "-"} - ${event.question || "-"}`,
     "",
-    `Status: ${event.status || "-"}`,
+    `Portfolio status: ${String(event.status || "").toUpperCase() === "ELIGIBLE" ? "ELIGIBLE" : "NOT ELIGIBLE"}`,
+    `Stored pipeline status: ${event.status || "-"}`,
     `AI probability: ${probability(Number(event.aiProbability))}`,
     `Raw probability: ${probability(Number(event.rawProbability))}`,
     `Market entry: ${probability(Number(event.marketPrice))}`,
@@ -2217,7 +2239,7 @@ function runEventDetail(event) {
     "",
     `AI analysis: ${event.analysisSummary || "-"}`,
     "",
-    `Reject / filter reasons: ${reasons}`,
+    `Filter reasons: ${reasons}`,
     "",
     `Polymarket: ${event.url || polymarketUrl(event)}`,
   ].join("\n");
@@ -2230,7 +2252,7 @@ function renderRunLog() {
   }
   if (!els.runLog) return;
   if (!runs.length) {
-    els.runLog.innerHTML = '<div class="empty">Evaluation run log is not available yet. It will appear after the next paper bot run.</div>';
+    els.runLog.innerHTML = '<div class="empty">Evaluation run log is not available yet. It will appear after the next evaluation run.</div>';
     return;
   }
 
@@ -2246,14 +2268,14 @@ function renderRunLog() {
           </div>
           <div class="run-counts">
             <span class="pill">${Number(run.eligibleCount || status.ELIGIBLE || 0)} eligible</span>
-            <span class="pill muted">${Number(run.rejectedCount || status.REJECTED || 0)} rejected</span>
+            <span class="pill muted">${Number(run.rejectedCount || status.REJECTED || 0)} not eligible</span>
             ${Number(run.errorCount || status.ERROR || 0) ? `<span class="pill error">${Number(run.errorCount || status.ERROR || 0)} error</span>` : ""}
           </div>
         </div>
         <div class="run-events">
           ${events.length ? events.slice(0, 80).map((event, eventIndex) => `
             <button class="run-event" type="button" data-run-event="${runIndex}:${eventIndex}">
-              <span class="${String(event.status || "").toUpperCase() === "ELIGIBLE" ? "positive" : "negative"}">${escapeHtml(event.status || "-")}</span>
+              <span class="${String(event.status || "").toUpperCase() === "ELIGIBLE" ? "positive" : ""}">${escapeHtml(String(event.status || "").toUpperCase() === "ELIGIBLE" ? "ELIGIBLE" : "NOT ELIGIBLE")}</span>
               <strong>${escapeHtml(event.outcome || "-")}</strong>
               <span>${escapeHtml(event.question || "-")}</span>
               <em>${probability(Number(event.aiProbability))} AI / ${signedPercent(Number(event.annualizedReturn))} EV p.a.</em>
