@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "/home/runner/work/apps/apps/scripts/jamu_ftp_file_audit.py", line 77, in <module>
+    def path_prefixes(relative: str, max_depth: int = MAX_PREFIX_DEPTH) -> list[str]:
+                                                      ^^^^^^^^^^^^^^^^
+NameError: name 'MAX_PREFIX_DEPTH' is not defined
