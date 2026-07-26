@@ -125,43 +125,8 @@ jobs:
                   remove_tree(ftp, child)
               ftp.cwd(current)
 
-          def count_tree(ftp, max_depth=2, depth=0):
-              current = ftp.pwd()
-              files = 0
-              dirs = 0
-              for child in list_names(ftp):
-                  try:
-                      ftp.cwd(child)
-                  except ftplib.all_errors:
-                      files += 1
-                      continue
-                  dirs += 1
-                  if depth < max_depth:
-                      child_files, child_dirs = count_tree(ftp, max_depth, depth + 1)
-                      files += child_files
-                      dirs += child_dirs
-                  ftp.cwd(current)
-              return files, dirs
-
-          def print_quota_probe(ftp):
-              try:
-                  ftp.cwd("/")
-              except ftplib.all_errors:
-                  return
-              root = ftp.pwd()
-              for name in list_names(ftp):
-                  try:
-                      ftp.cwd(name)
-                  except ftplib.all_errors:
-                      print(f"FTP quota probe /{name}: file")
-                      continue
-                  files, dirs = count_tree(ftp)
-                  print(f"FTP quota probe /{name}: files~{files} dirs~{dirs}")
-                  ftp.cwd(root)
-
           with ftplib.FTP(server, timeout=30) as ftp:
               ftp.login(username, password)
-              print_quota_probe(ftp)
               target_parts = target.split("/")
               enter_dir(ftp, target_parts)
               for name in list_names(ftp):
@@ -174,8 +139,7 @@ jobs:
                   if not path.is_file():
                       continue
                   relative = path.relative_to(local_dir).as_posix()
-                  route_files = {"settings/index.php", "opportunities/index.php", "portfolios/index.php"}
-                  if relative not in {"index.html", "api.php", "config.php", *route_files} and not relative.startswith("assets/"):
+                  if relative not in {"index.html", "api.php", "config.php", ".htaccess"} and not relative.startswith("assets/"):
                       continue
                   remote_parts = target_parts + relative.split("/")[:-1]
                   enter_dir(ftp, remote_parts)

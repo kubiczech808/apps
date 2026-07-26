@@ -1,0 +1,6 @@
+DirectoryIndex index.html
+
+RewriteEngine On
+RewriteBase /trading/
+
+RewriteRule ^(settings|opportunities|portfolios)/?$ index.html [L]
