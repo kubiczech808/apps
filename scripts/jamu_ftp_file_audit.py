@@ -4,11 +4,14 @@ import ftplib
 import json
 import os
 import requests
+import sys
+import traceback
 from pathlib import Path, PurePosixPath
 
 
 HOSTS = ("ftp.tajemstvijamu.cz", "neuron.blueboard.cz")
 OUTPUT = Path("jamu-content/file-audit.json")
+ERROR_OUTPUT = Path("jamu-content/file-audit-error.json")
 TEMPLATE = Path("scripts/templates/jamu_file_audit_bridge.php")
 PUBLIC_BASE_URL = "https://tajemstvijamu.cz"
 
@@ -151,4 +154,20 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        ERROR_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+        ERROR_OUTPUT.write_text(
+            json.dumps(
+                {
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "traceback": traceback.format_exc(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        print(ERROR_OUTPUT.read_text(encoding="utf-8"), file=sys.stderr)
+        raise
