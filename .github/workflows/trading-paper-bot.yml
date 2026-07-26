@@ -22,6 +22,21 @@ on:
         required: false
         default: "0.05"
         type: string
+      paper_conservative_min_probability:
+        description: "Conservative AI probability threshold, decimal 0.01-0.99"
+        required: false
+        default: "0.95"
+        type: string
+      paper_high_reward_min_probability:
+        description: "High reward AI probability threshold, decimal 0.01-0.99"
+        required: false
+        default: "0.60"
+        type: string
+      paper_more_probable_min_probability:
+        description: "More probable AI probability threshold, decimal 0.01-0.99"
+        required: false
+        default: "0.60"
+        type: string
   schedule:
     - cron: '7 * * * *'
     - cron: '22,37,52 * * * *'
@@ -36,6 +51,9 @@ jobs:
       PAPER_PORTFOLIO_USDC: "100"
       PAPER_MAX_FRACTION: ${{ github.event.inputs.paper_max_order_fraction || '0.05' }}
       PAPER_MIN_PROBABILITY: "0.95"
+      PAPER_CONSERVATIVE_MIN_PROBABILITY: ${{ github.event.inputs.paper_conservative_min_probability || '0.95' }}
+      PAPER_HIGH_REWARD_MIN_PROBABILITY: ${{ github.event.inputs.paper_high_reward_min_probability || '0.60' }}
+      PAPER_MORE_PROBABLE_MIN_PROBABILITY: ${{ github.event.inputs.paper_more_probable_min_probability || '0.60' }}
       PAPER_MIN_ANNUAL_RETURN: "0.05"
       PAPER_OPPORTUNITY_MIN_PROBABILITY: "0.60"
       PAPER_OPPORTUNITY_MIN_EDGE: "0.04"

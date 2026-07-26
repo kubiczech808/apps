@@ -8,6 +8,9 @@ const REMOTE_STATE_URL = process.env.PAPER_STATE_URL || "";
 const PORTFOLIO_USDC = Number(process.env.PAPER_PORTFOLIO_USDC || 100);
 const MAX_FRACTION = Number(process.env.PAPER_MAX_FRACTION || 0.05);
 const MIN_PROBABILITY = Number(process.env.PAPER_MIN_PROBABILITY || 0.95);
+const CONSERVATIVE_MIN_PROBABILITY = Number(process.env.PAPER_CONSERVATIVE_MIN_PROBABILITY || MIN_PROBABILITY);
+const HIGH_REWARD_MIN_PROBABILITY = Number(process.env.PAPER_HIGH_REWARD_MIN_PROBABILITY || 0.6);
+const MORE_PROBABLE_STRATEGY_MIN_PROBABILITY = Number(process.env.PAPER_MORE_PROBABLE_MIN_PROBABILITY || 0.6);
 const MIN_ANNUAL_RETURN = Number(process.env.PAPER_MIN_ANNUAL_RETURN || 0.05);
 const OPPORTUNITY_MIN_PROBABILITY = Number(process.env.PAPER_OPPORTUNITY_MIN_PROBABILITY || 0.6);
 const OPPORTUNITY_MIN_EDGE = Number(process.env.PAPER_OPPORTUNITY_MIN_EDGE || 0.04);
@@ -41,32 +44,32 @@ const PAPER_STRATEGIES = {
     id: "conservative",
     label: "Conservative",
     selectionMetric: "EV p.a.",
-    minProbability: MIN_PROBABILITY,
+    minProbability: CONSERVATIVE_MIN_PROBABILITY,
     maxResolutionDays: SHORT_HORIZON_DAYS,
     selectionOrder: "highest_ev_pa_first",
-    description: "Requires AI probability >= 95% and resolution within 7 days, then selects the highest EV p.a.",
+    description: `Requires AI probability >= ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${SHORT_HORIZON_DAYS} days, then selects the highest EV p.a.`,
   },
   highReward: {
     id: "highReward",
     label: "High reward",
     selectionMetric: "Reward / risk",
-    minProbability: OPPORTUNITY_MIN_PROBABILITY,
+    minProbability: HIGH_REWARD_MIN_PROBABILITY,
     maxResolutionDays: null,
     minLiquidityUsdc: null,
     requireMostProbableOutcome: false,
     selectionOrder: "highest_reward_risk_first",
-    description: "Prioritizes eligible opportunities by highest reward against risk, preferring short settlement horizons first.",
+    description: `Requires AI probability >= ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}%, then prioritizes eligible opportunities by highest reward against risk, preferring short settlement horizons first.`,
   },
   moreProbable: {
     id: "moreProbable",
     label: "More probable",
     selectionMetric: "Reward / risk",
-    minProbability: OPPORTUNITY_MIN_PROBABILITY,
+    minProbability: MORE_PROBABLE_STRATEGY_MIN_PROBABILITY,
     maxResolutionDays: SHORT_HORIZON_DAYS,
     minLiquidityUsdc: MORE_PROBABLE_MIN_LIQUIDITY_USDC,
     requireMostProbableOutcome: true,
     selectionOrder: "highest_reward_risk_first",
-    description: "Requires AI probability >= 60%, resolution within 7 days, deep liquidity, and the most probable outcome in each market.",
+    description: `Requires AI probability >= ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${SHORT_HORIZON_DAYS} days, deep liquidity, and the most probable outcome in each market.`,
   },
 };
 

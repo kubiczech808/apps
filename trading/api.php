@@ -622,6 +622,9 @@ try {
         $payload = request_payload();
         $target = (string) ($payload['target'] ?? '');
         $liveMinProbability = normalized_probability_input($payload['min_probability'] ?? $payload['live_min_probability'] ?? null);
+        $paperConservativeMinProbability = normalized_probability_input($payload['paper_conservative_min_probability'] ?? null);
+        $paperHighRewardMinProbability = normalized_probability_input($payload['paper_high_reward_min_probability'] ?? null);
+        $paperMoreProbableMinProbability = normalized_probability_input($payload['paper_more_probable_min_probability'] ?? null);
         $liveMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['live_max_order_fraction'] ?? null);
         $paperMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['paper_max_order_fraction'] ?? null);
         $workflows = [
@@ -630,6 +633,9 @@ try {
                 'inputs' => array_filter([
                     'mode' => 'full',
                     'paper_max_order_fraction' => $paperMaxOrderFraction,
+                    'paper_conservative_min_probability' => $paperConservativeMinProbability,
+                    'paper_high_reward_min_probability' => $paperHighRewardMinProbability,
+                    'paper_more_probable_min_probability' => $paperMoreProbableMinProbability,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Paper bot workflow dispatched.',
             ],

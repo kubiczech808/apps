@@ -1237,9 +1237,10 @@ function syncEvaluationProbabilityFilterControl() {
   }
 }
 
-function eligibilityThresholdStorageKey() {
-  const parts = [ELIGIBILITY_THRESHOLD_STORAGE_KEY, state.mode];
-  if (isLiveMode()) {
+function eligibilityThresholdStorageKey(mode = state.mode) {
+  const normalizedMode = normalizeMode(mode);
+  const parts = [ELIGIBILITY_THRESHOLD_STORAGE_KEY, normalizedMode];
+  if (normalizedMode === "live") {
     const address = state.liveState?.account?.address || state.liveState?.account?.proxyWallet || "";
     if (address) parts.push(String(address).toLowerCase());
   }
@@ -1263,21 +1264,20 @@ function limitOrdersStorageKey() {
   return accountScopedStorageKey(LIMIT_ORDERS_STORAGE_KEY);
 }
 
-function storedEligibilityThreshold() {
+function storedEligibilityThreshold(mode = state.mode) {
   try {
-    const scopedKey = eligibilityThresholdStorageKey();
+    const scopedKey = eligibilityThresholdStorageKey(mode);
     const scopedValue = normalizeEligibilityThreshold(Number(localStorage.getItem(scopedKey)));
     if (scopedValue != null) return scopedValue;
-    const legacyValue = normalizeEligibilityThreshold(Number(localStorage.getItem(ELIGIBILITY_THRESHOLD_STORAGE_KEY)));
-    return legacyValue;
+    return null;
   } catch {
     return null;
   }
 }
 
-function saveEligibilityThreshold(value) {
+function saveEligibilityThreshold(value, mode = state.mode) {
   try {
-    const key = eligibilityThresholdStorageKey();
+    const key = eligibilityThresholdStorageKey(mode);
     localStorage.setItem(key, String(value));
     state.eligibilityThresholdKey = key;
   } catch {
@@ -1291,8 +1291,7 @@ function refreshEligibilityThreshold() {
     syncEligibilityThresholdControl();
     return;
   }
-  const portfolioThreshold = Number(state.botState?.portfolio?.minProbability ?? DEFAULT_ELIGIBILITY_THRESHOLD);
-  state.eligibilityThreshold = storedEligibilityThreshold() ?? normalizeEligibilityThreshold(portfolioThreshold) ?? DEFAULT_ELIGIBILITY_THRESHOLD;
+  state.eligibilityThreshold = storedEligibilityThreshold() ?? thresholdDefaultForMode(state.mode);
   state.eligibilityThresholdKey = key;
   syncEligibilityThresholdControl();
 }
@@ -1640,9 +1639,7 @@ function currentEligibilityThreshold() {
   const configured = Number(state.eligibilityThreshold);
   const normalizedConfigured = normalizeEligibilityThreshold(configured);
   if (normalizedConfigured != null) return normalizedConfigured;
-  const portfolio = state.botState?.portfolio || {};
-  const fallback = Number(portfolio.minProbability ?? 0.95);
-  return normalizeEligibilityThreshold(fallback) ?? DEFAULT_ELIGIBILITY_THRESHOLD;
+  return thresholdForMode(state.mode);
 }
 
 function normalizeEligibilityThreshold(value) {
@@ -1650,6 +1647,36 @@ function normalizeEligibilityThreshold(value) {
   if (!Number.isFinite(numeric)) return null;
   if (numeric < MIN_ELIGIBILITY_THRESHOLD || numeric > MAX_ELIGIBILITY_THRESHOLD) return null;
   return numeric;
+}
+
+function paperModeFromStrategyId(strategyId) {
+  if (strategyId === "highReward") return "paper-highReward";
+  if (strategyId === "moreProbable") return "paper-moreProbable";
+  return "paper-conservative";
+}
+
+function portfolioForMode(mode = state.mode) {
+  if (normalizeMode(mode) === "live") return state.liveState?.portfolio || {};
+  const portfolios = paperPortfolioList(state.botState || {});
+  const strategyId = paperStrategyIdFromMode(mode);
+  const selected = portfolios.find((item) => item.id === strategyId) || selectedPaperPortfolio(state.botState || {});
+  return {
+    ...selected,
+    ...(selected?.portfolio || {}),
+  };
+}
+
+function thresholdDefaultForMode(mode = state.mode) {
+  const normalizedMode = normalizeMode(mode);
+  const portfolioThreshold = Number(portfolioForMode(normalizedMode)?.minProbability);
+  const fallback = normalizedMode === "paper-highReward" || normalizedMode === "paper-moreProbable"
+    ? 0.6
+    : DEFAULT_ELIGIBILITY_THRESHOLD;
+  return normalizeEligibilityThreshold(portfolioThreshold) ?? fallback;
+}
+
+function thresholdForMode(mode = state.mode) {
+  return storedEligibilityThreshold(mode) ?? thresholdDefaultForMode(mode);
 }
 
 function syncEligibilityThresholdControl() {
@@ -1779,6 +1806,14 @@ async function requestLiveAccountSync(options = {}) {
   }
 }
 
+function paperThresholdPayload() {
+  return {
+    paper_conservative_min_probability: thresholdForMode("paper-conservative"),
+    paper_high_reward_min_probability: thresholdForMode("paper-highReward"),
+    paper_more_probable_min_probability: thresholdForMode("paper-moreProbable"),
+  };
+}
+
 async function triggerOneTimeExecution(target) {
   const live = target === "live";
   if (live && !state.liveExecutionArmed) {
@@ -1812,6 +1847,7 @@ async function triggerOneTimeExecution(target) {
         target,
         ...(!live ? {
           max_order_fraction: currentRiskAllocation(),
+          ...paperThresholdPayload(),
         } : {
           min_probability: currentEligibilityThreshold(),
           max_order_fraction: currentRiskAllocation(),
@@ -1941,7 +1977,8 @@ function paperPortfolioTrades(portfolioState) {
 }
 
 function portfolioRuleRows(portfolio = {}) {
-  const threshold = Number(portfolio.minProbability ?? currentEligibilityThreshold());
+  const mode = portfolio.id ? paperModeFromStrategyId(portfolio.id) : state.mode;
+  const threshold = thresholdForMode(mode);
   const maxResolutionDays = Number(portfolio.maxResolutionDays);
   const minLiquidityUsdc = Number(portfolio.minLiquidityUsdc);
   const priority = portfolio.selectionOrder === "highest_reward_risk_first"
@@ -3009,6 +3046,11 @@ els.eligibilityThreshold?.addEventListener("input", () => {
   state.eligibilityThreshold = value;
   saveEligibilityThreshold(value);
   syncEligibilityThresholdControl();
+  if (isLiveMode() && state.liveState) {
+    renderLiveState(state.liveState);
+  } else if (state.botState) {
+    renderBotState(state.botState);
+  }
   renderBotEvaluations();
 });
 
