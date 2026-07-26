@@ -53,7 +53,44 @@ function aiResearchTemporaryBackoffUntil(Throwable $e): int
     return time() + max(0, $delay) + 5 * 60;
 }
 
-function scheduleAiResearchTemporaryBackoff(PDO $pdo, Throwable $e): int
+function aiResearchDailyGeminiRequestBudget(array $config): int
+{
+    $configured = (int)($config['ai']['gemini_research_daily_request_budget'] ?? 0);
+    return max(1, $configured > 0 ? $configured : 18);
+}
+
+function aiResearchEstimatedGeminiRequestsPerSeed(array $config): int
+{
+    $configured = (int)($config['ai']['gemini_research_requests_per_seed'] ?? 0);
+    return max(1, $configured > 0 ? $configured : 3);
+}
+
+function aiResearchDailySeedBudget(array $config): int
+{
+    return max(1, (int)floor(aiResearchDailyGeminiRequestBudget($config) / aiResearchEstimatedGeminiRequestsPerSeed($config)));
+}
+
+function aiResearchRunIntervalSeconds(array $config): int
+{
+    return max(5 * 60, (int)ceil(86400 / aiResearchDailySeedBudget($config)));
+}
+
+function aiResearchMaxContactValidationAttempts(array $config): int
+{
+    $configured = (int)($config['ai']['gemini_research_validation_attempts'] ?? 0);
+    return max(1, min(4, $configured > 0 ? $configured : 1));
+}
+
+function aiResearchIntervalLabel(int $seconds): string
+{
+    if ($seconds >= 3600) {
+        $hours = $seconds / 3600;
+        return abs($hours - round($hours)) < 0.05 ? (int)round($hours) . ' h' : number_format($hours, 1, ',', ' ') . ' h';
+    }
+    return max(1, (int)ceil($seconds / 60)) . ' min';
+}
+
+function scheduleAiResearchTemporaryBackoff(PDO $pdo, Throwable $e, int $intervalSeconds = 3600): int
 {
     $until = aiResearchTemporaryBackoffUntil($e);
     if ($until <= 0) {
@@ -66,7 +103,7 @@ function scheduleAiResearchTemporaryBackoff(PDO $pdo, Throwable $e): int
     }
     setSetting($pdo, 'ai_research_next_allowed_at', (string)$until);
     $delay = max(0, $until - time());
-    setSetting($pdo, 'ai_research_last_run_at', (string)(time() - 3600 + $delay));
+    setSetting($pdo, 'ai_research_last_run_at', (string)(time() - max(300, $intervalSeconds) + $delay));
     return $until;
 }
 
@@ -419,7 +456,7 @@ function handlePost(PDO $pdo, array $config): ?string
             setSetting($pdo, 'ai_research_next_allowed_at', '');
             return $message;
         } catch (AiResearchTemporaryException $e) {
-            $nextAllowedAt = scheduleAiResearchTemporaryBackoff($pdo, $e);
+            $nextAllowedAt = scheduleAiResearchTemporaryBackoff($pdo, $e, aiResearchRunIntervalSeconds($config));
             return 'AI research odlozen: ' . $e->getMessage()
                 . ($nextAllowedAt > 0 ? ' Dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.' : '');
         }
@@ -2071,13 +2108,15 @@ function onboardingDemoSeedContacts(string $businessType, array $plan): array
 function runCronAiResearch(PDO $pdo, array $config): string
 {
     $settings = loadSettings($pdo);
+    $intervalSeconds = aiResearchRunIntervalSeconds($config);
     $nextAllowedAt = (int)($settings['ai_research_next_allowed_at'] ?? 0);
     if ($nextAllowedAt > time()) {
         return 'AI research: Gemini je docasne omezeny, dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.';
     }
     $lastRun = (int)($settings['ai_research_last_run_at'] ?? 0);
-    if ($lastRun > 0 && time() - $lastRun < 3600) {
-        return 'AI research: dalsi beh jeste neni na rade.';
+    if ($lastRun > 0 && time() - $lastRun < $intervalSeconds) {
+        return 'AI research: dalsi beh jeste neni na rade. Rezim Gemini rozpoctu: '
+            . aiResearchDailySeedBudget($config) . ' seedu/den, interval cca ' . aiResearchIntervalLabel($intervalSeconds) . '.';
     }
     $lockUntil = (int)($settings['ai_research_lock_until'] ?? 0);
     if ($lockUntil > time()) {
@@ -2091,7 +2130,7 @@ function runCronAiResearch(PDO $pdo, array $config): string
         setSetting($pdo, 'ai_research_next_allowed_at', '');
         return $message;
     } catch (AiResearchTemporaryException $e) {
-        $nextAllowedAt = scheduleAiResearchTemporaryBackoff($pdo, $e);
+        $nextAllowedAt = scheduleAiResearchTemporaryBackoff($pdo, $e, $intervalSeconds);
         if ($nextAllowedAt <= 0) {
             setSetting($pdo, 'ai_research_last_run_at', (string)time());
         }
@@ -2132,9 +2171,13 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
         $bestEvaluated = [];
         $bestAccepted = [];
         $attempts = 0;
+        $maxValidationAttempts = aiResearchMaxContactValidationAttempts($config);
         $seenPlans = [];
         try {
             foreach ($plans as $plan) {
+                if ($attempts >= $maxValidationAttempts) {
+                    break;
+                }
                 $plan = aiResearchEnrichPlan($plan, $seed);
                 $signature = aiResearchPlanSignature($plan);
                 if ($signature !== '' && isset($seenPlans[$signature])) {
@@ -2154,12 +2197,16 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
                     $bestAccepted = $accepted;
                     updateAiResearchRunProgress($pdo, $runId, $bestPlan, 'AI research bezi: nalezeno ' . count($bestEvaluated) . ' kontaktu, vhodnych zatim ' . count($bestAccepted) . '.');
                 }
-                if (count($bestAccepted) >= 3 || $attempts >= 4) {
+                if (count($bestAccepted) >= 3 || $attempts >= $maxValidationAttempts) {
                     break;
                 }
             }
-            if (!$bestAccepted) {
-                foreach (aiResearchAlternativePlans($config, $seed, $bestPlan, array_keys($seenPlans), 3) as $plan) {
+            if (!$bestAccepted && $attempts < $maxValidationAttempts) {
+                $remainingAttempts = max(0, $maxValidationAttempts - $attempts);
+                foreach (aiResearchAlternativePlans($config, $seed, $bestPlan, array_keys($seenPlans), $remainingAttempts) as $plan) {
+                    if ($attempts >= $maxValidationAttempts) {
+                        break;
+                    }
                     $attempts++;
                     $plan = aiResearchEnrichPlan($plan, $seed);
                     updateAiResearchRunProgress($pdo, $runId, $plan, 'AI research bezi: zkousim alternativni keyword "' . aiResearchPrimaryKeyword($plan) . '".');
@@ -2174,7 +2221,7 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
                         $bestAccepted = $accepted;
                         updateAiResearchRunProgress($pdo, $runId, $bestPlan, 'AI research bezi: nalezeno ' . count($bestEvaluated) . ' kontaktu, vhodnych zatim ' . count($bestAccepted) . '.');
                     }
-                    if (count($bestAccepted) >= 3) {
+                    if (count($bestAccepted) >= 3 || $attempts >= $maxValidationAttempts) {
                         break;
                     }
                 }
@@ -4272,6 +4319,14 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
             'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini_research', 'skipped_seed_unsuitable'),
         ];
     }
+    $acceptedContacts = array_values(array_filter($contacts, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
+    if (!$acceptedContacts) {
+        return [
+            'subject' => 'Subjekt zatim neni pripraveny k osloveni',
+            'html' => '<p>Pro tento seed subjekt zatim nejsou ulozene zadne vhodne kontakty pro osloveni, proto se finalni text pres Gemini negeneroval.</p>',
+            'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini_research', 'skipped_no_accepted_contacts'),
+        ];
+    }
     $fallbackTarget = trim((string)($contacts[0]['subject_name'] ?? $plan['audience_label'] ?? ''));
     $fallbackSubject = aiResearchFallbackSubject($language, $fallbackTarget);
     $fallbackHtml = aiResearchFallbackEmailHtml($language, $seedBusiness);
@@ -4279,7 +4334,6 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
     if ($apiKey === '') {
         throw new AiResearchTemporaryException('AI outreach_draft nema nastaveny Gemini API klic, beh se neulozil jako fallback.');
     }
-    $acceptedContacts = array_values(array_filter($contacts, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
     $sampleContacts = array_slice($acceptedContacts ?: $contacts, 0, 5);
     $promptContext = [
         'seed_business' => [
@@ -11654,7 +11708,7 @@ function uiCzechDiacriticsMap(): array
 {
     $map = [
         'Aplikace zustala dostupna, ale pri nacitani prihlasene casti narazila na chybu. Tento text pomuze opravit konkretni misto bez obecne HTTP 500.' => 'Aplikace zůstala dostupná, ale při načítání přihlášené části narazila na chybu. Tento text pomůže opravit konkrétní místo bez obecné HTTP 500.',
-        'Kazdou hodinu agent vybere jeden ulozeny kontakt, navrhne B2B cileni, najde max. 10 kontaktu, vyhodnoti relevanci a ulozi navrh osloveni.' => 'Každou hodinu agent vybere jeden uložený kontakt, navrhne B2B cílení, najde max. 10 kontaktů, vyhodnotí relevanci a uloží návrh oslovení.',
+        'Agent prubezne vybira ulozene kontakty, navrhuje B2B cileni, hleda max. 10 kontaktu, vyhodnocuje relevanci a uklada navrh osloveni.' => 'Agent průběžně vybírá uložené kontakty, navrhuje B2B cílení, hledá max. 10 kontaktů, vyhodnocuje relevanci a ukládá návrh oslovení.',
         'Prehled behu, ktere prave bezi nebo cekaji ve fronte napric vsemi scraping kontejnery.' => 'Přehled běhů, které právě běží nebo čekají ve frontě napříč všemi scraping kontejnery.',
         'Prehled pripravenych kampani, jejich planu, limitu a stavu osloveni.' => 'Přehled připravených kampaní, jejich plánů, limitů a stavu oslovení.',
         'Cilova databaze ma' => 'Cílová databáze má',
@@ -14541,7 +14595,11 @@ function renderApp(PDO $pdo, ?array $flash): void
         $lastResearchRunAt = (int)($researchSettings['ai_research_last_run_at'] ?? 0);
         $researchLockUntil = (int)($researchSettings['ai_research_lock_until'] ?? 0);
         $researchAiNextAllowedAt = (int)($researchSettings['ai_research_next_allowed_at'] ?? 0);
-        $nextResearchRunAt = $lastResearchRunAt > 0 ? $lastResearchRunAt + 3600 : 0;
+        $researchGeminiDailyBudget = aiResearchDailyGeminiRequestBudget($config);
+        $researchGeminiRequestsPerSeed = aiResearchEstimatedGeminiRequestsPerSeed($config);
+        $researchDailySeedBudget = aiResearchDailySeedBudget($config);
+        $researchIntervalSeconds = aiResearchRunIntervalSeconds($config);
+        $nextResearchRunAt = $lastResearchRunAt > 0 ? $lastResearchRunAt + $researchIntervalSeconds : 0;
         $nextResearchRunAt = max($nextResearchRunAt, $researchAiNextAllowedAt);
         $researchAutomationStatus = $researchLockUntil > time()
             ? 'Právě běží, zámek do ' . formatDateTime(date('c', $researchLockUntil))
@@ -14557,8 +14615,8 @@ function renderApp(PDO $pdo, ?array $flash): void
         <div class="section-header">
             <div>
                 <h2>AI research administrace</h2>
-                <p>Každou hodinu agent vybere novou firmu z Firmy.cz / Vše pro firmy / Praha, projde její web, navrhne nejvhodnější B2B cílení, najde max. 10 kontaktů a uloží návrh oslovení.</p>
-                <p class="muted">Automatika se kontroluje cronem každých 5 minut, nový AI research se ale spustí nejvýš 1x za hodinu. Samostatný hodinový GitHub workflow běží v 17. minutě každé hodiny.</p>
+                <p>Agent průběžně vybírá nové firmy z Firmy.cz / Vše pro firmy / Praha, projde jejich web, navrhne nejvhodnější B2B cílení, najde max. 10 kontaktů a uloží návrh oslovení.</p>
+                <p class="muted">Automatika se kontroluje cronem každých 5 minut. Gemini research je rozložený do celého dne: rozpočet <?= h((string)$researchGeminiDailyBudget) ?> requestů/den, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed, maximum <?= h((string)$researchDailySeedBudget) ?> seed subjektů/den, interval cca <?= h(aiResearchIntervalLabel($researchIntervalSeconds)) ?>.</p>
                 <p class="muted">Poslední automatický běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Další nejdříve: <?= h($researchNextRunLabel) ?>. Stav: <?= h($researchAutomationStatus) ?></p>
             </div>
             <form method="post" class="inline">

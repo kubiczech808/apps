@@ -33,6 +33,9 @@ return [
         'gemini_api_key' => '',
         'gemini_model' => 'gemini-3.5-flash',
         'gemini_research_model' => 'gemini-3.5-flash',
+        'gemini_research_daily_request_budget' => 18,
+        'gemini_research_requests_per_seed' => 3,
+        'gemini_research_validation_attempts' => 1,
     ],
     'database' => [
         'driver' => 'mysql',

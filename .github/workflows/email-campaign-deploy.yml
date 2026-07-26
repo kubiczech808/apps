@@ -45,6 +45,9 @@ jobs:
           GEMINI_API_KEY_EMAILING: ${{ secrets.GEMINI_API_KEY_EMAILING }}
           GEMINI_RESEARCH_MODEL: ${{ secrets.GEMINI_RESEARCH_MODEL }}
           GEMINI_MODEL: gemini-3.5-flash
+          GEMINI_RESEARCH_DAILY_REQUEST_BUDGET: ${{ secrets.GEMINI_RESEARCH_DAILY_REQUEST_BUDGET }}
+          GEMINI_RESEARCH_REQUESTS_PER_SEED: ${{ secrets.GEMINI_RESEARCH_REQUESTS_PER_SEED }}
+          GEMINI_RESEARCH_VALIDATION_ATTEMPTS: ${{ secrets.GEMINI_RESEARCH_VALIDATION_ATTEMPTS }}
         run: |
           if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
             echo "MySQL database secrets are required for email-campaign deploy."
@@ -94,6 +97,9 @@ jobs:
                   'gemini_api_key' => {s(os.environ.get("GEMINI_API_KEY_EMAILING"))},
                   'gemini_model' => {s(os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash")},
                   'gemini_research_model' => {s(os.environ.get("GEMINI_RESEARCH_MODEL") or os.environ.get("GEMINI_MODEL") or "gemini-3.5-flash")},
+                  'gemini_research_daily_request_budget' => {int(os.environ.get("GEMINI_RESEARCH_DAILY_REQUEST_BUDGET") or "18")},
+                  'gemini_research_requests_per_seed' => {int(os.environ.get("GEMINI_RESEARCH_REQUESTS_PER_SEED") or "3")},
+                  'gemini_research_validation_attempts' => {int(os.environ.get("GEMINI_RESEARCH_VALIDATION_ATTEMPTS") or "1")},
               ],
               'database' => [
                   'driver' => 'mysql',
