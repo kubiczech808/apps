@@ -69,6 +69,9 @@ function jamu_file_audit_active_plugin_slugs(): array
 
 function jamu_file_audit_candidate(string $relative, bool $is_dir, array $active_plugin_slugs): array
 {
+    if (str_starts_with($relative, 'www/')) {
+        $relative = substr($relative, 4);
+    }
     $lower = strtolower(trim($relative, '/'));
     $parts = $lower === '' ? [] : explode('/', $lower);
     if ($lower === '') {
@@ -116,7 +119,8 @@ function jamu_file_audit_increment(array &$counter, string $key, int $by = 1): v
     $counter[$key] += $by;
 }
 
-$root = wp_normalize_path(ABSPATH);
+$wordpress_root = wp_normalize_path(ABSPATH);
+$root = wp_normalize_path(dirname(rtrim($wordpress_root, '/')) . '/');
 $active_plugin_slugs = jamu_file_audit_active_plugin_slugs();
 
 $total_files = 0;
@@ -171,7 +175,8 @@ foreach ($iterator as $item) {
             jamu_file_audit_increment($file_prefix_counts, $prefix);
             jamu_file_audit_increment($byte_prefix_counts, $prefix, $size);
         }
-        $parts = explode('/', $relative);
+        $effective_relative = str_starts_with($relative, 'www/') ? substr($relative, 4) : $relative;
+        $parts = explode('/', $effective_relative);
         if (count($parts) >= 3 && $parts[0] === 'wp-content' && $parts[1] === 'plugins') {
             jamu_file_audit_increment($plugin_file_counts, $parts[2]);
             jamu_file_audit_increment($plugin_byte_counts, $parts[2], $size);
@@ -217,7 +222,8 @@ foreach (array_slice($candidate_counts, 0, 80, true) as $path => $files) {
 $report = [
     'generated_at' => gmdate('c'),
     'site' => home_url('/'),
-    'wordpress_root' => $root,
+    'wordpress_root' => $wordpress_root,
+    'scanned_root' => $root,
     'total_files' => $total_files,
     'total_dirs' => $total_dirs,
     'total_bytes' => $total_bytes,
