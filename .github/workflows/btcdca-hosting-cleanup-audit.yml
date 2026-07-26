@@ -83,7 +83,7 @@ jobs:
           ftp = None
           for host in HOSTS:
               try:
-                  ftp = ftplib.FTP(host, timeout=30)
+                  ftp = ftplib.FTP(host, timeout=30, encoding="latin-1")
                   ftp.login(LOGIN, PASSWORD)
                   if ftp.sock:
                       ftp.sock.settimeout(30)
@@ -129,6 +129,26 @@ jobs:
                   return None, "missing", f"cwd failed: {exc}"
 
               try:
+                  lines = []
+                  ftp.retrlines("LIST", lines.append)
+                  rows = []
+                  for line in lines:
+                      parsed = parse_list_line(line)
+                      if not parsed:
+                          continue
+                      name, is_dir = parsed
+                      rows.append((clean_path(posixpath.join(path, name) if path else name), is_dir))
+                  return rows, "LIST", None
+              except Exception as list_exc:
+                  list_error = list_exc
+              finally:
+                  try:
+                      ftp.cwd(original)
+                  except Exception:
+                      pass
+
+              try:
+                  enter_dir(path)
                   rows = []
                   for name, facts in ftp.mlsd():
                       if name in (".", ".."):
@@ -142,26 +162,6 @@ jobs:
                   return rows, "MLSD", None
               except Exception as mlsd_exc:
                   mlsd_error = mlsd_exc
-              finally:
-                  try:
-                      ftp.cwd(original)
-                  except Exception:
-                      pass
-
-              try:
-                  enter_dir(path)
-                  lines = []
-                  ftp.retrlines("LIST", lines.append)
-                  rows = []
-                  for line in lines:
-                      parsed = parse_list_line(line)
-                      if not parsed:
-                          continue
-                      name, is_dir = parsed
-                      rows.append((clean_path(posixpath.join(path, name) if path else name), is_dir))
-                  return rows, "LIST", None
-              except Exception as list_exc:
-                  list_error = list_exc
               finally:
                   try:
                       ftp.cwd(original)
