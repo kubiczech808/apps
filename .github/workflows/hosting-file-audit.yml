@@ -8,10 +8,14 @@ on:
     paths:
       - '.github/workflows/hosting-file-audit.yml'
 
+concurrency:
+  group: hosting-file-audit
+  cancel-in-progress: true
+
 jobs:
   audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - name: Find likely cleanup candidates
         env:
@@ -77,25 +81,6 @@ jobs:
                   return []
               return [(posixpath.join(path.rstrip("/") or "/", name), name, kind) for name, kind in list_entries(ftp)]
 
-          def estimate_subtree(ftp, path, max_files=5000):
-              queue = deque([path])
-              files = 0
-              dirs = 0
-              truncated = False
-              while queue:
-                  current = queue.popleft()
-                  for child, name, kind in children(ftp, current):
-                      if kind == "dir":
-                          dirs += 1
-                          queue.append(child)
-                      else:
-                          files += 1
-                          if files >= max_files:
-                              truncated = True
-                              queue.clear()
-                              break
-              return files, dirs, truncated
-
           def candidate_roots():
               roots = ["/"]
               if configured_root:
@@ -130,7 +115,7 @@ jobs:
               candidates = []
               queue = deque((root, 0) for root in roots)
               visited = set()
-              max_nodes = 12000
+              max_nodes = 2500
               while queue and len(visited) < max_nodes:
                   current, depth = queue.popleft()
                   if current in visited:
@@ -140,13 +125,12 @@ jobs:
                       low = name.lower()
                       if kind == "dir":
                           if low in suspicious_dirs or any(token in low for token in ["backup", "cache", "tmp", "temp", "old"]):
-                              files, dirs, truncated = estimate_subtree(ftp, child)
-                              candidates.append((files, dirs, child, "dir", "truncated" if truncated else ""))
-                          if depth < 7 and low not in {"mail", "logs"}:
+                              candidates.append((child, "dir"))
+                          if depth < 5 and low not in {"mail", "logs"}:
                               queue.append((child, depth + 1))
                       else:
                           if low.endswith(suspicious_suffixes) or low in {".ftp-deploy-sync-state.json"}:
-                              candidates.append((1, 0, child, "file", ""))
+                              candidates.append((child, "file"))
 
               print(f"Visited directories: {len(visited)}")
               if len(visited) >= max_nodes:
@@ -155,7 +139,6 @@ jobs:
               print("Likely cleanup candidates:")
               if not candidates:
                   print("-")
-              for files, dirs, path, kind, note in sorted(candidates, key=lambda item: item[0], reverse=True)[:120]:
-                  suffix = f" ({note})" if note else ""
-                  print(f"{files:6d} files {dirs:5d} dirs  {kind:4s}  {path}{suffix}")
+              for path, kind in sorted(set(candidates))[:200]:
+                  print(f"{kind:4s}  {path}")
           PY
