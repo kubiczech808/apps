@@ -2783,7 +2783,9 @@ function liveBatchCandidateSummaryFromExecution(item = {}) {
 function liveRunLogRows() {
   const rows = [];
   const fromLiveState = Array.isArray(state.liveState?.runLog) ? state.liveState.runLog : [];
+  const fromExecutionState = Array.isArray(state.liveExecutionState?.runLog) ? state.liveExecutionState.runLog : [];
   rows.push(...fromLiveState);
+  rows.push(...fromExecutionState);
   const executionRun = normalizeLiveExecutionRun(state.liveExecutionState);
   if (executionRun) rows.unshift(executionRun);
   return mergeUniqueByRun(rows).slice(0, 120);

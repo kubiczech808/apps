@@ -34,6 +34,7 @@ const IDLE_CASH_GRACE_HOURS = Number(process.env.LIVE_IDLE_CASH_GRACE_HOURS || 2
 const ONE_TRADE_PER_DAY = String(process.env.LIVE_ONE_TRADE_PER_DAY ?? "true").toLowerCase() !== "false";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
 const TZ = "Europe/Prague";
+let previousExecutionState = null;
 
 function hasFlag(name) {
   return process.argv.includes(`--${name}`);
@@ -638,10 +639,45 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
 }
 
 async function emitDecision(payload) {
-  console.log(JSON.stringify(payload, null, 2));
+  const previousRunLog = Array.isArray(previousExecutionState?.runLog) ? previousExecutionState.runLog : [];
+  const runEntry = {
+    ...(payload.batchLog || {}),
+    id: payload.batchLog?.id || `live-trade-batch-${payload.generatedAt || new Date().toISOString()}`,
+    runAt: payload.batchLog?.runAt || payload.generatedAt || new Date().toISOString(),
+    generatedAt: payload.generatedAt || payload.batchLog?.runAt || new Date().toISOString(),
+    strategyId: payload.batchLog?.strategyId || "live",
+    strategyLabel: payload.batchLog?.strategyLabel || "Live",
+    action: payload.action || payload.batchLog?.action || "-",
+    reason: payload.reason || payload.batchLog?.reason || "-",
+    explanation: payload.batchLog?.explanation || payload.reason || "-",
+    response: payload.response || null,
+    attempts: Array.isArray(payload.attempts) ? payload.attempts : [],
+  };
+  const nextRunLog = mergeRunLog([runEntry, ...previousRunLog], 160);
+  const output = {
+    ...payload,
+    runLog: nextRunLog,
+  };
+
+  console.log(JSON.stringify(output, null, 2));
   if (!EXECUTION_STATE_PATH) return;
   await mkdir(dirname(EXECUTION_STATE_PATH), { recursive: true });
-  await writeFile(EXECUTION_STATE_PATH, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  await writeFile(EXECUTION_STATE_PATH, `${JSON.stringify(output, null, 2)}\n`, "utf8");
+}
+
+function mergeRunLog(rows = [], limit = 160) {
+  const seen = new Set();
+  const merged = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const key = row.id || `${row.runAt || row.generatedAt || ""}:${row.strategyId || "live"}:${row.action || ""}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+  }
+  return merged
+    .sort((a, b) => Date.parse(b.runAt || b.generatedAt || 0) - Date.parse(a.runAt || a.generatedAt || 0))
+    .slice(0, limit);
 }
 
 async function submitOrder(order) {
@@ -772,6 +808,7 @@ async function main() {
     loadJsonResource(LIVE_STATE_URL, "live state"),
     loadOptionalJsonResource(LIVE_EXECUTION_STATE_URL, "previous live execution state"),
   ]);
+  previousExecutionState = previousExecution;
   const cash = liveCashUsdc(liveState);
   const tradingConfig = liveTradingConfig(liveState);
   const portfolioValue = livePortfolioValue(liveState, cash);
