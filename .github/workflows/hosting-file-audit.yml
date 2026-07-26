@@ -1,0 +1,128 @@
+name: Hosting File Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - '.github/workflows/hosting-file-audit.yml'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Count FTP files
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          HOSTING_FTP_DIR: ${{ secrets.HOSTING_FTP_DIR }}
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          import posixpath
+          from collections import defaultdict
+
+          server = os.environ["HOSTING_FTP_SERVER"]
+          username = os.environ["HOSTING_FTP_USERNAME"]
+          password = os.environ["HOSTING_FTP_PASSWORD"]
+          configured_root = (os.environ.get("HOSTING_FTP_DIR") or "").strip()
+
+          def safe_cwd(ftp, path):
+              try:
+                  ftp.cwd(path)
+                  return True
+              except ftplib.all_errors:
+                  return False
+
+          def list_entries(ftp):
+              try:
+                  entries = []
+                  for name, facts in ftp.mlsd():
+                      if name in {".", ".."}:
+                          continue
+                      entries.append((name, facts.get("type", "")))
+                  return entries
+              except ftplib.all_errors:
+                  names = []
+                  try:
+                      names = [name for name in ftp.nlst() if name not in {".", ".."}]
+                  except ftplib.all_errors:
+                      return []
+                  entries = []
+                  current = ftp.pwd()
+                  for name in names:
+                      try:
+                          ftp.cwd(name)
+                          ftp.cwd(current)
+                          entries.append((name, "dir"))
+                      except ftplib.all_errors:
+                          entries.append((name, "file"))
+                  return entries
+
+          def walk_count(ftp, path, root_label, counts, errors):
+              if not safe_cwd(ftp, path):
+                  errors.append(f"cannot enter {path}")
+                  return 0
+              total = 0
+              entries = list_entries(ftp)
+              for name, kind in entries:
+                  child = posixpath.join(path.rstrip("/") or "/", name)
+                  if kind == "dir":
+                      child_total = walk_count(ftp, child, root_label, counts, errors)
+                      counts[child] += child_total
+                      total += child_total
+                      safe_cwd(ftp, path)
+                  else:
+                      total += 1
+              counts[path] += total
+              return total
+
+          def candidate_roots():
+              roots = ["/"]
+              if configured_root:
+                  roots.append("/" + configured_root.strip("/"))
+                  roots.append("/" + configured_root.strip("/") + "/www")
+              roots.append("/www")
+              seen = set()
+              for root in roots:
+                  root = posixpath.normpath(root)
+                  if root == ".":
+                      root = "/"
+                  if root not in seen:
+                      seen.add(root)
+                      yield root
+
+          with ftplib.FTP(server, timeout=60) as ftp:
+              ftp.login(username, password)
+              usable_roots = []
+              for root in candidate_roots():
+                  if safe_cwd(ftp, root):
+                      usable_roots.append(root)
+              print("Usable FTP roots:", ", ".join(usable_roots) or "-")
+              if not usable_roots:
+                  raise SystemExit("No configured FTP root was accessible.")
+
+              root = usable_roots[0]
+              if "/www" in usable_roots:
+                  root = "/www"
+              elif configured_root and "/" + configured_root.strip("/") + "/www" in usable_roots:
+                  root = "/" + configured_root.strip("/") + "/www"
+
+              counts = defaultdict(int)
+              errors = []
+              total = walk_count(ftp, root, root, counts, errors)
+              print(f"Audited root: {root}")
+              print(f"Total files under audited root: {total}")
+              print("")
+              print("Top directories by recursive file count:")
+              for path, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)[:80]:
+                  print(f"{count:8d}  {path}")
+              if errors:
+                  print("")
+                  print("Skipped paths/errors:")
+                  for item in errors[:50]:
+                      print(item)
+          PY
