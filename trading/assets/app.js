@@ -2529,11 +2529,80 @@ function tradeBatchDetail(batch) {
   ].join("\n");
 }
 
+function normalizeLiveExecutionRun(execution) {
+  if (!execution || typeof execution !== "object") return null;
+  if (execution.batchLog) {
+    return {
+      ...execution.batchLog,
+      generatedAt: execution.generatedAt || execution.batchLog.generatedAt,
+      response: execution.response || execution.batchLog.response,
+      attempts: Array.isArray(execution.attempts) ? execution.attempts : execution.batchLog.attempts,
+    };
+  }
+  const runAt = execution.generatedAt || execution.runAt || "";
+  const settings = execution.settings || {};
+  const account = execution.account || {};
+  const selected = execution.selected ? liveBatchCandidateSummaryFromExecution(execution.selected) : null;
+  const rejected = Array.isArray(execution.topRejected) ? execution.topRejected.map(liveBatchCandidateSummaryFromExecution) : [];
+  return {
+    id: `live-execution-${runAt || execution.action || "latest"}`,
+    runAt,
+    generatedAt: runAt,
+    strategyId: "live",
+    strategyLabel: "Live",
+    selectionMetric: "EV p.a.",
+    action: execution.action || "-",
+    reason: execution.reason || "-",
+    explanation: execution.reason || "Live execution state was recorded before detailed batch logs were introduced.",
+    settings: {
+      minProbability: settings.minProbability,
+      minAnnualReturn: settings.minAnnualReturn,
+      maxSpread: settings.maxSpread,
+      minVolume24hr: settings.minVolume24hr,
+      maxOrderFraction: account.maxOrderFraction,
+      useLimitOrders: settings.useLimitOrders,
+    },
+    capital: {
+      availableUsdc: account.cashUsdc,
+      portfolioValueUsdc: account.portfolioValueUsdc,
+      requiredStakeUsdc: account.maxNotionalUsdc,
+      insufficientCapital: Number(account.cashUsdc) + 0.000001 < Number(account.maxNotionalUsdc),
+    },
+    counts: {
+      scannedCandidates: settings.scannedCandidates,
+      revalidatedCandidates: settings.revalidatedCandidates,
+      eligibleCandidates: settings.eligibleCandidates,
+      rejectedCandidates: rejected.length,
+    },
+    selected,
+    topCandidates: selected ? [selected] : [],
+    topRejected: rejected,
+    response: execution.response || null,
+    attempts: Array.isArray(execution.attempts) ? execution.attempts : [],
+  };
+}
+
+function liveBatchCandidateSummaryFromExecution(item = {}) {
+  return {
+    question: item.question || item.candidate?.question || "-",
+    outcome: item.outcome || item.candidate?.outcome || "-",
+    tokenId: item.tokenId || item.candidate?.tokenId || null,
+    url: item.url || item.candidate?.url || polymarketUrl(item),
+    aiProbability: item.aiProbability ?? item.candidate?.aiProbability,
+    marketPrice: item.marketPrice ?? item.currentPrice ?? item.orderPrice ?? item.candidate?.marketPrice,
+    annualizedReturn: item.annualizedReturn ?? item.candidate?.annualizedReturn,
+    expectedValueUsdc: item.expectedValueUsdc ?? item.candidate?.expectedValueUsdc,
+    rejectReasons: item.rejectReasons || item.candidate?.rejectReasons || [],
+    riskBlockedReason: item.riskBlockedReason || "",
+  };
+}
+
 function liveRunLogRows() {
   const rows = [];
   const fromLiveState = Array.isArray(state.liveState?.runLog) ? state.liveState.runLog : [];
   rows.push(...fromLiveState);
-  if (state.liveExecutionState?.batchLog) rows.unshift(state.liveExecutionState.batchLog);
+  const executionRun = normalizeLiveExecutionRun(state.liveExecutionState);
+  if (executionRun) rows.unshift(executionRun);
   return mergeUniqueByRun(rows).slice(0, 120);
 }
 
@@ -2595,7 +2664,7 @@ function portfolioRunDetail(run = {}) {
   const extra = [
     "",
     "Portfolio run row",
-    `Run time: ${run.runAt ? formatDate(run.runAt) : "-"}`,
+    `Run time: ${run.runAt || run.generatedAt ? formatDate(run.runAt || run.generatedAt) : "-"}`,
     `Portfolio: ${run.strategyLabel || run.strategyId || "-"}`,
     `Action: ${run.action || batch.action || "-"}`,
     `Reason: ${run.reason || batch.reason || "-"}`,
@@ -2633,7 +2702,7 @@ function renderRunLog() {
         return `
           <button class="trade-batch portfolio-run-row" type="button" data-portfolio-run="${index}">
             <span class="${runActionClass(run.action || batch.action)}">${escapeHtml(run.action || batch.action || "-")}</span>
-            <strong>${escapeHtml(run.runAt ? formatDate(run.runAt) : "-")}</strong>
+            <strong>${escapeHtml(run.runAt || run.generatedAt ? formatDate(run.runAt || run.generatedAt) : "-")}</strong>
             <span>${escapeHtml(runDecisionSummary(run))}</span>
             <em>${escapeHtml(run.strategyLabel || batch.strategyLabel || run.strategyId || "-")}</em>
           </button>
