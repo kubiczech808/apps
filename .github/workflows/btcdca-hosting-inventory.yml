@@ -1,0 +1,297 @@
+name: Inspect BTC-DCA Hosting Files
+
+on:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - '.github/workflows/btcdca-hosting-inventory.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  inspect-hosting-files:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Count FTP files and identify cleanup candidates
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          import posixpath
+          import re
+          import time
+          from collections import Counter, defaultdict
+          from pathlib import Path
+
+          HOSTS = ["ftp.btc-dca.com", "neuron.blueboard.cz"]
+          LOGIN = os.environ["BTCDCA_FTP_LOGIN"]
+          PASSWORD = os.environ["BTCDCA_FTP_PASSWORD"]
+          MAX_ERRORS = 200
+
+          cleanup_patterns = {
+              "codex backups": re.compile(r"(^|/)\.codex-backups(/|$)", re.I),
+              "cache directories": re.compile(r"(^|/)(cache|\.cache|wp-content/cache|wp-content/uploads/cache|wp-content/litespeed)(/|$)", re.I),
+              "upgrade/temp directories": re.compile(r"(^|/)(tmp|temp|\.tmp|wp-content/upgrade|wp-content/ai1wm-backups)(/|$)", re.I),
+              "logs": re.compile(r"\.(log|log\.\d+|oldlog)$|(^|/)(logs?)(/|$)", re.I),
+              "compressed backups": re.compile(r"\.(zip|tar|tar\.gz|tgz|gz|bz2|7z|rar)$", re.I),
+              "backup-like files": re.compile(r"(\.bak|\.backup|\.old|~)$|(^|/)(backup|backups)(/|$)", re.I),
+          }
+
+          last_error = None
+          ftp = None
+          for host in HOSTS:
+              try:
+                  ftp = ftplib.FTP(host, timeout=45)
+                  ftp.login(LOGIN, PASSWORD)
+                  print(f"Connected to {host}")
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  print(f"Connect failed for {host}: {exc}")
+          if ftp is None:
+              raise SystemExit(f"Could not connect to FTP: {last_error}")
+
+          def clean_path(path):
+              path = path.strip()
+              while path.startswith("./"):
+                  path = path[2:]
+              return path.strip("/")
+
+          def parent_of(path):
+              if "/" not in path:
+                  return ""
+              return path.rsplit("/", 1)[0]
+
+          def depth_of(path):
+              path = clean_path(path)
+              return 0 if not path else path.count("/") + 1
+
+          def top_n(counter, n=40):
+              return counter.most_common(n)
+
+          dirs_seen = set([""])
+          file_count = 0
+          dir_count = 0
+          errors = []
+          direct_files = Counter()
+          recursive_files = Counter()
+          direct_dirs = Counter()
+          ext_counts = Counter()
+          top_level = Counter()
+          second_level = Counter()
+          third_level = Counter()
+          candidate_counts = Counter()
+          candidate_samples = defaultdict(list)
+          wp_plugins = Counter()
+          wp_themes = Counter()
+          wp_upload_year_month = Counter()
+          file_samples = []
+
+          def record_recursive(path):
+              current = clean_path(path)
+              while True:
+                  recursive_files[current] += 1
+                  if not current:
+                      break
+                  current = parent_of(current)
+
+          def record_file(path):
+              global file_count
+              path = clean_path(path)
+              file_count += 1
+              parent = parent_of(path)
+              direct_files[parent] += 1
+              record_recursive(parent)
+
+              parts = path.split("/") if path else []
+              if parts:
+                  top_level[parts[0]] += 1
+              if len(parts) >= 2:
+                  second_level["/".join(parts[:2])] += 1
+              if len(parts) >= 3:
+                  third_level["/".join(parts[:3])] += 1
+
+              name = parts[-1] if parts else path
+              if "." in name:
+                  ext = "." + name.rsplit(".", 1)[-1].lower()
+              else:
+                  ext = "[no extension]"
+              ext_counts[ext] += 1
+
+              if len(parts) >= 4 and parts[:3] == ["www", "wp-content", "plugins"]:
+                  wp_plugins["/".join(parts[:4])] += 1
+              if len(parts) >= 4 and parts[:3] == ["www", "wp-content", "themes"]:
+                  wp_themes["/".join(parts[:4])] += 1
+              if len(parts) >= 5 and parts[:3] == ["www", "wp-content", "uploads"] and re.match(r"^\d{4}$", parts[3]) and re.match(r"^\d{2}$", parts[4]):
+                  wp_upload_year_month["/".join(parts[:5])] += 1
+
+              for label, pattern in cleanup_patterns.items():
+                  if pattern.search(path):
+                      candidate_counts[label] += 1
+                      if len(candidate_samples[label]) < 20:
+                          candidate_samples[label].append(path)
+
+              if len(file_samples) < 40:
+                  file_samples.append(path)
+
+          def list_dir(path):
+              nonlocal_dir_marker = None
+              try:
+                  entries = list(ftp.mlsd(path or "."))
+                  for name, facts in entries:
+                      if name in (".", ".."):
+                          continue
+                      child = clean_path(posixpath.join(path, name) if path else name)
+                      kind = facts.get("type", "")
+                      if kind in ("dir", "cdir", "pdir"):
+                          if kind == "dir":
+                              yield child, True
+                      else:
+                          yield child, False
+                  return
+              except Exception:
+                  pass
+
+              try:
+                  names = ftp.nlst(path or ".")
+              except Exception as exc:
+                  if len(errors) < MAX_ERRORS:
+                      errors.append(f"{path or '.'}: {exc}")
+                  return
+
+              for raw in names:
+                  name = clean_path(raw)
+                  if not name or name in (".", ".."):
+                      continue
+                  if path and not name.startswith(clean_path(path) + "/"):
+                      name = clean_path(posixpath.join(path, name))
+                  base = name.rsplit("/", 1)[-1]
+                  if base in (".", ".."):
+                      continue
+                  original = ftp.pwd()
+                  is_dir = False
+                  try:
+                      ftp.cwd(name)
+                      is_dir = True
+                      ftp.cwd(original)
+                  except Exception:
+                      try:
+                          ftp.cwd(original)
+                      except Exception:
+                          pass
+                  yield name, is_dir
+
+          started = time.time()
+          stack = [""]
+          while stack:
+              current = stack.pop()
+              for child, is_dir in list_dir(current):
+                  if is_dir:
+                      if child in dirs_seen:
+                          continue
+                      dirs_seen.add(child)
+                      dir_count += 1
+                      direct_dirs[parent_of(child)] += 1
+                      stack.append(child)
+                  else:
+                      record_file(child)
+
+          ftp.quit()
+
+          report = []
+          report.append("# BTC-DCA Hosting File Inventory")
+          report.append("")
+          report.append(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+          report.append("")
+          report.append("This report is read-only. No hosting files were deleted or modified.")
+          report.append("")
+          report.append("## Summary")
+          report.append("")
+          report.append(f"- Total files counted: {file_count:,}")
+          report.append(f"- Directories counted: {dir_count:,}")
+          report.append(f"- Scan duration: {time.time() - started:.1f}s")
+          report.append(f"- FTP listing errors captured: {len(errors)}")
+          report.append("")
+
+          def table(title, rows, headers=("Path", "Files")):
+              report.append(f"## {title}")
+              report.append("")
+              report.append(f"| {headers[0]} | {headers[1]} |")
+              report.append("| --- | ---: |")
+              for key, value in rows:
+                  report.append(f"| `{key or '/'}` | {value:,} |")
+              report.append("")
+
+          table("Top-Level File Counts", top_n(top_level, 40))
+          table("Second-Level File Counts", top_n(second_level, 60))
+          table("Third-Level File Counts", top_n(third_level, 80))
+          table("Largest Recursive Directories", top_n(recursive_files, 80))
+          table("Largest Direct-File Directories", top_n(direct_files, 80))
+          table("File Extensions", top_n(ext_counts, 60), headers=("Extension", "Files"))
+          table("WordPress Plugins By File Count", top_n(wp_plugins, 80))
+          table("WordPress Themes By File Count", top_n(wp_themes, 40))
+          table("WordPress Uploads By Month", top_n(wp_upload_year_month, 60))
+
+          report.append("## Cleanup Candidate Buckets")
+          report.append("")
+          report.append("| Bucket | Matching files | Notes |")
+          report.append("| --- | ---: | --- |")
+          notes = {
+              "codex backups": "Usually restorable from GitHub/deploy history; delete only after keeping a recent backup set.",
+              "cache directories": "Typically regenerable; safest high-volume deletion target if app/WP cache plugins can rebuild.",
+              "upgrade/temp directories": "Usually temporary; verify no active migration/update is running.",
+              "logs": "Usually archivable/downloadable before deletion.",
+              "compressed backups": "Potentially large and often safe after downloading one copy.",
+              "backup-like files": "Review manually; can include old deploy/plugin backups.",
+          }
+          for bucket, count in candidate_counts.most_common():
+              report.append(f"| {bucket} | {count:,} | {notes.get(bucket, '')} |")
+          report.append("")
+
+          report.append("## Cleanup Candidate Samples")
+          report.append("")
+          for bucket, samples in candidate_samples.items():
+              report.append(f"### {bucket}")
+              report.append("")
+              for sample in samples:
+                  report.append(f"- `{sample}`")
+              report.append("")
+
+          if errors:
+              report.append("## Listing Errors")
+              report.append("")
+              for err in errors[:MAX_ERRORS]:
+                  report.append(f"- `{err}`")
+              report.append("")
+
+          report.append("## First File Samples")
+          report.append("")
+          for sample in file_samples:
+              report.append(f"- `{sample}`")
+          report.append("")
+
+          Path(".github/inspection").mkdir(parents=True, exist_ok=True)
+          Path(".github/inspection/btcdca-hosting-file-inventory.md").write_text("\n".join(report) + "\n", encoding="utf-8")
+          PY
+
+      - name: Commit inventory report
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/inspection/btcdca-hosting-file-inventory.md
+          if git diff --cached --quiet; then
+            echo "No inventory changes."
+            exit 0
+          fi
+          git commit -m "Update BTC-DCA hosting file inventory"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push
