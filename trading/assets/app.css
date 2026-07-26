@@ -265,8 +265,10 @@ button:disabled {
 }
 
 .account-summary[hidden],
-.bot-status[hidden] {
-  display: none;
+.bot-status[hidden],
+[data-page-section][hidden],
+.tab-panel[hidden] {
+  display: none !important;
 }
 
 .account-summary .bot-summary {

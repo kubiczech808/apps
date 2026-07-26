@@ -61,6 +61,7 @@ const LIVE_SYNC_REQUEST_MS = 30000;
 const els = {
   shell: document.querySelector("[data-app-shell]"),
   pageLinks: document.querySelectorAll("[data-page-link]"),
+  pageSections: document.querySelectorAll("[data-page-section]"),
   botAction: document.querySelector("[data-bot-action]"),
   botInlineAction: document.querySelector("[data-bot-inline-action]"),
   portfolioTitle: document.querySelector("[data-portfolio-title]"),
@@ -281,6 +282,26 @@ function currentRouteState() {
   };
 }
 
+function routePath(page) {
+  const normalized = ["settings", "opportunities", "portfolios"].includes(page) ? page : "portfolios";
+  return `/trading/${normalized}/`;
+}
+
+function pageOwnsSection(section, page = state.page) {
+  return String(section.dataset.pageSection || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .includes(page);
+}
+
+function syncPageSections() {
+  els.pageSections.forEach((section) => {
+    const visible = pageOwnsSection(section);
+    section.hidden = !visible;
+    section.setAttribute("aria-hidden", visible ? "false" : "true");
+  });
+}
+
 function setPage(page) {
   state.page = ["settings", "opportunities", "portfolios"].includes(page) ? page : "portfolios";
   if (els.shell) {
@@ -288,6 +309,7 @@ function setPage(page) {
     els.shell.classList.toggle("page-settings", state.page === "settings");
     els.shell.classList.toggle("page-opportunities", state.page === "opportunities");
   }
+  syncPageSections();
   els.pageLinks.forEach((item) => {
     item.classList.toggle("active", item.dataset.pageLink === state.page);
     item.setAttribute("aria-current", item.dataset.pageLink === state.page ? "page" : "false");
@@ -325,6 +347,27 @@ function setEvaluationStatus(status) {
     item.classList.toggle("active", item.dataset.evaluationStatus === state.evaluationStatus);
   });
   renderBotEvaluations();
+}
+
+function activatePage(page, { replace = false } = {}) {
+  const nextPage = ["settings", "opportunities", "portfolios"].includes(page) ? page : "portfolios";
+  setPage(nextPage);
+  if (nextPage === "opportunities") {
+    setSettingsSection("evaluation-log");
+    setEvaluationStatus("EVALUATED");
+    activateTab("settings-runs");
+  } else if (nextPage === "settings") {
+    setSettingsSection("calculations");
+    activateTab("settings-runs");
+  } else {
+    activateTab("daily-picks");
+  }
+
+  const nextPath = routePath(nextPage);
+  if (window.location.pathname !== nextPath) {
+    const method = replace ? "replaceState" : "pushState";
+    window.history[method]({ page: nextPage }, "", nextPath);
+  }
 }
 
 function applyInitialRoute() {
@@ -2977,6 +3020,19 @@ els.tabButtons.forEach((button) => {
     event.preventDefault();
     activateTab(target);
   });
+});
+
+els.pageLinks.forEach((link) => {
+  link.addEventListener("click", (event) => {
+    const page = link.dataset.pageLink;
+    if (!page) return;
+    event.preventDefault();
+    activatePage(page);
+  });
+});
+
+window.addEventListener("popstate", () => {
+  applyInitialRoute();
 });
 
 els.settingsSectionButtons.forEach((button) => {
