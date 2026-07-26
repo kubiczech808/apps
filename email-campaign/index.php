@@ -56,6 +56,12 @@ function aiResearchTemporaryBackoffUntil(Throwable $e): int
 function aiResearchDailyGeminiRequestBudget(array $config): int
 {
     $configured = (int)($config['ai']['gemini_research_daily_request_budget'] ?? 0);
+    return max(0, $configured);
+}
+
+function aiResearchGeminiRequestsPerMinuteBudget(array $config): int
+{
+    $configured = (int)($config['ai']['gemini_research_rpm_budget'] ?? 0);
     return max(1, $configured > 0 ? $configured : 18);
 }
 
@@ -67,12 +73,27 @@ function aiResearchEstimatedGeminiRequestsPerSeed(array $config): int
 
 function aiResearchDailySeedBudget(array $config): int
 {
-    return max(1, (int)floor(aiResearchDailyGeminiRequestBudget($config) / aiResearchEstimatedGeminiRequestsPerSeed($config)));
+    $explicit = (int)($config['ai']['gemini_research_daily_seed_budget'] ?? 0);
+    if ($explicit > 0) {
+        return $explicit;
+    }
+    $dailyRequests = aiResearchDailyGeminiRequestBudget($config);
+    if ($dailyRequests > 0) {
+        return max(1, (int)floor($dailyRequests / aiResearchEstimatedGeminiRequestsPerSeed($config)));
+    }
+    $cronInterval = max(300, (int)($config['campaign_cron_interval_minutes'] ?? 5) * 60);
+    return max(1, (int)floor(86400 / max($cronInterval, aiResearchMinimumIntervalByRpm($config))));
+}
+
+function aiResearchMinimumIntervalByRpm(array $config): int
+{
+    return (int)ceil((aiResearchEstimatedGeminiRequestsPerSeed($config) / aiResearchGeminiRequestsPerMinuteBudget($config)) * 60) + 5;
 }
 
 function aiResearchRunIntervalSeconds(array $config): int
 {
-    return max(5 * 60, (int)ceil(86400 / aiResearchDailySeedBudget($config)));
+    $cronInterval = max(300, (int)($config['campaign_cron_interval_minutes'] ?? 5) * 60);
+    return max($cronInterval, aiResearchMinimumIntervalByRpm($config), (int)ceil(86400 / aiResearchDailySeedBudget($config)));
 }
 
 function aiResearchMaxContactValidationAttempts(array $config): int
@@ -14596,9 +14617,13 @@ function renderApp(PDO $pdo, ?array $flash): void
         $researchLockUntil = (int)($researchSettings['ai_research_lock_until'] ?? 0);
         $researchAiNextAllowedAt = (int)($researchSettings['ai_research_next_allowed_at'] ?? 0);
         $researchGeminiDailyBudget = aiResearchDailyGeminiRequestBudget($config);
+        $researchGeminiRpmBudget = aiResearchGeminiRequestsPerMinuteBudget($config);
         $researchGeminiRequestsPerSeed = aiResearchEstimatedGeminiRequestsPerSeed($config);
         $researchDailySeedBudget = aiResearchDailySeedBudget($config);
         $researchIntervalSeconds = aiResearchRunIntervalSeconds($config);
+        $researchDailyBudgetText = $researchGeminiDailyBudget > 0
+            ? ', denní rozpočet ' . $researchGeminiDailyBudget . ' requestů'
+            : '';
         $nextResearchRunAt = $lastResearchRunAt > 0 ? $lastResearchRunAt + $researchIntervalSeconds : 0;
         $nextResearchRunAt = max($nextResearchRunAt, $researchAiNextAllowedAt);
         $researchAutomationStatus = $researchLockUntil > time()
@@ -14616,7 +14641,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <div>
                 <h2>AI research administrace</h2>
                 <p>Agent průběžně vybírá nové firmy z Firmy.cz / Vše pro firmy / Praha, projde jejich web, navrhne nejvhodnější B2B cílení, najde max. 10 kontaktů a uloží návrh oslovení.</p>
-                <p class="muted">Automatika se kontroluje cronem každých 5 minut. Gemini research je rozložený do celého dne: rozpočet <?= h((string)$researchGeminiDailyBudget) ?> requestů/den, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed, maximum <?= h((string)$researchDailySeedBudget) ?> seed subjektů/den, interval cca <?= h(aiResearchIntervalLabel($researchIntervalSeconds)) ?>.</p>
+                <p class="muted">Automatika se kontroluje cronem každých 5 minut. Gemini research je rozložený do celého dne: bezpečný limit <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed, maximum <?= h((string)$researchDailySeedBudget) ?> seed subjektů/den, interval cca <?= h(aiResearchIntervalLabel($researchIntervalSeconds)) ?>.</p>
                 <p class="muted">Poslední automatický běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Další nejdříve: <?= h($researchNextRunLabel) ?>. Stav: <?= h($researchAutomationStatus) ?></p>
             </div>
             <form method="post" class="inline">
