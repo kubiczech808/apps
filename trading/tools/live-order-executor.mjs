@@ -484,11 +484,11 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
   }
   if (minNotional > targetStake) {
     return {
-      size: null,
+      size: Number(minOrderSize.toFixed(4)),
       targetStake,
       minNotional,
-      minSizeOverride: false,
-      sizingNote: `target stake ${targetStake.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
+      minSizeOverride: true,
+      sizingNote: `raised to exchange minimum ${minOrderSize.toFixed(4)} shares because target stake ${targetStake.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
     };
   }
   if (ORDER_SIZE_MODE === "minimum") {
