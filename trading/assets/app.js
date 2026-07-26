@@ -75,6 +75,7 @@ const els = {
   closedSummary: document.querySelector("[data-closed-summary]"),
   botEvaluations: document.querySelector("[data-bot-evaluations]"),
   evaluationSummary: document.querySelector("[data-evaluation-summary]"),
+  evaluationFilterCount: document.querySelector("[data-evaluation-filter-count]"),
   runLog: document.querySelector("[data-run-log]"),
   runLogSummary: document.querySelector("[data-run-log-summary]"),
   runLogTitle: document.querySelector("[data-run-log-title]"),
@@ -2553,7 +2554,16 @@ function renderBotEvaluations() {
   const evaluatedCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "EVALUATED").length;
   const resolvedCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "RESOLVED").length;
   const errorCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "ERROR").length;
-  const filteredCount = filteredEvaluations(evaluations).length;
+  const filtered = filteredEvaluations(evaluations);
+  const filteredCount = filtered.length;
+  const probabilityFilter = currentEvaluationProbabilityFilter();
+
+  if (els.evaluationFilterCount) {
+    const countText = formatInteger(filteredCount) || String(filteredCount);
+    els.evaluationFilterCount.textContent = probabilityFilter > 0
+      ? `${countText} matching AI >= ${(probabilityFilter * 100).toFixed(0)}%`
+      : `${countText} matching current filters`;
+  }
 
   if (els.evaluationSummary) {
     const stats = state.botState?.evaluationStats || {};
@@ -2577,7 +2587,7 @@ function renderBotEvaluations() {
     return;
   }
 
-  const visibleEvaluations = sortedEvaluations(filteredEvaluations(evaluations)).slice(0, 80);
+  const visibleEvaluations = sortedEvaluations(filtered).slice(0, 80);
 
   if (!visibleEvaluations.length) {
     els.botEvaluations.innerHTML = `<div class="empty">No ${evaluationFilterLabel(state.evaluationStatus)} markets match the selected evaluation filters.</div>`;
