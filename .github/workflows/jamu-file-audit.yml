@@ -32,6 +32,7 @@ jobs:
           test -n "$JAMU_FTP_LOGIN" || { echo 'Missing JAMU_FTP_LOGIN'; exit 1; }
           test -n "$JAMU_FTP_PWD" || { echo 'Missing JAMU_FTP_PWD'; exit 1; }
           test -f scripts/jamu_ftp_file_audit.py
+          test -f scripts/templates/jamu_file_audit_bridge.php
       - name: Run read-only FTP file count audit
         run: python scripts/jamu_ftp_file_audit.py
       - name: Commit audit report to working branch

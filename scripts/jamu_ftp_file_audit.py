@@ -3,16 +3,14 @@ from __future__ import annotations
 import ftplib
 import json
 import os
-import time
-from collections import defaultdict
+import requests
 from pathlib import Path, PurePosixPath
-from typing import Any
 
 
 HOSTS = ("ftp.tajemstvijamu.cz", "neuron.blueboard.cz")
 OUTPUT = Path("jamu-content/file-audit.json")
-MAX_PREFIX_DEPTH = 5
-MAX_LIST_ITEMS = 80
+TEMPLATE = Path("scripts/templates/jamu_file_audit_bridge.php")
+PUBLIC_BASE_URL = "https://tajemstvijamu.cz"
 
 
 def connect() -> tuple[ftplib.FTP, str]:
@@ -94,165 +92,47 @@ def load_active_plugin_slugs() -> set[str]:
     return slugs
 
 
-def int_fact(facts: dict[str, str], key: str) -> int:
-    try:
-        return int(facts.get(key, "0") or 0)
-    except ValueError:
-        return 0
+def upload_bridge(ftp: ftplib.FTP, root: PurePosixPath, nonce: str) -> PurePosixPath:
+    source = TEMPLATE.read_text(encoding="utf-8").replace("__JAMU_FILE_AUDIT_NONCE__", nonce)
+    remote = root / f"jamu-file-audit-bridge-{nonce}.php"
+    with os.fdopen(os.open("jamu-file-audit-bridge.tmp.php", os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
+        handle.write(source)
+    with open("jamu-file-audit-bridge.tmp.php", "rb") as handle:
+        ftp.storbinary(f"STOR {remote}", handle)
+    Path("jamu-file-audit-bridge.tmp.php").unlink(missing_ok=True)
+    return remote
 
 
-def classify_candidate(relative: str, is_dir: bool, active_plugin_slugs: set[str]) -> tuple[str, str]:
-    lower = relative.lower().strip("/")
-    parts = lower.split("/") if lower else []
-
-    if not lower:
-        return "", ""
-
-    if any(token in lower for token in ["/cache/", "/cache", "wp-content/cache", "wp-content/upgrade"]):
-        return "low", "cache_or_upgrade"
-
-    if any(token in lower for token in ["backup", "backups", "updraft", "ai1wm-backups"]):
-        return "medium", "backup_like"
-
-    if any(token in lower for token in [".jamu-multilingual-incoming-", ".jamu-multilingual-previous-"]):
-        return "low", "stale_jamu_deploy_temp"
-
-    if lower.endswith((".zip", ".tar", ".tar.gz", ".tgz", ".bak", ".old", ".log")):
-        return "medium", "archive_or_log_file"
-
-    if len(parts) >= 3 and parts[0:2] == ["wp-content", "plugins"]:
-        slug = parts[2]
-        if slug and slug not in active_plugin_slugs:
-            return "medium", "inactive_plugin_directory"
-
-    if len(parts) >= 3 and parts[0:2] == ["wp-content", "uploads"]:
-        return "high", "uploads_media"
-
-    if parts[:2] == ["wp-content", "themes"] or parts[:1] in (["wp-admin"], ["wp-includes"]):
-        return "high", "wordpress_runtime"
-
-    return "", ""
-
-
-def top(counter: dict[str, int], limit: int = MAX_LIST_ITEMS) -> list[dict[str, Any]]:
-    return [{"path": key, "count": value} for key, value in sorted(counter.items(), key=lambda item: item[1], reverse=True)[:limit]]
-
-
-def audit_tree(ftp: ftplib.FTP, root: PurePosixPath) -> dict[str, Any]:
-    active_plugin_slugs = load_active_plugin_slugs()
-    stack = [root]
-    total_files = 0
-    total_dirs = 0
-    total_bytes = 0
-    errors: list[dict[str, str]] = []
-
-    file_prefix_counts: dict[str, int] = defaultdict(int)
-    dir_prefix_counts: dict[str, int] = defaultdict(int)
-    byte_prefix_counts: dict[str, int] = defaultdict(int)
-    extension_counts: dict[str, int] = defaultdict(int)
-    plugin_file_counts: dict[str, int] = defaultdict(int)
-    plugin_byte_counts: dict[str, int] = defaultdict(int)
-    candidate_counts: dict[str, int] = defaultdict(int)
-    candidate_bytes: dict[str, int] = defaultdict(int)
-    candidate_reasons: dict[str, dict[str, str]] = {}
-
-    while stack:
-        directory = stack.pop()
-        try:
-            rows = entries(ftp, directory)
-        except ftplib.all_errors as exc:
-            errors.append({"path": str(directory), "error": f"{type(exc).__name__}: {exc}"[:240]})
-            continue
-
-        for name, facts in rows:
-            child = directory / name
-            relative = relpath(child, root)
-            kind = facts.get("type", "")
-            is_dir = kind == "dir"
-
-            if is_dir:
-                total_dirs += 1
-                for prefix in path_prefixes(relative):
-                    dir_prefix_counts[prefix] += 1
-                stack.append(child)
-                risk, reason = classify_candidate(relative, True, active_plugin_slugs)
-                if risk:
-                    candidate_reasons.setdefault(relative, {"risk": risk, "reason": reason})
-                continue
-
-            total_files += 1
-            size = int_fact(facts, "size")
-            total_bytes += size
-
-            suffix = PurePosixPath(relative).suffix.lower() or "[no extension]"
-            extension_counts[suffix] += 1
-
-            prefixes = path_prefixes(relative)
-            for prefix in prefixes:
-                file_prefix_counts[prefix] += 1
-                byte_prefix_counts[prefix] += size
-
-            parts = relative.split("/")
-            if len(parts) >= 3 and parts[0] == "wp-content" and parts[1] == "plugins":
-                plugin_file_counts[parts[2]] += 1
-                plugin_byte_counts[parts[2]] += size
-
-            risk, reason = classify_candidate(relative, False, active_plugin_slugs)
-            if risk and prefixes:
-                candidate_path = prefixes[min(len(prefixes), 3) - 1]
-                candidate_counts[candidate_path] += 1
-                candidate_bytes[candidate_path] += size
-                candidate_reasons.setdefault(candidate_path, {"risk": risk, "reason": reason})
-
-    plugin_summary = []
-    for slug, count in sorted(plugin_file_counts.items(), key=lambda item: item[1], reverse=True):
-        plugin_summary.append(
-            {
-                "slug": slug,
-                "files": count,
-                "bytes": plugin_byte_counts[slug],
-                "active": slug in active_plugin_slugs,
-            }
-        )
-
-    candidate_summary = []
-    for path, count in sorted(candidate_counts.items(), key=lambda item: item[1], reverse=True):
-        meta = candidate_reasons.get(path, {})
-        candidate_summary.append(
-            {
-                "path": path,
-                "files": count,
-                "bytes": candidate_bytes[path],
-                "risk": meta.get("risk", ""),
-                "reason": meta.get("reason", ""),
-            }
-        )
-
-    return {
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "wordpress_root": str(root),
-        "total_files": total_files,
-        "total_dirs": total_dirs,
-        "total_bytes": total_bytes,
-        "active_plugin_slugs_from_source_inventory": sorted(active_plugin_slugs),
-        "top_file_prefixes": top(file_prefix_counts),
-        "top_dir_prefixes": top(dir_prefix_counts),
-        "top_byte_prefixes": top(byte_prefix_counts),
-        "extension_counts": top(extension_counts),
-        "plugin_file_counts": plugin_summary[:MAX_LIST_ITEMS],
-        "cleanup_candidates_read_only": candidate_summary[:MAX_LIST_ITEMS],
-        "errors": errors[:MAX_LIST_ITEMS],
-    }
+def fetch_report(remote: PurePosixPath, nonce: str) -> dict:
+    url = f"{PUBLIC_BASE_URL}/{remote.name}"
+    response = requests.get(
+        url,
+        params={"jamu_bridge": "file_audit", "jamu_nonce": nonce},
+        headers={"X-JAMU-File-Audit-Token": nonce, "User-Agent": "JAMU file audit/1.0"},
+        timeout=220,
+    )
+    response.raise_for_status()
+    report = response.json()
+    if report.get("site") != "https://tajemstvijamu.cz/":
+        raise RuntimeError("Unexpected file audit response site.")
+    return report
 
 
 def main() -> int:
+    nonce = "".join(ch for ch in os.environ.get("GITHUB_RUN_ID", "local") if ch.isdigit()) or "local"
     ftp, host = connect()
+    remote_bridge = None
     try:
         root = locate_wordpress(ftp)
-        report = audit_tree(ftp, root)
+        remote_bridge = upload_bridge(ftp, root, nonce)
+        report = fetch_report(remote_bridge, nonce)
         report["ftp_host"] = host
-        report["scope"] = "read-only FTP file count audit; no remote files changed"
     finally:
+        if remote_bridge is not None:
+            try:
+                ftp.delete(str(remote_bridge))
+            except ftplib.all_errors:
+                pass
         try:
             ftp.quit()
         except ftplib.all_errors:
