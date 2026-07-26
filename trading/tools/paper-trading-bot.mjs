@@ -408,6 +408,60 @@ function mergeEvaluationLists(primary = [], secondary = [], limit = MAX_HISTORY)
     .slice(0, limit);
 }
 
+function cleanEvaluationErrorMessage(message) {
+  return String(message || "")
+    .replace(/^Orderbook fetch failed:\s*/i, "")
+    .replace(/^Polymarket CLOB orderbook fetch failed:\s*/i, "")
+    .trim();
+}
+
+function inferEvaluationErrorDetails(item = {}) {
+  const reasons = Array.isArray(item.rejectReasons)
+    ? item.rejectReasons.map(cleanEvaluationErrorMessage).filter(Boolean)
+    : [];
+  const rawMessage = cleanEvaluationErrorMessage(item.rawErrorMessage || item.errorReason || reasons[0] || item.analysisSummary || "");
+  const joined = `${item.errorType || ""} ${rawMessage} ${item.analysisSummary || ""}`;
+  const tokenNote = item.tokenId ? ` token_id ${item.tokenId}.` : "";
+
+  if (/CLOB_ORDERBOOK_NOT_FOUND|HTTP 404|\/book\?token_id=|orderbook.*not found/i.test(joined)) {
+    return {
+      errorType: "CLOB_ORDERBOOK_NOT_FOUND",
+      errorReason: `Polymarket CLOB returned HTTP 404 for${tokenNote || " the market token."} The token is likely closed, stale, migrated, or not currently exposed by the CLOB orderbook.`,
+    };
+  }
+
+  if (/orderbook|clob|book\?/i.test(joined)) {
+    return {
+      errorType: item.errorType || "ORDERBOOK_FETCH_FAILED",
+      errorReason: `Polymarket CLOB orderbook fetch failed for${tokenNote || " the market token."} ${rawMessage || "No detailed exchange error was returned."}`.trim(),
+    };
+  }
+
+  return {
+    errorType: item.errorType || "EVALUATION_ERROR",
+    errorReason: rawMessage || "Unknown evaluation error.",
+  };
+}
+
+function ensureEvaluationErrorMetadata(item = {}) {
+  if (String(item.status || "").toUpperCase() !== "ERROR") return item;
+  const details = inferEvaluationErrorDetails(item);
+  const errorType = item.errorType || details.errorType;
+  const errorReason = item.errorReason || details.errorReason;
+  const rejectReasons = [...new Set([
+    errorReason,
+    ...(Array.isArray(item.rejectReasons) ? item.rejectReasons : []),
+  ].filter(Boolean))];
+
+  return {
+    ...item,
+    errorType,
+    errorReason,
+    rejectReasons,
+    analysisSummary: item.analysisSummary || `Evaluation error: ${errorReason}`,
+  };
+}
+
 function expirePastEvaluations(evaluations = []) {
   return evaluations.map((item) => {
     const status = String(item.status || "").toUpperCase();
@@ -3012,23 +3066,17 @@ async function run() {
         if (evaluation) evaluations.push(evaluation);
       } catch (error) {
         const errorMessage = error?.message || String(error || "Unknown orderbook error");
-        const isOrderbookNotFound = /HTTP 404|not found/i.test(errorMessage);
-        const errorType = isOrderbookNotFound ? "CLOB_ORDERBOOK_NOT_FOUND" : "ORDERBOOK_FETCH_FAILED";
-        const errorReason = isOrderbookNotFound
-          ? `Polymarket CLOB returned HTTP 404 for token_id ${tokenId}. The token is likely closed, stale, migrated, or not currently exposed by the CLOB orderbook.`
-          : `Polymarket CLOB orderbook fetch failed for token_id ${tokenId || "-"}.`;
-        evaluations.push({
+        evaluations.push(ensureEvaluationErrorMetadata({
           id: tokenId ? `token:${tokenId}` : `market:${market.slug || market.id || "unknown"}:${outcomes[outcomeIndex] || outcomeIndex}`,
           evaluatedAt: nowIso(),
           status: "ERROR",
           question: market.question || "",
           outcome: outcomes[outcomeIndex] || `Outcome ${outcomeIndex + 1}`,
           tokenId,
-          errorType,
-          errorReason,
-          rejectReasons: [errorReason, errorMessage],
-          analysisSummary: `Orderbook fetch failed: ${errorReason} Raw exchange error: ${errorMessage}`,
-        });
+          rawErrorMessage: errorMessage,
+          rejectReasons: [errorMessage],
+          analysisSummary: `Orderbook fetch failed: ${errorMessage}`,
+        }));
       }
     }
   }
@@ -3045,7 +3093,7 @@ async function run() {
   updatePortfolio(state);
   const mergedEvaluations = expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations));
   const retainedBefore = new Set([...(state.evaluations || []), ...evaluations].map(evaluationKey).filter(Boolean)).size;
-  state.evaluations = mergedEvaluations;
+  state.evaluations = mergedEvaluations.map(ensureEvaluationErrorMetadata);
   updateCalculationReport(state);
   updateEvaluationStats(state, { evaluations, retainedBefore, retainedAfter: state.evaluations.length });
   recordRun(state, { evaluations, eligible, decisions });
