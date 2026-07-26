@@ -1,6 +1,6 @@
 # BTC-DCA Hosting File Inventory
 
-Generated: 2026-07-26 22:43:43 UTC
+Generated: 2026-07-26 23:05:37 UTC
 
 This report is read-only. No hosting files were deleted or modified.
 
@@ -8,7 +8,7 @@ This report is read-only. No hosting files were deleted or modified.
 
 - Total files counted: 2,134
 - Directories counted: 389
-- Scan duration: 192.5s
+- Scan duration: 948.0s
 - FTP listing errors captured: 26
 
 ## Top-Level File Counts
@@ -419,32 +419,32 @@ This report is read-only. No hosting files were deleted or modified.
 
 ## Listing Errors
 
-- `www/wp-content/uploads/2024/09: 200 Type set to A`
-- `www/wp-content/uploads/2024/10: 200 Type set to A`
-- `www/wp-content/uploads/2024/04: 200 Type set to A`
-- `www/wp-content/uploads/2024/06: 200 Type set to A`
-- `www/wp-content/uploads/2024/12: 200 Type set to A`
-- `www/wp-content/uploads/2024/01: 200 Type set to A`
-- `www/wp-content/uploads/2024/05: 200 Type set to A`
-- `www/wp-content/uploads/2024/11: 200 Type set to A`
-- `www/wp-content/uploads/2024/08: 200 Type set to A`
-- `www/wp-content/uploads/2024/02: 200 Type set to A`
-- `www/wp-content/uploads/ast-block-templates-json: 200 Type set to A`
-- `www/wp-content/uploads/uag-plugin: 200 Type set to A`
-- `www/wp-content/uploads/2025: 200 Type set to A`
-- `www/wp-content/uploads/elementor: 200 Type set to A`
-- `www/wp-content/uploads/2022: 200 Type set to A`
-- `www/wp-content/uploads/2026: 200 Type set to A`
-- `www/wp-content/uploads/kadence_blocks_library: 200 Type set to A`
-- `www/wp-content/upgrade-temp-backup: 200 Type set to A`
-- `www/wp-content/cache: 200 Type set to A`
-- `www/wp-content/languages: 200 Type set to A`
-- `www/wp-content/plugins: 200 Type set to A`
-- `www/wp-admin: 200 Type set to A`
-- `www/wp-includes: 200 Type set to A`
-- `www/app: 200 Type set to A`
-- `www/ai: 200 Type set to A`
-- `.codex-backups: 200 Type set to A`
+- `www/wp-content/uploads/2024/09: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2024/10: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2024/04: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2024/06: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2024/12: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2024/01: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2024/05: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2024/11: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2024/08: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2024/02: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/ast-block-templates-json: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/uag-plugin: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2025: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/elementor: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2022: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/2026: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/uploads/kadence_blocks_library: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/upgrade-temp-backup: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/cache: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/languages: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-content/plugins: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-admin: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/wp-includes: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/app: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `www/ai: list failed after MLSD/LIST/NLST: 200 Type set to A`
+- `.codex-backups: list failed after MLSD/LIST/NLST: 200 Type set to A`
 
 ## First File Samples
 
