@@ -3011,6 +3011,12 @@ async function run() {
         const evaluation = evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfile: state.learningProfile });
         if (evaluation) evaluations.push(evaluation);
       } catch (error) {
+        const errorMessage = error?.message || String(error || "Unknown orderbook error");
+        const isOrderbookNotFound = /HTTP 404|not found/i.test(errorMessage);
+        const errorType = isOrderbookNotFound ? "CLOB_ORDERBOOK_NOT_FOUND" : "ORDERBOOK_FETCH_FAILED";
+        const errorReason = isOrderbookNotFound
+          ? `Polymarket CLOB returned HTTP 404 for token_id ${tokenId}. The token is likely closed, stale, migrated, or not currently exposed by the CLOB orderbook.`
+          : `Polymarket CLOB orderbook fetch failed for token_id ${tokenId || "-"}.`;
         evaluations.push({
           id: tokenId ? `token:${tokenId}` : `market:${market.slug || market.id || "unknown"}:${outcomes[outcomeIndex] || outcomeIndex}`,
           evaluatedAt: nowIso(),
@@ -3018,8 +3024,10 @@ async function run() {
           question: market.question || "",
           outcome: outcomes[outcomeIndex] || `Outcome ${outcomeIndex + 1}`,
           tokenId,
-          rejectReasons: [error.message],
-          analysisSummary: `Orderbook fetch failed: ${error.message}`,
+          errorType,
+          errorReason,
+          rejectReasons: [errorReason, errorMessage],
+          analysisSummary: `Orderbook fetch failed: ${errorReason} Raw exchange error: ${errorMessage}`,
         });
       }
     }

@@ -556,6 +556,26 @@ button:disabled {
   color: var(--danger);
 }
 
+.status-stack {
+  display: grid;
+  gap: 5px;
+}
+
+.status-error-reason,
+.error-reason-badge {
+  display: block;
+  max-width: 340px;
+  color: #991b1b;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.35;
+  text-transform: none;
+}
+
+.error-reason-badge {
+  margin-bottom: 8px;
+}
+
 .ledger {
   max-width: 100%;
   overflow-x: auto;

@@ -929,6 +929,7 @@ function structuredAnalysisDetails(item = {}, options = {}) {
   const reasons = Array.isArray(current.rejectReasons) && current.rejectReasons.length
     ? current.rejectReasons.join("; ")
     : (options.filterNote || "No portfolio filter note recorded.");
+  const errorReason = evaluationErrorReason(current);
   const originalLines = [
     options.title || `${current.outcome || "-"} - ${current.question || "-"}`,
     `Original analysis time: ${analysisDate(original) ? formatDate(analysisDate(original)) : "-"}`,
@@ -991,6 +992,12 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     `Polymarket: ${current.url || polymarketUrl(current)}`,
   ].filter(Boolean);
   return [
+    ...(errorReason ? [
+      "ERROR REASON",
+      errorReason,
+      current.errorType ? `Error type: ${current.errorType}` : "",
+      "",
+    ].filter(Boolean) : []),
     "Original AI probability decision",
     ...originalLines,
     "",
@@ -1205,6 +1212,68 @@ function annualizedPortfolioReturn(portfolio, days) {
   return totalPct * (365 / days);
 }
 
+function compactToken(tokenId) {
+  const token = String(tokenId || "");
+  if (!token) return "";
+  if (token.length <= 18) return token;
+  return `${token.slice(0, 10)}...${token.slice(-6)}`;
+}
+
+function cleanErrorMessage(message) {
+  return String(message || "")
+    .replace(/^Orderbook fetch failed:\s*/i, "")
+    .replace(/^Polymarket CLOB orderbook fetch failed:\s*/i, "")
+    .trim();
+}
+
+function evaluationErrorReason(item = {}) {
+  const status = String(item.status || "").toUpperCase();
+  const type = String(item.errorType || "").toUpperCase();
+  if (status !== "ERROR" && !type && !item.errorReason) return "";
+
+  const reasons = Array.isArray(item.rejectReasons)
+    ? item.rejectReasons.map(cleanErrorMessage).filter(Boolean)
+    : [];
+  const rawMessage = cleanErrorMessage(item.errorReason || reasons[0] || item.analysisSummary || "");
+  const joined = `${type} ${rawMessage} ${item.analysisSummary || ""}`;
+  const token = compactToken(item.tokenId);
+
+  if (/CLOB_ORDERBOOK_NOT_FOUND|HTTP 404|\/book\?token_id=|orderbook.*not found/i.test(joined)) {
+    return [
+      "CLOB orderbook unavailable (HTTP 404).",
+      token ? `token_id ${token}` : "",
+      "Price/liquidity economics could not be evaluated; the market token is likely closed, stale, migrated, or not exposed by CLOB.",
+    ].filter(Boolean).join(" ");
+  }
+
+  if (/orderbook|clob|book\?/i.test(joined)) {
+    return [
+      "CLOB orderbook fetch failed.",
+      token ? `token_id ${token}` : "",
+      rawMessage || "No detailed exchange error was returned.",
+    ].filter(Boolean).join(" ");
+  }
+
+  return rawMessage || "Unknown evaluation error.";
+}
+
+function errorReasonBadge(item) {
+  const reason = evaluationErrorReason(item);
+  if (!reason) return "";
+  return `<strong class="error-reason-badge">ERROR: ${escapeHtml(reason)}</strong>`;
+}
+
+function evaluationStatusCell(item) {
+  const label = evaluationStatusLabel(item);
+  const reason = evaluationErrorReason(item);
+  return `
+    <span class="status-stack">
+      <strong>${escapeHtml(label)}</strong>
+      ${reason ? `<span class="status-error-reason">${escapeHtml(reason)}</span>` : ""}
+    </span>
+  `;
+}
+
 function analysisBadge(item) {
   const riskReason = item.selectionStatus === "RISK_BLOCKED"
     ? (item.riskBlockedReason || "risk-blocked by an open correlated paper trade")
@@ -1220,6 +1289,7 @@ function analysisBadge(item) {
     ].join(" / "),
   });
   return `
+    ${errorReasonBadge(item)}
     <span class="analysis-popover">
       <button class="info-button" type="button" aria-label="Show analysis details">i</button>
       <span class="analysis-tooltip" role="tooltip">${escapeHtml(details)}</span>
@@ -2618,7 +2688,7 @@ function renderBotEvaluations() {
         ${visibleEvaluations.map((item) => `
           <tr>
             <td data-label="Time">${escapeHtml(formatDate(item.evaluatedAt || ""))}</td>
-            <td data-label="Status" class="${evaluationStatusClass(item)}">${escapeHtml(evaluationStatusLabel(item))}</td>
+            <td data-label="Status" class="${evaluationStatusClass(item)}">${evaluationStatusCell(item)}</td>
             <td data-label="Market">
               ${marketAnchor(item)}
             </td>
