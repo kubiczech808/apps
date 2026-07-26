@@ -1,5 +1,0 @@
-DirectoryIndex index.html index.php
-RewriteEngine On
-RewriteBase /trading/
-
-RewriteRule ^(settings|opportunities)/?$ index.html [L]

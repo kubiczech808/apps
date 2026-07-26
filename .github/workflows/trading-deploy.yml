@@ -93,7 +93,7 @@ jobs:
                   if not path.is_file():
                       continue
                   relative = path.relative_to(local_dir).as_posix()
-                  if relative not in {"index.html", "api.php", "config.php", ".htaccess"} and not relative.startswith("assets/") and not relative.startswith("data/"):
+                  if relative not in {"index.html", "api.php", "config.php"} and not relative.startswith("assets/") and not relative.startswith("data/"):
                       continue
                   if relative in {"data/paper-state.json", "data/live-state.json"}:
                       continue
