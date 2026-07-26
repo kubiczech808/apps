@@ -468,6 +468,7 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
     } else if (side.includes("SELL")) {
       group.sharesSold += size;
       group.sellProceeds += value;
+      group.closedAtSource = "sell-trade-history";
     }
   }
 
@@ -490,6 +491,7 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
     group.redeemedShares = number(group.redeemedShares, 0) + number(item.size, 0);
     if (!group.resolvedAt || Date.parse(item.timestamp || "") > Date.parse(group.resolvedAt || "")) group.resolvedAt = item.timestamp;
     group.status = "REDEEMED";
+    group.closedAtSource = "redeem-activity";
   }
 
   return [...groups.values()]
@@ -517,6 +519,7 @@ function closedTradesFromHistory(trades, activity, generatedAt) {
         openedAt: group.openedAt || generatedAt,
         resolvedAt: closedAt,
         closedAt,
+        closedAtSource: group.closedAtSource || "trade-history-close",
         endDate: closedAt,
         entryPrice,
         exitPrice,
@@ -568,23 +571,49 @@ function anySharedKey(item, knownKeys) {
   return [...liveItemKeys(item)].some((key) => knownKeys.has(key));
 }
 
+function timestampMs(value) {
+  const timestamp = Date.parse(isoTime(value) || "");
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function isSameTimestamp(a, b, toleranceMs = 2000) {
+  const left = timestampMs(a);
+  const right = timestampMs(b);
+  return left != null && right != null && Math.abs(left - right) <= toleranceMs;
+}
+
+function addTimestampToKeyIndex(index, item, value, mode = "earliest", source = "unknown") {
+  const timestamp = isoTime(value);
+  if (!timestamp) return;
+  for (const key of liveItemKeys(item)) {
+    const existing = index.get(key);
+    const shouldReplace = !existing
+      || (mode === "latest"
+        ? Date.parse(timestamp) > Date.parse(existing.timestamp)
+        : Date.parse(timestamp) < Date.parse(existing.timestamp));
+    if (shouldReplace) index.set(key, { timestamp, source });
+  }
+}
+
+function bestIndexedTimestamp(index, item, mode = "earliest") {
+  const candidates = [...liveItemKeys(item)]
+    .map((key) => index.get(key))
+    .filter(Boolean)
+    .sort((a, b) => {
+      const diff = Date.parse(a.timestamp) - Date.parse(b.timestamp);
+      return mode === "latest" ? -diff : diff;
+    });
+  return candidates[0] || null;
+}
+
 function enrichOpenTimesFromHistory(positions, historyItems, previousState = null) {
   const historyByKey = new Map();
   const previousByKey = new Map();
 
-  function addToIndex(index, item, value) {
-    const timestamp = isoTime(value);
-    if (!timestamp) return;
-    for (const key of liveItemKeys(item)) {
-      const existing = index.get(key);
-      if (!existing || Date.parse(timestamp) < Date.parse(existing)) index.set(key, timestamp);
-    }
-  }
-
   for (const item of historyItems) {
     const side = String(item.side || item.type || "").toUpperCase();
     if (side && !side.includes("BUY") && !side.includes("TRADE")) continue;
-    addToIndex(historyByKey, item, item.timestamp || item.createdAt || item.openedAt || item.date);
+    addTimestampToKeyIndex(historyByKey, item, item.timestamp || item.createdAt || item.openedAt || item.date, "earliest", "trade-history");
   }
 
   const previousRows = [
@@ -594,32 +623,81 @@ function enrichOpenTimesFromHistory(positions, historyItems, previousState = nul
   for (const item of previousRows) {
     const source = String(item.openedAtSource || "").toLowerCase();
     if (source === "sync-generated-fallback") continue;
-    addToIndex(previousByKey, item, item.openedAt || item.date || item.createdAt);
+    addTimestampToKeyIndex(previousByKey, item, item.openedAt || item.date || item.createdAt, "earliest", "previous-live-state");
   }
 
   return positions.map((position) => {
-    if (isoTime(position.openedAt)) return position;
-    const keys = [...liveItemKeys(position)];
-    const historyTime = keys.map((key) => historyByKey.get(key)).filter(Boolean).sort()[0] || null;
-    if (historyTime) {
-      return {
-        ...position,
-        date: historyTime,
-        openedAt: historyTime,
-        openedAtSource: "trade-history",
-      };
-    }
-    const previousTime = keys.map((key) => previousByKey.get(key)).filter(Boolean).sort()[0] || null;
-    if (previousTime) {
-      return {
-        ...position,
-        date: previousTime,
-        openedAt: previousTime,
-        openedAtSource: "previous-live-state",
-      };
-    }
-    return position;
+    const currentTime = isoTime(position.openedAt || position.date);
+    const candidates = [
+      bestIndexedTimestamp(historyByKey, position, "earliest"),
+      bestIndexedTimestamp(previousByKey, position, "earliest"),
+      currentTime ? { timestamp: currentTime, source: position.openedAtSource || "positions-api" } : null,
+    ].filter(Boolean).sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+    const best = candidates[0] || null;
+    if (!best) return position;
+    return {
+      ...position,
+      date: best.timestamp,
+      openedAt: best.timestamp,
+      openedAtSource: best.source,
+    };
   });
+}
+
+function buildCloseTimeIndex(historyItems) {
+  const index = new Map();
+  for (const item of historyItems) {
+    const side = String(item.side || "").toUpperCase();
+    const type = String(item.type || "").toUpperCase();
+    const isClose = side.includes("SELL")
+      || type.includes("SELL")
+      || type.includes("REDEEM")
+      || type.includes("CLAIM")
+      || type.includes("RESOLVE");
+    if (!isClose) continue;
+    addTimestampToKeyIndex(index, item, item.timestamp || item.closedAt || item.resolvedAt || item.date, "latest", "trade-history-close");
+  }
+  return index;
+}
+
+function buildPreviousCloseTimeIndex(previousState) {
+  const index = new Map();
+  const previousGeneratedAt = previousState?.generatedAt || null;
+  const previousRows = [
+    ...(Array.isArray(previousState?.closedTrades) ? previousState.closedTrades : []),
+    ...(Array.isArray(previousState?.resolvedApiPositions) ? previousState.resolvedApiPositions : []),
+  ];
+  for (const item of previousRows) {
+    const value = item.closedAt || item.resolvedAt || item.closedTime || item.endDate;
+    if (!value || isSameTimestamp(value, previousGeneratedAt)) continue;
+    addTimestampToKeyIndex(index, item, value, "latest", "previous-live-state-close");
+  }
+  return index;
+}
+
+function adjustedResolutionEndDate(position) {
+  const endDate = isoTime(position.endDate);
+  if (!endDate) return null;
+  let endMs = Date.parse(endDate);
+  const openedMs = timestampMs(position.openedAt || position.date);
+  const looksDateOnly = /T00:00:00\.000Z$/.test(endDate);
+  if (looksDateOnly && openedMs != null && endMs < openedMs) {
+    endMs += (24 * 60 * 60 * 1000) - 1;
+  }
+  if (openedMs != null && endMs < openedMs) return null;
+  return new Date(endMs).toISOString();
+}
+
+function resolvedPositionCloseTime(position, closeTimeIndex, previousCloseTimeIndex) {
+  const explicit = isoTime(position.resolvedAt || position.closedAt || position.closedTime || position.redeemedAt);
+  if (explicit) return { timestamp: explicit, source: "positions-api-resolved" };
+  const closeFromHistory = bestIndexedTimestamp(closeTimeIndex, position, "latest");
+  if (closeFromHistory) return closeFromHistory;
+  const closeFromPrevious = bestIndexedTimestamp(previousCloseTimeIndex, position, "latest");
+  if (closeFromPrevious) return closeFromPrevious;
+  const endDate = adjustedResolutionEndDate(position);
+  if (endDate) return { timestamp: endDate, source: "event-end-date" };
+  return null;
 }
 
 function redeemAlertId(prefix, item) {
@@ -636,7 +714,9 @@ function positionLooksResolved(position) {
   return positionOfficiallyResolved(position);
 }
 
-function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt) {
+function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt, historyItems = [], previousState = null) {
+  const closeTimeIndex = buildCloseTimeIndex(historyItems);
+  const previousCloseTimeIndex = buildPreviousCloseTimeIndex(previousState);
   return positions
     .filter((position) => positionLooksResolved(position) && !anySharedKey(position, knownClosedKeys))
     .map((position) => {
@@ -646,13 +726,15 @@ function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt
       const winningResolved = currentValue > 0.000001 || (currentPrice != null && currentPrice >= 0.995);
       const realizedPnl = currentValue - stake;
       const status = winningResolved ? "REDEEM_REQUIRED" : "LOST";
-      const officialClosedAt = position.resolvedAt || generatedAt;
+      const closeTime = resolvedPositionCloseTime(position, closeTimeIndex, previousCloseTimeIndex);
+      const officialClosedAt = closeTime?.timestamp || null;
       return {
         ...position,
         id: `resolved-position-${position.id}`,
         status,
         resolvedAt: officialClosedAt,
         closedAt: officialClosedAt,
+        closedAtSource: closeTime?.source || "unknown",
         exitPrice: currentPrice,
         finalOutcomePrice: currentPrice,
         exitValueUsdc: currentValue,
@@ -665,6 +747,7 @@ function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt
           status === "LOST"
             ? "Polymarket exposes this resolved position with zero value, so it is classified as a settled losing position rather than a redeem-needed winner."
             : "Polymarket exposes this position as redeemable/claimable/resolved, so it is classified outside opened trades until redeem is completed.",
+          !officialClosedAt ? "No stable Polymarket resolution timestamp was available; closed time is intentionally left blank instead of using the sync time." : "",
         ].filter(Boolean).join(" "),
       };
     });
@@ -1233,7 +1316,13 @@ async function main() {
   for (const item of historyClosedTrades) {
     for (const key of liveItemKeys(item)) knownClosedKeys.add(key);
   }
-  const resolvedPositionRows = closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt);
+  const resolvedPositionRows = closedRowsFromResolvedPositions(
+    positions,
+    knownClosedKeys,
+    generatedAt,
+    [...tradeHistory, ...activity],
+    previousLiveState,
+  );
   const openApiPositions = positions.filter((position) => !positionLooksResolved(position) && !anySharedKey(position, knownClosedKeys));
   const closedTrades = [...historyClosedTrades, ...resolvedPositionRows];
   const reconciliation = ledgerReconciliationFallbacks(
