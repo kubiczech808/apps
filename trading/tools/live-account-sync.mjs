@@ -230,8 +230,47 @@ function positionUrl(position) {
   return /^[a-z0-9-]+$/i.test(slug) ? `https://polymarket.com/event/${slug}` : "https://polymarket.com/";
 }
 
+function inferredEndDateFromQuestion(question, fallbackDate = null) {
+  const match = String(question || "").match(/\b(?:by|on|before|through)\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:,\s*(\d{4}))?/i);
+  if (!match) return null;
+  const months = {
+    january: 0,
+    february: 1,
+    march: 2,
+    april: 3,
+    may: 4,
+    june: 5,
+    july: 6,
+    august: 7,
+    september: 8,
+    october: 9,
+    november: 10,
+    december: 11,
+  };
+  const fallback = new Date(fallbackDate || Date.now());
+  const year = Number(match[3]) || (Number.isFinite(fallback.getTime()) ? fallback.getUTCFullYear() : new Date().getUTCFullYear());
+  const month = months[match[1].toLowerCase()];
+  const day = Number(match[2]);
+  if (!Number.isInteger(month) || !Number.isFinite(day)) return null;
+  const inferred = new Date(Date.UTC(year, month, day, 23, 59, 59));
+  return Number.isFinite(inferred.getTime()) ? inferred.toISOString() : null;
+}
+
+function correctedEndDate(question, rawEndDate, fallbackDate = null) {
+  const raw = isoTime(rawEndDate);
+  const inferred = inferredEndDateFromQuestion(question, raw || fallbackDate);
+  if (!inferred) return { endDate: raw, source: raw ? "positions-api" : "unknown", rawEndDate: raw };
+  const rawTime = Date.parse(raw || "");
+  const inferredTime = Date.parse(inferred);
+  if (!Number.isFinite(rawTime) || inferredTime > rawTime) {
+    return { endDate: inferred, source: raw ? "question-corrected" : "question-inferred", rawEndDate: raw };
+  }
+  return { endDate: raw || inferred, source: raw ? "positions-api" : "question-inferred", rawEndDate: raw };
+}
+
 function normalizePosition(position, generatedAt) {
   const size = number(position.size ?? position.balance ?? position.quantity, 0);
+  const question = position.title || position.question || position.market || "-";
   const avgPrice = number(position.avgPrice ?? position.averagePrice ?? position.entryPrice);
   const currentPrice = number(position.curPrice ?? position.currentPrice ?? position.price);
   const initialValue = number(position.initialValue ?? position.totalBought ?? (avgPrice != null ? avgPrice * size : null), 0);
@@ -239,7 +278,9 @@ function normalizePosition(position, generatedAt) {
   const cashPnl = number(position.cashPnl ?? position.pnl ?? position.unrealizedPnl ?? (currentValue - initialValue), 0);
   const pnlPct = ratio(position.percentPnl ?? position.pnlPercent ?? (initialValue > 0 ? cashPnl / initialValue : null));
   const realizedPnl = number(position.realizedPnl ?? position.cashPnlRealized, 0);
-  const endDate = isoTime(position.endDate ?? position.endDateIso ?? position.resolutionDate);
+  const rawEndDate = isoTime(position.endDate ?? position.endDateIso ?? position.resolutionDate);
+  const endDateCorrection = correctedEndDate(question, rawEndDate, position.createdAt ?? position.timestamp ?? generatedAt);
+  const endDate = endDateCorrection.endDate;
   const redeemable = Boolean(position.redeemable ?? position.claimable ?? position.canRedeem ?? position.conditionRedeemable ?? false);
   const resolved = Boolean(position.resolved ?? position.isResolved ?? position.closed ?? false);
   const claimable = Boolean(position.claimable ?? position.canRedeem ?? false);
@@ -252,7 +293,7 @@ function normalizePosition(position, generatedAt) {
     id: String(position.asset ?? position.tokenId ?? position.conditionId ?? `${position.slug || position.title || "position"}-${position.outcome || ""}`),
     mode: "LIVE",
     status: pendingResolution ? "PENDING_RESOLUTION" : "OPEN",
-    question: position.title || position.question || position.market || "-",
+    question,
     outcome: position.outcome || position.side || "-",
     slug: position.slug || position.eventSlug || "",
     eventSlug: position.eventSlug || position.slug || "",
@@ -263,6 +304,8 @@ function normalizePosition(position, generatedAt) {
     openedAt,
     openedAtSource: openedAt ? "positions-api" : "unknown",
     endDate,
+    rawEndDate,
+    endDateSource: endDateCorrection.source,
     resolvedAt,
     entryPrice: avgPrice,
     currentPrice,
