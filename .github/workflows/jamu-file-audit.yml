@@ -1,0 +1,44 @@
+name: JAMU FTP file count audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/jamu-multilingual']
+    paths:
+      - '.github/jamu-file-audit-trigger'
+      - '.github/workflows/jamu-file-audit.yml'
+      - 'scripts/jamu_ftp_file_audit.py'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jamu-ftp-file-audit
+  cancel-in-progress: false
+
+jobs:
+  file-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      JAMU_FTP_LOGIN: ${{ secrets.JAMU_FTP_LOGIN }}
+      JAMU_FTP_PWD: ${{ secrets.JAMU_FTP_PWD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/jamu-multilingual
+      - name: Validate secrets
+        run: |
+          test -n "$JAMU_FTP_LOGIN" || { echo 'Missing JAMU_FTP_LOGIN'; exit 1; }
+          test -n "$JAMU_FTP_PWD" || { echo 'Missing JAMU_FTP_PWD'; exit 1; }
+          test -f scripts/jamu_ftp_file_audit.py
+      - name: Run read-only FTP file count audit
+        run: python scripts/jamu_ftp_file_audit.py
+      - name: Commit audit report to working branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add jamu-content/file-audit.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Capture JAMU FTP file count audit'
+          git push origin HEAD:feat/jamu-multilingual
