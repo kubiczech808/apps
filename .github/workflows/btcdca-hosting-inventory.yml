@@ -58,6 +58,7 @@ jobs:
                   print(f"Connect failed for {host}: {exc}")
           if ftp is None:
               raise SystemExit(f"Could not connect to FTP: {last_error}")
+          ftp_root = ftp.pwd()
 
           def clean_path(path):
               path = path.strip()
@@ -69,10 +70,6 @@ jobs:
               if "/" not in path:
                   return ""
               return path.rsplit("/", 1)[0]
-
-          def depth_of(path):
-              path = clean_path(path)
-              return 0 if not path else path.count("/") + 1
 
           def top_n(counter, n=40):
               return counter.most_common(n)
@@ -142,52 +139,108 @@ jobs:
               if len(file_samples) < 40:
                   file_samples.append(path)
 
+          def enter_dir(path):
+              ftp.cwd(ftp_root)
+              for part in [part for part in clean_path(path).split("/") if part]:
+                  ftp.cwd(part)
+
+          def parse_list_line(line):
+              if not line or line.lower().startswith("total "):
+                  return None
+              parts = line.split(maxsplit=8)
+              if len(parts) < 9:
+                  return None
+              name = parts[8]
+              if name in (".", ".."):
+                  return None
+              if " -> " in name:
+                  name = name.split(" -> ", 1)[0]
+              return name, line[0].lower() == "d"
+
           def list_dir(path):
-              nonlocal_dir_marker = None
+              original = ftp.pwd()
               try:
-                  entries = list(ftp.mlsd(path or "."))
+                  enter_dir(path)
+              except Exception as exc:
+                  if len(errors) < MAX_ERRORS:
+                      errors.append(f"{path or '/'}: cwd failed: {exc}")
+                  try:
+                      ftp.cwd(original)
+                  except Exception:
+                      pass
+                  return
+
+              try:
+                  entries = list(ftp.mlsd())
                   for name, facts in entries:
                       if name in (".", ".."):
                           continue
                       child = clean_path(posixpath.join(path, name) if path else name)
                       kind = facts.get("type", "")
-                      if kind in ("dir", "cdir", "pdir"):
-                          if kind == "dir":
-                              yield child, True
-                      else:
+                      if kind == "dir":
+                          yield child, True
+                      elif kind not in ("cdir", "pdir"):
                           yield child, False
                   return
               except Exception:
                   pass
-
-              try:
-                  names = ftp.nlst(path or ".")
-              except Exception as exc:
-                  if len(errors) < MAX_ERRORS:
-                      errors.append(f"{path or '.'}: {exc}")
-                  return
-
-              for raw in names:
-                  name = clean_path(raw)
-                  if not name or name in (".", ".."):
-                      continue
-                  if path and not name.startswith(clean_path(path) + "/"):
-                      name = clean_path(posixpath.join(path, name))
-                  base = name.rsplit("/", 1)[-1]
-                  if base in (".", ".."):
-                      continue
-                  original = ftp.pwd()
-                  is_dir = False
+              finally:
                   try:
-                      ftp.cwd(name)
-                      is_dir = True
                       ftp.cwd(original)
                   except Exception:
+                      pass
+
+              try:
+                  enter_dir(path)
+                  lines = []
+                  ftp.retrlines("LIST", lines.append)
+                  parsed = []
+                  for line in lines:
+                      parsed_line = parse_list_line(line)
+                      if not parsed_line:
+                          continue
+                      name, is_dir = parsed_line
+                      parsed.append((clean_path(posixpath.join(path, name) if path else name), is_dir))
+                  if parsed:
+                      for child, is_dir in parsed:
+                          yield child, is_dir
+                      return
+              except Exception:
+                  pass
+              finally:
+                  try:
+                      ftp.cwd(original)
+                  except Exception:
+                      pass
+
+              try:
+                  enter_dir(path)
+                  names = ftp.nlst()
+                  current_dir = ftp.pwd()
+                  for raw in names:
+                      base = clean_path(raw).rsplit("/", 1)[-1]
+                      if not base or base in (".", ".."):
+                          continue
+                      child = clean_path(posixpath.join(path, base) if path else base)
+                      is_dir = False
                       try:
-                          ftp.cwd(original)
+                          ftp.cwd(base)
+                          is_dir = True
+                          ftp.cwd(current_dir)
                       except Exception:
-                          pass
-                  yield name, is_dir
+                          try:
+                              ftp.cwd(current_dir)
+                          except Exception:
+                              pass
+                      yield child, is_dir
+              except Exception as exc:
+                  if len(errors) < MAX_ERRORS:
+                      errors.append(f"{path or '/'}: list failed after MLSD/LIST/NLST: {exc}")
+              finally:
+                  try:
+                      ftp.cwd(original)
+                  except Exception:
+                      pass
 
           started = time.time()
           stack = [""]
