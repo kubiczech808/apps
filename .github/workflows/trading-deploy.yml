@@ -84,7 +84,10 @@ jobs:
                   try:
                       ftp.cwd(part)
                   except ftplib.error_perm:
-                      ftp.mkd(part)
+                      try:
+                          ftp.mkd(part)
+                      except ftplib.error_perm:
+                          pass
                       ftp.cwd(part)
 
           with ftplib.FTP(server, timeout=30) as ftp:
