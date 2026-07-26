@@ -84,10 +84,42 @@ jobs:
                           pass
                       ftp.cwd(part)
 
+          def list_names(ftp):
+              try:
+                  return [name for name, _facts in ftp.mlsd() if name not in {".", ".."}]
+              except ftplib.all_errors:
+                  try:
+                      return [name for name in ftp.nlst() if name not in {".", ".."}]
+                  except ftplib.all_errors:
+                      return []
+
+          def remove_tree(ftp, name):
+              current = ftp.pwd()
+              try:
+                  ftp.delete(name)
+                  return
+              except ftplib.all_errors:
+                  pass
+              try:
+                  ftp.cwd(name)
+              except ftplib.all_errors:
+                  return
+              for child in list_names(ftp):
+                  remove_tree(ftp, child)
+              ftp.cwd(current)
+              try:
+                  ftp.rmd(name)
+              except ftplib.all_errors:
+                  pass
+
           with ftplib.FTP(server, timeout=30) as ftp:
               ftp.login(username, password)
               target_parts = target.split("/")
               enter_dir(ftp, target_parts)
+              for name in list_names(ftp):
+                  if name == "data":
+                      continue
+                  remove_tree(ftp, name)
 
               for path in sorted(local_dir.rglob("*")):
                   if not path.is_file():
