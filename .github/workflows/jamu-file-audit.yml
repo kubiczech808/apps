@@ -49,7 +49,7 @@ jobs:
             printf '{\n  "error": "audit command exited with code %s before Python error report was written"\n}\n' "$code" > jamu-content/file-audit-error.json
           fi
           if [ "$code" -eq 0 ]; then
-            rm -f jamu-content/file-audit-error.json jamu-content/file-audit-stderr.txt
+            rm -f jamu-content/file-audit-error.json jamu-content/file-audit-stdout.txt jamu-content/file-audit-stderr.txt
           fi
           exit "$code"
       - name: Commit audit report to working branch

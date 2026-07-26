@@ -14,6 +14,7 @@ OUTPUT = Path("jamu-content/file-audit.json")
 ERROR_OUTPUT = Path("jamu-content/file-audit-error.json")
 TEMPLATE = Path("scripts/templates/jamu_file_audit_bridge.php")
 PUBLIC_BASE_URL = "https://tajemstvijamu.cz"
+MAX_PREFIX_DEPTH = 5
 
 
 def connect() -> tuple[ftplib.FTP, str]:
