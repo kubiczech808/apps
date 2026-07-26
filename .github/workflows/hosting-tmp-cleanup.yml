@@ -1,0 +1,264 @@
+name: Hosting Tmp Cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview only, do not delete files"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      retention_hours:
+        description: "Delete tmp files older than this many hours"
+        required: false
+        default: "24"
+        type: string
+  schedule:
+    - cron: '17 */6 * * *'
+
+concurrency:
+  group: hosting-tmp-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Clean hosting tmp directories
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          HOSTING_FTP_DIR: ${{ secrets.HOSTING_FTP_DIR }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          RETENTION_HOURS: ${{ github.event.inputs.retention_hours || '24' }}
+        run: |
+          python3 - <<'PY'
+          import datetime as dt
+          import ftplib
+          import os
+          import posixpath
+          import time
+
+          server = os.environ["HOSTING_FTP_SERVER"]
+          username = os.environ["HOSTING_FTP_USERNAME"]
+          password = os.environ["HOSTING_FTP_PASSWORD"]
+          configured_root = (os.environ.get("HOSTING_FTP_DIR") or "").strip("/")
+          dry_run = (os.environ.get("DRY_RUN") or "false").lower() == "true"
+          retention_hours = max(1, float(os.environ.get("RETENTION_HOURS") or 24))
+          cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=retention_hours)
+          max_deletes = 5000
+
+          # Only top-level hosting temp areas. Do not infer broad recursive
+          # cleanup paths from arbitrary names that merely contain "tmp".
+          relative_targets = ["tmp", "temp", "www/tmp", "www/temp"]
+
+          def clean_path(path):
+              return (path or "").strip().strip("/")
+
+          def join_path(*parts):
+              return clean_path(posixpath.join(*[clean_path(part) for part in parts if clean_path(part)]))
+
+          def candidate_targets():
+              bases = ["", configured_root]
+              seen = set()
+              for base in bases:
+                  for relative in relative_targets:
+                      target = join_path(base, relative)
+                      if target and target not in seen:
+                          seen.add(target)
+                          yield target
+
+          def cwd_path(ftp, path):
+              try:
+                  ftp.cwd("/")
+              except ftplib.all_errors:
+                  pass
+              try:
+                  for part in [part for part in clean_path(path).split("/") if part]:
+                      ftp.cwd(part)
+                  return True
+              except ftplib.all_errors:
+                  return False
+
+          def parse_mlsd_modify(value):
+              if not value:
+                  return None
+              try:
+                  parsed = dt.datetime.strptime(value[:14], "%Y%m%d%H%M%S")
+                  return parsed.replace(tzinfo=dt.timezone.utc)
+              except ValueError:
+                  return None
+
+          def list_entries(ftp, path):
+              original = ftp.pwd()
+              if not cwd_path(ftp, path):
+                  return None, f"missing or not accessible: {path}"
+              try:
+                  try:
+                      entries = []
+                      for name, facts in ftp.mlsd():
+                          if name in {".", ".."}:
+                              continue
+                          kind = (facts.get("type") or "").lower()
+                          entries.append({
+                              "name": name,
+                              "path": join_path(path, name),
+                              "is_dir": kind == "dir",
+                              "modified": parse_mlsd_modify(facts.get("modify")),
+                              "source": "MLSD",
+                          })
+                      return entries, None
+                  except ftplib.all_errors:
+                      lines = []
+                      ftp.retrlines("LIST", lines.append)
+                      entries = []
+                      for line in lines:
+                          if not line or line.lower().startswith("total "):
+                              continue
+                          parts = line.split(maxsplit=8)
+                          if len(parts) < 9:
+                              continue
+                          name = parts[8].split(" -> ", 1)[0]
+                          if name in {".", ".."}:
+                              continue
+                          entries.append({
+                              "name": name,
+                              "path": join_path(path, name),
+                              "is_dir": line[0].lower() == "d",
+                              "modified": None,
+                              "source": "LIST",
+                          })
+                      return entries, None
+              except Exception as exc:
+                  return None, f"list failed: {exc}"
+              finally:
+                  try:
+                      ftp.cwd(original)
+                  except ftplib.all_errors:
+                      pass
+
+          def delete_file(ftp, path):
+              parent = clean_path(posixpath.dirname(path))
+              name = posixpath.basename(path)
+              if not cwd_path(ftp, parent):
+                  return False, "parent not accessible"
+              try:
+                  ftp.delete(name)
+                  return True, ""
+              except Exception as exc:
+                  return False, str(exc)
+
+          def remove_empty_dir(ftp, path):
+              parent = clean_path(posixpath.dirname(path))
+              name = posixpath.basename(path)
+              if not cwd_path(ftp, parent):
+                  return False
+              try:
+                  ftp.rmd(name)
+                  return True
+              except ftplib.all_errors:
+                  return False
+
+          def scan_tree(ftp, root):
+              stack = [root]
+              files_seen = 0
+              dirs_seen = 0
+              old_files = []
+              skipped_unknown_time = []
+              list_errors = []
+              dir_order = []
+
+              while stack:
+                  current = stack.pop()
+                  entries, error = list_entries(ftp, current)
+                  if entries is None:
+                      list_errors.append(error)
+                      continue
+                  dir_order.append(current)
+                  for entry in entries:
+                      if entry["is_dir"]:
+                          dirs_seen += 1
+                          stack.append(entry["path"])
+                          continue
+                      files_seen += 1
+                      modified = entry["modified"]
+                      if modified is None:
+                          skipped_unknown_time.append(entry["path"])
+                      elif modified < cutoff:
+                          old_files.append((entry["path"], modified))
+
+              return {
+                  "root": root,
+                  "files_seen": files_seen,
+                  "dirs_seen": dirs_seen,
+                  "old_files": old_files,
+                  "skipped_unknown_time": skipped_unknown_time,
+                  "list_errors": list_errors,
+                  "dir_order": dir_order,
+              }
+
+          started = time.time()
+          deleted = []
+          failed = []
+          scanned = []
+
+          with ftplib.FTP(server, timeout=45, encoding="latin-1") as ftp:
+              ftp.login(username, password)
+              if ftp.sock:
+                  ftp.sock.settimeout(45)
+
+              for target in candidate_targets():
+                  result = scan_tree(ftp, target)
+                  scanned.append(result)
+                  for path, modified in result["old_files"]:
+                      if len(deleted) >= max_deletes:
+                          break
+                      if dry_run:
+                          deleted.append((path, modified, "dry-run"))
+                          continue
+                      ok, error = delete_file(ftp, path)
+                      if ok:
+                          deleted.append((path, modified, "deleted"))
+                      else:
+                          failed.append((path, error))
+
+                  if not dry_run:
+                      for directory in reversed(result["dir_order"]):
+                          if directory == target:
+                              continue
+                          remove_empty_dir(ftp, directory)
+
+          print("Hosting tmp cleanup completed.")
+          print(f"Mode: {'dry-run' if dry_run else 'delete'}")
+          print(f"Retention: {retention_hours:g} hours")
+          print(f"Cutoff UTC: {cutoff.isoformat()}")
+          print(f"Deleted/eligible files: {len(deleted)}")
+          print(f"Failed deletes: {len(failed)}")
+          print("")
+          print("Scanned targets:")
+          for result in scanned:
+              print(
+                  f"- {result['root']}: {result['files_seen']} files, "
+                  f"{result['dirs_seen']} dirs, {len(result['old_files'])} older than retention, "
+                  f"{len(result['skipped_unknown_time'])} skipped without reliable mtime"
+              )
+              for error in result["list_errors"][:5]:
+                  print(f"  warning: {error}")
+          if deleted:
+              print("")
+              print("Sample deleted/eligible files:")
+              for path, modified, mode in deleted[:60]:
+                  print(f"- {mode}: {path} ({modified.isoformat()})")
+          if failed:
+              print("")
+              print("Failed delete samples:")
+              for path, error in failed[:30]:
+                  print(f"- {path}: {error}")
+          print("")
+          print(f"Duration: {time.time() - started:.1f}s")
+          PY
