@@ -1,0 +1,2100 @@
+{
+  "generated_at": "2026-07-26T23:17:41+00:00",
+  "site": "https://tajemstvijamu.cz/",
+  "wordpress_root": "/data/www/26285/tajemstvijamu_cz/www/",
+  "total_files": 34077,
+  "total_dirs": 5402,
+  "total_bytes": 614626237,
+  "active_plugin_slugs": [
+    "WC-Doprava-main",
+    "akismet",
+    "auto-sizes",
+    "cookie-law-info",
+    "ecomail",
+    "facebook-for-woocommerce",
+    "google-site-kit",
+    "insert-headers-and-footers",
+    "jamu-multilingual",
+    "loco-translate",
+    "olympus-google-fonts",
+    "open-user-map",
+    "packeta",
+    "performance-lab",
+    "smart-slider-3",
+    "string-locator",
+    "webp-uploads",
+    "woo-checkout-field-editor-pro",
+    "woo-discount-rules",
+    "woo-stripe-payment",
+    "woocommerce-pay-for-payment",
+    "woocommerce-payments",
+    "woocommerce-services",
+    "woocommerce",
+    "wordpress-importer",
+    "wordpress-seo",
+    "wp-optimize",
+    "wpforms-lite",
+    "wpify-woo",
+    "yaycurrency",
+    "yaymail"
+  ],
+  "top_file_prefixes": [
+    {
+      "path": "wp-content",
+      "count": 30571
+    },
+    {
+      "path": "wp-content/plugins",
+      "count": 26252
+    },
+    {
+      "path": "wp-content/plugins/woocommerce",
+      "count": 6194
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite",
+      "count": 4713
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/vendor_prefixed",
+      "count": 2938
+    },
+    {
+      "path": "wp-includes",
+      "count": 2895
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/assets",
+      "count": 2252
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/vendor_prefixed/square",
+      "count": 2138
+    },
+    {
+      "path": "wp-content/plugins/wordpress-seo",
+      "count": 1943
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit",
+      "count": 1908
+    },
+    {
+      "path": "wp-content/uploads",
+      "count": 1871
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/src",
+      "count": 1571
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/assets/client",
+      "count": 1548
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments",
+      "count": 1487
+    },
+    {
+      "path": "wp-content/plugins/packeta",
+      "count": 1380
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/third-party",
+      "count": 1350
+    },
+    {
+      "path": "wp-content/plugins/wordpress-seo/src",
+      "count": 1251
+    },
+    {
+      "path": "wp-content/plugins/woo-stripe-payment",
+      "count": 1174
+    },
+    {
+      "path": "wp-content/plugins/wpify-woo",
+      "count": 1083
+    },
+    {
+      "path": "wp-content/languages",
+      "count": 1025
+    },
+    {
+      "path": "wp-content/plugins/wp-optimize",
+      "count": 993
+    },
+    {
+      "path": "wp-content/plugins/wpify-woo/vendor",
+      "count": 973
+    },
+    {
+      "path": "wp-content/plugins/wpify-woo/vendor/wpify-woo",
+      "count": 961
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3",
+      "count": 915
+    },
+    {
+      "path": "wp-content/languages/plugins",
+      "count": 849
+    },
+    {
+      "path": "wp-includes/blocks",
+      "count": 794
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Nextend",
+      "count": 786
+    },
+    {
+      "path": "wp-content/themes",
+      "count": 764
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/third-party/google",
+      "count": 731
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/assets",
+      "count": 710
+    },
+    {
+      "path": "wp-content/plugins/wp-optimize/vendor",
+      "count": 706
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments/vendor",
+      "count": 690
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/src",
+      "count": 651
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/includes",
+      "count": 643
+    },
+    {
+      "path": "wp-content/cache",
+      "count": 641
+    },
+    {
+      "path": "wp-content/cache/wpo-minify",
+      "count": 638
+    },
+    {
+      "path": "wp-content/plugins/facebook-for-woocommerce",
+      "count": 619
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/vendor",
+      "count": 613
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/src/Internal",
+      "count": 599
+    },
+    {
+      "path": "wp-admin",
+      "count": 590
+    },
+    {
+      "path": "wp-includes/js",
+      "count": 578
+    },
+    {
+      "path": "wp-content/plugins/yaymail",
+      "count": 560
+    },
+    {
+      "path": "wp-content/uploads/2024",
+      "count": 539
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-services",
+      "count": 502
+    },
+    {
+      "path": "wp-content/plugins/woo-stripe-payment/vendor",
+      "count": 471
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/includes",
+      "count": 467
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Nextend/SmartSlider3",
+      "count": 460
+    },
+    {
+      "path": "wp-content/plugins/woo-stripe-payment/vendor/stripe",
+      "count": 458
+    },
+    {
+      "path": "wp-content/uploads/2020",
+      "count": 456
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/packages",
+      "count": 450
+    },
+    {
+      "path": "wp-content/plugins/yaycurrency",
+      "count": 450
+    },
+    {
+      "path": "wp-includes/images",
+      "count": 410
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/src/Admin",
+      "count": 399
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/assets/images",
+      "count": 396
+    },
+    {
+      "path": "wp-content/plugins/packeta/deps",
+      "count": 395
+    },
+    {
+      "path": "wp-content/plugins/packeta/src",
+      "count": 389
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/assets/images",
+      "count": 380
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments/includes",
+      "count": 377
+    },
+    {
+      "path": "wp-content/plugins/packeta/src/Packetery",
+      "count": 375
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/vendor_prefixed/stripe",
+      "count": 374
+    },
+    {
+      "path": "wp-content/plugins/open-user-map",
+      "count": 374
+    },
+    {
+      "path": "wp-content/plugins/packeta/public",
+      "count": 365
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/lib",
+      "count": 363
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/lib/packages",
+      "count": 356
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/third-party/phpseclib",
+      "count": 339
+    },
+    {
+      "path": "wp-content/uploads/2026",
+      "count": 332
+    },
+    {
+      "path": "wp-includes/images/icon-library",
+      "count": 331
+    },
+    {
+      "path": "wp-content/plugins/facebook-for-woocommerce/vendor",
+      "count": 322
+    },
+    {
+      "path": "wp-content/plugins/ecomail",
+      "count": 313
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/includes/Core",
+      "count": 312
+    },
+    {
+      "path": "wp-content/plugins/loco-translate",
+      "count": 310
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments/vendor/woocommerce",
+      "count": 299
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/packages/email-editor",
+      "count": 295
+    },
+    {
+      "path": "wp-content/plugins/yaycurrency/assets",
+      "count": 295
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/src/Blocks",
+      "count": 291
+    },
+    {
+      "path": "wp-content/plugins/cookie-law-info",
+      "count": 288
+    },
+    {
+      "path": "wp-content/plugins/ecomail/vendor",
+      "count": 287
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Nextend/Framework",
+      "count": 286
+    },
+    {
+      "path": "wp-content/plugins/wordpress-importer",
+      "count": 283
+    },
+    {
+      "path": "wp-content/plugins/yaycurrency/assets/flags",
+      "count": 283
+    }
+  ],
+  "top_dir_prefixes": [
+    {
+      "path": "wp-content",
+      "count": 5002
+    },
+    {
+      "path": "wp-content/plugins",
+      "count": 4764
+    },
+    {
+      "path": "wp-content/plugins/woocommerce",
+      "count": 1072
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite",
+      "count": 624
+    },
+    {
+      "path": "wp-content/plugins/wordpress-seo",
+      "count": 476
+    },
+    {
+      "path": "wp-includes",
+      "count": 381
+    },
+    {
+      "path": "wp-content/plugins/wordpress-seo/src",
+      "count": 379
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/assets",
+      "count": 376
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3",
+      "count": 353
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/assets/client",
+      "count": 317
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/src",
+      "count": 297
+    },
+    {
+      "path": "wp-content/plugins/wpify-woo",
+      "count": 282
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Nextend",
+      "count": 274
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit",
+      "count": 258
+    },
+    {
+      "path": "wp-content/plugins/wpify-woo/vendor",
+      "count": 227
+    },
+    {
+      "path": "wp-content/plugins/wpify-woo/vendor/wpify-woo",
+      "count": 225
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/src",
+      "count": 211
+    },
+    {
+      "path": "wp-content/plugins/packeta",
+      "count": 210
+    },
+    {
+      "path": "wp-content/plugins/facebook-for-woocommerce",
+      "count": 200
+    },
+    {
+      "path": "wp-content/plugins/wp-optimize",
+      "count": 194
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments",
+      "count": 183
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Nextend/SmartSlider3",
+      "count": 181
+    },
+    {
+      "path": "wp-content/plugins/woo-stripe-payment",
+      "count": 180
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/vendor_prefixed",
+      "count": 165
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/third-party",
+      "count": 164
+    },
+    {
+      "path": "wp-content/plugins/wp-optimize/vendor",
+      "count": 160
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/src/Internal",
+      "count": 157
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/assets",
+      "count": 150
+    },
+    {
+      "path": "wp-content/themes",
+      "count": 123
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/packages",
+      "count": 120
+    },
+    {
+      "path": "wp-content/plugins/cookie-law-info",
+      "count": 120
+    },
+    {
+      "path": "wp-content/plugins/yaymail",
+      "count": 117
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/vendor",
+      "count": 112
+    },
+    {
+      "path": "wp-includes/blocks",
+      "count": 111
+    },
+    {
+      "path": "wp-content/plugins/packeta/deps",
+      "count": 102
+    },
+    {
+      "path": "wp-content/plugins/facebook-for-woocommerce/vendor",
+      "count": 97
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/packages/email-editor",
+      "count": 92
+    },
+    {
+      "path": "wp-content/plugins/facebook-for-woocommerce/includes",
+      "count": 90
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments/vendor",
+      "count": 89
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Nextend/Framework",
+      "count": 89
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/src/Integrations",
+      "count": 87
+    },
+    {
+      "path": "wp-content/plugins/facebook-for-woocommerce/vendor/facebook",
+      "count": 82
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/includes",
+      "count": 80
+    },
+    {
+      "path": "wp-content/uploads",
+      "count": 79
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Public",
+      "count": 78
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/includes",
+      "count": 77
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Public/SmartSlider3",
+      "count": 77
+    },
+    {
+      "path": "wp-includes/js",
+      "count": 76
+    },
+    {
+      "path": "wp-content/plugins/ecomail",
+      "count": 74
+    },
+    {
+      "path": "wp-includes/php-ai-client",
+      "count": 69
+    },
+    {
+      "path": "wp-content/plugins/cookie-law-info/lite",
+      "count": 68
+    },
+    {
+      "path": "wp-content/plugins/ecomail/vendor",
+      "count": 63
+    },
+    {
+      "path": "wp-content/plugins/woo-stripe-payment/packages",
+      "count": 63
+    },
+    {
+      "path": "wp-content/plugins/ecomail/vendor/ecomail",
+      "count": 61
+    },
+    {
+      "path": "wp-content/plugins/wordpress-importer",
+      "count": 61
+    },
+    {
+      "path": "wp-content/plugins/loco-translate",
+      "count": 61
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/src/Admin",
+      "count": 60
+    },
+    {
+      "path": "wp-content/plugins/packeta/deps/nette",
+      "count": 60
+    },
+    {
+      "path": "wp-content/plugins/woo-stripe-payment/vendor",
+      "count": 60
+    },
+    {
+      "path": "wp-content/plugins/facebook-for-woocommerce/includes/API",
+      "count": 60
+    },
+    {
+      "path": "wp-content/plugins/wordpress-importer/php-toolkit",
+      "count": 59
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/lib",
+      "count": 59
+    },
+    {
+      "path": "wp-content/plugins/woo-stripe-payment/vendor/stripe",
+      "count": 58
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/third-party/google",
+      "count": 56
+    },
+    {
+      "path": "wp-content/plugins/cookie-law-info/lite/admin",
+      "count": 55
+    },
+    {
+      "path": "wp-includes/php-ai-client/src",
+      "count": 54
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/includes/Core",
+      "count": 54
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/vendor_prefixed/stripe",
+      "count": 54
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/assets/js",
+      "count": 53
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/lib/packages",
+      "count": 53
+    },
+    {
+      "path": "wp-content/plugins/wordpress-seo/src/dashboard",
+      "count": 53
+    },
+    {
+      "path": "wp-content/themes/twentytwentyone",
+      "count": 52
+    },
+    {
+      "path": "wp-content/plugins/wordpress-importer/php-toolkit/DataLiberation",
+      "count": 52
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments/includes",
+      "count": 52
+    },
+    {
+      "path": "wp-content/plugins/open-user-map",
+      "count": 52
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/assets/images",
+      "count": 51
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/third-party/phpseclib",
+      "count": 50
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-services",
+      "count": 49
+    },
+    {
+      "path": "wp-content/plugins/cookie-law-info/legacy",
+      "count": 49
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/templates",
+      "count": 48
+    }
+  ],
+  "top_byte_prefixes": [
+    {
+      "path": "wp-content",
+      "count": 543892547
+    },
+    {
+      "path": "wp-content/plugins",
+      "count": 289103312
+    },
+    {
+      "path": "wp-content/uploads",
+      "count": 157653275
+    },
+    {
+      "path": "wp-includes",
+      "count": 60792034
+    },
+    {
+      "path": "wp-content/plugins/woocommerce",
+      "count": 58583620
+    },
+    {
+      "path": "wp-content/uploads/2024",
+      "count": 55034179
+    },
+    {
+      "path": "wp-content/uploads/2020",
+      "count": 48298334
+    },
+    {
+      "path": "wp-content/cache",
+      "count": 42936490
+    },
+    {
+      "path": "wp-content/cache/wpo-minify",
+      "count": 42933472
+    },
+    {
+      "path": "wp-includes/js",
+      "count": 38144335
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite",
+      "count": 32168753
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/assets",
+      "count": 29369200
+    },
+    {
+      "path": "wp-content/languages",
+      "count": 29013641
+    },
+    {
+      "path": "wp-includes/js/dist",
+      "count": 28640125
+    },
+    {
+      "path": "wp-content/uploads/2020/02",
+      "count": 28498164
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments",
+      "count": 26678070
+    },
+    {
+      "path": "wp-content/themes",
+      "count": 25178743
+    },
+    {
+      "path": "wp-content/plugins/wpify-woo",
+      "count": 24315520
+    },
+    {
+      "path": "wp-content/plugins/wpify-woo/vendor",
+      "count": 23381315
+    },
+    {
+      "path": "wp-content/plugins/wpify-woo/vendor/wpify-woo",
+      "count": 23329269
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit",
+      "count": 21762549
+    },
+    {
+      "path": "wp-content/languages/plugins",
+      "count": 20305694
+    },
+    {
+      "path": "wp-content/plugins/open-user-map",
+      "count": 20010064
+    },
+    {
+      "path": "wp-content/uploads/2024/10",
+      "count": 19354396
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/assets/client",
+      "count": 17324186
+    },
+    {
+      "path": "wp-content/plugins/wordpress-seo",
+      "count": 16701704
+    },
+    {
+      "path": "wp-content/uploads/2024/04",
+      "count": 15667078
+    },
+    {
+      "path": "wp-content/uploads/2026",
+      "count": 15580688
+    },
+    {
+      "path": "wp-content/uploads/2023",
+      "count": 13640851
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments/dist",
+      "count": 13120283
+    },
+    {
+      "path": "wp-content/uploads/2024/03",
+      "count": 12948488
+    },
+    {
+      "path": "wp-content/plugins/cookie-law-info",
+      "count": 12919567
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/dist",
+      "count": 12763016
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/dist/assets",
+      "count": 12753754
+    },
+    {
+      "path": "wp-content/plugins/open-user-map/assets",
+      "count": 12299578
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/assets",
+      "count": 12269099
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3",
+      "count": 12087382
+    },
+    {
+      "path": "wp-content/plugins/open-user-map/assets/images",
+      "count": 11808572
+    },
+    {
+      "path": "wp-content/cache/wpo-minify/1784004090",
+      "count": 11284492
+    },
+    {
+      "path": "wp-content/cache/wpo-minify/1784004090/assets",
+      "count": 11284147
+    },
+    {
+      "path": "wp-content/plugins/cookie-law-info/lite",
+      "count": 10526685
+    },
+    {
+      "path": "wp-content/cache/wpo-minify/1783288710",
+      "count": 10313714
+    },
+    {
+      "path": "wp-content/cache/wpo-minify/1783288710/assets",
+      "count": 10313399
+    },
+    {
+      "path": "wp-content/plugins/cookie-law-info/lite/admin",
+      "count": 10254556
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/vendor_prefixed",
+      "count": 10217932
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments/dist/chunks",
+      "count": 10154428
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/src",
+      "count": 10007830
+    },
+    {
+      "path": "wp-admin",
+      "count": 9723185
+    },
+    {
+      "path": "wp-content/plugins/wp-optimize",
+      "count": 9523409
+    },
+    {
+      "path": "wp-content/uploads/woocommerce_uploads",
+      "count": 8809435
+    },
+    {
+      "path": "wp-content/uploads/woocommerce_uploads/UeVe8OzPtJZ4i1bfJlljBrx45CmwYulG-GeoLite2-Country.mmdb",
+      "count": 8809422
+    },
+    {
+      "path": "wp-content/themes/twentytwentyfive",
+      "count": 8415086
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-payments/vendor",
+      "count": 8147059
+    },
+    {
+      "path": "wp-content/cache/wpo-minify/1784270059",
+      "count": 8114033
+    },
+    {
+      "path": "wp-content/cache/wpo-minify/1784270059/assets",
+      "count": 8114033
+    },
+    {
+      "path": "wp-content/uploads/2026/07",
+      "count": 8003506
+    },
+    {
+      "path": "wp-content/plugins/facebook-for-woocommerce",
+      "count": 7957495
+    },
+    {
+      "path": "wp-content/plugins/wordpress-seo/js",
+      "count": 7895506
+    },
+    {
+      "path": "wp-content/plugins/wordpress-seo/js/dist",
+      "count": 7895506
+    },
+    {
+      "path": "wp-content/uploads/2020/06",
+      "count": 7825478
+    },
+    {
+      "path": "wp-content/themes/twentytwentyfive/assets",
+      "count": 7674764
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/includes",
+      "count": 7652248
+    },
+    {
+      "path": "wp-content/cache/wpo-minify/1783244794",
+      "count": 7377816
+    },
+    {
+      "path": "wp-content/cache/wpo-minify/1783244794/assets",
+      "count": 7377816
+    },
+    {
+      "path": "wp-content/plugins/wpforms-lite/vendor_prefixed/square",
+      "count": 6939549
+    },
+    {
+      "path": "wp-content/plugins/google-site-kit/third-party",
+      "count": 6814752
+    },
+    {
+      "path": "wp-content/plugins/woocommerce-services",
+      "count": 6802055
+    },
+    {
+      "path": "wp-content/plugins/yaymail",
+      "count": 6651960
+    },
+    {
+      "path": "wp-content/themes/twentytwentytwo",
+      "count": 6644602
+    },
+    {
+      "path": "wp-content/uploads/2024/08",
+      "count": 6587012
+    },
+    {
+      "path": "wp-content/plugins/packeta",
+      "count": 6584854
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Nextend",
+      "count": 6465456
+    },
+    {
+      "path": "wp-content/plugins/woo-stripe-payment",
+      "count": 6364333
+    },
+    {
+      "path": "wp-content/plugins/woocommerce/assets/images",
+      "count": 6300895
+    },
+    {
+      "path": "wp-content/themes/twentytwentytwo/assets",
+      "count": 6271232
+    },
+    {
+      "path": "wp-content/uploads/2023/10",
+      "count": 6074413
+    },
+    {
+      "path": "wp-content/themes/twentytwentyfive/assets/fonts",
+      "count": 5728888
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Public",
+      "count": 5538344
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3/Public/SmartSlider3",
+      "count": 5538344
+    },
+    {
+      "path": "wp-content/uploads/2020/01",
+      "count": 5249663
+    }
+  ],
+  "extension_counts": [
+    {
+      "path": ".php",
+      "count": 20672
+    },
+    {
+      "path": ".js",
+      "count": 2504
+    },
+    {
+      "path": ".css",
+      "count": 2067
+    },
+    {
+      "path": ".json",
+      "count": 1787
+    },
+    {
+      "path": ".png",
+      "count": 1734
+    },
+    {
+      "path": ".svg",
+      "count": 1517
+    },
+    {
+      "path": ".jpg",
+      "count": 937
+    },
+    {
+      "path": ".webp",
+      "count": 415
+    },
+    {
+      "path": ".md",
+      "count": 394
+    },
+    {
+      "path": ".txt",
+      "count": 200
+    },
+    {
+      "path": ".gz",
+      "count": 197
+    },
+    {
+      "path": ".scss",
+      "count": 169
+    },
+    {
+      "path": "[no extension]",
+      "count": 167
+    },
+    {
+      "path": ".map",
+      "count": 122
+    },
+    {
+      "path": ".woff2",
+      "count": 118
+    },
+    {
+      "path": ".log",
+      "count": 115
+    },
+    {
+      "path": ".mo",
+      "count": 108
+    },
+    {
+      "path": ".html",
+      "count": 105
+    },
+    {
+      "path": ".gif",
+      "count": 104
+    },
+    {
+      "path": ".po",
+      "count": 95
+    },
+    {
+      "path": ".latte",
+      "count": 58
+    },
+    {
+      "path": ".tsx",
+      "count": 52
+    },
+    {
+      "path": ".lock",
+      "count": 47
+    },
+    {
+      "path": ".transient",
+      "count": 44
+    },
+    {
+      "path": ".phtml",
+      "count": 32
+    },
+    {
+      "path": ".xml",
+      "count": 30
+    },
+    {
+      "path": ".pot",
+      "count": 28
+    },
+    {
+      "path": ".jpeg",
+      "count": 26
+    },
+    {
+      "path": ".ts",
+      "count": 20
+    },
+    {
+      "path": ".ttf",
+      "count": 18
+    },
+    {
+      "path": ".java",
+      "count": 16
+    },
+    {
+      "path": ".dist",
+      "count": 14
+    },
+    {
+      "path": ".py",
+      "count": 14
+    },
+    {
+      "path": ".neon",
+      "count": 11
+    },
+    {
+      "path": ".jsx",
+      "count": 11
+    },
+    {
+      "path": ".csv",
+      "count": 10
+    },
+    {
+      "path": ".n2less",
+      "count": 10
+    },
+    {
+      "path": ".rb",
+      "count": 9
+    },
+    {
+      "path": ".htaccess",
+      "count": 8
+    },
+    {
+      "path": ".woff",
+      "count": 7
+    },
+    {
+      "path": ".sh",
+      "count": 6
+    },
+    {
+      "path": ".eot",
+      "count": 5
+    },
+    {
+      "path": ".yml",
+      "count": 5
+    },
+    {
+      "path": ".gitignore",
+      "count": 5
+    },
+    {
+      "path": ".properties",
+      "count": 5
+    },
+    {
+      "path": ".bat",
+      "count": 4
+    },
+    {
+      "path": ".meta",
+      "count": 4
+    },
+    {
+      "path": ".gradle",
+      "count": 4
+    },
+    {
+      "path": ".crt",
+      "count": 3
+    },
+    {
+      "path": ".phpt",
+      "count": 3
+    },
+    {
+      "path": ".otf",
+      "count": 3
+    },
+    {
+      "path": ".jar",
+      "count": 3
+    },
+    {
+      "path": ".mjs",
+      "count": 3
+    },
+    {
+      "path": ".mp4",
+      "count": 2
+    },
+    {
+      "path": ".cnf",
+      "count": 2
+    },
+    {
+      "path": ".ser",
+      "count": 2
+    },
+    {
+      "path": ".less",
+      "count": 2
+    },
+    {
+      "path": ".mmdb",
+      "count": 1
+    },
+    {
+      "path": ".zip",
+      "count": 1
+    },
+    {
+      "path": ".stylelintignore",
+      "count": 1
+    },
+    {
+      "path": ".avif",
+      "count": 1
+    },
+    {
+      "path": ".w32",
+      "count": 1
+    },
+    {
+      "path": ".m4",
+      "count": 1
+    },
+    {
+      "path": ".h",
+      "count": 1
+    },
+    {
+      "path": ".c",
+      "count": 1
+    },
+    {
+      "path": ".markdown",
+      "count": 1
+    },
+    {
+      "path": ".rst",
+      "count": 1
+    },
+    {
+      "path": ".bak",
+      "count": 1
+    },
+    {
+      "path": ".editorconfig",
+      "count": 1
+    },
+    {
+      "path": ".example",
+      "count": 1
+    },
+    {
+      "path": ".ecrc",
+      "count": 1
+    },
+    {
+      "path": ".ini",
+      "count": 1
+    },
+    {
+      "path": ".cmd",
+      "count": 1
+    },
+    {
+      "path": ".gitkeep",
+      "count": 1
+    },
+    {
+      "path": ".pem",
+      "count": 1
+    },
+    {
+      "path": ".stylelintrc",
+      "count": 1
+    },
+    {
+      "path": ".babelrc",
+      "count": 1
+    },
+    {
+      "path": ".gemspec",
+      "count": 1
+    },
+    {
+      "path": ".webm",
+      "count": 1
+    },
+    {
+      "path": ".cjs",
+      "count": 1
+    }
+  ],
+  "plugin_file_counts": [
+    {
+      "slug": "woocommerce",
+      "files": 6194,
+      "bytes": 58583620,
+      "active": true
+    },
+    {
+      "slug": "wpforms-lite",
+      "files": 4713,
+      "bytes": 32168753,
+      "active": true
+    },
+    {
+      "slug": "wordpress-seo",
+      "files": 1943,
+      "bytes": 16701704,
+      "active": true
+    },
+    {
+      "slug": "google-site-kit",
+      "files": 1908,
+      "bytes": 21762549,
+      "active": true
+    },
+    {
+      "slug": "woocommerce-payments",
+      "files": 1487,
+      "bytes": 26678070,
+      "active": true
+    },
+    {
+      "slug": "packeta",
+      "files": 1380,
+      "bytes": 6584854,
+      "active": true
+    },
+    {
+      "slug": "woo-stripe-payment",
+      "files": 1174,
+      "bytes": 6364333,
+      "active": true
+    },
+    {
+      "slug": "wpify-woo",
+      "files": 1083,
+      "bytes": 24315520,
+      "active": true
+    },
+    {
+      "slug": "wp-optimize",
+      "files": 993,
+      "bytes": 9523409,
+      "active": true
+    },
+    {
+      "slug": "smart-slider-3",
+      "files": 915,
+      "bytes": 12087382,
+      "active": true
+    },
+    {
+      "slug": "facebook-for-woocommerce",
+      "files": 619,
+      "bytes": 7957495,
+      "active": true
+    },
+    {
+      "slug": "yaymail",
+      "files": 560,
+      "bytes": 6651960,
+      "active": true
+    },
+    {
+      "slug": "woocommerce-services",
+      "files": 502,
+      "bytes": 6802055,
+      "active": true
+    },
+    {
+      "slug": "yaycurrency",
+      "files": 450,
+      "bytes": 3524696,
+      "active": true
+    },
+    {
+      "slug": "open-user-map",
+      "files": 374,
+      "bytes": 20010064,
+      "active": true
+    },
+    {
+      "slug": "ecomail",
+      "files": 313,
+      "bytes": 2614591,
+      "active": true
+    },
+    {
+      "slug": "loco-translate",
+      "files": 310,
+      "bytes": 1783251,
+      "active": true
+    },
+    {
+      "slug": "cookie-law-info",
+      "files": 288,
+      "bytes": 12919567,
+      "active": true
+    },
+    {
+      "slug": "wordpress-importer",
+      "files": 283,
+      "bytes": 1544068,
+      "active": true
+    },
+    {
+      "slug": "insert-headers-and-footers",
+      "files": 182,
+      "bytes": 2792336,
+      "active": true
+    },
+    {
+      "slug": "woo-discount-rules",
+      "files": 177,
+      "bytes": 2069848,
+      "active": true
+    },
+    {
+      "slug": "woo-checkout-field-editor-pro",
+      "files": 110,
+      "bytes": 1407265,
+      "active": true
+    },
+    {
+      "slug": "olympus-google-fonts",
+      "files": 71,
+      "bytes": 2464847,
+      "active": true
+    },
+    {
+      "slug": "akismet",
+      "files": 47,
+      "bytes": 426909,
+      "active": true
+    },
+    {
+      "slug": "string-locator",
+      "files": 45,
+      "bytes": 170839,
+      "active": true
+    },
+    {
+      "slug": "performance-lab",
+      "files": 31,
+      "bytes": 232545,
+      "active": true
+    },
+    {
+      "slug": "woocommerce-pay-for-payment",
+      "files": 29,
+      "bytes": 182794,
+      "active": true
+    },
+    {
+      "slug": "WC-Doprava-main",
+      "files": 17,
+      "bytes": 125460,
+      "active": true
+    },
+    {
+      "slug": "jamu-multilingual",
+      "files": 16,
+      "bytes": 224641,
+      "active": true
+    },
+    {
+      "slug": "ceske-sluzby",
+      "files": 15,
+      "bytes": 193245,
+      "active": false
+    },
+    {
+      "slug": "webp-uploads",
+      "files": 10,
+      "bytes": 127957,
+      "active": true
+    },
+    {
+      "slug": "easy-notification-bar",
+      "files": 8,
+      "bytes": 83345,
+      "active": false
+    },
+    {
+      "slug": "auto-sizes",
+      "files": 4,
+      "bytes": 23312,
+      "active": true
+    },
+    {
+      "slug": "index.php",
+      "files": 1,
+      "bytes": 28,
+      "active": false
+    }
+  ],
+  "cleanup_candidates_read_only": [
+    {
+      "path": "wp-content/cache/wpo-minify",
+      "files": 638,
+      "bytes": 42933472,
+      "risk": "low",
+      "reason": "cache_or_upgrade"
+    },
+    {
+      "path": "wp-content/uploads/2024",
+      "files": 539,
+      "bytes": 55034179,
+      "risk": "high",
+      "reason": "uploads_media"
+    },
+    {
+      "path": "wp-content/uploads/2020",
+      "files": 456,
+      "bytes": 48298334,
+      "risk": "high",
+      "reason": "uploads_media"
+    },
+    {
+      "path": "wp-content/uploads/2026",
+      "files": 332,
+      "bytes": 15580688,
+      "risk": "high",
+      "reason": "uploads_media"
+    },
+    {
+      "path": "wp-includes/images/icon-library",
+      "files": 331,
+      "bytes": 113606,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/js/dist",
+      "files": 237,
+      "bytes": 28640125,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/themes/twentytwentyfive",
+      "files": 231,
+      "bytes": 8415086,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/uploads/2023",
+      "files": 203,
+      "bytes": 13640851,
+      "risk": "high",
+      "reason": "uploads_media"
+    },
+    {
+      "path": "wp-content/themes/twentytwentyone",
+      "files": 187,
+      "bytes": 3677193,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/plugins/wp-optimize",
+      "files": 183,
+      "bytes": 1791162,
+      "risk": "medium",
+      "reason": "backup_like"
+    },
+    {
+      "path": "wp-content/themes/twentytwentytwo",
+      "files": 134,
+      "bytes": 6644602,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/css/dist",
+      "files": 117,
+      "bytes": 3496593,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/uploads/2021",
+      "files": 115,
+      "bytes": 4948038,
+      "risk": "high",
+      "reason": "uploads_media"
+    },
+    {
+      "path": "wp-content/themes/twentytwentyfour",
+      "files": 106,
+      "bytes": 3367930,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/php-ai-client/src",
+      "files": 101,
+      "bytes": 453422,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/uploads/wc-logs",
+      "files": 96,
+      "bytes": 3192953,
+      "risk": "high",
+      "reason": "uploads_media"
+    },
+    {
+      "path": "wp-includes/js/jquery",
+      "files": 92,
+      "bytes": 1304968,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/js/tinymce",
+      "files": 90,
+      "bytes": 2856553,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/plugins/packeta",
+      "files": 76,
+      "bytes": 541184,
+      "risk": "low",
+      "reason": "cache_or_upgrade"
+    },
+    {
+      "path": "wp-includes/sodium_compat/src",
+      "files": 69,
+      "bytes": 1278041,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/Requests/src",
+      "files": 64,
+      "bytes": 215628,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/themes/jadro",
+      "files": 55,
+      "bytes": 443628,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/themes/twentytwentythree",
+      "files": 50,
+      "bytes": 2630276,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/SimplePie/src",
+      "files": 46,
+      "bytes": 686427,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/rest-api/endpoints",
+      "files": 45,
+      "bytes": 928472,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/php-ai-client/third-party",
+      "files": 44,
+      "bytes": 147396,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-admin/css/colors",
+      "files": 44,
+      "bytes": 792322,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/uploads/2022",
+      "files": 37,
+      "bytes": 2407555,
+      "risk": "high",
+      "reason": "uploads_media"
+    },
+    {
+      "path": "wp-includes/SimplePie/library",
+      "files": 35,
+      "bytes": 56395,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/uploads/qr-payment",
+      "files": 30,
+      "bytes": 284297,
+      "risk": "high",
+      "reason": "uploads_media"
+    },
+    {
+      "path": "wp-includes/sodium_compat/namespaced",
+      "files": 26,
+      "bytes": 2698,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/images/smilies",
+      "files": 26,
+      "bytes": 10082,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/js/mediaelement",
+      "files": 20,
+      "bytes": 721307,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/uploads/fonts",
+      "files": 20,
+      "bytes": 1202304,
+      "risk": "high",
+      "reason": "uploads_media"
+    },
+    {
+      "path": "wp-includes/images/media",
+      "files": 18,
+      "bytes": 5263,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/plugins/WC-Doprava-main",
+      "files": 17,
+      "bytes": 125460,
+      "risk": "medium",
+      "reason": "inactive_plugin_directory"
+    },
+    {
+      "path": "wp-includes/build/routes",
+      "files": 16,
+      "bytes": 1018693,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/plugins/ceske-sluzby",
+      "files": 15,
+      "bytes": 193245,
+      "risk": "medium",
+      "reason": "inactive_plugin_directory"
+    },
+    {
+      "path": "wp-content/plugins/smart-slider-3",
+      "files": 15,
+      "bytes": 62984,
+      "risk": "low",
+      "reason": "cache_or_upgrade"
+    },
+    {
+      "path": "wp-admin/js/widgets",
+      "files": 14,
+      "bytes": 139413,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/group",
+      "files": 13,
+      "bytes": 11747,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/image",
+      "files": 13,
+      "bytes": 63526,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/table",
+      "files": 13,
+      "bytes": 36878,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/audio",
+      "files": 13,
+      "bytes": 10727,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/code",
+      "files": 13,
+      "bytes": 2890,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/pullquote",
+      "files": 13,
+      "bytes": 10521,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/gallery",
+      "files": 13,
+      "bytes": 91192,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/video",
+      "files": 13,
+      "bytes": 17306,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/search",
+      "files": 13,
+      "bytes": 15908,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/embed",
+      "files": 13,
+      "bytes": 19036,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/separator",
+      "files": 13,
+      "bytes": 5385,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/plugins/cookie-law-info",
+      "files": 13,
+      "bytes": 12327,
+      "risk": "low",
+      "reason": "cache_or_upgrade"
+    },
+    {
+      "path": "wp-includes/blocks/navigation-link",
+      "files": 11,
+      "bytes": 18814,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/images/crystal",
+      "files": 10,
+      "bytes": 15541,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-content/uploads/wpforms",
+      "files": 10,
+      "bytes": 2197924,
+      "risk": "high",
+      "reason": "uploads_media"
+    },
+    {
+      "path": "wp-includes/blocks/details",
+      "files": 9,
+      "bytes": 2261,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/rss",
+      "files": 9,
+      "bytes": 8665,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/page-list",
+      "files": 9,
+      "bytes": 11442,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/site-tagline",
+      "files": 9,
+      "bytes": 2176,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/spacer",
+      "files": 9,
+      "bytes": 6409,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/post-excerpt",
+      "files": 9,
+      "bytes": 3377,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/site-title",
+      "files": 9,
+      "bytes": 3097,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/avatar",
+      "files": 9,
+      "bytes": 2411,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/navigation",
+      "files": 9,
+      "bytes": 148310,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/paragraph",
+      "files": 9,
+      "bytes": 9645,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/quote",
+      "files": 9,
+      "bytes": 7341,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/social-links",
+      "files": 9,
+      "bytes": 57195,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/cover",
+      "files": 9,
+      "bytes": 98139,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/categories",
+      "files": 9,
+      "bytes": 4466,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/term-template",
+      "files": 9,
+      "bytes": 3668,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/site-logo",
+      "files": 9,
+      "bytes": 14866,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/file",
+      "files": 9,
+      "bytes": 8069,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/text-columns",
+      "files": 9,
+      "bytes": 4690,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/post-featured-image",
+      "files": 9,
+      "bytes": 32165,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/latest-posts",
+      "files": 9,
+      "bytes": 15357,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/columns",
+      "files": 9,
+      "bytes": 13055,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/buttons",
+      "files": 9,
+      "bytes": 12525,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/comments-pagination",
+      "files": 9,
+      "bytes": 6281,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/icon",
+      "files": 9,
+      "bytes": 7751,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    },
+    {
+      "path": "wp-includes/blocks/comments",
+      "files": 9,
+      "bytes": 30969,
+      "risk": "high",
+      "reason": "wordpress_runtime"
+    }
+  ],
+  "errors": [],
+  "scope": "server-side read-only file count audit; no target files changed",
+  "ftp_host": "ftp.tajemstvijamu.cz"
+}
