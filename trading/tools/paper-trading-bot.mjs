@@ -18,7 +18,7 @@ const OPPORTUNITY_MIN_ANNUAL_RETURN = Number(process.env.PAPER_OPPORTUNITY_MIN_A
 const MAX_EVALUATIONS_PER_RUN = Number(process.env.PAPER_MAX_EVALUATIONS_PER_RUN || 80);
 const MAX_SPREAD = Number(process.env.PAPER_MAX_SPREAD || 0.08);
 const MIN_VOLUME_24H = Number(process.env.PAPER_MIN_VOLUME_24H || 100);
-const MAX_HISTORY = Number(process.env.PAPER_MAX_HISTORY || 1200);
+const MAX_HISTORY = Number(process.env.PAPER_MAX_HISTORY || 5000);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
@@ -2904,6 +2904,28 @@ function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
   ].slice(0, 80);
 }
 
+function updateEvaluationStats(state, { evaluations = [], retainedBefore = 0, retainedAfter = 0 } = {}) {
+  const previousStats = state.evaluationStats || {};
+  const previousTotal = Number(previousStats.totalRunEvaluatedCount);
+  const loggedTotal = Array.isArray(state.evaluationRunLog)
+    ? state.evaluationRunLog.reduce((total, run) => total + Number(run.evaluatedCount || 0), 0)
+    : 0;
+  const baselineTotal = Number.isFinite(previousTotal) ? previousTotal : loggedTotal;
+  const retainedLimit = Number.isFinite(MAX_HISTORY) && MAX_HISTORY > 0 ? MAX_HISTORY : retainedAfter;
+
+  state.evaluationStats = {
+    ...previousStats,
+    retainedLimit,
+    retainedCount: retainedAfter,
+    retainedBeforeMergeCount: retainedBefore,
+    lastRunEvaluatedCount: evaluations.length,
+    lastRunAt: state.generatedAt,
+    totalRunEvaluatedCount: baselineTotal + evaluations.length,
+    historyTrimmed: retainedLimit > 0 && retainedAfter >= retainedLimit,
+    lastTrimmedCount: Math.max(0, retainedBefore - retainedAfter),
+  };
+}
+
 async function writeState(state) {
   await mkdir(dirname(OUTPUT_PATH), { recursive: true });
   await writeFile(OUTPUT_PATH, `${JSON.stringify(state, null, 2)}\n`, "utf8");
@@ -3013,8 +3035,11 @@ async function run() {
 
   state.generatedAt = nowIso();
   updatePortfolio(state);
-  state.evaluations = expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations));
+  const mergedEvaluations = expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations));
+  const retainedBefore = new Set([...(state.evaluations || []), ...evaluations].map(evaluationKey).filter(Boolean)).size;
+  state.evaluations = mergedEvaluations;
   updateCalculationReport(state);
+  updateEvaluationStats(state, { evaluations, retainedBefore, retainedAfter: state.evaluations.length });
   recordRun(state, { evaluations, eligible, decisions });
   await writeState(state);
   console.log(JSON.stringify({

@@ -380,6 +380,11 @@ function formatDate(value) {
   }).format(date);
 }
 
+function formatInteger(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toLocaleString("cs-CZ") : null;
+}
+
 function nextHourlyMinute(minute, from = new Date()) {
   const next = new Date(from);
   next.setSeconds(0, 0);
@@ -2508,7 +2513,20 @@ function renderBotEvaluations() {
   const filteredCount = filteredEvaluations(evaluations).length;
 
   if (els.evaluationSummary) {
-    els.evaluationSummary.textContent = `${filteredCount} shown / ${evaluatedCount} active evaluated / ${resolvedCount} resolved / ${errorCount} errors / ${evaluations.length} total`;
+    const stats = state.botState?.evaluationStats || {};
+    const retainedLimit = formatInteger(stats.retainedLimit);
+    const totalEvaluated = formatInteger(stats.totalRunEvaluatedCount);
+    const lastRunEvaluated = formatInteger(stats.lastRunEvaluatedCount);
+    const retainedText = `${formatInteger(evaluations.length) || evaluations.length}${retainedLimit ? ` / ${retainedLimit} retained cap` : " retained"}`;
+    els.evaluationSummary.textContent = [
+      `${formatInteger(filteredCount) || filteredCount} shown`,
+      `${formatInteger(evaluatedCount) || evaluatedCount} active evaluated`,
+      `${formatInteger(resolvedCount) || resolvedCount} resolved`,
+      `${formatInteger(errorCount) || errorCount} errors`,
+      retainedText,
+      totalEvaluated ? `${totalEvaluated} evaluated by runs` : null,
+      lastRunEvaluated ? `${lastRunEvaluated} last run` : null,
+    ].filter(Boolean).join(" / ");
   }
 
   if (!evaluations.length) {
