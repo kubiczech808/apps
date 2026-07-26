@@ -1,0 +1,435 @@
+name: BTC-DCA Hosting Cleanup Audit
+
+on:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - '.github/workflows/btcdca-hosting-cleanup-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: btcdca-hosting-cleanup-audit
+  cancel-in-progress: true
+
+jobs:
+  audit-cleanup-candidates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inspect likely cleanup candidates on FTP
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          import posixpath
+          import re
+          import time
+          from collections import Counter, defaultdict
+          from pathlib import Path
+
+          HOSTS = ["ftp.btc-dca.com", "neuron.blueboard.cz"]
+          LOGIN = os.environ["BTCDCA_FTP_LOGIN"]
+          PASSWORD = os.environ["BTCDCA_FTP_PASSWORD"]
+          MAX_ERRORS = 120
+          MAX_SAMPLES = 30
+
+          TARGETS = [
+              ("Codex deploy backups", ".codex-backups", "Potentially removable after keeping or downloading the newest rollback set."),
+              ("WordPress cache", "www/wp-content/cache", "Usually regenerable cache data."),
+              ("WordPress upgrade temp", "www/wp-content/upgrade", "Temporary WordPress upgrade files; safe only when no update is running."),
+              ("WordPress upgrade temp backup", "www/wp-content/upgrade-temp-backup", "Temporary plugin/theme backup area created by WordPress updates."),
+              ("All-in-One WP Migration backups", "www/wp-content/ai1wm-backups", "Backup archives; download before removal if they matter."),
+              ("Uploads cache", "www/wp-content/uploads/cache", "Usually regenerable generated cache files."),
+              ("Elementor uploads", "www/wp-content/uploads/elementor", "Mostly generated CSS/assets, but review before deleting the whole tree."),
+              ("UAG generated uploads", "www/wp-content/uploads/uag-plugin", "Generated/template support files; review plugin usage first."),
+              ("Astra block template cache", "www/wp-content/uploads/ast-block-templates-json", "Template JSON cache, usually regenerable."),
+              ("Uploads 2022", "www/wp-content/uploads/2022", "Media library files; not a safe automatic cleanup target."),
+              ("Uploads 2023", "www/wp-content/uploads/2023", "Media library files; not a safe automatic cleanup target."),
+              ("Uploads 2024", "www/wp-content/uploads/2024", "Media library files; not a safe automatic cleanup target."),
+              ("Uploads 2025", "www/wp-content/uploads/2025", "Media library files; not a safe automatic cleanup target."),
+              ("Uploads 2026", "www/wp-content/uploads/2026", "Media library files; not a safe automatic cleanup target."),
+              ("WordPress plugins", "www/wp-content/plugins", "Do not delete without checking active plugins."),
+              ("WordPress themes", "www/wp-content/themes", "Do not delete the active theme; old inactive themes may be removable."),
+              ("BTC-DCA app", "www/app", "Application runtime files; informational only."),
+              ("AI directory", "www/ai", "Application/content area; informational only."),
+              ("Shared assets", "www/assets", "Shared frontend assets; informational only."),
+              ("Includes", "www/includes", "Application libraries; informational only."),
+          ]
+
+          candidate_patterns = {
+              "codex backups": re.compile(r"(^|/)\.codex-backups(/|$)", re.I),
+              "wp cache": re.compile(r"(^|/)www/wp-content/cache(/|$)", re.I),
+              "upload cache": re.compile(r"(^|/)www/wp-content/uploads/cache(/|$)", re.I),
+              "elementor generated css": re.compile(r"(^|/)www/wp-content/uploads/elementor/css(/|$)", re.I),
+              "wp upgrade/temp": re.compile(r"(^|/)www/wp-content/(upgrade|upgrade-temp-backup)(/|$)", re.I),
+              "ai1wm backups": re.compile(r"(^|/)www/wp-content/ai1wm-backups(/|$)", re.I),
+              "uag/astra template cache": re.compile(r"(^|/)www/wp-content/uploads/(uag-plugin|ast-block-templates-json)(/|$)", re.I),
+              "logs": re.compile(r"\.(log|log\.\d+|oldlog)$|(^|/)logs?(/|$)", re.I),
+              "compressed archives": re.compile(r"\.(zip|tar|tar\.gz|tgz|gz|bz2|7z|rar)$", re.I),
+              "backup-like files": re.compile(r"(\.bak|\.backup|\.old|~)$|(^|/)backups?(/|$)", re.I),
+          }
+
+          errors = []
+          last_error = None
+          ftp = None
+          for host in HOSTS:
+              try:
+                  ftp = ftplib.FTP(host, timeout=30)
+                  ftp.login(LOGIN, PASSWORD)
+                  if ftp.sock:
+                      ftp.sock.settimeout(30)
+                  print(f"Connected to {host}")
+                  break
+              except Exception as exc:
+                  last_error = exc
+                  print(f"Connect failed for {host}: {exc}")
+          if ftp is None:
+              raise SystemExit(f"Could not connect to FTP: {last_error}")
+
+          ftp_root = ftp.pwd()
+
+          def clean_path(path):
+              path = path.strip()
+              while path.startswith("./"):
+                  path = path[2:]
+              return path.strip("/")
+
+          def enter_dir(path):
+              ftp.cwd(ftp_root)
+              for part in [part for part in clean_path(path).split("/") if part]:
+                  ftp.cwd(part)
+
+          def parse_list_line(line):
+              if not line or line.lower().startswith("total "):
+                  return None
+              parts = line.split(maxsplit=8)
+              if len(parts) < 9:
+                  return None
+              name = parts[8]
+              if name in (".", ".."):
+                  return None
+              if " -> " in name:
+                  name = name.split(" -> ", 1)[0]
+              return name, line[0].lower() == "d"
+
+          def list_dir(path):
+              original = ftp.pwd()
+              try:
+                  enter_dir(path)
+              except Exception as exc:
+                  return None, "missing", f"cwd failed: {exc}"
+
+              try:
+                  rows = []
+                  for name, facts in ftp.mlsd():
+                      if name in (".", ".."):
+                          continue
+                      child = clean_path(posixpath.join(path, name) if path else name)
+                      kind = facts.get("type", "")
+                      if kind == "dir":
+                          rows.append((child, True))
+                      elif kind not in ("cdir", "pdir"):
+                          rows.append((child, False))
+                  return rows, "MLSD", None
+              except Exception as mlsd_exc:
+                  mlsd_error = mlsd_exc
+              finally:
+                  try:
+                      ftp.cwd(original)
+                  except Exception:
+                      pass
+
+              try:
+                  enter_dir(path)
+                  lines = []
+                  ftp.retrlines("LIST", lines.append)
+                  rows = []
+                  for line in lines:
+                      parsed = parse_list_line(line)
+                      if not parsed:
+                          continue
+                      name, is_dir = parsed
+                      rows.append((clean_path(posixpath.join(path, name) if path else name), is_dir))
+                  return rows, "LIST", None
+              except Exception as list_exc:
+                  list_error = list_exc
+              finally:
+                  try:
+                      ftp.cwd(original)
+                  except Exception:
+                      pass
+
+              try:
+                  enter_dir(path)
+                  current_dir = ftp.pwd()
+                  rows = []
+                  for raw in ftp.nlst():
+                      base = clean_path(raw).rsplit("/", 1)[-1]
+                      if not base or base in (".", ".."):
+                          continue
+                      child = clean_path(posixpath.join(path, base) if path else base)
+                      is_dir = False
+                      try:
+                          ftp.cwd(base)
+                          is_dir = True
+                          ftp.cwd(current_dir)
+                      except Exception:
+                          try:
+                              ftp.cwd(current_dir)
+                          except Exception:
+                              pass
+                      rows.append((child, is_dir))
+                  return rows, "NLST", None
+              except Exception as nlst_exc:
+                  return None, "failed", f"MLSD={mlsd_error}; LIST={list_error}; NLST={nlst_exc}"
+              finally:
+                  try:
+                      ftp.cwd(original)
+                  except Exception:
+                      pass
+
+          def extension(path):
+              name = path.rsplit("/", 1)[-1]
+              if "." not in name:
+                  return "[no extension]"
+              return "." + name.rsplit(".", 1)[-1].lower()
+
+          def relative_first(root, path):
+              root = clean_path(root)
+              path = clean_path(path)
+              if root and path.startswith(root + "/"):
+                  rel = path[len(root) + 1:]
+              elif root == path:
+                  rel = ""
+              else:
+                  rel = path
+              return rel.split("/", 1)[0] if rel else "[root]"
+
+          def record_candidate(path, candidate_counts, candidate_samples):
+              for label, pattern in candidate_patterns.items():
+                  if pattern.search(path):
+                      candidate_counts[label] += 1
+                      if len(candidate_samples[label]) < MAX_SAMPLES:
+                          candidate_samples[label].append(path)
+
+          def scan_tree(label, root, notes):
+              started = time.time()
+              rows, method, error = list_dir(root)
+              if rows is None:
+                  if len(errors) < MAX_ERRORS:
+                      errors.append(f"{root}: {error}")
+                  return {
+                      "label": label,
+                      "root": root,
+                      "notes": notes,
+                      "exists": False,
+                      "files": 0,
+                      "dirs": 0,
+                      "duration": 0,
+                      "methods": Counter(),
+                      "children": Counter(),
+                      "extensions": Counter(),
+                      "candidate_counts": Counter(),
+                      "candidate_samples": defaultdict(list),
+                      "samples": [],
+                  }
+
+              stack = [(root, rows, method)]
+              seen_dirs = set([clean_path(root)])
+              files = 0
+              dirs = 0
+              methods = Counter()
+              children = Counter()
+              extensions = Counter()
+              candidate_counts = Counter()
+              candidate_samples = defaultdict(list)
+              samples = []
+              last_progress = time.time()
+
+              while stack:
+                  current, current_rows, current_method = stack.pop()
+                  methods[current_method] += 1
+                  for child, is_dir in current_rows:
+                      if is_dir:
+                          child = clean_path(child)
+                          if child in seen_dirs:
+                              continue
+                          seen_dirs.add(child)
+                          dirs += 1
+                          child_rows, child_method, child_error = list_dir(child)
+                          if child_rows is None:
+                              if len(errors) < MAX_ERRORS:
+                                  errors.append(f"{child}: {child_error}")
+                              continue
+                          stack.append((child, child_rows, child_method))
+                      else:
+                          child = clean_path(child)
+                          files += 1
+                          children[relative_first(root, child)] += 1
+                          extensions[extension(child)] += 1
+                          record_candidate(child, candidate_counts, candidate_samples)
+                          if len(samples) < MAX_SAMPLES:
+                              samples.append(child)
+
+                  if time.time() - last_progress > 20:
+                      print(f"{root}: {files} files, {dirs} dirs scanned so far")
+                      last_progress = time.time()
+
+              print(f"{root}: done, {files} files, {dirs} dirs")
+              return {
+                  "label": label,
+                  "root": root,
+                  "notes": notes,
+                  "exists": True,
+                  "files": files,
+                  "dirs": dirs,
+                  "duration": time.time() - started,
+                  "methods": methods,
+                  "children": children,
+                  "extensions": extensions,
+                  "candidate_counts": candidate_counts,
+                  "candidate_samples": candidate_samples,
+                  "samples": samples,
+              }
+
+          started_all = time.time()
+          results = []
+          for label, root, notes in TARGETS:
+              print(f"Scanning {root}")
+              results.append(scan_tree(label, root, notes))
+
+          ftp.quit()
+
+          total_target_files = sum(result["files"] for result in results)
+          total_target_dirs = sum(result["dirs"] for result in results)
+          combined_candidates = Counter()
+          combined_samples = defaultdict(list)
+          for result in results:
+              combined_candidates.update(result["candidate_counts"])
+              for bucket, samples in result["candidate_samples"].items():
+                  for sample in samples:
+                      if len(combined_samples[bucket]) < MAX_SAMPLES:
+                          combined_samples[bucket].append(sample)
+
+          def fmt(num):
+              return f"{num:,}"
+
+          def table(report, title, rows, headers=("Path", "Files")):
+              report.append(f"## {title}")
+              report.append("")
+              report.append(f"| {headers[0]} | {headers[1]} |")
+              report.append("| --- | ---: |")
+              for key, value in rows:
+                  report.append(f"| `{key}` | {fmt(value)} |")
+              report.append("")
+
+          report = []
+          report.append("# BTC-DCA Hosting Cleanup Audit")
+          report.append("")
+          report.append(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+          report.append("")
+          report.append("This audit is read-only. No hosting files were deleted or modified.")
+          report.append("It focuses on likely cleanup areas, so totals below are not the full hosting account file count.")
+          report.append("")
+          report.append("## Summary")
+          report.append("")
+          report.append(f"- Targeted files counted: {fmt(total_target_files)}")
+          report.append(f"- Targeted directories counted: {fmt(total_target_dirs)}")
+          report.append(f"- Scan duration: {time.time() - started_all:.1f}s")
+          report.append(f"- Listing errors captured: {len(errors)}")
+          report.append("")
+
+          report.append("## Target Roots")
+          report.append("")
+          report.append("| Area | Root | Files | Directories | Duration | Notes |")
+          report.append("| --- | --- | ---: | ---: | ---: | --- |")
+          for result in sorted(results, key=lambda item: item["files"], reverse=True):
+              exists_note = result["notes"] if result["exists"] else "Missing or not listable."
+              report.append(
+                  f"| {result['label']} | `{result['root']}` | {fmt(result['files'])} | "
+                  f"{fmt(result['dirs'])} | {result['duration']:.1f}s | {exists_note} |"
+              )
+          report.append("")
+
+          report.append("## Cleanup Candidate Buckets")
+          report.append("")
+          report.append("| Bucket | Matching files | Practical risk |")
+          report.append("| --- | ---: | --- |")
+          risk_notes = {
+              "codex backups": "Low if newest rollback set is kept or downloaded first.",
+              "wp cache": "Low; cache should regenerate.",
+              "upload cache": "Low; generated cache should regenerate.",
+              "elementor generated css": "Low/medium; Elementor can usually regenerate CSS.",
+              "wp upgrade/temp": "Low if no update is running.",
+              "ai1wm backups": "Medium; backup archives should be downloaded before deletion.",
+              "uag/astra template cache": "Low/medium; verify plugin usage.",
+              "logs": "Low after download/archive.",
+              "compressed archives": "Medium; could be intentional backups.",
+              "backup-like files": "Medium; review before deletion.",
+          }
+          for bucket, count in combined_candidates.most_common():
+              report.append(f"| {bucket} | {fmt(count)} | {risk_notes.get(bucket, 'Review manually.')} |")
+          report.append("")
+
+          for result in sorted(results, key=lambda item: item["files"], reverse=True):
+              report.append(f"## Detail: {result['label']}")
+              report.append("")
+              report.append(f"- Root: `{result['root']}`")
+              report.append(f"- Files: {fmt(result['files'])}")
+              report.append(f"- Directories: {fmt(result['dirs'])}")
+              report.append(f"- Listing methods: {', '.join(f'{k}={v}' for k, v in result['methods'].most_common()) or 'n/a'}")
+              report.append("")
+              if result["children"]:
+                  table(report, f"{result['label']} - Largest Immediate Children", result["children"].most_common(25), headers=("Child", "Files"))
+              if result["extensions"]:
+                  table(report, f"{result['label']} - Top Extensions", result["extensions"].most_common(15), headers=("Extension", "Files"))
+              if result["samples"]:
+                  report.append(f"### {result['label']} - File Samples")
+                  report.append("")
+                  for sample in result["samples"]:
+                      report.append(f"- `{sample}`")
+                  report.append("")
+
+          if combined_samples:
+              report.append("## Cleanup Candidate Samples")
+              report.append("")
+              for bucket, samples in combined_samples.items():
+                  report.append(f"### {bucket}")
+                  report.append("")
+                  for sample in samples:
+                      report.append(f"- `{sample}`")
+                  report.append("")
+
+          if errors:
+              report.append("## Listing Errors")
+              report.append("")
+              for err in errors[:MAX_ERRORS]:
+                  report.append(f"- `{err}`")
+              report.append("")
+
+          Path(".github/inspection").mkdir(parents=True, exist_ok=True)
+          Path(".github/inspection/btcdca-hosting-cleanup-audit.md").write_text("\n".join(report) + "\n", encoding="utf-8")
+          PY
+
+      - name: Commit cleanup audit report
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/inspection/btcdca-hosting-cleanup-audit.md
+          if git diff --cached --quiet; then
+            echo "No cleanup audit changes."
+            exit 0
+          fi
+          git commit -m "Update BTC-DCA hosting cleanup audit"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push
