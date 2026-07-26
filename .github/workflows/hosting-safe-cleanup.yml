@@ -1,0 +1,119 @@
+name: Hosting Safe Cleanup
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - '.github/workflows/hosting-safe-cleanup.yml'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Remove regenerable hosting cache files
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          HOSTING_FTP_DIR: ${{ secrets.HOSTING_FTP_DIR }}
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          import posixpath
+
+          server = os.environ["HOSTING_FTP_SERVER"]
+          username = os.environ["HOSTING_FTP_USERNAME"]
+          password = os.environ["HOSTING_FTP_PASSWORD"]
+          configured_root = (os.environ.get("HOSTING_FTP_DIR") or "").strip("/")
+
+          relative_targets = [
+              "www/wp-content/cache",
+              "www/wp-content/litespeed",
+              "www/wp-content/uploads/cache",
+              "www/wp-content/upgrade",
+              "www/wp-content/upgrade-temp-backup",
+              "www/wp-content/debug.log",
+              "www/poly/cache",
+              "www/email-campaign/.git",
+              "www/email-campaign/node_modules",
+              "www/trading/.git",
+              "www/trading/node_modules",
+          ]
+
+          def safe_cwd(ftp, path):
+              try:
+                  ftp.cwd(path)
+                  return True
+              except ftplib.all_errors:
+                  return False
+
+          def list_names(ftp):
+              try:
+                  return [name for name, _facts in ftp.mlsd() if name not in {".", ".."}]
+              except ftplib.all_errors:
+                  try:
+                      return [name for name in ftp.nlst() if name not in {".", ".."}]
+                  except ftplib.all_errors:
+                      return []
+
+          def parent_and_name(path):
+              path = "/" + path.strip("/")
+              return posixpath.dirname(path), posixpath.basename(path)
+
+          def remove_tree(ftp, path):
+              parent, name = parent_and_name(path)
+              if not safe_cwd(ftp, parent):
+                  return 0
+              try:
+                  ftp.delete(name)
+                  return 1
+              except ftplib.all_errors:
+                  pass
+              if not safe_cwd(ftp, path):
+                  return 0
+              removed = 0
+              for child in list_names(ftp):
+                  removed += remove_tree(ftp, posixpath.join(path, child))
+              safe_cwd(ftp, parent)
+              try:
+                  ftp.rmd(name)
+              except ftplib.all_errors:
+                  pass
+              return removed
+
+          def candidate_bases():
+              bases = [""]
+              if configured_root:
+                  bases.append(configured_root)
+              seen = set()
+              for base in bases:
+                  normalized = base.strip("/")
+                  if normalized not in seen:
+                      seen.add(normalized)
+                      yield normalized
+
+          with ftplib.FTP(server, timeout=45) as ftp:
+              ftp.login(username, password)
+              removed_total = 0
+              touched = []
+              for base in candidate_bases():
+                  for rel in relative_targets:
+                      target = "/" + posixpath.join(base, rel).strip("/")
+                      removed = remove_tree(ftp, target)
+                      if removed > 0:
+                          removed_total += removed
+                          touched.append((target, removed))
+
+          print("Safe cleanup completed.")
+          print(f"Removed files: {removed_total}")
+          if touched:
+              print("Touched targets:")
+              for path, removed in touched:
+                  print(f"- {path}: {removed} files")
+          else:
+              print("No configured safe-cache targets existed or contained files.")
+          PY
