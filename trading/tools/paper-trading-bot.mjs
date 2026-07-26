@@ -3,37 +3,54 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+function envNumber(name, fallback = null) {
+  const value = process.env[name];
+  if (value == null || value === "") return fallback;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function envBool(name, fallback = false) {
+  const value = process.env[name];
+  if (value == null || value === "") return fallback;
+  return String(value).toLowerCase() === "true";
+}
+
+function envSelectionOrder(name, fallback = "highest_ev_pa_first") {
+  return process.env[name] === "highest_reward_risk_first" ? "highest_reward_risk_first" : fallback;
+}
+
 const OUTPUT_PATH = process.env.PAPER_STATE_PATH || "data/paper-state.json";
 const REMOTE_STATE_URL = process.env.PAPER_STATE_URL || "";
-const PORTFOLIO_USDC = Number(process.env.PAPER_PORTFOLIO_USDC || 100);
-const MAX_FRACTION = Number(process.env.PAPER_MAX_FRACTION || 0.05);
-const MIN_PROBABILITY = Number(process.env.PAPER_MIN_PROBABILITY || 0.95);
-const CONSERVATIVE_MIN_PROBABILITY = Number(process.env.PAPER_CONSERVATIVE_MIN_PROBABILITY || MIN_PROBABILITY);
-const HIGH_REWARD_MIN_PROBABILITY = Number(process.env.PAPER_HIGH_REWARD_MIN_PROBABILITY || 0.6);
-const MORE_PROBABLE_STRATEGY_MIN_PROBABILITY = Number(process.env.PAPER_MORE_PROBABLE_MIN_PROBABILITY || 0.6);
-const MIN_ANNUAL_RETURN = Number(process.env.PAPER_MIN_ANNUAL_RETURN || 0.05);
-const OPPORTUNITY_MIN_PROBABILITY = Number(process.env.PAPER_OPPORTUNITY_MIN_PROBABILITY || 0.6);
-const OPPORTUNITY_MIN_EDGE = Number(process.env.PAPER_OPPORTUNITY_MIN_EDGE || 0.04);
-const OPPORTUNITY_MIN_ANNUAL_RETURN = Number(process.env.PAPER_OPPORTUNITY_MIN_ANNUAL_RETURN || 0.3);
-const MAX_EVALUATIONS_PER_RUN = Number(process.env.PAPER_MAX_EVALUATIONS_PER_RUN || 80);
-const MAX_SPREAD = Number(process.env.PAPER_MAX_SPREAD || 0.08);
-const MIN_VOLUME_24H = Number(process.env.PAPER_MIN_VOLUME_24H || 100);
-const MAX_HISTORY = Number(process.env.PAPER_MAX_HISTORY || 5000);
+const PORTFOLIO_USDC = envNumber("PAPER_PORTFOLIO_USDC", 100);
+const MAX_FRACTION = envNumber("PAPER_MAX_FRACTION", 0.05);
+const MIN_PROBABILITY = envNumber("PAPER_MIN_PROBABILITY", 0.95);
+const CONSERVATIVE_MIN_PROBABILITY = envNumber("PAPER_CONSERVATIVE_MIN_PROBABILITY", MIN_PROBABILITY);
+const HIGH_REWARD_MIN_PROBABILITY = envNumber("PAPER_HIGH_REWARD_MIN_PROBABILITY", 0.6);
+const MORE_PROBABLE_STRATEGY_MIN_PROBABILITY = envNumber("PAPER_MORE_PROBABLE_MIN_PROBABILITY", 0.6);
+const MIN_ANNUAL_RETURN = envNumber("PAPER_MIN_ANNUAL_RETURN", 0.05);
+const OPPORTUNITY_MIN_PROBABILITY = envNumber("PAPER_OPPORTUNITY_MIN_PROBABILITY", 0.6);
+const OPPORTUNITY_MIN_EDGE = envNumber("PAPER_OPPORTUNITY_MIN_EDGE", 0.04);
+const OPPORTUNITY_MIN_ANNUAL_RETURN = envNumber("PAPER_OPPORTUNITY_MIN_ANNUAL_RETURN", 0.3);
+const MAX_EVALUATIONS_PER_RUN = envNumber("PAPER_MAX_EVALUATIONS_PER_RUN", 80);
+const MAX_SPREAD = envNumber("PAPER_MAX_SPREAD", 0.08);
+const MIN_VOLUME_24H = envNumber("PAPER_MIN_VOLUME_24H", 100);
+const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").toLowerCase();
-const AI_ANALYSIS_LIMIT = Number(process.env.PAPER_AI_ANALYSIS_LIMIT || MAX_EVALUATIONS_PER_RUN);
-const AI_POSTMORTEM_LIMIT = Number(process.env.PAPER_AI_POSTMORTEM_LIMIT || 8);
+const AI_ANALYSIS_LIMIT = envNumber("PAPER_AI_ANALYSIS_LIMIT", MAX_EVALUATIONS_PER_RUN);
+const AI_POSTMORTEM_LIMIT = envNumber("PAPER_AI_POSTMORTEM_LIMIT", 8);
 const AI_STOP_ON_QUOTA_ERROR = String(process.env.PAPER_AI_STOP_ON_QUOTA_ERROR ?? "true").toLowerCase() !== "false";
-const SHORT_HORIZON_DAYS = Number(process.env.PAPER_SHORT_HORIZON_DAYS || 7);
-const MEDIUM_HORIZON_DAYS = Number(process.env.PAPER_MEDIUM_HORIZON_DAYS || 14);
-const MORE_PROBABLE_MIN_LIQUIDITY_USDC = Number(process.env.PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC || 500000);
-const ROTATION_MIN_SCORE_IMPROVEMENT = Number(process.env.PAPER_ROTATION_MIN_SCORE_IMPROVEMENT || 0.15);
-const ROTATION_MIN_EV_USDC_IMPROVEMENT = Number(process.env.PAPER_ROTATION_MIN_EV_USDC_IMPROVEMENT || 0.02);
-const ROTATION_MIN_HOLD_HOURS = Number(process.env.PAPER_ROTATION_MIN_HOLD_HOURS || 6);
+const SHORT_HORIZON_DAYS = envNumber("PAPER_SHORT_HORIZON_DAYS", 7);
+const MEDIUM_HORIZON_DAYS = envNumber("PAPER_MEDIUM_HORIZON_DAYS", 14);
+const MORE_PROBABLE_MIN_LIQUIDITY_USDC = envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", 500000);
+const ROTATION_MIN_SCORE_IMPROVEMENT = envNumber("PAPER_ROTATION_MIN_SCORE_IMPROVEMENT", 0.15);
+const ROTATION_MIN_EV_USDC_IMPROVEMENT = envNumber("PAPER_ROTATION_MIN_EV_USDC_IMPROVEMENT", 0.02);
+const ROTATION_MIN_HOLD_HOURS = envNumber("PAPER_ROTATION_MIN_HOLD_HOURS", 6);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
 const TZ = "Europe/Prague";
@@ -45,8 +62,11 @@ const PAPER_STRATEGIES = {
     label: "Conservative",
     selectionMetric: "EV p.a.",
     minProbability: CONSERVATIVE_MIN_PROBABILITY,
-    maxResolutionDays: SHORT_HORIZON_DAYS,
-    selectionOrder: "highest_ev_pa_first",
+    maxFraction: envNumber("PAPER_CONSERVATIVE_MAX_FRACTION", MAX_FRACTION),
+    maxResolutionDays: envNumber("PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS", SHORT_HORIZON_DAYS),
+    minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
+    requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
+    selectionOrder: envSelectionOrder("PAPER_CONSERVATIVE_SELECTION_ORDER", "highest_ev_pa_first"),
     description: `Requires AI probability >= ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${SHORT_HORIZON_DAYS} days, then selects the highest EV p.a.`,
   },
   highReward: {
@@ -54,10 +74,11 @@ const PAPER_STRATEGIES = {
     label: "High reward",
     selectionMetric: "Reward / risk",
     minProbability: HIGH_REWARD_MIN_PROBABILITY,
-    maxResolutionDays: null,
-    minLiquidityUsdc: null,
-    requireMostProbableOutcome: false,
-    selectionOrder: "highest_reward_risk_first",
+    maxFraction: envNumber("PAPER_HIGH_REWARD_MAX_FRACTION", MAX_FRACTION),
+    maxResolutionDays: envNumber("PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS", null),
+    minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
+    requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
+    selectionOrder: envSelectionOrder("PAPER_HIGH_REWARD_SELECTION_ORDER", "highest_reward_risk_first"),
     description: `Requires AI probability >= ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}%, then prioritizes eligible opportunities by highest reward against risk, preferring short settlement horizons first.`,
   },
   moreProbable: {
@@ -65,10 +86,11 @@ const PAPER_STRATEGIES = {
     label: "More probable",
     selectionMetric: "Reward / risk",
     minProbability: MORE_PROBABLE_STRATEGY_MIN_PROBABILITY,
-    maxResolutionDays: SHORT_HORIZON_DAYS,
-    minLiquidityUsdc: MORE_PROBABLE_MIN_LIQUIDITY_USDC,
-    requireMostProbableOutcome: true,
-    selectionOrder: "highest_reward_risk_first",
+    maxFraction: envNumber("PAPER_MORE_PROBABLE_MAX_FRACTION", MAX_FRACTION),
+    maxResolutionDays: envNumber("PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS", SHORT_HORIZON_DAYS),
+    minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
+    requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
+    selectionOrder: envSelectionOrder("PAPER_MORE_PROBABLE_SELECTION_ORDER", "highest_reward_risk_first"),
     description: `Requires AI probability >= ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${SHORT_HORIZON_DAYS} days, deep liquidity, and the most probable outcome in each market.`,
   },
 };
@@ -244,13 +266,14 @@ function normalizePaperPortfolio(strategy, input = {}) {
     selectionMetric: strategy.selectionMetric,
     selectionOrder: strategy.selectionOrder,
     minProbability: strategy.minProbability,
+    maxFraction: strategy.maxFraction,
     maxResolutionDays: strategy.maxResolutionDays,
     minLiquidityUsdc: strategy.minLiquidityUsdc,
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     description: strategy.description,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
-      maxFraction: Number(input.portfolio?.maxFraction || MAX_FRACTION),
+      maxFraction: Number(strategy.maxFraction ?? input.portfolio?.maxFraction ?? MAX_FRACTION),
       minProbability: Number(strategy.minProbability ?? input.portfolio?.minProbability ?? MIN_PROBABILITY),
       minAnnualReturn: Number(input.portfolio?.minAnnualReturn || MIN_ANNUAL_RETURN),
       opportunityMinProbability: Number(input.portfolio?.opportunityMinProbability || OPPORTUNITY_MIN_PROBABILITY),
@@ -1991,6 +2014,7 @@ function buildTradeBatchLog({ portfolioState, strategy, eligible, rankedEligible
       : `No ${strategy.label} trade was opened: ${reason}.`,
     settings: {
       minProbability: strategy.minProbability,
+      maxFraction: strategy.maxFraction ?? null,
       maxResolutionDays: strategy.maxResolutionDays ?? null,
       minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
       selectionOrder: strategy.selectionOrder,
@@ -2131,7 +2155,8 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
     .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
   const portfolioValue = Math.max(0, PORTFOLIO_USDC + realizedPnl + openPnl);
   const available = Math.max(0, PORTFOLIO_USDC + realizedPnl - openRisk(portfolioState.trades));
-  const stake = portfolioValue * MAX_FRACTION;
+  const maxFraction = Number(strategy.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION);
+  const stake = portfolioValue * maxFraction;
 
   if (portfolioState.lastTradeHour === currentHour) {
     const reason = "hourly paper trade already opened";

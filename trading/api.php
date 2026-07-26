@@ -116,6 +116,160 @@ function state_payload(string $target): array
     return $data;
 }
 
+function default_portfolio_config(): array
+{
+    return [
+        'paper' => [
+            'conservative' => [
+                'minProbability' => 0.95,
+                'maxOrderFraction' => 0.05,
+                'maxResolutionDays' => 7,
+                'selectionOrder' => 'highest_ev_pa_first',
+                'minLiquidityUsdc' => null,
+                'requireMostProbableOutcome' => false,
+            ],
+            'highReward' => [
+                'minProbability' => 0.6,
+                'maxOrderFraction' => 0.05,
+                'maxResolutionDays' => null,
+                'selectionOrder' => 'highest_reward_risk_first',
+                'minLiquidityUsdc' => null,
+                'requireMostProbableOutcome' => false,
+            ],
+            'moreProbable' => [
+                'minProbability' => 0.6,
+                'maxOrderFraction' => 0.05,
+                'maxResolutionDays' => 7,
+                'selectionOrder' => 'highest_reward_risk_first',
+                'minLiquidityUsdc' => 500000,
+                'requireMostProbableOutcome' => true,
+            ],
+        ],
+        'live' => [
+            'minProbability' => 0.95,
+            'maxOrderFraction' => 0.05,
+            'maxResolutionDays' => null,
+            'shortHorizonDays' => 7,
+            'mediumHorizonDays' => 14,
+            'selectionOrder' => 'highest_ev_pa_first',
+            'minLiquidityUsdc' => 100,
+            'useLimitOrders' => true,
+            'requireMostProbableOutcome' => false,
+        ],
+    ];
+}
+
+function portfolio_config_path(): string
+{
+    return __DIR__ . '/data/portfolio-config.json';
+}
+
+function normalize_probability_value(mixed $value, float $fallback): float
+{
+    if (!is_numeric($value)) {
+        return $fallback;
+    }
+    $probability = (float) $value;
+    if ($probability > 1) {
+        $probability /= 100;
+    }
+    return max(0.01, min(0.99, $probability));
+}
+
+function normalize_fraction_value(mixed $value, float $fallback): float
+{
+    if (!is_numeric($value)) {
+        return $fallback;
+    }
+    $fraction = (float) $value;
+    if ($fraction > 1) {
+        $fraction /= 100;
+    }
+    return max(0.01, min(0.5, $fraction));
+}
+
+function normalize_optional_days_value(mixed $value): ?int
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    if (!is_numeric($value)) {
+        return null;
+    }
+    return max(1, min(365, (int) round((float) $value)));
+}
+
+function normalize_optional_money_value(mixed $value): ?float
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    if (!is_numeric($value)) {
+        return null;
+    }
+    return max(0.0, round((float) $value, 2));
+}
+
+function normalize_selection_order_value(mixed $value): string
+{
+    return $value === 'highest_reward_risk_first' ? 'highest_reward_risk_first' : 'highest_ev_pa_first';
+}
+
+function normalize_strategy_config(array $input, array $defaults): array
+{
+    return [
+        'minProbability' => normalize_probability_value($input['minProbability'] ?? null, (float) $defaults['minProbability']),
+        'maxOrderFraction' => normalize_fraction_value($input['maxOrderFraction'] ?? null, (float) $defaults['maxOrderFraction']),
+        'maxResolutionDays' => normalize_optional_days_value($input['maxResolutionDays'] ?? $defaults['maxResolutionDays']),
+        'selectionOrder' => normalize_selection_order_value($input['selectionOrder'] ?? $defaults['selectionOrder']),
+        'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
+        'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
+    ];
+}
+
+function normalize_portfolio_config(array $input): array
+{
+    $defaults = default_portfolio_config();
+    $paperInput = is_array($input['paper'] ?? null) ? $input['paper'] : [];
+    $liveInput = is_array($input['live'] ?? null) ? $input['live'] : [];
+    $config = $defaults;
+    foreach ($defaults['paper'] as $id => $strategyDefaults) {
+        $strategyInput = is_array($paperInput[$id] ?? null) ? $paperInput[$id] : [];
+        $config['paper'][$id] = normalize_strategy_config($strategyInput, $strategyDefaults);
+    }
+    $config['live'] = normalize_strategy_config($liveInput, $defaults['live']);
+    $config['live']['shortHorizonDays'] = normalize_optional_days_value($liveInput['shortHorizonDays'] ?? $defaults['live']['shortHorizonDays']) ?? 7;
+    $config['live']['mediumHorizonDays'] = normalize_optional_days_value($liveInput['mediumHorizonDays'] ?? $defaults['live']['mediumHorizonDays']) ?? 14;
+    $config['live']['useLimitOrders'] = (bool) ($liveInput['useLimitOrders'] ?? $defaults['live']['useLimitOrders']);
+    return $config;
+}
+
+function load_portfolio_config(): array
+{
+    $path = portfolio_config_path();
+    if (!is_file($path)) {
+        return default_portfolio_config();
+    }
+    $raw = file_get_contents($path);
+    $data = json_decode(is_string($raw) ? $raw : '', true);
+    return normalize_portfolio_config(is_array($data) ? $data : []);
+}
+
+function save_portfolio_config(array $config): array
+{
+    $normalized = normalize_portfolio_config($config);
+    $path = portfolio_config_path();
+    $dir = dirname($path);
+    if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        respond(['ok' => false, 'error' => 'Unable to create data directory'], 500);
+    }
+    $encoded = json_encode($normalized, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($encoded) || file_put_contents($path, $encoded . "\n", LOCK_EX) === false) {
+        respond(['ok' => false, 'error' => 'Unable to persist portfolio config'], 500);
+    }
+    return $normalized;
+}
+
 function live_state_path(): string
 {
     return __DIR__ . '/data/live-state.json';
@@ -564,6 +718,56 @@ function normalized_fraction_input($value): ?string
     return rtrim(rtrim(number_format($fraction, 4, '.', ''), '0'), '.');
 }
 
+function normalized_days_input($value): ?string
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    if (!is_numeric($value)) {
+        return null;
+    }
+    $days = max(1, min(365, (int) round((float) $value)));
+    return (string) $days;
+}
+
+function normalized_money_input($value): ?string
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    if (!is_numeric($value)) {
+        return null;
+    }
+    $money = max(0.0, (float) $value);
+    return rtrim(rtrim(number_format($money, 2, '.', ''), '0'), '.');
+}
+
+function normalized_bool_input($value): ?string
+{
+    if ($value === null) {
+        return null;
+    }
+    if (is_bool($value)) {
+        return $value ? 'true' : 'false';
+    }
+    $text = strtolower((string) $value);
+    if (in_array($text, ['1', 'true', 'yes', 'on'], true)) {
+        return 'true';
+    }
+    if (in_array($text, ['0', 'false', 'no', 'off'], true)) {
+        return 'false';
+    }
+    return null;
+}
+
+function normalized_selection_order_input($value): ?string
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    return $value === 'highest_reward_risk_first' ? 'highest_reward_risk_first' : 'highest_ev_pa_first';
+}
+
 try {
     $action = $_GET['action'] ?? 'markets';
 
@@ -627,16 +831,29 @@ try {
         $paperMoreProbableMinProbability = normalized_probability_input($payload['paper_more_probable_min_probability'] ?? null);
         $liveMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['live_max_order_fraction'] ?? null);
         $paperMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['paper_max_order_fraction'] ?? null);
+        $liveMaxResolutionDays = normalized_days_input($payload['maxResolutionDays'] ?? $payload['live_max_resolution_days'] ?? null);
+        $liveSelectionOrder = normalized_selection_order_input($payload['selectionOrder'] ?? $payload['live_selection_order'] ?? null);
+        $liveMinLiquidity = normalized_money_input($payload['minLiquidityUsdc'] ?? $payload['live_min_liquidity_usdc'] ?? null);
+        $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
+        $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
+        $paperExtraInputs = [];
+        foreach ($paperStrategies as $strategy) {
+            $paperExtraInputs["paper_{$strategy}_max_order_fraction"] = normalized_fraction_input($payload["paper_{$strategy}_max_order_fraction"] ?? null);
+            $paperExtraInputs["paper_{$strategy}_max_resolution_days"] = normalized_days_input($payload["paper_{$strategy}_max_resolution_days"] ?? null);
+            $paperExtraInputs["paper_{$strategy}_selection_order"] = normalized_selection_order_input($payload["paper_{$strategy}_selection_order"] ?? null);
+            $paperExtraInputs["paper_{$strategy}_min_liquidity_usdc"] = normalized_money_input($payload["paper_{$strategy}_min_liquidity_usdc"] ?? null);
+            $paperExtraInputs["paper_{$strategy}_require_most_probable"] = normalized_bool_input($payload["paper_{$strategy}_require_most_probable"] ?? null);
+        }
         $workflows = [
             'paper' => [
                 'workflow' => 'trading-paper-bot.yml',
-                'inputs' => array_filter([
+                'inputs' => array_filter(array_merge([
                     'mode' => 'full',
                     'paper_max_order_fraction' => $paperMaxOrderFraction,
                     'paper_conservative_min_probability' => $paperConservativeMinProbability,
                     'paper_high_reward_min_probability' => $paperHighRewardMinProbability,
                     'paper_more_probable_min_probability' => $paperMoreProbableMinProbability,
-                ], static fn ($value): bool => $value !== null),
+                ], $paperExtraInputs), static fn ($value): bool => $value !== null),
                 'message' => 'Paper bot workflow dispatched.',
             ],
             'live' => [
@@ -645,6 +862,10 @@ try {
                     'live_confirm' => true,
                     'live_min_probability' => $liveMinProbability,
                     'live_max_order_fraction' => $liveMaxOrderFraction,
+                    'live_max_resolution_days' => $liveMaxResolutionDays,
+                    'live_selection_order' => $liveSelectionOrder,
+                    'live_min_liquidity_usdc' => $liveMinLiquidity,
+                    'live_use_limit_orders' => $liveUseLimitOrders,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
             ],
@@ -663,6 +884,24 @@ try {
             'ref' => $result['ref'],
             'generatedAt' => gmdate('c'),
         ], $result['status'] === 204 ? 202 : 200);
+    }
+
+    if ($action === 'portfolio-config') {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $payload = request_payload();
+            $config = is_array($payload['config'] ?? null) ? $payload['config'] : $payload;
+            $saved = save_portfolio_config($config);
+            respond([
+                'ok' => true,
+                'config' => $saved,
+                'generatedAt' => gmdate('c'),
+            ]);
+        }
+        respond([
+            'ok' => true,
+            'config' => load_portfolio_config(),
+            'generatedAt' => gmdate('c'),
+        ]);
     }
 
     if ($action === 'workflow-status') {

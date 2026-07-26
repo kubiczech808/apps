@@ -3,24 +3,33 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+function envNumber(name, fallback = null) {
+  const value = process.env[name];
+  if (value == null || value === "") return fallback;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
 const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
 const LIVE_EXECUTION_STATE_URL = process.env.LIVE_EXECUTION_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution";
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
-const MIN_PROBABILITY = Number(process.env.LIVE_MIN_PROBABILITY || process.env.PAPER_MIN_PROBABILITY || 0.95);
-const MIN_ANNUAL_RETURN = Number(process.env.LIVE_MIN_ANNUAL_RETURN || process.env.PAPER_MIN_ANNUAL_RETURN || 0.05);
-const OPPORTUNITY_MIN_PROBABILITY = Number(process.env.LIVE_OPPORTUNITY_MIN_PROBABILITY || process.env.PAPER_OPPORTUNITY_MIN_PROBABILITY || 0.6);
-const OPPORTUNITY_MIN_EDGE = Number(process.env.LIVE_OPPORTUNITY_MIN_EDGE || process.env.PAPER_OPPORTUNITY_MIN_EDGE || 0.04);
-const OPPORTUNITY_MIN_ANNUAL_RETURN = Number(process.env.LIVE_OPPORTUNITY_MIN_ANNUAL_RETURN || process.env.PAPER_OPPORTUNITY_MIN_ANNUAL_RETURN || 0.3);
-const MAX_SPREAD = Number(process.env.LIVE_MAX_SPREAD || process.env.PAPER_MAX_SPREAD || 0.08);
-const MIN_VOLUME_24H = Number(process.env.LIVE_MIN_VOLUME_24H || process.env.PAPER_MIN_VOLUME_24H || 100);
-const MAX_ORDER_FRACTION = Number(process.env.MAX_ORDER_FRACTION || process.env.LIVE_MAX_ORDER_FRACTION || 0.05);
-const MAX_ORDER_NOTIONAL_USDC = Number(process.env.MAX_ORDER_NOTIONAL_USDC || process.env.LIVE_MAX_ORDER_NOTIONAL_USDC || Infinity);
-const CANDIDATE_SCAN_LIMIT = Number(process.env.LIVE_CANDIDATE_SCAN_LIMIT || 120);
-const SHORT_HORIZON_DAYS = Number(process.env.LIVE_SHORT_HORIZON_DAYS || process.env.PAPER_SHORT_HORIZON_DAYS || 7);
-const MEDIUM_HORIZON_DAYS = Number(process.env.LIVE_MEDIUM_HORIZON_DAYS || process.env.PAPER_MEDIUM_HORIZON_DAYS || 14);
+const MIN_PROBABILITY = envNumber("LIVE_MIN_PROBABILITY", envNumber("PAPER_MIN_PROBABILITY", 0.95));
+const MIN_ANNUAL_RETURN = envNumber("LIVE_MIN_ANNUAL_RETURN", envNumber("PAPER_MIN_ANNUAL_RETURN", 0.05));
+const OPPORTUNITY_MIN_PROBABILITY = envNumber("LIVE_OPPORTUNITY_MIN_PROBABILITY", envNumber("PAPER_OPPORTUNITY_MIN_PROBABILITY", 0.6));
+const OPPORTUNITY_MIN_EDGE = envNumber("LIVE_OPPORTUNITY_MIN_EDGE", envNumber("PAPER_OPPORTUNITY_MIN_EDGE", 0.04));
+const OPPORTUNITY_MIN_ANNUAL_RETURN = envNumber("LIVE_OPPORTUNITY_MIN_ANNUAL_RETURN", envNumber("PAPER_OPPORTUNITY_MIN_ANNUAL_RETURN", 0.3));
+const MAX_SPREAD = envNumber("LIVE_MAX_SPREAD", envNumber("PAPER_MAX_SPREAD", 0.08));
+const MIN_VOLUME_24H = envNumber("LIVE_CONFIG_MIN_LIQUIDITY_USDC", envNumber("LIVE_MIN_VOLUME_24H", envNumber("PAPER_MIN_VOLUME_24H", 100)));
+const MAX_ORDER_FRACTION = envNumber("MAX_ORDER_FRACTION", envNumber("LIVE_MAX_ORDER_FRACTION", 0.05));
+const MAX_ORDER_NOTIONAL_USDC = envNumber("MAX_ORDER_NOTIONAL_USDC", envNumber("LIVE_MAX_ORDER_NOTIONAL_USDC", Infinity));
+const CANDIDATE_SCAN_LIMIT = envNumber("LIVE_CANDIDATE_SCAN_LIMIT", 120);
+const SHORT_HORIZON_DAYS = envNumber("LIVE_SHORT_HORIZON_DAYS", envNumber("PAPER_SHORT_HORIZON_DAYS", 7));
+const MEDIUM_HORIZON_DAYS = envNumber("LIVE_MEDIUM_HORIZON_DAYS", envNumber("PAPER_MEDIUM_HORIZON_DAYS", 14));
+const MAX_RESOLUTION_DAYS = envNumber("LIVE_MAX_RESOLUTION_DAYS", null);
+const SELECTION_ORDER = process.env.LIVE_SELECTION_ORDER === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
 const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "stake_fraction").toLowerCase();
 const USE_LIMIT_ORDERS = String(process.env.USE_LIMIT_ORDERS ?? "true").toLowerCase() !== "false";
 const POST_ONLY = String(process.env.POLYMARKET_POST_ONLY ?? "true").toLowerCase() !== "false";
@@ -576,6 +585,16 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   const probability = number(evaluation.aiProbability);
   const endDate = correctedEndDate(market.question || evaluation.question, market.endDate, market.createdAt || market.updatedAt);
   const days = daysToEnd(endDate);
+  const resolvedDays = daysValue({ daysToResolution: days });
+  if (Number.isFinite(MAX_RESOLUTION_DAYS) && resolvedDays > MAX_RESOLUTION_DAYS) {
+    return {
+      candidate: evaluation,
+      eligible: false,
+      rejectReasons: [`resolution ${Number.isFinite(resolvedDays) ? resolvedDays.toFixed(2) : "-"} days exceeds live max ${MAX_RESOLUTION_DAYS} days`],
+      currentPrice: price,
+      minOrderSize,
+    };
+  }
   const endOk = endDateIsFuture(endDate);
   const volume24hr = number(market.volume24hr, number(evaluation.volume24hr, 0));
   const liquidity = number(market.liquidity, number(evaluation.liquidity, 0));
@@ -853,6 +872,11 @@ async function main() {
   const preferredHorizon = preferredHorizonCandidates(allEligible);
   const eligible = preferredHorizon.rows
     .sort((a, b) => {
+      if (SELECTION_ORDER === "highest_reward_risk_first") {
+        const aRatio = Number(a.riskReward || 0);
+        const bRatio = Number(b.riskReward || 0);
+        if (bRatio !== aRatio) return bRatio - aRatio;
+      }
       if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
       const horizon = compareShorterHorizon(a, b);
       if (horizon !== 0) return horizon;
@@ -891,6 +915,8 @@ async function main() {
       minAnnualReturn: MIN_ANNUAL_RETURN,
       maxSpread: MAX_SPREAD,
       minVolume24hr: MIN_VOLUME_24H,
+      maxResolutionDays: MAX_RESOLUTION_DAYS,
+      selectionOrder: SELECTION_ORDER,
       shortHorizonDays: SHORT_HORIZON_DAYS,
       mediumHorizonDays: MEDIUM_HORIZON_DAYS,
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
@@ -923,6 +949,8 @@ async function main() {
         minAnnualReturn: MIN_ANNUAL_RETURN,
         maxSpread: MAX_SPREAD,
         minVolume24hr: MIN_VOLUME_24H,
+        maxResolutionDays: MAX_RESOLUTION_DAYS,
+        selectionOrder: SELECTION_ORDER,
         shortHorizonDays: SHORT_HORIZON_DAYS,
         mediumHorizonDays: MEDIUM_HORIZON_DAYS,
         useLimitOrders: USE_LIMIT_ORDERS,

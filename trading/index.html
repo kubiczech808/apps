@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260727-error-reasons">
+  <link rel="stylesheet" href="assets/app.css?v=20260727-portfolio-params">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -265,6 +265,28 @@
           <input type="number" min="1" max="50" step="1" value="5" data-risk-allocation>
           <strong data-risk-allocation-label>5%</strong>
         </label>
+        <label class="parameter-control">
+          <span>Max resolution days</span>
+          <input type="number" min="1" max="365" step="1" placeholder="auto" data-max-resolution-days>
+          <strong data-max-resolution-days-label>auto</strong>
+        </label>
+        <label class="parameter-control">
+          <span>Trade priority</span>
+          <select data-selection-order>
+            <option value="highest_ev_pa_first">Highest EV p.a.</option>
+            <option value="highest_reward_risk_first">Highest reward/risk</option>
+          </select>
+          <strong data-selection-order-label>EV p.a.</strong>
+        </label>
+        <label class="parameter-control">
+          <span>Min liquidity / volume</span>
+          <input type="number" min="0" step="100" placeholder="none" data-min-liquidity>
+          <strong data-min-liquidity-label>none</strong>
+        </label>
+        <label class="parameter-control order-mode-toggle">
+          <input type="checkbox" data-most-probable-outcome>
+          <span>Only most probable outcome per market</span>
+        </label>
         <div class="parameter-control parameter-control-readout">
           <span>Calculated stake</span>
           <strong data-risk-allocation-value>$5.00</strong>
@@ -279,6 +301,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260727-error-reasons"></script>
+  <script src="assets/app.js?v=20260727-portfolio-params"></script>
 </body>
 </html>

@@ -889,13 +889,19 @@ body.modal-open {
   text-transform: uppercase;
 }
 
-.parameter-control input[type="number"] {
+.parameter-control input[type="number"],
+.parameter-control select {
   width: 84px;
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 8px 10px;
   font: inherit;
   font-weight: 800;
+  background: #ffffff;
+}
+
+.parameter-control select {
+  width: min(210px, 100%);
 }
 
 .parameter-control strong {

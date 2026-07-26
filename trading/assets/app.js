@@ -35,6 +35,8 @@ const state = {
   limitOrdersKey: "",
   liveExecutionArmed: false,
   liveExecutionState: null,
+  portfolioConfig: null,
+  portfolioConfigSaveTimer: null,
   executionBusy: null,
   autoLiveSyncBusy: false,
   settingsSection: "evaluation-log",
@@ -55,6 +57,8 @@ const MAX_ELIGIBILITY_THRESHOLD = 0.99;
 const DEFAULT_RISK_ALLOCATION = 0.05;
 const MIN_RISK_ALLOCATION = 0.01;
 const MAX_RISK_ALLOCATION = 0.5;
+const DEFAULT_SHORT_HORIZON_DAYS = 7;
+const DEFAULT_MEDIUM_HORIZON_DAYS = 14;
 const LIVE_STATE_REFRESH_MS = 15000;
 const LIVE_SYNC_REQUEST_MS = 30000;
 
@@ -94,6 +98,13 @@ const els = {
   riskAllocationLabel: document.querySelector("[data-risk-allocation-label]"),
   riskAllocationValue: document.querySelector("[data-risk-allocation-value]"),
   riskAllocationNote: document.querySelector("[data-risk-allocation-note]"),
+  maxResolutionDays: document.querySelector("[data-max-resolution-days]"),
+  maxResolutionDaysLabel: document.querySelector("[data-max-resolution-days-label]"),
+  selectionOrder: document.querySelector("[data-selection-order]"),
+  selectionOrderLabel: document.querySelector("[data-selection-order-label]"),
+  minLiquidity: document.querySelector("[data-min-liquidity]"),
+  minLiquidityLabel: document.querySelector("[data-min-liquidity-label]"),
+  mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
   limitOrders: document.querySelector("[data-limit-orders]"),
   executionButtons: document.querySelectorAll("[data-one-time-execution]"),
@@ -214,6 +225,112 @@ function paperModeLabel(mode = state.mode) {
   if (strategyId === "highReward") return "High reward";
   if (strategyId === "moreProbable") return "More probable";
   return "Conservative";
+}
+
+function defaultPortfolioConfig() {
+  return {
+    paper: {
+      conservative: {
+        minProbability: 0.95,
+        maxOrderFraction: 0.05,
+        maxResolutionDays: 7,
+        selectionOrder: "highest_ev_pa_first",
+        minLiquidityUsdc: null,
+        requireMostProbableOutcome: false,
+      },
+      highReward: {
+        minProbability: 0.6,
+        maxOrderFraction: 0.05,
+        maxResolutionDays: null,
+        selectionOrder: "highest_reward_risk_first",
+        minLiquidityUsdc: null,
+        requireMostProbableOutcome: false,
+      },
+      moreProbable: {
+        minProbability: 0.6,
+        maxOrderFraction: 0.05,
+        maxResolutionDays: 7,
+        selectionOrder: "highest_reward_risk_first",
+        minLiquidityUsdc: 500000,
+        requireMostProbableOutcome: true,
+      },
+    },
+    live: {
+      minProbability: 0.95,
+      maxOrderFraction: 0.05,
+      maxResolutionDays: null,
+      shortHorizonDays: 7,
+      mediumHorizonDays: 14,
+      selectionOrder: "highest_ev_pa_first",
+      minLiquidityUsdc: 100,
+      useLimitOrders: true,
+      requireMostProbableOutcome: false,
+    },
+  };
+}
+
+function normalizeSelectionOrder(value) {
+  return value === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
+}
+
+function selectionOrderLabel(value) {
+  return normalizeSelectionOrder(value) === "highest_reward_risk_first" ? "Reward/risk" : "EV p.a.";
+}
+
+function normalizeOptionalDays(value) {
+  if (value === "" || value == null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return Math.min(365, Math.max(1, Math.round(numeric)));
+}
+
+function normalizeOptionalMoney(value) {
+  if (value === "" || value == null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return Math.round(numeric * 100) / 100;
+}
+
+function portfolioConfigForMode(mode = state.mode) {
+  const defaults = defaultPortfolioConfig();
+  const config = state.portfolioConfig || {};
+  if (normalizeMode(mode) === "live") {
+    return {
+      ...defaults.live,
+      ...(config.live || {}),
+    };
+  }
+  const strategyId = paperStrategyIdFromMode(mode);
+  return {
+    ...defaults.paper[strategyId],
+    ...((config.paper || {})[strategyId] || {}),
+  };
+}
+
+function updatePortfolioConfigForMode(mode, updates) {
+  const normalizedMode = normalizeMode(mode);
+  const base = state.portfolioConfig || defaultPortfolioConfig();
+  if (normalizedMode === "live") {
+    state.portfolioConfig = {
+      ...base,
+      live: {
+        ...portfolioConfigForMode("live"),
+        ...updates,
+      },
+    };
+    return;
+  }
+  const strategyId = paperStrategyIdFromMode(normalizedMode);
+  state.portfolioConfig = {
+    ...base,
+    paper: {
+      ...(base.paper || {}),
+      [strategyId]: {
+        ...portfolioConfigForMode(normalizedMode),
+        ...updates,
+      },
+    },
+  };
 }
 
 function storedLiveExecutionArmed() {
@@ -1410,7 +1527,7 @@ function refreshEligibilityThreshold() {
     syncEligibilityThresholdControl();
     return;
   }
-  state.eligibilityThreshold = storedEligibilityThreshold() ?? thresholdDefaultForMode(state.mode);
+  state.eligibilityThreshold = portfolioConfigForMode(state.mode).minProbability ?? storedEligibilityThreshold() ?? thresholdDefaultForMode(state.mode);
   state.eligibilityThresholdKey = key;
   syncEligibilityThresholdControl();
 }
@@ -1455,7 +1572,7 @@ function refreshRiskAllocation() {
     syncRiskAllocationControl();
     return;
   }
-  state.riskAllocation = storedRiskAllocation() ?? DEFAULT_RISK_ALLOCATION;
+  state.riskAllocation = portfolioConfigForMode(state.mode).maxOrderFraction ?? storedRiskAllocation() ?? DEFAULT_RISK_ALLOCATION;
   state.riskAllocationKey = key;
   syncRiskAllocationControl();
 }
@@ -1545,7 +1662,7 @@ function refreshLimitOrders() {
     syncLimitOrdersControl();
     return;
   }
-  state.limitOrders = storedLimitOrders() ?? defaultLimitOrdersForMode();
+  state.limitOrders = portfolioConfigForMode(state.mode).useLimitOrders ?? storedLimitOrders() ?? defaultLimitOrdersForMode();
   state.limitOrdersKey = key;
   syncLimitOrdersControl();
 }
@@ -1556,11 +1673,43 @@ function syncLimitOrdersControl() {
   }
 }
 
+function syncPortfolioParameterControls() {
+  const config = portfolioConfigForMode(state.mode);
+  const maxDays = normalizeOptionalDays(config.maxResolutionDays);
+  const liquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
+  const order = normalizeSelectionOrder(config.selectionOrder);
+  if (els.maxResolutionDays) els.maxResolutionDays.value = maxDays == null ? "" : String(maxDays);
+  if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = maxDays == null ? "auto" : `${maxDays} d`;
+  if (els.selectionOrder) els.selectionOrder.value = order;
+  if (els.selectionOrderLabel) els.selectionOrderLabel.textContent = selectionOrderLabel(order);
+  if (els.minLiquidity) els.minLiquidity.value = liquidity == null ? "" : String(liquidity);
+  if (els.minLiquidityLabel) els.minLiquidityLabel.textContent = liquidity == null ? "none" : money(liquidity);
+  if (els.mostProbableOutcome) {
+    els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
+    els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLiveMode());
+  }
+}
+
+function rerenderCurrentDashboard() {
+  if (isLiveMode() && state.liveState) {
+    renderLiveState(state.liveState);
+  } else if (state.botState) {
+    renderBotState(state.botState);
+  } else {
+    syncEligibilityThresholdControl();
+    syncRiskAllocationControl();
+    syncLimitOrdersControl();
+    syncPortfolioParameterControls();
+  }
+  renderBotEvaluations();
+}
+
 function openParameterModal(trigger) {
   if (!els.parameterModal) return;
   refreshEligibilityThreshold();
   refreshRiskAllocation();
   refreshLimitOrders();
+  syncPortfolioParameterControls();
   els.parameterModal.hidden = false;
   document.body.classList.add("modal-open");
   els.parameterModalClose?.focus();
@@ -1795,7 +1944,7 @@ function thresholdDefaultForMode(mode = state.mode) {
 }
 
 function thresholdForMode(mode = state.mode) {
-  return storedEligibilityThreshold(mode) ?? thresholdDefaultForMode(mode);
+  return portfolioConfigForMode(mode).minProbability ?? storedEligibilityThreshold(mode) ?? thresholdDefaultForMode(mode);
 }
 
 function syncEligibilityThresholdControl() {
@@ -1892,6 +2041,39 @@ async function fetchApiJson(url, options = {}) {
   return payload;
 }
 
+async function loadPortfolioConfig() {
+  try {
+    const payload = await fetchApiJson("api.php?action=portfolio-config");
+    state.portfolioConfig = payload.config || defaultPortfolioConfig();
+  } catch {
+    state.portfolioConfig = state.portfolioConfig || defaultPortfolioConfig();
+  }
+  return state.portfolioConfig;
+}
+
+async function savePortfolioConfigNow() {
+  window.clearTimeout(state.portfolioConfigSaveTimer);
+  const payload = await fetchApiJson("api.php?action=portfolio-config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config: state.portfolioConfig || defaultPortfolioConfig() }),
+  });
+  state.portfolioConfig = payload.config || state.portfolioConfig || defaultPortfolioConfig();
+  return state.portfolioConfig;
+}
+
+function savePortfolioConfigSoon() {
+  window.clearTimeout(state.portfolioConfigSaveTimer);
+  state.portfolioConfigSaveTimer = window.setTimeout(async () => {
+    try {
+      await savePortfolioConfigNow();
+      setExecutionStatus("portfolio parameters saved");
+    } catch (error) {
+      setExecutionStatus(error.message || "portfolio parameter save failed", "error");
+    }
+  }, 350);
+}
+
 async function requestLiveAccountSync(options = {}) {
   if (state.autoLiveSyncBusy) return;
   state.autoLiveSyncBusy = true;
@@ -1926,10 +2108,28 @@ async function requestLiveAccountSync(options = {}) {
 }
 
 function paperThresholdPayload() {
+  const conservative = portfolioConfigForMode("paper-conservative");
+  const highReward = portfolioConfigForMode("paper-highReward");
+  const moreProbable = portfolioConfigForMode("paper-moreProbable");
   return {
     paper_conservative_min_probability: thresholdForMode("paper-conservative"),
     paper_high_reward_min_probability: thresholdForMode("paper-highReward"),
     paper_more_probable_min_probability: thresholdForMode("paper-moreProbable"),
+    paper_conservative_max_order_fraction: conservative.maxOrderFraction,
+    paper_high_reward_max_order_fraction: highReward.maxOrderFraction,
+    paper_more_probable_max_order_fraction: moreProbable.maxOrderFraction,
+    paper_conservative_max_resolution_days: conservative.maxResolutionDays,
+    paper_high_reward_max_resolution_days: highReward.maxResolutionDays,
+    paper_more_probable_max_resolution_days: moreProbable.maxResolutionDays,
+    paper_conservative_selection_order: conservative.selectionOrder,
+    paper_high_reward_selection_order: highReward.selectionOrder,
+    paper_more_probable_selection_order: moreProbable.selectionOrder,
+    paper_conservative_min_liquidity_usdc: conservative.minLiquidityUsdc,
+    paper_high_reward_min_liquidity_usdc: highReward.minLiquidityUsdc,
+    paper_more_probable_min_liquidity_usdc: moreProbable.minLiquidityUsdc,
+    paper_conservative_require_most_probable: conservative.requireMostProbableOutcome,
+    paper_high_reward_require_most_probable: highReward.requireMostProbableOutcome,
+    paper_more_probable_require_most_probable: moreProbable.requireMostProbableOutcome,
   };
 }
 
@@ -1959,6 +2159,7 @@ async function triggerOneTimeExecution(target) {
   renderExecutionSteps(steps);
 
   try {
+    await savePortfolioConfigNow();
     const response = await fetch("api.php?action=workflow", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1968,8 +2169,10 @@ async function triggerOneTimeExecution(target) {
           max_order_fraction: currentRiskAllocation(),
           ...paperThresholdPayload(),
         } : {
+          ...portfolioConfigForMode("live"),
           min_probability: currentEligibilityThreshold(),
           max_order_fraction: currentRiskAllocation(),
+          use_limit_orders: currentLimitOrders(),
         }),
       }),
     });
@@ -2061,6 +2264,9 @@ async function loadLiveState(options = {}) {
 
 function loadDashboardState(options = {}) {
   syncModeUi();
+  if (!state.portfolioConfig) {
+    return loadPortfolioConfig().then(() => loadDashboardState(options));
+  }
   return isLiveMode() ? loadLiveState(options) : loadBotState();
 }
 
@@ -2097,10 +2303,11 @@ function paperPortfolioTrades(portfolioState) {
 
 function portfolioRuleRows(portfolio = {}) {
   const mode = portfolio.id ? paperModeFromStrategyId(portfolio.id) : state.mode;
+  const config = portfolioConfigForMode(mode);
   const threshold = thresholdForMode(mode);
-  const maxResolutionDays = Number(portfolio.maxResolutionDays);
-  const minLiquidityUsdc = Number(portfolio.minLiquidityUsdc);
-  const priority = portfolio.selectionOrder === "highest_reward_risk_first"
+  const maxResolutionDays = Number(config.maxResolutionDays);
+  const minLiquidityUsdc = Number(config.minLiquidityUsdc);
+  const priority = config.selectionOrder === "highest_reward_risk_first"
     ? "Highest reward/risk, then shorter resolution and EV"
     : "Highest EV p.a., then shorter resolution and EV";
   const resolution = Number.isFinite(maxResolutionDays)
@@ -2108,23 +2315,29 @@ function portfolioRuleRows(portfolio = {}) {
     : "Shortest available horizon bucket";
   const rows = [
     ["AI probability threshold", percent(threshold)],
+    ["Stake sizing", `${probability(currentRiskAllocation())} of portfolio equity`],
     ["Resolution filter", resolution],
     ["Trade priority", priority],
   ];
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Liquidity filter", `>= ${money(minLiquidityUsdc)}`]);
-  if (portfolio.requireMostProbableOutcome) rows.push(["Outcome filter", "Only the most probable outcome per market"]);
+  if (config.requireMostProbableOutcome) rows.push(["Outcome filter", "Only the most probable outcome per market"]);
   return rows;
 }
 
 function livePortfolioRuleRows() {
+  const config = portfolioConfigForMode("live");
+  const maxResolutionDays = normalizeOptionalDays(config.maxResolutionDays);
+  const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
+  const priority = config.selectionOrder === "highest_reward_risk_first"
+    ? "Highest reward/risk, then shorter resolution and EV"
+    : "Highest EV p.a., then shorter resolution and EV";
   return [
     ["AI probability threshold", percent(currentEligibilityThreshold())],
-    ["Resolution filter", "Max 7 days preferred, then 14 days before longer horizons"],
-    ["Trade priority", "Highest EV p.a., then shorter resolution and EV"],
-    ["Pre-trade check", "Revalidate current order book first"],
-    ["Risk control", "Risk-diversified before submit"],
-    ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
     ["Stake sizing", `${probability(currentRiskAllocation())} of live equity`],
+    ["Resolution filter", maxResolutionDays == null ? `Prefer <=${Number(config.shortHorizonDays || DEFAULT_SHORT_HORIZON_DAYS)}d, then <=${Number(config.mediumHorizonDays || DEFAULT_MEDIUM_HORIZON_DAYS)}d` : `Max ${maxResolutionDays} days`],
+    ["Trade priority", priority],
+    ["Liquidity / volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
+    ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
   ];
 }
 
@@ -3200,14 +3413,11 @@ els.eligibilityThreshold?.addEventListener("input", () => {
   const normalized = normalizeEligibilityThreshold(raw / 100);
   const value = normalized ?? currentEligibilityThreshold();
   state.eligibilityThreshold = value;
+  updatePortfolioConfigForMode(state.mode, { minProbability: value });
   saveEligibilityThreshold(value);
+  savePortfolioConfigSoon();
   syncEligibilityThresholdControl();
-  if (isLiveMode() && state.liveState) {
-    renderLiveState(state.liveState);
-  } else if (state.botState) {
-    renderBotState(state.botState);
-  }
-  renderBotEvaluations();
+  rerenderCurrentDashboard();
 });
 
 els.riskAllocation?.addEventListener("input", () => {
@@ -3216,26 +3426,48 @@ els.riskAllocation?.addEventListener("input", () => {
   const normalized = normalizeRiskAllocation(raw / 100);
   const value = normalized ?? currentRiskAllocation();
   state.riskAllocation = value;
+  updatePortfolioConfigForMode(state.mode, { maxOrderFraction: value });
   saveRiskAllocation(value);
-  if (isLiveMode() && state.liveState) {
-    renderLiveState(state.liveState);
-  } else if (state.botState) {
-    renderBotState(state.botState);
-  } else {
-    syncRiskAllocationControl();
-  }
+  savePortfolioConfigSoon();
+  rerenderCurrentDashboard();
 });
 
 els.limitOrders?.addEventListener("change", () => {
   state.limitOrders = Boolean(els.limitOrders.checked);
+  updatePortfolioConfigForMode(state.mode, { useLimitOrders: state.limitOrders });
   saveLimitOrders(state.limitOrders);
-  if (isLiveMode() && state.liveState) {
-    renderLiveState(state.liveState);
-  } else if (state.botState) {
-    renderBotState(state.botState);
-  } else {
-    syncLimitOrdersControl();
-  }
+  savePortfolioConfigSoon();
+  rerenderCurrentDashboard();
+});
+
+els.maxResolutionDays?.addEventListener("input", () => {
+  const value = normalizeOptionalDays(els.maxResolutionDays.value);
+  updatePortfolioConfigForMode(state.mode, { maxResolutionDays: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.selectionOrder?.addEventListener("change", () => {
+  updatePortfolioConfigForMode(state.mode, { selectionOrder: normalizeSelectionOrder(els.selectionOrder.value) });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.minLiquidity?.addEventListener("input", () => {
+  const value = normalizeOptionalMoney(els.minLiquidity.value);
+  updatePortfolioConfigForMode(state.mode, { minLiquidityUsdc: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.mostProbableOutcome?.addEventListener("change", () => {
+  updatePortfolioConfigForMode(state.mode, { requireMostProbableOutcome: Boolean(els.mostProbableOutcome.checked) });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
 });
 
 els.botEvaluations?.addEventListener("click", (event) => {

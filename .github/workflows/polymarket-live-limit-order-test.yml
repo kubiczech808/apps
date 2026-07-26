@@ -24,6 +24,26 @@ on:
         required: false
         default: "0.05"
         type: string
+      live_max_resolution_days:
+        description: Optional hard max resolution days
+        required: false
+        default: ""
+        type: string
+      live_selection_order:
+        description: Candidate priority order
+        required: false
+        default: ""
+        type: string
+      live_min_liquidity_usdc:
+        description: Minimum 24h volume or liquidity in USDC
+        required: false
+        default: ""
+        type: string
+      live_use_limit_orders:
+        description: Use limit orders instead of market orders
+        required: false
+        default: ""
+        type: string
   schedule:
     - cron: '7 * * * *'
 
@@ -47,7 +67,7 @@ jobs:
       LIVE_IDLE_CASH_MAX_USDC: "5"
       LIVE_IDLE_CASH_GRACE_HOURS: "24"
       LIVE_ONE_TRADE_PER_DAY: "true"
-      USE_LIMIT_ORDERS: "true"
+      USE_LIMIT_ORDERS: ${{ github.event.inputs.live_use_limit_orders || 'true' }}
       POLYMARKET_POST_ONLY: "true"
       LIVE_ORDER_SIZE_MODE: stake_fraction
       LIVE_MIN_PROBABILITY: ${{ github.event.inputs.live_min_probability || '0.95' }}
@@ -57,6 +77,9 @@ jobs:
       LIVE_OPPORTUNITY_MIN_ANNUAL_RETURN: "0.30"
       LIVE_MAX_SPREAD: "0.08"
       LIVE_MIN_VOLUME_24H: "100"
+      LIVE_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.live_max_resolution_days || '' }}
+      LIVE_SELECTION_ORDER: ${{ github.event.inputs.live_selection_order || '' }}
+      LIVE_CONFIG_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.live_min_liquidity_usdc || '' }}
       LIVE_SHORT_HORIZON_DAYS: "7"
       LIVE_MEDIUM_HORIZON_DAYS: "14"
       LIVE_CANDIDATE_SCAN_LIMIT: "120"
@@ -78,6 +101,35 @@ jobs:
             echo "Trading live order test must not target email-campaign."
             exit 1
           fi
+
+      - name: Load portfolio config
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          try:
+              payload = json.loads(urllib.request.urlopen("https://osobnizkusenosti.cz/trading/api.php?action=portfolio-config", timeout=20).read().decode("utf-8"))
+          except Exception as exc:
+              print(f"portfolio config unavailable: {exc}")
+              raise SystemExit(0)
+          live = (payload.get("config") or {}).get("live") or {}
+          mapping = {
+              "LIVE_MIN_PROBABILITY": live.get("minProbability"),
+              "MAX_ORDER_FRACTION": live.get("maxOrderFraction"),
+              "LIVE_MAX_RESOLUTION_DAYS": live.get("maxResolutionDays"),
+              "LIVE_SELECTION_ORDER": live.get("selectionOrder"),
+              "LIVE_CONFIG_MIN_LIQUIDITY_USDC": live.get("minLiquidityUsdc"),
+              "USE_LIMIT_ORDERS": str(bool(live.get("useLimitOrders", True))).lower(),
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              for key, value in mapping.items():
+                  if value is None or value == "":
+                      continue
+                  print(f"{key}={value}")
+                  handle.write(f"{key}={value}\n")
+          PY
 
       - name: Generate fresh live account snapshot
         working-directory: trading

@@ -37,6 +37,81 @@ on:
         required: false
         default: "0.60"
         type: string
+      paper_conservative_max_order_fraction:
+        description: "Conservative max stake fraction"
+        required: false
+        default: ""
+        type: string
+      paper_high_reward_max_order_fraction:
+        description: "High reward max stake fraction"
+        required: false
+        default: ""
+        type: string
+      paper_more_probable_max_order_fraction:
+        description: "More probable max stake fraction"
+        required: false
+        default: ""
+        type: string
+      paper_conservative_max_resolution_days:
+        description: "Conservative max resolution days"
+        required: false
+        default: ""
+        type: string
+      paper_high_reward_max_resolution_days:
+        description: "High reward max resolution days"
+        required: false
+        default: ""
+        type: string
+      paper_more_probable_max_resolution_days:
+        description: "More probable max resolution days"
+        required: false
+        default: ""
+        type: string
+      paper_conservative_selection_order:
+        description: "Conservative selection order"
+        required: false
+        default: ""
+        type: string
+      paper_high_reward_selection_order:
+        description: "High reward selection order"
+        required: false
+        default: ""
+        type: string
+      paper_more_probable_selection_order:
+        description: "More probable selection order"
+        required: false
+        default: ""
+        type: string
+      paper_conservative_min_liquidity_usdc:
+        description: "Conservative min liquidity"
+        required: false
+        default: ""
+        type: string
+      paper_high_reward_min_liquidity_usdc:
+        description: "High reward min liquidity"
+        required: false
+        default: ""
+        type: string
+      paper_more_probable_min_liquidity_usdc:
+        description: "More probable min liquidity"
+        required: false
+        default: ""
+        type: string
+      paper_conservative_require_most_probable:
+        description: "Conservative requires most probable outcome"
+        required: false
+        default: ""
+        type: string
+      paper_high_reward_require_most_probable:
+        description: "High reward requires most probable outcome"
+        required: false
+        default: ""
+        type: string
+      paper_more_probable_require_most_probable:
+        description: "More probable requires most probable outcome"
+        required: false
+        default: ""
+        type: string
   schedule:
     - cron: '7 * * * *'
     - cron: '22,37,52 * * * *'
@@ -54,6 +129,21 @@ jobs:
       PAPER_CONSERVATIVE_MIN_PROBABILITY: ${{ github.event.inputs.paper_conservative_min_probability || '0.95' }}
       PAPER_HIGH_REWARD_MIN_PROBABILITY: ${{ github.event.inputs.paper_high_reward_min_probability || '0.60' }}
       PAPER_MORE_PROBABLE_MIN_PROBABILITY: ${{ github.event.inputs.paper_more_probable_min_probability || '0.60' }}
+      PAPER_CONSERVATIVE_MAX_FRACTION: ${{ github.event.inputs.paper_conservative_max_order_fraction || '' }}
+      PAPER_HIGH_REWARD_MAX_FRACTION: ${{ github.event.inputs.paper_high_reward_max_order_fraction || '' }}
+      PAPER_MORE_PROBABLE_MAX_FRACTION: ${{ github.event.inputs.paper_more_probable_max_order_fraction || '' }}
+      PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.paper_conservative_max_resolution_days || '' }}
+      PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.paper_high_reward_max_resolution_days || '' }}
+      PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.paper_more_probable_max_resolution_days || '' }}
+      PAPER_CONSERVATIVE_SELECTION_ORDER: ${{ github.event.inputs.paper_conservative_selection_order || '' }}
+      PAPER_HIGH_REWARD_SELECTION_ORDER: ${{ github.event.inputs.paper_high_reward_selection_order || '' }}
+      PAPER_MORE_PROBABLE_SELECTION_ORDER: ${{ github.event.inputs.paper_more_probable_selection_order || '' }}
+      PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.paper_conservative_min_liquidity_usdc || '' }}
+      PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.paper_high_reward_min_liquidity_usdc || '' }}
+      PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.paper_more_probable_min_liquidity_usdc || '' }}
+      PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_conservative_require_most_probable || '' }}
+      PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_high_reward_require_most_probable || '' }}
+      PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_more_probable_require_most_probable || '' }}
       PAPER_MIN_ANNUAL_RETURN: "0.05"
       PAPER_OPPORTUNITY_MIN_PROBABILITY: "0.60"
       PAPER_OPPORTUNITY_MIN_EDGE: "0.04"
@@ -88,6 +178,44 @@ jobs:
             echo "Trading paper bot must not target email-campaign."
             exit 1
           fi
+
+      - name: Load portfolio config
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          url = "https://osobnizkusenosti.cz/trading/api.php?action=portfolio-config"
+          try:
+              payload = json.loads(urllib.request.urlopen(url, timeout=20).read().decode("utf-8"))
+          except Exception as exc:
+              print(f"portfolio config unavailable: {exc}")
+              raise SystemExit(0)
+
+          config = payload.get("config") or {}
+          paper = config.get("paper") or {}
+          mapping = {
+              "conservative": "PAPER_CONSERVATIVE",
+              "highReward": "PAPER_HIGH_REWARD",
+              "moreProbable": "PAPER_MORE_PROBABLE",
+          }
+          def emit(key, value):
+              if value is None or value == "":
+                  return
+              print(f"{key}={value}")
+              with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+                  handle.write(f"{key}={value}\n")
+
+          for strategy, prefix in mapping.items():
+              row = paper.get(strategy) or {}
+              emit(f"{prefix}_MIN_PROBABILITY", row.get("minProbability"))
+              emit(f"{prefix}_MAX_FRACTION", row.get("maxOrderFraction"))
+              emit(f"{prefix}_MAX_RESOLUTION_DAYS", row.get("maxResolutionDays"))
+              emit(f"{prefix}_SELECTION_ORDER", row.get("selectionOrder"))
+              emit(f"{prefix}_MIN_LIQUIDITY_USDC", row.get("minLiquidityUsdc"))
+              emit(f"{prefix}_REQUIRE_MOST_PROBABLE", str(bool(row.get("requireMostProbableOutcome"))).lower())
+          PY
 
       - name: Run paper bot
         working-directory: trading
