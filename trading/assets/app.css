@@ -131,6 +131,22 @@ button:disabled {
   margin-bottom: 16px;
 }
 
+.page-settings .portfolio-overview,
+.page-opportunities .portfolio-overview,
+.page-settings .dashboard-tabs > .tab-list,
+.page-opportunities .dashboard-tabs > .tab-list {
+  display: none;
+}
+
+.page-settings .dashboard-tabs,
+.page-opportunities .dashboard-tabs {
+  margin-top: 0;
+}
+
+.page-opportunities .settings-subtabs {
+  display: none;
+}
+
 .portfolio-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));

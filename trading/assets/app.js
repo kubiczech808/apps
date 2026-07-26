@@ -1,5 +1,6 @@
 const state = {
   mode: "paper",
+  page: "portfolios",
   botState: null,
   liveState: null,
   evaluationSort: {
@@ -58,6 +59,8 @@ const LIVE_STATE_REFRESH_MS = 15000;
 const LIVE_SYNC_REQUEST_MS = 30000;
 
 const els = {
+  shell: document.querySelector("[data-app-shell]"),
+  pageLinks: document.querySelectorAll("[data-page-link]"),
   botAction: document.querySelector("[data-bot-action]"),
   botInlineAction: document.querySelector("[data-bot-inline-action]"),
   portfolioTitle: document.querySelector("[data-portfolio-title]"),
@@ -74,6 +77,8 @@ const els = {
   runLog: document.querySelector("[data-run-log]"),
   runLogSummary: document.querySelector("[data-run-log-summary]"),
   runLogTitle: document.querySelector("[data-run-log-title]"),
+  settingsPageEyebrow: document.querySelector("[data-settings-page-eyebrow]"),
+  settingsPageTitle: document.querySelector("[data-settings-page-title]"),
   settingsSectionButtons: document.querySelectorAll("[data-settings-section]"),
   settingsPanels: document.querySelectorAll("[data-settings-panel]"),
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
@@ -251,6 +256,7 @@ function currentRouteState() {
   const path = window.location.pathname.replace(/\/+$/, "/");
   if (path.endsWith("/trading/opportunities/") || path.endsWith("/opportunities/")) {
     return {
+      page: "opportunities",
       tab: "settings-runs",
       settingsSection: "evaluation-log",
       evaluationStatus: "EVALUATED",
@@ -258,11 +264,40 @@ function currentRouteState() {
   }
   if (path.endsWith("/trading/settings/") || path.endsWith("/settings/")) {
     return {
+      page: "settings",
       tab: "settings-runs",
-      settingsSection: "evaluation-log",
+      settingsSection: "calculations",
     };
   }
-  return null;
+  if (path.endsWith("/trading/portfolios/") || path.endsWith("/portfolios/")) {
+    return {
+      page: "portfolios",
+      tab: "daily-picks",
+    };
+  }
+  return {
+    page: "portfolios",
+    tab: "daily-picks",
+  };
+}
+
+function setPage(page) {
+  state.page = ["settings", "opportunities", "portfolios"].includes(page) ? page : "portfolios";
+  if (els.shell) {
+    els.shell.classList.toggle("page-portfolios", state.page === "portfolios");
+    els.shell.classList.toggle("page-settings", state.page === "settings");
+    els.shell.classList.toggle("page-opportunities", state.page === "opportunities");
+  }
+  els.pageLinks.forEach((item) => {
+    item.classList.toggle("active", item.dataset.pageLink === state.page);
+    item.setAttribute("aria-current", item.dataset.pageLink === state.page ? "page" : "false");
+  });
+  if (els.settingsPageEyebrow) {
+    els.settingsPageEyebrow.textContent = state.page === "opportunities" ? "Market evaluation" : "Settings";
+  }
+  if (els.settingsPageTitle) {
+    els.settingsPageTitle.textContent = state.page === "opportunities" ? "Evaluated opportunities" : "Automation settings";
+  }
 }
 
 function activateTab(target) {
@@ -294,6 +329,7 @@ function setEvaluationStatus(status) {
 
 function applyInitialRoute() {
   const route = currentRouteState();
+  setPage(route.page);
   if (route?.settingsSection) setSettingsSection(route.settingsSection);
   if (route?.evaluationStatus) setEvaluationStatus(route.evaluationStatus);
   activateTab(route?.tab || "daily-picks");

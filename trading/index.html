@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="assets/app.css">
 </head>
 <body>
-  <main class="shell">
+  <main class="shell" data-app-shell>
     <section class="workspace">
       <header class="topbar">
         <div>
@@ -16,7 +16,18 @@
           <h1>AI trading desk</h1>
         </div>
         <div class="topbar-actions" aria-label="Quick navigation">
-          <a class="settings-tab-button" href="opportunities/" aria-label="Open evaluated opportunities" title="Evaluated opportunities">
+          <a class="settings-tab-button" href="portfolios/" data-page-link="portfolios" aria-label="Open portfolios" title="Portfolios">
+            <span aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="M4 7h16"></path>
+                <path d="M4 12h16"></path>
+                <path d="M4 17h16"></path>
+                <path d="M7 4v16"></path>
+                <path d="M17 4v16"></path>
+              </svg>
+            </span>
+          </a>
+          <a class="settings-tab-button" href="opportunities/" data-page-link="opportunities" aria-label="Open evaluated opportunities" title="Evaluated opportunities">
             <span aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false">
                 <path d="M3 12h4"></path>
@@ -28,7 +39,7 @@
               </svg>
             </span>
           </a>
-          <a class="settings-tab-button" href="settings/" aria-label="Open settings" title="Settings">
+          <a class="settings-tab-button" href="settings/" data-page-link="settings" aria-label="Open settings" title="Settings">
             <span aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false">
                 <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"></path>
@@ -173,8 +184,8 @@
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Settings</p>
-                <h2>Automation settings</h2>
+                <p class="eyebrow" data-settings-page-eyebrow>Settings</p>
+                <h2 data-settings-page-title>Automation settings</h2>
               </div>
             </div>
             <div class="settings-subtabs" role="tablist" aria-label="Settings sections">
