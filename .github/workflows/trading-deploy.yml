@@ -125,24 +125,38 @@ jobs:
                   remove_tree(ftp, child)
               ftp.cwd(current)
 
+          def is_deploy_file(relative):
+              return relative in {"index.html", "api.php", "config.php", ".htaccess"} or relative.startswith("assets/")
+
+          deploy_files = [
+              path
+              for path in sorted(local_dir.rglob("*"))
+              if path.is_file() and is_deploy_file(path.relative_to(local_dir).as_posix())
+          ]
+          deploy_roots = {"data"}
+          for path in deploy_files:
+              relative_parts = path.relative_to(local_dir).as_posix().split("/")
+              deploy_roots.add(relative_parts[0])
+
           with ftplib.FTP(server, timeout=30) as ftp:
               ftp.login(username, password)
               target_parts = target.split("/")
+              enter_dir(ftp, target_parts)
+
+              # Upload first, clean second. If hosting rejects STOR because of
+              # quota, the currently deployed app remains intact.
+              for path in deploy_files:
+                  relative = path.relative_to(local_dir).as_posix()
+                  remote_parts = target_parts + relative.split("/")[:-1]
+                  enter_dir(ftp, remote_parts)
+                  with path.open("rb") as handle:
+                      ftp.storbinary(f"STOR {path.name}", handle)
+
               enter_dir(ftp, target_parts)
               for name in list_names(ftp):
                   if name == "data":
                       clean_data_dir(ftp)
                       continue
-                  remove_tree(ftp, name)
-
-              for path in sorted(local_dir.rglob("*")):
-                  if not path.is_file():
-                      continue
-                  relative = path.relative_to(local_dir).as_posix()
-                  if relative not in {"index.html", "api.php", "config.php", ".htaccess"} and not relative.startswith("assets/"):
-                      continue
-                  remote_parts = target_parts + relative.split("/")[:-1]
-                  enter_dir(ftp, remote_parts)
-                  with path.open("rb") as handle:
-                      ftp.storbinary(f"STOR {path.name}", handle)
+                  if name not in deploy_roots:
+                      remove_tree(ftp, name)
           PY
