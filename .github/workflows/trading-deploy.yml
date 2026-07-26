@@ -112,12 +112,26 @@ jobs:
               except ftplib.all_errors:
                   pass
 
+          def clean_data_dir(ftp):
+              current = ftp.pwd()
+              keep = {"paper-state.json", "live-state.json", "live-execution-state.json"}
+              try:
+                  ftp.cwd("data")
+              except ftplib.all_errors:
+                  return
+              for child in list_names(ftp):
+                  if child in keep:
+                      continue
+                  remove_tree(ftp, child)
+              ftp.cwd(current)
+
           with ftplib.FTP(server, timeout=30) as ftp:
               ftp.login(username, password)
               target_parts = target.split("/")
               enter_dir(ftp, target_parts)
               for name in list_names(ftp):
                   if name == "data":
+                      clean_data_dir(ftp)
                       continue
                   remove_tree(ftp, name)
 
