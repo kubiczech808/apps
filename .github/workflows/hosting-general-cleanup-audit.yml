@@ -1,0 +1,337 @@
+name: Hosting General Cleanup Audit
+
+on:
+  push:
+    branches:
+      - claude/energy-consumption-app-Nf7bh
+    paths:
+      - '.github/workflows/hosting-general-cleanup-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hosting-general-cleanup-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inspect high-volume cleanup candidates
+        env:
+          BTCDCA_FTP_LOGIN: ${{ secrets.BTCDCA_FTP_LOGIN }}
+          BTCDCA_FTP_PASSWORD: ${{ secrets.BTCDCA_FTP_PASSWORD }}
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          HOSTING_FTP_DIR: ${{ secrets.HOSTING_FTP_DIR }}
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          import posixpath
+          import time
+          from collections import Counter
+          from pathlib import Path
+
+          MAX_COUNT_PER_TARGET = 25000
+          MAX_SAMPLES = 25
+
+          TARGETS = [
+              ("trading node_modules", "www/trading/node_modules", "Very likely removable from PHP/static webroot; Node deps are installed in Actions for bots/tests."),
+              ("email-campaign node_modules", "www/email-campaign/node_modules", "Very likely removable; local app has no package.json."),
+              ("trading .git", "www/trading/.git", "Safe to remove from public webroot."),
+              ("email-campaign .git", "www/email-campaign/.git", "Safe to remove from public webroot."),
+              ("trading npm cache", "www/trading/.npm", "Safe to remove if present."),
+              ("email-campaign npm cache", "www/email-campaign/.npm", "Safe to remove if present."),
+              ("trading cache", "www/trading/cache", "Review generated/cache data only."),
+              ("email-campaign cache", "www/email-campaign/cache", "Review generated/cache data only."),
+              ("email-campaign storage cache", "www/email-campaign/storage/cache", "Usually generated cache."),
+              ("email-campaign storage logs", "www/email-campaign/storage/logs", "Logs can be downloaded then removed."),
+              ("email-campaign vendor", "www/email-campaign/vendor", "Do not remove unless app does not require Composer vendor."),
+              ("trading tools", "www/trading/tools", "Should not be needed by hosted web UI if deploy workflow is current."),
+              ("trading root", "www/trading", "Informational scan capped for root."),
+              ("email-campaign root", "www/email-campaign", "Informational scan capped for root."),
+              ("btcdca codex backups", ".codex-backups", "Rollback backups; keep latest or download before removal."),
+          ]
+
+          CONNECTIONS = [
+              {
+                  "name": "BTCDCA_FTP",
+                  "hosts": ["ftp.btc-dca.com", "neuron.blueboard.cz"],
+                  "login": os.environ.get("BTCDCA_FTP_LOGIN", ""),
+                  "password": os.environ.get("BTCDCA_FTP_PASSWORD", ""),
+                  "bases": [""],
+              },
+              {
+                  "name": "HOSTING_FTP",
+                  "hosts": [os.environ.get("HOSTING_FTP_SERVER", "")],
+                  "login": os.environ.get("HOSTING_FTP_USERNAME", ""),
+                  "password": os.environ.get("HOSTING_FTP_PASSWORD", ""),
+                  "bases": ["", os.environ.get("HOSTING_FTP_DIR", "").strip("/")],
+              },
+          ]
+
+          def clean_path(path):
+              path = (path or "").strip()
+              while path.startswith("./"):
+                  path = path[2:]
+              return path.strip("/")
+
+          def join_path(*parts):
+              return clean_path(posixpath.join(*[clean_path(part) for part in parts if clean_path(part)]))
+
+          def parse_list_line(line):
+              if not line or line.lower().startswith("total "):
+                  return None
+              parts = line.split(maxsplit=8)
+              if len(parts) < 9:
+                  return None
+              name = parts[8]
+              if name in (".", ".."):
+                  return None
+              if " -> " in name:
+                  name = name.split(" -> ", 1)[0]
+              return name, line[0].lower() == "d"
+
+          class FtpScanner:
+              def __init__(self, ftp):
+                  self.ftp = ftp
+                  self.root = ftp.pwd()
+                  self.errors = []
+
+              def enter(self, path):
+                  self.ftp.cwd(self.root)
+                  for part in [part for part in clean_path(path).split("/") if part]:
+                      self.ftp.cwd(part)
+
+              def list_dir(self, path):
+                  original = self.ftp.pwd()
+                  try:
+                      self.enter(path)
+                  except Exception as exc:
+                      return None, f"cwd failed: {exc}"
+                  try:
+                      lines = []
+                      self.ftp.retrlines("LIST", lines.append)
+                      rows = []
+                      for line in lines:
+                          parsed = parse_list_line(line)
+                          if not parsed:
+                              continue
+                          name, is_dir = parsed
+                          rows.append((join_path(path, name), is_dir))
+                      return rows, None
+                  except Exception as exc:
+                      return None, f"LIST failed: {exc}"
+                  finally:
+                      try:
+                          self.ftp.cwd(original)
+                      except Exception:
+                          pass
+
+              def count_tree(self, root):
+                  rows, error = self.list_dir(root)
+                  if rows is None:
+                      return {
+                          "exists": False,
+                          "files": 0,
+                          "dirs": 0,
+                          "capped": False,
+                          "samples": [],
+                          "extensions": Counter(),
+                          "error": error,
+                      }
+
+                  stack = [(root, rows)]
+                  seen_dirs = {clean_path(root)}
+                  files = 0
+                  dirs = 0
+                  capped = False
+                  samples = []
+                  extensions = Counter()
+
+                  while stack:
+                      current, current_rows = stack.pop()
+                      for child, is_dir in current_rows:
+                          if is_dir:
+                              child = clean_path(child)
+                              if child in seen_dirs:
+                                  continue
+                              seen_dirs.add(child)
+                              dirs += 1
+                              child_rows, child_error = self.list_dir(child)
+                              if child_rows is None:
+                                  self.errors.append(f"{child}: {child_error}")
+                                  continue
+                              stack.append((child, child_rows))
+                          else:
+                              child = clean_path(child)
+                              files += 1
+                              name = child.rsplit("/", 1)[-1]
+                              ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else "[no extension]"
+                              extensions[ext] += 1
+                              if len(samples) < MAX_SAMPLES:
+                                  samples.append(child)
+                              if files >= MAX_COUNT_PER_TARGET:
+                                  capped = True
+                                  stack.clear()
+                                  break
+
+                  return {
+                      "exists": True,
+                      "files": files,
+                      "dirs": dirs,
+                      "capped": capped,
+                      "samples": samples,
+                      "extensions": extensions,
+                      "error": "",
+                  }
+
+          def connect(config):
+              if not config["login"] or not config["password"]:
+                  return None, "missing credentials"
+              last_error = None
+              for host in [host for host in config["hosts"] if host]:
+                  try:
+                      ftp = ftplib.FTP(host, timeout=30, encoding="latin-1")
+                      ftp.login(config["login"], config["password"])
+                      if ftp.sock:
+                          ftp.sock.settimeout(30)
+                      return ftp, f"connected to {host}"
+                  except Exception as exc:
+                      last_error = exc
+              return None, f"connect failed: {last_error}"
+
+          started = time.time()
+          report = []
+          report.append("# Hosting General Cleanup Audit")
+          report.append("")
+          report.append(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+          report.append("")
+          report.append("This audit is read-only. No hosting files were deleted or modified.")
+          report.append(f"Counts are capped at {MAX_COUNT_PER_TARGET:,} files per target to avoid hanging on huge directories.")
+          report.append("")
+
+          all_results = []
+          for config in CONNECTIONS:
+              ftp, status = connect(config)
+              report.append(f"## Connection: {config['name']}")
+              report.append("")
+              report.append(f"- Status: {status}")
+              if ftp is None:
+                  report.append("")
+                  continue
+
+              scanner = FtpScanner(ftp)
+              bases = []
+              for base in config["bases"]:
+                  base = clean_path(base)
+                  if base not in bases:
+                      bases.append(base)
+
+              for base in bases:
+                  for label, relative, note in TARGETS:
+                      root = join_path(base, relative)
+                      result = scanner.count_tree(root)
+                      result.update({
+                          "connection": config["name"],
+                          "label": label,
+                          "root": root,
+                          "note": note,
+                      })
+                      all_results.append(result)
+
+              if scanner.errors:
+                  report.append("### Listing Errors")
+                  report.append("")
+                  for item in scanner.errors[:80]:
+                      report.append(f"- `{item}`")
+                  report.append("")
+              ftp.quit()
+
+          report.append("## Target Results")
+          report.append("")
+          report.append("| Connection | Area | Root | Files | Directories | Capped | Note/Error |")
+          report.append("| --- | --- | --- | ---: | ---: | --- | --- |")
+          for result in sorted(all_results, key=lambda item: item["files"], reverse=True):
+              marker = "yes" if result["capped"] else "no"
+              note = result["note"] if result["exists"] else result["error"]
+              report.append(
+                  f"| {result['connection']} | {result['label']} | `{result['root']}` | "
+                  f"{result['files']:,} | {result['dirs']:,} | {marker} | {note} |"
+              )
+          report.append("")
+
+          removable = [
+              result for result in all_results
+              if result["exists"] and result["files"] > 0 and (
+                  "node_modules" in result["root"]
+                  or result["root"].endswith("/.git")
+                  or result["root"].endswith("/.npm")
+                  or result["label"] == "btcdca codex backups"
+              )
+          ]
+          report.append("## Highest-Confidence Removable Candidates")
+          report.append("")
+          report.append("| Connection | Root | Files | Directories | Capped | Reason |")
+          report.append("| --- | --- | ---: | ---: | --- | --- |")
+          for result in sorted(removable, key=lambda item: item["files"], reverse=True):
+              marker = "yes" if result["capped"] else "no"
+              report.append(
+                  f"| {result['connection']} | `{result['root']}` | {result['files']:,} | "
+                  f"{result['dirs']:,} | {marker} | {result['note']} |"
+              )
+          if not removable:
+              report.append("| - | - | 0 | 0 | no | No high-confidence removable target was found. |")
+          report.append("")
+
+          for result in sorted(all_results, key=lambda item: item["files"], reverse=True):
+              if not result["exists"] or result["files"] == 0:
+                  continue
+              report.append(f"## Detail: {result['connection']} / {result['label']}")
+              report.append("")
+              report.append(f"- Root: `{result['root']}`")
+              report.append(f"- Files: {result['files']:,}{'+' if result['capped'] else ''}")
+              report.append(f"- Directories: {result['dirs']:,}")
+              report.append("")
+              if result["extensions"]:
+                  report.append("| Extension | Files |")
+                  report.append("| --- | ---: |")
+                  for ext, count in result["extensions"].most_common(15):
+                      report.append(f"| `{ext}` | {count:,} |")
+                  report.append("")
+              if result["samples"]:
+                  report.append("### Samples")
+                  report.append("")
+                  for sample in result["samples"]:
+                      report.append(f"- `{sample}`")
+                  report.append("")
+
+          report.append("## Audit Runtime")
+          report.append("")
+          report.append(f"- Duration: {time.time() - started:.1f}s")
+          report.append("")
+
+          Path(".github/inspection").mkdir(parents=True, exist_ok=True)
+          Path(".github/inspection/hosting-general-cleanup-audit.md").write_text("\n".join(report), encoding="utf-8")
+          PY
+
+      - name: Commit general cleanup audit report
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/inspection/hosting-general-cleanup-audit.md
+          if git diff --cached --quiet; then
+            echo "No general cleanup audit changes."
+            exit 0
+          fi
+          git commit -m "Update hosting general cleanup audit"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push
