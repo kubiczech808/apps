@@ -39,7 +39,16 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install requests
       - name: Run read-only FTP file count audit
-        run: python scripts/jamu_ftp_file_audit.py
+        run: |
+          set +e
+          python --version
+          python scripts/jamu_ftp_file_audit.py
+          code=$?
+          if [ "$code" -ne 0 ] && [ ! -f jamu-content/file-audit-error.json ]; then
+            mkdir -p jamu-content
+            printf '{\n  "error": "audit command exited with code %s before Python error report was written"\n}\n' "$code" > jamu-content/file-audit-error.json
+          fi
+          exit "$code"
       - name: Commit audit report to working branch
         if: always()
         run: |
