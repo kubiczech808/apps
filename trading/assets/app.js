@@ -25,6 +25,7 @@ const state = {
     },
   },
   evaluationStatus: "EVALUATED",
+  evaluationProbabilityFilter: 0,
   eligibilityThreshold: null,
   eligibilityThresholdKey: "",
   riskAllocation: null,
@@ -42,6 +43,7 @@ const state = {
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
+const EVALUATION_PROBABILITY_FILTER_STORAGE_KEY = "tradingEvaluationProbabilityFilter";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
@@ -77,6 +79,8 @@ const els = {
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
   calculationMarketButtons: document.querySelectorAll("[data-calculation-market]"),
   calculationReport: document.querySelector("[data-calculation-report]"),
+  evaluationProbabilityFilter: document.querySelector("[data-evaluation-probability-filter]"),
+  evaluationProbabilityFilterLabel: document.querySelector("[data-evaluation-probability-filter-label]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   riskAllocation: document.querySelector("[data-risk-allocation]"),
@@ -1158,6 +1162,43 @@ function evaluationFilterLabel(value) {
   if (value === "RESOLVED") return "resolved";
   if (value === "ERROR") return "error";
   return "evaluated";
+}
+
+function normalizeEvaluationProbabilityFilter(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.min(Math.max(numeric, 0), 0.99);
+}
+
+function storedEvaluationProbabilityFilter() {
+  try {
+    return normalizeEvaluationProbabilityFilter(Number(localStorage.getItem(EVALUATION_PROBABILITY_FILTER_STORAGE_KEY)));
+  } catch {
+    return 0;
+  }
+}
+
+function saveEvaluationProbabilityFilter(value) {
+  try {
+    localStorage.setItem(EVALUATION_PROBABILITY_FILTER_STORAGE_KEY, String(normalizeEvaluationProbabilityFilter(value)));
+  } catch {
+    // Display-only preference; ignore storage failures.
+  }
+}
+
+function currentEvaluationProbabilityFilter() {
+  return normalizeEvaluationProbabilityFilter(state.evaluationProbabilityFilter);
+}
+
+function syncEvaluationProbabilityFilterControl() {
+  const value = currentEvaluationProbabilityFilter();
+  state.evaluationProbabilityFilter = value;
+  if (els.evaluationProbabilityFilter) {
+    els.evaluationProbabilityFilter.value = String(Math.round(value * 100));
+  }
+  if (els.evaluationProbabilityFilterLabel) {
+    els.evaluationProbabilityFilterLabel.textContent = `>= ${probability(value)}`;
+  }
 }
 
 function eligibilityThresholdStorageKey() {
@@ -2315,8 +2356,15 @@ function sortedEvaluations(evaluations) {
 }
 
 function filteredEvaluations(evaluations) {
-  if (state.evaluationStatus === "ALL") return evaluations;
-  return evaluations.filter((item) => portfolioEvaluationStatus(item) === state.evaluationStatus);
+  const statusFiltered = state.evaluationStatus === "ALL"
+    ? evaluations
+    : evaluations.filter((item) => portfolioEvaluationStatus(item) === state.evaluationStatus);
+  const minProbability = currentEvaluationProbabilityFilter();
+  if (minProbability <= 0) return statusFiltered;
+  return statusFiltered.filter((item) => {
+    const aiProbability = Number(item.aiProbability);
+    return Number.isFinite(aiProbability) && aiProbability >= minProbability;
+  });
 }
 
 function sortableHeader(key, label) {
@@ -2384,9 +2432,10 @@ function renderBotEvaluations() {
   const evaluatedCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "EVALUATED").length;
   const resolvedCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "RESOLVED").length;
   const errorCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "ERROR").length;
+  const filteredCount = filteredEvaluations(evaluations).length;
 
   if (els.evaluationSummary) {
-    els.evaluationSummary.textContent = `${evaluatedCount} active evaluated / ${resolvedCount} resolved / ${errorCount} errors / ${evaluations.length} total`;
+    els.evaluationSummary.textContent = `${filteredCount} shown / ${evaluatedCount} active evaluated / ${resolvedCount} resolved / ${errorCount} errors / ${evaluations.length} total`;
   }
 
   if (!evaluations.length) {
@@ -2397,7 +2446,7 @@ function renderBotEvaluations() {
   const visibleEvaluations = sortedEvaluations(filteredEvaluations(evaluations)).slice(0, 80);
 
   if (!visibleEvaluations.length) {
-    els.botEvaluations.innerHTML = `<div class="empty">No ${evaluationFilterLabel(state.evaluationStatus)} markets in the latest evaluation log.</div>`;
+    els.botEvaluations.innerHTML = `<div class="empty">No ${evaluationFilterLabel(state.evaluationStatus)} markets match the selected evaluation filters.</div>`;
     return;
   }
 
@@ -2907,6 +2956,15 @@ els.evaluationStatusButtons.forEach((button) => {
   });
 });
 
+els.evaluationProbabilityFilter?.addEventListener("input", () => {
+  const raw = Number(els.evaluationProbabilityFilter.value);
+  const value = normalizeEvaluationProbabilityFilter(Number.isFinite(raw) ? raw / 100 : 0);
+  state.evaluationProbabilityFilter = value;
+  saveEvaluationProbabilityFilter(value);
+  syncEvaluationProbabilityFilterControl();
+  renderBotEvaluations();
+});
+
 els.eligibilityThreshold?.addEventListener("input", () => {
   const raw = Number(els.eligibilityThreshold.value);
   if (!Number.isFinite(raw)) return;
@@ -3069,6 +3127,8 @@ els.closedTrades?.addEventListener("click", handleTradeSort);
 
 state.mode = storedMode();
 state.liveExecutionArmed = storedLiveExecutionArmed();
+state.evaluationProbabilityFilter = storedEvaluationProbabilityFilter();
+syncEvaluationProbabilityFilterControl();
 applyInitialRoute();
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);

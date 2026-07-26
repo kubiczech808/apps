@@ -371,6 +371,14 @@ button:disabled {
   font-size: 13px;
 }
 
+.evaluation-probability-control {
+  flex: 0 0 auto;
+}
+
+.evaluation-probability-control strong {
+  min-width: 64px;
+}
+
 .segmented {
   display: inline-flex;
   flex-wrap: wrap;

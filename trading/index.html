@@ -189,6 +189,11 @@
                 </div>
                 <div class="evaluation-head" data-evaluation-controls>
                   <span class="pill" data-evaluation-summary>0 active evaluated / 0 total</span>
+                  <label class="threshold-control evaluation-probability-control" title="Display-only filter for this evaluation table. Portfolio rules are not changed.">
+                    <span>AI prob. filter</span>
+                    <input type="number" min="0" max="99" step="1" value="0" data-evaluation-probability-filter>
+                    <strong data-evaluation-probability-filter-label>&gt;= 0.0%</strong>
+                  </label>
                   <div class="segmented" data-evaluation-filter>
                     <button class="segment-button active" type="button" data-evaluation-status="EVALUATED">Evaluated</button>
                     <button class="segment-button" type="button" data-evaluation-status="RESOLVED">Resolved</button>
