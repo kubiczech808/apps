@@ -536,11 +536,11 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
   }
   if (minNotional > targetStake) {
     return {
-      size: Number(minOrderSize.toFixed(4)),
+      size: null,
       targetStake,
       minNotional,
-      minSizeOverride: true,
-      sizingNote: `raised to exchange minimum ${minOrderSize.toFixed(4)} shares because target stake ${targetStake.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
+      minSizeOverride: false,
+      sizingNote: `minimum order ${minOrderSize.toFixed(4)} shares costs ${minNotional.toFixed(4)} USDC, above max stake ${targetStake.toFixed(4)} USDC`,
     };
   }
   if (ORDER_SIZE_MODE === "minimum") {
@@ -936,6 +936,9 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
     const ageHours = openOrderAgeHours(order);
     const sourceEvaluation = evaluationByToken.get(tokenId);
     const lockedNotional = number(order.notionalUsdc, number(order.price, 0) * number(order.remainingSize, 0));
+    const maxStakeBreached = Number.isFinite(lockedNotional)
+      && Number.isFinite(maxNotional)
+      && lockedNotional > maxNotional + 0.01;
     const effectiveCash = number(cash, 0) + number(lockedNotional, 0);
     const review = openOrderSummary(order, {
       action: "KEEP_WAITING",
@@ -946,7 +949,10 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
       replaceResponse: null,
     });
 
-    if (!sourceEvaluation) {
+    if (maxStakeBreached) {
+      review.action = "CANCEL";
+      review.reason = `open order notional ${lockedNotional.toFixed(4)} USDC exceeds max stake ${maxNotional.toFixed(4)} USDC`;
+    } else if (!sourceEvaluation) {
       review.reason = ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS
         ? "no current AI evaluation links to this open order and the order is stale"
         : "no current AI evaluation links to this open order yet";
@@ -959,7 +965,7 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
           sourceEvaluation,
           liveStateWithoutOpenOrder(liveState, order),
           effectiveCash,
-          Math.max(number(maxNotional, 0), number(lockedNotional, 0)),
+          maxNotional,
           evaluationByToken,
         );
         review.currentEvaluation = liveBatchCandidateSummary(revalidated);
