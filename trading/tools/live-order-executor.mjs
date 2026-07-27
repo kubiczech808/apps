@@ -39,6 +39,7 @@ const EXECUTION_STATE_PATH = process.env.LIVE_EXECUTION_STATE_PATH || "";
 const IDLE_CASH_MAX_USDC = Number(process.env.LIVE_IDLE_CASH_MAX_USDC || 5);
 const IDLE_CASH_GRACE_HOURS = Number(process.env.LIVE_IDLE_CASH_GRACE_HOURS || 24);
 const ONE_TRADE_PER_DAY = String(process.env.LIVE_ONE_TRADE_PER_DAY ?? "true").toLowerCase() !== "false";
+const TRADE_CADENCE_HOURS = Math.min(168, Math.max(1, Math.round(envNumber("LIVE_TRADE_CADENCE_HOURS", ONE_TRADE_PER_DAY ? 24 : 1))));
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
 const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
@@ -128,9 +129,13 @@ function liveCashMonitoring(previousExecution, cash, now = new Date()) {
   const lastSubmittedAt = previousExecution?.action === "SUBMITTED"
     ? previousExecution.generatedAt
     : previousMonitoring.lastSubmittedAt || null;
+  const submittedHoursAgo = lastSubmittedAt ? hoursSince(lastSubmittedAt, now) : null;
   const submittedToday = ONE_TRADE_PER_DAY
     && lastSubmittedAt
     && pragueDateKey(new Date(lastSubmittedAt)) === pragueDateKey(now);
+  const cadenceBlocked = lastSubmittedAt
+    ? Number(submittedHoursAgo ?? Infinity) < TRADE_CADENCE_HOURS
+    : false;
 
   return {
     idleCashLimitUsdc: IDLE_CASH_MAX_USDC,
@@ -140,7 +145,10 @@ function liveCashMonitoring(previousExecution, cash, now = new Date()) {
     idleCashHours: idleHours == null ? null : Number(idleHours.toFixed(2)),
     idleCashOverdue: cashAboveLimit && Number(idleHours || 0) >= IDLE_CASH_GRACE_HOURS,
     lastSubmittedAt,
+    submittedHoursAgo: submittedHoursAgo == null ? null : Number(submittedHoursAgo.toFixed(2)),
     submittedToday,
+    cadenceBlocked,
+    tradeCadenceHours: TRADE_CADENCE_HOURS,
     oneTradePerDay: ONE_TRADE_PER_DAY,
   };
 }
@@ -838,6 +846,8 @@ function orderAttemptSummary(candidate, response = null, extra = {}) {
 
 function liveBatchCandidateSummary(item) {
   const source = item?.candidate || item || {};
+  const gain = number(item?.netGainIfWinUsdc ?? source.netGainIfWinUsdc);
+  const cost = number(item?.totalCostUsdc ?? item?.orderNotionalUsdc ?? source.totalCostUsdc ?? source.stakeUsdc);
   return {
     question: item?.question || source.question || "",
     outcome: item?.outcome || source.outcome || "",
@@ -848,6 +858,9 @@ function liveBatchCandidateSummary(item) {
     marketPrice: number(item?.marketPrice ?? source.marketPrice ?? item?.currentPrice),
     annualizedReturn: number(item?.annualizedReturn ?? source.annualizedReturn),
     expectedValueUsdc: number(item?.expectedValueUsdc ?? source.expectedValueUsdc),
+    netGainIfWinUsdc: gain,
+    netYield: gain != null && cost != null && cost > 0 ? number(gain / cost) : null,
+    riskReward: gain != null && cost != null && cost > 0 ? number(gain / cost) : null,
     orderPrice: number(item?.orderPrice),
     orderSize: number(item?.orderSize),
     orderNotionalUsdc: number(item?.orderNotionalUsdc),
@@ -1052,12 +1065,12 @@ async function main() {
   });
 
   const best = eligible[0] || null;
-  const dailyBlocked = Boolean(monitoring.submittedToday);
+  const cadenceBlocked = Boolean(monitoring.cadenceBlocked || monitoring.submittedToday);
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
-    action: best && !dailyBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
-    reason: dailyBlocked
-      ? "daily live trade already submitted"
+    action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
+    reason: cadenceBlocked
+      ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h)`
       : (best ? "best currently revalidated executable candidate" : "no currently executable candidate after live revalidation"),
     generatedAt: new Date().toISOString(),
     account: {
@@ -1089,6 +1102,7 @@ async function main() {
       idleCashMaxUsdc: IDLE_CASH_MAX_USDC,
       idleCashGraceHours: IDLE_CASH_GRACE_HOURS,
       oneTradePerDay: ONE_TRADE_PER_DAY,
+      tradeCadenceHours: TRADE_CADENCE_HOURS,
       capitalUtilizationOverride: monitoring.idleCashOverdue,
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
@@ -1105,19 +1119,20 @@ async function main() {
       strategyId: "live",
       strategyLabel: "Live",
       selectionMetric: "EV p.a.",
-      action: best && !dailyBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
-      reason: dailyBlocked
-        ? "daily live trade already submitted"
+      action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
+      reason: cadenceBlocked
+        ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h)`
         : (best ? "best currently revalidated executable candidate" : "no currently executable candidate after live revalidation"),
-      explanation: best && !dailyBlocked
+      explanation: best && !cadenceBlocked
         ? "Live batch found an executable candidate after revalidation."
-        : (dailyBlocked ? "No live order was submitted because the one-trade-per-day rule is already satisfied." : "No live order was submitted because all revalidated candidates failed current execution criteria."),
+        : (cadenceBlocked ? "No live order was submitted because the configured new-trade cadence is not elapsed yet. Open-order management still ran." : "No live order was submitted because all revalidated candidates failed current execution criteria."),
       settings: {
         minProbability: MIN_PROBABILITY,
         minAnnualReturn: MIN_ANNUAL_RETURN,
         maxSpread: MAX_SPREAD,
         minVolume24hr: MIN_VOLUME_24H,
         maxResolutionDays: MAX_RESOLUTION_DAYS,
+        tradeCadenceHours: TRADE_CADENCE_HOURS,
         selectionOrder: SELECTION_ORDER,
         useLimitOrders: USE_LIMIT_ORDERS,
         maxOrderFraction: MAX_ORDER_FRACTION,
@@ -1135,7 +1150,7 @@ async function main() {
         rankedEligibleCandidates: eligible.length,
         openOrdersReviewed: orderManagement.reviews.length,
         rejectedCandidates: checked.filter((item) => item.status !== "ELIGIBLE").length,
-        dailyBlocked,
+        cadenceBlocked,
       },
       openOrderReviews: orderManagement.reviews,
       selected: best ? liveBatchCandidateSummary(best) : null,
@@ -1172,7 +1187,7 @@ async function main() {
     return;
   }
 
-  if (!best || dailyBlocked || DRY_RUN || !hasFlag("confirm-live")) {
+  if (!best || cadenceBlocked || DRY_RUN || !hasFlag("confirm-live")) {
     await emitDecision({ ...decision, attempts: best ? [orderAttemptSummary(best, null, { action: decision.action })] : [] });
     return;
   }

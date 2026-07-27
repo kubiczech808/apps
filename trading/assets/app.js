@@ -106,6 +106,8 @@ const els = {
   selectionOrderLabel: document.querySelector("[data-selection-order-label]"),
   minLiquidity: document.querySelector("[data-min-liquidity]"),
   minLiquidityLabel: document.querySelector("[data-min-liquidity-label]"),
+  tradeCadenceHours: document.querySelector("[data-trade-cadence-hours]"),
+  tradeCadenceHoursLabel: document.querySelector("[data-trade-cadence-hours-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
   limitOrders: document.querySelector("[data-limit-orders]"),
@@ -239,6 +241,7 @@ function defaultPortfolioConfig() {
         maxResolutionDays: 7,
         selectionOrder: "highest_ev_pa_first",
         minLiquidityUsdc: null,
+        tradeCadenceHours: 1,
         requireMostProbableOutcome: false,
       },
       highReward: {
@@ -247,6 +250,7 @@ function defaultPortfolioConfig() {
         maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
         selectionOrder: "highest_reward_risk_first",
         minLiquidityUsdc: null,
+        tradeCadenceHours: 1,
         requireMostProbableOutcome: false,
       },
       moreProbable: {
@@ -255,6 +259,7 @@ function defaultPortfolioConfig() {
         maxResolutionDays: 7,
         selectionOrder: "highest_reward_risk_first",
         minLiquidityUsdc: 500000,
+        tradeCadenceHours: 1,
         requireMostProbableOutcome: true,
       },
     },
@@ -264,6 +269,7 @@ function defaultPortfolioConfig() {
       maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
       selectionOrder: "highest_ev_pa_first",
       minLiquidityUsdc: 100,
+      tradeCadenceHours: 24,
       useLimitOrders: true,
       requireMostProbableOutcome: false,
     },
@@ -294,6 +300,12 @@ function normalizeOptionalMoney(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) return null;
   return Math.round(numeric * 100) / 100;
+}
+
+function normalizeCadenceHours(value, fallback = 24) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+  return Math.min(168, Math.max(1, Math.round(numeric)));
 }
 
 function portfolioConfigForMode(mode = state.mode) {
@@ -1170,7 +1182,6 @@ function tradeSortValue(trade, key) {
   if (key === "currentPrice") return Number(trade.currentPrice);
   if (key === "aiProbability") return tradeAiProbability(trade);
   if (key === "resolution") return Date.parse(tradeEndDate(trade) || "") || 0;
-  if (key === "holding") return tradeHoldingDays(trade);
   if (key === "potentialGain") return tradePotentialGain(trade);
   if (key === "potentialPct") return tradePotentialGainPct(trade);
   if (key === "riskReward") return tradeRiskReward(trade);
@@ -1207,13 +1218,10 @@ function tradeSortArrow(tableKey, key) {
 
 const TRADE_HEADER_INFO = {
   market: "Market links directly to Polymarket. Row-specific risk notes and AI thesis are available from the AI probability info popup.",
-  entryPrice: "Entry price used for paper/live accounting. Execution fees and slippage are included in stored cost fields where available.",
-  currentPrice: "Current mark for open rows or final outcome price for closed rows.",
+  currentPrice: "Current mark/final price as the primary value; entry price is shown below it for comparison.",
   aiProbability: "Original AI probability and thesis from the evaluation that selected this opportunity.",
   resolution: "Expected or observed resolution/end date for the market.",
-  holding: "Time since opening for open rows, or time from open to close for closed rows.",
-  potentialGain: "Nominal profit if the selected outcome resolves in our favor.",
-  potentialPct: "Potential profit divided by stake/cost.",
+  potentialGain: "Nominal profit if the selected outcome resolves in our favor; percent return is shown below it.",
   riskReward: "Reward divided by risk. Higher means more upside per dollar at risk.",
   potentialAnnualized: "Potential return annualized by days to resolution.",
   pnl: "Current or realized profit/loss for the row.",
@@ -1263,6 +1271,21 @@ function tradeTypeBadge(trade) {
   return "";
 }
 
+function tradePriceCell(trade, showStatus = false) {
+  const currentLabel = showStatus ? "final" : "mark";
+  return `
+    ${probability(Number(trade.currentPrice))}
+    <span>${currentLabel}; entry ${probability(Number(trade.entryPrice))}</span>
+  `;
+}
+
+function tradeWinCell(trade) {
+  return `
+    ${potentialGainCell(trade)}
+    <span>${potentialPctCell(trade)}</span>
+  `;
+}
+
 function renderTradeRows(trades, emptyText, options = {}) {
   const tableKey = options.tableKey || "open";
   const showStatus = options.showStatus !== false;
@@ -1274,13 +1297,10 @@ function renderTradeRows(trades, emptyText, options = {}) {
         <tr>
           ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
           ${tradeHeader(tableKey, "market", "Market")}
-          ${tradeHeader(tableKey, "entryPrice", "Entry")}
-          ${tradeHeader(tableKey, "currentPrice", showStatus ? "Final" : "Mark")}
+          ${tradeHeader(tableKey, "currentPrice", showStatus ? "Final / entry" : "Mark / entry")}
           ${tradeHeader(tableKey, "aiProbability", "AI prob.")}
           ${tradeHeader(tableKey, "resolution", "Resolution")}
-          ${tradeHeader(tableKey, "holding", "Holding")}
-          ${tradeHeader(tableKey, "potentialGain", "Win $")}
-          ${tradeHeader(tableKey, "potentialPct", "Win %")}
+          ${tradeHeader(tableKey, "potentialGain", "Win")}
           ${tradeHeader(tableKey, "riskReward", "R/R")}
           ${tradeHeader(tableKey, "potentialAnnualized", "Win p.a.")}
           ${showStatus ? tradeHeader(tableKey, "status", "Result") : ""}
@@ -1296,8 +1316,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
               ${tradeTypeBadge(trade)}
               ${marketAnchor(trade)}
             </td>
-            <td data-label="Entry">${probability(Number(trade.entryPrice))}</td>
-            <td data-label="${showStatus ? "Final" : "Mark"}">${probability(Number(trade.currentPrice))}</td>
+            <td data-label="${showStatus ? "Final / entry" : "Mark / entry"}">${tradePriceCell(trade, showStatus)}</td>
             <td data-label="AI prob.">
               <strong>${probability(tradeAiProbability(trade))}</strong>
               <span class="analysis-popover">
@@ -1306,9 +1325,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
               </span>
             </td>
             <td data-label="Resolution">${resolutionCell(trade)}</td>
-            <td data-label="Holding">${holdingCell(trade)}</td>
-            <td data-label="Win $">${potentialGainCell(trade)}</td>
-            <td data-label="Win %">${potentialPctCell(trade)}</td>
+            <td data-label="Win">${tradeWinCell(trade)}</td>
             <td data-label="R/R"><span class="${riskRewardClass(tradeRiskReward(trade))}">${riskReward(tradeRiskReward(trade))}</span></td>
             <td data-label="Win p.a.">${potentialAnnualizedCell(trade)}</td>
             ${showStatus ? `<td data-label="Result">
@@ -1690,12 +1707,15 @@ function syncPortfolioParameterControls() {
   const maxDays = resolutionDaysForMode(state.mode);
   const liquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const order = normalizeSelectionOrder(config.selectionOrder);
+  const cadence = normalizeCadenceHours(config.tradeCadenceHours, isLiveMode() ? 24 : 1);
   if (els.maxResolutionDays) els.maxResolutionDays.value = String(maxDays);
   if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = `${maxDays} d`;
   if (els.selectionOrder) els.selectionOrder.value = order;
   if (els.selectionOrderLabel) els.selectionOrderLabel.textContent = selectionOrderLabel(order);
   if (els.minLiquidity) els.minLiquidity.value = liquidity == null ? "" : String(liquidity);
   if (els.minLiquidityLabel) els.minLiquidityLabel.textContent = liquidity == null ? "none" : money(liquidity);
+  if (els.tradeCadenceHours) els.tradeCadenceHours.value = String(cadence);
+  if (els.tradeCadenceHoursLabel) els.tradeCadenceHoursLabel.textContent = `${cadence}h`;
   if (els.mostProbableOutcome) {
     els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
     els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLiveMode());
@@ -2154,6 +2174,9 @@ function paperThresholdPayload() {
     paper_conservative_min_liquidity_usdc: conservative.minLiquidityUsdc,
     paper_high_reward_min_liquidity_usdc: highReward.minLiquidityUsdc,
     paper_more_probable_min_liquidity_usdc: moreProbable.minLiquidityUsdc,
+    paper_conservative_trade_cadence_hours: conservative.tradeCadenceHours,
+    paper_high_reward_trade_cadence_hours: highReward.tradeCadenceHours,
+    paper_more_probable_trade_cadence_hours: moreProbable.tradeCadenceHours,
     paper_conservative_require_most_probable: conservative.requireMostProbableOutcome,
     paper_high_reward_require_most_probable: highReward.requireMostProbableOutcome,
     paper_more_probable_require_most_probable: moreProbable.requireMostProbableOutcome,
@@ -2343,9 +2366,10 @@ function portfolioRuleRows(portfolio = {}) {
     ["Stake sizing", `${probability(currentRiskAllocation())} of portfolio equity`],
     ["Resolution filter", resolution],
     ["Trade priority", priority],
+    ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 1)}h between new paper trades`],
   ];
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Liquidity filter", `>= ${money(minLiquidityUsdc)}`]);
-  if (config.requireMostProbableOutcome) rows.push(["Outcome filter", "Only the most probable outcome per market"]);
+  if (config.requireMostProbableOutcome) rows.push(["Market type filter", "Only multichoice events"]);
   return rows;
 }
 
@@ -2361,6 +2385,7 @@ function livePortfolioRuleRows() {
     ["Stake sizing", `${probability(currentRiskAllocation())} of live equity`],
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
+    ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 24)}h between new live orders`],
     ["Liquidity / volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
   ];
@@ -3044,10 +3069,19 @@ function tradeBatchDetail(batch) {
   const candidates = Array.isArray(batch.topCandidates) ? batch.topCandidates : [];
   const blocked = Array.isArray(batch.riskBlocked) ? batch.riskBlocked : [];
   const openOrderReviews = Array.isArray(batch.openOrderReviews) ? batch.openOrderReviews : [];
+  const candidateMetricLine = (item) => [
+    `AI ${probability(Number(item.aiProbability))}`,
+    `entry ${probability(Number(item.marketPrice ?? item.orderPrice))}`,
+    item.netGainIfWinUsdc != null ? `win ${signedMoney(Number(item.netGainIfWinUsdc), 4)}` : "",
+    item.netYield != null ? `win ${signedPercent(Number(item.netYield))}` : "",
+    item.riskReward != null ? `R/R ${riskReward(Number(item.riskReward))}` : "",
+    `EV p.a. ${signedPercent(Number(item.annualizedReturn))}`,
+    `EV ${signedMoney(Number(item.expectedValueUsdc), 4)}`,
+  ].filter(Boolean).join(" / ");
   const candidateLines = candidates.length
     ? candidates.map((item, index) => [
         `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
-        `   AI ${probability(Number(item.aiProbability))} / entry ${probability(Number(item.marketPrice))} / EV p.a. ${signedPercent(Number(item.annualizedReturn))} / EV ${signedMoney(Number(item.expectedValueUsdc), 4)}`,
+        `   ${candidateMetricLine(item)}`,
         item.riskBlockedReason ? `   Risk blocked: ${item.riskBlockedReason}` : "",
         Array.isArray(item.rejectReasons) && item.rejectReasons.length ? `   Notes: ${item.rejectReasons.join("; ")}` : "",
         item.url ? `   Polymarket: ${item.url}` : "",
@@ -3079,6 +3113,7 @@ function tradeBatchDetail(batch) {
     `Rules:`,
     `AI threshold: ${probability(Number(settings.minProbability))}`,
     `Max resolution days: ${settings.maxResolutionDays == null ? "-" : settings.maxResolutionDays}`,
+    `New trade cadence: ${settings.tradeCadenceHours == null ? "-" : `${settings.tradeCadenceHours}h`}`,
     `Min liquidity: ${settings.minLiquidityUsdc == null ? "-" : money(Number(settings.minLiquidityUsdc))}`,
     `Selection order: ${settings.selectionOrder || "-"}`,
     `Max stake: ${money(Number(settings.maxStakeUsdc || 0))}`,
@@ -3088,7 +3123,11 @@ function tradeBatchDetail(batch) {
     "",
     `Counts: ${Number(counts.rankedEligible ?? counts.eligibleCandidates ?? 0)} ranked eligible / ${Number(counts.skippedForRisk || 0)} skipped for risk / ${Number(counts.openTrades || 0)} open trades / ${Number(counts.openOrdersReviewed || 0)} open orders reviewed`,
     "",
-    selected ? `Selected: ${selected.outcome || "-"} - ${selected.question || "-"}` : "Selected: none",
+    selected ? [
+      `Selected: ${selected.outcome || "-"} - ${selected.question || "-"}`,
+      `Selected metrics: ${candidateMetricLine(selected)}`,
+      selected.url ? `Selected market: ${selected.url}` : "",
+    ].filter(Boolean).join("\n") : "Selected: none",
     "",
     `Risk-blocked candidates:`,
     blockedLines,
@@ -3131,6 +3170,7 @@ function normalizeLiveExecutionRun(execution) {
       minAnnualReturn: settings.minAnnualReturn,
       maxSpread: settings.maxSpread,
       minVolume24hr: settings.minVolume24hr,
+      tradeCadenceHours: settings.tradeCadenceHours,
       maxOrderFraction: account.maxOrderFraction,
       useLimitOrders: settings.useLimitOrders,
     },
@@ -3164,6 +3204,9 @@ function liveBatchCandidateSummaryFromExecution(item = {}) {
     marketPrice: item.marketPrice ?? item.currentPrice ?? item.orderPrice ?? item.candidate?.marketPrice,
     annualizedReturn: item.annualizedReturn ?? item.candidate?.annualizedReturn,
     expectedValueUsdc: item.expectedValueUsdc ?? item.candidate?.expectedValueUsdc,
+    netGainIfWinUsdc: item.netGainIfWinUsdc ?? item.candidate?.netGainIfWinUsdc,
+    netYield: item.netYield ?? item.candidate?.netYield,
+    riskReward: item.riskReward ?? item.candidate?.riskReward,
     rejectReasons: item.rejectReasons || item.candidate?.rejectReasons || [],
     riskBlockedReason: item.riskBlockedReason || "",
   };
@@ -3221,6 +3264,7 @@ function runCapitalNote(run = {}) {
 function runDecisionSummary(run = {}) {
   const batch = run.batchLog || run;
   const counts = batch.counts || {};
+  const selected = batch.selected || run.selected || null;
   const evaluated = Number(run.evaluatedCount ?? counts.scannedCandidates ?? counts.revalidatedCandidates);
   const eligible = Number(run.eligibleCount ?? counts.rankedEligible ?? counts.eligibleCandidates);
   const riskSkipped = Number(run.riskSkippedCount ?? counts.skippedForRisk);
@@ -3229,7 +3273,10 @@ function runDecisionSummary(run = {}) {
     Number.isFinite(eligible) ? `${eligible} eligible` : "",
     Number.isFinite(riskSkipped) ? `${riskSkipped} risk skipped` : "",
   ].filter(Boolean).join(" / ");
-  return [run.reason || batch.reason || "-", countParts, runCapitalNote(run)].filter(Boolean).join(" / ");
+  const selectedText = selected
+    ? `${selected.outcome || "-"} ${selected.question || "-"} / AI ${probability(Number(selected.aiProbability))} / win ${signedMoney(Number(selected.netGainIfWinUsdc), 4)} ${selected.netYield != null ? `(${signedPercent(Number(selected.netYield))})` : ""}`
+    : "";
+  return [run.reason || batch.reason || "-", selectedText, countParts, runCapitalNote(run)].filter(Boolean).join(" / ");
 }
 
 function portfolioRunDetail(run = {}) {
@@ -3557,6 +3604,15 @@ els.selectionOrder?.addEventListener("change", () => {
 els.minLiquidity?.addEventListener("input", () => {
   const value = normalizeOptionalMoney(els.minLiquidity.value);
   updatePortfolioConfigForMode(state.mode, { minLiquidityUsdc: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.tradeCadenceHours?.addEventListener("input", () => {
+  const fallback = isLiveMode() ? 24 : 1;
+  const value = normalizeCadenceHours(els.tradeCadenceHours.value, fallback);
+  updatePortfolioConfigForMode(state.mode, { tradeCadenceHours: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

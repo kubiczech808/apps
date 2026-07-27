@@ -64,6 +64,7 @@ const PAPER_STRATEGIES = {
     maxFraction: envNumber("PAPER_CONSERVATIVE_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
+    tradeCadenceHours: envNumber("PAPER_CONSERVATIVE_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
     selectionOrder: envSelectionOrder("PAPER_CONSERVATIVE_SELECTION_ORDER", "highest_ev_pa_first"),
     description: `Requires AI probability >= ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then selects the highest EV p.a.`,
@@ -76,6 +77,7 @@ const PAPER_STRATEGIES = {
     maxFraction: envNumber("PAPER_HIGH_REWARD_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
+    tradeCadenceHours: envNumber("PAPER_HIGH_REWARD_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
     selectionOrder: envSelectionOrder("PAPER_HIGH_REWARD_SELECTION_ORDER", "highest_reward_risk_first"),
     description: `Requires AI probability >= ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then prioritizes eligible opportunities by highest reward against risk.`,
@@ -88,9 +90,10 @@ const PAPER_STRATEGIES = {
     maxFraction: envNumber("PAPER_MORE_PROBABLE_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
+    tradeCadenceHours: envNumber("PAPER_MORE_PROBABLE_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
     selectionOrder: envSelectionOrder("PAPER_MORE_PROBABLE_SELECTION_ORDER", "highest_reward_risk_first"),
-    description: `Requires AI probability >= ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, deep liquidity, and the most probable outcome in each market.`,
+    description: `Requires AI probability >= ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, deep liquidity, and multichoice-style event markets.`,
   },
 };
 
@@ -268,6 +271,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     maxFraction: strategy.maxFraction,
     maxResolutionDays: strategyMaxResolutionDays(strategy),
     minLiquidityUsdc: strategy.minLiquidityUsdc,
+    tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     description: strategy.description,
     portfolio: {
@@ -280,6 +284,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       opportunityMinAnnualReturn: Number(input.portfolio?.opportunityMinAnnualReturn || OPPORTUNITY_MIN_ANNUAL_RETURN),
       maxResolutionDays: strategyMaxResolutionDays(strategy),
       minLiquidityUsdc: strategy.minLiquidityUsdc == null ? null : Number(strategy.minLiquidityUsdc),
+      tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     },
     trades: Array.isArray(input.trades)
@@ -1334,6 +1339,8 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     slug: market.slug || "",
     eventSlug,
     outcome,
+    outcomeCount: outcomes.length,
+    marketType: outcomes.length > 2 ? "multi" : reportMarketType({ question, slug: market.slug, eventSlug, outcome }),
     tokenId,
     endDate,
     tags,
@@ -1834,9 +1841,48 @@ function compareShorterHorizon(a, b) {
   return Number.isFinite(delta) ? delta : 0;
 }
 
+function isNoOutcome(item) {
+  return /^no$/i.test(String(item?.outcome || "").trim());
+}
+
+function similarPolymarketProbability(a, b, tolerance = 0.03) {
+  const aPrice = Number(a?.marketPrice ?? a?.entryPrice ?? a?.currentPrice);
+  const bPrice = Number(b?.marketPrice ?? b?.entryPrice ?? b?.currentPrice);
+  return Number.isFinite(aPrice) && Number.isFinite(bPrice) && Math.abs(aPrice - bPrice) <= tolerance;
+}
+
+function preferNoWhenComparable(a, b, scoreDelta = 0) {
+  if (!similarPolymarketProbability(a, b)) return 0;
+  if (Math.abs(scoreDelta) > 0.05) return 0;
+  if (isNoOutcome(a) === isNoOutcome(b)) return 0;
+  return isNoOutcome(a) ? -1 : 1;
+}
+
 function strategyMaxResolutionDays(strategy) {
   const days = Number(strategy.maxResolutionDays);
   return Number.isFinite(days) && days > 0 ? days : DEFAULT_MAX_RESOLUTION_DAYS;
+}
+
+function normalizeTradeCadenceHours(value, fallback = 1) {
+  const hours = Number(value);
+  if (!Number.isFinite(hours) || hours <= 0) return fallback;
+  return Math.min(168, Math.max(1, Math.round(hours)));
+}
+
+function hourKeyToDate(key) {
+  const match = String(key || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})$/);
+  if (!match) return null;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4])));
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function cadenceBlocked(lastTradeHour, currentHour, cadenceHours) {
+  const cadence = normalizeTradeCadenceHours(cadenceHours, 1);
+  if (cadence <= 1) return lastTradeHour === currentHour;
+  const previous = hourKeyToDate(lastTradeHour);
+  const current = hourKeyToDate(currentHour);
+  if (!previous || !current) return false;
+  return (current.getTime() - previous.getTime()) / 3600000 < cadence;
 }
 
 function strategyEligibleCandidates(eligible, strategy) {
@@ -1850,15 +1896,7 @@ function strategyEligibleCandidates(eligible, strategy) {
     return true;
   });
   if (strategy.requireMostProbableOutcome) {
-    const bestByMarket = new Map();
-    for (const item of rows) {
-      const key = item.slug || item.eventSlug || item.question || item.id;
-      const previous = bestByMarket.get(key);
-      if (!previous || Number(item.aiProbability || 0) > Number(previous.aiProbability || 0)) {
-        bestByMarket.set(key, item);
-      }
-    }
-    rows = [...bestByMarket.values()];
+    rows = rows.filter((item) => item.marketType === "multi" || reportMarketType(item) === "multi");
   }
   return rows;
 }
@@ -1870,7 +1908,11 @@ function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservat
     return rows.sort((a, b) => {
       const aRatio = rewardRiskRatio(a) ?? -Infinity;
       const bRatio = rewardRiskRatio(b) ?? -Infinity;
-      if (bRatio !== aRatio) return bRatio - aRatio;
+      if (bRatio !== aRatio) {
+        const noPreference = preferNoWhenComparable(a, b, bRatio - aRatio);
+        if (noPreference) return noPreference;
+        return bRatio - aRatio;
+      }
       const horizon = compareShorterHorizon(a, b);
       if (horizon !== 0) return horizon;
       if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
@@ -1878,7 +1920,11 @@ function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservat
     });
   }
   return rows.sort((a, b) => {
-    if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
+    if (b.annualizedReturn !== a.annualizedReturn) {
+      const noPreference = preferNoWhenComparable(a, b, b.annualizedReturn - a.annualizedReturn);
+      if (noPreference) return noPreference;
+      return b.annualizedReturn - a.annualizedReturn;
+    }
     const horizon = compareShorterHorizon(a, b);
     if (horizon !== 0) return horizon;
     return b.expectedValueUsdc - a.expectedValueUsdc;
@@ -2002,6 +2048,11 @@ function tradeBatchCandidateSummary(item) {
     marketPrice: Number.isFinite(Number(item.marketPrice)) ? Number(Number(item.marketPrice).toFixed(4)) : null,
     annualizedReturn: Number.isFinite(Number(item.annualizedReturn)) ? Number(Number(item.annualizedReturn).toFixed(4)) : null,
     expectedValueUsdc: Number.isFinite(Number(item.expectedValueUsdc)) ? Number(Number(item.expectedValueUsdc).toFixed(4)) : null,
+    netGainIfWinUsdc: Number.isFinite(Number(item.netGainIfWinUsdc)) ? Number(Number(item.netGainIfWinUsdc).toFixed(4)) : null,
+    netYield: Number.isFinite(Number(item.netGainIfWinUsdc)) && Number(item.totalCostUsdc || item.stakeUsdc || 0) > 0
+      ? Number((Number(item.netGainIfWinUsdc) / Number(item.totalCostUsdc || item.stakeUsdc || 0)).toFixed(4))
+      : null,
+    riskReward: Number.isFinite(Number(rewardRiskRatio(item))) ? Number(Number(rewardRiskRatio(item)).toFixed(4)) : null,
     daysToResolution: Number.isFinite(Number(item.daysToResolution)) ? Number(Number(item.daysToResolution).toFixed(2)) : null,
     liquidity: Number.isFinite(Number(item.liquidity)) ? Number(Number(item.liquidity).toFixed(2)) : null,
     riskGroupLabels: Array.isArray(item.riskGroupLabels) ? item.riskGroupLabels.slice(0, 5) : [],
@@ -2034,6 +2085,7 @@ function buildTradeBatchLog({ portfolioState, strategy, eligible, rankedEligible
       minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
       selectionOrder: strategy.selectionOrder,
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
+      tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
       maxStakeUsdc: Number(stake.toFixed(2)),
     },
     capital: {
@@ -2170,8 +2222,10 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   const maxFraction = Number(strategy.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION);
   const stake = sizingCapital * maxFraction;
 
-  if (portfolioState.lastTradeHour === currentHour) {
-    const reason = "hourly paper trade already opened";
+  const tradeCadenceHours = normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1);
+
+  if (cadenceBlocked(portfolioState.lastTradeHour, currentHour, tradeCadenceHours)) {
+    const reason = `paper trade cadence blocked: last new trade ${portfolioState.lastTradeHour || "-"}, cadence ${tradeCadenceHours}h`;
     return {
       action: "SKIP",
       reason,

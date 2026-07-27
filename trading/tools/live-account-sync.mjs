@@ -731,15 +731,27 @@ function adjustedResolutionEndDate(position) {
   return new Date(endMs).toISOString();
 }
 
-function resolvedPositionCloseTime(position, closeTimeIndex, previousCloseTimeIndex) {
+function stableCloseTimestamp(value, generatedAt) {
+  const timestamp = isoTime(value);
+  if (!timestamp) return null;
+  const syncMs = timestampMs(generatedAt);
+  const timestampValue = Date.parse(timestamp);
+  if (syncMs != null && Number.isFinite(timestampValue) && timestampValue > syncMs + 60000) return null;
+  return timestamp;
+}
+
+function resolvedPositionCloseTime(position, closeTimeIndex, previousCloseTimeIndex, generatedAt) {
   const explicit = isoTime(position.resolvedAt || position.closedAt || position.closedTime || position.redeemedAt);
-  if (explicit) return { timestamp: explicit, source: "positions-api-resolved" };
+  const stableExplicit = stableCloseTimestamp(explicit, generatedAt);
+  if (stableExplicit) return { timestamp: stableExplicit, source: "positions-api-resolved" };
   const closeFromHistory = bestIndexedTimestamp(closeTimeIndex, position, "latest");
-  if (closeFromHistory) return closeFromHistory;
+  if (stableCloseTimestamp(closeFromHistory?.timestamp, generatedAt)) return closeFromHistory;
   const closeFromPrevious = bestIndexedTimestamp(previousCloseTimeIndex, position, "latest");
-  if (closeFromPrevious) return closeFromPrevious;
+  if (stableCloseTimestamp(closeFromPrevious?.timestamp, generatedAt)) return closeFromPrevious;
   const endDate = adjustedResolutionEndDate(position);
-  if (endDate) return { timestamp: endDate, source: "event-end-date" };
+  const stableEndDate = stableCloseTimestamp(endDate, generatedAt);
+  if (stableEndDate) return { timestamp: stableEndDate, source: "event-end-date" };
+  if (positionOfficiallyResolved(position)) return { timestamp: generatedAt, source: "redeem-required-detected" };
   return null;
 }
 
@@ -769,7 +781,7 @@ function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt
       const winningResolved = currentValue > 0.000001 || (currentPrice != null && currentPrice >= 0.995);
       const realizedPnl = currentValue - stake;
       const status = winningResolved ? "REDEEM_REQUIRED" : "LOST";
-      const closeTime = resolvedPositionCloseTime(position, closeTimeIndex, previousCloseTimeIndex);
+      const closeTime = resolvedPositionCloseTime(position, closeTimeIndex, previousCloseTimeIndex, generatedAt);
       const officialClosedAt = closeTime?.timestamp || null;
       return {
         ...position,

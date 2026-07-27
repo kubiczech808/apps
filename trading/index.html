@@ -298,9 +298,14 @@
           <input type="number" min="0" step="100" placeholder="none" data-min-liquidity>
           <strong data-min-liquidity-label>none</strong>
         </label>
+        <label class="parameter-control">
+          <span>New trade cadence</span>
+          <input type="number" min="1" max="168" step="1" placeholder="24" data-trade-cadence-hours>
+          <strong data-trade-cadence-hours-label>24h</strong>
+        </label>
         <label class="parameter-control order-mode-toggle">
           <input type="checkbox" data-most-probable-outcome>
-          <span>Only most probable outcome per market</span>
+          <span>Only multichoice events</span>
         </label>
         <label class="parameter-control order-mode-toggle">
           <input type="checkbox" data-limit-orders>
@@ -313,6 +318,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260727-sane-refresh-stake"></script>
+  <script src="assets/app.js?v=20260727-compact-tables-run-detail"></script>
 </body>
 </html>

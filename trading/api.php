@@ -126,6 +126,7 @@ function default_portfolio_config(): array
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_ev_pa_first',
                 'minLiquidityUsdc' => null,
+                'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => false,
             ],
             'highReward' => [
@@ -134,6 +135,7 @@ function default_portfolio_config(): array
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_reward_risk_first',
                 'minLiquidityUsdc' => null,
+                'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => false,
             ],
             'moreProbable' => [
@@ -142,6 +144,7 @@ function default_portfolio_config(): array
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_reward_risk_first',
                 'minLiquidityUsdc' => 500000,
+                'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => true,
             ],
         ],
@@ -151,6 +154,7 @@ function default_portfolio_config(): array
             'maxResolutionDays' => 7,
             'selectionOrder' => 'highest_ev_pa_first',
             'minLiquidityUsdc' => 100,
+            'tradeCadenceHours' => 24,
             'useLimitOrders' => true,
             'requireMostProbableOutcome' => false,
         ],
@@ -213,6 +217,14 @@ function normalize_optional_money_value(mixed $value): ?float
     return max(0.0, round((float) $value, 2));
 }
 
+function normalize_cadence_hours_value(mixed $value, int $fallback): int
+{
+    if (!is_numeric($value)) {
+        return max(1, min(168, $fallback));
+    }
+    return max(1, min(168, (int) round((float) $value)));
+}
+
 function normalize_selection_order_value(mixed $value): string
 {
     return $value === 'highest_reward_risk_first' ? 'highest_reward_risk_first' : 'highest_ev_pa_first';
@@ -226,6 +238,7 @@ function normalize_strategy_config(array $input, array $defaults): array
         'maxResolutionDays' => normalize_days_value($input['maxResolutionDays'] ?? null, (int) $defaults['maxResolutionDays']),
         'selectionOrder' => normalize_selection_order_value($input['selectionOrder'] ?? $defaults['selectionOrder']),
         'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
+        'tradeCadenceHours' => normalize_cadence_hours_value($input['tradeCadenceHours'] ?? null, (int) $defaults['tradeCadenceHours']),
         'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
     ];
 }
@@ -867,6 +880,7 @@ try {
         $liveMaxResolutionDays = normalized_days_input($payload['maxResolutionDays'] ?? $payload['live_max_resolution_days'] ?? null);
         $liveSelectionOrder = normalized_selection_order_input($payload['selectionOrder'] ?? $payload['live_selection_order'] ?? null);
         $liveMinLiquidity = normalized_money_input($payload['minLiquidityUsdc'] ?? $payload['live_min_liquidity_usdc'] ?? null);
+        $liveTradeCadenceHours = normalized_days_input($payload['tradeCadenceHours'] ?? $payload['live_trade_cadence_hours'] ?? null);
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
         $paperExtraInputs = [];
@@ -875,6 +889,7 @@ try {
             $paperExtraInputs["paper_{$strategy}_max_resolution_days"] = normalized_days_input($payload["paper_{$strategy}_max_resolution_days"] ?? null);
             $paperExtraInputs["paper_{$strategy}_selection_order"] = normalized_selection_order_input($payload["paper_{$strategy}_selection_order"] ?? null);
             $paperExtraInputs["paper_{$strategy}_min_liquidity_usdc"] = normalized_money_input($payload["paper_{$strategy}_min_liquidity_usdc"] ?? null);
+            $paperExtraInputs["paper_{$strategy}_trade_cadence_hours"] = normalized_days_input($payload["paper_{$strategy}_trade_cadence_hours"] ?? null);
             $paperExtraInputs["paper_{$strategy}_require_most_probable"] = normalized_bool_input($payload["paper_{$strategy}_require_most_probable"] ?? null);
         }
         $workflows = [
@@ -898,6 +913,7 @@ try {
                     'live_max_resolution_days' => $liveMaxResolutionDays,
                     'live_selection_order' => $liveSelectionOrder,
                     'live_min_liquidity_usdc' => $liveMinLiquidity,
+                    'live_trade_cadence_hours' => $liveTradeCadenceHours,
                     'live_use_limit_orders' => $liveUseLimitOrders,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
