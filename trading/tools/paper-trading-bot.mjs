@@ -1797,6 +1797,21 @@ function riskBlockReason(block) {
   return `open correlated paper trade ${block.tradeId} already covers ${overlap}`;
 }
 
+function candidateSelectionDecision({ candidate, portfolioState, selected, action, reason }) {
+  if (!candidate) return "not selected: missing candidate";
+  if (selected && String(candidate.tokenId || "") === String(selected.tokenId || "")) {
+    return "selected for trade";
+  }
+  const activeTrades = Array.isArray(portfolioState?.trades) ? portfolioState.trades : [];
+  const duplicate = activeTrades.find((trade) => OPEN_STATUSES.has(trade.status) && trade.tokenId === candidate.tokenId);
+  if (duplicate) return `not selected: same token already open in trade ${duplicate.id}`;
+  const block = riskBlock(candidate, activeTrades);
+  if (block) return `not selected: ${riskBlockReason(block)}`;
+  if (String(action || "").toUpperCase() === "SKIP" && reason) return `not selected: batch skipped - ${reason}`;
+  if (selected) return "not selected: lower priority than selected candidate after portfolio ranking";
+  return "not selected: no selectable candidate was recorded";
+}
+
 function rewardRiskRatio(item) {
   const reward = Number(item.netGainIfWinUsdc ?? item.grossGainIfWinUsdc);
   const risk = Number(item.totalCostUsdc || item.maxLossUsdc || item.stakeUsdc || 0);
@@ -1930,6 +1945,41 @@ function strategyEligibleCandidates(eligible, strategy) {
     rows = rows.filter((item) => item.marketType === "multi" || reportMarketType(item) === "multi");
   }
   return rows;
+}
+
+function portfolioFilterResult(item, strategy) {
+  const reasons = [];
+  const status = String(item.status || "").toUpperCase();
+  const minProbability = Number(strategy.minProbability);
+  const maxResolutionDays = strategyMaxResolutionDays(strategy);
+  const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
+  const aiProbability = Number(item.aiProbability);
+  const days = daysValue(item);
+  const liquidity = Number(item.liquidity || 0);
+  const marketType = item.marketType || reportMarketType(item);
+
+  if (status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
+  if (Number.isFinite(minProbability) && (!Number.isFinite(aiProbability) || aiProbability < minProbability)) {
+    reasons.push(`AI probability ${Number.isFinite(aiProbability) ? (aiProbability * 100).toFixed(1) : "-"}% below ${(minProbability * 100).toFixed(1)}%`);
+  }
+  if (days > maxResolutionDays) {
+    reasons.push(`resolution ${Number.isFinite(days) ? days.toFixed(2) : "-"} days exceeds max ${maxResolutionDays}`);
+  }
+  if (Number.isFinite(minLiquidityUsdc) && liquidity < minLiquidityUsdc) {
+    reasons.push(`liquidity ${liquidity.toFixed(2)} below ${minLiquidityUsdc.toFixed(2)} USDC`);
+  }
+  if (strategy.requireMostProbableOutcome && marketType !== "multi") {
+    reasons.push(`market type ${marketType || "-"} is not multichoice`);
+  }
+
+  return {
+    eligible: reasons.length === 0,
+    reasons,
+  };
+}
+
+function incrementCount(counts, key) {
+  counts[key] = Number(counts[key] || 0) + 1;
 }
 
 function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservative) {
@@ -2094,10 +2144,49 @@ function tradeBatchCandidateSummary(item) {
   };
 }
 
-function buildTradeBatchLog({ portfolioState, strategy, eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, cadenceBlocked = false, rotationReview = null }) {
+function portfolioFilterDiagnostics(evaluations, strategy) {
+  const rows = Array.isArray(evaluations) ? evaluations : [];
+  const reasonCounts = {};
+  const excludedSample = [];
+  let baseEligible = 0;
+  let portfolioEligible = 0;
+
+  for (const item of rows) {
+    if (String(item.status || "").toUpperCase() === "ELIGIBLE") baseEligible += 1;
+    const result = portfolioFilterResult(item, strategy);
+    if (result.eligible) {
+      portfolioEligible += 1;
+      continue;
+    }
+    for (const reason of result.reasons) incrementCount(reasonCounts, reason);
+    if (excludedSample.length < 20) {
+      excludedSample.push({
+        ...tradeBatchCandidateSummary(item),
+        portfolioRejectReasons: result.reasons,
+      });
+    }
+  }
+
+  return {
+    totalEvaluated: rows.length,
+    baseEligible,
+    portfolioEligible,
+    excludedCount: Math.max(0, rows.length - portfolioEligible),
+    reasonCounts,
+    excludedSample,
+  };
+}
+
+function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, cadenceBlocked = false, rotationReview = null }) {
   const evaluated = Array.isArray(eligible) ? eligible : [];
   const ranked = Array.isArray(rankedEligible) ? rankedEligible : evaluated;
   const blocked = ranked.filter((item) => item.selectionStatus === "RISK_BLOCKED" || item.riskBlockedReason);
+  const eligibleCandidates = ranked
+    .map((item) => ({
+      ...tradeBatchCandidateSummary(item),
+      selectionDecision: candidateSelectionDecision({ candidate: item, portfolioState, selected, action, reason }),
+    }))
+    .filter(Boolean);
   return {
     id: `trade-batch-${strategy.id}-${nowIso()}`,
     runAt: nowIso(),
@@ -2131,7 +2220,9 @@ function buildTradeBatchLog({ portfolioState, strategy, eligible, rankedEligible
       openTrades: openTrades(portfolioState.trades || []).length,
       cadenceBlocked: Boolean(cadenceBlocked),
     },
+    portfolioFilter: portfolioFilterDiagnostics(evaluations, strategy),
     selected: tradeBatchCandidateSummary(selected),
+    eligibleCandidates,
     topCandidates: ranked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
     riskBlocked: blocked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
     rotationReview: rotationReview || null,
@@ -2244,7 +2335,7 @@ function closeTradeForRotation(trade, review, strategy) {
   };
 }
 
-function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative) {
+function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative, evaluations = []) {
   const today = pragueDateKey();
   const currentHour = pragueHourKey();
   const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
@@ -2266,6 +2357,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
       batchLog: buildTradeBatchLog({
         portfolioState,
         strategy,
+        evaluations,
         eligible,
         rankedEligible: eligible,
         action: "SKIP",
@@ -2300,6 +2392,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
       batchLog: buildTradeBatchLog({
         portfolioState,
         strategy,
+        evaluations,
         eligible,
         rankedEligible: eligible,
         action: "ROTATED_OPENED",
@@ -2324,6 +2417,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
       batchLog: buildTradeBatchLog({
         portfolioState,
         strategy,
+        evaluations,
         eligible,
         rankedEligible: eligible,
         action: "SKIP",
@@ -2331,6 +2425,29 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         available,
         stake,
         insufficientCapital: true,
+      }),
+    };
+  }
+
+  if (!eligible.length) {
+    const reason = `no candidates passed ${strategy.label} portfolio filters`;
+    return {
+      action: "SKIP",
+      reason,
+      available,
+      requiredStake: stake,
+      skippedForRisk: 0,
+      strategyId: strategy.id,
+      batchLog: buildTradeBatchLog({
+        portfolioState,
+        strategy,
+        evaluations,
+        eligible,
+        rankedEligible: eligible,
+        action: "SKIP",
+        reason,
+        available,
+        stake,
       }),
     };
   }
@@ -2350,6 +2467,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
       batchLog: buildTradeBatchLog({
         portfolioState,
         strategy,
+        evaluations,
         eligible,
         rankedEligible: eligible,
         action: "SKIP",
@@ -2378,6 +2496,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
     batchLog: buildTradeBatchLog({
       portfolioState,
       strategy,
+      evaluations,
       eligible,
       rankedEligible: eligible,
       action: "OPENED",
@@ -2959,13 +3078,15 @@ function updatePortfolio(state) {
 
 function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible = [], decision }) {
   const runAt = state.generatedAt;
+  const portfolioEligibleCount = Number(decision.batchLog?.counts?.rankedEligible);
+  const eligibleCount = Number.isFinite(portfolioEligibleCount) ? portfolioEligibleCount : eligible.length;
   portfolioState.lastDecision = {
     runAt,
     strategyId: portfolioState.id,
     strategyLabel: portfolioState.label,
     selectionMetric: portfolioState.selectionMetric,
     evaluatedCount: evaluations.length,
-    eligibleCount: eligible.length,
+    eligibleCount,
     action: decision.action,
     reason: decision.reason,
     tradeId: decision.trade?.id || null,
@@ -2990,7 +3111,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
       strategyLabel: portfolioState.label,
       selectionMetric: portfolioState.selectionMetric,
       evaluatedCount: evaluations.length,
-      eligibleCount: eligible.length,
+      eligibleCount,
       action: decision.action,
       reason: decision.reason,
       tradeId: decision.trade?.id || null,
@@ -3206,7 +3327,7 @@ async function run() {
   const decisions = Object.values(PAPER_STRATEGIES).map((strategy) => {
     const portfolioState = state.paperPortfolios[strategy.id];
     const rankedEligible = sortEligibleForStrategy(eligible, strategy);
-    return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy);
+    return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations);
   });
 
   state.generatedAt = nowIso();

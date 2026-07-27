@@ -3120,9 +3120,12 @@ function tradeBatchDetail(batch) {
   const capital = batch.capital || {};
   const counts = batch.counts || {};
   const selected = batch.selected;
-  const candidates = Array.isArray(batch.topCandidates) ? batch.topCandidates : [];
+  const candidates = Array.isArray(batch.eligibleCandidates) && batch.eligibleCandidates.length
+    ? batch.eligibleCandidates
+    : (Array.isArray(batch.topCandidates) ? batch.topCandidates : []);
   const blocked = Array.isArray(batch.riskBlocked) ? batch.riskBlocked : [];
   const openOrderReviews = Array.isArray(batch.openOrderReviews) ? batch.openOrderReviews : [];
+  const portfolioFilter = batch.portfolioFilter || {};
   const candidateMetricLine = (item) => [
     `AI ${probability(Number(item.aiProbability))}`,
     `entry ${probability(Number(item.marketPrice ?? item.orderPrice))}`,
@@ -3131,16 +3134,33 @@ function tradeBatchDetail(batch) {
     item.riskReward != null ? `R/R ${riskReward(Number(item.riskReward))}` : "",
     `EV p.a. ${signedPercent(Number(item.annualizedReturn))}`,
     `EV ${signedMoney(Number(item.expectedValueUsdc), 4)}`,
+    item.daysToResolution != null ? `resolution ${Number(item.daysToResolution).toFixed(2)}d` : "",
+    item.liquidity != null ? `liquidity ${money(Number(item.liquidity))}` : "",
   ].filter(Boolean).join(" / ");
+  const filterReasonLines = portfolioFilter.reasonCounts && typeof portfolioFilter.reasonCounts === "object"
+    ? Object.entries(portfolioFilter.reasonCounts)
+        .sort((a, b) => Number(b[1]) - Number(a[1]))
+        .map(([reason, count]) => `- ${count}x ${reason}`)
+        .join("\n")
+    : "-";
+  const excludedSample = Array.isArray(portfolioFilter.excludedSample) ? portfolioFilter.excludedSample : [];
+  const excludedLines = excludedSample.length
+    ? excludedSample.map((item, index) => [
+        `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
+        `   ${candidateMetricLine(item)}`,
+        Array.isArray(item.portfolioRejectReasons) && item.portfolioRejectReasons.length ? `   Filter reasons: ${item.portfolioRejectReasons.join("; ")}` : "",
+      ].filter(Boolean).join("\n")).join("\n\n")
+    : "-";
   const candidateLines = candidates.length
     ? candidates.map((item, index) => [
         `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
         `   ${candidateMetricLine(item)}`,
+        item.selectionDecision ? `   Decision: ${item.selectionDecision}` : "",
         item.riskBlockedReason ? `   Risk blocked: ${item.riskBlockedReason}` : "",
         Array.isArray(item.rejectReasons) && item.rejectReasons.length ? `   Notes: ${item.rejectReasons.join("; ")}` : "",
         item.url ? `   Polymarket: ${item.url}` : "",
       ].filter(Boolean).join("\n")).join("\n\n")
-    : "No ranked candidates in this batch.";
+    : "No eligible candidates passed this portfolio filter.";
   const blockedLines = blocked.length
     ? blocked.map((item) => `- ${item.outcome || "-"} / ${item.question || "-"}: ${item.riskBlockedReason || "risk overlap"}`).join("\n")
     : "-";
@@ -3176,6 +3196,19 @@ function tradeBatchDetail(batch) {
     `Insufficient capital: ${capital.insufficientCapital ? "yes" : "no"}`,
     "",
     `Counts: ${Number(counts.rankedEligible ?? counts.eligibleCandidates ?? 0)} ranked eligible / ${Number(counts.skippedForRisk || 0)} skipped for risk / ${Number(counts.openTrades || 0)} open trades / ${Number(counts.openOrdersReviewed || 0)} open orders reviewed`,
+    portfolioFilter.totalEvaluated != null ? [
+      "",
+      `Portfolio filter diagnostics:`,
+      `Evaluated in this run: ${Number(portfolioFilter.totalEvaluated || 0)}`,
+      `Base ELIGIBLE before portfolio rules: ${Number(portfolioFilter.baseEligible || 0)}`,
+      `Eligible after ${batch.strategyLabel || batch.strategyId || "portfolio"} rules: ${Number(portfolioFilter.portfolioEligible || 0)}`,
+      `Excluded by portfolio rules/status: ${Number(portfolioFilter.excludedCount || 0)}`,
+      `Filter reason counts:`,
+      filterReasonLines,
+      "",
+      `Excluded sample:`,
+      excludedLines,
+    ].join("\n") : "",
     "",
     selected ? [
       `Selected: ${selected.outcome || "-"} - ${selected.question || "-"}`,
@@ -3189,7 +3222,7 @@ function tradeBatchDetail(batch) {
     `Open order review:`,
     orderReviewLines,
     "",
-    `Top candidates checked:`,
+    `Eligible candidates checked:`,
     candidateLines,
   ].join("\n");
 }
