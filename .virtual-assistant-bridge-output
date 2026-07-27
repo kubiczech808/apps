@@ -1,5 +1,5 @@
 bridge_output_format=safe-summary-v1
-checked_at_utc=2026-07-27T08:07:43Z
+checked_at_utc=2026-07-27T08:14:59Z
 shared_brain_intro_telegram_sent=not_requested
 xoz_comment_test_requested=false
 playwright_install=ok
@@ -99,30 +99,29 @@ agent_g_chat_available= True
 agent_g_escalated_blockers_summary= 0
 agent_g_escalated_log_blockers_summary= 0
 agent_g_handoffs_written_summary= 0
-[2026-07-27 10:07:45] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-[2026-07-27 10:07:50] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-27T08:07:48.074275Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "Could not validate you
+[2026-07-27 10:15:01] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+[2026-07-27 10:15:05] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-27T08:15:02.908096Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "Could not validate you
 ai_smoke_ok= True
 gmail_google_meta_1=date=Fri, 24 Jul 2026 10:04:05 -0700 from=Google AI Studio <googleaistudio-noreply@google.com> subject=Hi Jakub, welcome to Google AI Studio
 gmail_google_meta_2=date=Mon, 29 Jun 2026 04:41:24 -0700 from=Google <google-noreply@google.com> subject=Další informace o aktualizovaných smluvních podmínkách
 gmail_google_meta_3=date=Sun, 28 Jun 2026 18:51:26 -0500 from=mailto.jakub.elias@gmail.com subject=Virtualni asistentka: novy email k revizi - Zkontrolujte si nastavení ochrany soukromí v účtu Google
 gmail_setup_poll=ok
 telegram_state_offset= 309697091
-virtual_assistant_lock_exists= True
-virtual_assistant_lock_age_sec= 16
+virtual_assistant_lock_exists= False
 virtual_assistant_log_exists= True
-virtual_assistant_log_mtime_utc= 2026-07-27T08:07:50Z
-virtual_assistant_log_signal_1=[2026-07-27 10:07:32] Daemon poll error: HTTP Error 401: Unauthorized
-virtual_assistant_log_signal_2=[2026-07-27 10:07:33] Daemon poll error: HTTP Error 401: Unauthorized
-virtual_assistant_log_signal_3=[2026-07-27 10:07:34] Daemon poll error: HTTP Error 401: Unauthorized
-virtual_assistant_log_signal_4=[2026-07-27 10:07:35] Daemon poll error: HTTP Error 401: Unauthorized
-virtual_assistant_log_signal_5=[2026-07-27 10:07:40] Virtual Assistant delegation monitor started
-virtual_assistant_log_signal_6=[2026-07-27 10:07:40] Agent G daemon started
-virtual_assistant_log_signal_7=[2026-07-27 10:07:40] Virtual Assistant email worker started
-virtual_assistant_log_signal_8=[2026-07-27 10:07:40] Virtual Assistant telegram recovery worker started
-virtual_assistant_log_signal_9=[2026-07-27 10:07:40] Telegram bot commands refresh: sent
-virtual_assistant_log_signal_10=[2026-07-27 10:07:43] XOZ approval Telegram media send failed: RuntimeError: media unavailable
-virtual_assistant_log_signal_11=[2026-07-27 10:07:45] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
-virtual_assistant_log_signal_12=[2026-07-27 10:07:50] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-27T08:07:48.074275Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "Cou
+virtual_assistant_log_mtime_utc= 2026-07-27T08:15:05Z
+virtual_assistant_log_signal_1=[2026-07-27 10:07:45] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_2=[2026-07-27 10:07:50] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-27T08:07:48.074275Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "Cou
+virtual_assistant_log_signal_3=[2026-07-27 10:08:34] Telegram bot commands menu installed
+virtual_assistant_log_signal_4=[2026-07-27 10:11:02] XOZ approval Telegram media send failed: RuntimeError: media unavailable
+virtual_assistant_log_signal_5=[2026-07-27 10:13:12] Virtual Assistant email worker started
+virtual_assistant_log_signal_6=[2026-07-27 10:13:12] Virtual Assistant delegation monitor started
+virtual_assistant_log_signal_7=[2026-07-27 10:13:12] Virtual Assistant telegram recovery worker started
+virtual_assistant_log_signal_8=[2026-07-27 10:13:12] Agent G daemon started
+virtual_assistant_log_signal_9=[2026-07-27 10:13:12] Telegram bot commands refresh: sent
+virtual_assistant_log_signal_10=[2026-07-27 10:13:15] XOZ approval Telegram media send failed: RuntimeError: media unavailable
+virtual_assistant_log_signal_11=[2026-07-27 10:15:01] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+virtual_assistant_log_signal_12=[2026-07-27 10:15:05] Codex backend failed, trying Virtual Assistant fallback: Codex CLI selhal (1): 2026-07-27T08:15:02.908096Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {   "error": {     "message": "Cou
 va_2026_06_29_log_1=[2026-06-29 01:13:25] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_2=[2026-06-29 01:13:43] Email message processing failed id=19f05b3562763bdd: Gemini API selhalo po retry/fallback modelech: Gemini API HTTP 404: {
 va_2026_06_29_log_3=[2026-06-29 01:18:48] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
@@ -153,46 +152,46 @@ va_2026_06_29_log_27=[2026-06-29 12:29:43] Model route: gpt-5.4-mini tier=cheap 
 va_2026_06_29_log_28=[2026-06-29 12:30:20] -> Hotovo:
 va_2026_06_29_log_29=[2026-06-29 13:42:33] Model route: gpt-5.5 tier=email_instruction reason=emailova instrukce vyzaduje samostatne zpracovani a odpoved sandbox=danger-full-access
 va_2026_06_29_log_30=[2026-06-29 13:42:59] Email processed and replied: from=<email>@google.com trusted=False subject=Další informace o aktualizovaných smluvních podmínkách
-va_today_log_1=[2026-07-27 10:06:57] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_2=[2026-07-27 10:06:58] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_3=[2026-07-27 10:06:59] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_4=[2026-07-27 10:07:00] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_5=[2026-07-27 10:07:01] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_6=[2026-07-27 10:07:02] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_7=[2026-07-27 10:07:03] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_8=[2026-07-27 10:07:04] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_9=[2026-07-27 10:07:06] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_10=[2026-07-27 10:07:07] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_11=[2026-07-27 10:07:08] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_12=[2026-07-27 10:07:09] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_13=[2026-07-27 10:07:10] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_14=[2026-07-27 10:07:11] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_15=[2026-07-27 10:07:12] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_16=[2026-07-27 10:07:13] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_17=[2026-07-27 10:07:14] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_18=[2026-07-27 10:07:16] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_19=[2026-07-27 10:07:17] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_20=[2026-07-27 10:07:18] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_21=[2026-07-27 10:07:19] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_22=[2026-07-27 10:07:20] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_23=[2026-07-27 10:07:21] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_24=[2026-07-27 10:07:22] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_25=[2026-07-27 10:07:23] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_26=[2026-07-27 10:07:24] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_27=[2026-07-27 10:07:26] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_28=[2026-07-27 10:07:27] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_29=[2026-07-27 10:07:28] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_30=[2026-07-27 10:07:29] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_31=[2026-07-27 10:07:30] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_32=[2026-07-27 10:07:31] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_33=[2026-07-27 10:07:32] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_34=[2026-07-27 10:07:33] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_35=[2026-07-27 10:07:34] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_36=[2026-07-27 10:07:35] Daemon poll error: HTTP Error 401: Unauthorized
-va_today_log_37=[2026-07-27 10:07:37] <- /menu
-va_today_log_38=[2026-07-27 10:07:40] Virtual Assistant delegation monitor started
-va_today_log_39=[2026-07-27 10:07:40] Virtual Assistant email worker started
-va_today_log_40=[2026-07-27 10:07:45] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_1=[2026-07-27 10:07:00] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_2=[2026-07-27 10:07:01] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_3=[2026-07-27 10:07:02] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_4=[2026-07-27 10:07:03] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_5=[2026-07-27 10:07:04] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_6=[2026-07-27 10:07:06] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_7=[2026-07-27 10:07:07] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_8=[2026-07-27 10:07:08] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_9=[2026-07-27 10:07:09] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_10=[2026-07-27 10:07:10] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_11=[2026-07-27 10:07:11] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_12=[2026-07-27 10:07:12] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_13=[2026-07-27 10:07:13] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_14=[2026-07-27 10:07:14] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_15=[2026-07-27 10:07:16] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_16=[2026-07-27 10:07:17] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_17=[2026-07-27 10:07:18] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_18=[2026-07-27 10:07:19] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_19=[2026-07-27 10:07:20] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_20=[2026-07-27 10:07:21] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_21=[2026-07-27 10:07:22] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_22=[2026-07-27 10:07:23] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_23=[2026-07-27 10:07:24] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_24=[2026-07-27 10:07:26] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_25=[2026-07-27 10:07:27] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_26=[2026-07-27 10:07:28] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_27=[2026-07-27 10:07:29] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_28=[2026-07-27 10:07:30] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_29=[2026-07-27 10:07:31] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_30=[2026-07-27 10:07:32] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_31=[2026-07-27 10:07:33] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_32=[2026-07-27 10:07:34] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_33=[2026-07-27 10:07:35] Daemon poll error: HTTP Error 401: Unauthorized
+va_today_log_34=[2026-07-27 10:07:37] <- /menu
+va_today_log_35=[2026-07-27 10:07:40] Virtual Assistant delegation monitor started
+va_today_log_36=[2026-07-27 10:07:40] Virtual Assistant email worker started
+va_today_log_37=[2026-07-27 10:07:45] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
+va_today_log_38=[2026-07-27 10:13:12] Virtual Assistant email worker started
+va_today_log_39=[2026-07-27 10:13:12] Virtual Assistant delegation monitor started
+va_today_log_40=[2026-07-27 10:15:01] Model route: gpt-5.4-mini tier=cheap reason=bezne zadani sandbox=danger-full-access
 va_today_03_04_log_1=[2026-07-27 04:58:29] Daemon poll error: HTTP Error 401: Unauthorized
 va_today_03_04_log_2=[2026-07-27 04:58:30] Daemon poll error: HTTP Error 401: Unauthorized
 va_today_03_04_log_3=[2026-07-27 04:58:31] Daemon poll error: HTTP Error 401: Unauthorized
