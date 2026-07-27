@@ -229,6 +229,17 @@ function extractTeams(question) {
 function topicRiskClusters({ question, slug, eventSlug }) {
   const text = normalizedSlug(`${question || ""} ${slug || ""} ${eventSlug || ""}`).replace(/-/g, " ");
   const clusters = [];
+  const cryptoAssets = [
+    { key: "bitcoin", label: "Bitcoin", pattern: /\b(bitcoin|btc)\b/ },
+    { key: "ethereum", label: "Ethereum", pattern: /\b(ethereum|ether|eth)\b/ },
+    { key: "solana", label: "Solana", pattern: /\bsolana\b/ },
+    { key: "xrp", label: "XRP", pattern: /\b(xrp|ripple)\b/ },
+  ];
+  for (const asset of cryptoAssets) {
+    if (asset.pattern.test(text)) {
+      clusters.push([`topic:${asset.key}`, `Topic: ${asset.label}`]);
+    }
+  }
   if (/\b(iran|iranian|hormuz|kharg|strait of hormuz|israel|israeli|tehran|nuclear)\b/.test(text)) {
     clusters.push(["topic:iran-war", "Topic: Iran war / Gulf escalation"]);
   }

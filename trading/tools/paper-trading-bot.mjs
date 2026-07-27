@@ -377,17 +377,37 @@ function changedEvaluationFields(previous, next) {
   return changes;
 }
 
+function normalizeEvaluationRisk(item) {
+  if (!item || typeof item !== "object") return item;
+  const risk = riskProfile({
+    question: item.question,
+    slug: item.slug,
+    eventSlug: item.eventSlug,
+    outcome: item.outcome,
+    tags: item.tags,
+  });
+  const existingRiskKeys = Array.isArray(item.riskGroupKeys) ? item.riskGroupKeys : [];
+  const existingRiskLabels = Array.isArray(item.riskGroupLabels) ? item.riskGroupLabels : [];
+  return {
+    ...item,
+    riskGroupKeys: [...new Set([...existingRiskKeys, ...risk.keys])],
+    riskGroupLabels: [...new Set([...existingRiskLabels, ...risk.labels])],
+    riskCategory: item.riskCategory || risk.category,
+    riskPrimaryEntity: item.riskPrimaryEntity || risk.primaryEntity,
+  };
+}
+
 function mergeEvaluation(previous, next) {
   if (!previous) {
     const key = evaluationKey(next);
-    return {
+    return normalizeEvaluationRisk({
       ...next,
       id: key || next.id,
       firstEvaluatedAt: next.firstEvaluatedAt || next.evaluatedAt || nowIso(),
       lastSeenAt: next.lastSeenAt || next.evaluatedAt || nowIso(),
       evaluationCount: Number(next.evaluationCount || 1),
       updateHistory: Array.isArray(next.updateHistory) ? next.updateHistory.slice(0, 30) : [],
-    };
+    });
   }
   if (!next) return previous;
 
@@ -407,7 +427,7 @@ function mergeEvaluation(previous, next) {
       }]
     : [];
 
-  return {
+  return normalizeEvaluationRisk({
     ...older,
     ...latest,
     id: evaluationKey(latest) || latest.id || previous.id,
@@ -419,7 +439,7 @@ function mergeEvaluation(previous, next) {
       : Number(previous.evaluationCount || 1) + Number(next.evaluationCount || 1),
     updateHistory: [...changeEntry, ...incomingHistory, ...previousHistory].slice(0, 30),
     lastChanges: changes,
-  };
+  });
 }
 
 function mergeEvaluationLists(primary = [], secondary = [], limit = MAX_HISTORY) {
@@ -749,6 +769,17 @@ function eventSlugKey(slug) {
 function topicRiskClusters({ question, slug, eventSlug }) {
   const text = normalizeRiskText(`${question || ""} ${slug || ""} ${eventSlug || ""}`);
   const clusters = [];
+  const cryptoAssets = [
+    { key: "bitcoin", label: "Bitcoin", pattern: /\b(bitcoin|btc)\b/ },
+    { key: "ethereum", label: "Ethereum", pattern: /\b(ethereum|ether|eth)\b/ },
+    { key: "solana", label: "Solana", pattern: /\bsolana\b/ },
+    { key: "xrp", label: "XRP", pattern: /\b(xrp|ripple)\b/ },
+  ];
+  for (const asset of cryptoAssets) {
+    if (asset.pattern.test(text)) {
+      clusters.push([`topic:${asset.key}`, `Topic: ${asset.label}`]);
+    }
+  }
   if (/\b(iran|iranian|hormuz|kharg|strait of hormuz|israel|israeli|tehran|nuclear)\b/.test(text)) {
     clusters.push(["topic:iran-war", "Topic: Iran war / Gulf escalation"]);
   }
@@ -3170,7 +3201,7 @@ async function run() {
     }
   }
 
-  evaluations = await enrichEvaluationsWithAi(evaluations, state.learningProfile);
+  evaluations = (await enrichEvaluationsWithAi(evaluations, state.learningProfile)).map(normalizeEvaluationRisk);
   const eligible = evaluations.filter((item) => item.status === "ELIGIBLE");
   const decisions = Object.values(PAPER_STRATEGIES).map((strategy) => {
     const portfolioState = state.paperPortfolios[strategy.id];
