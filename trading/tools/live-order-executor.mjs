@@ -38,7 +38,10 @@ const FUNDER_ADDRESS = process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLY
 const EXECUTION_STATE_PATH = process.env.LIVE_EXECUTION_STATE_PATH || "";
 const IDLE_CASH_MAX_USDC = Number(process.env.LIVE_IDLE_CASH_MAX_USDC || 5);
 const IDLE_CASH_GRACE_HOURS = Number(process.env.LIVE_IDLE_CASH_GRACE_HOURS || 24);
-const ONE_TRADE_PER_DAY = String(process.env.LIVE_ONE_TRADE_PER_DAY ?? "true").toLowerCase() !== "false";
+const HAS_EXPLICIT_TRADE_CADENCE = process.env.LIVE_TRADE_CADENCE_HOURS != null && process.env.LIVE_TRADE_CADENCE_HOURS !== "";
+const ONE_TRADE_PER_DAY = HAS_EXPLICIT_TRADE_CADENCE
+  ? false
+  : String(process.env.LIVE_ONE_TRADE_PER_DAY ?? "true").toLowerCase() !== "false";
 const TRADE_CADENCE_HOURS = Math.min(168, Math.max(1, Math.round(envNumber("LIVE_TRADE_CADENCE_HOURS", ONE_TRADE_PER_DAY ? 24 : 1))));
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
@@ -1085,7 +1088,7 @@ async function main() {
   });
 
   const best = eligible[0] || null;
-  const cadenceBlocked = Boolean(monitoring.cadenceBlocked || monitoring.submittedToday);
+  const cadenceBlocked = Boolean(monitoring.cadenceBlocked);
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
     action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
