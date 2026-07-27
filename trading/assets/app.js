@@ -1098,6 +1098,33 @@ function analysisModel(item = {}) {
   return item.analysisModel || item.aiAnalysis?.model || "";
 }
 
+function analysisProbabilityRationale(item = {}) {
+  return item.aiAnalysis?.probabilityRationale
+    || item.aiAnalysis?.researchSummary
+    || item.probabilityThesis
+    || item.aiAnalysis?.thesis
+    || item.analysisSummary
+    || "";
+}
+
+function analysisPointRationale(item = {}) {
+  return item.aiAnalysis?.probabilityPointRationale || "";
+}
+
+function analysisMarketComparison(item = {}) {
+  if (item.aiAnalysis?.marketComparisonSummary) return item.aiAnalysis.marketComparisonSummary;
+  const ai = Number(analysisProbability(item));
+  const market = Number(item.marketPrice ?? item.entryPrice ?? item.aiAnalysis?.marketImpliedProbability);
+  if (!Number.isFinite(ai) || !Number.isFinite(market)) return "";
+  const difference = ai - market;
+  const direction = difference >= 0 ? "above" : "below";
+  const rationale = normalizedDetailText(analysisProbabilityRationale(item));
+  return [
+    `AI probability ${probability(ai)} is ${Math.abs(difference * 100).toFixed(1)} pts ${direction} Polymarket entry ${probability(market)}.`,
+    rationale ? `Reason: ${rationale}` : "",
+  ].filter(Boolean).join(" ");
+}
+
 function normalizedDetailText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
@@ -1173,6 +1200,9 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     analysisModel(original) ? `Model: ${analysisModel(original)}` : "",
     originalAi.probabilityMethod ? `Probability method: ${originalAi.probabilityMethod}` : "",
     originalAi.sourceQuality ? `Source quality: ${originalAi.sourceQuality}` : "",
+    analysisMarketComparison(original) ? `AI vs Polymarket: ${analysisMarketComparison(original)}` : "",
+    analysisProbabilityRationale(original) ? `Why this probability: ${analysisProbabilityRationale(original)}` : "",
+    analysisPointRationale(original) ? `Why these percentage points: ${analysisPointRationale(original)}` : "",
     `Thesis: ${analysisThesis(original) || "-"}`,
     originalAi.researchSummary ? `Research summary: ${originalAi.researchSummary}` : "",
     original.analysisSummary ? `AI analysis: ${original.analysisSummary}` : "",
@@ -1201,6 +1231,9 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     analysisModel(current) ? detailText("Model", analysisModel(current), analysisModel(original)) : "",
     currentAi.probabilityMethod ? detailText("Probability method", currentAi.probabilityMethod, originalAi.probabilityMethod) : "",
     currentAi.sourceQuality ? detailText("Source quality", currentAi.sourceQuality, originalAi.sourceQuality) : "",
+    analysisMarketComparison(current) ? detailText("AI vs Polymarket", analysisMarketComparison(current), analysisMarketComparison(original)) : "",
+    analysisProbabilityRationale(current) ? detailText("Why this probability", analysisProbabilityRationale(current), analysisProbabilityRationale(original)) : "",
+    analysisPointRationale(current) ? detailText("Why these percentage points", analysisPointRationale(current), analysisPointRationale(original)) : "",
     detailText("Current thesis", analysisThesis(current), analysisThesis(original)),
     currentAi.researchSummary ? detailText("Research summary", currentAi.researchSummary, originalAi.researchSummary) : "",
     current.analysisSummary ? detailText("Current AI analysis", current.analysisSummary, original.analysisSummary) : "",

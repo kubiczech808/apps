@@ -136,6 +136,35 @@ const LEDGER_RECOVERY_ANCHORS = [
   },
 ];
 
+function pctText(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? `${(numeric * 100).toFixed(1)}%` : "-";
+}
+
+function pointText(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  const sign = numeric > 0 ? "+" : "";
+  return `${sign}${(numeric * 100).toFixed(1)} pts`;
+}
+
+function compactSentence(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function buildMarketComparisonSummary({ probability, marketProbability, rationale }) {
+  const ai = Number(probability);
+  const market = Number(marketProbability);
+  const reason = compactSentence(rationale);
+  if (!Number.isFinite(ai) || !Number.isFinite(market)) {
+    return reason || "No Polymarket entry price was available for a percentage-point comparison.";
+  }
+  const difference = ai - market;
+  const direction = difference >= 0 ? "above" : "below";
+  const reasonText = reason ? ` because ${reason.charAt(0).toLowerCase()}${reason.slice(1)}` : ".";
+  return `AI probability ${pctText(ai)} is ${(Math.abs(difference) * 100).toFixed(1)} pts ${direction} the Polymarket entry ${pctText(market)}${reasonText}`;
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -1176,6 +1205,15 @@ function buildHeuristicAnalysis({
   const likely = probability >= 0.5 ? "likely" : "unlikely";
   const value = expectedValue > 0 ? "positive" : "negative";
   const thesis = `${direction} thesis: ${String(outcome || "selected outcome")} is ${likely} at ${(probability * 100).toFixed(1)}% versus market-buy entry ${(executionPrice * 100).toFixed(1)}%; expected value is ${value}.`;
+  const probabilityRationale = notes.length
+    ? `The probability is calibrated from the strongest available signals: ${notes.slice(0, 3).join(" ")}`
+    : "The probability remains close to the observable execution price because no stronger independent public signal was available in the heuristic pass.";
+  const probabilityPointRationale = `The estimate lands at ${pctText(probability)} after a raw heuristic estimate of ${pctText(rawProbability)} and learning adjustment of ${pointText(probability - rawProbability)}.`;
+  const marketComparisonSummary = buildMarketComparisonSummary({
+    probability,
+    marketProbability: executionPrice,
+    rationale: probabilityRationale,
+  });
   const uncertaintyFlags = [
     executionPrice > 0.97 ? "crowded near-certain market" : "",
     executionPrice < 0.15 ? "long-shot price bucket" : "",
@@ -1192,6 +1230,9 @@ function buildHeuristicAnalysis({
     confidenceTier: confidenceTier(probability),
     marketImpliedProbability: Number(executionPrice.toFixed(4)),
     edge: Number(edge.toFixed(4)),
+    probabilityRationale,
+    probabilityPointRationale,
+    marketComparisonSummary,
     expectedValueUsdc: Number(expectedValue.toFixed(4)),
     annualizedReturn: Number(annualizedReturn.toFixed(4)),
     evidence: notes.slice(0, 6),
@@ -1415,6 +1456,9 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     analysisSummary: [
       `${aiAnalysis.thesis}`,
       `Raw probability ${(rawProbability * 100).toFixed(1)}%, calibrated probability ${(probability * 100).toFixed(1)}% vs simulated market-buy entry ${(executionPrice * 100).toFixed(1)}%.`,
+      `Why this probability: ${aiAnalysis.probabilityRationale}`,
+      `Why these percentage points: ${aiAnalysis.probabilityPointRationale}`,
+      `AI vs Polymarket: ${aiAnalysis.marketComparisonSummary}`,
       `Best ask ${(bestAsk * 100).toFixed(1)}%, slippage ${execution.slippage == null ? "n/a" : (execution.slippage * 100).toFixed(1) + " pts"} for ${stake.toFixed(2)} USDC.`,
       `Polymarket taker fee ${takerFee.toFixed(5)} USDC (${fees.feesEnabled ? `${(fees.feeRate * 100).toFixed(1)}% ${fees.feeType}` : "fee-free market"}).`,
       `Net gain if win ${netGainIfWin.toFixed(4)} USDC; expected annualized return ${(economics.annualizedReturn * 100).toFixed(1)}% with max paper loss ${totalCost.toFixed(5)} USDC.`,
@@ -1629,6 +1673,22 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     if (reason === "insufficient ask depth for market buy") return `insufficient ask depth for ${stake.toFixed(2)} USDC market buy`;
     return reason;
   });
+  const probabilityRationale = compactSentence(
+    modelAnalysis?.probabilityRationale
+      || modelAnalysis?.researchSummary
+      || modelAnalysis?.thesis
+      || evaluation.probabilityThesis
+      || "No source-grounded probability rationale was returned by the model."
+  );
+  const probabilityPointRationale = compactSentence(
+    modelAnalysis?.probabilityPointRationale
+      || `The model's independent probability is ${pctText(probability)}; the difference versus Polymarket is computed after the forecast from the entry price ${pctText(evaluation.marketPrice)}.`
+  );
+  const marketComparisonSummary = buildMarketComparisonSummary({
+    probability,
+    marketProbability: evaluation.marketPrice,
+    rationale: probabilityRationale,
+  });
   const aiAnalysis = {
     ...(evaluation.aiAnalysis || {}),
     ...modelAnalysis,
@@ -1637,6 +1697,9 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     probabilityMethod: "independent-public-research",
     marketImpliedProbability: Number(evaluation.marketPrice),
     edge: Number(economics.edge.toFixed(4)),
+    probabilityRationale,
+    probabilityPointRationale,
+    marketComparisonSummary,
     expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
     annualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
     confidenceTier: modelAnalysis?.confidenceTier || confidenceTier(probability),
@@ -1659,6 +1722,9 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     analysisSummary: [
       aiAnalysis.thesis || evaluation.probabilityThesis || "AI analysis produced no thesis.",
       `Independent AI probability ${(probability * 100).toFixed(1)}%; Polymarket entry is used only after the AI estimate for EV calculation.`,
+      aiAnalysis.probabilityRationale ? `Why this probability: ${aiAnalysis.probabilityRationale}` : "",
+      aiAnalysis.probabilityPointRationale ? `Why these percentage points: ${aiAnalysis.probabilityPointRationale}` : "",
+      aiAnalysis.marketComparisonSummary ? `AI vs Polymarket: ${aiAnalysis.marketComparisonSummary}` : "",
       `Edge ${(economics.edge * 100).toFixed(1)} pts; expected annualized return ${(economics.annualizedReturn * 100).toFixed(1)}%; thesis type ${economics.thesisType}.`,
       modelAnalysis?.evidence ? `Evidence: ${[].concat(modelAnalysis.evidence).join(" ")}` : "",
       modelAnalysis?.counterEvidence ? `Counter evidence: ${[].concat(modelAnalysis.counterEvidence).join(" ")}` : "",
@@ -1699,7 +1765,10 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
         "The probability must be independent of Polymarket. Treat market pricing as unavailable.",
         "Use verified public information with strong causal relevance to the event outcome: official sources, primary data, reputable news, match/event schedules, statements, results, or authoritative statistics.",
         "Search the web if needed. Prefer recent and primary sources. If evidence is weak or conflicting, lower confidence instead of copying market intuition.",
+        "Evidence bullets should name the source or authority and the fact learned when possible, for example an official schedule, regulator release, company statement, weather service, or reputable news outlet.",
         "For YES/NO markets, estimate the probability that the selected outcome is true by resolution time. For multi-outcome markets, estimate the selected outcome only.",
+        "Always include a fact-based human-language sentence explaining why the final probability is exactly in this range, grounded in the public evidence you found.",
+        "Always explain the percentage-point calibration: which facts push probability upward, which facts cap or reduce it, and why the final percentage is not merely a vague likely/unlikely label.",
         "Return calibrated probability, not trade recommendation. EV is calculated later outside the model.",
       ],
       candidate: {
@@ -1720,6 +1789,8 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
         direction: "YES | NO | OUTCOME",
         probability: "number from 0.01 to 0.995",
         thesis: "one sentence",
+        probabilityRationale: "one clear Czech or English human sentence explaining why the final probability is what it is, based on verified public evidence",
+        probabilityPointRationale: "one concise sentence explaining the percentage-point calibration: facts pushing up, facts pushing down, and why the final number lands there",
         confidenceTier: "near-certain | high | edge-watch | uncertain | long-shot",
         evidence: ["short bullet with the public fact used"],
         counterEvidence: ["short bullet with uncertainty or contrary public fact"],
@@ -1747,6 +1818,8 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
     byId.set(candidate.id, refreshEvaluationAfterProbability(candidate, probability, result._model || GEMINI_MODEL, {
       direction: result.direction || outcomeKind(candidate.outcome),
       thesis: result.thesis || candidate.probabilityThesis,
+      probabilityRationale: result.probabilityRationale || "",
+      probabilityPointRationale: result.probabilityPointRationale || "",
       confidenceTier: result.confidenceTier || confidenceTier(probability),
       evidence: Array.isArray(result.evidence) ? result.evidence.slice(0, 6) : [],
       counterEvidence: Array.isArray(result.counterEvidence) ? result.counterEvidence.slice(0, 6) : [],
