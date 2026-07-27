@@ -696,16 +696,17 @@ function github_json_request(string $url): array
 function workflow_status_payload(string $target): array
 {
     $config = app_config();
+    $targetKey = workflow_target_key($target);
     $workflows = [
         'paper' => 'trading-paper-bot.yml',
         'live' => 'polymarket-live-limit-order-test.yml',
         'live-sync' => 'trading-live-account.yml',
     ];
-    if (!isset($workflows[$target])) {
+    if (!isset($workflows[$targetKey])) {
         respond(['ok' => false, 'error' => 'Unknown workflow target'], 400);
     }
 
-    $workflow = $workflows[$target];
+    $workflow = $workflows[$targetKey];
     $url = sprintf(
         'https://api.github.com/repos/%s/actions/workflows/%s/runs?%s',
         rawurlencode($config['repo']),
@@ -743,6 +744,7 @@ function workflow_status_payload(string $target): array
     return [
         'ok' => true,
         'target' => $target,
+        'workflowTarget' => $targetKey,
         'workflow' => $workflow,
         'generatedAt' => gmdate('c'),
         'runs' => $runs,
@@ -839,6 +841,21 @@ function normalized_paper_strategy_input($value): ?string
     return in_array($text, ['conservative', 'highReward', 'moreProbable'], true) ? $text : null;
 }
 
+function paper_strategy_from_target(string $target): ?string
+{
+    return match ($target) {
+        'paper-conservative' => 'conservative',
+        'paper-highReward' => 'highReward',
+        'paper-moreProbable' => 'moreProbable',
+        default => null,
+    };
+}
+
+function workflow_target_key(string $target): string
+{
+    return paper_strategy_from_target($target) !== null ? 'paper' : $target;
+}
+
 try {
     $action = $_GET['action'] ?? 'markets';
 
@@ -896,6 +913,7 @@ try {
 
         $payload = request_payload();
         $target = (string) ($payload['target'] ?? '');
+        $targetKey = workflow_target_key($target);
         $liveMinProbability = normalized_probability_input($payload['min_probability'] ?? $payload['live_min_probability'] ?? null);
         $paperConservativeMinProbability = normalized_probability_input($payload['paper_conservative_min_probability'] ?? null);
         $paperHighRewardMinProbability = normalized_probability_input($payload['paper_high_reward_min_probability'] ?? null);
@@ -909,7 +927,7 @@ try {
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
         $manualRunOnce = normalized_bool_input($payload['manual_run_once'] ?? $payload['manualRunOnce'] ?? null);
-        $paperStrategyId = normalized_paper_strategy_input($payload['paper_strategy_id'] ?? $payload['paperStrategyId'] ?? null);
+        $paperStrategyId = paper_strategy_from_target($target) ?? normalized_paper_strategy_input($payload['paper_strategy_id'] ?? $payload['paperStrategyId'] ?? null);
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
         $paperExtraInputs = [];
         foreach ($paperStrategies as $strategy) {
@@ -952,15 +970,17 @@ try {
             ],
         ];
 
-        if (!isset($workflows[$target])) {
+        if (!isset($workflows[$targetKey])) {
             respond(['ok' => false, 'error' => 'Unknown workflow target'], 400);
         }
 
-        $result = dispatch_workflow($workflows[$target]['workflow'], $workflows[$target]['inputs'], false);
+        $result = dispatch_workflow($workflows[$targetKey]['workflow'], $workflows[$targetKey]['inputs'], false);
         respond([
             'ok' => true,
             'target' => $target,
-            'message' => $workflows[$target]['message'],
+            'workflowTarget' => $targetKey,
+            'paperStrategyId' => $paperStrategyId,
+            'message' => $workflows[$targetKey]['message'],
             'workflow' => $result['workflow'],
             'ref' => $result['ref'],
             'generatedAt' => gmdate('c'),

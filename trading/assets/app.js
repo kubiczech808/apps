@@ -452,9 +452,19 @@ function stateWarningHtml(target, label) {
 }
 
 function oneTimeExecutionTarget(button) {
-  if (!button) return isLiveMode() ? "live" : "paper";
-  if (button.dataset.oneTimeExecution === "current") return isLiveMode() ? "live" : "paper";
+  if (!button) return isLiveMode() ? "live" : state.mode;
+  if (button.dataset.oneTimeExecution === "current") return isLiveMode() ? "live" : state.mode;
   return button.dataset.oneTimeExecution === "live" ? "live" : "paper";
+}
+
+function isPaperExecutionTarget(target) {
+  return target === "paper" || String(target || "").startsWith("paper-");
+}
+
+function executionTargetLabel(target) {
+  if (target === "live") return "live";
+  if (isPaperExecutionTarget(target)) return paperPortfolioLabelFromMode(target === "paper" ? state.mode : target);
+  return "paper";
 }
 
 function syncExecutionButtons() {
@@ -463,11 +473,10 @@ function syncExecutionButtons() {
     const busy = state.executionBusy === target;
     button.disabled = Boolean(state.executionBusy);
     button.classList.toggle("live", isLiveMode());
-    const labels = {
-      paper: ["Run paper once", "Starting paper..."],
-      live: ["Run live once", "Starting live..."],
-    };
-    const [idleLabel, busyLabel] = labels[target] || ["Run once", "Starting..."];
+    const labels = target === "live"
+      ? ["Run live once", "Starting live..."]
+      : [`Run ${executionTargetLabel(target)} once`, `Starting ${executionTargetLabel(target)}...`];
+    const [idleLabel, busyLabel] = labels;
     button.textContent = busy ? busyLabel : idleLabel;
   });
 }
@@ -2272,7 +2281,7 @@ function openExecutionModal(target) {
   modal.dataset.target = target;
   modal.dataset.done = "false";
   document.body.classList.add("modal-open");
-  renderExecutionSteps([{ tone: "active", text: `${target === "live" ? "Live" : "Paper"} run requested` }]);
+  renderExecutionSteps([{ tone: "active", text: `${target === "live" ? "Live" : executionTargetLabel(target)} run requested` }]);
   modal.querySelector("[data-execution-modal-close]")?.focus();
 }
 
@@ -2649,15 +2658,15 @@ function liveWorkflowPayload() {
 }
 
 async function triggerOneTimeExecution(target) {
-  target = target === "live" ? "live" : "paper";
+  target = target === "live" ? "live" : (isPaperExecutionTarget(target) ? target : "paper");
   const live = target === "live";
-  const paperStrategyId = live ? "" : paperStrategyIdFromMode();
+  const paperStrategyId = live ? "" : paperStrategyIdFromMode(target === "paper" ? state.mode : target);
   const startedAt = new Date().toISOString();
   openExecutionModal(target);
   let steps = [
     {
       title: live ? "Live execution requested" : "Paper execution requested",
-      detail: `Started ${formatDate(startedAt)}`,
+      detail: live ? `Started ${formatDate(startedAt)}` : `${executionTargetLabel(target)} / started ${formatDate(startedAt)}`,
       tone: "active",
     },
   ];
