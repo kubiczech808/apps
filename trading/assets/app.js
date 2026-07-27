@@ -2701,8 +2701,8 @@ function renderLiveState(liveState) {
     : (Number.isFinite(marketValue) ? marketValue : 0);
   const deposited = Number(portfolio.depositedUsdc);
   const depositedLine = Number.isFinite(deposited)
-    ? `Deposited/original value ${money(deposited)}`
-    : "Deposited/original value not available";
+    ? `Original value ${money(deposited)}`
+    : "Original value not available";
   const redeemLine = Number.isFinite(pendingRedeem) && pendingRedeem > 0.000001
     ? `includes ${money(pendingRedeem)} pending redeem`
     : "";
