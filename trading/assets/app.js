@@ -42,6 +42,10 @@ const state = {
   settingsSection: "evaluation-log",
   calculationSource: "all",
   calculationMarket: "all",
+  calculationSort: {
+    key: "roi",
+    direction: "desc",
+  },
   displayedRunLog: [],
   userNavRefreshTimer: null,
 };
@@ -639,6 +643,11 @@ function sortDirectionIndicator(direction) {
 function sortArrow(key) {
   if (state.evaluationSort.key !== key) return "";
   return sortDirectionIndicator(state.evaluationSort.direction);
+}
+
+function calculationSortArrow(key) {
+  if (state.calculationSort.key !== key) return "";
+  return sortDirectionIndicator(state.calculationSort.direction);
 }
 
 function evaluationStake(item) {
@@ -3348,11 +3357,45 @@ function calculationMarketLabel(type) {
 
 function calculationRows(report) {
   const rows = Array.isArray(report?.thresholdSummaries) ? report.thresholdSummaries : [];
-  return rows.filter((row) => {
+  const filtered = rows.filter((row) => {
     const sourceOk = state.calculationSource === "all" || row.source === state.calculationSource;
     const marketOk = state.calculationMarket === "all" || row.marketType === state.calculationMarket;
     return sourceOk && marketOk;
   });
+  return sortedCalculationRows(filtered);
+}
+
+function calculationSortValue(row, key) {
+  if (key === "source") return calculationSourceLabel(row.source).toLowerCase();
+  if (key === "marketType") return calculationMarketLabel(row.marketType).toLowerCase();
+  if (key === "threshold") return Number(row.threshold);
+  if (key === "trades") return Number(row.trades || 0);
+  if (key === "accuracy") return Number(row.winRate);
+  if (key === "pnl") return Number(row.pnlUsdc || 0);
+  if (key === "roi") return Number(row.roi);
+  if (key === "avgProbability") return Number(row.avgAiProbability);
+  return "";
+}
+
+function sortedCalculationRows(rows) {
+  const sort = state.calculationSort || { key: "roi", direction: "desc" };
+  const direction = sort.direction === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const aValue = calculationSortValue(a, sort.key);
+    const bValue = calculationSortValue(b, sort.key);
+    const aMissing = aValue == null || Number.isNaN(aValue);
+    const bMissing = bValue == null || Number.isNaN(bValue);
+    if (aMissing && bMissing) return 0;
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+    if (typeof aValue === "number" && typeof bValue === "number") return (aValue - bValue) * direction;
+    return String(aValue).localeCompare(String(bValue)) * direction;
+  });
+}
+
+function calculationHeader(key, label) {
+  const active = state.calculationSort.key === key ? " active" : "";
+  return `<th><div class="th-content"><button class="sort-button${active}" type="button" data-calculation-sort="${key}">${label}${calculationSortArrow(key)}</button></div></th>`;
 }
 
 function renderCalculationReport() {
@@ -3421,14 +3464,14 @@ function renderCalculationReport() {
         <table class="calculation-table">
           <thead>
             <tr>
-              <th>Probability source</th>
-              <th>Market type</th>
-              <th>Threshold</th>
-              <th>Trades</th>
-              <th>Accuracy</th>
-              <th>P/L</th>
-              <th>ROI</th>
-              <th>Avg AI / PM</th>
+              ${calculationHeader("source", "Probability source")}
+              ${calculationHeader("marketType", "Market type")}
+              ${calculationHeader("threshold", "Threshold")}
+              ${calculationHeader("trades", "Trades")}
+              ${calculationHeader("accuracy", "Accuracy")}
+              ${calculationHeader("pnl", "P/L")}
+              ${calculationHeader("roi", "ROI")}
+              ${calculationHeader("avgProbability", "Avg AI / PM")}
             </tr>
           </thead>
           <tbody>
@@ -3500,6 +3543,19 @@ els.calculationMarketButtons.forEach((button) => {
     });
     renderCalculationReport();
   });
+});
+
+els.calculationReport?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-calculation-sort]");
+  if (!button) return;
+  const key = button.dataset.calculationSort;
+  if (state.calculationSort.key === key) {
+    state.calculationSort.direction = state.calculationSort.direction === "asc" ? "desc" : "asc";
+  } else {
+    state.calculationSort.key = key;
+    state.calculationSort.direction = ["source", "marketType", "threshold"].includes(key) ? "asc" : "desc";
+  }
+  renderCalculationReport();
 });
 
 els.modeButtons.forEach((button) => {
