@@ -2331,6 +2331,7 @@ function renderAnalysisModalHtml(text) {
     "Risk-blocked candidates:",
     "Open order review:",
     "Position rotation review:",
+    "Revalidated candidates checked:",
     "Eligible candidates checked:",
     "Rejected candidates checked:",
     "Selected:",
@@ -2376,6 +2377,8 @@ function renderAnalysisModalHtml(text) {
 function openAnalysisModal(text, trigger, options = {}) {
   const modal = analysisModal();
   modal.querySelector(".analysis-modal")?.classList.add("analysis-detail-modal");
+  const title = modal.querySelector("#analysis-modal-title");
+  if (title) title.textContent = options.title || "Analysis detail";
   const body = modal.querySelector("[data-analysis-modal-body]");
   if (body) body.innerHTML = renderAnalysisModalHtml(text || "No analysis detail available.");
   modal.dataset.opportunityKey = options.opportunityKey || "";
@@ -3761,6 +3764,9 @@ function tradeBatchDetail(batch) {
     : (Array.isArray(batch.topCandidates) ? batch.topCandidates : []);
   const blocked = Array.isArray(batch.riskBlocked) ? batch.riskBlocked : [];
   const rejected = Array.isArray(batch.topRejected) ? batch.topRejected : [];
+  const revalidated = Array.isArray(batch.revalidatedCandidates) && batch.revalidatedCandidates.length
+    ? batch.revalidatedCandidates
+    : [...candidates, ...rejected];
   const openOrderReviews = Array.isArray(batch.openOrderReviews) ? batch.openOrderReviews : [];
   const rotationReview = batch.rotationReview || null;
   const portfolioFilter = batch.portfolioFilter || {};
@@ -3819,6 +3825,16 @@ function tradeBatchDetail(batch) {
         `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
         `   ${candidateMetricLine(item)}`,
         `   Why not: ${rejectionReasonLine(item)}`,
+        opportunityKey(item) ? `   Analysis: ${absoluteOpportunityDetailUrl(item)}` : "",
+        item.url ? `   Polymarket: ${item.url}` : "",
+      ].filter(Boolean).join("\n")).join("\n\n")
+    : "-";
+  const revalidatedLines = revalidated.length
+    ? revalidated.map((item, index) => [
+        `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
+        `   Status: ${item.status || "-"}`,
+        `   ${candidateMetricLine(item)}`,
+        String(item.status || "").toUpperCase() === "ELIGIBLE" ? "   Why: passes current execution criteria" : `   Why not: ${rejectionReasonLine(item)}`,
         opportunityKey(item) ? `   Analysis: ${absoluteOpportunityDetailUrl(item)}` : "",
         item.url ? `   Polymarket: ${item.url}` : "",
       ].filter(Boolean).join("\n")).join("\n\n")
@@ -3919,6 +3935,9 @@ function tradeBatchDetail(batch) {
     "",
     `Position rotation review:`,
     rotationReviewLines,
+    "",
+    `Revalidated candidates checked:`,
+    revalidatedLines,
     "",
     `Eligible candidates checked:`,
     candidateLines,
@@ -4538,7 +4557,7 @@ document.addEventListener("click", (event) => {
   if (portfolioRunButton) {
     event.preventDefault();
     const run = state.displayedRunLog[Number(portfolioRunButton.dataset.portfolioRun)];
-    openAnalysisModal(portfolioRunDetail(run || {}), portfolioRunButton);
+    openAnalysisModal(portfolioRunDetail(run || {}), portfolioRunButton, { title: "Execution run log" });
     return;
   }
 

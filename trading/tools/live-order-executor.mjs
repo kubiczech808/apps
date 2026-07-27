@@ -1398,6 +1398,7 @@ async function main() {
       openOrderReviews: orderManagement.reviews,
       rotationReview,
       selected: best ? liveBatchCandidateSummary(best) : null,
+      revalidatedCandidates: checked.map(liveBatchCandidateSummary),
       topCandidates: eligible.slice(0, 8).map(liveBatchCandidateSummary),
       topRejected: checked.filter((item) => item.status !== "ELIGIBLE").slice(0, REJECTED_CANDIDATE_LOG_LIMIT).map(liveBatchCandidateSummary),
     },
