@@ -1805,6 +1805,27 @@ function isQuotaError(result) {
   return /quota|rate limit|429/i.test(String(result?.error || ""));
 }
 
+function markAiAnalysisUnavailable(item, message) {
+  const reason = compactSentence(message || "Gemini grounded AI analysis unavailable");
+  return ensureEvaluationErrorMetadata({
+    ...item,
+    status: "ERROR",
+    errorType: "AI_ANALYSIS_UNAVAILABLE",
+    errorReason: `Gemini grounded AI analysis unavailable: ${reason}. Trade selection is blocked because Gemini analysis is required.`,
+    rejectReasons: [
+      `Gemini grounded AI analysis unavailable: ${reason}`,
+      ...(Array.isArray(item.rejectReasons) ? item.rejectReasons : []),
+    ],
+    aiAnalysis: {
+      ...(item.aiAnalysis || {}),
+      aiModelError: reason,
+      requiredModel: GEMINI_MODEL,
+      provider: "gemini",
+    },
+    analysisSummary: `Gemini grounded AI analysis unavailable: ${reason}. This opportunity was not allowed to trade from heuristic-only analysis.`,
+  });
+}
+
 async function enrichEvaluationsWithAi(evaluations, learningProfile) {
   if (!GEMINI_API_KEY || AI_ANALYSIS_LIMIT <= 0) return evaluations;
   const candidates = [...evaluations]
@@ -1820,6 +1841,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
     })
     .slice(0, AI_ANALYSIS_LIMIT);
   const byId = new Map(evaluations.map((item) => [item.id, item]));
+  let quotaError = "";
 
   for (const candidate of candidates) {
     const prompt = {
@@ -1881,14 +1903,20 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
       { role: "user", content: JSON.stringify(prompt) },
     ]);
     if (!result || result.error) {
-      byId.set(candidate.id, {
-        ...candidate,
-        aiAnalysis: {
-          ...(candidate.aiAnalysis || {}),
-          aiModelError: result?.error || "Gemini public-research analysis unavailable",
-        },
-      });
-      if (AI_STOP_ON_QUOTA_ERROR && isQuotaError(result)) break;
+      const message = result?.error || "Gemini public-research analysis unavailable";
+      byId.set(candidate.id, REQUIRE_GEMINI
+        ? markAiAnalysisUnavailable(candidate, message)
+        : {
+            ...candidate,
+            aiAnalysis: {
+              ...(candidate.aiAnalysis || {}),
+              aiModelError: message,
+            },
+          });
+      if (AI_STOP_ON_QUOTA_ERROR && isQuotaError(result)) {
+        quotaError = message;
+        break;
+      }
       continue;
     }
     const probability = clamp(Number(result.probability), 0.01, 0.995);
@@ -1912,6 +1940,13 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
       source: "gemini-grounded-public-research",
       _provider: "gemini",
     }));
+  }
+
+  if (REQUIRE_GEMINI && quotaError) {
+    for (const item of evaluations) {
+      if (hasGroundedPublicMemo(byId.get(item.id) || item)) continue;
+      byId.set(item.id, markAiAnalysisUnavailable(byId.get(item.id) || item, `Gemini quota/rate limit stopped this run before the candidate could be reviewed: ${quotaError}`));
+    }
   }
 
   return evaluations.map((item) => byId.get(item.id) || item);
