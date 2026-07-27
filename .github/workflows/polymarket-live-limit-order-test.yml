@@ -59,7 +59,7 @@ jobs:
       POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '1' }}
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
       LIVE_STATE_PATH: data/live-state.json
-      LIVE_STATE_URL: data/live-state.json
+      LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
       LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
       LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
       MAX_ORDER_FRACTION: ${{ github.event.inputs.live_max_order_fraction || '0.05' }}
@@ -194,4 +194,24 @@ jobs:
               if execution_file.exists():
                   with execution_file.open("rb") as handle:
                       ftp.storbinary("STOR live-execution-state.json", handle)
+          PY
+
+      - name: Send redeem alert emails
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          import sys
+          import urllib.request
+
+          request = urllib.request.Request(
+              "https://osobnizkusenosti.cz/trading/api.php?action=send-redeem-alerts",
+              data=b"",
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=60) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+          print(json.dumps(payload, ensure_ascii=False))
+          if not payload.get("ok") or int(payload.get("failedCount") or 0) > 0:
+              sys.exit("Redeem alert email sending failed")
           PY
