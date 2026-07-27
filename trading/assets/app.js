@@ -37,6 +37,10 @@ const state = {
   liveExecutionState: null,
   portfolioConfig: null,
   portfolioConfigSaveTimer: null,
+  parameterDraft: null,
+  parameterDraftMode: "",
+  parameterDraftSystem: null,
+  parameterCapitalContext: null,
   stateFetchErrors: {},
   executionBusy: null,
   autoLiveSyncBusy: false,
@@ -1985,12 +1989,69 @@ function syncLimitOrdersControl() {
   }
 }
 
-function syncPortfolioParameterControls() {
-  const config = portfolioConfigForMode(state.mode);
-  const maxDays = resolutionDaysForMode(state.mode);
+function parameterCapitalContextForMode(mode = state.mode) {
+  if (normalizeMode(mode) === "live") {
+    const portfolio = state.liveState?.portfolio || {};
+    const openOrderRisk = Array.isArray(state.liveState?.openOrders)
+      ? state.liveState.openOrders.reduce((sum, order) => sum + Number(order.notionalUsdc || 0), 0)
+      : 0;
+    const freeCash = Math.max(0, Number(portfolio.cashUsdc || 0) - openOrderRisk);
+    const equity = Number.isFinite(Number(portfolio.equityUsdc))
+      ? Number(portfolio.equityUsdc)
+      : Number(portfolio.marketValueUsdc);
+    const openPnl = Number(portfolio.openPnlUsdc);
+    return {
+      availableCapital: Number.isFinite(freeCash) ? freeCash : null,
+      baseCapital: Number.isFinite(equity) ? Math.max(0, equity - (Number.isFinite(openPnl) ? openPnl : 0)) : null,
+      sourceLabel: "live portfolio equity excl. unrealized P/L",
+      cadenceLabel: "next live execution",
+    };
+  }
+  const strategy = paperStrategyIdFromMode(mode);
+  const portfolio = state.botState?.paperPortfolios?.[strategy]?.portfolio || state.botState?.portfolio || {};
+  const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
+  const realizedPnl = Number(portfolio.realizedPnlUsdc || 0);
+  return {
+    availableCapital: Number.isFinite(freeCapital) ? freeCapital : null,
+    baseCapital: Number(portfolio.initialUsdc ?? 100) + realizedPnl,
+    sourceLabel: "paper portfolio equity",
+    cadenceLabel: "next paper execution",
+  };
+}
+
+function syncDraftRiskAllocationControl(value, context = {}) {
+  const normalized = normalizeRiskAllocation(value) ?? DEFAULT_RISK_ALLOCATION;
+  const base = Number(context.baseCapital);
+  const available = Number(context.availableCapital);
+  const stake = Number.isFinite(base) ? base * normalized : null;
+  if (els.riskAllocation) els.riskAllocation.value = String(Math.round(normalized * 100));
+  if (els.riskAllocationLabel) els.riskAllocationLabel.textContent = probability(normalized);
+  if (els.riskAllocationValue) els.riskAllocationValue.textContent = Number.isFinite(stake) ? money(stake) : "-";
+  if (els.riskAllocationNote) els.riskAllocationNote.textContent = `maximum stake from ${context.sourceLabel || "portfolio capital"}`;
+  syncCapitalStatus({
+    availableCapital: Number.isFinite(available) ? available : null,
+    baseCapital: Number.isFinite(base) ? base : null,
+    stake,
+    cadenceLabel: context.cadenceLabel || "next scheduled run",
+  });
+}
+
+function syncPortfolioParameterControls(configOverride = null, options = {}) {
+  const mode = options.mode || state.mode;
+  const config = configOverride || portfolioConfigForMode(mode);
+  const maxDays = normalizeOptionalDays(config.maxResolutionDays) || DEFAULT_MAX_RESOLUTION_DAYS;
   const liquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const order = normalizeSelectionOrder(config.selectionOrder);
-  const cadence = normalizeCadenceHours(config.tradeCadenceHours, isLiveMode() ? 24 : 1);
+  const isLive = normalizeMode(mode) === "live";
+  const cadence = normalizeCadenceHours(config.tradeCadenceHours, isLive ? 24 : 1);
+  const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(mode);
+  const allocation = normalizeRiskAllocation(config.maxOrderFraction) ?? DEFAULT_RISK_ALLOCATION;
+  const limitOrders = config.useLimitOrders ?? isLive;
+  const capitalContext = options.capitalContext || parameterCapitalContextForMode(mode);
+  if (els.eligibilityThreshold) els.eligibilityThreshold.value = String(Math.round(threshold * 100));
+  if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = probability(threshold);
+  syncDraftRiskAllocationControl(allocation, capitalContext);
+  if (els.limitOrders) els.limitOrders.checked = Boolean(limitOrders);
   if (els.maxResolutionDays) els.maxResolutionDays.value = String(maxDays);
   if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = `${maxDays} d`;
   if (els.selectionOrder) els.selectionOrder.value = order;
@@ -2001,10 +2062,10 @@ function syncPortfolioParameterControls() {
   if (els.tradeCadenceHoursLabel) els.tradeCadenceHoursLabel.textContent = `${cadence}h`;
   if (els.mostProbableOutcome) {
     els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
-    els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLiveMode());
+    els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLive);
   }
   if (els.crossLiveRisk) {
-    els.crossLiveRisk.checked = systemConfig().crossLivePortfolioRiskDiversification !== false;
+    els.crossLiveRisk.checked = (options.systemConfig || systemConfig()).crossLivePortfolioRiskDiversification !== false;
   }
 }
 
@@ -2024,10 +2085,16 @@ function rerenderCurrentDashboard() {
 
 function openParameterModal(trigger) {
   if (!els.parameterModal) return;
-  refreshEligibilityThreshold();
-  refreshRiskAllocation();
-  refreshLimitOrders();
-  syncPortfolioParameterControls();
+  const mode = state.mode;
+  state.parameterDraftMode = mode;
+  state.parameterDraft = { ...portfolioConfigForMode(mode) };
+  state.parameterDraftSystem = { ...systemConfig() };
+  state.parameterCapitalContext = parameterCapitalContextForMode(mode);
+  syncPortfolioParameterControls(state.parameterDraft, {
+    mode,
+    systemConfig: state.parameterDraftSystem,
+    capitalContext: state.parameterCapitalContext,
+  });
   els.parameterModal.hidden = false;
   document.body.classList.add("modal-open");
   els.parameterModalClose?.focus();
@@ -2040,6 +2107,14 @@ function closeParameterModal() {
   if (!els.parameterModal || els.parameterModal.hidden) return;
   els.parameterModal.hidden = true;
   document.body.classList.remove("modal-open");
+  state.parameterDraft = null;
+  state.parameterDraftMode = "";
+  state.parameterDraftSystem = null;
+  state.parameterCapitalContext = null;
+  refreshEligibilityThreshold();
+  refreshRiskAllocation();
+  refreshLimitOrders();
+  syncPortfolioParameterControls();
   if (openParameterModal.lastTrigger instanceof HTMLElement) {
     openParameterModal.lastTrigger.focus();
   }
@@ -2048,14 +2123,34 @@ function closeParameterModal() {
 
 async function confirmParameterModal() {
   if (!els.parameterModal || els.parameterModal.hidden) return;
+  const draftMode = state.parameterDraftMode || state.mode;
+  const draft = state.parameterDraft ? { ...state.parameterDraft } : { ...portfolioConfigForMode(draftMode) };
+  const draftSystem = state.parameterDraftSystem ? { ...state.parameterDraftSystem } : systemConfig();
   if (els.parameterModalConfirm) {
     els.parameterModalConfirm.disabled = true;
     els.parameterModalConfirm.textContent = "Saving...";
   }
   try {
+    updatePortfolioConfigForMode(draftMode, draft);
+    updateSystemConfig(draftSystem);
+    const threshold = normalizeEligibilityThreshold(draft.minProbability);
+    const allocation = normalizeRiskAllocation(draft.maxOrderFraction);
+    if (threshold != null) {
+      state.eligibilityThreshold = threshold;
+      saveEligibilityThreshold(threshold, draftMode);
+    }
+    if (allocation != null) {
+      state.riskAllocation = allocation;
+      saveRiskAllocation(allocation);
+    }
+    if (typeof draft.useLimitOrders === "boolean") {
+      state.limitOrders = draft.useLimitOrders;
+      saveLimitOrders(draft.useLimitOrders);
+    }
     await savePortfolioConfigNow();
     setExecutionStatus("portfolio parameters saved");
     closeParameterModal();
+    rerenderCurrentDashboard();
   } catch (error) {
     setExecutionStatus(error.message || "portfolio parameter save failed", "error");
   } finally {
@@ -2064,6 +2159,30 @@ async function confirmParameterModal() {
       els.parameterModalConfirm.textContent = "Save and close";
     }
   }
+}
+
+function parameterDraftActive() {
+  return Boolean(els.parameterModal && !els.parameterModal.hidden && state.parameterDraft);
+}
+
+function updateParameterDraft(updates = {}, systemUpdates = null) {
+  if (!parameterDraftActive()) return false;
+  state.parameterDraft = {
+    ...state.parameterDraft,
+    ...updates,
+  };
+  if (systemUpdates) {
+    state.parameterDraftSystem = {
+      ...(state.parameterDraftSystem || systemConfig()),
+      ...systemUpdates,
+    };
+  }
+  syncPortfolioParameterControls(state.parameterDraft, {
+    mode: state.parameterDraftMode || state.mode,
+    systemConfig: state.parameterDraftSystem || systemConfig(),
+    capitalContext: state.parameterCapitalContext || parameterCapitalContextForMode(state.parameterDraftMode || state.mode),
+  });
+  return true;
 }
 
 function analysisModal() {
@@ -4249,6 +4368,7 @@ els.eligibilityThreshold?.addEventListener("input", () => {
   if (!Number.isFinite(raw)) return;
   const normalized = normalizeEligibilityThreshold(raw / 100);
   const value = normalized ?? currentEligibilityThreshold();
+  if (updateParameterDraft({ minProbability: value })) return;
   state.eligibilityThreshold = value;
   updatePortfolioConfigForMode(state.mode, { minProbability: value });
   saveEligibilityThreshold(value);
@@ -4262,6 +4382,7 @@ els.riskAllocation?.addEventListener("input", () => {
   if (!Number.isFinite(raw)) return;
   const normalized = normalizeRiskAllocation(raw / 100);
   const value = normalized ?? currentRiskAllocation();
+  if (updateParameterDraft({ maxOrderFraction: value })) return;
   state.riskAllocation = value;
   updatePortfolioConfigForMode(state.mode, { maxOrderFraction: value });
   saveRiskAllocation(value);
@@ -4270,6 +4391,7 @@ els.riskAllocation?.addEventListener("input", () => {
 });
 
 els.limitOrders?.addEventListener("change", () => {
+  if (updateParameterDraft({ useLimitOrders: Boolean(els.limitOrders.checked) })) return;
   state.limitOrders = Boolean(els.limitOrders.checked);
   updatePortfolioConfigForMode(state.mode, { useLimitOrders: state.limitOrders });
   saveLimitOrders(state.limitOrders);
@@ -4279,6 +4401,7 @@ els.limitOrders?.addEventListener("change", () => {
 
 els.maxResolutionDays?.addEventListener("input", () => {
   const value = normalizeOptionalDays(els.maxResolutionDays.value) || DEFAULT_MAX_RESOLUTION_DAYS;
+  if (updateParameterDraft({ maxResolutionDays: value })) return;
   updatePortfolioConfigForMode(state.mode, { maxResolutionDays: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
@@ -4286,7 +4409,9 @@ els.maxResolutionDays?.addEventListener("input", () => {
 });
 
 els.selectionOrder?.addEventListener("change", () => {
-  updatePortfolioConfigForMode(state.mode, { selectionOrder: normalizeSelectionOrder(els.selectionOrder.value) });
+  const value = normalizeSelectionOrder(els.selectionOrder.value);
+  if (updateParameterDraft({ selectionOrder: value })) return;
+  updatePortfolioConfigForMode(state.mode, { selectionOrder: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();
@@ -4294,6 +4419,7 @@ els.selectionOrder?.addEventListener("change", () => {
 
 els.minLiquidity?.addEventListener("input", () => {
   const value = normalizeOptionalMoney(els.minLiquidity.value);
+  if (updateParameterDraft({ minLiquidityUsdc: value })) return;
   updatePortfolioConfigForMode(state.mode, { minLiquidityUsdc: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
@@ -4303,6 +4429,7 @@ els.minLiquidity?.addEventListener("input", () => {
 els.tradeCadenceHours?.addEventListener("input", () => {
   const fallback = isLiveMode() ? 24 : 1;
   const value = normalizeCadenceHours(els.tradeCadenceHours.value, fallback);
+  if (updateParameterDraft({ tradeCadenceHours: value })) return;
   updatePortfolioConfigForMode(state.mode, { tradeCadenceHours: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
@@ -4310,14 +4437,18 @@ els.tradeCadenceHours?.addEventListener("input", () => {
 });
 
 els.mostProbableOutcome?.addEventListener("change", () => {
-  updatePortfolioConfigForMode(state.mode, { requireMostProbableOutcome: Boolean(els.mostProbableOutcome.checked) });
+  const value = Boolean(els.mostProbableOutcome.checked);
+  if (updateParameterDraft({ requireMostProbableOutcome: value })) return;
+  updatePortfolioConfigForMode(state.mode, { requireMostProbableOutcome: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();
 });
 
 els.crossLiveRisk?.addEventListener("change", () => {
-  updateSystemConfig({ crossLivePortfolioRiskDiversification: Boolean(els.crossLiveRisk.checked) });
+  const value = Boolean(els.crossLiveRisk.checked);
+  if (updateParameterDraft({}, { crossLivePortfolioRiskDiversification: value })) return;
+  updateSystemConfig({ crossLivePortfolioRiskDiversification: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
 });

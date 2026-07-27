@@ -794,6 +794,18 @@ function normalized_days_input($value): ?string
     return (string) $days;
 }
 
+function normalized_cadence_hours_input($value): ?string
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    if (!is_numeric($value)) {
+        return null;
+    }
+    $hours = max(1, min(168, (int) round((float) $value)));
+    return (string) $hours;
+}
+
 function normalized_money_input($value): ?string
 {
     if ($value === null || $value === '') {
@@ -923,7 +935,7 @@ try {
         $liveMaxResolutionDays = normalized_days_input($payload['maxResolutionDays'] ?? $payload['live_max_resolution_days'] ?? null);
         $liveSelectionOrder = normalized_selection_order_input($payload['selectionOrder'] ?? $payload['live_selection_order'] ?? null);
         $liveMinLiquidity = normalized_money_input($payload['minLiquidityUsdc'] ?? $payload['live_min_liquidity_usdc'] ?? null);
-        $liveTradeCadenceHours = normalized_days_input($payload['tradeCadenceHours'] ?? $payload['live_trade_cadence_hours'] ?? null);
+        $liveTradeCadenceHours = normalized_cadence_hours_input($payload['tradeCadenceHours'] ?? $payload['live_trade_cadence_hours'] ?? null);
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
         $manualRunOnce = normalized_bool_input($payload['manual_run_once'] ?? $payload['manualRunOnce'] ?? null);
@@ -935,7 +947,7 @@ try {
             $paperExtraInputs["paper_{$strategy}_max_resolution_days"] = normalized_days_input($payload["paper_{$strategy}_max_resolution_days"] ?? null);
             $paperExtraInputs["paper_{$strategy}_selection_order"] = normalized_selection_order_input($payload["paper_{$strategy}_selection_order"] ?? null);
             $paperExtraInputs["paper_{$strategy}_min_liquidity_usdc"] = normalized_money_input($payload["paper_{$strategy}_min_liquidity_usdc"] ?? null);
-            $paperExtraInputs["paper_{$strategy}_trade_cadence_hours"] = normalized_days_input($payload["paper_{$strategy}_trade_cadence_hours"] ?? null);
+            $paperExtraInputs["paper_{$strategy}_trade_cadence_hours"] = normalized_cadence_hours_input($payload["paper_{$strategy}_trade_cadence_hours"] ?? null);
             $paperExtraInputs["paper_{$strategy}_require_most_probable"] = normalized_bool_input($payload["paper_{$strategy}_require_most_probable"] ?? null);
         }
         $workflows = [
