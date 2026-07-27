@@ -80,8 +80,6 @@ jobs:
       LIVE_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.live_max_resolution_days || '' }}
       LIVE_SELECTION_ORDER: ${{ github.event.inputs.live_selection_order || '' }}
       LIVE_CONFIG_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.live_min_liquidity_usdc || '' }}
-      LIVE_SHORT_HORIZON_DAYS: "7"
-      LIVE_MEDIUM_HORIZON_DAYS: "14"
       LIVE_CANDIDATE_SCAN_LIMIT: "120"
       LIVE_EXECUTION_SOURCE: rpi-self-hosted
     steps:

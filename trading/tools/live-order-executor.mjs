@@ -26,9 +26,7 @@ const MIN_VOLUME_24H = envNumber("LIVE_CONFIG_MIN_LIQUIDITY_USDC", envNumber("LI
 const MAX_ORDER_FRACTION = envNumber("MAX_ORDER_FRACTION", envNumber("LIVE_MAX_ORDER_FRACTION", 0.05));
 const MAX_ORDER_NOTIONAL_USDC = envNumber("MAX_ORDER_NOTIONAL_USDC", envNumber("LIVE_MAX_ORDER_NOTIONAL_USDC", Infinity));
 const CANDIDATE_SCAN_LIMIT = envNumber("LIVE_CANDIDATE_SCAN_LIMIT", 120);
-const SHORT_HORIZON_DAYS = envNumber("LIVE_SHORT_HORIZON_DAYS", envNumber("PAPER_SHORT_HORIZON_DAYS", 7));
-const MEDIUM_HORIZON_DAYS = envNumber("LIVE_MEDIUM_HORIZON_DAYS", envNumber("PAPER_MEDIUM_HORIZON_DAYS", 14));
-const MAX_RESOLUTION_DAYS = envNumber("LIVE_MAX_RESOLUTION_DAYS", null);
+const MAX_RESOLUTION_DAYS = envNumber("LIVE_MAX_RESOLUTION_DAYS", 7);
 const SELECTION_ORDER = process.env.LIVE_SELECTION_ORDER === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
 const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "stake_fraction").toLowerCase();
 const USE_LIMIT_ORDERS = String(process.env.USE_LIMIT_ORDERS ?? "true").toLowerCase() !== "false";
@@ -368,28 +366,6 @@ function liveCashUsdc(liveState) {
 function daysValue(item) {
   const days = Number(item.daysToResolution);
   return Number.isFinite(days) ? days : Infinity;
-}
-
-function horizonBucket(item) {
-  const days = daysValue(item);
-  if (days <= SHORT_HORIZON_DAYS) return 0;
-  if (days <= MEDIUM_HORIZON_DAYS) return 1;
-  return 2;
-}
-
-function horizonBucketLabel(bucket) {
-  if (bucket === 0) return `<=${SHORT_HORIZON_DAYS}d`;
-  if (bucket === 1) return `<=${MEDIUM_HORIZON_DAYS}d`;
-  return `>${MEDIUM_HORIZON_DAYS}d`;
-}
-
-function preferredHorizonCandidates(items) {
-  if (!items.length) return { rows: items, bucket: null };
-  const bucket = Math.min(...items.map(horizonBucket));
-  return {
-    rows: items.filter((item) => horizonBucket(item) === bucket),
-    bucket,
-  };
 }
 
 function compareShorterHorizon(a, b) {
@@ -1064,8 +1040,7 @@ async function main() {
       funderAddress: tradingConfig.funderAddress,
       signatureType: tradingConfig.signatureType,
     }));
-  const preferredHorizon = preferredHorizonCandidates(allEligible);
-  const eligible = sortLiveEligibleCandidates(preferredHorizon.rows);
+  const eligible = sortLiveEligibleCandidates(allEligible);
   const orderManagement = await reviewOpenOrders({
     liveState,
     evaluationByToken,
@@ -1109,8 +1084,6 @@ async function main() {
       minVolume24hr: MIN_VOLUME_24H,
       maxResolutionDays: MAX_RESOLUTION_DAYS,
       selectionOrder: SELECTION_ORDER,
-      shortHorizonDays: SHORT_HORIZON_DAYS,
-      mediumHorizonDays: MEDIUM_HORIZON_DAYS,
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
       idleCashMaxUsdc: IDLE_CASH_MAX_USDC,
       idleCashGraceHours: IDLE_CASH_GRACE_HOURS,
@@ -1119,8 +1092,6 @@ async function main() {
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
       eligibleCandidates: allEligible.length,
-      preferredHorizonEligibleCandidates: eligible.length,
-      selectedHorizonBucket: preferredHorizon.bucket == null ? null : horizonBucketLabel(preferredHorizon.bucket),
       openOrderReviewAfterHours: OPEN_ORDER_REVIEW_AFTER_HOURS,
       openOrderCancelAfterHours: OPEN_ORDER_CANCEL_AFTER_HOURS,
       openOrderRepriceThreshold: OPEN_ORDER_REPRICE_THRESHOLD,
@@ -1147,8 +1118,6 @@ async function main() {
         minVolume24hr: MIN_VOLUME_24H,
         maxResolutionDays: MAX_RESOLUTION_DAYS,
         selectionOrder: SELECTION_ORDER,
-        shortHorizonDays: SHORT_HORIZON_DAYS,
-        mediumHorizonDays: MEDIUM_HORIZON_DAYS,
         useLimitOrders: USE_LIMIT_ORDERS,
         maxOrderFraction: MAX_ORDER_FRACTION,
       },
@@ -1162,7 +1131,7 @@ async function main() {
         scannedCandidates: baseCandidates.length,
         revalidatedCandidates: checked.length,
         eligibleCandidates: allEligible.length,
-        preferredHorizonEligibleCandidates: eligible.length,
+        rankedEligibleCandidates: eligible.length,
         openOrdersReviewed: orderManagement.reviews.length,
         rejectedCandidates: checked.filter((item) => item.status !== "ELIGIBLE").length,
         dailyBlocked,

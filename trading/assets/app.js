@@ -57,8 +57,7 @@ const MAX_ELIGIBILITY_THRESHOLD = 0.99;
 const DEFAULT_RISK_ALLOCATION = 0.05;
 const MIN_RISK_ALLOCATION = 0.01;
 const MAX_RISK_ALLOCATION = 0.5;
-const DEFAULT_SHORT_HORIZON_DAYS = 7;
-const DEFAULT_MEDIUM_HORIZON_DAYS = 14;
+const DEFAULT_MAX_RESOLUTION_DAYS = 7;
 const LIVE_STATE_REFRESH_MS = 15000;
 const LIVE_SYNC_REQUEST_MS = 30000;
 
@@ -243,7 +242,7 @@ function defaultPortfolioConfig() {
       highReward: {
         minProbability: 0.6,
         maxOrderFraction: 0.05,
-        maxResolutionDays: null,
+        maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
         selectionOrder: "highest_reward_risk_first",
         minLiquidityUsdc: null,
         requireMostProbableOutcome: false,
@@ -260,9 +259,7 @@ function defaultPortfolioConfig() {
     live: {
       minProbability: 0.95,
       maxOrderFraction: 0.05,
-      maxResolutionDays: null,
-      shortHorizonDays: 7,
-      mediumHorizonDays: 14,
+      maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
       selectionOrder: "highest_ev_pa_first",
       minLiquidityUsdc: 100,
       useLimitOrders: true,
@@ -284,6 +281,10 @@ function normalizeOptionalDays(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return null;
   return Math.min(365, Math.max(1, Math.round(numeric)));
+}
+
+function resolutionDaysForMode(mode = state.mode) {
+  return normalizeOptionalDays(portfolioConfigForMode(mode).maxResolutionDays) || DEFAULT_MAX_RESOLUTION_DAYS;
 }
 
 function normalizeOptionalMoney(value) {
@@ -1677,11 +1678,11 @@ function syncLimitOrdersControl() {
 
 function syncPortfolioParameterControls() {
   const config = portfolioConfigForMode(state.mode);
-  const maxDays = normalizeOptionalDays(config.maxResolutionDays);
+  const maxDays = resolutionDaysForMode(state.mode);
   const liquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const order = normalizeSelectionOrder(config.selectionOrder);
-  if (els.maxResolutionDays) els.maxResolutionDays.value = maxDays == null ? "" : String(maxDays);
-  if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = maxDays == null ? "auto" : `${maxDays} d`;
+  if (els.maxResolutionDays) els.maxResolutionDays.value = String(maxDays);
+  if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = `${maxDays} d`;
   if (els.selectionOrder) els.selectionOrder.value = order;
   if (els.selectionOrderLabel) els.selectionOrderLabel.textContent = selectionOrderLabel(order);
   if (els.minLiquidity) els.minLiquidity.value = liquidity == null ? "" : String(liquidity);
@@ -2327,14 +2328,12 @@ function portfolioRuleRows(portfolio = {}) {
   const mode = portfolio.id ? paperModeFromStrategyId(portfolio.id) : state.mode;
   const config = portfolioConfigForMode(mode);
   const threshold = thresholdForMode(mode);
-  const maxResolutionDays = Number(config.maxResolutionDays);
+  const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = Number(config.minLiquidityUsdc);
   const priority = config.selectionOrder === "highest_reward_risk_first"
     ? "Highest reward/risk, then shorter resolution and EV"
     : "Highest EV p.a., then shorter resolution and EV";
-  const resolution = Number.isFinite(maxResolutionDays)
-    ? `Max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`
-    : "Shortest available horizon bucket";
+  const resolution = `Max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`;
   const rows = [
     ["AI probability threshold", percent(threshold)],
     ["Stake sizing", `${probability(currentRiskAllocation())} of portfolio equity`],
@@ -2348,7 +2347,7 @@ function portfolioRuleRows(portfolio = {}) {
 
 function livePortfolioRuleRows() {
   const config = portfolioConfigForMode("live");
-  const maxResolutionDays = normalizeOptionalDays(config.maxResolutionDays);
+  const maxResolutionDays = resolutionDaysForMode("live");
   const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
   const priority = config.selectionOrder === "highest_reward_risk_first"
     ? "Highest reward/risk, then shorter resolution and EV"
@@ -2356,7 +2355,7 @@ function livePortfolioRuleRows() {
   return [
     ["AI probability threshold", percent(currentEligibilityThreshold())],
     ["Stake sizing", `${probability(currentRiskAllocation())} of live equity`],
-    ["Resolution filter", maxResolutionDays == null ? `Prefer <=${Number(config.shortHorizonDays || DEFAULT_SHORT_HORIZON_DAYS)}d, then <=${Number(config.mediumHorizonDays || DEFAULT_MEDIUM_HORIZON_DAYS)}d` : `Max ${maxResolutionDays} days`],
+    ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
     ["Liquidity / volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
@@ -3535,7 +3534,7 @@ els.limitOrders?.addEventListener("change", () => {
 });
 
 els.maxResolutionDays?.addEventListener("input", () => {
-  const value = normalizeOptionalDays(els.maxResolutionDays.value);
+  const value = normalizeOptionalDays(els.maxResolutionDays.value) || DEFAULT_MAX_RESOLUTION_DAYS;
   updatePortfolioConfigForMode(state.mode, { maxResolutionDays: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();

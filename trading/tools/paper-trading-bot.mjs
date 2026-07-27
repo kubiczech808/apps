@@ -45,8 +45,7 @@ const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").
 const AI_ANALYSIS_LIMIT = envNumber("PAPER_AI_ANALYSIS_LIMIT", MAX_EVALUATIONS_PER_RUN);
 const AI_POSTMORTEM_LIMIT = envNumber("PAPER_AI_POSTMORTEM_LIMIT", 8);
 const AI_STOP_ON_QUOTA_ERROR = String(process.env.PAPER_AI_STOP_ON_QUOTA_ERROR ?? "true").toLowerCase() !== "false";
-const SHORT_HORIZON_DAYS = envNumber("PAPER_SHORT_HORIZON_DAYS", 7);
-const MEDIUM_HORIZON_DAYS = envNumber("PAPER_MEDIUM_HORIZON_DAYS", 14);
+const DEFAULT_MAX_RESOLUTION_DAYS = envNumber("PAPER_MAX_RESOLUTION_DAYS", envNumber("PAPER_SHORT_HORIZON_DAYS", 7));
 const MORE_PROBABLE_MIN_LIQUIDITY_USDC = envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", 500000);
 const ROTATION_MIN_SCORE_IMPROVEMENT = envNumber("PAPER_ROTATION_MIN_SCORE_IMPROVEMENT", 0.15);
 const ROTATION_MIN_EV_USDC_IMPROVEMENT = envNumber("PAPER_ROTATION_MIN_EV_USDC_IMPROVEMENT", 0.02);
@@ -63,11 +62,11 @@ const PAPER_STRATEGIES = {
     selectionMetric: "EV p.a.",
     minProbability: CONSERVATIVE_MIN_PROBABILITY,
     maxFraction: envNumber("PAPER_CONSERVATIVE_MAX_FRACTION", MAX_FRACTION),
-    maxResolutionDays: envNumber("PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS", SHORT_HORIZON_DAYS),
+    maxResolutionDays: envNumber("PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
     requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
     selectionOrder: envSelectionOrder("PAPER_CONSERVATIVE_SELECTION_ORDER", "highest_ev_pa_first"),
-    description: `Requires AI probability >= ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${SHORT_HORIZON_DAYS} days, then selects the highest EV p.a.`,
+    description: `Requires AI probability >= ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then selects the highest EV p.a.`,
   },
   highReward: {
     id: "highReward",
@@ -75,11 +74,11 @@ const PAPER_STRATEGIES = {
     selectionMetric: "Reward / risk",
     minProbability: HIGH_REWARD_MIN_PROBABILITY,
     maxFraction: envNumber("PAPER_HIGH_REWARD_MAX_FRACTION", MAX_FRACTION),
-    maxResolutionDays: envNumber("PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS", null),
+    maxResolutionDays: envNumber("PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
     requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
     selectionOrder: envSelectionOrder("PAPER_HIGH_REWARD_SELECTION_ORDER", "highest_reward_risk_first"),
-    description: `Requires AI probability >= ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}%, then prioritizes eligible opportunities by highest reward against risk, preferring short settlement horizons first.`,
+    description: `Requires AI probability >= ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then prioritizes eligible opportunities by highest reward against risk.`,
   },
   moreProbable: {
     id: "moreProbable",
@@ -87,11 +86,11 @@ const PAPER_STRATEGIES = {
     selectionMetric: "Reward / risk",
     minProbability: MORE_PROBABLE_STRATEGY_MIN_PROBABILITY,
     maxFraction: envNumber("PAPER_MORE_PROBABLE_MAX_FRACTION", MAX_FRACTION),
-    maxResolutionDays: envNumber("PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS", SHORT_HORIZON_DAYS),
+    maxResolutionDays: envNumber("PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
     requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
     selectionOrder: envSelectionOrder("PAPER_MORE_PROBABLE_SELECTION_ORDER", "highest_reward_risk_first"),
-    description: `Requires AI probability >= ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${SHORT_HORIZON_DAYS} days, deep liquidity, and the most probable outcome in each market.`,
+    description: `Requires AI probability >= ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, deep liquidity, and the most probable outcome in each market.`,
   },
 };
 
@@ -267,7 +266,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     selectionOrder: strategy.selectionOrder,
     minProbability: strategy.minProbability,
     maxFraction: strategy.maxFraction,
-    maxResolutionDays: strategy.maxResolutionDays,
+    maxResolutionDays: strategyMaxResolutionDays(strategy),
     minLiquidityUsdc: strategy.minLiquidityUsdc,
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     description: strategy.description,
@@ -279,7 +278,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       opportunityMinProbability: Number(input.portfolio?.opportunityMinProbability || OPPORTUNITY_MIN_PROBABILITY),
       opportunityMinEdge: Number(input.portfolio?.opportunityMinEdge || OPPORTUNITY_MIN_EDGE),
       opportunityMinAnnualReturn: Number(input.portfolio?.opportunityMinAnnualReturn || OPPORTUNITY_MIN_ANNUAL_RETURN),
-      maxResolutionDays: strategy.maxResolutionDays == null ? null : Number(strategy.maxResolutionDays),
+      maxResolutionDays: strategyMaxResolutionDays(strategy),
       minLiquidityUsdc: strategy.minLiquidityUsdc == null ? null : Number(strategy.minLiquidityUsdc),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     },
@@ -1646,10 +1645,9 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
     .sort((a, b) => {
       if (hasIndependentResearch(a) !== hasIndependentResearch(b)) return hasIndependentResearch(a) ? 1 : -1;
       if (a.status !== b.status) return a.status === "ELIGIBLE" ? -1 : 1;
-      if (horizonBucket(a) !== horizonBucket(b)) return horizonBucket(a) - horizonBucket(b);
-      if (b.expectedValueUsdc !== a.expectedValueUsdc) return b.expectedValueUsdc - a.expectedValueUsdc;
       const horizon = compareShorterHorizon(a, b);
       if (horizon !== 0) return horizon;
+      if (b.expectedValueUsdc !== a.expectedValueUsdc) return b.expectedValueUsdc - a.expectedValueUsdc;
       return b.annualizedReturn - a.annualizedReturn;
     })
     .slice(0, AI_ANALYSIS_LIMIT);
@@ -1831,36 +1829,22 @@ function daysValue(item) {
   return Number.isFinite(days) ? days : Infinity;
 }
 
-function horizonBucket(item) {
-  const days = daysValue(item);
-  if (days <= SHORT_HORIZON_DAYS) return 0;
-  if (days <= MEDIUM_HORIZON_DAYS) return 1;
-  return 2;
-}
-
-function horizonBucketLabel(bucket) {
-  if (bucket === 0) return `<=${SHORT_HORIZON_DAYS}d`;
-  if (bucket === 1) return `<=${MEDIUM_HORIZON_DAYS}d`;
-  return `>${MEDIUM_HORIZON_DAYS}d`;
-}
-
-function preferredHorizonCandidates(items) {
-  if (!items.length) return items;
-  const bestBucket = Math.min(...items.map(horizonBucket));
-  return items.filter((item) => horizonBucket(item) === bestBucket);
-}
-
 function compareShorterHorizon(a, b) {
   const delta = daysValue(a) - daysValue(b);
   return Number.isFinite(delta) ? delta : 0;
 }
 
+function strategyMaxResolutionDays(strategy) {
+  const days = Number(strategy.maxResolutionDays);
+  return Number.isFinite(days) && days > 0 ? days : DEFAULT_MAX_RESOLUTION_DAYS;
+}
+
 function strategyEligibleCandidates(eligible, strategy) {
+  const maxResolutionDays = strategyMaxResolutionDays(strategy);
   let rows = [...eligible].filter((item) => {
     const minProbability = Number(strategy.minProbability);
     if (Number.isFinite(minProbability) && Number(item.aiProbability) < minProbability) return false;
-    const maxResolutionDays = Number(strategy.maxResolutionDays);
-    if (Number.isFinite(maxResolutionDays) && daysValue(item) > maxResolutionDays) return false;
+    if (daysValue(item) > maxResolutionDays) return false;
     const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
     if (Number.isFinite(minLiquidityUsdc) && Number(item.liquidity || 0) < minLiquidityUsdc) return false;
     return true;
@@ -1881,7 +1865,7 @@ function strategyEligibleCandidates(eligible, strategy) {
 
 function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservative) {
   const strategyRows = strategyEligibleCandidates(eligible, strategy);
-  const rows = strategy.maxResolutionDays == null ? preferredHorizonCandidates(strategyRows) : strategyRows;
+  const rows = strategyRows;
   if (strategy.selectionOrder === "highest_reward_risk_first") {
     return rows.sort((a, b) => {
       const aRatio = rewardRiskRatio(a) ?? -Infinity;
@@ -2015,7 +1999,7 @@ function buildTradeBatchLog({ portfolioState, strategy, eligible, rankedEligible
     settings: {
       minProbability: strategy.minProbability,
       maxFraction: strategy.maxFraction ?? null,
-      maxResolutionDays: strategy.maxResolutionDays ?? null,
+      maxResolutionDays: strategyMaxResolutionDays(strategy),
       minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
       selectionOrder: strategy.selectionOrder,
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
@@ -2269,7 +2253,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   portfolioState.trades.unshift(trade);
   portfolioState.lastTradeDate = today;
   portfolioState.lastTradeHour = currentHour;
-  const reason = `best ${strategy.selectionMetric} non-correlated candidate in ${horizonBucketLabel(horizonBucket(best))} horizon bucket`;
+  const reason = `best ${strategy.selectionMetric} non-correlated candidate within max ${strategyMaxResolutionDays(strategy)} day resolution`;
   return {
     action: "OPENED",
     reason,
@@ -2748,7 +2732,7 @@ function buildCalculationReport(state) {
       strategyLabel: portfolioState.label,
       selectionMetric: portfolioState.selectionMetric,
       minProbability: portfolioState.portfolio?.minProbability ?? portfolioState.minProbability ?? null,
-      maxResolutionDays: portfolioState.portfolio?.maxResolutionDays ?? portfolioState.maxResolutionDays ?? null,
+      maxResolutionDays: strategyMaxResolutionDays(portfolioState),
       minLiquidityUsdc: portfolioState.portfolio?.minLiquidityUsdc ?? portfolioState.minLiquidityUsdc ?? null,
       selectionOrder: portfolioState.selectionOrder,
       ...summarizeTradesForReport(closed),
@@ -2836,9 +2820,7 @@ function updatePaperPortfolio(portfolioState) {
     opportunityMinProbability: OPPORTUNITY_MIN_PROBABILITY,
     opportunityMinEdge: OPPORTUNITY_MIN_EDGE,
     opportunityMinAnnualReturn: OPPORTUNITY_MIN_ANNUAL_RETURN,
-    shortHorizonDays: SHORT_HORIZON_DAYS,
-    mediumHorizonDays: MEDIUM_HORIZON_DAYS,
-    maxResolutionDays: portfolioState.maxResolutionDays == null ? null : Number(portfolioState.maxResolutionDays),
+    maxResolutionDays: strategyMaxResolutionDays(portfolioState),
     minLiquidityUsdc: portfolioState.minLiquidityUsdc == null ? null : Number(portfolioState.minLiquidityUsdc),
     requireMostProbableOutcome: Boolean(portfolioState.requireMostProbableOutcome),
     realizedPnlUsdc: Number(realizedPnl.toFixed(4)),

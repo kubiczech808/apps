@@ -131,7 +131,7 @@ function default_portfolio_config(): array
             'highReward' => [
                 'minProbability' => 0.6,
                 'maxOrderFraction' => 0.05,
-                'maxResolutionDays' => null,
+                'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_reward_risk_first',
                 'minLiquidityUsdc' => null,
                 'requireMostProbableOutcome' => false,
@@ -148,9 +148,7 @@ function default_portfolio_config(): array
         'live' => [
             'minProbability' => 0.95,
             'maxOrderFraction' => 0.05,
-            'maxResolutionDays' => null,
-            'shortHorizonDays' => 7,
-            'mediumHorizonDays' => 14,
+            'maxResolutionDays' => 7,
             'selectionOrder' => 'highest_ev_pa_first',
             'minLiquidityUsdc' => 100,
             'useLimitOrders' => true,
@@ -199,6 +197,11 @@ function normalize_optional_days_value(mixed $value): ?int
     return max(1, min(365, (int) round((float) $value)));
 }
 
+function normalize_days_value(mixed $value, int $fallback): int
+{
+    return normalize_optional_days_value($value) ?? max(1, min(365, $fallback));
+}
+
 function normalize_optional_money_value(mixed $value): ?float
 {
     if ($value === null || $value === '') {
@@ -220,7 +223,7 @@ function normalize_strategy_config(array $input, array $defaults): array
     return [
         'minProbability' => normalize_probability_value($input['minProbability'] ?? null, (float) $defaults['minProbability']),
         'maxOrderFraction' => normalize_fraction_value($input['maxOrderFraction'] ?? null, (float) $defaults['maxOrderFraction']),
-        'maxResolutionDays' => normalize_optional_days_value($input['maxResolutionDays'] ?? $defaults['maxResolutionDays']),
+        'maxResolutionDays' => normalize_days_value($input['maxResolutionDays'] ?? null, (int) $defaults['maxResolutionDays']),
         'selectionOrder' => normalize_selection_order_value($input['selectionOrder'] ?? $defaults['selectionOrder']),
         'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
         'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
@@ -238,8 +241,6 @@ function normalize_portfolio_config(array $input): array
         $config['paper'][$id] = normalize_strategy_config($strategyInput, $strategyDefaults);
     }
     $config['live'] = normalize_strategy_config($liveInput, $defaults['live']);
-    $config['live']['shortHorizonDays'] = normalize_optional_days_value($liveInput['shortHorizonDays'] ?? $defaults['live']['shortHorizonDays']) ?? 7;
-    $config['live']['mediumHorizonDays'] = normalize_optional_days_value($liveInput['mediumHorizonDays'] ?? $defaults['live']['mediumHorizonDays']) ?? 14;
     $config['live']['useLimitOrders'] = (bool) ($liveInput['useLimitOrders'] ?? $defaults['live']['useLimitOrders']);
     return $config;
 }
