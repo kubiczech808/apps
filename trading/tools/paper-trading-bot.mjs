@@ -39,6 +39,7 @@ const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
+const REQUIRE_GEMINI = envBool("PAPER_REQUIRE_GEMINI", false);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").toLowerCase();
@@ -3392,6 +3393,16 @@ async function writeState(state) {
 }
 
 async function run() {
+  if (REQUIRE_GEMINI && !GEMINI_API_KEY) {
+    throw new Error("PAPER_REQUIRE_GEMINI is true, but GEMINI_API_KEY is not available. Check GitHub secret GEMINI_API_KEY_POLYMARKET and workflow secret access.");
+  }
+  console.log(JSON.stringify({
+    aiProvider: GEMINI_API_KEY ? "gemini" : (OPENAI_API_KEY ? "openai" : "heuristic-only"),
+    geminiConfigured: Boolean(GEMINI_API_KEY),
+    geminiModel: GEMINI_API_KEY ? GEMINI_MODEL : null,
+    requireGemini: REQUIRE_GEMINI,
+    aiAnalysisLimit: AI_ANALYSIS_LIMIT,
+  }));
   const state = await readState();
   syncLegacyPaperAliases(state);
   state.evaluations = expirePastEvaluations(state.evaluations || []);
