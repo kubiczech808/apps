@@ -802,7 +802,14 @@ async function cancelOrder(order, tradingConfig = {}) {
     funderAddress: tradingConfig.funderAddress || FUNDER_ADDRESS,
     signatureType: number(tradingConfig.signatureType, SIGNATURE_TYPE),
   });
-  if (typeof client.cancelOrder === "function") return client.cancelOrder(orderId);
+  if (typeof client.cancelOrder === "function") {
+    const singleResponse = await client.cancelOrder({ orderID: orderId });
+    if (successfulCancelResponse(singleResponse, orderId) || typeof client.cancelOrders !== "function") {
+      return singleResponse;
+    }
+    const error = orderResponseError(singleResponse);
+    if (!/invalid order payload/i.test(error)) return singleResponse;
+  }
   if (typeof client.cancelOrders === "function") return client.cancelOrders([orderId]);
   throw new Error("CLOB client does not expose cancelOrder/cancelOrders");
 }
@@ -876,6 +883,8 @@ function successfulCancelResponse(response, orderId) {
   if (response.success === true) return true;
   if (Array.isArray(response.canceled) && response.canceled.map(String).includes(String(orderId))) return true;
   if (Array.isArray(response.cancelled) && response.cancelled.map(String).includes(String(orderId))) return true;
+  if (response.not_canceled && Object.prototype.hasOwnProperty.call(response.not_canceled, String(orderId))) return false;
+  if (response.notCanceled && Object.prototype.hasOwnProperty.call(response.notCanceled, String(orderId))) return false;
   if (String(response.status || "").toLowerCase().includes("cancel")) return true;
   return false;
 }
