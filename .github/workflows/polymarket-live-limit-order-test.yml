@@ -194,11 +194,19 @@ jobs:
           with ftplib.FTP(server, timeout=30) as ftp:
               ftp.login(username, password)
               enter_dir(ftp, target.split("/"))
-              with state_file.open("rb") as handle:
-                  ftp.storbinary("STOR live-state.json", handle)
+              def upload_atomic(local_path, remote_name):
+                  tmp_name = f"{remote_name}.uploading"
+                  with local_path.open("rb") as handle:
+                      ftp.storbinary(f"STOR {tmp_name}", handle)
+                  try:
+                      ftp.rename(tmp_name, remote_name)
+                  except ftplib.all_errors:
+                      ftp.delete(remote_name)
+                      ftp.rename(tmp_name, remote_name)
+
+              upload_atomic(state_file, "live-state.json")
               if execution_file.exists():
-                  with execution_file.open("rb") as handle:
-                      ftp.storbinary("STOR live-execution-state.json", handle)
+                  upload_atomic(execution_file, "live-execution-state.json")
           PY
 
       - name: Send redeem alert emails

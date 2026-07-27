@@ -86,8 +86,14 @@ jobs:
           with ftplib.FTP(server, timeout=30) as ftp:
               ftp.login(username, password)
               enter_dir(ftp, target.split("/"))
+              tmp_name = "live-state.json.uploading"
               with state_file.open("rb") as handle:
-                  ftp.storbinary("STOR live-state.json", handle)
+                  ftp.storbinary(f"STOR {tmp_name}", handle)
+              try:
+                  ftp.rename(tmp_name, "live-state.json")
+              except ftplib.all_errors:
+                  ftp.delete("live-state.json")
+                  ftp.rename(tmp_name, "live-state.json")
           PY
 
       - name: Send redeem alert emails

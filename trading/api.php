@@ -106,14 +106,23 @@ function state_payload(string $target): array
         respond(['ok' => false, 'error' => 'State file is not available yet'], 404);
     }
 
-    clearstatcache(true, $path);
-    $raw = file_get_contents($path);
-    $data = json_decode(is_string($raw) ? $raw : '', true);
-    if (!is_array($data)) {
-        respond(['ok' => false, 'error' => 'State file contains invalid JSON'], 502);
+    $lastError = 'State file contains invalid JSON';
+    for ($attempt = 0; $attempt < 4; $attempt++) {
+        clearstatcache(true, $path);
+        $raw = @file_get_contents($path);
+        if ($raw === false) {
+            $lastError = 'State file could not be read';
+        } else {
+            $data = json_decode($raw, true);
+            if (is_array($data)) {
+                return $data;
+            }
+            $lastError = 'State file contains invalid JSON';
+        }
+        usleep(150000);
     }
 
-    return $data;
+    respond(['ok' => false, 'error' => $lastError], 502);
 }
 
 function default_portfolio_config(): array

@@ -278,6 +278,12 @@ jobs:
           with ftplib.FTP(server, timeout=30) as ftp:
               ftp.login(username, password)
               enter_dir(ftp, target.split("/"))
+              tmp_name = "paper-state.json.uploading"
               with state_file.open("rb") as handle:
-                  ftp.storbinary("STOR paper-state.json", handle)
+                  ftp.storbinary(f"STOR {tmp_name}", handle)
+              try:
+                  ftp.rename(tmp_name, "paper-state.json")
+              except ftplib.all_errors:
+                  ftp.delete("paper-state.json")
+                  ftp.rename(tmp_name, "paper-state.json")
           PY

@@ -37,6 +37,7 @@ const state = {
   liveExecutionState: null,
   portfolioConfig: null,
   portfolioConfigSaveTimer: null,
+  stateFetchErrors: {},
   executionBusy: null,
   autoLiveSyncBusy: false,
   settingsSection: "evaluation-log",
@@ -57,6 +58,7 @@ const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
 const LIVE_EXECUTION_STORAGE_KEY = "tradingLiveExecutionArmed";
+const STATE_CACHE_PREFIX = "tradingStateCache:";
 const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
 const MIN_ELIGIBILITY_THRESHOLD = 0.01;
 const MAX_ELIGIBILITY_THRESHOLD = 0.99;
@@ -376,6 +378,54 @@ function setExecutionStatus(text, tone = "") {
   els.executionStatus.textContent = text;
   els.executionStatus.classList.toggle("error", tone === "error");
   els.executionStatus.classList.toggle("muted", tone !== "error");
+}
+
+function stateCacheKey(target) {
+  return `${STATE_CACHE_PREFIX}${target}`;
+}
+
+function readCachedState(target) {
+  try {
+    const raw = localStorage.getItem(stateCacheKey(target));
+    if (!raw) return null;
+    const payload = JSON.parse(raw);
+    return payload && typeof payload.data === "object" ? payload.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedState(target, data) {
+  try {
+    localStorage.setItem(stateCacheKey(target), JSON.stringify({
+      cachedAt: new Date().toISOString(),
+      data,
+    }));
+  } catch {
+    // Ignore cache write failures; the live in-memory state still remains.
+  }
+}
+
+function rememberStateFetchError(target, error) {
+  state.stateFetchErrors[target] = {
+    message: error?.message || String(error || "state refresh failed"),
+    at: new Date().toISOString(),
+  };
+}
+
+function clearStateFetchError(target) {
+  delete state.stateFetchErrors[target];
+}
+
+function stateWarningHtml(target, label) {
+  const warning = state.stateFetchErrors[target];
+  if (!warning) return "";
+  const time = warning.at ? formatDate(warning.at) : "-";
+  return `
+    <div class="sync-warning">
+      Showing last saved ${escapeHtml(label)} data. Latest refresh failed at ${escapeHtml(time)}: ${escapeHtml(warning.message)}
+    </div>
+  `;
 }
 
 function oneTimeExecutionTarget(button) {
@@ -2278,7 +2328,11 @@ async function loadBotState() {
     const botState = await fetchJson("data/paper-state.json");
     renderBotState(botState);
   } catch (error) {
-    state.botState = null;
+    if (state.botState) {
+      rememberStateFetchError("paper", error);
+      renderBotState(state.botState);
+      return;
+    }
     if (els.botAction) els.botAction.textContent = "offline";
     if (els.botInlineAction) els.botInlineAction.textContent = "offline";
     if (els.portfolioRules) els.portfolioRules.innerHTML = "";
@@ -2297,9 +2351,23 @@ async function fetchJson(path) {
   const url = stateTarget
     ? `api.php?action=state&target=${stateTarget}&t=${Date.now()}`
     : `${statePath}?t=${Date.now()}`;
-  const statePayload = await fetch(url, { cache: "no-store" });
-  if (!statePayload.ok) throw new Error(`${path} HTTP ${statePayload.status}`);
-  return statePayload.json();
+  try {
+    const statePayload = await fetch(url, { cache: "no-store" });
+    if (!statePayload.ok) throw new Error(`${path} HTTP ${statePayload.status}`);
+    const payload = await statePayload.json();
+    if (stateTarget) {
+      writeCachedState(stateTarget, payload);
+      clearStateFetchError(stateTarget);
+    }
+    return payload;
+  } catch (error) {
+    if (stateTarget) {
+      rememberStateFetchError(stateTarget, error);
+      const cached = readCachedState(stateTarget);
+      if (cached) return cached;
+    }
+    throw error;
+  }
 }
 
 async function fetchApiJson(url, options = {}) {
@@ -2501,8 +2569,8 @@ async function loadLiveState(options = {}) {
       fetchJson("data/live-execution-state.json"),
     ]);
     if (liveResult.status === "rejected") throw liveResult.reason;
-    state.botState = botResult.status === "fulfilled" ? botResult.value : null;
-    state.liveExecutionState = executionResult.status === "fulfilled" ? executionResult.value : null;
+    state.botState = botResult.status === "fulfilled" ? botResult.value : state.botState;
+    state.liveExecutionState = executionResult.status === "fulfilled" ? executionResult.value : state.liveExecutionState;
     const liveState = liveResult.value;
     renderLiveState(liveState);
     if (!options.skipAutoLiveSync) {
@@ -2512,7 +2580,11 @@ async function loadLiveState(options = {}) {
       els.botEvaluations.innerHTML = `<div class="empty">Common evaluation log is not available: ${escapeHtml(botResult.reason?.message || String(botResult.reason))}</div>`;
     }
   } catch (error) {
-    state.liveState = null;
+    if (state.liveState) {
+      rememberStateFetchError("live", error);
+      renderLiveState(state.liveState);
+      return;
+    }
     state.liveExecutionState = null;
     syncModeUi();
     if (els.botAction) els.botAction.textContent = "offline";
@@ -2726,8 +2798,9 @@ function renderBotState(botState) {
     </div>
   `;
   }
-  els.botStatus.innerHTML = "";
-  els.botStatus.hidden = true;
+  const paperWarning = stateWarningHtml("paper", "paper portfolio");
+  els.botStatus.innerHTML = paperWarning;
+  els.botStatus.hidden = !paperWarning;
 
   els.botTrades.innerHTML = renderTradeRows(openTrades.slice(0, 12), "Zatim zadne otevrene autonomni paper obchody.", {
     tableKey: "open",
@@ -3053,8 +3126,13 @@ function renderLiveState(liveState) {
     </div>
   `;
   }
-  els.botStatus.innerHTML = "";
-  els.botStatus.hidden = true;
+  const liveWarning = [
+    stateWarningHtml("live", "live account"),
+    stateWarningHtml("paper", "common evaluation log"),
+    stateWarningHtml("live-execution", "live execution monitor"),
+  ].filter(Boolean).join("");
+  els.botStatus.innerHTML = liveWarning;
+  els.botStatus.hidden = !liveWarning;
 
   els.botTrades.innerHTML = renderTradeRows(openedRows, "Zatim zadne otevrene live pozice ani limit objednavky na napojenem Polymarket uctu.", {
     tableKey: "live",
