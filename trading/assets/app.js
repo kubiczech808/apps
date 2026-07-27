@@ -2330,6 +2330,7 @@ function renderAnalysisModalHtml(text) {
     "Excluded sample:",
     "Risk-blocked candidates:",
     "Open order review:",
+    "Position rotation review:",
     "Eligible candidates checked:",
     "Rejected candidates checked:",
     "Selected:",
@@ -3761,6 +3762,7 @@ function tradeBatchDetail(batch) {
   const blocked = Array.isArray(batch.riskBlocked) ? batch.riskBlocked : [];
   const rejected = Array.isArray(batch.topRejected) ? batch.topRejected : [];
   const openOrderReviews = Array.isArray(batch.openOrderReviews) ? batch.openOrderReviews : [];
+  const rotationReview = batch.rotationReview || null;
   const portfolioFilter = batch.portfolioFilter || {};
   const candidateMetricLine = (item) => [
     `AI ${probability(Number(item.aiProbability))}`,
@@ -3835,6 +3837,38 @@ function tradeBatchDetail(batch) {
         item.replaceResponse ? `   Replace response: ${JSON.stringify(item.replaceResponse).slice(0, 240)}` : "",
       ].filter(Boolean).join("\n")).join("\n\n")
     : "-";
+  const rotationReviewLines = rotationReview
+    ? [
+        `Action: ${rotationReview.action || "-"}`,
+        `Reason: ${rotationReview.reason || "-"}`,
+        rotationReview.best?.position ? [
+          `Best position to sell: ${rotationReview.best.position.outcome || "-"} - ${rotationReview.best.position.question || "-"}`,
+          `   Estimated exit: ${money(Number(rotationReview.best.position.estimatedExitValueUsdc || 0))} / current P/L ${signedMoney(Number(rotationReview.best.position.unrealizedPnlUsdc || 0), 4)}`,
+          rotationReview.best.position.url ? `   Polymarket: ${rotationReview.best.position.url}` : "",
+        ].filter(Boolean).join("\n") : "",
+        rotationReview.best?.candidate ? [
+          `Replacement candidate: ${rotationReview.best.candidate.outcome || "-"} - ${rotationReview.best.candidate.question || "-"}`,
+          `   ${candidateMetricLine(rotationReview.best.candidate)}`,
+          rotationReview.best.candidate.url ? `   Polymarket: ${rotationReview.best.candidate.url}` : "",
+        ].filter(Boolean).join("\n") : "",
+        rotationReview.best?.evDeltaUsdc != null ? `Expected value improvement: ${signedMoney(Number(rotationReview.best.evDeltaUsdc), 4)}` : "",
+        Array.isArray(rotationReview.reviews) && rotationReview.reviews.length ? [
+          "Reviewed positions:",
+          rotationReview.reviews.slice(0, 8).map((item, index) => {
+            const position = item.position || item;
+            const candidate = item.candidate || null;
+            return [
+              `${index + 1}. ${position.outcome || item.outcome || "-"} - ${position.question || item.question || "-"}`,
+              `   Action: ${item.action || "-"}`,
+              `   Reason: ${item.reason || "-"}`,
+              item.cashAfterExitUsdc != null ? `   Cash after exit: ${money(Number(item.cashAfterExitUsdc))}` : "",
+              item.evDeltaUsdc != null ? `   EV delta: ${signedMoney(Number(item.evDeltaUsdc), 4)}` : "",
+              candidate ? `   Candidate: ${candidate.outcome || "-"} - ${candidate.question || "-"} / EV ${signedMoney(Number(candidate.expectedValueUsdc || 0), 4)}` : "",
+            ].filter(Boolean).join("\n");
+          }).join("\n\n"),
+        ].join("\n") : "",
+      ].filter(Boolean).join("\n")
+    : "-";
 
   return [
     `${batch.strategyLabel || batch.strategyId || "Portfolio"} trade batch`,
@@ -3882,6 +3916,9 @@ function tradeBatchDetail(batch) {
     "",
     `Open order review:`,
     orderReviewLines,
+    "",
+    `Position rotation review:`,
+    rotationReviewLines,
     "",
     `Eligible candidates checked:`,
     candidateLines,

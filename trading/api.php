@@ -976,7 +976,7 @@ try {
                     'live_trade_cadence_hours' => $liveTradeCadenceHours,
                     'live_use_limit_orders' => $liveUseLimitOrders,
                     'cross_live_portfolio_risk_diversification' => $crossLiveRiskDiversification,
-                    'live_ignore_trade_cadence' => $manualRunOnce,
+                    'live_ignore_trade_cadence' => 'true',
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
             ],

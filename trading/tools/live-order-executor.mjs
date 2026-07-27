@@ -50,6 +50,9 @@ const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HO
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
 const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
 const OPEN_ORDER_BETTER_CANDIDATE_EV_USDC = envNumber("LIVE_OPEN_ORDER_BETTER_CANDIDATE_EV_USDC", 0.02);
+const ROTATION_CANDIDATE_SCAN_LIMIT = envNumber("LIVE_ROTATION_CANDIDATE_SCAN_LIMIT", 10);
+const ROTATION_POSITION_SCAN_LIMIT = envNumber("LIVE_ROTATION_POSITION_SCAN_LIMIT", 6);
+const ROTATION_MIN_EV_USDC_IMPROVEMENT = envNumber("LIVE_ROTATION_MIN_EV_USDC_IMPROVEMENT", 0.1);
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
 const TZ = "Europe/Prague";
 let previousExecutionState = null;
@@ -435,6 +438,20 @@ function liveStateWithoutOpenOrder(liveState, order) {
   };
 }
 
+function liveStateWithoutPosition(liveState, position) {
+  const tokenId = String(position.tokenId || position.assetId || "");
+  const positionId = String(position.id || "");
+  return {
+    ...liveState,
+    positions: (Array.isArray(liveState?.positions) ? liveState.positions : []).filter((item) => {
+      const itemToken = String(item.tokenId || item.assetId || "");
+      const itemId = String(item.id || "");
+      if (positionId && itemId === positionId) return false;
+      return !(tokenId && itemToken === tokenId);
+    }),
+  };
+}
+
 function liveTradingConfig(liveState) {
   return {
     funderAddress: liveState?.account?.trading?.funderAddress || liveState?.accountDiscovery?.selectedFunderAddress || FUNDER_ADDRESS,
@@ -483,6 +500,170 @@ function riskBlock(candidate, liveState, evaluationByToken = new Map()) {
     if (overlap.length) return { reason: "correlated live exposure", overlap: overlap.slice(0, 4) };
   }
   return null;
+}
+
+function openPositionsForRotation(liveState) {
+  return (Array.isArray(liveState?.positions) ? liveState.positions : [])
+    .filter((position) => {
+      const status = String(position.status || "OPEN").toUpperCase();
+      if (!OPEN_STATUSES.has(status) && ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD"].includes(status)) return false;
+      return number(position.shares, 0) > 0 && String(position.tokenId || position.assetId || "");
+    });
+}
+
+function positionExitValue(position) {
+  const explicit = number(position.currentValueUsdc ?? position.valueUsdc ?? position.marketValueUsdc);
+  if (explicit != null) return explicit;
+  const price = number(position.currentPrice ?? position.markPrice ?? position.price);
+  const shares = number(position.shares ?? position.size);
+  return price != null && shares != null ? price * shares : null;
+}
+
+function positionCost(position) {
+  return number(position.totalCostUsdc ?? position.stakeUsdc ?? position.maxLossUsdc, 0);
+}
+
+function positionHoldExpectedValue(position, evaluationByToken = new Map()) {
+  const source = evaluationByToken.get(String(position.tokenId || position.assetId || ""));
+  const sourceEv = number(source?.expectedValueUsdc);
+  if (sourceEv != null) return sourceEv;
+  const pnl = number(position.unrealizedPnlUsdc);
+  return pnl != null ? pnl : 0;
+}
+
+function rotationPositionSummary(position, evaluationByToken = new Map(), extra = {}) {
+  const exitValue = positionExitValue(position);
+  const cost = positionCost(position);
+  const holdEv = positionHoldExpectedValue(position, evaluationByToken);
+  return {
+    question: position.question || position.market || "",
+    outcome: position.outcome || position.side || "",
+    tokenId: position.tokenId || position.assetId || null,
+    status: position.status || "OPEN",
+    shares: number(position.shares ?? position.size),
+    entryPrice: number(position.entryPrice),
+    currentPrice: number(position.currentPrice),
+    costUsdc: cost,
+    estimatedExitValueUsdc: exitValue == null ? null : Number(exitValue.toFixed(5)),
+    unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
+    holdExpectedValueUsdc: Number(holdEv.toFixed(5)),
+    url: position.url || `https://polymarket.com/event/${position.eventSlug || position.slug || ""}`,
+    ...extra,
+  };
+}
+
+function candidatePoolForRotation(baseCandidates = []) {
+  return [...baseCandidates]
+    .filter((item) => Number.isFinite(Number(item.aiProbability)))
+    .sort((a, b) => {
+      const annualized = Number(b.annualizedReturn || 0) - Number(a.annualizedReturn || 0);
+      if (annualized) return annualized;
+      return Number(b.expectedValueUsdc || 0) - Number(a.expectedValueUsdc || 0);
+    })
+    .slice(0, ROTATION_CANDIDATE_SCAN_LIMIT);
+}
+
+async function reviewPositionRotation({ liveState, evaluationByToken, baseCandidates, cash, maxNotional }) {
+  const positions = openPositionsForRotation(liveState)
+    .map((position) => ({
+      position,
+      exitValue: positionExitValue(position),
+      holdEv: positionHoldExpectedValue(position, evaluationByToken),
+    }))
+    .sort((a, b) => a.holdEv - b.holdEv)
+    .slice(0, ROTATION_POSITION_SCAN_LIMIT);
+  const candidates = candidatePoolForRotation(baseCandidates);
+  const reviews = [];
+  let best = null;
+
+  if (!positions.length) {
+    return {
+      action: "NO_ROTATION_CANDIDATE",
+      reason: "no open live position can be evaluated for rotation",
+      reviews,
+      best: null,
+    };
+  }
+
+  for (const item of positions) {
+    const { position, exitValue, holdEv } = item;
+    const baseReview = rotationPositionSummary(position, evaluationByToken);
+    if (exitValue == null || exitValue <= 0) {
+      reviews.push({
+        ...baseReview,
+        action: "NOT_SELLABLE_FOR_ROTATION",
+        reason: "estimated exit value is not available",
+      });
+      continue;
+    }
+    const cashAfterExit = number(cash, 0) + exitValue;
+    if (cashAfterExit + 0.000001 < maxNotional) {
+      reviews.push({
+        ...baseReview,
+        action: "INSUFFICIENT_AFTER_EXIT",
+        reason: `selling this position would free about ${exitValue.toFixed(4)} USDC, leaving ${cashAfterExit.toFixed(4)} USDC for required stake ${maxNotional.toFixed(4)} USDC`,
+        cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
+      });
+      continue;
+    }
+
+    let bestForPosition = null;
+    for (const evaluation of candidates) {
+      if (String(evaluation.tokenId || "") === String(position.tokenId || position.assetId || "")) continue;
+      try {
+        const revalidated = await revalidateEvaluation(
+          evaluation,
+          liveStateWithoutPosition(liveState, position),
+          cashAfterExit,
+          maxNotional,
+          evaluationByToken,
+        );
+        if (revalidated.status !== "ELIGIBLE") continue;
+        const candidateEv = number(revalidated.expectedValueUsdc, 0);
+        const evDelta = candidateEv - holdEv;
+        const review = {
+          position: baseReview,
+          candidate: liveBatchCandidateSummary(revalidated),
+          action: evDelta >= ROTATION_MIN_EV_USDC_IMPROVEMENT ? "ROTATION_AVAILABLE" : "HOLD_CURRENT_POSITION",
+          reason: evDelta >= ROTATION_MIN_EV_USDC_IMPROVEMENT
+            ? `candidate improves expected value by ${evDelta.toFixed(4)} USDC after freeing this position`
+            : `candidate expected value improvement ${evDelta.toFixed(4)} USDC is below required ${ROTATION_MIN_EV_USDC_IMPROVEMENT.toFixed(4)} USDC`,
+          cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
+          evDeltaUsdc: Number(evDelta.toFixed(5)),
+        };
+        if (!bestForPosition || evDelta > bestForPosition.evDeltaUsdc) bestForPosition = review;
+      } catch (error) {
+        reviews.push({
+          ...baseReview,
+          action: "ROTATION_REVALIDATION_ERROR",
+          reason: error?.message || String(error),
+        });
+      }
+    }
+
+    if (bestForPosition) {
+      reviews.push(bestForPosition);
+      if (bestForPosition.action === "ROTATION_AVAILABLE" && (!best || bestForPosition.evDeltaUsdc > best.evDeltaUsdc)) {
+        best = bestForPosition;
+      }
+    } else {
+      reviews.push({
+        ...baseReview,
+        action: "NO_BETTER_CANDIDATE_AFTER_EXIT",
+        reason: "no currently eligible candidate would become executable after selling this position",
+        cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
+      });
+    }
+  }
+
+  return {
+    action: best ? "ROTATION_AVAILABLE" : "NO_ROTATION_CANDIDATE",
+    reason: best
+      ? "a better candidate could be opened after selling an existing position; live sell/rebuy execution is not automated in this step"
+      : "selling reviewed open positions did not produce a better executable candidate",
+    reviews,
+    best,
+  };
 }
 
 function scoreEconomics({ probability, annualizedReturn, edge, spread, volume24hr, liquidity, endOk }) {
@@ -1091,6 +1272,15 @@ async function main() {
       signatureType: tradingConfig.signatureType,
     }));
   const eligible = sortLiveEligibleCandidates(allEligible);
+  const rotationReview = (!eligible.length || cash + 0.000001 < maxNotional)
+    ? await reviewPositionRotation({
+        liveState,
+        evaluationByToken,
+        baseCandidates,
+        cash,
+        maxNotional,
+      })
+    : null;
   const orderManagement = await reviewOpenOrders({
     liveState,
     evaluationByToken,
@@ -1102,12 +1292,25 @@ async function main() {
 
   const best = eligible[0] || null;
   const cadenceBlocked = Boolean(monitoring.cadenceBlocked);
+  const rotationAvailable = rotationReview?.action === "ROTATION_AVAILABLE";
+  const actionReason = cadenceBlocked
+    ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h)`
+    : (best
+        ? "best currently revalidated executable candidate"
+        : (rotationAvailable
+            ? "cash is insufficient for a new direct order; a sell-and-replace rotation candidate was identified"
+            : "no currently executable candidate after live revalidation"));
+  const actionExplanation = best && !cadenceBlocked
+    ? "Live batch found an executable candidate after revalidation."
+    : (cadenceBlocked
+        ? "No live order was submitted because the configured new-trade cadence is not elapsed yet. Open-order management still ran."
+        : (rotationAvailable
+            ? "No live order was submitted because opening the better candidate would first require selling an existing live position; this run records the rotation review but does not perform the sell/rebuy sequence automatically."
+            : "No live order was submitted because all revalidated candidates failed current execution criteria."));
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
     action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
-    reason: cadenceBlocked
-      ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h)`
-      : (best ? "best currently revalidated executable candidate" : "no currently executable candidate after live revalidation"),
+    reason: actionReason,
     generatedAt: new Date().toISOString(),
     account: {
       address: liveState?.account?.address || FUNDER_ADDRESS,
@@ -1150,6 +1353,7 @@ async function main() {
       openOrderRepriceThreshold: OPEN_ORDER_REPRICE_THRESHOLD,
     },
     orderManagement,
+    rotationReview,
     selected: best,
     batchLog: {
       id: `live-trade-batch-${new Date().toISOString()}`,
@@ -1158,12 +1362,8 @@ async function main() {
       strategyLabel: "Live",
       selectionMetric: "EV p.a.",
       action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
-      reason: cadenceBlocked
-        ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h)`
-        : (best ? "best currently revalidated executable candidate" : "no currently executable candidate after live revalidation"),
-      explanation: best && !cadenceBlocked
-        ? "Live batch found an executable candidate after revalidation."
-        : (cadenceBlocked ? "No live order was submitted because the configured new-trade cadence is not elapsed yet. Open-order management still ran." : "No live order was submitted because all revalidated candidates failed current execution criteria."),
+      reason: actionReason,
+      explanation: actionExplanation,
       settings: {
         minProbability: MIN_PROBABILITY,
         minAnnualReturn: MIN_ANNUAL_RETURN,
@@ -1189,11 +1389,14 @@ async function main() {
         eligibleCandidates: allEligible.length,
         rankedEligibleCandidates: eligible.length,
         openOrdersReviewed: orderManagement.reviews.length,
+        positionsReviewedForRotation: rotationReview?.reviews?.length || 0,
+        rotationAvailable,
         rejectedCandidates: checked.filter((item) => item.status !== "ELIGIBLE").length,
         cadenceBlocked,
         rawCadenceBlocked: Boolean(monitoring.rawCadenceBlocked),
       },
       openOrderReviews: orderManagement.reviews,
+      rotationReview,
       selected: best ? liveBatchCandidateSummary(best) : null,
       topCandidates: eligible.slice(0, 8).map(liveBatchCandidateSummary),
       topRejected: checked.filter((item) => item.status !== "ELIGIBLE").slice(0, REJECTED_CANDIDATE_LOG_LIMIT).map(liveBatchCandidateSummary),
