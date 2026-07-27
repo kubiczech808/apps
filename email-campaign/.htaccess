@@ -4,6 +4,10 @@ Options -Indexes
     Require all denied
 </FilesMatch>
 
+<FilesMatch "^sess_">
+    Require all denied
+</FilesMatch>
+
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteRule ^storage/ - [F,L]

@@ -255,6 +255,13 @@ final class Database
                 setting_key VARCHAR(191) PRIMARY KEY,
                 value TEXT NOT NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS app_sessions (
+                id VARCHAR(128) PRIMARY KEY,
+                data MEDIUMBLOB NOT NULL,
+                updated_at INT NOT NULL,
+                expires_at INT NOT NULL,
+                INDEX app_sessions_expires_idx (expires_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
             "CREATE TABLE IF NOT EXISTS scraping_containers (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 list_id INT NOT NULL,

@@ -11,6 +11,72 @@ final class AiResearchTemporaryException extends RuntimeException
 {
 }
 
+final class DatabaseSessionHandler implements SessionHandlerInterface
+{
+    private PDO $pdo;
+    private int $lifetime;
+
+    public function __construct(PDO $pdo, int $lifetime)
+    {
+        $this->pdo = $pdo;
+        $this->lifetime = max(3600, $lifetime);
+        $this->pdo->exec('CREATE TABLE IF NOT EXISTS app_sessions (
+            id VARCHAR(128) PRIMARY KEY,
+            data MEDIUMBLOB NOT NULL,
+            updated_at INT NOT NULL,
+            expires_at INT NOT NULL,
+            INDEX app_sessions_expires_idx (expires_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
+    }
+
+    public function open(string $path, string $name): bool
+    {
+        return true;
+    }
+
+    public function close(): bool
+    {
+        return true;
+    }
+
+    public function read(string $id): string
+    {
+        $stmt = $this->pdo->prepare('SELECT data FROM app_sessions WHERE id=? AND expires_at>=?');
+        $stmt->execute([$this->normalizeId($id), time()]);
+        $data = $stmt->fetchColumn();
+        return is_string($data) ? $data : '';
+    }
+
+    public function write(string $id, string $data): bool
+    {
+        $now = time();
+        $stmt = $this->pdo->prepare('
+            INSERT INTO app_sessions (id, data, updated_at, expires_at)
+            VALUES (?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE data=VALUES(data), updated_at=VALUES(updated_at), expires_at=VALUES(expires_at)
+        ');
+        return $stmt->execute([$this->normalizeId($id), $data, $now, $now + $this->lifetime]);
+    }
+
+    public function destroy(string $id): bool
+    {
+        $stmt = $this->pdo->prepare('DELETE FROM app_sessions WHERE id=?');
+        return $stmt->execute([$this->normalizeId($id)]);
+    }
+
+    public function gc(int $max_lifetime): int|false
+    {
+        $stmt = $this->pdo->prepare('DELETE FROM app_sessions WHERE expires_at<?');
+        $stmt->execute([time()]);
+        return $stmt->rowCount();
+    }
+
+    private function normalizeId(string $id): string
+    {
+        return substr(preg_replace('/[^a-zA-Z0-9,-]/', '', $id) ?: '', 0, 128);
+    }
+}
+
 function aiResearchRetryDelaySeconds(string $message): int
 {
     $maxDelay = 0;
@@ -140,7 +206,6 @@ function isAiResearchAdminEmail(string $email): bool
 
 date_default_timezone_set('Europe/Prague');
 
-session_start();
 require __DIR__ . '/src/Database.php';
 require __DIR__ . '/src/SmtpMailer.php';
 
@@ -150,10 +215,23 @@ $isMysqlDatabase = true;
 $dbWarning = null;
 try {
     $databaseConfig = productionDatabaseConfig($baseConfig);
+    $db = new Database($databaseConfig, false);
+    try {
+        verifyProductionDatabase($db->pdo());
+    } catch (Throwable $verifyError) {
+        if (databasePermissionDenied($verifyError)) {
+            throw $verifyError;
+        }
+        $db = new Database($databaseConfig, true);
+        verifyProductionDatabase($db->pdo());
+    }
+    startDatabaseBackedSession($db->pdo());
     $runDatabaseMigrations = shouldRunDatabaseMigrations();
-    $db = new Database($databaseConfig, $runDatabaseMigrations);
-    verifyProductionDatabase($db->pdo());
-    if ($runDatabaseMigrations && !isWorkerEndpoint() && !isTrackingEndpoint()) {
+    if ($runDatabaseMigrations) {
+        $db = new Database($databaseConfig, true);
+        verifyProductionDatabase($db->pdo());
+    }
+    if ($runDatabaseMigrations && session_status() === PHP_SESSION_ACTIVE && !isWorkerEndpoint() && !isTrackingEndpoint()) {
         $_SESSION['schema_version'] = APP_VERSION;
     }
 } catch (Throwable $e) {
@@ -185,6 +263,9 @@ if (shouldRunStartupMaintenance()) {
         ensureAiResearchSeedOutreachTokens($pdo);
         normalizeAiResearchSeedOutreachStatuses($pdo);
         reconcileAiResearchSeedOutreachDuplicates($pdo);
+        cleanupFinishedImportStorage($pdo, 250);
+        cleanupOrphanImportStorageFiles($pdo, 500);
+        cleanupLegacySessionFiles(1000);
         releaseAiResearchRunsWithFixedWebsiteContext($pdo);
         markStaleAiResearchRuns($pdo);
     } catch (Throwable $e) {
@@ -5446,6 +5527,31 @@ function isTrackingEndpoint(): bool
     return isset($_GET['open']) || (isset($_GET['click']) && isset($_GET['u']));
 }
 
+function shouldStartHttpSession(): bool
+{
+    return !isset($_GET['cron'])
+        && !isWorkerEndpoint()
+        && !isTrackingEndpoint()
+        && !isset($_GET['unsubscribe'])
+        && !isset($_GET['seed_unsubscribe']);
+}
+
+function startDatabaseBackedSession(PDO $pdo): void
+{
+    if (!shouldStartHttpSession() || session_status() === PHP_SESSION_ACTIVE) {
+        return;
+    }
+    $lifetime = max(3600, (int)ini_get('session.gc_maxlifetime'));
+    ini_set('session.use_strict_mode', '1');
+    ini_set('session.gc_probability', '1');
+    ini_set('session.gc_divisor', '100');
+    session_set_save_handler(new DatabaseSessionHandler($pdo, $lifetime), true);
+    session_start();
+    if (random_int(1, 100) === 1) {
+        (new DatabaseSessionHandler($pdo, $lifetime))->gc($lifetime);
+    }
+}
+
 function shouldRunDatabaseMigrations(): bool
 {
     return !isWorkerEndpoint()
@@ -6721,12 +6827,15 @@ function triggerImportWorker(PDO $pdo): void
 
 function runCronImports(PDO $pdo): string
 {
+    $removedStoredFiles = cleanupFinishedImportStorage($pdo, 250);
+    $removedOrphanFiles = cleanupOrphanImportStorageFiles($pdo, 500);
+    $removedLegacySessions = cleanupLegacySessionFiles(1000);
     markStaleImportRunsQueued($pdo);
     if (activeImportRunsExist($pdo)) {
         triggerImportWorker($pdo);
-        return "Import: aktivni import byl predan workeru na pozadi.\n";
+        return "Import: aktivni import byl predan workeru na pozadi. Uklid: {$removedStoredFiles} importnich souboru, {$removedOrphanFiles} osirelych souboru, {$removedLegacySessions} legacy session souboru.\n";
     }
-    return "Import: zadny aktivni import.\n";
+    return "Import: zadny aktivni import. Uklid: {$removedStoredFiles} importnich souboru, {$removedOrphanFiles} osirelych souboru, {$removedLegacySessions} legacy session souboru.\n";
 }
 
 function runImportWorker(PDO $pdo): string
@@ -6779,17 +6888,20 @@ function processImportRunBatch(PDO $pdo, array $run, int $limit): string
     $path = (string)($run['storage_path'] ?? '');
     if ($path === '' || !is_file($path)) {
         updateImportRun($pdo, (int)$run['id'], ['status' => 'failed', 'last_message' => 'Importni soubor nebyl nalezen.', 'finished_at' => date('c')]);
+        clearImportStoragePath($pdo, (int)$run['id'], $path);
         return 'Import #' . (int)$run['id'] . ': soubor nebyl nalezen.';
     }
     $handle = fopen($path, 'rb');
     if (!$handle) {
         updateImportRun($pdo, (int)$run['id'], ['status' => 'failed', 'last_message' => 'CSV soubor nejde otevrit.', 'finished_at' => date('c')]);
+        clearImportStoragePath($pdo, (int)$run['id'], $path);
         return 'Import #' . (int)$run['id'] . ': soubor nejde otevrit.';
     }
     $first = fgetcsv($handle, 0, ',');
     if ($first === false) {
         fclose($handle);
         updateImportRun($pdo, (int)$run['id'], ['status' => 'finished', 'last_message' => 'CSV je prazdne.', 'finished_at' => date('c')]);
+        clearImportStoragePath($pdo, (int)$run['id'], $path);
         return 'Import #' . (int)$run['id'] . ': prazdny soubor.';
     }
     $headers = array_map(fn($v) => strtolower(trim((string)$v)), $first);
@@ -6895,7 +7007,114 @@ function processImportRunBatch(PDO $pdo, array $run, int $limit): string
         $fields['finished_at'] = date('c');
     }
     updateImportRun($pdo, (int)$run['id'], $fields);
+    if ($done) {
+        clearImportStoragePath($pdo, (int)$run['id'], $path);
+    }
     return 'Import #' . (int)$run['id'] . ': zpracovano ' . $newProcessed . ', vlozeno +' . $inserted . ', aktualizovano +' . $updated . ', preskoceno +' . $skipped . '.';
+}
+
+function importStorageRoot(): string
+{
+    return __DIR__ . '/storage/imports';
+}
+
+function clearImportStoragePath(PDO $pdo, int $importRunId, string $path): void
+{
+    $path = trim($path);
+    if ($path !== '' && isSafeImportStoragePath($path) && is_file($path)) {
+        @unlink($path);
+    }
+    $stmt = $pdo->prepare('UPDATE import_runs SET storage_path="", updated_at=? WHERE id=?');
+    $stmt->execute([date('c'), $importRunId]);
+}
+
+function isSafeImportStoragePath(string $path): bool
+{
+    $root = realpath(importStorageRoot());
+    $real = realpath($path);
+    return $root !== false && $real !== false && str_starts_with($real, $root . DIRECTORY_SEPARATOR);
+}
+
+function cleanupFinishedImportStorage(PDO $pdo, int $limit = 250): int
+{
+    $limit = max(1, $limit);
+    $stmt = $pdo->query('
+        SELECT id, storage_path
+        FROM import_runs
+        WHERE storage_path<>""
+          AND status IN ("finished", "failed")
+        ORDER BY id ASC
+        LIMIT ' . $limit . '
+    ');
+    $cleaned = 0;
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        clearImportStoragePath($pdo, (int)$row['id'], (string)$row['storage_path']);
+        $cleaned++;
+    }
+    return $cleaned;
+}
+
+function cleanupOrphanImportStorageFiles(PDO $pdo, int $limit = 500): int
+{
+    $root = realpath(importStorageRoot());
+    if ($root === false || !is_dir($root)) {
+        return 0;
+    }
+    $active = [];
+    $rows = $pdo->query('SELECT storage_path FROM import_runs WHERE storage_path<>"" AND status IN ("queued", "running")')->fetchAll(PDO::FETCH_COLUMN);
+    foreach ($rows as $path) {
+        $real = realpath((string)$path);
+        if ($real !== false) {
+            $active[$real] = true;
+        }
+    }
+    $removed = 0;
+    $threshold = time() - 3600;
+    foreach (new DirectoryIterator($root) as $file) {
+        if ($removed >= $limit) {
+            break;
+        }
+        if (!$file->isFile() || !str_starts_with($file->getFilename(), 'import-')) {
+            continue;
+        }
+        $path = $file->getPathname();
+        $real = realpath($path);
+        if ($real === false || isset($active[$real]) || $file->getMTime() > $threshold) {
+            continue;
+        }
+        if (@unlink($path)) {
+            $removed++;
+        }
+    }
+    return $removed;
+}
+
+function cleanupLegacySessionFiles(int $limit = 1000): int
+{
+    $directories = [
+        __DIR__,
+        __DIR__ . '/storage',
+        __DIR__ . '/storage/sessions',
+    ];
+    $removed = 0;
+    $threshold = time() - 600;
+    foreach ($directories as $directory) {
+        if ($removed >= $limit || !is_dir($directory)) {
+            continue;
+        }
+        foreach (new DirectoryIterator($directory) as $file) {
+            if ($removed >= $limit) {
+                break;
+            }
+            if (!$file->isFile() || !str_starts_with($file->getFilename(), 'sess_') || $file->getMTime() > $threshold) {
+                continue;
+            }
+            if (@unlink($file->getPathname())) {
+                $removed++;
+            }
+        }
+    }
+    return $removed;
 }
 
 function updateImportRun(PDO $pdo, int $id, array $fields): void
