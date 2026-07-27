@@ -1168,7 +1168,17 @@ function analysisThesis(item = {}) {
 }
 
 function analysisModel(item = {}) {
-  return item.analysisModel || item.aiAnalysis?.model || "";
+  return item.analysisModel
+    || item.aiAnalysis?.model
+    || item.sourceEvaluation?.analysisModel
+    || item.sourceEvaluation?.aiAnalysis?.model
+    || item.postMortem?.model
+    || item.aiModel
+    || "";
+}
+
+function analysisModelLabel(item = {}) {
+  return analysisModel(item) || "not recorded";
 }
 
 function analysisProbabilityRationale(item = {}) {
@@ -1228,6 +1238,12 @@ function detailText(label, current, original) {
   return `${label}: ${text}`;
 }
 
+function detailModel(label, current, original) {
+  const text = normalizedDetailText(current) || "not recorded";
+  if (sameDetailValue(text, original || "not recorded", "text")) return `${label}: ${text} (unchanged)`;
+  return `${label}: ${text}`;
+}
+
 function detailEvidence(label, current, original) {
   const currentText = Array.isArray(current) ? current.join(" ") : current;
   const originalText = Array.isArray(original) ? original.join(" ") : original;
@@ -1270,7 +1286,7 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     original.endDate ? `End date: ${formatDate(original.endDate)}` : "",
     original.daysToResolution != null ? `Days to resolution: ${Number.isFinite(Number(original.daysToResolution)) ? Number(original.daysToResolution).toFixed(2) : "-"}` : "",
     original.thesisType ? `Thesis type: ${original.thesisType}` : "",
-    analysisModel(original) ? `Model: ${analysisModel(original)}` : "",
+    `AI model: ${analysisModelLabel(original)}`,
     originalAi.probabilityMethod ? `Probability method: ${originalAi.probabilityMethod}` : "",
     originalAi.sourceQuality ? `Source quality: ${originalAi.sourceQuality}` : "",
     analysisMarketComparison(original) ? `AI vs Polymarket: ${analysisMarketComparison(original)}` : "",
@@ -1301,7 +1317,7 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     current.endDate ? detailText("End date", formatDate(current.endDate), original.endDate ? formatDate(original.endDate) : "") : "",
     current.daysToResolution != null ? detailNumber("Days to resolution", Number(current.daysToResolution), Number(original.daysToResolution), (value) => value.toFixed(2)) : "",
     current.thesisType ? detailText("Thesis type", current.thesisType, original.thesisType) : "",
-    analysisModel(current) ? detailText("Model", analysisModel(current), analysisModel(original)) : "",
+    detailModel("AI model", analysisModelLabel(current), analysisModelLabel(original)),
     currentAi.probabilityMethod ? detailText("Probability method", currentAi.probabilityMethod, originalAi.probabilityMethod) : "",
     currentAi.sourceQuality ? detailText("Source quality", currentAi.sourceQuality, originalAi.sourceQuality) : "",
     analysisMarketComparison(current) ? detailText("AI vs Polymarket", analysisMarketComparison(current), analysisMarketComparison(original)) : "",
@@ -1318,6 +1334,7 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     `Portfolio filter notes: ${reasons}`,
     current.rotationReview?.note ? `Rotation review: ${current.rotationReview.note}` : "",
     current.rotationEntryReason ? `Opened after rotation: ${current.rotationEntryReason}` : "",
+    current.postMortem?.model ? detailModel("Post-mortem AI model", current.postMortem.model, original.postMortem?.model || "") : "",
     current.postMortem?.thesisReview ? `Post-mortem: ${current.postMortem.thesisReview}` : "",
     `Polymarket: ${current.url || polymarketUrl(current)}`,
   ].filter(Boolean);
@@ -3041,7 +3058,15 @@ function normalizeLiveOpenOrderForTable(order) {
     unrealizedPnlUsdc: 0,
     unrealizedPnlPct: 0,
     aiProbability: Number(source?.aiProbability),
+    rawProbability: Number(source?.rawProbability),
+    thesisType: source?.thesisType || "",
+    annualizedReturn: source?.annualizedReturn,
+    expectedValueUsdc: source?.expectedValueUsdc,
+    edge: source?.edge,
     sourceEvaluation: source || null,
+    aiAnalysis: source?.aiAnalysis || null,
+    probabilityThesis: source?.probabilityThesis || source?.aiAnalysis?.thesis || "",
+    analysisModel: source?.analysisModel || source?.aiAnalysis?.model || "",
     analysisSummary: [
       `Open ${order.side || ""} limit order ${shortIdentifier(order.id || order.orderID || order.orderId)}, ${remainingSize.toLocaleString("en-US", { maximumFractionDigits: 4 })} shares at ${probability(price)}.`,
       `Created ${order.createdAt ? formatDate(order.createdAt) : "-"}.`,

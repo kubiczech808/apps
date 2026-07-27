@@ -2145,6 +2145,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
       annualizedReturn: best.annualizedReturn,
       probabilityThesis: best.probabilityThesis,
       analysisSummary: best.analysisSummary,
+      analysisModel: best.analysisModel,
       aiAnalysis: best.aiAnalysis,
       evidence: best.evidence,
     },
