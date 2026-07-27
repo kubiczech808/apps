@@ -2026,16 +2026,83 @@ function renderAnalysisLine(line) {
   if (!text) return "";
   const bullet = text.match(/^[-*]\s+(.+)$/);
   if (bullet) return `<li>${renderAnalysisInline(bullet[1])}</li>`;
-  const kv = text.match(/^([^:\n]{2,72}):\s*(.*)$/);
+  const kv = parseAnalysisKv(text);
   if (kv) {
     return `
       <div class="analysis-kv">
-        <strong>${escapeHtml(kv[1])}:</strong>
-        <span>${renderAnalysisInline(kv[2] || "-")}</span>
+        <strong>${escapeHtml(kv.label)}:</strong>
+        <span>${renderAnalysisInline(kv.value || "-")}</span>
       </div>
     `;
   }
   return `<p>${renderAnalysisInline(text)}</p>`;
+}
+
+function parseAnalysisKv(line) {
+  const match = String(line || "").trim().match(/^([^:\n]{2,72}):\s*(.*)$/);
+  return match ? { label: match[1].trim(), value: match[2] || "-" } : null;
+}
+
+function normalizedAnalysisField(label) {
+  const text = String(label || "").trim();
+  if (/^(original analysis time|current reassessment time)$/i.test(text)) return "Analysis time";
+  if (/^current thesis$/i.test(text)) return "Thesis";
+  if (/^current ai analysis$/i.test(text)) return "AI analysis";
+  return text.replace(/^(Original|Current)\s+/i, "");
+}
+
+function analysisComparisonRows(originalSection, currentSection) {
+  const order = [];
+  const rows = new Map();
+  const addLine = (line, side) => {
+    const kv = parseAnalysisKv(line);
+    if (!kv) {
+      const text = String(line || "").trim();
+      if (!text) return;
+      const label = side === "original" ? "Market" : "Current note";
+      if (!rows.has(label)) {
+        rows.set(label, { label, original: "", current: "" });
+        order.push(label);
+      }
+      rows.get(label)[side] = text;
+      return;
+    }
+    const label = normalizedAnalysisField(kv.label);
+    if (!rows.has(label)) {
+      rows.set(label, { label, original: "", current: "" });
+      order.push(label);
+    }
+    rows.get(label)[side] = kv.value || "-";
+  };
+  (originalSection?.lines || []).forEach((line) => addLine(line, "original"));
+  (currentSection?.lines || []).forEach((line) => addLine(line, "current"));
+  return order.map((label) => rows.get(label)).filter(Boolean);
+}
+
+function renderAnalysisComparison(originalSection, currentSection) {
+  const rows = analysisComparisonRows(originalSection, currentSection);
+  if (!rows.length) return "";
+  return `
+    <section class="analysis-detail-section comparison">
+      <h3>Original vs Current</h3>
+      <div class="analysis-comparison-wrap">
+        <div class="analysis-comparison-grid" role="table" aria-label="Original and current analysis comparison">
+          <div class="analysis-comparison-head" role="row">
+            <strong role="columnheader">Field</strong>
+            <strong role="columnheader">Original</strong>
+            <strong role="columnheader">Current</strong>
+          </div>
+          ${rows.map((row) => `
+            <div class="analysis-comparison-row" role="row">
+              <strong role="rowheader">${escapeHtml(row.label)}</strong>
+              <span role="cell">${renderAnalysisInline(row.original || "-")}</span>
+              <span role="cell">${renderAnalysisInline(row.current || "-")}</span>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    </section>
+  `;
 }
 
 function renderAnalysisModalHtml(text) {
@@ -2073,10 +2140,14 @@ function renderAnalysisModalHtml(text) {
     current.lines.push(line);
   }
   pushCurrent();
+  const originalSection = sections.find((section) => section.title === "Original AI probability decision");
+  const currentSection = sections.find((section) => section.title === "Current reassessment");
+  const visibleSections = sections.filter((section) => !["Original AI probability decision", "Current reassessment"].includes(section.title));
+  const comparisonHtml = originalSection || currentSection ? renderAnalysisComparison(originalSection, currentSection) : "";
 
   return `
     <div class="analysis-detail-sections">
-      ${sections.map((section) => `
+      ${visibleSections.map((section) => `
         <section class="analysis-detail-section ${section.title === "ERROR REASON" ? "error" : ""} ${section.title === "Analysis" ? "overview" : ""}">
           <h3>${escapeHtml(section.title)}</h3>
           <div class="analysis-detail-lines">
@@ -2084,6 +2155,7 @@ function renderAnalysisModalHtml(text) {
           </div>
         </section>
       `).join("")}
+      ${comparisonHtml}
     </div>
   `;
 }
