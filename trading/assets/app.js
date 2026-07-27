@@ -117,6 +117,7 @@ const els = {
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
   parameterModal: document.querySelector("[data-parameter-modal]"),
   parameterModalClose: document.querySelector("[data-parameter-modal-close]"),
+  parameterModalConfirm: document.querySelector("[data-parameter-modal-confirm]"),
   modeButtons: document.querySelectorAll("[data-mode-toggle]"),
   liveActivation: document.querySelector("[data-live-activation]"),
   tabButtons: document.querySelectorAll("[data-tab-target]"),
@@ -1727,6 +1728,26 @@ function closeParameterModal() {
     openParameterModal.lastTrigger.focus();
   }
   openParameterModal.lastTrigger = null;
+}
+
+async function confirmParameterModal() {
+  if (!els.parameterModal || els.parameterModal.hidden) return;
+  if (els.parameterModalConfirm) {
+    els.parameterModalConfirm.disabled = true;
+    els.parameterModalConfirm.textContent = "Saving...";
+  }
+  try {
+    await savePortfolioConfigNow();
+    setExecutionStatus("portfolio parameters saved");
+    closeParameterModal();
+  } catch (error) {
+    setExecutionStatus(error.message || "portfolio parameter save failed", "error");
+  } finally {
+    if (els.parameterModalConfirm) {
+      els.parameterModalConfirm.disabled = false;
+      els.parameterModalConfirm.textContent = "Save and close";
+    }
+  }
 }
 
 function analysisModal() {
@@ -3559,6 +3580,10 @@ els.botEvaluations?.addEventListener("click", (event) => {
 document.addEventListener("click", (event) => {
   const parameterModal = event.target.closest("[data-parameter-modal]");
   if (parameterModal) {
+    if (event.target.closest("[data-parameter-modal-confirm]")) {
+      confirmParameterModal();
+      return;
+    }
     if (event.target === parameterModal || event.target.closest("[data-parameter-modal-close]")) {
       closeParameterModal();
     }

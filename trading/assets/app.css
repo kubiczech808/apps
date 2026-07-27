@@ -929,6 +929,36 @@ body.modal-open {
   background: #ffffff;
 }
 
+.parameter-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.parameter-confirm-button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.parameter-confirm-button:hover {
+  border-color: var(--accent-dark);
+  background: var(--accent-dark);
+}
+
+.parameter-confirm-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .execution-modal-body {
   white-space: normal;
 }
@@ -1481,6 +1511,14 @@ body.modal-open {
   .parameter-control,
   .parameter-control-readout {
     grid-template-columns: 1fr;
+  }
+
+  .parameter-modal-footer {
+    padding: 10px;
+  }
+
+  .parameter-confirm-button {
+    width: 100%;
   }
 
   .parameter-control em {
