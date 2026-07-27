@@ -80,6 +80,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .settings-tab-button {
@@ -311,6 +312,7 @@ button:disabled {
 
 .dashboard-tabs {
   display: grid;
+  min-width: 0;
   gap: 12px;
   margin-top: 16px;
 }
@@ -1348,7 +1350,14 @@ body.modal-open {
 }
 
 @media (max-width: 680px) {
+  body {
+    min-width: 0;
+  }
+
   .workspace {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
     padding: 8px;
   }
 
@@ -1379,13 +1388,26 @@ body.modal-open {
 
   .topbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: start;
+  }
+
+  .topbar > div:first-child {
+    min-width: 0;
+  }
+
+  .topbar-actions {
+    display: grid;
+    grid-template-columns: repeat(3, 40px);
+    gap: 6px;
+    justify-self: end;
   }
 
   .settings-tab-button {
     align-self: start;
     justify-self: end;
+    width: 40px;
+    height: 40px;
   }
 
   .portfolio-actions {
@@ -1410,10 +1432,12 @@ body.modal-open {
   .mode-switch {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: 100%;
     width: 100%;
   }
 
   .mode-button {
+    min-width: 0;
     width: 100%;
     white-space: normal;
   }
@@ -1426,6 +1450,13 @@ body.modal-open {
     flex: 0 0 auto;
     min-height: 42px;
     white-space: nowrap;
+  }
+
+  .mode-switch .mode-button {
+    flex: 1 1 auto;
+    padding: 0 8px;
+    line-height: 1.15;
+    white-space: normal;
   }
 
   .evaluation-head {
@@ -1466,7 +1497,7 @@ body.modal-open {
   }
 
   .portfolio-cards {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
     gap: 8px;
   }
 
@@ -1588,6 +1619,14 @@ body.modal-open {
 }
 
 @media (max-width: 380px) {
+  .topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar-actions {
+    justify-self: start;
+  }
+
   .portfolio-cards,
   .mode-switch,
   .evaluation-head .segmented {
