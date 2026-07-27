@@ -594,6 +594,7 @@ function evaluationResolutionSlug(item) {
 }
 
 function resolutionSyncPriority(item) {
+  if (item?.finalOutcomePrice != null && item?.marketClosed !== true) return 0;
   const end = Date.parse(item?.endDate || "");
   const checked = Date.parse(item?.resolutionCheckedAt || "");
   const ageHours = Number.isFinite(checked) ? (Date.now() - checked) / 3600000 : Infinity;
@@ -649,7 +650,7 @@ function resolvedEvaluationFromMarket(item, market, checkedAt = nowIso()) {
     acceptingOrders: typeof market.acceptingOrders === "boolean" ? market.acceptingOrders : item.acceptingOrders ?? null,
     closedTime: market.closedTime || item.closedTime || null,
     umaResolutionStatus: market.umaResolutionStatus || item.umaResolutionStatus || null,
-    finalOutcomePrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : item.finalOutcomePrice ?? null,
+    finalOutcomePrice: market.closed && Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : null,
   };
 
   if (market.closed) {
