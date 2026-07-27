@@ -828,6 +828,10 @@ body.modal-open {
   box-shadow: var(--shadow);
 }
 
+.analysis-detail-modal {
+  width: min(980px, 100%);
+}
+
 .analysis-modal-head {
   display: flex;
   align-items: center;
@@ -869,6 +873,94 @@ body.modal-open {
   font-size: 13px;
   line-height: 1.55;
   white-space: pre-line;
+}
+
+.analysis-detail-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  white-space: normal;
+}
+
+.analysis-detail-section {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.analysis-detail-section.overview,
+.analysis-detail-section.error {
+  grid-column: 1 / -1;
+}
+
+.analysis-detail-section.error {
+  border-left: 4px solid var(--bad);
+}
+
+.analysis-detail-section h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.analysis-detail-lines {
+  display: grid;
+  gap: 8px;
+}
+
+.analysis-detail-lines p,
+.analysis-detail-lines li {
+  margin: 0;
+}
+
+.analysis-kv {
+  display: grid;
+  grid-template-columns: minmax(128px, 0.38fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.analysis-kv strong {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.analysis-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.analysis-status.positive {
+  border-color: rgba(0, 137, 123, 0.35);
+  background: rgba(178, 245, 234, 0.85);
+  color: var(--good);
+}
+
+.analysis-status.negative {
+  border-color: rgba(190, 24, 93, 0.35);
+  background: rgba(255, 228, 230, 0.85);
+  color: var(--bad);
+}
+
+.analysis-status.muted,
+.analysis-unchanged {
+  color: var(--muted);
 }
 
 .execution-modal {
@@ -1536,6 +1628,16 @@ body.modal-open {
   .parameter-control,
   .parameter-control-readout {
     grid-template-columns: 1fr;
+  }
+
+  .analysis-detail-sections,
+  .analysis-kv {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-detail-section.overview,
+  .analysis-detail-section.error {
+    grid-column: auto;
   }
 
   .parameter-modal-footer {

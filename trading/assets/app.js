@@ -1873,8 +1873,7 @@ function analysisModal() {
   return modal;
 }
 
-function linkifyEscapedText(text) {
-  const escaped = escapeHtml(text || "No analysis detail available.");
+function linkifyEscapedHtml(escaped) {
   return escaped.replace(/https?:\/\/[^\s<>"']+/g, (url) => {
     const cleanUrl = url.replace(/[),.;]+$/g, "");
     const suffix = url.slice(cleanUrl.length);
@@ -1882,10 +1881,96 @@ function linkifyEscapedText(text) {
   });
 }
 
+function analysisStatusClass(value) {
+  const status = String(value || "").toUpperCase();
+  if (["ERROR", "REJECTED", "SKIP", "LOST", "RISK_BLOCKED"].includes(status)) return "negative";
+  if (["ELIGIBLE", "EVALUATED", "OPENED", "SUBMITTED", "DRY_RUN_READY", "WON"].includes(status)) return "positive";
+  if (["RESOLVED", "SOLD", "PENDING_RESOLUTION"].includes(status)) return "muted";
+  return "";
+}
+
+function renderAnalysisInline(value) {
+  let html = linkifyEscapedHtml(escapeHtml(value || "-"));
+  html = html.replace(/\b(ERROR|REJECTED|SKIP|LOST|RISK_BLOCKED|ELIGIBLE|EVALUATED|OPENED|SUBMITTED|DRY_RUN_READY|WON|RESOLVED|SOLD|PENDING_RESOLUTION)\b/g, (status) => {
+    const statusClass = analysisStatusClass(status);
+    return `<span class="analysis-status ${statusClass}">${escapeHtml(status)}</span>`;
+  });
+  html = html.replace(/\b(same as original|unchanged)\b/gi, (text) => `<span class="analysis-unchanged">${escapeHtml(text)}</span>`);
+  return html;
+}
+
+function renderAnalysisLine(line) {
+  const text = String(line || "").trim();
+  if (!text) return "";
+  const bullet = text.match(/^[-*]\s+(.+)$/);
+  if (bullet) return `<li>${renderAnalysisInline(bullet[1])}</li>`;
+  const kv = text.match(/^([^:\n]{2,72}):\s*(.*)$/);
+  if (kv) {
+    return `
+      <div class="analysis-kv">
+        <strong>${escapeHtml(kv[1])}:</strong>
+        <span>${renderAnalysisInline(kv[2] || "-")}</span>
+      </div>
+    `;
+  }
+  return `<p>${renderAnalysisInline(text)}</p>`;
+}
+
+function renderAnalysisModalHtml(text) {
+  const lines = String(text || "No analysis detail available.").split(/\r?\n/);
+  const sectionTitles = new Set([
+    "ERROR REASON",
+    "Original AI probability decision",
+    "Current reassessment",
+    "Portfolio run row",
+    "Rules:",
+    "Capital:",
+    "Portfolio filter diagnostics:",
+    "Filter reason counts:",
+    "Excluded sample:",
+    "Risk-blocked candidates:",
+    "Open order review:",
+    "Eligible candidates checked:",
+    "Selected:",
+  ]);
+  const sections = [];
+  let current = { title: "Analysis", lines: [] };
+  const pushCurrent = () => {
+    if (current.lines.some((line) => String(line || "").trim()) || current.title !== "Analysis") {
+      sections.push(current);
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (sectionTitles.has(trimmed)) {
+      pushCurrent();
+      current = { title: trimmed.replace(/:$/, ""), lines: [] };
+      continue;
+    }
+    current.lines.push(line);
+  }
+  pushCurrent();
+
+  return `
+    <div class="analysis-detail-sections">
+      ${sections.map((section) => `
+        <section class="analysis-detail-section ${section.title === "ERROR REASON" ? "error" : ""} ${section.title === "Analysis" ? "overview" : ""}">
+          <h3>${escapeHtml(section.title)}</h3>
+          <div class="analysis-detail-lines">
+            ${section.lines.map(renderAnalysisLine).filter(Boolean).join("")}
+          </div>
+        </section>
+      `).join("")}
+    </div>
+  `;
+}
+
 function openAnalysisModal(text, trigger, options = {}) {
   const modal = analysisModal();
+  modal.querySelector(".analysis-modal")?.classList.add("analysis-detail-modal");
   const body = modal.querySelector("[data-analysis-modal-body]");
-  if (body) body.innerHTML = linkifyEscapedText(text || "No analysis detail available.");
+  if (body) body.innerHTML = renderAnalysisModalHtml(text || "No analysis detail available.");
   modal.dataset.opportunityKey = options.opportunityKey || "";
   modal.hidden = false;
   document.body.classList.add("modal-open");
@@ -1900,6 +1985,7 @@ function closeAnalysisModal() {
   const modal = document.querySelector("[data-analysis-modal]");
   if (!modal || modal.hidden) return;
   const opportunityKey = modal.dataset.opportunityKey || "";
+  modal.querySelector(".analysis-modal")?.classList.remove("analysis-detail-modal");
   modal.hidden = true;
   modal.dataset.opportunityKey = "";
   document.body.classList.remove("modal-open");
