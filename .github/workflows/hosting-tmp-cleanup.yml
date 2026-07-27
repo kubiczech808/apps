@@ -16,9 +16,6 @@ on:
         required: false
         default: "24"
         type: string
-  schedule:
-    - cron: '17 */6 * * *'
-
 concurrency:
   group: hosting-tmp-cleanup
   cancel-in-progress: false
