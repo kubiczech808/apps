@@ -1277,6 +1277,29 @@ function detailText(label, current, original) {
   return `${label}: ${text}`;
 }
 
+function selectionClassificationLabel(value) {
+  const type = String(value || "").trim().toUpperCase();
+  if (!type) return "";
+  if (type === "HIGH_CONFIDENCE") return "High-confidence candidate";
+  if (type === "EDGE_OPPORTUNITY") return "Edge-opportunity candidate";
+  if (type === "EDGE_OPPORTUNITY_BELOW_LIVE_THRESHOLD") return "Edge opportunity below live threshold";
+  if (type === "REJECTED") return "Not selected by trading rules";
+  if (type === "RESOLVED") return "Resolved / no longer selectable";
+  if (type === "UNKNOWN") return "Unknown";
+  return type.toLowerCase().replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function selectionClassificationNote(item = {}) {
+  const type = String(item.thesisType || "").trim().toUpperCase();
+  if (type === "REJECTED") {
+    return "This does not mean the AI thinks the event is unlikely; it means the opportunity did not pass trading rules such as threshold, EV, spread, liquidity, depth, resolution date, capital, or diversification.";
+  }
+  if (type === "EDGE_OPPORTUNITY_BELOW_LIVE_THRESHOLD") {
+    return "The AI may see an edge, but live trading still requires the configured AI probability threshold before execution.";
+  }
+  return "";
+}
+
 function detailModel(label, current, original) {
   const text = normalizedDetailText(current) || "not recorded";
   if (sameDetailValue(text, original || "not recorded", "text")) return `${label}: ${text} (unchanged)`;
@@ -1300,6 +1323,10 @@ function structuredAnalysisDetails(item = {}, options = {}) {
   const current = currentAnalysisSnapshot({ ...original, ...source, ...item });
   const originalAi = original.aiAnalysis || {};
   const currentAi = current.aiAnalysis || {};
+  const originalSelectionClassification = selectionClassificationLabel(original.thesisType);
+  const currentSelectionClassification = selectionClassificationLabel(current.thesisType);
+  const originalSelectionNote = selectionClassificationNote(original);
+  const currentSelectionNote = selectionClassificationNote(current);
   const risk = Array.isArray(current.riskGroupLabels) && current.riskGroupLabels.length
     ? current.riskGroupLabels.join(", ")
     : "-";
@@ -1324,7 +1351,8 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     original.volume24hr != null ? `24h volume: ${money(Number(original.volume24hr || 0))}` : "",
     original.endDate ? `End date: ${formatDate(original.endDate)}` : "",
     original.daysToResolution != null ? `Days to resolution: ${Number.isFinite(Number(original.daysToResolution)) ? Number(original.daysToResolution).toFixed(2) : "-"}` : "",
-    original.thesisType ? `Thesis type: ${original.thesisType}` : "",
+    originalSelectionClassification ? `Selection classification: ${originalSelectionClassification}` : "",
+    originalSelectionNote ? `Selection note: ${originalSelectionNote}` : "",
     `AI model: ${analysisModelLabel(original)}`,
     originalAi.probabilityMethod ? `Probability method: ${originalAi.probabilityMethod}` : "",
     originalAi.sourceQuality ? `Source quality: ${originalAi.sourceQuality}` : "",
@@ -1358,7 +1386,8 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     current.volume24hr != null ? detailNumber("24h volume", Number(current.volume24hr || 0), Number(original.volume24hr || 0), money) : "",
     current.endDate ? detailText("End date", formatDate(current.endDate), original.endDate ? formatDate(original.endDate) : "") : "",
     current.daysToResolution != null ? detailNumber("Days to resolution", Number(current.daysToResolution), Number(original.daysToResolution), (value) => value.toFixed(2)) : "",
-    current.thesisType ? detailText("Thesis type", current.thesisType, original.thesisType) : "",
+    currentSelectionClassification ? detailText("Selection classification", currentSelectionClassification, originalSelectionClassification) : "",
+    currentSelectionNote ? detailText("Selection note", currentSelectionNote, originalSelectionNote) : "",
     detailModel("AI model", analysisModelLabel(current), analysisModelLabel(original)),
     currentAi.probabilityMethod ? detailText("Probability method", currentAi.probabilityMethod, originalAi.probabilityMethod) : "",
     currentAi.sourceQuality ? detailText("Source quality", currentAi.sourceQuality, originalAi.sourceQuality) : "",
@@ -2109,6 +2138,7 @@ function normalizedAnalysisField(label) {
   const text = String(label || "").trim();
   if (/^(original analysis time|current reassessment time)$/i.test(text)) return "Analysis time";
   if (/^current thesis$/i.test(text)) return "Thesis";
+  if (/^thesis type$/i.test(text)) return "Selection classification";
   if (/^current ai analysis$/i.test(text)) return "AI analysis";
   return text.replace(/^(Original|Current)\s+/i, "");
 }
