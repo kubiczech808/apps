@@ -137,7 +137,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PAPER_STATE_PATH: data/paper-state.json
-      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/data/paper-state.json
+      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
       PAPER_PORTFOLIO_USDC: "100"
       PAPER_MAX_FRACTION: ${{ github.event.inputs.paper_max_order_fraction || '0.05' }}
       PAPER_MIN_PROBABILITY: "0.95"

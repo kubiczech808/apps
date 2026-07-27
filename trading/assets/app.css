@@ -261,6 +261,11 @@ button:disabled {
   color: #115e59;
 }
 
+.system-toggle {
+  margin: 12px 0 8px;
+  background: #fff;
+}
+
 .account-summary {
   margin-top: 12px;
 }

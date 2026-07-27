@@ -167,6 +167,9 @@ function default_portfolio_config(): array
             'useLimitOrders' => true,
             'requireMostProbableOutcome' => false,
         ],
+        'system' => [
+            'crossLivePortfolioRiskDiversification' => true,
+        ],
     ];
 }
 
@@ -257,6 +260,7 @@ function normalize_portfolio_config(array $input): array
     $defaults = default_portfolio_config();
     $paperInput = is_array($input['paper'] ?? null) ? $input['paper'] : [];
     $liveInput = is_array($input['live'] ?? null) ? $input['live'] : [];
+    $systemInput = is_array($input['system'] ?? null) ? $input['system'] : [];
     $config = $defaults;
     foreach ($defaults['paper'] as $id => $strategyDefaults) {
         $strategyInput = is_array($paperInput[$id] ?? null) ? $paperInput[$id] : [];
@@ -264,6 +268,9 @@ function normalize_portfolio_config(array $input): array
     }
     $config['live'] = normalize_strategy_config($liveInput, $defaults['live']);
     $config['live']['useLimitOrders'] = (bool) ($liveInput['useLimitOrders'] ?? $defaults['live']['useLimitOrders']);
+    $config['system'] = [
+        'crossLivePortfolioRiskDiversification' => (bool) ($systemInput['crossLivePortfolioRiskDiversification'] ?? $defaults['system']['crossLivePortfolioRiskDiversification']),
+    ];
     return $config;
 }
 
@@ -891,6 +898,7 @@ try {
         $liveMinLiquidity = normalized_money_input($payload['minLiquidityUsdc'] ?? $payload['live_min_liquidity_usdc'] ?? null);
         $liveTradeCadenceHours = normalized_days_input($payload['tradeCadenceHours'] ?? $payload['live_trade_cadence_hours'] ?? null);
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
+        $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
         $paperExtraInputs = [];
         foreach ($paperStrategies as $strategy) {
@@ -924,6 +932,7 @@ try {
                     'live_min_liquidity_usdc' => $liveMinLiquidity,
                     'live_trade_cadence_hours' => $liveTradeCadenceHours,
                     'live_use_limit_orders' => $liveUseLimitOrders,
+                    'cross_live_portfolio_risk_diversification' => $crossLiveRiskDiversification,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
             ],

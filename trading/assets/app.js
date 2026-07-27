@@ -116,6 +116,7 @@ const els = {
   tradeCadenceHours: document.querySelector("[data-trade-cadence-hours]"),
   tradeCadenceHoursLabel: document.querySelector("[data-trade-cadence-hours-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
+  crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
   limitOrders: document.querySelector("[data-limit-orders]"),
   executionButtons: document.querySelectorAll("[data-one-time-execution]"),
@@ -280,6 +281,9 @@ function defaultPortfolioConfig() {
       useLimitOrders: true,
       requireMostProbableOutcome: false,
     },
+    system: {
+      crossLivePortfolioRiskDiversification: true,
+    },
   };
 }
 
@@ -378,6 +382,25 @@ function setExecutionStatus(text, tone = "") {
   els.executionStatus.textContent = text;
   els.executionStatus.classList.toggle("error", tone === "error");
   els.executionStatus.classList.toggle("muted", tone !== "error");
+}
+
+function systemConfig() {
+  const defaults = defaultPortfolioConfig().system;
+  return {
+    ...defaults,
+    ...((state.portfolioConfig || {}).system || {}),
+  };
+}
+
+function updateSystemConfig(updates) {
+  const base = state.portfolioConfig || defaultPortfolioConfig();
+  state.portfolioConfig = {
+    ...base,
+    system: {
+      ...systemConfig(),
+      ...updates,
+    },
+  };
 }
 
 function stateCacheKey(target) {
@@ -1889,6 +1912,9 @@ function syncPortfolioParameterControls() {
     els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
     els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLiveMode());
   }
+  if (els.crossLiveRisk) {
+    els.crossLiveRisk.checked = systemConfig().crossLivePortfolioRiskDiversification !== false;
+  }
 }
 
 function rerenderCurrentDashboard() {
@@ -2472,6 +2498,16 @@ function paperThresholdPayload() {
   };
 }
 
+function liveWorkflowPayload() {
+  return {
+    ...portfolioConfigForMode("live"),
+    min_probability: currentEligibilityThreshold(),
+    max_order_fraction: currentRiskAllocation(),
+    use_limit_orders: currentLimitOrders(),
+    cross_live_portfolio_risk_diversification: systemConfig().crossLivePortfolioRiskDiversification !== false,
+  };
+}
+
 async function triggerOneTimeExecution(target) {
   target = target === "live" ? "live" : "paper";
   const live = target === "live";
@@ -2524,10 +2560,7 @@ async function triggerOneTimeExecution(target) {
           max_order_fraction: currentRiskAllocation(),
           ...paperThresholdPayload(),
         } : {
-          ...portfolioConfigForMode("live"),
-          min_probability: currentEligibilityThreshold(),
-          max_order_fraction: currentRiskAllocation(),
-          use_limit_orders: currentLimitOrders(),
+          ...liveWorkflowPayload(),
         }),
       }),
     });
@@ -2697,6 +2730,7 @@ function livePortfolioRuleRows() {
     ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 24)}h between new live orders`],
     ["Liquidity / volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
+    ["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "Block correlated exposure" : "Allow correlated exposure"],
   ];
 }
 
@@ -3483,6 +3517,7 @@ function tradeBatchDetail(batch) {
     `New trade cadence: ${settings.tradeCadenceHours == null ? "-" : `${settings.tradeCadenceHours}h`}`,
     `Min liquidity: ${settings.minLiquidityUsdc == null ? "-" : money(Number(settings.minLiquidityUsdc))}`,
     `Selection order: ${settings.selectionOrder || "-"}`,
+    settings.crossPortfolioRiskDiversification == null ? "" : `Cross-live risk diversification: ${settings.crossPortfolioRiskDiversification ? "on" : "off"}`,
     `Max stake: ${money(Number(settings.maxStakeUsdc || 0))}`,
     "",
     `Capital: ${money(Number(capital.availableUsdc || 0))} available / ${money(Number(capital.requiredStakeUsdc || 0))} required`,
@@ -3553,6 +3588,7 @@ function normalizeLiveExecutionRun(execution) {
       tradeCadenceHours: settings.tradeCadenceHours,
       maxOrderFraction: account.maxOrderFraction,
       useLimitOrders: settings.useLimitOrders,
+      crossPortfolioRiskDiversification: settings.crossPortfolioRiskDiversification,
     },
     capital: {
       availableUsdc: account.cashUsdc,
@@ -4061,6 +4097,12 @@ els.mostProbableOutcome?.addEventListener("change", () => {
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();
+});
+
+els.crossLiveRisk?.addEventListener("change", () => {
+  updateSystemConfig({ crossLivePortfolioRiskDiversification: Boolean(els.crossLiveRisk.checked) });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
 });
 
 els.botEvaluations?.addEventListener("click", (event) => {

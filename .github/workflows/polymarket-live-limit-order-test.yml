@@ -49,6 +49,11 @@ on:
         required: false
         default: ""
         type: string
+      cross_live_portfolio_risk_diversification:
+        description: Block correlated exposure across live portfolios
+        required: false
+        default: "true"
+        type: string
   schedule:
     - cron: '7 * * * *'
 
@@ -74,6 +79,7 @@ jobs:
       LIVE_ONE_TRADE_PER_DAY: "true"
       LIVE_TRADE_CADENCE_HOURS: ${{ github.event.inputs.live_trade_cadence_hours || '24' }}
       USE_LIMIT_ORDERS: ${{ github.event.inputs.live_use_limit_orders || 'true' }}
+      LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION: ${{ github.event.inputs.cross_live_portfolio_risk_diversification || 'true' }}
       POLYMARKET_POST_ONLY: "true"
       LIVE_ORDER_SIZE_MODE: stake_fraction
       LIVE_MIN_PROBABILITY: ${{ github.event.inputs.live_min_probability || '0.95' }}
@@ -119,6 +125,7 @@ jobs:
               print(f"portfolio config unavailable: {exc}")
               raise SystemExit(0)
           live = (payload.get("config") or {}).get("live") or {}
+          system = (payload.get("config") or {}).get("system") or {}
           mapping = {
               "LIVE_MIN_PROBABILITY": live.get("minProbability"),
               "MAX_ORDER_FRACTION": live.get("maxOrderFraction"),
@@ -127,6 +134,7 @@ jobs:
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": live.get("minLiquidityUsdc"),
               "LIVE_TRADE_CADENCE_HOURS": live.get("tradeCadenceHours"),
               "USE_LIMIT_ORDERS": str(bool(live.get("useLimitOrders", True))).lower(),
+              "LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION": str(bool(system.get("crossLivePortfolioRiskDiversification", True))).lower(),
           }
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
               for key, value in mapping.items():

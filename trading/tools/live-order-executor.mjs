@@ -30,6 +30,7 @@ const MAX_RESOLUTION_DAYS = envNumber("LIVE_MAX_RESOLUTION_DAYS", 7);
 const SELECTION_ORDER = process.env.LIVE_SELECTION_ORDER === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
 const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "stake_fraction").toLowerCase();
 const USE_LIMIT_ORDERS = String(process.env.USE_LIMIT_ORDERS ?? "true").toLowerCase() !== "false";
+const CROSS_PORTFOLIO_RISK_DIVERSIFICATION = String(process.env.LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION ?? "true").toLowerCase() !== "false";
 const POST_ONLY = String(process.env.POLYMARKET_POST_ONLY ?? "true").toLowerCase() !== "false";
 const DRY_RUN = String(process.env.POLYMARKET_DRY_RUN ?? "true").toLowerCase() !== "false";
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
@@ -465,6 +466,7 @@ function riskBlock(candidate, liveState, evaluationByToken = new Map()) {
     if (String(item.tokenId || item.assetId || "") === String(candidate.tokenId || "")) {
       return { reason: "duplicate token already open", overlap: [String(candidate.tokenId)] };
     }
+    if (!CROSS_PORTFOLIO_RISK_DIVERSIFICATION) continue;
     const itemRisk = riskProfile({
       question: item.question || "",
       slug: item.slug || "",
@@ -1113,6 +1115,7 @@ async function main() {
     monitoring,
     settings: {
       useLimitOrders: USE_LIMIT_ORDERS,
+      crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,
       postOnly: POST_ONLY,
       orderSizeMode: ORDER_SIZE_MODE,
       minProbability: MIN_PROBABILITY,
@@ -1158,6 +1161,7 @@ async function main() {
         tradeCadenceHours: TRADE_CADENCE_HOURS,
         selectionOrder: SELECTION_ORDER,
         useLimitOrders: USE_LIMIT_ORDERS,
+        crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,
         maxOrderFraction: MAX_ORDER_FRACTION,
       },
       capital: {

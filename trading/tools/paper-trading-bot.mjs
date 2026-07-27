@@ -2004,6 +2004,12 @@ function cadenceBlocked(lastTradeHour, currentHour, cadenceHours) {
   return (current.getTime() - previous.getTime()) / 3600000 < cadence;
 }
 
+function latestNewTrade(portfolioState = {}) {
+  return (portfolioState.trades || [])
+    .filter((trade) => !trade.openedAfterRotationOfTradeId)
+    .sort((a, b) => tradeUpdateTime(b) - tradeUpdateTime(a))[0] || null;
+}
+
 function strategyEligibleCandidates(eligible, strategy) {
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
   let rows = [...eligible].filter((item) => {
@@ -2420,7 +2426,11 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   const tradeCadenceHours = normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1);
 
   if (cadenceBlocked(portfolioState.lastTradeHour, currentHour, tradeCadenceHours)) {
-    const reason = `paper trade cadence blocked: last new trade ${portfolioState.lastTradeHour || "-"}, cadence ${tradeCadenceHours}h`;
+    const latest = latestNewTrade(portfolioState);
+    const latestLabel = latest
+      ? `${latest.strategyLabel || strategy.label}: ${latest.outcome || "-"} / ${latest.question || "-"}`
+      : strategy.label;
+    const reason = `${strategy.label} paper trade cadence blocked: this portfolio last opened a new trade at ${portfolioState.lastTradeHour || "-"}, cadence ${tradeCadenceHours}h. Other paper portfolios do not block this cadence. Last trade: ${latestLabel}`;
     return {
       action: "SKIP",
       reason,

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260727-state-cache">
+  <link rel="stylesheet" href="assets/app.css?v=20260727-portfolio-cadence">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -224,10 +224,15 @@
                 <div class="system-status-head">
                   <div>
                     <p class="eyebrow">System</p>
-                    <h3>Live execution gate</h3>
+                    <h3>Live risk controls</h3>
                   </div>
                   <button class="activation-button" type="button" data-live-activation hidden aria-pressed="false">Activate live execution</button>
                 </div>
+                <label class="parameter-control order-mode-toggle system-toggle">
+                  <input type="checkbox" data-cross-live-risk checked>
+                  <span>Block correlated trades across live portfolios</span>
+                </label>
+                <p class="system-status-note">Default on. Live portfolios may share one account, so correlated open exposure is blocked across live portfolios while paper portfolios keep their own cadence and trade independently.</p>
                 <p class="system-status-note">One-time browser-side confirmation for this connected live account. Keep it here for account setup or future reconnection; normal scheduled automation uses stored server secrets.</p>
               </div>
               <div class="calculation-controls">
@@ -318,6 +323,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260727-state-cache"></script>
+  <script src="assets/app.js?v=20260727-portfolio-cadence"></script>
 </body>
 </html>
