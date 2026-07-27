@@ -743,12 +743,30 @@ function polymarketUrl(item) {
   return "https://polymarket.com/";
 }
 
+function shortIdentifier(value) {
+  const text = String(value || "");
+  if (!text) return "";
+  if (text.length <= 18) return text;
+  return `${text.slice(0, 8)}...${text.slice(-6)}`;
+}
+
+function marketMetaLine(item) {
+  if (item.mode !== "LIVE_ORDER") return "";
+  const parts = [
+    item.orderId ? `order ${shortIdentifier(item.orderId)}` : "",
+    item.openedAt ? `created ${formatDate(item.openedAt)}` : "",
+    Number.isFinite(Number(item.entryPrice)) ? `limit ${probability(Number(item.entryPrice))}` : "",
+  ].filter(Boolean);
+  return parts.length ? `<span>${escapeHtml(parts.join(" / "))}</span>` : "";
+}
+
 function marketAnchor(item) {
   const href = polymarketUrl(item);
   return `
     <a class="market-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
       <strong>${escapeHtml(item.outcome)}</strong>
       <span>${escapeHtml(item.question)}</span>
+      ${marketMetaLine(item)}
     </a>
   `;
 }
@@ -2611,6 +2629,7 @@ function normalizeLiveOpenOrderForTable(order) {
   const stake = Number.isFinite(notional) ? notional : (Number.isFinite(price) ? price * remainingSize : 0);
   return {
     id: `open-order-${order.id}`,
+    orderId: order.id || order.orderID || order.orderId || null,
     mode: "LIVE_ORDER",
     status: "LIMIT ORDER",
     question: source?.question || order.question || "Open live limit order",
@@ -2633,7 +2652,11 @@ function normalizeLiveOpenOrderForTable(order) {
     unrealizedPnlPct: 0,
     aiProbability: Number(source?.aiProbability),
     sourceEvaluation: source || null,
-    analysisSummary: `Open ${order.side || ""} limit order, ${remainingSize.toLocaleString("en-US", { maximumFractionDigits: 4 })} shares at ${probability(price)}. Matched ${Number(order.sizeMatched || 0).toLocaleString("en-US", { maximumFractionDigits: 4 })} shares.`,
+    analysisSummary: [
+      `Open ${order.side || ""} limit order ${shortIdentifier(order.id || order.orderID || order.orderId)}, ${remainingSize.toLocaleString("en-US", { maximumFractionDigits: 4 })} shares at ${probability(price)}.`,
+      `Created ${order.createdAt ? formatDate(order.createdAt) : "-"}.`,
+      `Matched ${Number(order.sizeMatched || 0).toLocaleString("en-US", { maximumFractionDigits: 4 })} shares.`,
+    ].join(" "),
   };
 }
 
