@@ -377,9 +377,15 @@ function setExecutionStatus(text, tone = "") {
   els.executionStatus.classList.toggle("muted", tone !== "error");
 }
 
+function oneTimeExecutionTarget(button) {
+  if (!button) return isLiveMode() ? "live" : "paper";
+  if (button.dataset.oneTimeExecution === "current") return isLiveMode() ? "live" : "paper";
+  return button.dataset.oneTimeExecution === "live" ? "live" : "paper";
+}
+
 function syncExecutionButtons() {
   els.executionButtons.forEach((button) => {
-    const target = button.dataset.oneTimeExecution === "current" ? (isLiveMode() ? "live" : "paper") : button.dataset.oneTimeExecution;
+    const target = oneTimeExecutionTarget(button);
     const busy = state.executionBusy === target;
     button.disabled = Boolean(state.executionBusy);
     button.classList.toggle("live", isLiveMode());
@@ -2211,19 +2217,8 @@ function paperThresholdPayload() {
 }
 
 async function triggerOneTimeExecution(target) {
+  target = target === "live" ? "live" : "paper";
   const live = target === "live";
-  if (live && !state.liveExecutionArmed) {
-    window.alert("Nejdrive aktivuj live execution gate.");
-    return;
-  }
-  if (live) {
-    const confirmed = window.confirm("Spustit jednorazovou LIVE exekuci? Workflow znovu overi kandidaty a muze poslat realny Polymarket order.");
-    if (!confirmed) return;
-  }
-
-  state.executionBusy = target;
-  syncExecutionButtons();
-  setExecutionStatus(live ? "starting live workflow" : "starting paper workflow");
   const startedAt = new Date().toISOString();
   openExecutionModal(target);
   let steps = [
@@ -2234,6 +2229,33 @@ async function triggerOneTimeExecution(target) {
     },
   ];
   renderExecutionSteps(steps);
+
+  if (state.executionBusy) {
+    steps = addExecutionStep(steps, "Execution already running", `${state.executionBusy === "live" ? "Live" : "Paper"} workflow is still in progress. Wait for it to finish before starting another one.`, "error");
+    setExecutionStatus("execution already running", "error");
+    return;
+  }
+
+  if (live && !state.liveExecutionArmed) {
+    steps = addExecutionStep(steps, "Live gate is inactive on this browser", "Open Settings and activate the live execution gate once on this device. Scheduled server automation still uses stored secrets; this only protects manual live clicks from the browser UI.", "error");
+    setExecutionStatus("live execution blocked: gate inactive", "error");
+    return;
+  }
+  if (live) {
+    steps = addExecutionStep(steps, "Waiting for browser confirmation", "Confirm the live one-time execution prompt to dispatch the workflow.", "active");
+    await sleep(80);
+    const confirmed = window.confirm("Spustit jednorazovou LIVE exekuci? Workflow znovu overi kandidaty a muze poslat realny Polymarket order.");
+    if (!confirmed) {
+      steps = addExecutionStep(steps, "Live execution canceled", "The workflow was not dispatched because the browser confirmation was canceled.", "error");
+      setExecutionStatus("live workflow canceled", "error");
+      return;
+    }
+    steps = addExecutionStep(steps, "Live execution confirmed", "Dispatching GitHub workflow with the current portfolio parameters.", "done");
+  }
+
+  state.executionBusy = target;
+  syncExecutionButtons();
+  setExecutionStatus(live ? "starting live workflow" : "starting paper workflow");
 
   try {
     await savePortfolioConfigNow();
@@ -3609,12 +3631,18 @@ els.liveActivation?.addEventListener("click", () => {
 });
 
 els.executionButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    const target = button.dataset.oneTimeExecution === "current"
-      ? (isLiveMode() ? "live" : "paper")
-      : (button.dataset.oneTimeExecution === "live" ? "live" : "paper");
-    triggerOneTimeExecution(target);
+  button.dataset.executionBound = "true";
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    triggerOneTimeExecution(oneTimeExecutionTarget(button));
   });
+});
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-one-time-execution]");
+  if (!button || button.dataset.executionBound === "true") return;
+  event.preventDefault();
+  triggerOneTimeExecution(oneTimeExecutionTarget(button));
 });
 
 els.evaluationStatusButtons.forEach((button) => {
