@@ -784,6 +784,18 @@ button:disabled {
   font-weight: 900;
 }
 
+.analysis-detail-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-left: 6px;
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 850;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .ledger .analysis-tooltip {
   display: none;
 }

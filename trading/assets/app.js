@@ -48,6 +48,7 @@ const state = {
   },
   displayedRunLog: [],
   userNavRefreshTimer: null,
+  openedOpportunityKey: "",
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
@@ -501,7 +502,7 @@ function setEvaluationStatus(status) {
   renderBotEvaluations();
 }
 
-function activatePage(page, { replace = false } = {}) {
+function activatePage(page, { replace = false, preserveSearch = false } = {}) {
   const nextPage = ["settings", "opportunities", "portfolios"].includes(page) ? page : "portfolios";
   setPage(nextPage);
   if (nextPage === "opportunities") {
@@ -516,9 +517,11 @@ function activatePage(page, { replace = false } = {}) {
   }
 
   const nextPath = routePath(nextPage);
-  if (window.location.pathname !== nextPath) {
+  const targetPath = preserveSearch ? `${nextPath}${window.location.search}` : nextPath;
+  const currentPath = `${window.location.pathname}${window.location.search}`;
+  if (currentPath !== targetPath) {
     const method = replace ? "replaceState" : "pushState";
-    window.history[method]({ page: nextPage }, "", nextPath);
+    window.history[method]({ page: nextPage }, "", targetPath);
   }
 }
 
@@ -747,6 +750,40 @@ function polymarketUrl(item) {
   const slug = String(item?.eventSlug || item?.slug || "").trim();
   if (/^[a-z0-9-]+$/i.test(slug)) return `https://polymarket.com/event/${slug}`;
   return "https://polymarket.com/";
+}
+
+function opportunityKey(item) {
+  const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || item?.asset || "").trim();
+  if (tokenId) return `token:${tokenId}`;
+  const id = String(item?.id || "").trim();
+  if (id) return id;
+  const slug = String(item?.eventSlug || item?.slug || "").trim().toLowerCase();
+  const outcome = String(item?.outcome || "").trim().toLowerCase();
+  return slug && outcome ? `market:${slug}:${outcome}` : "";
+}
+
+function opportunityDetailUrl(itemOrKey) {
+  const key = typeof itemOrKey === "string" ? itemOrKey : opportunityKey(itemOrKey);
+  const url = new URL("/trading/opportunities/", window.location.origin);
+  if (key) url.searchParams.set("event", key);
+  return url.pathname + url.search;
+}
+
+function absoluteOpportunityDetailUrl(itemOrKey) {
+  return `${window.location.origin}${opportunityDetailUrl(itemOrKey)}`;
+}
+
+function currentOpportunityKeyFromUrl() {
+  return new URLSearchParams(window.location.search).get("event") || "";
+}
+
+function findOpportunityByKey(key) {
+  const wanted = String(key || "");
+  if (!wanted) return null;
+  const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
+  return evaluations.find((item) => opportunityKey(item) === wanted)
+    || evaluations.find((item) => String(item.id || "") === wanted)
+    || null;
 }
 
 function shortIdentifier(value) {
@@ -1464,15 +1501,18 @@ function analysisBadge(item) {
       `Evaluation status: ${evaluationStatusLabel(item)}`,
       `Stored pipeline status: ${item.status || "-"}`,
       `Selected AI probability threshold: ${probability(currentEligibilityThreshold())}`,
+      `Analysis URL: ${absoluteOpportunityDetailUrl(item)}`,
       reasons,
     ].join(" / "),
   });
+  const detailUrl = opportunityDetailUrl(item);
   return `
     ${errorReasonBadge(item)}
     <span class="analysis-popover">
       <button class="info-button" type="button" aria-label="Show analysis details">i</button>
       <span class="analysis-tooltip" role="tooltip">${escapeHtml(details)}</span>
     </span>
+    <a class="analysis-detail-link" href="${escapeHtml(detailUrl)}" data-opportunity-detail="${escapeHtml(opportunityKey(item))}">detail</a>
   `;
 }
 
@@ -1833,10 +1873,20 @@ function analysisModal() {
   return modal;
 }
 
-function openAnalysisModal(text, trigger) {
+function linkifyEscapedText(text) {
+  const escaped = escapeHtml(text || "No analysis detail available.");
+  return escaped.replace(/https?:\/\/[^\s<>"']+/g, (url) => {
+    const cleanUrl = url.replace(/[),.;]+$/g, "");
+    const suffix = url.slice(cleanUrl.length);
+    return `<a href="${escapeHtml(cleanUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cleanUrl)}</a>${escapeHtml(suffix)}`;
+  });
+}
+
+function openAnalysisModal(text, trigger, options = {}) {
   const modal = analysisModal();
   const body = modal.querySelector("[data-analysis-modal-body]");
-  if (body) body.textContent = text || "No analysis detail available.";
+  if (body) body.innerHTML = linkifyEscapedText(text || "No analysis detail available.");
+  modal.dataset.opportunityKey = options.opportunityKey || "";
   modal.hidden = false;
   document.body.classList.add("modal-open");
   modal.querySelector("[data-analysis-modal-close]")?.focus();
@@ -1849,8 +1899,14 @@ function openAnalysisModal(text, trigger) {
 function closeAnalysisModal() {
   const modal = document.querySelector("[data-analysis-modal]");
   if (!modal || modal.hidden) return;
+  const opportunityKey = modal.dataset.opportunityKey || "";
   modal.hidden = true;
+  modal.dataset.opportunityKey = "";
   document.body.classList.remove("modal-open");
+  if (opportunityKey && currentOpportunityKeyFromUrl() === opportunityKey) {
+    window.history.replaceState({ page: "opportunities" }, "", routePath("opportunities"));
+    state.openedOpportunityKey = "";
+  }
   if (analysisModal.lastTrigger instanceof HTMLElement) {
     analysisModal.lastTrigger.focus();
   }
@@ -2559,6 +2615,7 @@ function renderBotState(botState) {
   renderBotEvaluations();
   renderRunLog();
   renderCalculationReport();
+  openOpportunityFromCurrentUrl();
 }
 
 function livePositions(liveState) {
@@ -2884,6 +2941,7 @@ function renderLiveState(liveState) {
   renderBotEvaluations();
   renderRunLog();
   renderCalculationReport();
+  openOpportunityFromCurrentUrl();
 }
 
 function evaluationSortValue(item, key) {
@@ -3097,9 +3155,32 @@ function runEventDetail(event) {
       `Evaluation result: ${runEventResultLabel(event)}`,
       `Portfolio filter status at run time: ${event.portfolioFilterStatus || event.status || "-"}`,
       "Portfolio eligibility is applied separately by the active portfolio rules.",
+      `Analysis URL: ${absoluteOpportunityDetailUrl(event)}`,
       reasons,
     ].join(" / "),
   });
+}
+
+function openOpportunityDetail(item, trigger = null, { push = true } = {}) {
+  if (!item) return false;
+  const key = opportunityKey(item);
+  if (!key) return false;
+  if (push) {
+    window.history.pushState({ page: "opportunities", event: key }, "", opportunityDetailUrl(key));
+  }
+  activatePage("opportunities", { replace: true, preserveSearch: true });
+  state.openedOpportunityKey = key;
+  openAnalysisModal(runEventDetail(item), trigger, { opportunityKey: key });
+  return true;
+}
+
+function openOpportunityFromCurrentUrl() {
+  const key = currentOpportunityKeyFromUrl();
+  if (!key || key === state.openedOpportunityKey) return;
+  const item = findOpportunityByKey(key);
+  if (item) {
+    openOpportunityDetail(item, null, { push: false });
+  }
 }
 
 function runEventResultLabel(event) {
@@ -3149,6 +3230,7 @@ function tradeBatchDetail(batch) {
         `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
         `   ${candidateMetricLine(item)}`,
         Array.isArray(item.portfolioRejectReasons) && item.portfolioRejectReasons.length ? `   Filter reasons: ${item.portfolioRejectReasons.join("; ")}` : "",
+        opportunityKey(item) ? `   Analysis: ${absoluteOpportunityDetailUrl(item)}` : "",
       ].filter(Boolean).join("\n")).join("\n\n")
     : "-";
   const candidateLines = candidates.length
@@ -3158,6 +3240,7 @@ function tradeBatchDetail(batch) {
         item.selectionDecision ? `   Decision: ${item.selectionDecision}` : "",
         item.riskBlockedReason ? `   Risk blocked: ${item.riskBlockedReason}` : "",
         Array.isArray(item.rejectReasons) && item.rejectReasons.length ? `   Notes: ${item.rejectReasons.join("; ")}` : "",
+        opportunityKey(item) ? `   Analysis: ${absoluteOpportunityDetailUrl(item)}` : "",
         item.url ? `   Polymarket: ${item.url}` : "",
       ].filter(Boolean).join("\n")).join("\n\n")
     : "No eligible candidates passed this portfolio filter.";
@@ -3594,6 +3677,11 @@ els.pageLinks.forEach((link) => {
 
 window.addEventListener("popstate", () => {
   applyInitialRoute();
+  if (currentOpportunityKeyFromUrl()) {
+    openOpportunityFromCurrentUrl();
+  } else {
+    closeAnalysisModal();
+  }
   refreshDashboardAfterUserNavigation();
 });
 
@@ -3838,6 +3926,14 @@ document.addEventListener("click", (event) => {
   if (parameterEditButton) {
     event.preventDefault();
     openParameterModal(parameterEditButton);
+    return;
+  }
+
+  const opportunityDetailLink = event.target.closest("[data-opportunity-detail]");
+  if (opportunityDetailLink) {
+    event.preventDefault();
+    const item = findOpportunityByKey(opportunityDetailLink.dataset.opportunityDetail || "");
+    openOpportunityDetail(item, opportunityDetailLink, { push: true });
     return;
   }
 
