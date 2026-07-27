@@ -55,6 +55,9 @@ const ROTATION_MIN_HOLD_HOURS = envNumber("PAPER_ROTATION_MIN_HOLD_HOURS", 6);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
 const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
+const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable"].includes(process.env.PAPER_STRATEGY_ID)
+  ? process.env.PAPER_STRATEGY_ID
+  : "";
 const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
 const REPORT_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
@@ -99,6 +102,13 @@ const PAPER_STRATEGIES = {
     description: `Requires AI probability >= ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, deep liquidity, and multichoice-style event markets.`,
   },
 };
+
+function executionStrategies() {
+  if (MANUAL_RUN_ONCE && PAPER_STRATEGY_ID && PAPER_STRATEGIES[PAPER_STRATEGY_ID]) {
+    return [PAPER_STRATEGIES[PAPER_STRATEGY_ID]];
+  }
+  return Object.values(PAPER_STRATEGIES);
+}
 
 const LEDGER_RECOVERY_ANCHORS = [
   {
@@ -2406,6 +2416,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
       manualRunOnce: MANUAL_RUN_ONCE,
       cadenceIgnored: MANUAL_RUN_ONCE,
+      requestedStrategyId: PAPER_STRATEGY_ID || null,
       maxStakeUsdc: Number(stake.toFixed(2)),
     },
     capital: {
@@ -3539,7 +3550,7 @@ async function run() {
 
   evaluations = (await enrichEvaluationsWithAi(evaluations, state.learningProfile)).map(normalizeEvaluationRisk);
   const eligible = evaluations.filter((item) => item.status === "ELIGIBLE");
-  const decisions = Object.values(PAPER_STRATEGIES).map((strategy) => {
+  const decisions = executionStrategies().map((strategy) => {
     const portfolioState = state.paperPortfolios[strategy.id];
     const rankedEligible = sortEligibleForStrategy(eligible, strategy);
     return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations, { ignoreCadence: MANUAL_RUN_ONCE });

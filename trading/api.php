@@ -830,6 +830,15 @@ function normalized_selection_order_input($value): ?string
     return $value === 'highest_reward_risk_first' ? 'highest_reward_risk_first' : 'highest_ev_pa_first';
 }
 
+function normalized_paper_strategy_input($value): ?string
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    $text = (string) $value;
+    return in_array($text, ['conservative', 'highReward', 'moreProbable'], true) ? $text : null;
+}
+
 try {
     $action = $_GET['action'] ?? 'markets';
 
@@ -900,6 +909,7 @@ try {
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
         $manualRunOnce = normalized_bool_input($payload['manual_run_once'] ?? $payload['manualRunOnce'] ?? null);
+        $paperStrategyId = normalized_paper_strategy_input($payload['paper_strategy_id'] ?? $payload['paperStrategyId'] ?? null);
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
         $paperExtraInputs = [];
         foreach ($paperStrategies as $strategy) {
@@ -920,6 +930,7 @@ try {
                     'paper_high_reward_min_probability' => $paperHighRewardMinProbability,
                     'paper_more_probable_min_probability' => $paperMoreProbableMinProbability,
                     'manual_run_once' => $manualRunOnce,
+                    'paper_strategy_id' => $paperStrategyId,
                 ], $paperExtraInputs), static fn ($value): bool => $value !== null),
                 'message' => 'Paper bot workflow dispatched.',
             ],

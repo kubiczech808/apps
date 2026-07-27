@@ -2334,6 +2334,18 @@ async function waitForWorkflowRun(target, startedAt, steps) {
   return { run: latest, steps };
 }
 
+function paperExecutionDecision(payload, strategyId = "") {
+  const requestedStrategyId = strategyId || paperStrategyIdFromMode();
+  const portfolio = payload?.paperPortfolios?.[requestedStrategyId];
+  if (portfolio?.lastDecision) return portfolio.lastDecision;
+  const runs = Array.isArray(payload?.evaluationRunLog) ? payload.evaluationRunLog : [];
+  for (const run of runs) {
+    const decision = (Array.isArray(run.decisions) ? run.decisions : []).find((item) => item.strategyId === requestedStrategyId);
+    if (decision) return { ...decision, runAt: run.runAt || payload.generatedAt };
+  }
+  return strategyId ? null : (payload?.lastDecision || null);
+}
+
 function liveExecutionSummary(execution) {
   if (!execution || typeof execution !== "object") return "Live execution state is not available yet.";
   const selected = execution.selected || {};
@@ -2358,16 +2370,19 @@ function liveExecutionSummary(execution) {
   return lines.filter(Boolean).join("\n");
 }
 
-async function waitForExecutionResult(target, startedAt, steps) {
+async function waitForExecutionResult(target, startedAt, steps, options = {}) {
   const stateTarget = target === "live" ? "live-execution" : "paper";
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const payload = await fetchApiJson(`api.php?action=state&target=${stateTarget}`);
-    const generated = Date.parse(payload.generatedAt || payload.lastDecision?.runAt || "");
+    const paperDecision = target === "paper" ? paperExecutionDecision(payload, options.paperStrategyId) : null;
+    const generated = Date.parse(target === "paper"
+      ? (paperDecision?.runAt || payload.generatedAt || payload.lastDecision?.runAt || "")
+      : (payload.generatedAt || payload.lastDecision?.runAt || ""));
     const start = Date.parse(startedAt || "");
     if (!Number.isFinite(start) || (Number.isFinite(generated) && generated >= start - 120000)) {
       const detail = target === "live"
         ? liveExecutionSummary(payload)
-        : `Paper action: ${payload.lastDecision?.action || "-"} / ${payload.lastDecision?.reason || "-"}`;
+        : `Paper ${paperPortfolioLabelFromMode(paperModeFromStrategyId(options.paperStrategyId))} action: ${paperDecision?.action || "-"} / ${paperDecision?.reason || "-"}`;
       steps = addExecutionStep(steps, "Execution result", detail, "done");
       return { payload, steps };
     }
@@ -2636,6 +2651,7 @@ function liveWorkflowPayload() {
 async function triggerOneTimeExecution(target) {
   target = target === "live" ? "live" : "paper";
   const live = target === "live";
+  const paperStrategyId = live ? "" : paperStrategyIdFromMode();
   const startedAt = new Date().toISOString();
   openExecutionModal(target);
   let steps = [
@@ -2683,6 +2699,7 @@ async function triggerOneTimeExecution(target) {
         target,
         manual_run_once: true,
         ...(!live ? {
+          paper_strategy_id: paperStrategyId,
           max_order_fraction: currentRiskAllocation(),
           ...paperThresholdPayload(),
         } : {
@@ -2706,7 +2723,7 @@ async function triggerOneTimeExecution(target) {
       setExecutionStatus(`${target} workflow ${workflow.run.conclusion}`, "error");
       return;
     }
-    const result = await waitForExecutionResult(target, startedAt, steps);
+    const result = await waitForExecutionResult(target, startedAt, steps, { paperStrategyId });
     steps = result.steps;
     steps = addExecutionStep(steps, "Dashboard refreshed", "Open positions and limit orders are shown in the tables below.", "done");
     setExecutionStatus(`${target} workflow completed`);

@@ -22,6 +22,11 @@ on:
         required: false
         default: "false"
         type: string
+      paper_strategy_id:
+        description: "Optional paper portfolio to execute for manual Run once"
+        required: false
+        default: ""
+        type: string
       paper_max_order_fraction:
         description: "Maximum stake per paper trade as fraction of portfolio, decimal 0.01-0.50"
         required: false
@@ -181,6 +186,7 @@ jobs:
       PAPER_AI_POSTMORTEM_LIMIT: "8"
       PAPER_REQUIRE_GEMINI: "true"
       PAPER_MANUAL_RUN_ONCE: ${{ github.event_name == 'workflow_dispatch' && inputs.manual_run_once == 'true' && 'true' || 'false' }}
+      PAPER_STRATEGY_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_strategy_id || '' }}
       PAPER_REPORT_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report') }}
       PAPER_REFRESH_ONLY: ${{ !((github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report')) && ((github.event_name == 'schedule' && github.event.schedule != '7 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh')) }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET || secrets.GEMINI_API_KEY }}
