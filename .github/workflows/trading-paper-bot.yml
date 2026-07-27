@@ -17,6 +17,11 @@ on:
           - full
           - refresh
           - report
+      manual_run_once:
+        description: "Manual Run once request; bypasses new-trade cadence only"
+        required: false
+        default: "false"
+        type: string
       paper_max_order_fraction:
         description: "Maximum stake per paper trade as fraction of portfolio, decimal 0.01-0.50"
         required: false
@@ -175,6 +180,7 @@ jobs:
       PAPER_AI_STOP_ON_QUOTA_ERROR: "true"
       PAPER_AI_POSTMORTEM_LIMIT: "8"
       PAPER_REQUIRE_GEMINI: "true"
+      PAPER_MANUAL_RUN_ONCE: ${{ github.event_name == 'workflow_dispatch' && inputs.manual_run_once == 'true' && 'true' || 'false' }}
       PAPER_REPORT_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report') }}
       PAPER_REFRESH_ONLY: ${{ !((github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report')) && ((github.event_name == 'schedule' && github.event.schedule != '7 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh')) }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET || secrets.GEMINI_API_KEY }}

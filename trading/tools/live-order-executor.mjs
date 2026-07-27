@@ -44,6 +44,7 @@ const ONE_TRADE_PER_DAY = HAS_EXPLICIT_TRADE_CADENCE
   ? false
   : String(process.env.LIVE_ONE_TRADE_PER_DAY ?? "true").toLowerCase() !== "false";
 const TRADE_CADENCE_HOURS = Math.min(168, Math.max(1, Math.round(envNumber("LIVE_TRADE_CADENCE_HOURS", ONE_TRADE_PER_DAY ? 24 : 1))));
+const IGNORE_TRADE_CADENCE = String(process.env.LIVE_IGNORE_TRADE_CADENCE || "").toLowerCase() === "true";
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
 const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
@@ -137,9 +138,10 @@ function liveCashMonitoring(previousExecution, cash, now = new Date()) {
   const submittedToday = ONE_TRADE_PER_DAY
     && lastSubmittedAt
     && pragueDateKey(new Date(lastSubmittedAt)) === pragueDateKey(now);
-  const cadenceBlocked = lastSubmittedAt
+  const rawCadenceBlocked = lastSubmittedAt
     ? Number(submittedHoursAgo ?? Infinity) < TRADE_CADENCE_HOURS
     : false;
+  const cadenceBlocked = IGNORE_TRADE_CADENCE ? false : rawCadenceBlocked;
 
   return {
     idleCashLimitUsdc: IDLE_CASH_MAX_USDC,
@@ -152,6 +154,8 @@ function liveCashMonitoring(previousExecution, cash, now = new Date()) {
     submittedHoursAgo: submittedHoursAgo == null ? null : Number(submittedHoursAgo.toFixed(2)),
     submittedToday,
     cadenceBlocked,
+    rawCadenceBlocked,
+    ignoreTradeCadence: IGNORE_TRADE_CADENCE,
     tradeCadenceHours: TRADE_CADENCE_HOURS,
     oneTradePerDay: ONE_TRADE_PER_DAY,
   };
@@ -1129,6 +1133,7 @@ async function main() {
       idleCashGraceHours: IDLE_CASH_GRACE_HOURS,
       oneTradePerDay: ONE_TRADE_PER_DAY,
       tradeCadenceHours: TRADE_CADENCE_HOURS,
+      ignoreTradeCadence: IGNORE_TRADE_CADENCE,
       capitalUtilizationOverride: monitoring.idleCashOverdue,
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
@@ -1159,6 +1164,7 @@ async function main() {
         minVolume24hr: MIN_VOLUME_24H,
         maxResolutionDays: MAX_RESOLUTION_DAYS,
         tradeCadenceHours: TRADE_CADENCE_HOURS,
+        ignoreTradeCadence: IGNORE_TRADE_CADENCE,
         selectionOrder: SELECTION_ORDER,
         useLimitOrders: USE_LIMIT_ORDERS,
         crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,
@@ -1178,6 +1184,7 @@ async function main() {
         openOrdersReviewed: orderManagement.reviews.length,
         rejectedCandidates: checked.filter((item) => item.status !== "ELIGIBLE").length,
         cadenceBlocked,
+        rawCadenceBlocked: Boolean(monitoring.rawCadenceBlocked),
       },
       openOrderReviews: orderManagement.reviews,
       selected: best ? liveBatchCandidateSummary(best) : null,

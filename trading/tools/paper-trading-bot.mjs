@@ -54,6 +54,7 @@ const ROTATION_MIN_EV_USDC_IMPROVEMENT = envNumber("PAPER_ROTATION_MIN_EV_USDC_I
 const ROTATION_MIN_HOLD_HOURS = envNumber("PAPER_ROTATION_MIN_HOLD_HOURS", 6);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
+const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
 const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
 const REPORT_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
@@ -2403,6 +2404,8 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       selectionOrder: strategy.selectionOrder,
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
+      manualRunOnce: MANUAL_RUN_ONCE,
+      cadenceIgnored: MANUAL_RUN_ONCE,
       maxStakeUsdc: Number(stake.toFixed(2)),
     },
     capital: {
@@ -2532,7 +2535,7 @@ function closeTradeForRotation(trade, review, strategy) {
   };
 }
 
-function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative, evaluations = []) {
+function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRATEGIES.conservative, evaluations = [], options = {}) {
   const today = pragueDateKey();
   const currentHour = pragueHourKey();
   const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
@@ -2542,8 +2545,9 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   const stake = sizingCapital * maxFraction;
 
   const tradeCadenceHours = normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1);
+  const ignoreCadence = Boolean(options.ignoreCadence);
 
-  if (cadenceBlocked(portfolioState.lastTradeHour, currentHour, tradeCadenceHours)) {
+  if (!ignoreCadence && cadenceBlocked(portfolioState.lastTradeHour, currentHour, tradeCadenceHours)) {
     const latest = latestNewTrade(portfolioState);
     const latestLabel = latest
       ? `${latest.strategyLabel || strategy.label}: ${latest.outcome || "-"} / ${latest.question || "-"}`
@@ -3538,7 +3542,7 @@ async function run() {
   const decisions = Object.values(PAPER_STRATEGIES).map((strategy) => {
     const portfolioState = state.paperPortfolios[strategy.id];
     const rankedEligible = sortEligibleForStrategy(eligible, strategy);
-    return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations);
+    return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations, { ignoreCadence: MANUAL_RUN_ONCE });
   });
 
   state.generatedAt = nowIso();

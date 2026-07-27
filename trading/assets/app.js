@@ -2681,6 +2681,7 @@ async function triggerOneTimeExecution(target) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target,
+        manual_run_once: true,
         ...(!live ? {
           max_order_fraction: currentRiskAllocation(),
           ...paperThresholdPayload(),

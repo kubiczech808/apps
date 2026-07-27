@@ -899,6 +899,7 @@ try {
         $liveTradeCadenceHours = normalized_days_input($payload['tradeCadenceHours'] ?? $payload['live_trade_cadence_hours'] ?? null);
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
+        $manualRunOnce = normalized_bool_input($payload['manual_run_once'] ?? $payload['manualRunOnce'] ?? null);
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
         $paperExtraInputs = [];
         foreach ($paperStrategies as $strategy) {
@@ -918,6 +919,7 @@ try {
                     'paper_conservative_min_probability' => $paperConservativeMinProbability,
                     'paper_high_reward_min_probability' => $paperHighRewardMinProbability,
                     'paper_more_probable_min_probability' => $paperMoreProbableMinProbability,
+                    'manual_run_once' => $manualRunOnce,
                 ], $paperExtraInputs), static fn ($value): bool => $value !== null),
                 'message' => 'Paper bot workflow dispatched.',
             ],
@@ -933,6 +935,7 @@ try {
                     'live_trade_cadence_hours' => $liveTradeCadenceHours,
                     'live_use_limit_orders' => $liveUseLimitOrders,
                     'cross_live_portfolio_risk_diversification' => $crossLiveRiskDiversification,
+                    'live_ignore_trade_cadence' => $manualRunOnce,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
             ],
