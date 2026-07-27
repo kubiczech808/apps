@@ -2419,7 +2419,7 @@ function renderBotState(botState) {
   const openPnl = Number(portfolio.openPnlUsdc || 0);
   const openPnlPct = Number(portfolio.openPnlPct || 0);
   const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
-  const paperCapitalBase = Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100);
+  const paperCapitalBase = Number(portfolio.initialUsdc ?? 100) + realizedPnl;
   syncRiskAllocationControl(freeCapital, "paper portfolio equity", {
     baseCapital: paperCapitalBase,
     cadenceLabel: "next paper execution",
@@ -2691,9 +2691,10 @@ function renderLiveState(liveState) {
   const collateral = balanceAllowance.collateral || {};
   const positions = livePositions(liveState).map(decorateLiveTradeForTable);
   const openOrders = liveOpenOrders(liveState);
+  const openOrderRows = openOrders.map(normalizeLiveOpenOrderForTable);
   const openedRows = [
     ...positions,
-    ...openOrders.map(normalizeLiveOpenOrderForTable),
+    ...openOrderRows,
   ];
   const activity = liveActivity(liveState);
   const closedTrades = liveClosedTrades(liveState).map(decorateLiveTradeForTable);
@@ -2710,6 +2711,8 @@ function renderLiveState(liveState) {
   const openPnlPct = Number(portfolio.openPnlPct);
   const marketValue = Number(portfolio.marketValueUsdc);
   const cash = Number(portfolio.cashUsdc);
+  const openOrderRisk = openOrderRows.reduce((sum, order) => sum + Number(order.totalCostUsdc || order.stakeUsdc || 0), 0);
+  const freeCash = Number.isFinite(cash) ? Math.max(0, cash - openOrderRisk) : null;
   const pendingRedeem = Number(portfolio.pendingRedeemUsdc);
   const executionState = state.liveExecutionState || {};
   const monitoring = executionState.monitoring || {};
@@ -2730,9 +2733,9 @@ function renderLiveState(liveState) {
   const redeemLine = Number.isFinite(pendingRedeem) && pendingRedeem > 0.000001
     ? `includes ${money(pendingRedeem)} pending redeem`
     : "";
-  const liveCapitalBase = Number.isFinite(equity) ? equity : null;
-  syncRiskAllocationControl(Number.isFinite(cash) ? cash : null, "live portfolio equity", {
-    baseCapital: liveCapitalBase,
+  const liveSizingCapitalBase = Number.isFinite(equity) ? Math.max(0, equity - (Number.isFinite(openPnl) ? openPnl : 0)) : null;
+  syncRiskAllocationControl(freeCash, "live portfolio equity excl. unrealized P/L", {
+    baseCapital: liveSizingCapitalBase,
     cadenceLabel: "next live execution",
   });
 
@@ -2759,8 +2762,8 @@ function renderLiveState(liveState) {
   els.portfolioOpenPl.textContent = signedMoney(openPnl);
   els.portfolioOpenPl.className = pnlClass(openPnl);
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
-  els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || marketValue || 0));
-  els.portfolioFree.textContent = Number.isFinite(cash) ? `${money(cash)} cash` : "cash not available";
+  els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0) + openOrderRisk);
+  els.portfolioFree.textContent = freeCash == null ? "cash not available" : `${money(freeCash)} free cash`;
   if (els.portfolioRr) {
     els.portfolioRr.textContent = riskReward(portfolioRiskReward);
     els.portfolioRr.className = riskRewardClass(portfolioRiskReward);

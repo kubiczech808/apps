@@ -536,7 +536,8 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
 function livePortfolioValue(liveState, cash) {
   const portfolio = liveState?.portfolio || {};
   const equity = number(portfolio.equityUsdc);
-  if (equity != null && equity > 0) return equity;
+  const openPnl = number(portfolio.openPnlUsdc, 0);
+  if (equity != null && equity > 0) return Math.max(0, equity - openPnl);
   const marketValue = number(portfolio.marketValueUsdc, 0);
   if (cash != null && cash >= 0) return cash + marketValue;
   return marketValue;

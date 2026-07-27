@@ -1885,7 +1885,38 @@ function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservat
   });
 }
 
+function scaledPaperEconomics(best, stake) {
+  const baseStake = Number(best.stakeUsdc || best.filledStakeUsdc || 0);
+  const targetStake = Number(stake);
+  const scale = baseStake > 0 && Number.isFinite(targetStake) ? targetStake / baseStake : 1;
+  const shares = Number(best.executableShares);
+  const takerFee = Number(best.takerFeeUsdc || 0);
+  const totalCost = Number(best.totalCostUsdc || baseStake + takerFee);
+  const grossGain = Number(best.grossGainIfWinUsdc);
+  const netGain = Number(best.netGainIfWinUsdc);
+  const maxLoss = Number(best.maxLossUsdc || totalCost);
+  const expectedValue = Number(best.expectedValueUsdc);
+  const fills = Array.isArray(best.marketFills) ? best.marketFills.map((fill) => ({
+    ...fill,
+    size: Number((Number(fill.size || 0) * scale).toFixed(4)),
+    costUsdc: Number((Number(fill.costUsdc || 0) * scale).toFixed(4)),
+  })) : [];
+
+  return {
+    scale,
+    shares: Number.isFinite(shares) ? Number((shares * scale).toFixed(4)) : shares,
+    takerFeeUsdc: Number.isFinite(takerFee) ? Number((takerFee * scale).toFixed(5)) : takerFee,
+    totalCostUsdc: Number.isFinite(totalCost) ? Number((totalCost * scale).toFixed(5)) : totalCost,
+    grossGainIfWinUsdc: Number.isFinite(grossGain) ? Number((grossGain * scale).toFixed(4)) : grossGain,
+    netGainIfWinUsdc: Number.isFinite(netGain) ? Number((netGain * scale).toFixed(4)) : netGain,
+    maxLossUsdc: Number.isFinite(maxLoss) ? Number((maxLoss * scale).toFixed(5)) : maxLoss,
+    expectedValueUsdc: Number.isFinite(expectedValue) ? Number((expectedValue * scale).toFixed(4)) : expectedValue,
+    marketFills: fills,
+  };
+}
+
 function paperTradeFromCandidate(best, strategy, today, stake) {
+  const economics = scaledPaperEconomics(best, stake);
   return {
     id: `paper-${strategy.id}-${today}-${best.tokenId}`,
     strategyId: strategy.id,
@@ -1904,7 +1935,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
       rawProbability: best.rawProbability,
       marketPrice: best.marketPrice,
       edge: best.edge,
-      expectedValueUsdc: best.expectedValueUsdc,
+      expectedValueUsdc: economics.expectedValueUsdc,
       annualizedReturn: best.annualizedReturn,
       probabilityThesis: best.probabilityThesis,
       analysisSummary: best.analysisSummary,
@@ -1934,22 +1965,22 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     rawProbability: best.rawProbability,
     thesisType: best.thesisType,
     annualizedReturn: best.annualizedReturn,
-    expectedValueUsdc: best.expectedValueUsdc,
+    expectedValueUsdc: economics.expectedValueUsdc,
     stakeUsdc: Number(stake.toFixed(2)),
-    shares: best.executableShares,
+    shares: economics.shares,
     feesEnabled: best.feesEnabled,
     feeType: best.feeType,
     feeRate: best.feeRate,
-    takerFeeUsdc: best.takerFeeUsdc,
-    totalCostUsdc: best.totalCostUsdc,
-    grossGainIfWinUsdc: best.grossGainIfWinUsdc,
-    netGainIfWinUsdc: best.netGainIfWinUsdc,
-    maxLossUsdc: best.maxLossUsdc,
+    takerFeeUsdc: economics.takerFeeUsdc,
+    totalCostUsdc: economics.totalCostUsdc,
+    grossGainIfWinUsdc: economics.grossGainIfWinUsdc,
+    netGainIfWinUsdc: economics.netGainIfWinUsdc,
+    maxLossUsdc: economics.maxLossUsdc,
     currentPrice: best.marketPrice,
     currentValueUsdc: Number(stake.toFixed(2)),
     unrealizedPnlUsdc: 0,
     unrealizedPnlPct: 0,
-    marketFills: best.marketFills,
+    marketFills: economics.marketFills,
     aiAnalysis: best.aiAnalysis,
     probabilityThesis: best.probabilityThesis,
     analysisModel: best.analysisModel,
@@ -2134,13 +2165,10 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   const today = pragueDateKey();
   const currentHour = pragueHourKey();
   const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
-  const openPnl = portfolioState.trades
-    .filter((trade) => trade.status === "OPEN")
-    .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
-  const portfolioValue = Math.max(0, PORTFOLIO_USDC + realizedPnl + openPnl);
-  const available = Math.max(0, PORTFOLIO_USDC + realizedPnl - openRisk(portfolioState.trades));
+  const sizingCapital = Math.max(0, PORTFOLIO_USDC + realizedPnl);
+  const available = Math.max(0, sizingCapital - openRisk(portfolioState.trades));
   const maxFraction = Number(strategy.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION);
-  const stake = portfolioValue * maxFraction;
+  const stake = sizingCapital * maxFraction;
 
   if (portfolioState.lastTradeHour === currentHour) {
     const reason = "hourly paper trade already opened";

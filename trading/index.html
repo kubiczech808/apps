@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260727-quiet-refresh-gate-settings">
+  <link rel="stylesheet" href="assets/app.css?v=20260727-sane-refresh-stake">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -277,6 +277,8 @@
           <span>Max per trade</span>
           <input type="number" min="1" max="50" step="1" value="5" data-risk-allocation>
           <strong data-risk-allocation-label>5%</strong>
+          <em>Calculated stake <strong data-risk-allocation-value>$5.00</strong>; <span data-risk-allocation-note>from portfolio capital</span></em>
+          <em class="capital-status" data-capital-status>Capital status pending.</em>
         </label>
         <label class="parameter-control">
           <span>Max resolution days</span>
@@ -300,12 +302,6 @@
           <input type="checkbox" data-most-probable-outcome>
           <span>Only most probable outcome per market</span>
         </label>
-        <div class="parameter-control parameter-control-readout">
-          <span>Calculated stake</span>
-          <strong data-risk-allocation-value>$5.00</strong>
-          <em data-risk-allocation-note>maximum stake from available capital</em>
-          <em class="capital-status" data-capital-status>Capital status pending.</em>
-        </div>
         <label class="parameter-control order-mode-toggle">
           <input type="checkbox" data-limit-orders>
           <span>Use limit orders</span>
@@ -317,6 +313,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260727-quiet-refresh-gate-settings"></script>
+  <script src="assets/app.js?v=20260727-sane-refresh-stake"></script>
 </body>
 </html>
