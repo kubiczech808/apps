@@ -43,6 +43,7 @@ const state = {
   calculationSource: "all",
   calculationMarket: "all",
   displayedRunLog: [],
+  userNavRefreshTimer: null,
 };
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
@@ -60,6 +61,7 @@ const MAX_RISK_ALLOCATION = 0.5;
 const DEFAULT_MAX_RESOLUTION_DAYS = 7;
 const LIVE_STATE_REFRESH_MS = 15000;
 const LIVE_SYNC_REQUEST_MS = 30000;
+const USER_NAV_REFRESH_DEBOUNCE_MS = 250;
 
 const els = {
   shell: document.querySelector("[data-app-shell]"),
@@ -450,6 +452,13 @@ function activateTab(target) {
   els.tabPanels.forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.tabPanel === target);
   });
+}
+
+function refreshDashboardAfterUserNavigation() {
+  window.clearTimeout(state.userNavRefreshTimer);
+  state.userNavRefreshTimer = window.setTimeout(() => {
+    loadDashboardState({ skipAutoLiveSync: true });
+  }, USER_NAV_REFRESH_DEBOUNCE_MS);
 }
 
 function setSettingsSection(section) {
@@ -2115,11 +2124,6 @@ async function requestLiveAccountSync(options = {}) {
     }
     if (payload.action === "DISPATCH") {
       if (!quiet) setExecutionStatus("live sync started");
-      [8000, 16000, 30000, 45000].forEach((delay) => {
-        window.setTimeout(() => {
-          loadDashboardState({ skipAutoLiveSync: true });
-        }, delay);
-      });
     } else {
       if (!quiet) setExecutionStatus("live account current");
     }
@@ -2727,10 +2731,6 @@ function renderLiveState(liveState) {
     ? `includes ${money(pendingRedeem)} pending redeem`
     : "";
   const liveCapitalBase = Number.isFinite(equity) ? equity : null;
-  const liveGuardLabel = state.liveExecutionArmed ? "Armed" : "Inactive";
-  const liveGuardText = state.liveExecutionArmed
-    ? "UI gate enabled; no automatic live order submitter is connected yet"
-    : "click Activate live execution before future live order routing";
   syncRiskAllocationControl(Number.isFinite(cash) ? cash : null, "live portfolio equity", {
     baseCapital: liveCapitalBase,
     cadenceLabel: "next live execution",
@@ -3407,6 +3407,7 @@ els.tabButtons.forEach((button) => {
     const target = button.dataset.tabTarget;
     event.preventDefault();
     activateTab(target);
+    refreshDashboardAfterUserNavigation();
   });
 });
 
@@ -3416,11 +3417,13 @@ els.pageLinks.forEach((link) => {
     if (!page) return;
     event.preventDefault();
     activatePage(page);
+    refreshDashboardAfterUserNavigation();
   });
 });
 
 window.addEventListener("popstate", () => {
   applyInitialRoute();
+  refreshDashboardAfterUserNavigation();
 });
 
 els.settingsSectionButtons.forEach((button) => {
@@ -3701,6 +3704,5 @@ loadDashboardState().then(() => {
 
 window.setInterval(() => {
   if (!isLiveMode()) return;
-  loadDashboardState({ skipAutoLiveSync: true });
   requestLiveAccountSync({ quiet: true, minSeconds: LIVE_SYNC_REQUEST_MS / 1000 });
 }, LIVE_STATE_REFRESH_MS);

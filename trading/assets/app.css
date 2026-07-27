@@ -1043,6 +1043,13 @@ body.modal-open {
   font-size: 16px;
 }
 
+.system-status-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .system-status-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

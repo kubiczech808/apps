@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260727-single-resolution-days">
+  <link rel="stylesheet" href="assets/app.css?v=20260727-quiet-refresh-gate-settings">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -123,11 +123,6 @@
               <strong data-next-order-scan>-</strong>
               <span class="control-note">paper + live candidate execution</span>
             </div>
-            <div class="control-block">
-              <span class="label">Live gate</span>
-              <button class="activation-button" type="button" data-live-activation hidden aria-pressed="false">Activate live execution</button>
-              <span class="control-note">required for live one-time execution</span>
-            </div>
           </div>
         </section>
         <div class="account-summary" data-account-summary hidden></div>
@@ -225,6 +220,16 @@
             </div>
             <div class="settings-panel-body">
               <div class="system-status-card" data-system-status hidden></div>
+              <div class="system-status-card">
+                <div class="system-status-head">
+                  <div>
+                    <p class="eyebrow">System</p>
+                    <h3>Live execution gate</h3>
+                  </div>
+                  <button class="activation-button" type="button" data-live-activation hidden aria-pressed="false">Activate live execution</button>
+                </div>
+                <p class="system-status-note">One-time browser-side confirmation for this connected live account. Keep it here for account setup or future reconnection; normal scheduled automation uses stored server secrets.</p>
+              </div>
               <div class="calculation-controls">
                 <div>
                   <p class="eyebrow">Nightly portfolio replay</p>
@@ -312,6 +317,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260727-single-resolution-days"></script>
+  <script src="assets/app.js?v=20260727-quiet-refresh-gate-settings"></script>
 </body>
 </html>
