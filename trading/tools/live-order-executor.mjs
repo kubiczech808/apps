@@ -41,6 +41,10 @@ const EXECUTION_STATE_PATH = process.env.LIVE_EXECUTION_STATE_PATH || "";
 const IDLE_CASH_MAX_USDC = Number(process.env.LIVE_IDLE_CASH_MAX_USDC || 5);
 const IDLE_CASH_GRACE_HOURS = Number(process.env.LIVE_IDLE_CASH_GRACE_HOURS || 24);
 const ONE_TRADE_PER_DAY = String(process.env.LIVE_ONE_TRADE_PER_DAY ?? "true").toLowerCase() !== "false";
+const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
+const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
+const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
+const OPEN_ORDER_BETTER_CANDIDATE_EV_USDC = envNumber("LIVE_OPEN_ORDER_BETTER_CANDIDATE_EV_USDC", 0.02);
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
 const TZ = "Europe/Prague";
 let previousExecutionState = null;
@@ -393,6 +397,40 @@ function compareShorterHorizon(a, b) {
   return Number.isFinite(delta) ? delta : 0;
 }
 
+function sortLiveEligibleCandidates(rows = []) {
+  return [...rows].sort((a, b) => {
+    if (SELECTION_ORDER === "highest_reward_risk_first") {
+      const aRatio = Number(a.riskReward || 0);
+      const bRatio = Number(b.riskReward || 0);
+      if (bRatio !== aRatio) return bRatio - aRatio;
+    }
+    if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
+    const horizon = compareShorterHorizon(a, b);
+    if (horizon !== 0) return horizon;
+    return b.expectedValueUsdc - a.expectedValueUsdc;
+  });
+}
+
+function openOrderAgeHours(order) {
+  const timestamp = Date.parse(order.createdAt || order.insertTime || order.created_at || "");
+  if (!Number.isFinite(timestamp)) return Infinity;
+  return Math.max(0, (Date.now() - timestamp) / 3600000);
+}
+
+function liveStateWithoutOpenOrder(liveState, order) {
+  const orderId = String(order.id || order.orderID || order.orderId || "");
+  const tokenId = String(order.tokenId || order.assetId || "");
+  return {
+    ...liveState,
+    openOrders: (Array.isArray(liveState?.openOrders) ? liveState.openOrders : []).filter((item) => {
+      const itemId = String(item.id || item.orderID || item.orderId || "");
+      const itemToken = String(item.tokenId || item.assetId || "");
+      if (orderId && itemId === orderId) return false;
+      return !(tokenId && itemToken === tokenId);
+    }),
+  };
+}
+
 function liveTradingConfig(liveState) {
   return {
     funderAddress: liveState?.account?.trading?.funderAddress || liveState?.accountDiscovery?.selectedFunderAddress || FUNDER_ADDRESS,
@@ -704,6 +742,37 @@ async function submitOrder(order) {
   const funderAddress = order.funderAddress || FUNDER_ADDRESS;
   const signatureType = number(order.signatureType, SIGNATURE_TYPE);
   if (!privateKey || !funderAddress) throw new Error("POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER_ADDRESS are required");
+  const { client, Side, OrderType } = await authenticatedClobClient({ privateKey, funderAddress, signatureType });
+  const options = {
+    tickSize: String(order.tickSize || "0.01"),
+    negRisk: Boolean(order.negRisk),
+  };
+  if (!USE_LIMIT_ORDERS) {
+    const marketOrder = await client.createMarketOrder(
+      {
+        tokenID: order.tokenId,
+        price: order.orderPrice,
+        amount: order.orderNotionalUsdc,
+        side: Side.BUY,
+      },
+      options,
+    );
+    return client.postOrder(marketOrder, OrderType.FAK);
+  }
+  const signedOrder = await client.createOrder(
+    {
+      tokenID: order.tokenId,
+      price: order.orderPrice,
+      size: order.orderSize,
+      side: Side.BUY,
+    },
+    options,
+  );
+  return client.postOrder(signedOrder, OrderType.GTC, POST_ONLY);
+}
+
+async function authenticatedClobClient({ privateKey = process.env.POLYMARKET_PRIVATE_KEY, funderAddress = FUNDER_ADDRESS, signatureType = SIGNATURE_TYPE } = {}) {
+  if (!privateKey || !funderAddress) throw new Error("POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER_ADDRESS are required");
   const [{ ClobClient, Side, OrderType, SignatureTypeV2 }, { createWalletClient, custom }, { privateKeyToAccount }] =
     await Promise.all([
       import("@polymarket/clob-client-v2"),
@@ -735,32 +804,22 @@ async function submitOrder(order) {
     signatureType: signatureTypeMap[signatureType] ?? SignatureTypeV2.POLY_PROXY,
     funderAddress,
   });
-  const options = {
-    tickSize: String(order.tickSize || "0.01"),
-    negRisk: Boolean(order.negRisk),
-  };
-  if (!USE_LIMIT_ORDERS) {
-    const marketOrder = await client.createMarketOrder(
-      {
-        tokenID: order.tokenId,
-        price: order.orderPrice,
-        amount: order.orderNotionalUsdc,
-        side: Side.BUY,
-      },
-      options,
-    );
-    return client.postOrder(marketOrder, OrderType.FAK);
+  return { client, Side, OrderType };
+}
+
+async function cancelOrder(order, tradingConfig = {}) {
+  const orderId = order.id || order.orderId || order.orderID;
+  if (!orderId) return { error: "open order has no order id", status: "missing_order_id" };
+  if (DRY_RUN || !hasFlag("confirm-live")) {
+    return { status: "dry_run_cancel", orderID: orderId, success: true };
   }
-  const signedOrder = await client.createOrder(
-    {
-      tokenID: order.tokenId,
-      price: order.orderPrice,
-      size: order.orderSize,
-      side: Side.BUY,
-    },
-    options,
-  );
-  return client.postOrder(signedOrder, OrderType.GTC, POST_ONLY);
+  const { client } = await authenticatedClobClient({
+    funderAddress: tradingConfig.funderAddress || FUNDER_ADDRESS,
+    signatureType: number(tradingConfig.signatureType, SIGNATURE_TYPE),
+  });
+  if (typeof client.cancelOrder === "function") return client.cancelOrder(orderId);
+  if (typeof client.cancelOrders === "function") return client.cancelOrders([orderId]);
+  throw new Error("CLOB client does not expose cancelOrder/cancelOrders");
 }
 
 function orderResponseError(response) {
@@ -821,6 +880,142 @@ function liveBatchCandidateSummary(item) {
   };
 }
 
+function successfulCancelResponse(response, orderId) {
+  if (!response) return false;
+  if (response.error || response.success === false || response.status === "error") return false;
+  if (response.success === true) return true;
+  if (Array.isArray(response.canceled) && response.canceled.map(String).includes(String(orderId))) return true;
+  if (Array.isArray(response.cancelled) && response.cancelled.map(String).includes(String(orderId))) return true;
+  if (String(response.status || "").toLowerCase().includes("cancel")) return true;
+  return false;
+}
+
+function openOrderSummary(order, extra = {}) {
+  return {
+    orderId: order.id || order.orderID || order.orderId || null,
+    tokenId: order.tokenId || order.assetId || null,
+    question: order.question || order.market || "",
+    outcome: order.outcome || "",
+    price: number(order.price),
+    remainingSize: number(order.remainingSize),
+    notionalUsdc: number(order.notionalUsdc),
+    createdAt: order.createdAt || null,
+    ageHours: Number(openOrderAgeHours(order).toFixed(3)),
+    ...extra,
+  };
+}
+
+async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, maxNotional, tradingConfig }) {
+  const openOrders = Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
+  const reviews = [];
+  let selectedAction = null;
+
+  for (const order of openOrders) {
+    const orderId = order.id || order.orderID || order.orderId;
+    const tokenId = String(order.tokenId || order.assetId || "");
+    const ageHours = openOrderAgeHours(order);
+    const sourceEvaluation = evaluationByToken.get(tokenId);
+    const lockedNotional = number(order.notionalUsdc, number(order.price, 0) * number(order.remainingSize, 0));
+    const effectiveCash = number(cash, 0) + number(lockedNotional, 0);
+    const review = openOrderSummary(order, {
+      action: "KEEP_WAITING",
+      reason: "open order is still inside the minimum review window",
+      currentEvaluation: null,
+      betterCandidate: null,
+      cancelResponse: null,
+      replaceResponse: null,
+    });
+
+    if (!sourceEvaluation) {
+      review.reason = ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS
+        ? "no current AI evaluation links to this open order and the order is stale"
+        : "no current AI evaluation links to this open order yet";
+      if (ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS) {
+        review.action = "CANCEL";
+      }
+    } else {
+      try {
+        const revalidated = await revalidateEvaluation(
+          sourceEvaluation,
+          liveStateWithoutOpenOrder(liveState, order),
+          effectiveCash,
+          Math.max(number(maxNotional, 0), number(lockedNotional, 0)),
+          evaluationByToken,
+        );
+        review.currentEvaluation = liveBatchCandidateSummary(revalidated);
+        const bestOther = eligible.find((candidate) => String(candidate.tokenId || "") !== tokenId) || null;
+        const betterCandidate = bestOther && Number(bestOther.expectedValueUsdc || 0) > Number(revalidated.expectedValueUsdc || 0) + OPEN_ORDER_BETTER_CANDIDATE_EV_USDC
+          ? bestOther
+          : null;
+        const orderPrice = number(order.price);
+        const newPrice = number(revalidated.orderPrice);
+        const priceDelta = Number.isFinite(orderPrice) && Number.isFinite(newPrice) ? newPrice - orderPrice : 0;
+        review.betterCandidate = betterCandidate ? liveBatchCandidateSummary(betterCandidate) : null;
+        review.priceDelta = Number(priceDelta.toFixed(4));
+
+        if (revalidated.status !== "ELIGIBLE") {
+          review.action = ageHours >= OPEN_ORDER_REVIEW_AFTER_HOURS ? "CANCEL" : "KEEP_WAITING";
+          review.reason = `current revalidation no longer satisfies live rules: ${(revalidated.rejectReasons || []).join("; ") || "not eligible"}`;
+        } else if (betterCandidate) {
+          review.action = "CANCEL_FOR_BETTER_CANDIDATE";
+          review.reason = `a better candidate exceeds this order by at least ${OPEN_ORDER_BETTER_CANDIDATE_EV_USDC.toFixed(2)} USDC expected value`;
+        } else if (ageHours >= OPEN_ORDER_REVIEW_AFTER_HOURS && Math.abs(priceDelta) >= OPEN_ORDER_REPRICE_THRESHOLD) {
+          review.action = "REPLACE";
+          review.reason = priceDelta > 0
+            ? `market moved away; raise limit price closer to current post-only level by ${(priceDelta * 100).toFixed(1)} pts`
+            : `current post-only level is lower by ${(Math.abs(priceDelta) * 100).toFixed(1)} pts; repost at updated economics`;
+          review.replacementCandidate = revalidated;
+        } else if (ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS) {
+          review.action = "CANCEL";
+          review.reason = `order has waited ${ageHours.toFixed(1)}h without fill; release capital for the next batch`;
+        } else {
+          review.action = "KEEP_WAITING";
+          review.reason = `still eligible and price gap ${Math.abs(priceDelta * 100).toFixed(1)} pts is below reprice threshold`;
+        }
+      } catch (error) {
+        review.action = ageHours >= OPEN_ORDER_REVIEW_AFTER_HOURS ? "CANCEL" : "KEEP_WAITING";
+        review.reason = `open order revalidation failed: ${error?.message || String(error)}`;
+      }
+    }
+
+    if (!selectedAction && review.action !== "KEEP_WAITING") {
+      selectedAction = review;
+    }
+    reviews.push(review);
+  }
+
+  if (!selectedAction) {
+    return { action: "NONE", reviews };
+  }
+
+  try {
+    selectedAction.cancelResponse = await cancelOrder(selectedAction, tradingConfig);
+    const canceled = successfulCancelResponse(selectedAction.cancelResponse, selectedAction.orderId);
+    if (!canceled) {
+      selectedAction.action = "CANCEL_REJECTED";
+      selectedAction.reason = `cancel request did not confirm cancellation: ${JSON.stringify(selectedAction.cancelResponse)}`;
+      return { action: selectedAction.action, selected: selectedAction, reviews };
+    }
+    if (selectedAction.action === "REPLACE" && selectedAction.replacementCandidate) {
+      selectedAction.replaceResponse = DRY_RUN || !hasFlag("confirm-live")
+        ? { status: "dry_run_replace", success: true }
+        : await submitOrder({
+            ...selectedAction.replacementCandidate,
+            funderAddress: tradingConfig.funderAddress,
+            signatureType: tradingConfig.signatureType,
+          });
+      selectedAction.action = successfulOrderResponse(selectedAction.replaceResponse) ? "REPLACED" : "REPLACE_REJECTED";
+    } else {
+      selectedAction.action = selectedAction.action === "CANCEL_FOR_BETTER_CANDIDATE" ? "CANCELED_FOR_BETTER_CANDIDATE" : "CANCELED";
+    }
+  } catch (error) {
+    selectedAction.action = "ORDER_MANAGEMENT_ERROR";
+    selectedAction.cancelResponse = { error: error?.message || String(error), status: "exception" };
+  }
+
+  return { action: selectedAction.action, selected: selectedAction, reviews };
+}
+
 async function main() {
   const [paperState, liveState, previousExecution] = await Promise.all([
     loadJsonResource(PAPER_STATE_URL, "paper state"),
@@ -870,18 +1065,15 @@ async function main() {
       signatureType: tradingConfig.signatureType,
     }));
   const preferredHorizon = preferredHorizonCandidates(allEligible);
-  const eligible = preferredHorizon.rows
-    .sort((a, b) => {
-      if (SELECTION_ORDER === "highest_reward_risk_first") {
-        const aRatio = Number(a.riskReward || 0);
-        const bRatio = Number(b.riskReward || 0);
-        if (bRatio !== aRatio) return bRatio - aRatio;
-      }
-      if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
-      const horizon = compareShorterHorizon(a, b);
-      if (horizon !== 0) return horizon;
-      return b.expectedValueUsdc - a.expectedValueUsdc;
-    });
+  const eligible = sortLiveEligibleCandidates(preferredHorizon.rows);
+  const orderManagement = await reviewOpenOrders({
+    liveState,
+    evaluationByToken,
+    eligible,
+    cash,
+    maxNotional,
+    tradingConfig,
+  });
 
   const best = eligible[0] || null;
   const dailyBlocked = Boolean(monitoring.submittedToday);
@@ -929,7 +1121,11 @@ async function main() {
       eligibleCandidates: allEligible.length,
       preferredHorizonEligibleCandidates: eligible.length,
       selectedHorizonBucket: preferredHorizon.bucket == null ? null : horizonBucketLabel(preferredHorizon.bucket),
+      openOrderReviewAfterHours: OPEN_ORDER_REVIEW_AFTER_HOURS,
+      openOrderCancelAfterHours: OPEN_ORDER_CANCEL_AFTER_HOURS,
+      openOrderRepriceThreshold: OPEN_ORDER_REPRICE_THRESHOLD,
     },
+    orderManagement,
     selected: best,
     batchLog: {
       id: `live-trade-batch-${new Date().toISOString()}`,
@@ -967,9 +1163,11 @@ async function main() {
         revalidatedCandidates: checked.length,
         eligibleCandidates: allEligible.length,
         preferredHorizonEligibleCandidates: eligible.length,
+        openOrdersReviewed: orderManagement.reviews.length,
         rejectedCandidates: checked.filter((item) => item.status !== "ELIGIBLE").length,
         dailyBlocked,
       },
+      openOrderReviews: orderManagement.reviews,
       selected: best ? liveBatchCandidateSummary(best) : null,
       topCandidates: eligible.slice(0, 8).map(liveBatchCandidateSummary),
       topRejected: checked.filter((item) => item.status !== "ELIGIBLE").slice(0, 8).map(liveBatchCandidateSummary),
@@ -987,6 +1185,22 @@ async function main() {
         minOrderSize: item.minOrderSize || null,
       })),
   };
+
+  if (orderManagement.action !== "NONE") {
+    await emitDecision({
+      ...decision,
+      action: orderManagement.action,
+      reason: orderManagement.selected?.reason || "open order management action completed",
+      batchLog: {
+        ...decision.batchLog,
+        action: orderManagement.action,
+        reason: orderManagement.selected?.reason || "open order management action completed",
+        explanation: "Live batch reviewed existing open limit orders before opening a new position.",
+      },
+      attempts: [orderManagement.selected],
+    });
+    return;
+  }
 
   if (!best || dailyBlocked || DRY_RUN || !hasFlag("confirm-live")) {
     await emitDecision({ ...decision, attempts: best ? [orderAttemptSummary(best, null, { action: decision.action })] : [] });

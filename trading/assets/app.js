@@ -2962,6 +2962,7 @@ function tradeBatchDetail(batch) {
   const selected = batch.selected;
   const candidates = Array.isArray(batch.topCandidates) ? batch.topCandidates : [];
   const blocked = Array.isArray(batch.riskBlocked) ? batch.riskBlocked : [];
+  const openOrderReviews = Array.isArray(batch.openOrderReviews) ? batch.openOrderReviews : [];
   const candidateLines = candidates.length
     ? candidates.map((item, index) => [
         `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
@@ -2973,6 +2974,17 @@ function tradeBatchDetail(batch) {
     : "No ranked candidates in this batch.";
   const blockedLines = blocked.length
     ? blocked.map((item) => `- ${item.outcome || "-"} / ${item.question || "-"}: ${item.riskBlockedReason || "risk overlap"}`).join("\n")
+    : "-";
+  const orderReviewLines = openOrderReviews.length
+    ? openOrderReviews.map((item, index) => [
+        `${index + 1}. ${item.action || "-"} / ${item.outcome || "-"} / ${item.question || item.tokenId || "-"}`,
+        `   Order: ${item.orderId || "-"} / price ${probability(Number(item.price))} / remaining ${Number(item.remainingSize || 0).toLocaleString("en-US", { maximumFractionDigits: 4 })} / age ${Number(item.ageHours || 0).toFixed(1)}h`,
+        item.priceDelta != null ? `   Reprice delta: ${(Number(item.priceDelta) * 100).toFixed(1)} pts` : "",
+        `   Reason: ${item.reason || "-"}`,
+        item.betterCandidate ? `   Better candidate: ${item.betterCandidate.outcome || "-"} - ${item.betterCandidate.question || "-"} / EV ${signedMoney(Number(item.betterCandidate.expectedValueUsdc), 4)}` : "",
+        item.cancelResponse ? `   Cancel response: ${JSON.stringify(item.cancelResponse).slice(0, 240)}` : "",
+        item.replaceResponse ? `   Replace response: ${JSON.stringify(item.replaceResponse).slice(0, 240)}` : "",
+      ].filter(Boolean).join("\n")).join("\n\n")
     : "-";
 
   return [
@@ -2993,12 +3005,15 @@ function tradeBatchDetail(batch) {
     `Capital: ${money(Number(capital.availableUsdc || 0))} available / ${money(Number(capital.requiredStakeUsdc || 0))} required`,
     `Insufficient capital: ${capital.insufficientCapital ? "yes" : "no"}`,
     "",
-    `Counts: ${Number(counts.rankedEligible || 0)} ranked eligible / ${Number(counts.skippedForRisk || 0)} skipped for risk / ${Number(counts.openTrades || 0)} open trades`,
+    `Counts: ${Number(counts.rankedEligible ?? counts.eligibleCandidates ?? 0)} ranked eligible / ${Number(counts.skippedForRisk || 0)} skipped for risk / ${Number(counts.openTrades || 0)} open trades / ${Number(counts.openOrdersReviewed || 0)} open orders reviewed`,
     "",
     selected ? `Selected: ${selected.outcome || "-"} - ${selected.question || "-"}` : "Selected: none",
     "",
     `Risk-blocked candidates:`,
     blockedLines,
+    "",
+    `Open order review:`,
+    orderReviewLines,
     "",
     `Top candidates checked:`,
     candidateLines,
