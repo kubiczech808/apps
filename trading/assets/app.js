@@ -1061,8 +1061,19 @@ function originalAnalysisSnapshot(item = {}) {
   };
 }
 
-function analysisDate(item = {}) {
-  return item.lastSeenAt || item.evaluatedAt || item.openedAt || item.date || "";
+function firstAnalysisDate(item = {}) {
+  return item.firstEvaluatedAt || item.evaluatedAt || item.openedAt || item.date || "";
+}
+
+function reassessmentDate(item = {}, originalDate = "") {
+  const candidates = [item.lastSeenAt, item.evaluatedAt, item.updatedAt].filter(Boolean);
+  const originalTime = Date.parse(originalDate || "");
+  for (const value of candidates) {
+    const candidateTime = Date.parse(value || "");
+    if (!Number.isFinite(candidateTime)) continue;
+    if (!Number.isFinite(originalTime) || Math.abs(candidateTime - originalTime) > 1000) return value;
+  }
+  return "";
 }
 
 function analysisProbability(item = {}) {
@@ -1141,9 +1152,11 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     ? current.rejectReasons.join("; ")
     : (options.filterNote || "No portfolio filter note recorded.");
   const errorReason = evaluationErrorReason(current);
+  const originalDate = firstAnalysisDate(original);
+  const currentDate = reassessmentDate(current, originalDate);
   const originalLines = [
     options.title || `${current.outcome || "-"} - ${current.question || "-"}`,
-    `Original analysis time: ${analysisDate(original) ? formatDate(analysisDate(original)) : "-"}`,
+    `Original analysis time: ${originalDate ? formatDate(originalDate) : "-"}`,
     `AI probability: ${probability(analysisProbability(original))}`,
     `Raw probability: ${probability(analysisRawProbability(original))}`,
     original.marketPrice != null || original.entryPrice != null ? `Market entry: ${probability(Number(original.marketPrice ?? original.entryPrice))}` : "",
@@ -1169,7 +1182,7 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     Array.isArray(originalAi.groundingSources) && originalAi.groundingSources.length ? `Sources: ${originalAi.groundingSources.map((source) => source.title || source.uri).join("; ")}` : "",
   ].filter(Boolean);
   const currentLines = [
-    `Current reassessment time: ${analysisDate(current) ? formatDate(analysisDate(current)) : "-"}`,
+    `Current reassessment time: ${currentDate ? formatDate(currentDate) : "No later reassessment recorded"}`,
     detailNumber("AI probability", analysisProbability(current), analysisProbability(original), probability),
     detailNumber("Raw probability", analysisRawProbability(current), analysisRawProbability(original), probability),
     current.marketPrice != null || current.entryPrice != null ? detailNumber("Market entry", Number(current.marketPrice ?? current.entryPrice), Number(original.marketPrice ?? original.entryPrice), probability) : "",
