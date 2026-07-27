@@ -55,6 +55,7 @@ const ROTATION_MIN_HOLD_HOURS = envNumber("PAPER_ROTATION_MIN_HOLD_HOURS", 6);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
 const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
+const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
 const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable"].includes(process.env.PAPER_STRATEGY_ID)
   ? process.env.PAPER_STRATEGY_ID
   : "";
@@ -397,6 +398,11 @@ const EVALUATION_CHANGE_FIELDS = [
   "annualizedReturn",
   "netGainIfWinUsdc",
   "endDate",
+  "marketClosed",
+  "acceptingOrders",
+  "closedTime",
+  "resolutionStatus",
+  "finalOutcomePrice",
   "probabilityThesis",
 ];
 
@@ -555,7 +561,7 @@ function expirePastEvaluations(evaluations = []) {
   return evaluations.map((item) => {
     const status = String(item.status || "").toUpperCase();
     const end = Date.parse(item.endDate || "");
-    if (!["ELIGIBLE", "REJECTED"].includes(status) || !Number.isFinite(end) || end > Date.now()) return item;
+    if (status === "ERROR" || status === "RESOLVED" || !Number.isFinite(end) || end > Date.now()) return item;
 
     const rejectReasons = Array.isArray(item.rejectReasons) ? [...item.rejectReasons] : [];
     if (!rejectReasons.some((reason) => /end date|past|closed|accepting orders/i.test(String(reason || "")))) {
@@ -566,7 +572,7 @@ function expirePastEvaluations(evaluations = []) {
     return {
       ...item,
       status: "RESOLVED",
-      thesisType: item.thesisType === "HIGH_CONFIDENCE" || item.thesisType === "EDGE_OPPORTUNITY" || item.thesisType === "REJECTED" ? "RESOLVED" : item.thesisType,
+      thesisType: "RESOLVED",
       resolutionStatus: item.resolutionStatus || "PENDING_RESULT",
       rejectReasons,
       lastSeenAt: item.lastSeenAt || changedAt,
@@ -581,6 +587,130 @@ function expirePastEvaluations(evaluations = []) {
       ].slice(0, 30),
     };
   });
+}
+
+function evaluationResolutionSlug(item) {
+  return String(item?.slug || item?.eventSlug || "").trim();
+}
+
+function resolutionSyncPriority(item) {
+  const end = Date.parse(item?.endDate || "");
+  const checked = Date.parse(item?.resolutionCheckedAt || "");
+  const ageHours = Number.isFinite(checked) ? (Date.now() - checked) / 3600000 : Infinity;
+  const days = Number.isFinite(end) ? (end - Date.now()) / 86400000 : Infinity;
+  if (days <= 0) return 0;
+  if (ageHours < 6) return 9;
+  if (days <= 2) return 1;
+  if (days <= 7) return 2;
+  return 5;
+}
+
+function withEvaluationResolutionUpdate(item, patch, reason, checkedAt = nowIso()) {
+  const rejectReasons = Array.isArray(item.rejectReasons) ? [...item.rejectReasons] : [];
+  if (reason && !rejectReasons.some((entry) => String(entry || "") === reason)) {
+    rejectReasons.unshift(reason);
+  }
+  const next = normalizeEvaluationRisk({
+    ...item,
+    ...patch,
+    rejectReasons,
+    lastSeenAt: checkedAt,
+    resolutionCheckedAt: checkedAt,
+  });
+  const changes = changedEvaluationFields(item, next);
+  return {
+    ...next,
+    lastChanges: changes,
+    updateHistory: [
+      {
+        changedAt: checkedAt,
+        previousEvaluatedAt: item.evaluatedAt || item.lastSeenAt || null,
+        changes: changes.length ? changes : [{ field: "resolutionCheckedAt", from: item.resolutionCheckedAt || null, to: checkedAt }],
+      },
+      ...(Array.isArray(item.updateHistory) ? item.updateHistory : []),
+    ].slice(0, 30),
+  };
+}
+
+function resolvedEvaluationFromMarket(item, market, checkedAt = nowIso()) {
+  const outcomeIndex = outcomeIndexForTrade(market, item);
+  const prices = parseOutcomePrices(market);
+  const resolvedPrice = outcomeIndex >= 0 ? prices[outcomeIndex] : null;
+  const endDate = correctedEndDate(market.question || item.question, market.endDate || item.endDate || null, item.evaluatedAt || item.firstEvaluatedAt);
+  const remainingDays = endDate ? daysToEnd(endDate) : null;
+  const patch = {
+    question: market.question || item.question,
+    slug: market.slug || item.slug || "",
+    eventSlug: marketEventSlug(market) || item.eventSlug || "",
+    endDate,
+    daysToResolution: remainingDays == null ? item.daysToResolution ?? null : Number(remainingDays.toFixed(2)),
+    marketClosed: typeof market.closed === "boolean" ? market.closed : item.marketClosed ?? null,
+    marketActive: typeof market.active === "boolean" ? market.active : item.marketActive ?? null,
+    acceptingOrders: typeof market.acceptingOrders === "boolean" ? market.acceptingOrders : item.acceptingOrders ?? null,
+    closedTime: market.closedTime || item.closedTime || null,
+    umaResolutionStatus: market.umaResolutionStatus || item.umaResolutionStatus || null,
+    finalOutcomePrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : item.finalOutcomePrice ?? null,
+  };
+
+  if (market.closed) {
+    return withEvaluationResolutionUpdate(item, {
+      ...patch,
+      status: "RESOLVED",
+      thesisType: "RESOLVED",
+      resolutionStatus: Number.isFinite(resolvedPrice) ? "FINAL_PRICE_AVAILABLE" : "PENDING_RESULT",
+    }, "Polymarket market is closed; no longer selectable for new trades", checkedAt);
+  }
+
+  if (market.acceptingOrders === false) {
+    return withEvaluationResolutionUpdate(item, {
+      ...patch,
+      status: "RESOLVED",
+      thesisType: "RESOLVED",
+      resolutionStatus: "NOT_ACCEPTING_ORDERS",
+    }, "Polymarket market is no longer accepting orders; excluded from active evaluated opportunities", checkedAt);
+  }
+
+  if (remainingDays != null && remainingDays <= 0) {
+    return withEvaluationResolutionUpdate(item, {
+      ...patch,
+      status: "RESOLVED",
+      thesisType: "RESOLVED",
+      resolutionStatus: "PENDING_RESULT",
+    }, "event end date is in the past; awaiting resolution sync", checkedAt);
+  }
+
+  return withEvaluationResolutionUpdate(item, patch, "", checkedAt);
+}
+
+async function refreshStoredEvaluationResolutionStatuses(evaluations = []) {
+  const refreshable = evaluations
+    .map((item, index) => ({ item, index, status: String(item.status || "").toUpperCase(), slug: evaluationResolutionSlug(item) }))
+    .filter(({ status, slug }) => slug && status !== "ERROR" && status !== "RESOLVED")
+    .sort((a, b) => resolutionSyncPriority(a.item) - resolutionSyncPriority(b.item))
+    .slice(0, Math.max(0, EVALUATION_RESOLUTION_SYNC_LIMIT));
+  if (!refreshable.length) return evaluations;
+
+  const next = [...evaluations];
+  for (const entry of refreshable) {
+    const checkedAt = nowIso();
+    try {
+      const market = await fetchMarketBySlug(entry.slug);
+      if (!market) {
+        next[entry.index] = withEvaluationResolutionUpdate(entry.item, {
+          marketUrlStatus: "not_found",
+        }, "Polymarket market slug was not found during resolution sync", checkedAt);
+        continue;
+      }
+      next[entry.index] = resolvedEvaluationFromMarket(entry.item, market, checkedAt);
+    } catch (error) {
+      next[entry.index] = {
+        ...entry.item,
+        resolutionCheckedAt: checkedAt,
+        resolutionCheckError: error?.message || String(error || "Unknown resolution sync error"),
+      };
+    }
+  }
+  return next;
 }
 
 function mergeTrade(existing, incoming) {
@@ -3455,7 +3585,7 @@ async function run() {
   }));
   const state = await readState();
   syncLegacyPaperAliases(state);
-  state.evaluations = expirePastEvaluations(state.evaluations || []);
+  state.evaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || []));
   recoverLedgerGaps(state);
   for (const portfolioState of Object.values(state.paperPortfolios)) {
     portfolioState.trades = await refreshTrades(portfolioState.trades);
@@ -3558,7 +3688,7 @@ async function run() {
 
   state.generatedAt = nowIso();
   updatePortfolio(state);
-  const mergedEvaluations = expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations));
+  const mergedEvaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations)));
   const retainedBefore = new Set([...(state.evaluations || []), ...evaluations].map(evaluationKey).filter(Boolean)).size;
   state.evaluations = mergedEvaluations.map(ensureEvaluationErrorMetadata);
   updateCalculationReport(state);

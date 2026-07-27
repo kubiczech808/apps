@@ -825,7 +825,21 @@ function evaluationDaysLeft(item) {
   return daysToResolution(item);
 }
 
+function evaluationResolvedByMarket(item) {
+  const status = String(item?.status || "").trim().toUpperCase();
+  if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) return true;
+  const resolutionStatus = String(item?.resolutionStatus || item?.umaResolutionStatus || "").trim().toUpperCase();
+  if (["RESOLVED", "CLOSED", "FINAL", "FINALIZED", "SETTLED", "FINAL_PRICE_AVAILABLE", "NOT_ACCEPTING_ORDERS", "PENDING_RESULT"].includes(resolutionStatus)) {
+    return true;
+  }
+  if (item?.marketClosed === true || item?.closed === true || item?.resolved === true || item?.isResolved === true) return true;
+  if (item?.acceptingOrders === false) return true;
+  const resolvedAt = Date.parse(item?.resolvedAt || item?.closedTime || item?.closedAt || item?.resolutionTime || "");
+  return Number.isFinite(resolvedAt) && resolvedAt <= Date.now();
+}
+
 function evaluationEnded(item) {
+  if (evaluationResolvedByMarket(item)) return true;
   const end = Date.parse(evaluationEndDate(item) || "");
   return Number.isFinite(end) && end <= Date.now();
 }
@@ -2640,7 +2654,7 @@ function evaluationReasons(item, riskReason = "") {
   const reasons = [];
   if (riskReason) reasons.push(riskReason);
   if (portfolioEvaluationStatus(item) === "RESOLVED") {
-    reasons.push("event end date has passed; excluded from new trade selection and waiting for/following resolution sync");
+    reasons.push("market is closed, no longer accepting orders, or past its end date; excluded from new trade selection and waiting for/following resolution sync");
   }
   if (Number.isFinite(aiProbability) && aiProbability < threshold) {
     reasons.push(`portfolio filter: AI probability ${probability(aiProbability)} below selected ${probability(threshold)}`);
