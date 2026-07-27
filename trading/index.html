@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260727-portfolio-params">
+  <link rel="stylesheet" href="assets/app.css?v=20260727-settings-opportunities">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -180,19 +180,15 @@
           </article>
         </section>
 
-        <section class="tab-panel" data-tab-panel="settings-runs" data-page-section="settings opportunities">
+        <section class="tab-panel" data-tab-panel="settings-runs" data-page-section="opportunities">
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow" data-settings-page-eyebrow>Settings</p>
-                <h2 data-settings-page-title>Automation settings</h2>
+                <p class="eyebrow">Market evaluation</p>
+                <h2>Evaluated opportunities</h2>
               </div>
             </div>
-            <div class="settings-subtabs" role="tablist" aria-label="Settings sections">
-              <button class="segment-button active" type="button" data-settings-section="evaluation-log">Evaluation log</button>
-              <button class="segment-button" type="button" data-settings-section="calculations">Night calculations</button>
-            </div>
-            <div class="settings-panel-body" data-settings-panel="evaluation-log">
+            <div class="settings-panel-body">
               <div class="panel-head evaluation-settings-head">
                 <div>
                   <p class="eyebrow">Market evaluation</p>
@@ -216,7 +212,18 @@
               </div>
               <div class="ledger" data-bot-evaluations></div>
             </div>
-            <div class="settings-panel-body" data-settings-panel="calculations" hidden>
+          </article>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="settings-runs" data-page-section="settings">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Settings</p>
+                <h2>Automation settings</h2>
+              </div>
+            </div>
+            <div class="settings-panel-body">
               <div class="calculation-controls">
                 <div>
                   <p class="eyebrow">Nightly portfolio replay</p>
@@ -301,6 +308,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260727-portfolio-params"></script>
+  <script src="assets/app.js?v=20260727-settings-opportunities"></script>
 </body>
 </html>
