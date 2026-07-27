@@ -26,6 +26,7 @@ const MIN_VOLUME_24H = envNumber("LIVE_CONFIG_MIN_LIQUIDITY_USDC", envNumber("LI
 const MAX_ORDER_FRACTION = envNumber("MAX_ORDER_FRACTION", envNumber("LIVE_MAX_ORDER_FRACTION", 0.05));
 const MAX_ORDER_NOTIONAL_USDC = envNumber("MAX_ORDER_NOTIONAL_USDC", envNumber("LIVE_MAX_ORDER_NOTIONAL_USDC", Infinity));
 const CANDIDATE_SCAN_LIMIT = envNumber("LIVE_CANDIDATE_SCAN_LIMIT", 120);
+const REJECTED_CANDIDATE_LOG_LIMIT = envNumber("LIVE_REJECTED_CANDIDATE_LOG_LIMIT", 16);
 const MAX_RESOLUTION_DAYS = envNumber("LIVE_MAX_RESOLUTION_DAYS", 7);
 const SELECTION_ORDER = process.env.LIVE_SELECTION_ORDER === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
 const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "stake_fraction").toLowerCase();
@@ -1189,11 +1190,11 @@ async function main() {
       openOrderReviews: orderManagement.reviews,
       selected: best ? liveBatchCandidateSummary(best) : null,
       topCandidates: eligible.slice(0, 8).map(liveBatchCandidateSummary),
-      topRejected: checked.filter((item) => item.status !== "ELIGIBLE").slice(0, 8).map(liveBatchCandidateSummary),
+      topRejected: checked.filter((item) => item.status !== "ELIGIBLE").slice(0, REJECTED_CANDIDATE_LOG_LIMIT).map(liveBatchCandidateSummary),
     },
     topRejected: checked
       .filter((item) => item.status !== "ELIGIBLE")
-      .slice(0, 8)
+      .slice(0, REJECTED_CANDIDATE_LOG_LIMIT)
       .map((item) => ({
         question: item.question || item.candidate?.question,
         outcome: item.outcome || item.candidate?.outcome,

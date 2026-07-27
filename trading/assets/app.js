@@ -2182,6 +2182,7 @@ function renderAnalysisModalHtml(text) {
     "Risk-blocked candidates:",
     "Open order review:",
     "Eligible candidates checked:",
+    "Rejected candidates checked:",
     "Selected:",
   ]);
   const sections = [];
@@ -3609,6 +3610,7 @@ function tradeBatchDetail(batch) {
     ? batch.eligibleCandidates
     : (Array.isArray(batch.topCandidates) ? batch.topCandidates : []);
   const blocked = Array.isArray(batch.riskBlocked) ? batch.riskBlocked : [];
+  const rejected = Array.isArray(batch.topRejected) ? batch.topRejected : [];
   const openOrderReviews = Array.isArray(batch.openOrderReviews) ? batch.openOrderReviews : [];
   const portfolioFilter = batch.portfolioFilter || {};
   const candidateMetricLine = (item) => [
@@ -3648,6 +3650,28 @@ function tradeBatchDetail(batch) {
         item.url ? `   Polymarket: ${item.url}` : "",
       ].filter(Boolean).join("\n")).join("\n\n")
     : "No eligible candidates passed this portfolio filter.";
+  const rejectionReasonLine = (item) => {
+    const reasons = [
+      ...(Array.isArray(item.rejectReasons) ? item.rejectReasons : []),
+      ...(Array.isArray(item.portfolioRejectReasons) ? item.portfolioRejectReasons : []),
+      item.riskBlockedReason,
+      item.sizingNote,
+    ].map((reason) => String(reason || "").trim()).filter(Boolean);
+    if (reasons.length) return reasons.join("; ");
+    const status = String(item.status || "").trim();
+    return status && status.toUpperCase() !== "ELIGIBLE"
+      ? `status ${status}`
+      : "No rejection reason was recorded.";
+  };
+  const rejectedLines = rejected.length
+    ? rejected.map((item, index) => [
+        `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
+        `   ${candidateMetricLine(item)}`,
+        `   Why not: ${rejectionReasonLine(item)}`,
+        opportunityKey(item) ? `   Analysis: ${absoluteOpportunityDetailUrl(item)}` : "",
+        item.url ? `   Polymarket: ${item.url}` : "",
+      ].filter(Boolean).join("\n")).join("\n\n")
+    : "-";
   const blockedLines = blocked.length
     ? blocked.map((item) => `- ${item.outcome || "-"} / ${item.question || "-"}: ${item.riskBlockedReason || "risk overlap"}`).join("\n")
     : "-";
@@ -3712,6 +3736,9 @@ function tradeBatchDetail(batch) {
     "",
     `Eligible candidates checked:`,
     candidateLines,
+    "",
+    `Rejected candidates checked:`,
+    rejectedLines,
   ].join("\n");
 }
 
