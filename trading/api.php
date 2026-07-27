@@ -325,10 +325,21 @@ function send_redeem_alert_email(array $alert): bool
         'From: Trading Bot <noreply@osobnizkusenosti.cz>',
         'Reply-To: noreply@osobnizkusenosti.cz',
         'Content-Type: text/plain; charset=UTF-8',
+        'X-Mailer: osobnizkusenosti.cz trading bot',
         'X-Auto-Response-Suppress: All',
     ];
 
-    return mail($recipient, $subject, $body, implode("\r\n", $headers));
+    return mail($recipient, $subject, $body, implode("\r\n", $headers), '-f noreply@osobnizkusenosti.cz');
+}
+
+function redeem_alert_was_sent(array $alert, array $sentKeys): bool
+{
+    $key = (string) ($alert['key'] ?? '');
+    $sentAt = trim((string) ($alert['sentAt'] ?? ''));
+    if ($key === '' || $sentAt === '') {
+        return false;
+    }
+    return !empty($alert['sent']) || isset($sentKeys[$key]);
 }
 
 function send_redeem_alerts(): array
@@ -362,8 +373,12 @@ function send_redeem_alerts(): array
             continue;
         }
         $key = (string) ($alert['key'] ?? '');
-        if ($key === '' || isset($sentKeys[$key])) {
+        if ($key === '' || redeem_alert_was_sent($alert, $sentKeys)) {
             continue;
+        }
+        $attemptAt = gmdate('c');
+        if (!isset($alerts[$index]['emailAttempts']) || !is_array($alerts[$index]['emailAttempts'])) {
+            $alerts[$index]['emailAttempts'] = [];
         }
         try {
             if (!send_redeem_alert_email($alert)) {
@@ -371,7 +386,11 @@ function send_redeem_alerts(): array
             }
             $sentKeys[$key] = true;
             $alerts[$index]['sent'] = true;
-            $alerts[$index]['sentAt'] = gmdate('c');
+            $alerts[$index]['sentAt'] = $attemptAt;
+            $alerts[$index]['emailAttempts'][] = [
+                'attemptedAt' => $attemptAt,
+                'status' => 'sent',
+            ];
             $sent[] = [
                 'key' => $key,
                 'type' => (string) ($alert['type'] ?? ''),
@@ -379,6 +398,12 @@ function send_redeem_alerts(): array
                 'sentAt' => $alerts[$index]['sentAt'],
             ];
         } catch (Throwable $e) {
+            $alerts[$index]['sent'] = false;
+            $alerts[$index]['emailAttempts'][] = [
+                'attemptedAt' => $attemptAt,
+                'status' => 'failed',
+                'error' => $e->getMessage(),
+            ];
             $failed[] = [
                 'key' => $key,
                 'error' => $e->getMessage(),
@@ -391,7 +416,14 @@ function send_redeem_alerts(): array
         $alerts,
         static fn ($alert): bool => is_array($alert) && empty($alert['sent'])
     ));
-    $notifications['sentRedeemAlertKeys'] = array_keys($sentKeys);
+    $confirmedSentKeys = [];
+    foreach ($alerts as $alert) {
+        if (!is_array($alert) || !redeem_alert_was_sent($alert, $sentKeys)) {
+            continue;
+        }
+        $confirmedSentKeys[(string) $alert['key']] = true;
+    }
+    $notifications['sentRedeemAlertKeys'] = array_keys($confirmedSentKeys);
     $notifications['lastEmailCheckAt'] = gmdate('c');
     $notifications['lastEmailSent'] = $sent;
     $notifications['lastEmailFailures'] = $failed;

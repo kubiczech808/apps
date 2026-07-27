@@ -803,13 +803,25 @@ function redeemNotifications(positions, closedTrades, previousState, generatedAt
   const sentKeys = new Set(Array.isArray(previousNotifications.sentRedeemAlertKeys)
     ? previousNotifications.sentRedeemAlertKeys.map(String)
     : []);
+  const previousAlertsByKey = new Map((Array.isArray(previousNotifications.redeemAlerts)
+    ? previousNotifications.redeemAlerts
+    : [])
+    .filter((alert) => alert && alert.key)
+    .map((alert) => [String(alert.key), alert]));
   const alerts = [];
 
   function addAlert(alert) {
     if (!alert.key || alerts.some((item) => item.key === alert.key)) return;
+    const previous = previousAlertsByKey.get(String(alert.key)) || {};
+    const sentAt = previous.sentAt || null;
+    const sent = Boolean(sentAt && (previous.sent || sentKeys.has(alert.key)));
     alerts.push({
+      ...previous,
       ...alert,
-      sent: sentKeys.has(alert.key),
+      firstDetectedAt: previous.firstDetectedAt || previous.detectedAt || alert.detectedAt,
+      sent,
+      sentAt,
+      emailAttempts: Array.isArray(previous.emailAttempts) ? previous.emailAttempts : [],
     });
   }
 
@@ -866,7 +878,7 @@ function redeemNotifications(positions, closedTrades, previousState, generatedAt
   return {
     emailRecipient: "jakub.elias88@gmail.com",
     generatedAt,
-    sentRedeemAlertKeys: [...sentKeys],
+    sentRedeemAlertKeys: alerts.filter((alert) => alert.sent && alert.sentAt).map((alert) => alert.key),
     redeemAlerts: alerts,
     unsentRedeemAlerts: alerts.filter((alert) => !alert.sent),
   };
