@@ -3784,6 +3784,7 @@ function tradeBatchDetail(batch) {
   const openOrderReviews = Array.isArray(batch.openOrderReviews) ? batch.openOrderReviews : [];
   const rotationReview = batch.rotationReview || null;
   const portfolioFilter = batch.portfolioFilter || {};
+  const prevalidationFilter = batch.prevalidationFilter || {};
   const candidateMetricLine = (item) => [
     `AI ${probability(Number(item.aiProbability))}`,
     `entry ${probability(Number(item.marketPrice ?? item.orderPrice))}`,
@@ -3839,6 +3840,23 @@ function tradeBatchDetail(batch) {
         `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
         `   ${candidateMetricLine(item)}`,
         `   Why not: ${rejectionReasonLine(item)}`,
+        opportunityKey(item) ? `   Analysis: ${absoluteOpportunityDetailUrl(item)}` : "",
+        item.url ? `   Polymarket: ${item.url}` : "",
+      ].filter(Boolean).join("\n")).join("\n\n")
+    : "-";
+  const prevalidationReasonLines = prevalidationFilter.reasonCounts && typeof prevalidationFilter.reasonCounts === "object"
+    ? Object.entries(prevalidationFilter.reasonCounts)
+        .sort((a, b) => Number(b[1]) - Number(a[1]))
+        .map(([reason, count]) => `- ${count}x ${reason}`)
+        .join("\n")
+    : "-";
+  const prevalidationRejectedSample = Array.isArray(prevalidationFilter.rejectedSample) ? prevalidationFilter.rejectedSample : [];
+  const prevalidationLimitSample = Array.isArray(prevalidationFilter.skippedByLimitSample) ? prevalidationFilter.skippedByLimitSample : [];
+  const prevalidationSampleLines = [...prevalidationRejectedSample, ...prevalidationLimitSample].length
+    ? [...prevalidationRejectedSample, ...prevalidationLimitSample].map((item, index) => [
+        `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
+        `   ${candidateMetricLine(item)}`,
+        Array.isArray(item.rejectReasons) && item.rejectReasons.length ? `   Why not prevalidated: ${item.rejectReasons.join("; ")}` : "",
         opportunityKey(item) ? `   Analysis: ${absoluteOpportunityDetailUrl(item)}` : "",
         item.url ? `   Polymarket: ${item.url}` : "",
       ].filter(Boolean).join("\n")).join("\n\n")
@@ -3920,6 +3938,21 @@ function tradeBatchDetail(batch) {
     `Capital: ${money(Number(capital.availableUsdc || 0))} available / ${money(Number(capital.requiredStakeUsdc || 0))} required`,
     `Insufficient capital: ${capital.insufficientCapital ? "yes" : "no"}`,
     "",
+    prevalidationFilter.uniqueEvaluations != null ? [
+      `Pre-revalidation short-expiry filter:`,
+      `Stored evaluations: ${Number(prevalidationFilter.storedEvaluations || 0)}`,
+      `Unique markets/outcomes: ${Number(prevalidationFilter.uniqueEvaluations || 0)}`,
+      `Passed local live rules: ${Number(prevalidationFilter.prefilterPassed || 0)}`,
+      `Selected for Polymarket revalidation: ${Number(prevalidationFilter.selectedForRevalidation || 0)} / limit ${Number(prevalidationFilter.scanLimit || 0)}`,
+      `Skipped by scan limit: ${Number(prevalidationFilter.skippedByScanLimit || 0)}`,
+      `Rejected before revalidation: ${Number(prevalidationFilter.prefilterRejected || 0)}`,
+      `Prevalidation reason counts:`,
+      prevalidationReasonLines,
+      "",
+      `Prevalidation rejected / skipped sample:`,
+      prevalidationSampleLines,
+      "",
+    ].join("\n") : "",
     `Counts: ${Number(counts.rankedEligible ?? counts.eligibleCandidates ?? 0)} ranked eligible / ${Number(counts.skippedForRisk || 0)} skipped for risk / ${Number(counts.openTrades || 0)} open trades / ${Number(counts.openOrdersReviewed || 0)} open orders reviewed`,
     portfolioFilter.totalEvaluated != null ? [
       "",

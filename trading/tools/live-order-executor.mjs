@@ -27,6 +27,7 @@ const MAX_ORDER_FRACTION = envNumber("MAX_ORDER_FRACTION", envNumber("LIVE_MAX_O
 const MAX_ORDER_NOTIONAL_USDC = envNumber("MAX_ORDER_NOTIONAL_USDC", envNumber("LIVE_MAX_ORDER_NOTIONAL_USDC", Infinity));
 const CANDIDATE_SCAN_LIMIT = envNumber("LIVE_CANDIDATE_SCAN_LIMIT", 120);
 const REJECTED_CANDIDATE_LOG_LIMIT = envNumber("LIVE_REJECTED_CANDIDATE_LOG_LIMIT", 16);
+const PREFILTER_REJECTED_LOG_LIMIT = envNumber("LIVE_PREFILTER_REJECTED_LOG_LIMIT", 24);
 const MAX_RESOLUTION_DAYS = envNumber("LIVE_MAX_RESOLUTION_DAYS", 7);
 const SELECTION_ORDER = process.env.LIVE_SELECTION_ORDER === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
 const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "stake_fraction").toLowerCase();
@@ -362,16 +363,146 @@ function marketEventSlug(market) {
   return events.find((event) => event?.slug)?.slug || market.eventSlug || market.slug || "";
 }
 
-function latestUniqueEvaluations(evaluations) {
+function latestUniqueEvaluations(evaluations, limit = Infinity) {
   const byToken = new Map();
   const ordered = [...evaluations].sort((a, b) => (Date.parse(b.evaluatedAt || "") || 0) - (Date.parse(a.evaluatedAt || "") || 0));
   for (const item of ordered) {
     const tokenId = String(item.tokenId || "");
     if (!tokenId || byToken.has(tokenId)) continue;
     byToken.set(tokenId, item);
-    if (byToken.size >= CANDIDATE_SCAN_LIMIT) break;
+    if (byToken.size >= limit) break;
   }
   return [...byToken.values()];
+}
+
+function localDaysToResolution(item) {
+  const stored = number(item?.daysToResolution);
+  if (stored != null) return stored;
+  const end = Date.parse(item?.endDate || "");
+  if (!Number.isFinite(end)) return Infinity;
+  return (end - Date.now()) / 86400000;
+}
+
+function candidateEvaluatedAtTime(item) {
+  return Date.parse(item?.evaluatedAt || item?.lastSeenAt || item?.firstEvaluatedAt || "") || 0;
+}
+
+function prefilterLiveCandidate(item) {
+  const reasons = [];
+  const tokenId = String(item?.tokenId || "");
+  const status = String(item?.status || "").toUpperCase();
+  const aiProbability = number(item?.aiProbability);
+  const endTime = Date.parse(item?.endDate || "");
+  const days = localDaysToResolution(item);
+
+  if (!tokenId) reasons.push("missing token id");
+  if (status === "ERROR") reasons.push("stored status ERROR");
+  if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) reasons.push(`stored status ${status}`);
+  if (item?.marketClosed === true || item?.closed === true || item?.resolved === true || item?.isResolved === true) {
+    reasons.push("stored market is already closed/resolved");
+  }
+  if (item?.acceptingOrders === false) reasons.push("stored market is not accepting orders");
+  if (!Number.isFinite(aiProbability)) {
+    reasons.push("missing AI probability");
+  } else if (aiProbability < MIN_PROBABILITY) {
+    reasons.push(`AI probability ${(aiProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`);
+  }
+  if (Number.isFinite(endTime) && endTime <= Date.now()) {
+    reasons.push("stored end date is in the past");
+  }
+  if (Number.isFinite(MAX_RESOLUTION_DAYS) && Number.isFinite(days) && days > MAX_RESOLUTION_DAYS) {
+    reasons.push(`stored resolution ${days.toFixed(2)} days exceeds live max ${MAX_RESOLUTION_DAYS} days`);
+  }
+
+  return {
+    passed: reasons.length === 0,
+    reasons,
+    days,
+  };
+}
+
+function sortLivePrefilterCandidates(rows = []) {
+  return [...rows].sort((a, b) => {
+    const aAnnualized = number(a.annualizedReturn, -Infinity);
+    const bAnnualized = number(b.annualizedReturn, -Infinity);
+    if (bAnnualized !== aAnnualized) return bAnnualized - aAnnualized;
+    const horizon = compareShorterHorizon(a, b);
+    if (horizon !== 0) return horizon;
+    const aEv = number(a.expectedValueUsdc, -Infinity);
+    const bEv = number(b.expectedValueUsdc, -Infinity);
+    if (bEv !== aEv) return bEv - aEv;
+    const aProbability = number(a.aiProbability, -Infinity);
+    const bProbability = number(b.aiProbability, -Infinity);
+    if (bProbability !== aProbability) return bProbability - aProbability;
+    return candidateEvaluatedAtTime(b) - candidateEvaluatedAtTime(a);
+  });
+}
+
+function prefilterReasonCountKey(reason) {
+  const text = String(reason || "");
+  if (/AI probability .* below live threshold/i.test(text)) return "AI probability below live threshold";
+  if (/stored resolution .* exceeds live max/i.test(text)) return "stored resolution exceeds live max days";
+  if (/outside live revalidation scan limit/i.test(text)) return "outside live revalidation scan limit after short-expiry ranking";
+  return text || "unknown prevalidation reason";
+}
+
+function incrementReason(counts, reason) {
+  const key = prefilterReasonCountKey(reason);
+  counts[key] = number(counts[key], 0) + 1;
+}
+
+function prepareLiveCandidatePool(evaluations = []) {
+  const uniqueEvaluations = latestUniqueEvaluations(evaluations);
+  const reasonCounts = {};
+  const prefilterRejected = [];
+  let prefilterRejectedCount = 0;
+  const prefilterPassed = [];
+
+  for (const item of uniqueEvaluations) {
+    const result = prefilterLiveCandidate(item);
+    if (result.passed) {
+      prefilterPassed.push({
+        ...item,
+        daysToResolution: Number.isFinite(result.days) ? Number(result.days.toFixed(2)) : item.daysToResolution,
+      });
+      continue;
+    }
+    for (const reason of result.reasons) incrementReason(reasonCounts, reason);
+    prefilterRejectedCount += 1;
+    if (prefilterRejected.length < PREFILTER_REJECTED_LOG_LIMIT) {
+      prefilterRejected.push({
+        ...liveBatchCandidateSummary(item),
+        rejectReasons: result.reasons,
+      });
+    }
+  }
+
+  const ranked = sortLivePrefilterCandidates(prefilterPassed);
+  const selected = ranked.slice(0, Math.max(0, CANDIDATE_SCAN_LIMIT));
+  const skippedByLimit = ranked.slice(Math.max(0, CANDIDATE_SCAN_LIMIT));
+  if (skippedByLimit.length) {
+    incrementReason(reasonCounts, `outside live revalidation scan limit after short-expiry ranking (${CANDIDATE_SCAN_LIMIT})`);
+  }
+
+  return {
+    uniqueEvaluations,
+    candidates: selected,
+    diagnostics: {
+      storedEvaluations: evaluations.length,
+      uniqueEvaluations: uniqueEvaluations.length,
+      prefilterPassed: prefilterPassed.length,
+      selectedForRevalidation: selected.length,
+      scanLimit: CANDIDATE_SCAN_LIMIT,
+      skippedByScanLimit: skippedByLimit.length,
+      prefilterRejected: prefilterRejectedCount,
+      reasonCounts,
+      rejectedSample: prefilterRejected,
+      skippedByLimitSample: skippedByLimit.slice(0, PREFILTER_REJECTED_LOG_LIMIT).map((item) => ({
+        ...liveBatchCandidateSummary(item),
+        rejectReasons: [`outside live revalidation scan limit after short-expiry ranking (${CANDIDATE_SCAN_LIMIT})`],
+      })),
+    },
+  };
 }
 
 async function fetchMarket(evaluation) {
@@ -1067,6 +1198,8 @@ function liveBatchCandidateSummary(item) {
     marketPrice: number(item?.marketPrice ?? source.marketPrice ?? item?.currentPrice),
     annualizedReturn: number(item?.annualizedReturn ?? source.annualizedReturn),
     expectedValueUsdc: number(item?.expectedValueUsdc ?? source.expectedValueUsdc),
+    daysToResolution: number(item?.daysToResolution ?? source.daysToResolution),
+    liquidity: number(item?.liquidity ?? source.liquidity),
     netGainIfWinUsdc: gain,
     netYield: gain != null && cost != null && cost > 0 ? number(gain / cost) : null,
     riskReward: gain != null && cost != null && cost > 0 ? number(gain / cost) : null,
@@ -1239,11 +1372,10 @@ async function main() {
   const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, cash - IDLE_CASH_MAX_USDC) : 0;
   const maxNotional = Number(regularMaxNotional.toFixed(5));
   const rawEvaluations = Array.isArray(paperState.evaluations) ? paperState.evaluations : [];
-  const latestEvaluations = latestUniqueEvaluations(rawEvaluations);
+  const candidatePool = prepareLiveCandidatePool(rawEvaluations);
+  const latestEvaluations = candidatePool.uniqueEvaluations;
   const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
-  const baseCandidates = latestEvaluations
-    .filter((item) => Number.isFinite(Number(item.aiProbability)))
-    .filter((item) => String(item.status || "").toUpperCase() !== "ERROR");
+  const baseCandidates = candidatePool.candidates;
 
   const checked = [];
   for (const evaluation of baseCandidates) {
@@ -1345,6 +1477,11 @@ async function main() {
       tradeCadenceHours: TRADE_CADENCE_HOURS,
       ignoreTradeCadence: IGNORE_TRADE_CADENCE,
       capitalUtilizationOverride: monitoring.idleCashOverdue,
+      storedEvaluations: rawEvaluations.length,
+      uniqueEvaluations: latestEvaluations.length,
+      prefilterPassedCandidates: candidatePool.diagnostics.prefilterPassed,
+      prefilterRejectedCandidates: candidatePool.diagnostics.prefilterRejected,
+      skippedByScanLimit: candidatePool.diagnostics.skippedByScanLimit,
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
       eligibleCandidates: allEligible.length,
@@ -1384,6 +1521,11 @@ async function main() {
         insufficientCapital: !Number.isFinite(maxNotional) || maxNotional <= 0 || cash + 0.000001 < maxNotional,
       },
       counts: {
+        storedEvaluations: rawEvaluations.length,
+        uniqueEvaluations: latestEvaluations.length,
+        prefilterPassedCandidates: candidatePool.diagnostics.prefilterPassed,
+        prefilterRejectedCandidates: candidatePool.diagnostics.prefilterRejected,
+        skippedByScanLimit: candidatePool.diagnostics.skippedByScanLimit,
         scannedCandidates: baseCandidates.length,
         revalidatedCandidates: checked.length,
         eligibleCandidates: allEligible.length,
@@ -1397,6 +1539,7 @@ async function main() {
       },
       openOrderReviews: orderManagement.reviews,
       rotationReview,
+      prevalidationFilter: candidatePool.diagnostics,
       selected: best ? liveBatchCandidateSummary(best) : null,
       revalidatedCandidates: checked.map(liveBatchCandidateSummary),
       topCandidates: eligible.slice(0, 8).map(liveBatchCandidateSummary),
