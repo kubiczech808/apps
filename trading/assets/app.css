@@ -986,6 +986,63 @@ body.modal-open {
   gap: 16px;
 }
 
+.system-status-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.system-status-card[hidden] {
+  display: none;
+}
+
+.system-status-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.system-status-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.system-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.system-status-grid > div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.system-status-grid span,
+.system-status-grid strong {
+  display: block;
+}
+
+.system-status-grid span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.system-status-grid strong {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
 .calculation-controls {
   display: flex;
   align-items: flex-start;
@@ -1280,7 +1337,8 @@ body.modal-open {
 @media (max-width: 1180px) {
   .control-grid,
   .portfolio-cards,
-  .bot-summary {
+  .bot-summary,
+  .system-status-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1384,7 +1442,8 @@ body.modal-open {
 
   .control-grid,
   .bot-summary,
-  .calculation-summary {
+  .calculation-summary,
+  .system-status-grid {
     grid-template-columns: 1fr;
   }
 

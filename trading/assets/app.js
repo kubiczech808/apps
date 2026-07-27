@@ -90,6 +90,7 @@ const els = {
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
   calculationMarketButtons: document.querySelectorAll("[data-calculation-market]"),
   calculationReport: document.querySelector("[data-calculation-report]"),
+  systemStatus: document.querySelector("[data-system-status]"),
   evaluationProbabilityFilter: document.querySelector("[data-evaluation-probability-filter]"),
   evaluationProbabilityFilterLabel: document.querySelector("[data-evaluation-probability-filter-label]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
@@ -2368,6 +2369,7 @@ function renderPortfolioRulesCard(title, rows) {
 function renderBotState(botState) {
   state.botState = botState;
   syncModeUi();
+  renderSystemStatus(state.liveState);
   if (els.accountSummary) {
     els.accountSummary.hidden = true;
     els.accountSummary.innerHTML = "";
@@ -2601,6 +2603,57 @@ function liveAccountProfileLine(account = {}) {
   ].filter(Boolean).join(" / ");
 }
 
+function renderSystemStatus(liveState = state.liveState) {
+  if (!els.systemStatus) return;
+  if (!liveState) {
+    els.systemStatus.hidden = false;
+    els.systemStatus.innerHTML = `
+      <div class="system-status-head">
+        <div>
+          <p class="eyebrow">System</p>
+          <h3>Live account sync</h3>
+        </div>
+        <span class="pill muted">not loaded</span>
+      </div>
+      <div class="empty">Live account system details will appear after the live portfolio state is loaded.</div>
+    `;
+    return;
+  }
+
+  const account = liveState.account || {};
+  const portfolio = liveState.portfolio || {};
+  const sync = liveState.sync || {};
+  const pendingRedeem = Number(portfolio.pendingRedeemUsdc);
+  const rows = [
+    ["Synced account", liveAccountName(account)],
+    ["Address", account.address || "-"],
+    ["Last sync", liveState.generatedAt ? formatDate(liveState.generatedAt) : "-"],
+    ["Connection", account.connectionMode || "-"],
+    ["Equity source", portfolio.equitySource || "-"],
+    ["Pending redeem", Number.isFinite(pendingRedeem) ? money(pendingRedeem) : "-"],
+    ["Sync status", sync.status || "-"],
+  ];
+
+  els.systemStatus.hidden = false;
+  els.systemStatus.innerHTML = `
+    <div class="system-status-head">
+      <div>
+        <p class="eyebrow">System</p>
+        <h3>Live account sync</h3>
+      </div>
+      <span class="pill muted">${escapeHtml(liveState.generatedAt ? formatDate(liveState.generatedAt) : "-")}</span>
+    </div>
+    <div class="system-status-grid">
+      ${rows.map(([label, value]) => `
+        <div>
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderLiveState(liveState) {
   state.liveState = liveState;
   syncModeUi();
@@ -2668,7 +2721,6 @@ function renderLiveState(liveState) {
   els.portfolioEquity.textContent = money(equity);
   els.portfolioEquity.className = pnlClass(totalPnl);
   els.portfolioLastRun.innerHTML = `
-    ${escapeHtml(liveAccountName(account))} / sync ${escapeHtml(liveState.generatedAt ? formatDate(liveState.generatedAt) : "-")}
     <small class="metric-note">${escapeHtml(depositedLine)}</small>
     ${redeemLine ? `<small class="metric-note">${escapeHtml(redeemLine)}</small>` : ""}
   `;
@@ -2702,6 +2754,7 @@ function renderLiveState(liveState) {
     els.accountSummary.hidden = true;
     els.accountSummary.innerHTML = "";
   }
+  renderSystemStatus(liveState);
   if (els.portfolioRules) {
     els.portfolioRules.innerHTML = `
     <div class="bot-summary">
