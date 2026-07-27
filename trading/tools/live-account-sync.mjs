@@ -1075,6 +1075,9 @@ function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades
 function portfolioSummary(positions, valueRows, closedTrades = []) {
   const valueRow = Array.isArray(valueRows) ? valueRows.find((row) => String(row.user || "").toLowerCase() === ACCOUNT_ADDRESS) : null;
   const marketValue = positions.reduce((sum, item) => sum + number(item.currentValueUsdc, 0), 0);
+  const pendingRedeemValue = closedTrades
+    .filter((item) => String(item.status || "").toUpperCase() === "REDEEM_REQUIRED")
+    .reduce((sum, item) => sum + number(item.exitValueUsdc ?? item.currentValueUsdc, 0), 0);
   const openRisk = positions.reduce((sum, item) => sum + number(item.totalCostUsdc, 0), 0);
   const openPnl = positions.reduce((sum, item) => sum + number(item.unrealizedPnlUsdc, 0), 0);
   const realizedPnl = positions.reduce((sum, item) => sum + number(item.realizedPnlUsdc, 0), 0)
@@ -1088,6 +1091,7 @@ function portfolioSummary(positions, valueRows, closedTrades = []) {
     positionCount: positions.length,
     equityUsdc: equity,
     marketValueUsdc: marketValue,
+    pendingRedeemUsdc: pendingRedeemValue,
     cashUsdc: null,
     openRiskUsdc: openRisk,
     openPnlUsdc: openPnl,
@@ -1400,9 +1404,10 @@ async function main() {
   const portfolioBase = portfolioSummary(reconciledPositions, valueRows, closedTrades);
   const notifications = redeemNotifications(reconciledPositions, closedTrades, previousLiveState, generatedAt);
   const cashUsdc = number(balanceAllowance?.collateral?.balanceUsdc);
+  const pendingRedeemUsdc = number(portfolioBase.pendingRedeemUsdc, 0);
   const equityUsdc = cashUsdc == null
     ? portfolioBase.equityUsdc
-    : cashUsdc + number(portfolioBase.marketValueUsdc, 0);
+    : cashUsdc + number(portfolioBase.marketValueUsdc, 0) + pendingRedeemUsdc;
   const depositedUsdc = number((equityUsdc - number(portfolioBase.totalPnlUsdc, 0)).toFixed(6));
 
   const payload = {
@@ -1433,6 +1438,8 @@ async function main() {
       depositedUsdc,
       depositedSource: "equity minus tracked Polymarket P/L",
       depositedNote: "Estimated original account capital currently visible to this app; deposits/withdrawals are not itemized by the public activity API.",
+      equitySource: cashUsdc == null ? "polymarket-value-api-or-open-market-value" : "cash + open market value + pending redeem value",
+      pendingRedeemNote: "Winning resolved positions that Polymarket exposes as redeemable are counted in equity until cash balance shows the manual redeem.",
       cashSource: balanceAllowance?.status === "OK" ? "clob-balance-allowance" : null,
     },
     balanceAllowance,

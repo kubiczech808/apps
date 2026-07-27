@@ -2633,6 +2633,7 @@ function renderLiveState(liveState) {
   const openPnlPct = Number(portfolio.openPnlPct);
   const marketValue = Number(portfolio.marketValueUsdc);
   const cash = Number(portfolio.cashUsdc);
+  const pendingRedeem = Number(portfolio.pendingRedeemUsdc);
   const executionState = state.liveExecutionState || {};
   const monitoring = executionState.monitoring || {};
   const idleCashLimit = Number(monitoring.idleCashLimitUsdc);
@@ -2649,6 +2650,9 @@ function renderLiveState(liveState) {
   const depositedLine = Number.isFinite(deposited)
     ? `Deposited/original value ${money(deposited)}`
     : "Deposited/original value not available";
+  const redeemLine = Number.isFinite(pendingRedeem) && pendingRedeem > 0.000001
+    ? `includes ${money(pendingRedeem)} pending redeem`
+    : "";
   const liveCapitalBase = Number.isFinite(equity) ? equity : null;
   const liveGuardLabel = state.liveExecutionArmed ? "Armed" : "Inactive";
   const liveGuardText = state.liveExecutionArmed
@@ -2666,6 +2670,7 @@ function renderLiveState(liveState) {
   els.portfolioLastRun.innerHTML = `
     ${escapeHtml(liveAccountName(account))} / sync ${escapeHtml(liveState.generatedAt ? formatDate(liveState.generatedAt) : "-")}
     <small class="metric-note">${escapeHtml(depositedLine)}</small>
+    ${redeemLine ? `<small class="metric-note">${escapeHtml(redeemLine)}</small>` : ""}
   `;
   els.portfolioTotalPl.textContent = signedMoney(totalPnl);
   els.portfolioTotalPl.className = pnlClass(totalPnl);
