@@ -45,6 +45,7 @@ const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").
 const AI_ANALYSIS_LIMIT = envNumber("PAPER_AI_ANALYSIS_LIMIT", MAX_EVALUATIONS_PER_RUN);
 const AI_POSTMORTEM_LIMIT = envNumber("PAPER_AI_POSTMORTEM_LIMIT", 8);
 const AI_STOP_ON_QUOTA_ERROR = String(process.env.PAPER_AI_STOP_ON_QUOTA_ERROR ?? "true").toLowerCase() !== "false";
+const GROUNDED_AI_ANALYSIS_VERSION = "grounded-public-memo-v1";
 const DEFAULT_MAX_RESOLUTION_DAYS = envNumber("PAPER_MAX_RESOLUTION_DAYS", envNumber("PAPER_SHORT_HORIZON_DAYS", 7));
 const MORE_PROBABLE_MIN_LIQUIDITY_USDC = envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", 500000);
 const ROTATION_MIN_SCORE_IMPROVEMENT = envNumber("PAPER_ROTATION_MIN_SCORE_IMPROVEMENT", 0.15);
@@ -1693,6 +1694,7 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     ...(evaluation.aiAnalysis || {}),
     ...modelAnalysis,
     model: modelName,
+    analysisSchemaVersion: modelAnalysis?.analysisSchemaVersion || GROUNDED_AI_ANALYSIS_VERSION,
     probability: Number(probability.toFixed(4)),
     probabilityMethod: "independent-public-research",
     marketImpliedProbability: Number(evaluation.marketPrice),
@@ -1705,6 +1707,26 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     confidenceTier: modelAnalysis?.confidenceTier || confidenceTier(probability),
     provider: modelAnalysis?._provider || modelAnalysis?.provider || null,
   };
+  const keyFacts = formatKeyFacts(aiAnalysis.keyFacts);
+  const groundingSources = formatGroundingSources(aiAnalysis.groundingSources);
+  const evidence = Array.isArray(aiAnalysis.evidence) && aiAnalysis.evidence.length
+    ? aiAnalysis.evidence.map((item) => `- ${compactSentence(item)}`).join(" ")
+    : "";
+  const counterEvidence = Array.isArray(aiAnalysis.counterEvidence) && aiAnalysis.counterEvidence.length
+    ? aiAnalysis.counterEvidence.map((item) => `- ${compactSentence(item)}`).join(" ")
+    : "";
+  const groundedSummary = [
+    aiAnalysis.finalHumanConclusion ? `Zaver: ${compactSentence(aiAnalysis.finalHumanConclusion)}` : "",
+    aiAnalysis.researchSummary ? `Verejna fakta: ${compactSentence(aiAnalysis.researchSummary)}` : "",
+    keyFacts ? `Klicova fakta: ${keyFacts}` : "",
+    `AI probability ${(probability * 100).toFixed(1)}%.`,
+    aiAnalysis.probabilityRationale ? `Proc tato pravdepodobnost: ${aiAnalysis.probabilityRationale}` : "",
+    aiAnalysis.probabilityPointRationale ? `Kalibrace procent: ${aiAnalysis.probabilityPointRationale}` : "",
+    aiAnalysis.probabilityBridge ? `Mostek vypoctu: ${compactSentence(aiAnalysis.probabilityBridge)}` : "",
+    evidence ? `Evidence: ${evidence}` : "",
+    counterEvidence ? `Nejistoty/protiargumenty: ${counterEvidence}` : "",
+    groundingSources ? `Zdroje: ${groundingSources}` : "",
+  ].filter(Boolean).join(" ");
 
   return {
     ...evaluation,
@@ -1719,23 +1741,63 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     aiAnalysis,
     probabilityThesis: aiAnalysis.thesis || evaluation.probabilityThesis,
     analysisModel: modelName,
-    analysisSummary: [
+    analysisSummary: groundedSummary || [
       aiAnalysis.thesis || evaluation.probabilityThesis || "AI analysis produced no thesis.",
       `Independent AI probability ${(probability * 100).toFixed(1)}%; Polymarket entry is used only after the AI estimate for EV calculation.`,
       aiAnalysis.probabilityRationale ? `Why this probability: ${aiAnalysis.probabilityRationale}` : "",
       aiAnalysis.probabilityPointRationale ? `Why these percentage points: ${aiAnalysis.probabilityPointRationale}` : "",
       aiAnalysis.marketComparisonSummary ? `AI vs Polymarket: ${aiAnalysis.marketComparisonSummary}` : "",
       `Edge ${(economics.edge * 100).toFixed(1)} pts; expected annualized return ${(economics.annualizedReturn * 100).toFixed(1)}%; thesis type ${economics.thesisType}.`,
-      modelAnalysis?.evidence ? `Evidence: ${[].concat(modelAnalysis.evidence).join(" ")}` : "",
-      modelAnalysis?.counterEvidence ? `Counter evidence: ${[].concat(modelAnalysis.counterEvidence).join(" ")}` : "",
-      modelAnalysis?.groundingSources?.length ? `Sources: ${modelAnalysis.groundingSources.map((source) => source.title || source.uri).join("; ")}` : "",
-      evaluation.analysisSummary || "",
     ].filter(Boolean).join(" "),
   };
 }
 
 function hasIndependentResearch(item) {
   return item?.aiAnalysis?.probabilityMethod === "independent-public-research";
+}
+
+function longEnough(value, minLength) {
+  return String(value || "").trim().length >= minLength;
+}
+
+function hasGroundedPublicMemo(item) {
+  const analysis = item?.aiAnalysis || {};
+  return analysis.analysisSchemaVersion === GROUNDED_AI_ANALYSIS_VERSION
+    && longEnough(analysis.probabilityRationale, 80)
+    && longEnough(analysis.probabilityPointRationale, 70)
+    && longEnough(analysis.researchSummary, 140)
+    && (Array.isArray(analysis.keyFacts) ? analysis.keyFacts.length >= 2 : Array.isArray(analysis.evidence) && analysis.evidence.length >= 2);
+}
+
+function formatKeyFact(fact) {
+  if (!fact || typeof fact !== "object") return compactSentence(fact);
+  const source = compactSentence(fact.source || fact.authority || fact.publisher || "");
+  const date = compactSentence(fact.date || fact.asOf || "");
+  const impact = compactSentence(fact.impact || fact.effect || "");
+  const effect = Number(fact.probabilityEffectPts);
+  const effectText = Number.isFinite(effect) ? `${effect >= 0 ? "+" : ""}${effect.toFixed(1)} pp` : "";
+  const text = compactSentence(fact.fact || fact.summary || fact.text || "");
+  return [
+    source || "public source",
+    date ? `(${date})` : "",
+    text ? `- ${text}` : "",
+    impact ? `Impact: ${impact}.` : "",
+    effectText ? `Calibration: ${effectText}.` : "",
+  ].filter(Boolean).join(" ");
+}
+
+function formatKeyFacts(facts = []) {
+  const rows = Array.isArray(facts) ? facts.map(formatKeyFact).filter(Boolean).slice(0, 5) : [];
+  return rows.length ? rows.map((fact) => `- ${fact}`).join(" ") : "";
+}
+
+function formatGroundingSources(sources = []) {
+  if (!Array.isArray(sources) || !sources.length) return "";
+  return sources
+    .map((source) => compactSentence(source.title || source.uri || ""))
+    .filter(Boolean)
+    .slice(0, 5)
+    .join("; ");
 }
 
 function isQuotaError(result) {
@@ -1747,6 +1809,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
   const candidates = [...evaluations]
     .filter((item) => item.status !== "ERROR")
     .sort((a, b) => {
+      if (hasGroundedPublicMemo(a) !== hasGroundedPublicMemo(b)) return hasGroundedPublicMemo(a) ? 1 : -1;
       if (hasIndependentResearch(a) !== hasIndependentResearch(b)) return hasIndependentResearch(a) ? 1 : -1;
       if (a.status !== b.status) return a.status === "ELIGIBLE" ? -1 : 1;
       const horizon = compareShorterHorizon(a, b);
@@ -1765,10 +1828,13 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
         "The probability must be independent of Polymarket. Treat market pricing as unavailable.",
         "Use verified public information with strong causal relevance to the event outcome: official sources, primary data, reputable news, match/event schedules, statements, results, or authoritative statistics.",
         "Search the web if needed. Prefer recent and primary sources. If evidence is weak or conflicting, lower confidence instead of copying market intuition.",
-        "Evidence bullets should name the source or authority and the fact learned when possible, for example an official schedule, regulator release, company statement, weather service, or reputable news outlet.",
+        "Evidence bullets must name the source or authority, include the date/as-of date when available, and state the concrete fact learned, for example an official schedule, regulator release, company statement, weather service, or reputable news outlet.",
+        "Do not write generic filler such as 'market conditions suggest' or 'current sentiment indicates' unless it is tied to a named public source and a concrete fact.",
+        "For macro/central-bank markets, use official central-bank communications, inflation/jobs/activity data, and reputable reporting about policymakers; do not use prediction-market odds or betting consensus.",
         "For YES/NO markets, estimate the probability that the selected outcome is true by resolution time. For multi-outcome markets, estimate the selected outcome only.",
         "Always include a fact-based human-language sentence explaining why the final probability is exactly in this range, grounded in the public evidence you found.",
         "Always explain the percentage-point calibration: which facts push probability upward, which facts cap or reduce it, and why the final percentage is not merely a vague likely/unlikely label.",
+        "Write the rationale in Czech, concise but concrete. Keep each field short enough for a dashboard detail modal.",
         "Return calibrated probability, not trade recommendation. EV is calculated later outside the model.",
       ],
       candidate: {
@@ -1788,18 +1854,29 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
       requiredJson: {
         direction: "YES | NO | OUTCOME",
         probability: "number from 0.01 to 0.995",
-        thesis: "one sentence",
-        probabilityRationale: "one clear Czech or English human sentence explaining why the final probability is what it is, based on verified public evidence",
-        probabilityPointRationale: "one concise sentence explaining the percentage-point calibration: facts pushing up, facts pushing down, and why the final number lands there",
+        thesis: "one Czech sentence with the core forecast",
+        finalHumanConclusion: "one Czech sentence: based on named public facts, why the final probability is exactly this high/low",
+        probabilityRationale: "one clear Czech human sentence explaining why the final probability is what it is, based on verified public evidence",
+        probabilityPointRationale: "one concise Czech sentence explaining the percentage-point calibration: facts pushing up, facts pushing down, and why the final number lands there",
+        probabilityBridge: "one Czech sentence with a rough base-rate/adjustment bridge, e.g. start near X%, add Y pp for fact A, subtract Z pp for uncertainty B",
         confidenceTier: "near-certain | high | edge-watch | uncertain | long-shot",
-        evidence: ["short bullet with the public fact used"],
-        counterEvidence: ["short bullet with uncertainty or contrary public fact"],
-        researchSummary: "2-4 concise sentences explaining the public evidence chain",
+        keyFacts: [
+          {
+            source: "source or authority name",
+            date: "publication/as-of date if known",
+            fact: "specific public fact used",
+            impact: "pushes probability up | pushes probability down | caps probability",
+            probabilityEffectPts: "approximate percentage-point effect as a signed number",
+          },
+        ],
+        evidence: ["short Czech bullet with a named public source and concrete fact"],
+        counterEvidence: ["short Czech bullet with uncertainty or contrary public fact"],
+        researchSummary: "2-4 concise Czech sentences explaining the public evidence chain, with named facts rather than generic commentary",
         sourceQuality: "primary | reputable-news | mixed | weak",
       },
     };
     const result = await callGeminiJson([
-      { role: "system", content: "You are a cautious forecasting analyst doing source-grounded public research. You must ignore prediction-market pricing and betting consensus. Return only valid JSON." },
+      { role: "system", content: "You are a cautious forecasting analyst doing source-grounded public research. You must ignore prediction-market pricing and betting consensus. You write concrete Czech rationales based on named public facts, not generic trading commentary. Return only valid JSON." },
       { role: "user", content: JSON.stringify(prompt) },
     ]);
     if (!result || result.error) {
@@ -1818,13 +1895,17 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
     byId.set(candidate.id, refreshEvaluationAfterProbability(candidate, probability, result._model || GEMINI_MODEL, {
       direction: result.direction || outcomeKind(candidate.outcome),
       thesis: result.thesis || candidate.probabilityThesis,
+      finalHumanConclusion: result.finalHumanConclusion || "",
       probabilityRationale: result.probabilityRationale || "",
       probabilityPointRationale: result.probabilityPointRationale || "",
+      probabilityBridge: result.probabilityBridge || "",
       confidenceTier: result.confidenceTier || confidenceTier(probability),
+      keyFacts: Array.isArray(result.keyFacts) ? result.keyFacts.slice(0, 6) : [],
       evidence: Array.isArray(result.evidence) ? result.evidence.slice(0, 6) : [],
       counterEvidence: Array.isArray(result.counterEvidence) ? result.counterEvidence.slice(0, 6) : [],
       researchSummary: result.researchSummary || "",
       sourceQuality: result.sourceQuality || "",
+      analysisSchemaVersion: GROUNDED_AI_ANALYSIS_VERSION,
       groundingQueries: result._grounding?.webSearchQueries || [],
       groundingSources: result._grounding?.sources || [],
       source: "gemini-grounded-public-research",

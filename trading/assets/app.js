@@ -1194,6 +1194,36 @@ function analysisPointRationale(item = {}) {
   return item.aiAnalysis?.probabilityPointRationale || "";
 }
 
+function analysisFinalConclusion(item = {}) {
+  return item.aiAnalysis?.finalHumanConclusion || "";
+}
+
+function analysisProbabilityBridge(item = {}) {
+  return item.aiAnalysis?.probabilityBridge || "";
+}
+
+function formatAnalysisKeyFact(fact) {
+  if (!fact || typeof fact !== "object") return normalizedDetailText(fact);
+  const source = normalizedDetailText(fact.source || fact.authority || fact.publisher || "");
+  const date = normalizedDetailText(fact.date || fact.asOf || "");
+  const text = normalizedDetailText(fact.fact || fact.summary || fact.text || "");
+  const impact = normalizedDetailText(fact.impact || fact.effect || "");
+  const effect = Number(fact.probabilityEffectPts);
+  const effectText = Number.isFinite(effect) ? `${effect >= 0 ? "+" : ""}${effect.toFixed(1)} pp` : "";
+  return [
+    source || "public source",
+    date ? `(${date})` : "",
+    text ? `- ${text}` : "",
+    impact ? `Impact: ${impact}.` : "",
+    effectText ? `Calibration: ${effectText}.` : "",
+  ].filter(Boolean).join(" ");
+}
+
+function analysisKeyFacts(item = {}) {
+  const facts = Array.isArray(item.aiAnalysis?.keyFacts) ? item.aiAnalysis.keyFacts : [];
+  return facts.map(formatAnalysisKeyFact).filter(Boolean).slice(0, 5).join(" ");
+}
+
 function analysisMarketComparison(item = {}) {
   if (item.aiAnalysis?.marketComparisonSummary) return item.aiAnalysis.marketComparisonSummary;
   const ai = Number(analysisProbability(item));
@@ -1289,9 +1319,12 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     `AI model: ${analysisModelLabel(original)}`,
     originalAi.probabilityMethod ? `Probability method: ${originalAi.probabilityMethod}` : "",
     originalAi.sourceQuality ? `Source quality: ${originalAi.sourceQuality}` : "",
+    analysisFinalConclusion(original) ? `Final conclusion: ${analysisFinalConclusion(original)}` : "",
     analysisMarketComparison(original) ? `AI vs Polymarket: ${analysisMarketComparison(original)}` : "",
     analysisProbabilityRationale(original) ? `Why this probability: ${analysisProbabilityRationale(original)}` : "",
     analysisPointRationale(original) ? `Why these percentage points: ${analysisPointRationale(original)}` : "",
+    analysisProbabilityBridge(original) ? `Probability bridge: ${analysisProbabilityBridge(original)}` : "",
+    analysisKeyFacts(original) ? `Key facts: ${analysisKeyFacts(original)}` : "",
     `Thesis: ${analysisThesis(original) || "-"}`,
     originalAi.researchSummary ? `Research summary: ${originalAi.researchSummary}` : "",
     original.analysisSummary ? `AI analysis: ${original.analysisSummary}` : "",
@@ -1320,9 +1353,12 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     detailModel("AI model", analysisModelLabel(current), analysisModelLabel(original)),
     currentAi.probabilityMethod ? detailText("Probability method", currentAi.probabilityMethod, originalAi.probabilityMethod) : "",
     currentAi.sourceQuality ? detailText("Source quality", currentAi.sourceQuality, originalAi.sourceQuality) : "",
+    analysisFinalConclusion(current) ? detailText("Final conclusion", analysisFinalConclusion(current), analysisFinalConclusion(original)) : "",
     analysisMarketComparison(current) ? detailText("AI vs Polymarket", analysisMarketComparison(current), analysisMarketComparison(original)) : "",
     analysisProbabilityRationale(current) ? detailText("Why this probability", analysisProbabilityRationale(current), analysisProbabilityRationale(original)) : "",
     analysisPointRationale(current) ? detailText("Why these percentage points", analysisPointRationale(current), analysisPointRationale(original)) : "",
+    analysisProbabilityBridge(current) ? detailText("Probability bridge", analysisProbabilityBridge(current), analysisProbabilityBridge(original)) : "",
+    analysisKeyFacts(current) ? detailText("Key facts", analysisKeyFacts(current), analysisKeyFacts(original)) : "",
     detailText("Current thesis", analysisThesis(current), analysisThesis(original)),
     currentAi.researchSummary ? detailText("Research summary", currentAi.researchSummary, originalAi.researchSummary) : "",
     current.analysisSummary ? detailText("Current AI analysis", current.analysisSummary, original.analysisSummary) : "",
