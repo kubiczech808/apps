@@ -813,6 +813,7 @@ function workflow_status_payload(string $target): array
     $targetKey = workflow_target_key($target);
     $workflows = [
         'paper' => 'trading-paper-bot.yml',
+        'paper-evaluation' => 'trading-paper-evaluation.yml',
         'live' => 'polymarket-live-limit-order-test.yml',
         'live-sync' => 'trading-live-account.yml',
     ];
@@ -979,7 +980,7 @@ function paper_strategy_from_target(string $target): ?string
 
 function workflow_target_key(string $target): string
 {
-    return (paper_strategy_from_target($target) !== null || $target === 'paper-evaluation') ? 'paper' : $target;
+    return paper_strategy_from_target($target) !== null ? 'paper' : $target;
 }
 
 try {
@@ -1053,7 +1054,6 @@ try {
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
         $manualRunOnce = normalized_bool_input($payload['manual_run_once'] ?? $payload['manualRunOnce'] ?? null);
-        $evaluationOnly = normalized_bool_input($payload['evaluation_only'] ?? $payload['evaluationOnly'] ?? null);
         $evaluationTokenId = preg_replace('/[^0-9]/', '', (string) ($payload['evaluation_token_id'] ?? $payload['evaluationTokenId'] ?? ''));
         $evaluationMarketSlug = preg_replace('/[^A-Za-z0-9_-]/', '', (string) ($payload['evaluation_market_slug'] ?? $payload['evaluationMarketSlug'] ?? ''));
         $paperStrategyId = paper_strategy_from_target($target) ?? normalized_paper_strategy_input($payload['paper_strategy_id'] ?? $payload['paperStrategyId'] ?? null);
@@ -1078,9 +1078,6 @@ try {
                     'paper_more_probable_min_probability' => $paperMoreProbableMinProbability,
                     'manual_run_once' => $manualRunOnce,
                     'paper_strategy_id' => $paperStrategyId,
-                    'evaluation_only' => $evaluationOnly,
-                    'evaluation_token_id' => $evaluationTokenId !== '' ? $evaluationTokenId : null,
-                    'evaluation_market_slug' => $evaluationMarketSlug !== '' ? $evaluationMarketSlug : null,
                 ], $paperExtraInputs), static fn ($value): bool => $value !== null),
                 'message' => 'Paper bot workflow dispatched.',
             ],
@@ -1101,6 +1098,17 @@ try {
                 'message' => 'Live one-time execution workflow dispatched.',
             ],
         ];
+
+        if ($targetKey === 'paper-evaluation') {
+            $workflows['paper-evaluation'] = [
+                'workflow' => 'trading-paper-evaluation.yml',
+                'inputs' => array_filter([
+                    'evaluation_token_id' => $evaluationTokenId !== '' ? $evaluationTokenId : null,
+                    'evaluation_market_slug' => $evaluationMarketSlug !== '' ? $evaluationMarketSlug : null,
+                ], static fn ($value): bool => $value !== null),
+                'message' => 'Focused paper evaluation workflow dispatched.',
+            ];
+        }
 
         if (!isset($workflows[$targetKey])) {
             respond(['ok' => false, 'error' => 'Unknown workflow target'], 400);

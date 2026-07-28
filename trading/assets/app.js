@@ -3081,7 +3081,7 @@ async function triggerManualOpportunityEvaluation(item, trigger = null) {
     if (!response.ok || payload.ok === false) throw new Error(payload.error || `workflow HTTP ${response.status}`);
     steps = addExecutionStep(steps, "Workflow dispatched", payload.workflow || "GitHub Actions accepted the request", "done");
     steps = addExecutionStep(steps, "Gemini evaluation running", "Only this Polymarket outcome is being reviewed. No paper or live order will be opened.", "active");
-    const workflow = await waitForWorkflowRun("paper", startedAt, steps);
+    const workflow = await waitForWorkflowRun(target, startedAt, steps);
     steps = workflow.steps;
     if (workflow.run?.conclusion && workflow.run.conclusion !== "success") {
       steps = addExecutionStep(steps, "Workflow finished with warning", `Conclusion: ${workflow.run.conclusion}`, "error");
