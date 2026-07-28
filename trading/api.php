@@ -199,19 +199,27 @@ function compact_evaluation(array $item): array
     return $compact;
 }
 
-function dashboard_state_payload(string $target, array $data): array
+function compact_state_payload(string $target, array $data, string $summary): array
 {
     if ($target !== 'paper') {
         return $data;
     }
 
     $compact = $data;
-    $evaluations = is_array($data['evaluations'] ?? null) ? $data['evaluations'] : [];
-    $compact['evaluations'] = array_map(
-        static fn($item): array => is_array($item) ? compact_evaluation($item) : [],
-        array_values(array_filter($evaluations, 'is_array'))
-    );
-    $compact['evaluationDetailsMode'] = 'compact';
+    if ($summary === 'dashboard') {
+        $compact['evaluations'] = [];
+        $compact['evaluationDetailsMode'] = 'dashboard';
+        return $compact;
+    }
+
+    if ($summary === 'candidates') {
+        $evaluations = is_array($data['evaluations'] ?? null) ? $data['evaluations'] : [];
+        $compact['evaluations'] = array_map(
+            static fn($item): array => is_array($item) ? compact_evaluation($item) : [],
+            array_values(array_filter($evaluations, 'is_array'))
+        );
+        $compact['evaluationDetailsMode'] = 'compact';
+    }
 
     return $compact;
 }
@@ -1120,8 +1128,9 @@ try {
     if ($action === 'state') {
         $target = (string) ($_GET['target'] ?? '');
         $payload = state_payload($target);
-        if (($_GET['summary'] ?? '') === 'dashboard') {
-            $payload = dashboard_state_payload($target, $payload);
+        $summary = (string) ($_GET['summary'] ?? '');
+        if (in_array($summary, ['dashboard', 'candidates'], true)) {
+            $payload = compact_state_payload($target, $payload, $summary);
         }
         respond($payload);
     }

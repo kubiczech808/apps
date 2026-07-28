@@ -46,6 +46,7 @@ const state = {
   autoLiveSyncBusy: false,
   dashboardLoadSeq: 0,
   fullBotStateBusy: false,
+  candidateBotStateBusy: false,
   botStateFull: false,
   settingsSection: "evaluation-log",
   calculationSource: "all",
@@ -571,6 +572,9 @@ function activateTab(target) {
   els.tabPanels.forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.tabPanel === target);
   });
+  if (target === "portfolio-candidates") {
+    ensureCandidateBotState();
+  }
 }
 
 function refreshDashboardAfterUserNavigation() {
@@ -2699,6 +2703,37 @@ function shouldLoadFullBotState() {
   return state.page === "opportunities";
 }
 
+function activeTabTarget() {
+  return document.querySelector("[data-tab-target].active")?.dataset.tabTarget || "";
+}
+
+function shouldLoadCandidateBotState() {
+  return state.page === "portfolios" && activeTabTarget() === "portfolio-candidates";
+}
+
+async function ensureCandidateBotState(options = {}) {
+  if (state.botStateFull || state.candidateBotStateBusy || !shouldLoadCandidateBotState()) return;
+  const hasEvaluations = Array.isArray(state.botState?.evaluations) && state.botState.evaluations.length > 0;
+  if (hasEvaluations && state.botState?.evaluationDetailsMode === "compact") return;
+  state.candidateBotStateBusy = true;
+  try {
+    const botState = await fetchJson("data/paper-state.json", { summary: "candidates" });
+    if (dashboardLoadIsStale(options)) return;
+    state.botStateFull = botStateIsFull(botState);
+    if (normalizeMode(state.mode) === "live") {
+      state.botState = botState;
+      if (state.liveState) renderLiveState(state.liveState);
+      return;
+    }
+    renderBotState(botState);
+  } catch (error) {
+    rememberStateFetchError("paper", error);
+    renderPortfolioCandidates();
+  } finally {
+    state.candidateBotStateBusy = false;
+  }
+}
+
 async function ensureFullBotState(options = {}) {
   if (state.botStateFull || state.fullBotStateBusy || !shouldLoadFullBotState()) return;
   state.fullBotStateBusy = true;
@@ -2728,6 +2763,7 @@ async function loadBotState(options = {}) {
     if (dashboardLoadIsStale(options) || isLiveMode()) return;
     state.botStateFull = botStateIsFull(botState);
     renderBotState(botState);
+    ensureCandidateBotState(options);
     ensureFullBotState(options);
   } catch (error) {
     if (dashboardLoadIsStale(options) || isLiveMode()) return;
@@ -2991,6 +3027,7 @@ async function loadLiveState(options = {}) {
     state.liveExecutionState = executionResult.status === "fulfilled" ? executionResult.value : state.liveExecutionState;
     const liveState = liveResult.value;
     renderLiveState(liveState);
+    ensureCandidateBotState(options);
     ensureFullBotState(options);
     if (!options.skipAutoLiveSync) {
       requestLiveAccountSync();
@@ -3335,6 +3372,13 @@ function renderPortfolioCandidates() {
   if (!state.botState) {
     els.portfolioCandidates.innerHTML = '<div class="empty">Common evaluation log is not loaded yet.</div>';
     if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "0 candidates";
+    return;
+  }
+  const hasEvaluations = Array.isArray(state.botState.evaluations) && state.botState.evaluations.length > 0;
+  if (!hasEvaluations && state.botState.evaluationDetailsMode === "dashboard") {
+    if (shouldLoadCandidateBotState()) ensureCandidateBotState();
+    els.portfolioCandidates.innerHTML = '<div class="empty">Loading portfolio execution shortlist...</div>';
+    if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "loading";
     return;
   }
   const rows = portfolioCandidateRows(mode);
