@@ -2725,6 +2725,14 @@ function candidateBotStateIsLoaded() {
 function botStateWithPreservedEvaluations(botState) {
   if (!botState || typeof botState !== "object") return botState;
   const detailsMode = String(botState.evaluationDetailsMode || "");
+  if (detailsMode === "compact") {
+    return {
+      ...state.botState,
+      ...botState,
+      evaluations: Array.isArray(botState.evaluations) ? botState.evaluations : [],
+      evaluationDetailsMode: "compact",
+    };
+  }
   if (detailsMode !== "dashboard" || !candidateBotStateIsLoaded()) return botState;
   return {
     ...state.botState,

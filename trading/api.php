@@ -212,8 +212,8 @@ function compact_state_payload(string $target, array $data, string $summary): ar
         return $data;
     }
 
-    $compact = $data;
     if ($summary === 'dashboard') {
+        $compact = $data;
         $compact['evaluations'] = [];
         $compact['evaluationDetailsMode'] = 'dashboard';
         return $compact;
@@ -221,14 +221,19 @@ function compact_state_payload(string $target, array $data, string $summary): ar
 
     if ($summary === 'candidates') {
         $evaluations = is_array($data['evaluations'] ?? null) ? $data['evaluations'] : [];
+        $compact = [
+            'schemaVersion' => $data['schemaVersion'] ?? null,
+            'generatedAt' => $data['generatedAt'] ?? null,
+        ];
         $compact['evaluations'] = array_map(
             static fn($item): array => is_array($item) ? compact_evaluation($item) : [],
             array_values(array_filter($evaluations, 'is_array'))
         );
         $compact['evaluationDetailsMode'] = 'compact';
+        return $compact;
     }
 
-    return $compact;
+    return $data;
 }
 
 function default_portfolio_config(): array
