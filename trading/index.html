@@ -132,6 +132,7 @@
         <div class="tab-list" role="tablist" aria-label="Trading dashboard" data-page-section="portfolios">
           <button class="tab-button active" type="button" data-tab-target="daily-picks" data-paper-label="Opened trades" data-live-label="Opened trades">Opened trades</button>
           <button class="tab-button" type="button" data-tab-target="closed-trades" data-paper-label="Closed trades" data-live-label="Closed trades">Closed trades</button>
+          <button class="tab-button" type="button" data-tab-target="portfolio-candidates" data-paper-label="Execution candidates" data-live-label="Execution candidates">Execution candidates</button>
           <button class="tab-button" type="button" data-tab-target="run-log" data-paper-label="Run log" data-live-label="Run log">Run log</button>
         </div>
 
@@ -172,6 +173,19 @@
               <span class="pill" data-run-log-summary>0 runs</span>
             </div>
             <div class="run-log" data-run-log></div>
+          </article>
+        </section>
+
+        <section class="tab-panel" data-tab-panel="portfolio-candidates" data-page-section="portfolios">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Automated trading</p>
+                <h2 data-portfolio-candidates-title>Execution candidates</h2>
+              </div>
+              <span class="pill" data-portfolio-candidates-summary>0 candidates</span>
+            </div>
+            <div class="ledger" data-portfolio-candidates></div>
           </article>
         </section>
 
@@ -323,6 +337,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260728-portfolio-switch-state-guard"></script>
+  <script src="assets/app.js?v=20260728-portfolio-execution-candidates"></script>
 </body>
 </html>

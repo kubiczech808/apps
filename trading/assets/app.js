@@ -96,6 +96,9 @@ const els = {
   runLog: document.querySelector("[data-run-log]"),
   runLogSummary: document.querySelector("[data-run-log-summary]"),
   runLogTitle: document.querySelector("[data-run-log-title]"),
+  portfolioCandidates: document.querySelector("[data-portfolio-candidates]"),
+  portfolioCandidatesSummary: document.querySelector("[data-portfolio-candidates-summary]"),
+  portfolioCandidatesTitle: document.querySelector("[data-portfolio-candidates-title]"),
   settingsPageEyebrow: document.querySelector("[data-settings-page-eyebrow]"),
   settingsPageTitle: document.querySelector("[data-settings-page-title]"),
   settingsSectionButtons: document.querySelectorAll("[data-settings-section]"),
@@ -2096,6 +2099,7 @@ function rerenderCurrentDashboard() {
     syncPortfolioParameterControls();
   }
   renderBotEvaluations();
+  renderPortfolioCandidates();
 }
 
 function openParameterModal(trigger) {
@@ -3078,6 +3082,227 @@ function livePortfolioRuleRows() {
   ];
 }
 
+function evaluationUpdateMs(item) {
+  return Math.max(
+    Date.parse(item?.evaluatedAt || "") || 0,
+    Date.parse(item?.lastSeenAt || "") || 0,
+    Date.parse(item?.updatedAt || "") || 0,
+  );
+}
+
+function latestUniquePortfolioEvaluations(evaluations = []) {
+  const byKey = new Map();
+  const ordered = [...evaluations].sort((a, b) => evaluationUpdateMs(b) - evaluationUpdateMs(a));
+  for (const item of ordered) {
+    const key = String(item?.tokenId || item?.clobTokenId || item?.assetId || item?.id || opportunityKey(item) || "");
+    if (!key || byKey.has(key)) continue;
+    byKey.set(key, item);
+  }
+  return [...byKey.values()];
+}
+
+function candidateMarketType(item = {}) {
+  if (item.marketType) return item.marketType;
+  const question = String(item.question || "");
+  const slug = String(item.eventSlug || item.slug || "");
+  if (/(^|[-\s])(exact-score|correct-score|winner|group-winner|nominee|award|primary|election)([-\s]|$)/i.test(`${slug} ${question}`)) {
+    return "multi";
+  }
+  if (/^(which|who|what|how many)\b/i.test(question)) return "multi";
+  if (/^(yes|no)$/i.test(String(item.outcome || "")) && /^(will|is|are|can|does|do|did|has|have|was|were)\b/i.test(question)) {
+    return "binary";
+  }
+  return "multi";
+}
+
+function portfolioCandidateFilterReasons(item, mode = state.mode) {
+  const config = portfolioConfigForMode(mode);
+  const normalizedMode = normalizeMode(mode);
+  const reasons = [];
+  const storedStatus = String(item.status || "").toUpperCase();
+  const displayStatus = portfolioEvaluationStatus(item);
+  const aiProbability = Number(item.aiProbability);
+  const maxDays = resolutionDaysForMode(normalizedMode);
+  const days = evaluationDaysLeft(item);
+  const liquidity = Number(item.liquidity || 0);
+  const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
+  const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(normalizedMode);
+
+  if (displayStatus !== "EVALUATED") reasons.push(`status ${displayStatus}`);
+  if (normalizedMode !== "live" && storedStatus !== "ELIGIBLE") {
+    reasons.push(`base status ${storedStatus || "UNKNOWN"} is not ELIGIBLE`);
+  }
+  if (!Number.isFinite(aiProbability)) {
+    reasons.push("missing AI probability");
+  } else if (aiProbability < threshold) {
+    reasons.push(`AI probability ${probability(aiProbability)} below ${probability(threshold)}`);
+  }
+  if (!Number.isFinite(days)) {
+    reasons.push("missing resolution date");
+  } else if (days > maxDays) {
+    reasons.push(`resolution ${days.toFixed(2)} days exceeds max ${maxDays}`);
+  }
+  if (minLiquidity != null && liquidity < minLiquidity) {
+    reasons.push(`liquidity ${money(liquidity)} below ${money(minLiquidity)}`);
+  }
+  if (config.requireMostProbableOutcome && candidateMarketType(item) !== "multi") {
+    reasons.push(`market type ${candidateMarketType(item)} is not multichoice`);
+  }
+  return reasons;
+}
+
+function activeExposureRowsForMode(mode = state.mode) {
+  if (normalizeMode(mode) === "live") {
+    return [
+      ...(Array.isArray(state.liveState?.positions) ? state.liveState.positions : []),
+      ...(Array.isArray(state.liveState?.openOrders) ? state.liveState.openOrders : []),
+    ];
+  }
+  const portfolioState = selectedPaperPortfolio(state.botState || {});
+  return paperPortfolioTrades(portfolioState).filter((trade) => !isClosedTrade(trade));
+}
+
+function riskKeysForRow(row, evaluationByToken = new Map()) {
+  const direct = Array.isArray(row?.riskGroupKeys) ? row.riskGroupKeys : [];
+  if (direct.length) return direct.map(String).filter(Boolean);
+  const token = String(row?.tokenId || row?.assetId || row?.asset || "");
+  const evaluation = token ? evaluationByToken.get(token) : null;
+  return Array.isArray(evaluation?.riskGroupKeys) ? evaluation.riskGroupKeys.map(String).filter(Boolean) : [];
+}
+
+function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new Map()) {
+  const token = String(item?.tokenId || item?.assetId || "");
+  const keys = new Set(riskKeysForRow(item, evaluationByToken));
+  for (const row of activeRows) {
+    const rowToken = String(row?.tokenId || row?.assetId || row?.asset || "");
+    if (token && rowToken && token === rowToken) return "duplicate token already open";
+    const overlap = riskKeysForRow(row, evaluationByToken).filter((key) => keys.has(key));
+    if (overlap.length) return `risk overlap: ${overlap.slice(0, 3).join(", ")}`;
+  }
+  return "";
+}
+
+function portfolioCandidateSortValue(item, key) {
+  if (key === "riskReward") return evaluationRiskReward(item) ?? -Infinity;
+  if (key === "annualizedReturn") return annualizedExpectedReturn(item) ?? -Infinity;
+  if (key === "expectedValue") return expectedValue(item) ?? -Infinity;
+  if (key === "aiProbability") return Number(item.aiProbability);
+  if (key === "days") return evaluationDaysLeft(item);
+  return 0;
+}
+
+function sortPortfolioCandidates(rows = [], mode = state.mode) {
+  const config = portfolioConfigForMode(mode);
+  const primary = config.selectionOrder === "highest_reward_risk_first" ? "riskReward" : "annualizedReturn";
+  const sorted = [...rows].sort((a, b) => {
+    const aPrimary = portfolioCandidateSortValue(a, primary);
+    const bPrimary = portfolioCandidateSortValue(b, primary);
+    if (bPrimary !== aPrimary) return bPrimary - aPrimary;
+    const aDays = portfolioCandidateSortValue(a, "days");
+    const bDays = portfolioCandidateSortValue(b, "days");
+    if (Number.isFinite(aDays) && Number.isFinite(bDays) && aDays !== bDays) return aDays - bDays;
+    const aEv = portfolioCandidateSortValue(a, "expectedValue");
+    const bEv = portfolioCandidateSortValue(b, "expectedValue");
+    if (bEv !== aEv) return bEv - aEv;
+    return (Date.parse(b.evaluatedAt || "") || 0) - (Date.parse(a.evaluatedAt || "") || 0);
+  });
+  return [
+    ...sorted.filter((item) => !item.portfolioRiskBlockReason),
+    ...sorted.filter((item) => item.portfolioRiskBlockReason),
+  ];
+}
+
+function portfolioCandidateRows(mode = state.mode) {
+  const evaluations = latestUniquePortfolioEvaluations(Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : []);
+  const evaluationByToken = new Map(evaluations.map((item) => [String(item.tokenId || ""), item]).filter(([token]) => token));
+  const activeRows = activeExposureRowsForMode(mode);
+  const rows = evaluations
+    .map((item) => {
+      const reasons = portfolioCandidateFilterReasons(item, mode);
+      if (reasons.length) return null;
+      const riskReason = candidateRiskBlockReason(item, activeRows, evaluationByToken);
+      return {
+        ...item,
+        portfolioRiskBlockReason: riskReason,
+      };
+    })
+    .filter(Boolean);
+  return sortPortfolioCandidates(rows, mode);
+}
+
+function renderPortfolioCandidateRows(rows = [], mode = state.mode) {
+  if (!rows.length) {
+    return '<div class="empty">No opportunities currently pass this portfolio shortlist. The next run will still refresh market data and re-evaluate newly analyzed opportunities.</div>';
+  }
+  const live = normalizeMode(mode) === "live";
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Precheck</th>
+          <th>Market</th>
+          <th>End date</th>
+          <th>Days left</th>
+          <th>AI prob.</th>
+          <th>Mkt entry</th>
+          <th>EV p.a.</th>
+          <th>EV</th>
+          <th>Win</th>
+          <th>R/R</th>
+          <th>Analysis</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.slice(0, 80).map((item, index) => {
+          const blocked = Boolean(item.portfolioRiskBlockReason);
+          const status = blocked
+            ? item.portfolioRiskBlockReason
+            : (live ? "will revalidate before live order" : "ready for next paper execution");
+          return `
+            <tr>
+              <td data-label="#">${index + 1}</td>
+              <td data-label="Precheck" class="${blocked ? "muted" : "positive"}">
+                <strong>${blocked ? "WATCH" : "READY"}</strong>
+                <span>${escapeHtml(status)}</span>
+              </td>
+              <td data-label="Market">${marketAnchor(item)}</td>
+              <td data-label="End date">${evaluationEndDateCell(item)}</td>
+              <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
+              <td data-label="AI prob.">${probability(Number(item.aiProbability))}</td>
+              <td data-label="Mkt entry">${probability(Number(item.marketPrice))}</td>
+              <td data-label="EV p.a.">${annualizedCell(item)}</td>
+              <td data-label="EV">${signedMoney(expectedValue(item), 4)}</td>
+              <td data-label="Win">${gainCell(item)}</td>
+              <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
+              <td data-label="Analysis">${analysisBadge(item)}</td>
+            </tr>
+          `;
+        }).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderPortfolioCandidates() {
+  if (!els.portfolioCandidates) return;
+  const mode = state.mode;
+  if (!state.botState) {
+    els.portfolioCandidates.innerHTML = '<div class="empty">Common evaluation log is not loaded yet.</div>';
+    if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "0 candidates";
+    return;
+  }
+  const rows = portfolioCandidateRows(mode);
+  const blockedCount = rows.filter((item) => item.portfolioRiskBlockReason).length;
+  const readyCount = rows.length - blockedCount;
+  const label = normalizeMode(mode) === "live" ? "Live" : `Paper - ${paperModeLabel(mode)}`;
+  if (els.portfolioCandidatesTitle) els.portfolioCandidatesTitle.textContent = `${label} execution candidates`;
+  if (els.portfolioCandidatesSummary) {
+    els.portfolioCandidatesSummary.textContent = `${readyCount} ready / ${blockedCount} watch / ${rows.length} total`;
+  }
+  els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode);
+}
+
 function renderPortfolioRulesCard(title, rows) {
   return `
     <div class="portfolio-rules-card">
@@ -3196,6 +3421,7 @@ function renderBotState(botState) {
   }
 
   renderBotEvaluations();
+  renderPortfolioCandidates();
   renderRunLog();
   renderCalculationReport();
   openOpportunityFromCurrentUrl();
@@ -3535,6 +3761,7 @@ function renderLiveState(liveState) {
     });
   }
   renderBotEvaluations();
+  renderPortfolioCandidates();
   renderRunLog();
   renderCalculationReport();
   openOpportunityFromCurrentUrl();
