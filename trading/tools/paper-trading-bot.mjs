@@ -1801,6 +1801,7 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   const depthOk = Number(evaluation.filledStakeUsdc || 0) >= stake * 0.999;
   const days = Number(evaluation.daysToResolution);
+  const endOk = endDateIsFuture(evaluation.endDate);
   const economics = economicsForProbability({
     probability,
     execution,
@@ -1811,6 +1812,7 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     spreadOk,
     volumeOk,
     depthOk,
+    endOk,
   });
 
   const rejectReasons = economics.rejectReasons.map((reason) => {
@@ -2625,7 +2627,138 @@ function portfolioFilterDiagnostics(evaluations, strategy) {
   };
 }
 
-function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, cadenceBlocked = false, rotationReview = null, diversificationDiagnostics = null }) {
+function latestUniqueExecutionEvaluations(evaluations = []) {
+  const byKey = new Map();
+  const ordered = [...evaluations].sort((a, b) => evaluationUpdateTime(b) - evaluationUpdateTime(a));
+  for (const item of ordered) {
+    const key = evaluationKey(item);
+    if (!key || byKey.has(key)) continue;
+    byKey.set(key, item);
+  }
+  return [...byKey.values()];
+}
+
+function storedExecutionShortlist(state, strategy) {
+  const unique = latestUniqueExecutionEvaluations(expirePastEvaluations(state.evaluations || []).map(ensureEvaluationErrorMetadata));
+  const rejected = [];
+  const passed = [];
+  const reasonCounts = {};
+
+  for (const item of unique) {
+    const result = portfolioFilterResult(item, strategy);
+    if (result.eligible) {
+      passed.push(item);
+      continue;
+    }
+    for (const reason of result.reasons) incrementCount(reasonCounts, reason);
+    if (rejected.length < 20) {
+      rejected.push({
+        ...tradeBatchCandidateSummary(item),
+        portfolioRejectReasons: result.reasons,
+      });
+    }
+  }
+
+  const rows = sortEligibleForStrategy(passed, strategy);
+  return {
+    rows,
+    diagnostics: {
+      source: "stored_execution_candidates",
+      storedEvaluations: Array.isArray(state.evaluations) ? state.evaluations.length : 0,
+      uniqueEvaluations: unique.length,
+      prefilterPassed: rows.length,
+      prefilterRejected: Math.max(0, unique.length - rows.length),
+      scanLimit: MAX_EVALUATIONS_PER_RUN,
+      reasonCounts,
+      portfolioPrefilterPassed: rows.length,
+      portfolioPrefilterRejected: Math.max(0, unique.length - rows.length),
+      rejectedSample: rejected,
+      executionShortlist: rows.slice(0, 30).map(tradeBatchCandidateSummary).filter(Boolean),
+    },
+  };
+}
+
+function marketFromStoredEvaluation(item) {
+  const outcome = String(item.outcome || "Outcome 1");
+  const tokenId = String(item.tokenId || item.clobTokenId || "");
+  return {
+    id: item.marketId || item.conditionId || item.slug || item.eventSlug || tokenId,
+    question: item.question || "",
+    slug: item.slug || item.eventSlug || "",
+    eventSlug: item.eventSlug || item.slug || "",
+    events: item.eventSlug ? [{ slug: item.eventSlug }] : [],
+    endDate: item.endDate || null,
+    createdAt: item.createdAt || item.firstEvaluatedAt || item.evaluatedAt || null,
+    updatedAt: item.updatedAt || item.lastSeenAt || item.evaluatedAt || null,
+    outcomes: JSON.stringify([outcome]),
+    clobTokenIds: JSON.stringify([tokenId]),
+    liquidity: Number(item.liquidity || 0),
+    volume24hr: Number(item.volume24hr || 0),
+    negRisk: item.negRisk,
+    feeSchedule: item.feeSchedule,
+    feesEnabled: item.feesEnabled,
+    feeType: item.feeType,
+    feeRate: item.feeRate,
+  };
+}
+
+function revalidationFailureEvaluation(item, message, status = "REJECTED") {
+  const reason = `execution shortlist revalidation failed: ${message}`;
+  return normalizeEvaluationRisk({
+    ...item,
+    id: evaluationKey(item) || item.id,
+    evaluatedAt: nowIso(),
+    lastSeenAt: nowIso(),
+    status,
+    thesisType: status === "ERROR" ? "ERROR" : "REJECTED",
+    selectionStatus: "REVALIDATION_FAILED",
+    rejectReasons: [reason, ...(Array.isArray(item.rejectReasons) ? item.rejectReasons : [])],
+    analysisSummary: `${reason}. Candidate was removed from the current execution shortlist until a later evaluation makes it executable again.`,
+  });
+}
+
+async function revalidateStoredExecutionCandidate(item, learningProfile) {
+  const tokenId = String(item.tokenId || item.clobTokenId || "");
+  if (!tokenId) {
+    return revalidationFailureEvaluation(item, "missing token id");
+  }
+
+  try {
+    const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`);
+    const evaluation = evaluateCandidate({
+      market: marketFromStoredEvaluation(item),
+      outcomeIndex: 0,
+      tokenId,
+      book,
+      learningProfile,
+    });
+    if (!evaluation) {
+      return revalidationFailureEvaluation(item, "no executable ask/orderbook depth at current market");
+    }
+    return normalizeEvaluationRisk({
+      ...evaluation,
+      revalidationSource: "stored_execution_candidates",
+      previousEvaluatedAt: item.evaluatedAt || item.lastSeenAt || null,
+      firstEvaluatedAt: item.firstEvaluatedAt || item.evaluatedAt || null,
+    });
+  } catch (error) {
+    const message = cleanEvaluationErrorMessage(error?.message || String(error || "unknown error"));
+    return ensureEvaluationErrorMetadata(revalidationFailureEvaluation(item, message, "ERROR"));
+  }
+}
+
+async function revalidateStoredExecutionShortlist(shortlist, learningProfile) {
+  const raw = [];
+  for (const item of shortlist) {
+    raw.push(await revalidateStoredExecutionCandidate(item, learningProfile));
+  }
+  const analyzable = raw.filter((item) => item.selectionStatus !== "REVALIDATION_FAILED");
+  const enriched = await enrichEvaluationsWithAi(analyzable, learningProfile);
+  const byId = new Map(enriched.map((item) => [item.id, item]));
+  return raw.map((item) => normalizeEvaluationRisk(byId.get(item.id) || item));
+}
+
+function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, cadenceBlocked = false, rotationReview = null, diversificationDiagnostics = null, prevalidationFilter = null }) {
   const evaluated = Array.isArray(eligible) ? eligible : [];
   const ranked = Array.isArray(rankedEligible) ? rankedEligible : evaluated;
   const blocked = ranked.filter((item) => item.selectionStatus === "RISK_BLOCKED" || item.riskBlockedReason);
@@ -2675,9 +2808,12 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
     selected: tradeBatchCandidateSummary(selected),
     eligibleCandidates,
     topCandidates: ranked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
+    revalidatedCandidates: prevalidationFilter?.revalidatedCandidates || null,
+    topRejected: prevalidationFilter?.revalidatedRejectedSample || null,
     riskBlocked: blocked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
     rotationReview: rotationReview || null,
     diversificationDiagnostics: diversificationDiagnostics || null,
+    prevalidationFilter: prevalidationFilter || null,
   };
 }
 
@@ -2823,6 +2959,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         stake,
         cadenceBlocked: true,
         diversificationDiagnostics: options.diversificationDiagnostics || null,
+        prevalidationFilter: options.prevalidationFilter || null,
       }),
     };
   }
@@ -2860,6 +2997,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         selected: rotation.candidate,
         rotationReview: closedTrade.rotationReview,
         diversificationDiagnostics: options.diversificationDiagnostics || null,
+        prevalidationFilter: options.prevalidationFilter || null,
       }),
     };
   }
@@ -2885,6 +3023,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         stake,
         insufficientCapital: true,
         diversificationDiagnostics: options.diversificationDiagnostics || null,
+        prevalidationFilter: options.prevalidationFilter || null,
       }),
     };
   }
@@ -2909,6 +3048,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         available,
         stake,
         diversificationDiagnostics: options.diversificationDiagnostics || null,
+        prevalidationFilter: options.prevalidationFilter || null,
       }),
     };
   }
@@ -2937,6 +3077,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         stake,
         skippedForRisk,
         diversificationDiagnostics: options.diversificationDiagnostics || null,
+        prevalidationFilter: options.prevalidationFilter || null,
       }),
     };
   }
@@ -2968,6 +3109,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
       selected: best,
       skippedForRisk,
       diversificationDiagnostics: options.diversificationDiagnostics || null,
+      prevalidationFilter: options.prevalidationFilter || null,
     }),
   };
 }
@@ -3684,6 +3826,82 @@ function updateEvaluationStats(state, { evaluations = [], retainedBefore = 0, re
   };
 }
 
+async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun) {
+  const evaluations = [];
+  const eligible = [];
+  const decisions = [];
+
+  for (const strategy of strategiesForRun) {
+    const portfolioState = state.paperPortfolios?.[strategy.id];
+    if (!portfolioState) continue;
+
+    const shortlist = storedExecutionShortlist(state, strategy);
+    const selectedForRevalidation = shortlist.rows.slice(0, MAX_EVALUATIONS_PER_RUN);
+    const revalidated = await revalidateStoredExecutionShortlist(selectedForRevalidation, state.learningProfile);
+    const rankedEligible = sortEligibleForStrategy(
+      revalidated.filter((item) => portfolioFilterResult(item, strategy).eligible),
+      strategy,
+    );
+    const revalidatedRejectedSample = revalidated
+      .map((item) => {
+        const result = portfolioFilterResult(item, strategy);
+        if (result.eligible) return null;
+        return {
+          ...tradeBatchCandidateSummary(item),
+          portfolioRejectReasons: result.reasons,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 30);
+
+    const prevalidationFilter = {
+      ...shortlist.diagnostics,
+      source: "stored_execution_candidates",
+      selectedForRevalidation: selectedForRevalidation.length,
+      revalidatedCount: revalidated.length,
+      revalidatedPortfolioEligible: rankedEligible.length,
+      revalidatedRejected: Math.max(0, revalidated.length - rankedEligible.length),
+      skippedByScanLimit: Math.max(0, shortlist.rows.length - selectedForRevalidation.length),
+      skippedByRevalidationLimit: Math.max(0, shortlist.rows.length - selectedForRevalidation.length),
+      revalidatedCandidates: revalidated.slice(0, 30).map(tradeBatchCandidateSummary).filter(Boolean),
+      revalidatedRejectedSample,
+    };
+
+    const decision = maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, revalidated, {
+      ignoreCadence: true,
+      prevalidationFilter,
+      diversificationDiagnostics: {
+        source: "stored_execution_candidates",
+        note: "Manual paper run revalidated the current portfolio execution shortlist only; no unrelated fresh market scan was used.",
+      },
+    });
+    decisions.push(decision);
+    evaluations.push(...revalidated);
+    eligible.push(...revalidated.filter((item) => String(item.status || "").toUpperCase() === "ELIGIBLE"));
+  }
+
+  state.generatedAt = nowIso();
+  updatePortfolio(state);
+  const mergedEvaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(mergeEvaluationLists(evaluations, state.evaluations)));
+  const retainedBefore = new Set([...(state.evaluations || []), ...evaluations].map(evaluationKey).filter(Boolean)).size;
+  state.evaluations = mergedEvaluations.map(ensureEvaluationErrorMetadata);
+  updateCalculationReport(state);
+  updateEvaluationStats(state, { evaluations, retainedBefore, retainedAfter: state.evaluations.length });
+  recordRun(state, { evaluations, eligible, decisions });
+  await writeState(state);
+  console.log(JSON.stringify({
+    generatedAt: state.generatedAt,
+    source: "stored_execution_candidates",
+    decisions: Object.fromEntries(decisions.map((decision) => [decision.strategyId, {
+      action: decision.action,
+      reason: decision.reason,
+      tradeId: decision.trade?.id || null,
+      revalidatedCount: decision.batchLog?.prevalidationFilter?.revalidatedCount ?? null,
+      revalidatedPortfolioEligible: decision.batchLog?.prevalidationFilter?.revalidatedPortfolioEligible ?? null,
+    }])),
+  }, null, 2));
+}
+
 async function writeState(state) {
   await mkdir(dirname(OUTPUT_PATH), { recursive: true });
   await writeFile(OUTPUT_PATH, `${JSON.stringify(state, null, 2)}\n`, "utf8");
@@ -3768,6 +3986,11 @@ async function run() {
         tradeCadenceHours: normalizeTradeCadenceHours(PAPER_STRATEGIES[portfolioState.id]?.tradeCadenceHours, 1),
       })),
     }, null, 2));
+    return;
+  }
+
+  if (MANUAL_RUN_ONCE) {
+    await executeManualPaperRunFromStoredCandidates(state, strategiesForRun);
     return;
   }
 

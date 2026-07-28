@@ -4331,7 +4331,7 @@ function tradeBatchDetail(batch) {
       `Prepared execution shortlist:`,
       `Stored evaluations: ${Number(prevalidationFilter.storedEvaluations || 0)}`,
       `Unique markets/outcomes: ${Number(prevalidationFilter.uniqueEvaluations || 0)}`,
-      `Passed live portfolio rules before revalidation: ${Number(prevalidationFilter.prefilterPassed || 0)}`,
+      `Passed portfolio rules before revalidation: ${Number(prevalidationFilter.prefilterPassed || 0)}`,
       `Selected for Polymarket revalidation: ${Number(prevalidationFilter.selectedForRevalidation || 0)} / limit ${Number(prevalidationFilter.scanLimit || 0)}`,
       `Skipped by scan limit: ${Number(prevalidationFilter.skippedByScanLimit || 0)}`,
       `Not in shortlist before revalidation: ${Number(prevalidationFilter.prefilterRejected || 0)}`,
