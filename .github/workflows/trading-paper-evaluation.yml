@@ -13,7 +13,7 @@ on:
         type: string
 
 concurrency:
-  group: trading-focused-evaluation
+  group: trading-paper-bot
   cancel-in-progress: false
 
 jobs:
@@ -39,6 +39,10 @@ jobs:
       PAPER_MAX_RESOLUTION_DAYS: "7"
       PAPER_AI_ANALYSIS_LIMIT: "1"
       PAPER_AI_REQUEST_DELAY_MS: "0"
+      PAPER_AI_MIN_INTERVAL_SECONDS: "3600"
+      PAPER_AI_MAX_REQUESTS_PER_HOUR: "1"
+      PAPER_AI_MAX_REQUESTS_PER_DAY: "24"
+      PAPER_AI_USAGE_HISTORY_LIMIT: "500"
       PAPER_AI_STOP_ON_QUOTA_ERROR: "true"
       PAPER_AI_POSTMORTEM_LIMIT: "8"
       PAPER_REQUIRE_GEMINI: "true"

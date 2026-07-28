@@ -45,6 +45,10 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").toLowerCase();
 const AI_ANALYSIS_LIMIT = envNumber("PAPER_AI_ANALYSIS_LIMIT", 2);
 const AI_REQUEST_DELAY_MS = envNumber("PAPER_AI_REQUEST_DELAY_MS", 2500);
+const AI_MIN_INTERVAL_SECONDS = envNumber("PAPER_AI_MIN_INTERVAL_SECONDS", 3600);
+const AI_MAX_REQUESTS_PER_HOUR = envNumber("PAPER_AI_MAX_REQUESTS_PER_HOUR", 1);
+const AI_MAX_REQUESTS_PER_DAY = envNumber("PAPER_AI_MAX_REQUESTS_PER_DAY", 24);
+const AI_USAGE_HISTORY_LIMIT = envNumber("PAPER_AI_USAGE_HISTORY_LIMIT", 500);
 const AI_POSTMORTEM_LIMIT = envNumber("PAPER_AI_POSTMORTEM_LIMIT", 8);
 const AI_STOP_ON_QUOTA_ERROR = String(process.env.PAPER_AI_STOP_ON_QUOTA_ERROR ?? "true").toLowerCase() !== "false";
 const GROUNDED_AI_ANALYSIS_VERSION = "grounded-public-memo-v1";
@@ -302,6 +306,8 @@ function normalizeState(input) {
     calculationReports: Array.isArray(input.calculationReports) ? input.calculationReports.slice(0, 30) : [],
     latestCalculationReport: input.latestCalculationReport || (Array.isArray(input.calculationReports) ? input.calculationReports[0] || null : null),
     learningProfile: normalizeLearningProfile(input.learningProfile),
+    aiUsageLog: Array.isArray(input.aiUsageLog) ? input.aiUsageLog.slice(-Math.max(20, AI_USAGE_HISTORY_LIMIT)) : [],
+    aiUsage: input.aiUsage && typeof input.aiUsage === "object" ? input.aiUsage : null,
     lastTradeDate: paperPortfolios.conservative.lastTradeDate,
     lastTradeHour: paperPortfolios.conservative.lastTradeHour,
     lastDecision: paperPortfolios.conservative.lastDecision,
@@ -468,6 +474,9 @@ function mergeEvaluation(previous, next) {
   const latest = incomingIsNewer ? next : previous;
   const older = incomingIsNewer ? previous : next;
   const changes = changedEvaluationFields(older, latest);
+  const deferredWithoutNewMemo = latest.selectionStatus === "AI_PENDING"
+    || latest.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
+  const preservePreviousMemo = deferredWithoutNewMemo && hasGroundedPublicMemo(previous);
   const sameObservation = (previous.evaluatedAt || previous.lastSeenAt || "") === (next.evaluatedAt || next.lastSeenAt || "")
     && changes.length === 0;
   const previousHistory = Array.isArray(previous.updateHistory) ? previous.updateHistory : [];
@@ -480,7 +489,7 @@ function mergeEvaluation(previous, next) {
       }]
     : [];
 
-  return normalizeEvaluationRisk({
+  const merged = {
     ...older,
     ...latest,
     id: evaluationKey(latest) || latest.id || previous.id,
@@ -492,7 +501,19 @@ function mergeEvaluation(previous, next) {
       : Number(previous.evaluationCount || 1) + Number(next.evaluationCount || 1),
     updateHistory: [...changeEntry, ...incomingHistory, ...previousHistory].slice(0, 30),
     lastChanges: changes,
-  });
+  };
+  if (preservePreviousMemo) {
+    Object.assign(merged, {
+      aiAnalysis: previous.aiAnalysis,
+      aiProbability: previous.aiProbability,
+      rawProbability: previous.rawProbability,
+      probabilityThesis: previous.probabilityThesis,
+      analysisModel: previous.analysisModel,
+      analysisSummary: previous.analysisSummary,
+      selectionStatus: "AI_PENDING",
+    });
+  }
+  return normalizeEvaluationRisk(merged);
 }
 
 function mergeEvaluationLists(primary = [], secondary = [], limit = MAX_HISTORY) {
@@ -1913,6 +1934,7 @@ function longEnough(value, minLength) {
 }
 
 function hasGroundedPublicMemo(item) {
+  if (item?.selectionStatus === "AI_PENDING" || item?.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED") return false;
   const analysis = item?.aiAnalysis || {};
   return analysis.analysisSchemaVersion === GROUNDED_AI_ANALYSIS_VERSION
     && longEnough(analysis.probabilityRationale, 80)
@@ -1993,10 +2015,107 @@ function markAiAnalysisDeferred(item, message) {
   };
 }
 
-async function enrichEvaluationsWithAi(evaluations, learningProfile) {
+function aiUsageEntries(state) {
+  return Array.isArray(state?.aiUsageLog) ? state.aiUsageLog : [];
+}
+
+function aiUsageSnapshot(state, now = Date.now()) {
+  const entries = aiUsageEntries(state).filter((entry) => {
+    const time = Date.parse(entry.requestedAt || "");
+    return Number.isFinite(time) && time >= now - 86400000;
+  });
+  const inWindow = (duration) => entries.filter((entry) => Date.parse(entry.requestedAt || "") >= now - duration);
+  const minute = inWindow(60000);
+  const hour = inWindow(3600000);
+  const successful = (rows) => rows.filter((entry) => entry.status === "SUCCESS").length;
+  const quotaErrors = (rows) => rows.filter((entry) => entry.status === "QUOTA_LIMITED").length;
+  const last = [...entries].sort((a, b) => Date.parse(b.requestedAt || "") - Date.parse(a.requestedAt || ""))[0] || null;
+  const nextFromInterval = last ? Date.parse(last.requestedAt || "") + AI_MIN_INTERVAL_SECONDS * 1000 : 0;
+  const oldestHour = hour[0] ? Date.parse(hour[0].requestedAt || "") + 3600000 : 0;
+  const oldestDay = entries[0] ? Date.parse(entries[0].requestedAt || "") + 86400000 : 0;
+  const nextAvailable = Math.max(
+    nextFromInterval,
+    hour.length >= AI_MAX_REQUESTS_PER_HOUR ? oldestHour : 0,
+    entries.length >= AI_MAX_REQUESTS_PER_DAY ? oldestDay : 0,
+  );
+  return {
+    model: GEMINI_MODEL,
+    requestsLastMinute: minute.length,
+    requestsLastHour: hour.length,
+    requestsLast24Hours: entries.length,
+    successfulLastMinute: successful(minute),
+    successfulLastHour: successful(hour),
+    successfulLast24Hours: successful(entries),
+    quotaErrorsLast24Hours: quotaErrors(entries),
+    maxRequestsPerHour: AI_MAX_REQUESTS_PER_HOUR,
+    maxRequestsPer24Hours: AI_MAX_REQUESTS_PER_DAY,
+    minIntervalSeconds: AI_MIN_INTERVAL_SECONDS,
+    estimatedDailyCapacity: Math.min(AI_MAX_REQUESTS_PER_DAY, Math.floor(86400 / Math.max(1, AI_MIN_INTERVAL_SECONDS))),
+    nextAvailableAt: nextAvailable > now ? new Date(nextAvailable).toISOString() : null,
+    lastRequestAt: last?.requestedAt || null,
+    lastRequestStatus: last?.status || null,
+    lastError: last?.error || null,
+    deferredRuns: Number(state?.aiUsage?.deferredRuns || 0),
+    lastDeferredAt: state?.aiUsage?.lastDeferredAt || null,
+  };
+}
+
+function reserveAiRequest(state) {
+  const entry = {
+    id: `ai-${nowIso()}-${Math.random().toString(36).slice(2, 8)}`,
+    requestedAt: nowIso(),
+    status: "IN_FLIGHT",
+    model: GEMINI_MODEL,
+  };
+  state.aiUsageLog = [...aiUsageEntries(state), entry].slice(-Math.max(20, AI_USAGE_HISTORY_LIMIT));
+  state.aiUsage = aiUsageSnapshot(state);
+  return entry.id;
+}
+
+function finishAiRequest(state, id, status, error = "") {
+  state.aiUsageLog = aiUsageEntries(state).map((entry) => entry.id === id
+    ? { ...entry, completedAt: nowIso(), status, error: error ? compactSentence(error) : null }
+    : entry);
+  state.aiUsage = aiUsageSnapshot(state);
+}
+
+function deferAiRun(state, reason) {
+  state.aiUsage = {
+    ...aiUsageSnapshot(state),
+    deferredRuns: Number(state?.aiUsage?.deferredRuns || 0) + 1,
+    lastDeferredAt: nowIso(),
+    lastDeferredReason: compactSentence(reason),
+  };
+}
+
+function aiSlotAvailability(state) {
+  const snapshot = aiUsageSnapshot(state);
+  if (snapshot.requestsLast24Hours >= AI_MAX_REQUESTS_PER_DAY) {
+    return { allowed: false, reason: `AI daily request budget reached (${AI_MAX_REQUESTS_PER_DAY}/24h)`, snapshot };
+  }
+  if (snapshot.requestsLastHour >= AI_MAX_REQUESTS_PER_HOUR) {
+    return { allowed: false, reason: `AI hourly request budget reached (${AI_MAX_REQUESTS_PER_HOUR}/h)`, snapshot };
+  }
+  if (snapshot.nextAvailableAt) {
+    return { allowed: false, reason: `AI request slot is reserved until ${snapshot.nextAvailableAt}`, snapshot };
+  }
+  return { allowed: true, reason: "AI request slot available", snapshot };
+}
+
+async function enrichEvaluationsWithAi(evaluations, learningProfile, state = null) {
   if (!GEMINI_API_KEY || AI_ANALYSIS_LIMIT <= 0) return evaluations;
+  const storedByKey = new Map((state?.evaluations || []).map((item) => [evaluationKey(item), item]).filter(([key]) => key));
+  const carriedMemos = new Map();
   const candidates = [...evaluations]
     .filter((item) => item.status !== "ERROR")
+    .filter((item) => {
+      const stored = storedByKey.get(evaluationKey(item));
+      if (!stored || !hasGroundedPublicMemo(stored)) return true;
+      const lastGroundedAt = Date.parse(stored.evaluatedAt || stored.lastSeenAt || "");
+      if (!Number.isFinite(lastGroundedAt) || Date.now() - lastGroundedAt >= 86400000) return true;
+      carriedMemos.set(evaluationKey(item), stored);
+      return false;
+    })
     .sort((a, b) => {
       if (hasGroundedPublicMemo(a) !== hasGroundedPublicMemo(b)) return hasGroundedPublicMemo(a) ? 1 : -1;
       if (hasIndependentResearch(a) !== hasIndependentResearch(b)) return hasIndependentResearch(a) ? 1 : -1;
@@ -2011,6 +2130,14 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
   let quotaError = "";
 
   for (const [candidateIndex, candidate] of candidates.entries()) {
+    if (state) {
+      const slot = aiSlotAvailability(state);
+      if (!slot.allowed) {
+        deferAiRun(state, slot.reason);
+        quotaError = `AI evaluation deferred by scheduler: ${slot.reason}`;
+        break;
+      }
+    }
     if (candidateIndex > 0 && AI_REQUEST_DELAY_MS > 0) {
       await new Promise((resolve) => setTimeout(resolve, AI_REQUEST_DELAY_MS));
     }
@@ -2068,6 +2195,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
         sourceQuality: "primary | reputable-news | mixed | weak",
       },
     };
+    const requestId = state ? reserveAiRequest(state) : null;
     const result = await callGeminiJson([
       { role: "system", content: "You are a cautious forecasting analyst doing source-grounded public research. You must ignore prediction-market pricing and betting consensus. You write concrete Czech rationales based on named public facts, not generic trading commentary. Return only valid JSON." },
       { role: "user", content: JSON.stringify(prompt) },
@@ -2075,6 +2203,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
     if (!result || result.error) {
       const message = result?.error || "Gemini public-research analysis unavailable";
       const quotaLimited = isQuotaError(result);
+      if (requestId) finishAiRequest(state, requestId, quotaLimited ? "QUOTA_LIMITED" : "ERROR", message);
       byId.set(candidate.id, REQUIRE_GEMINI && !quotaLimited
         ? markAiAnalysisUnavailable(candidate, message)
         : quotaLimited
@@ -2093,7 +2222,11 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
       continue;
     }
     const probability = clamp(Number(result.probability), 0.01, 0.995);
-    if (!Number.isFinite(probability)) continue;
+    if (!Number.isFinite(probability)) {
+      if (requestId) finishAiRequest(state, requestId, "ERROR", "Gemini returned no valid probability");
+      continue;
+    }
+    if (requestId) finishAiRequest(state, requestId, "SUCCESS");
     byId.set(candidate.id, refreshEvaluationAfterProbability(candidate, probability, result._model || GEMINI_MODEL, {
       direction: result.direction || outcomeKind(candidate.outcome),
       thesis: result.thesis || candidate.probabilityThesis,
@@ -2122,7 +2255,16 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
     }
   }
 
-  return evaluations.map((item) => byId.get(item.id) || item);
+  return evaluations.map((item) => {
+    const carried = carriedMemos.get(evaluationKey(item));
+    if (!carried) return byId.get(item.id) || item;
+    return refreshEvaluationAfterProbability(
+      item,
+      Number(carried.aiProbability),
+      carried.analysisModel || carried.aiAnalysis?.model || GEMINI_MODEL,
+      carried.aiAnalysis || {},
+    );
+  });
 }
 
 function openRisk(trades) {
@@ -2780,13 +2922,13 @@ async function revalidateStoredExecutionCandidate(item, learningProfile) {
   }
 }
 
-async function revalidateStoredExecutionShortlist(shortlist, learningProfile) {
+async function revalidateStoredExecutionShortlist(shortlist, learningProfile, state = null) {
   const raw = [];
   for (const item of shortlist) {
     raw.push(await revalidateStoredExecutionCandidate(item, learningProfile));
   }
   const analyzable = raw.filter((item) => item.selectionStatus !== "REVALIDATION_FAILED");
-  const enriched = await enrichEvaluationsWithAi(analyzable, learningProfile);
+  const enriched = await enrichEvaluationsWithAi(analyzable, learningProfile, state);
   const byId = new Map(enriched.map((item) => [item.id, item]));
   return raw.map((item) => normalizeEvaluationRisk(byId.get(item.id) || item));
 }
@@ -3868,6 +4010,7 @@ function updateEvaluationStats(state, { evaluations = [], retainedBefore = 0, re
     totalRunEvaluatedCount: baselineTotal + evaluations.length,
     historyTrimmed: retainedLimit > 0 && retainedAfter >= retainedLimit,
     lastTrimmedCount: Math.max(0, retainedBefore - retainedAfter),
+    aiUsage: state.aiUsage || null,
   };
 }
 
@@ -3882,7 +4025,7 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
 
     const shortlist = storedExecutionShortlist(state, strategy);
     const selectedForRevalidation = shortlist.rows.slice(0, MAX_EVALUATIONS_PER_RUN);
-    const revalidated = await revalidateStoredExecutionShortlist(selectedForRevalidation, state.learningProfile);
+    const revalidated = await revalidateStoredExecutionShortlist(selectedForRevalidation, state.learningProfile, state);
     const rankedEligible = sortEligibleForStrategy(
       revalidated.filter((item) => portfolioFilterResult(item, strategy).eligible),
       strategy,
@@ -3965,6 +4108,7 @@ async function run() {
   }));
   const state = await readState();
   syncLegacyPaperAliases(state);
+  state.aiUsage = aiUsageSnapshot(state);
   state.evaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || []));
   recoverLedgerGaps(state);
   for (const portfolioState of Object.values(state.paperPortfolios)) {
@@ -4113,7 +4257,7 @@ async function run() {
     }
   }
 
-  evaluations = (await enrichEvaluationsWithAi(evaluations, state.learningProfile)).map(normalizeEvaluationRisk);
+  evaluations = (await enrichEvaluationsWithAi(evaluations, state.learningProfile, state)).map(normalizeEvaluationRisk);
   const eligible = evaluations.filter((item) => item.status === "ELIGIBLE" && (!REQUIRE_GEMINI || hasGroundedPublicMemo(item)));
   const decisions = EVALUATION_ONLY
     ? strategiesForRun.map((strategy) => ({
