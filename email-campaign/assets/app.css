@@ -2000,14 +2000,13 @@ td a {
 .view-scraping .log-table td:nth-child(8) { width: 98px; }
 .view-scraping .log-table th:nth-child(9),
 .view-scraping .log-table td:nth-child(9) { width: auto; }
-.view-research table {
-  min-width: 1480px;
-}
 .view-research .research-table {
   table-layout: fixed;
+  width: 100%;
+  min-width: 1336px;
 }
+.view-research .research-table > thead > tr > th,
 .view-research .research-table > tbody > tr.expandable-row > td {
-  max-width: 220px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2017,29 +2016,32 @@ td a {
 .view-research .research-table > tbody > tr.expandable-row > td small {
   display: none;
 }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(1) { width: 76px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(2) { width: 108px; overflow: visible; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(3) { width: 136px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(4) { width: 86px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(5) { width: 128px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(6) { width: 230px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(7) { width: 210px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(8) { width: 108px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(9) { width: 140px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(10) { width: 160px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(11) { width: 120px; }
+/* Sirky patri na hlavicku: table-layout:fixed cte sloupce z prvniho radku (thead),
+   takze widthy jen na tbody td se ignorovaly a vsech 13 sloupcu bylo stejne sirokych. */
+.view-research .research-table > thead > tr > th:nth-child(1) { width: 84px; }
+.view-research .research-table > thead > tr > th:nth-child(2) { width: 150px; }
+.view-research .research-table > thead > tr > th:nth-child(3) { width: 92px; }
+.view-research .research-table > thead > tr > th:nth-child(4) { width: 80px; }
+.view-research .research-table > thead > tr > th:nth-child(5) { width: 124px; }
+.view-research .research-table > thead > tr > th:nth-child(6) { width: 132px; }
+.view-research .research-table > thead > tr > th:nth-child(7) { width: 124px; }
+.view-research .research-table > thead > tr > th:nth-child(8) { width: 78px; }
+.view-research .research-table > thead > tr > th:nth-child(9) { width: 98px; }
+.view-research .research-table > thead > tr > th:nth-child(10) { width: 122px; }
+.view-research .research-table > thead > tr > th:nth-child(11) { width: 88px; }
+.view-research .research-table > thead > tr > th:nth-child(12) { width: 88px; }
+.view-research .research-table > thead > tr > th:nth-child(13) { width: 76px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(2) { overflow: visible; }
+.view-research .research-table > thead > tr > th:nth-child(12),
+.view-research .research-table > thead > tr > th:nth-child(13),
 .view-research .research-table > tbody > tr.expandable-row > td:nth-child(12),
 .view-research .research-table > tbody > tr.expandable-row > td:nth-child(13) {
-  width: 86px;
   text-align: right;
 }
 .view-research .research-table .detail-row td {
   white-space: normal;
   overflow: visible;
   text-overflow: clip;
-}
-.research-draft-actions {
-  white-space: nowrap;
 }
 .ai-outreach-modal {
   max-width: min(820px, calc(100vw - 28px));
@@ -2228,12 +2230,13 @@ td a {
 }
 .research-draft-actions {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 6px;
 }
 .research-draft-actions button {
-  min-height: 32px;
-  padding: 7px 10px;
+  min-height: 30px;
+  padding: 6px 9px;
+  font-size: 12px;
 }
 .admin-database-catalog-table {
   min-width: 1280px;

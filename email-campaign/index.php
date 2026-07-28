@@ -15828,7 +15828,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 </form>
             </div>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
             <tr><td colspan="13">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
