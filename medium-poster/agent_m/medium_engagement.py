@@ -709,6 +709,9 @@ def _detect_article_language(lang: str, text: str) -> tuple[str | None, str]:
     sample = _clean_text(text).lower()[:2500]
     raw_code = (lang or "").lower().replace("_", "-").split("-")[0]
 
+    if raw_code in {"es", "fr", "pt"}:
+        return raw_code, _SUPPORTED_COMMENT_LANGUAGES[raw_code]
+
     if sample:
         if _looks_french(sample):
             return "fr", _SUPPORTED_COMMENT_LANGUAGES["fr"]
