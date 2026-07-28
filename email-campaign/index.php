@@ -528,6 +528,8 @@ if (isset($_GET['cron'])) {
     echo "\n" . runCronScraping($pdo);
     // AI research ma vlastni endpoint (?ai_research=1), ktery vola stejny cron workflow.
     // Volani i odsud by trojnasobilo pocet pokusu a palilo Gemini kvotu nadarmo.
+    // Odhad dosahu ale zadny Gemini pozadavek nestoji, takze se pocita tady.
+    echo "\n" . runCronAiResearchContactEstimates($pdo, $config, 45);
     exit;
 }
 
@@ -4143,6 +4145,102 @@ function aiResearchSourceCountry(string $source): string
  * Zdroj podle trhu, ktery AI vybrala pro osloveni, ne podle sidla seed firmy.
  * Kdyz firma cili mimo CR, nema smysl scrapovat Firmy.cz.
  */
+/**
+ * Zjisti, kolik polozek katalog pro dany dotaz vubec ma, bez toho aby se prochazel cely.
+ * Exponencialni sonda najde posledni neprazdnou stranku, binarni puleni ji doladi, takze
+ * misto tisicu fetchu staci radove 12-18 a odpoved je do desitek sekund. Nezavisi na
+ * formatu konkretniho katalogu, jen na tom, ze stranka N vraci polozky.
+ */
+function aiResearchEstimateListingPages(callable $countItemsOnPage, int $maxProbePages = 2048): array
+{
+    $fetches = 0;
+    $count = static function (int $page) use ($countItemsOnPage, &$fetches): int {
+        $fetches++;
+        return max(0, $countItemsOnPage($page));
+    };
+
+    $firstPageItems = $count(1);
+    if ($firstPageItems <= 0) {
+        return ['pages' => 0, 'items_per_page' => 0, 'items_total' => 0, 'fetches' => $fetches, 'capped' => false];
+    }
+
+    $lastGood = 1;
+    $lastGoodItems = $firstPageItems;
+    $firstEmpty = 0;
+    $probe = 2;
+    while ($probe <= $maxProbePages) {
+        $items = $count($probe);
+        if ($items <= 0) {
+            $firstEmpty = $probe;
+            break;
+        }
+        $lastGood = $probe;
+        // Musi se drzet i pocet na te strance: kdyz sonda rovnou najde posledni stranku,
+        // binarni puleni uz ji znovu nenavstivi a jinak by se dopocital plny pocet.
+        $lastGoodItems = $items;
+        $probe *= 2;
+    }
+    $capped = false;
+    if ($firstEmpty === 0) {
+        $capped = true;
+        $firstEmpty = $maxProbePages + 1;
+    }
+
+    $low = $lastGood;
+    $high = $firstEmpty;
+    while ($high - $low > 1) {
+        $mid = intdiv($low + $high, 2);
+        $items = $count($mid);
+        if ($items > 0) {
+            $low = $mid;
+            $lastGoodItems = $items;
+        } else {
+            $high = $mid;
+        }
+    }
+
+    return [
+        'pages' => $low,
+        'items_per_page' => $firstPageItems,
+        'items_total' => $low > 1 ? ($low - 1) * $firstPageItems + $lastGoodItems : $firstPageItems,
+        'fetches' => $fetches,
+        'capped' => $capped,
+    ];
+}
+
+function aiResearchCountListingItems(string $source, string $keyword, string $location, int $page): int
+{
+    $total = 0;
+    foreach (aiResearchScrapingSearchUrls($source, $keyword, $location, $page) as $search) {
+        try {
+            $html = (string)fetchScrapingSearch($search)['html'];
+        } catch (Throwable $e) {
+            continue;
+        }
+        $total += count(extractCandidateUrls($html, (string)$search['url'], $source));
+    }
+    return $total;
+}
+
+/**
+ * Prvotni pruzkum pred tim, nez se AI pta na zahranicni cileni: kdyz web seed firmy
+ * neni ani v anglictine, bere se automaticky jako cileni na domaci trh a Gemini se
+ * tim vubec nezatezuje. Anglicky web se posuzuje vzdy.
+ */
+function aiResearchSiteHasEnglishVersion(string $html): bool
+{
+    if (preg_match('/<html[^>]*\blang=(["\'])\s*en/i', $html)) {
+        return true;
+    }
+    if (preg_match('/hreflang=(["\'])\s*en(?:-[a-z]{2})?\s*\1/i', $html)) {
+        return true;
+    }
+    if (preg_match('#<a\b[^>]*href=(["\'])[^"\']*/(?:en|english)(?:/|["\'])#i', $html)) {
+        return true;
+    }
+    return false;
+}
+
 function aiResearchSourceForMarketLanguage(string $language): string
 {
     $source = [
@@ -5429,6 +5527,90 @@ function aiResearchStoreProvisionedContainer(PDO $pdo, int $runId, int $containe
     $plan['provisioned_list_id'] = $listId;
     $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
     $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
+}
+
+/**
+ * Spocita, kolik kontaktu s emailem je pro plan behu vubec dosazitelnych, a ulozi to.
+ * Scrapuje se pritom jen prvni davka, takze toto cislo je jediny zdroj pravdy o tom,
+ * kolik zakazniku muzeme seed firme realne nabidnout.
+ */
+function runCronAiResearchContactEstimates(PDO $pdo, array $config, int $budgetSeconds = 60): string
+{
+    $deadline = time() + max(10, $budgetSeconds);
+    $runs = $pdo->query('
+        SELECT id, plan_json
+        FROM ai_research_runs
+        WHERE status IN ("done", "no_match")
+          AND plan_json <> ""
+          AND plan_json NOT LIKE "%contact_estimate%"
+        ORDER BY id DESC
+        LIMIT 5
+    ')->fetchAll(PDO::FETCH_ASSOC);
+    if (!$runs) {
+        return 'AI research odhad dosahu: nic ke spocitani.';
+    }
+    foreach ($runs as $row) {
+        if (time() >= $deadline) {
+            return 'AI research odhad dosahu: casovy budget vycerpan, pokracuje se dalsim cronem.';
+        }
+        $runId = (int)$row['id'];
+        $plan = json_decode((string)$row['plan_json'], true);
+        if (!is_array($plan)) {
+            continue;
+        }
+        $source = aiResearchPrimarySourceKey($plan);
+        $keyword = aiResearchPrimaryKeyword($plan);
+        $location = (string)($plan['target_location'] ?? '');
+        if ($source === '' || $keyword === '' || !scrapingSourceIsActive($source)) {
+            continue;
+        }
+        try {
+            $listing = aiResearchEstimateListingPages(
+                static function (int $page) use ($source, $keyword, $location, $deadline): int {
+                    if (time() >= $deadline) {
+                        return 0;
+                    }
+                    return aiResearchCountListingItems($source, $keyword, $location, $page);
+                }
+            );
+        } catch (Throwable $e) {
+            error_log('AI research estimate for #' . $runId . ' failed: ' . $e->getMessage());
+            continue;
+        }
+        $plan['contact_estimate'] = aiResearchBuildContactEstimate($pdo, $runId, $source, $listing);
+        $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
+        $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
+        return 'AI research odhad dosahu: beh #' . $runId . ' ma '
+            . (int)$plan['contact_estimate']['reachable_contacts'] . ' dosazitelnych kontaktu z '
+            . (int)$plan['contact_estimate']['listing_items'] . ' zaznamu katalogu.';
+    }
+    return 'AI research odhad dosahu: zadny beh nemel pouzitelny plan.';
+}
+
+/**
+ * Vytéznost emailu se meri na vzorku, ktery uz beh skutecne prosel, takze odhad
+ * nepredstira, ze kazdy zaznam v katalogu ma dohledatelny email.
+ */
+function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $source, array $listing): array
+{
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM ai_research_contacts WHERE run_id=?');
+    $stmt->execute([$runId]);
+    $sampleWithEmail = (int)$stmt->fetchColumn();
+    $sampleVisited = max($sampleWithEmail, (int)($listing['items_per_page'] ?? 0));
+    $yield = $sampleVisited > 0 ? $sampleWithEmail / $sampleVisited : 0.0;
+    $itemsTotal = (int)($listing['items_total'] ?? 0);
+    return [
+        'source' => $source,
+        'listing_items' => $itemsTotal,
+        'listing_pages' => (int)($listing['pages'] ?? 0),
+        'listing_capped' => (bool)($listing['capped'] ?? false),
+        'listing_fetches' => (int)($listing['fetches'] ?? 0),
+        'sample_with_email' => $sampleWithEmail,
+        'sample_visited' => $sampleVisited,
+        'email_yield' => round($yield, 3),
+        'reachable_contacts' => (int)round($itemsTotal * $yield),
+        'calculated_at' => date('c'),
+    ];
 }
 
 function aiResearchScrapingProgress(PDO $pdo, array $plan): ?array
@@ -16204,6 +16386,14 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <p><strong>Databaze:</strong> <?= h((string)($run['search_source_label'] ?? '-')) ?></p>
                                 <p><strong>Klicove slovo:</strong> <?= h((string)($run['scraping_keyword'] ?? '')) ?></p>
                                 <?php if ($secondaryKeywords): ?><p><strong>Doplňkové keywordy:</strong> <?= h(implode(', ', $secondaryKeywords)) ?></p><?php endif; ?>
+                                <?php $estimate = is_array($runPlan['contact_estimate'] ?? null) ? (array)$runPlan['contact_estimate'] : []; ?>
+                                <?php if ($estimate): ?>
+                                    <p><strong>Dosažitelných kontaktů:</strong> <?= h((string)(int)($estimate['reachable_contacts'] ?? 0)) ?><?= !empty($estimate['listing_capped']) ? ' a více' : '' ?>
+                                        <small>(z <?= h((string)(int)($estimate['listing_items'] ?? 0)) ?> záznamů katalogu na <?= h((string)(int)($estimate['listing_pages'] ?? 0)) ?> stránkách, e-mail má <?= h((string)round(((float)($estimate['email_yield'] ?? 0)) * 100)) ?> % z nich; zjištěno <?= h((string)(int)($estimate['listing_fetches'] ?? 0)) ?> dotazy)</small></p>
+                                    <p class="note">Reálně se scrapuje jen prvních <?= h((string)AI_RESEARCH_FIRST_BATCH_CONTACTS) ?> kontaktů pro první dávku oslovení. Zbytek se dosbírá, až bude potřeba.</p>
+                                <?php else: ?>
+                                    <p><strong>Dosažitelných kontaktů:</strong> spočítá nejbližší cron.</p>
+                                <?php endif; ?>
                                 <p><strong>Lokalita:</strong> <?= h(aiResearchTargetAreaLabel($runPlan)) ?></p>
                                 <?php if (trim((string)($runPlan['search_url'] ?? '')) !== ''): ?><p><strong>URL hledani:</strong> <a href="<?= h((string)$runPlan['search_url']) ?>" target="_blank" rel="noopener"><?= h((string)$runPlan['search_url']) ?></a></p><?php endif; ?>
                             </section>
