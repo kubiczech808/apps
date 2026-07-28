@@ -395,16 +395,36 @@ try {
         $_SESSION['schema_version'] = APP_VERSION;
     }
 } catch (Throwable $e) {
-    error_log('Email campaign MySQL startup failed: ' . $e->getMessage());
-    renderDatabaseBootFailure($e);
-    exit;
+    // Kratky retry: na sdilenem hostingu se stava, ze prvni dotaz spadne na docasnou
+    // chybu prav nebo spojeni. Uzivateli nema takovy zadrhel vubec dojit na oci.
+    $bootRecovered = false;
+    if (databaseErrorLooksTransient($e)) {
+        for ($bootAttempt = 1; $bootAttempt <= 2 && !$bootRecovered; $bootAttempt++) {
+            usleep(200000 * $bootAttempt);
+            try {
+                $db = new Database(productionDatabaseConfig($baseConfig), false);
+                verifyProductionDatabase($db->pdo());
+                if (session_status() !== PHP_SESSION_ACTIVE) {
+                    startDatabaseBackedSession($db->pdo());
+                }
+                $bootRecovered = true;
+            } catch (Throwable $retryError) {
+                $e = $retryError;
+            }
+        }
+    }
+    if (!$bootRecovered) {
+        error_log('Email campaign MySQL startup failed: ' . $e->getMessage());
+        renderDatabaseBootFailure($e);
+        exit;
+    }
 }
 $pdo = $db->pdo();
 if (!empty($runDatabaseMigrations) && isset($_GET['cron'])) {
     try {
         backfillRecipientSources($pdo, 1500);
     } catch (Throwable $e) {
-        $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Doplneni zdroju kontaktu selhalo: ' . $e->getMessage());
+        $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Doplneni zdroju kontaktu se nepodarilo dokoncit.');
     }
 }
 if (shouldRunStartupMaintenance()) {
@@ -430,9 +450,9 @@ if (shouldRunStartupMaintenance()) {
         markStaleAiResearchRuns($pdo);
     } catch (Throwable $e) {
         if ($isMysqlDatabase && databasePermissionDenied($e)) {
-            $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Startovni udrzba databaze byla preskocena kvuli docasne DB chybe: ' . $e->getMessage());
+            $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Startovni udrzba databaze byla preskocena kvuli docasne chybe databaze.');
         } else {
-            $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Startovni udrzba databaze selhala: ' . $e->getMessage());
+            $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Startovni udrzba databaze se nepodarila.');
         }
     }
 }
@@ -450,7 +470,7 @@ try {
         renderDatabaseBootFailure($e);
         exit;
     }
-    $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Nastaveni aplikace se nepodarilo nacist z databaze: ' . $e->getMessage());
+    $dbWarning = trim(($dbWarning ? $dbWarning . ' ' : '') . 'Nastaveni aplikace se nepodarilo nacist z databaze.');
     $config = $baseConfig;
 }
 $flash = $_SESSION['flash'] ?? null;
@@ -2467,7 +2487,8 @@ function runCronAiResearch(PDO $pdo, array $config): string
         }
     });
     try {
-        $message = runAiResearchOnce($pdo, $config);
+        $unfinished = runCronAiResearchUnfinished($pdo, $config);
+        $message = $unfinished !== '' ? $unfinished : runAiResearchOnce($pdo, $config);
         setSetting($pdo, 'ai_research_last_run_at', (string)time());
         setSetting($pdo, 'ai_research_lock_until', '');
         setSetting($pdo, 'ai_research_next_allowed_at', '');
@@ -5555,7 +5576,7 @@ function markStaleAiResearchRuns(PDO $pdo): void
     $stmt = $pdo->prepare('
         UPDATE ai_research_runs
         SET status="deferred",
-            message="AI research byl prerusen timeoutem nebo ukoncenim requestu; pri dalsim behu se vybere dalsi subjekt.",
+            message="AI research byl prerusen timeoutem hostingu. Nedokonceny beh se dokonci pri dalsim cronu, nebo hned tlacitkem Zkontrolovat.",
             updated_at=?
         WHERE status="running"
           AND updated_at<?
@@ -5789,6 +5810,45 @@ function aiResearchStoreProvisionedContainer(PDO $pdo, int $runId, int $containe
  * Scrapuje se pritom jen prvni davka, takze toto cislo je jediny zdroj pravdy o tom,
  * kolik zakazniku muzeme seed firme realne nabidnout.
  */
+/**
+ * Dokonci behy, kterym uz zbyva jen vzor osloveni. Vznikaji, kdyz hosting ukonci request
+ * uprostred behu. Bez tohoto kroku by v prehledu zustavaly navzdy nedokoncene.
+ */
+function runCronAiResearchUnfinished(PDO $pdo, array $config): string
+{
+    $stmt = $pdo->prepare('
+        SELECT id, plan_json
+        FROM ai_research_runs
+        WHERE status IN ("deferred", "failed")
+          AND COALESCE(found_count, 0) > 0
+          AND updated_at >= ?
+        ORDER BY updated_at DESC
+        LIMIT 5
+    ');
+    $stmt->execute([date('c', time() - 7 * 86400)]);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $plan = json_decode((string)$row['plan_json'], true);
+        if (!is_array($plan) || aiResearchPrimaryKeyword($plan) === '') {
+            continue;
+        }
+        // Po nekolika neuspesnych pokusech uz beh nezkousime, aby neblokoval nove seedy.
+        if ((int)($plan['finish_attempts'] ?? 0) >= 3) {
+            continue;
+        }
+        $runId = (int)$row['id'];
+        $plan['finish_attempts'] = (int)($plan['finish_attempts'] ?? 0) + 1;
+        $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
+        $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
+        try {
+            return 'AI research dokonceni: ' . finishAiResearchRunNow($pdo, $config, $runId);
+        } catch (Throwable $e) {
+            error_log('AI research finish for #' . $runId . ' failed: ' . $e->getMessage());
+            return 'AI research dokonceni behu #' . $runId . ' se nepodarilo: ' . $e->getMessage();
+        }
+    }
+    return '';
+}
+
 function runCronAiResearchContactEstimates(PDO $pdo, array $config, int $budgetSeconds = 60): string
 {
     $deadline = time() + max(10, $budgetSeconds);
@@ -6449,6 +6509,14 @@ function renderOnboardingWizard(PDO $pdo, array $config, array $lead, string $st
     echo localizeHtml((string)ob_get_clean(), $pdo, $config);
 }
 
+function databaseErrorLooksTransient(Throwable $e): bool
+{
+    return preg_match(
+        '/gone away|lost connection|too many connections|deadlock|lock wait timeout|connection refused|timed out|command denied/i',
+        $e->getMessage()
+    ) === 1;
+}
+
 function databasePermissionDenied(Throwable $e): bool
 {
     return preg_match('/command denied|access denied.*for table|SELECT command denied/i', $e->getMessage()) === 1;
@@ -6533,10 +6601,14 @@ function shouldRunStartupMaintenance(): bool
 
 function renderDatabaseBootFailure(Throwable $e): void
 {
-    http_response_code(500);
-    $headline = databasePermissionDenied($e) ? 'MySQL uzivatel nema prava k databazi.' : 'MySQL databaze neni dostupna.';
+    http_response_code(503);
+    // Detail chyby obsahuje jmeno databaze, uzivatele i cely SQL dotaz. To se uzivateli
+    // nikdy nezobrazuje, jde jen do logu; na strance zbyva neutralni text a referencni kod.
+    $reference = strtoupper(substr(hash('sha256', $e->getMessage() . date('Y-m-d-H')), 0, 8));
+    error_log('Email campaign database failure [' . $reference . ']: ' . $e->getMessage());
+    $headline = 'Aplikace je krátce nedostupná.';
     ob_start();
-    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Chyba databaze</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body><header><strong>Email rozesilac</strong></header><main><section class="panel narrow"><div class="flash error"><?= h($headline) ?> Detail: <?= h($e->getMessage()) ?></div><p class="note">Aplikace je nastavena pouze na produkcni MySQL/MariaDB databazi. Zkontroluj prosim hodnoty APP_DATABASE_NAME, APP_DATABASE_USERNAME a APP_DATABASE_PASSWORD v GitHub Secrets a hlavne prava DB uzivatele pro SELECT/INSERT/UPDATE/DELETE/CREATE/ALTER nad touto databazi.</p></section></main></body></html><?php
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aplikace je nedostupna</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body><header><strong>Email rozesilac</strong></header><main><section class="panel narrow"><div class="flash error"><?= h($headline) ?></div><p>Nepodařilo se načíst data. Zkuste to prosím za chvíli znovu, obvykle jde o krátkodobý výpadek databáze.</p><p><a class="button" href="./">Zkusit znovu</a></p><p class="note">Pokud problém trvá, nahlaste prosím kód <strong><?= h($reference) ?></strong>. Technický detail je zapsaný v serverovém logu.</p></section></main></body></html><?php
     echo localizeHtml((string)ob_get_clean());
 }
 
@@ -16823,13 +16895,40 @@ function renderApp(PDO $pdo, ?array $flash): void
         <?php endforeach; ?>
         </tbody></table>
         <?php if ($researchAutoRefresh): ?>
-        <p class="note" data-research-refresh>Běh probíhá na pozadí, přehled se sám obnoví za několik sekund.</p>
+        <p class="note research-refresh-note">
+            Běh probíhá na pozadí.
+            <a href="<?= h(routeUrl('research')) ?>">Obnovit přehled</a>
+            <button type="button" class="secondary small" data-research-autorefresh>Sledovat průběh</button>
+            <span data-research-autorefresh-state hidden>Přehled se obnoví za několik sekund, klikněte znovu pro zastavení.</span>
+        </p>
         <script>
-            // Navigujeme na GET adresu, ne reload: stranka po odeslani formulare je POST
-            // a reload by ten POST poslal znovu, cimz by spustil dalsi beh.
-            setTimeout(function () {
-                window.location.href = <?= json_encode(routeUrl('research'), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
-            }, 8000);
+            // Prehled se sam neobnovuje, dokud si to uzivatel nezapne: automaticky reload
+            // pri kazdem behu znemoznuje na strance pracovat.
+            (function () {
+                var button = document.querySelector('[data-research-autorefresh]');
+                var state = document.querySelector('[data-research-autorefresh-state]');
+                if (!button || !state) return;
+                var url = <?= json_encode(routeUrl('research'), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+                var key = 'aiResearchWatch';
+                var timer = null;
+                function stop() {
+                    sessionStorage.removeItem(key);
+                    if (timer) window.clearTimeout(timer);
+                    timer = null;
+                    state.hidden = true;
+                    button.textContent = 'Sledovat průběh';
+                }
+                function start() {
+                    sessionStorage.setItem(key, '1');
+                    state.hidden = false;
+                    button.textContent = 'Přestat sledovat';
+                    timer = window.setTimeout(function () { window.location.href = url; }, 10000);
+                }
+                button.addEventListener('click', function () {
+                    if (sessionStorage.getItem(key) === '1') { stop(); } else { start(); }
+                });
+                if (sessionStorage.getItem(key) === '1') { start(); }
+            })();
         </script>
         <?php endif; ?>
     </section>
@@ -17579,9 +17678,7 @@ function aiResearchRuns(PDO $pdo): array
                 $row['plan_json'] = json_encode($fixedPlan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: (string)$row['plan_json'];
                 $row['scraping_keyword'] = aiResearchPrimaryKeyword($fixedPlan);
                 $plan = $fixedPlan;
-                if ((string)($row['message'] ?? '') !== '') {
-                    $row['message'] .= ' Zobrazeni planu bylo prepocitano podle zeme seed subjektu.';
-                }
+
             }
         }
         if (trim((string)($row['scraping_keyword'] ?? '')) === '') {
