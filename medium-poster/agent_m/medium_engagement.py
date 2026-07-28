@@ -62,7 +62,6 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
     platform spam.
     """
     state = _read_state(_STATE_FILE)
-    seen = set(state.setdefault("seen_urls", []))
     blocked_articles = _used_article_urls(state)
     blocked_profiles = _blocked_profiles(state) | _used_profiles_this_week(state)
 
@@ -100,7 +99,6 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
         except Exception as exc:
             log.warning("Medium engagement article inspection failed for %s: %s", candidate.get("url"), exc)
             rejected.append({"url": candidate.get("url"), "reason": f"inspection failed: {exc}"})
-            seen.add(candidate["url"])
             continue
 
         candidate["responses"] = int(details.get("responses") or 0)
@@ -121,7 +119,6 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
                 "title": candidate.get("title"),
                 "reason": reason,
             })
-            seen.add(candidate["url"])
             continue
 
         try:
@@ -144,7 +141,6 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
                 language=candidate["language"],
             )
         )
-        seen.add(candidate["url"])
 
     if not opportunities and fallback_candidates:
         fallback_candidates.sort(
@@ -182,9 +178,7 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
                     language=candidate["language"],
                 )
             )
-            seen.add(candidate["url"])
 
-    state["seen_urls"] = sorted(seen)[-500:]
     state["last_run_at"] = datetime.now(timezone.utc).isoformat()
     _write_state(_STATE_FILE, state)
 
@@ -514,7 +508,7 @@ async def _build_queries() -> list[str]:
         queries.append(plan.seo_keyword)
 
     queries.extend(_DEFAULT_QUERIES)
-    return _dedupe([q for q in queries if len(q.split()) >= 2])[:6]
+    return _dedupe([q for q in queries if len(q.split()) >= 2])[:_SEARCH_QUERY_LIMIT]
 
 
 def _rank_candidates(
