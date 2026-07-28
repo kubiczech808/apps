@@ -562,7 +562,7 @@ if (($_GET['worker'] ?? '') === 'ai_research') {
         http_response_code(403);
         exit("Forbidden\n");
     }
-    echo runAiResearchWorker($pdo, $config);
+    echo runAiResearchWorker($pdo, $config, (int)($_GET['run_id'] ?? 0));
     exit;
 }
 
@@ -731,11 +731,30 @@ function handlePost(PDO $pdo, array $config): ?string
         if ((int)($researchSettings['ai_research_lock_until'] ?? 0) > time()) {
             return 'AI research uz bezi na pozadi. Prehled se sam obnovuje.';
         }
-        // Beh se zamerne nespousti v tomto pozadavku, jinak by prohlizec cekal na cely beh.
-        setSetting($pdo, 'ai_research_manual_pending', (string)time());
+        // Radek vznikne uz tady, jeste nez odstartuje worker. Vyber seedu je levny a diky
+        // tomu je hned videt, co se zpracovava, i kdyby se worker vubec nerozjel.
+        $seed = selectAiResearchFirmySeedCompany($pdo);
+        if (!$seed) {
+            return 'AI research: nepodarilo se najit novou unikatni seed firmu z Firmy.cz / Vse pro firmy / Praha.';
+        }
+        $runId = startAiResearchRun(
+            $pdo,
+            $seed,
+            aiResearchBootstrapPlan($seed),
+            'AI research ceka na spusteni na pozadi.'
+        );
+        setSetting($pdo, 'ai_research_last_seed_source_url', (string)($seed['source_url'] ?? ''));
         setSetting($pdo, 'ai_research_next_allowed_at', '');
-        triggerAiResearchWorker($pdo);
-        return 'AI research byl spusten na pozadi. Radek behu se doplni sam, prehled se prubezne obnovuje.';
+        triggerAiResearchWorker($pdo, $runId);
+        return 'AI research beh #' . $runId . ' zalozen pro ' . (string)$seed['email']
+            . ' a spusten na pozadi. Prehled se prubezne obnovuje.';
+    }
+
+    if ($action === 'audit_ai_research_run') {
+        if (!canAccessAiResearch()) {
+            throw new RuntimeException('Kontrola AI research behu je dostupna pouze adminovi.');
+        }
+        return auditAiResearchRunNow($pdo, $config, (int)($_POST['run_id'] ?? 0));
     }
 
     if ($action === 'finish_ai_research_run') {
@@ -2473,17 +2492,18 @@ function runCronAiResearch(PDO $pdo, array $config): string
     }
 }
 
-function triggerAiResearchWorker(PDO $pdo): void
+function triggerAiResearchWorker(PDO $pdo, int $runId = 0): void
 {
     $token = scrapingWorkerToken($pdo, true);
-    fireAndForgetGet(appBaseUrl() . '?worker=ai_research&token=' . rawurlencode($token));
+    fireAndForgetGet(appBaseUrl() . '?worker=ai_research&token=' . rawurlencode($token)
+        . ($runId > 0 ? '&run_id=' . $runId : ''));
 }
 
 /**
  * Rucne spusteny research bezi na pozadi, aby prohlizec necekal na cely beh.
  * Prehled se sam obnovuje, takze radek behu se plni postupne.
  */
-function runAiResearchWorker(PDO $pdo, array $config): string
+function runAiResearchWorker(PDO $pdo, array $config, int $resumeRunId = 0): string
 {
     ignore_user_abort(true);
     if (function_exists('set_time_limit')) {
@@ -2509,7 +2529,7 @@ function runAiResearchWorker(PDO $pdo, array $config): string
         }
     });
     try {
-        $message = runAiResearchOnce($pdo, $config, true);
+        $message = runAiResearchOnce($pdo, $config, true, $resumeRunId);
         setSetting($pdo, 'ai_research_last_run_at', (string)time());
         setSetting($pdo, 'ai_research_next_allowed_at', '');
         return $message;
@@ -2551,12 +2571,22 @@ function aiResearchBootstrapPlan(array $seed): array
     ];
 }
 
-function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
+function runAiResearchOnce(PDO $pdo, array $config, bool $force = false, int $resumeRunId = 0): string
 {
     $skippedSeeds = 0;
     $lastMessage = '';
     for ($seedAttempt = 0; $seedAttempt < 6; $seedAttempt++) {
-        $seed = selectAiResearchFirmySeedCompany($pdo);
+        // Prvni kolo muze pokracovat v radku, ktery uz vznikl pri kliknuti na tlacitko.
+        $resumeSeed = null;
+        if ($seedAttempt === 0 && $resumeRunId > 0) {
+            $resumeStmt = $pdo->prepare('SELECT * FROM ai_research_runs WHERE id=? AND status="running" LIMIT 1');
+            $resumeStmt->execute([$resumeRunId]);
+            $resumeRow = $resumeStmt->fetch(PDO::FETCH_ASSOC);
+            if ($resumeRow && trim((string)($resumeRow['seed_email'] ?? '')) !== '') {
+                $resumeSeed = aiResearchSeedFromRun($resumeRow);
+            }
+        }
+        $seed = $resumeSeed ?: selectAiResearchFirmySeedCompany($pdo);
         if (!$seed) {
             return $skippedSeeds > 0
                 ? 'AI research: ulozeno ' . $skippedSeeds . ' seed subjektu bez pouzitelneho webu, dalsi unikatni firma z Firmy.cz ted nebyla nalezena.'
@@ -2564,12 +2594,17 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
         }
         // Radek se zaklada hned po vyberu seedu. Vyber je levny, kdezto nacteni webu
         // a plan trvaji desitky sekund, takze uzivatel jinak dlouho nevidi, co se zpracovava.
-        $runId = startAiResearchRun(
-            $pdo,
-            $seed,
-            aiResearchBootstrapPlan($seed),
-            'AI research bezi: nacitam a analyzuji web seed firmy.'
-        );
+        $runId = $resumeSeed !== null && $resumeRunId > 0
+            ? $resumeRunId
+            : startAiResearchRun(
+                $pdo,
+                $seed,
+                aiResearchBootstrapPlan($seed),
+                'AI research bezi: nacitam a analyzuji web seed firmy.'
+            );
+        if ($resumeSeed !== null) {
+            updateAiResearchRunProgress($pdo, $runId, aiResearchBootstrapPlan($seed), 'AI research bezi: nacitam a analyzuji web seed firmy.');
+        }
         setSetting($pdo, 'ai_research_last_seed_source_url', (string)($seed['source_url'] ?? ''));
         try {
             $basePlan = aiResearchPlan($config, $seed);
@@ -4831,6 +4866,123 @@ function finishAiResearchRunNow(PDO $pdo, array $config, int $runId): string
     }
     return 'Beh #' . $runId . ' dokoncen: kontaktu ' . count($context['contacts'])
         . ', vhodnych ' . count($accepted) . '. Gemini pozadavku: ' . aiResearchRequestsMadeThisProcess() . '.';
+}
+
+/**
+ * Projde u jednoho behu vsechny kroky workflow a dopln, co chybi. Slouzi pro starsi behy,
+ * ktere nedobehly do konce nebo vznikly jeste pred zlepsenim pravidel. Vraci prehled
+ * toho, co bylo v poradku a co se doplnilo, aby bylo videt, proc se beh zasekl.
+ */
+function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
+{
+    $context = aiResearchRunActionContext($pdo, $runId);
+    $run = $context['run'];
+    $plan = $context['plan'];
+    $seed = $context['seed'];
+    $contacts = $context['contacts'];
+    $done = [];
+    $fixed = [];
+    $blocked = [];
+
+    aiResearchRequestTimestamps('reset');
+    aiResearchDeadline(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS);
+    try {
+        // 1. Plan: keyword a pochopeni byznysu.
+        $keyword = aiResearchPrimaryKeyword($plan);
+        if ($keyword === '' || trim((string)($plan['business_understanding'] ?? '')) === '') {
+            $blocked[] = 'plan nema keyword nebo pochopeni byznysu, spust research na tento seed znovu';
+        } else {
+            $done[] = 'plan';
+        }
+
+        // 2. Nalezene kontakty.
+        if (!$contacts) {
+            $blocked[] = 'beh nema zadne nalezene kontakty';
+        } else {
+            $done[] = 'kontakty (' . count($contacts) . ')';
+        }
+
+        // 3. Vzory osloveni, vcetne dvou variant a zakazu zastupnych mist.
+        $variants = [];
+        foreach ((array)($plan['outreach_variants'] ?? []) as $variant) {
+            if (is_array($variant) && trim((string)($variant['subject'] ?? '')) !== '') {
+                $variants[] = $variant;
+            }
+        }
+        $draftUnusable = trim((string)($run['email_subject'] ?? '')) === ''
+            || trim(strip_tags((string)($run['email_body_html'] ?? ''))) === ''
+            || aiResearchTextHasPlaceholder((string)$run['email_subject'])
+            || aiResearchTextHasPlaceholder(strip_tags((string)$run['email_body_html']));
+        if ($contacts && ($draftUnusable || count($variants) < 2)) {
+            $accepted = array_values(array_filter(
+                $contacts,
+                static fn(array $c): bool => (string)($c['status'] ?? '') === 'accepted'
+            ));
+            try {
+                finalizeAiResearchRun($pdo, $config, $runId, $seed, $plan, $contacts, $accepted);
+                $fixed[] = 'vzory osloveni pregenerovany';
+                $context = aiResearchRunActionContext($pdo, $runId);
+                $run = $context['run'];
+                $plan = $context['plan'];
+            } catch (Throwable $e) {
+                $blocked[] = 'vzory osloveni: ' . $e->getMessage();
+            }
+        } elseif ($contacts) {
+            $done[] = 'vzory osloveni (' . count($variants) . ')';
+        }
+
+        // 4. Ucet, databaze, kampan a scraping kontejner.
+        $acceptedCount = (int)($run['accepted_count'] ?? 0);
+        if ($acceptedCount > 0 && in_array((string)$run['status'], ['done', 'no_match'], true)) {
+            if (aiResearchProvisionedUser($pdo, $run)) {
+                $done[] = 'ucet a workspace';
+            } else {
+                try {
+                    provisionAiResearchCustomerWorkspace(
+                        $pdo,
+                        $runId,
+                        $seed,
+                        $plan,
+                        array_values(array_filter($contacts, static fn(array $c): bool => (string)($c['status'] ?? '') === 'accepted')),
+                        (string)($run['email_subject'] ?? ''),
+                        (string)($run['email_body_html'] ?? '')
+                    );
+                    $fixed[] = 'ucet, databaze, kampan a scraping zalozeny';
+                    $plan = aiResearchRunActionContext($pdo, $runId)['plan'];
+                } catch (Throwable $e) {
+                    $blocked[] = 'zalozeni uctu: ' . $e->getMessage();
+                }
+            }
+        }
+
+        // 5. Prvni davka scrapingu.
+        $containerId = (int)($plan['provisioned_container_id'] ?? 0);
+        if ($containerId > 0) {
+            aiResearchEnsureFirstBatchScrapingRun($pdo, $containerId, $runId);
+            $done[] = 'scraping kontejner';
+        }
+
+        // 6. Odhad dosazitelnych kontaktu.
+        if (is_array($plan['contact_estimate'] ?? null)) {
+            $done[] = 'odhad dosahu (' . (int)($plan['contact_estimate']['reachable_contacts'] ?? 0) . ')';
+        } else {
+            $blocked[] = 'odhad dosahu jeste nespocitan, dopocita ho nejblizsi cron';
+        }
+    } finally {
+        aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
+    }
+
+    $parts = [];
+    if ($fixed) {
+        $parts[] = 'doplneno: ' . implode(', ', $fixed);
+    }
+    if ($done) {
+        $parts[] = 'v poradku: ' . implode(', ', $done);
+    }
+    if ($blocked) {
+        $parts[] = 'zbyva: ' . implode('; ', $blocked);
+    }
+    return 'Kontrola behu #' . $runId . ' - ' . ($parts ? implode(' | ', $parts) : 'neni co doplnit') . '.';
 }
 
 function validateAiResearchRunContactsNow(PDO $pdo, array $config, int $runId): string
@@ -16344,6 +16496,10 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td>Zobrazit</td>
                 <td>
                     <div class="research-draft-actions">
+                    <form method="post" class="inline">
+                        <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
+                        <button type="submit" name="action" value="audit_ai_research_run" class="secondary small" title="Zkontroluje, zda jsou všechny kroky workflow dokončené, a chybějící doplní.">Zkontrolovat</button>
+                    </form>
                     <button type="button" class="secondary small" data-dialog-open="ai-outreach-<?= h((string)$run['id']) ?>" aria-label="Zobrazit navrh kampane pro nalezene kontakty" title="Zobrazit navrh kampane pro nalezene kontakty">Kampaň</button>
                     <dialog class="modal ai-outreach-modal" id="ai-outreach-<?= h((string)$run['id']) ?>">
                         <div class="modal-header">
@@ -16440,6 +16596,10 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <span><?= h((string)$run['accepted_count']) ?> vhodnych z <?= h((string)$run['found_count']) ?> nalezenych</span>
                             <?php if ((int)$run['found_count'] > 0): ?>
                             <div class="scraping-detail-actions">
+                                <form method="post" class="inline">
+                                    <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
+                                    <button type="submit" name="action" value="audit_ai_research_run" title="Projde všechny kroky workflow a doplní, co chybí nebo vzniklo podle starších pravidel.">Zkontrolovat a doplnit</button>
+                                </form>
                                 <?php if (in_array((string)$run['status'], ['deferred', 'failed', 'running'], true)): ?>
                                 <form method="post" class="inline">
                                     <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
