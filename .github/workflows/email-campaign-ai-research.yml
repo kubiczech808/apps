@@ -1,8 +1,11 @@
 name: Email Campaign AI Research
 
 on:
-  # Pravidelne bezi AI research uz v Email Campaign Cron (?ai_research=1) kazdych 5 minut.
-  # Samostatny hodinovy schedule byl zruseny, aby dva workflow nepalily stejnou Gemini kvotu.
+  # Doplnek k Email Campaign Cron: planovane behy GitHubu se v praxi zpozduji, takze
+  # samotny */5 cron nestaci. Jeden seed stoji 2 Gemini pozadavky a aplikace ma interval,
+  # zamek i denni rozpocet, takze druhy vstupni bod uz kvotu neprepali.
+  schedule:
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 concurrency:
