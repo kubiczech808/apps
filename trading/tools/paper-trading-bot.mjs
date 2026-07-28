@@ -1402,7 +1402,9 @@ function scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, 
     rejectReasons: [
       endOk ? null : "event end date is in the past",
       highConfidenceOk || opportunityOk ? null : `probability ${(probability * 100).toFixed(1)}% below high-confidence threshold and edge-opportunity threshold`,
-      returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`,
+      annualizedReturn <= 0
+        ? `annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
+        : (returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`),
       spreadOk ? null : "spread too wide",
       volumeOk ? null : "liquidity/volume too low",
       depthOk ? null : "insufficient ask depth for market buy",
@@ -2406,10 +2408,14 @@ function portfolioFilterResult(item, strategy) {
   const days = daysValue(item);
   const liquidity = Number(item.liquidity || 0);
   const marketType = item.marketType || reportMarketType(item);
+  const annualizedReturn = Number(item.annualizedReturn);
 
   if (status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
   if (Number.isFinite(minProbability) && (!Number.isFinite(aiProbability) || aiProbability < minProbability)) {
     reasons.push(`AI probability ${Number.isFinite(aiProbability) ? (aiProbability * 100).toFixed(1) : "-"}% below ${(minProbability * 100).toFixed(1)}%`);
+  }
+  if (Number.isFinite(annualizedReturn) && annualizedReturn <= 0) {
+    reasons.push(`annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
   }
   if (days > maxResolutionDays) {
     reasons.push(`resolution ${Number.isFinite(days) ? days.toFixed(2) : "-"} days exceeds max ${maxResolutionDays}`);

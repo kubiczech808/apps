@@ -3251,6 +3251,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const liquidity = Number(item.liquidity || 0);
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(normalizedMode);
+  const annualizedReturn = Number(item.annualizedReturn);
 
   if (displayStatus !== "EVALUATED") reasons.push(`status ${displayStatus}`);
   if (normalizedMode !== "live" && storedStatus !== "ELIGIBLE") {
@@ -3260,6 +3261,9 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     reasons.push("missing AI probability");
   } else if (aiProbability < threshold) {
     reasons.push(`AI probability ${probability(aiProbability)} below ${probability(threshold)}`);
+  }
+  if (Number.isFinite(annualizedReturn) && annualizedReturn <= 0) {
+    reasons.push(`EV p.a. ${signedPercent(annualizedReturn)} is non-profitable after fees`);
   }
   if (!Number.isFinite(days)) {
     reasons.push("missing resolution date");

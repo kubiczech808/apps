@@ -436,6 +436,10 @@ function prefilterLiveCandidate(item) {
   } else if (aiProbability < MIN_PROBABILITY) {
     reasons.push(`AI probability ${(aiProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`);
   }
+  const annualizedReturn = number(item?.annualizedReturn);
+  if (Number.isFinite(annualizedReturn) && annualizedReturn <= 0) {
+    reasons.push(`annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
+  }
   if (Number.isFinite(endTime) && endTime <= Date.now()) {
     reasons.push("stored end date is in the past");
   }
@@ -836,7 +840,9 @@ function scoreEconomics({ probability, annualizedReturn, edge, spread, volume24h
     rejectReasons: [
       endOk ? null : "event end date is in the past",
       probabilityOk ? null : `AI probability ${(probability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`,
-      returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`,
+      annualizedReturn <= 0
+        ? `annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
+        : (returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`),
       spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
       volumeOk ? null : "liquidity/volume too low",
     ].filter(Boolean),
