@@ -573,6 +573,7 @@ function activateTab(target) {
     panel.classList.toggle("active", panel.dataset.tabPanel === target);
   });
   if (target === "portfolio-candidates") {
+    renderPortfolioCandidates();
     ensureCandidateBotState();
   }
 }
@@ -2696,7 +2697,8 @@ function renderKnownStateForMode(mode = state.mode) {
 }
 
 function botStateIsFull(botState) {
-  return Boolean(botState) && botState.evaluationDetailsMode !== "compact";
+  const detailsMode = String(botState?.evaluationDetailsMode || "");
+  return Boolean(botState) && detailsMode !== "compact" && detailsMode !== "dashboard";
 }
 
 function shouldLoadFullBotState() {
@@ -2708,27 +2710,45 @@ function activeTabTarget() {
 }
 
 function shouldLoadCandidateBotState() {
+  return state.page === "portfolios";
+}
+
+function shouldRenderCandidateBotState() {
   return state.page === "portfolios" && activeTabTarget() === "portfolio-candidates";
+}
+
+function candidateBotStateIsLoaded() {
+  const detailsMode = String(state.botState?.evaluationDetailsMode || "");
+  return detailsMode === "compact" || botStateIsFull(state.botState);
+}
+
+function botStateWithPreservedEvaluations(botState) {
+  if (!botState || typeof botState !== "object") return botState;
+  const detailsMode = String(botState.evaluationDetailsMode || "");
+  if (detailsMode !== "dashboard" || !candidateBotStateIsLoaded()) return botState;
+  return {
+    ...state.botState,
+    ...botState,
+    evaluations: state.botState?.evaluations || [],
+    evaluationDetailsMode: state.botState?.evaluationDetailsMode || botState.evaluationDetailsMode,
+  };
 }
 
 async function ensureCandidateBotState(options = {}) {
   if (state.botStateFull || state.candidateBotStateBusy || !shouldLoadCandidateBotState()) return;
-  const hasEvaluations = Array.isArray(state.botState?.evaluations) && state.botState.evaluations.length > 0;
-  if (hasEvaluations && state.botState?.evaluationDetailsMode === "compact") return;
+  if (candidateBotStateIsLoaded()) return;
   state.candidateBotStateBusy = true;
   try {
     const botState = await fetchJson("data/paper-state.json", { summary: "candidates" });
     if (dashboardLoadIsStale(options)) return;
-    state.botStateFull = botStateIsFull(botState);
-    if (normalizeMode(state.mode) === "live") {
-      state.botState = botState;
-      if (state.liveState) renderLiveState(state.liveState);
-      return;
+    state.botState = botStateWithPreservedEvaluations(botState);
+    state.botStateFull = state.botStateFull || botStateIsFull(botState);
+    if (shouldRenderCandidateBotState()) {
+      renderPortfolioCandidates();
     }
-    renderBotState(botState);
   } catch (error) {
     rememberStateFetchError("paper", error);
-    renderPortfolioCandidates();
+    if (shouldRenderCandidateBotState()) renderPortfolioCandidates();
   } finally {
     state.candidateBotStateBusy = false;
   }
@@ -2761,9 +2781,10 @@ async function loadBotState(options = {}) {
   try {
     const botState = await fetchJson("data/paper-state.json", { summary: "dashboard" });
     if (dashboardLoadIsStale(options) || isLiveMode()) return;
-    state.botStateFull = botStateIsFull(botState);
-    renderBotState(botState);
-    ensureCandidateBotState(options);
+    const mergedBotState = botStateWithPreservedEvaluations(botState);
+    state.botStateFull = botStateIsFull(mergedBotState);
+    renderBotState(mergedBotState);
+    ensureCandidateBotState();
     ensureFullBotState(options);
   } catch (error) {
     if (dashboardLoadIsStale(options) || isLiveMode()) return;
@@ -3021,13 +3042,13 @@ async function loadLiveState(options = {}) {
     if (dashboardLoadIsStale(options) || !isLiveMode()) return;
     if (liveResult.status === "rejected") throw liveResult.reason;
     if (botResult.status === "fulfilled") {
-      state.botState = botResult.value;
-      state.botStateFull = botStateIsFull(botResult.value);
+      state.botState = botStateWithPreservedEvaluations(botResult.value);
+      state.botStateFull = botStateIsFull(state.botState);
     }
     state.liveExecutionState = executionResult.status === "fulfilled" ? executionResult.value : state.liveExecutionState;
     const liveState = liveResult.value;
     renderLiveState(liveState);
-    ensureCandidateBotState(options);
+    ensureCandidateBotState();
     ensureFullBotState(options);
     if (!options.skipAutoLiveSync) {
       requestLiveAccountSync();

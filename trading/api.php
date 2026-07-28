@@ -173,8 +173,16 @@ function compact_evaluation(array $item): array
         'netGainIfWinUsdc',
         'grossGainIfWinUsdc',
         'feeUsdc',
+        'takerFeeUsdc',
+        'stakeUsdc',
+        'shares',
+        'executableShares',
+        'totalCostUsdc',
+        'daysToResolution',
+        'riskReward',
         'liquidity',
         'volume',
+        'volume24hr',
         'edge',
         'thesisType',
         'analysisModel',
@@ -186,13 +194,12 @@ function compact_evaluation(array $item): array
         }
     }
 
-    $compact['analysisSummary'] = compact_text($item['analysisSummary'] ?? $item['probabilityThesis'] ?? '');
-    $compact['probabilityThesis'] = compact_text($item['probabilityThesis'] ?? '');
+    $compact['analysisSummary'] = compact_text($item['analysisSummary'] ?? $item['probabilityThesis'] ?? '', 220);
+    $compact['probabilityThesis'] = compact_text($item['probabilityThesis'] ?? '', 220);
     if (isset($item['aiAnalysis']) && is_array($item['aiAnalysis'])) {
         $compact['aiAnalysis'] = [
             'model' => $item['aiAnalysis']['model'] ?? ($item['analysisModel'] ?? null),
-            'thesis' => compact_text($item['aiAnalysis']['thesis'] ?? ''),
-            'summary' => compact_text($item['aiAnalysis']['summary'] ?? ''),
+            'thesis' => compact_text($item['aiAnalysis']['thesis'] ?? '', 180),
         ];
     }
 
