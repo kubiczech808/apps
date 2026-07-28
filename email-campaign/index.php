@@ -398,9 +398,13 @@ try {
     // Kratky retry: na sdilenem hostingu se stava, ze prvni dotaz spadne na docasnou
     // chybu prav nebo spojeni. Uzivateli nema takovy zadrhel vubec dojit na oci.
     $bootRecovered = false;
+    $bootAttemptsUsed = 0;
     if (databaseErrorLooksTransient($e)) {
-        for ($bootAttempt = 1; $bootAttempt <= 2 && !$bootRecovered; $bootAttempt++) {
-            usleep(200000 * $bootAttempt);
+        // Rucni refresh o par sekund pozdeji uz projde, takze se ceka radove sekundy,
+        // ne stovky milisekund. Cekat chvilku je porad lepsi nez chybova stranka.
+        foreach ([250000, 500000, 1000000, 1500000] as $backoff) {
+            usleep($backoff);
+            $bootAttemptsUsed++;
             try {
                 $db = new Database(productionDatabaseConfig($baseConfig), false);
                 verifyProductionDatabase($db->pdo());
@@ -408,13 +412,16 @@ try {
                     startDatabaseBackedSession($db->pdo());
                 }
                 $bootRecovered = true;
+                break;
             } catch (Throwable $retryError) {
                 $e = $retryError;
             }
         }
     }
-    if (!$bootRecovered) {
-        error_log('Email campaign MySQL startup failed: ' . $e->getMessage());
+    if ($bootRecovered) {
+        error_log('Email campaign MySQL startup recovered after ' . $bootAttemptsUsed . ' retry attempt(s).');
+    } else {
+        error_log('Email campaign MySQL startup failed after ' . $bootAttemptsUsed . ' retry attempt(s): ' . $e->getMessage());
         renderDatabaseBootFailure($e);
         exit;
     }
@@ -6607,8 +6614,11 @@ function renderDatabaseBootFailure(Throwable $e): void
     $reference = strtoupper(substr(hash('sha256', $e->getMessage() . date('Y-m-d-H')), 0, 8));
     error_log('Email campaign database failure [' . $reference . ']: ' . $e->getMessage());
     $headline = 'Aplikace je krátce nedostupná.';
+    // Jeden automaticky pokus navic: rucni refresh o par sekund pozdeji uz obvykle projde,
+    // takze to za uzivatele udela stranka sama. Parametr zabrani nekonecnemu cyklu.
+    $autoRetry = !isset($_GET['dbretry']);
     ob_start();
-    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aplikace je nedostupna</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body><header><strong>Email rozesilac</strong></header><main><section class="panel narrow"><div class="flash error"><?= h($headline) ?></div><p>Nepodařilo se načíst data. Zkuste to prosím za chvíli znovu, obvykle jde o krátkodobý výpadek databáze.</p><p><a class="button" href="./">Zkusit znovu</a></p><p class="note">Pokud problém trvá, nahlaste prosím kód <strong><?= h($reference) ?></strong>. Technický detail je zapsaný v serverovém logu.</p></section></main></body></html><?php
+    ?><!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aplikace je nedostupna</title><link rel="stylesheet" href="<?= h(assetUrl('assets/app.css')) ?>"></head><body><header><strong>Email rozesilac</strong></header><main><section class="panel narrow"><div class="flash error"><?= h($headline) ?></div><p><?= $autoRetry ? 'Zkouším to za vás znovu, vydržte prosím chvilku.' : 'Nepodařilo se načíst data. Zkuste to prosím za chvíli znovu, obvykle jde o krátkodobý výpadek databáze.' ?></p><p><a class="button" href="./">Zkusit znovu</a></p><?php if ($autoRetry): ?><script>setTimeout(function(){window.location.href='./?dbretry=1';},3000);</script><?php endif; ?><p class="note">Pokud problém trvá, nahlaste prosím kód <strong><?= h($reference) ?></strong>. Technický detail je zapsaný v serverovém logu.</p></section></main></body></html><?php
     echo localizeHtml((string)ob_get_clean());
 }
 
