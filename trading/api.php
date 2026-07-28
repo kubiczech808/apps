@@ -150,6 +150,7 @@ function compact_evaluation(array $item): array
         'eventSlug',
         'url',
         'status',
+        'selectionStatus',
         'rejectReasons',
         'riskGroupKeys',
         'marketType',
@@ -200,6 +201,7 @@ function compact_evaluation(array $item): array
         $compact['aiAnalysis'] = [
             'model' => $item['aiAnalysis']['model'] ?? ($item['analysisModel'] ?? null),
             'thesis' => compact_text($item['aiAnalysis']['thesis'] ?? '', 180),
+            'aiModelStatus' => $item['aiAnalysis']['aiModelStatus'] ?? null,
         ];
     }
 
@@ -977,7 +979,7 @@ function paper_strategy_from_target(string $target): ?string
 
 function workflow_target_key(string $target): string
 {
-    return paper_strategy_from_target($target) !== null ? 'paper' : $target;
+    return (paper_strategy_from_target($target) !== null || $target === 'paper-evaluation') ? 'paper' : $target;
 }
 
 try {
@@ -1051,6 +1053,9 @@ try {
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
         $manualRunOnce = normalized_bool_input($payload['manual_run_once'] ?? $payload['manualRunOnce'] ?? null);
+        $evaluationOnly = normalized_bool_input($payload['evaluation_only'] ?? $payload['evaluationOnly'] ?? null);
+        $evaluationTokenId = preg_replace('/[^0-9]/', '', (string) ($payload['evaluation_token_id'] ?? $payload['evaluationTokenId'] ?? ''));
+        $evaluationMarketSlug = preg_replace('/[^A-Za-z0-9_-]/', '', (string) ($payload['evaluation_market_slug'] ?? $payload['evaluationMarketSlug'] ?? ''));
         $paperStrategyId = paper_strategy_from_target($target) ?? normalized_paper_strategy_input($payload['paper_strategy_id'] ?? $payload['paperStrategyId'] ?? null);
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
         $paperExtraInputs = [];
@@ -1073,6 +1078,9 @@ try {
                     'paper_more_probable_min_probability' => $paperMoreProbableMinProbability,
                     'manual_run_once' => $manualRunOnce,
                     'paper_strategy_id' => $paperStrategyId,
+                    'evaluation_only' => $evaluationOnly,
+                    'evaluation_token_id' => $evaluationTokenId !== '' ? $evaluationTokenId : null,
+                    'evaluation_market_slug' => $evaluationMarketSlug !== '' ? $evaluationMarketSlug : null,
                 ], $paperExtraInputs), static fn ($value): bool => $value !== null),
                 'message' => 'Paper bot workflow dispatched.',
             ],

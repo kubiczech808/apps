@@ -3053,6 +3053,53 @@ async function triggerOneTimeExecution(target) {
   }
 }
 
+async function triggerManualOpportunityEvaluation(item, trigger = null) {
+  if (!item || state.executionBusy) return;
+  const startedAt = new Date().toISOString();
+  const target = "paper-evaluation";
+  openExecutionModal("paper");
+  let steps = [{
+    title: "Manual evaluation requested",
+    detail: `${item.outcome || "Outcome"} - ${item.question || "Selected Polymarket opportunity"}`,
+    tone: "active",
+  }];
+  renderExecutionSteps(steps);
+  state.executionBusy = target;
+  syncExecutionButtons();
+  try {
+    const response = await fetch("api.php?action=workflow", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target,
+        evaluation_only: true,
+        evaluation_token_id: item.tokenId || item.clobTokenId || "",
+        evaluation_market_slug: item.slug || item.eventSlug || "",
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) throw new Error(payload.error || `workflow HTTP ${response.status}`);
+    steps = addExecutionStep(steps, "Workflow dispatched", payload.workflow || "GitHub Actions accepted the request", "done");
+    steps = addExecutionStep(steps, "Gemini evaluation running", "Only this Polymarket outcome is being reviewed. No paper or live order will be opened.", "active");
+    const workflow = await waitForWorkflowRun("paper", startedAt, steps);
+    steps = workflow.steps;
+    if (workflow.run?.conclusion && workflow.run.conclusion !== "success") {
+      steps = addExecutionStep(steps, "Workflow finished with warning", `Conclusion: ${workflow.run.conclusion}`, "error");
+      return;
+    }
+    const refreshed = await fetchJson("data/paper-state.json");
+    state.botStateFull = true;
+    state.botState = refreshed;
+    renderBotState(refreshed);
+    steps = addExecutionStep(steps, "Evaluation saved", "The analysis and any changed values are now in the evaluation log.", "done");
+  } catch (error) {
+    steps = addExecutionStep(steps, "Evaluation failed", error.message || "manual evaluation failed", "error");
+  } finally {
+    state.executionBusy = null;
+    syncExecutionButtons();
+  }
+}
+
 async function loadLiveState(options = {}) {
   try {
     const [liveResult, botResult, executionResult] = await Promise.allSettled([
@@ -4097,6 +4144,7 @@ function renderBotEvaluations() {
             <td data-label="Updates">${updateHistoryCell(item)}</td>
             <td data-label="Analysis">
               ${analysisBadge(item)}
+              ${item.tokenId ? `<button class="manual-evaluation-button" type="button" data-manual-evaluation="${escapeHtml(opportunityKey(item))}" title="Run Gemini evaluation for this Polymarket outcome">Evaluate now</button>` : ""}
             </td>
           </tr>
         `).join("")}
@@ -5009,6 +5057,15 @@ document.addEventListener("click", (event) => {
     const run = (Array.isArray(state.botState?.evaluationRunLog) ? state.botState.evaluationRunLog : [])[Number(runIndexRaw)];
     const runEvent = Array.isArray(run?.events) ? run.events[Number(eventIndexRaw)] : null;
     openAnalysisModal(runEventDetail(runEvent || {}), runEventButton);
+    return;
+  }
+
+  const manualEvaluationButton = event.target.closest("[data-manual-evaluation]");
+  if (manualEvaluationButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const item = findOpportunityByKey(manualEvaluationButton.dataset.manualEvaluation || "");
+    triggerManualOpportunityEvaluation(item, manualEvaluationButton);
     return;
   }
 

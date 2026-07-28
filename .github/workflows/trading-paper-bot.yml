@@ -27,6 +27,21 @@ on:
         required: false
         default: ""
         type: string
+      evaluation_only:
+        description: "Evaluate only the selected Polymarket outcome; do not trade"
+        required: false
+        default: "false"
+        type: string
+      evaluation_token_id:
+        description: "Optional Polymarket CLOB token for a focused evaluation"
+        required: false
+        default: ""
+        type: string
+      evaluation_market_slug:
+        description: "Optional Polymarket market slug for a focused evaluation"
+        required: false
+        default: ""
+        type: string
       paper_max_order_fraction:
         description: "Maximum stake per paper trade as fraction of portfolio, decimal 0.01-0.50"
         required: false
@@ -191,6 +206,9 @@ jobs:
       PAPER_AI_POSTMORTEM_LIMIT: "8"
       PAPER_REQUIRE_GEMINI: "true"
       PAPER_MANUAL_RUN_ONCE: ${{ github.event_name == 'workflow_dispatch' && inputs.manual_run_once == 'true' && 'true' || 'false' }}
+      PAPER_EVALUATION_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.evaluation_only == 'true' && 'true' || 'false' }}
+      PAPER_EVALUATION_TOKEN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.evaluation_token_id || '' }}
+      PAPER_EVALUATION_MARKET_SLUG: ${{ github.event_name == 'workflow_dispatch' && inputs.evaluation_market_slug || '' }}
       PAPER_STRATEGY_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_strategy_id || '' }}
       PAPER_REPORT_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report') }}
       PAPER_REFRESH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' }}

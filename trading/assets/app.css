@@ -789,6 +789,25 @@ button:disabled {
   font-weight: 900;
 }
 
+.manual-evaluation-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  margin-top: 8px;
+  padding: 5px 9px;
+  border: 1px solid #0f766e;
+  border-radius: 6px;
+  background: #ecfdf5;
+  color: #0f766e;
+  font-size: 0.74rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.manual-evaluation-button:hover {
+  background: #ccfbf1;
+}
+
 .analysis-detail-link {
   display: inline-flex;
   align-items: center;

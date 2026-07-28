@@ -56,6 +56,9 @@ const ROTATION_MIN_HOLD_HOURS = envNumber("PAPER_ROTATION_MIN_HOLD_HOURS", 6);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
 const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
+const EVALUATION_ONLY = envBool("PAPER_EVALUATION_ONLY", false);
+const EVALUATION_TOKEN_ID = String(process.env.PAPER_EVALUATION_TOKEN_ID || "").trim();
+const EVALUATION_MARKET_SLUG = String(process.env.PAPER_EVALUATION_MARKET_SLUG || "").trim();
 const SCHEDULED_CADENCE_POLL = envBool("PAPER_SCHEDULED_CADENCE_POLL", false);
 const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
 const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable"].includes(process.env.PAPER_STRATEGY_ID)
@@ -3507,6 +3510,18 @@ async function loadMarkets() {
   return fetchJson(url);
 }
 
+async function loadFocusedEvaluationMarkets(state) {
+  let market = EVALUATION_MARKET_SLUG ? await fetchMarketBySlug(EVALUATION_MARKET_SLUG) : null;
+  if (!market && EVALUATION_TOKEN_ID) {
+    const stored = (state.evaluations || []).find((item) => String(item.tokenId || "") === EVALUATION_TOKEN_ID);
+    if (stored?.slug) market = await fetchMarketBySlug(stored.slug);
+  }
+  if (!market) {
+    throw new Error("manual evaluation market was not found on Polymarket");
+  }
+  return [market];
+}
+
 function marketHasNewOutcome(market, knownEvaluationKeys) {
   return parseJsonField(market.clobTokenIds).some((tokenId) => tokenId && !knownEvaluationKeys.has(`token:${tokenId}`));
 }
@@ -4003,7 +4018,7 @@ async function run() {
     return;
   }
 
-  const strategiesForRun = dueExecutionStrategies(state);
+  const strategiesForRun = EVALUATION_ONLY ? executionStrategies() : dueExecutionStrategies(state);
   if (!strategiesForRun.length) {
     await writeState(state);
     console.log(JSON.stringify({
@@ -4034,7 +4049,7 @@ async function run() {
     }
     return diversificationByMarket.get(key);
   };
-  const markets = (await loadMarkets()).sort((a, b) => {
+  const markets = (EVALUATION_ONLY ? await loadFocusedEvaluationMarkets(state) : await loadMarkets()).sort((a, b) => {
     const aNew = marketHasNewOutcome(a, knownEvaluationKeys) ? 1 : 0;
     const bNew = marketHasNewOutcome(b, knownEvaluationKeys) ? 1 : 0;
     if (aNew !== bNew) return bNew - aNew;
@@ -4065,9 +4080,14 @@ async function run() {
   for (const market of markets) {
     const outcomes = parseJsonField(market.outcomes);
     const tokenIds = parseJsonField(market.clobTokenIds);
-    const maxOutcomes = Math.min(outcomes.length, tokenIds.length, 2);
+    const requestedOutcomeIndex = EVALUATION_TOKEN_ID
+      ? tokenIds.findIndex((tokenId) => String(tokenId) === EVALUATION_TOKEN_ID)
+      : -1;
+    const outcomeIndexes = requestedOutcomeIndex >= 0
+      ? [requestedOutcomeIndex]
+      : Array.from({ length: Math.min(outcomes.length, tokenIds.length, 2) }, (_, index) => index);
 
-    for (let outcomeIndex = 0; outcomeIndex < maxOutcomes; outcomeIndex += 1) {
+    for (const outcomeIndex of outcomeIndexes) {
       if (evaluations.length >= MAX_EVALUATIONS_PER_RUN) break;
       const tokenId = tokenIds[outcomeIndex];
       if (!tokenId) continue;
@@ -4095,11 +4115,28 @@ async function run() {
 
   evaluations = (await enrichEvaluationsWithAi(evaluations, state.learningProfile)).map(normalizeEvaluationRisk);
   const eligible = evaluations.filter((item) => item.status === "ELIGIBLE" && (!REQUIRE_GEMINI || hasGroundedPublicMemo(item)));
-  const decisions = strategiesForRun.map((strategy) => {
-    const portfolioState = state.paperPortfolios[strategy.id];
-    const rankedEligible = sortEligibleForStrategy(eligible, strategy);
-    return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations, { ignoreCadence: MANUAL_RUN_ONCE, diversificationDiagnostics });
-  });
+  const decisions = EVALUATION_ONLY
+    ? strategiesForRun.map((strategy) => ({
+        action: "EVALUATION_ONLY",
+        reason: `manual evaluation completed for ${evaluations.length} selected Polymarket outcome${evaluations.length === 1 ? "" : "s"}; no trade was considered`,
+        strategyId: strategy.id,
+        evaluatedCount: evaluations.length,
+        eligibleCount: eligible.length,
+        batchLog: {
+          action: "EVALUATION_ONLY",
+          reason: "manual single-opportunity evaluation",
+          explanation: "A single Polymarket opportunity was evaluated on demand. Portfolio positions and trade cadence were not changed.",
+          evaluatedCount: evaluations.length,
+          eligibleCount: eligible.length,
+          selected: evaluations[0] ? tradeBatchCandidateSummary(evaluations[0]) : null,
+          evaluationOnly: true,
+        },
+      }))
+    : strategiesForRun.map((strategy) => {
+        const portfolioState = state.paperPortfolios[strategy.id];
+        const rankedEligible = sortEligibleForStrategy(eligible, strategy);
+        return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations, { ignoreCadence: MANUAL_RUN_ONCE, diversificationDiagnostics });
+      });
 
   state.generatedAt = nowIso();
   updatePortfolio(state);
