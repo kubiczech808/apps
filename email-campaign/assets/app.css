@@ -2138,7 +2138,12 @@ td a {
   align-items: center;
   color: var(--muted);
 }
-.scraping-detail-head form.inline { margin-left: auto; }
+.scraping-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
 .outreach-variant-grid {
   display: grid;
   gap: 14px;

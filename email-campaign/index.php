@@ -726,6 +726,13 @@ function handlePost(PDO $pdo, array $config): ?string
         }
     }
 
+    if ($action === 'finish_ai_research_run') {
+        if (!canAccessAiResearch()) {
+            throw new RuntimeException('Dokonceni AI research behu je dostupne pouze adminovi.');
+        }
+        return finishAiResearchRunNow($pdo, $config, (int)($_POST['run_id'] ?? 0));
+    }
+
     if ($action === 'validate_ai_research_contacts') {
         if (!canAccessAiResearch()) {
             throw new RuntimeException('AI validace kontaktu je dostupna pouze adminovi.');
@@ -3523,12 +3530,33 @@ function aiResearchAssertDraftQuality(string $subject, string $html, array $plan
     if (aiResearchTextLooksGeneric($subject . ' ' . $plain)) {
         throw new AiResearchTemporaryException('AI outreach_draft vratil obecny fallbackovy text.');
     }
+    if (aiResearchTextHasPlaceholder($subject) || aiResearchTextHasPlaceholder($plain)) {
+        throw new AiResearchTemporaryException('AI outreach_draft obsahuje misto k doplneni, takze neni odesilatelny bez rucni upravy.');
+    }
     $keyword = aiResearchFoldText(aiResearchPrimaryKeyword($plan));
     $audience = aiResearchFoldText((string)($plan['audience_label'] ?? ''));
     $haystack = aiResearchFoldText($plain . ' ' . $subject);
     if ($keyword !== '' && !str_contains($haystack, $keyword) && $audience !== '' && !str_contains($haystack, $audience)) {
         throw new AiResearchTemporaryException('AI outreach_draft neobsahuje konkretni vazbu na vybrany segment nebo keyword.');
     }
+}
+
+/**
+ * Email musi byt odesilatelny tak, jak je. Na uzivatele se nelze spolehnout, ze doplni
+ * zastupna misto typu "[Jmeno odesilatele]", takze takovy draft se nepovazuje za hotovy.
+ */
+function aiResearchTextHasPlaceholder(string $text): bool
+{
+    if (preg_match('/\[[^\]\n]{2,80}\]|\{\{[^}\n]{1,80}\}\}|<[^>\n]{2,40}>/u', $text)) {
+        return true;
+    }
+    $folded = aiResearchFoldText($text);
+    foreach (['doplnte', 'vase jmeno', 'vas podpis', 'jmeno odesilatele', 'nazev vasi firmy', 'your name', 'ihr name'] as $phrase) {
+        if (str_contains($folded, aiResearchFoldText($phrase))) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function aiResearchTextLooksGeneric(string $text): bool
@@ -4511,20 +4539,24 @@ function aiResearchProcessFilterContacts(array $seed, array $plan, array $contac
  * Jednorazova AI validace relevance kontaktu pro jeden konkretni beh. Vola se rucne
  * z detailu behu, protoze automaticka validace je vychozi vypnuta.
  */
-function validateAiResearchRunContactsNow(PDO $pdo, array $config, int $runId): string
+/**
+ * Nacte ulozeny beh do podoby, se kterou umi pracovat AI kroky: plan, seed a kontakty.
+ * Diky tomu jde dokoncit rozdelany beh bez opakovaneho scrapingu i generovani planu.
+ */
+function aiResearchRunActionContext(PDO $pdo, int $runId): array
 {
     if ($runId <= 0) {
-        throw new RuntimeException('Beh pro validaci kontaktu neni platny.');
+        throw new RuntimeException('Beh neni platny.');
     }
     $stmt = $pdo->prepare('SELECT * FROM ai_research_runs WHERE id=? LIMIT 1');
     $stmt->execute([$runId]);
     $run = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$run) {
-        throw new RuntimeException('Beh pro validaci kontaktu nebyl nalezen.');
+        throw new RuntimeException('Beh nebyl nalezen.');
     }
     $plan = json_decode((string)($run['plan_json'] ?? ''), true);
     if (!is_array($plan)) {
-        throw new RuntimeException('Beh nema ulozeny plan, validaci kontaktu nelze spustit.');
+        throw new RuntimeException('Beh nema ulozeny plan, nelze v nem pokracovat.');
     }
     $seed = [
         'email' => (string)($run['seed_email'] ?? ''),
@@ -4537,9 +4569,6 @@ function validateAiResearchRunContactsNow(PDO $pdo, array $config, int $runId): 
     $contactsStmt = $pdo->prepare('SELECT * FROM ai_research_contacts WHERE run_id=? ORDER BY id ASC');
     $contactsStmt->execute([$runId]);
     $rows = $contactsStmt->fetchAll(PDO::FETCH_ASSOC);
-    if (!$rows) {
-        return 'Beh #' . $runId . ' zatim nema zadne kontakty k validaci.';
-    }
     $contacts = array_map(static function (array $row) use ($plan): array {
         return [
             'email' => (string)($row['email'] ?? ''),
@@ -4549,9 +4578,48 @@ function validateAiResearchRunContactsNow(PDO $pdo, array $config, int $runId): 
             'phone' => (string)($row['phone'] ?? ''),
             'source_label' => (string)($row['source_label'] ?? ''),
             'source_url' => (string)($row['source_url'] ?? ''),
+            'status' => (string)($row['status'] ?? ''),
+            'fit_reason' => (string)($row['fit_reason'] ?? ''),
             'target_segment' => (string)($plan['primary_segment'] ?? $plan['audience_label'] ?? ''),
         ];
     }, $rows);
+    return ['run' => $run, 'plan' => $plan, 'seed' => $seed, 'contacts' => $contacts];
+}
+
+/**
+ * Dokonci beh, ktery se zastavil pred generovanim osloveni. Pouzije ulozeny plan
+ * i nalezene kontakty, takze nestoji dalsi scraping ani novy plan.
+ */
+function finishAiResearchRunNow(PDO $pdo, array $config, int $runId): string
+{
+    $context = aiResearchRunActionContext($pdo, $runId);
+    if (!$context['contacts']) {
+        throw new RuntimeException('Beh #' . $runId . ' nema zadne nalezene kontakty, dokoncit ho nelze.');
+    }
+    $accepted = array_values(array_filter(
+        $context['contacts'],
+        static fn(array $c): bool => (string)($c['status'] ?? '') === 'accepted'
+    ));
+    aiResearchRequestTimestamps('reset');
+    aiResearchDeadline(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS);
+    try {
+        finalizeAiResearchRun($pdo, $config, $runId, $context['seed'], $context['plan'], $context['contacts'], $accepted);
+    } finally {
+        aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
+    }
+    return 'Beh #' . $runId . ' dokoncen: kontaktu ' . count($context['contacts'])
+        . ', vhodnych ' . count($accepted) . '. Gemini pozadavku: ' . aiResearchRequestsMadeThisProcess() . '.';
+}
+
+function validateAiResearchRunContactsNow(PDO $pdo, array $config, int $runId): string
+{
+    $context = aiResearchRunActionContext($pdo, $runId);
+    $seed = $context['seed'];
+    $plan = $context['plan'];
+    $contacts = $context['contacts'];
+    if (!$contacts) {
+        return 'Beh #' . $runId . ' zatim nema zadne kontakty k validaci.';
+    }
     aiResearchRequestTimestamps('reset');
     aiResearchDeadline(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS);
     try {
@@ -4786,6 +4854,8 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         . "Obe musi byt pouzitelne samostatne a lisit se uhlem, ne jen preformulovanim: napr. prvni vede konkretnim provoznim problemem ciloveho segmentu, druha konkretnim vysledkem nebo referenci. Do angle napis jednou kratkou vetou, cim se varianta odlisuje. "
         . "POVINNE u kazde varianty: v predmetu nebo v textu musi doslova padnout scraping_keyword (" . aiResearchPrimaryKeyword($plan) . ") jako pojmenovani typu firmy, kterou oslovujeme. Bez toho je varianta nepouzitelna. "
         . "Kazda varianta ma mit alespon 250 znaku textu, aby slo o skutecny email a ne jen upoutavku. "
+        . "ZAKAZANO jsou jakakoli zastupna misto k doplneni: nikdy nepis '[Jmeno odesilatele]', '[nazev firmy]', '{{...}}' ani nic v hranatych ci slozenych zavorkach. "
+        . "Email musi byt odesilatelny presne tak, jak ho vratis. Podpis uzavri konkretne jmenem seed firmy (" . $seedBusiness . "), zadny zastupny text. "
         . "Jazyk pouzij podle market_language (" . $language . "). "
         . "HTML bude kratke, vecne, personalizovatelne pro nalezeny typ kontaktu a bez prehnanych slibu. "
         . "Musis propojit tri veci: co seed firma realne dela podle business_understanding, proc bylo vybrane scraping_keyword + target_location podle targeting_reason, a jaka konkretni nabidka nebo use-case dava smysl pro nalezene kontakty. "
@@ -15905,8 +15975,10 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td>
                     <?php if ($provisionUser): ?>
                         <?= statusBadge('hotovo') ?><br><small><?= h((string)$provisionUser['email']) ?></small>
+                    <?php elseif ((int)$run['accepted_count'] > 0 && in_array((string)$run['status'], ['done', 'no_match'], true)): ?>
+                        <?= statusBadge('queued') ?><br><small>založí nejbližší cron</small>
                     <?php elseif ((int)$run['accepted_count'] > 0): ?>
-                        <?= statusBadge('queued') ?><br><small>připraví se po načtení</small>
+                        <?= statusBadge('nepřipraveno') ?><br><small>běh není dokončený</small>
                     <?php else: ?>
                         -
                     <?php endif; ?>
@@ -15928,10 +16000,18 @@ function renderApp(PDO $pdo, ?array $flash): void
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
                             <span><?= h((string)$run['accepted_count']) ?> vhodnych z <?= h((string)$run['found_count']) ?> nalezenych</span>
                             <?php if ((int)$run['found_count'] > 0): ?>
-                            <form method="post" class="inline">
-                                <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
-                                <button type="submit" name="action" value="validate_ai_research_contacts" class="secondary" title="Nechá AI jednorázově posoudit relevanci nalezených kontaktů pro tento běh.">Spustit AI validaci kontaktů</button>
-                            </form>
+                            <div class="scraping-detail-actions">
+                                <?php if (in_array((string)$run['status'], ['deferred', 'failed', 'running'], true)): ?>
+                                <form method="post" class="inline">
+                                    <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
+                                    <button type="submit" name="action" value="finish_ai_research_run" title="Dogeneruje vzor oslovení z už uloženého plánu a kontaktů a běh uzavře. Nescrapuje znovu.">Dokončit běh</button>
+                                </form>
+                                <?php endif; ?>
+                                <form method="post" class="inline">
+                                    <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
+                                    <button type="submit" name="action" value="validate_ai_research_contacts" class="secondary" title="Nechá AI jednorázově posoudit relevanci nalezených kontaktů pro tento běh.">Spustit AI validaci kontaktů</button>
+                                </form>
+                            </div>
                             <?php endif; ?>
                         </div>
                         <?php
@@ -15965,7 +16045,13 @@ function renderApp(PDO $pdo, ?array $flash): void
                                     <span>Lokalita: <?= h(aiResearchTargetAreaLabel($runPlan)) ?></span>
                                 </div>
                                 <?php if ($run['seed_website']): ?><p><strong>Seed web:</strong> <a href="<?= h((string)$run['seed_website']) ?>" target="_blank" rel="noopener"><?= h((string)$run['seed_website']) ?></a></p><?php endif; ?>
-                                <?php if ($provisionUser): ?><p><strong>Založený účet:</strong> <?= h((string)$provisionUser['email']) ?></p><?php elseif ((int)$run['accepted_count'] > 0): ?><p><strong>Založený účet:</strong> připraví se po načtení.</p><?php endif; ?>
+                                <?php if ($provisionUser): ?>
+                                    <p><strong>Založený účet:</strong> <?= h((string)$provisionUser['email']) ?></p>
+                                <?php elseif ((int)$run['accepted_count'] > 0 && in_array((string)$run['status'], ['done', 'no_match'], true)): ?>
+                                    <p><strong>Založený účet:</strong> ještě není. Účet, databázi a kampaň zakládá až cron při dalším průchodu.</p>
+                                <?php elseif ((int)$run['accepted_count'] > 0): ?>
+                                    <p><strong>Založený účet:</strong> nezaloží se, dokud je běh ve stavu <?= h(aiResearchRunStatusLabel((string)$run['status'])) ?>. Chybí vzor oslovení, takže není co vložit do kampaně. Dokonči běh tlačítkem výše.</p>
+                                <?php endif; ?>
                                 <?php if ((string)($run['seed_outreach_sent_at'] ?? '') !== ''): ?><p><strong>Naše oslovení odesláno:</strong> <?= h(formatDateTime((string)$run['seed_outreach_sent_at'])) ?></p><?php endif; ?>
                                 <?php if ((string)($run['seed_outreach_unsubscribed_at'] ?? '') !== ''): ?><p><strong>Odhlášeno:</strong> <?= h(formatDateTime((string)$run['seed_outreach_unsubscribed_at'])) ?></p><?php endif; ?>
                                 <?php if (trim((string)$run['message']) !== ''): ?><p><strong>Zpráva:</strong> <?= h((string)$run['message']) ?></p><?php endif; ?>
