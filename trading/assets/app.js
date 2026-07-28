@@ -730,7 +730,7 @@ function scheduleLabel(date) {
 
 function updateSchedulePanel() {
   if (els.nextOrderScan) {
-    els.nextOrderScan.textContent = scheduleLabel(nextHourlyMinute(7));
+    els.nextOrderScan.textContent = scheduleLabel(nextMinuteFromSet([7, 22, 37, 52]));
   }
   if (els.accountSyncPolicy) {
     els.accountSyncPolicy.textContent = "On page load";

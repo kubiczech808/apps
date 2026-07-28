@@ -128,9 +128,19 @@ function hoursSince(value, now = new Date()) {
   return Math.max(0, (now.getTime() - time) / 3600000);
 }
 
+function isCadenceWaitRun(row = {}) {
+  const action = String(row.action || row.batchLog?.action || "").toUpperCase();
+  const reason = String(row.reason || row.batchLog?.reason || "");
+  return action === "CADENCE_WAIT" || /cadence poll is not due|poll is not due/i.test(reason);
+}
+
 function latestLiveExecutionRunAt(previousExecution = {}) {
-  const fromLog = Array.isArray(previousExecution?.runLog) ? previousExecution.runLog[0]?.runAt : null;
-  const candidates = [fromLog, previousExecution?.generatedAt, previousExecution?.batchLog?.runAt];
+  const fromLog = Array.isArray(previousExecution?.runLog)
+    ? previousExecution.runLog.find((row) => !isCadenceWaitRun(row))?.runAt
+    : null;
+  const rootGeneratedAt = isCadenceWaitRun(previousExecution) ? null : previousExecution?.generatedAt;
+  const rootBatchAt = isCadenceWaitRun(previousExecution?.batchLog || {}) ? null : previousExecution?.batchLog?.runAt;
+  const candidates = [fromLog, rootGeneratedAt, rootBatchAt];
   return candidates.find((value) => Number.isFinite(Date.parse(value || ""))) || null;
 }
 
@@ -1378,14 +1388,61 @@ async function main() {
   ]);
   previousExecutionState = previousExecution;
   if (!liveExecutionRunDue(previousExecution, liveState)) {
-    console.log(JSON.stringify({
+    const now = new Date();
+    const runAt = now.toISOString();
+    const lastFullRunAt = latestLiveExecutionRunAt(previousExecution);
+    const cash = liveCashUsdc(liveState);
+    const reason = `scheduled live cadence poll is not due for a full evaluation yet (${TRADE_CADENCE_HOURS}h cadence)`;
+    await emitDecision({
+      mode: "scheduled-cadence-poll",
       action: "CADENCE_WAIT",
-      reason: "live execution poll is not due for a new trading evaluation run yet",
-      scheduledCadencePoll: SCHEDULED_CADENCE_POLL,
-      tradeCadenceHours: TRADE_CADENCE_HOURS,
-      lastRunAt: latestLiveExecutionRunAt(previousExecution),
-      openOrders: Array.isArray(liveState?.openOrders) ? liveState.openOrders.length : 0,
-    }, null, 2));
+      reason,
+      generatedAt: runAt,
+      account: {
+        address: liveState?.account?.address || FUNDER_ADDRESS,
+        cashUsdc: cash,
+        openPositions: Array.isArray(liveState.positions) ? liveState.positions.length : 0,
+        openOrders: Array.isArray(liveState.openOrders) ? liveState.openOrders.length : 0,
+      },
+      settings: {
+        scheduledCadencePoll: SCHEDULED_CADENCE_POLL,
+        tradeCadenceHours: TRADE_CADENCE_HOURS,
+        ignoreTradeCadence: IGNORE_TRADE_CADENCE,
+        lastFullRunAt,
+      },
+      batchLog: {
+        id: `live-cadence-wait-${runAt}`,
+        runAt,
+        strategyId: "live",
+        strategyLabel: "Live",
+        selectionMetric: "EV p.a.",
+        action: "CADENCE_WAIT",
+        reason,
+        explanation: "Scheduled live workflow checked the portfolio, but the next full candidate revalidation is not due yet.",
+        settings: {
+          scheduledCadencePoll: SCHEDULED_CADENCE_POLL,
+          tradeCadenceHours: TRADE_CADENCE_HOURS,
+          ignoreTradeCadence: IGNORE_TRADE_CADENCE,
+          lastFullRunAt,
+        },
+        capital: {
+          availableUsdc: cash,
+        },
+        counts: {
+          storedEvaluations: 0,
+          uniqueEvaluations: 0,
+          scannedCandidates: 0,
+          revalidatedCandidates: 0,
+          eligibleCandidates: 0,
+          cadenceBlocked: true,
+        },
+        selected: null,
+        revalidatedCandidates: [],
+        topCandidates: [],
+        topRejected: [],
+      },
+      attempts: [],
+    });
     return;
   }
   const paperState = await loadJsonResource(PAPER_STATE_URL, "paper state");

@@ -1,4 +1,4 @@
-name: Polymarket Live Limit Order Test
+name: Trading Live Execution
 
 on:
   push:
