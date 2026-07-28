@@ -125,6 +125,97 @@ function state_payload(string $target): array
     respond(['ok' => false, 'error' => $lastError], 502);
 }
 
+function compact_text(mixed $value, int $limit = 700): string
+{
+    $text = trim((string) ($value ?? ''));
+    if ($text === '' || strlen($text) <= $limit) {
+        return $text;
+    }
+
+    return rtrim(substr($text, 0, $limit - 3)) . '...';
+}
+
+function compact_evaluation(array $item): array
+{
+    $keys = [
+        'id',
+        'tokenId',
+        'clobTokenId',
+        'assetId',
+        'marketId',
+        'eventId',
+        'question',
+        'outcome',
+        'slug',
+        'eventSlug',
+        'url',
+        'status',
+        'rejectReasons',
+        'riskGroupKeys',
+        'marketType',
+        'category',
+        'endDate',
+        'evaluatedAt',
+        'firstEvaluatedAt',
+        'lastSeenAt',
+        'updatedAt',
+        'resolvedAt',
+        'aiProbability',
+        'rawProbability',
+        'marketPrice',
+        'entryPrice',
+        'askPrice',
+        'bidPrice',
+        'annualizedReturn',
+        'annualizedNetReturn',
+        'annualizedExpectedReturn',
+        'expectedValueUsdc',
+        'netGainIfWinUsdc',
+        'grossGainIfWinUsdc',
+        'feeUsdc',
+        'liquidity',
+        'volume',
+        'edge',
+        'thesisType',
+        'analysisModel',
+    ];
+    $compact = [];
+    foreach ($keys as $key) {
+        if (array_key_exists($key, $item)) {
+            $compact[$key] = $item[$key];
+        }
+    }
+
+    $compact['analysisSummary'] = compact_text($item['analysisSummary'] ?? $item['probabilityThesis'] ?? '');
+    $compact['probabilityThesis'] = compact_text($item['probabilityThesis'] ?? '');
+    if (isset($item['aiAnalysis']) && is_array($item['aiAnalysis'])) {
+        $compact['aiAnalysis'] = [
+            'model' => $item['aiAnalysis']['model'] ?? ($item['analysisModel'] ?? null),
+            'thesis' => compact_text($item['aiAnalysis']['thesis'] ?? ''),
+            'summary' => compact_text($item['aiAnalysis']['summary'] ?? ''),
+        ];
+    }
+
+    return $compact;
+}
+
+function dashboard_state_payload(string $target, array $data): array
+{
+    if ($target !== 'paper') {
+        return $data;
+    }
+
+    $compact = $data;
+    $evaluations = is_array($data['evaluations'] ?? null) ? $data['evaluations'] : [];
+    $compact['evaluations'] = array_map(
+        static fn($item): array => is_array($item) ? compact_evaluation($item) : [],
+        array_values(array_filter($evaluations, 'is_array'))
+    );
+    $compact['evaluationDetailsMode'] = 'compact';
+
+    return $compact;
+}
+
 function default_portfolio_config(): array
 {
     return [
@@ -1028,7 +1119,11 @@ try {
 
     if ($action === 'state') {
         $target = (string) ($_GET['target'] ?? '');
-        respond(state_payload($target));
+        $payload = state_payload($target);
+        if (($_GET['summary'] ?? '') === 'dashboard') {
+            $payload = dashboard_state_payload($target, $payload);
+        }
+        respond($payload);
     }
 
     if ($action === 'markets') {

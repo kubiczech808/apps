@@ -45,6 +45,8 @@ const state = {
   executionBusy: null,
   autoLiveSyncBusy: false,
   dashboardLoadSeq: 0,
+  fullBotStateBusy: false,
+  botStateFull: false,
   settingsSection: "evaluation-log",
   calculationSource: "all",
   calculationMarket: "all",
@@ -420,7 +422,11 @@ function readCachedState(target) {
     const raw = localStorage.getItem(stateCacheKey(target));
     if (!raw) return null;
     const payload = JSON.parse(raw);
-    return payload && typeof payload.data === "object" ? payload.data : null;
+    const data = payload && typeof payload.data === "object" ? payload.data : null;
+    if (target === "paper" && data && !data.paperPortfolios && (state.botState?.paperPortfolios || paperStrategyIdFromMode() !== "conservative")) {
+      return null;
+    }
+    return data;
   } catch {
     return null;
   }
@@ -599,6 +605,7 @@ function activatePage(page, { replace = false, preserveSearch = false } = {}) {
     setSettingsSection("evaluation-log");
     setEvaluationStatus("EVALUATED");
     activateTab("settings-runs");
+    ensureFullBotState();
   } else if (nextPage === "settings") {
     setSettingsSection("calculations");
     activateTab("settings-runs");
@@ -2684,11 +2691,44 @@ function renderKnownStateForMode(mode = state.mode) {
   if (state.botState) renderBotState(state.botState);
 }
 
-async function loadBotState(options = {}) {
+function botStateIsFull(botState) {
+  return Boolean(botState) && botState.evaluationDetailsMode !== "compact";
+}
+
+function shouldLoadFullBotState() {
+  return state.page === "opportunities";
+}
+
+async function ensureFullBotState(options = {}) {
+  if (state.botStateFull || state.fullBotStateBusy || !shouldLoadFullBotState()) return;
+  state.fullBotStateBusy = true;
   try {
     const botState = await fetchJson("data/paper-state.json");
-    if (dashboardLoadIsStale(options) || isLiveMode()) return;
+    if (dashboardLoadIsStale(options)) return;
+    state.botStateFull = botStateIsFull(botState);
+    if (normalizeMode(state.mode) === "live") {
+      state.botState = botState;
+      if (state.liveState) renderLiveState(state.liveState);
+      return;
+    }
     renderBotState(botState);
+  } catch (error) {
+    rememberStateFetchError("paper", error);
+    if (state.botState) {
+      renderKnownStateForMode(state.mode);
+    }
+  } finally {
+    state.fullBotStateBusy = false;
+  }
+}
+
+async function loadBotState(options = {}) {
+  try {
+    const botState = await fetchJson("data/paper-state.json", { summary: "dashboard" });
+    if (dashboardLoadIsStale(options) || isLiveMode()) return;
+    state.botStateFull = botStateIsFull(botState);
+    renderBotState(botState);
+    ensureFullBotState(options);
   } catch (error) {
     if (dashboardLoadIsStale(options) || isLiveMode()) return;
     if (state.botState) {
@@ -2708,11 +2748,12 @@ async function loadBotState(options = {}) {
   }
 }
 
-async function fetchJson(path) {
+async function fetchJson(path, options = {}) {
   const statePath = String(path || "");
   const stateTarget = statePath === "data/live-state.json" ? "live" : (statePath === "data/paper-state.json" ? "paper" : "");
+  const summary = options.summary ? `&summary=${encodeURIComponent(options.summary)}` : "";
   const url = stateTarget
-    ? `api.php?action=state&target=${stateTarget}&t=${Date.now()}`
+    ? `api.php?action=state&target=${stateTarget}${summary}&t=${Date.now()}`
     : `${statePath}?t=${Date.now()}`;
   try {
     const statePayload = await fetch(url, { cache: "no-store" });
@@ -2938,15 +2979,19 @@ async function loadLiveState(options = {}) {
   try {
     const [liveResult, botResult, executionResult] = await Promise.allSettled([
       fetchJson("data/live-state.json"),
-      fetchJson("data/paper-state.json"),
+      fetchJson("data/paper-state.json", { summary: "dashboard" }),
       fetchJson("data/live-execution-state.json"),
     ]);
     if (dashboardLoadIsStale(options) || !isLiveMode()) return;
     if (liveResult.status === "rejected") throw liveResult.reason;
-    state.botState = botResult.status === "fulfilled" ? botResult.value : state.botState;
+    if (botResult.status === "fulfilled") {
+      state.botState = botResult.value;
+      state.botStateFull = botStateIsFull(botResult.value);
+    }
     state.liveExecutionState = executionResult.status === "fulfilled" ? executionResult.value : state.liveExecutionState;
     const liveState = liveResult.value;
     renderLiveState(liveState);
+    ensureFullBotState(options);
     if (!options.skipAutoLiveSync) {
       requestLiveAccountSync();
     }
