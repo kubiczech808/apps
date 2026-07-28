@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
@@ -30,6 +31,12 @@ _SEARCH_RESULTS_PER_QUERY = 16
 _SEARCH_QUERY_LIMIT = 8
 _PREFILTER_SCORE = 45
 _PREFILTER_FALLBACK_SCORE = 18
+_SUPPORTED_COMMENT_LANGUAGES = {
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "pt": "Portuguese",
+}
 _DEFAULT_QUERIES = [
     "bitcoin dca",
     "dollar cost averaging bitcoin",
@@ -52,6 +59,7 @@ class EngagementOpportunity:
     responses: int
     followers: int
     language: str
+    language_label: str
 
 
 async def run_once(limit: int = 3, query: str | None = None) -> dict:
@@ -103,7 +111,12 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
 
         candidate["responses"] = int(details.get("responses") or 0)
         candidate["followers"] = int(details.get("followers") or 0)
-        candidate["language"] = details.get("lang") or "unknown"
+        language_code, language_label = _detect_article_language(
+            str(details.get("lang") or ""),
+            _article_sample(candidate, details),
+        )
+        candidate["language"] = language_code or "unknown"
+        candidate["language_label"] = language_label
         candidate["author_profile_url"] = details.get("authorProfileUrl") or candidate.get("profile")
 
         eligible, reason = _eligible_article(candidate, details)
@@ -139,6 +152,7 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
                 responses=candidate["responses"],
                 followers=candidate["followers"],
                 language=candidate["language"],
+                language_label=candidate["language_label"],
             )
         )
 
@@ -176,6 +190,7 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
                     responses=candidate["responses"],
                     followers=candidate["followers"],
                     language=candidate["language"],
+                    language_label=candidate["language_label"],
                 )
             )
 
@@ -345,6 +360,7 @@ def engagement_rules_status() -> dict:
         "min_responses": _MIN_RESPONSES,
         "min_followers": _MIN_FOLLOWERS,
         "fallback_min_followers": _MIN_FOLLOWERS,
+        "supported_languages": _SUPPORTED_COMMENT_LANGUAGES,
         "prefilter_score": _PREFILTER_SCORE,
         "prefilter_fallback_score": _PREFILTER_FALLBACK_SCORE,
         "search_results_per_query": _SEARCH_RESULTS_PER_QUERY,
@@ -367,11 +383,12 @@ def format_engagement_rules_status() -> str:
         "Primary eligibility:\n"
         f"- Article responses/comments: >= {rules['min_responses']}\n"
         f"- Author/profile followers: >= {rules['min_followers']}\n"
-        "- Language: confidently English\n"
+        f"- Language: supported article languages ({', '.join(rules['supported_languages'].values())})\n"
+        "- Comment language: same language as the article\n"
         "- Article: never commented before\n"
         "- Profile: not used this week and not blocked/skipped\n\n"
         "Fallback eligibility:\n"
-        f"- If no inspected article has {rules['min_responses']}+ responses, select the English candidate "
+        f"- If no inspected article has {rules['min_responses']}+ responses, select the supported-language candidate "
         f"with the highest known follower count, minimum {rules['fallback_min_followers']} followers.\n\n"
         "Search/prefilter:\n"
         f"- Search queries per run: {rules['search_query_limit']}\n"
@@ -431,7 +448,8 @@ def format_opportunity_message(result: dict) -> str:
         f"Title: {op.get('title')}\n"
             f"Profile: {op.get('profile')}\n"
             f"Score: {op.get('score')} | Query: {op.get('query')}\n"
-            f"Responses: {op.get('responses')} | Followers: {op.get('followers')} | Language: {op.get('language')}\n"
+            f"Responses: {op.get('responses')} | Followers: {op.get('followers')} | "
+            f"Language: {op.get('language')} ({op.get('language_label') or 'unknown'})\n"
             f"URL: {op.get('url')}\n\n"
         "Comment draft:\n"
         f"{op.get('comment')}\n\n"
@@ -482,7 +500,8 @@ def format_result(result: dict) -> str:
                 "",
                 f"{idx}. {item.get('title')}",
                 f"Score: {item.get('score')} | Query: {item.get('query')}",
-                f"Responses: {item.get('responses')} | Followers: {item.get('followers')} | Language: {item.get('language')}",
+                f"Responses: {item.get('responses')} | Followers: {item.get('followers')} | "
+                f"Language: {item.get('language')} ({item.get('language_label') or 'unknown'})",
                 f"Reason: {item.get('reason')}",
                 f"URL: {item.get('url')}",
                 "Comment:",
@@ -651,18 +670,11 @@ def _score_candidate(title: str, snippet: str, query: str) -> tuple[int, str]:
 def _eligible_article(candidate: dict, details: dict) -> tuple[bool, str]:
     responses = int(details.get("responses") or 0)
     followers = int(details.get("followers") or 0)
-    lang = str(details.get("lang") or "").lower()
-    sample = " ".join(
-        [
-            candidate.get("title") or "",
-            candidate.get("snippet") or "",
-            details.get("title") or "",
-            details.get("textSample") or "",
-        ]
-    )
+    language = candidate.get("language") or "unknown"
 
-    if not _looks_english(lang, sample):
-        return False, f"not confidently English (lang={lang or 'unknown'})"
+    if language not in _SUPPORTED_COMMENT_LANGUAGES:
+        raw_lang = str(details.get("lang") or "").lower() or "unknown"
+        return False, f"unsupported or unclear article language (lang={raw_lang})"
     if responses < _MIN_RESPONSES:
         return False, f"too few comments/responses ({responses} < {_MIN_RESPONSES})"
     if followers < _MIN_FOLLOWERS:
@@ -672,8 +684,18 @@ def _eligible_article(candidate: dict, details: dict) -> tuple[bool, str]:
 
 def _fallback_article(candidate: dict, details: dict) -> tuple[bool, str]:
     followers = int(details.get("followers") or 0)
-    lang = str(details.get("lang") or "").lower()
-    sample = " ".join(
+    language = candidate.get("language") or "unknown"
+
+    if followers < _MIN_FOLLOWERS:
+        return False, f"fallback rejected: too few followers ({followers} < {_MIN_FOLLOWERS})"
+    if language not in _SUPPORTED_COMMENT_LANGUAGES:
+        raw_lang = str(details.get("lang") or "").lower() or "unknown"
+        return False, f"fallback rejected: unsupported or unclear article language (lang={raw_lang})"
+    return True, "fallback eligible by highest known follower count"
+
+
+def _article_sample(candidate: dict, details: dict) -> str:
+    return " ".join(
         [
             candidate.get("title") or "",
             candidate.get("snippet") or "",
@@ -682,11 +704,31 @@ def _fallback_article(candidate: dict, details: dict) -> tuple[bool, str]:
         ]
     )
 
-    if followers < _MIN_FOLLOWERS:
-        return False, f"fallback rejected: too few followers ({followers} < {_MIN_FOLLOWERS})"
-    if not _looks_english(lang, sample):
-        return False, f"fallback rejected: not confidently English (lang={lang or 'unknown'})"
-    return True, "fallback eligible by highest known follower count"
+
+def _detect_article_language(lang: str, text: str) -> tuple[str | None, str]:
+    sample = _clean_text(text).lower()[:2500]
+    raw_code = (lang or "").lower().replace("_", "-").split("-")[0]
+
+    if sample:
+        if _looks_french(sample):
+            return "fr", _SUPPORTED_COMMENT_LANGUAGES["fr"]
+        if _looks_spanish(sample):
+            return "es", _SUPPORTED_COMMENT_LANGUAGES["es"]
+        if _looks_portuguese(sample):
+            return "pt", _SUPPORTED_COMMENT_LANGUAGES["pt"]
+        if _looks_english(raw_code, sample):
+            return "en", _SUPPORTED_COMMENT_LANGUAGES["en"]
+
+    if raw_code in _SUPPORTED_COMMENT_LANGUAGES:
+        return raw_code, _SUPPORTED_COMMENT_LANGUAGES[raw_code]
+    return None, "unknown"
+
+
+def _fold_latin(text: str) -> str:
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(ch)
+    )
 
 
 def _looks_english(lang: str, text: str) -> bool:
@@ -768,7 +810,92 @@ def _looks_spanish_or_portuguese(sample: str) -> bool:
     )
 
 
+def _looks_french(sample: str) -> bool:
+    sample = _fold_latin(sample.lower())
+    words = re.findall(r"[a-z\u00c0-\u017f]{2,}", sample.lower())
+    if not words:
+        return False
+    french_markers = {
+        "la", "le", "les", "des", "du", "de", "pour", "avec", "dans",
+        "une", "est", "pas", "plus", "sur", "par", "vous", "votre",
+        "meilleure", "strategie", "acheter", "investissement", "recurrent",
+        "ou", "et", "que", "qui", "comment", "quand",
+    }
+    english_markers = {
+        "the", "and", "that", "with", "this", "from", "have", "your",
+        "market", "price", "strategy", "investing", "stack", "wallet",
+    }
+    french_hits = sum(1 for word in words[:220] if word in french_markers)
+    english_hits = sum(1 for word in words[:220] if word in english_markers)
+    if french_hits >= 4 and french_hits > english_hits:
+        return True
+    return bool(re.search(r"\b(la|le|les|du|des)\s+\w+\s+(strategie|pour|bitcoin)\b", sample))
+
+
+def _looks_spanish(sample: str) -> bool:
+    sample = _fold_latin(sample.lower())
+    words = re.findall(r"[a-z\u00c0-\u017f]{2,}", sample.lower())
+    if not words:
+        return False
+    markers = {
+        "el", "la", "los", "las", "un", "una", "unos", "unas",
+        "de", "del", "que", "con", "para", "por", "como", "sobre",
+        "este", "esta", "estos", "estas", "pero", "mas", "sin",
+        "comprar", "inversion", "estrategia", "mercado", "precio",
+        "promedio", "coste", "costo", "dolar", "cuando", "mejor",
+    }
+    english_markers = {
+        "the", "and", "that", "with", "this", "from", "have", "your",
+        "market", "price", "strategy", "investing", "stack", "wallet",
+    }
+    spanish_hits = sum(1 for word in words[:220] if word in markers)
+    english_hits = sum(1 for word in words[:220] if word in english_markers)
+    if spanish_hits >= 4 and spanish_hits > english_hits:
+        return True
+    return bool(
+        re.search(
+            r"\b(el|la|los|las|de|del|para|por|como|sobre)\s+\w+\s+"
+            r"(bitcoin|dca|estrategia|inversion|mercado)\b",
+            sample,
+        )
+    )
+
+
+def _looks_portuguese(sample: str) -> bool:
+    sample = _fold_latin(sample.lower())
+    words = re.findall(r"[a-z\u00c0-\u017f]{2,}", sample.lower())
+    if not words:
+        return False
+    markers = {
+        "o", "a", "os", "as", "um", "uma", "de", "do", "da", "dos", "das",
+        "que", "com", "para", "por", "como", "sobre", "este", "esta",
+        "mas", "sem", "comprar", "investimento", "estrategia", "mercado",
+        "preco", "media", "recorrente", "voce", "quando", "melhor",
+    }
+    english_markers = {
+        "the", "and", "that", "with", "this", "from", "have", "your",
+        "market", "price", "strategy", "investing", "stack", "wallet",
+    }
+    portuguese_hits = sum(1 for word in words[:220] if word in markers)
+    english_hits = sum(1 for word in words[:220] if word in english_markers)
+    if portuguese_hits >= 4 and portuguese_hits > english_hits:
+        return True
+    return bool(
+        re.search(
+            r"\b(o|a|os|as|do|da|dos|das|para|por|como|sobre)\s+\w+\s+"
+            r"(bitcoin|dca|estrategia|investimento|mercado)\b",
+            sample,
+        )
+    )
+
+
+def _looks_spanish_or_portuguese(sample: str) -> bool:
+    return _looks_spanish(sample) or _looks_portuguese(sample)
+
+
 async def _draft_comment(candidate: dict) -> str:
+    language_code = candidate.get("language") or "en"
+    language_label = _SUPPORTED_COMMENT_LANGUAGES.get(language_code, "English")
     prompt = f"""You are drafting ONE Medium comment for the btc-dca.com author account.
 
 Article title:
@@ -784,6 +911,8 @@ Write a thoughtful comment that could be posted under this article.
 
 Rules:
 - 55-95 words.
+- Write the comment in {language_label}, matching the article language.
+- Do not switch to English unless the article language is English.
 - Sound like a real practitioner, not a marketer.
 - Add one concrete idea, question, or small nuance related to Bitcoin DCA.
 - Do not flatter generically ("great article", "thanks for sharing").
@@ -838,7 +967,29 @@ def _valid_comment(comment: str) -> bool:
 
 
 def _fallback_comment(candidate: dict) -> str:
+    language = candidate.get("language") or "en"
     title = candidate.get("title") or "this"
+    if language == "es":
+        return (
+            "Un matiz que suelo revisar en cualquier plan de DCA con Bitcoin es si la regla sigue siendo "
+            "facil de mantener cuando el mercado se mueve durante meses en contra. La parte dificil no es "
+            "solo elegir el intervalo de compra, sino evitar cambiarlo por miedo o entusiasmo. Me interesaria "
+            "ver como incorporas comisiones, retiros a autocustodia y spreads reales en esa disciplina."
+        )
+    if language == "fr":
+        return (
+            "Le point que je trouve souvent sous-estime dans une strategie DCA Bitcoin, c'est la discipline "
+            "pendant les periodes longues et ennuyeuses. La methode reduit le besoin de choisir le bon moment, "
+            "mais elle ne supprime pas la pression psychologique. Je serais curieux de voir comment tu integres "
+            "les frais, les retraits en self-custody et les ecarts de prix reels."
+        )
+    if language == "pt":
+        return (
+            "Um ponto que eu sempre testaria em uma estrategia de DCA com Bitcoin e se a regra continua simples "
+            "de seguir quando o mercado fica meses sem recompensa aparente. O desafio nao e apenas escolher a "
+            "frequencia de compra, mas manter a disciplina quando a emocao pede outra coisa. Seria interessante "
+            "incluir taxas, spread e retiradas para autocustodia nessa analise."
+        )
     if "timing" in title.lower() or "signal" in (candidate.get("snippet") or "").lower():
         return (
             "One thing I would pressure-test is whether the strategy still works after fees, "
