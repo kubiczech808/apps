@@ -27,7 +27,6 @@ const MAX_ORDER_FRACTION = envNumber("MAX_ORDER_FRACTION", envNumber("LIVE_MAX_O
 const MAX_ORDER_NOTIONAL_USDC = envNumber("MAX_ORDER_NOTIONAL_USDC", envNumber("LIVE_MAX_ORDER_NOTIONAL_USDC", Infinity));
 const CANDIDATE_SCAN_LIMIT = envNumber("LIVE_CANDIDATE_SCAN_LIMIT", 120);
 const REJECTED_CANDIDATE_LOG_LIMIT = envNumber("LIVE_REJECTED_CANDIDATE_LOG_LIMIT", 16);
-const PREFILTER_REJECTED_LOG_LIMIT = envNumber("LIVE_PREFILTER_REJECTED_LOG_LIMIT", 24);
 const MAX_RESOLUTION_DAYS = envNumber("LIVE_MAX_RESOLUTION_DAYS", 7);
 const SELECTION_ORDER = process.env.LIVE_SELECTION_ORDER === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
 const ORDER_SIZE_MODE = String(process.env.LIVE_ORDER_SIZE_MODE || "stake_fraction").toLowerCase();
@@ -411,8 +410,13 @@ function prefilterLiveCandidate(item) {
   const days = localDaysToResolution(item);
 
   if (!tokenId) reasons.push("missing token id");
-  if (status === "ERROR") reasons.push("stored status ERROR");
-  if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) reasons.push(`stored status ${status}`);
+  if (status === "ERROR") {
+    reasons.push("stored status ERROR");
+  } else if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
+    reasons.push(`stored status ${status}`);
+  } else if (status && !["ELIGIBLE", "EVALUATED"].includes(status)) {
+    reasons.push(`stored status ${status}`);
+  }
   if (item?.marketClosed === true || item?.closed === true || item?.resolved === true || item?.isResolved === true) {
     reasons.push("stored market is already closed/resolved");
   }
@@ -438,6 +442,11 @@ function prefilterLiveCandidate(item) {
 
 function sortLivePrefilterCandidates(rows = []) {
   return [...rows].sort((a, b) => {
+    if (SELECTION_ORDER === "highest_reward_risk_first") {
+      const aRatio = number(a.riskReward, number(a.netGainIfWinUsdc) && number(a.totalCostUsdc) ? number(a.netGainIfWinUsdc) / number(a.totalCostUsdc) : -Infinity);
+      const bRatio = number(b.riskReward, number(b.netGainIfWinUsdc) && number(b.totalCostUsdc) ? number(b.netGainIfWinUsdc) / number(b.totalCostUsdc) : -Infinity);
+      if (bRatio !== aRatio) return bRatio - aRatio;
+    }
     const aAnnualized = number(a.annualizedReturn, -Infinity);
     const bAnnualized = number(b.annualizedReturn, -Infinity);
     if (bAnnualized !== aAnnualized) return bAnnualized - aAnnualized;
@@ -469,7 +478,6 @@ function incrementReason(counts, reason) {
 function prepareLiveCandidatePool(evaluations = []) {
   const uniqueEvaluations = latestUniqueEvaluations(evaluations);
   const reasonCounts = {};
-  const prefilterRejected = [];
   let prefilterRejectedCount = 0;
   const prefilterPassed = [];
 
@@ -484,12 +492,6 @@ function prepareLiveCandidatePool(evaluations = []) {
     }
     for (const reason of result.reasons) incrementReason(reasonCounts, reason);
     prefilterRejectedCount += 1;
-    if (prefilterRejected.length < PREFILTER_REJECTED_LOG_LIMIT) {
-      prefilterRejected.push({
-        ...liveBatchCandidateSummary(item),
-        rejectReasons: result.reasons,
-      });
-    }
   }
 
   const ranked = sortLivePrefilterCandidates(prefilterPassed);
@@ -511,11 +513,9 @@ function prepareLiveCandidatePool(evaluations = []) {
       skippedByScanLimit: skippedByLimit.length,
       prefilterRejected: prefilterRejectedCount,
       reasonCounts,
-      rejectedSample: prefilterRejected,
-      skippedByLimitSample: skippedByLimit.slice(0, PREFILTER_REJECTED_LOG_LIMIT).map((item) => ({
-        ...liveBatchCandidateSummary(item),
-        rejectReasons: [`outside live revalidation scan limit after short-expiry ranking (${CANDIDATE_SCAN_LIMIT})`],
-      })),
+      rejectedSample: [],
+      skippedByLimitSample: [],
+      executionShortlist: selected.slice(0, Math.min(20, CANDIDATE_SCAN_LIMIT)).map(liveBatchCandidateSummary),
     },
   };
 }

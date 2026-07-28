@@ -4142,15 +4142,6 @@ function tradeBatchDetail(batch) {
         .map(([reason, count]) => `- ${count}x ${reason}`)
         .join("\n")
     : "-";
-  const excludedSample = Array.isArray(portfolioFilter.excludedSample) ? portfolioFilter.excludedSample : [];
-  const excludedLines = excludedSample.length
-    ? excludedSample.map((item, index) => [
-        `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
-        `   ${candidateMetricLine(item)}`,
-        Array.isArray(item.portfolioRejectReasons) && item.portfolioRejectReasons.length ? `   Filter reasons: ${item.portfolioRejectReasons.join("; ")}` : "",
-        opportunityKey(item) ? `   Analysis: ${absoluteOpportunityDetailUrl(item)}` : "",
-      ].filter(Boolean).join("\n")).join("\n\n")
-    : "-";
   const candidateLines = candidates.length
     ? candidates.map((item, index) => [
         `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
@@ -4190,13 +4181,11 @@ function tradeBatchDetail(batch) {
         .map(([reason, count]) => `- ${count}x ${reason}`)
         .join("\n")
     : "-";
-  const prevalidationRejectedSample = Array.isArray(prevalidationFilter.rejectedSample) ? prevalidationFilter.rejectedSample : [];
-  const prevalidationLimitSample = Array.isArray(prevalidationFilter.skippedByLimitSample) ? prevalidationFilter.skippedByLimitSample : [];
-  const prevalidationSampleLines = [...prevalidationRejectedSample, ...prevalidationLimitSample].length
-    ? [...prevalidationRejectedSample, ...prevalidationLimitSample].map((item, index) => [
+  const executionShortlist = Array.isArray(prevalidationFilter.executionShortlist) ? prevalidationFilter.executionShortlist : [];
+  const executionShortlistLines = executionShortlist.length
+    ? executionShortlist.map((item, index) => [
         `${index + 1}. ${item.outcome || "-"} - ${item.question || "-"}`,
         `   ${candidateMetricLine(item)}`,
-        Array.isArray(item.rejectReasons) && item.rejectReasons.length ? `   Why not prevalidated: ${item.rejectReasons.join("; ")}` : "",
         opportunityKey(item) ? `   Analysis: ${absoluteOpportunityDetailUrl(item)}` : "",
         item.url ? `   Polymarket: ${item.url}` : "",
       ].filter(Boolean).join("\n")).join("\n\n")
@@ -4279,18 +4268,18 @@ function tradeBatchDetail(batch) {
     `Insufficient capital: ${capital.insufficientCapital ? "yes" : "no"}`,
     "",
     prevalidationFilter.uniqueEvaluations != null ? [
-      `Pre-revalidation short-expiry filter:`,
+      `Prepared execution shortlist:`,
       `Stored evaluations: ${Number(prevalidationFilter.storedEvaluations || 0)}`,
       `Unique markets/outcomes: ${Number(prevalidationFilter.uniqueEvaluations || 0)}`,
-      `Passed local live rules: ${Number(prevalidationFilter.prefilterPassed || 0)}`,
+      `Passed live portfolio rules before revalidation: ${Number(prevalidationFilter.prefilterPassed || 0)}`,
       `Selected for Polymarket revalidation: ${Number(prevalidationFilter.selectedForRevalidation || 0)} / limit ${Number(prevalidationFilter.scanLimit || 0)}`,
       `Skipped by scan limit: ${Number(prevalidationFilter.skippedByScanLimit || 0)}`,
-      `Rejected before revalidation: ${Number(prevalidationFilter.prefilterRejected || 0)}`,
-      `Prevalidation reason counts:`,
+      `Not in shortlist before revalidation: ${Number(prevalidationFilter.prefilterRejected || 0)}`,
+      `Not-in-shortlist reason counts:`,
       prevalidationReasonLines,
       "",
-      `Prevalidation rejected / skipped sample:`,
-      prevalidationSampleLines,
+      `Shortlist order before Polymarket revalidation:`,
+      executionShortlistLines,
       "",
     ].join("\n") : "",
     `Counts: ${Number(counts.rankedEligible ?? counts.eligibleCandidates ?? 0)} ranked eligible / ${Number(counts.skippedForRisk || 0)} skipped for risk / ${Number(counts.openTrades || 0)} open trades / ${Number(counts.openOrdersReviewed || 0)} open orders reviewed`,
@@ -4303,9 +4292,6 @@ function tradeBatchDetail(batch) {
       `Excluded by portfolio rules/status: ${Number(portfolioFilter.excludedCount || 0)}`,
       `Filter reason counts:`,
       filterReasonLines,
-      "",
-      `Excluded sample:`,
-      excludedLines,
     ].join("\n") : "",
     "",
     selected ? [
