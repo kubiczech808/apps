@@ -925,6 +925,9 @@ class MediumPlaywrightPublisher:
         return bool(clicked)
 
     async def _open_medium_response_editor(self, page) -> bool:
+        if await self._find_visible_response_editor(page, timeout_ms=1500):
+            return True
+
         selectors = [
             'button:has-text("Respond")',
             'button:has-text("Responses")',
@@ -964,6 +967,8 @@ class MediumPlaywrightPublisher:
             '[contenteditable="true"][aria-label*="response" i]:visible',
             '[contenteditable="true"][aria-label*="comment" i]:visible',
             'div[contenteditable="true"]:visible',
+            'div[role="textbox"]:has-text("What are your thoughts?"):visible',
+            'div[role="textbox"]:visible',
             'textarea:visible:not([name^="g-recaptcha-response"]):not([id^="g-recaptcha-response"])',
         ]
         deadline = asyncio.get_running_loop().time() + timeout_ms / 1000
@@ -976,8 +981,9 @@ class MediumPlaywrightPublisher:
                         candidate = locators.nth(index)
                         if await candidate.is_visible(timeout=500):
                             editable = await candidate.get_attribute("contenteditable")
+                            role = await candidate.get_attribute("role")
                             disabled = await candidate.get_attribute("disabled")
-                            if editable == "true" or disabled is None:
+                            if editable == "true" or role == "textbox" or disabled is None:
                                 log.info("Medium: found visible response editor via %s", selector)
                                 return candidate
                 except Exception:
