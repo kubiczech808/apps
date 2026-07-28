@@ -484,7 +484,7 @@ function isPaperExecutionTarget(target) {
 
 function executionTargetLabel(target) {
   if (target === "live") return "live";
-  if (isPaperExecutionTarget(target)) return paperPortfolioLabelFromMode(target === "paper" ? state.mode : target);
+  if (isPaperExecutionTarget(target)) return paperModeLabel(target === "paper" ? state.mode : target);
   return "paper";
 }
 
@@ -2582,7 +2582,7 @@ async function waitForExecutionResult(target, startedAt, steps, options = {}) {
     if (!Number.isFinite(start) || (Number.isFinite(generated) && generated >= start - 120000)) {
       const detail = target === "live"
         ? liveExecutionSummary(payload)
-        : `Paper ${paperPortfolioLabelFromMode(paperModeFromStrategyId(options.paperStrategyId))} action: ${paperDecision?.action || "-"} / ${paperDecision?.reason || "-"}`;
+        : `Paper ${paperModeLabel(paperModeFromStrategyId(options.paperStrategyId))} action: ${paperDecision?.action || "-"} / ${paperDecision?.reason || "-"}`;
       steps = addExecutionStep(steps, "Execution result", detail, "done");
       return { payload, steps };
     }
