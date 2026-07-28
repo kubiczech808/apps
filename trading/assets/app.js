@@ -414,18 +414,24 @@ function updateSystemConfig(updates) {
   };
 }
 
-function stateCacheKey(target) {
-  return `${STATE_CACHE_PREFIX}${target}`;
+function stateCacheKey(target, summary = "full") {
+  return `${STATE_CACHE_PREFIX}${target}:${summary || "full"}`;
 }
 
-function readCachedState(target) {
+function readCachedState(target, summary = "full") {
   try {
-    const raw = localStorage.getItem(stateCacheKey(target));
+    const raw = localStorage.getItem(stateCacheKey(target, summary));
     if (!raw) return null;
     const payload = JSON.parse(raw);
     const data = payload && typeof payload.data === "object" ? payload.data : null;
-    if (target === "paper" && data && !data.paperPortfolios && (state.botState?.paperPortfolios || paperStrategyIdFromMode() !== "conservative")) {
-      return null;
+    if (target === "paper" && data) {
+      const detailsMode = String(data.evaluationDetailsMode || "");
+      if (summary === "candidates") {
+        return detailsMode === "compact" && Array.isArray(data.evaluations) ? data : null;
+      }
+      if (detailsMode === "compact" || !data.paperPortfolios) {
+        return null;
+      }
     }
     return data;
   } catch {
@@ -433,9 +439,9 @@ function readCachedState(target) {
   }
 }
 
-function writeCachedState(target, data) {
+function writeCachedState(target, data, summary = "full") {
   try {
-    localStorage.setItem(stateCacheKey(target), JSON.stringify({
+    localStorage.setItem(stateCacheKey(target, summary), JSON.stringify({
       cachedAt: new Date().toISOString(),
       data,
     }));
@@ -2817,6 +2823,7 @@ async function fetchJson(path, options = {}) {
   const statePath = String(path || "");
   const stateTarget = statePath === "data/live-state.json" ? "live" : (statePath === "data/paper-state.json" ? "paper" : "");
   const summary = options.summary ? `&summary=${encodeURIComponent(options.summary)}` : "";
+  const cacheSummary = options.summary || "full";
   const url = stateTarget
     ? `api.php?action=state&target=${stateTarget}${summary}&t=${Date.now()}`
     : `${statePath}?t=${Date.now()}`;
@@ -2825,14 +2832,14 @@ async function fetchJson(path, options = {}) {
     if (!statePayload.ok) throw new Error(`${path} HTTP ${statePayload.status}`);
     const payload = await statePayload.json();
     if (stateTarget) {
-      writeCachedState(stateTarget, payload);
+      writeCachedState(stateTarget, payload, cacheSummary);
       clearStateFetchError(stateTarget);
     }
     return payload;
   } catch (error) {
     if (stateTarget) {
       rememberStateFetchError(stateTarget, error);
-      const cached = readCachedState(stateTarget);
+      const cached = readCachedState(stateTarget, cacheSummary);
       if (cached) return cached;
     }
     throw error;

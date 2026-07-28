@@ -215,6 +215,7 @@ function compact_state_payload(string $target, array $data, string $summary): ar
     if ($summary === 'dashboard') {
         $compact = $data;
         $compact['evaluations'] = [];
+        unset($compact['evaluationRunLog'], $compact['calculationReports'], $compact['runLog']);
         $compact['evaluationDetailsMode'] = 'dashboard';
         return $compact;
     }
