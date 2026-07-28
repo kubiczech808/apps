@@ -555,6 +555,17 @@ if (($_GET['worker'] ?? '') === 'scraping') {
     exit;
 }
 
+if (($_GET['worker'] ?? '') === 'ai_research') {
+    header('Content-Type: text/plain; charset=utf-8');
+    $workerToken = scrapingWorkerToken($pdo, false);
+    if ($workerToken === '' || !hash_equals($workerToken, (string)($_GET['token'] ?? ''))) {
+        http_response_code(403);
+        exit("Forbidden\n");
+    }
+    echo runAiResearchWorker($pdo, $config);
+    exit;
+}
+
 if (($_GET['worker'] ?? '') === 'campaigns') {
     header('Content-Type: text/plain; charset=utf-8');
     $workerToken = scrapingWorkerToken($pdo, false);
@@ -716,19 +727,15 @@ function handlePost(PDO $pdo, array $config): ?string
         if (!canAccessAiResearch()) {
             throw new RuntimeException('AI research neni pro tento ucet dostupny.');
         }
-        aiResearchRequestTimestamps('reset');
-        aiResearchDeadline(time() + 90);
-        try {
-            $message = runAiResearchOnce($pdo, $config, true);
-            setSetting($pdo, 'ai_research_next_allowed_at', '');
-            return $message;
-        } catch (AiResearchTemporaryException $e) {
-            $nextAllowedAt = scheduleAiResearchTemporaryBackoff($pdo, $e, aiResearchRunIntervalSeconds($config));
-            return 'AI research odlozen: ' . $e->getMessage()
-                . ($nextAllowedAt > 0 ? ' Dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.' : '');
-        } finally {
-            aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
+        $researchSettings = loadSettings($pdo);
+        if ((int)($researchSettings['ai_research_lock_until'] ?? 0) > time()) {
+            return 'AI research uz bezi na pozadi. Prehled se sam obnovuje.';
         }
+        // Beh se zamerne nespousti v tomto pozadavku, jinak by prohlizec cekal na cely beh.
+        setSetting($pdo, 'ai_research_manual_pending', (string)time());
+        setSetting($pdo, 'ai_research_next_allowed_at', '');
+        triggerAiResearchWorker($pdo);
+        return 'AI research byl spusten na pozadi. Radek behu se doplni sam, prehled se prubezne obnovuje.';
     }
 
     if ($action === 'finish_ai_research_run') {
@@ -2462,6 +2469,59 @@ function runCronAiResearch(PDO $pdo, array $config): string
         return 'AI research selhal: ' . $e->getMessage();
     } finally {
         $lockHeld = false;
+        aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
+    }
+}
+
+function triggerAiResearchWorker(PDO $pdo): void
+{
+    $token = scrapingWorkerToken($pdo, true);
+    fireAndForgetGet(appBaseUrl() . '?worker=ai_research&token=' . rawurlencode($token));
+}
+
+/**
+ * Rucne spusteny research bezi na pozadi, aby prohlizec necekal na cely beh.
+ * Prehled se sam obnovuje, takze radek behu se plni postupne.
+ */
+function runAiResearchWorker(PDO $pdo, array $config): string
+{
+    ignore_user_abort(true);
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(0);
+    }
+    $settings = loadSettings($pdo);
+    if ((int)($settings['ai_research_lock_until'] ?? 0) > time()) {
+        return 'AI research: uz bezi.';
+    }
+    setSetting($pdo, 'ai_research_lock_until', (string)(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS + 60));
+    aiResearchRequestTimestamps('reset');
+    aiResearchDeadline(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS);
+    $lockHeld = true;
+    register_shutdown_function(static function () use ($pdo, &$lockHeld): void {
+        if (!$lockHeld) {
+            return;
+        }
+        try {
+            setSetting($pdo, 'ai_research_lock_until', '');
+            setSetting($pdo, 'ai_research_manual_pending', '');
+        } catch (Throwable $e) {
+            error_log('AI research worker cleanup failed: ' . $e->getMessage());
+        }
+    });
+    try {
+        $message = runAiResearchOnce($pdo, $config, true);
+        setSetting($pdo, 'ai_research_last_run_at', (string)time());
+        setSetting($pdo, 'ai_research_next_allowed_at', '');
+        return $message;
+    } catch (AiResearchTemporaryException $e) {
+        scheduleAiResearchTemporaryBackoff($pdo, $e, aiResearchRunIntervalSeconds($config));
+        return 'AI research odlozen: ' . $e->getMessage();
+    } catch (Throwable $e) {
+        return 'AI research selhal: ' . $e->getMessage();
+    } finally {
+        $lockHeld = false;
+        setSetting($pdo, 'ai_research_lock_until', '');
+        setSetting($pdo, 'ai_research_manual_pending', '');
         aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
     }
 }
@@ -6231,7 +6291,7 @@ function isBackgroundEndpoint(): bool
 
 function isWorkerEndpoint(): bool
 {
-    return in_array((string)($_GET['worker'] ?? ''), ['imports', 'scraping', 'campaigns'], true);
+    return in_array((string)($_GET['worker'] ?? ''), ['imports', 'scraping', 'campaigns', 'ai_research'], true);
 }
 
 function isTrackingEndpoint(): bool
@@ -16181,6 +16241,19 @@ function renderApp(PDO $pdo, ?array $flash): void
         $researchNextRunLabel = $nextResearchRunAt > time()
             ? formatDateTime(date('c', $nextResearchRunAt))
             : 'při nejbližší kontrole cronu';
+        $researchManualPending = (int)($researchSettings['ai_research_manual_pending'] ?? 0);
+        $researchHasRunningRow = false;
+        foreach ($aiResearchRuns as $runRow) {
+            if ((string)$runRow['status'] === 'running') {
+                $researchHasRunningRow = true;
+                break;
+            }
+        }
+        // Beh startuje na pozadi, takze jeho radek jeste nemusi existovat. Dokud drzi zamek,
+        // ukaze se placeholder a prehled se sam obnovuje, aby se data plnila prubezne.
+        $researchStarting = !$researchHasRunningRow
+            && ($researchLockUntil > time() || ($researchManualPending > 0 && time() - $researchManualPending < 180));
+        $researchAutoRefresh = $researchStarting || $researchHasRunningRow;
     ?>
     <section class="panel">
         <div class="section-header">
@@ -16202,7 +16275,17 @@ function renderApp(PDO $pdo, ?array $flash): void
             </div>
         </div>
         <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>Vzorek</th></tr></thead><tbody>
-        <?php if (!$aiResearchRuns): ?>
+        <?php if ($researchStarting): ?>
+            <tr class="research-starting-row">
+                <td>-</td><td>-</td><td>-</td><td>-</td>
+                <td><?= h(formatDateTime(date('c'))) ?></td>
+                <td><strong>hledá se seed…</strong></td>
+                <td>-</td>
+                <td><?= statusBadge('bezi...') ?></td>
+                <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+            </tr>
+        <?php endif; ?>
+        <?php if (!$aiResearchRuns && !$researchStarting): ?>
             <tr><td colspan="14">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
@@ -16536,6 +16619,16 @@ function renderApp(PDO $pdo, ?array $flash): void
             </tr>
         <?php endforeach; ?>
         </tbody></table>
+        <?php if ($researchAutoRefresh): ?>
+        <p class="note" data-research-refresh>Běh probíhá na pozadí, přehled se sám obnoví za několik sekund.</p>
+        <script>
+            // Navigujeme na GET adresu, ne reload: stranka po odeslani formulare je POST
+            // a reload by ten POST poslal znovu, cimz by spustil dalsi beh.
+            setTimeout(function () {
+                window.location.href = <?= json_encode(routeUrl('research'), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+            }, 8000);
+        </script>
+        <?php endif; ?>
     </section>
     <?php endif; ?>
 

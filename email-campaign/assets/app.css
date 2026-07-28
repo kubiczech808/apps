@@ -2039,6 +2039,13 @@ td a {
 .view-research .research-table > tbody > tr.expandable-row > td:nth-child(14) {
   text-align: right;
 }
+.view-research .research-table > tbody > tr.research-starting-row > td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  color: var(--muted);
+}
 .view-research .research-table .detail-row td {
   white-space: normal;
   overflow: visible;
