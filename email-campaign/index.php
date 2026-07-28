@@ -7,6 +7,9 @@ const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 const AI_RESEARCH_CONTEXT_FIX_VERSION = '2026-07-19-emporo-context-v1';
 const AI_RESEARCH_MAX_BACKOFF_SECONDS = 1800;
+// Realne scrapujeme jen prvni davku pro osloveni, ne cely zdroj. Nezahrata adresa
+// stejne vic nez cca 100 emailu za 24 h neposle, takze zbytek zdroje je zbytecna prace.
+const AI_RESEARCH_FIRST_BATCH_CONTACTS = 100;
 // Hosting uzavre pozadavek 504 Gateway Timeout cca po 150 s, bez ohledu na set_time_limit().
 // Beh proto musi skoncit driv a rozdelanou praci nechat na dalsi cron.
 const AI_RESEARCH_REQUEST_BUDGET_SECONDS = 100;
@@ -3412,7 +3415,10 @@ function aiResearchPlan(array $config, array $seed): array
                     $terms[] = $term;
                 }
             }
-            $source = aiResearchDefaultSourceForSeed($seed);
+            // Trh, ktery AI vybrala, ma prednost pred sidlem seed firmy: ceska firma
+            // muze cilit na Slovensko nebo Nemecko a pak je Firmy.cz spatny zdroj.
+            $source = aiResearchSourceForMarketLanguage((string)($plan['market_language'] ?? ''))
+                ?: aiResearchDefaultSourceForSeed($seed);
             $plan['candidate_terms'] = $terms;
             $plan['scraping_queries'] = array_map(fn(string $term): array => [
                 'source' => $source,
@@ -4131,6 +4137,21 @@ function aiResearchSourceCountry(string $source): string
         return 'CZ';
     }
     return '';
+}
+
+/**
+ * Zdroj podle trhu, ktery AI vybrala pro osloveni, ne podle sidla seed firmy.
+ * Kdyz firma cili mimo CR, nema smysl scrapovat Firmy.cz.
+ */
+function aiResearchSourceForMarketLanguage(string $language): string
+{
+    $source = [
+        'cs' => 'firmy_cz',
+        'sk' => 'zoznam_sk',
+        'de' => 'gelbeseiten_de',
+        'pl' => 'panoramafirm_pl',
+    ][strtolower(trim($language))] ?? '';
+    return $source !== '' && scrapingSourceIsActive($source) ? $source : '';
 }
 
 function aiResearchDefaultSourceForCountry(string $country): string
@@ -5379,10 +5400,60 @@ function provisionAiResearchCustomerWorkspace(PDO $pdo, int $runId, array $seed,
         $normalizedContacts[] = $normalized;
     }
 
-    aiResearchEnsureScrapingContainerAndLog($pdo, $ownerId, $listId, $source, $keyword, $plan, $runId, $normalizedContacts, $inserted, $updated, $skipped);
+    $containerId = aiResearchEnsureScrapingContainerAndLog($pdo, $ownerId, $listId, $source, $keyword, $plan, $runId, $normalizedContacts, $inserted, $updated, $skipped);
+    aiResearchStoreProvisionedContainer($pdo, $runId, $containerId, $listId);
     aiResearchEnsurePausedCampaign($pdo, $ownerId, $listId, $seed, $plan, $subject, $bodyHtml);
     setSettingForUser($pdo, $ownerId, 'from_email', strtolower(trim((string)($seed['email'] ?? ''))));
     setSettingForUser($pdo, $ownerId, 'from_name', truncatePlainText((string)($seed['subject_name'] ?: $seed['email']), 255));
+}
+
+/**
+ * Ulozi do planu behu, ktery scraping kontejner a databazi mu patri, aby admin
+ * v prehledu videl stav plneho scrapingu, ne jen vzorek 10 kontaktu.
+ */
+function aiResearchStoreProvisionedContainer(PDO $pdo, int $runId, int $containerId, int $listId): void
+{
+    if ($runId <= 0 || $containerId <= 0) {
+        return;
+    }
+    $stmt = $pdo->prepare('SELECT plan_json FROM ai_research_runs WHERE id=? LIMIT 1');
+    $stmt->execute([$runId]);
+    $plan = json_decode((string)$stmt->fetchColumn(), true);
+    if (!is_array($plan)) {
+        return;
+    }
+    if ((int)($plan['provisioned_container_id'] ?? 0) === $containerId && (int)($plan['provisioned_list_id'] ?? 0) === $listId) {
+        return;
+    }
+    $plan['provisioned_container_id'] = $containerId;
+    $plan['provisioned_list_id'] = $listId;
+    $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
+    $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
+}
+
+function aiResearchScrapingProgress(PDO $pdo, array $plan): ?array
+{
+    $containerId = (int)($plan['provisioned_container_id'] ?? 0);
+    if ($containerId <= 0) {
+        return null;
+    }
+    $stmt = $pdo->prepare('
+        SELECT status, processed_count, inserted_count, updated_count, skipped_count, finished_at, last_message
+        FROM scraping_jobs
+        WHERE container_id=? AND run_type<>"ai_research"
+        ORDER BY id DESC
+        LIMIT 1
+    ');
+    $stmt->execute([$containerId]);
+    $job = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    $listId = (int)($plan['provisioned_list_id'] ?? 0);
+    $total = 0;
+    if ($listId > 0) {
+        $countStmt = $pdo->prepare('SELECT COUNT(*) FROM recipients WHERE list_id=? AND COALESCE(archived,0)=0');
+        $countStmt->execute([$listId]);
+        $total = (int)$countStmt->fetchColumn();
+    }
+    return ['container_id' => $containerId, 'list_id' => $listId, 'job' => $job, 'contacts_total' => $total];
 }
 
 function aiResearchProvisionDatabaseName(string $keyword, array $plan): string
@@ -5405,7 +5476,7 @@ function aiResearchEnsureContactDatabase(PDO $pdo, int $ownerId, string $name): 
     return (int)$pdo->lastInsertId();
 }
 
-function aiResearchEnsureScrapingContainerAndLog(PDO $pdo, int $ownerId, int $listId, string $source, string $keyword, array $plan, int $runId, array $contacts, int $inserted, int $updated, int $skipped): void
+function aiResearchEnsureScrapingContainerAndLog(PDO $pdo, int $ownerId, int $listId, string $source, string $keyword, array $plan, int $runId, array $contacts, int $inserted, int $updated, int $skipped): int
 {
     $now = date('c');
     $locationScope = scrapingNormalizeLocationScope((string)($plan['location_scope'] ?? 'cela_cr'));
@@ -5428,7 +5499,8 @@ function aiResearchEnsureScrapingContainerAndLog(PDO $pdo, int $ownerId, int $li
     $exists = $pdo->prepare('SELECT id FROM scraping_jobs WHERE container_id=? AND last_message LIKE ? ORDER BY id ASC LIMIT 1');
     $exists->execute([$containerId, '%AI research #' . $runId . '%']);
     if ((int)$exists->fetchColumn() > 0) {
-        return;
+        aiResearchEnsureFirstBatchScrapingRun($pdo, $containerId, $runId);
+        return $containerId;
     }
 
     $processed = count($contacts);
@@ -5453,6 +5525,39 @@ function aiResearchEnsureScrapingContainerAndLog(PDO $pdo, int $ownerId, int $li
             $now,
             $now,
         ]);
+    }
+    aiResearchEnsureFirstBatchScrapingRun($pdo, $containerId, $runId);
+    return $containerId;
+}
+
+/**
+ * AI research si necha jen malinky vzorek kontaktu na vyhodnoceni. Kontakty pro prvni
+ * davku osloveni dosbira bezny worker, ale zamerne se zastavi na cilovem poctu,
+ * misto aby prochazel cely zdroj. Uz bezici beh se jen napoji.
+ */
+function aiResearchEnsureFirstBatchScrapingRun(PDO $pdo, int $containerId, int $runId): void
+{
+    if ($containerId <= 0) {
+        return;
+    }
+    try {
+        $container = findScrapingContainer($pdo, $containerId);
+        if ((string)$container['status'] !== 'active' || !scrapingSourceIsActive((string)$container['source'])) {
+            return;
+        }
+        if (activeScrapingRunForParams($pdo, $container) > 0) {
+            return;
+        }
+        createScrapingRun(
+            $pdo,
+            $container,
+            'Prvni davka z AI research #' . $runId . ': cil ' . AI_RESEARCH_FIRST_BATCH_CONTACTS . ' kontaktu.',
+            'manual',
+            AI_RESEARCH_FIRST_BATCH_CONTACTS
+        );
+        triggerScrapingWorker($pdo);
+    } catch (Throwable $e) {
+        error_log('AI research full scraping run for #' . $runId . ' failed: ' . $e->getMessage());
     }
 }
 
@@ -8215,7 +8320,7 @@ function startScrapingRun(PDO $pdo, int $containerId): string
     return 'Novy scraping beh #' . $jobId . ' vytvoren.';
 }
 
-function createScrapingRun(PDO $pdo, array $container, string $message = 'Beh ceka na spusteni.', string $runType = 'manual'): int
+function createScrapingRun(PDO $pdo, array $container, string $message = 'Beh ceka na spusteni.', string $runType = 'manual', int $targetContacts = 0): int
 {
     if (!scrapingSourceIsActive((string)$container['source'])) {
         throw new RuntimeException('Zdroj dat je deaktivovany.');
@@ -8229,7 +8334,7 @@ function createScrapingRun(PDO $pdo, array $container, string $message = 'Beh ce
     $locationScope = scrapingNormalizeLocationScope((string)($container['location_scope'] ?? 'cela_cr'));
     $targetLocation = in_array($locationScope, ['cela_cr', 'zahranici'], true) ? '' : trim((string)($container['target_location'] ?? ''));
     $stmt = $pdo->prepare('INSERT INTO scraping_jobs (owner_user_id, container_id, list_id, source, keyword, location_scope, target_location, status, max_pages, max_sites, last_message, run_type, discovery_done, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, "queued", ?, ?, ?, ?, 0, ?, ?)');
-    $stmt->execute([(int)($container['owner_user_id'] ?? 0), (int)$container['id'], (int)$container['list_id'], (string)$container['source'], (string)$container['keyword'], $locationScope, $targetLocation, 0, 0, $message, $runType, $now, $now]);
+    $stmt->execute([(int)($container['owner_user_id'] ?? 0), (int)$container['id'], (int)$container['list_id'], (string)$container['source'], (string)$container['keyword'], $locationScope, $targetLocation, 0, max(0, $targetContacts), $message, $runType, $now, $now]);
     return (int)$pdo->lastInsertId();
 }
 
@@ -8513,6 +8618,17 @@ function fireAndForgetGet(string $url): void
     fclose($socket);
 }
 
+/**
+ * Kolik kontaktu uz beh skutecne ulozil. Pouziva se jako strop, kdyz scrapujeme jen
+ * prvni davku pro osloveni a zbytek zdroje zamerne neprochazime.
+ */
+function scrapingJobSavedContactCount(PDO $pdo, int $jobId): int
+{
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM scraping_job_items WHERE job_id=? AND status IN ("inserted","updated")');
+    $stmt->execute([$jobId]);
+    return (int)$stmt->fetchColumn();
+}
+
 function runScrapingJob(PDO $pdo, int $jobId, int $steps = 8): string
 {
     $job = findScrapingJob($pdo, $jobId);
@@ -8538,6 +8654,11 @@ function runScrapingJob(PDO $pdo, int $jobId, int $steps = 8): string
         for ($i = 0; $i < $steps; $i++) {
             $job = findScrapingJob($pdo, $jobId);
             if (in_array($job['status'], ['paused', 'finished', 'failed', 'cancelled'], true)) {
+                break;
+            }
+            $targetContacts = (int)($job['max_sites'] ?? 0);
+            if ($targetContacts > 0 && scrapingJobSavedContactCount($pdo, $jobId) >= $targetContacts) {
+                finishScrapingJob($pdo, $jobId, 'Dokonceno: nasbiran cilovy pocet ' . $targetContacts . ' kontaktu pro prvni davku osloveni.');
                 break;
             }
             $item = nextScrapingItem($pdo, $jobId);
@@ -15898,9 +16019,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                 </form>
             </div>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>Vzorek</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
-            <tr><td colspan="13">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="14">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
@@ -15909,6 +16030,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <?php $runUnderstanding = trim((string)($runPlan['business_understanding'] ?? ($runPlan['business_summary'] ?? ''))); ?>
             <?php $modelAudit = aiResearchNormalizeModelAudit($runPlan['ai_model_audit'] ?? []); ?>
             <?php $provisionUser = aiResearchProvisionedUser($pdo, $run); ?>
+            <?php $runScraping = aiResearchScrapingProgress($pdo, $runPlan); ?>
             <?php $seedOutreachDraft = aiResearchSeedOutreachDraft($run, $runContacts, $runPlan, $runLanguage); ?>
             <tr class="expandable-row" data-detail-target="ai-research-detail-<?= h((string)$run['id']) ?>" tabindex="0" aria-expanded="false">
                 <td>Zobrazit</td>
@@ -15990,11 +16112,20 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><?= h((string)($run['search_source_label'] ?? '-')) ?></td>
                 <td><?= h((string)($run['scraping_keyword'] ?? '')) ?></td>
                 <td><?= h(aiResearchTargetAreaLabel($runPlan)) ?></td>
-                <td><?= h((string)$run['found_count']) ?></td>
-                <td><?= h((string)$run['accepted_count']) ?></td>
+                <td>
+                    <?php if ($runScraping && $runScraping['job']): ?>
+                        <?= statusBadge(scrapingStatusLabel((string)$runScraping['job']['status'])) ?>
+                    <?php elseif ($runScraping): ?>
+                        <?= statusBadge('ceka') ?>
+                    <?php else: ?>
+                        -
+                    <?php endif; ?>
+                </td>
+                <td><?= $runScraping ? h((string)$runScraping['contacts_total']) : '-' ?></td>
+                <td><?= h((string)$run['accepted_count']) ?>/<?= h((string)$run['found_count']) ?></td>
             </tr>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="13">
+                <td colspan="14">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>

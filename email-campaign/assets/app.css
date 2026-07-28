@@ -2003,7 +2003,7 @@ td a {
 .view-research .research-table {
   table-layout: fixed;
   width: 100%;
-  min-width: 1336px;
+  min-width: 1340px;
 }
 .view-research .research-table > thead > tr > th,
 .view-research .research-table > tbody > tr.expandable-row > td {
@@ -2018,24 +2018,25 @@ td a {
 }
 /* Sirky patri na hlavicku: table-layout:fixed cte sloupce z prvniho radku (thead),
    takze widthy jen na tbody td se ignorovaly a vsech 13 sloupcu bylo stejne sirokych. */
-.view-research .research-table > thead > tr > th:nth-child(1) { width: 84px; }
-.view-research .research-table > thead > tr > th:nth-child(2) { width: 150px; }
-.view-research .research-table > thead > tr > th:nth-child(3) { width: 92px; }
-.view-research .research-table > thead > tr > th:nth-child(4) { width: 80px; }
-.view-research .research-table > thead > tr > th:nth-child(5) { width: 124px; }
-.view-research .research-table > thead > tr > th:nth-child(6) { width: 132px; }
-.view-research .research-table > thead > tr > th:nth-child(7) { width: 124px; }
-.view-research .research-table > thead > tr > th:nth-child(8) { width: 78px; }
-.view-research .research-table > thead > tr > th:nth-child(9) { width: 98px; }
-.view-research .research-table > thead > tr > th:nth-child(10) { width: 122px; }
-.view-research .research-table > thead > tr > th:nth-child(11) { width: 88px; }
-.view-research .research-table > thead > tr > th:nth-child(12) { width: 88px; }
-.view-research .research-table > thead > tr > th:nth-child(13) { width: 76px; }
+.view-research .research-table > thead > tr > th:nth-child(1) { width: 80px; }
+.view-research .research-table > thead > tr > th:nth-child(2) { width: 138px; }
+.view-research .research-table > thead > tr > th:nth-child(3) { width: 86px; }
+.view-research .research-table > thead > tr > th:nth-child(4) { width: 74px; }
+.view-research .research-table > thead > tr > th:nth-child(5) { width: 120px; }
+.view-research .research-table > thead > tr > th:nth-child(6) { width: 116px; }
+.view-research .research-table > thead > tr > th:nth-child(7) { width: 100px; }
+.view-research .research-table > thead > tr > th:nth-child(8) { width: 72px; }
+.view-research .research-table > thead > tr > th:nth-child(9) { width: 90px; }
+.view-research .research-table > thead > tr > th:nth-child(10) { width: 120px; }
+.view-research .research-table > thead > tr > th:nth-child(11) { width: 80px; }
+.view-research .research-table > thead > tr > th:nth-child(12) { width: 90px; }
+.view-research .research-table > thead > tr > th:nth-child(13) { width: 96px; }
+.view-research .research-table > thead > tr > th:nth-child(14) { width: 78px; }
 .view-research .research-table > tbody > tr.expandable-row > td:nth-child(2) { overflow: visible; }
-.view-research .research-table > thead > tr > th:nth-child(12),
 .view-research .research-table > thead > tr > th:nth-child(13),
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(12),
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(13) {
+.view-research .research-table > thead > tr > th:nth-child(14),
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(13),
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(14) {
   text-align: right;
 }
 .view-research .research-table .detail-row td {
