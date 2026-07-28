@@ -1,5 +1,5 @@
 const state = {
-  mode: "paper",
+  mode: "paper-conservative",
   page: "portfolios",
   botState: null,
   liveState: null,
@@ -44,6 +44,7 @@ const state = {
   stateFetchErrors: {},
   executionBusy: null,
   autoLiveSyncBusy: false,
+  dashboardLoadSeq: 0,
   settingsSection: "evaluation-log",
   calculationSource: "all",
   calculationMarket: "all",
@@ -2666,11 +2667,26 @@ function evaluationReasons(item, riskReason = "") {
   return reasons.filter(Boolean);
 }
 
-async function loadBotState() {
+function dashboardLoadIsStale(options = {}) {
+  return Number(options.requestId || 0) !== state.dashboardLoadSeq
+    || (options.requestedMode && normalizeMode(state.mode) !== normalizeMode(options.requestedMode));
+}
+
+function renderKnownStateForMode(mode = state.mode) {
+  if (normalizeMode(mode) === "live") {
+    if (state.liveState) renderLiveState(state.liveState);
+    return;
+  }
+  if (state.botState) renderBotState(state.botState);
+}
+
+async function loadBotState(options = {}) {
   try {
     const botState = await fetchJson("data/paper-state.json");
+    if (dashboardLoadIsStale(options) || isLiveMode()) return;
     renderBotState(botState);
   } catch (error) {
+    if (dashboardLoadIsStale(options) || isLiveMode()) return;
     if (state.botState) {
       rememberStateFetchError("paper", error);
       renderBotState(state.botState);
@@ -2921,6 +2937,7 @@ async function loadLiveState(options = {}) {
       fetchJson("data/paper-state.json"),
       fetchJson("data/live-execution-state.json"),
     ]);
+    if (dashboardLoadIsStale(options) || !isLiveMode()) return;
     if (liveResult.status === "rejected") throw liveResult.reason;
     state.botState = botResult.status === "fulfilled" ? botResult.value : state.botState;
     state.liveExecutionState = executionResult.status === "fulfilled" ? executionResult.value : state.liveExecutionState;
@@ -2933,6 +2950,7 @@ async function loadLiveState(options = {}) {
       els.botEvaluations.innerHTML = `<div class="empty">Common evaluation log is not available: ${escapeHtml(botResult.reason?.message || String(botResult.reason))}</div>`;
     }
   } catch (error) {
+    if (dashboardLoadIsStale(options) || !isLiveMode()) return;
     if (state.liveState) {
       rememberStateFetchError("live", error);
       renderLiveState(state.liveState);
@@ -2974,12 +2992,18 @@ async function loadLiveState(options = {}) {
   }
 }
 
-function loadDashboardState(options = {}) {
+async function loadDashboardState(options = {}) {
+  const requestedMode = normalizeMode(state.mode);
+  const requestId = ++state.dashboardLoadSeq;
   syncModeUi();
+  renderKnownStateForMode(requestedMode);
   if (!state.portfolioConfig) {
-    return loadPortfolioConfig().then(() => loadDashboardState(options));
+    await loadPortfolioConfig();
+    if (dashboardLoadIsStale({ requestId, requestedMode })) return;
   }
-  return isLiveMode() ? loadLiveState(options) : loadBotState();
+  return requestedMode === "live"
+    ? loadLiveState({ ...options, requestId, requestedMode })
+    : loadBotState({ ...options, requestId, requestedMode });
 }
 
 function paperPortfolioList(botState) {
