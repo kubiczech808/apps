@@ -584,9 +584,13 @@ button:disabled {
 }
 
 .ledger {
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
   scrollbar-width: thin;
 }
 
@@ -684,7 +688,7 @@ button:disabled {
 }
 
 .ledger table {
-  width: 100%;
+  width: max-content;
   border-collapse: collapse;
   min-width: 1380px;
 }
