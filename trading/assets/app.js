@@ -2690,7 +2690,9 @@ function evaluationReasons(item, riskReason = "") {
 }
 
 function dashboardLoadIsStale(options = {}) {
-  return Number(options.requestId || 0) !== state.dashboardLoadSeq
+  const requestId = Number(options.requestId);
+  const hasRequestId = Number.isFinite(requestId) && requestId > 0;
+  return (hasRequestId && requestId !== state.dashboardLoadSeq)
     || (options.requestedMode && normalizeMode(state.mode) !== normalizeMode(options.requestedMode));
 }
 
