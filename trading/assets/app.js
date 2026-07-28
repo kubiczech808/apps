@@ -2222,6 +2222,10 @@ function updateParameterDraft(updates = {}, systemUpdates = null) {
   return true;
 }
 
+function parameterDraftInputIsEmpty(input) {
+  return parameterDraftActive() && input && input.value === "";
+}
+
 function analysisModal() {
   let modal = document.querySelector("[data-analysis-modal]");
   if (modal) return modal;
@@ -4852,6 +4856,10 @@ els.evaluationProbabilityFilter?.addEventListener("input", () => {
 });
 
 els.eligibilityThreshold?.addEventListener("input", () => {
+  if (parameterDraftInputIsEmpty(els.eligibilityThreshold)) {
+    if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = "-";
+    return;
+  }
   const raw = Number(els.eligibilityThreshold.value);
   if (!Number.isFinite(raw)) return;
   const normalized = normalizeEligibilityThreshold(raw / 100);
@@ -4866,6 +4874,11 @@ els.eligibilityThreshold?.addEventListener("input", () => {
 });
 
 els.riskAllocation?.addEventListener("input", () => {
+  if (parameterDraftInputIsEmpty(els.riskAllocation)) {
+    if (els.riskAllocationLabel) els.riskAllocationLabel.textContent = "-";
+    if (els.riskAllocationValue) els.riskAllocationValue.textContent = "-";
+    return;
+  }
   const raw = Number(els.riskAllocation.value);
   if (!Number.isFinite(raw)) return;
   const normalized = normalizeRiskAllocation(raw / 100);
@@ -4888,6 +4901,10 @@ els.limitOrders?.addEventListener("change", () => {
 });
 
 els.maxResolutionDays?.addEventListener("input", () => {
+  if (parameterDraftInputIsEmpty(els.maxResolutionDays)) {
+    if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = "-";
+    return;
+  }
   const value = normalizeOptionalDays(els.maxResolutionDays.value) || DEFAULT_MAX_RESOLUTION_DAYS;
   if (updateParameterDraft({ maxResolutionDays: value })) return;
   updatePortfolioConfigForMode(state.mode, { maxResolutionDays: value });
@@ -4915,6 +4932,10 @@ els.minLiquidity?.addEventListener("input", () => {
 });
 
 els.tradeCadenceHours?.addEventListener("input", () => {
+  if (parameterDraftInputIsEmpty(els.tradeCadenceHours)) {
+    if (els.tradeCadenceHoursLabel) els.tradeCadenceHoursLabel.textContent = "-";
+    return;
+  }
   const fallback = isLiveMode() ? 24 : 1;
   const value = normalizeCadenceHours(els.tradeCadenceHours.value, fallback);
   if (updateParameterDraft({ tradeCadenceHours: value })) return;
