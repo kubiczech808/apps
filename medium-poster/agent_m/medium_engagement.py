@@ -336,6 +336,57 @@ def set_daily_proposal_count(count: int) -> dict:
     return {"status": "ok", "daily_proposals": count, "max_daily_posts": _DAILY_LIMIT}
 
 
+def engagement_rules_status() -> dict:
+    state = _read_state(_STATE_FILE)
+    blocked_profiles = _blocked_profiles(state)
+    pending = state.get("pending") or {}
+    pending_count = sum(1 for item in pending.values() if item.get("status") == "pending")
+    return {
+        "min_responses": _MIN_RESPONSES,
+        "min_followers": _MIN_FOLLOWERS,
+        "fallback_min_followers": 1,
+        "prefilter_score": 45,
+        "prefilter_fallback_score": 18,
+        "daily_proposals": get_daily_proposal_count(),
+        "max_daily_posts": _DAILY_LIMIT,
+        "auto_post_enabled": is_auto_post_enabled(),
+        "blocked_profiles": len(blocked_profiles),
+        "used_profiles_this_week": len(_used_profiles_this_week(state)),
+        "pending": pending_count,
+        "queries": _DEFAULT_QUERIES,
+    }
+
+
+def format_engagement_rules_status() -> str:
+    rules = engagement_rules_status()
+    mode = "auto-post without approval" if rules["auto_post_enabled"] else "proposal approval required"
+    return (
+        "Medium engagement rules\n\n"
+        "Primary eligibility:\n"
+        f"- Article responses/comments: >= {rules['min_responses']}\n"
+        f"- Author/profile followers: >= {rules['min_followers']}\n"
+        "- Language: confidently English\n"
+        "- Article: never commented before\n"
+        "- Profile: not used this week and not blocked/skipped\n\n"
+        "Fallback eligibility:\n"
+        f"- If no inspected article has {rules['min_responses']}+ responses, select the English candidate "
+        f"with the highest known follower count, minimum {rules['fallback_min_followers']} follower.\n\n"
+        "Search/prefilter:\n"
+        f"- Search results per query: 12\n"
+        f"- Primary topical score: >= {rules['prefilter_score']}\n"
+        f"- Fallback inspection score: >= {rules['prefilter_fallback_score']}\n\n"
+        "Current schedule/settings:\n"
+        f"- Daily proposal slots: {rules['daily_proposals']}\n"
+        f"- Hard daily posted-comment cap: {rules['max_daily_posts']}\n"
+        f"- Mode: {mode}\n"
+        f"- Pending proposals: {rules['pending']}\n"
+        f"- Blocked profiles: {rules['blocked_profiles']}\n"
+        f"- Profiles already used this week: {rules['used_profiles_this_week']}\n\n"
+        "Use /engage_auto <0-10> to change daily slots and /engage_autopost on|off|status "
+        "to change approval mode."
+    )[:4096]
+
+
 def planned_times_for_today(now: datetime | None = None, count: int | None = None) -> list[datetime]:
     now = now.astimezone(_PRAGUE) if now else datetime.now(_PRAGUE)
     count = get_daily_proposal_count() if count is None else _clamp_daily_proposals(count)

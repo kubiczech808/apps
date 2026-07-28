@@ -80,6 +80,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/history — recent publications\n"
         "/topics — content plan status\n"
         "/engage [query] — find related Medium articles and draft comments\n"
+        "/engage_rules — show Medium engagement eligibility rules\n"
         "/engage_auto <0-10> — set daily scheduled Medium engagement proposals\n"
         "/engage_autopost on|off|status — post scheduled engagement without approval\n"
         "/status — token usage & schedule\n"
@@ -622,6 +623,17 @@ async def engage_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except Exception as exc:
         log.exception("Medium engagement scout failed")
         await msg.reply_text(f"Medium engagement scout failed:\n{exc}")
+
+
+@admin_only
+async def engage_rules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    from agent_m.medium_engagement import format_engagement_rules_status
+
+    await msg.reply_text(format_engagement_rules_status())
 
 
 @admin_only

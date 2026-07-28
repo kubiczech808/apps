@@ -198,6 +198,7 @@ _BOT_COMMANDS = [
     BotCommand("history", "Poslední publikace"),
     BotCommand("topics", "Stav obsahového plánu"),
     BotCommand("engage", "Param: [query] - najit clanky a navrhnout komentare"),
+    BotCommand("engage_rules", "Bez parametru - vypsat engagement pravidla"),
     BotCommand("engage_auto", "Param: <0-10> - denni pocet engagement navrhu"),
     BotCommand("engage_autopost", "Param: on|off|status - komentare bez schvalovani"),
     BotCommand("status", "Využití tokenů a rozvrh"),
@@ -255,6 +256,7 @@ def build_app():
     app.add_handler(CommandHandler("topics", handlers.topics_cmd))
     app.add_handler(CommandHandler("topic", handlers.topic_suggestion_cmd))
     app.add_handler(CommandHandler("engage", handlers.engage_cmd))
+    app.add_handler(CommandHandler("engage_rules", handlers.engage_rules_cmd))
     app.add_handler(CommandHandler("engage_auto", handlers.engage_auto_cmd))
     app.add_handler(CommandHandler("engage_autopost", handlers.engage_autopost_cmd))
     app.add_handler(CommandHandler("status", handlers.status_cmd))
