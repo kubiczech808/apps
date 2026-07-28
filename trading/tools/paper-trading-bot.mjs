@@ -2204,6 +2204,84 @@ function openTrades(trades) {
   return trades.filter((trade) => OPEN_STATUSES.has(trade.status));
 }
 
+function openExposureProfile(portfolioStates = []) {
+  const tagCounts = {};
+  const categoryCounts = {};
+  const riskCounts = {};
+  const rows = [];
+  for (const portfolioState of portfolioStates) {
+    for (const trade of openTrades(portfolioState?.trades || [])) {
+      const tags = Array.isArray(trade.tags) && trade.tags.length ? trade.tags : tagQuestion(trade.question || "");
+      const category = trade.riskCategory || (tags.includes("sports") ? "sports" : tags[0] || "general");
+      for (const tag of tags) {
+        tagCounts[tag] = Number(tagCounts[tag] || 0) + 1;
+      }
+      categoryCounts[category] = Number(categoryCounts[category] || 0) + 1;
+      const keys = Array.isArray(trade.riskGroupKeys) && trade.riskGroupKeys.length
+        ? trade.riskGroupKeys
+        : riskProfile({
+            question: trade.question,
+            slug: trade.slug,
+            eventSlug: trade.eventSlug,
+            outcome: trade.outcome,
+            tags,
+          }).keys;
+      for (const key of keys) {
+        riskCounts[key] = Number(riskCounts[key] || 0) + 1;
+      }
+      rows.push({
+        strategyId: portfolioState?.id || trade.strategyId || "paper",
+        tradeId: trade.id || null,
+        question: trade.question || "",
+        outcome: trade.outcome || "",
+        tags,
+        category,
+        riskGroupKeys: keys,
+      });
+    }
+  }
+  return { tagCounts, categoryCounts, riskCounts, openTrades: rows };
+}
+
+function marketDiversificationScore(market, exposure) {
+  const question = String(market?.question || "");
+  const tags = tagQuestion(question);
+  const eventSlug = marketEventSlug(market);
+  const risk = riskProfile({ question, slug: market?.slug, eventSlug, outcome: "", tags });
+  const category = risk.category || tags[0] || "general";
+  let score = 0;
+  const reasons = [];
+
+  if (!Number(exposure.categoryCounts[category] || 0)) {
+    score += 5;
+    reasons.push(`new category ${category}`);
+  }
+  const newTags = tags.filter((tag) => !Number(exposure.tagCounts[tag] || 0));
+  if (newTags.length) {
+    score += Math.min(4, newTags.length * 2);
+    reasons.push(`new tags ${newTags.slice(0, 3).join(", ")}`);
+  }
+  const topicKeys = risk.keys.filter((key) => key.startsWith("topic:"));
+  const newTopics = topicKeys.filter((key) => !Number(exposure.riskCounts[key] || 0));
+  if (newTopics.length) {
+    score += Math.min(4, newTopics.length * 2);
+    reasons.push(`new topics ${newTopics.slice(0, 3).join(", ")}`);
+  }
+  const overlapKeys = risk.keys.filter((key) => Number(exposure.riskCounts[key] || 0));
+  if (overlapKeys.length) {
+    score -= Math.min(6, overlapKeys.length * 2);
+    reasons.push(`overlaps ${overlapKeys.slice(0, 3).join(", ")}`);
+  }
+
+  return {
+    score,
+    tags,
+    category,
+    riskGroupKeys: risk.keys,
+    reasons,
+  };
+}
+
 function heldHours(trade) {
   const opened = Date.parse(trade.openedAt || trade.date || "");
   if (!Number.isFinite(opened)) return Infinity;
@@ -2547,7 +2625,7 @@ function portfolioFilterDiagnostics(evaluations, strategy) {
   };
 }
 
-function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, cadenceBlocked = false, rotationReview = null }) {
+function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, cadenceBlocked = false, rotationReview = null, diversificationDiagnostics = null }) {
   const evaluated = Array.isArray(eligible) ? eligible : [];
   const ranked = Array.isArray(rankedEligible) ? rankedEligible : evaluated;
   const blocked = ranked.filter((item) => item.selectionStatus === "RISK_BLOCKED" || item.riskBlockedReason);
@@ -2599,6 +2677,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
     topCandidates: ranked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
     riskBlocked: blocked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
     rotationReview: rotationReview || null,
+    diversificationDiagnostics: diversificationDiagnostics || null,
   };
 }
 
@@ -2743,6 +2822,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         available,
         stake,
         cadenceBlocked: true,
+        diversificationDiagnostics: options.diversificationDiagnostics || null,
       }),
     };
   }
@@ -2779,6 +2859,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         stake,
         selected: rotation.candidate,
         rotationReview: closedTrade.rotationReview,
+        diversificationDiagnostics: options.diversificationDiagnostics || null,
       }),
     };
   }
@@ -2803,6 +2884,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         available,
         stake,
         insufficientCapital: true,
+        diversificationDiagnostics: options.diversificationDiagnostics || null,
       }),
     };
   }
@@ -2826,6 +2908,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         reason,
         available,
         stake,
+        diversificationDiagnostics: options.diversificationDiagnostics || null,
       }),
     };
   }
@@ -2853,6 +2936,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         available,
         stake,
         skippedForRisk,
+        diversificationDiagnostics: options.diversificationDiagnostics || null,
       }),
     };
   }
@@ -2883,6 +2967,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
       stake,
       selected: best,
       skippedForRisk,
+      diversificationDiagnostics: options.diversificationDiagnostics || null,
     }),
   };
 }
@@ -3687,12 +3772,41 @@ async function run() {
   }
 
   const knownEvaluationKeys = new Set((state.evaluations || []).map(evaluationKey).filter(Boolean));
+  const exposureProfile = openExposureProfile(strategiesForRun.map((strategy) => state.paperPortfolios[strategy.id]).filter(Boolean));
+  const diversificationByMarket = new Map();
+  const diversificationForMarket = (market) => {
+    const key = String(market?.id || market?.slug || market?.question || "");
+    if (!diversificationByMarket.has(key)) {
+      diversificationByMarket.set(key, marketDiversificationScore(market, exposureProfile));
+    }
+    return diversificationByMarket.get(key);
+  };
   const markets = (await loadMarkets()).sort((a, b) => {
     const aNew = marketHasNewOutcome(a, knownEvaluationKeys) ? 1 : 0;
     const bNew = marketHasNewOutcome(b, knownEvaluationKeys) ? 1 : 0;
     if (aNew !== bNew) return bNew - aNew;
+    const aDiversification = diversificationForMarket(a).score;
+    const bDiversification = diversificationForMarket(b).score;
+    if (bDiversification !== aDiversification) return bDiversification - aDiversification;
     return Number(b.volume24hr || 0) - Number(a.volume24hr || 0);
   });
+  const diversificationDiagnostics = {
+    openTrades: exposureProfile.openTrades.length,
+    occupiedTags: exposureProfile.tagCounts,
+    occupiedCategories: exposureProfile.categoryCounts,
+    topDiversifiedMarkets: markets.slice(0, 12).map((market) => {
+      const diversification = diversificationForMarket(market);
+      return {
+        question: market.question || "",
+        slug: market.slug || "",
+        volume24hr: Number(market.volume24hr || 0),
+        diversificationScore: Number(diversification.score.toFixed(2)),
+        category: diversification.category,
+        tags: diversification.tags,
+        reasons: diversification.reasons,
+      };
+    }),
+  };
   let evaluations = [];
 
   for (const market of markets) {
@@ -3731,7 +3845,7 @@ async function run() {
   const decisions = strategiesForRun.map((strategy) => {
     const portfolioState = state.paperPortfolios[strategy.id];
     const rankedEligible = sortEligibleForStrategy(eligible, strategy);
-    return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations, { ignoreCadence: MANUAL_RUN_ONCE });
+    return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations, { ignoreCadence: MANUAL_RUN_ONCE, diversificationDiagnostics });
   });
 
   state.generatedAt = nowIso();

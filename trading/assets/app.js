@@ -4123,6 +4123,7 @@ function tradeBatchDetail(batch) {
     : [...candidates, ...rejected];
   const openOrderReviews = Array.isArray(batch.openOrderReviews) ? batch.openOrderReviews : [];
   const rotationReview = batch.rotationReview || null;
+  const diversificationDiagnostics = batch.diversificationDiagnostics || null;
   const portfolioFilter = batch.portfolioFilter || {};
   const prevalidationFilter = batch.prevalidationFilter || {};
   const candidateMetricLine = (item) => [
@@ -4213,6 +4214,23 @@ function tradeBatchDetail(batch) {
         item.cancelResponse ? `   Cancel response: ${JSON.stringify(item.cancelResponse).slice(0, 240)}` : "",
         item.replaceResponse ? `   Replace response: ${JSON.stringify(item.replaceResponse).slice(0, 240)}` : "",
       ].filter(Boolean).join("\n")).join("\n\n")
+    : "-";
+  const diversificationLines = diversificationDiagnostics
+    ? [
+        `Open positions considered: ${Number(diversificationDiagnostics.openTrades || 0)}`,
+        `Occupied categories: ${Object.keys(diversificationDiagnostics.occupiedCategories || {}).join(", ") || "-"}`,
+        `Occupied tags: ${Object.keys(diversificationDiagnostics.occupiedTags || {}).join(", ") || "-"}`,
+        "",
+        "Priority markets for broader pre-evaluation:",
+        ...(Array.isArray(diversificationDiagnostics.topDiversifiedMarkets)
+          ? diversificationDiagnostics.topDiversifiedMarkets.slice(0, 8).map((item, index) => [
+              `${index + 1}. ${item.question || item.slug || "-"}`,
+              `   Category/tags: ${item.category || "-"} / ${(item.tags || []).join(", ") || "-"}`,
+              `   Diversification score: ${Number(item.diversificationScore || 0).toFixed(1)}`,
+              Array.isArray(item.reasons) && item.reasons.length ? `   Why: ${item.reasons.join("; ")}` : "",
+            ].filter(Boolean).join("\n"))
+          : []),
+      ].filter(Boolean).join("\n")
     : "-";
   const rotationReviewLines = rotationReview
     ? [
@@ -4305,6 +4323,9 @@ function tradeBatchDetail(batch) {
     "",
     `Open order review:`,
     orderReviewLines,
+    "",
+    `Pre-evaluation diversification steering:`,
+    diversificationLines,
     "",
     `Position rotation review:`,
     rotationReviewLines,
