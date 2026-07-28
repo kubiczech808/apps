@@ -3252,6 +3252,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(normalizedMode);
   const annualizedReturn = Number(item.annualizedReturn);
+  const aiPending = item.selectionStatus === "AI_PENDING" || item.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
 
   if (displayStatus !== "EVALUATED") reasons.push(`status ${displayStatus}`);
   if (normalizedMode !== "live" && storedStatus !== "ELIGIBLE") {
@@ -3265,6 +3266,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   if (Number.isFinite(annualizedReturn) && annualizedReturn <= 0) {
     reasons.push(`EV p.a. ${signedPercent(annualizedReturn)} is non-profitable after fees`);
   }
+  if (aiPending) reasons.push("grounded Gemini analysis is pending");
   if (!Number.isFinite(days)) {
     reasons.push("missing resolution date");
   } else if (days > maxDays) {

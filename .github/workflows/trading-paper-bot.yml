@@ -142,6 +142,10 @@ on:
     - cron: '22,37,52 * * * *'
     - cron: '17 1 * * *'
 
+concurrency:
+  group: trading-paper-bot
+  cancel-in-progress: false
+
 jobs:
   paper:
     runs-on: ubuntu-latest
@@ -181,7 +185,8 @@ jobs:
       PAPER_MAX_SPREAD: "0.08"
       PAPER_MIN_VOLUME_24H: "100"
       PAPER_MAX_RESOLUTION_DAYS: "7"
-      PAPER_AI_ANALYSIS_LIMIT: "6"
+      PAPER_AI_ANALYSIS_LIMIT: "2"
+      PAPER_AI_REQUEST_DELAY_MS: "2500"
       PAPER_AI_STOP_ON_QUOTA_ERROR: "true"
       PAPER_AI_POSTMORTEM_LIMIT: "8"
       PAPER_REQUIRE_GEMINI: "true"

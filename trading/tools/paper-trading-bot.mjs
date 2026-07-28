@@ -43,7 +43,8 @@ const REQUIRE_GEMINI = envBool("PAPER_REQUIRE_GEMINI", false);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").toLowerCase();
-const AI_ANALYSIS_LIMIT = envNumber("PAPER_AI_ANALYSIS_LIMIT", MAX_EVALUATIONS_PER_RUN);
+const AI_ANALYSIS_LIMIT = envNumber("PAPER_AI_ANALYSIS_LIMIT", 2);
+const AI_REQUEST_DELAY_MS = envNumber("PAPER_AI_REQUEST_DELAY_MS", 2500);
 const AI_POSTMORTEM_LIMIT = envNumber("PAPER_AI_POSTMORTEM_LIMIT", 8);
 const AI_STOP_ON_QUOTA_ERROR = String(process.env.PAPER_AI_STOP_ON_QUOTA_ERROR ?? "true").toLowerCase() !== "false";
 const GROUNDED_AI_ANALYSIS_VERSION = "grounded-public-memo-v1";
@@ -1973,6 +1974,22 @@ function markAiAnalysisUnavailable(item, message) {
   });
 }
 
+function markAiAnalysisDeferred(item, message) {
+  const reason = compactSentence(message || "Gemini grounded AI analysis was deferred");
+  return {
+    ...item,
+    selectionStatus: "AI_PENDING",
+    aiAnalysis: {
+      ...(item.aiAnalysis || {}),
+      aiModelStatus: "QUOTA_LIMITED",
+      aiModelError: reason,
+      requiredModel: GEMINI_MODEL,
+      provider: "gemini",
+    },
+    analysisSummary: `Gemini grounded AI analysis was deferred for this run because the API rate limit or quota was reached: ${reason}. The opportunity remains pending and is not eligible for trade selection until a grounded memo is completed.`,
+  };
+}
+
 async function enrichEvaluationsWithAi(evaluations, learningProfile) {
   if (!GEMINI_API_KEY || AI_ANALYSIS_LIMIT <= 0) return evaluations;
   const candidates = [...evaluations]
@@ -1990,7 +2007,10 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
   const byId = new Map(evaluations.map((item) => [item.id, item]));
   let quotaError = "";
 
-  for (const candidate of candidates) {
+  for (const [candidateIndex, candidate] of candidates.entries()) {
+    if (candidateIndex > 0 && AI_REQUEST_DELAY_MS > 0) {
+      await new Promise((resolve) => setTimeout(resolve, AI_REQUEST_DELAY_MS));
+    }
     const prompt = {
       task: "Deep-research this prediction-market event and estimate the true probability of the selected outcome using public evidence only.",
       strictRules: [
@@ -2051,16 +2071,19 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
     ]);
     if (!result || result.error) {
       const message = result?.error || "Gemini public-research analysis unavailable";
-      byId.set(candidate.id, REQUIRE_GEMINI
+      const quotaLimited = isQuotaError(result);
+      byId.set(candidate.id, REQUIRE_GEMINI && !quotaLimited
         ? markAiAnalysisUnavailable(candidate, message)
-        : {
+        : quotaLimited
+          ? markAiAnalysisDeferred(candidate, message)
+          : {
             ...candidate,
             aiAnalysis: {
               ...(candidate.aiAnalysis || {}),
               aiModelError: message,
             },
           });
-      if (AI_STOP_ON_QUOTA_ERROR && isQuotaError(result)) {
+      if (AI_STOP_ON_QUOTA_ERROR && quotaLimited) {
         quotaError = message;
         break;
       }
@@ -2092,7 +2115,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile) {
   if (REQUIRE_GEMINI && quotaError) {
     for (const item of evaluations) {
       if (hasGroundedPublicMemo(byId.get(item.id) || item)) continue;
-      byId.set(item.id, markAiAnalysisUnavailable(byId.get(item.id) || item, `Gemini quota/rate limit stopped this run before the candidate could be reviewed: ${quotaError}`));
+      byId.set(item.id, markAiAnalysisDeferred(byId.get(item.id) || item, `Gemini quota/rate limit stopped this run before the candidate could be reviewed: ${quotaError}`));
     }
   }
 
@@ -2411,6 +2434,7 @@ function portfolioFilterResult(item, strategy) {
   const annualizedReturn = Number(item.annualizedReturn);
 
   if (status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
+  if (REQUIRE_GEMINI && !hasGroundedPublicMemo(item)) reasons.push("grounded Gemini analysis is pending");
   if (Number.isFinite(minProbability) && (!Number.isFinite(aiProbability) || aiProbability < minProbability)) {
     reasons.push(`AI probability ${Number.isFinite(aiProbability) ? (aiProbability * 100).toFixed(1) : "-"}% below ${(minProbability * 100).toFixed(1)}%`);
   }
@@ -4070,7 +4094,7 @@ async function run() {
   }
 
   evaluations = (await enrichEvaluationsWithAi(evaluations, state.learningProfile)).map(normalizeEvaluationRisk);
-  const eligible = evaluations.filter((item) => item.status === "ELIGIBLE");
+  const eligible = evaluations.filter((item) => item.status === "ELIGIBLE" && (!REQUIRE_GEMINI || hasGroundedPublicMemo(item)));
   const decisions = strategiesForRun.map((strategy) => {
     const portfolioState = state.paperPortfolios[strategy.id];
     const rankedEligible = sortEligibleForStrategy(eligible, strategy);
