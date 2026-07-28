@@ -23,9 +23,13 @@ _STATE_FILE = config.data_dir / "medium_engagement.json"
 _OWN_MEDIUM_MARKERS = ("/@info_89535/", "medium.com/@info_89535")
 _PRAGUE = ZoneInfo("Europe/Prague")
 _DAILY_LIMIT = 10
-_DEFAULT_DAILY_PROPOSALS = 1
+_DEFAULT_DAILY_PROPOSALS = 3
 _MIN_RESPONSES = 3
-_MIN_FOLLOWERS = 500
+_MIN_FOLLOWERS = 100
+_SEARCH_RESULTS_PER_QUERY = 16
+_SEARCH_QUERY_LIMIT = 8
+_PREFILTER_SCORE = 45
+_PREFILTER_FALLBACK_SCORE = 18
 _DEFAULT_QUERIES = [
     "bitcoin dca",
     "dollar cost averaging bitcoin",
@@ -66,9 +70,9 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
     publisher = MediumPlaywrightPublisher()
 
     raw_candidates: list[dict] = []
-    for q in queries[:5]:
+    for q in queries[:_SEARCH_QUERY_LIMIT]:
         try:
-            raw_candidates.extend(await publisher.search_articles(q, limit=12))
+            raw_candidates.extend(await publisher.search_articles(q, limit=_SEARCH_RESULTS_PER_QUERY))
         except Exception as exc:
             log.warning("Medium engagement search failed for %r: %s", q, exc)
 
@@ -78,14 +82,16 @@ async def run_once(limit: int = 3, query: str | None = None) -> dict:
     # Only pending/posted articles and this week's used profiles are hard
     # blocks.
     candidates, prefilter_rejected = _rank_candidates(raw_candidates, blocked_articles, blocked_profiles)
-    if not candidates and prefilter_rejected:
-        candidates = _prefilter_fallback_candidates(prefilter_rejected, limit=max(limit * 6, 8))
+    candidates = _merge_candidate_lists(
+        candidates,
+        _prefilter_fallback_candidates(prefilter_rejected, limit=max(limit * 16, 24)),
+    )
     opportunities: list[EngagementOpportunity] = []
     fallback_candidates: list[dict] = []
     rejected: list[dict] = prefilter_rejected[:10] if not candidates else []
     inspected = 0
 
-    for candidate in candidates[: max(limit * 8, 12)]:
+    for candidate in candidates[: max(limit * 16, 24)]:
         if len(opportunities) >= limit:
             break
         inspected += 1
@@ -344,9 +350,11 @@ def engagement_rules_status() -> dict:
     return {
         "min_responses": _MIN_RESPONSES,
         "min_followers": _MIN_FOLLOWERS,
-        "fallback_min_followers": 1,
-        "prefilter_score": 45,
-        "prefilter_fallback_score": 18,
+        "fallback_min_followers": _MIN_FOLLOWERS,
+        "prefilter_score": _PREFILTER_SCORE,
+        "prefilter_fallback_score": _PREFILTER_FALLBACK_SCORE,
+        "search_results_per_query": _SEARCH_RESULTS_PER_QUERY,
+        "search_query_limit": _SEARCH_QUERY_LIMIT,
         "daily_proposals": get_daily_proposal_count(),
         "max_daily_posts": _DAILY_LIMIT,
         "auto_post_enabled": is_auto_post_enabled(),
@@ -370,9 +378,10 @@ def format_engagement_rules_status() -> str:
         "- Profile: not used this week and not blocked/skipped\n\n"
         "Fallback eligibility:\n"
         f"- If no inspected article has {rules['min_responses']}+ responses, select the English candidate "
-        f"with the highest known follower count, minimum {rules['fallback_min_followers']} follower.\n\n"
+        f"with the highest known follower count, minimum {rules['fallback_min_followers']} followers.\n\n"
         "Search/prefilter:\n"
-        f"- Search results per query: 12\n"
+        f"- Search queries per run: {rules['search_query_limit']}\n"
+        f"- Search results per query: {rules['search_results_per_query']}\n"
         f"- Primary topical score: >= {rules['prefilter_score']}\n"
         f"- Fallback inspection score: >= {rules['prefilter_fallback_score']}\n\n"
         "Current schedule/settings:\n"
@@ -540,7 +549,7 @@ def _rank_candidates(
             continue
 
         score, reason = _score_candidate(title, snippet, query)
-        if score < 45:
+        if score < _PREFILTER_SCORE:
             rejected.append({
                 "title": title,
                 "url": url,
@@ -549,8 +558,8 @@ def _rank_candidates(
                 "query": query,
                 "score": score,
                 "rank_reason": reason,
-                "reason": f"low topical score ({score} < 45): {reason}",
-                "fallback_inspectable": score >= 18,
+                "reason": f"low topical score ({score} < {_PREFILTER_SCORE}): {reason}",
+                "fallback_inspectable": score >= _PREFILTER_FALLBACK_SCORE,
             })
             continue
 
@@ -568,6 +577,18 @@ def _rank_candidates(
         )
 
     return sorted(ranked, key=lambda x: x["score"], reverse=True), rejected
+
+
+def _merge_candidate_lists(primary: list[dict], fallback: list[dict]) -> list[dict]:
+    merged = []
+    seen_urls = set()
+    for item in [*primary, *fallback]:
+        url = _clean_url(item.get("url") or "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        merged.append(item)
+    return merged
 
 
 def _prefilter_fallback_candidates(rejected: list[dict], limit: int) -> list[dict]:
@@ -646,12 +667,12 @@ def _eligible_article(candidate: dict, details: dict) -> tuple[bool, str]:
         ]
     )
 
+    if not _looks_english(lang, sample):
+        return False, f"not confidently English (lang={lang or 'unknown'})"
     if responses < _MIN_RESPONSES:
         return False, f"too few comments/responses ({responses} < {_MIN_RESPONSES})"
     if followers < _MIN_FOLLOWERS:
         return False, f"too few followers ({followers} < {_MIN_FOLLOWERS})"
-    if not _looks_english(lang, sample):
-        return False, f"not confidently English (lang={lang or 'unknown'})"
     return True, "eligible"
 
 
@@ -667,8 +688,8 @@ def _fallback_article(candidate: dict, details: dict) -> tuple[bool, str]:
         ]
     )
 
-    if followers <= 0:
-        return False, "fallback rejected: follower count unavailable"
+    if followers < _MIN_FOLLOWERS:
+        return False, f"fallback rejected: too few followers ({followers} < {_MIN_FOLLOWERS})"
     if not _looks_english(lang, sample):
         return False, f"fallback rejected: not confidently English (lang={lang or 'unknown'})"
     return True, "fallback eligible by highest known follower count"
@@ -679,7 +700,7 @@ def _looks_english(lang: str, text: str) -> bool:
     if not sample:
         return False
 
-    if _looks_french(sample):
+    if _looks_french(sample) or _looks_spanish_or_portuguese(sample):
         return False
     if lang and not lang.startswith("en"):
         return False
@@ -721,6 +742,36 @@ def _looks_french(sample: str) -> bool:
     if french_hits >= 4 and french_hits > english_hits:
         return True
     return bool(re.search(r"\b(la|le|les|du|des)\s+\w+\s+(strategie|stratégie|pour|bitcoin)\b", sample))
+
+
+def _looks_spanish_or_portuguese(sample: str) -> bool:
+    words = re.findall(r"[a-záéíóúüñãõçâêôà]{2,}", sample.lower())
+    if not words:
+        return False
+    markers = {
+        "el", "la", "los", "las", "un", "una", "unos", "unas",
+        "de", "del", "que", "con", "para", "por", "como", "sobre",
+        "este", "esta", "estos", "estas", "pero", "mas", "más", "sin",
+        "comprar", "inversion", "inversión", "estrategia", "mercado",
+        "precio", "promedio", "coste", "costo", "dolar", "dólar",
+        "o", "e", "os", "as", "um", "uma", "dos", "das", "nao", "não",
+        "voce", "você", "investimento", "recorrente", "preco", "preço",
+    }
+    latin_hits = sum(1 for word in words[:220] if word in markers)
+    english_markers = {
+        "the", "and", "that", "with", "this", "from", "have", "your",
+        "market", "price", "strategy", "investing", "stack", "wallet",
+    }
+    english_hits = sum(1 for word in words[:220] if word in english_markers)
+    if latin_hits >= 4 and latin_hits > english_hits:
+        return True
+    return bool(
+        re.search(
+            r"\b(el|la|los|las|de|del|para|por|como|sobre)\s+\w+\s+"
+            r"(bitcoin|dca|estrategia|inversi[oó]n|investimento|mercado)\b",
+            sample,
+        )
+    )
 
 
 async def _draft_comment(candidate: dict) -> str:
