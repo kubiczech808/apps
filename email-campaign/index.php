@@ -2526,6 +2526,31 @@ function runAiResearchWorker(PDO $pdo, array $config): string
     }
 }
 
+/**
+ * Minimalni plan pro radek, ktery se zaklada jeste pred analyzou webu. Slouzi jen k tomu,
+ * aby bylo v prehledu hned videt, jaky seed subjekt se prave zpracovava.
+ */
+function aiResearchBootstrapPlan(array $seed): array
+{
+    return [
+        'audience_label' => 'vyhodnocuje se',
+        'rationale' => 'Seed subjekt byl vybran z katalogu, probiha analyza jeho webu.',
+        'email_angle' => '',
+        'target_segments' => [],
+        'candidate_terms' => [],
+        'filters' => [],
+        'scraping_queries' => [],
+        'business_understanding' => '',
+        'targeting_reason' => '',
+        'location_scope' => 'cela_cr',
+        'target_location' => '',
+        'seed_description' => (string)($seed['seed_description'] ?? ''),
+        'seed_catalog_url' => (string)($seed['source_url'] ?? ''),
+        'website_url_analyzed' => (string)($seed['website'] ?? ''),
+        'website_context_excerpt' => '',
+    ];
+}
+
 function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
 {
     $skippedSeeds = 0;
@@ -2537,7 +2562,21 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
                 ? 'AI research: ulozeno ' . $skippedSeeds . ' seed subjektu bez pouzitelneho webu, dalsi unikatni firma z Firmy.cz ted nebyla nalezena.'
                 : 'AI research: nepodarilo se najit novou unikatni seed firmu z Firmy.cz / Vse pro firmy / Praha.';
         }
-        $basePlan = aiResearchPlan($config, $seed);
+        // Radek se zaklada hned po vyberu seedu. Vyber je levny, kdezto nacteni webu
+        // a plan trvaji desitky sekund, takze uzivatel jinak dlouho nevidi, co se zpracovava.
+        $runId = startAiResearchRun(
+            $pdo,
+            $seed,
+            aiResearchBootstrapPlan($seed),
+            'AI research bezi: nacitam a analyzuji web seed firmy.'
+        );
+        setSetting($pdo, 'ai_research_last_seed_source_url', (string)($seed['source_url'] ?? ''));
+        try {
+            $basePlan = aiResearchPlan($config, $seed);
+        } catch (Throwable $e) {
+            markAiResearchRunDeferred($pdo, $runId, 'AI research odlozen: ' . $e->getMessage());
+            throw $e;
+        }
         if (!empty($basePlan['seed_unsuitable'])) {
             $basePlan['research_attempts'] = 0;
             $runId = saveAiResearchRun($pdo, $config, $seed, $basePlan, [], []);
@@ -2548,8 +2587,12 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
         }
         $plans = [$basePlan];
         $plans = array_merge($plans, aiResearchFallbackMarketPlans($seed, $basePlan));
-        $runId = startAiResearchRun($pdo, $seed, aiResearchEnrichPlan($basePlan, $seed), 'AI research bezi: plan je pripraveny, zacinam hledat kontakty.');
-        setSetting($pdo, 'ai_research_last_seed_source_url', (string)($seed['source_url'] ?? ''));
+        updateAiResearchRunProgress(
+            $pdo,
+            $runId,
+            aiResearchEnrichPlan($basePlan, $seed),
+            'AI research bezi: plan je pripraveny, zacinam hledat kontakty.'
+        );
         $bestPlan = $basePlan;
         $bestEvaluated = [];
         $bestAccepted = [];
@@ -5402,7 +5445,7 @@ function aiResearchReusableRunId(PDO $pdo, array $seed): int
     $stmt = $pdo->prepare('
         SELECT id
         FROM ai_research_runs
-        WHERE status IN ("deferred","failed")
+        WHERE status IN ("deferred","failed","running")
           AND (' . implode(' OR ', $conditions) . ')
         ORDER BY updated_at DESC, id DESC
         LIMIT 1
