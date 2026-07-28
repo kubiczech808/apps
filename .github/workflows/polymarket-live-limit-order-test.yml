@@ -60,7 +60,7 @@ on:
         default: "false"
         type: string
   schedule:
-    - cron: '7 * * * *'
+    - cron: '7,22,37,52 * * * *'
 
 jobs:
   live-limit-order-test:
@@ -84,6 +84,7 @@ jobs:
       LIVE_ONE_TRADE_PER_DAY: "true"
       LIVE_TRADE_CADENCE_HOURS: ${{ github.event.inputs.live_trade_cadence_hours || '24' }}
       LIVE_IGNORE_TRADE_CADENCE: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+      LIVE_SCHEDULED_CADENCE_POLL: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
       USE_LIMIT_ORDERS: ${{ github.event.inputs.live_use_limit_orders || 'true' }}
       LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION: ${{ github.event.inputs.cross_live_portfolio_risk_diversification || 'true' }}
       POLYMARKET_POST_ONLY: "true"

@@ -55,6 +55,7 @@ const ROTATION_MIN_HOLD_HOURS = envNumber("PAPER_ROTATION_MIN_HOLD_HOURS", 6);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
 const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
 const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
+const SCHEDULED_CADENCE_POLL = envBool("PAPER_SCHEDULED_CADENCE_POLL", false);
 const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
 const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable"].includes(process.env.PAPER_STRATEGY_ID)
   ? process.env.PAPER_STRATEGY_ID
@@ -2263,6 +2264,36 @@ function cadenceBlocked(lastTradeHour, currentHour, cadenceHours) {
   return (current.getTime() - previous.getTime()) / 3600000 < cadence;
 }
 
+function latestPortfolioRunAt(portfolioState = {}) {
+  const isTradeEvaluationRun = (row = {}) => {
+    if (row.refreshOnly || row.reportOnly) return false;
+    return !["REFRESH", "REPORT", "CADENCE_WAIT"].includes(String(row.action || "").toUpperCase());
+  };
+  const candidates = [
+    isTradeEvaluationRun(portfolioState.lastDecision) ? portfolioState.lastDecision?.runAt : null,
+    ...(Array.isArray(portfolioState.runLog) ? portfolioState.runLog.filter(isTradeEvaluationRun).map((row) => row.runAt) : []),
+  ];
+  return candidates.find((value) => Number.isFinite(Date.parse(value || ""))) || null;
+}
+
+function portfolioRunDue(portfolioState, strategy, now = new Date()) {
+  if (!SCHEDULED_CADENCE_POLL || MANUAL_RUN_ONCE) return true;
+  const lastRunAt = latestPortfolioRunAt(portfolioState);
+  if (!lastRunAt) return true;
+  const last = Date.parse(lastRunAt);
+  if (!Number.isFinite(last)) return true;
+  const cadence = normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1);
+  return (now.getTime() - last) / 3600000 >= cadence;
+}
+
+function dueExecutionStrategies(state) {
+  const now = new Date();
+  return executionStrategies().filter((strategy) => {
+    const portfolioState = state.paperPortfolios?.[strategy.id];
+    return portfolioRunDue(portfolioState, strategy, now);
+  });
+}
+
 function latestNewTrade(portfolioState = {}) {
   return (portfolioState.trades || [])
     .filter((trade) => !trade.openedAfterRotationOfTradeId)
@@ -3639,6 +3670,22 @@ async function run() {
     return;
   }
 
+  const strategiesForRun = dueExecutionStrategies(state);
+  if (!strategiesForRun.length) {
+    await writeState(state);
+    console.log(JSON.stringify({
+      action: "CADENCE_WAIT",
+      reason: "no paper portfolio is due for a new trading evaluation run yet",
+      scheduledCadencePoll: SCHEDULED_CADENCE_POLL,
+      portfolios: Object.values(state.paperPortfolios || {}).map((portfolioState) => ({
+        strategyId: portfolioState.id,
+        lastRunAt: latestPortfolioRunAt(portfolioState),
+        tradeCadenceHours: normalizeTradeCadenceHours(PAPER_STRATEGIES[portfolioState.id]?.tradeCadenceHours, 1),
+      })),
+    }, null, 2));
+    return;
+  }
+
   const knownEvaluationKeys = new Set((state.evaluations || []).map(evaluationKey).filter(Boolean));
   const markets = (await loadMarkets()).sort((a, b) => {
     const aNew = marketHasNewOutcome(a, knownEvaluationKeys) ? 1 : 0;
@@ -3681,7 +3728,7 @@ async function run() {
 
   evaluations = (await enrichEvaluationsWithAi(evaluations, state.learningProfile)).map(normalizeEvaluationRisk);
   const eligible = evaluations.filter((item) => item.status === "ELIGIBLE");
-  const decisions = executionStrategies().map((strategy) => {
+  const decisions = strategiesForRun.map((strategy) => {
     const portfolioState = state.paperPortfolios[strategy.id];
     const rankedEligible = sortEligibleForStrategy(eligible, strategy);
     return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations, { ignoreCadence: MANUAL_RUN_ONCE });

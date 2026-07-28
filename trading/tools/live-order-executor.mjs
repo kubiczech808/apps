@@ -47,6 +47,7 @@ const ONE_TRADE_PER_DAY = HAS_EXPLICIT_TRADE_CADENCE
   : String(process.env.LIVE_ONE_TRADE_PER_DAY ?? "true").toLowerCase() !== "false";
 const TRADE_CADENCE_HOURS = Math.min(168, Math.max(1, Math.round(envNumber("LIVE_TRADE_CADENCE_HOURS", ONE_TRADE_PER_DAY ? 24 : 1))));
 const IGNORE_TRADE_CADENCE = String(process.env.LIVE_IGNORE_TRADE_CADENCE || "").toLowerCase() === "true";
+const SCHEDULED_CADENCE_POLL = String(process.env.LIVE_SCHEDULED_CADENCE_POLL || "").toLowerCase() === "true";
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
 const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
@@ -126,6 +127,20 @@ function hoursSince(value, now = new Date()) {
   const time = Date.parse(value || "");
   if (!Number.isFinite(time)) return null;
   return Math.max(0, (now.getTime() - time) / 3600000);
+}
+
+function latestLiveExecutionRunAt(previousExecution = {}) {
+  const fromLog = Array.isArray(previousExecution?.runLog) ? previousExecution.runLog[0]?.runAt : null;
+  const candidates = [fromLog, previousExecution?.generatedAt, previousExecution?.batchLog?.runAt];
+  return candidates.find((value) => Number.isFinite(Date.parse(value || ""))) || null;
+}
+
+function liveExecutionRunDue(previousExecution, liveState, now = new Date()) {
+  if (!SCHEDULED_CADENCE_POLL || IGNORE_TRADE_CADENCE) return true;
+  if (Array.isArray(liveState?.openOrders) && liveState.openOrders.length > 0) return true;
+  const lastRunAt = latestLiveExecutionRunAt(previousExecution);
+  if (!lastRunAt) return true;
+  return Number(hoursSince(lastRunAt, now) ?? Infinity) >= TRADE_CADENCE_HOURS;
 }
 
 function liveCashMonitoring(previousExecution, cash, now = new Date()) {
@@ -1357,12 +1372,23 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
 }
 
 async function main() {
-  const [paperState, liveState, previousExecution] = await Promise.all([
-    loadJsonResource(PAPER_STATE_URL, "paper state"),
+  const [liveState, previousExecution] = await Promise.all([
     loadJsonResource(LIVE_STATE_URL, "live state"),
     loadOptionalJsonResource(LIVE_EXECUTION_STATE_URL, "previous live execution state"),
   ]);
   previousExecutionState = previousExecution;
+  if (!liveExecutionRunDue(previousExecution, liveState)) {
+    console.log(JSON.stringify({
+      action: "CADENCE_WAIT",
+      reason: "live execution poll is not due for a new trading evaluation run yet",
+      scheduledCadencePoll: SCHEDULED_CADENCE_POLL,
+      tradeCadenceHours: TRADE_CADENCE_HOURS,
+      lastRunAt: latestLiveExecutionRunAt(previousExecution),
+      openOrders: Array.isArray(liveState?.openOrders) ? liveState.openOrders.length : 0,
+    }, null, 2));
+    return;
+  }
+  const paperState = await loadJsonResource(PAPER_STATE_URL, "paper state");
   const cash = liveCashUsdc(liveState);
   const tradingConfig = liveTradingConfig(liveState);
   const portfolioValue = livePortfolioValue(liveState, cash);
