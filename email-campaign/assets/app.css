@@ -1101,6 +1101,13 @@ main > .panel + .panel { margin-top: 16px; }
 }
 .section-header h2 { margin-bottom: 6px; }
 .section-header p { margin-bottom: 0; max-width: 880px; }
+.section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
 .database-detail-header .actions-row {
   justify-content: flex-end;
   flex: 0 0 auto;
@@ -2123,11 +2130,19 @@ td a {
 }
 .scraping-detail-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 14px;
   align-items: center;
   color: var(--muted);
 }
+.scraping-detail-head form.inline { margin-left: auto; }
+.outreach-variant-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+.outreach-variant h4 { margin: 0 0 4px; font-size: 14px; }
 .scraping-detail-head strong {
   color: var(--text);
   font-size: 15px;

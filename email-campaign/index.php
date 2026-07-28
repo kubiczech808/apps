@@ -7,6 +7,11 @@ const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
 const AI_RESEARCH_CONTEXT_FIX_VERSION = '2026-07-19-emporo-context-v1';
 const AI_RESEARCH_MAX_BACKOFF_SECONDS = 1800;
+// Hosting uzavre pozadavek 504 Gateway Timeout cca po 150 s, bez ohledu na set_time_limit().
+// Beh proto musi skoncit driv a rozdelanou praci nechat na dalsi cron.
+const AI_RESEARCH_REQUEST_BUDGET_SECONDS = 100;
+// Rezerva na vygenerovani emailu a dopsani behu do DB, kdyz scraping dojede az na hranu.
+const AI_RESEARCH_FINALIZE_RESERVE_SECONDS = 30;
 
 final class AiResearchTemporaryException extends RuntimeException
 {
@@ -178,6 +183,11 @@ function aiResearchDeadline(?int $deadline = null): int
     return $held > 0 ? $held : time() + 200;
 }
 
+function aiResearchDeadlineReached(int $reserveSeconds = 0): bool
+{
+    return time() >= aiResearchDeadline() - max(0, $reserveSeconds);
+}
+
 function aiResearchRequestTimestamps(string $mode = 'list'): array
 {
     static $timestamps = [];
@@ -239,6 +249,9 @@ function aiResearchGeminiCall(array $config, string $step, array $payload, int $
         throw new AiResearchTemporaryException('AI ' . $step . ' nema nastaveny Gemini API klic, beh se neulozil jako fallback.');
     }
     $deadline = aiResearchDeadline();
+    if (aiResearchDeadlineReached()) {
+        throw new AiResearchTemporaryException('AI ' . $step . ' se nevesel do casoveho budgetu pozadavku, beh pokracuje pri dalsim cronu.');
+    }
     $maxAttempts = 3;
     $lastError = null;
     for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
@@ -711,6 +724,24 @@ function handlePost(PDO $pdo, array $config): ?string
         } finally {
             aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
         }
+    }
+
+    if ($action === 'validate_ai_research_contacts') {
+        if (!canAccessAiResearch()) {
+            throw new RuntimeException('AI validace kontaktu je dostupna pouze adminovi.');
+        }
+        return validateAiResearchRunContactsNow($pdo, $config, (int)($_POST['run_id'] ?? 0));
+    }
+
+    if ($action === 'toggle_ai_research_contact_validation') {
+        if (!canAccessAiResearch()) {
+            throw new RuntimeException('Nastaveni AI validace kontaktu je dostupne pouze adminovi.');
+        }
+        $enabled = aiResearchContactValidationEnabled($pdo) ? '0' : '1';
+        setSetting($pdo, 'ai_research_contact_validation', $enabled);
+        return $enabled === '1'
+            ? 'AI validace scrapovanych kontaktu je zapnuta pro vsechny dalsi behy.'
+            : 'AI validace scrapovanych kontaktu je vypnuta. Kontakty se hodnoti pravidly z planu.';
     }
 
     if ($action === 'mark_seed_outreach_sent') {
@@ -2380,9 +2411,23 @@ function runCronAiResearch(PDO $pdo, array $config): string
         return 'AI research: denni rozpocet Gemini pozadavku je vycerpany (' . $usedToday . '/' . $dailyBudget
             . ' za poslednich 24 h, jeden seed potrebuje ' . $neededPerSeed . '). Dalsi seed se spusti, az se klouzave okno uvolni.';
     }
-    setSetting($pdo, 'ai_research_lock_until', (string)(time() + 900));
+    // Zamek drzi jen o malo delsi dobu, nez je vlastni casovy budget behu. Kdyz hosting
+    // pozadavek zabije, dalsi cron neceka 15 minut, ale hned to zkusi znovu.
+    setSetting($pdo, 'ai_research_lock_until', (string)(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS + 60));
     aiResearchRequestTimestamps('reset');
-    aiResearchDeadline(time() + (isset($_GET['ai_research']) ? 230 : 90));
+    aiResearchDeadline(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS);
+    ignore_user_abort(true);
+    $lockHeld = true;
+    register_shutdown_function(static function () use ($pdo, &$lockHeld): void {
+        if (!$lockHeld) {
+            return;
+        }
+        try {
+            setSetting($pdo, 'ai_research_lock_until', '');
+        } catch (Throwable $e) {
+            error_log('AI research lock release failed: ' . $e->getMessage());
+        }
+    });
     try {
         $message = runAiResearchOnce($pdo, $config);
         setSetting($pdo, 'ai_research_last_run_at', (string)time());
@@ -2404,6 +2449,7 @@ function runCronAiResearch(PDO $pdo, array $config): string
         setSetting($pdo, 'ai_research_lock_until', '');
         return 'AI research selhal: ' . $e->getMessage();
     } finally {
+        $lockHeld = false;
         aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
     }
 }
@@ -2437,6 +2483,7 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
         $bestAccepted = [];
         $attempts = 0;
         $maxValidationAttempts = aiResearchMaxContactValidationAttempts($config);
+        $validateWithAi = aiResearchContactValidationEnabled($pdo);
         $seenPlans = [];
         try {
             foreach ($plans as $plan) {
@@ -2453,7 +2500,9 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
                 updateAiResearchRunProgress($pdo, $runId, $plan, 'AI research bezi: zkousim keyword "' . aiResearchPrimaryKeyword($plan) . '".');
                 $contacts = aiResearchFindContacts($pdo, $seed, $plan, 10, $runId);
                 upsertAiResearchRunContacts($pdo, $runId, aiResearchPendingContacts($contacts), 'pending');
-                $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
+                $evaluated = $validateWithAi
+                    ? aiResearchEvaluateContacts($config, $seed, $plan, $contacts)
+                    : aiResearchProcessFilterContacts($seed, $plan, $contacts);
                 upsertAiResearchRunContacts($pdo, $runId, $evaluated, 'pending');
                 $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'contact_validation', 'gemini_research', aiResearchEvaluationAiStatus($evaluated)));
                 $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
@@ -2478,7 +2527,9 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false): string
                     updateAiResearchRunProgress($pdo, $runId, $plan, 'AI research bezi: zkousim alternativni keyword "' . aiResearchPrimaryKeyword($plan) . '".');
                     $contacts = aiResearchFindContacts($pdo, $seed, $plan, 10, $runId);
                     upsertAiResearchRunContacts($pdo, $runId, aiResearchPendingContacts($contacts), 'pending');
-                    $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
+                    $evaluated = $validateWithAi
+                        ? aiResearchEvaluateContacts($config, $seed, $plan, $contacts)
+                        : aiResearchProcessFilterContacts($seed, $plan, $contacts);
                     upsertAiResearchRunContacts($pdo, $runId, $evaluated, 'pending');
                     $plan = aiResearchAppendModelAudit($plan, aiModelAuditEntry($config, 'contact_validation', 'gemini_research', aiResearchEvaluationAiStatus($evaluated)));
                     $accepted = array_values(array_filter($evaluated, static fn($contact) => (string)($contact['status'] ?? 'accepted') === 'accepted'));
@@ -4297,10 +4348,19 @@ function aiResearchQuickScrapeContacts(array $plan, int $limit, int $pagesPerQue
         }
         try {
             for ($page = 1; $page <= max(1, $pagesPerQuery); $page++) {
+                if (aiResearchDeadlineReached(AI_RESEARCH_FINALIZE_RESERVE_SECONDS)) {
+                    return $contacts;
+                }
                 foreach (aiResearchScrapingSearchUrls($source, $keyword, (string)($plan['target_location'] ?? ''), $page) as $search) {
+                    if (aiResearchDeadlineReached(AI_RESEARCH_FINALIZE_RESERVE_SECONDS)) {
+                        return $contacts;
+                    }
                     $searchResponse = fetchScrapingSearch($search);
                     $html = (string)$searchResponse['html'];
                     foreach (array_slice(extractCandidateUrls($html, $search['url'], $source), 0, max(1, $detailsPerPage)) as $url) {
+                        if (aiResearchDeadlineReached(AI_RESEARCH_FINALIZE_RESERVE_SECONDS)) {
+                            return $contacts;
+                        }
                         try {
                             $contact = extractContactFromHtml(httpGet($url), $url);
                         } catch (Throwable $e) {
@@ -4419,18 +4479,96 @@ function aiResearchCandidateContactsFromRecipients(PDO $pdo, array $seed, array 
     return array_slice(onboardingUniqueValidContacts($contacts), 0, $limit);
 }
 
-function aiResearchEvaluateContacts(array $config, array $seed, array $plan, array $contacts): array
+/**
+ * Deterministicke vyhodnoceni kontaktu bez AI: kontakt prisel z katalogu podle keywordu
+ * a lokace, takze staci pravidla z planu. Tohle je vychozi rezim; AI validace je volitelna.
+ */
+/**
+ * AI validace scrapovanych kontaktu je vychozi vypnuta. Kontakt uz prisel z katalogu podle
+ * keywordu a lokace, takze na to AI potreba neni a kazdy seed tim usetri jeden Gemini pozadavek.
+ * Zapnout ji lze globalne v nastaveni, nebo jednorazove u konkretniho behu.
+ */
+function aiResearchContactValidationEnabled(PDO $pdo): bool
 {
-    if (!$contacts) {
-        return [];
-    }
-    $fallback = [];
+    $settings = loadSettings($pdo);
+    return (string)($settings['ai_research_contact_validation'] ?? '0') === '1';
+}
+
+function aiResearchProcessFilterContacts(array $seed, array $plan, array $contacts): array
+{
+    $out = [];
     foreach ($contacts as $contact) {
         $filterReason = aiResearchContactProcessFilterReason($seed, $plan, $contact);
         $accepted = $filterReason === '';
         $decorated = aiResearchDecorateContact($seed, $plan, $contact, $accepted, $accepted ? 'Kontakt odpovida navrzenemu segmentu, keywordu a lokaci podle dostupnych dat.' : $filterReason);
         $decorated['ai_validation_status'] = 'fallback_process_filter';
-        $fallback[] = $decorated;
+        $out[] = $decorated;
+    }
+    return $out;
+}
+
+/**
+ * Jednorazova AI validace relevance kontaktu pro jeden konkretni beh. Vola se rucne
+ * z detailu behu, protoze automaticka validace je vychozi vypnuta.
+ */
+function validateAiResearchRunContactsNow(PDO $pdo, array $config, int $runId): string
+{
+    if ($runId <= 0) {
+        throw new RuntimeException('Beh pro validaci kontaktu neni platny.');
+    }
+    $stmt = $pdo->prepare('SELECT * FROM ai_research_runs WHERE id=? LIMIT 1');
+    $stmt->execute([$runId]);
+    $run = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$run) {
+        throw new RuntimeException('Beh pro validaci kontaktu nebyl nalezen.');
+    }
+    $plan = json_decode((string)($run['plan_json'] ?? ''), true);
+    if (!is_array($plan)) {
+        throw new RuntimeException('Beh nema ulozeny plan, validaci kontaktu nelze spustit.');
+    }
+    $seed = [
+        'email' => (string)($run['seed_email'] ?? ''),
+        'subject_name' => (string)($run['seed_business'] ?? ''),
+        'website' => (string)($run['seed_website'] ?? ''),
+        'address' => (string)($run['seed_address'] ?? ''),
+        'source_label' => (string)($run['seed_source_label'] ?? ''),
+        'source_url' => (string)($run['seed_source_url'] ?? ''),
+    ];
+    $contactsStmt = $pdo->prepare('SELECT * FROM ai_research_contacts WHERE run_id=? ORDER BY id ASC');
+    $contactsStmt->execute([$runId]);
+    $rows = $contactsStmt->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) {
+        return 'Beh #' . $runId . ' zatim nema zadne kontakty k validaci.';
+    }
+    $contacts = array_map(static function (array $row) use ($plan): array {
+        return [
+            'email' => (string)($row['email'] ?? ''),
+            'subject_name' => (string)($row['subject_name'] ?? ''),
+            'website' => (string)($row['website'] ?? ''),
+            'address' => (string)($row['address'] ?? ''),
+            'phone' => (string)($row['phone'] ?? ''),
+            'source_label' => (string)($row['source_label'] ?? ''),
+            'source_url' => (string)($row['source_url'] ?? ''),
+            'target_segment' => (string)($plan['primary_segment'] ?? $plan['audience_label'] ?? ''),
+        ];
+    }, $rows);
+    aiResearchRequestTimestamps('reset');
+    aiResearchDeadline(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS);
+    try {
+        $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
+    } finally {
+        aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
+    }
+    upsertAiResearchRunContacts($pdo, $runId, $evaluated, 'pending');
+    $accepted = count(array_filter($evaluated, static fn(array $c): bool => (string)($c['status'] ?? '') === 'accepted'));
+    return 'AI validace kontaktu pro beh #' . $runId . ' hotova: vyhodnoceno '
+        . count($evaluated) . ', vhodnych ' . $accepted . '.';
+}
+
+function aiResearchEvaluateContacts(array $config, array $seed, array $plan, array $contacts): array
+{
+    if (!$contacts) {
+        return [];
     }
     $apiKey = trim((string)($config['ai']['gemini_api_key'] ?? ''));
     if ($apiKey === '') {
@@ -4643,7 +4781,9 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
     $prompt = "Priprav finalni navrh obchodniho osloveni pro AI research beh. "
         . "Tento text vznikne pres API a ma byt vyslednym doporucenim, jak oslovit nalezene kontakty a s cim konkretne. "
         . "Vstupni kontext: " . json_encode($promptContext, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Vrat pouze JSON {\"subject\":\"...\",\"html\":\"...\"}. "
+        . "Vrat pouze JSON {\"variants\":[{\"subject\":\"...\",\"html\":\"...\",\"angle\":\"...\"},{\"subject\":\"...\",\"html\":\"...\",\"angle\":\"...\"}]}. "
+        . "Vytvor presne dve varianty osloveni, aby si admin mohl vybrat nebo je otestovat proti sobe. "
+        . "Obe musi byt pouzitelne samostatne a lisit se uhlem, ne jen preformulovanim: napr. prvni vede konkretnim provoznim problemem ciloveho segmentu, druha konkretnim vysledkem nebo referenci. Do angle napis jednou kratkou vetou, cim se varianta odlisuje. "
         . "Jazyk pouzij podle market_language (" . $language . "). "
         . "HTML bude kratke, vecne, personalizovatelne pro nalezeny typ kontaktu a bez prehnanych slibu. "
         . "Musis propojit tri veci: co seed firma realne dela podle business_understanding, proc bylo vybrane scraping_keyword + target_location podle targeting_reason, a jaka konkretni nabidka nebo use-case dava smysl pro nalezene kontakty. "
@@ -4660,11 +4800,38 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
             'generation_config' => ['temperature' => 0.45],
         ], 35);
         $json = parseJsonObjectFromText(geminiInteractionText($response));
-        $subject = truncatePlainText(trim((string)($json['subject'] ?? '')), 255);
-        $html = cleanHtml((string)($json['html'] ?? ''));
-        if ($subject !== '' && trim(strip_tags($html)) !== '') {
-            aiResearchAssertDraftQuality($subject, $html, $plan);
-            return ['subject' => $subject, 'html' => $html, 'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini_research')];
+        // Starsi jednovariantni odpoved zustava podporena, aby zmena kontraktu nerozbila beh.
+        $rawVariants = is_array($json['variants'] ?? null) && $json['variants'] !== []
+            ? (array)$json['variants']
+            : [$json];
+        $variants = [];
+        foreach ($rawVariants as $rawVariant) {
+            if (!is_array($rawVariant)) {
+                continue;
+            }
+            $variantSubject = truncatePlainText(trim((string)($rawVariant['subject'] ?? '')), 255);
+            $variantHtml = cleanHtml((string)($rawVariant['html'] ?? ''));
+            if ($variantSubject === '' || trim(strip_tags($variantHtml)) === '') {
+                continue;
+            }
+            $variants[] = [
+                'subject' => $variantSubject,
+                'html' => $variantHtml,
+                'angle' => truncatePlainText(trim((string)($rawVariant['angle'] ?? '')), 240),
+            ];
+            if (count($variants) >= 2) {
+                break;
+            }
+        }
+        if ($variants) {
+            // Kvalitu vynucujeme na variante, ktera se uklada jako hlavni.
+            aiResearchAssertDraftQuality((string)$variants[0]['subject'], (string)$variants[0]['html'], $plan);
+            return [
+                'subject' => (string)$variants[0]['subject'],
+                'html' => (string)$variants[0]['html'],
+                'variants' => $variants,
+                'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini_research'),
+            ];
         }
     } catch (Throwable $e) {
         error_log('AI research run draft fallback: ' . $e->getMessage());
@@ -4851,6 +5018,9 @@ function finalizeAiResearchRun(PDO $pdo, array $config, int $runId, array $seed,
     $draft = aiResearchRunDraft($config, $seed, $plan, $accepted ?: $evaluated);
     $draftSubject = (string)$draft['subject'];
     $draftHtml = (string)$draft['html'];
+    if (is_array($draft['variants'] ?? null)) {
+        $plan['outreach_variants'] = (array)$draft['variants'];
+    }
     if (is_array($draft['audit'] ?? null)) {
         $plan = aiResearchAppendModelAudit($plan, (array)$draft['audit']);
     }
@@ -4983,6 +5153,9 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
     $draft = aiResearchRunDraft($config, $seed, $plan, $accepted ?: $evaluated);
     $draftSubject = (string)$draft['subject'];
     $draftHtml = (string)$draft['html'];
+    if (is_array($draft['variants'] ?? null)) {
+        $plan['outreach_variants'] = (array)$draft['variants'];
+    }
     if (is_array($draft['audit'] ?? null)) {
         $plan = aiResearchAppendModelAudit($plan, (array)$draft['audit']);
     }
@@ -15593,12 +15766,12 @@ function renderApp(PDO $pdo, ?array $flash): void
         $researchGeminiDailyBudget = aiResearchDailyGeminiRequestBudget($config);
         $researchGeminiRpmBudget = aiResearchGeminiRequestsPerMinuteBudget($config);
         $researchGeminiRequestsPerSeed = aiResearchEstimatedGeminiRequestsPerSeed($config);
-        $researchDailySeedBudget = aiResearchDailySeedBudget($config);
         $researchIntervalSeconds = aiResearchRunIntervalSeconds($config);
         $researchDailyBudgetText = $researchGeminiDailyBudget > 0
             ? ', denní rozpočet ' . $researchGeminiDailyBudget . ' requestů'
             : '';
         $researchEffectiveDailyBudget = aiResearchDailyRequestBudgetOrDefault($config);
+        $researchContactValidationEnabled = aiResearchContactValidationEnabled($pdo);
         $researchUsageTimestamps = aiResearchGeminiUsageTimestamps($pdo);
         $researchRequestsLast24h = count($researchUsageTimestamps);
         $researchRequestsLastMinute = count(array_filter(
@@ -15625,14 +15798,20 @@ function renderApp(PDO $pdo, ?array $flash): void
         <div class="section-header">
             <div>
                 <h2>AI research administrace</h2>
-                <p>Agent průběžně vybírá nové firmy z Firmy.cz / Vše pro firmy / Praha, projde jejich web, navrhne nejvhodnější B2B cílení, najde max. 10 kontaktů a uloží návrh oslovení.</p>
-                <p class="muted">Automatika se kontroluje cronem každých 5 minut. Gemini research je rozložený do celého dne: bezpečný limit <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed, maximum <?= h((string)$researchDailySeedBudget) ?> seed subjektů/den, interval cca <?= h(aiResearchIntervalLabel($researchIntervalSeconds)) ?>.</p>
+                <p>Agent průběžně vybírá nové firmy z Firmy.cz / Vše pro firmy / Praha, projde jejich web, navrhne nejvhodnější B2B cílení včetně klíčového slova a lokality, najde max. 10 kontaktů a připraví dvě varianty oslovení. AI se používá jen na pochopení byznysu, výběr cílovky a texty; scraping kontaktů je čistá automatizace.</p>
+                <p class="muted">Automatika se spouští cronem (GitHub plánované běhy se v praxi zpožďují, takže interval bývá delší než 5 minut). Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Gemini rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
                 <p class="muted">Poslední automatický běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Další nejdříve: <?= h($researchNextRunLabel) ?>. Stav: <?= h($researchAutomationStatus) ?></p>
                 <p class="muted">Skutečně odeslané Gemini requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h. Podle těchto čísel se pozná, zda Google limituje po minutách, nebo po dnech.</p>
+                <p class="muted">AI validace scrapovaných kontaktů je <strong><?= $researchContactValidationEnabled ? 'zapnutá' : 'vypnutá' ?></strong>. Vypnutá šetří jeden Gemini požadavek na každý seed; kontakty se hodnotí pravidly z plánu, protože přišly z katalogu podle klíčového slova a lokality. Jednorázově ji lze spustit u konkrétního běhu v jeho detailu.</p>
             </div>
-            <form method="post" class="inline">
-                <button type="submit" name="action" value="run_ai_research_now">Spustit research teď</button>
-            </form>
+            <div class="section-actions">
+                <form method="post" class="inline">
+                    <button type="submit" name="action" value="run_ai_research_now">Spustit research teď</button>
+                </form>
+                <form method="post" class="inline">
+                    <button type="submit" name="action" value="toggle_ai_research_contact_validation" class="secondary"><?= $researchContactValidationEnabled ? 'Vypnout AI validaci kontaktů' : 'Zapnout AI validaci kontaktů' ?></button>
+                </form>
+            </div>
         </div>
         <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze hledání</th><th>Klíčové slovo</th><th>Lokalita</th><th>Nalezeno</th><th>Vhodné</th></tr></thead><tbody>
         <?php if (!$aiResearchRuns): ?>
@@ -15733,6 +15912,12 @@ function renderApp(PDO $pdo, ?array $flash): void
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
                             <span><?= h((string)$run['accepted_count']) ?> vhodnych z <?= h((string)$run['found_count']) ?> nalezenych</span>
+                            <?php if ((int)$run['found_count'] > 0): ?>
+                            <form method="post" class="inline">
+                                <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
+                                <button type="submit" name="action" value="validate_ai_research_contacts" class="secondary" title="Nechá AI jednorázově posoudit relevanci nalezených kontaktů pro tento běh.">Spustit AI validaci kontaktů</button>
+                            </form>
+                            <?php endif; ?>
                         </div>
                         <?php
                             $candidateSegments = aiResearchNormalizeCandidateSegments($runPlan['candidate_segments'] ?? []);
@@ -15790,10 +15975,34 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <p><strong>Lokalita:</strong> <?= h(aiResearchTargetAreaLabel($runPlan)) ?></p>
                                 <?php if (trim((string)($runPlan['search_url'] ?? '')) !== ''): ?><p><strong>URL hledani:</strong> <a href="<?= h((string)$runPlan['search_url']) ?>" target="_blank" rel="noopener"><?= h((string)$runPlan['search_url']) ?></a></p><?php endif; ?>
                             </section>
-                            <section>
-                                <h3>Vzor osloveni</h3>
-                                <p><strong><?= h((string)$run['email_subject']) ?></strong></p>
-                                <div class="email-preview"><?= cleanHtml((string)$run['email_body_html']) ?></div>
+                            <?php
+                                $outreachVariants = [];
+                                foreach ((array)($runPlan['outreach_variants'] ?? []) as $variant) {
+                                    if (!is_array($variant) || trim((string)($variant['subject'] ?? '')) === '') {
+                                        continue;
+                                    }
+                                    $outreachVariants[] = $variant;
+                                }
+                                if (!$outreachVariants) {
+                                    $outreachVariants[] = [
+                                        'subject' => (string)$run['email_subject'],
+                                        'html' => (string)$run['email_body_html'],
+                                        'angle' => '',
+                                    ];
+                                }
+                            ?>
+                            <section<?= count($outreachVariants) > 1 ? ' class="research-wide"' : '' ?>>
+                                <h3>Vzor osloveni<?= count($outreachVariants) > 1 ? ' (' . count($outreachVariants) . ' varianty)' : '' ?></h3>
+                                <div class="outreach-variant-grid">
+                                    <?php foreach ($outreachVariants as $variantIndex => $variant): ?>
+                                    <div class="outreach-variant">
+                                        <?php if (count($outreachVariants) > 1): ?><h4>Varianta <?= h((string)($variantIndex + 1)) ?></h4><?php endif; ?>
+                                        <?php if (trim((string)($variant['angle'] ?? '')) !== ''): ?><p class="muted"><?= h((string)$variant['angle']) ?></p><?php endif; ?>
+                                        <p><strong><?= h((string)($variant['subject'] ?? '')) ?></strong></p>
+                                        <div class="email-preview"><?= cleanHtml((string)($variant['html'] ?? '')) ?></div>
+                                    </div>
+                                    <?php endforeach; ?>
+                                </div>
                             </section>
                             <?php if ($candidateSegments): ?>
                             <section class="research-wide">

@@ -49,10 +49,12 @@ jobs:
             test "$http_code" -ge 200 -a "$http_code" -lt 400
           }
           call_ai_research() {
-            http_code=$(curl --show-error --silent --max-time 300 --output /tmp/email-campaign-ai-research-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&ai_research=1")
+            http_code=$(curl --show-error --silent --max-time 170 --output /tmp/email-campaign-ai-research-body.txt --write-out "%{http_code}" "https://www.osobnizkusenosti.cz/email-campaign/?cron=${TOKEN}&ai_research=1")
             echo "AI research HTTP ${http_code}"
             cat /tmp/email-campaign-ai-research-body.txt
             test "$http_code" -ge 200 -a "$http_code" -lt 400
           }
-          call_ai_research
+          # Rozesilka, IMAP, importy a scraping bezi prvni a jsou povinne.
           call_cron
+          # AI research je doplnek. Kdyz se neveslo do casu hostingu, nesmi to shodit zbytek cronu.
+          call_ai_research || echo "AI research call did not finish successfully; rest of cron already ran."
