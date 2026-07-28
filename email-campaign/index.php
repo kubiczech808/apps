@@ -4784,6 +4784,8 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
         . "Vrat pouze JSON {\"variants\":[{\"subject\":\"...\",\"html\":\"...\",\"angle\":\"...\"},{\"subject\":\"...\",\"html\":\"...\",\"angle\":\"...\"}]}. "
         . "Vytvor presne dve varianty osloveni, aby si admin mohl vybrat nebo je otestovat proti sobe. "
         . "Obe musi byt pouzitelne samostatne a lisit se uhlem, ne jen preformulovanim: napr. prvni vede konkretnim provoznim problemem ciloveho segmentu, druha konkretnim vysledkem nebo referenci. Do angle napis jednou kratkou vetou, cim se varianta odlisuje. "
+        . "POVINNE u kazde varianty: v predmetu nebo v textu musi doslova padnout scraping_keyword (" . aiResearchPrimaryKeyword($plan) . ") jako pojmenovani typu firmy, kterou oslovujeme. Bez toho je varianta nepouzitelna. "
+        . "Kazda varianta ma mit alespon 250 znaku textu, aby slo o skutecny email a ne jen upoutavku. "
         . "Jazyk pouzij podle market_language (" . $language . "). "
         . "HTML bude kratke, vecne, personalizovatelne pro nalezeny typ kontaktu a bez prehnanych slibu. "
         . "Musis propojit tri veci: co seed firma realne dela podle business_understanding, proc bylo vybrane scraping_keyword + target_location podle targeting_reason, a jaka konkretni nabidka nebo use-case dava smysl pro nalezene kontakty. "
@@ -4823,15 +4825,28 @@ function aiResearchRunDraft(array $config, array $seed, array $plan, array $cont
                 break;
             }
         }
-        if ($variants) {
-            // Kvalitu vynucujeme na variante, ktera se uklada jako hlavni.
-            aiResearchAssertDraftQuality((string)$variants[0]['subject'], (string)$variants[0]['html'], $plan);
+        // Kvalitni musi byt kazda ulozena varianta. Kdyz projde jen jedna, pouzije se ona
+        // a druha se zahodi; odlozit beh je potreba az kdyz neprojde ani jedna.
+        $qualityError = null;
+        $usableVariants = [];
+        foreach ($variants as $variant) {
+            try {
+                aiResearchAssertDraftQuality((string)$variant['subject'], (string)$variant['html'], $plan);
+                $usableVariants[] = $variant;
+            } catch (AiResearchTemporaryException $e) {
+                $qualityError = $e;
+            }
+        }
+        if ($usableVariants) {
             return [
-                'subject' => (string)$variants[0]['subject'],
-                'html' => (string)$variants[0]['html'],
-                'variants' => $variants,
+                'subject' => (string)$usableVariants[0]['subject'],
+                'html' => (string)$usableVariants[0]['html'],
+                'variants' => $usableVariants,
                 'audit' => aiModelAuditEntry($config, 'outreach_draft', 'gemini_research'),
             ];
+        }
+        if ($qualityError) {
+            throw $qualityError;
         }
     } catch (Throwable $e) {
         error_log('AI research run draft fallback: ' . $e->getMessage());
