@@ -3,6 +3,9 @@
 declare(strict_types=1);
 
 const APP_VERSION = '2026-07-19-seed-outreach-status';
+// Konstanty musi byt tady nahore: prikaz const se vykona az na svem radku, takze
+// deklarace za polovinou souboru by v renderu jeste neexistovala.
+const APP_TOOL_NAME = 'Akvizice AI';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
 const AI_RESEARCH_RESET_VERSION = '2026-07-29-gemini-3-flash-preview-v1';
 const AI_RESEARCH_CONTEXT_FIX_VERSION = '2026-07-19-emporo-context-v1';
@@ -18616,8 +18619,6 @@ function aiResearchSeedOutreachUnsubscribeUrl(array $run): string
     }
     return appBaseUrl() . '?seed_unsubscribe=' . rawurlencode($token);
 }
-
-const APP_TOOL_NAME = 'Akvizice AI';
 
 /**
  * Povinna paticka pod kazdym obchodnim oslovenim seed subjektu. Nikdy nevstupuje do
