@@ -9154,14 +9154,25 @@ function scheduleDueScrapingRuns(PDO $pdo): string
     return "Scraping plan: " . implode(' ', $messages) . "\n";
 }
 
-function runCronScraping(PDO $pdo): string
+function runCronScraping(PDO $pdo, int $inlineSteps = 10): string
 {
     $messages = [trim(scheduleDueScrapingRuns($pdo))];
-    if (activeScrapingJobsExist($pdo)) {
-        triggerScrapingWorker($pdo);
-        $messages[] = 'Scraping: aktivni beh byl predan workeru na pozadi.';
-    } else {
+    if (!activeScrapingJobsExist($pdo)) {
         $messages[] = 'Scraping: zadny aktivni job.';
+        return implode("\n", array_filter($messages)) . "\n";
+    }
+    triggerScrapingWorker($pdo);
+    $messages[] = 'Scraping: aktivni beh byl predan workeru na pozadi.';
+    // Worker se spousti pres HTTP pozadavek na sebe sama a na nekterych hostinzich se
+    // nedovola. Bez teto zalohy by beh zustal ve fronte navzdy, proto ho cron posune i sam.
+    $lockUntil = (int)(loadSettings($pdo)['scraping_worker_lock_until'] ?? 0);
+    if ($lockUntil <= time()) {
+        try {
+            $messages[] = trim(runScrapingQueue($pdo, max(1, $inlineSteps)));
+        } catch (Throwable $e) {
+            error_log('Cron inline scraping step failed: ' . $e->getMessage());
+            $messages[] = 'Scraping: krok v cronu se nepodaril, pokracuje worker.';
+        }
     }
     return implode("\n", array_filter($messages)) . "\n";
 }
