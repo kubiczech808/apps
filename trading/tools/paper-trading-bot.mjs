@@ -524,7 +524,21 @@ function mergeEvaluationLists(primary = [], secondary = [], limit = MAX_HISTORY)
     if (!key) continue;
     byKey.set(key, mergeEvaluation(byKey.get(key), item));
   }
-  return [...byKey.values()]
+  const deduplicated = new Map();
+  for (const item of byKey.values()) {
+    const binaryKey = binaryEvaluationMarketKey(item);
+    if (!binaryKey) {
+      deduplicated.set(`evaluation:${evaluationKey(item)}`, item);
+      continue;
+    }
+    const previous = deduplicated.get(binaryKey);
+    if (!previous
+      || evaluationUpdateTime(item) > evaluationUpdateTime(previous)
+      || (evaluationUpdateTime(item) === evaluationUpdateTime(previous) && Number(item.aiProbability || 0) > Number(previous.aiProbability || 0))) {
+      deduplicated.set(binaryKey, item);
+    }
+  }
+  return [...deduplicated.values()]
     .sort((a, b) => evaluationUpdateTime(b) - evaluationUpdateTime(a))
     .slice(0, limit);
 }
@@ -1301,6 +1315,31 @@ function outcomeKind(outcome) {
   return "OUTCOME";
 }
 
+function binaryYesNoOutcomeIndexes(outcomes = []) {
+  const normalized = outcomes.map((outcome) => String(outcome || "").trim().toLowerCase());
+  if (normalized.length !== 2) return null;
+  const yesIndex = normalized.indexOf("yes");
+  const noIndex = normalized.indexOf("no");
+  return yesIndex >= 0 && noIndex >= 0 ? { yesIndex, noIndex } : null;
+}
+
+function binaryEvaluationMarketKey(item) {
+  const outcome = outcomeKind(item?.outcome);
+  const isBinary = item?.binaryYesTokenId || (Number(item?.outcomeCount) === 2 && (outcome === "YES" || outcome === "NO"));
+  if (!isBinary) return "";
+  const slug = String(item?.slug || item?.eventSlug || "").trim().toLowerCase();
+  const question = String(item?.question || "").trim().toLowerCase();
+  return slug ? `binary:${slug}` : (question ? `binary-question:${question}` : "");
+}
+
+function binaryMarketKeyFromMarket(market) {
+  const outcomes = parseJsonField(market?.outcomes);
+  if (!binaryYesNoOutcomeIndexes(outcomes)) return "";
+  const slug = String(market?.slug || marketEventSlug(market) || "").trim().toLowerCase();
+  const question = String(market?.question || "").trim().toLowerCase();
+  return slug ? `binary:${slug}` : (question ? `binary-question:${question}` : "");
+}
+
 function analysisFactorKeys({ probability, outcome, tags, spread, liquidity, volume24hr, days, market }) {
   const keys = new Set();
   const tagList = Array.isArray(tags) && tags.length ? tags : ["general"];
@@ -1661,6 +1700,89 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
       `daysToResolution=${days ?? "n/a"}`,
     ],
   };
+}
+
+function withBinaryEvaluationMetadata(evaluation, { yesProbability, yesTokenId, noTokenId }) {
+  const { _binaryCounterpart, ...clean } = evaluation;
+  return {
+    ...clean,
+    binaryYesProbability: Number(yesProbability.toFixed(4)),
+    binaryYesTokenId: String(yesTokenId || ""),
+    binaryNoTokenId: String(noTokenId || ""),
+  };
+}
+
+function invertedNoModelAnalysis(modelAnalysis, yesProbability) {
+  const noProbability = 1 - yesProbability;
+  const yesText = pctText(yesProbability);
+  const noText = pctText(noProbability);
+  const rationale = compactSentence(modelAnalysis?.probabilityRationale || modelAnalysis?.researchSummary || "The model assessed the YES statement from independent public evidence.");
+  return {
+    ...modelAnalysis,
+    direction: "NO",
+    thesis: `NO thesis: independent research estimates the YES statement at ${yesText}, so its inverse NO outcome is ${noText}.`,
+    finalHumanConclusion: `Gemini estimates that the YES statement has only ${yesText} probability on public evidence; the displayed NO outcome is therefore the more probable inverse at ${noText}.`,
+    probabilityRationale: `Gemini's public-evidence assessment assigns ${yesText} to YES. The inverse NO probability is therefore ${noText}. Evidence for the YES assessment: ${rationale}`,
+    probabilityPointRationale: `The model first estimated YES at ${yesText}; NO is calculated as 100% minus YES, resulting in ${noText}.`,
+    probabilityBridge: `YES ${yesText} -> inverse NO ${noText}.`,
+    confidenceTier: modelAnalysis?.confidenceTier || confidenceTier(noProbability),
+  };
+}
+
+async function materializePreferredBinaryOutcome(candidate, yesProbability, modelName, modelAnalysis) {
+  const counterpart = candidate?._binaryCounterpart;
+  if (!counterpart || yesProbability >= 0.5) {
+    return withBinaryEvaluationMetadata(
+      refreshEvaluationAfterProbability(candidate, yesProbability, modelName, modelAnalysis),
+      {
+        yesProbability,
+        yesTokenId: counterpart?.yesTokenId || candidate.tokenId,
+        noTokenId: counterpart?.tokenId || "",
+      },
+    );
+  }
+
+  const inverseAnalysis = invertedNoModelAnalysis(modelAnalysis, yesProbability);
+  try {
+    const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(counterpart.tokenId)}`);
+    const noEvaluation = evaluateCandidate({
+      market: counterpart.market,
+      outcomeIndex: counterpart.outcomeIndex,
+      tokenId: counterpart.tokenId,
+      book,
+      learningProfile: counterpart.learningProfile,
+    });
+    if (!noEvaluation) throw new Error("No executable orderbook data for the inverse NO outcome");
+    return withBinaryEvaluationMetadata(
+      refreshEvaluationAfterProbability(noEvaluation, 1 - yesProbability, modelName, inverseAnalysis),
+      {
+        yesProbability,
+        yesTokenId: counterpart.yesTokenId || candidate.tokenId,
+        noTokenId: counterpart.tokenId,
+      },
+    );
+  } catch (error) {
+    const message = `Inverse NO orderbook refresh failed: ${error?.message || String(error)}`;
+    return withBinaryEvaluationMetadata(ensureEvaluationErrorMetadata({
+      ...candidate,
+      id: `token:${counterpart.tokenId}`,
+      tokenId: counterpart.tokenId,
+      outcome: counterpart.outcome || "No",
+      status: "ERROR",
+      rawErrorMessage: message,
+      rejectReasons: [message],
+      aiProbability: Number((1 - yesProbability).toFixed(4)),
+      rawProbability: Number((1 - yesProbability).toFixed(4)),
+      aiAnalysis: inverseAnalysis,
+      probabilityThesis: inverseAnalysis.thesis,
+      analysisModel: modelName,
+      analysisSummary: `${inverseAnalysis.finalHumanConclusion} ${message}`,
+    }), {
+      yesProbability,
+      yesTokenId: counterpart.yesTokenId || candidate.tokenId,
+      noTokenId: counterpart.tokenId,
+    });
+  }
 }
 
 function parseJsonObject(text) {
@@ -2227,7 +2349,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
       continue;
     }
     if (requestId) finishAiRequest(state, requestId, "SUCCESS");
-    byId.set(candidate.id, refreshEvaluationAfterProbability(candidate, probability, result._model || GEMINI_MODEL, {
+    const modelAnalysis = {
       direction: result.direction || outcomeKind(candidate.outcome),
       thesis: result.thesis || candidate.probabilityThesis,
       finalHumanConclusion: result.finalHumanConclusion || "",
@@ -2245,7 +2367,13 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
       groundingSources: result._grounding?.sources || [],
       source: "gemini-grounded-public-research",
       _provider: "gemini",
-    }));
+    };
+    byId.set(candidate.id, await materializePreferredBinaryOutcome(
+      candidate,
+      probability,
+      result._model || GEMINI_MODEL,
+      modelAnalysis,
+    ));
   }
 
   if (REQUIRE_GEMINI && quotaError) {
@@ -2257,13 +2385,18 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
 
   return evaluations.map((item) => {
     const carried = carriedMemos.get(evaluationKey(item));
-    if (!carried) return byId.get(item.id) || item;
-    return refreshEvaluationAfterProbability(
+    if (!carried) {
+      const { _binaryCounterpart, ...clean } = byId.get(item.id) || item;
+      return clean;
+    }
+    const refreshed = refreshEvaluationAfterProbability(
       item,
       Number(carried.aiProbability),
       carried.analysisModel || carried.aiAnalysis?.model || GEMINI_MODEL,
       carried.aiAnalysis || {},
     );
+    const { _binaryCounterpart, ...clean } = refreshed;
+    return clean;
   });
 }
 
@@ -3664,7 +3797,9 @@ async function loadFocusedEvaluationMarkets(state) {
   return [market];
 }
 
-function marketHasNewOutcome(market, knownEvaluationKeys) {
+function marketHasNewOutcome(market, knownEvaluationKeys, knownBinaryMarketKeys = new Set()) {
+  const binaryKey = binaryMarketKeyFromMarket(market);
+  if (binaryKey) return !knownBinaryMarketKeys.has(binaryKey);
   return parseJsonField(market.clobTokenIds).some((tokenId) => tokenId && !knownEvaluationKeys.has(`token:${tokenId}`));
 }
 
@@ -4184,6 +4319,7 @@ async function run() {
   }
 
   const knownEvaluationKeys = new Set((state.evaluations || []).map(evaluationKey).filter(Boolean));
+  const knownBinaryMarketKeys = new Set((state.evaluations || []).map(binaryEvaluationMarketKey).filter(Boolean));
   const exposureProfile = openExposureProfile(strategiesForRun.map((strategy) => state.paperPortfolios[strategy.id]).filter(Boolean));
   const diversificationByMarket = new Map();
   const diversificationForMarket = (market) => {
@@ -4194,8 +4330,8 @@ async function run() {
     return diversificationByMarket.get(key);
   };
   const markets = (EVALUATION_ONLY ? await loadFocusedEvaluationMarkets(state) : await loadMarkets()).sort((a, b) => {
-    const aNew = marketHasNewOutcome(a, knownEvaluationKeys) ? 1 : 0;
-    const bNew = marketHasNewOutcome(b, knownEvaluationKeys) ? 1 : 0;
+    const aNew = marketHasNewOutcome(a, knownEvaluationKeys, knownBinaryMarketKeys) ? 1 : 0;
+    const bNew = marketHasNewOutcome(b, knownEvaluationKeys, knownBinaryMarketKeys) ? 1 : 0;
     if (aNew !== bNew) return bNew - aNew;
     const aDiversification = diversificationForMarket(a).score;
     const bDiversification = diversificationForMarket(b).score;
@@ -4224,10 +4360,13 @@ async function run() {
   for (const market of markets) {
     const outcomes = parseJsonField(market.outcomes);
     const tokenIds = parseJsonField(market.clobTokenIds);
+    const binaryIndexes = binaryYesNoOutcomeIndexes(outcomes);
     const requestedOutcomeIndex = EVALUATION_TOKEN_ID
       ? tokenIds.findIndex((tokenId) => String(tokenId) === EVALUATION_TOKEN_ID)
       : -1;
-    const outcomeIndexes = requestedOutcomeIndex >= 0
+    const outcomeIndexes = binaryIndexes
+      ? [binaryIndexes.yesIndex]
+      : requestedOutcomeIndex >= 0
       ? [requestedOutcomeIndex]
       : Array.from({ length: Math.min(outcomes.length, tokenIds.length, 2) }, (_, index) => index);
 
@@ -4239,7 +4378,19 @@ async function run() {
       try {
         const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`);
         const evaluation = evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfile: state.learningProfile });
-        if (evaluation) evaluations.push(evaluation);
+        if (evaluation) {
+          if (binaryIndexes) {
+            evaluation._binaryCounterpart = {
+              market,
+              outcomeIndex: binaryIndexes.noIndex,
+              outcome: outcomes[binaryIndexes.noIndex] || "No",
+              tokenId: tokenIds[binaryIndexes.noIndex],
+              yesTokenId: tokenIds[binaryIndexes.yesIndex],
+              learningProfile: state.learningProfile,
+            };
+          }
+          evaluations.push(evaluation);
+        }
       } catch (error) {
         const errorMessage = error?.message || String(error || "Unknown orderbook error");
         evaluations.push(ensureEvaluationErrorMetadata({
