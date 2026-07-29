@@ -15,6 +15,9 @@ const AI_RESEARCH_FIRST_BATCH_CONTACTS = 100;
 const AI_RESEARCH_REQUEST_BUDGET_SECONDS = 100;
 // Rezerva na vygenerovani emailu a dopsani behu do DB, kdyz scraping dojede az na hranu.
 const AI_RESEARCH_FINALIZE_RESERVE_SECONDS = 30;
+// Prihlaseni ma vydrzet i pres noc a pres zavreny prohlizec. Hodnota je zamerne
+// vyssi nez pozadovanych 24 h, aby uzivatel neprisel o session prave na hrane.
+const APP_SESSION_LIFETIME_SECONDS = 7 * 24 * 3600;
 
 final class AiResearchTemporaryException extends RuntimeException
 {
@@ -740,6 +743,10 @@ if (($_POST['action'] ?? '') === 'login') {
 
 if (isset($_GET['logout'])) {
     session_destroy();
+    // Dlouhozija cookie by po odhlaseni zustala v prohlizeci, takze se maze explicitne.
+    if (!headers_sent()) {
+        setcookie(session_name(), '', ['expires' => time() - 3600] + appSessionCookieBaseParams());
+    }
     header('Location: ./');
     exit;
 }
@@ -7064,15 +7071,44 @@ function startDatabaseBackedSession(PDO $pdo): void
     if (!shouldStartHttpSession() || session_status() === PHP_SESSION_ACTIVE) {
         return;
     }
-    $lifetime = max(3600, (int)ini_get('session.gc_maxlifetime'));
+    $lifetime = max(APP_SESSION_LIFETIME_SECONDS, (int)ini_get('session.gc_maxlifetime'));
     ini_set('session.use_strict_mode', '1');
     ini_set('session.gc_probability', '1');
     ini_set('session.gc_divisor', '100');
+    // Bez tohoto by PHP session posbiral vlastni garbage collector po hodine,
+    // i kdyz zaznam v app_sessions plati dal.
+    ini_set('session.gc_maxlifetime', (string)$lifetime);
+    // Bez zapisu pri kazdem pozadavku by se expires_at neposouval a session by
+    // vyprsela tyden po prihlaseni bez ohledu na to, jak dlouho se aplikace pouziva.
+    ini_set('session.lazy_write', '0');
+    session_set_cookie_params(['lifetime' => $lifetime] + appSessionCookieBaseParams());
     session_set_save_handler(new DatabaseSessionHandler($pdo, $lifetime), true);
     session_start();
+    // Cookie s pevnou expiraci by po tydnu vyprsela i aktivnimu uzivateli. PHP ji
+    // sam neposila znovu, takze se posouva rucne pri kazdem pozadavku.
+    if (session_id() !== '' && !headers_sent()) {
+        setcookie(session_name(), session_id(), ['expires' => time() + $lifetime] + appSessionCookieBaseParams());
+    }
     if (random_int(1, 100) === 1) {
         (new DatabaseSessionHandler($pdo, $lifetime))->gc($lifetime);
     }
+}
+
+/**
+ * Spolecne atributy session cookie. 'lifetime' a 'expires' se dosazuji podle toho,
+ * ktera funkce cookie nastavuje - kazda z nich zna jen svuj vlastni klic.
+ */
+function appSessionCookieBaseParams(): array
+{
+    $https = ($_SERVER['HTTPS'] ?? '') !== '' && strtolower((string)$_SERVER['HTTPS']) !== 'off';
+    $https = $https || (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
+    return [
+        'path' => '/',
+        'domain' => '',
+        'secure' => $https,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ];
 }
 
 function shouldRunDatabaseMigrations(): bool
