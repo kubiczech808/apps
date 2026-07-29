@@ -6269,6 +6269,31 @@ function aiResearchEnsureScrapingContainerAndLog(PDO $pdo, int $ownerId, int $li
  * davku osloveni dosbira bezny worker, ale zamerne se zastavi na cilovem poctu,
  * misto aby prochazel cely zdroj. Uz bezici beh se jen napoji.
  */
+function aiResearchListContactCount(PDO $pdo, int $listId): int
+{
+    if ($listId <= 0) {
+        return 0;
+    }
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM recipients WHERE list_id=? AND COALESCE(archived,0)=0');
+    $stmt->execute([$listId]);
+    return (int)$stmt->fetchColumn();
+}
+
+function aiResearchOwnerSendCount(PDO $pdo, int $ownerId): int
+{
+    if ($ownerId <= 0) {
+        return 0;
+    }
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM send_logs sl JOIN campaigns c ON c.id=sl.campaign_id WHERE c.owner_user_id=?');
+    $stmt->execute([$ownerId]);
+    return (int)$stmt->fetchColumn();
+}
+
+/**
+ * Drzi scraping u predzalozeneho uctu jen na prvni davku. Dokud z uctu neodesla prvni
+ * rozesilka, dalsi kontakty nema smysl sbirat: uz nascrapovane stejne nestihne oslovit
+ * a beh by jen blokoval frontu vsem ostatnim seedum. Po prvni rozesilce se sbira dal.
+ */
 function aiResearchEnsureFirstBatchScrapingRun(PDO $pdo, int $containerId, int $runId): void
 {
     if ($containerId <= 0) {
@@ -6279,19 +6304,27 @@ function aiResearchEnsureFirstBatchScrapingRun(PDO $pdo, int $containerId, int $
         if ((string)$container['status'] !== 'active' || !scrapingSourceIsActive((string)$container['source'])) {
             return;
         }
-        if (activeScrapingRunForParams($pdo, $container) > 0) {
+        $contacts = aiResearchListContactCount($pdo, (int)($container['list_id'] ?? 0));
+        $sends = aiResearchOwnerSendCount($pdo, (int)($container['owner_user_id'] ?? 0));
+        $activeJobId = activeScrapingRunForParams($pdo, $container);
+        if ($contacts >= AI_RESEARCH_FIRST_BATCH_CONTACTS && $sends === 0) {
+            if ($activeJobId > 0) {
+                cancelScrapingJob($pdo, $activeJobId);
+                error_log('AI research #' . $runId . ': scraping run #' . $activeJobId
+                    . ' stopped, first batch is ready and the account has not sent yet.');
+            }
             return;
         }
-        createScrapingRun(
-            $pdo,
-            $container,
-            'Prvni davka z AI research #' . $runId . ': cil ' . AI_RESEARCH_FIRST_BATCH_CONTACTS . ' kontaktu.',
-            'manual',
-            AI_RESEARCH_FIRST_BATCH_CONTACTS
-        );
+        if ($activeJobId > 0) {
+            return;
+        }
+        $message = $sends > 0
+            ? 'Dalsi davka kontaktu po prvni rozesilce z uctu.'
+            : 'Prvni davka z AI research #' . $runId . ': cil ' . AI_RESEARCH_FIRST_BATCH_CONTACTS . ' kontaktu.';
+        createScrapingRun($pdo, $container, $message, 'manual', AI_RESEARCH_FIRST_BATCH_CONTACTS);
         triggerScrapingWorker($pdo);
     } catch (Throwable $e) {
-        error_log('AI research full scraping run for #' . $runId . ' failed: ' . $e->getMessage());
+        error_log('AI research scraping run for #' . $runId . ' failed: ' . $e->getMessage());
     }
 }
 
