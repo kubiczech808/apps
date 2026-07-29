@@ -1130,13 +1130,18 @@ function potentialAnnualizedCell(trade) {
   return `<span class="${pnlClass(annualized)}">${signedPercent(annualized)}</span>`;
 }
 
+function numericOrNull(value) {
+  if (value == null || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 function tradeAiProbability(trade) {
-  const fromTrade = Number(trade.aiProbability);
-  if (Number.isFinite(fromTrade)) return fromTrade;
-  const fromAnalysis = Number(trade.aiAnalysis?.probability);
-  if (Number.isFinite(fromAnalysis)) return fromAnalysis;
-  const fromEvaluation = Number(trade.sourceEvaluation?.aiProbability);
-  return Number.isFinite(fromEvaluation) ? fromEvaluation : null;
+  const fromTrade = numericOrNull(trade.aiProbability);
+  if (fromTrade != null) return fromTrade;
+  const fromAnalysis = numericOrNull(trade.aiAnalysis?.probability);
+  if (fromAnalysis != null) return fromAnalysis;
+  return numericOrNull(trade.sourceEvaluation?.aiProbability);
 }
 
 function tradeAnalysisThesis(trade) {
@@ -1195,17 +1200,15 @@ function reassessmentDate(item = {}, originalDate = "") {
 }
 
 function analysisProbability(item = {}) {
-  const direct = Number(item.aiProbability);
-  if (Number.isFinite(direct)) return direct;
-  const nested = Number(item.aiAnalysis?.probability);
-  return Number.isFinite(nested) ? nested : null;
+  const direct = numericOrNull(item.aiProbability);
+  if (direct != null) return direct;
+  return numericOrNull(item.aiAnalysis?.probability);
 }
 
 function analysisRawProbability(item = {}) {
-  const direct = Number(item.rawProbability);
-  if (Number.isFinite(direct)) return direct;
-  const nested = Number(item.aiAnalysis?.rawProbability);
-  return Number.isFinite(nested) ? nested : null;
+  const direct = numericOrNull(item.rawProbability);
+  if (direct != null) return direct;
+  return numericOrNull(item.aiAnalysis?.rawProbability);
 }
 
 function analysisThesis(item = {}) {
@@ -2768,6 +2771,10 @@ async function ensureCandidateBotState(options = {}) {
     if (shouldRenderCandidateBotState()) {
       renderPortfolioCandidates();
     }
+    if (isLiveMode() && state.liveState) {
+      // The live snapshot renders first; enrich its rows once the shared evaluations arrive.
+      renderLiveState(state.liveState);
+    }
   } catch (error) {
     rememberStateFetchError("paper", error);
     if (shouldRenderCandidateBotState()) renderPortfolioCandidates();
@@ -3726,7 +3733,7 @@ function evaluationByTrade(item) {
 }
 
 function decorateLiveTradeForTable(trade) {
-  if (trade.sourceEvaluation || Number.isFinite(Number(trade.aiProbability))) return trade;
+  if (trade.sourceEvaluation || tradeAiProbability(trade) != null) return trade;
   const source = evaluationByTrade(trade);
   if (!source) {
     return {
@@ -3736,8 +3743,8 @@ function decorateLiveTradeForTable(trade) {
   }
   return {
     ...trade,
-    aiProbability: Number(source.aiProbability),
-    rawProbability: Number(source.rawProbability),
+    aiProbability: numericOrNull(source.aiProbability),
+    rawProbability: numericOrNull(source.rawProbability),
     thesisType: source.thesisType,
     annualizedReturn: trade.annualizedReturn ?? source.annualizedReturn,
     expectedValueUsdc: trade.expectedValueUsdc ?? source.expectedValueUsdc,
@@ -3782,8 +3789,8 @@ function normalizeLiveOpenOrderForTable(order) {
     netGainIfWinUsdc: Number.isFinite(remainingSize) ? remainingSize - stake : null,
     unrealizedPnlUsdc: 0,
     unrealizedPnlPct: 0,
-    aiProbability: Number(source?.aiProbability),
-    rawProbability: Number(source?.rawProbability),
+    aiProbability: numericOrNull(source?.aiProbability),
+    rawProbability: numericOrNull(source?.rawProbability),
     thesisType: source?.thesisType || "",
     annualizedReturn: source?.annualizedReturn,
     expectedValueUsdc: source?.expectedValueUsdc,
