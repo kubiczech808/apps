@@ -251,6 +251,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => null,
                 'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => false,
+                'probabilitySource' => 'ai',
             ],
             'highReward' => [
                 'minProbability' => 0.6,
@@ -260,6 +261,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => null,
                 'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => false,
+                'probabilitySource' => 'ai',
             ],
             'moreProbable' => [
                 'minProbability' => 0.6,
@@ -269,6 +271,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => 500000,
                 'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => true,
+                'probabilitySource' => 'ai',
             ],
         ],
         'live' => [
@@ -280,6 +283,7 @@ function default_portfolio_config(): array
             'tradeCadenceHours' => 24,
             'useLimitOrders' => true,
             'requireMostProbableOutcome' => false,
+            'probabilitySource' => 'ai',
         ],
         'system' => [
             'crossLivePortfolioRiskDiversification' => true,
@@ -356,6 +360,11 @@ function normalize_selection_order_value(mixed $value): string
     return $value === 'highest_reward_risk_first' ? 'highest_reward_risk_first' : 'highest_ev_pa_first';
 }
 
+function normalize_probability_source_value(mixed $value): string
+{
+    return $value === 'polymarket' ? 'polymarket' : 'ai';
+}
+
 function normalize_strategy_config(array $input, array $defaults): array
 {
     return [
@@ -366,6 +375,7 @@ function normalize_strategy_config(array $input, array $defaults): array
         'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
         'tradeCadenceHours' => normalize_cadence_hours_value($input['tradeCadenceHours'] ?? null, (int) $defaults['tradeCadenceHours']),
         'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
+        'probabilitySource' => normalize_probability_source_value($input['probabilitySource'] ?? $defaults['probabilitySource']),
     ];
 }
 

@@ -17,6 +17,7 @@ const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymar
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
 const MIN_PROBABILITY = envNumber("LIVE_MIN_PROBABILITY", envNumber("PAPER_MIN_PROBABILITY", 0.95));
+const PROBABILITY_SOURCE = process.env.LIVE_PROBABILITY_SOURCE === "polymarket" ? "polymarket" : "ai";
 const MIN_ANNUAL_RETURN = envNumber("LIVE_MIN_ANNUAL_RETURN", envNumber("PAPER_MIN_ANNUAL_RETURN", 0.05));
 const OPPORTUNITY_MIN_PROBABILITY = envNumber("LIVE_OPPORTUNITY_MIN_PROBABILITY", envNumber("PAPER_OPPORTUNITY_MIN_PROBABILITY", 0.6));
 const OPPORTUNITY_MIN_EDGE = envNumber("LIVE_OPPORTUNITY_MIN_EDGE", envNumber("PAPER_OPPORTUNITY_MIN_EDGE", 0.04));
@@ -153,6 +154,14 @@ function liveExecutionRunDue(previousExecution, liveState, now = new Date()) {
   const lastRunAt = latestLiveExecutionRunAt(previousExecution);
   if (!lastRunAt) return true;
   return Number(hoursSince(lastRunAt, now) ?? Infinity) >= TRADE_CADENCE_HOURS;
+}
+
+function probabilitySourceLabel() {
+  return PROBABILITY_SOURCE === "polymarket" ? "Polymarket probability" : "AI probability";
+}
+
+function selectedProbability(item) {
+  return number(PROBABILITY_SOURCE === "polymarket" ? item?.marketPrice : item?.aiProbability);
 }
 
 function hasOpenSellOrderForToken(liveState, tokenId) {
@@ -435,7 +444,7 @@ function prefilterLiveCandidate(item) {
   const tokenId = String(item?.tokenId || "");
   const status = String(item?.status || "").toUpperCase();
   const aiPending = item?.selectionStatus === "AI_PENDING" || item?.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
-  const aiProbability = number(item?.aiProbability);
+  const qualificationProbability = selectedProbability(item);
   const endTime = Date.parse(item?.endDate || "");
   const days = localDaysToResolution(item);
 
@@ -444,7 +453,7 @@ function prefilterLiveCandidate(item) {
     reasons.push("stored status ERROR");
   } else if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
     reasons.push(`stored status ${status}`);
-  } else if (status && !["ELIGIBLE", "EVALUATED"].includes(status)) {
+  } else if (PROBABILITY_SOURCE === "ai" && status && !["ELIGIBLE", "EVALUATED"].includes(status)) {
     reasons.push(`stored status ${status}`);
   }
   if (aiPending) reasons.push("grounded Gemini analysis is pending");
@@ -452,10 +461,10 @@ function prefilterLiveCandidate(item) {
     reasons.push("stored market is already closed/resolved");
   }
   if (item?.acceptingOrders === false) reasons.push("stored market is not accepting orders");
-  if (!Number.isFinite(aiProbability)) {
-    reasons.push("missing AI probability");
-  } else if (aiProbability < MIN_PROBABILITY) {
-    reasons.push(`AI probability ${(aiProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`);
+  if (!Number.isFinite(qualificationProbability)) {
+    reasons.push(`missing ${probabilitySourceLabel().toLowerCase()}`);
+  } else if (qualificationProbability < MIN_PROBABILITY) {
+    reasons.push(`${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`);
   }
   const annualizedReturn = number(item?.annualizedReturn);
   if (Number.isFinite(annualizedReturn) && annualizedReturn <= 0) {
@@ -490,8 +499,8 @@ function sortLivePrefilterCandidates(rows = []) {
     const aEv = number(a.expectedValueUsdc, -Infinity);
     const bEv = number(b.expectedValueUsdc, -Infinity);
     if (bEv !== aEv) return bEv - aEv;
-    const aProbability = number(a.aiProbability, -Infinity);
-    const bProbability = number(b.aiProbability, -Infinity);
+    const aProbability = selectedProbability(a) ?? -Infinity;
+    const bProbability = selectedProbability(b) ?? -Infinity;
     if (bProbability !== aProbability) return bProbability - aProbability;
     return candidateEvaluatedAtTime(b) - candidateEvaluatedAtTime(a);
   });
@@ -499,7 +508,7 @@ function sortLivePrefilterCandidates(rows = []) {
 
 function prefilterReasonCountKey(reason) {
   const text = String(reason || "");
-  if (/AI probability .* below live threshold/i.test(text)) return "AI probability below live threshold";
+  if (/(AI|Polymarket) probability .* below live threshold/i.test(text)) return "selected probability below live threshold";
   if (/stored resolution .* exceeds live max/i.test(text)) return "stored resolution exceeds live max days";
   if (/outside live revalidation scan limit/i.test(text)) return "outside live revalidation scan limit after short-expiry ranking";
   return text || "unknown prevalidation reason";
@@ -959,8 +968,8 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
   };
 }
 
-function scoreEconomics({ probability, annualizedReturn, edge, spread, volume24hr, liquidity, endOk }) {
-  const probabilityOk = probability >= MIN_PROBABILITY;
+function scoreEconomics({ probability, qualificationProbability, annualizedReturn, edge, spread, volume24hr, liquidity, endOk }) {
+  const probabilityOk = qualificationProbability >= MIN_PROBABILITY;
   const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
     && edge >= OPPORTUNITY_MIN_EDGE
     && annualizedReturn >= OPPORTUNITY_MIN_ANNUAL_RETURN;
@@ -972,7 +981,7 @@ function scoreEconomics({ probability, annualizedReturn, edge, spread, volume24h
     thesisType: probabilityOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY_BELOW_LIVE_THRESHOLD" : "REJECTED"),
     rejectReasons: [
       endOk ? null : "event end date is in the past",
-      probabilityOk ? null : `AI probability ${(probability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`,
+      probabilityOk ? null : `${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`,
       annualizedReturn <= 0
         ? `annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
         : (returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`),
@@ -1091,6 +1100,10 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   }
 
   const probability = number(evaluation.aiProbability);
+  if (!Number.isFinite(probability)) {
+    return { candidate: evaluation, eligible: false, rejectReasons: ["missing AI probability required for EV calculation"], currentPrice: price, minOrderSize };
+  }
+  const qualificationProbability = PROBABILITY_SOURCE === "polymarket" ? price : probability;
   const endDate = correctedEndDate(market.question || evaluation.question, market.endDate, market.createdAt || market.updatedAt);
   const days = daysToEnd(endDate);
   const resolvedDays = daysValue({ daysToResolution: days });
@@ -1115,6 +1128,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   const edge = probability - price;
   const scored = scoreEconomics({
     probability,
+    qualificationProbability,
     annualizedReturn,
     edge,
     spread: book.spread,
@@ -1737,6 +1751,7 @@ async function main() {
       postOnly: POST_ONLY,
       orderSizeMode: ORDER_SIZE_MODE,
       minProbability: MIN_PROBABILITY,
+      probabilitySource: PROBABILITY_SOURCE,
       minAnnualReturn: MIN_ANNUAL_RETURN,
       maxSpread: MAX_SPREAD,
       minVolume24hr: MIN_VOLUME_24H,
@@ -1780,6 +1795,7 @@ async function main() {
       explanation: actionExplanation,
       settings: {
         minProbability: MIN_PROBABILITY,
+        probabilitySource: PROBABILITY_SOURCE,
         minAnnualReturn: MIN_ANNUAL_RETURN,
         maxSpread: MAX_SPREAD,
         minVolume24hr: MIN_VOLUME_24H,

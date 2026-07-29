@@ -15,7 +15,7 @@ on:
         default: false
         type: boolean
       live_min_probability:
-        description: Minimum AI probability required for live execution, as decimal 0-1
+        description: Minimum configured probability required for live execution, as decimal 0-1
         required: false
         default: "0.95"
         type: string
@@ -90,6 +90,7 @@ jobs:
       POLYMARKET_POST_ONLY: "true"
       LIVE_ORDER_SIZE_MODE: stake_fraction
       LIVE_MIN_PROBABILITY: ${{ github.event.inputs.live_min_probability || '0.95' }}
+      LIVE_PROBABILITY_SOURCE: "ai"
       LIVE_MIN_ANNUAL_RETURN: "0.05"
       LIVE_OPPORTUNITY_MIN_PROBABILITY: "0.60"
       LIVE_OPPORTUNITY_MIN_EDGE: "0.04"
@@ -136,6 +137,7 @@ jobs:
           system = (payload.get("config") or {}).get("system") or {}
           mapping = {
               "LIVE_MIN_PROBABILITY": live.get("minProbability"),
+              "LIVE_PROBABILITY_SOURCE": live.get("probabilitySource"),
               "MAX_ORDER_FRACTION": live.get("maxOrderFraction"),
               "LIVE_MAX_RESOLUTION_DAYS": live.get("maxResolutionDays"),
               "LIVE_SELECTION_ORDER": live.get("selectionOrder"),

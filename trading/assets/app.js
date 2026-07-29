@@ -133,6 +133,7 @@ const els = {
   tradeCadenceHours: document.querySelector("[data-trade-cadence-hours]"),
   tradeCadenceHoursLabel: document.querySelector("[data-trade-cadence-hours-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
+  polymarketProbability: document.querySelector("[data-polymarket-probability]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
   limitOrders: document.querySelector("[data-limit-orders]"),
@@ -267,6 +268,7 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: null,
         tradeCadenceHours: 1,
         requireMostProbableOutcome: false,
+        probabilitySource: "ai",
       },
       highReward: {
         minProbability: 0.6,
@@ -276,6 +278,7 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: null,
         tradeCadenceHours: 1,
         requireMostProbableOutcome: false,
+        probabilitySource: "ai",
       },
       moreProbable: {
         minProbability: 0.6,
@@ -285,6 +288,7 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: 500000,
         tradeCadenceHours: 1,
         requireMostProbableOutcome: true,
+        probabilitySource: "ai",
       },
     },
     live: {
@@ -296,6 +300,7 @@ function defaultPortfolioConfig() {
       tradeCadenceHours: 24,
       useLimitOrders: true,
       requireMostProbableOutcome: false,
+      probabilitySource: "ai",
     },
     system: {
       crossLivePortfolioRiskDiversification: true,
@@ -305,6 +310,20 @@ function defaultPortfolioConfig() {
 
 function normalizeSelectionOrder(value) {
   return value === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
+}
+
+function normalizeProbabilitySource(value) {
+  return value === "polymarket" ? "polymarket" : "ai";
+}
+
+function probabilitySourceLabel(value) {
+  return normalizeProbabilitySource(value) === "polymarket" ? "Polymarket probability" : "AI probability";
+}
+
+function portfolioProbability(item, config = {}) {
+  return normalizeProbabilitySource(config.probabilitySource) === "polymarket"
+    ? Number(item.marketPrice)
+    : Number(item.aiProbability);
 }
 
 function selectionOrderLabel(value) {
@@ -2134,6 +2153,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = probability(threshold);
   syncDraftRiskAllocationControl(allocation, capitalContext);
   if (els.limitOrders) els.limitOrders.checked = Boolean(limitOrders);
+  if (els.polymarketProbability) els.polymarketProbability.checked = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
   if (els.maxResolutionDays) els.maxResolutionDays.value = String(maxDays);
   if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = `${maxDays} d`;
   if (els.selectionOrder) els.selectionOrder.value = order;
@@ -3312,7 +3332,7 @@ function portfolioRuleRows(portfolio = {}) {
     : "Highest EV p.a., then shorter resolution and EV";
   const resolution = `Max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`;
   const rows = [
-    ["AI probability threshold", percent(threshold)],
+    ["Probability threshold", `${probabilitySourceLabel(config.probabilitySource)} >= ${percent(threshold)}`],
     ["Stake sizing", `${probability(currentRiskAllocation())} of portfolio equity`],
     ["Resolution filter", resolution],
     ["Trade priority", priority],
@@ -3331,7 +3351,7 @@ function livePortfolioRuleRows() {
     ? "Highest reward/risk, then shorter resolution and EV"
     : "Highest EV p.a., then shorter resolution and EV";
   return [
-    ["AI probability threshold", percent(currentEligibilityThreshold())],
+    ["Probability threshold", `${probabilitySourceLabel(config.probabilitySource)} >= ${percent(currentEligibilityThreshold())}`],
     ["Stake sizing", `${probability(currentRiskAllocation())} of live equity`],
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
@@ -3382,7 +3402,8 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const reasons = [];
   const storedStatus = String(item.status || "").toUpperCase();
   const displayStatus = portfolioEvaluationStatus(item);
-  const aiProbability = Number(item.aiProbability);
+  const probabilitySource = normalizeProbabilitySource(config.probabilitySource);
+  const selectedProbability = portfolioProbability(item, config);
   const maxDays = resolutionDaysForMode(normalizedMode);
   const days = evaluationDaysLeft(item);
   const liquidity = Number(item.liquidity || 0);
@@ -3401,13 +3422,16 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     && (Date.parse(executionCheck.checkedAt || "") || 0) >= (Date.parse(item.evaluatedAt || "") || 0);
 
   if (displayStatus !== "EVALUATED") reasons.push(`status ${displayStatus}`);
-  if (normalizedMode !== "live" && storedStatus !== "ELIGIBLE") {
+  if (probabilitySource === "ai" && normalizedMode !== "live" && storedStatus !== "ELIGIBLE") {
     reasons.push(`base status ${storedStatus || "UNKNOWN"} is not ELIGIBLE`);
   }
-  if (!Number.isFinite(aiProbability)) {
-    reasons.push("missing AI probability");
-  } else if (aiProbability < threshold) {
-    reasons.push(`AI probability ${probability(aiProbability)} below ${probability(threshold)}`);
+  if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(storedStatus)) {
+    reasons.push(`base status ${storedStatus || "UNKNOWN"} is not executable`);
+  }
+  if (!Number.isFinite(selectedProbability)) {
+    reasons.push(`missing ${probabilitySourceLabel(probabilitySource).toLowerCase()}`);
+  } else if (selectedProbability < threshold) {
+    reasons.push(`${probabilitySourceLabel(probabilitySource)} ${probability(selectedProbability)} below ${probability(threshold)}`);
   }
   if (!Number.isFinite(annualizedReturn)) {
     reasons.push("missing usable EV p.a.");
@@ -5196,6 +5220,15 @@ els.mostProbableOutcome?.addEventListener("change", () => {
   const value = Boolean(els.mostProbableOutcome.checked);
   if (updateParameterDraft({ requireMostProbableOutcome: value })) return;
   updatePortfolioConfigForMode(state.mode, { requireMostProbableOutcome: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.polymarketProbability?.addEventListener("change", () => {
+  const probabilitySource = els.polymarketProbability.checked ? "polymarket" : "ai";
+  if (updateParameterDraft({ probabilitySource })) return;
+  updatePortfolioConfigForMode(state.mode, { probabilitySource });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

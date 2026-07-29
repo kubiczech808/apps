@@ -20,6 +20,10 @@ function envSelectionOrder(name, fallback = "highest_ev_pa_first") {
   return process.env[name] === "highest_reward_risk_first" ? "highest_reward_risk_first" : fallback;
 }
 
+function envProbabilitySource(name, fallback = "ai") {
+  return process.env[name] === "polymarket" ? "polymarket" : fallback;
+}
+
 const OUTPUT_PATH = process.env.PAPER_STATE_PATH || "data/paper-state.json";
 const REMOTE_STATE_URL = process.env.PAPER_STATE_URL || "";
 const PORTFOLIO_USDC = envNumber("PAPER_PORTFOLIO_USDC", 100);
@@ -86,8 +90,9 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
     tradeCadenceHours: envNumber("PAPER_CONSERVATIVE_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
+    probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
     selectionOrder: envSelectionOrder("PAPER_CONSERVATIVE_SELECTION_ORDER", "highest_ev_pa_first"),
-    description: `Requires AI probability >= ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then selects the highest EV p.a.`,
+    description: `Requires the configured probability source to meet ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then selects the highest EV p.a.`,
   },
   highReward: {
     id: "highReward",
@@ -99,8 +104,9 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
     tradeCadenceHours: envNumber("PAPER_HIGH_REWARD_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
+    probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
     selectionOrder: envSelectionOrder("PAPER_HIGH_REWARD_SELECTION_ORDER", "highest_reward_risk_first"),
-    description: `Requires AI probability >= ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then prioritizes eligible opportunities by highest reward against risk.`,
+    description: `Requires the configured probability source to meet ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then prioritizes eligible opportunities by highest reward against risk.`,
   },
   moreProbable: {
     id: "moreProbable",
@@ -112,8 +118,9 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
     tradeCadenceHours: envNumber("PAPER_MORE_PROBABLE_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
+    probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
     selectionOrder: envSelectionOrder("PAPER_MORE_PROBABLE_SELECTION_ORDER", "highest_reward_risk_first"),
-    description: `Requires AI probability >= ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, deep liquidity, and multichoice-style event markets.`,
+    description: `Requires the configured probability source to meet ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, deep liquidity, and multichoice-style event markets.`,
   },
 };
 
@@ -331,6 +338,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     minLiquidityUsdc: strategy.minLiquidityUsdc,
     tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
+    probabilitySource: strategy.probabilitySource,
     description: strategy.description,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
@@ -344,6 +352,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       minLiquidityUsdc: strategy.minLiquidityUsdc == null ? null : Number(strategy.minLiquidityUsdc),
       tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
+      probabilitySource: strategy.probabilitySource,
     },
     trades: Array.isArray(input.trades)
       ? input.trades.map((trade) => normalizeTrade({ ...trade, strategyId: trade.strategyId || strategy.id, strategyLabel: trade.strategyLabel || strategy.label }))
@@ -2822,7 +2831,8 @@ function strategyEligibleCandidates(eligible, strategy) {
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
   let rows = [...eligible].filter((item) => {
     const minProbability = Number(strategy.minProbability);
-    if (Number.isFinite(minProbability) && Number(item.aiProbability) < minProbability) return false;
+    const selectedProbability = Number(strategy.probabilitySource === "polymarket" ? item.marketPrice : item.aiProbability);
+    if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) return false;
     if (daysValue(item) > maxResolutionDays) return false;
     const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
     if (Number.isFinite(minLiquidityUsdc) && Number(item.liquidity || 0) < minLiquidityUsdc) return false;
@@ -2840,16 +2850,21 @@ function portfolioFilterResult(item, strategy) {
   const minProbability = Number(strategy.minProbability);
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
   const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
-  const aiProbability = Number(item.aiProbability);
+  const probabilitySource = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
+  const selectedProbability = Number(probabilitySource === "polymarket" ? item.marketPrice : item.aiProbability);
   const days = daysValue(item);
   const liquidity = Number(item.liquidity || 0);
   const marketType = item.marketType || reportMarketType(item);
   const annualizedReturn = Number(item.annualizedReturn);
 
-  if (status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
+  if (probabilitySource === "ai" && status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
+  if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
+    reasons.push(`base status ${status || "UNKNOWN"} is not executable`);
+  }
   if (REQUIRE_GEMINI && !hasGroundedPublicMemo(item)) reasons.push("grounded Gemini analysis is pending");
-  if (Number.isFinite(minProbability) && (!Number.isFinite(aiProbability) || aiProbability < minProbability)) {
-    reasons.push(`AI probability ${Number.isFinite(aiProbability) ? (aiProbability * 100).toFixed(1) : "-"}% below ${(minProbability * 100).toFixed(1)}%`);
+  if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) {
+    const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
+    reasons.push(`${label} ${Number.isFinite(selectedProbability) ? (selectedProbability * 100).toFixed(1) : "-"}% below ${(minProbability * 100).toFixed(1)}%`);
   }
   if (Number.isFinite(annualizedReturn) && annualizedReturn <= 0) {
     reasons.push(`annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
@@ -3237,6 +3252,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
       selectionOrder: strategy.selectionOrder,
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
+      probabilitySource: strategy.probabilitySource,
       tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
       manualRunOnce: MANUAL_RUN_ONCE,
       cadenceIgnored: MANUAL_RUN_ONCE,
@@ -4559,6 +4575,7 @@ async function run() {
 
   evaluations = (await enrichEvaluationsWithAi(evaluations, state.learningProfile, state)).map(normalizeEvaluationRisk);
   const eligible = evaluations.filter((item) => item.status === "ELIGIBLE" && (!REQUIRE_GEMINI || hasGroundedPublicMemo(item)));
+  const executionEvaluations = evaluations.filter((item) => item.status !== "ERROR" && (!REQUIRE_GEMINI || hasGroundedPublicMemo(item)));
   const decisions = EVALUATION_ONLY
     ? strategiesForRun.map((strategy) => ({
         action: "EVALUATION_ONLY",
@@ -4578,7 +4595,10 @@ async function run() {
       }))
     : strategiesForRun.map((strategy) => {
         const portfolioState = state.paperPortfolios[strategy.id];
-        const rankedEligible = sortEligibleForStrategy(eligible, strategy);
+        const rankedEligible = sortEligibleForStrategy(
+          executionEvaluations.filter((item) => portfolioFilterResult(item, strategy).eligible),
+          strategy,
+        );
         return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations, { ignoreCadence: MANUAL_RUN_ONCE, diversificationDiagnostics });
       });
 

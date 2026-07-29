@@ -291,9 +291,13 @@
       </div>
       <div class="analysis-modal-body parameter-modal-body">
         <label class="parameter-control">
-          <span>AI probability threshold</span>
+          <span>Probability threshold</span>
           <input type="number" min="1" max="99" step="1" value="95" data-eligibility-threshold>
           <strong data-eligibility-threshold-label>95%</strong>
+        </label>
+        <label class="parameter-control order-mode-toggle" title="When enabled, the probability threshold uses Polymarket's current outcome probability. Expected value still uses the independent AI assessment.">
+          <input type="checkbox" data-polymarket-probability>
+          <span>Use Polymarket probability for threshold</span>
         </label>
         <label class="parameter-control">
           <span>Max per trade</span>
@@ -340,6 +344,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260729-opportunity-days-filter"></script>
+  <script src="assets/app.js?v=20260729-probability-source"></script>
 </body>
 </html>
