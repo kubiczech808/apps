@@ -40,6 +40,9 @@ const MAX_EVALUATIONS_PER_RUN = envNumber("PAPER_MAX_EVALUATIONS_PER_RUN", 80);
 const MAX_SPREAD = envNumber("PAPER_MAX_SPREAD", 0.08);
 const MIN_VOLUME_24H = envNumber("PAPER_MIN_VOLUME_24H", 100);
 const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
+const MARKET_SCAN_BATCH_SIZE = envNumber("PAPER_MARKET_SCAN_BATCH_SIZE", 100);
+const MARKET_SCAN_MAX_OBSERVATIONS = envNumber("PAPER_MARKET_SCAN_MAX_OBSERVATIONS", 5000);
+const MARKET_SCAN_MAX_OFFSET = envNumber("PAPER_MARKET_SCAN_MAX_OFFSET", 5000);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3-flash-preview";
 const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
@@ -313,6 +316,8 @@ function normalizeState(input) {
     portfolio: paperPortfolios.conservative.portfolio,
     trades: paperPortfolios.conservative.trades,
     evaluations: mergeEvaluationLists(Array.isArray(input.evaluations) ? input.evaluations : []),
+    marketObservations: mergeMarketObservationLists(Array.isArray(input.marketObservations) ? input.marketObservations : []),
+    marketScan: normalizeMarketScan(input.marketScan),
     evaluationRunLog: Array.isArray(input.evaluationRunLog) ? input.evaluationRunLog.slice(0, 80) : [],
     calculationReports: Array.isArray(input.calculationReports) ? input.calculationReports.slice(0, 30) : [],
     latestCalculationReport: input.latestCalculationReport || (Array.isArray(input.calculationReports) ? input.calculationReports[0] || null : null),
@@ -391,8 +396,42 @@ function evaluationUpdateTime(item) {
   return Math.max(
     Date.parse(item?.evaluatedAt || "") || 0,
     Date.parse(item?.lastSeenAt || "") || 0,
+    Date.parse(item?.marketDataUpdatedAt || "") || 0,
     Date.parse(item?.updatedAt || "") || 0,
   );
+}
+
+function marketObservationKey(item) {
+  return String(item?.marketKey || item?.id || item?.tokenId || "").trim();
+}
+
+function marketObservationUpdateTime(item) {
+  return Date.parse(item?.marketDataUpdatedAt || item?.observedAt || item?.updatedAt || "") || 0;
+}
+
+function normalizeMarketScan(input = {}) {
+  return {
+    cursor: Math.max(0, Math.floor(Number(input?.cursor) || 0)),
+    lastScanAt: input?.lastScanAt || null,
+    lastBatchCount: Math.max(0, Math.floor(Number(input?.lastBatchCount) || 0)),
+    lastPreferredCount: Math.max(0, Math.floor(Number(input?.lastPreferredCount) || 0)),
+    lastScanError: input?.lastScanError || null,
+  };
+}
+
+function mergeMarketObservationLists(primary = [], secondary = [], limit = MARKET_SCAN_MAX_OBSERVATIONS) {
+  const byKey = new Map();
+  for (const item of [...secondary, ...primary]) {
+    const key = marketObservationKey(item);
+    if (!key) continue;
+    const current = byKey.get(key);
+    if (!current || marketObservationUpdateTime(item) >= marketObservationUpdateTime(current)) {
+      byKey.set(key, item);
+    }
+  }
+  return [...byKey.values()]
+    .sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a))
+    .slice(0, limit);
 }
 
 function mergeUniqueById(items, idFn, limit = Infinity) {
@@ -409,7 +448,12 @@ const EVALUATION_CHANGE_FIELDS = [
   "status",
   "selectionStatus",
   "thesisType",
+  "outcome",
+  "tokenId",
   "marketPrice",
+  "marketProbability",
+  "marketDataUpdatedAt",
+  "marketOutcomeFlipped",
   "bestAsk",
   "bestBid",
   "spread",
@@ -795,6 +839,8 @@ function mergeStates(primary, secondary) {
   const merged = {
     ...base,
     evaluations: mergeEvaluationLists(base.evaluations || [], other.evaluations || []),
+    marketObservations: mergeMarketObservationLists(base.marketObservations || [], other.marketObservations || []),
+    marketScan: stateTime(base) >= stateTime(other) ? normalizeMarketScan(base.marketScan) : normalizeMarketScan(other.marketScan),
     evaluationRunLog: mergeUniqueById([...(base.evaluationRunLog || []), ...(other.evaluationRunLog || [])], (item) => item.runAt || item.id || "", 80),
     calculationReports: mergeUniqueById([...(base.calculationReports || []), ...(other.calculationReports || [])], (item) => item.id || item.generatedAt || "", 60)
       .sort((a, b) => (Date.parse(b.generatedAt || "") || 0) - (Date.parse(a.generatedAt || "") || 0))
@@ -1578,6 +1624,7 @@ function estimateProbability({ market, outcome, ask, bid, spread, liquidity, vol
 function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfile }) {
   const question = String(market.question || "");
   const outcomes = parseJsonField(market.outcomes);
+  const outcomePrices = parseJsonField(market.outcomePrices);
   const outcome = String(outcomes[outcomeIndex] || `Outcome ${outcomeIndex + 1}`);
   const { bestBid, bestAsk, spread, askDepth, asks } = bestBook(book);
   const volume24hr = Number(market.volume24hr || 0);
@@ -1658,6 +1705,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     riskGroupLabels: risk.labels,
     executionMode: "MARKET_BUY",
     marketPrice: Number(executionPrice.toFixed(4)),
+    marketProbability: validMarketProbability(outcomePrices[outcomeIndex]) ?? Number(executionPrice.toFixed(4)),
     bestAsk: Number(bestAsk.toFixed(4)),
     bestBid: bestBid == null ? null : Number(bestBid.toFixed(4)),
     spread: spread == null ? null : Number(spread.toFixed(4)),
@@ -2007,7 +2055,7 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
   );
   const marketComparisonSummary = buildMarketComparisonSummary({
     probability,
-    marketProbability: evaluation.marketPrice,
+    marketProbability: evaluation.marketProbability ?? evaluation.marketPrice,
     rationale: probabilityRationale,
   });
   const aiAnalysis = {
@@ -2017,7 +2065,7 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     analysisSchemaVersion: modelAnalysis?.analysisSchemaVersion || GROUNDED_AI_ANALYSIS_VERSION,
     probability: Number(probability.toFixed(4)),
     probabilityMethod: "independent-public-research",
-    marketImpliedProbability: Number(evaluation.marketPrice),
+    marketImpliedProbability: Number(evaluation.marketProbability ?? evaluation.marketPrice),
     edge: Number(economics.edge.toFixed(4)),
     probabilityRationale,
     probabilityPointRationale,
@@ -2752,8 +2800,8 @@ function isNoOutcome(item) {
 }
 
 function similarPolymarketProbability(a, b, tolerance = 0.03) {
-  const aPrice = Number(a?.marketPrice ?? a?.entryPrice ?? a?.currentPrice);
-  const bPrice = Number(b?.marketPrice ?? b?.entryPrice ?? b?.currentPrice);
+  const aPrice = Number(a?.marketProbability ?? a?.marketPrice ?? a?.entryPrice ?? a?.currentPrice);
+  const bPrice = Number(b?.marketProbability ?? b?.marketPrice ?? b?.entryPrice ?? b?.currentPrice);
   return Number.isFinite(aPrice) && Number.isFinite(bPrice) && Math.abs(aPrice - bPrice) <= tolerance;
 }
 
@@ -2831,7 +2879,7 @@ function strategyEligibleCandidates(eligible, strategy) {
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
   let rows = [...eligible].filter((item) => {
     const minProbability = Number(strategy.minProbability);
-    const selectedProbability = Number(strategy.probabilitySource === "polymarket" ? item.marketPrice : item.aiProbability);
+    const selectedProbability = Number(strategy.probabilitySource === "polymarket" ? (item.marketProbability ?? item.marketPrice) : item.aiProbability);
     if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) return false;
     if (daysValue(item) > maxResolutionDays) return false;
     const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
@@ -2851,7 +2899,7 @@ function portfolioFilterResult(item, strategy) {
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
   const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
   const probabilitySource = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
-  const selectedProbability = Number(probabilitySource === "polymarket" ? item.marketPrice : item.aiProbability);
+  const selectedProbability = Number(probabilitySource === "polymarket" ? (item.marketProbability ?? item.marketPrice) : item.aiProbability);
   const days = daysValue(item);
   const liquidity = Number(item.liquidity || 0);
   const marketType = item.marketType || reportMarketType(item);
@@ -3944,6 +3992,164 @@ async function loadMarkets() {
   return fetchJson(url);
 }
 
+function validMarketProbability(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 && numeric < 1 ? numeric : null;
+}
+
+function preferredMarketObservation(market, observedAt = nowIso()) {
+  const outcomes = parseJsonField(market?.outcomes).map((outcome) => String(outcome || ""));
+  const prices = parseJsonField(market?.outcomePrices).map(validMarketProbability);
+  const tokenIds = parseJsonField(market?.clobTokenIds).map((tokenId) => String(tokenId || ""));
+  const binary = binaryYesNoOutcomeIndexes(outcomes);
+  let outcomeIndex = -1;
+  let binaryYesPrice = null;
+  let binaryNoPrice = null;
+
+  if (binary) {
+    binaryYesPrice = prices[binary.yesIndex];
+    binaryNoPrice = prices[binary.noIndex] ?? (binaryYesPrice == null ? null : 1 - binaryYesPrice);
+    if (binaryYesPrice == null && binaryNoPrice == null) return null;
+    outcomeIndex = binaryYesPrice != null && (binaryNoPrice == null || binaryYesPrice >= binaryNoPrice)
+      ? binary.yesIndex
+      : binary.noIndex;
+  } else {
+    let best = -1;
+    for (let index = 0; index < Math.min(outcomes.length, prices.length, tokenIds.length); index += 1) {
+      if (prices[index] != null && prices[index] > best) {
+        best = prices[index];
+        outcomeIndex = index;
+      }
+    }
+  }
+
+  const probability = binary && outcomeIndex === binary.noIndex ? binaryNoPrice : prices[outcomeIndex];
+  const tokenId = tokenIds[outcomeIndex];
+  if (outcomeIndex < 0 || probability == null || probability < 0.5 || !tokenId) return null;
+
+  const marketKey = binary
+    ? binaryMarketKeyFromMarket(market)
+    : `token:${tokenId}`;
+  if (!marketKey) return null;
+  const endDate = correctedEndDate(market.question || "", market.endDate, market.createdAt || market.updatedAt);
+  return {
+    id: marketKey,
+    marketKey,
+    marketId: String(market.conditionId || market.id || ""),
+    question: String(market.question || ""),
+    slug: String(market.slug || ""),
+    eventSlug: marketEventSlug(market),
+    outcome: outcomes[outcomeIndex],
+    tokenId,
+    marketProbability: Number(probability.toFixed(4)),
+    binaryYesMarketProbability: binary && binaryYesPrice != null ? Number(binaryYesPrice.toFixed(4)) : null,
+    binaryNoMarketProbability: binary && binaryNoPrice != null ? Number(binaryNoPrice.toFixed(4)) : null,
+    binaryYesTokenId: binary ? tokenIds[binary.yesIndex] || "" : "",
+    binaryNoTokenId: binary ? tokenIds[binary.noIndex] || "" : "",
+    outcomeCount: outcomes.length,
+    endDate,
+    liquidity: Number(market.liquidity || 0),
+    volume24hr: Number(market.volume24hr || 0),
+    marketDataUpdatedAt: observedAt,
+    observedAt,
+    source: "polymarket-gamma",
+  };
+}
+
+async function refreshMarketObservations(state) {
+  const previousScan = normalizeMarketScan(state.marketScan);
+  const url = new URL("https://gamma-api.polymarket.com/markets");
+  url.searchParams.set("limit", String(Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE))));
+  url.searchParams.set("offset", String(previousScan.cursor));
+  url.searchParams.set("active", "true");
+  url.searchParams.set("closed", "false");
+  url.searchParams.set("order", "volume24hr");
+  url.searchParams.set("ascending", "false");
+  const markets = await fetchJson(url);
+  const observedAt = nowIso();
+  const observations = (Array.isArray(markets) ? markets : [])
+    .map((market) => preferredMarketObservation(market, observedAt))
+    .filter(Boolean);
+  const nextCursor = Array.isArray(markets) && markets.length >= MARKET_SCAN_BATCH_SIZE
+    ? previousScan.cursor + MARKET_SCAN_BATCH_SIZE
+    : 0;
+  state.marketObservations = mergeMarketObservationLists(observations, state.marketObservations || []);
+  state.marketScan = {
+    cursor: nextCursor >= MARKET_SCAN_MAX_OFFSET ? 0 : nextCursor,
+    lastScanAt: observedAt,
+    lastBatchCount: Array.isArray(markets) ? markets.length : 0,
+    lastPreferredCount: observations.length,
+  };
+  return observations;
+}
+
+function snapshotMatchesEvaluation(snapshot, evaluation) {
+  if (!snapshot || !evaluation) return false;
+  if (snapshot.marketKey.startsWith("binary:")) {
+    return binaryEvaluationMarketKey(evaluation) === snapshot.marketKey;
+  }
+  return String(snapshot.tokenId || "") === String(evaluation.tokenId || "");
+}
+
+function marketObservationChanges(previous, next) {
+  return ["outcome", "tokenId", "marketProbability", "marketDataUpdatedAt"]
+    .map((field) => ({ field, from: comparableEvaluationValue(previous?.[field]), to: comparableEvaluationValue(next?.[field]) }))
+    .filter((change) => JSON.stringify(change.from) !== JSON.stringify(change.to));
+}
+
+function applyMarketObservationsToEvaluations(evaluations, observations) {
+  if (!observations.length || !evaluations.length) return evaluations;
+  return evaluations.map((evaluation) => {
+    const snapshot = observations.find((item) => snapshotMatchesEvaluation(item, evaluation));
+    if (!snapshot) return evaluation;
+    const outcomeChanged = String(snapshot.tokenId) !== String(evaluation.tokenId || "");
+    const storedProbability = Number(evaluation.aiProbability);
+    const yesProbability = Number.isFinite(Number(evaluation.binaryYesProbability))
+      ? Number(evaluation.binaryYesProbability)
+      : (Number.isFinite(storedProbability)
+        ? (String(evaluation.outcome || "").toLowerCase() === "yes" ? storedProbability : 1 - storedProbability)
+        : null);
+    const nextAiProbability = Number.isFinite(yesProbability)
+      ? Number((String(snapshot.outcome).toLowerCase() === "yes" ? yesProbability : 1 - yesProbability).toFixed(4))
+      : evaluation.aiProbability;
+    const next = normalizeEvaluationRisk({
+      ...evaluation,
+      id: outcomeChanged ? `token:${snapshot.tokenId}` : evaluation.id,
+      tokenId: snapshot.tokenId,
+      outcome: snapshot.outcome,
+      marketProbability: snapshot.marketProbability,
+      marketDataUpdatedAt: snapshot.marketDataUpdatedAt,
+      binaryYesMarketProbability: snapshot.binaryYesMarketProbability,
+      binaryNoMarketProbability: snapshot.binaryNoMarketProbability,
+      binaryYesTokenId: snapshot.binaryYesTokenId || evaluation.binaryYesTokenId,
+      binaryNoTokenId: snapshot.binaryNoTokenId || evaluation.binaryNoTokenId,
+      marketOutcomeFlipped: outcomeChanged,
+      marketOutcomeFlipAt: outcomeChanged ? snapshot.marketDataUpdatedAt : evaluation.marketOutcomeFlipAt || null,
+      marketOutcomeFlipNote: outcomeChanged
+        ? `Polymarket probability crossed 50%; stored outcome switched to ${snapshot.outcome} at ${(snapshot.marketProbability * 100).toFixed(1)}%.`
+        : evaluation.marketOutcomeFlipNote || null,
+      aiProbability: nextAiProbability,
+      binaryYesProbability: Number.isFinite(yesProbability) ? Number(yesProbability.toFixed(4)) : evaluation.binaryYesProbability,
+      rawProbability: Number.isFinite(yesProbability)
+        ? Number((String(snapshot.outcome).toLowerCase() === "yes" ? yesProbability : 1 - yesProbability).toFixed(4))
+        : evaluation.rawProbability,
+      lastSeenAt: snapshot.marketDataUpdatedAt,
+    });
+    const changes = marketObservationChanges(evaluation, next);
+    if (!changes.length) return evaluation;
+    return {
+      ...next,
+      updateHistory: [{
+        changedAt: snapshot.marketDataUpdatedAt,
+        previousEvaluatedAt: evaluation.evaluatedAt || evaluation.lastSeenAt || null,
+        source: "polymarket-market-scan",
+        changes,
+      }, ...(Array.isArray(evaluation.updateHistory) ? evaluation.updateHistory : [])].slice(0, 30),
+      lastChanges: changes,
+    };
+  });
+}
+
 async function loadFocusedEvaluationMarkets(state) {
   let market = EVALUATION_MARKET_SLUG ? await fetchMarketBySlug(EVALUATION_MARKET_SLUG) : null;
   if (!market && EVALUATION_TOKEN_ID) {
@@ -3976,7 +4182,7 @@ function reportMarketType(item) {
 }
 
 function reportPolymarketProbability(item) {
-  const value = Number(item?.entryPrice ?? item?.marketPrice ?? item?.currentPrice);
+  const value = Number(item?.marketProbability ?? item?.entryPrice ?? item?.marketPrice ?? item?.currentPrice);
   return Number.isFinite(value) && value > 0 && value < 1 ? value : null;
 }
 
@@ -4407,6 +4613,15 @@ async function run() {
     .filter((item) => !wasNeverReviewedBecauseOfQuota(item))
     .map(normalizeAiPendingEvaluation)
     .map(ensureEvaluationErrorMetadata);
+  try {
+    const observations = await refreshMarketObservations(state);
+    state.evaluations = applyMarketObservationsToEvaluations(state.evaluations, observations);
+  } catch (error) {
+    state.marketScan = {
+      ...normalizeMarketScan(state.marketScan),
+      lastScanError: error?.message || String(error),
+    };
+  }
   recoverLedgerGaps(state);
   for (const portfolioState of Object.values(state.paperPortfolios)) {
     portfolioState.trades = await refreshTrades(portfolioState.trades);

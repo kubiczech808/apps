@@ -322,7 +322,7 @@ function probabilitySourceLabel(value) {
 
 function portfolioProbability(item, config = {}) {
   return normalizeProbabilitySource(config.probabilitySource) === "polymarket"
-    ? Number(item.marketPrice)
+    ? Number(item.marketProbability ?? item.marketPrice)
     : Number(item.aiProbability);
 }
 

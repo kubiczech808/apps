@@ -161,7 +161,7 @@ function probabilitySourceLabel() {
 }
 
 function selectedProbability(item) {
-  return number(PROBABILITY_SOURCE === "polymarket" ? item?.marketPrice : item?.aiProbability);
+  return number(PROBABILITY_SOURCE === "polymarket" ? (item?.marketProbability ?? item?.marketPrice) : item?.aiProbability);
 }
 
 function hasOpenSellOrderForToken(liveState, tokenId) {
