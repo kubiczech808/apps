@@ -3359,12 +3359,57 @@ function activeExposureRowsForMode(mode = state.mode) {
   return paperPortfolioTrades(portfolioState).filter((trade) => !isClosedTrade(trade));
 }
 
+function normalizedRiskSlug(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function eventRiskKey(value) {
+  const slug = normalizedRiskSlug(value);
+  if (!slug) return "";
+  // Polymarket often appends a time or an outcome suffix to one event family.
+  return slug.replace(/-20\d{2}-\d{2}-\d{2}(?:-.*)?$/, "");
+}
+
+function inferredRiskKeysForRow(row) {
+  const slug = normalizedRiskSlug(row?.slug);
+  const eventSlug = normalizedRiskSlug(row?.eventSlug || row?.eventId);
+  const eventKey = eventRiskKey(row?.eventSlug || row?.slug);
+  const text = normalizedRiskSlug(`${row?.question || ""} ${row?.slug || ""} ${row?.eventSlug || ""}`).replace(/-/g, " ");
+  const keys = new Set();
+  if (slug) keys.add(`market:${slug}`);
+  if (eventSlug) keys.add(`event:${eventSlug}`);
+  if (eventKey) keys.add(`event:${eventKey}`);
+  if (/\b(bitcoin|btc)\b/.test(text)) keys.add("topic:bitcoin");
+  if (/\b(ethereum|ether|eth)\b/.test(text)) keys.add("topic:ethereum");
+  if (/\bsolana\b/.test(text)) keys.add("topic:solana");
+  if (/\b(xrp|ripple)\b/.test(text)) keys.add("topic:xrp");
+  if (/\b(iran|iranian|hormuz|kharg|strait of hormuz|israel|israeli|tehran|nuclear)\b/.test(text)) {
+    keys.add("topic:iran-war");
+  }
+  const fed = text.match(/\b(fed|federal reserve|interest rates?|rate cut|rate hike|bps|fomc)\b/);
+  if (fed) {
+    const month = text.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/)?.[1] || "meeting";
+    const year = text.match(/\b(20\d{2})\b/)?.[1] || "";
+    keys.add(`topic:fed-${month}${year ? `-${year}` : ""}`);
+  }
+  return [...keys];
+}
+
 function riskKeysForRow(row, evaluationByToken = new Map()) {
-  const direct = Array.isArray(row?.riskGroupKeys) ? row.riskGroupKeys : [];
-  if (direct.length) return direct.map(String).filter(Boolean);
   const token = String(row?.tokenId || row?.assetId || row?.asset || "");
   const evaluation = token ? evaluationByToken.get(token) : null;
-  return Array.isArray(evaluation?.riskGroupKeys) ? evaluation.riskGroupKeys.map(String).filter(Boolean) : [];
+  const direct = Array.isArray(row?.riskGroupKeys) ? row.riskGroupKeys : [];
+  const evaluated = Array.isArray(evaluation?.riskGroupKeys) ? evaluation.riskGroupKeys : [];
+  return [...new Set([
+    ...direct.map(String),
+    ...evaluated.map(String),
+    ...inferredRiskKeysForRow(row),
+  ].filter(Boolean))];
 }
 
 function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new Map()) {
