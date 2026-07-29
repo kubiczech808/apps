@@ -47,6 +47,7 @@ const state = {
   dashboardLoadSeq: 0,
   fullBotStateBusy: false,
   candidateBotStateBusy: false,
+  candidateRefreshBusy: false,
   botStateFull: false,
   settingsSection: "evaluation-log",
   calculationSource: "all",
@@ -100,6 +101,7 @@ const els = {
   runLogSummary: document.querySelector("[data-run-log-summary]"),
   runLogTitle: document.querySelector("[data-run-log-title]"),
   portfolioCandidates: document.querySelector("[data-portfolio-candidates]"),
+  portfolioCandidatesRefresh: document.querySelector("[data-portfolio-candidates-refresh]"),
   portfolioCandidatesSummary: document.querySelector("[data-portfolio-candidates-summary]"),
   portfolioCandidatesTitle: document.querySelector("[data-portfolio-candidates-title]"),
   settingsPageEyebrow: document.querySelector("[data-settings-page-eyebrow]"),
@@ -579,7 +581,7 @@ function activateTab(target) {
   });
   if (target === "portfolio-candidates") {
     renderPortfolioCandidates();
-    ensureCandidateBotState();
+    refreshPortfolioCandidates({ quiet: true });
   }
 }
 
@@ -2783,6 +2785,43 @@ async function ensureCandidateBotState(options = {}) {
   }
 }
 
+function syncPortfolioCandidateRefreshControl() {
+  if (!els.portfolioCandidatesRefresh) return;
+  const busy = Boolean(state.candidateRefreshBusy || state.candidateBotStateBusy);
+  els.portfolioCandidatesRefresh.disabled = busy;
+  els.portfolioCandidatesRefresh.textContent = busy ? "Refreshing..." : "Refresh shortlist";
+}
+
+async function refreshPortfolioCandidates(options = {}) {
+  if (state.candidateRefreshBusy || state.candidateBotStateBusy) return;
+  state.candidateRefreshBusy = true;
+  syncPortfolioCandidateRefreshControl();
+  if (activeTabTarget() === "portfolio-candidates" && els.portfolioCandidates) {
+    els.portfolioCandidates.innerHTML = '<div class="empty">Loading the latest portfolio execution shortlist...</div>';
+    if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "refreshing";
+  }
+  if (!options.quiet) setExecutionStatus("refreshing execution shortlist");
+  try {
+    const requests = [fetchJson("data/paper-state.json", { summary: "candidates" })];
+    if (isLiveMode()) requests.push(fetchJson("data/live-state.json"));
+    const [botState, liveState] = await Promise.all(requests);
+    state.botState = botStateWithPreservedEvaluations(botState);
+    state.botStateFull = state.botStateFull || botStateIsFull(botState);
+    if (liveState) {
+      renderLiveState(liveState);
+    } else {
+      renderPortfolioCandidates();
+    }
+    if (!options.quiet) setExecutionStatus("execution shortlist refreshed");
+  } catch (error) {
+    if (!options.quiet) setExecutionStatus(error.message || "shortlist refresh failed", "error");
+    renderPortfolioCandidates();
+  } finally {
+    state.candidateRefreshBusy = false;
+    syncPortfolioCandidateRefreshControl();
+  }
+}
+
 async function ensureFullBotState(options = {}) {
   if (state.botStateFull || state.fullBotStateBusy || !shouldLoadFullBotState()) return;
   state.fullBotStateBusy = true;
@@ -3532,6 +3571,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode) {
 
 function renderPortfolioCandidates() {
   if (!els.portfolioCandidates) return;
+  syncPortfolioCandidateRefreshControl();
   const mode = state.mode;
   if (!state.botState) {
     els.portfolioCandidates.innerHTML = '<div class="empty">Common evaluation log is not loaded yet.</div>';
@@ -5126,6 +5166,13 @@ els.botEvaluations?.addEventListener("click", (event) => {
 });
 
 document.addEventListener("click", (event) => {
+  const shortlistRefreshButton = event.target.closest("[data-portfolio-candidates-refresh]");
+  if (shortlistRefreshButton) {
+    event.preventDefault();
+    refreshPortfolioCandidates();
+    return;
+  }
+
   const parameterModal = event.target.closest("[data-parameter-modal]");
   if (parameterModal) {
     if (event.target.closest("[data-parameter-modal-confirm]")) {

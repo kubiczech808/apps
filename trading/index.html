@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260729-ledger-scroll">
+  <link rel="stylesheet" href="assets/app.css?v=20260729-shortlist-refresh">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -178,7 +178,10 @@
                 <p class="eyebrow">Automated trading</p>
                 <h2 data-portfolio-candidates-title>Execution candidates</h2>
               </div>
-              <span class="pill" data-portfolio-candidates-summary>0 candidates</span>
+              <div class="panel-head-actions">
+                <button class="execution-button shortlist-refresh-button" type="button" data-portfolio-candidates-refresh title="Load the latest evaluated opportunities and current portfolio exposure">Refresh shortlist</button>
+                <span class="pill" data-portfolio-candidates-summary>0 candidates</span>
+              </div>
             </div>
             <div class="ledger" data-portfolio-candidates></div>
           </article>
@@ -332,6 +335,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260729-live-ai-probability"></script>
+  <script src="assets/app.js?v=20260729-shortlist-refresh"></script>
 </body>
 </html>

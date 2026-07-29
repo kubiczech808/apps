@@ -450,6 +450,19 @@ button:disabled {
   margin-bottom: 18px;
 }
 
+.panel-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shortlist-refresh-button {
+  min-height: 32px;
+  text-transform: none;
+}
+
 .panel h2 {
   font-size: 24px;
 }
