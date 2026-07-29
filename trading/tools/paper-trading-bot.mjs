@@ -2156,6 +2156,14 @@ function markAiAnalysisDeferred(item, message) {
   });
 }
 
+function wasNeverReviewedBecauseOfQuota(item) {
+  if (item?.selectionStatus !== "AI_PENDING") return false;
+  const message = [item?.errorReason, item?.analysisSummary, item?.aiAnalysis?.aiModelError]
+    .filter(Boolean)
+    .join(" ");
+  return /stopped this run before the candidate could be reviewed/i.test(message);
+}
+
 function normalizeAiPendingEvaluation(item) {
   const pending = item?.selectionStatus === "AI_PENDING" || item?.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
   if (!pending) return item;
@@ -2285,14 +2293,14 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
     })
     .slice(0, AI_ANALYSIS_LIMIT);
   const byId = new Map(evaluations.map((item) => [item.id, item]));
-  let quotaError = "";
+  let quotaResponseReceived = false;
+  const attemptedIds = new Set();
 
   for (const [candidateIndex, candidate] of candidates.entries()) {
     if (state) {
       const slot = aiSlotAvailability(state);
       if (!slot.allowed) {
         deferAiRun(state, slot.reason);
-        quotaError = `AI evaluation deferred by scheduler: ${slot.reason}`;
         break;
       }
     }
@@ -2354,6 +2362,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
       },
     };
     const requestId = state ? reserveAiRequest(state) : null;
+    attemptedIds.add(candidate.id);
     const result = await callGeminiJson([
       { role: "system", content: "You are a cautious forecasting analyst doing source-grounded public research. You must ignore prediction-market pricing and betting consensus. You write concrete Czech rationales based on named public facts, not generic trading commentary. Return only valid JSON." },
       { role: "user", content: JSON.stringify(prompt) },
@@ -2374,7 +2383,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
             },
           });
       if (AI_STOP_ON_QUOTA_ERROR && quotaLimited) {
-        quotaError = message;
+        quotaResponseReceived = true;
         break;
       }
       continue;
@@ -2412,14 +2421,14 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
     ));
   }
 
-  if (REQUIRE_GEMINI && quotaError) {
-    for (const item of evaluations) {
-      if (hasGroundedPublicMemo(byId.get(item.id) || item)) continue;
-      byId.set(item.id, markAiAnalysisDeferred(byId.get(item.id) || item, `Gemini quota/rate limit stopped this run before the candidate could be reviewed: ${quotaError}`));
-    }
-  }
+  // A 429 is authoritative for this run. Persist only requests that Gemini
+  // actually received (plus existing carried memos), leaving all other market
+  // observations untouched for the next scheduled evaluation.
+  const output = quotaResponseReceived
+    ? evaluations.filter((item) => attemptedIds.has(item.id) || carriedMemos.has(evaluationKey(item)))
+    : evaluations;
 
-  return evaluations.map((item) => {
+  return output.map((item) => {
     const carried = carriedMemos.get(evaluationKey(item));
     if (!carried) {
       const { _binaryCounterpart, ...clean } = byId.get(item.id) || item;
@@ -4281,6 +4290,7 @@ async function run() {
   syncLegacyPaperAliases(state);
   state.aiUsage = aiUsageSnapshot(state);
   state.evaluations = (await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || [])))
+    .filter((item) => !wasNeverReviewedBecauseOfQuota(item))
     .map(normalizeAiPendingEvaluation)
     .map(ensureEvaluationErrorMetadata);
   recoverLedgerGaps(state);
