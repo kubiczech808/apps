@@ -1695,7 +1695,11 @@ function cleanErrorMessage(message) {
 function evaluationErrorReason(item = {}) {
   const status = String(item.status || "").toUpperCase();
   const type = String(item.errorType || "").toUpperCase();
-  if (status !== "ERROR" && !type && !item.errorReason) return "";
+  const aiPending = item.selectionStatus === "AI_PENDING" || item.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
+  if (status !== "ERROR" && !type && !item.errorReason && !aiPending) return "";
+  if (aiPending) {
+    return "Gemini grounded analysis is pending after a quota/rate-limit response. This row is not eligible until the AI memo is completed.";
+  }
 
   const reasons = Array.isArray(item.rejectReasons)
     ? item.rejectReasons.map(cleanErrorMessage).filter(Boolean)
@@ -2669,6 +2673,7 @@ function adjustedEvaluationStatus(item) {
 }
 
 function portfolioEvaluationStatus(item) {
+  if (item?.selectionStatus === "AI_PENDING" || item?.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED") return "ERROR";
   const status = adjustedEvaluationStatus(item);
   if (status === "ERROR") return "ERROR";
   if (status === "RESOLVED") return "RESOLVED";

@@ -476,7 +476,24 @@ function mergeEvaluation(previous, next) {
   const changes = changedEvaluationFields(older, latest);
   const deferredWithoutNewMemo = latest.selectionStatus === "AI_PENDING"
     || latest.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
-  const preservePreviousMemo = deferredWithoutNewMemo && hasGroundedPublicMemo(previous);
+  const preservePreviousMemo = deferredWithoutNewMemo && hasStoredGroundedPublicMemo(previous);
+  if (preservePreviousMemo) {
+    const retryAt = latest.evaluatedAt || latest.lastSeenAt || nowIso();
+    const retryReason = compactSentence(
+      latest.errorReason
+      || latest.aiAnalysis?.aiModelError
+      || latest.analysisSummary
+      || "Gemini grounded analysis was deferred before a newer memo was completed.",
+    );
+    return normalizeEvaluationRisk({
+      ...previous,
+      lastAiRetryAt: retryAt,
+      lastAiRetryStatus: "QUOTA_LIMITED",
+      lastAiRetryReason: retryReason,
+      aiRetryCount: Number(previous.aiRetryCount || 0) + 1,
+      aiRetryHistory: [{ attemptedAt: retryAt, status: "QUOTA_LIMITED", reason: retryReason }, ...(Array.isArray(previous.aiRetryHistory) ? previous.aiRetryHistory : [])].slice(0, 20),
+    });
+  }
   const sameObservation = (previous.evaluatedAt || previous.lastSeenAt || "") === (next.evaluatedAt || next.lastSeenAt || "")
     && changes.length === 0;
   const previousHistory = Array.isArray(previous.updateHistory) ? previous.updateHistory : [];
@@ -502,17 +519,6 @@ function mergeEvaluation(previous, next) {
     updateHistory: [...changeEntry, ...incomingHistory, ...previousHistory].slice(0, 30),
     lastChanges: changes,
   };
-  if (preservePreviousMemo) {
-    Object.assign(merged, {
-      aiAnalysis: previous.aiAnalysis,
-      aiProbability: previous.aiProbability,
-      rawProbability: previous.rawProbability,
-      probabilityThesis: previous.probabilityThesis,
-      analysisModel: previous.analysisModel,
-      analysisSummary: previous.analysisSummary,
-      selectionStatus: "AI_PENDING",
-    });
-  }
   return normalizeEvaluationRisk(merged);
 }
 
@@ -532,7 +538,13 @@ function mergeEvaluationLists(primary = [], secondary = [], limit = MAX_HISTORY)
       continue;
     }
     const previous = deduplicated.get(binaryKey);
+    const itemIsPendingRetry = item.selectionStatus === "AI_PENDING" || item.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
+    const previousIsPendingRetry = previous?.selectionStatus === "AI_PENDING" || previous?.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
+    const previousHasMemo = hasStoredGroundedPublicMemo(previous);
+    const itemHasMemo = hasStoredGroundedPublicMemo(item);
+    if (previousHasMemo && itemIsPendingRetry) continue;
     if (!previous
+      || (itemHasMemo && previousIsPendingRetry)
       || evaluationUpdateTime(item) > evaluationUpdateTime(previous)
       || (evaluationUpdateTime(item) === evaluationUpdateTime(previous) && Number(item.aiProbability || 0) > Number(previous.aiProbability || 0))) {
       deduplicated.set(binaryKey, item);
@@ -2055,14 +2067,18 @@ function longEnough(value, minLength) {
   return String(value || "").trim().length >= minLength;
 }
 
-function hasGroundedPublicMemo(item) {
-  if (item?.selectionStatus === "AI_PENDING" || item?.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED") return false;
+function hasStoredGroundedPublicMemo(item) {
   const analysis = item?.aiAnalysis || {};
   return analysis.analysisSchemaVersion === GROUNDED_AI_ANALYSIS_VERSION
     && longEnough(analysis.probabilityRationale, 80)
     && longEnough(analysis.probabilityPointRationale, 70)
     && longEnough(analysis.researchSummary, 140)
     && (Array.isArray(analysis.keyFacts) ? analysis.keyFacts.length >= 2 : Array.isArray(analysis.evidence) && analysis.evidence.length >= 2);
+}
+
+function hasGroundedPublicMemo(item) {
+  if (item?.selectionStatus === "AI_PENDING" || item?.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED") return false;
+  return hasStoredGroundedPublicMemo(item);
 }
 
 function formatKeyFact(fact) {
@@ -2123,8 +2139,11 @@ function markAiAnalysisUnavailable(item, message) {
 
 function markAiAnalysisDeferred(item, message) {
   const reason = compactSentence(message || "Gemini grounded AI analysis was deferred");
-  return {
+  return ensureEvaluationErrorMetadata({
     ...item,
+    status: "ERROR",
+    errorType: "AI_ANALYSIS_PENDING",
+    errorReason: `Gemini grounded AI analysis is pending: ${reason}. The item will be retried by a later scheduled evaluation run.`,
     selectionStatus: "AI_PENDING",
     aiAnalysis: {
       ...(item.aiAnalysis || {}),
@@ -2133,7 +2152,24 @@ function markAiAnalysisDeferred(item, message) {
       requiredModel: GEMINI_MODEL,
       provider: "gemini",
     },
-    analysisSummary: `Gemini grounded AI analysis was deferred for this run because the API rate limit or quota was reached: ${reason}. The opportunity remains pending and is not eligible for trade selection until a grounded memo is completed.`,
+    analysisSummary: `Gemini grounded AI analysis is pending because the API rate limit or quota was reached: ${reason}. This is not an evaluated opportunity and cannot be selected for trading until a grounded memo is completed.`,
+  });
+}
+
+function normalizeAiPendingEvaluation(item) {
+  const pending = item?.selectionStatus === "AI_PENDING" || item?.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
+  if (!pending) return item;
+  if (!hasStoredGroundedPublicMemo(item)) {
+    return markAiAnalysisDeferred(item, item.errorReason || item.aiAnalysis?.aiModelError || item.analysisSummary);
+  }
+  const { aiModelStatus, aiModelError, ...completedAnalysis } = item.aiAnalysis || {};
+  return {
+    ...item,
+    selectionStatus: null,
+    aiAnalysis: completedAnalysis,
+    lastAiRetryAt: item.lastAiRetryAt || item.lastSeenAt || nowIso(),
+    lastAiRetryStatus: item.lastAiRetryStatus || aiModelStatus || "QUOTA_LIMITED",
+    lastAiRetryReason: item.lastAiRetryReason || aiModelError || null,
   };
 }
 
@@ -4244,7 +4280,9 @@ async function run() {
   const state = await readState();
   syncLegacyPaperAliases(state);
   state.aiUsage = aiUsageSnapshot(state);
-  state.evaluations = await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || []));
+  state.evaluations = (await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || [])))
+    .map(normalizeAiPendingEvaluation)
+    .map(ensureEvaluationErrorMetadata);
   recoverLedgerGaps(state);
   for (const portfolioState of Object.values(state.paperPortfolios)) {
     portfolioState.trades = await refreshTrades(portfolioState.trades);
