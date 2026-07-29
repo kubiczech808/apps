@@ -3423,7 +3423,7 @@ function portfolioCandidateRows(mode = state.mode) {
         portfolioRiskBlockReason: riskReason,
       };
     })
-    .filter(Boolean);
+    .filter((item) => item && !item.portfolioRiskBlockReason);
   return sortPortfolioCandidates(rows, mode);
 }
 
@@ -3452,15 +3452,12 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode) {
       </thead>
       <tbody>
         ${rows.slice(0, 80).map((item, index) => {
-          const blocked = Boolean(item.portfolioRiskBlockReason);
-          const status = blocked
-            ? item.portfolioRiskBlockReason
-            : (live ? "will revalidate before live order" : "ready for next paper execution");
+          const status = live ? "will revalidate before live order" : "ready for next paper execution";
           return `
             <tr>
               <td data-label="#">${index + 1}</td>
-              <td data-label="Precheck" class="${blocked ? "muted" : "positive"}">
-                <strong>${blocked ? "WATCH" : "READY"}</strong>
+              <td data-label="Precheck" class="positive">
+                <strong>READY</strong>
                 <span>${escapeHtml(status)}</span>
               </td>
               <td data-label="Market">${marketAnchor(item)}</td>
@@ -3497,12 +3494,10 @@ function renderPortfolioCandidates() {
     return;
   }
   const rows = portfolioCandidateRows(mode);
-  const blockedCount = rows.filter((item) => item.portfolioRiskBlockReason).length;
-  const readyCount = rows.length - blockedCount;
   const label = normalizeMode(mode) === "live" ? "Live" : `Paper - ${paperModeLabel(mode)}`;
   if (els.portfolioCandidatesTitle) els.portfolioCandidatesTitle.textContent = `${label} execution candidates`;
   if (els.portfolioCandidatesSummary) {
-    els.portfolioCandidatesSummary.textContent = `${readyCount} ready / ${blockedCount} watch / ${rows.length} total`;
+    els.portfolioCandidatesSummary.textContent = `${rows.length} ready / active risk overlaps excluded`;
   }
   els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode);
 }
