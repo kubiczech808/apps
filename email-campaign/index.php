@@ -222,31 +222,51 @@ function aiResearchSleepWithinDeadline(int $seconds, int $deadline): bool
 }
 
 /**
- * Ceka, dokud by dalsi pozadavek prekrocil bud pocet pozadavku za minutu, nebo odhadovany
- * pocet tokenu za minutu. Diky tomu se vyhodnocovani rozlozi v case samo.
+ * Drzi RPM i TPM. U poctu pozadavku staci pockat, dokud z minutoveho okna vypadne
+ * nejstarsi pozadavek. U tokenu se ale ceka celych 60 sekund, aby se okno vyprazdnilo
+ * uplne: TPM limit se vyuziva cely, takze u jeho hranice je bezpecnejsi pauza nez
+ * odhadovani, kolik tokenu presne odejde. Vraci false, kdyz se pauza do casoveho
+ * budgetu behu nevejde a pozadavek se tedy posilat nesmi.
  */
-function aiResearchThrottleBeforeRequest(array $config, int $deadline, int $plannedTokens = 0): void
+function aiResearchThrottleBeforeRequest(array $config, int $deadline, int $plannedTokens = 0): bool
 {
     $requestBudget = aiResearchGeminiRequestsPerMinuteBudget($config);
     $tokenBudget = aiResearchTokensPerMinuteBudget($config);
-    for ($guard = 0; $guard < 4; $guard++) {
+    $nearTokenLimit = (int)floor($tokenBudget * 0.95);
+
+    $window = static function (): array {
         $recent = array_values(array_filter(
             aiResearchRequestTimestamps(),
             static fn(array $request): bool => (int)$request['at'] > time() - 60
         ));
         usort($recent, static fn(array $a, array $b): int => (int)$a['at'] <=> (int)$b['at']);
-        $tokensInWindow = array_sum(array_map(static fn(array $r): int => (int)$r['tokens'], $recent));
-        $overRequests = count($recent) >= $requestBudget;
-        $overTokens = $plannedTokens > 0 && ($tokensInWindow + $plannedTokens) > $tokenBudget;
-        if (!$overRequests && !$overTokens) {
-            return;
+        return $recent;
+    };
+
+    for ($guard = 0; $guard < 3; $guard++) {
+        $recent = $window();
+        if (count($recent) < $requestBudget) {
+            break;
         }
-        // Ceka se jen do chvile, kdy z okna vypadne nejstarsi pozadavek.
-        $oldest = $recent ? (int)$recent[0]['at'] : time();
+        $oldest = (int)$recent[0]['at'];
         if (!aiResearchSleepWithinDeadline(max(1, $oldest + 61 - time()), $deadline)) {
-            return;
+            return false;
         }
     }
+
+    $recent = $window();
+    $tokensInWindow = array_sum(array_map(static fn(array $r): int => (int)$r['tokens'], $recent));
+    $wouldExceed = $plannedTokens > 0 && ($tokensInWindow + $plannedTokens) > $tokenBudget;
+    $alreadyNear = $tokensInWindow >= $nearTokenLimit;
+    if ($wouldExceed || $alreadyNear) {
+        // Musi se pockat cela minuta. Kratsi pauza okno nevyprazdni, takze kdyz se do
+        // casoveho budgetu behu nevejde, pozadavek se neposila a dokonci ho dalsi cron.
+        if ($deadline - time() < 60) {
+            return false;
+        }
+        aiResearchSleepWithinDeadline(60, $deadline);
+    }
+    return true;
 }
 
 function aiResearchErrorIsRetryable(string $message): bool
@@ -276,7 +296,11 @@ function aiResearchGeminiCall(array $config, string $step, array $payload, int $
     $lastError = null;
     for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
         $plannedTokens = aiResearchEstimatePayloadTokens($payload);
-        aiResearchThrottleBeforeRequest($config, $deadline, $plannedTokens);
+        if (!aiResearchThrottleBeforeRequest($config, $deadline, $plannedTokens)) {
+            throw new AiResearchTemporaryException(
+                'AI ' . $step . ' se odklada, aby se nesla pres minutovy limit tokenu; beh pokracuje pri dalsim cronu.'
+            );
+        }
         aiResearchRequestTimestamps('add', $plannedTokens);
         try {
             return jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
@@ -348,9 +372,9 @@ function aiResearchDailyRequestBudgetOrDefault(array $config): int
 
 function aiResearchTokensPerMinuteBudget(array $config): int
 {
-    // gemini-3-flash ma 250 000 TPM; vychozi strop je pod nim.
+    // gemini-3-flash ma 250 000 TPM a vyuziva se cely; pojistkou je pauza pred prekrocenim.
     $configured = (int)($config['ai']['gemini_research_tpm_budget'] ?? 0);
-    return max(10000, $configured > 0 ? $configured : 200000);
+    return max(10000, $configured > 0 ? $configured : 250000);
 }
 
 /**
