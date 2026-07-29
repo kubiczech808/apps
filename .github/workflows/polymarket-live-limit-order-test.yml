@@ -100,6 +100,7 @@ jobs:
       LIVE_SELECTION_ORDER: ${{ github.event.inputs.live_selection_order || '' }}
       LIVE_CONFIG_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.live_min_liquidity_usdc || '' }}
       LIVE_CANDIDATE_SCAN_LIMIT: "120"
+      LIVE_AUTO_ROTATE: "true"
       LIVE_EXECUTION_SOURCE: rpi-self-hosted
     steps:
       - uses: actions/checkout@v4

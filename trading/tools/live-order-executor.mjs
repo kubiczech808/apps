@@ -55,6 +55,7 @@ const ROTATION_CANDIDATE_SCAN_LIMIT = envNumber("LIVE_ROTATION_CANDIDATE_SCAN_LI
 const ROTATION_POSITION_SCAN_LIMIT = envNumber("LIVE_ROTATION_POSITION_SCAN_LIMIT", 6);
 const ROTATION_MIN_EV_USDC_IMPROVEMENT = envNumber("LIVE_ROTATION_MIN_EV_USDC_IMPROVEMENT", 0.02);
 const ROTATION_MIN_ANNUALIZED_IMPROVEMENT = envNumber("LIVE_ROTATION_MIN_ANNUALIZED_IMPROVEMENT", 0.25);
+const LIVE_AUTO_ROTATE = String(process.env.LIVE_AUTO_ROTATE ?? "true").toLowerCase() !== "false";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
 const TZ = "Europe/Prague";
 let previousExecutionState = null;
@@ -147,10 +148,27 @@ function latestLiveExecutionRunAt(previousExecution = {}) {
 
 function liveExecutionRunDue(previousExecution, liveState, now = new Date()) {
   if (!SCHEDULED_CADENCE_POLL || IGNORE_TRADE_CADENCE) return true;
+  if (rotationReplacementDue(previousExecution, liveState)) return true;
   if (Array.isArray(liveState?.openOrders) && liveState.openOrders.length > 0) return true;
   const lastRunAt = latestLiveExecutionRunAt(previousExecution);
   if (!lastRunAt) return true;
   return Number(hoursSince(lastRunAt, now) ?? Infinity) >= TRADE_CADENCE_HOURS;
+}
+
+function hasOpenSellOrderForToken(liveState, tokenId) {
+  const target = String(tokenId || "");
+  return (Array.isArray(liveState?.openOrders) ? liveState.openOrders : []).some((order) => {
+    const orderToken = String(order.tokenId || order.assetId || "");
+    return orderToken === target && String(order.side || "").toUpperCase().includes("SELL");
+  });
+}
+
+function rotationReplacementDue(previousExecution, liveState) {
+  const tokenId = previousExecution?.rotationExit?.position?.tokenId;
+  if (!tokenId) return false;
+  const stillHeld = (Array.isArray(liveState?.positions) ? liveState.positions : [])
+    .some((position) => String(position.tokenId || position.assetId || "") === String(tokenId) && number(position.shares, 0) > 0);
+  return !stillHeld && !hasOpenSellOrderForToken(liveState, tokenId);
 }
 
 function liveCashMonitoring(previousExecution, cash, now = new Date()) {
@@ -673,7 +691,8 @@ function openPositionsForRotation(liveState) {
     .filter((position) => {
       const status = String(position.status || "OPEN").toUpperCase();
       if (!OPEN_STATUSES.has(status) && ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD"].includes(status)) return false;
-      return number(position.shares, 0) > 0 && String(position.tokenId || position.assetId || "");
+      const tokenId = String(position.tokenId || position.assetId || "");
+      return number(position.shares, 0) > 0 && tokenId && !hasOpenSellOrderForToken(liveState, tokenId);
     });
 }
 
@@ -870,8 +889,9 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
         const candidateAnnualizedReturn = number(revalidated.annualizedReturn, 0);
         // Both paths now start from the same current portfolio state. The exit
         // P/L and estimated exit fee are included in the rotate path.
-        const rotatedExpectedPnl = number(economics.realizedPnlIfExit, 0) + candidateEv;
-        const holdExpectedPnl = number(economics.holdExpectedPnl, holdEv);
+        const realizedPnlIfExit = economics.realizedPnlIfExit != null ? economics.realizedPnlIfExit : 0;
+        const holdExpectedPnl = economics.holdExpectedPnl != null ? economics.holdExpectedPnl : holdEv;
+        const rotatedExpectedPnl = realizedPnlIfExit + candidateEv;
         const evDelta = rotatedExpectedPnl - holdExpectedPnl;
         const annualizedDelta = candidateAnnualizedReturn - holdAnnualizedReturn;
         const rotationPreferred = evDelta >= ROTATION_MIN_EV_USDC_IMPROVEMENT
@@ -1214,13 +1234,14 @@ async function submitOrder(order) {
     tickSize: String(order.tickSize || "0.01"),
     negRisk: Boolean(order.negRisk),
   };
+  const side = String(order.side || "BUY").toUpperCase() === "SELL" ? Side.SELL : Side.BUY;
   if (!USE_LIMIT_ORDERS) {
     const marketOrder = await client.createMarketOrder(
       {
         tokenID: order.tokenId,
         price: order.orderPrice,
-        amount: order.orderNotionalUsdc,
-        side: Side.BUY,
+        amount: side === Side.SELL ? order.orderSize : order.orderNotionalUsdc,
+        side,
       },
       options,
     );
@@ -1231,11 +1252,39 @@ async function submitOrder(order) {
       tokenID: order.tokenId,
       price: order.orderPrice,
       size: order.orderSize,
-      side: Side.BUY,
+      side,
     },
     options,
   );
-  return client.postOrder(signedOrder, OrderType.GTC, POST_ONLY);
+  // A rotation exit at the current bid is intentionally marketable. Post-only
+  // would reject it and leave the old correlated exposure in place.
+  return client.postOrder(signedOrder, OrderType.GTC, side === Side.SELL ? false : POST_ONLY);
+}
+
+async function buildRotationExitOrder(position, evaluationByToken, tradingConfig) {
+  const tokenId = String(position.tokenId || position.assetId || "");
+  const orderSize = number(position.shares ?? position.size);
+  if (!tokenId || orderSize == null || orderSize <= 0) throw new Error("rotation exit has no sellable token balance");
+  const source = positionSourceEvaluation(position, evaluationByToken) || {};
+  const book = bestBook(await fetchJson(new URL(`/book?token_id=${tokenId}`, CLOB_HOST), `CLOB rotation exit book ${tokenId}`));
+  if (book.bestBid == null || book.bestBid <= 0) throw new Error("rotation exit has no executable bid in the order book");
+  const clobMarket = await fetchClobMarket(position.market || position.conditionId || source.conditionId).catch(() => null);
+  const tickSize = number(clobMarket?.mts ?? source.tickSize, 0.01);
+  const orderPrice = roundToTick(book.bestBid, tickSize, "down");
+  return {
+    question: position.question || source.question || "",
+    outcome: position.outcome || source.outcome || "",
+    tokenId,
+    side: "SELL",
+    orderType: USE_LIMIT_ORDERS ? "GTC" : "FAK",
+    orderPrice,
+    orderSize: Number(orderSize.toFixed(4)),
+    orderNotionalUsdc: Number((orderPrice * orderSize).toFixed(5)),
+    tickSize,
+    negRisk: Boolean(clobMarket?.negRisk ?? source.negRisk),
+    funderAddress: tradingConfig.funderAddress,
+    signatureType: tradingConfig.signatureType,
+  };
 }
 
 async function authenticatedClobClient({ privateKey = process.env.POLYMARKET_PRIVATE_KEY, funderAddress = FUNDER_ADDRESS, signatureType = SIGNATURE_TYPE } = {}) {
@@ -1321,6 +1370,7 @@ function orderAttemptSummary(candidate, response = null, extra = {}) {
     question: candidate.question,
     outcome: candidate.outcome,
     tokenId: candidate.tokenId,
+    side: candidate.side || "BUY",
     orderType: candidate.orderType,
     orderPrice: candidate.orderPrice,
     orderSize: candidate.orderSize,
@@ -1434,6 +1484,15 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
     const orderId = order.id || order.orderID || order.orderId;
     const tokenId = String(order.tokenId || order.assetId || "");
     const ageHours = openOrderAgeHours(order);
+    if (String(order.side || "").toUpperCase().includes("SELL")) {
+      reviews.push(openOrderSummary(order, {
+        action: "KEEP_ROTATION_EXIT_WAITING",
+        reason: "live sell order is reducing an existing position; wait for account sync before a replacement buy",
+        currentEvaluation: null,
+        betterCandidate: null,
+      }));
+      continue;
+    }
     const sourceEvaluation = evaluationByToken.get(tokenId);
     const lockedNotional = number(order.notionalUsdc, number(order.price, 0) * number(order.remainingSize, 0));
     const maxStakeBreached = Number.isFinite(lockedNotional)
@@ -1610,36 +1669,49 @@ async function main() {
         maxNotional,
       })
     : null;
-  const orderManagement = await reviewOpenOrders({
-    liveState,
-    evaluationByToken,
-    eligible,
-    cash,
-    maxNotional,
-    tradingConfig,
-  });
+  const activeSellOrders = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
+    .filter((order) => String(order.side || "").toUpperCase().includes("SELL"));
+  const orderManagement = activeSellOrders.length
+    ? { action: "NONE", reviews: [] }
+    : await reviewOpenOrders({
+        liveState,
+        evaluationByToken,
+        eligible,
+        cash,
+        maxNotional,
+        tradingConfig,
+      });
 
   const best = eligible[0] || null;
-  const cadenceBlocked = Boolean(monitoring.cadenceBlocked);
+  const replacementDue = rotationReplacementDue(previousExecution, liveState);
+  const cadenceBlocked = Boolean(monitoring.cadenceBlocked) && !replacementDue;
   const rotationAvailable = rotationReview?.action === "ROTATION_AVAILABLE";
-  const actionReason = cadenceBlocked
-    ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h)`
-    : (best
+  const actionReason = activeSellOrders.length
+    ? "waiting for an existing live sell order to reduce position exposure before any replacement buy"
+    : (rotationAvailable && LIVE_AUTO_ROTATE
+      ? "a sell-and-replace rotation will submit the exit order before any replacement buy"
+      : (cadenceBlocked
+        ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h)`
+        : (best
         ? "best currently revalidated executable candidate"
         : (rotationAvailable
             ? "cash is insufficient for a new direct order; a sell-and-replace rotation candidate was identified"
             : (capitalSizingBlocked.length
                 ? `live candidates blocked by available USDC: ${capitalSizingBlocked.length} cannot meet the current Polymarket minimum order size`
-                : "no currently executable candidate after live revalidation")));
-  const actionExplanation = best && !cadenceBlocked
-    ? "Live batch found an executable candidate after revalidation."
-    : (cadenceBlocked
+                : "no currently executable candidate after live revalidation")))));
+  const actionExplanation = activeSellOrders.length
+    ? "A live sell order is open. The system waits for account sync to confirm the exit before it can revalidate and place a replacement buy."
+    : (rotationAvailable && LIVE_AUTO_ROTATE
+      ? "The system will sell the selected weaker position first. It will only consider a replacement after account sync confirms the exit."
+      : (best && !cadenceBlocked
+      ? "Live batch found an executable candidate after revalidation."
+      : (cadenceBlocked
         ? "No live order was submitted because the configured new-trade cadence is not elapsed yet. Open-order management still ran."
         : (rotationAvailable
             ? "No live order was submitted because opening the better candidate would first require selling an existing live position; this run records the rotation review but does not perform the sell/rebuy sequence automatically."
             : (capitalSizingBlocked.length
                 ? "No live order was submitted because available USDC cannot cover the exchange minimum size for the revalidated candidate(s)."
-                : "No live order was submitted because all revalidated candidates failed current execution criteria.")));
+                : "No live order was submitted because all revalidated candidates failed current execution criteria.")))));
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
     action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
@@ -1663,6 +1735,7 @@ async function main() {
     settings: {
       useLimitOrders: USE_LIMIT_ORDERS,
       crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,
+      liveAutoRotate: LIVE_AUTO_ROTATE,
       postOnly: POST_ONLY,
       orderSizeMode: ORDER_SIZE_MODE,
       minProbability: MIN_PROBABILITY,
@@ -1693,6 +1766,7 @@ async function main() {
     },
     orderManagement,
     rotationReview,
+    rotationExit: null,
     revalidationUpdates: checked
       .map((item) => liveRevalidationUpdate(item, new Date().toISOString()))
       .filter((item) => item.tokenId),
@@ -1717,6 +1791,7 @@ async function main() {
         selectionOrder: SELECTION_ORDER,
         useLimitOrders: USE_LIMIT_ORDERS,
         crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,
+        liveAutoRotate: LIVE_AUTO_ROTATE,
         maxOrderFraction: MAX_ORDER_FRACTION,
       },
       capital: {
@@ -1778,6 +1853,87 @@ async function main() {
         explanation: "Live batch reviewed existing open limit orders before opening a new position.",
       },
       attempts: [orderManagement.selected],
+    });
+    return;
+  }
+
+  if (activeSellOrders.length) {
+    await emitDecision({
+      ...decision,
+      action: "ROTATION_EXIT_WAITING",
+      reason: "waiting for the live sell order to fill before selecting a replacement",
+      batchLog: {
+        ...decision.batchLog,
+        action: "ROTATION_EXIT_WAITING",
+        reason: "waiting for the live sell order to fill before selecting a replacement",
+        explanation: "No replacement buy is allowed while the rotation exit remains open. The next account sync will release the token exposure once the sell fills.",
+      },
+      attempts: activeSellOrders.map((order) => orderAttemptSummary({
+        ...order,
+        question: order.question || "Rotation exit",
+        outcome: order.outcome || "",
+        orderType: "GTC",
+        orderPrice: order.price,
+        orderSize: order.remainingSize,
+        orderNotionalUsdc: order.notionalUsdc,
+        side: "SELL",
+      }, null, { action: "WAITING_FOR_SELL_FILL" })),
+    });
+    return;
+  }
+
+  if (rotationAvailable && LIVE_AUTO_ROTATE) {
+    const rotation = rotationReview.best;
+    let exitOrder = null;
+    let exitResponse = null;
+    try {
+      exitOrder = await buildRotationExitOrder(rotation.position, evaluationByToken, tradingConfig);
+      exitResponse = DRY_RUN || !hasFlag("confirm-live")
+        ? { status: "dry_run_rotation_exit", success: true }
+        : await submitOrder(exitOrder);
+    } catch (error) {
+      exitResponse = { error: error?.message || String(error), status: "exception" };
+    }
+    const rotationExit = {
+      position: rotation.position,
+      replacementCandidate: rotation.candidate,
+      order: exitOrder,
+      response: exitResponse,
+      submittedAt: new Date().toISOString(),
+    };
+    if (successfulOrderResponse(exitResponse)) {
+      const action = DRY_RUN || !hasFlag("confirm-live") ? "ROTATION_EXIT_READY" : "ROTATION_EXIT_SUBMITTED";
+      await emitDecision({
+        ...decision,
+        action,
+        reason: "rotation exit accepted; wait for account sync before replacement buy",
+        rotationExit,
+        batchLog: {
+          ...decision.batchLog,
+          action,
+          reason: "rotation exit accepted; wait for account sync before replacement buy",
+          explanation: "The weaker position received a sell order at the current bid. A replacement is intentionally deferred until account sync confirms the sell has filled.",
+          selected: rotation.candidate,
+          rotationExit,
+        },
+        attempts: [orderAttemptSummary(exitOrder || rotation.position, exitResponse, { action, replacementCandidate: rotation.candidate })],
+      });
+      return;
+    }
+    await emitDecision({
+      ...decision,
+      action: "ROTATION_EXIT_REJECTED",
+      reason: `rotation exit was not accepted: ${orderResponseError(exitResponse) || "unknown order response"}`,
+      rotationExit,
+      batchLog: {
+        ...decision.batchLog,
+        action: "ROTATION_EXIT_REJECTED",
+        reason: `rotation exit was not accepted: ${orderResponseError(exitResponse) || "unknown order response"}`,
+        explanation: "The old position remains open and no replacement buy was attempted.",
+        selected: rotation.candidate,
+        rotationExit,
+      },
+      attempts: [orderAttemptSummary(exitOrder || rotation.position, exitResponse, { action: "ROTATION_EXIT_REJECTED", replacementCandidate: rotation.candidate })],
     });
     return;
   }
