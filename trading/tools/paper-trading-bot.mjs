@@ -464,6 +464,11 @@ const EVALUATION_CHANGE_FIELDS = [
   "edge",
   "expectedValueUsdc",
   "annualizedReturn",
+  "aiExpectedValueUsdc",
+  "aiAnnualizedReturn",
+  "marketExpectedValueUsdc",
+  "marketExpectedRoi",
+  "marketAnnualizedReturn",
   "netGainIfWinUsdc",
   "endDate",
   "marketClosed",
@@ -1665,6 +1670,19 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   const depthOk = execution.fillable;
   const economics = economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk, endOk });
+  const marketProbability = validMarketProbability(outcomePrices[outcomeIndex]) ?? executionPrice;
+  const marketEconomics = economicsForProbability({
+    probability: marketProbability,
+    execution,
+    stake,
+    takerFee,
+    totalCost,
+    days,
+    spreadOk,
+    volumeOk,
+    depthOk,
+    endOk,
+  });
   const rejectReasons = economics.rejectReasons.map((reason) => {
     if (reason === "spread too wide") return `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`;
     if (reason === "insufficient ask depth for market buy") return `insufficient ask depth for ${stake.toFixed(2)} USDC market buy`;
@@ -1705,7 +1723,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     riskGroupLabels: risk.labels,
     executionMode: "MARKET_BUY",
     marketPrice: Number(executionPrice.toFixed(4)),
-    marketProbability: validMarketProbability(outcomePrices[outcomeIndex]) ?? Number(executionPrice.toFixed(4)),
+    marketProbability: Number(marketProbability.toFixed(4)),
     bestAsk: Number(bestAsk.toFixed(4)),
     bestBid: bestBid == null ? null : Number(bestBid.toFixed(4)),
     spread: spread == null ? null : Number(spread.toFixed(4)),
@@ -1730,9 +1748,14 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     edge: Number(economics.edge.toFixed(4)),
     expectedRoi: Number(economics.expectedRoi.toFixed(4)),
     annualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
+    aiExpectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
+    aiAnnualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
     grossAnnualizedIfWin: Number(grossAnnualizedIfWin.toFixed(4)),
     stakeUsdc: Number(stake.toFixed(2)),
     expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
+    marketExpectedValueUsdc: Number(marketEconomics.expectedValue.toFixed(4)),
+    marketExpectedRoi: Number(marketEconomics.expectedRoi.toFixed(4)),
+    marketAnnualizedReturn: Number(marketEconomics.annualizedReturn.toFixed(4)),
     maxLossUsdc: Number(totalCost.toFixed(5)),
     aiAnalysis,
     probabilityThesis: aiAnalysis.thesis,
@@ -2036,6 +2059,21 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     depthOk,
     endOk,
   });
+  const marketProbability = validMarketProbability(evaluation.marketProbability) ?? Number(evaluation.marketPrice);
+  const marketEconomics = Number.isFinite(marketProbability)
+    ? economicsForProbability({
+        probability: marketProbability,
+        execution,
+        stake,
+        takerFee,
+        totalCost: totalCostValue,
+        days: Number.isFinite(days) ? days : null,
+        spreadOk,
+        volumeOk,
+        depthOk,
+        endOk,
+      })
+    : null;
 
   const rejectReasons = economics.rejectReasons.map((reason) => {
     if (reason === "spread too wide") return `spread ${Number.isFinite(spread) ? (spread * 100).toFixed(1) + " pts" : "n/a"} too wide`;
@@ -2106,6 +2144,11 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     expectedRoi: Number(economics.expectedRoi.toFixed(4)),
     annualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
     expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
+    aiExpectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
+    aiAnnualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
+    marketExpectedValueUsdc: marketEconomics ? Number(marketEconomics.expectedValue.toFixed(4)) : null,
+    marketExpectedRoi: marketEconomics ? Number(marketEconomics.expectedRoi.toFixed(4)) : null,
+    marketAnnualizedReturn: marketEconomics ? Number(marketEconomics.annualizedReturn.toFixed(4)) : null,
     aiAnalysis,
     probabilityThesis: aiAnalysis.thesis || evaluation.probabilityThesis,
     analysisModel: modelName,
@@ -2669,16 +2712,24 @@ function tradeCurrentValue(trade) {
 function tradeContinuationEconomics(trade, strategy = PAPER_STRATEGIES.conservative) {
   const currentValue = tradeCurrentValue(trade);
   const shares = Number(trade.shares);
-  const probability = Number(trade.aiProbability ?? trade.sourceEvaluation?.aiProbability);
+  const probability = Number(strategy.probabilitySource === "polymarket"
+    ? (trade.marketProbability ?? trade.sourceEvaluation?.marketProbability ?? trade.entryPrice)
+    : (trade.aiProbability ?? trade.sourceEvaluation?.aiProbability));
   const remainingDays = remainingDaysValue(trade);
   const reward = Number.isFinite(shares) && Number.isFinite(currentValue) ? Math.max(0, shares - currentValue) : null;
   const expectedValue = Number.isFinite(probability) && Number.isFinite(shares) && Number.isFinite(currentValue)
     ? (probability * shares) - currentValue
-    : Number(trade.expectedValueUsdc);
+    : Number(strategy.probabilitySource === "polymarket"
+      ? (trade.marketExpectedValueUsdc ?? trade.sourceEvaluation?.marketExpectedValueUsdc)
+      : trade.expectedValueUsdc);
   const expectedRoi = Number.isFinite(expectedValue) && Number.isFinite(currentValue) && currentValue > 0
     ? expectedValue / currentValue
     : null;
-  const annualizedReturn = Number.isFinite(expectedRoi) ? expectedRoi * (365 / remainingDays) : Number(trade.annualizedReturn);
+  const annualizedReturn = Number.isFinite(expectedRoi)
+    ? expectedRoi * (365 / remainingDays)
+    : Number(strategy.probabilitySource === "polymarket"
+      ? (trade.marketAnnualizedReturn ?? trade.sourceEvaluation?.marketAnnualizedReturn)
+      : trade.annualizedReturn);
   const rewardRisk = Number.isFinite(reward) && Number.isFinite(currentValue) && currentValue > 0 ? reward / currentValue : null;
   const score = strategy.selectionOrder === "highest_reward_risk_first" ? rewardRisk : annualizedReturn;
   return {
@@ -2694,7 +2745,7 @@ function tradeContinuationEconomics(trade, strategy = PAPER_STRATEGIES.conservat
 function candidateRotationScore(candidate, strategy = PAPER_STRATEGIES.conservative) {
   return strategy.selectionOrder === "highest_reward_risk_first"
     ? rewardRiskRatio(candidate)
-    : Number(candidate.annualizedReturn);
+    : portfolioEconomics(candidate, strategy).annualizedReturn;
 }
 
 function openTrades(trades) {
@@ -2892,6 +2943,17 @@ function strategyEligibleCandidates(eligible, strategy) {
   return rows;
 }
 
+function portfolioEconomics(item, strategy = PAPER_STRATEGIES.conservative) {
+  const probabilitySource = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
+  const annualizedValue = Number(probabilitySource === "polymarket" ? item.marketAnnualizedReturn : item.annualizedReturn);
+  const expectedValue = Number(probabilitySource === "polymarket" ? item.marketExpectedValueUsdc : item.expectedValueUsdc);
+  return {
+    probabilitySource,
+    annualizedReturn: Number.isFinite(annualizedValue) ? annualizedValue : null,
+    expectedValueUsdc: Number.isFinite(expectedValue) ? expectedValue : null,
+  };
+}
+
 function portfolioFilterResult(item, strategy) {
   const reasons = [];
   const status = String(item.status || "").toUpperCase();
@@ -2903,7 +2965,8 @@ function portfolioFilterResult(item, strategy) {
   const days = daysValue(item);
   const liquidity = Number(item.liquidity || 0);
   const marketType = item.marketType || reportMarketType(item);
-  const annualizedReturn = Number(item.annualizedReturn);
+  const economics = portfolioEconomics(item, strategy);
+  const annualizedReturn = economics.annualizedReturn;
 
   if (probabilitySource === "ai" && status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
   if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
@@ -2914,8 +2977,15 @@ function portfolioFilterResult(item, strategy) {
     const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
     reasons.push(`${label} ${Number.isFinite(selectedProbability) ? (selectedProbability * 100).toFixed(1) : "-"}% below ${(minProbability * 100).toFixed(1)}%`);
   }
-  if (Number.isFinite(annualizedReturn) && annualizedReturn <= 0) {
-    reasons.push(`annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
+  if (!Number.isFinite(annualizedReturn)) {
+    const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
+    reasons.push(`missing ${label} EV p.a.`);
+  } else if (annualizedReturn <= 0) {
+    const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
+    reasons.push(`${label} EV p.a. ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
+  } else if (annualizedReturn < MIN_ANNUAL_RETURN) {
+    const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
+    reasons.push(`${label} EV p.a. ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`);
   }
   if (days > maxResolutionDays) {
     reasons.push(`resolution ${Number.isFinite(days) ? days.toFixed(2) : "-"} days exceeds max ${maxResolutionDays}`);
@@ -2951,19 +3021,23 @@ function sortEligibleForStrategy(eligible, strategy = PAPER_STRATEGIES.conservat
       }
       const horizon = compareShorterHorizon(a, b);
       if (horizon !== 0) return horizon;
-      if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
-      return b.expectedValueUsdc - a.expectedValueUsdc;
+      const aEconomics = portfolioEconomics(a, strategy);
+      const bEconomics = portfolioEconomics(b, strategy);
+      if (bEconomics.annualizedReturn !== aEconomics.annualizedReturn) return bEconomics.annualizedReturn - aEconomics.annualizedReturn;
+      return bEconomics.expectedValueUsdc - aEconomics.expectedValueUsdc;
     });
   }
   return rows.sort((a, b) => {
-    if (b.annualizedReturn !== a.annualizedReturn) {
-      const noPreference = preferNoWhenComparable(a, b, b.annualizedReturn - a.annualizedReturn);
+    const aEconomics = portfolioEconomics(a, strategy);
+    const bEconomics = portfolioEconomics(b, strategy);
+    if (bEconomics.annualizedReturn !== aEconomics.annualizedReturn) {
+      const noPreference = preferNoWhenComparable(a, b, bEconomics.annualizedReturn - aEconomics.annualizedReturn);
       if (noPreference) return noPreference;
-      return b.annualizedReturn - a.annualizedReturn;
+      return bEconomics.annualizedReturn - aEconomics.annualizedReturn;
     }
     const horizon = compareShorterHorizon(a, b);
     if (horizon !== 0) return horizon;
-    return b.expectedValueUsdc - a.expectedValueUsdc;
+    return bEconomics.expectedValueUsdc - aEconomics.expectedValueUsdc;
   });
 }
 
@@ -2999,6 +3073,10 @@ function scaledPaperEconomics(best, stake) {
 
 function paperTradeFromCandidate(best, strategy, today, stake) {
   const economics = scaledPaperEconomics(best, stake);
+  const selectionEconomics = portfolioEconomics(best, strategy);
+  const selectedExpectedValue = Number.isFinite(selectionEconomics.expectedValueUsdc)
+    ? Number((selectionEconomics.expectedValueUsdc * economics.scale).toFixed(4))
+    : null;
   return {
     id: `paper-${strategy.id}-${today}-${best.tokenId}`,
     strategyId: strategy.id,
@@ -3016,9 +3094,15 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
       aiProbability: best.aiProbability,
       rawProbability: best.rawProbability,
       marketPrice: best.marketPrice,
+      marketProbability: best.marketProbability,
       edge: best.edge,
-      expectedValueUsdc: economics.expectedValueUsdc,
-      annualizedReturn: best.annualizedReturn,
+      expectedValueUsdc: selectedExpectedValue,
+      annualizedReturn: selectionEconomics.annualizedReturn,
+      aiExpectedValueUsdc: Number.isFinite(Number(best.aiExpectedValueUsdc ?? best.expectedValueUsdc)) ? Number((Number(best.aiExpectedValueUsdc ?? best.expectedValueUsdc) * economics.scale).toFixed(4)) : null,
+      aiAnnualizedReturn: best.aiAnnualizedReturn ?? best.annualizedReturn,
+      marketExpectedValueUsdc: Number.isFinite(Number(best.marketExpectedValueUsdc)) ? Number((Number(best.marketExpectedValueUsdc) * economics.scale).toFixed(4)) : null,
+      marketAnnualizedReturn: best.marketAnnualizedReturn ?? null,
+      probabilitySource: strategy.probabilitySource,
       probabilityThesis: best.probabilityThesis,
       analysisSummary: best.analysisSummary,
       analysisModel: best.analysisModel,
@@ -3046,9 +3130,15 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     daysToResolution: best.daysToResolution,
     aiProbability: best.aiProbability,
     rawProbability: best.rawProbability,
+    marketProbability: best.marketProbability,
     thesisType: best.thesisType,
-    annualizedReturn: best.annualizedReturn,
-    expectedValueUsdc: economics.expectedValueUsdc,
+    probabilitySource: strategy.probabilitySource,
+    annualizedReturn: selectionEconomics.annualizedReturn,
+    expectedValueUsdc: selectedExpectedValue,
+    aiExpectedValueUsdc: Number.isFinite(Number(best.aiExpectedValueUsdc ?? best.expectedValueUsdc)) ? Number((Number(best.aiExpectedValueUsdc ?? best.expectedValueUsdc) * economics.scale).toFixed(4)) : null,
+    aiAnnualizedReturn: best.aiAnnualizedReturn ?? best.annualizedReturn,
+    marketExpectedValueUsdc: Number.isFinite(Number(best.marketExpectedValueUsdc)) ? Number((Number(best.marketExpectedValueUsdc) * economics.scale).toFixed(4)) : null,
+    marketAnnualizedReturn: best.marketAnnualizedReturn ?? null,
     stakeUsdc: Number(stake.toFixed(2)),
     shares: economics.shares,
     feesEnabled: best.feesEnabled,
@@ -3083,8 +3173,13 @@ function tradeBatchCandidateSummary(item) {
     selectionStatus: item.selectionStatus || null,
     aiProbability: Number.isFinite(Number(item.aiProbability)) ? Number(Number(item.aiProbability).toFixed(4)) : null,
     marketPrice: Number.isFinite(Number(item.marketPrice)) ? Number(Number(item.marketPrice).toFixed(4)) : null,
+    marketProbability: Number.isFinite(Number(item.marketProbability)) ? Number(Number(item.marketProbability).toFixed(4)) : null,
     annualizedReturn: Number.isFinite(Number(item.annualizedReturn)) ? Number(Number(item.annualizedReturn).toFixed(4)) : null,
     expectedValueUsdc: Number.isFinite(Number(item.expectedValueUsdc)) ? Number(Number(item.expectedValueUsdc).toFixed(4)) : null,
+    aiAnnualizedReturn: Number.isFinite(Number(item.aiAnnualizedReturn)) ? Number(Number(item.aiAnnualizedReturn).toFixed(4)) : null,
+    aiExpectedValueUsdc: Number.isFinite(Number(item.aiExpectedValueUsdc)) ? Number(Number(item.aiExpectedValueUsdc).toFixed(4)) : null,
+    marketAnnualizedReturn: Number.isFinite(Number(item.marketAnnualizedReturn)) ? Number(Number(item.marketAnnualizedReturn).toFixed(4)) : null,
+    marketExpectedValueUsdc: Number.isFinite(Number(item.marketExpectedValueUsdc)) ? Number(Number(item.marketExpectedValueUsdc).toFixed(4)) : null,
     netGainIfWinUsdc: Number.isFinite(Number(item.netGainIfWinUsdc)) ? Number(Number(item.netGainIfWinUsdc).toFixed(4)) : null,
     netYield: Number.isFinite(Number(item.netGainIfWinUsdc)) && Number(item.totalCostUsdc || item.stakeUsdc || 0) > 0
       ? Number((Number(item.netGainIfWinUsdc) / Number(item.totalCostUsdc || item.stakeUsdc || 0)).toFixed(4))
@@ -3368,7 +3463,7 @@ function rotationReview(portfolioState, eligible, strategy, available, stake) {
 
     const hold = tradeContinuationEconomics(trade, strategy);
     const candidateScore = candidateRotationScore(candidate, strategy);
-    const candidateEv = Number(candidate.expectedValueUsdc);
+    const candidateEv = Number(portfolioEconomics(candidate, strategy).expectedValueUsdc);
     const holdEv = Number(hold.expectedValue);
     if (!Number.isFinite(candidateScore) || !Number.isFinite(hold.score)) continue;
     if (!Number.isFinite(candidateEv) || !Number.isFinite(holdEv)) continue;
@@ -4092,9 +4187,28 @@ function snapshotMatchesEvaluation(snapshot, evaluation) {
 }
 
 function marketObservationChanges(previous, next) {
-  return ["outcome", "tokenId", "marketProbability", "marketDataUpdatedAt"]
+  return ["outcome", "tokenId", "marketProbability", "marketDataUpdatedAt", "marketExpectedValueUsdc", "marketAnnualizedReturn"]
     .map((field) => ({ field, from: comparableEvaluationValue(previous?.[field]), to: comparableEvaluationValue(next?.[field]) }))
     .filter((change) => JSON.stringify(change.from) !== JSON.stringify(change.to));
+}
+
+function marketEconomicsForStoredEvaluation(evaluation, marketProbability) {
+  const totalCost = Number(evaluation.totalCostUsdc ?? evaluation.stakeUsdc);
+  const storedFee = Number(evaluation.takerFeeUsdc ?? 0);
+  const stake = Number(evaluation.stakeUsdc ?? evaluation.filledStakeUsdc ?? (totalCost - storedFee));
+  const days = Number(evaluation.daysToResolution);
+  if (!Number.isFinite(stake) || stake <= 0 || !Number.isFinite(totalCost) || totalCost <= 0 || !Number.isFinite(marketProbability) || marketProbability <= 0) return null;
+  // The public market quote is both the implied probability and the fresh entry
+  // price. With no independent probability edge, the residual EV is the fee.
+  const sharesAtMarketQuote = stake / marketProbability;
+  const expectedValue = marketProbability * sharesAtMarketQuote - totalCost;
+  const expectedRoi = expectedValue / totalCost;
+  const annualizedReturn = Number.isFinite(days) && days > 0 ? expectedRoi * (365 / days) : expectedRoi;
+  return {
+    expectedValueUsdc: Number(expectedValue.toFixed(4)),
+    expectedRoi: Number(expectedRoi.toFixed(4)),
+    annualizedReturn: Number(annualizedReturn.toFixed(4)),
+  };
 }
 
 function applyMarketObservationsToEvaluations(evaluations, observations) {
@@ -4112,6 +4226,7 @@ function applyMarketObservationsToEvaluations(evaluations, observations) {
     const nextAiProbability = Number.isFinite(yesProbability)
       ? Number((String(snapshot.outcome).toLowerCase() === "yes" ? yesProbability : 1 - yesProbability).toFixed(4))
       : evaluation.aiProbability;
+    const marketEconomics = outcomeChanged ? null : marketEconomicsForStoredEvaluation(evaluation, snapshot.marketProbability);
     const next = normalizeEvaluationRisk({
       ...evaluation,
       id: outcomeChanged ? `token:${snapshot.tokenId}` : evaluation.id,
@@ -4119,6 +4234,9 @@ function applyMarketObservationsToEvaluations(evaluations, observations) {
       outcome: snapshot.outcome,
       marketProbability: snapshot.marketProbability,
       marketDataUpdatedAt: snapshot.marketDataUpdatedAt,
+      marketExpectedValueUsdc: outcomeChanged ? null : (marketEconomics?.expectedValueUsdc ?? evaluation.marketExpectedValueUsdc ?? null),
+      marketExpectedRoi: outcomeChanged ? null : (marketEconomics?.expectedRoi ?? evaluation.marketExpectedRoi ?? null),
+      marketAnnualizedReturn: outcomeChanged ? null : (marketEconomics?.annualizedReturn ?? evaluation.marketAnnualizedReturn ?? null),
       binaryYesMarketProbability: snapshot.binaryYesMarketProbability,
       binaryNoMarketProbability: snapshot.binaryNoMarketProbability,
       binaryYesTokenId: snapshot.binaryYesTokenId || evaluation.binaryYesTokenId,

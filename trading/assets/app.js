@@ -73,6 +73,7 @@ const STATE_CACHE_PREFIX = "tradingStateCache:";
 const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
 const MIN_ELIGIBILITY_THRESHOLD = 0.01;
 const MAX_ELIGIBILITY_THRESHOLD = 0.99;
+const MIN_PORTFOLIO_EV_PA = 0.05;
 const DEFAULT_RISK_ALLOCATION = 0.05;
 const MIN_RISK_ALLOCATION = 0.01;
 const MAX_RISK_ALLOCATION = 0.5;
@@ -324,6 +325,20 @@ function portfolioProbability(item, config = {}) {
   return normalizeProbabilitySource(config.probabilitySource) === "polymarket"
     ? Number(item.marketProbability ?? item.marketPrice)
     : Number(item.aiProbability);
+}
+
+function portfolioExpectedValue(item, config = {}) {
+  const value = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
+    ? Number(item.marketExpectedValueUsdc)
+    : Number(item.expectedValueUsdc);
+  return Number.isFinite(value) ? value : null;
+}
+
+function portfolioAnnualizedReturn(item, config = {}) {
+  const value = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
+    ? Number(item.marketAnnualizedReturn)
+    : Number(item.annualizedReturn);
+  return Number.isFinite(value) ? value : null;
 }
 
 function selectionOrderLabel(value) {
@@ -3409,11 +3424,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const liquidity = Number(item.liquidity || 0);
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(normalizedMode);
-  const storedAnnualizedReturn = Number(item.annualizedReturn);
-  const displayedAnnualizedReturn = annualizedExpectedReturn(item);
-  const annualizedReturn = Number.isFinite(displayedAnnualizedReturn)
-    ? displayedAnnualizedReturn
-    : storedAnnualizedReturn;
+  const annualizedReturn = portfolioAnnualizedReturn(item, config);
   const aiPending = item.selectionStatus === "AI_PENDING" || item.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
   const executionCheck = item.executionRevalidation && typeof item.executionRevalidation === "object"
     ? item.executionRevalidation
@@ -3437,6 +3448,8 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     reasons.push("missing usable EV p.a.");
   } else if (annualizedReturn <= 0) {
     reasons.push(`EV p.a. ${signedPercent(annualizedReturn)} is non-profitable after fees`);
+  } else if (annualizedReturn < MIN_PORTFOLIO_EV_PA) {
+    reasons.push(`EV p.a. ${signedPercent(annualizedReturn)} below ${signedPercent(MIN_PORTFOLIO_EV_PA)}`);
   }
   if (aiPending) reasons.push("grounded Gemini analysis is pending");
   if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY") {
@@ -3535,10 +3548,11 @@ function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new
   return "";
 }
 
-function portfolioCandidateSortValue(item, key) {
+function portfolioCandidateSortValue(item, key, mode = state.mode) {
+  const config = portfolioConfigForMode(mode);
   if (key === "riskReward") return evaluationRiskReward(item) ?? -Infinity;
-  if (key === "annualizedReturn") return annualizedExpectedReturn(item) ?? -Infinity;
-  if (key === "expectedValue") return expectedValue(item) ?? -Infinity;
+  if (key === "annualizedReturn") return portfolioAnnualizedReturn(item, config) ?? -Infinity;
+  if (key === "expectedValue") return portfolioExpectedValue(item, config) ?? -Infinity;
   if (key === "aiProbability") return Number(item.aiProbability);
   if (key === "days") return evaluationDaysLeft(item);
   return 0;
@@ -3548,14 +3562,14 @@ function sortPortfolioCandidates(rows = [], mode = state.mode) {
   const config = portfolioConfigForMode(mode);
   const primary = config.selectionOrder === "highest_reward_risk_first" ? "riskReward" : "annualizedReturn";
   const sorted = [...rows].sort((a, b) => {
-    const aPrimary = portfolioCandidateSortValue(a, primary);
-    const bPrimary = portfolioCandidateSortValue(b, primary);
+    const aPrimary = portfolioCandidateSortValue(a, primary, mode);
+    const bPrimary = portfolioCandidateSortValue(b, primary, mode);
     if (bPrimary !== aPrimary) return bPrimary - aPrimary;
-    const aDays = portfolioCandidateSortValue(a, "days");
-    const bDays = portfolioCandidateSortValue(b, "days");
+    const aDays = portfolioCandidateSortValue(a, "days", mode);
+    const bDays = portfolioCandidateSortValue(b, "days", mode);
     if (Number.isFinite(aDays) && Number.isFinite(bDays) && aDays !== bDays) return aDays - bDays;
-    const aEv = portfolioCandidateSortValue(a, "expectedValue");
-    const bEv = portfolioCandidateSortValue(b, "expectedValue");
+    const aEv = portfolioCandidateSortValue(a, "expectedValue", mode);
+    const bEv = portfolioCandidateSortValue(b, "expectedValue", mode);
     if (bEv !== aEv) return bEv - aEv;
     return (Date.parse(b.evaluatedAt || "") || 0) - (Date.parse(a.evaluatedAt || "") || 0);
   });
@@ -3574,8 +3588,11 @@ function portfolioCandidateRows(mode = state.mode) {
       const reasons = portfolioCandidateFilterReasons(item, mode);
       if (reasons.length) return null;
       const riskReason = candidateRiskBlockReason(item, activeRows, evaluationByToken);
+      const config = portfolioConfigForMode(mode);
       return {
         ...item,
+        annualizedReturn: portfolioAnnualizedReturn(item, config),
+        expectedValueUsdc: portfolioExpectedValue(item, config),
         portfolioRiskBlockReason: riskReason,
       };
     })
@@ -3588,6 +3605,8 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode) {
     return '<div class="empty">No opportunities currently pass this portfolio shortlist. The next run will still refresh market data and re-evaluate newly analyzed opportunities.</div>';
   }
   const live = normalizeMode(mode) === "live";
+  const config = portfolioConfigForMode(mode);
+  const probabilityLabel = normalizeProbabilitySource(config.probabilitySource) === "polymarket" ? "Mkt prob." : "AI prob.";
   return `
     <table>
       <thead>
@@ -3597,7 +3616,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode) {
           <th>Market</th>
           <th>End date</th>
           <th>Days left</th>
-          <th>AI prob.</th>
+          <th>${probabilityLabel}</th>
           <th>Mkt entry</th>
           <th>EV p.a.</th>
           <th>EV</th>
@@ -3609,6 +3628,9 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode) {
       <tbody>
         ${rows.slice(0, 80).map((item, index) => {
           const status = live ? "will revalidate before live order" : "ready for next paper execution";
+          const selectedProbability = portfolioProbability(item, config);
+          const selectedAnnualizedReturn = portfolioAnnualizedReturn(item, config);
+          const selectedExpectedValue = portfolioExpectedValue(item, config);
           return `
             <tr>
               <td data-label="#">${index + 1}</td>
@@ -3619,10 +3641,10 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode) {
               <td data-label="Market">${marketAnchor(item)}</td>
               <td data-label="End date">${evaluationEndDateCell(item)}</td>
               <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
-              <td data-label="AI prob.">${probability(Number(item.aiProbability))}</td>
+              <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
               <td data-label="Mkt entry">${probability(Number(item.marketPrice))}</td>
-              <td data-label="EV p.a.">${annualizedCell(item)}</td>
-              <td data-label="EV">${signedMoney(expectedValue(item), 4)}</td>
+              <td data-label="EV p.a."><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
+              <td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>
               <td data-label="Win">${gainCell(item)}</td>
               <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
               <td data-label="Analysis">${analysisBadge(item)}</td>

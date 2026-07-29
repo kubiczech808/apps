@@ -164,6 +164,14 @@ function selectedProbability(item) {
   return number(PROBABILITY_SOURCE === "polymarket" ? (item?.marketProbability ?? item?.marketPrice) : item?.aiProbability);
 }
 
+function selectedExpectedValue(item) {
+  return number(PROBABILITY_SOURCE === "polymarket" ? item?.marketExpectedValueUsdc : item?.expectedValueUsdc);
+}
+
+function selectedAnnualizedReturn(item) {
+  return number(PROBABILITY_SOURCE === "polymarket" ? item?.marketAnnualizedReturn : item?.annualizedReturn);
+}
+
 function hasOpenSellOrderForToken(liveState, tokenId) {
   const target = String(tokenId || "");
   return (Array.isArray(liveState?.openOrders) ? liveState.openOrders : []).some((order) => {
@@ -466,9 +474,11 @@ function prefilterLiveCandidate(item) {
   } else if (qualificationProbability < MIN_PROBABILITY) {
     reasons.push(`${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`);
   }
-  const annualizedReturn = number(item?.annualizedReturn);
-  if (Number.isFinite(annualizedReturn) && annualizedReturn <= 0) {
-    reasons.push(`annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
+  const annualizedReturn = selectedAnnualizedReturn(item);
+  if (!Number.isFinite(annualizedReturn)) {
+    reasons.push(`missing ${probabilitySourceLabel()} EV p.a.`);
+  } else if (annualizedReturn <= 0) {
+    reasons.push(`${probabilitySourceLabel()} EV p.a. ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
   }
   if (Number.isFinite(endTime) && endTime <= Date.now()) {
     reasons.push("stored end date is in the past");
@@ -491,13 +501,13 @@ function sortLivePrefilterCandidates(rows = []) {
       const bRatio = number(b.riskReward, number(b.netGainIfWinUsdc) && number(b.totalCostUsdc) ? number(b.netGainIfWinUsdc) / number(b.totalCostUsdc) : -Infinity);
       if (bRatio !== aRatio) return bRatio - aRatio;
     }
-    const aAnnualized = number(a.annualizedReturn, -Infinity);
-    const bAnnualized = number(b.annualizedReturn, -Infinity);
+    const aAnnualized = selectedAnnualizedReturn(a) ?? -Infinity;
+    const bAnnualized = selectedAnnualizedReturn(b) ?? -Infinity;
     if (bAnnualized !== aAnnualized) return bAnnualized - aAnnualized;
     const horizon = compareShorterHorizon(a, b);
     if (horizon !== 0) return horizon;
-    const aEv = number(a.expectedValueUsdc, -Infinity);
-    const bEv = number(b.expectedValueUsdc, -Infinity);
+    const aEv = selectedExpectedValue(a) ?? -Infinity;
+    const bEv = selectedExpectedValue(b) ?? -Infinity;
     if (bEv !== aEv) return bEv - aEv;
     const aProbability = selectedProbability(a) ?? -Infinity;
     const bProbability = selectedProbability(b) ?? -Infinity;
@@ -596,18 +606,20 @@ function compareShorterHorizon(a, b) {
 
 function sortLiveEligibleCandidates(rows = []) {
   return [...rows]
-    .filter((item) => Number.isFinite(Number(item.annualizedReturn)) && Number(item.annualizedReturn) > 0)
-    .filter((item) => Number.isFinite(Number(item.expectedValueUsdc)) && Number(item.expectedValueUsdc) > 0)
+    .filter((item) => Number.isFinite(selectedAnnualizedReturn(item)) && selectedAnnualizedReturn(item) > 0)
+    .filter((item) => Number.isFinite(selectedExpectedValue(item)) && selectedExpectedValue(item) > 0)
     .sort((a, b) => {
       if (SELECTION_ORDER === "highest_reward_risk_first") {
         const aRatio = Number(a.riskReward || 0);
         const bRatio = Number(b.riskReward || 0);
         if (bRatio !== aRatio) return bRatio - aRatio;
       }
-      if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
+      const aAnnualized = selectedAnnualizedReturn(a) ?? -Infinity;
+      const bAnnualized = selectedAnnualizedReturn(b) ?? -Infinity;
+      if (bAnnualized !== aAnnualized) return bAnnualized - aAnnualized;
       const horizon = compareShorterHorizon(a, b);
       if (horizon !== 0) return horizon;
-      return b.expectedValueUsdc - a.expectedValueUsdc;
+      return (selectedExpectedValue(b) ?? -Infinity) - (selectedExpectedValue(a) ?? -Infinity);
     });
 }
 
@@ -737,7 +749,9 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
   const netExitValue = grossExitValue == null ? null : Math.max(0, grossExitValue - exitFee);
   const cost = positionCost(position);
   const shares = number(position.shares ?? position.size);
-  const probability = number(source?.aiProbability);
+  const probability = PROBABILITY_SOURCE === "polymarket"
+    ? number(position.currentPrice ?? position.markPrice ?? position.price ?? source?.marketProbability ?? source?.marketPrice)
+    : number(source?.aiProbability);
   const expectedPayout = shares != null && probability != null ? shares * probability : null;
   const realizedPnlIfExit = netExitValue == null ? null : netExitValue - cost;
   const holdExpectedPnl = expectedPayout == null ? null : expectedPayout - cost;
@@ -772,7 +786,7 @@ function positionHoldExpectedValue(position, evaluationByToken = new Map()) {
 function positionHoldAnnualizedReturn(position, evaluationByToken = new Map()) {
   const economics = positionRotationEconomics(position, evaluationByToken);
   if (economics.continuationAnnualizedReturn != null) return economics.continuationAnnualizedReturn;
-  return number(economics.source?.annualizedReturn, 0);
+  return selectedAnnualizedReturn(economics.source) ?? 0;
 }
 
 function positionHoldRiskReward(position, evaluationByToken = new Map()) {
@@ -823,11 +837,13 @@ function rotationPositionSummary(position, evaluationByToken = new Map(), extra 
 
 function candidatePoolForRotation(baseCandidates = []) {
   return [...baseCandidates]
-    .filter((item) => Number.isFinite(Number(item.aiProbability)))
+    .filter((item) => Number.isFinite(selectedProbability(item)))
+    .filter((item) => Number.isFinite(selectedAnnualizedReturn(item)) && selectedAnnualizedReturn(item) > 0)
+    .filter((item) => Number.isFinite(selectedExpectedValue(item)) && selectedExpectedValue(item) > 0)
     .sort((a, b) => {
-      const annualized = Number(b.annualizedReturn || 0) - Number(a.annualizedReturn || 0);
+      const annualized = (selectedAnnualizedReturn(b) ?? 0) - (selectedAnnualizedReturn(a) ?? 0);
       if (annualized) return annualized;
-      return Number(b.expectedValueUsdc || 0) - Number(a.expectedValueUsdc || 0);
+      return (selectedExpectedValue(b) ?? 0) - (selectedExpectedValue(a) ?? 0);
     })
     .slice(0, ROTATION_CANDIDATE_SCAN_LIMIT);
 }
@@ -983,8 +999,8 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
       endOk ? null : "event end date is in the past",
       probabilityOk ? null : `${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`,
       annualizedReturn <= 0
-        ? `annualized EV ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
-        : (returnOk ? null : `annualized EV ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`),
+        ? `${probabilitySourceLabel()} EV p.a. ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
+        : (returnOk ? null : `${probabilitySourceLabel()} EV p.a. ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`),
       spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
       volumeOk ? null : "liquidity/volume too low",
     ].filter(Boolean),
@@ -1125,18 +1141,23 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   const expectedValue = probability * size - notional - fee;
   const expectedRoi = totalCost > 0 ? expectedValue / totalCost : 0;
   const annualizedReturn = days ? expectedRoi * (365 / days) : expectedRoi;
+  const marketExpectedValue = price * size - notional - fee;
+  const marketExpectedRoi = totalCost > 0 ? marketExpectedValue / totalCost : 0;
+  const marketAnnualizedReturn = days ? marketExpectedRoi * (365 / days) : marketExpectedRoi;
+  const selectedExpectedValueUsdc = PROBABILITY_SOURCE === "polymarket" ? marketExpectedValue : expectedValue;
+  const selectedAnnualizedReturn = PROBABILITY_SOURCE === "polymarket" ? marketAnnualizedReturn : annualizedReturn;
   const edge = probability - price;
   const scored = scoreEconomics({
-    probability,
+    probability: PROBABILITY_SOURCE === "polymarket" ? qualificationProbability : probability,
     qualificationProbability,
-    annualizedReturn,
-    edge,
+    annualizedReturn: selectedAnnualizedReturn,
+    edge: PROBABILITY_SOURCE === "polymarket" ? qualificationProbability - price : edge,
     spread: book.spread,
     volume24hr,
     liquidity,
     endOk,
   });
-  if (!Number.isFinite(expectedValue) || expectedValue <= 0 || !Number.isFinite(annualizedReturn) || annualizedReturn <= 0) {
+  if (!Number.isFinite(selectedExpectedValueUsdc) || selectedExpectedValueUsdc <= 0 || !Number.isFinite(selectedAnnualizedReturn) || selectedAnnualizedReturn <= 0) {
     return {
       candidate: evaluation,
       eligible: false,
@@ -1174,10 +1195,15 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     tickSize: tick,
     negRisk: Boolean(market.negRisk),
     aiProbability: Number(probability.toFixed(4)),
+    marketProbability: Number(price.toFixed(4)),
     edge: Number(edge.toFixed(4)),
     daysToResolution: days == null ? null : Number(days.toFixed(2)),
-    expectedValueUsdc: Number(expectedValue.toFixed(4)),
-    annualizedReturn: Number(annualizedReturn.toFixed(4)),
+    expectedValueUsdc: Number(selectedExpectedValueUsdc.toFixed(4)),
+    annualizedReturn: Number(selectedAnnualizedReturn.toFixed(4)),
+    aiExpectedValueUsdc: Number(expectedValue.toFixed(4)),
+    aiAnnualizedReturn: Number(annualizedReturn.toFixed(4)),
+    marketExpectedValueUsdc: Number(marketExpectedValue.toFixed(4)),
+    marketAnnualizedReturn: Number(marketAnnualizedReturn.toFixed(4)),
     netGainIfWinUsdc: Number((size - notional - fee).toFixed(4)),
     totalCostUsdc: Number(totalCost.toFixed(5)),
     tradingFeeUsdc: Number(fee.toFixed(5)),
@@ -1185,7 +1211,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     orderType: USE_LIMIT_ORDERS ? "GTC" : "FAK",
     riskGroupKeys: risk.keys,
     riskGroupLabels: risk.labels,
-    score: Number((annualizedReturn + edge).toFixed(6)),
+    score: Number((selectedAnnualizedReturn + (PROBABILITY_SOURCE === "polymarket" ? qualificationProbability - price : edge)).toFixed(6)),
   };
 }
 
@@ -1403,9 +1429,14 @@ function liveBatchCandidateSummary(item) {
     evaluatedAt: item?.evaluatedAt || source.evaluatedAt || null,
     status: item?.status || source.status || null,
     aiProbability: number(item?.aiProbability ?? source.aiProbability),
+    marketProbability: number(item?.marketProbability ?? source.marketProbability ?? item?.marketPrice ?? source.marketPrice),
     marketPrice: number(item?.marketPrice ?? source.marketPrice ?? item?.currentPrice),
     annualizedReturn: number(item?.annualizedReturn ?? source.annualizedReturn),
     expectedValueUsdc: number(item?.expectedValueUsdc ?? source.expectedValueUsdc),
+    aiAnnualizedReturn: number(item?.aiAnnualizedReturn ?? source.aiAnnualizedReturn),
+    aiExpectedValueUsdc: number(item?.aiExpectedValueUsdc ?? source.aiExpectedValueUsdc),
+    marketAnnualizedReturn: number(item?.marketAnnualizedReturn ?? source.marketAnnualizedReturn),
+    marketExpectedValueUsdc: number(item?.marketExpectedValueUsdc ?? source.marketExpectedValueUsdc),
     daysToResolution: number(item?.daysToResolution ?? source.daysToResolution),
     liquidity: number(item?.liquidity ?? source.liquidity),
     netGainIfWinUsdc: gain,
@@ -1427,9 +1458,14 @@ function liveRevalidationUpdate(item, checkedAt) {
   const status = String(item?.status || "REJECTED").toUpperCase();
   const numericFields = [
     "marketPrice",
+    "marketProbability",
     "currentPrice",
     "annualizedReturn",
     "expectedValueUsdc",
+    "aiAnnualizedReturn",
+    "aiExpectedValueUsdc",
+    "marketAnnualizedReturn",
+    "marketExpectedValueUsdc",
     "daysToResolution",
     "liquidity",
     "netGainIfWinUsdc",
