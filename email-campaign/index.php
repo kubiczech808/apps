@@ -5005,16 +5005,43 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
     aiResearchRequestTimestamps('reset');
     aiResearchDeadline(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS);
     try {
-        // 1. Plan: keyword a pochopeni byznysu.
+        // 1. Plan: keyword a pochopeni byznysu. Chybejici plan se dogeneruje, ne nahlasi.
         $keyword = aiResearchPrimaryKeyword($plan);
         if ($keyword === '' || trim((string)($plan['business_understanding'] ?? '')) === '') {
-            $blocked[] = 'plan nema keyword nebo pochopeni byznysu, spust research na tento seed znovu';
+            try {
+                $plan = aiResearchEnrichPlan(aiResearchPlan($config, $seed), $seed);
+                if (!empty($plan['seed_unsuitable'])) {
+                    $blocked[] = 'seed subjekt nema pouzitelny webovy kontext, plan nelze sestavit';
+                } else {
+                    updateAiResearchRunProgress($pdo, $runId, $plan, 'Plan pregenerovan rucni kontrolou behu.');
+                    $keyword = aiResearchPrimaryKeyword($plan);
+                    $fixed[] = 'plan pregenerovan';
+                }
+            } catch (Throwable $e) {
+                $blocked[] = 'plan: ' . $e->getMessage();
+            }
         } else {
             $done[] = 'plan';
         }
 
-        // 2. Nalezene kontakty.
-        if (!$contacts) {
+        // 2. Nalezene kontakty. Kdyz chybi, rovnou se dohledaji.
+        if (!$contacts && $keyword !== '' && !aiResearchDeadlineReached(45)) {
+            try {
+                $found = aiResearchFindContacts($pdo, $seed, $plan, 10, $runId);
+                if ($found) {
+                    $evaluated = aiResearchContactValidationEnabled($pdo)
+                        ? aiResearchEvaluateContacts($config, $seed, $plan, $found)
+                        : aiResearchProcessFilterContacts($seed, $plan, $found);
+                    upsertAiResearchRunContacts($pdo, $runId, $evaluated, 'pending');
+                    $contacts = aiResearchRunActionContext($pdo, $runId)['contacts'];
+                    $fixed[] = 'kontakty dohledany (' . count($contacts) . ')';
+                } else {
+                    $blocked[] = 'scraping pro tento keyword a lokalitu nenasel zadny kontakt s emailem';
+                }
+            } catch (Throwable $e) {
+                $blocked[] = 'hledani kontaktu: ' . $e->getMessage();
+            }
+        } elseif (!$contacts) {
             $blocked[] = 'beh nema zadne nalezene kontakty';
         } else {
             $done[] = 'kontakty (' . count($contacts) . ')';
@@ -5080,11 +5107,21 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
             $done[] = 'scraping kontejner';
         }
 
-        // 6. Odhad dosazitelnych kontaktu.
+        // 6. Odhad dosazitelnych kontaktu. Spocita se hned, pokud na to zbyva cas.
         if (is_array($plan['contact_estimate'] ?? null)) {
             $done[] = 'odhad dosahu (' . (int)($plan['contact_estimate']['reachable_contacts'] ?? 0) . ')';
+        } elseif (aiResearchDeadlineReached(30)) {
+            $blocked[] = 'odhad dosahu se do casoveho limitu nevesel, dopocita ho nejblizsi cron';
         } else {
-            $blocked[] = 'odhad dosahu jeste nespocitan, dopocita ho nejblizsi cron';
+            $estimate = aiResearchComputeContactEstimate($pdo, $runId, $plan, aiResearchDeadline());
+            if ($estimate === null) {
+                $blocked[] = 'odhad dosahu nelze spocitat, plan nema pouzitelny keyword nebo zdroj';
+            } else {
+                $plan['contact_estimate'] = $estimate;
+                $store = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
+                $store->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
+                $fixed[] = 'odhad dosahu spocitan (' . (int)$estimate['reachable_contacts'] . ')';
+            }
         }
     } finally {
         aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
@@ -6080,20 +6117,11 @@ function runCronAiResearchContactEstimates(PDO $pdo, array $config, int $budgetS
         if ($source === '' || $keyword === '' || !scrapingSourceIsActive($source)) {
             continue;
         }
-        try {
-            $listing = aiResearchEstimateListingPages(
-                static function (int $page) use ($source, $keyword, $location, $deadline): int {
-                    if (time() >= $deadline) {
-                        return 0;
-                    }
-                    return aiResearchCountListingItems($source, $keyword, $location, $page);
-                }
-            );
-        } catch (Throwable $e) {
-            error_log('AI research estimate for #' . $runId . ' failed: ' . $e->getMessage());
+        $estimate = aiResearchComputeContactEstimate($pdo, $runId, $plan, $deadline);
+        if ($estimate === null) {
             continue;
         }
-        $plan['contact_estimate'] = aiResearchBuildContactEstimate($pdo, $runId, $source, $listing);
+        $plan['contact_estimate'] = $estimate;
         $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
         $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
         return 'AI research odhad dosahu: beh #' . $runId . ' ma '
@@ -6107,6 +6135,34 @@ function runCronAiResearchContactEstimates(PDO $pdo, array $config, int $budgetS
  * Vytéznost emailu se meri na vzorku, ktery uz beh skutecne prosel, takze odhad
  * nepredstira, ze kazdy zaznam v katalogu ma dohledatelny email.
  */
+/**
+ * Spocita odhad dosahu pro plan behu. Vraci null, kdyz plan na to nema dost udaju,
+ * nebo kdyz se vypocet do zadaneho casu nevejde.
+ */
+function aiResearchComputeContactEstimate(PDO $pdo, int $runId, array $plan, int $deadline): ?array
+{
+    $source = aiResearchPrimarySourceKey($plan);
+    $keyword = aiResearchPrimaryKeyword($plan);
+    $location = (string)($plan['target_location'] ?? '');
+    if ($source === '' || $keyword === '' || !scrapingSourceIsActive($source)) {
+        return null;
+    }
+    try {
+        $listing = aiResearchEstimateListingPages(
+            static function (int $page) use ($source, $keyword, $location, $deadline): int {
+                if (time() >= $deadline) {
+                    return 0;
+                }
+                return aiResearchCountListingItems($source, $keyword, $location, $page);
+            }
+        );
+    } catch (Throwable $e) {
+        error_log('AI research estimate for #' . $runId . ' failed: ' . $e->getMessage());
+        return null;
+    }
+    return aiResearchBuildContactEstimate($pdo, $runId, $source, $listing);
+}
+
 function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $source, array $listing): array
 {
     $stmt = $pdo->prepare('SELECT COUNT(*) FROM ai_research_contacts WHERE run_id=?');
