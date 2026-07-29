@@ -137,7 +137,8 @@ function aiResearchDailyGeminiRequestBudget(array $config): int
 function aiResearchGeminiRequestsPerMinuteBudget(array $config): int
 {
     $configured = (int)($config['ai']['gemini_research_rpm_budget'] ?? 0);
-    return max(1, $configured > 0 ? $configured : 18);
+    // gemini-3-flash ma 10 RPM, drzime se pod tim.
+    return max(1, min(9, $configured > 0 ? $configured : 8));
 }
 
 function aiResearchEstimatedGeminiRequestsPerSeed(array $config): int
@@ -191,15 +192,18 @@ function aiResearchDeadlineReached(int $reserveSeconds = 0): bool
     return time() >= aiResearchDeadline() - max(0, $reserveSeconds);
 }
 
-function aiResearchRequestTimestamps(string $mode = 'list'): array
+/**
+ * Log odeslanych pozadavku vcetne odhadu tokenu. Slouzi na dodrzeni RPM i TPM limitu.
+ */
+function aiResearchRequestTimestamps(string $mode = 'list', int $tokens = 0): array
 {
-    static $timestamps = [];
+    static $requests = [];
     if ($mode === 'reset') {
-        $timestamps = [];
+        $requests = [];
     } elseif ($mode === 'add') {
-        $timestamps[] = time();
+        $requests[] = ['at' => time(), 'tokens' => max(0, $tokens)];
     }
-    return $timestamps;
+    return $requests;
 }
 
 function aiResearchRequestsMadeThisProcess(): int
@@ -217,19 +221,32 @@ function aiResearchSleepWithinDeadline(int $seconds, int $deadline): bool
     return true;
 }
 
-function aiResearchThrottleBeforeRequest(array $config, int $deadline): void
+/**
+ * Ceka, dokud by dalsi pozadavek prekrocil bud pocet pozadavku za minutu, nebo odhadovany
+ * pocet tokenu za minutu. Diky tomu se vyhodnocovani rozlozi v case samo.
+ */
+function aiResearchThrottleBeforeRequest(array $config, int $deadline, int $plannedTokens = 0): void
 {
-    $budget = aiResearchGeminiRequestsPerMinuteBudget($config);
-    $recent = array_values(array_filter(
-        aiResearchRequestTimestamps(),
-        static fn(int $timestamp): bool => $timestamp > time() - 60
-    ));
-    if (count($recent) < $budget) {
-        return;
+    $requestBudget = aiResearchGeminiRequestsPerMinuteBudget($config);
+    $tokenBudget = aiResearchTokensPerMinuteBudget($config);
+    for ($guard = 0; $guard < 4; $guard++) {
+        $recent = array_values(array_filter(
+            aiResearchRequestTimestamps(),
+            static fn(array $request): bool => (int)$request['at'] > time() - 60
+        ));
+        usort($recent, static fn(array $a, array $b): int => (int)$a['at'] <=> (int)$b['at']);
+        $tokensInWindow = array_sum(array_map(static fn(array $r): int => (int)$r['tokens'], $recent));
+        $overRequests = count($recent) >= $requestBudget;
+        $overTokens = $plannedTokens > 0 && ($tokensInWindow + $plannedTokens) > $tokenBudget;
+        if (!$overRequests && !$overTokens) {
+            return;
+        }
+        // Ceka se jen do chvile, kdy z okna vypadne nejstarsi pozadavek.
+        $oldest = $recent ? (int)$recent[0]['at'] : time();
+        if (!aiResearchSleepWithinDeadline(max(1, $oldest + 61 - time()), $deadline)) {
+            return;
+        }
     }
-    sort($recent);
-    $oldestInWindow = $recent[count($recent) - $budget];
-    aiResearchSleepWithinDeadline(max(0, $oldestInWindow + 61 - time()), $deadline);
 }
 
 function aiResearchErrorIsRetryable(string $message): bool
@@ -258,8 +275,9 @@ function aiResearchGeminiCall(array $config, string $step, array $payload, int $
     $maxAttempts = 3;
     $lastError = null;
     for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
-        aiResearchThrottleBeforeRequest($config, $deadline);
-        aiResearchRequestTimestamps('add');
+        $plannedTokens = aiResearchEstimatePayloadTokens($payload);
+        aiResearchThrottleBeforeRequest($config, $deadline, $plannedTokens);
+        aiResearchRequestTimestamps('add', $plannedTokens);
         try {
             return jsonHttpPost('https://generativelanguage.googleapis.com/v1beta/interactions', [
                 'x-goog-api-key: ' . $apiKey,
@@ -322,8 +340,27 @@ function aiResearchRecordGeminiUsage(PDO $pdo, int $requests): void
 
 function aiResearchDailyRequestBudgetOrDefault(array $config): int
 {
+    // gemini-3-flash ma 1500 RPD. Rezerva zbyva na onboarding a kampanova volani,
+    // ktera sdileji stejny klic a do tohoto pocitadla se nezapisuji.
     $configured = aiResearchDailyGeminiRequestBudget($config);
-    return $configured > 0 ? $configured : 180;
+    return $configured > 0 ? $configured : 1000;
+}
+
+function aiResearchTokensPerMinuteBudget(array $config): int
+{
+    // gemini-3-flash ma 250 000 TPM; vychozi strop je pod nim.
+    $configured = (int)($config['ai']['gemini_research_tpm_budget'] ?? 0);
+    return max(10000, $configured > 0 ? $configured : 200000);
+}
+
+/**
+ * Hruby odhad tokenu z delky payloadu. Presnost neni potreba, jde jen o to nenarazit
+ * na TPM limit; ctyri znaky na token je bezne pouzivane priblizeni.
+ */
+function aiResearchEstimatePayloadTokens(array $payload): int
+{
+    $text = (string)($payload['input'] ?? '') . ' ' . (string)($payload['system_instruction'] ?? '');
+    return max(1, (int)ceil(mb_strlen($text) / 4));
 }
 
 function aiResearchIntervalLabel(int $seconds): string
@@ -1902,17 +1939,29 @@ function aiResearchApplyStrategicFields(array $plan, array $json): array
     return $plan;
 }
 
+/**
+ * Nazvy modelu, ktere Google skutecne nabizi. Zastaraly nebo neexistujici nazev ze
+ * secretu se prepise, aby jedno stare nastaveni nezpusobilo chybu u kazdeho pozadavku.
+ */
+function normalizeGeminiModelName(string $model): string
+{
+    $model = trim($model);
+    $known = ['gemini-3-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+    return in_array($model, $known, true) ? $model : 'gemini-3-flash';
+}
+
 function aiModelName(array $config, string $provider = 'gemini'): string
 {
     if ($provider === 'openai') {
         return trim((string)($config['ai']['openai_model'] ?? 'gpt-4.1')) ?: 'gpt-4.1';
     }
-    return trim((string)($config['ai']['gemini_model'] ?? 'gemini-3.5-flash')) ?: 'gemini-3.5-flash';
+    return normalizeGeminiModelName((string)($config['ai']['gemini_model'] ?? ''));
 }
 
 function aiResearchModelName(array $config): string
 {
-    return trim((string)($config['ai']['gemini_research_model'] ?? '')) ?: aiModelName($config, 'gemini');
+    $configured = trim((string)($config['ai']['gemini_research_model'] ?? ''));
+    return $configured !== '' ? normalizeGeminiModelName($configured) : aiModelName($config, 'gemini');
 }
 
 function aiModelAuditEntry(array $config, string $step, string $provider = 'gemini', string $status = 'used'): array
@@ -2731,7 +2780,9 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false, int $re
                 }
             }
             $bestPlan['research_attempts'] = $attempts;
+            $requestsBeforeFinalize = aiResearchRequestsMadeThisProcess();
             finalizeAiResearchRun($pdo, $config, $runId, $seed, $bestPlan, $bestEvaluated, $bestAccepted);
+            aiResearchAddRunRequests($pdo, $runId, aiResearchRequestsMadeThisProcess());
             setSetting($pdo, 'ai_research_last_seed_source_url', (string)($seed['source_url'] ?? ''));
             return 'AI research: beh #' . $runId . ', seed ' . (string)$seed['email'] . ', pokusu ' . $attempts . ', nalezeno ' . count($bestEvaluated) . ', vhodnych ' . count($bestAccepted) . '.';
         } catch (AiResearchTemporaryException $e) {
@@ -4895,10 +4946,12 @@ function finishAiResearchRunNow(PDO $pdo, array $config, int $runId): string
     ));
     aiResearchRequestTimestamps('reset');
     aiResearchDeadline(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS);
+    $requestsBefore = aiResearchRequestsMadeThisProcess();
     try {
         finalizeAiResearchRun($pdo, $config, $runId, $context['seed'], $context['plan'], $context['contacts'], $accepted);
     } finally {
         aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
+        aiResearchAddRunRequests($pdo, $runId, aiResearchRequestsMadeThisProcess() - $requestsBefore);
     }
     return 'Beh #' . $runId . ' dokoncen: kontaktu ' . count($context['contacts'])
         . ', vhodnych ' . count($accepted) . '. Gemini pozadavku: ' . aiResearchRequestsMadeThisProcess() . '.';
@@ -5006,6 +5059,7 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
         }
     } finally {
         aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
+        aiResearchAddRunRequests($pdo, $runId, aiResearchRequestsMadeThisProcess());
     }
 
     $parts = [];
@@ -5032,10 +5086,12 @@ function validateAiResearchRunContactsNow(PDO $pdo, array $config, int $runId): 
     }
     aiResearchRequestTimestamps('reset');
     aiResearchDeadline(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS);
+    $requestsBefore = aiResearchRequestsMadeThisProcess();
     try {
         $evaluated = aiResearchEvaluateContacts($config, $seed, $plan, $contacts);
     } finally {
         aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
+        aiResearchAddRunRequests($pdo, $runId, aiResearchRequestsMadeThisProcess() - $requestsBefore);
     }
     upsertAiResearchRunContacts($pdo, $runId, $evaluated, 'pending');
     $accepted = count(array_filter($evaluated, static fn(array $c): bool => (string)($c['status'] ?? '') === 'accepted'));
@@ -5997,6 +6053,42 @@ function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $source, ar
         'reachable_contacts' => (int)round($itemsTotal * $yield),
         'calculated_at' => date('c'),
     ];
+}
+
+/**
+ * Pripocte pozadavky spotrebovane na konkretni beh. Beh muze prochazet vic cronu,
+ * takze se pocet kumuluje az do stavu ready.
+ */
+function aiResearchAddRunRequests(PDO $pdo, int $runId, int $requests): void
+{
+    if ($runId <= 0 || $requests <= 0) {
+        return;
+    }
+    $stmt = $pdo->prepare('SELECT plan_json FROM ai_research_runs WHERE id=? LIMIT 1');
+    $stmt->execute([$runId]);
+    $plan = json_decode((string)$stmt->fetchColumn(), true);
+    if (!is_array($plan)) {
+        return;
+    }
+    $plan['gemini_requests'] = (int)($plan['gemini_requests'] ?? 0) + $requests;
+    $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
+    $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
+}
+
+/**
+ * Model, ktery beh naposledy vyhodnocoval, podle auditu jednotlivych kroku.
+ */
+function aiResearchLastAuditModel(array $plan): string
+{
+    $audit = aiResearchNormalizeModelAudit($plan['ai_model_audit'] ?? []);
+    $model = '';
+    foreach ($audit as $entry) {
+        $candidate = trim((string)($entry['model'] ?? ''));
+        if ($candidate !== '') {
+            $model = $candidate;
+        }
+    }
+    return $model;
 }
 
 function aiResearchScrapingProgress(PDO $pdo, array $plan): ?array
@@ -16615,7 +16707,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 </form>
             </div>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>K oslovení</th><th>Vzorek</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>K oslovení</th><th>Vzorek</th><th>Req.</th><th>Model</th></tr></thead><tbody>
         <?php if ($researchStarting): ?>
             <tr class="research-starting-row">
                 <td>-</td><td>-</td><td>-</td><td>-</td>
@@ -16623,11 +16715,11 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><strong>hledá se seed…</strong></td>
                 <td>-</td>
                 <td><?= statusBadge('bezi...') ?></td>
-                <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+                <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
             </tr>
         <?php endif; ?>
         <?php if (!$aiResearchRuns && !$researchStarting): ?>
-            <tr><td colspan="15">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="17">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
@@ -16741,9 +16833,11 @@ function renderApp(PDO $pdo, ?array $flash): void
                     <?php endif; ?>
                 </td>
                 <td><?= h((string)$run['accepted_count']) ?>/<?= h((string)$run['found_count']) ?></td>
+                <td><?= h((string)(int)($runPlan['gemini_requests'] ?? 0)) ?></td>
+                <td><?php $runModel = aiResearchLastAuditModel($runPlan); ?><?= $runModel !== '' ? h($runModel) : '-' ?></td>
             </tr>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="15">
+                <td colspan="17">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
