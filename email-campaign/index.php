@@ -131,7 +131,43 @@ function aiResearchTemporaryBackoffUntil(Throwable $e): int
     if ($delay <= 0 && !$isQuotaLike) {
         return 0;
     }
+    // Minutove okno se uvolni samo behem minuty, takze nema smysl pridavat 5 minut
+    // navic - jen by to uskodilo dennimu poctu zpracovanych seedu.
+    if (aiResearchQuotaIsMinuteWindow($message)) {
+        return time() + aiResearchMinuteQuotaWaitSeconds($message);
+    }
     return time() + max(0, $delay) + 5 * 60;
+}
+
+/**
+ * Jak dlouho se ceka po minutove quote. Jedno misto pro vypocet, aby zprava pro
+ * uzivatele nerikala jine cislo, nez podle ktereho se beh opravdu naplanuje.
+ */
+function aiResearchMinuteQuotaWaitSeconds(string $message): int
+{
+    return max(60, aiResearchRetryDelaySeconds($message)) + 15;
+}
+
+/**
+ * Pozna quota chybu, ktera se uvolni do minuty ("Please retry in 56.7s"), od denniho
+ * limitu. U minutoveho okna se ceka jen chvili, u denniho ma smysl delsi pauza.
+ */
+function aiResearchErrorIsMinuteQuota(Throwable $e): bool
+{
+    $messages = [];
+    for ($current = $e; $current; $current = $current->getPrevious()) {
+        $messages[] = $current->getMessage();
+    }
+    return aiResearchQuotaIsMinuteWindow(implode(' ', $messages));
+}
+
+function aiResearchQuotaIsMinuteWindow(string $message): bool
+{
+    if (preg_match('/per\s*day|daily|requests_per_day|\bRPD\b/i', $message)) {
+        return false;
+    }
+    $delay = aiResearchRetryDelaySeconds($message);
+    return $delay > 0 && $delay <= 60;
 }
 
 function aiResearchDailyGeminiRequestBudget(array $config): int
@@ -421,7 +457,9 @@ function scheduleAiResearchTemporaryBackoff(PDO $pdo, Throwable $e, int $interva
     }
     $settings = loadSettings($pdo);
     $existingUntil = (int)($settings['ai_research_next_allowed_at'] ?? 0);
-    if ($existingUntil > time()) {
+    // Eskalace patri jen dennim limitum. Minutove okno by se jinak opakovanym
+    // narazenim vysplhalo az na strop a beh by stal desitky minut zbytecne.
+    if ($existingUntil > time() && !aiResearchErrorIsMinuteQuota($e)) {
         $until = max($until, $existingUntil + 5 * 60);
     }
     // Strop, aby opakovane quota chyby nenarostly do hodin a neudusily denni propustnost.
@@ -2665,7 +2703,7 @@ function runCronAiResearch(PDO $pdo, array $config): string
             setSetting($pdo, 'ai_research_last_run_at', (string)time());
         }
         setSetting($pdo, 'ai_research_lock_until', '');
-        return 'AI research odlozen: ' . $e->getMessage()
+        return 'AI research odlozen: ' . aiResearchFailureMessage($e)
             . ($nextAllowedAt > 0 ? ' Dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.' : '')
             . ' Gemini pozadavku v behu: ' . aiResearchRequestsMadeThisProcess()
             . ', za 24 h ' . ($usedToday + aiResearchRequestsMadeThisProcess()) . '/' . $dailyBudget . '.';
@@ -2721,7 +2759,7 @@ function runAiResearchWorker(PDO $pdo, array $config, int $resumeRunId = 0): str
         return $message;
     } catch (AiResearchTemporaryException $e) {
         scheduleAiResearchTemporaryBackoff($pdo, $e, aiResearchRunIntervalSeconds($config));
-        return 'AI research odlozen: ' . $e->getMessage();
+        return 'AI research odlozen: ' . aiResearchFailureMessage($e);
     } catch (Throwable $e) {
         return 'AI research selhal: ' . $e->getMessage();
     } finally {
@@ -2792,10 +2830,18 @@ function runAiResearchOnce(PDO $pdo, array $config, bool $force = false, int $re
             updateAiResearchRunProgress($pdo, $runId, aiResearchBootstrapPlan($seed), 'AI research bezi: nacitam a analyzuji web seed firmy.');
         }
         setSetting($pdo, 'ai_research_last_seed_source_url', (string)($seed['source_url'] ?? ''));
+        $fetchedContext = null;
         try {
-            $basePlan = aiResearchPlan($config, $seed);
+            $basePlan = aiResearchPlan($config, $seed, $fetchedContext);
         } catch (Throwable $e) {
-            markAiResearchRunDeferred($pdo, $runId, 'AI research odlozen: ' . $e->getMessage());
+            // Nacteny web se ulozi i pri chybe, aby dalsi pokus neplatil znovu casem
+            // za crawl a vesel se do casoveho budgetu requestu.
+            markAiResearchRunDeferred(
+                $pdo,
+                $runId,
+                'AI research odlozen: ' . aiResearchFailureMessage($e),
+                aiResearchWebsiteContextCache($fetchedContext)
+            );
             throw $e;
         }
         if (!empty($basePlan['seed_unsuitable'])) {
@@ -3632,14 +3678,27 @@ function aiResearchLocalWebsiteUnderstanding(string $websiteContext, string $web
     return truncatePlainText('Web ' . websiteLabel($website) . ' uvadi: ' . $summary, 520);
 }
 
-function aiResearchPlan(array $config, array $seed): array
+/**
+ * $fetchedContext vraci nacteny webovy kontext i v pripade, ze plan skonci chybou.
+ * Volajici ho ulozi k behu, takze opakovany pokus uz web necte znovu.
+ */
+function aiResearchPlan(array $config, array $seed, ?array &$fetchedContext = null): array
 {
     $business = trim((string)($seed['subject_name'] ?: $seed['email']));
     $website = trim((string)($seed['website'] ?? ''));
     $address = trim((string)($seed['address'] ?? ''));
     $seedDescription = trim((string)($seed['seed_description'] ?? ''));
     $siteHasEnglish = false;
-    $websiteContext = aiResearchSeedWebsiteContext($website, $siteHasEnglish);
+    // Nacteni webu trva desitky sekund. Kdyz se plan nepovede kvuli minutovemu limitu
+    // Gemini, dalsi pokus dostane kontext z cache a stihne se v casovem budgetu.
+    $cachedContext = trim((string)($seed['website_context_cache'] ?? ''));
+    if ($cachedContext !== '') {
+        $websiteContext = $cachedContext;
+        $siteHasEnglish = !empty($seed['website_has_english']);
+    } else {
+        $websiteContext = aiResearchSeedWebsiteContext($website, $siteHasEnglish);
+    }
+    $fetchedContext = ['context' => $websiteContext, 'has_english' => $siteHasEnglish];
     $seedCountry = aiResearchSeedCountry($seed) ?: 'CZ';
     $websiteUnderstandingFallback = aiResearchLocalWebsiteUnderstanding($websiteContext, $website);
     $businessContextForFallback = $business . ' ' . $website . ' ' . $address . ' ' . $websiteUnderstandingFallback . ' ' . truncatePlainText($websiteContext, 1400);
@@ -4830,6 +4889,26 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
             'location' => (string)($plan['target_location'] ?? ''),
         ];
     }
+    return aiResearchDropUnevaluatedTargeting($plan);
+}
+
+/**
+ * Dokud neni pochopeny byznys seedu, nesmi beh nabizet keyword, lokalitu ani trhy.
+ * Odvozene hodnoty z nazvu a adresy nejsou cileni, jen odhad, a podle nich se ma
+ * pracovat teprve az projde vyhodnoceni webu.
+ */
+function aiResearchDropUnevaluatedTargeting(array $plan): array
+{
+    if (trim((string)($plan['business_understanding'] ?? '')) !== '') {
+        return $plan;
+    }
+    $plan['scraping_queries'] = [];
+    $plan['candidate_terms'] = [];
+    $plan['primary_keyword'] = '';
+    $plan['target_location'] = '';
+    $plan['target_markets'] = [];
+    $plan['targeting_unevaluated'] = true;
+    unset($plan['search_url'], $plan['search_params']);
     return $plan;
 }
 
@@ -5107,14 +5186,7 @@ function aiResearchRunActionContext(PDO $pdo, int $runId): array
     if (!is_array($plan)) {
         throw new RuntimeException('Beh nema ulozeny plan, nelze v nem pokracovat.');
     }
-    $seed = [
-        'email' => (string)($run['seed_email'] ?? ''),
-        'subject_name' => (string)($run['seed_business'] ?? ''),
-        'website' => (string)($run['seed_website'] ?? ''),
-        'address' => (string)($run['seed_address'] ?? ''),
-        'source_label' => (string)($run['seed_source_label'] ?? ''),
-        'source_url' => (string)($run['seed_source_url'] ?? ''),
-    ];
+    $seed = aiResearchSeedFromRun($run);
     $contactsStmt = $pdo->prepare('SELECT * FROM ai_research_contacts WHERE run_id=? ORDER BY id ASC');
     $contactsStmt->execute([$runId]);
     $rows = $contactsStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -5184,17 +5256,21 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
         // 1. Plan: keyword a pochopeni byznysu. Chybejici plan se dogeneruje, ne nahlasi.
         $keyword = aiResearchPrimaryKeyword($plan);
         if ($keyword === '' || trim((string)($plan['business_understanding'] ?? '')) === '') {
+            $fetchedContext = null;
             try {
-                $plan = aiResearchEnrichPlan(aiResearchPlan($config, $seed), $seed);
+                $plan = aiResearchEnrichPlan(aiResearchPlan($config, $seed, $fetchedContext), $seed);
                 if (!empty($plan['seed_unsuitable'])) {
                     $blocked[] = 'seed subjekt nema pouzitelny webovy kontext, plan nelze sestavit';
                 } else {
+                    $plan = array_merge($plan, aiResearchWebsiteContextCache($fetchedContext));
                     updateAiResearchRunProgress($pdo, $runId, $plan, 'Plan pregenerovan rucni kontrolou behu.');
                     $keyword = aiResearchPrimaryKeyword($plan);
                     $fixed[] = 'plan pregenerovan';
                 }
             } catch (Throwable $e) {
-                $blocked[] = 'plan: ' . $e->getMessage();
+                // Nacteny web se ulozi i pri chybe, takze dalsi kliknuti uz jen doplni plan.
+                storeAiResearchWebsiteContextCache($pdo, $runId, aiResearchWebsiteContextCache($fetchedContext));
+                $blocked[] = 'plan: ' . aiResearchFailureMessage($e);
             }
         } else {
             $done[] = 'plan';
@@ -5886,13 +5962,66 @@ function finalizeAiResearchRun(PDO $pdo, array $config, int $runId, array $seed,
     }
 }
 
-function markAiResearchRunDeferred(PDO $pdo, int $runId, string $message): void
+function markAiResearchRunDeferred(PDO $pdo, int $runId, string $message, array $contextCache = []): void
 {
     if ($runId <= 0) {
         return;
     }
     $stmt = $pdo->prepare('UPDATE ai_research_runs SET status="deferred", message=?, updated_at=? WHERE id=? AND status="running"');
     $stmt->execute([truncatePlainText($message, 500), date('c'), $runId]);
+    if ($contextCache) {
+        storeAiResearchWebsiteContextCache($pdo, $runId, $contextCache);
+    }
+}
+
+/**
+ * Prevede vystup z aiResearchPlan na to, co ma smysl ulozit k behu. Prazdne pole
+ * znamena, ze se web nestihl nacist a cachovat neni co.
+ */
+function aiResearchWebsiteContextCache(?array $fetchedContext): array
+{
+    $context = trim((string)($fetchedContext['context'] ?? ''));
+    if ($context === '') {
+        return [];
+    }
+    return [
+        'website_context_cache' => truncatePlainText($context, 6000),
+        'website_has_english' => !empty($fetchedContext['has_english']),
+    ];
+}
+
+function storeAiResearchWebsiteContextCache(PDO $pdo, int $runId, array $contextCache): void
+{
+    if ($runId <= 0 || !$contextCache) {
+        return;
+    }
+    $stmt = $pdo->prepare('SELECT plan_json FROM ai_research_runs WHERE id=? LIMIT 1');
+    $stmt->execute([$runId]);
+    $plan = json_decode((string)$stmt->fetchColumn(), true);
+    if (!is_array($plan)) {
+        $plan = [];
+    }
+    $plan = array_merge($plan, $contextCache);
+    $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
+    $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
+}
+
+/**
+ * Zprava pro uzivatele. Quota chyba od Google je dlouha a technicka; misto ni se
+ * rekne, co se stalo a ze se beh dokonci sam.
+ */
+function aiResearchFailureMessage(Throwable $e): string
+{
+    $message = $e->getMessage();
+    if (aiResearchErrorIsMinuteQuota($e)) {
+        return 'Google momentalne drzi minutovy limit free tieru, dalsi pokus za cca '
+            . aiResearchMinuteQuotaWaitSeconds($message)
+            . ' s. Beh se dokonci sam pri nejblizsim cronu, nic se neztratilo.';
+    }
+    if (preg_match('/per\s*day|daily|requests_per_day|\bRPD\b/i', $message)) {
+        return 'Denni limit Gemini free tieru je vycerpany, beh se dokonci, az se okno uvolni.';
+    }
+    return $message;
 }
 
 function markAiResearchRunFailed(PDO $pdo, int $runId, string $message): void
@@ -6296,10 +6425,10 @@ function aiResearchWorkflowChecklist(PDO $pdo, array $run, array $plan): array
     $markets = array_values(array_filter(array_map('strval', (array)($plan['target_markets'] ?? []))));
     $keyword = aiResearchPrimaryKeyword($plan);
     $accepted = (int)($run['accepted_count'] ?? 0);
-    // Keyword, lokalita ani trhy nejsou "vyhodnocene", dokud chybi pochopeni byznysu.
-    // Bez nej jsou to jen odhady z nazvu a adresy seedu, takze se nesmi odskrtnout.
+    // Keyword, lokalita ani trhy neexistuji, dokud neni pochopeny byznys seedu.
+    // Odvozene hodnoty se zahazuji, takze tady uz zbyva jen ohlasit, na co se ceka.
     $understood = trim((string)($plan['business_understanding'] ?? '')) !== '';
-    $onlyGuess = ' – jen odhad, dokud není vyhodnocen byznys';
+    $waitsForPlan = 'čeká na vyhodnocení byznysu';
 
     return [
         [
@@ -6318,18 +6447,14 @@ function aiResearchWorkflowChecklist(PDO $pdo, array $run, array $plan): array
             'label' => 'Vybraná cílovka a klíčové slovo',
             'required' => true,
             'done' => $understood && $keyword !== '' && trim((string)($plan['primary_segment'] ?? $plan['audience_label'] ?? '')) !== '',
-            'detail' => $keyword === ''
-                ? 'keyword chybí'
-                : 'keyword ' . $keyword . ($understood ? '' : $onlyGuess),
+            'detail' => !$understood ? $waitsForPlan : ($keyword === '' ? 'keyword chybí' : 'keyword ' . $keyword),
         ],
         [
             'key' => 'markets',
             'label' => 'Cílové trhy a katalogy pro scraping',
             'required' => true,
             'done' => $understood && $markets !== [] && aiResearchEstimateSourcesForPlan($plan) !== [],
-            'detail' => $markets === []
-                ? 'trhy neurčeny'
-                : implode(', ', $markets) . ($understood ? '' : $onlyGuess),
+            'detail' => !$understood ? $waitsForPlan : ($markets === [] ? 'trhy neurčeny' : implode(', ', $markets)),
         ],
         [
             'key' => 'estimate',
@@ -17462,8 +17587,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><?= statusBadge(aiResearchRunStatusLabel((string)$run['status'])) ?></td>
                 <td><?= h((string)($run['search_source_label'] ?? '-')) ?></td>
                 <?php $runUnderstood = trim((string)($runPlan['business_understanding'] ?? '')) !== ''; ?>
-                <td><?= h((string)($run['scraping_keyword'] ?? '')) ?><?php if (!$runUnderstood && trim((string)($run['scraping_keyword'] ?? '')) !== ''): ?><br><small class="muted" title="Byznys seedu ještě není vyhodnocený, keyword je jen odhad z názvu a adresy">odhad</small><?php endif; ?></td>
-                <td><?= h(aiResearchTargetAreaLabel($runPlan)) ?><?php if (!$runUnderstood): ?><br><small class="muted" title="Byznys seedu ještě není vyhodnocený, lokalita je jen odhad">odhad</small><?php endif; ?></td>
+                <?php // Bez vyhodnoceneho byznysu se keyword ani lokalita neukazuji - odhady nechceme. ?>
+                <td><?= $runUnderstood ? h((string)($run['scraping_keyword'] ?? '')) : '<small class="muted" title="Keyword se určí až po vyhodnocení byznysu seedu">čeká na plán</small>' ?></td>
+                <td><?= $runUnderstood ? h(aiResearchTargetAreaLabel($runPlan)) : '<small class="muted" title="Lokalita se určí až po vyhodnocení byznysu seedu">čeká na plán</small>' ?></td>
                 <td>
                     <?php if ($runScraping && $runScraping['job']): ?>
                         <?= statusBadge(scrapingStatusLabel((string)$runScraping['job']['status'])) ?>
@@ -18585,6 +18711,10 @@ function aiResearchPrimarySourceKey(array $plan): string
 
 function aiResearchSeedFromRun(array $run): array
 {
+    // Kontext webu z predchoziho pokusu jde se seedem dal, aby opakovany plan
+    // nemusel znovu prochazet web a vesel se do casoveho budgetu requestu.
+    $plan = json_decode((string)($run['plan_json'] ?? ''), true);
+    $plan = is_array($plan) ? $plan : [];
     return [
         'id' => (int)($run['seed_recipient_id'] ?? 0),
         'email' => (string)($run['seed_email'] ?? ''),
@@ -18593,6 +18723,8 @@ function aiResearchSeedFromRun(array $run): array
         'address' => (string)($run['seed_address'] ?? ''),
         'source_label' => (string)($run['seed_source_label'] ?? ''),
         'source_url' => (string)($run['seed_source_url'] ?? ''),
+        'website_context_cache' => (string)($plan['website_context_cache'] ?? ''),
+        'website_has_english' => !empty($plan['website_has_english']),
     ];
 }
 
