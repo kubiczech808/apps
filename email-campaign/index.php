@@ -140,7 +140,7 @@ function aiResearchDailyGeminiRequestBudget(array $config): int
 function aiResearchGeminiRequestsPerMinuteBudget(array $config): int
 {
     $configured = (int)($config['ai']['gemini_research_rpm_budget'] ?? 0);
-    // gemini-3-flash ma 10 RPM, drzime se pod tim.
+    // gemini-3-flash-preview ma 10 RPM, drzime se pod tim.
     return max(1, min(9, $configured > 0 ? $configured : 8));
 }
 
@@ -312,6 +312,17 @@ function aiResearchGeminiCall(array $config, string $step, array $payload, int $
             ], $payload, $timeout);
         } catch (Throwable $e) {
             $lastError = $e;
+            // Google modely prejmenovava. Kdyz ID neexistuje, zkusi se dalsi v poradi,
+            // aby research neuvizl na neplatnem nazvu az do rucni zmeny konfigurace.
+            $nextModel = geminiModelAfterNotFound($e->getMessage(), (string)($payload['model'] ?? ''));
+            if ($nextModel !== '' && $maxAttempts < 3 + count(geminiModelCandidates())) {
+                error_log('AI ' . $step . ': model ' . (string)($payload['model'] ?? '') . ' neexistuje, zkousim ' . $nextModel);
+                $payload['model'] = $nextModel;
+                // Dalsi kroky stejneho behu uz maji zacit fungujicim modelem.
+                geminiRuntimeModel($nextModel);
+                $maxAttempts++;
+                continue;
+            }
             if ($attempt >= $maxAttempts || !aiResearchErrorIsRetryable($e->getMessage())) {
                 break;
             }
@@ -367,7 +378,7 @@ function aiResearchRecordGeminiUsage(PDO $pdo, int $requests): void
 
 function aiResearchDailyRequestBudgetOrDefault(array $config): int
 {
-    // gemini-3-flash ma 1500 RPD. Rezerva zbyva na onboarding a kampanova volani,
+    // gemini-3-flash-preview ma 1500 RPD. Rezerva zbyva na onboarding a kampanova volani,
     // ktera sdileji stejny klic a do tohoto pocitadla se nezapisuji.
     $configured = aiResearchDailyGeminiRequestBudget($config);
     return $configured > 0 ? $configured : 1000;
@@ -375,7 +386,7 @@ function aiResearchDailyRequestBudgetOrDefault(array $config): int
 
 function aiResearchTokensPerMinuteBudget(array $config): int
 {
-    // gemini-3-flash ma 250 000 TPM a vyuziva se cely; pojistkou je pauza pred prekrocenim.
+    // gemini-3-flash-preview ma 250 000 TPM a vyuziva se cely; pojistkou je pauza pred prekrocenim.
     $configured = (int)($config['ai']['gemini_research_tpm_budget'] ?? 0);
     return max(10000, $configured > 0 ? $configured : 250000);
 }
@@ -1975,11 +1986,58 @@ function aiResearchApplyStrategicFields(array $plan, array $json): array
  * Nazvy modelu, ktere Google skutecne nabizi. Zastaraly nebo neexistujici nazev ze
  * secretu se prepise, aby jedno stare nastaveni nezpusobilo chybu u kazdeho pozadavku.
  */
+/**
+ * Poradi modelu, ktere zkousime. Prvni je ten, ktery ma podle Google dokumentace
+ * platne ID; dalsi jsou zaloha, kdyz Google model precislu nebo prejmenuje.
+ * https://ai.google.dev/gemini-api/docs/models/gemini-3-flash-preview
+ */
+function geminiModelCandidates(): array
+{
+    return ['gemini-3-flash-preview', 'gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+}
+
+/**
+ * Model, ktery v tomto procesu prokazatelne funguje. Nastavi ho automaticky
+ * fallback po chybe "model not found", aby dalsi kroky uz nezkousely slepou ulicku.
+ */
+function geminiRuntimeModel(?string $set = null): string
+{
+    static $model = '';
+    if ($set !== null && trim($set) !== '') {
+        $model = trim($set);
+    }
+    return $model;
+}
+
+/**
+ * Vrati dalsi model, ktery ma smysl zkusit, kdyz Google odmitl nazev jako neexistujici.
+ * Prazdny string znamena, ze chyba neni o nazvu modelu nebo uz nezbyva co zkusit.
+ */
+function geminiModelAfterNotFound(string $error, string $currentModel): string
+{
+    if (!preg_match('/model\b[^.]*\bnot found|is not found|not supported|unsupported model|verify the model name/i', $error)) {
+        return '';
+    }
+    // Google casto sam poradi spravny nazev: "Did you mean 'gemini-3.6-flash'?"
+    if (preg_match('/did you mean\s*[\'"]?([a-z0-9.\-]*gemini[a-z0-9.\-]*)[\'"]?/i', $error, $match)) {
+        $suggested = strtolower(trim($match[1], " '\".?"));
+        if ($suggested !== '' && $suggested !== strtolower(trim($currentModel))) {
+            return $suggested;
+        }
+    }
+    $candidates = geminiModelCandidates();
+    $position = array_search(trim($currentModel), $candidates, true);
+    $next = $position === false ? 0 : (int)$position + 1;
+    return $candidates[$next] ?? '';
+}
+
 function normalizeGeminiModelName(string $model): string
 {
     $model = trim($model);
-    $known = ['gemini-3-flash', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
-    return in_array($model, $known, true) ? $model : 'gemini-3-flash';
+    $candidates = geminiModelCandidates();
+    // Neznamy nazev (vcetne starych jako gemini-3-flash nebo gemini-3.5-flash)
+    // vede na aktualni ID; jinak by beh spadl na "model not found".
+    return in_array($model, $candidates, true) ? $model : $candidates[0];
 }
 
 function aiModelName(array $config, string $provider = 'gemini'): string
@@ -1987,11 +2045,15 @@ function aiModelName(array $config, string $provider = 'gemini'): string
     if ($provider === 'openai') {
         return trim((string)($config['ai']['openai_model'] ?? 'gpt-4.1')) ?: 'gpt-4.1';
     }
-    return normalizeGeminiModelName((string)($config['ai']['gemini_model'] ?? ''));
+    return geminiRuntimeModel() ?: normalizeGeminiModelName((string)($config['ai']['gemini_model'] ?? ''));
 }
 
 function aiResearchModelName(array $config): string
 {
+    $runtime = geminiRuntimeModel();
+    if ($runtime !== '') {
+        return $runtime;
+    }
     $configured = trim((string)($config['ai']['gemini_research_model'] ?? ''));
     return $configured !== '' ? normalizeGeminiModelName($configured) : aiModelName($config, 'gemini');
 }
@@ -5803,7 +5865,7 @@ function repairAiResearchAuditModelNames(PDO $pdo): void
     $rows = $pdo->query('
         SELECT id, plan_json
         FROM ai_research_runs
-        WHERE plan_json LIKE "%gemini-3.5%"
+        WHERE (plan_json LIKE "%gemini-3.5%" OR plan_json LIKE "%\"gemini-3-flash\"%")
         ORDER BY id DESC
         LIMIT 200
     ')->fetchAll(PDO::FETCH_ASSOC);
