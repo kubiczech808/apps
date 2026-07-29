@@ -936,29 +936,47 @@ class MediumPlaywrightPublisher:
             'a[href*="responses"]',
         ]
         for selector in selectors:
-            loc = page.locator(selector).first
+            locators = page.locator(selector)
             try:
-                if await loc.count() and await loc.is_visible(timeout=2500):
+                count = min(await locators.count(), 12)
+                for index in range(count):
+                    loc = locators.nth(index)
+                    if not await loc.is_visible(timeout=500):
+                        continue
+                    await loc.scroll_into_view_if_needed(timeout=3000)
                     await loc.click(timeout=5000)
-                    await asyncio.sleep(2)
-                    if await self._find_visible_response_editor(page, timeout_ms=5000):
+                    await asyncio.sleep(3)
+                    if await self._find_visible_response_editor(page, timeout_ms=8000):
+                        log.info("Medium: opened response editor via %s[%d]", selector, index)
                         return True
             except Exception:
                 continue
 
         opened = await page.evaluate("""() => {
+            const visible = el => {
+                const r = el.getBoundingClientRect();
+                const s = getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+            };
             const els = Array.from(document.querySelectorAll('button,a,[role="button"]'));
-            const btn = els.find(el => {
-                const text = `${el.innerText || ''} ${el.getAttribute('aria-label') || ''}`.toLowerCase();
+            const candidates = els.filter(el => {
+                const text = `${el.innerText || ''} ${el.getAttribute('aria-label') || ''} ${el.href || ''}`.toLowerCase();
+                if (!visible(el)) return false;
+                if (text.includes('reply')) return false;
                 return text.includes('respond') || text.includes('response') || text.includes('comment');
             });
+            const btn = candidates.find(el => (el.getAttribute('aria-label') || '').toLowerCase().includes('responses'))
+                || candidates.find(el => /\\bresponses?\\b/i.test(el.innerText || ''))
+                || candidates.find(el => /\\brespond\\b/i.test(`${el.innerText || ''} ${el.getAttribute('aria-label') || ''}`))
+                || candidates[0];
             if (!btn) return false;
+            btn.scrollIntoView({block: 'center', inline: 'center'});
             btn.click();
             return true;
         }""")
         if opened:
-            await asyncio.sleep(2)
-        return bool(opened and await self._find_visible_response_editor(page, timeout_ms=5000))
+            await asyncio.sleep(3)
+        return bool(opened and await self._find_visible_response_editor(page, timeout_ms=8000))
 
     async def _find_visible_response_editor(self, page, timeout_ms: int = 5000):
         selectors = [
