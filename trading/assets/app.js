@@ -27,6 +27,7 @@ const state = {
   },
   evaluationStatus: "EVALUATED",
   evaluationProbabilityFilter: 0,
+  evaluationDaysFilter: null,
   eligibilityThreshold: null,
   eligibilityThresholdKey: "",
   riskAllocation: null,
@@ -63,6 +64,7 @@ const state = {
 
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
 const EVALUATION_PROBABILITY_FILTER_STORAGE_KEY = "tradingEvaluationProbabilityFilter";
+const EVALUATION_DAYS_FILTER_STORAGE_KEY = "tradingEvaluationDaysFilter";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
@@ -114,6 +116,8 @@ const els = {
   systemStatus: document.querySelector("[data-system-status]"),
   evaluationProbabilityFilter: document.querySelector("[data-evaluation-probability-filter]"),
   evaluationProbabilityFilterLabel: document.querySelector("[data-evaluation-probability-filter-label]"),
+  evaluationDaysFilter: document.querySelector("[data-evaluation-days-filter]"),
+  evaluationDaysFilterLabel: document.querySelector("[data-evaluation-days-filter-label]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   riskAllocation: document.querySelector("[data-risk-allocation]"),
@@ -1955,6 +1959,41 @@ function syncCapitalStatus({ availableCapital = null, baseCapital = null, stake 
   }
   els.capitalStatus.textContent = `K dispozici pro ${cadenceLabel}: ${money(available)}; dalsi obchodni davka ${money(appliedStake)}${baseText}; po dalsim obchodu zustane cca ${money(idleAfterNext)}.`;
   els.capitalStatus.className = idleAfterNext > appliedStake ? "capital-status warning" : "capital-status positive";
+}
+
+function normalizeEvaluationDaysFilter(value) {
+  if (value == null || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? Math.min(numeric, 3650) : null;
+}
+
+function storedEvaluationDaysFilter() {
+  try {
+    return normalizeEvaluationDaysFilter(localStorage.getItem(EVALUATION_DAYS_FILTER_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function saveEvaluationDaysFilter(value) {
+  try {
+    const normalized = normalizeEvaluationDaysFilter(value);
+    if (normalized == null) localStorage.removeItem(EVALUATION_DAYS_FILTER_STORAGE_KEY);
+    else localStorage.setItem(EVALUATION_DAYS_FILTER_STORAGE_KEY, String(normalized));
+  } catch {
+    // Display-only preference; ignore storage failures.
+  }
+}
+
+function currentEvaluationDaysFilter() {
+  return normalizeEvaluationDaysFilter(state.evaluationDaysFilter);
+}
+
+function syncEvaluationDaysFilterControl() {
+  const value = currentEvaluationDaysFilter();
+  state.evaluationDaysFilter = value;
+  if (els.evaluationDaysFilter) els.evaluationDaysFilter.value = value == null ? "" : String(value);
+  if (els.evaluationDaysFilterLabel) els.evaluationDaysFilterLabel.textContent = value == null ? "All" : `<= ${value} d`;
 }
 
 function syncRiskAllocationControl(availableCapital = null, sourceLabel = "available capital", options = {}) {
@@ -4099,10 +4138,13 @@ function filteredEvaluations(evaluations) {
     ? evaluations
     : evaluations.filter((item) => portfolioEvaluationStatus(item) === state.evaluationStatus);
   const minProbability = currentEvaluationProbabilityFilter();
-  if (minProbability <= 0) return statusFiltered;
+  const maxDays = currentEvaluationDaysFilter();
   return statusFiltered.filter((item) => {
     const aiProbability = Number(item.aiProbability);
-    return Number.isFinite(aiProbability) && aiProbability >= minProbability;
+    if (minProbability > 0 && (!Number.isFinite(aiProbability) || aiProbability < minProbability)) return false;
+    const days = evaluationDaysLeft(item);
+    if (maxDays != null && (!Number.isFinite(days) || days > maxDays)) return false;
+    return true;
   });
 }
 
@@ -4174,11 +4216,16 @@ function renderBotEvaluations() {
   const filtered = filteredEvaluations(evaluations);
   const filteredCount = filtered.length;
   const probabilityFilter = currentEvaluationProbabilityFilter();
+  const daysFilter = currentEvaluationDaysFilter();
 
   if (els.evaluationFilterCount) {
     const countText = formatInteger(filteredCount) || String(filteredCount);
-    els.evaluationFilterCount.textContent = probabilityFilter > 0
-      ? `${countText} matching AI >= ${(probabilityFilter * 100).toFixed(0)}%`
+    const filters = [
+      probabilityFilter > 0 ? `AI >= ${(probabilityFilter * 100).toFixed(0)}%` : "",
+      daysFilter != null ? `days <= ${daysFilter}` : "",
+    ].filter(Boolean);
+    els.evaluationFilterCount.textContent = filters.length
+      ? `${countText} matching ${filters.join(" / ")}`
       : `${countText} matching current filters`;
   }
 
@@ -5047,6 +5094,14 @@ els.evaluationProbabilityFilter?.addEventListener("input", () => {
   renderBotEvaluations();
 });
 
+els.evaluationDaysFilter?.addEventListener("input", () => {
+  const value = normalizeEvaluationDaysFilter(els.evaluationDaysFilter.value);
+  state.evaluationDaysFilter = value;
+  saveEvaluationDaysFilter(value);
+  syncEvaluationDaysFilterControl();
+  renderBotEvaluations();
+});
+
 els.eligibilityThreshold?.addEventListener("input", () => {
   if (parameterDraftInputIsEmpty(els.eligibilityThreshold)) {
     if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = "-";
@@ -5306,7 +5361,9 @@ els.closedTrades?.addEventListener("click", handleTradeSort);
 state.mode = storedMode();
 state.liveExecutionArmed = storedLiveExecutionArmed();
 state.evaluationProbabilityFilter = storedEvaluationProbabilityFilter();
+state.evaluationDaysFilter = storedEvaluationDaysFilter();
 syncEvaluationProbabilityFilterControl();
+syncEvaluationDaysFilterControl();
 applyInitialRoute();
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);

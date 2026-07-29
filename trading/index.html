@@ -209,6 +209,11 @@
                     <input type="number" min="0" max="99" step="1" value="0" data-evaluation-probability-filter>
                     <strong data-evaluation-probability-filter-label>&gt;= 0.0%</strong>
                   </label>
+                  <label class="threshold-control evaluation-days-control" title="Display-only maximum days left filter. Portfolio rules are not changed.">
+                    <span>Days left max</span>
+                    <input type="number" min="0" max="3650" step="0.5" placeholder="All" data-evaluation-days-filter>
+                    <strong data-evaluation-days-filter-label>All</strong>
+                  </label>
                   <div class="segmented" data-evaluation-filter>
                     <button class="segment-button active" type="button" data-evaluation-status="EVALUATED">Evaluated</button>
                     <button class="segment-button" type="button" data-evaluation-status="RESOLVED">Resolved</button>
@@ -335,6 +340,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260729-stake-capped-by-cash"></script>
+  <script src="assets/app.js?v=20260729-opportunity-days-filter"></script>
 </body>
 </html>
