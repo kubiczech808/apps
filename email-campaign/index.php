@@ -3828,58 +3828,59 @@ function aiResearchPlan(array $config, array $seed): array
 function aiResearchFallbackTerms(string $business, string $website, string $address, string $country = ''): array
 {
     $haystack = aiResearchFoldText($business . ' ' . $website . ' ' . $address);
-    $city = aiResearchCityFromAddress($address);
-    $suffix = $city !== '' ? ' ' . $city : '';
+    // Keyword je katalogova kategorie bez lokality; misto se predava zvlast v
+    // target_location. Drive se sem lepilo mesto z adresy, takze i beh bez
+    // vyhodnoceneho zameru mel keyword typu "restaurace Malesice".
     $country = strtoupper($country);
     if (preg_match('/osint|due diligence|dohledav|majet|pravni|advokat|spor|spory|pohledav|insolven|podvod|aml|kyc|kyt|blockchain|forenz|reputac|vysetrov|intelligence|krypto/i', $haystack)) {
         return ['vymahani pohledavek', 'insolvencni spravce', 'advokatni kancelar', 'advokatni kancelar insolvence', 'advokat obchodni spory'];
     }
     if (preg_match('/textil|odev|odevy|uniform|pracovn|reklamn|golf|hotel|lekar|lazn/i', $haystack)) {
-        return ['hotel' . $suffix, 'golfovy klub' . $suffix, 'ordinace' . $suffix, 'lazne' . $suffix, 'stavebni firma' . $suffix, 'wellness centrum' . $suffix];
+        return ['hotel', 'golfovy klub', 'ordinace', 'lazne', 'stavebni firma', 'wellness centrum'];
     }
     if (preg_match('/vybaveni pro firmy|prumyslov|kovovy nabyt|regal|regaly|skrin|skrine|manipulac|transport|paletov|prepravk|kontejner|bezpecnost prace|sklad|dilna|dilensky|esd/i', $haystack)) {
-        return ['vyrobni podnik' . $suffix, 'sklad' . $suffix, 'stavebni firma' . $suffix, 'autoservis' . $suffix, 'logisticka firma' . $suffix, 'velkoobchod' . $suffix];
+        return ['vyrobni podnik', 'sklad', 'stavebni firma', 'autoservis', 'logisticka firma', 'velkoobchod'];
     }
     if ($country === 'AT' || $country === 'DE') {
         if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
-            return ['IT Firma' . $suffix, 'Steuerberater' . $suffix, 'Rechtsanwalt' . $suffix, 'Callcenter' . $suffix, 'Coworking' . $suffix, 'Hotel' . $suffix, 'Bueroservice' . $suffix];
+            return ['IT Firma', 'Steuerberater', 'Rechtsanwalt', 'Callcenter', 'Coworking', 'Hotel', 'Bueroservice'];
         }
         if (preg_match('/uct|dan|account|bookkeep|steuer|buchhalt/i', $haystack)) {
-            return ['Handwerker' . $suffix, 'Baufirma' . $suffix, 'Online Shop' . $suffix, 'Restaurant' . $suffix, 'Arztpraxis' . $suffix];
+            return ['Handwerker', 'Baufirma', 'Online Shop', 'Restaurant', 'Arztpraxis'];
         }
         if (preg_match('/gastro|restaur|hotel|kavarn|bar/i', $haystack)) {
-            return ['Restaurant' . $suffix, 'Hotel' . $suffix, 'Cafe' . $suffix, 'Catering' . $suffix];
+            return ['Restaurant', 'Hotel', 'Cafe', 'Catering'];
         }
         if (preg_match('/software|it|web|marketing|reklam/i', $haystack)) {
-            return ['Hersteller' . $suffix, 'Grosshandel' . $suffix, 'Immobilienmakler' . $suffix, 'Autowerkstatt' . $suffix, 'Online Shop' . $suffix];
+            return ['Hersteller', 'Grosshandel', 'Immobilienmakler', 'Autowerkstatt', 'Online Shop'];
         }
-        return ['Baufirma' . $suffix, 'Hotel' . $suffix, 'Restaurant' . $suffix, 'Autowerkstatt' . $suffix, 'Grosshandel' . $suffix];
+        return ['Baufirma', 'Hotel', 'Restaurant', 'Autowerkstatt', 'Grosshandel'];
     }
     if ($country === 'SK') {
         if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
-            return ['IT firma' . $suffix, 'uctovna kancelaria' . $suffix, 'advokatska kancelaria' . $suffix, 'call centrum' . $suffix, 'coworking' . $suffix];
+            return ['IT firma', 'uctovna kancelaria', 'advokatska kancelaria', 'call centrum', 'coworking'];
         }
-        return ['vyrobna firma' . $suffix, 'velkoobchod' . $suffix, 'stavebna firma' . $suffix, 'autoservis' . $suffix, 'hotel' . $suffix];
+        return ['vyrobna firma', 'velkoobchod', 'stavebna firma', 'autoservis', 'hotel'];
     }
     if ($country === 'PL') {
         if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
-            return ['firma IT' . $suffix, 'biuro rachunkowe' . $suffix, 'kancelaria prawna' . $suffix, 'call center' . $suffix, 'coworking' . $suffix];
+            return ['firma IT', 'biuro rachunkowe', 'kancelaria prawna', 'call center', 'coworking'];
         }
-        return ['firma produkcyjna' . $suffix, 'hurtownia' . $suffix, 'firma budowlana' . $suffix, 'warsztat samochodowy' . $suffix, 'hotel' . $suffix];
+        return ['firma produkcyjna', 'hurtownia', 'firma budowlana', 'warsztat samochodowy', 'hotel'];
     }
     if (preg_match('/mas|wellness|fyzi|rehab/i', $haystack)) {
-        return ['IT firma' . $suffix, 'ucetni kancelar' . $suffix, 'advokatni kancelar' . $suffix, 'call centrum' . $suffix, 'coworking' . $suffix];
+        return ['IT firma', 'ucetni kancelar', 'advokatni kancelar', 'call centrum', 'coworking'];
     }
     if (preg_match('/uct|dan|account|bookkeep/i', $haystack)) {
-        return ['remeslnici' . $suffix, 'stavebni firma' . $suffix, 'e-shop' . $suffix, 'restaurace' . $suffix, 'ordinace' . $suffix];
+        return ['remeslnici', 'stavebni firma', 'e-shop', 'restaurace', 'ordinace'];
     }
     if (preg_match('/gastro|restaur|hotel|kavarn|bar/i', $haystack)) {
-        return ['restaurace' . $suffix, 'hotel' . $suffix, 'kavarna' . $suffix, 'catering' . $suffix];
+        return ['restaurace', 'hotel', 'kavarna', 'catering'];
     }
     if (preg_match('/software|it|web|marketing|reklam/i', $haystack)) {
-        return ['realitni kancelar' . $suffix, 'autoservis' . $suffix, 'hotel' . $suffix, 'zubni ordinace' . $suffix, 'e-shop' . $suffix];
+        return ['realitni kancelar', 'autoservis', 'hotel', 'zubni ordinace', 'e-shop'];
     }
-    return ['restaurace' . $suffix, 'hotel' . $suffix, 'autoservis' . $suffix, 'zubni ordinace' . $suffix, 'kavarna' . $suffix, 'fitness centrum' . $suffix];
+    return ['restaurace', 'hotel', 'autoservis', 'zubni ordinace', 'kavarna', 'fitness centrum'];
 }
 
 function aiResearchAssertPlanQuality(array $plan): void
@@ -6295,30 +6296,40 @@ function aiResearchWorkflowChecklist(PDO $pdo, array $run, array $plan): array
     $markets = array_values(array_filter(array_map('strval', (array)($plan['target_markets'] ?? []))));
     $keyword = aiResearchPrimaryKeyword($plan);
     $accepted = (int)($run['accepted_count'] ?? 0);
+    // Keyword, lokalita ani trhy nejsou "vyhodnocene", dokud chybi pochopeni byznysu.
+    // Bez nej jsou to jen odhady z nazvu a adresy seedu, takze se nesmi odskrtnout.
+    $understood = trim((string)($plan['business_understanding'] ?? '')) !== '';
+    $onlyGuess = ' – jen odhad, dokud není vyhodnocen byznys';
 
     return [
         [
             'key' => 'plan',
             'label' => 'Pochopení byznysu z webu seedu',
             'required' => true,
-            'done' => trim((string)($plan['business_understanding'] ?? '')) !== '',
-            'detail' => trim((string)($plan['website_url_analyzed'] ?? '')) !== ''
-                ? 'analyzován ' . (string)$plan['website_url_analyzed']
-                : 'web se nepodařilo přečíst',
+            'done' => $understood,
+            'detail' => $understood
+                ? 'analyzován ' . (string)($plan['website_url_analyzed'] ?? '')
+                : (trim((string)($plan['website_url_analyzed'] ?? $run['seed_website'] ?? '')) !== ''
+                    ? 'web se nepodařilo vyhodnotit'
+                    : 'web se nepodařilo přečíst'),
         ],
         [
             'key' => 'targeting',
             'label' => 'Vybraná cílovka a klíčové slovo',
             'required' => true,
-            'done' => $keyword !== '' && trim((string)($plan['primary_segment'] ?? $plan['audience_label'] ?? '')) !== '',
-            'detail' => $keyword !== '' ? 'keyword ' . $keyword : 'keyword chybí',
+            'done' => $understood && $keyword !== '' && trim((string)($plan['primary_segment'] ?? $plan['audience_label'] ?? '')) !== '',
+            'detail' => $keyword === ''
+                ? 'keyword chybí'
+                : 'keyword ' . $keyword . ($understood ? '' : $onlyGuess),
         ],
         [
             'key' => 'markets',
             'label' => 'Cílové trhy a katalogy pro scraping',
             'required' => true,
-            'done' => $markets !== [] && aiResearchEstimateSourcesForPlan($plan) !== [],
-            'detail' => $markets !== [] ? implode(', ', $markets) : 'trhy neurčeny',
+            'done' => $understood && $markets !== [] && aiResearchEstimateSourcesForPlan($plan) !== [],
+            'detail' => $markets === []
+                ? 'trhy neurčeny'
+                : implode(', ', $markets) . ($understood ? '' : $onlyGuess),
         ],
         [
             'key' => 'estimate',
@@ -17450,8 +17461,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><?= h((string)$run['seed_email']) ?></td>
                 <td><?= statusBadge(aiResearchRunStatusLabel((string)$run['status'])) ?></td>
                 <td><?= h((string)($run['search_source_label'] ?? '-')) ?></td>
-                <td><?= h((string)($run['scraping_keyword'] ?? '')) ?></td>
-                <td><?= h(aiResearchTargetAreaLabel($runPlan)) ?></td>
+                <?php $runUnderstood = trim((string)($runPlan['business_understanding'] ?? '')) !== ''; ?>
+                <td><?= h((string)($run['scraping_keyword'] ?? '')) ?><?php if (!$runUnderstood && trim((string)($run['scraping_keyword'] ?? '')) !== ''): ?><br><small class="muted" title="Byznys seedu ještě není vyhodnocený, keyword je jen odhad z názvu a adresy">odhad</small><?php endif; ?></td>
+                <td><?= h(aiResearchTargetAreaLabel($runPlan)) ?><?php if (!$runUnderstood): ?><br><small class="muted" title="Byznys seedu ještě není vyhodnocený, lokalita je jen odhad">odhad</small><?php endif; ?></td>
                 <td>
                     <?php if ($runScraping && $runScraping['job']): ?>
                         <?= statusBadge(scrapingStatusLabel((string)$runScraping['job']['status'])) ?>
