@@ -4360,6 +4360,7 @@ function tradeBatchDetail(batch) {
         rotationReview.best?.position ? [
           `Best position to sell: ${rotationReview.best.position.outcome || "-"} - ${rotationReview.best.position.question || "-"}`,
           `   Estimated exit: ${money(Number(rotationReview.best.position.estimatedExitValueUsdc || 0))} / current P/L ${signedMoney(Number(rotationReview.best.position.unrealizedPnlUsdc || 0), 4)}`,
+          rotationReview.best.position.rotationPriorityValue != null ? `   Rotation priority (${rotationReview.best.position.rotationPriorityMetric || "EV p.a."}): ${rotationReview.best.position.rotationPriorityMetric === "R/R" ? `${Number(rotationReview.best.position.rotationPriorityValue).toFixed(2)}:1` : signedPercent(Number(rotationReview.best.position.rotationPriorityValue))}` : "",
           rotationReview.best.position.url ? `   Polymarket: ${rotationReview.best.position.url}` : "",
         ].filter(Boolean).join("\n") : "",
         rotationReview.best?.candidate ? [
@@ -4375,6 +4376,7 @@ function tradeBatchDetail(batch) {
             const candidate = item.candidate || null;
             return [
               `${index + 1}. ${position.outcome || item.outcome || "-"} - ${position.question || item.question || "-"}`,
+              position.rotationPriorityValue != null ? `   Rotation priority (${position.rotationPriorityMetric || "EV p.a."}): ${position.rotationPriorityMetric === "R/R" ? `${Number(position.rotationPriorityValue).toFixed(2)}:1` : signedPercent(Number(position.rotationPriorityValue))}` : "",
               `   Action: ${item.action || "-"}`,
               `   Reason: ${item.reason || "-"}`,
               item.cashAfterExitUsdc != null ? `   Cash after exit: ${money(Number(item.cashAfterExitUsdc))}` : "",

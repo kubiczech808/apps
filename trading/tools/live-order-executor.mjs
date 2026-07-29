@@ -697,10 +697,33 @@ function positionHoldExpectedValue(position, evaluationByToken = new Map()) {
   return pnl != null ? pnl : 0;
 }
 
+function positionHoldAnnualizedReturn(position, evaluationByToken = new Map()) {
+  const source = evaluationByToken.get(String(position.tokenId || position.assetId || ""));
+  return number(source?.annualizedReturn, 0);
+}
+
+function positionHoldRiskReward(position, evaluationByToken = new Map()) {
+  const source = evaluationByToken.get(String(position.tokenId || position.assetId || ""));
+  const sourceRatio = number(source?.riskReward);
+  if (sourceRatio != null) return sourceRatio;
+  const gain = number(source?.netGainIfWinUsdc);
+  const cost = number(source?.totalCostUsdc ?? source?.stakeUsdc ?? position.totalCostUsdc ?? position.stakeUsdc);
+  return gain != null && cost != null && cost > 0 ? gain / cost : 0;
+}
+
+function rotationPriority(position, evaluationByToken = new Map()) {
+  if (SELECTION_ORDER === "highest_reward_risk_first") {
+    return { metric: "R/R", value: positionHoldRiskReward(position, evaluationByToken) };
+  }
+  return { metric: "EV p.a.", value: positionHoldAnnualizedReturn(position, evaluationByToken) };
+}
+
 function rotationPositionSummary(position, evaluationByToken = new Map(), extra = {}) {
   const exitValue = positionExitValue(position);
   const cost = positionCost(position);
   const holdEv = positionHoldExpectedValue(position, evaluationByToken);
+  const holdAnnualizedReturn = positionHoldAnnualizedReturn(position, evaluationByToken);
+  const priority = rotationPriority(position, evaluationByToken);
   return {
     question: position.question || position.market || "",
     outcome: position.outcome || position.side || "",
@@ -713,6 +736,9 @@ function rotationPositionSummary(position, evaluationByToken = new Map(), extra 
     estimatedExitValueUsdc: exitValue == null ? null : Number(exitValue.toFixed(5)),
     unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
     holdExpectedValueUsdc: Number(holdEv.toFixed(5)),
+    holdAnnualizedReturn: Number(holdAnnualizedReturn.toFixed(5)),
+    rotationPriorityMetric: priority.metric,
+    rotationPriorityValue: Number(priority.value.toFixed(5)),
     url: position.url || `https://polymarket.com/event/${position.eventSlug || position.slug || ""}`,
     ...extra,
   };
@@ -735,8 +761,15 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
       position,
       exitValue: positionExitValue(position),
       holdEv: positionHoldExpectedValue(position, evaluationByToken),
+      holdAnnualizedReturn: positionHoldAnnualizedReturn(position, evaluationByToken),
+      priority: rotationPriority(position, evaluationByToken),
     }))
-    .sort((a, b) => a.holdEv - b.holdEv)
+    // Review the weakest held position first according to this portfolio's own selection rule.
+    .sort((a, b) => {
+      if (a.priority.value !== b.priority.value) return a.priority.value - b.priority.value;
+      if (a.holdAnnualizedReturn !== b.holdAnnualizedReturn) return a.holdAnnualizedReturn - b.holdAnnualizedReturn;
+      return a.holdEv - b.holdEv;
+    })
     .slice(0, ROTATION_POSITION_SCAN_LIMIT);
   const candidates = candidatePoolForRotation(baseCandidates);
   const reviews = [];
@@ -1264,11 +1297,6 @@ function liveBatchCandidateSummary(item) {
     sizingNote: item?.sizingNote || null,
     url: `https://polymarket.com/event/${item?.eventSlug || source.eventSlug || item?.slug || source.slug || ""}`,
   };
-}
-
-function positionHoldAnnualizedReturn(position, evaluationByToken = new Map()) {
-  const source = evaluationByToken.get(String(position.tokenId || position.assetId || ""));
-  return number(source?.annualizedReturn, 0);
 }
 
 // The paper evaluation is the durable AI record.  A live execution check only
