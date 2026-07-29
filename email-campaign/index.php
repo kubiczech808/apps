@@ -515,6 +515,7 @@ if (shouldRunStartupMaintenance()) {
         cleanupOrphanImportStorageFiles($pdo, 500);
         cleanupLegacySessionFiles(1000);
         releaseAiResearchRunsWithFixedWebsiteContext($pdo);
+        repairAiResearchAuditModelNames($pdo);
         markStaleAiResearchRuns($pdo);
     } catch (Throwable $e) {
         if ($isMysqlDatabase && databasePermissionDenied($e)) {
@@ -2025,6 +2026,10 @@ function aiResearchNormalizeModelAudit(mixed $audit): array
         $model = truncatePlainText(trim((string)($row['model'] ?? '')), 120);
         if ($step === '' || $model === '') {
             continue;
+        }
+        // Starsi behy nesou nazev modelu, ktery uz neexistuje; zobrazi se opraveny.
+        if (($provider === 'gemini' || $provider === '') && $model !== '') {
+            $model = normalizeGeminiModelName($model);
         }
         $out[] = [
             'step' => $step,
@@ -5664,6 +5669,51 @@ function markAiResearchRunFailed(PDO $pdo, int $runId, string $message): void
     }
     $stmt = $pdo->prepare('UPDATE ai_research_runs SET status="failed", message=?, updated_at=? WHERE id=? AND status="running"');
     $stmt->execute([truncatePlainText($message, 500), date('c'), $runId]);
+}
+
+/**
+ * Prepise v ulozenych planech nazvy modelu, ktere uz Google nenabizi. Behy ulozene pred
+ * opravou konfigurace jinak navzdy tvrdi, ze je vyhodnotil neexistujici model.
+ */
+function repairAiResearchAuditModelNames(PDO $pdo): void
+{
+    $rows = $pdo->query('
+        SELECT id, plan_json
+        FROM ai_research_runs
+        WHERE plan_json LIKE "%gemini-3.5%"
+        ORDER BY id DESC
+        LIMIT 200
+    ')->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) {
+        return;
+    }
+    $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=? WHERE id=?');
+    foreach ($rows as $row) {
+        $plan = json_decode((string)$row['plan_json'], true);
+        if (!is_array($plan) || !is_array($plan['ai_model_audit'] ?? null)) {
+            continue;
+        }
+        $changed = false;
+        foreach ($plan['ai_model_audit'] as $index => $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $model = trim((string)($entry['model'] ?? ''));
+            $provider = trim((string)($entry['provider'] ?? ''));
+            // Krok vyhodnoceny pravidly nema nazev modelu prepisovat na Gemini.
+            if ($model === '' || ($provider !== 'gemini' && $provider !== '')) {
+                continue;
+            }
+            $fixed = normalizeGeminiModelName($model);
+            if ($fixed !== $model) {
+                $plan['ai_model_audit'][$index]['model'] = $fixed;
+                $changed = true;
+            }
+        }
+        if ($changed) {
+            $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: (string)$row['plan_json'], (int)$row['id']]);
+        }
+    }
 }
 
 function markStaleAiResearchRuns(PDO $pdo): void
