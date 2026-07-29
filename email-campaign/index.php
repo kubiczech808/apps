@@ -5836,20 +5836,23 @@ function aiResearchStoreProvisionedContainer(PDO $pdo, int $runId, int $containe
  */
 function runCronAiResearchSeedReadiness(PDO $pdo): string
 {
+    // Zamerne se resi oba smery: uz odeslane stavy se nedotykame, ale predcasne "ready"
+    // se musi vratit na "pripravuje se", jinak by starsi zaznamy zustaly nespravne hotove.
     $rows = $pdo->query('
-        SELECT id, plan_json
+        SELECT id, plan_json, seed_outreach_status
         FROM ai_research_runs
-        WHERE seed_outreach_status="preparing"
+        WHERE seed_outreach_status IN ("preparing", "ready")
           AND COALESCE(accepted_count, 0) > 0
         ORDER BY id DESC
-        LIMIT 40
+        LIMIT 60
     ')->fetchAll(PDO::FETCH_ASSOC);
     if (!$rows) {
         return '';
     }
-    $ready = 0;
+    $promoted = 0;
+    $demoted = 0;
     $waiting = 0;
-    $update = $pdo->prepare('UPDATE ai_research_runs SET seed_outreach_status="ready", updated_at=? WHERE id=? AND seed_outreach_status="preparing"');
+    $setStatus = $pdo->prepare('UPDATE ai_research_runs SET seed_outreach_status=?, updated_at=? WHERE id=? AND seed_outreach_status IN ("preparing", "ready")');
     foreach ($rows as $row) {
         $plan = json_decode((string)$row['plan_json'], true);
         if (!is_array($plan)) {
@@ -5862,17 +5865,24 @@ function runCronAiResearchSeedReadiness(PDO $pdo): string
             && in_array((string)$job['status'], ['finished', 'cancelled', 'failed'], true);
         $batchFull = is_array($progress)
             && (int)$progress['contacts_total'] >= AI_RESEARCH_FIRST_BATCH_CONTACTS;
-        if ($hasEstimate && ($batchDone || $batchFull)) {
-            $update->execute([date('c'), (int)$row['id']]);
-            $ready++;
-        } else {
+        $prepared = $hasEstimate && ($batchDone || $batchFull);
+        $current = (string)$row['seed_outreach_status'];
+        if ($prepared && $current !== 'ready') {
+            $setStatus->execute(['ready', date('c'), (int)$row['id']]);
+            $promoted++;
+        } elseif (!$prepared && $current === 'ready') {
+            $setStatus->execute(['preparing', date('c'), (int)$row['id']]);
+            $demoted++;
+        } elseif (!$prepared) {
             $waiting++;
         }
     }
-    if ($ready === 0 && $waiting === 0) {
+    if ($promoted === 0 && $demoted === 0 && $waiting === 0) {
         return '';
     }
-    return 'AI research priprava osloveni: pripraveno ' . $ready . ', jeste se dokoncuje ' . $waiting . '.';
+    return 'AI research priprava osloveni: pripraveno ' . $promoted
+        . ', vraceno k dokonceni ' . $demoted
+        . ', jeste se dokoncuje ' . $waiting . '.';
 }
 
 function runCronAiResearchUnfinished(PDO $pdo, array $config): string
@@ -16605,7 +16615,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 </form>
             </div>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>Vzorek</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>K oslovení</th><th>Vzorek</th></tr></thead><tbody>
         <?php if ($researchStarting): ?>
             <tr class="research-starting-row">
                 <td>-</td><td>-</td><td>-</td><td>-</td>
@@ -16613,11 +16623,11 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><strong>hledá se seed…</strong></td>
                 <td>-</td>
                 <td><?= statusBadge('bezi...') ?></td>
-                <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+                <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
             </tr>
         <?php endif; ?>
         <?php if (!$aiResearchRuns && !$researchStarting): ?>
-            <tr><td colspan="14">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="15">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
@@ -16722,10 +16732,18 @@ function renderApp(PDO $pdo, ?array $flash): void
                     <?php endif; ?>
                 </td>
                 <td><?= $runScraping ? h((string)$runScraping['contacts_total']) : '-' ?></td>
+                <td>
+                    <?php $runEstimate = is_array($runPlan['contact_estimate'] ?? null) ? (array)$runPlan['contact_estimate'] : []; ?>
+                    <?php if ($runEstimate): ?>
+                        <?= h((string)(int)($runEstimate['reachable_contacts'] ?? 0)) ?><?= !empty($runEstimate['listing_capped']) ? '+' : '' ?>
+                    <?php else: ?>
+                        -
+                    <?php endif; ?>
+                </td>
                 <td><?= h((string)$run['accepted_count']) ?>/<?= h((string)$run['found_count']) ?></td>
             </tr>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="14">
+                <td colspan="15">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
@@ -17847,7 +17865,7 @@ function aiResearchSeedOutreachStatusLabel(string $status): string
         'done' => 'done',
         'unsubscribed' => 'unsubscribed',
         'skipped_duplicate' => 'skipped_duplicate',
-    ][trim($status)] ?? 'ready';
+    ][trim($status)] ?? 'not_ready';
 }
 
 function aiResearchSeedOutreachUnsubscribeUrl(array $run): string
