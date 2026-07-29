@@ -3165,6 +3165,9 @@ async function revalidateStoredExecutionCandidate(item, learningProfile) {
   if (!tokenId) {
     return revalidationFailureEvaluation(item, "missing token id");
   }
+  if (REQUIRE_GEMINI && !hasGroundedPublicMemo(item)) {
+    return markAiAnalysisDeferred(item, "Execution revalidation uses the stored grounded AI memo and never consumes a new Gemini request.");
+  }
 
   try {
     const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`);
@@ -3178,12 +3181,18 @@ async function revalidateStoredExecutionCandidate(item, learningProfile) {
     if (!evaluation) {
       return revalidationFailureEvaluation(item, "no executable ask/orderbook depth at current market");
     }
-    return normalizeEvaluationRisk({
+    const refreshed = normalizeEvaluationRisk({
       ...evaluation,
       revalidationSource: "stored_execution_candidates",
       previousEvaluatedAt: item.evaluatedAt || item.lastSeenAt || null,
       firstEvaluatedAt: item.firstEvaluatedAt || item.evaluatedAt || null,
     });
+    return normalizeEvaluationRisk(refreshEvaluationAfterProbability(
+      refreshed,
+      Number(item.aiProbability),
+      item.analysisModel || item.aiAnalysis?.model || GEMINI_MODEL,
+      item.aiAnalysis || {},
+    ));
   } catch (error) {
     const message = cleanEvaluationErrorMessage(error?.message || String(error || "unknown error"));
     return ensureEvaluationErrorMetadata(revalidationFailureEvaluation(item, message, "ERROR"));
@@ -3195,10 +3204,9 @@ async function revalidateStoredExecutionShortlist(shortlist, learningProfile, st
   for (const item of shortlist) {
     raw.push(await revalidateStoredExecutionCandidate(item, learningProfile));
   }
-  const analyzable = raw.filter((item) => item.selectionStatus !== "REVALIDATION_FAILED");
-  const enriched = await enrichEvaluationsWithAi(analyzable, learningProfile, state);
-  const byId = new Map(enriched.map((item) => [item.id, item]));
-  return raw.map((item) => normalizeEvaluationRisk(byId.get(item.id) || item));
+  // Execution verifies price, liquidity and diversification only. AI research
+  // belongs to the background evaluation budget, never to execution cadence.
+  return raw.map(normalizeEvaluationRisk);
 }
 
 function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, cadenceBlocked = false, rotationReview = null, diversificationDiagnostics = null, prevalidationFilter = null }) {
