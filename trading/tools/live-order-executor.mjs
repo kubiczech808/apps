@@ -53,7 +53,8 @@ const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOL
 const OPEN_ORDER_BETTER_CANDIDATE_EV_USDC = envNumber("LIVE_OPEN_ORDER_BETTER_CANDIDATE_EV_USDC", 0.02);
 const ROTATION_CANDIDATE_SCAN_LIMIT = envNumber("LIVE_ROTATION_CANDIDATE_SCAN_LIMIT", 10);
 const ROTATION_POSITION_SCAN_LIMIT = envNumber("LIVE_ROTATION_POSITION_SCAN_LIMIT", 6);
-const ROTATION_MIN_EV_USDC_IMPROVEMENT = envNumber("LIVE_ROTATION_MIN_EV_USDC_IMPROVEMENT", 0.1);
+const ROTATION_MIN_EV_USDC_IMPROVEMENT = envNumber("LIVE_ROTATION_MIN_EV_USDC_IMPROVEMENT", 0.02);
+const ROTATION_MIN_ANNUALIZED_IMPROVEMENT = envNumber("LIVE_ROTATION_MIN_ANNUALIZED_IMPROVEMENT", 0.25);
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
 const TZ = "Europe/Prague";
 let previousExecutionState = null;
@@ -752,6 +753,7 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
 
   for (const item of positions) {
     const { position, exitValue, holdEv } = item;
+    const holdAnnualizedReturn = positionHoldAnnualizedReturn(position, evaluationByToken);
     const baseReview = rotationPositionSummary(position, evaluationByToken);
     if (exitValue == null || exitValue <= 0) {
       reviews.push({
@@ -773,6 +775,7 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
     }
 
     let bestForPosition = null;
+    const rejectedCandidates = [];
     for (const evaluation of candidates) {
       if (String(evaluation.tokenId || "") === String(position.tokenId || position.assetId || "")) continue;
       try {
@@ -783,18 +786,27 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           maxNotional,
           evaluationByToken,
         );
-        if (revalidated.status !== "ELIGIBLE") continue;
+        if (revalidated.status !== "ELIGIBLE") {
+          rejectedCandidates.push(liveBatchCandidateSummary(revalidated));
+          continue;
+        }
         const candidateEv = number(revalidated.expectedValueUsdc, 0);
+        const candidateAnnualizedReturn = number(revalidated.annualizedReturn, 0);
         const evDelta = candidateEv - holdEv;
+        const annualizedDelta = candidateAnnualizedReturn - holdAnnualizedReturn;
+        const rotationPreferred = evDelta >= ROTATION_MIN_EV_USDC_IMPROVEMENT
+          || (evDelta > 0 && annualizedDelta >= ROTATION_MIN_ANNUALIZED_IMPROVEMENT);
         const review = {
           position: baseReview,
           candidate: liveBatchCandidateSummary(revalidated),
-          action: evDelta >= ROTATION_MIN_EV_USDC_IMPROVEMENT ? "ROTATION_AVAILABLE" : "HOLD_CURRENT_POSITION",
-          reason: evDelta >= ROTATION_MIN_EV_USDC_IMPROVEMENT
-            ? `candidate improves expected value by ${evDelta.toFixed(4)} USDC after freeing this position`
-            : `candidate expected value improvement ${evDelta.toFixed(4)} USDC is below required ${ROTATION_MIN_EV_USDC_IMPROVEMENT.toFixed(4)} USDC`,
+          action: rotationPreferred ? "ROTATION_AVAILABLE" : "HOLD_CURRENT_POSITION",
+          reason: rotationPreferred
+            ? `candidate improves expected value by ${evDelta.toFixed(4)} USDC and annualized return by ${(annualizedDelta * 100).toFixed(1)} pts after freeing this position`
+            : `candidate improvement ${evDelta.toFixed(4)} USDC / ${(annualizedDelta * 100).toFixed(1)} annualized pts does not justify rotation`,
           cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
           evDeltaUsdc: Number(evDelta.toFixed(5)),
+          annualizedDelta: Number(annualizedDelta.toFixed(5)),
+          rejectedCandidates,
         };
         if (!bestForPosition || evDelta > bestForPosition.evDeltaUsdc) bestForPosition = review;
       } catch (error) {
@@ -817,6 +829,7 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
         action: "NO_BETTER_CANDIDATE_AFTER_EXIT",
         reason: "no currently eligible candidate would become executable after selling this position",
         cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
+        rejectedCandidates,
       });
     }
   }
@@ -1251,6 +1264,11 @@ function liveBatchCandidateSummary(item) {
     sizingNote: item?.sizingNote || null,
     url: `https://polymarket.com/event/${item?.eventSlug || source.eventSlug || item?.slug || source.slug || ""}`,
   };
+}
+
+function positionHoldAnnualizedReturn(position, evaluationByToken = new Map()) {
+  const source = evaluationByToken.get(String(position.tokenId || position.assetId || ""));
+  return number(source?.annualizedReturn, 0);
 }
 
 // The paper evaluation is the durable AI record.  A live execution check only
