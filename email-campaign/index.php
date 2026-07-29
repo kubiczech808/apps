@@ -557,6 +557,7 @@ if (isset($_GET['cron'])) {
     // Volani i odsud by trojnasobilo pocet pokusu a palilo Gemini kvotu nadarmo.
     // Odhad dosahu ale zadny Gemini pozadavek nestoji, takze se pocita tady.
     echo "\n" . runCronAiResearchContactEstimates($pdo, $config, 45);
+    echo "\n" . runCronAiResearchSeedReadiness($pdo);
     exit;
 }
 
@@ -4131,7 +4132,7 @@ function ensureAiResearchSeedOutreachTokens(PDO $pdo): void
     }
     $stmt = $pdo->prepare('UPDATE ai_research_runs SET seed_outreach_token=?, seed_outreach_status=CASE WHEN seed_outreach_status="" THEN ? ELSE seed_outreach_status END, updated_at=? WHERE id=?');
     foreach ($rows as $row) {
-        $status = (int)($row['accepted_count'] ?? 0) > 0 ? 'ready' : 'not_ready';
+        $status = (int)($row['accepted_count'] ?? 0) > 0 ? 'preparing' : 'not_ready';
         $stmt->execute([aiResearchSeedOutreachToken($pdo), $status, date('c'), (int)$row['id']]);
     }
 }
@@ -5555,7 +5556,7 @@ function finalizeAiResearchRun(PDO $pdo, array $config, int $runId, array $seed,
         $runId,
         $message,
         $now,
-        $accepted ? 'ready' : 'not_ready',
+        $accepted ? 'preparing' : 'not_ready',
         $runId,
     ]);
     if ($accepted) {
@@ -5655,7 +5656,7 @@ function saveAiResearchRun(PDO $pdo, array $config, array $seed, array $plan, ar
     }
     $ownerId = aiResearchOwnerUserId($pdo);
     $scrapingKeyword = aiResearchPrimaryKeyword($plan);
-    $seedOutreachStatus = $accepted ? 'ready' : 'not_ready';
+    $seedOutreachStatus = $accepted ? 'preparing' : 'not_ready';
     $status = !empty($plan['seed_unsuitable']) ? 'unsuitable' : ($accepted ? 'done' : ($evaluated ? 'no_match' : 'no_contacts'));
     $message = !empty($plan['seed_unsuitable'])
         ? 'Seed subjekt nebyl vyhodnocen jako pouzitelny pro B2B research: chybi citelny webovy kontext podnikani.'
@@ -5828,6 +5829,52 @@ function aiResearchStoreProvisionedContainer(PDO $pdo, int $runId, int $containe
  * Dokonci behy, kterym uz zbyva jen vzor osloveni. Vznikaji, kdyz hosting ukonci request
  * uprostred behu. Bez tohoto kroku by v prehledu zustavaly navzdy nedokoncene.
  */
+/**
+ * Seed subjekt je pripraveny k osloveni teprve tehdy, kdyz je nascrapovana prvni davka
+ * kontaktu k okamzitemu spusteni a je znamy celkovy pocet dosazitelnych kandidatu, ktery
+ * patri do zpravy pro seed. Do te doby zustava ve stavu "pripravuje se".
+ */
+function runCronAiResearchSeedReadiness(PDO $pdo): string
+{
+    $rows = $pdo->query('
+        SELECT id, plan_json
+        FROM ai_research_runs
+        WHERE seed_outreach_status="preparing"
+          AND COALESCE(accepted_count, 0) > 0
+        ORDER BY id DESC
+        LIMIT 40
+    ')->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) {
+        return '';
+    }
+    $ready = 0;
+    $waiting = 0;
+    $update = $pdo->prepare('UPDATE ai_research_runs SET seed_outreach_status="ready", updated_at=? WHERE id=? AND seed_outreach_status="preparing"');
+    foreach ($rows as $row) {
+        $plan = json_decode((string)$row['plan_json'], true);
+        if (!is_array($plan)) {
+            continue;
+        }
+        $hasEstimate = is_array($plan['contact_estimate'] ?? null);
+        $progress = aiResearchScrapingProgress($pdo, $plan);
+        $job = is_array($progress) ? ($progress['job'] ?? null) : null;
+        $batchDone = is_array($job)
+            && in_array((string)$job['status'], ['finished', 'cancelled', 'failed'], true);
+        $batchFull = is_array($progress)
+            && (int)$progress['contacts_total'] >= AI_RESEARCH_FIRST_BATCH_CONTACTS;
+        if ($hasEstimate && ($batchDone || $batchFull)) {
+            $update->execute([date('c'), (int)$row['id']]);
+            $ready++;
+        } else {
+            $waiting++;
+        }
+    }
+    if ($ready === 0 && $waiting === 0) {
+        return '';
+    }
+    return 'AI research priprava osloveni: pripraveno ' . $ready . ', jeste se dokoncuje ' . $waiting . '.';
+}
+
 function runCronAiResearchUnfinished(PDO $pdo, array $config): string
 {
     $stmt = $pdo->prepare('
@@ -17794,6 +17841,7 @@ function aiResearchSeedOutreachStatusLabel(string $status): string
 {
     return [
         'not_ready' => 'not_ready',
+        'preparing' => 'pripravuje se',
         'ready' => 'ready',
         'sent' => 'done',
         'done' => 'done',
@@ -17845,7 +17893,10 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
         }
     }
     $sampleText = $sampleNames ? implode(', ', $sampleNames) : '';
-    $countLabel = (string)$acceptedCount;
+    // Do zpravy pro seed patri celkovy pocet dosazitelnych kandidatu, ne jen vzorek,
+    // ktery jsme kvuli setreni zdroju nascrapovali pro prvni davku.
+    $reachableContacts = (int)($plan['contact_estimate']['reachable_contacts'] ?? 0);
+    $countLabel = (string)($reachableContacts > $acceptedCount ? $reachableContacts : $acceptedCount);
     $language = normalizeAiResearchMarketLanguage($language) ?: 'cs';
     $offerSummary = aiResearchOfferSummaryForOutreach($plan, $audience);
     $targetLabel = $audience !== '' ? $audience : 'vybrané B2B kontakty';
