@@ -1253,6 +1253,43 @@ function liveBatchCandidateSummary(item) {
   };
 }
 
+// The paper evaluation is the durable AI record.  A live execution check only
+// adds its current-market verdict so a stale shortlist cannot offer it again.
+function liveRevalidationUpdate(item, checkedAt) {
+  const source = item?.candidate || item || {};
+  const status = String(item?.status || "REJECTED").toUpperCase();
+  const numericFields = [
+    "marketPrice",
+    "currentPrice",
+    "annualizedReturn",
+    "expectedValueUsdc",
+    "daysToResolution",
+    "liquidity",
+    "netGainIfWinUsdc",
+    "totalCostUsdc",
+    "orderPrice",
+    "orderSize",
+    "orderNotionalUsdc",
+    "minOrderSize",
+    "spread",
+    "feeRate",
+  ];
+  const metrics = {};
+  for (const field of numericFields) {
+    const value = Number(item?.[field]);
+    if (Number.isFinite(value)) metrics[field === "currentPrice" ? "marketPrice" : field] = value;
+  }
+  return {
+    tokenId: String(item?.tokenId || source.tokenId || ""),
+    checkedAt,
+    status: status === "ELIGIBLE" ? "READY" : (status === "ERROR" ? "ERROR" : "REJECTED"),
+    rejectReasons: Array.isArray(item?.rejectReasons) ? item.rejectReasons.slice(0, 8) : [],
+    question: item?.question || source.question || "",
+    outcome: item?.outcome || source.outcome || "",
+    ...metrics,
+  };
+}
+
 function successfulCancelResponse(response, orderId) {
   if (!response) return false;
   if (response.error || response.success === false || response.status === "error") return false;
@@ -1542,6 +1579,9 @@ async function main() {
     },
     orderManagement,
     rotationReview,
+    revalidationUpdates: checked
+      .map((item) => liveRevalidationUpdate(item, new Date().toISOString()))
+      .filter((item) => item.tokenId),
     selected: best,
     batchLog: {
       id: `live-trade-batch-${new Date().toISOString()}`,

@@ -3263,6 +3263,7 @@ function evaluationUpdateMs(item) {
     Date.parse(item?.evaluatedAt || "") || 0,
     Date.parse(item?.lastSeenAt || "") || 0,
     Date.parse(item?.updatedAt || "") || 0,
+    Date.parse(item?.executionRevalidation?.checkedAt || "") || 0,
   );
 }
 
@@ -3309,6 +3310,11 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     ? displayedAnnualizedReturn
     : storedAnnualizedReturn;
   const aiPending = item.selectionStatus === "AI_PENDING" || item.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
+  const executionCheck = item.executionRevalidation && typeof item.executionRevalidation === "object"
+    ? item.executionRevalidation
+    : null;
+  const executionCheckIsCurrent = executionCheck
+    && (Date.parse(executionCheck.checkedAt || "") || 0) >= (Date.parse(item.evaluatedAt || "") || 0);
 
   if (displayStatus !== "EVALUATED") reasons.push(`status ${displayStatus}`);
   if (normalizedMode !== "live" && storedStatus !== "ELIGIBLE") {
@@ -3325,6 +3331,12 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     reasons.push(`EV p.a. ${signedPercent(annualizedReturn)} is non-profitable after fees`);
   }
   if (aiPending) reasons.push("grounded Gemini analysis is pending");
+  if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY") {
+    const detail = Array.isArray(executionCheck.rejectReasons) && executionCheck.rejectReasons[0]
+      ? `: ${executionCheck.rejectReasons[0]}`
+      : "";
+    reasons.push(`latest live revalidation ${String(executionCheck.status || "REJECTED").toLowerCase()}${detail}`);
+  }
   if (!Number.isFinite(days)) {
     reasons.push("missing resolution date");
   } else if (days > maxDays) {

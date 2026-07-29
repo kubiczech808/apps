@@ -167,6 +167,87 @@ jobs:
         working-directory: trading
         run: npm run live:account
 
+      - name: Persist current live revalidation into evaluation state
+        if: always()
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+          LIVE_EXECUTION_STATE_FILE: trading/data/live-execution-state.json
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import io
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          execution_path = Path(os.environ["LIVE_EXECUTION_STATE_FILE"])
+          if not execution_path.exists():
+              print("No live execution state was generated; no evaluation update to persist.")
+              raise SystemExit(0)
+
+          execution = json.loads(execution_path.read_text(encoding="utf-8"))
+          updates = [item for item in execution.get("revalidationUpdates", []) if item.get("tokenId")]
+          if not updates:
+              print("No candidates were revalidated; paper evaluation state is unchanged.")
+              raise SystemExit(0)
+
+          target = os.environ["TRADING_FTP_DIR"].strip("/")
+          def enter_dir(ftp, parts):
+              try:
+                  ftp.cwd("/")
+              except ftplib.all_errors:
+                  pass
+              for part in parts:
+                  if not part:
+                      continue
+                  ftp.cwd(part)
+
+          with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=30) as ftp:
+              ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
+              enter_dir(ftp, target.split("/"))
+              remote = io.BytesIO()
+              ftp.retrbinary("RETR paper-state.json", remote.write)
+              state = json.loads(remote.getvalue().decode("utf-8"))
+              evaluations = state.get("evaluations")
+              if not isinstance(evaluations, list):
+                  raise SystemExit("Remote paper-state.json has no evaluations array")
+
+              by_token = {str(item.get("tokenId")): item for item in evaluations if isinstance(item, dict) and item.get("tokenId")}
+              merged = 0
+              for update in updates:
+                  item = by_token.get(str(update["tokenId"]))
+                  if not item:
+                      continue
+                  existing = item.get("executionRevalidation") if isinstance(item.get("executionRevalidation"), dict) else {}
+                  if existing.get("checkedAt", "") > update.get("checkedAt", ""):
+                      continue
+                  item["executionRevalidation"] = update
+                  # Current book economics are useful in the audit log, but never overwrite the AI thesis.
+                  for field in ("marketPrice", "annualizedReturn", "expectedValueUsdc", "daysToResolution", "liquidity", "netGainIfWinUsdc", "totalCostUsdc", "orderPrice", "orderSize", "orderNotionalUsdc", "minOrderSize", "spread", "feeRate"):
+                      if field in update:
+                          item[field] = update[field]
+                  item["updatedAt"] = update["checkedAt"]
+                  merged += 1
+
+              if not merged:
+                  print("Revalidated tokens were no longer present in remote paper-state.json.")
+                  raise SystemExit(0)
+
+              payload = (json.dumps(state, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+              temporary = "paper-state.json.live-revalidation-uploading"
+              ftp.storbinary(f"STOR {temporary}", io.BytesIO(payload))
+              try:
+                  ftp.rename(temporary, "paper-state.json")
+              except ftplib.all_errors:
+                  ftp.delete("paper-state.json")
+                  ftp.rename(temporary, "paper-state.json")
+              print(f"Persisted {merged} live revalidation updates into paper-state.json at {datetime.now(timezone.utc).isoformat()}")
+          PY
+
       - name: Upload live state
         if: always()
         env:
