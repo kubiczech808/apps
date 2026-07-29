@@ -49,7 +49,8 @@ const AI_MIN_INTERVAL_SECONDS = envNumber("PAPER_AI_MIN_INTERVAL_SECONDS", 7);
 const AI_MAX_REQUESTS_PER_MINUTE = envNumber("PAPER_AI_MAX_REQUESTS_PER_MINUTE", 10);
 const AI_MAX_INPUT_TOKENS_PER_MINUTE = envNumber("PAPER_AI_MAX_INPUT_TOKENS_PER_MINUTE", 250000);
 const AI_MAX_REQUESTS_PER_HOUR = envNumber("PAPER_AI_MAX_REQUESTS_PER_HOUR", 600);
-const AI_MAX_REQUESTS_PER_DAY = envNumber("PAPER_AI_MAX_REQUESTS_PER_DAY", 1450);
+const AI_MAX_REQUESTS_PER_DAY = envNumber("PAPER_AI_MAX_REQUESTS_PER_DAY", 1500);
+const AI_EXECUTION_RESERVE_REQUESTS = envNumber("PAPER_AI_EXECUTION_RESERVE_REQUESTS", 100);
 const AI_USAGE_HISTORY_LIMIT = envNumber("PAPER_AI_USAGE_HISTORY_LIMIT", 500);
 const AI_POSTMORTEM_LIMIT = envNumber("PAPER_AI_POSTMORTEM_LIMIT", 8);
 const AI_STOP_ON_QUOTA_ERROR = String(process.env.PAPER_AI_STOP_ON_QUOTA_ERROR ?? "true").toLowerCase() !== "false";
@@ -2224,6 +2225,8 @@ function aiUsageSnapshot(state, now = Date.now()) {
     maxRequestsPerMinute: AI_MAX_REQUESTS_PER_MINUTE,
     maxInputTokensPerMinute: AI_MAX_INPUT_TOKENS_PER_MINUTE,
     maxRequestsPer24Hours: AI_MAX_REQUESTS_PER_DAY,
+    executionReserveRequests: AI_EXECUTION_RESERVE_REQUESTS,
+    backgroundRequestBudget: Math.max(0, AI_MAX_REQUESTS_PER_DAY - AI_EXECUTION_RESERVE_REQUESTS),
     minIntervalSeconds: AI_MIN_INTERVAL_SECONDS,
     estimatedDailyCapacity: Math.min(AI_MAX_REQUESTS_PER_DAY, Math.floor(86400 / Math.max(1, AI_MIN_INTERVAL_SECONDS))),
     nextAvailableAt: nextAvailable > now ? new Date(nextAvailable).toISOString() : null,
@@ -2235,13 +2238,15 @@ function aiUsageSnapshot(state, now = Date.now()) {
   };
 }
 
-function reserveAiRequest(state, estimatedInputTokens = 0) {
+function reserveAiRequest(state, estimatedInputTokens = 0, metadata = {}) {
   const entry = {
     id: `ai-${nowIso()}-${Math.random().toString(36).slice(2, 8)}`,
     requestedAt: nowIso(),
     status: "IN_FLIGHT",
     model: GEMINI_MODEL,
     estimatedInputTokens: Math.max(0, Number(estimatedInputTokens) || 0),
+    evaluationKey: metadata.evaluationKey || null,
+    phase: metadata.phase || "research",
   };
   state.aiUsageLog = [...aiUsageEntries(state), entry].slice(-Math.max(20, AI_USAGE_HISTORY_LIMIT));
   state.aiUsage = aiUsageSnapshot(state);
@@ -2274,8 +2279,9 @@ function deferAiRun(state, reason) {
 
 function aiSlotAvailability(state, nextInputTokens = 0) {
   const snapshot = aiUsageSnapshot(state);
-  if (snapshot.requestsLast24Hours >= AI_MAX_REQUESTS_PER_DAY) {
-    return { allowed: false, reason: `AI daily request budget reached (${AI_MAX_REQUESTS_PER_DAY}/24h)`, snapshot };
+  const backgroundDailyBudget = Math.max(0, AI_MAX_REQUESTS_PER_DAY - AI_EXECUTION_RESERVE_REQUESTS);
+  if (snapshot.requestsLast24Hours >= backgroundDailyBudget) {
+    return { allowed: false, reason: `AI background daily budget reached (${backgroundDailyBudget}/24h; ${AI_EXECUTION_RESERVE_REQUESTS} reserved for execution)`, snapshot };
   }
   if (snapshot.requestsLastMinute >= AI_MAX_REQUESTS_PER_MINUTE) {
     return { allowed: false, reason: `AI minute request budget reached (${AI_MAX_REQUESTS_PER_MINUTE}/min)`, snapshot };
@@ -2387,12 +2393,13 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
       const slot = aiSlotAvailability(state, estimatedInputTokens);
       if (!slot.allowed) {
         deferAiRun(state, slot.reason);
+        quotaResponseReceived = true;
         break;
       }
     }
-    const requestId = state ? reserveAiRequest(state, estimatedInputTokens) : null;
+    const requestId = state ? reserveAiRequest(state, estimatedInputTokens, { evaluationKey: evaluationKey(candidate), phase: "research" }) : null;
     attemptedIds.add(candidate.id);
-    const result = await callGeminiJson(messages);
+    let result = await callGeminiJson(messages);
     if (!result || result.error) {
       const message = result?.error || "Gemini public-research analysis unavailable";
       const quotaLimited = isQuotaError(result);
@@ -2414,12 +2421,60 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
       }
       continue;
     }
+    if (requestId) finishAiRequest(state, requestId, "SUCCESS", "", result._usage);
+
+    // A second, independently grounded pass challenges the first probability
+    // before it becomes an executable portfolio evaluation.
+    await new Promise((resolve) => setTimeout(resolve, AI_REQUEST_DELAY_MS));
+    const criticPrompt = {
+      task: "Independently audit this prediction-market research. Search public sources yourself, challenge omissions and calibration, then return the final probability. Do not use market prices or betting consensus.",
+      candidate: prompt.candidate,
+      preliminaryResearch: {
+        probability: result.probability,
+        thesis: result.thesis,
+        keyFacts: result.keyFacts,
+        evidence: result.evidence,
+        counterEvidence: result.counterEvidence,
+        probabilityRationale: result.probabilityRationale,
+      },
+      strictRules: prompt.strictRules,
+      requiredJson: prompt.requiredJson,
+    };
+    const criticMessages = [
+      { role: "system", content: "You are an independent forecasting critic. Verify public facts yourself, correct unsupported claims, and return only valid JSON in Czech." },
+      { role: "user", content: JSON.stringify(criticPrompt) },
+    ];
+    const criticEstimate = Math.ceil(messagesToGeminiText(criticMessages).length / 4) + 128;
+    if (state) {
+      const slot = aiSlotAvailability(state, criticEstimate);
+      if (!slot.allowed) {
+        deferAiRun(state, slot.reason);
+        byId.set(candidate.id, markAiAnalysisDeferred(candidate, `Gemini critic pass deferred: ${slot.reason}`));
+        quotaResponseReceived = true;
+        break;
+      }
+    }
+    const criticRequestId = state ? reserveAiRequest(state, criticEstimate, { evaluationKey: evaluationKey(candidate), phase: "critic" }) : null;
+    const criticResult = await callGeminiJson(criticMessages);
+    if (!criticResult || criticResult.error) {
+      const message = criticResult?.error || "Gemini critic analysis unavailable";
+      const quotaLimited = isQuotaError(criticResult);
+      if (criticRequestId) finishAiRequest(state, criticRequestId, quotaLimited ? "QUOTA_LIMITED" : "ERROR", message);
+      byId.set(candidate.id, quotaLimited ? markAiAnalysisDeferred(candidate, message) : markAiAnalysisUnavailable(candidate, message));
+      if (AI_STOP_ON_QUOTA_ERROR && quotaLimited) {
+        quotaResponseReceived = true;
+        break;
+      }
+      continue;
+    }
+    if (criticRequestId) finishAiRequest(state, criticRequestId, "SUCCESS", "", criticResult._usage);
+    const researchResult = result;
+    result = criticResult;
     const probability = clamp(Number(result.probability), 0.01, 0.995);
     if (!Number.isFinite(probability)) {
       if (requestId) finishAiRequest(state, requestId, "ERROR", "Gemini returned no valid probability");
       continue;
     }
-    if (requestId) finishAiRequest(state, requestId, "SUCCESS", "", result._usage);
     const modelAnalysis = {
       direction: result.direction || outcomeKind(candidate.outcome),
       thesis: result.thesis || candidate.probabilityThesis,
@@ -2437,6 +2492,16 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
       groundingQueries: result._grounding?.webSearchQueries || [],
       groundingSources: result._grounding?.sources || [],
       source: "gemini-grounded-public-research",
+      researchPass: {
+        probability: Number(researchResult.probability) || null,
+        thesis: researchResult.thesis || "",
+        keyFacts: Array.isArray(researchResult.keyFacts) ? researchResult.keyFacts.slice(0, 6) : [],
+      },
+      aiRequestUsage: {
+        totalRequests: 2,
+        research: researchResult._usage || null,
+        critic: criticResult._usage || null,
+      },
       _provider: "gemini",
     };
     byId.set(candidate.id, await materializePreferredBinaryOutcome(
