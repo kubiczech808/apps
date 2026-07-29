@@ -4528,7 +4528,16 @@ function liveRunLogRows() {
   rows.push(...fromExecutionState);
   const executionRun = normalizeLiveExecutionRun(state.liveExecutionState);
   if (executionRun) rows.unshift(executionRun);
-  return mergeUniqueByRun(rows).slice(0, 120);
+  return mergeUniqueByRun(rows)
+    .filter((row) => !isCadenceWaitRun(row))
+    .slice(0, 120);
+}
+
+function isCadenceWaitRun(row = {}) {
+  const batch = row.batchLog || row;
+  const action = String(row.action || batch.action || "").toUpperCase();
+  const reason = String(row.reason || batch.reason || "");
+  return action === "CADENCE_WAIT" || /cadence poll is not due|polling skipped: no live execution review is due/i.test(reason);
 }
 
 function mergeUniqueByRun(rows = []) {
@@ -4546,7 +4555,7 @@ function mergeUniqueByRun(rows = []) {
 function currentPortfolioRunLog() {
   if (isLiveMode()) return liveRunLogRows();
   const portfolio = selectedPaperPortfolio(state.botState || {});
-  return Array.isArray(portfolio.runLog) ? portfolio.runLog : [];
+  return Array.isArray(portfolio.runLog) ? portfolio.runLog.filter((row) => !isCadenceWaitRun(row)) : [];
 }
 
 function runActionClass(action) {
@@ -4569,6 +4578,22 @@ function runCapitalNote(run = {}) {
   return parts.filter(Boolean).join(" / ");
 }
 
+function humanRunReason(run = {}) {
+  const batch = run.batchLog || run;
+  const action = String(run.action || batch.action || "").toUpperCase();
+  const reason = String(run.reason || batch.reason || "");
+  if (/no currently executable candidate after live revalidation/i.test(reason)) {
+    return "No order placed: none of the candidates passed the fresh Polymarket verification.";
+  }
+  if (/live new-trade cadence blocked/i.test(reason)) {
+    return "No new order placed: the configured trade cadence has not elapsed. Existing orders were still reviewed.";
+  }
+  if (action === "SKIP" && /no candidates passed/i.test(reason)) {
+    return "No order placed: no candidate passed this portfolio's current rules.";
+  }
+  return reason || "-";
+}
+
 function runDecisionSummary(run = {}) {
   const batch = run.batchLog || run;
   const counts = batch.counts || {};
@@ -4576,15 +4601,16 @@ function runDecisionSummary(run = {}) {
   const evaluated = Number(run.evaluatedCount ?? counts.scannedCandidates ?? counts.revalidatedCandidates);
   const eligible = Number(run.eligibleCount ?? counts.rankedEligible ?? counts.eligibleCandidates);
   const riskSkipped = Number(run.riskSkippedCount ?? counts.skippedForRisk);
+  const isLiveRun = String(run.strategyId || batch.strategyId || "").toLowerCase() === "live";
   const countParts = [
-    Number.isFinite(evaluated) ? `${evaluated} evaluated` : "",
-    Number.isFinite(eligible) ? `${eligible} eligible` : "",
+    Number.isFinite(evaluated) ? `${evaluated} ${isLiveRun ? "revalidated" : "evaluated"}` : "",
+    Number.isFinite(eligible) ? `${eligible} ${isLiveRun ? "passed" : "eligible"}` : "",
     Number.isFinite(riskSkipped) ? `${riskSkipped} risk skipped` : "",
   ].filter(Boolean).join(" / ");
   const selectedText = selected
     ? `${selected.outcome || "-"} ${selected.question || "-"} / AI ${probability(Number(selected.aiProbability))} / win ${signedMoney(Number(selected.netGainIfWinUsdc), 4)} ${selected.netYield != null ? `(${signedPercent(Number(selected.netYield))})` : ""}`
     : "";
-  return [run.reason || batch.reason || "-", selectedText, countParts, runCapitalNote(run)].filter(Boolean).join(" / ");
+  return [humanRunReason(run), selectedText, countParts, runCapitalNote(run)].filter(Boolean).join(" / ");
 }
 
 function portfolioRunDetail(run = {}) {
@@ -4596,7 +4622,7 @@ function portfolioRunDetail(run = {}) {
     `Run time: ${run.runAt || run.generatedAt ? formatDate(run.runAt || run.generatedAt) : "-"}`,
     `Portfolio: ${run.strategyLabel || run.strategyId || "-"}`,
     `Action: ${run.action || batch.action || "-"}`,
-    `Reason: ${run.reason || batch.reason || "-"}`,
+    `Reason: ${humanRunReason(run)}`,
     `Evaluated: ${Number(run.evaluatedCount ?? batch.counts?.scannedCandidates ?? 0)}`,
     `Eligible for this portfolio: ${Number(run.eligibleCount ?? batch.counts?.eligibleCandidates ?? 0)}`,
     `Risk skipped: ${Number(run.riskSkippedCount ?? batch.counts?.skippedForRisk ?? 0)}`,

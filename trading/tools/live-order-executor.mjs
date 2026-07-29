@@ -415,6 +415,7 @@ function prefilterLiveCandidate(item) {
   const reasons = [];
   const tokenId = String(item?.tokenId || "");
   const status = String(item?.status || "").toUpperCase();
+  const aiPending = item?.selectionStatus === "AI_PENDING" || item?.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
   const aiProbability = number(item?.aiProbability);
   const endTime = Date.parse(item?.endDate || "");
   const days = localDaysToResolution(item);
@@ -427,6 +428,7 @@ function prefilterLiveCandidate(item) {
   } else if (status && !["ELIGIBLE", "EVALUATED"].includes(status)) {
     reasons.push(`stored status ${status}`);
   }
+  if (aiPending) reasons.push("grounded Gemini analysis is pending");
   if (item?.marketClosed === true || item?.closed === true || item?.resolved === true || item?.isResolved === true) {
     reasons.push("stored market is already closed/resolved");
   }
@@ -858,16 +860,8 @@ function orderPriceForBook(book, tick) {
 
 function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
   const targetStake = maxNotional;
+  const usableStake = Math.min(targetStake, cash);
   const minNotional = price * minOrderSize;
-  if (targetStake > cash) {
-    return {
-      size: null,
-      targetStake,
-      minNotional,
-      minSizeOverride: false,
-      sizingNote: `target stake ${targetStake.toFixed(4)} USDC is based on total portfolio value, above available cash ${cash.toFixed(4)} USDC`,
-    };
-  }
   if (minNotional > cash) {
     return {
       size: null,
@@ -877,13 +871,13 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
       sizingNote: `minimum order ${minOrderSize} shares costs ${minNotional.toFixed(4)} USDC, above cash ${cash.toFixed(4)} USDC`,
     };
   }
-  if (minNotional > targetStake) {
+  if (minNotional > usableStake) {
     return {
-      size: null,
+      size: Number(minOrderSize.toFixed(4)),
       targetStake,
       minNotional,
-      minSizeOverride: false,
-      sizingNote: `minimum order ${minOrderSize.toFixed(4)} shares costs ${minNotional.toFixed(4)} USDC, above max stake ${targetStake.toFixed(4)} USDC`,
+      minSizeOverride: true,
+      sizingNote: `exchange minimum override: ${minOrderSize.toFixed(4)} shares costs ${minNotional.toFixed(4)} USDC, above the ${targetStake.toFixed(4)} USDC portfolio stake but covered by available cash`,
     };
   }
   if (ORDER_SIZE_MODE === "minimum") {
@@ -895,13 +889,15 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
       sizingNote: "legacy minimum-share sizing; use LIVE_ORDER_SIZE_MODE=stake_fraction for equal stake sizing",
     };
   }
-  const size = Math.floor((targetStake / price) * 10000) / 10000;
+  const size = Math.floor((usableStake / price) * 10000) / 10000;
   return {
     size: size >= minOrderSize ? Number(size.toFixed(4)) : null,
     targetStake,
     minNotional,
     minSizeOverride: false,
-    sizingNote: size >= minOrderSize ? "sized from target stake percentage" : `target stake ${targetStake.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
+    sizingNote: size >= minOrderSize
+      ? (usableStake < targetStake ? "sized from available cash below target stake" : "sized from target stake percentage")
+      : `target stake ${targetStake.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
   };
 }
 
@@ -1045,7 +1041,9 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
 }
 
 async function emitDecision(payload) {
-  const previousRunLog = Array.isArray(previousExecutionState?.runLog) ? previousExecutionState.runLog : [];
+  const previousRunLog = Array.isArray(previousExecutionState?.runLog)
+    ? previousExecutionState.runLog.filter((row) => !isCadenceWaitRun(row))
+    : [];
   const runEntry = {
     ...(payload.batchLog || {}),
     id: payload.batchLog?.id || `live-trade-batch-${payload.generatedAt || new Date().toISOString()}`,
@@ -1394,61 +1392,11 @@ async function main() {
   ]);
   previousExecutionState = previousExecution;
   if (!liveExecutionRunDue(previousExecution, liveState)) {
-    const now = new Date();
-    const runAt = now.toISOString();
-    const lastFullRunAt = latestLiveExecutionRunAt(previousExecution);
-    const cash = liveCashUsdc(liveState);
-    const reason = `scheduled live cadence poll is not due for a full evaluation yet (${TRADE_CADENCE_HOURS}h cadence)`;
-    await emitDecision({
-      mode: "scheduled-cadence-poll",
+    console.log(JSON.stringify({
       action: "CADENCE_WAIT",
-      reason,
-      generatedAt: runAt,
-      account: {
-        address: liveState?.account?.address || FUNDER_ADDRESS,
-        cashUsdc: cash,
-        openPositions: Array.isArray(liveState.positions) ? liveState.positions.length : 0,
-        openOrders: Array.isArray(liveState.openOrders) ? liveState.openOrders.length : 0,
-      },
-      settings: {
-        scheduledCadencePoll: SCHEDULED_CADENCE_POLL,
-        tradeCadenceHours: TRADE_CADENCE_HOURS,
-        ignoreTradeCadence: IGNORE_TRADE_CADENCE,
-        lastFullRunAt,
-      },
-      batchLog: {
-        id: `live-cadence-wait-${runAt}`,
-        runAt,
-        strategyId: "live",
-        strategyLabel: "Live",
-        selectionMetric: "EV p.a.",
-        action: "CADENCE_WAIT",
-        reason,
-        explanation: "Scheduled live workflow checked the portfolio, but the next full candidate revalidation is not due yet.",
-        settings: {
-          scheduledCadencePoll: SCHEDULED_CADENCE_POLL,
-          tradeCadenceHours: TRADE_CADENCE_HOURS,
-          ignoreTradeCadence: IGNORE_TRADE_CADENCE,
-          lastFullRunAt,
-        },
-        capital: {
-          availableUsdc: cash,
-        },
-        counts: {
-          storedEvaluations: 0,
-          uniqueEvaluations: 0,
-          scannedCandidates: 0,
-          revalidatedCandidates: 0,
-          eligibleCandidates: 0,
-          cadenceBlocked: true,
-        },
-        selected: null,
-        revalidatedCandidates: [],
-        topCandidates: [],
-        topRejected: [],
-      },
-      attempts: [],
-    });
+      reason: "Scheduled polling skipped: no live execution review is due yet.",
+      lastFullRunAt: latestLiveExecutionRunAt(previousExecution),
+    }, null, 2));
     return;
   }
   const paperState = await loadJsonResource(PAPER_STATE_URL, "paper state");
