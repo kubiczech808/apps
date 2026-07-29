@@ -1858,15 +1858,18 @@ async function main() {
   }
 
   if (activeSellOrders.length) {
+    const pendingRotationExit = previousExecution?.rotationExit || null;
     await emitDecision({
       ...decision,
       action: "ROTATION_EXIT_WAITING",
       reason: "waiting for the live sell order to fill before selecting a replacement",
+      rotationExit: pendingRotationExit,
       batchLog: {
         ...decision.batchLog,
         action: "ROTATION_EXIT_WAITING",
         reason: "waiting for the live sell order to fill before selecting a replacement",
         explanation: "No replacement buy is allowed while the rotation exit remains open. The next account sync will release the token exposure once the sell fills.",
+        rotationExit: pendingRotationExit,
       },
       attempts: activeSellOrders.map((order) => orderAttemptSummary({
         ...order,
