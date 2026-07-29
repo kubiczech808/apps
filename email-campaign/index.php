@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 const APP_VERSION = '2026-07-19-seed-outreach-status';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
-const AI_RESEARCH_RESET_VERSION = '2026-07-19-research-service-pages-v1';
+const AI_RESEARCH_RESET_VERSION = '2026-07-29-gemini-3-flash-preview-v1';
 const AI_RESEARCH_CONTEXT_FIX_VERSION = '2026-07-19-emporo-context-v1';
 const AI_RESEARCH_MAX_BACKOFF_SECONDS = 1800;
 // Realne scrapujeme jen prvni davku pro osloveni, ne cely zdroj. Nezahrata adresa
@@ -3041,7 +3041,36 @@ function resetAiResearchDataIfNeeded(PDO $pdo): void
     }
     setSetting($pdo, 'ai_research_lock_until', '');
     setSetting($pdo, 'ai_research_next_allowed_at', '');
+    // Behy odlozene kvuli chybe, ktera je uz opravena, si zaslouzi cistý pocet pokusu.
+    // Bez toho by je strop finish_attempts drzel odlozene nadobro.
+    resetAiResearchFinishAttempts($pdo);
     setSetting($pdo, 'ai_research_reset_version', AI_RESEARCH_RESET_VERSION);
+}
+
+function resetAiResearchFinishAttempts(PDO $pdo): void
+{
+    try {
+        $rows = $pdo->query('
+            SELECT id, plan_json
+            FROM ai_research_runs
+            WHERE status IN ("deferred", "failed")
+              AND plan_json LIKE "%finish_attempts%"
+            ORDER BY id DESC
+            LIMIT 200
+        ')->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('AI research finish_attempts reset skipped: ' . $e->getMessage());
+        return;
+    }
+    $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=? WHERE id=?');
+    foreach ($rows as $row) {
+        $plan = json_decode((string)$row['plan_json'], true);
+        if (!is_array($plan) || !isset($plan['finish_attempts'])) {
+            continue;
+        }
+        unset($plan['finish_attempts']);
+        $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: (string)$row['plan_json'], (int)$row['id']]);
+    }
 }
 
 function releaseAiResearchRunsWithFixedWebsiteContext(PDO $pdo): void
@@ -6203,10 +6232,9 @@ function runCronAiResearchSeedReadiness(PDO $pdo): string
 function runCronAiResearchUnfinished(PDO $pdo, array $config): string
 {
     $stmt = $pdo->prepare('
-        SELECT id, plan_json
+        SELECT id, plan_json, COALESCE(found_count, 0) AS found_count
         FROM ai_research_runs
         WHERE status IN ("deferred", "failed")
-          AND COALESCE(found_count, 0) > 0
           AND updated_at >= ?
         ORDER BY updated_at DESC
         LIMIT 5
@@ -6214,7 +6242,7 @@ function runCronAiResearchUnfinished(PDO $pdo, array $config): string
     $stmt->execute([date('c', time() - 7 * 86400)]);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $plan = json_decode((string)$row['plan_json'], true);
-        if (!is_array($plan) || aiResearchPrimaryKeyword($plan) === '') {
+        if (!is_array($plan)) {
             continue;
         }
         // Po nekolika neuspesnych pokusech uz beh nezkousime, aby neblokoval nove seedy.
@@ -6226,6 +6254,11 @@ function runCronAiResearchUnfinished(PDO $pdo, array $config): string
         $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
         $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
         try {
+            // Beh, ktery se zastavil uz na planu nebo bez kontaktu, nema co dokoncovat.
+            // Kontrola behu dogeneruje chybejici kroky vcetne planu a scrapingu.
+            if (aiResearchPrimaryKeyword($plan) === '' || (int)($row['found_count'] ?? 0) <= 0) {
+                return 'AI research dokonceni: ' . auditAiResearchRunNow($pdo, $config, $runId);
+            }
             return 'AI research dokonceni: ' . finishAiResearchRunNow($pdo, $config, $runId);
         } catch (Throwable $e) {
             error_log('AI research finish for #' . $runId . ' failed: ' . $e->getMessage());
