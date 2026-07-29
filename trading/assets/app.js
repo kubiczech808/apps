@@ -4360,6 +4360,7 @@ function tradeBatchDetail(batch) {
         rotationReview.best?.position ? [
           `Best position to sell: ${rotationReview.best.position.outcome || "-"} - ${rotationReview.best.position.question || "-"}`,
           `   Estimated exit: ${money(Number(rotationReview.best.position.estimatedExitValueUsdc || 0))} / current P/L ${signedMoney(Number(rotationReview.best.position.unrealizedPnlUsdc || 0), 4)}`,
+          rotationReview.best.position.estimatedExitFeeUsdc != null ? `   Estimated exit fee: ${money(Number(rotationReview.best.position.estimatedExitFeeUsdc))} / net P/L if exited: ${signedMoney(Number(rotationReview.best.position.realizedPnlIfExitUsdc || 0), 4)}` : "",
           rotationReview.best.position.rotationPriorityValue != null ? `   Rotation priority (${rotationReview.best.position.rotationPriorityMetric || "EV p.a."}): ${rotationReview.best.position.rotationPriorityMetric === "R/R" ? `${Number(rotationReview.best.position.rotationPriorityValue).toFixed(2)}:1` : signedPercent(Number(rotationReview.best.position.rotationPriorityValue))}` : "",
           rotationReview.best.position.url ? `   Polymarket: ${rotationReview.best.position.url}` : "",
         ].filter(Boolean).join("\n") : "",
@@ -4377,10 +4378,12 @@ function tradeBatchDetail(batch) {
             return [
               `${index + 1}. ${position.outcome || item.outcome || "-"} - ${position.question || item.question || "-"}`,
               position.rotationPriorityValue != null ? `   Rotation priority (${position.rotationPriorityMetric || "EV p.a."}): ${position.rotationPriorityMetric === "R/R" ? `${Number(position.rotationPriorityValue).toFixed(2)}:1` : signedPercent(Number(position.rotationPriorityValue))}` : "",
+              position.estimatedExitFeeUsdc != null ? `   Net P/L if exited now: ${signedMoney(Number(position.realizedPnlIfExitUsdc || 0), 4)} after estimated ${money(Number(position.estimatedExitFeeUsdc))} exit fee` : "",
               `   Action: ${item.action || "-"}`,
               `   Reason: ${item.reason || "-"}`,
               item.cashAfterExitUsdc != null ? `   Cash after exit: ${money(Number(item.cashAfterExitUsdc))}` : "",
               item.evDeltaUsdc != null ? `   EV delta: ${signedMoney(Number(item.evDeltaUsdc), 4)}` : "",
+              item.rotatedExpectedPnlUsdc != null ? `   Expected P/L: hold ${signedMoney(Number(item.holdExpectedPnlUsdc || 0), 4)} / rotate ${signedMoney(Number(item.rotatedExpectedPnlUsdc || 0), 4)}` : "",
               candidate ? `   Candidate: ${candidate.outcome || "-"} - ${candidate.question || "-"} / EV ${signedMoney(Number(candidate.expectedValueUsdc || 0), 4)}` : "",
             ].filter(Boolean).join("\n");
           }).join("\n\n"),

@@ -689,21 +689,66 @@ function positionCost(position) {
   return number(position.totalCostUsdc ?? position.stakeUsdc ?? position.maxLossUsdc, 0);
 }
 
+function positionSourceEvaluation(position, evaluationByToken = new Map()) {
+  return evaluationByToken.get(String(position.tokenId || position.assetId || "")) || null;
+}
+
+function positionExitFee(position, evaluationByToken = new Map()) {
+  if (USE_LIMIT_ORDERS && POST_ONLY) return 0;
+  const source = positionSourceEvaluation(position, evaluationByToken);
+  const shares = number(position.shares ?? position.size);
+  const price = number(position.currentPrice ?? position.markPrice ?? position.price);
+  if (shares == null || price == null) return 0;
+  return takerFee(shares, price, feeRateForEvaluation(source || {}));
+}
+
+function positionRotationEconomics(position, evaluationByToken = new Map()) {
+  const source = positionSourceEvaluation(position, evaluationByToken);
+  const grossExitValue = positionExitValue(position);
+  const exitFee = positionExitFee(position, evaluationByToken);
+  const netExitValue = grossExitValue == null ? null : Math.max(0, grossExitValue - exitFee);
+  const cost = positionCost(position);
+  const shares = number(position.shares ?? position.size);
+  const probability = number(source?.aiProbability);
+  const expectedPayout = shares != null && probability != null ? shares * probability : null;
+  const realizedPnlIfExit = netExitValue == null ? null : netExitValue - cost;
+  const holdExpectedPnl = expectedPayout == null ? null : expectedPayout - cost;
+  const continuationExpectedValue = expectedPayout != null && netExitValue != null
+    ? expectedPayout - netExitValue
+    : null;
+  const days = number(source?.daysToResolution);
+  const continuationAnnualizedReturn = continuationExpectedValue != null && netExitValue != null && netExitValue > 0 && days != null && days > 0
+    ? (continuationExpectedValue / netExitValue) * (365 / days)
+    : null;
+  return {
+    source,
+    grossExitValue,
+    exitFee,
+    netExitValue,
+    cost,
+    expectedPayout,
+    realizedPnlIfExit,
+    holdExpectedPnl,
+    continuationExpectedValue,
+    continuationAnnualizedReturn,
+  };
+}
+
 function positionHoldExpectedValue(position, evaluationByToken = new Map()) {
-  const source = evaluationByToken.get(String(position.tokenId || position.assetId || ""));
-  const sourceEv = number(source?.expectedValueUsdc);
-  if (sourceEv != null) return sourceEv;
+  const economics = positionRotationEconomics(position, evaluationByToken);
+  if (economics.continuationExpectedValue != null) return economics.continuationExpectedValue;
   const pnl = number(position.unrealizedPnlUsdc);
   return pnl != null ? pnl : 0;
 }
 
 function positionHoldAnnualizedReturn(position, evaluationByToken = new Map()) {
-  const source = evaluationByToken.get(String(position.tokenId || position.assetId || ""));
-  return number(source?.annualizedReturn, 0);
+  const economics = positionRotationEconomics(position, evaluationByToken);
+  if (economics.continuationAnnualizedReturn != null) return economics.continuationAnnualizedReturn;
+  return number(economics.source?.annualizedReturn, 0);
 }
 
 function positionHoldRiskReward(position, evaluationByToken = new Map()) {
-  const source = evaluationByToken.get(String(position.tokenId || position.assetId || ""));
+  const source = positionSourceEvaluation(position, evaluationByToken);
   const sourceRatio = number(source?.riskReward);
   if (sourceRatio != null) return sourceRatio;
   const gain = number(source?.netGainIfWinUsdc);
@@ -719,8 +764,9 @@ function rotationPriority(position, evaluationByToken = new Map()) {
 }
 
 function rotationPositionSummary(position, evaluationByToken = new Map(), extra = {}) {
-  const exitValue = positionExitValue(position);
-  const cost = positionCost(position);
+  const economics = positionRotationEconomics(position, evaluationByToken);
+  const exitValue = economics.netExitValue;
+  const cost = economics.cost;
   const holdEv = positionHoldExpectedValue(position, evaluationByToken);
   const holdAnnualizedReturn = positionHoldAnnualizedReturn(position, evaluationByToken);
   const priority = rotationPriority(position, evaluationByToken);
@@ -734,8 +780,11 @@ function rotationPositionSummary(position, evaluationByToken = new Map(), extra 
     currentPrice: number(position.currentPrice),
     costUsdc: cost,
     estimatedExitValueUsdc: exitValue == null ? null : Number(exitValue.toFixed(5)),
+    estimatedExitFeeUsdc: Number(economics.exitFee.toFixed(5)),
     unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
+    realizedPnlIfExitUsdc: economics.realizedPnlIfExit == null ? null : Number(economics.realizedPnlIfExit.toFixed(5)),
     holdExpectedValueUsdc: Number(holdEv.toFixed(5)),
+    holdExpectedPnlUsdc: economics.holdExpectedPnl == null ? null : Number(economics.holdExpectedPnl.toFixed(5)),
     holdAnnualizedReturn: Number(holdAnnualizedReturn.toFixed(5)),
     rotationPriorityMetric: priority.metric,
     rotationPriorityValue: Number(priority.value.toFixed(5)),
@@ -757,13 +806,17 @@ function candidatePoolForRotation(baseCandidates = []) {
 
 async function reviewPositionRotation({ liveState, evaluationByToken, baseCandidates, cash, maxNotional }) {
   const positions = openPositionsForRotation(liveState)
-    .map((position) => ({
-      position,
-      exitValue: positionExitValue(position),
-      holdEv: positionHoldExpectedValue(position, evaluationByToken),
-      holdAnnualizedReturn: positionHoldAnnualizedReturn(position, evaluationByToken),
-      priority: rotationPriority(position, evaluationByToken),
-    }))
+    .map((position) => {
+      const economics = positionRotationEconomics(position, evaluationByToken);
+      return {
+        position,
+        exitValue: economics.netExitValue,
+        holdEv: positionHoldExpectedValue(position, evaluationByToken),
+        holdAnnualizedReturn: positionHoldAnnualizedReturn(position, evaluationByToken),
+        priority: rotationPriority(position, evaluationByToken),
+        economics,
+      };
+    })
     // Review the weakest held position first according to this portfolio's own selection rule.
     .sort((a, b) => {
       if (a.priority.value !== b.priority.value) return a.priority.value - b.priority.value;
@@ -785,8 +838,7 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
   }
 
   for (const item of positions) {
-    const { position, exitValue, holdEv } = item;
-    const holdAnnualizedReturn = positionHoldAnnualizedReturn(position, evaluationByToken);
+    const { position, exitValue, holdEv, holdAnnualizedReturn, economics } = item;
     const baseReview = rotationPositionSummary(position, evaluationByToken);
     if (exitValue == null || exitValue <= 0) {
       reviews.push({
@@ -797,15 +849,6 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
       continue;
     }
     const cashAfterExit = number(cash, 0) + exitValue;
-    if (cashAfterExit + 0.000001 < maxNotional) {
-      reviews.push({
-        ...baseReview,
-        action: "INSUFFICIENT_AFTER_EXIT",
-        reason: `selling this position would free about ${exitValue.toFixed(4)} USDC, leaving ${cashAfterExit.toFixed(4)} USDC for required stake ${maxNotional.toFixed(4)} USDC`,
-        cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
-      });
-      continue;
-    }
 
     let bestForPosition = null;
     const rejectedCandidates = [];
@@ -825,7 +868,11 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
         }
         const candidateEv = number(revalidated.expectedValueUsdc, 0);
         const candidateAnnualizedReturn = number(revalidated.annualizedReturn, 0);
-        const evDelta = candidateEv - holdEv;
+        // Both paths now start from the same current portfolio state. The exit
+        // P/L and estimated exit fee are included in the rotate path.
+        const rotatedExpectedPnl = number(economics.realizedPnlIfExit, 0) + candidateEv;
+        const holdExpectedPnl = number(economics.holdExpectedPnl, holdEv);
+        const evDelta = rotatedExpectedPnl - holdExpectedPnl;
         const annualizedDelta = candidateAnnualizedReturn - holdAnnualizedReturn;
         const rotationPreferred = evDelta >= ROTATION_MIN_EV_USDC_IMPROVEMENT
           || (evDelta > 0 && annualizedDelta >= ROTATION_MIN_ANNUALIZED_IMPROVEMENT);
@@ -834,14 +881,20 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           candidate: liveBatchCandidateSummary(revalidated),
           action: rotationPreferred ? "ROTATION_AVAILABLE" : "HOLD_CURRENT_POSITION",
           reason: rotationPreferred
-            ? `candidate improves expected value by ${evDelta.toFixed(4)} USDC and annualized return by ${(annualizedDelta * 100).toFixed(1)} pts after freeing this position`
-            : `candidate improvement ${evDelta.toFixed(4)} USDC / ${(annualizedDelta * 100).toFixed(1)} annualized pts does not justify rotation`,
+            ? `after estimated exit fees and realized P/L, candidate improves expected result by ${evDelta.toFixed(4)} USDC and EV p.a. by ${(annualizedDelta * 100).toFixed(1)} pts`
+            : `after estimated exit fees and realized P/L, candidate change is ${evDelta.toFixed(4)} USDC / ${(annualizedDelta * 100).toFixed(1)} EV p.a. pts and does not justify rotation`,
           cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
           evDeltaUsdc: Number(evDelta.toFixed(5)),
           annualizedDelta: Number(annualizedDelta.toFixed(5)),
+          rotatedExpectedPnlUsdc: Number(rotatedExpectedPnl.toFixed(5)),
+          holdExpectedPnlUsdc: Number(holdExpectedPnl.toFixed(5)),
           rejectedCandidates,
         };
-        if (!bestForPosition || evDelta > bestForPosition.evDeltaUsdc) bestForPosition = review;
+        if (!bestForPosition
+          || annualizedDelta > bestForPosition.annualizedDelta
+          || (annualizedDelta === bestForPosition.annualizedDelta && evDelta > bestForPosition.evDeltaUsdc)) {
+          bestForPosition = review;
+        }
       } catch (error) {
         reviews.push({
           ...baseReview,
@@ -853,14 +906,23 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
 
     if (bestForPosition) {
       reviews.push(bestForPosition);
-      if (bestForPosition.action === "ROTATION_AVAILABLE" && (!best || bestForPosition.evDeltaUsdc > best.evDeltaUsdc)) {
+      if (bestForPosition.action === "ROTATION_AVAILABLE" && (!best
+        || bestForPosition.annualizedDelta > best.annualizedDelta
+        || (bestForPosition.annualizedDelta === best.annualizedDelta && bestForPosition.evDeltaUsdc > best.evDeltaUsdc))) {
         best = bestForPosition;
       }
     } else {
+      const rejectedReasons = [...new Set(rejectedCandidates
+        .flatMap((candidate) => Array.isArray(candidate.rejectReasons) ? candidate.rejectReasons : [])
+        .filter(Boolean))]
+        .slice(0, 3)
+        .join("; ");
       reviews.push({
         ...baseReview,
         action: "NO_BETTER_CANDIDATE_AFTER_EXIT",
-        reason: "no currently eligible candidate would become executable after selling this position",
+        reason: rejectedReasons
+          ? `no replacement passed fresh verification after exit: ${rejectedReasons}`
+          : "no currently eligible candidate would become executable after selling this position",
         cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
         rejectedCandidates,
       });
