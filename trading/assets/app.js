@@ -4600,6 +4600,9 @@ function humanRunReason(run = {}) {
   const batch = run.batchLog || run;
   const action = String(run.action || batch.action || "").toUpperCase();
   const reason = String(run.reason || batch.reason || "");
+  if (/live candidates blocked by available USDC/i.test(reason)) {
+    return "No order placed: the revalidated candidate met the trading rules, but available USDC cannot cover Polymarket's current minimum order size.";
+  }
   if (/no currently executable candidate after live revalidation/i.test(reason)) {
     return "No order placed: none of the candidates passed the fresh Polymarket verification.";
   }

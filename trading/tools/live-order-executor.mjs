@@ -1492,6 +1492,7 @@ async function main() {
       signatureType: tradingConfig.signatureType,
     }));
   const eligible = sortLiveEligibleCandidates(allEligible);
+  const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
   const rotationReview = (!eligible.length || cash + 0.000001 < maxNotional)
     ? await reviewPositionRotation({
         liveState,
@@ -1519,14 +1520,18 @@ async function main() {
         ? "best currently revalidated executable candidate"
         : (rotationAvailable
             ? "cash is insufficient for a new direct order; a sell-and-replace rotation candidate was identified"
-            : "no currently executable candidate after live revalidation"));
+            : (capitalSizingBlocked.length
+                ? `live candidates blocked by available USDC: ${capitalSizingBlocked.length} cannot meet the current Polymarket minimum order size`
+                : "no currently executable candidate after live revalidation")));
   const actionExplanation = best && !cadenceBlocked
     ? "Live batch found an executable candidate after revalidation."
     : (cadenceBlocked
         ? "No live order was submitted because the configured new-trade cadence is not elapsed yet. Open-order management still ran."
         : (rotationAvailable
             ? "No live order was submitted because opening the better candidate would first require selling an existing live position; this run records the rotation review but does not perform the sell/rebuy sequence automatically."
-            : "No live order was submitted because all revalidated candidates failed current execution criteria."));
+            : (capitalSizingBlocked.length
+                ? "No live order was submitted because available USDC cannot cover the exchange minimum size for the revalidated candidate(s)."
+                : "No live order was submitted because all revalidated candidates failed current execution criteria.")));
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
     action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
@@ -1573,6 +1578,7 @@ async function main() {
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
       eligibleCandidates: allEligible.length,
+      capitalSizingBlockedCandidates: capitalSizingBlocked.length,
       openOrderReviewAfterHours: OPEN_ORDER_REVIEW_AFTER_HOURS,
       openOrderCancelAfterHours: OPEN_ORDER_CANCEL_AFTER_HOURS,
       openOrderRepriceThreshold: OPEN_ORDER_REPRICE_THRESHOLD,
@@ -1609,7 +1615,8 @@ async function main() {
         availableUsdc: cash,
         portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
         requiredStakeUsdc: maxNotional,
-        insufficientCapital: !Number.isFinite(maxNotional) || maxNotional <= 0 || cash + 0.000001 < maxNotional,
+        insufficientCapital: !Number.isFinite(maxNotional) || maxNotional <= 0 || cash + 0.000001 < maxNotional || (!allEligible.length && capitalSizingBlocked.length > 0),
+        capitalSizingBlockedCandidates: capitalSizingBlocked.length,
       },
       counts: {
         storedEvaluations: rawEvaluations.length,
@@ -1620,6 +1627,7 @@ async function main() {
         scannedCandidates: baseCandidates.length,
         revalidatedCandidates: checked.length,
         eligibleCandidates: allEligible.length,
+        capitalSizingBlockedCandidates: capitalSizingBlocked.length,
         rankedEligibleCandidates: eligible.length,
         openOrdersReviewed: orderManagement.reviews.length,
         positionsReviewedForRotation: rotationReview?.reviews?.length || 0,
