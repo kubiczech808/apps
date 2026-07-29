@@ -5275,11 +5275,22 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
             }
         }
 
-        // 5. Prvni davka scrapingu.
+        // 5. Prvni davka scrapingu. Stav osloveni nesmi tvrdit, ze je hotovo,
+        // dokud pro novy workspace skutecne nejsou pripravene kontakty.
         $containerId = (int)($plan['provisioned_container_id'] ?? 0);
         if ($containerId > 0) {
             aiResearchEnsureFirstBatchScrapingRun($pdo, $containerId, $runId);
-            $done[] = 'scraping kontejner';
+            $progress = aiResearchScrapingProgress($pdo, $plan);
+            $scrapedContacts = (int)($progress['contacts_total'] ?? 0);
+            $jobStatus = trim((string)($progress['job']['status'] ?? ''));
+            if ($scrapedContacts >= AI_RESEARCH_FIRST_BATCH_CONTACTS
+                || (in_array($jobStatus, ['finished', 'cancelled'], true) && $scrapedContacts > 0)) {
+                $done[] = 'prvni davka kontaktu (' . $scrapedContacts . ')';
+            } else {
+                $blocked[] = $jobStatus === 'failed'
+                    ? 'prvni davka kontaktu selhala'
+                    : 'ceka se na prvni davku kontaktu pro novy workspace';
+            }
         }
 
         // 6. Odhad dosazitelnych kontaktu. Spocita se hned, pokud na to zbyva cas.
@@ -5303,6 +5314,10 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
                     . (empty($estimate['complete']) ? ', zbyva ' . count((array)$estimate['pending_sources']) : '') . ')';
             }
         }
+
+        // Audit musi po dokonceni kroku okamzite srovnat i stav osloveni. Jinak
+        // mohl checklist hlasit hotovo, ale badge zustal do dalsiho cronu "pripravuje se".
+        aiResearchRefreshSeedOutreachStatus($pdo, $runId);
     } finally {
         aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
         aiResearchAddRunRequests($pdo, $runId, aiResearchRequestsMadeThisProcess());
@@ -6176,17 +6191,44 @@ function aiResearchStoreProvisionedContainer(PDO $pdo, int $runId, int $containe
  * Dokonci behy, kterym uz zbyva jen vzor osloveni. Vznikaji, kdyz hosting ukonci request
  * uprostred behu. Bez tohoto kroku by v prehledu zustavaly navzdy nedokoncene.
  */
-/**
- * Seed subjekt je pripraveny k osloveni teprve tehdy, kdyz je nascrapovana prvni davka
- * kontaktu k okamzitemu spusteni a je znamy celkovy pocet dosazitelnych kandidatu, ktery
- * patri do zpravy pro seed. Do te doby zustava ve stavu "pripravuje se".
- */
+function aiResearchRefreshSeedOutreachStatus(PDO $pdo, int $runId): string
+{
+    $stmt = $pdo->prepare('SELECT id, plan_json, seed_outreach_status, found_count, accepted_count, email_body_html, message FROM ai_research_runs WHERE id=? LIMIT 1');
+    $stmt->execute([$runId]);
+    $run = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$run || !in_array((string)($run['seed_outreach_status'] ?? ''), ['preparing', 'ready'], true)) {
+        return '';
+    }
+    $plan = json_decode((string)$run['plan_json'], true);
+    if (!is_array($plan)) {
+        return '';
+    }
+    $checklist = aiResearchWorkflowChecklist($pdo, $run, $plan);
+    $nextStatus = aiResearchWorkflowRequiredDone($checklist) ? 'ready' : 'preparing';
+    $currentStatus = (string)$run['seed_outreach_status'];
+    $message = trim((string)$run['message']);
+    $nextMessage = $message;
+    $messageClaimsReady = str_contains(aiResearchFoldText($message), 'pripravene k odeslani');
+    if ($nextStatus === 'ready') {
+        $nextMessage = 'Vsechny povinne kroky jsou hotove, osloveni je pripravene k odeslani.';
+    } elseif ($messageClaimsReady) {
+        $missing = aiResearchWorkflowMissingSteps($checklist);
+        $nextMessage = $missing
+            ? 'Osloveni se jeste pripravuje: ' . implode('; ', $missing) . '.'
+            : 'Osloveni se jeste pripravuje.';
+    }
+    if ($nextStatus === $currentStatus && $nextMessage === $message) {
+        return '';
+    }
+    $update = $pdo->prepare('UPDATE ai_research_runs SET seed_outreach_status=?, message=?, updated_at=? WHERE id=? AND seed_outreach_status IN ("preparing", "ready")');
+    $update->execute([$nextStatus, $nextMessage, date('c'), $runId]);
+    return $nextStatus === $currentStatus ? 'synced' : $nextStatus;
+}
+
 function runCronAiResearchSeedReadiness(PDO $pdo): string
 {
-    // Zamerne se resi oba smery: uz odeslane stavy se nedotykame, ale predcasne "ready"
-    // se musi vratit na "pripravuje se", jinak by starsi zaznamy zustaly nespravne hotove.
     $rows = $pdo->query('
-        SELECT id, plan_json, seed_outreach_status, found_count, accepted_count, email_body_html
+        SELECT id
         FROM ai_research_runs
         WHERE seed_outreach_status IN ("preparing", "ready")
           AND COALESCE(accepted_count, 0) > 0
@@ -6199,23 +6241,13 @@ function runCronAiResearchSeedReadiness(PDO $pdo): string
     $promoted = 0;
     $demoted = 0;
     $waiting = 0;
-    $setStatus = $pdo->prepare('UPDATE ai_research_runs SET seed_outreach_status=?, updated_at=? WHERE id=? AND seed_outreach_status IN ("preparing", "ready")');
     foreach ($rows as $row) {
-        $plan = json_decode((string)$row['plan_json'], true);
-        if (!is_array($plan)) {
-            continue;
-        }
-        // Stejny checklist, ktery uzivatel vidi v detailu behu. Stav se tak nikdy
-        // nerozejde s tim, co je v prehledu odskrtnute.
-        $prepared = aiResearchWorkflowRequiredDone(aiResearchWorkflowChecklist($pdo, $row, $plan));
-        $current = (string)$row['seed_outreach_status'];
-        if ($prepared && $current !== 'ready') {
-            $setStatus->execute(['ready', date('c'), (int)$row['id']]);
+        $status = aiResearchRefreshSeedOutreachStatus($pdo, (int)$row['id']);
+        if ($status === 'ready') {
             $promoted++;
-        } elseif (!$prepared && $current === 'ready') {
-            $setStatus->execute(['preparing', date('c'), (int)$row['id']]);
+        } elseif ($status === 'preparing') {
             $demoted++;
-        } elseif (!$prepared) {
+        } else {
             $waiting++;
         }
     }
@@ -6224,7 +6256,7 @@ function runCronAiResearchSeedReadiness(PDO $pdo): string
     }
     return 'AI research priprava osloveni: pripraveno ' . $promoted
         . ', vraceno k dokonceni ' . $demoted
-        . ', jeste se dokoncuje ' . $waiting . '.';
+        . ', beze zmeny ' . $waiting . '.';
 }
 
 /**
@@ -6237,8 +6269,10 @@ function aiResearchWorkflowChecklist(PDO $pdo, array $run, array $plan): array
     $progress = aiResearchScrapingProgress($pdo, $plan);
     $job = is_array($progress) ? ($progress['job'] ?? null) : null;
     $contactsScraped = is_array($progress) ? (int)$progress['contacts_total'] : 0;
-    $batchDone = is_array($job) && in_array((string)$job['status'], ['finished', 'cancelled', 'failed'], true);
+    $jobFinished = is_array($job) && in_array((string)$job['status'], ['finished', 'cancelled'], true);
+    $jobFailed = is_array($job) && (string)$job['status'] === 'failed';
     $batchFull = $contactsScraped >= AI_RESEARCH_FIRST_BATCH_CONTACTS;
+    $batchDone = $batchFull || ($jobFinished && $contactsScraped > 0);
 
     $estimate = is_array($plan['contact_estimate'] ?? null) ? (array)$plan['contact_estimate'] : [];
     $estimateSources = count((array)($estimate['sources'] ?? []));
@@ -6303,8 +6337,10 @@ function aiResearchWorkflowChecklist(PDO $pdo, array $run, array $plan): array
             'done' => $batchDone || $batchFull,
             'detail' => $progress === null
                 ? 'scraping ještě nezaložen'
-                : $contactsScraped . ' z cílových ' . AI_RESEARCH_FIRST_BATCH_CONTACTS
-                    . ($batchDone ? ', scraping dokončen' : ', scraping běží'),
+                : ($jobFailed
+                    ? 'scraping selhal, zatím ' . $contactsScraped . ' kontaktů'
+                    : $contactsScraped . ' z cílových ' . AI_RESEARCH_FIRST_BATCH_CONTACTS
+                        . ($batchDone ? ', scraping dokončen' : ', scraping běží')),
         ],
         [
             'key' => 'contacts',
