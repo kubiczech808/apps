@@ -18617,6 +18617,34 @@ function aiResearchSeedOutreachUnsubscribeUrl(array $run): string
     return appBaseUrl() . '?seed_unsubscribe=' . rawurlencode($token);
 }
 
+const APP_TOOL_NAME = 'Akvizice AI';
+
+/**
+ * Povinna paticka pod kazdym obchodnim oslovenim seed subjektu. Nikdy nevstupuje do
+ * editoru kampane, takze ji uzivatel nemuze smazat. Odkaz na landing page nese
+ * tracking parametry, aby bylo videt, ktere osloveni privedlo navstevu.
+ */
+function aiResearchToolAttributionHtml(string $language, array $run): string
+{
+    $url = appBaseUrl() . '?' . http_build_query([
+        'utm_source' => 'seed_outreach',
+        'utm_medium' => 'email',
+        'utm_campaign' => 'ai_research',
+        'ref' => trim((string)($run['seed_outreach_token'] ?? '')) !== ''
+            ? (string)$run['seed_outreach_token']
+            : 'run-' . (int)($run['id'] ?? 0),
+    ]);
+    // Escapovani na &amp; resi az h() pri vlozeni do href; jinak by vzniklo &amp;amp;.
+    $link = '<a href="' . h($url) . '" style="color:#67736d">' . h(APP_TOOL_NAME) . '</a>';
+    $text = [
+        'de' => 'Diese geschäftliche Nachricht wurde über ' . $link . ' versendet.',
+        'en' => 'This business message was sent using ' . $link . '.',
+        'sk' => 'Toto obchodné oslovenie bolo odoslané prostredníctvom ' . $link . '.',
+        'pl' => 'Ta wiadomosc handlowa zostala wyslana za posrednictwem ' . $link . '.',
+    ][$language] ?? 'Toto obchodní oslovení bylo odesláno prostřednictvím ' . $link . '.';
+    return '<p style="font-size:11px;color:#67736d;text-align:center;margin-top:18px">' . $text . '</p>';
+}
+
 function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, string $language): array
 {
     $acceptedContacts = array_values(array_filter($contacts, static fn($contact) => (string)($contact['status'] ?? '') === 'accepted'));
@@ -18715,9 +18743,11 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . $unsubscribeHtmlCs;
     }
 
+    // Paticka se pripojuje az tady, mimo editovatelny text kampane, aby ji nesel
+    // odebrat - kazdy email pro seed subjekt ji tak ma vzdy.
     return [
         'subject' => truncatePlainText($subject, 255),
-        'html' => $html,
+        'html' => $html . aiResearchToolAttributionHtml($language, $run),
         'accepted_count' => $acceptedCount,
         'audience' => $audience !== '' ? $audience : '-',
         'target_area' => $targetArea !== '' ? $targetArea : '-',
