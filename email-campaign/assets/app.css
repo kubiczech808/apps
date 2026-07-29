@@ -1147,6 +1147,56 @@ label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-
   font-weight: 800;
   flex: 0 0 28px;
 }
+.workflow-checklist-title {
+  margin: 14px 0 6px;
+  font-size: 14px;
+}
+.workflow-checklist {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.workflow-checklist li {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #f4f8f6;
+}
+.workflow-checklist li.is-pending {
+  background: #fdf3e7;
+}
+.workflow-checklist li.is-optional {
+  background: #f2f4f7;
+}
+.workflow-checklist-mark {
+  font-weight: 800;
+  color: #1f7a5e;
+}
+.workflow-checklist li.is-pending .workflow-checklist-mark {
+  color: #a5651a;
+}
+.workflow-checklist li.is-optional .workflow-checklist-mark {
+  color: #7b8794;
+}
+.workflow-checklist-detail {
+  color: #5d7b72;
+  text-align: right;
+}
+@media (max-width: 640px) {
+  .workflow-checklist li {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+  .workflow-checklist-detail {
+    grid-column: 2;
+    text-align: left;
+  }
+}
 .estimate-source-list {
   margin: 4px 0 10px;
   padding-left: 18px;

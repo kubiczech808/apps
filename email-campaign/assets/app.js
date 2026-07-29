@@ -372,7 +372,8 @@ document.querySelectorAll("[data-onboarding-select-all]").forEach((toggle) => {
 
 document.querySelectorAll("[data-gmail-preset]").forEach((button) => {
   button.addEventListener("click", () => {
-    const form = button.closest(".onboarding-card")?.querySelector(".smtp-form");
+    // Onboarding ma formular v karte, konfigurace v dialogu - tlacitko funguje v obou.
+    const form = button.closest(".onboarding-card")?.querySelector(".smtp-form") || button.closest("form");
     if (!form) return;
     const email = button.dataset.accountEmail || form.querySelector('[name="from_email"]')?.value || "";
     const set = (selector, value) => {

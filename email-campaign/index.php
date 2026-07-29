@@ -6183,7 +6183,7 @@ function runCronAiResearchSeedReadiness(PDO $pdo): string
     // Zamerne se resi oba smery: uz odeslane stavy se nedotykame, ale predcasne "ready"
     // se musi vratit na "pripravuje se", jinak by starsi zaznamy zustaly nespravne hotove.
     $rows = $pdo->query('
-        SELECT id, plan_json, seed_outreach_status
+        SELECT id, plan_json, seed_outreach_status, found_count, accepted_count, email_body_html
         FROM ai_research_runs
         WHERE seed_outreach_status IN ("preparing", "ready")
           AND COALESCE(accepted_count, 0) > 0
@@ -6202,14 +6202,9 @@ function runCronAiResearchSeedReadiness(PDO $pdo): string
         if (!is_array($plan)) {
             continue;
         }
-        $hasEstimate = is_array($plan['contact_estimate'] ?? null);
-        $progress = aiResearchScrapingProgress($pdo, $plan);
-        $job = is_array($progress) ? ($progress['job'] ?? null) : null;
-        $batchDone = is_array($job)
-            && in_array((string)$job['status'], ['finished', 'cancelled', 'failed'], true);
-        $batchFull = is_array($progress)
-            && (int)$progress['contacts_total'] >= AI_RESEARCH_FIRST_BATCH_CONTACTS;
-        $prepared = $hasEstimate && ($batchDone || $batchFull);
+        // Stejny checklist, ktery uzivatel vidi v detailu behu. Stav se tak nikdy
+        // nerozejde s tim, co je v prehledu odskrtnute.
+        $prepared = aiResearchWorkflowRequiredDone(aiResearchWorkflowChecklist($pdo, $row, $plan));
         $current = (string)$row['seed_outreach_status'];
         if ($prepared && $current !== 'ready') {
             $setStatus->execute(['ready', date('c'), (int)$row['id']]);
@@ -6227,6 +6222,142 @@ function runCronAiResearchSeedReadiness(PDO $pdo): string
     return 'AI research priprava osloveni: pripraveno ' . $promoted
         . ', vraceno k dokonceni ' . $demoted
         . ', jeste se dokoncuje ' . $waiting . '.';
+}
+
+/**
+ * Jedno misto, ktere rika, co ma beh splnit. Pouziva ho prehled stavu i rozhodnuti,
+ * jestli smi byt osloveni "ready" - aby stav nikdy nerikal neco jineho nez checklist.
+ * Nepovinny je jen krok "AI validace kontaktu"; ostatni musi byt hotove.
+ */
+function aiResearchWorkflowChecklist(PDO $pdo, array $run, array $plan): array
+{
+    $progress = aiResearchScrapingProgress($pdo, $plan);
+    $job = is_array($progress) ? ($progress['job'] ?? null) : null;
+    $contactsScraped = is_array($progress) ? (int)$progress['contacts_total'] : 0;
+    $batchDone = is_array($job) && in_array((string)$job['status'], ['finished', 'cancelled', 'failed'], true);
+    $batchFull = $contactsScraped >= AI_RESEARCH_FIRST_BATCH_CONTACTS;
+
+    $estimate = is_array($plan['contact_estimate'] ?? null) ? (array)$plan['contact_estimate'] : [];
+    $estimateSources = count((array)($estimate['sources'] ?? []));
+    $estimatePending = count((array)($estimate['pending_sources'] ?? []));
+
+    $variants = 0;
+    foreach ((array)($plan['outreach_variants'] ?? []) as $variant) {
+        if (is_array($variant) && trim((string)($variant['subject'] ?? '')) !== '') {
+            $variants++;
+        }
+    }
+
+    $validation = null;
+    foreach (aiResearchNormalizeModelAudit($plan['ai_model_audit'] ?? []) as $entry) {
+        if ((string)($entry['step'] ?? '') === 'contact_validation') {
+            $validation = $entry;
+        }
+    }
+
+    $markets = array_values(array_filter(array_map('strval', (array)($plan['target_markets'] ?? []))));
+    $keyword = aiResearchPrimaryKeyword($plan);
+    $accepted = (int)($run['accepted_count'] ?? 0);
+
+    return [
+        [
+            'key' => 'plan',
+            'label' => 'Pochopení byznysu z webu seedu',
+            'required' => true,
+            'done' => trim((string)($plan['business_understanding'] ?? '')) !== '',
+            'detail' => trim((string)($plan['website_url_analyzed'] ?? '')) !== ''
+                ? 'analyzován ' . (string)$plan['website_url_analyzed']
+                : 'web se nepodařilo přečíst',
+        ],
+        [
+            'key' => 'targeting',
+            'label' => 'Vybraná cílovka a klíčové slovo',
+            'required' => true,
+            'done' => $keyword !== '' && trim((string)($plan['primary_segment'] ?? $plan['audience_label'] ?? '')) !== '',
+            'detail' => $keyword !== '' ? 'keyword ' . $keyword : 'keyword chybí',
+        ],
+        [
+            'key' => 'markets',
+            'label' => 'Cílové trhy a katalogy pro scraping',
+            'required' => true,
+            'done' => $markets !== [] && aiResearchEstimateSourcesForPlan($plan) !== [],
+            'detail' => $markets !== [] ? implode(', ', $markets) : 'trhy neurčeny',
+        ],
+        [
+            'key' => 'estimate',
+            'label' => 'Spočítaný dosah napříč katalogy',
+            'required' => true,
+            'done' => $estimate !== [] && !empty($estimate['complete']) && (int)($estimate['reachable_contacts'] ?? 0) > 0,
+            'detail' => $estimate === []
+                ? 'ještě nespočítáno'
+                : (int)($estimate['reachable_contacts'] ?? 0) . ' kontaktů z ' . $estimateSources . ' katalogů'
+                    . ($estimatePending > 0 ? ', dopočítává se ' . $estimatePending : ''),
+        ],
+        [
+            'key' => 'first_batch',
+            'label' => 'Nascrapovaná první dávka kontaktů',
+            'required' => true,
+            'done' => $batchDone || $batchFull,
+            'detail' => $progress === null
+                ? 'scraping ještě nezaložen'
+                : $contactsScraped . ' z cílových ' . AI_RESEARCH_FIRST_BATCH_CONTACTS
+                    . ($batchDone ? ', scraping dokončen' : ', scraping běží'),
+        ],
+        [
+            'key' => 'contacts',
+            'label' => 'Kontakty vhodné k oslovení',
+            'required' => true,
+            'done' => $accepted > 0,
+            'detail' => $accepted . ' vhodných z ' . (int)($run['found_count'] ?? 0) . ' nalezených',
+        ],
+        [
+            'key' => 'drafts',
+            'label' => 'Dvě varianty oslovení bez míst k doplnění',
+            'required' => true,
+            'done' => $variants >= 2 && trim((string)($run['email_body_html'] ?? '')) !== '',
+            'detail' => $variants > 0 ? $variants . ' varianty' : 'vzory chybí',
+        ],
+        [
+            'key' => 'workspace',
+            'label' => 'Založený účet, databáze a kampaň',
+            'required' => true,
+            'done' => (int)($plan['provisioned_container_id'] ?? 0) > 0 && (int)($plan['provisioned_list_id'] ?? 0) > 0,
+            'detail' => (int)($plan['provisioned_container_id'] ?? 0) > 0 ? 'hotovo' : 'ještě nezaloženo',
+        ],
+        [
+            'key' => 'validation',
+            'label' => 'AI validace vhodnosti nalezených kontaktů',
+            'required' => false,
+            'done' => is_array($validation) && (string)($validation['provider'] ?? '') === 'gemini',
+            'detail' => is_array($validation)
+                ? 'vyhodnoceno: ' . (string)($validation['model'] ?? 'pravidla')
+                : 'nepovinné, vypnuté kvůli úspoře Gemini požadavků',
+        ],
+    ];
+}
+
+/**
+ * Osloveni smi byt "ready" teprve tehdy, kdyz jsou hotove vsechny povinne kroky.
+ */
+function aiResearchWorkflowRequiredDone(array $checklist): bool
+{
+    foreach ($checklist as $step) {
+        if (!empty($step['required']) && empty($step['done'])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function aiResearchWorkflowMissingSteps(array $checklist): array
+{
+    $missing = [];
+    foreach ($checklist as $step) {
+        if (!empty($step['required']) && empty($step['done'])) {
+            $missing[] = (string)$step['label'];
+        }
+    }
+    return $missing;
 }
 
 function runCronAiResearchUnfinished(PDO $pdo, array $config): string
@@ -17362,6 +17493,27 @@ function renderApp(PDO $pdo, ?array $flash): void
                                     <span>Keyword: <?= h((string)($run['scraping_keyword'] ?? '')) ?></span>
                                     <span>Lokalita: <?= h(aiResearchTargetAreaLabel($runPlan)) ?></span>
                                 </div>
+                                <?php
+                                    $runChecklist = aiResearchWorkflowChecklist($pdo, $run, $runPlan);
+                                    $runMissing = aiResearchWorkflowMissingSteps($runChecklist);
+                                ?>
+                                <h4 class="workflow-checklist-title">Kroky workflow</h4>
+                                <ul class="workflow-checklist">
+                                    <?php foreach ($runChecklist as $step): ?>
+                                        <li class="<?= !empty($step['done']) ? 'is-done' : (empty($step['required']) ? 'is-optional' : 'is-pending') ?>">
+                                            <span class="workflow-checklist-mark" aria-hidden="true"><?= !empty($step['done']) ? '✓' : (empty($step['required']) ? '–' : '○') ?></span>
+                                            <span class="workflow-checklist-label"><?= h((string)$step['label']) ?><?= empty($step['required']) ? ' <em>(nepovinné)</em>' : '' ?></span>
+                                            <span class="workflow-checklist-detail"><?= h((string)$step['detail']) ?></span>
+                                        </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                                <p class="muted">
+                                    <?php if ($runMissing): ?>
+                                        Oslovení zůstává ve stavu <strong>připravuje se</strong>, dokud zbývá: <?= h(implode('; ', $runMissing)) ?>. Tlačítko „Zkontrolovat a doplnit“ chybějící kroky rovnou dohraje.
+                                    <?php else: ?>
+                                        Všechny povinné kroky jsou hotové, oslovení je <strong>připravené k odeslání</strong>.
+                                    <?php endif; ?>
+                                </p>
                                 <?php if ($run['seed_website']): ?><p><strong>Seed web:</strong> <a href="<?= h((string)$run['seed_website']) ?>" target="_blank" rel="noopener"><?= h((string)$run['seed_website']) ?></a></p><?php endif; ?>
                                 <?php if ($provisionUser): ?>
                                     <p><strong>Založený účet:</strong> <?= h((string)$provisionUser['email']) ?></p>
@@ -17743,12 +17895,16 @@ function renderApp(PDO $pdo, ?array $flash): void
             </div>
             <label>Odesilatel email<input type="email" name="from_email" autocomplete="off" value="<?= h($config['from_email']) ?>" required></label>
             <label>Odesilatel jmeno<input name="from_name" autocomplete="off" value="<?= h($config['from_name']) ?>" required></label>
-            <label>SMTP server<input name="smtp_host" autocomplete="off" value="<?= h($config['smtp']['host']) ?>" required></label>
-            <div class="row">
-                <label>Port<input type="number" name="smtp_port" autocomplete="off" value="<?= h((string)$config['smtp']['port']) ?>" required></label>
-                <label>Sifrovani<select name="smtp_encryption"><option value="tls" <?= $config['smtp']['encryption']==='tls'?'selected':'' ?>>TLS</option><option value="ssl" <?= $config['smtp']['encryption']==='ssl'?'selected':'' ?>>SSL</option><option value="" <?= $config['smtp']['encryption']===''?'selected':'' ?>>Bez</option></select></label>
+            <div class="actions-row">
+                <button type="button" class="secondary" data-gmail-preset>Nastavit pro Gmail</button>
             </div>
-            <label>SMTP uzivatel<input name="smtp_username" autocomplete="off" data-lpignore="true" data-1p-ignore="true" value="<?= h($config['smtp']['username']) ?>" required></label>
+            <div class="note">Gmail: tlačítko doplní server, port a šifrování a jako uživatele použije adresu odesílatele. Do hesla patří <strong>heslo aplikace</strong> z Google účtu (Zabezpečení → Hesla aplikací), běžné heslo k účtu Gmail přes SMTP nefunguje.</div>
+            <label>SMTP server<input name="smtp_host" autocomplete="off" value="<?= h($config['smtp']['host']) ?>" data-smtp-host required></label>
+            <div class="row">
+                <label>Port<input type="number" name="smtp_port" autocomplete="off" value="<?= h((string)$config['smtp']['port']) ?>" data-smtp-port required></label>
+                <label>Sifrovani<select name="smtp_encryption" data-smtp-encryption><option value="tls" <?= $config['smtp']['encryption']==='tls'?'selected':'' ?>>TLS</option><option value="ssl" <?= $config['smtp']['encryption']==='ssl'?'selected':'' ?>>SSL</option><option value="" <?= $config['smtp']['encryption']===''?'selected':'' ?>>Bez</option></select></label>
+            </div>
+            <label>SMTP uzivatel<input name="smtp_username" autocomplete="off" data-lpignore="true" data-1p-ignore="true" value="<?= h($config['smtp']['username']) ?>" data-smtp-username required></label>
             <label>SMTP heslo<input type="password" name="smtp_password" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" placeholder="Prazdne = nemenit"></label>
             <label>DKIM selector<input name="smtp_dkim_selector" autocomplete="off" value="<?= h((string)($config['smtp']['dkim_selector'] ?? '')) ?>" placeholder="napr. default, mail, selector1"></label>
             <div class="note">Selector najdes u poskytovatele emailu. Kontrola overuje DNS zaznamy domeny odesilatele, ne samotny podpis konkretni zpravy.</div>
