@@ -1147,6 +1147,16 @@ label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-
   font-weight: 800;
   flex: 0 0 28px;
 }
+.estimate-source-list {
+  margin: 4px 0 10px;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #21443b;
+}
+.estimate-source-list small {
+  color: #5d7b72;
+}
 .note {
   border: 1px solid #b8d8ce;
   background: #eef8f4;

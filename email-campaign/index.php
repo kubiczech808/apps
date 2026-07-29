@@ -3198,8 +3198,13 @@ function selectAiResearchSeedRecipient(PDO $pdo, bool $force = false): ?array
     return $row ?: null;
 }
 
-function aiResearchSeedWebsiteContext(string $website): string
+/**
+ * $hasEnglish se plni z homepage a slouzi jako levny pruzkum pred tim, nez se AI
+ * pta na zahranicni cileni. Web bez anglicke verze se bere jako cileni na domaci trh.
+ */
+function aiResearchSeedWebsiteContext(string $website, ?bool &$hasEnglish = null): string
 {
+    $hasEnglish = false;
     $website = normalizeWebsite(trim($website));
     if ($website === '') {
         return '';
@@ -3211,6 +3216,7 @@ function aiResearchSeedWebsiteContext(string $website): string
         error_log('AI research seed website context skipped [' . $website . ']: ' . $e->getMessage());
         return '';
     }
+    $hasEnglish = aiResearchSiteHasEnglishVersion((string)$html);
     $homeText = aiResearchReadableWebsiteText($html);
     $pages[$loadedWebsite] = aiResearchImportantWebsiteText($homeText, 1300);
     if ($pages[$loadedWebsite] === '' && aiResearchTextLength($homeText) >= 250) {
@@ -3531,7 +3537,9 @@ function aiResearchPlan(array $config, array $seed): array
     $website = trim((string)($seed['website'] ?? ''));
     $address = trim((string)($seed['address'] ?? ''));
     $seedDescription = trim((string)($seed['seed_description'] ?? ''));
-    $websiteContext = aiResearchSeedWebsiteContext($website);
+    $siteHasEnglish = false;
+    $websiteContext = aiResearchSeedWebsiteContext($website, $siteHasEnglish);
+    $seedCountry = aiResearchSeedCountry($seed) ?: 'CZ';
     $websiteUnderstandingFallback = aiResearchLocalWebsiteUnderstanding($websiteContext, $website);
     $businessContextForFallback = $business . ' ' . $website . ' ' . $address . ' ' . $websiteUnderstandingFallback . ' ' . truncatePlainText($websiteContext, 1400);
     $fallback = onboardingFallbackLeadPlan($businessContextForFallback);
@@ -3547,6 +3555,8 @@ function aiResearchPlan(array $config, array $seed): array
     $fallback['business_understanding'] = $websiteUnderstandingFallback;
     $fallback['targeting_reason'] = 'Keyword a trzni dosah jsou odvozene z webu, typu nabidky a adresy seed firmy.';
     $fallback['location_scope'] = 'stejne_mesto';
+    $fallback['target_markets'] = [$seedCountry];
+    $fallback['site_has_english'] = $siteHasEnglish;
     $fallback['target_location'] = aiResearchSeedRegionLabel($seed);
     $fallback['seed_description'] = $seedDescription;
     $fallback['seed_catalog_url'] = (string)($seed['source_url'] ?? '');
@@ -3572,6 +3582,8 @@ function aiResearchPlan(array $config, array $seed): array
             'targeting_reason' => 'Bez weboveho kontextu nelze zodpovedne vysvetlit keyword ani lokalitu.',
             'location_scope' => 'cela_cr',
             'target_location' => '',
+            'target_markets' => [$seedCountry],
+            'site_has_english' => $siteHasEnglish,
             'seed_description' => $seedDescription,
             'seed_catalog_url' => (string)($seed['source_url'] ?? ''),
             'website_url_analyzed' => $website,
@@ -3611,7 +3623,7 @@ function aiResearchPlan(array $config, array $seed): array
             'firmy_description' => $seedDescription,
             'website_context' => $websiteContext,
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ". "
-        . "Vrat pouze JSON {\"business_understanding\":\"...\",\"evidence_summary\":{\"claimed_by_website\":[...],\"supported_by_specific_pages\":[...],\"business_inferences\":[...]},\"candidate_segments\":[{\"segment\":\"...\",\"score\":0,\"use_case\":\"...\",\"decision_maker\":\"...\",\"keyword\":\"...\",\"reason\":\"...\",\"criteria\":{\"offer_fit\":0,\"urgency\":0,\"budget_value\":0,\"repeatability\":0,\"targeting_ease\":0,\"sales_cycle\":0,\"cost_pass_through\":0,\"legal_risk\":0}}],\"primary_segment\":\"...\",\"main_use_case\":\"...\",\"decision_maker\":\"...\",\"payer\":\"...\",\"user_role\":\"...\",\"reseller_channel\":\"...\",\"scraping_keyword\":\"...\",\"secondary_keywords\":[...],\"location_scope\":\"...\",\"target_location\":\"...\",\"targeting_reason\":\"...\",\"audience_label\":\"...\",\"email_angle\":\"...\",\"market_language\":\"cs\",\"filters\":[...],\"rejected_alternatives\":[{\"segment\":\"...\",\"reason\":\"...\"}],\"confidence\":0,\"confidence_notes\":\"...\"}. "
+        . "Vrat pouze JSON {\"business_understanding\":\"...\",\"evidence_summary\":{\"claimed_by_website\":[...],\"supported_by_specific_pages\":[...],\"business_inferences\":[...]},\"candidate_segments\":[{\"segment\":\"...\",\"score\":0,\"use_case\":\"...\",\"decision_maker\":\"...\",\"keyword\":\"...\",\"reason\":\"...\",\"criteria\":{\"offer_fit\":0,\"urgency\":0,\"budget_value\":0,\"repeatability\":0,\"targeting_ease\":0,\"sales_cycle\":0,\"cost_pass_through\":0,\"legal_risk\":0}}],\"primary_segment\":\"...\",\"main_use_case\":\"...\",\"decision_maker\":\"...\",\"payer\":\"...\",\"user_role\":\"...\",\"reseller_channel\":\"...\",\"scraping_keyword\":\"...\",\"secondary_keywords\":[...],\"location_scope\":\"...\",\"target_location\":\"...\",\"targeting_reason\":\"...\",\"audience_label\":\"...\",\"email_angle\":\"...\",\"market_language\":\"cs\",\"target_markets\":[\"CZ\"],\"filters\":[...],\"rejected_alternatives\":[{\"segment\":\"...\",\"reason\":\"...\"}],\"confidence\":0,\"confidence_notes\":\"...\"}. "
         . "Ve skutecnem vystupu nikdy nepouzivej tri tecky ani komentare; dosad skutecne stringy, cisla a pole, aby odpoved byla parsovatelny JSON. "
         . "business_understanding: 1-2 kratke vety v cestine, bez instrukci, bez slov 'AI', bez planu. Musi byt shrnuti toho, co subjekt dela, vyhradne podle website_context nacteneho z website_url. Musi zminit konkretni produkty/sluzby z webu. Nepouzivej obecne domenky podle nazvu firmy ani pouze katalogovy popis z Firmy.cz. "
         . "scraping_keyword: jen kategorie firem bez lokace. location_scope: jedna z hodnot konkretni_lokace, stejne_mesto, stejny_kraj nebo cela_cr. target_location: konkretni lokalita jen pokud location_scope neni cela_cr. "
@@ -3620,6 +3632,11 @@ function aiResearchPlan(array $config, array $seed): array
         . "candidate_segments musi mit 4-6 polozek a score 0-100 podle vah vyse; v primary_segment musi byt vitezny segment. rejected_alternatives musi vysvetlit alespon dve zamitnute cilovky. "
         . "decision_maker, payer a user_role vypln tak, aby bylo jasne, kdo sluzbu pouziva, kdo rozhoduje a kdo plati. "
         . "market_language = jeden jazyk pro osloveni vsech vybranych subjektu: cs, sk, de, pl nebo en. "
+        . ($siteHasEnglish
+            ? "Web seed firmy ma anglickou verzi, takze posud, zda ma obchodne smysl hledat zakazniky i mimo domaci trh (" . $seedCountry . "). "
+                . "target_markets = pole ISO kodu zemi z CZ, SK, DE, AT, PL, kde ma cileni realny smysl podle nabidky, dorucitelnosti, jazyka podpory a referenci na webu. "
+                . "Domaci trh " . $seedCountry . " uved vzdy jako prvni. Dalsi zemi pridej jen kdyz web sam dokladá, ze tam firma umi dodavat nebo obsluhovat; jinak vrat pouze domaci trh. "
+            : "Web seed firmy neni ani v anglictine, takze cileni ber jako vyhradne domaci: target_markets = [\"" . $seedCountry . "\"]. ")
         . "filters: povinna pravidla pro odmitnuti nevhodnych kontaktu; uveď, co musi byt na webu kontaktu zrejme, aby byl opravdu vhodny. "
         . "email_angle: jedna veta konkretniho uhlu pro email. "
         . "Zakazane keywordy: 'relevantni B2B firmy', 'potencialni zakaznici', 'male firmy', 'firmy', 'sluzby pro firmy', 'B2B subjekty', 'vhodne firmy', 'vyrobni firma', 'vyrobce', 'prumyslova firma', 'podniky'. "
@@ -3640,6 +3657,8 @@ function aiResearchPlan(array $config, array $seed): array
         if ($marketLanguage !== '') {
             $plan['market_language'] = $marketLanguage;
         }
+        $plan['site_has_english'] = $siteHasEnglish;
+        $plan['target_markets'] = aiResearchNormalizeTargetMarkets($json['target_markets'] ?? [], $seedCountry, $siteHasEnglish);
         $understanding = truncatePlainText(trim((string)($json['business_understanding'] ?? ($json['business_summary'] ?? ''))), 420);
         if ($understanding !== '') {
             $plan['business_understanding'] = $understanding;
@@ -4506,6 +4525,56 @@ function aiResearchSourceForMarketLanguage(string $language): string
     return $source !== '' && scrapingSourceIsActive($source) ? $source : '';
 }
 
+/**
+ * Trhy, na kterych ma cileni smysl. Bez anglicke verze webu se AI vubec neptame a
+ * bereme domaci trh; jinak se bere seznam od AI, vzdy doplneny domacim trhem.
+ */
+function aiResearchNormalizeTargetMarkets($raw, string $seedCountry, bool $allowForeign): array
+{
+    $home = strtoupper(trim($seedCountry)) ?: 'CZ';
+    $markets = [$home];
+    if ($allowForeign) {
+        foreach ((array)$raw as $value) {
+            $code = strtoupper(trim((string)$value));
+            if (!isset(aiResearchSupportedMarkets()[$code]) || in_array($code, $markets, true)) {
+                continue;
+            }
+            $markets[] = $code;
+            if (count($markets) >= 5) {
+                break;
+            }
+        }
+    }
+    return $markets;
+}
+
+function aiResearchSupportedMarkets(): array
+{
+    return ['CZ' => 'firmy_cz', 'SK' => 'zoznam_sk', 'DE' => 'gelbeseiten_de', 'AT' => 'herold_at', 'PL' => 'panoramafirm_pl'];
+}
+
+/**
+ * Katalogy, ve kterych se ma pocitat dosah. Primarni zdroj planu je vzdy prvni,
+ * dalsi se pridavaji podle vybranych trhu; neaktivni zdroje se preskoci.
+ */
+function aiResearchEstimateSourcesForPlan(array $plan): array
+{
+    $sources = [];
+    $primary = aiResearchPrimarySourceKey($plan);
+    if ($primary !== '' && scrapingSourceIsActive($primary)) {
+        $sources[] = $primary;
+    }
+    $supported = aiResearchSupportedMarkets();
+    foreach ((array)($plan['target_markets'] ?? []) as $market) {
+        $source = $supported[strtoupper(trim((string)$market))] ?? '';
+        if ($source === '' || in_array($source, $sources, true) || !scrapingSourceIsActive($source)) {
+            continue;
+        }
+        $sources[] = $source;
+    }
+    return $sources;
+}
+
 function aiResearchDefaultSourceForCountry(string $country): string
 {
     return [
@@ -4618,6 +4687,11 @@ function aiResearchEnrichPlan(array $plan, array $seed): array
     $plan['scraping_queries'] = $queries;
     $plan['primary_keyword'] = aiResearchNormalizeCatalogKeyword($keyword) ?: aiResearchPrimaryKeyword(['scraping_queries' => $queries, 'candidate_terms' => []]);
     $plan['market_language'] = normalizeAiResearchMarketLanguage((string)($plan['market_language'] ?? '')) ?: aiResearchDefaultMarketLanguage($seed, $plan);
+    $plan['target_markets'] = aiResearchNormalizeTargetMarkets(
+        $plan['target_markets'] ?? [],
+        aiResearchSeedCountry($seed) ?: 'CZ',
+        !empty($plan['site_has_english'])
+    );
     $plan['location_scope'] = aiResearchNormalizeLocationScope((string)($plan['location_scope'] ?? ''));
     $plan['target_location'] = aiResearchNormalizeTargetLocation((string)($plan['target_location'] ?? ''), $seed);
     if (in_array($plan['location_scope'], ['cela_cr', 'zahranici'], true)) {
@@ -5108,7 +5182,10 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
         }
 
         // 6. Odhad dosazitelnych kontaktu. Spocita se hned, pokud na to zbyva cas.
-        if (is_array($plan['contact_estimate'] ?? null)) {
+        $estimateComplete = is_array($plan['contact_estimate'] ?? null)
+            && !empty($plan['contact_estimate']['complete'])
+            && !array_diff(aiResearchEstimateSourcesForPlan($plan), array_column((array)($plan['contact_estimate']['sources'] ?? []), 'source'));
+        if ($estimateComplete) {
             $done[] = 'odhad dosahu (' . (int)($plan['contact_estimate']['reachable_contacts'] ?? 0) . ')';
         } elseif (aiResearchDeadlineReached(30)) {
             $blocked[] = 'odhad dosahu se do casoveho limitu nevesel, dopocita ho nejblizsi cron';
@@ -5120,7 +5197,9 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
                 $plan['contact_estimate'] = $estimate;
                 $store = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
                 $store->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
-                $fixed[] = 'odhad dosahu spocitan (' . (int)$estimate['reachable_contacts'] . ')';
+                $fixed[] = 'odhad dosahu spocitan (' . (int)$estimate['reachable_contacts'] . ' z '
+                    . count((array)$estimate['sources']) . ' katalogu'
+                    . (empty($estimate['complete']) ? ', zbyva ' . count((array)$estimate['pending_sources']) : '') . ')';
             }
         }
     } finally {
@@ -6095,7 +6174,7 @@ function runCronAiResearchContactEstimates(PDO $pdo, array $config, int $budgetS
         FROM ai_research_runs
         WHERE status IN ("done", "no_match")
           AND plan_json <> ""
-          AND plan_json NOT LIKE "%contact_estimate%"
+          AND (plan_json NOT LIKE "%contact_estimate%" OR plan_json LIKE "%\"complete\":false%")
         ORDER BY id DESC
         LIMIT 5
     ')->fetchAll(PDO::FETCH_ASSOC);
@@ -6111,10 +6190,7 @@ function runCronAiResearchContactEstimates(PDO $pdo, array $config, int $budgetS
         if (!is_array($plan)) {
             continue;
         }
-        $source = aiResearchPrimarySourceKey($plan);
-        $keyword = aiResearchPrimaryKeyword($plan);
-        $location = (string)($plan['target_location'] ?? '');
-        if ($source === '' || $keyword === '' || !scrapingSourceIsActive($source)) {
+        if (aiResearchPrimaryKeyword($plan) === '' || !aiResearchEstimateSourcesForPlan($plan)) {
             continue;
         }
         $estimate = aiResearchComputeContactEstimate($pdo, $runId, $plan, $deadline);
@@ -6125,8 +6201,9 @@ function runCronAiResearchContactEstimates(PDO $pdo, array $config, int $budgetS
         $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
         $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
         return 'AI research odhad dosahu: beh #' . $runId . ' ma '
-            . (int)$plan['contact_estimate']['reachable_contacts'] . ' dosazitelnych kontaktu z '
-            . (int)$plan['contact_estimate']['listing_items'] . ' zaznamu katalogu.';
+            . (int)$estimate['reachable_contacts'] . ' dosazitelnych kontaktu z '
+            . (int)$estimate['listing_items'] . ' zaznamu v ' . count((array)$estimate['sources']) . ' katalozich'
+            . ($estimate['complete'] ? '.' : '; ' . count((array)$estimate['pending_sources']) . ' katalog(y) dopocita dalsi cron.');
     }
     return 'AI research odhad dosahu: zadny beh nemel pouzitelny plan.';
 }
@@ -6136,51 +6213,136 @@ function runCronAiResearchContactEstimates(PDO $pdo, array $config, int $budgetS
  * nepredstira, ze kazdy zaznam v katalogu ma dohledatelny email.
  */
 /**
- * Spocita odhad dosahu pro plan behu. Vraci null, kdyz plan na to nema dost udaju,
- * nebo kdyz se vypocet do zadaneho casu nevejde.
+ * Spocita odhad dosahu pro plan behu, a to pres vsechny katalogy, ve kterych ma
+ * cileni smysl (primarni zdroj planu + katalogy vybranych trhu). Vraci null, kdyz
+ * plan na to nema dost udaju nebo kdyz se nestihl ani prvni katalog.
  */
 function aiResearchComputeContactEstimate(PDO $pdo, int $runId, array $plan, int $deadline): ?array
 {
-    $source = aiResearchPrimarySourceKey($plan);
     $keyword = aiResearchPrimaryKeyword($plan);
-    $location = (string)($plan['target_location'] ?? '');
-    if ($source === '' || $keyword === '' || !scrapingSourceIsActive($source)) {
+    $sources = aiResearchEstimateSourcesForPlan($plan);
+    if ($keyword === '' || !$sources) {
         return null;
     }
-    try {
-        $listing = aiResearchEstimateListingPages(
-            static function (int $page) use ($source, $keyword, $location, $deadline): int {
-                if (time() >= $deadline) {
-                    return 0;
+    $primary = $sources[0];
+    // Konkretni lokalita ma smysl jen v katalogu domaciho trhu; do zahranicniho
+    // katalogu by mesto typu Praha nepatrilo a odhad by vysel nula.
+    $markets = (array)($plan['target_markets'] ?? []);
+    $homeSource = aiResearchSupportedMarkets()[strtoupper(trim((string)($markets[0] ?? '')))] ?? $primary;
+    // Uz spocitane katalogy se neprepocitavaji; dopocitavaji se jen ty, na ktere
+    // predchozi beh nemel cas, aby soucet postupne dorostl na vsechny trhy.
+    $listings = [];
+    $existing = is_array($plan['contact_estimate'] ?? null) ? (array)$plan['contact_estimate'] : [];
+    foreach ((array)($existing['sources'] ?? []) as $entry) {
+        $done = (string)($entry['source'] ?? '');
+        if ($done === '' || !in_array($done, $sources, true)) {
+            continue;
+        }
+        $listings[$done] = [
+            'listing' => [
+                'items_total' => (int)($entry['listing_items'] ?? 0),
+                'pages' => (int)($entry['listing_pages'] ?? 0),
+                'capped' => !empty($entry['listing_capped']),
+                'items_per_page' => (int)($entry['items_per_page'] ?? ($existing['sample_visited'] ?? 0)),
+                'fetches' => 0,
+            ],
+            'location' => (string)($entry['location'] ?? ''),
+        ];
+    }
+    $pending = [];
+    foreach ($sources as $source) {
+        if (isset($listings[$source])) {
+            continue;
+        }
+        if (time() >= $deadline - 5) {
+            // Zbyle katalogy dopocita dalsi cron, aby request neskoncil na timeoutu hostingu.
+            $pending[] = $source;
+            continue;
+        }
+        $location = $source === $homeSource ? (string)($plan['target_location'] ?? '') : '';
+        $ranOutOfTime = false;
+        try {
+            $listing = aiResearchEstimateListingPages(
+                static function (int $page) use ($source, $keyword, $location, $deadline, &$ranOutOfTime): int {
+                    if (time() >= $deadline) {
+                        $ranOutOfTime = true;
+                        return 0;
+                    }
+                    return aiResearchCountListingItems($source, $keyword, $location, $page);
                 }
-                return aiResearchCountListingItems($source, $keyword, $location, $page);
-            }
-        );
-    } catch (Throwable $e) {
-        error_log('AI research estimate for #' . $runId . ' failed: ' . $e->getMessage());
+            );
+        } catch (Throwable $e) {
+            error_log('AI research estimate for #' . $runId . ' source ' . $source . ' failed: ' . $e->getMessage());
+            $pending[] = $source;
+            continue;
+        }
+        if ($ranOutOfTime) {
+            // Necely pruzkum by dosah podstrelil, takze se radeji nepocita vubec.
+            $pending[] = $source;
+            continue;
+        }
+        $listings[$source] = ['listing' => $listing, 'location' => $location];
+    }
+    if (!$listings) {
         return null;
     }
-    return aiResearchBuildContactEstimate($pdo, $runId, $source, $listing);
+    return aiResearchBuildContactEstimate($pdo, $runId, $primary, $listings, $pending);
 }
 
-function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $source, array $listing): array
+/**
+ * Vytéznost emailu se meri na vzorku, ktery uz beh skutecne prosel, takze odhad
+ * nepredstira, ze kazdy zaznam v katalogu ma dohledatelny email. Stejna vytéznost
+ * se pouzije na vsechny katalogy - jina merena data pro zahranicni zdroje nemame.
+ */
+function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $primarySource, array $listings, array $pendingSources = []): array
 {
     $stmt = $pdo->prepare('SELECT COUNT(*) FROM ai_research_contacts WHERE run_id=?');
     $stmt->execute([$runId]);
     $sampleWithEmail = (int)$stmt->fetchColumn();
-    $sampleVisited = max($sampleWithEmail, (int)($listing['items_per_page'] ?? 0));
+    $primaryListing = $listings[$primarySource]['listing'] ?? reset($listings)['listing'] ?? [];
+    $sampleVisited = max($sampleWithEmail, (int)($primaryListing['items_per_page'] ?? 0));
     $yield = $sampleVisited > 0 ? $sampleWithEmail / $sampleVisited : 0.0;
-    $itemsTotal = (int)($listing['items_total'] ?? 0);
+
+    $itemsTotal = 0;
+    $pagesTotal = 0;
+    $fetchesTotal = 0;
+    $capped = false;
+    $reachable = 0;
+    $breakdown = [];
+    foreach ($listings as $source => $entry) {
+        $listing = (array)$entry['listing'];
+        $items = (int)($listing['items_total'] ?? 0);
+        $itemsTotal += $items;
+        $pagesTotal += (int)($listing['pages'] ?? 0);
+        $fetchesTotal += (int)($listing['fetches'] ?? 0);
+        $capped = $capped || !empty($listing['capped']);
+        $sourceReachable = (int)round($items * $yield);
+        $reachable += $sourceReachable;
+        $breakdown[] = [
+            'source' => $source,
+            'source_label' => scrapingSourceLabel((string)$source),
+            'location' => (string)$entry['location'],
+            'listing_items' => $items,
+            'listing_pages' => (int)($listing['pages'] ?? 0),
+            'items_per_page' => (int)($listing['items_per_page'] ?? 0),
+            'listing_capped' => !empty($listing['capped']),
+            'reachable_contacts' => $sourceReachable,
+        ];
+    }
+
     return [
-        'source' => $source,
+        'source' => $primarySource,
+        'sources' => $breakdown,
+        'pending_sources' => array_values($pendingSources),
+        'complete' => !$pendingSources,
         'listing_items' => $itemsTotal,
-        'listing_pages' => (int)($listing['pages'] ?? 0),
-        'listing_capped' => (bool)($listing['capped'] ?? false),
-        'listing_fetches' => (int)($listing['fetches'] ?? 0),
+        'listing_pages' => $pagesTotal,
+        'listing_capped' => $capped,
+        'listing_fetches' => $fetchesTotal,
         'sample_with_email' => $sampleWithEmail,
         'sample_visited' => $sampleVisited,
         'email_yield' => round($yield, 3),
-        'reachable_contacts' => (int)round($itemsTotal * $yield),
+        'reachable_contacts' => $reachable,
         'calculated_at' => date('c'),
     ];
 }
@@ -16867,6 +17029,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <div>
                 <h2>AI research administrace</h2>
                 <p>Agent průběžně vybírá nové firmy z Firmy.cz / Vše pro firmy / Praha, projde jejich web, navrhne nejvhodnější B2B cílení včetně klíčového slova a lokality, najde max. 10 kontaktů a připraví dvě varianty oslovení. AI se používá jen na pochopení byznysu, výběr cílovky a texty; scraping kontaktů je čistá automatizace.</p>
+                <p class="muted">Dosažitelné kontakty se počítají napříč všemi katalogy, kde cílení dává smysl. Pokud web seed firmy není ani v angličtině, bere se cílení automaticky jako domácí a AI se na trhy vůbec neptáme; u anglického webu vyhodnotí AI, ve kterých zemích má hledání smysl, a jejich katalogy se do součtu přičtou. Reálně se scrapuje jen prvních <?= h((string)AI_RESEARCH_FIRST_BATCH_CONTACTS) ?> kontaktů pro první dávku.</p>
                 <p class="muted">Automatika se spouští cronem (GitHub plánované běhy se v praxi zpožďují, takže interval bývá delší než 5 minut). Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Gemini rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
                 <p class="muted">Poslední automatický běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Další nejdříve: <?= h($researchNextRunLabel) ?>. Stav: <?= h($researchAutomationStatus) ?></p>
                 <p class="muted">Skutečně odeslané Gemini requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h. Podle těchto čísel se pozná, zda Google limituje po minutách, nebo po dnech.</p>
@@ -17001,7 +17164,11 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td>
                     <?php $runEstimate = is_array($runPlan['contact_estimate'] ?? null) ? (array)$runPlan['contact_estimate'] : []; ?>
                     <?php if ($runEstimate): ?>
-                        <?= h((string)(int)($runEstimate['reachable_contacts'] ?? 0)) ?><?= !empty($runEstimate['listing_capped']) ? '+' : '' ?>
+                        <span title="<?= h(implode(' | ', array_map(
+                            static fn(array $entry): string => (string)($entry['source_label'] ?? $entry['source'] ?? '') . ': ' . (int)($entry['reachable_contacts'] ?? 0),
+                            array_filter((array)($runEstimate['sources'] ?? []), 'is_array')
+                        ))) ?>"><?= h((string)(int)($runEstimate['reachable_contacts'] ?? 0)) ?><?= !empty($runEstimate['listing_capped']) ? '+' : '' ?></span>
+                        <?php if (!empty($runEstimate['pending_sources'])): ?><small title="Dopočítávají se další katalogy">…</small><?php endif; ?>
                     <?php else: ?>
                         -
                     <?php endif; ?>
@@ -17098,11 +17265,30 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <?php if ($estimate): ?>
                                     <p><strong>Dosažitelných kontaktů:</strong> <?= h((string)(int)($estimate['reachable_contacts'] ?? 0)) ?><?= !empty($estimate['listing_capped']) ? ' a více' : '' ?>
                                         <small>(z <?= h((string)(int)($estimate['listing_items'] ?? 0)) ?> záznamů katalogu na <?= h((string)(int)($estimate['listing_pages'] ?? 0)) ?> stránkách, e-mail má <?= h((string)round(((float)($estimate['email_yield'] ?? 0)) * 100)) ?> % z nich; zjištěno <?= h((string)(int)($estimate['listing_fetches'] ?? 0)) ?> dotazy)</small></p>
+                                    <?php if (count((array)($estimate['sources'] ?? [])) > 1): ?>
+                                        <ul class="estimate-source-list">
+                                            <?php foreach ((array)$estimate['sources'] as $estimateSource): ?>
+                                                <li><strong><?= h((string)($estimateSource['source_label'] ?? $estimateSource['source'] ?? '')) ?></strong>
+                                                    <?= h((string)(int)($estimateSource['reachable_contacts'] ?? 0)) ?> kontaktů
+                                                    <small>(<?= h((string)(int)($estimateSource['listing_items'] ?? 0)) ?> záznamů<?= trim((string)($estimateSource['location'] ?? '')) !== '' ? ', ' . h((string)$estimateSource['location']) : ', celá země' ?>)</small></li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    <?php endif; ?>
+                                    <?php if (!empty($estimate['pending_sources'])): ?>
+                                        <p class="note">Dopočítává se ještě <?= h((string)count((array)$estimate['pending_sources'])) ?> katalog(y): <?= h(implode(', ', array_map('scrapingSourceLabel', (array)$estimate['pending_sources']))) ?>. Součet po dokončení naroste.</p>
+                                    <?php endif; ?>
                                     <p class="note">Reálně se scrapuje jen prvních <?= h((string)AI_RESEARCH_FIRST_BATCH_CONTACTS) ?> kontaktů pro první dávku oslovení. Zbytek se dosbírá, až bude potřeba.</p>
                                 <?php else: ?>
                                     <p><strong>Dosažitelných kontaktů:</strong> spočítá nejbližší cron.</p>
                                 <?php endif; ?>
                                 <p><strong>Lokalita:</strong> <?= h(aiResearchTargetAreaLabel($runPlan)) ?></p>
+                                <?php $runMarkets = array_values(array_filter(array_map('strval', (array)($runPlan['target_markets'] ?? [])))); ?>
+                                <?php if ($runMarkets): ?>
+                                    <p><strong>Cílové trhy:</strong> <?= h(implode(', ', $runMarkets)) ?>
+                                        <small><?= empty($runPlan['site_has_english'])
+                                            ? '(web seedu není ani v angličtině, takže se bere jen domácí trh)'
+                                            : '(web seedu má anglickou verzi, zahraniční trhy vyhodnotila AI)' ?></small></p>
+                                <?php endif; ?>
                                 <?php if (trim((string)($runPlan['search_url'] ?? '')) !== ''): ?><p><strong>URL hledani:</strong> <a href="<?= h((string)$runPlan['search_url']) ?>" target="_blank" rel="noopener"><?= h((string)$runPlan['search_url']) ?></a></p><?php endif; ?>
                             </section>
                             <?php
