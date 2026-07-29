@@ -2494,8 +2494,15 @@ function runCronAiResearch(PDO $pdo, array $config): string
         }
     });
     try {
+        // Dokonceni rozdelanych behu nesmi vyradit zalozeni noveho seedu, jinak by se pri
+        // vetsim mnozstvi nedokoncenych behu prestaly zpracovavat nove subjekty.
         $unfinished = runCronAiResearchUnfinished($pdo, $config);
-        $message = $unfinished !== '' ? $unfinished : runAiResearchOnce($pdo, $config);
+        $message = aiResearchDeadlineReached(55)
+            ? 'AI research: novy seed se odklada, cas tohoto behu uz padl na dokonceni rozdelane prace.'
+            : runAiResearchOnce($pdo, $config);
+        if ($unfinished !== '') {
+            $message = $unfinished . ' | ' . $message;
+        }
         setSetting($pdo, 'ai_research_last_run_at', (string)time());
         setSetting($pdo, 'ai_research_lock_until', '');
         setSetting($pdo, 'ai_research_next_allowed_at', '');
