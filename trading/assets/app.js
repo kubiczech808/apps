@@ -1943,16 +1943,18 @@ function syncCapitalStatus({ availableCapital = null, baseCapital = null, stake 
     els.capitalStatus.className = "capital-status muted";
     return;
   }
-  if (available + 0.000001 < orderStake) {
-    els.capitalStatus.textContent = `Dalsi obchod se ted nerealizuje: k dispozici je ${money(available)}, ale jedna obchodni davka podle diverzifikace vyzaduje ${money(orderStake)}.`;
-    els.capitalStatus.className = "capital-status negative";
-    return;
-  }
-  const idleAfterNext = Math.max(0, available - orderStake);
+  const appliedStake = Math.min(available, orderStake);
+  const cappedByCash = available + 0.000001 < orderStake;
+  const idleAfterNext = Math.max(0, available - appliedStake);
   const base = Number(baseCapital);
   const baseText = Number.isFinite(base) ? ` / base ${money(base)}` : "";
-  els.capitalStatus.textContent = `K dispozici pro ${cadenceLabel}: ${money(available)}; dalsi obchodni davka ${money(orderStake)}${baseText}; po dalsim obchodu zustane cca ${money(idleAfterNext)}.`;
-  els.capitalStatus.className = idleAfterNext > orderStake ? "capital-status warning" : "capital-status positive";
+  if (cappedByCash) {
+    els.capitalStatus.textContent = `K dispozici pro ${cadenceLabel}: ${money(available)}; nastaveny maximalni stake je ${money(orderStake)}${baseText}, ale dalsi order pouzije maximalne dostupnych ${money(appliedStake)} vcetne odhadovanych poplatku.`;
+    els.capitalStatus.className = "capital-status warning";
+    return;
+  }
+  els.capitalStatus.textContent = `K dispozici pro ${cadenceLabel}: ${money(available)}; dalsi obchodni davka ${money(appliedStake)}${baseText}; po dalsim obchodu zustane cca ${money(idleAfterNext)}.`;
+  els.capitalStatus.className = idleAfterNext > appliedStake ? "capital-status warning" : "capital-status positive";
 }
 
 function syncRiskAllocationControl(availableCapital = null, sourceLabel = "available capital", options = {}) {

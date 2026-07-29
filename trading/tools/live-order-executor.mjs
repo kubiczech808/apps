@@ -989,46 +989,39 @@ function orderPriceForBook(book, tick) {
   return null;
 }
 
-function sharesForOrder({ price, minOrderSize, maxNotional, cash }) {
-  const targetStake = maxNotional;
-  const usableStake = Math.min(targetStake, cash);
+function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 }) {
+  const targetStake = Math.max(0, number(maxNotional, 0));
+  const availableCash = Math.max(0, number(cash, 0));
+  // The portfolio percentage caps the cash committed, not the potential payout.
+  // For taker orders, reserve the estimated fee inside that cap as well.
+  const usableStake = Math.min(targetStake, availableCash);
+  const appliedFeeRate = USE_LIMIT_ORDERS && POST_ONLY ? 0 : Math.max(0, number(feeRate, 0));
+  const costPerShare = price * (1 + appliedFeeRate * (1 - price));
   const minNotional = price * minOrderSize;
-  if (minNotional > cash) {
-    return {
-      size: null,
-      targetStake,
-      minNotional,
-      minSizeOverride: false,
-      sizingNote: `minimum order ${minOrderSize} shares costs ${minNotional.toFixed(4)} USDC, above cash ${cash.toFixed(4)} USDC`,
-    };
+  let size = costPerShare > 0
+    ? Math.floor((usableStake / costPerShare) * 10000) / 10000
+    : 0;
+  while (size > 0) {
+    const notional = price * size;
+    const fee = appliedFeeRate > 0 ? takerFee(size, price, appliedFeeRate) : 0;
+    if (notional + fee <= usableStake + 0.000001) break;
+    size = Math.max(0, Number((size - 0.0001).toFixed(4)));
   }
-  if (minNotional > usableStake) {
-    return {
-      size: Number(minOrderSize.toFixed(4)),
-      targetStake,
-      minNotional,
-      minSizeOverride: true,
-      sizingNote: `exchange minimum override: ${minOrderSize.toFixed(4)} shares costs ${minNotional.toFixed(4)} USDC, above the ${targetStake.toFixed(4)} USDC portfolio stake but covered by available cash`,
-    };
-  }
-  if (ORDER_SIZE_MODE === "minimum") {
-    return {
-      size: Number(minOrderSize.toFixed(4)),
-      targetStake,
-      minNotional,
-      minSizeOverride: false,
-      sizingNote: "legacy minimum-share sizing; use LIVE_ORDER_SIZE_MODE=stake_fraction for equal stake sizing",
-    };
-  }
-  const size = Math.floor((usableStake / price) * 10000) / 10000;
+  const belowExchangeMinimum = size > 0 && size + 0.000001 < minOrderSize;
+
   return {
-    size: size >= minOrderSize ? Number(size.toFixed(4)) : null,
+    size: size > 0 ? Number(size.toFixed(4)) : null,
     targetStake,
+    usableStake,
     minNotional,
-    minSizeOverride: false,
-    sizingNote: size >= minOrderSize
-      ? (usableStake < targetStake ? "sized from available cash below target stake" : "sized from target stake percentage")
-      : `target stake ${targetStake.toFixed(4)} USDC is below exchange minimum ${minNotional.toFixed(4)} USDC`,
+    minSizeOverride: belowExchangeMinimum,
+    sizingNote: size <= 0
+      ? "no available cash for a positive stake"
+      : (belowExchangeMinimum
+        ? `sized to the available ${usableStake.toFixed(4)} USDC stake (below the displayed ${minOrderSize.toFixed(4)}-share exchange minimum; submission will verify acceptance)`
+        : (usableStake < targetStake
+          ? "sized from available cash below the configured portfolio stake"
+          : "sized from the configured portfolio stake")),
   };
 }
 
@@ -1065,7 +1058,8 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     return { candidate: evaluation, eligible: false, rejectReasons: ["post-only limit would cross current ask"] };
   }
 
-  const orderSizing = sharesForOrder({ price, minOrderSize, maxNotional, cash });
+  const estimatedFeeRate = feeRateForEvaluation(evaluation);
+  const orderSizing = sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate: estimatedFeeRate });
   const size = orderSizing.size;
   if (!Number.isFinite(size)) {
     return {
@@ -1113,7 +1107,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   const volume24hr = number(market.volume24hr, number(evaluation.volume24hr, 0));
   const liquidity = number(market.liquidity, number(evaluation.liquidity, 0));
   const notional = Number((price * size).toFixed(5));
-  const fee = USE_LIMIT_ORDERS && POST_ONLY ? 0 : takerFee(size, price, feeRateForEvaluation(evaluation));
+  const fee = USE_LIMIT_ORDERS && POST_ONLY ? 0 : takerFee(size, price, estimatedFeeRate);
   const totalCost = notional + fee;
   const expectedValue = probability * size - notional - fee;
   const expectedRoi = totalCost > 0 ? expectedValue / totalCost : 0;
@@ -1157,6 +1151,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     orderSize: Number(size.toFixed(4)),
     orderNotionalUsdc: notional,
     targetStakeUsdc: Number(orderSizing.targetStake.toFixed(5)),
+    appliedStakeUsdc: Number(orderSizing.usableStake.toFixed(5)),
     minOrderSize,
     minOrderNotionalUsdc: Number(orderSizing.minNotional.toFixed(5)),
     maxNotionalBeforeMinimumOverrideUsdc: maxNotional,
@@ -1660,7 +1655,7 @@ async function main() {
     }));
   const eligible = sortLiveEligibleCandidates(allEligible);
   const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
-  const rotationReview = (!eligible.length || cash + 0.000001 < maxNotional)
+  const rotationReview = (!eligible.length || cash <= 0)
     ? await reviewPositionRotation({
         liveState,
         evaluationByToken,
@@ -1683,6 +1678,9 @@ async function main() {
       });
 
   const best = eligible[0] || null;
+  const appliedDirectStake = best?.totalCostUsdc != null
+    ? number(best.totalCostUsdc, 0)
+    : Math.min(maxNotional, Math.max(0, cash));
   const replacementDue = rotationReplacementDue(previousExecution, liveState);
   const cadenceBlocked = Boolean(monitoring.cadenceBlocked) && !replacementDue;
   const rotationAvailable = rotationReview?.action === "ROTATION_AVAILABLE";
@@ -1797,8 +1795,9 @@ async function main() {
       capital: {
         availableUsdc: cash,
         portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
-        requiredStakeUsdc: maxNotional,
-        insufficientCapital: !Number.isFinite(maxNotional) || maxNotional <= 0 || cash + 0.000001 < maxNotional || (!allEligible.length && capitalSizingBlocked.length > 0),
+        targetStakeUsdc: maxNotional,
+        requiredStakeUsdc: Number(appliedDirectStake.toFixed(5)),
+        insufficientCapital: !Number.isFinite(maxNotional) || maxNotional <= 0 || cash <= 0 || (!allEligible.length && capitalSizingBlocked.length > 0),
         capitalSizingBlockedCandidates: capitalSizingBlocked.length,
       },
       counts: {
