@@ -138,8 +138,7 @@ on:
         default: ""
         type: string
   schedule:
-    - cron: '7 * * * *'
-    - cron: '22,37,52 * * * *'
+    - cron: '*/5 * * * *'
     - cron: '17 1 * * *'
 
 concurrency:
@@ -185,11 +184,13 @@ jobs:
       PAPER_MAX_SPREAD: "0.08"
       PAPER_MIN_VOLUME_24H: "100"
       PAPER_MAX_RESOLUTION_DAYS: "7"
-      PAPER_AI_ANALYSIS_LIMIT: "1"
-      PAPER_AI_REQUEST_DELAY_MS: "0"
-      PAPER_AI_MIN_INTERVAL_SECONDS: "3600"
-      PAPER_AI_MAX_REQUESTS_PER_HOUR: "1"
-      PAPER_AI_MAX_REQUESTS_PER_DAY: "24"
+      PAPER_AI_ANALYSIS_LIMIT: "5"
+      PAPER_AI_REQUEST_DELAY_MS: "7000"
+      PAPER_AI_MIN_INTERVAL_SECONDS: "7"
+      PAPER_AI_MAX_REQUESTS_PER_MINUTE: "10"
+      PAPER_AI_MAX_INPUT_TOKENS_PER_MINUTE: "250000"
+      PAPER_AI_MAX_REQUESTS_PER_HOUR: "600"
+      PAPER_AI_MAX_REQUESTS_PER_DAY: "1450"
       PAPER_AI_USAGE_HISTORY_LIMIT: "500"
       PAPER_AI_STOP_ON_QUOTA_ERROR: "true"
       PAPER_AI_POSTMORTEM_LIMIT: "8"
@@ -199,8 +200,9 @@ jobs:
       PAPER_REPORT_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report') }}
       PAPER_REFRESH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' }}
       PAPER_SCHEDULED_CADENCE_POLL: ${{ github.event_name == 'schedule' && github.event.schedule != '17 1 * * *' && 'true' || 'false' }}
+      PAPER_CONTINUOUS_EVALUATION: "true"
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET || secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-3.5-flash' }}
+      GEMINI_MODEL: gemini-3-flash-preview
       GEMINI_SEARCH_GROUNDING: "true"
       PAPER_PRIMARY_AI_PROVIDER: gemini
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

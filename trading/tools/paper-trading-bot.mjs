@@ -37,17 +37,19 @@ const MAX_SPREAD = envNumber("PAPER_MAX_SPREAD", 0.08);
 const MIN_VOLUME_24H = envNumber("PAPER_MIN_VOLUME_24H", 100);
 const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3-flash-preview";
 const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
 const REQUIRE_GEMINI = envBool("PAPER_REQUIRE_GEMINI", false);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").toLowerCase();
 const AI_ANALYSIS_LIMIT = envNumber("PAPER_AI_ANALYSIS_LIMIT", 2);
-const AI_REQUEST_DELAY_MS = envNumber("PAPER_AI_REQUEST_DELAY_MS", 2500);
-const AI_MIN_INTERVAL_SECONDS = envNumber("PAPER_AI_MIN_INTERVAL_SECONDS", 3600);
-const AI_MAX_REQUESTS_PER_HOUR = envNumber("PAPER_AI_MAX_REQUESTS_PER_HOUR", 1);
-const AI_MAX_REQUESTS_PER_DAY = envNumber("PAPER_AI_MAX_REQUESTS_PER_DAY", 24);
+const AI_REQUEST_DELAY_MS = envNumber("PAPER_AI_REQUEST_DELAY_MS", 7000);
+const AI_MIN_INTERVAL_SECONDS = envNumber("PAPER_AI_MIN_INTERVAL_SECONDS", 7);
+const AI_MAX_REQUESTS_PER_MINUTE = envNumber("PAPER_AI_MAX_REQUESTS_PER_MINUTE", 10);
+const AI_MAX_INPUT_TOKENS_PER_MINUTE = envNumber("PAPER_AI_MAX_INPUT_TOKENS_PER_MINUTE", 250000);
+const AI_MAX_REQUESTS_PER_HOUR = envNumber("PAPER_AI_MAX_REQUESTS_PER_HOUR", 600);
+const AI_MAX_REQUESTS_PER_DAY = envNumber("PAPER_AI_MAX_REQUESTS_PER_DAY", 1450);
 const AI_USAGE_HISTORY_LIMIT = envNumber("PAPER_AI_USAGE_HISTORY_LIMIT", 500);
 const AI_POSTMORTEM_LIMIT = envNumber("PAPER_AI_POSTMORTEM_LIMIT", 8);
 const AI_STOP_ON_QUOTA_ERROR = String(process.env.PAPER_AI_STOP_ON_QUOTA_ERROR ?? "true").toLowerCase() !== "false";
@@ -64,6 +66,7 @@ const EVALUATION_ONLY = envBool("PAPER_EVALUATION_ONLY", false);
 const EVALUATION_TOKEN_ID = String(process.env.PAPER_EVALUATION_TOKEN_ID || "").trim();
 const EVALUATION_MARKET_SLUG = String(process.env.PAPER_EVALUATION_MARKET_SLUG || "").trim();
 const SCHEDULED_CADENCE_POLL = envBool("PAPER_SCHEDULED_CADENCE_POLL", false);
+const CONTINUOUS_EVALUATION = envBool("PAPER_CONTINUOUS_EVALUATION", false);
 const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
 const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable"].includes(process.env.PAPER_STRATEGY_ID)
   ? process.env.PAPER_STRATEGY_ID
@@ -1854,20 +1857,21 @@ function messagesToGeminiText(messages) {
 async function callGeminiJson(messages) {
   if (!GEMINI_API_KEY) return null;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
-  const requestBody = (jsonMode = true) => ({
-    generationConfig: jsonMode ? {
+  const requestText = `${messagesToGeminiText(messages)}\n\nReturn only one valid JSON object.`;
+  const requestBody = {
+    generationConfig: {
       responseMimeType: "application/json",
-    } : undefined,
+    },
     tools: GEMINI_SEARCH_GROUNDING ? [{ google_search: {} }] : undefined,
     contents: [{
       role: "user",
       parts: [{
-        text: `${messagesToGeminiText(messages)}\n\nReturn only one valid JSON object.`,
+        text: requestText,
       }],
     }],
-  });
+  };
 
-  async function send(jsonMode) {
+  async function send() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 25000);
     try {
@@ -1877,7 +1881,7 @@ async function callGeminiJson(messages) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(requestBody(jsonMode)),
+        body: JSON.stringify(requestBody),
       });
       if (!response.ok) {
         const detail = await response.text().catch(() => "");
@@ -1890,13 +1894,7 @@ async function callGeminiJson(messages) {
   }
 
   try {
-    let payload;
-    try {
-      payload = await send(true);
-    } catch (error) {
-      if (!GEMINI_SEARCH_GROUNDING || !/Gemini HTTP 400/.test(String(error.message || ""))) throw error;
-      payload = await send(false);
-    }
+      const payload = await send();
     const text = payload?.candidates?.[0]?.content?.parts
       ?.map((part) => part.text || "")
       .join("")
@@ -1917,6 +1915,11 @@ async function callGeminiJson(messages) {
               .slice(0, 8)
           : [],
       } : null,
+      _usage: {
+        promptTokens: Number(payload?.usageMetadata?.promptTokenCount || 0) || null,
+        outputTokens: Number(payload?.usageMetadata?.candidatesTokenCount || 0) || null,
+        totalTokens: Number(payload?.usageMetadata?.totalTokenCount || 0) || null,
+      },
     };
   } catch (error) {
     return { error: error.message || String(error), provider: "gemini", model: GEMINI_MODEL };
@@ -2195,18 +2198,22 @@ function aiUsageSnapshot(state, now = Date.now()) {
   const hour = inWindow(3600000);
   const successful = (rows) => rows.filter((entry) => entry.status === "SUCCESS").length;
   const quotaErrors = (rows) => rows.filter((entry) => entry.status === "QUOTA_LIMITED").length;
+  const inputTokens = (rows) => rows.reduce((total, entry) => total + Math.max(0, Number(entry.inputTokens ?? entry.estimatedInputTokens ?? 0)), 0);
   const last = [...entries].sort((a, b) => Date.parse(b.requestedAt || "") - Date.parse(a.requestedAt || ""))[0] || null;
   const nextFromInterval = last ? Date.parse(last.requestedAt || "") + AI_MIN_INTERVAL_SECONDS * 1000 : 0;
   const oldestHour = hour[0] ? Date.parse(hour[0].requestedAt || "") + 3600000 : 0;
+  const oldestMinute = minute[0] ? Date.parse(minute[0].requestedAt || "") + 60000 : 0;
   const oldestDay = entries[0] ? Date.parse(entries[0].requestedAt || "") + 86400000 : 0;
   const nextAvailable = Math.max(
     nextFromInterval,
+    minute.length >= AI_MAX_REQUESTS_PER_MINUTE ? oldestMinute : 0,
     hour.length >= AI_MAX_REQUESTS_PER_HOUR ? oldestHour : 0,
     entries.length >= AI_MAX_REQUESTS_PER_DAY ? oldestDay : 0,
   );
   return {
     model: GEMINI_MODEL,
     requestsLastMinute: minute.length,
+    inputTokensLastMinute: inputTokens(minute),
     requestsLastHour: hour.length,
     requestsLast24Hours: entries.length,
     successfulLastMinute: successful(minute),
@@ -2214,6 +2221,8 @@ function aiUsageSnapshot(state, now = Date.now()) {
     successfulLast24Hours: successful(entries),
     quotaErrorsLast24Hours: quotaErrors(entries),
     maxRequestsPerHour: AI_MAX_REQUESTS_PER_HOUR,
+    maxRequestsPerMinute: AI_MAX_REQUESTS_PER_MINUTE,
+    maxInputTokensPerMinute: AI_MAX_INPUT_TOKENS_PER_MINUTE,
     maxRequestsPer24Hours: AI_MAX_REQUESTS_PER_DAY,
     minIntervalSeconds: AI_MIN_INTERVAL_SECONDS,
     estimatedDailyCapacity: Math.min(AI_MAX_REQUESTS_PER_DAY, Math.floor(86400 / Math.max(1, AI_MIN_INTERVAL_SECONDS))),
@@ -2226,21 +2235,30 @@ function aiUsageSnapshot(state, now = Date.now()) {
   };
 }
 
-function reserveAiRequest(state) {
+function reserveAiRequest(state, estimatedInputTokens = 0) {
   const entry = {
     id: `ai-${nowIso()}-${Math.random().toString(36).slice(2, 8)}`,
     requestedAt: nowIso(),
     status: "IN_FLIGHT",
     model: GEMINI_MODEL,
+    estimatedInputTokens: Math.max(0, Number(estimatedInputTokens) || 0),
   };
   state.aiUsageLog = [...aiUsageEntries(state), entry].slice(-Math.max(20, AI_USAGE_HISTORY_LIMIT));
   state.aiUsage = aiUsageSnapshot(state);
   return entry.id;
 }
 
-function finishAiRequest(state, id, status, error = "") {
+function finishAiRequest(state, id, status, error = "", usage = null) {
   state.aiUsageLog = aiUsageEntries(state).map((entry) => entry.id === id
-    ? { ...entry, completedAt: nowIso(), status, error: error ? compactSentence(error) : null }
+    ? {
+        ...entry,
+        completedAt: nowIso(),
+        status,
+        error: error ? compactSentence(error) : null,
+        inputTokens: Number(usage?.promptTokens) || entry.estimatedInputTokens || 0,
+        outputTokens: Number(usage?.outputTokens) || null,
+        totalTokens: Number(usage?.totalTokens) || null,
+      }
     : entry);
   state.aiUsage = aiUsageSnapshot(state);
 }
@@ -2254,10 +2272,16 @@ function deferAiRun(state, reason) {
   };
 }
 
-function aiSlotAvailability(state) {
+function aiSlotAvailability(state, nextInputTokens = 0) {
   const snapshot = aiUsageSnapshot(state);
   if (snapshot.requestsLast24Hours >= AI_MAX_REQUESTS_PER_DAY) {
     return { allowed: false, reason: `AI daily request budget reached (${AI_MAX_REQUESTS_PER_DAY}/24h)`, snapshot };
+  }
+  if (snapshot.requestsLastMinute >= AI_MAX_REQUESTS_PER_MINUTE) {
+    return { allowed: false, reason: `AI minute request budget reached (${AI_MAX_REQUESTS_PER_MINUTE}/min)`, snapshot };
+  }
+  if (snapshot.inputTokensLastMinute + Math.max(0, Number(nextInputTokens) || 0) > AI_MAX_INPUT_TOKENS_PER_MINUTE) {
+    return { allowed: false, reason: `AI minute input-token budget reached (${AI_MAX_INPUT_TOKENS_PER_MINUTE}/min)`, snapshot };
   }
   if (snapshot.requestsLastHour >= AI_MAX_REQUESTS_PER_HOUR) {
     return { allowed: false, reason: `AI hourly request budget reached (${AI_MAX_REQUESTS_PER_HOUR}/h)`, snapshot };
@@ -2297,13 +2321,6 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
   const attemptedIds = new Set();
 
   for (const [candidateIndex, candidate] of candidates.entries()) {
-    if (state) {
-      const slot = aiSlotAvailability(state);
-      if (!slot.allowed) {
-        deferAiRun(state, slot.reason);
-        break;
-      }
-    }
     if (candidateIndex > 0 && AI_REQUEST_DELAY_MS > 0) {
       await new Promise((resolve) => setTimeout(resolve, AI_REQUEST_DELAY_MS));
     }
@@ -2361,12 +2378,21 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
         sourceQuality: "primary | reputable-news | mixed | weak",
       },
     };
-    const requestId = state ? reserveAiRequest(state) : null;
-    attemptedIds.add(candidate.id);
-    const result = await callGeminiJson([
+    const messages = [
       { role: "system", content: "You are a cautious forecasting analyst doing source-grounded public research. You must ignore prediction-market pricing and betting consensus. You write concrete Czech rationales based on named public facts, not generic trading commentary. Return only valid JSON." },
       { role: "user", content: JSON.stringify(prompt) },
-    ]);
+    ];
+    const estimatedInputTokens = Math.ceil(messagesToGeminiText(messages).length / 4) + 128;
+    if (state) {
+      const slot = aiSlotAvailability(state, estimatedInputTokens);
+      if (!slot.allowed) {
+        deferAiRun(state, slot.reason);
+        break;
+      }
+    }
+    const requestId = state ? reserveAiRequest(state, estimatedInputTokens) : null;
+    attemptedIds.add(candidate.id);
+    const result = await callGeminiJson(messages);
     if (!result || result.error) {
       const message = result?.error || "Gemini public-research analysis unavailable";
       const quotaLimited = isQuotaError(result);
@@ -2393,7 +2419,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
       if (requestId) finishAiRequest(state, requestId, "ERROR", "Gemini returned no valid probability");
       continue;
     }
-    if (requestId) finishAiRequest(state, requestId, "SUCCESS");
+    if (requestId) finishAiRequest(state, requestId, "SUCCESS", "", result._usage);
     const modelAnalysis = {
       direction: result.direction || outcomeKind(candidate.outcome),
       thesis: result.thesis || candidate.probabilityThesis,
@@ -2420,7 +2446,6 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
       modelAnalysis,
     ));
   }
-
   // A 429 is authoritative for this run. Persist only requests that Gemini
   // actually received (plus existing carried memos), leaving all other market
   // observations untouched for the next scheduled evaluation.
@@ -4345,7 +4370,10 @@ async function run() {
     return;
   }
 
-  const strategiesForRun = EVALUATION_ONLY ? executionStrategies() : dueExecutionStrategies(state);
+  let strategiesForRun = EVALUATION_ONLY ? executionStrategies() : dueExecutionStrategies(state);
+  if (!EVALUATION_ONLY && CONTINUOUS_EVALUATION && !strategiesForRun.length) {
+    strategiesForRun = executionStrategies();
+  }
   if (!strategiesForRun.length) {
     await writeState(state);
     console.log(JSON.stringify({
