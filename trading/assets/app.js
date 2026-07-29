@@ -4,7 +4,7 @@ const state = {
   botState: null,
   liveState: null,
   evaluationSort: {
-    key: "annualizedReturn",
+    key: "evaluatedAt",
     direction: "desc",
   },
   tradeSort: {
