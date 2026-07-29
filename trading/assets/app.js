@@ -2493,7 +2493,7 @@ function renderExecutionSteps(steps) {
   if (!body) return;
   body.innerHTML = `
     <div class="execution-steps">
-      ${steps.map((step) => `
+      ${[...steps].reverse().map((step) => `
         <div class="execution-step ${escapeHtml(step.tone || "")}">
           <strong>${escapeHtml(step.title || step.text || "")}</strong>
           ${step.detail ? `<span>${escapeHtml(step.detail)}</span>` : ""}
@@ -2501,6 +2501,7 @@ function renderExecutionSteps(steps) {
       `).join("")}
     </div>
   `;
+  body.scrollTop = 0;
 }
 
 function addExecutionStep(steps, title, detail = "", tone = "") {
