@@ -4337,12 +4337,6 @@ function tradeBatchDetail(batch) {
         item.url ? `   Polymarket: ${item.url}` : "",
       ].filter(Boolean).join("\n")).join("\n\n")
     : "-";
-  const prevalidationReasonLines = prevalidationFilter.reasonCounts && typeof prevalidationFilter.reasonCounts === "object"
-    ? Object.entries(prevalidationFilter.reasonCounts)
-        .sort((a, b) => Number(b[1]) - Number(a[1]))
-        .map(([reason, count]) => `- ${count}x ${reason}`)
-        .join("\n")
-    : "-";
   const executionShortlist = Array.isArray(prevalidationFilter.executionShortlist) ? prevalidationFilter.executionShortlist : [];
   const executionShortlistLines = executionShortlist.length
     ? executionShortlist.map((item, index) => [
@@ -4457,10 +4451,6 @@ function tradeBatchDetail(batch) {
       `Unique markets/outcomes: ${Number(prevalidationFilter.uniqueEvaluations || 0)}`,
       `Passed portfolio rules before revalidation: ${Number(prevalidationFilter.prefilterPassed || 0)}`,
       `Selected for Polymarket revalidation: ${Number(prevalidationFilter.selectedForRevalidation || 0)} / limit ${Number(prevalidationFilter.scanLimit || 0)}`,
-      `Skipped by scan limit: ${Number(prevalidationFilter.skippedByScanLimit || 0)}`,
-      `Not in shortlist before revalidation: ${Number(prevalidationFilter.prefilterRejected || 0)}`,
-      `Not-in-shortlist reason counts:`,
-      prevalidationReasonLines,
       "",
       `Shortlist order before Polymarket revalidation:`,
       executionShortlistLines,
