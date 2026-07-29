@@ -567,17 +567,20 @@ function compareShorterHorizon(a, b) {
 }
 
 function sortLiveEligibleCandidates(rows = []) {
-  return [...rows].sort((a, b) => {
-    if (SELECTION_ORDER === "highest_reward_risk_first") {
-      const aRatio = Number(a.riskReward || 0);
-      const bRatio = Number(b.riskReward || 0);
-      if (bRatio !== aRatio) return bRatio - aRatio;
-    }
-    if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
-    const horizon = compareShorterHorizon(a, b);
-    if (horizon !== 0) return horizon;
-    return b.expectedValueUsdc - a.expectedValueUsdc;
-  });
+  return [...rows]
+    .filter((item) => Number.isFinite(Number(item.annualizedReturn)) && Number(item.annualizedReturn) > 0)
+    .filter((item) => Number.isFinite(Number(item.expectedValueUsdc)) && Number(item.expectedValueUsdc) > 0)
+    .sort((a, b) => {
+      if (SELECTION_ORDER === "highest_reward_risk_first") {
+        const aRatio = Number(a.riskReward || 0);
+        const bRatio = Number(b.riskReward || 0);
+        if (bRatio !== aRatio) return bRatio - aRatio;
+      }
+      if (b.annualizedReturn !== a.annualizedReturn) return b.annualizedReturn - a.annualizedReturn;
+      const horizon = compareShorterHorizon(a, b);
+      if (horizon !== 0) return horizon;
+      return b.expectedValueUsdc - a.expectedValueUsdc;
+    });
 }
 
 function openOrderAgeHours(order) {
@@ -997,6 +1000,15 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     liquidity,
     endOk,
   });
+  if (!Number.isFinite(expectedValue) || expectedValue <= 0 || !Number.isFinite(annualizedReturn) || annualizedReturn <= 0) {
+    return {
+      candidate: evaluation,
+      eligible: false,
+      rejectReasons: ["current EV p.a. is non-profitable after fees"],
+      currentPrice: price,
+      minOrderSize,
+    };
+  }
 
   return {
     ...evaluation,
@@ -1435,6 +1447,8 @@ async function main() {
 
   const allEligible = checked
     .filter((item) => item.status === "ELIGIBLE")
+    .filter((item) => Number.isFinite(Number(item.annualizedReturn)) && Number(item.annualizedReturn) > 0)
+    .filter((item) => Number.isFinite(Number(item.expectedValueUsdc)) && Number(item.expectedValueUsdc) > 0)
     .map((item) => ({
       ...item,
       funderAddress: tradingConfig.funderAddress,

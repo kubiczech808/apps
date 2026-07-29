@@ -3303,7 +3303,11 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const liquidity = Number(item.liquidity || 0);
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(normalizedMode);
-  const annualizedReturn = Number(item.annualizedReturn);
+  const storedAnnualizedReturn = Number(item.annualizedReturn);
+  const displayedAnnualizedReturn = annualizedExpectedReturn(item);
+  const annualizedReturn = Number.isFinite(displayedAnnualizedReturn)
+    ? displayedAnnualizedReturn
+    : storedAnnualizedReturn;
   const aiPending = item.selectionStatus === "AI_PENDING" || item.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
 
   if (displayStatus !== "EVALUATED") reasons.push(`status ${displayStatus}`);
@@ -3315,7 +3319,9 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   } else if (aiProbability < threshold) {
     reasons.push(`AI probability ${probability(aiProbability)} below ${probability(threshold)}`);
   }
-  if (Number.isFinite(annualizedReturn) && annualizedReturn <= 0) {
+  if (!Number.isFinite(annualizedReturn)) {
+    reasons.push("missing usable EV p.a.");
+  } else if (annualizedReturn <= 0) {
     reasons.push(`EV p.a. ${signedPercent(annualizedReturn)} is non-profitable after fees`);
   }
   if (aiPending) reasons.push("grounded Gemini analysis is pending");
