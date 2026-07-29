@@ -65,15 +65,50 @@ final class SmtpMailer
         fclose($socket);
     }
 
+    /**
+     * Chybejici nebo neplatne nastaveni musi rict, co presne doplnit. Bez teto kontroly
+     * skonci prazdny host az v DNS jako "getaddrinfo for  failed", z ceho uzivatel nepozna,
+     * ze mu jen chybi vyplneny SMTP server.
+     */
+    private function assertSmtpConfigured(array $smtp): void
+    {
+        $missing = [];
+        if (trim((string)($smtp['host'] ?? '')) === '') {
+            $missing[] = 'SMTP server';
+        }
+        if ((int)($smtp['port'] ?? 0) <= 0) {
+            $missing[] = 'port';
+        }
+        if (trim((string)($smtp['username'] ?? '')) === '') {
+            $missing[] = 'uzivatelske jmeno';
+        }
+        if (trim((string)($smtp['password'] ?? '')) === '') {
+            $missing[] = 'heslo';
+        }
+        if ($missing) {
+            throw new RuntimeException(
+                'Odesilani emailu neni nastavene: chybi ' . implode(', ', $missing)
+                . '. Vypln to v Konfigurace -> Odesilani e-mailu (SMTP) a uloz; pak zkus test znovu.'
+            );
+        }
+        if (trim((string)$smtp['host']) === 'smtp.example.com') {
+            throw new RuntimeException(
+                'SMTP server je jeste na vzorove hodnote smtp.example.com. Zadej v Konfigurace -> Odesilani e-mailu (SMTP)'
+                . ' skutecny server od poskytovatele hostingu nebo mailu.'
+            );
+        }
+    }
+
     private function connectAndAuthenticate()
     {
         $smtp = $this->config['smtp'];
-        $host = $smtp['host'];
+        $this->assertSmtpConfigured($smtp);
+        $host = trim((string)$smtp['host']);
         $port = (int)$smtp['port'];
         $scheme = ($smtp['encryption'] ?? '') === 'ssl' ? 'ssl://' : '';
         $socket = stream_socket_client($scheme . $host . ':' . $port, $errno, $errstr, 30);
         if (!$socket) {
-            throw new RuntimeException("SMTP connection failed: $errstr");
+            throw new RuntimeException($this->connectionErrorMessage($host, $port, (string)$errstr));
         }
 
         $this->expect($socket, [220]);
@@ -88,6 +123,28 @@ final class SmtpMailer
         $this->cmd($socket, base64_encode($smtp['password']), [235]);
 
         return $socket;
+    }
+
+    /**
+     * Prelozi technickou chybu spojeni na to, co ma uzivatel zmenit.
+     */
+    private function connectionErrorMessage(string $host, int $port, string $error): string
+    {
+        $where = $host . ':' . $port;
+        if (stripos($error, 'getaddrinfo') !== false || stripos($error, 'name does not resolve') !== false || stripos($error, 'name or service not known') !== false) {
+            return 'SMTP server ' . $where . ' neexistuje nebo se nepodarilo prelozit jeho jmeno.'
+                . ' Zkontroluj preklep v adrese serveru v Konfigurace -> Odesilani e-mailu (SMTP).'
+                . ' Detail: ' . $error;
+        }
+        if (stripos($error, 'refused') !== false) {
+            return 'SMTP server ' . $where . ' spojeni odmitl. Nejcasteji je spatny port nebo typ sifrovani'
+                . ' (587 = TLS, 465 = SSL). Uprav to v Konfigurace -> Odesilani e-mailu (SMTP). Detail: ' . $error;
+        }
+        if (stripos($error, 'timed out') !== false || stripos($error, 'timeout') !== false) {
+            return 'SMTP server ' . $where . ' neodpovedel v limitu. Bud je nedostupny, nebo hosting odchozi spojeni na tento port blokuje.'
+                . ' Detail: ' . $error;
+        }
+        return 'Spojeni na SMTP server ' . $where . ' se nepodarilo. Detail: ' . $error;
     }
 
     private function personalize(string $text, array $vars): string

@@ -17175,7 +17175,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 </form>
             </div>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>K oslovení</th><th>Vzorek</th><th>Req.</th><th>Model</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>K oslovení</th><th>Req.</th><th>Model</th></tr></thead><tbody>
         <?php if ($researchStarting): ?>
             <tr class="research-starting-row">
                 <td>-</td><td>-</td><td>-</td><td>-</td>
@@ -17183,11 +17183,11 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><strong>hledá se seed…</strong></td>
                 <td>-</td>
                 <td><?= statusBadge('bezi...') ?></td>
-                <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+                <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
             </tr>
         <?php endif; ?>
         <?php if (!$aiResearchRuns && !$researchStarting): ?>
-            <tr><td colspan="17">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="16">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
@@ -17304,12 +17304,11 @@ function renderApp(PDO $pdo, ?array $flash): void
                         -
                     <?php endif; ?>
                 </td>
-                <td><?= h((string)$run['accepted_count']) ?>/<?= h((string)$run['found_count']) ?></td>
                 <td><?= h((string)(int)($runPlan['gemini_requests'] ?? 0)) ?></td>
                 <td><?php $runModel = aiResearchLastAuditModel($runPlan); ?><?= $runModel !== '' ? h($runModel) : '-' ?></td>
             </tr>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="17">
+                <td colspan="16">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
