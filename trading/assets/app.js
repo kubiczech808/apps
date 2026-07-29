@@ -132,7 +132,6 @@ const els = {
   limitOrders: document.querySelector("[data-limit-orders]"),
   executionButtons: document.querySelectorAll("[data-one-time-execution]"),
   executionStatus: document.querySelector("[data-execution-status]"),
-  nextOrderScan: document.querySelector("[data-next-order-scan]"),
   accountSyncPolicy: document.querySelector("[data-account-sync-policy]"),
   nextAccountSync: document.querySelector("[data-next-account-sync]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
@@ -729,9 +728,6 @@ function scheduleLabel(date) {
 }
 
 function updateSchedulePanel() {
-  if (els.nextOrderScan) {
-    els.nextOrderScan.textContent = scheduleLabel(nextMinuteFromSet([7, 22, 37, 52]));
-  }
   if (els.accountSyncPolicy) {
     els.accountSyncPolicy.textContent = "On page load";
   }
