@@ -400,6 +400,22 @@ function bestBook(book) {
   };
 }
 
+function validProbability(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 && numeric < 1 ? numeric : null;
+}
+
+function marketProbabilityForToken(market, tokenIndex, book = {}, fallback = null) {
+  const prices = parseJsonField(market?.outcomePrices);
+  const fromGamma = validProbability(prices[tokenIndex]);
+  if (fromGamma != null) return fromGamma;
+  if (book.bestBid != null && book.bestAsk != null) {
+    const midpoint = validProbability((Number(book.bestBid) + Number(book.bestAsk)) / 2);
+    if (midpoint != null) return midpoint;
+  }
+  return validProbability(fallback);
+}
+
 function roundToTick(value, tick, direction = "nearest") {
   const scale = Math.round(1 / tick);
   if (!Number.isFinite(scale) || scale <= 0) return Number(value.toFixed(4));
@@ -425,7 +441,7 @@ function marketEventSlug(market) {
 
 function latestUniqueEvaluations(evaluations, limit = Infinity) {
   const byToken = new Map();
-  const ordered = [...evaluations].sort((a, b) => (Date.parse(b.evaluatedAt || "") || 0) - (Date.parse(a.evaluatedAt || "") || 0));
+  const ordered = [...evaluations].sort((a, b) => candidateEvaluatedAtTime(b) - candidateEvaluatedAtTime(a));
   for (const item of ordered) {
     const tokenId = String(item.tokenId || "");
     if (!tokenId || byToken.has(tokenId)) continue;
@@ -444,7 +460,7 @@ function localDaysToResolution(item) {
 }
 
 function candidateEvaluatedAtTime(item) {
-  return Date.parse(item?.evaluatedAt || item?.lastSeenAt || item?.firstEvaluatedAt || "") || 0;
+  return Date.parse(item?.evaluatedAt || item?.lastSeenAt || item?.observedAt || item?.marketDataUpdatedAt || item?.firstEvaluatedAt || "") || 0;
 }
 
 function prefilterLiveCandidate(item) {
@@ -1115,11 +1131,19 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     };
   }
 
-  const probability = number(evaluation.aiProbability);
+  const aiProbability = number(evaluation.aiProbability);
+  const marketProbability = marketProbabilityForToken(market, tokenIndex, book, evaluation.marketProbability ?? evaluation.marketPrice ?? price);
+  const probability = PROBABILITY_SOURCE === "polymarket" ? marketProbability : aiProbability;
   if (!Number.isFinite(probability)) {
-    return { candidate: evaluation, eligible: false, rejectReasons: ["missing AI probability required for EV calculation"], currentPrice: price, minOrderSize };
+    return {
+      candidate: evaluation,
+      eligible: false,
+      rejectReasons: [`missing ${probabilitySourceLabel().toLowerCase()} required for EV calculation`],
+      currentPrice: price,
+      minOrderSize,
+    };
   }
-  const qualificationProbability = PROBABILITY_SOURCE === "polymarket" ? price : probability;
+  const qualificationProbability = probability;
   const endDate = correctedEndDate(market.question || evaluation.question, market.endDate, market.createdAt || market.updatedAt);
   const days = daysToEnd(endDate);
   const resolvedDays = daysValue({ daysToResolution: days });
@@ -1138,20 +1162,20 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   const notional = Number((price * size).toFixed(5));
   const fee = USE_LIMIT_ORDERS && POST_ONLY ? 0 : takerFee(size, price, estimatedFeeRate);
   const totalCost = notional + fee;
-  const expectedValue = probability * size - notional - fee;
-  const expectedRoi = totalCost > 0 ? expectedValue / totalCost : 0;
-  const annualizedReturn = days ? expectedRoi * (365 / days) : expectedRoi;
-  const marketExpectedValue = price * size - notional - fee;
+  const expectedValue = Number.isFinite(aiProbability) ? aiProbability * size - notional - fee : null;
+  const expectedRoi = Number.isFinite(expectedValue) && totalCost > 0 ? expectedValue / totalCost : null;
+  const annualizedReturn = Number.isFinite(expectedRoi) ? (days ? expectedRoi * (365 / days) : expectedRoi) : null;
+  const marketExpectedValue = marketProbability * size - notional - fee;
   const marketExpectedRoi = totalCost > 0 ? marketExpectedValue / totalCost : 0;
   const marketAnnualizedReturn = days ? marketExpectedRoi * (365 / days) : marketExpectedRoi;
   const selectedExpectedValueUsdc = PROBABILITY_SOURCE === "polymarket" ? marketExpectedValue : expectedValue;
   const selectedAnnualizedReturn = PROBABILITY_SOURCE === "polymarket" ? marketAnnualizedReturn : annualizedReturn;
-  const edge = probability - price;
+  const edge = Number.isFinite(aiProbability) ? aiProbability - price : marketProbability - price;
   const scored = scoreEconomics({
-    probability: PROBABILITY_SOURCE === "polymarket" ? qualificationProbability : probability,
+    probability: qualificationProbability,
     qualificationProbability,
     annualizedReturn: selectedAnnualizedReturn,
-    edge: PROBABILITY_SOURCE === "polymarket" ? qualificationProbability - price : edge,
+    edge: qualificationProbability - price,
     spread: book.spread,
     volume24hr,
     liquidity,
@@ -1194,14 +1218,14 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     sizingNote: orderSizing.sizingNote,
     tickSize: tick,
     negRisk: Boolean(market.negRisk),
-    aiProbability: Number(probability.toFixed(4)),
-    marketProbability: Number(price.toFixed(4)),
+    aiProbability: Number.isFinite(aiProbability) ? Number(aiProbability.toFixed(4)) : null,
+    marketProbability: Number(marketProbability.toFixed(4)),
     edge: Number(edge.toFixed(4)),
     daysToResolution: days == null ? null : Number(days.toFixed(2)),
     expectedValueUsdc: Number(selectedExpectedValueUsdc.toFixed(4)),
     annualizedReturn: Number(selectedAnnualizedReturn.toFixed(4)),
-    aiExpectedValueUsdc: Number(expectedValue.toFixed(4)),
-    aiAnnualizedReturn: Number(annualizedReturn.toFixed(4)),
+    aiExpectedValueUsdc: Number.isFinite(expectedValue) ? Number(expectedValue.toFixed(4)) : null,
+    aiAnnualizedReturn: Number.isFinite(annualizedReturn) ? Number(annualizedReturn.toFixed(4)) : null,
     marketExpectedValueUsdc: Number(marketExpectedValue.toFixed(4)),
     marketAnnualizedReturn: Number(marketAnnualizedReturn.toFixed(4)),
     netGainIfWinUsdc: Number((size - notional - fee).toFixed(4)),
@@ -1670,7 +1694,13 @@ async function main() {
   const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, cash - IDLE_CASH_MAX_USDC) : 0;
   const maxNotional = Number(regularMaxNotional.toFixed(5));
   const rawEvaluations = Array.isArray(paperState.evaluations) ? paperState.evaluations : [];
-  const candidatePool = prepareLiveCandidatePool(rawEvaluations);
+  const rawMarketObservations = PROBABILITY_SOURCE === "polymarket" && Array.isArray(paperState.marketObservations)
+    ? paperState.marketObservations
+    : [];
+  const rawCandidateRows = PROBABILITY_SOURCE === "polymarket"
+    ? [...rawMarketObservations, ...rawEvaluations]
+    : rawEvaluations;
+  const candidatePool = prepareLiveCandidatePool(rawCandidateRows);
   const latestEvaluations = candidatePool.uniqueEvaluations;
   const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
   const baseCandidates = candidatePool.candidates;

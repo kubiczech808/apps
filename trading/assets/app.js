@@ -390,14 +390,14 @@ function portfolioProbability(item, config = {}) {
 
 function portfolioExpectedValue(item, config = {}) {
   const value = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
-    ? Number(item.marketExpectedValueUsdc)
+    ? marketExpectedValueFromQuote(item)
     : Number(item.expectedValueUsdc);
   return Number.isFinite(value) ? value : null;
 }
 
 function portfolioAnnualizedReturn(item, config = {}) {
   const value = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
-    ? Number(item.marketAnnualizedReturn)
+    ? marketAnnualizedExpectedReturn(item)
     : Number(item.annualizedReturn);
   return Number.isFinite(value) ? value : null;
 }
@@ -974,6 +974,13 @@ function expectedValue(item) {
   return (aiProbability * shares) - evaluationTotalCost(item);
 }
 
+function marketExpectedValueFromQuote(item) {
+  const marketProbability = Number(item.marketProbability ?? item.marketPrice);
+  const shares = evaluationShares(item);
+  if (!Number.isFinite(marketProbability) || !Number.isFinite(shares)) return null;
+  return (marketProbability * shares) - evaluationTotalCost(item);
+}
+
 function netYield(item) {
   const gain = gainIfWin(item);
   const cost = evaluationTotalCost(item);
@@ -994,6 +1001,15 @@ function annualizedExpectedReturn(item) {
   if (!Number.isFinite(ev) || !Number.isFinite(cost) || cost <= 0) return null;
   const roi = ev / cost;
   const days = daysToResolution(item);
+  return Number.isFinite(days) && days > 0 ? roi * (365 / days) : roi;
+}
+
+function marketAnnualizedExpectedReturn(item) {
+  const ev = marketExpectedValueFromQuote(item);
+  const cost = evaluationTotalCost(item);
+  if (!Number.isFinite(ev) || !Number.isFinite(cost) || cost <= 0) return null;
+  const roi = ev / cost;
+  const days = evaluationDaysLeft(item);
   return Number.isFinite(days) && days > 0 ? roi * (365 / days) : roi;
 }
 
@@ -3014,10 +3030,21 @@ async function refreshPortfolioCandidates(options = {}) {
   }
   if (!options.quiet) setExecutionStatus("refreshing execution shortlist");
   try {
-    const requests = [fetchJson("data/paper-state.json", { summary: "candidates" })];
-    if (isLiveMode()) requests.push(fetchJson("data/live-state.json"));
-    const [botState, liveState] = await Promise.all(requests);
+    const needsScraped = normalizeProbabilitySource(portfolioConfigForMode(state.mode).probabilitySource) === "polymarket";
+    const [botState, scrapedState, liveState] = await Promise.all([
+      fetchJson("data/paper-state.json", { summary: "candidates" }),
+      needsScraped ? fetchJson("data/paper-state.json", { summary: "scraped" }) : Promise.resolve(null),
+      isLiveMode() ? fetchJson("data/live-state.json") : Promise.resolve(null),
+    ]);
     state.botState = botStateWithPreservedEvaluations(botState);
+    if (scrapedState) {
+      state.botState = {
+        ...state.botState,
+        marketObservations: Array.isArray(scrapedState.marketObservations) ? scrapedState.marketObservations : [],
+        marketScan: scrapedState.marketScan || {},
+      };
+      state.scrapedMarketStateLoaded = true;
+    }
     state.botStateFull = state.botStateFull || botStateIsFull(botState);
     if (liveState) {
       renderLiveState(liveState);
@@ -3080,6 +3107,7 @@ async function ensureScrapedMarketState(options = {}) {
     };
     state.scrapedMarketStateLoaded = true;
     if (state.opportunityView === "scraped") renderBotEvaluations();
+    if (shouldRenderCandidateBotState()) renderPortfolioCandidates();
   } catch (error) {
     rememberStateFetchError("paper", error);
     if (state.opportunityView === "scraped" && els.botEvaluations) {
@@ -3551,6 +3579,8 @@ function evaluationUpdateMs(item) {
   return Math.max(
     Date.parse(item?.evaluatedAt || "") || 0,
     Date.parse(item?.lastSeenAt || "") || 0,
+    Date.parse(item?.observedAt || "") || 0,
+    Date.parse(item?.marketDataUpdatedAt || "") || 0,
     Date.parse(item?.updatedAt || "") || 0,
     Date.parse(item?.executionRevalidation?.checkedAt || "") || 0,
   );
@@ -3750,13 +3780,17 @@ function sortPortfolioCandidates(rows = [], mode = state.mode) {
 }
 
 function portfolioCandidateDiagnostics(mode = state.mode) {
-  const evaluations = latestUniquePortfolioEvaluations(Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : []);
+  const config = portfolioConfigForMode(mode);
+  const baseEvaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
+  const scrapedObservations = normalizeProbabilitySource(config.probabilitySource) === "polymarket" && Array.isArray(state.botState?.marketObservations)
+    ? state.botState.marketObservations
+    : [];
+  const evaluations = latestUniquePortfolioEvaluations([...scrapedObservations, ...baseEvaluations]);
   const evaluationByToken = new Map(evaluations.map((item) => [String(item.tokenId || ""), item]).filter(([token]) => token));
   const activeRows = activeExposureRowsForMode(mode);
   const ready = [];
   const riskBlocked = [];
   const filteredReasonCounts = new Map();
-  const config = portfolioConfigForMode(mode);
 
   for (const item of evaluations) {
     const reasons = portfolioCandidateFilterReasons(item, mode);
@@ -3862,6 +3896,13 @@ function renderPortfolioCandidates() {
   if (!state.botState) {
     els.portfolioCandidates.innerHTML = '<div class="empty">Common evaluation log is not loaded yet.</div>';
     if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "0 candidates";
+    return;
+  }
+  const config = portfolioConfigForMode(mode);
+  if (normalizeProbabilitySource(config.probabilitySource) === "polymarket" && !scrapedMarketStateIsLoaded()) {
+    ensureScrapedMarketState();
+    els.portfolioCandidates.innerHTML = '<div class="empty">Loading scraped Polymarket economics for this portfolio shortlist...</div>';
+    if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "loading scraped";
     return;
   }
   const hasEvaluations = Array.isArray(state.botState.evaluations) && state.botState.evaluations.length > 0;
@@ -4482,6 +4523,11 @@ function scrapedSortValue(item, key) {
   if (key === "endDate") return Date.parse(item.endDate || "") || 0;
   if (key === "daysLeft") return evaluationDaysLeft(item);
   if (key === "marketProbability") return Number(item.marketProbability);
+  if (key === "netGainIfWinUsdc") return gainIfWin(item);
+  if (key === "netYield") return netYield(item);
+  if (key === "riskReward") return evaluationRiskReward(item);
+  if (key === "marketAnnualizedReturn") return marketAnnualizedExpectedReturn(item);
+  if (key === "marketExpectedValueUsdc") return marketExpectedValueFromQuote(item);
   if (key === "liquidity") return Number(item.liquidity);
   if (key === "volume24hr") return Number(item.volume24hr);
   if (key === "outcomeCount") return Number(item.outcomeCount);
@@ -4574,6 +4620,11 @@ function renderScrapedOpportunities() {
             ${scrapedSortableHeader("endDate", "End date")}
             ${scrapedSortableHeader("daysLeft", "Days left")}
             ${scrapedSortableHeader("marketProbability", "Mkt prob.")}
+            ${scrapedSortableHeader("netGainIfWinUsdc", "Win @ $5")}
+            ${scrapedSortableHeader("netYield", "Net yield %")}
+            ${scrapedSortableHeader("riskReward", "R/R")}
+            ${scrapedSortableHeader("marketAnnualizedReturn", "EV p.a.")}
+            ${scrapedSortableHeader("marketExpectedValueUsdc", "EV")}
             <th>Yes / No</th>
             ${scrapedSortableHeader("liquidity", "Liquidity")}
             ${scrapedSortableHeader("volume24hr", "24h volume")}
@@ -4589,6 +4640,11 @@ function renderScrapedOpportunities() {
               <td data-label="End date">${evaluationEndDateCell(item)}</td>
               <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
               <td data-label="Mkt prob.">${probability(Number(item.marketProbability))}</td>
+              <td data-label="Win @ $5">${gainCell(item)}</td>
+              <td data-label="Net yield %">${netYieldCell(item)}</td>
+              <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
+              <td data-label="EV p.a."><span class="${pnlClass(marketAnnualizedExpectedReturn(item))}">${signedPercent(marketAnnualizedExpectedReturn(item))}</span></td>
+              <td data-label="EV">${signedMoney(marketExpectedValueFromQuote(item), 4)}</td>
               <td data-label="Yes / No">${binaryMarketProbabilityCell(item)}</td>
               <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
               <td data-label="24h volume">${money(Number(item.volume24hr || 0))}</td>

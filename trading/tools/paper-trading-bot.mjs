@@ -3046,7 +3046,7 @@ function portfolioFilterResult(item, strategy) {
   if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
     reasons.push(`base status ${status || "UNKNOWN"} is not executable`);
   }
-  if (REQUIRE_GEMINI && !hasGroundedPublicMemo(item)) reasons.push("grounded Gemini analysis is pending");
+  if (probabilitySource === "ai" && REQUIRE_GEMINI && !hasGroundedPublicMemo(item)) reasons.push("grounded Gemini analysis is pending");
   if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) {
     const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
     reasons.push(`${label} ${Number.isFinite(selectedProbability) ? (selectedProbability * 100).toFixed(1) : "-"}% below ${(minProbability * 100).toFixed(1)}%`);
@@ -3313,8 +3313,16 @@ function latestUniqueExecutionEvaluations(evaluations = []) {
   return [...byKey.values()];
 }
 
+function executionRowsForStrategy(state, strategy, baseRows = []) {
+  const rows = Array.isArray(baseRows) ? baseRows : [];
+  if (strategy.probabilitySource !== "polymarket") return latestUniqueExecutionEvaluations(rows);
+  const observations = Array.isArray(state.marketObservations) ? state.marketObservations : [];
+  return latestUniqueExecutionEvaluations([...observations, ...rows]);
+}
+
 function storedExecutionShortlist(state, strategy) {
-  const unique = latestUniqueExecutionEvaluations(expirePastEvaluations(state.evaluations || []).map(ensureEvaluationErrorMetadata));
+  const baseRows = expirePastEvaluations(state.evaluations || []).map(ensureEvaluationErrorMetadata);
+  const unique = executionRowsForStrategy(state, strategy, baseRows);
   const rejected = [];
   const passed = [];
   const reasonCounts = {};
@@ -3340,6 +3348,7 @@ function storedExecutionShortlist(state, strategy) {
     diagnostics: {
       source: "stored_execution_candidates",
       storedEvaluations: Array.isArray(state.evaluations) ? state.evaluations.length : 0,
+      storedMarketObservations: Array.isArray(state.marketObservations) ? state.marketObservations.length : 0,
       uniqueEvaluations: unique.length,
       prefilterPassed: rows.length,
       prefilterRejected: Math.max(0, unique.length - rows.length),
@@ -4320,6 +4329,28 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     : `token:${tokenId}`;
   if (!marketKey) return null;
   const endDate = correctedEndDate(market.question || "", market.endDate, market.createdAt || market.updatedAt);
+  const days = daysToEnd(endDate);
+  const stake = PORTFOLIO_USDC * MAX_FRACTION;
+  const fees = feeConfig(market);
+  const shares = stake / probability;
+  const takerFee = takerFeeForFills([{ price: probability, size: shares }], fees.feeRate);
+  const totalCost = stake + takerFee;
+  const netGainIfWin = shares - stake - takerFee;
+  const netYield = totalCost > 0 ? netGainIfWin / totalCost : null;
+  const riskReward = totalCost > 0 ? netGainIfWin / totalCost : null;
+  const marketExpectedValue = probability * shares - stake - takerFee;
+  const marketExpectedRoi = totalCost > 0 ? marketExpectedValue / totalCost : null;
+  const marketAnnualizedReturn = Number.isFinite(days) && days > 0 && Number.isFinite(marketExpectedRoi)
+    ? marketExpectedRoi * (365 / days)
+    : marketExpectedRoi;
+  const tags = tagQuestion(market.question || "");
+  const risk = riskProfile({
+    question: market.question || "",
+    slug: market.slug,
+    eventSlug: marketEventSlug(market),
+    outcome: outcomes[outcomeIndex],
+    tags,
+  });
   return {
     id: marketKey,
     marketKey,
@@ -4329,6 +4360,15 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     eventSlug: marketEventSlug(market),
     outcome: outcomes[outcomeIndex],
     tokenId,
+    status: "SCRAPED",
+    selectionStatus: "SCRAPED",
+    marketType: outcomes.length > 2 ? "multi" : reportMarketType({ question: market.question || "", slug: market.slug, eventSlug: marketEventSlug(market), outcome: outcomes[outcomeIndex] }),
+    tags,
+    riskCategory: risk.category,
+    riskPrimaryEntity: risk.primaryEntity,
+    riskGroupKeys: risk.keys,
+    riskGroupLabels: risk.labels,
+    marketPrice: Number(probability.toFixed(4)),
     marketProbability: Number(probability.toFixed(4)),
     binaryYesMarketProbability: binary && binaryYesPrice != null ? Number(binaryYesPrice.toFixed(4)) : null,
     binaryNoMarketProbability: binary && binaryNoPrice != null ? Number(binaryNoPrice.toFixed(4)) : null,
@@ -4336,8 +4376,24 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     binaryNoTokenId: binary ? tokenIds[binary.noIndex] || "" : "",
     outcomeCount: outcomes.length,
     endDate,
+    daysToResolution: days == null ? null : Number(days.toFixed(2)),
     liquidity: Number(market.liquidity || 0),
     volume24hr: Number(market.volume24hr || 0),
+    stakeUsdc: Number(stake.toFixed(2)),
+    executableShares: Number(shares.toFixed(4)),
+    takerFeeUsdc: Number(takerFee.toFixed(5)),
+    totalCostUsdc: Number(totalCost.toFixed(5)),
+    netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
+    netYield: Number.isFinite(netYield) ? Number(netYield.toFixed(4)) : null,
+    riskReward: Number.isFinite(riskReward) ? Number(riskReward.toFixed(4)) : null,
+    marketExpectedValueUsdc: Number(marketExpectedValue.toFixed(4)),
+    marketExpectedRoi: Number.isFinite(marketExpectedRoi) ? Number(marketExpectedRoi.toFixed(4)) : null,
+    marketAnnualizedReturn: Number.isFinite(marketAnnualizedReturn) ? Number(marketAnnualizedReturn.toFixed(4)) : null,
+    annualizedReturn: Number.isFinite(marketAnnualizedReturn) ? Number(marketAnnualizedReturn.toFixed(4)) : null,
+    expectedValueUsdc: Number(marketExpectedValue.toFixed(4)),
+    feesEnabled: fees.feesEnabled,
+    feeType: fees.feeType,
+    feeRate: fees.feeRate,
     marketDataUpdatedAt: observedAt,
     observedAt,
     source: "polymarket-gamma",
@@ -5148,11 +5204,12 @@ async function run() {
       }))
     : strategiesForRun.map((strategy) => {
         const portfolioState = state.paperPortfolios[strategy.id];
+        const strategyExecutionRows = executionRowsForStrategy(state, strategy, executionEvaluations);
         const rankedEligible = sortEligibleForStrategy(
-          executionEvaluations.filter((item) => portfolioFilterResult(item, strategy).eligible),
+          strategyExecutionRows.filter((item) => portfolioFilterResult(item, strategy).eligible),
           strategy,
         );
-        return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, evaluations, { ignoreCadence: MANUAL_RUN_ONCE, diversificationDiagnostics });
+        return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, strategyExecutionRows, { ignoreCadence: MANUAL_RUN_ONCE, diversificationDiagnostics });
       });
 
   state.generatedAt = nowIso();
