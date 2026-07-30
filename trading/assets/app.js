@@ -758,7 +758,15 @@ function syncOpportunityViewControls() {
     button.classList.toggle("active", button.dataset.opportunityView === state.opportunityView);
   });
   els.evaluationOnlyControls.forEach((element) => {
-    element.hidden = scraped;
+    element.hidden = false;
+  });
+  els.evaluationStatusButtons.forEach((button) => {
+    const status = button.dataset.evaluationStatus;
+    if (scraped) {
+      button.textContent = status === "EVALUATED" ? "Scraped" : status === "ALL" ? "All scraped" : button.textContent;
+    } else {
+      button.textContent = status === "EVALUATED" ? "Evaluated" : status === "ALL" ? "All evaluated" : button.textContent;
+    }
   });
 }
 
@@ -4507,13 +4515,21 @@ function updateHistoryCell(item) {
 }
 
 function scrapedObservationStatus(item) {
-  const endTime = Date.parse(item?.endDate || "");
-  if (Number.isFinite(endTime) && endTime <= Date.now()) return "END DATE PASSED";
+  const status = String(item?.status || item?.selectionStatus || "").trim().toUpperCase();
+  if (status === "ERROR") return "ERROR";
+  if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status) || evaluationEnded(item)) return "RESOLVED";
   return "SCRAPED";
 }
 
+function scrapedObservationFilterStatus(item) {
+  const status = scrapedObservationStatus(item);
+  return status === "SCRAPED" ? "EVALUATED" : status;
+}
+
 function scrapedObservationStatusClass(item) {
-  return scrapedObservationStatus(item) === "SCRAPED" ? "positive" : "muted";
+  const status = scrapedObservationStatus(item);
+  if (status === "ERROR") return "negative";
+  return status === "SCRAPED" ? "positive" : "muted";
 }
 
 function scrapedSortValue(item, key) {
@@ -4567,15 +4583,21 @@ function renderScrapedOpportunities() {
   const observations = Array.isArray(state.botState?.marketObservations) ? state.botState.marketObservations : [];
   const probabilityFilter = currentEvaluationProbabilityFilter();
   const daysFilter = currentEvaluationDaysFilter();
-  const filtered = observations.filter((item) => {
+  const statusFiltered = state.evaluationStatus === "ALL"
+    ? observations
+    : observations.filter((item) => scrapedObservationFilterStatus(item) === state.evaluationStatus);
+  const filtered = statusFiltered.filter((item) => {
     const marketProbability = Number(item.marketProbability);
     if (probabilityFilter > 0 && (!Number.isFinite(marketProbability) || marketProbability < probabilityFilter)) return false;
     const days = evaluationDaysLeft(item);
-    if (!Number.isFinite(days) || days < 0) return false;
+    if (!Number.isFinite(days)) return false;
     return daysFilter == null || (Number.isFinite(days) && days <= daysFilter);
   });
   const visible = sortedScrapedObservations(filtered).slice(0, 250);
   const scan = state.botState?.marketScan || {};
+  const scrapedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "EVALUATED").length;
+  const resolvedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "RESOLVED").length;
+  const errorCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "ERROR").length;
 
   if (els.evaluationFilterCount) {
     const filters = [
@@ -4591,6 +4613,9 @@ function renderScrapedOpportunities() {
     els.evaluationSummary.textContent = [
       `${formatInteger(filtered.length) || filtered.length} shown`,
       `${formatInteger(observations.length) || observations.length} retained`,
+      `${formatInteger(scrapedCount) || scrapedCount} scraped`,
+      `${formatInteger(resolvedCount) || resolvedCount} resolved`,
+      errorCount ? `${formatInteger(errorCount) || errorCount} error` : null,
       scan.lastBatchCount != null ? `${formatInteger(scan.lastBatchCount)} in last batch` : null,
       scan.lastPreferredCount != null ? `${formatInteger(scan.lastPreferredCount)} preferred outcomes` : null,
       scan.lastShortHorizonCount != null ? `${formatInteger(scan.lastShortHorizonCount)} <= ${formatInteger(scan.preferredMaxResolutionDays || DEFAULT_MAX_RESOLUTION_DAYS)}d` : null,

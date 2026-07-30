@@ -413,6 +413,22 @@ function marketObservationUpdateTime(item) {
   return Date.parse(item?.marketDataUpdatedAt || item?.observedAt || item?.updatedAt || "") || 0;
 }
 
+function normalizeMarketObservationLifecycle(item, checkedAt = nowIso()) {
+  if (!item || typeof item !== "object") return item;
+  const status = String(item.status || item.selectionStatus || "").trim().toUpperCase();
+  if (status === "ERROR" || status === "RESOLVED") return item;
+  const end = Date.parse(item.endDate || "");
+  if (!Number.isFinite(end) || end > Date.now()) return item;
+  return {
+    ...item,
+    status: "RESOLVED",
+    selectionStatus: "RESOLVED",
+    resolutionStatus: item.resolutionStatus || "PENDING_RESULT",
+    resolvedAt: item.resolvedAt || item.closedTime || item.endDate || checkedAt,
+    resolvedDetectedAt: item.resolvedDetectedAt || checkedAt,
+  };
+}
+
 function normalizeMarketScan(input = {}) {
   return {
     cursor: Math.max(0, Math.floor(Number(input?.cursor) || 0)),
@@ -437,6 +453,7 @@ function mergeMarketObservationLists(primary = [], secondary = [], limit = MARKE
     }
   }
   return [...byKey.values()]
+    .map((item) => normalizeMarketObservationLifecycle(item))
     .sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a))
     .slice(0, limit);
 }
