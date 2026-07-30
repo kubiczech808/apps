@@ -1197,6 +1197,13 @@ label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-
   white-space: normal;
   line-height: 1.45;
 }
+.research-log-planned.is-overdue {
+  background: #fdecea;
+}
+.research-log-overdue {
+  color: #b3261e;
+  font-weight: 700;
+}
 .research-log-planned {
   background: #eef8f4;
   font-weight: 600;
