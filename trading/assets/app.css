@@ -600,11 +600,23 @@ button:disabled {
   width: 100%;
   min-width: 0;
   max-width: 100%;
+}
+
+.ledger-scroll {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
+  touch-action: pan-x pan-y;
   scrollbar-width: thin;
+}
+
+.trade-ledger-table {
+  min-width: 1280px;
 }
 
 .bot-summary {
@@ -1826,11 +1838,13 @@ body.modal-open {
     white-space: normal;
   }
 
-  .ledger {
-    overflow-x: auto;
+  .ledger-scroll {
+    overflow-x: scroll;
+    overflow-y: hidden;
+    padding-bottom: 6px;
   }
 
-  .ledger table {
+  .ledger .trade-ledger-table {
     display: table;
     min-width: 1180px;
     border-collapse: collapse;

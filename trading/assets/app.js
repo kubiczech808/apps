@@ -1651,7 +1651,8 @@ function renderTradeRows(trades, emptyText, options = {}) {
   if (!trades.length) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
   const rows = sortedTrades(trades, tableKey);
   return `
-    <table>
+    <div class="ledger-scroll" tabindex="0" aria-label="Scrollable trade table">
+    <table class="trade-ledger-table">
       <thead>
         <tr>
           ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
@@ -1698,6 +1699,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
         `).join("")}
       </tbody>
     </table>
+    </div>
   `;
 }
 
