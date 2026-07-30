@@ -1225,7 +1225,7 @@ try {
         $target = (string) ($_GET['target'] ?? '');
         $payload = state_payload($target);
         $summary = (string) ($_GET['summary'] ?? '');
-        if (in_array($summary, ['dashboard', 'candidates'], true)) {
+        if ($target === 'paper') {
             $payload = compact_state_payload($target, $payload, $summary);
         }
         respond($payload);
