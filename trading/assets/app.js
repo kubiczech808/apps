@@ -65,6 +65,7 @@ const state = {
     direction: "desc",
   },
   displayedRunLog: [],
+  runLogFilter: "ALL",
   userNavRefreshTimer: null,
   openedOpportunityKey: "",
 };
@@ -76,6 +77,7 @@ const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
 const LIVE_EXECUTION_STORAGE_KEY = "tradingLiveExecutionArmed";
+const RUN_LOG_FILTER_STORAGE_PREFIX = "tradingRunLogStatusFilter";
 const STATE_CACHE_PREFIX = "tradingStateCache:";
 const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
 const MIN_ELIGIBILITY_THRESHOLD = 0.01;
@@ -110,6 +112,7 @@ const els = {
   runLog: document.querySelector("[data-run-log]"),
   runLogSummary: document.querySelector("[data-run-log-summary]"),
   runLogTitle: document.querySelector("[data-run-log-title]"),
+  runLogFilter: document.querySelector("[data-run-log-filter]"),
   portfolioCandidates: document.querySelector("[data-portfolio-candidates]"),
   portfolioCandidatesRefresh: document.querySelector("[data-portfolio-candidates-refresh]"),
   portfolioCandidatesSummary: document.querySelector("[data-portfolio-candidates-summary]"),
@@ -242,6 +245,31 @@ function saveMode(mode) {
     localStorage.setItem(MODE_STORAGE_KEY, normalizeMode(mode));
   } catch {
     // Ignore localStorage failures; the mode switch still works for this page load.
+  }
+}
+
+function normalizeRunLogFilter(value) {
+  const normalized = String(value || "ALL").trim().toUpperCase();
+  return normalized || "ALL";
+}
+
+function runLogFilterStorageKey(mode = state.mode) {
+  return `${RUN_LOG_FILTER_STORAGE_PREFIX}:${normalizeMode(mode)}`;
+}
+
+function storedRunLogFilter(mode = state.mode) {
+  try {
+    return normalizeRunLogFilter(localStorage.getItem(runLogFilterStorageKey(mode)));
+  } catch {
+    return "ALL";
+  }
+}
+
+function saveRunLogFilter(value, mode = state.mode) {
+  try {
+    localStorage.setItem(runLogFilterStorageKey(mode), normalizeRunLogFilter(value));
+  } catch {
+    // The filter remains active for this page load if local storage is unavailable.
   }
 }
 
@@ -4958,6 +4986,27 @@ function currentPortfolioRunLog() {
   return Array.isArray(portfolio.runLog) ? portfolio.runLog.filter((row) => !isCadenceWaitRun(row)) : [];
 }
 
+function runActionValue(run = {}) {
+  const batch = run.batchLog || run;
+  return normalizeRunLogFilter(run.action || batch.action || "UNKNOWN");
+}
+
+function runActionFilterLabel(action) {
+  if (action === "ALL") return "All statuses";
+  return String(action || "UNKNOWN").replaceAll("_", " ");
+}
+
+function syncRunLogFilterControl(runs = []) {
+  if (!els.runLogFilter) return;
+  const actions = [...new Set(runs.map(runActionValue))].sort((a, b) => a.localeCompare(b));
+  const selected = normalizeRunLogFilter(state.runLogFilter);
+  if (selected !== "ALL" && !actions.includes(selected)) actions.push(selected);
+  els.runLogFilter.innerHTML = ["ALL", ...actions]
+    .map((action) => `<option value="${escapeHtml(action)}">${escapeHtml(runActionFilterLabel(action))}</option>`)
+    .join("");
+  els.runLogFilter.value = selected;
+}
+
 function runActionClass(action) {
   const value = String(action || "").toUpperCase();
   if (["OPEN", "OPENED", "SUBMIT", "SUBMITTED", "DRY_RUN_READY", "ROTATE", "ROTATED"].includes(value)) return "positive";
@@ -5039,17 +5088,25 @@ function portfolioRunDetail(run = {}) {
 
 function renderRunLog() {
   if (!els.runLog) return;
-  const runs = currentPortfolioRunLog();
+  const allRuns = currentPortfolioRunLog();
+  syncRunLogFilterControl(allRuns);
+  const filter = normalizeRunLogFilter(state.runLogFilter);
+  const runs = filter === "ALL"
+    ? allRuns
+    : allRuns.filter((run) => runActionValue(run) === filter);
   state.displayedRunLog = runs;
   const label = isLiveMode() ? "Live" : paperModeLabel();
   if (els.runLogTitle) {
     els.runLogTitle.textContent = `${label} run log`;
   }
   if (els.runLogSummary) {
-    els.runLogSummary.textContent = `${runs.length} runs`;
+    els.runLogSummary.textContent = filter === "ALL"
+      ? `${runs.length} runs`
+      : `${runs.length} / ${allRuns.length} runs`;
   }
   if (!runs.length) {
-    els.runLog.innerHTML = `<div class="empty">No ${escapeHtml(label)} trading decision runs recorded yet.</div>`;
+    const actionText = filter === "ALL" ? "" : ` with status ${runActionFilterLabel(filter)}`;
+    els.runLog.innerHTML = `<div class="empty">No ${escapeHtml(label)} trading decision runs${escapeHtml(actionText)} recorded yet.</div>`;
     return;
   }
 
@@ -5297,6 +5354,7 @@ els.modeButtons.forEach((button) => {
     if (state.mode === mode) return;
     state.mode = mode;
     saveMode(mode);
+    state.runLogFilter = storedRunLogFilter(mode);
     state.eligibilityThreshold = null;
     state.eligibilityThresholdKey = "";
     state.riskAllocation = null;
@@ -5337,6 +5395,12 @@ els.evaluationStatusButtons.forEach((button) => {
   button.addEventListener("click", () => {
     setEvaluationStatus(button.dataset.evaluationStatus);
   });
+});
+
+els.runLogFilter?.addEventListener("change", () => {
+  state.runLogFilter = normalizeRunLogFilter(els.runLogFilter.value);
+  saveRunLogFilter(state.runLogFilter);
+  renderRunLog();
 });
 
 els.opportunityViewButtons.forEach((button) => {
@@ -5640,6 +5704,7 @@ els.botTrades?.addEventListener("click", handleTradeSort);
 els.closedTrades?.addEventListener("click", handleTradeSort);
 
 state.mode = storedMode();
+state.runLogFilter = storedRunLogFilter(state.mode);
 state.liveExecutionArmed = storedLiveExecutionArmed();
 state.evaluationProbabilityFilter = storedEvaluationProbabilityFilter();
 state.evaluationDaysFilter = storedEvaluationDaysFilter();

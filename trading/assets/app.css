@@ -1239,6 +1239,43 @@ body.modal-open {
   gap: 12px;
 }
 
+.run-log-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.run-log-filter-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.run-log-filter-control > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.run-log-filter-control select {
+  min-width: 112px;
+  max-width: 190px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 750;
+}
+
 .settings-subtabs {
   display: flex;
   flex-wrap: wrap;
@@ -1749,6 +1786,21 @@ body.modal-open {
   .evaluation-settings-head > * {
     min-width: 0;
     max-width: 100%;
+  }
+
+  .run-log-head-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .run-log-filter-control {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  .run-log-filter-control select {
+    width: 100%;
+    min-width: 0;
   }
 
   .control-panel-head,

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260730-mobile-opportunity-scroll">
+  <link rel="stylesheet" href="assets/app.css?v=20260730-run-log-filter">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -165,7 +165,15 @@
                 <p class="eyebrow">Automated trading</p>
                 <h2 data-run-log-title>Portfolio run log</h2>
               </div>
-              <span class="pill" data-run-log-summary>0 runs</span>
+              <div class="run-log-head-actions">
+                <label class="run-log-filter-control">
+                  <span>Status</span>
+                  <select data-run-log-filter aria-label="Filter execution run log by status">
+                    <option value="ALL">All statuses</option>
+                  </select>
+                </label>
+                <span class="pill" data-run-log-summary>0 runs</span>
+              </div>
             </div>
             <div class="run-log" data-run-log></div>
           </article>
@@ -348,6 +356,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260730-scraped-log"></script>
+  <script src="assets/app.js?v=20260730-run-log-filter"></script>
 </body>
 </html>
