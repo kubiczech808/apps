@@ -43,6 +43,10 @@ const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
 const MARKET_SCAN_BATCH_SIZE = envNumber("PAPER_MARKET_SCAN_BATCH_SIZE", 100);
 const MARKET_SCAN_MAX_OBSERVATIONS = envNumber("PAPER_MARKET_SCAN_MAX_OBSERVATIONS", 5000);
 const MARKET_SCAN_MAX_OFFSET = envNumber("PAPER_MARKET_SCAN_MAX_OFFSET", 5000);
+const MARKET_SCAN_PREFETCH_BATCHES = envNumber("PAPER_MARKET_SCAN_PREFETCH_BATCHES", 2);
+const MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", envNumber("PAPER_MAX_RESOLUTION_DAYS", 7));
+const MARKET_SCAN_MIN_PROBABILITY = envNumber("PAPER_MARKET_SCAN_MIN_PROBABILITY", 0.5);
+const MARKET_SCAN_MIN_RESOLUTION_HOURS = envNumber("PAPER_MARKET_SCAN_MIN_RESOLUTION_HOURS", 1);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
@@ -415,6 +419,9 @@ function normalizeMarketScan(input = {}) {
     lastScanAt: input?.lastScanAt || null,
     lastBatchCount: Math.max(0, Math.floor(Number(input?.lastBatchCount) || 0)),
     lastPreferredCount: Math.max(0, Math.floor(Number(input?.lastPreferredCount) || 0)),
+    lastShortHorizonCount: Math.max(0, Math.floor(Number(input?.lastShortHorizonCount) || 0)),
+    preferredMaxResolutionDays: Math.max(1, Math.floor(Number(input?.preferredMaxResolutionDays) || MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS)),
+    minResolutionHours: Math.max(0, Number(input?.minResolutionHours) || MARKET_SCAN_MIN_RESOLUTION_HOURS),
     lastScanError: input?.lastScanError || null,
   };
 }
@@ -4171,14 +4178,106 @@ function buildLearningProfile(trades, previousProfile = {}) {
   };
 }
 
-async function loadMarkets() {
+function marketIdentity(market = {}) {
+  return String(market.conditionId || market.id || market.slug || market.question || "").trim().toLowerCase();
+}
+
+function mergeMarketLists(...lists) {
+  const byId = new Map();
+  for (const list of lists) {
+    for (const market of Array.isArray(list) ? list : []) {
+      const key = marketIdentity(market);
+      if (!key) continue;
+      if (!byId.has(key)) byId.set(key, market);
+    }
+  }
+  return [...byId.values()];
+}
+
+function gammaMarketsUrl(params = {}) {
   const url = new URL("https://gamma-api.polymarket.com/markets");
-  url.searchParams.set("limit", "60");
   url.searchParams.set("active", "true");
   url.searchParams.set("closed", "false");
-  url.searchParams.set("order", "volume24hr");
-  url.searchParams.set("ascending", "false");
-  return fetchJson(url);
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === "") continue;
+    url.searchParams.set(key, String(value));
+  }
+  return url;
+}
+
+async function fetchGammaMarkets(params = {}) {
+  return fetchJson(gammaMarketsUrl(params));
+}
+
+function marketDaysLeft(market = {}) {
+  return daysToEnd(correctedEndDate(market.question || "", market.endDate, market.createdAt || market.updatedAt));
+}
+
+function compareMarketsForShortHorizon(a, b) {
+  const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
+  const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+  const aDays = marketDaysLeft(a);
+  const bDays = marketDaysLeft(b);
+  const aBucket = Number.isFinite(aDays) && aDays >= minimumDays && aDays <= preferredDays ? 0 : Number.isFinite(aDays) && aDays > 0 ? 1 : 2;
+  const bBucket = Number.isFinite(bDays) && bDays >= minimumDays && bDays <= preferredDays ? 0 : Number.isFinite(bDays) && bDays > 0 ? 1 : 2;
+  if (aBucket !== bBucket) return aBucket - bBucket;
+  if (Number.isFinite(aDays) && Number.isFinite(bDays) && aDays !== bDays) return aDays - bDays;
+  return Number(b.volume24hr || 0) - Number(a.volume24hr || 0);
+}
+
+async function loadMarkets() {
+  const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
+  const minimumHours = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0);
+  const start = new Date(Date.now() + minimumHours * 3600000).toISOString();
+  const preferredEnd = new Date(Date.now() + preferredDays * 86400000).toISOString();
+  const preferred = await fetchGammaMarkets({
+    limit: "60",
+    order: "endDate",
+    ascending: "true",
+    end_date_min: start,
+    end_date_max: preferredEnd,
+  });
+  const broad = await fetchGammaMarkets({
+    limit: "60",
+    order: "volume24hr",
+    ascending: "false",
+  });
+  return mergeMarketLists(preferred, broad).sort(compareMarketsForShortHorizon);
+}
+
+async function loadBroadMarketScanBatch(previousScan) {
+  const limit = Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE));
+  return fetchGammaMarkets({
+    limit,
+    offset: previousScan.cursor,
+    order: "volume24hr",
+    ascending: "false",
+  });
+}
+
+async function loadPreferredMarketScanBatch() {
+  const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
+  const minimumHours = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0);
+  return fetchGammaMarkets({
+    limit: Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE)),
+    order: "endDate",
+    ascending: "true",
+    end_date_min: new Date(Date.now() + minimumHours * 3600000).toISOString(),
+    end_date_max: new Date(Date.now() + preferredDays * 86400000).toISOString(),
+  });
+}
+
+function compareObservationsForMarketScan(a, b) {
+  const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
+  const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+  const aDays = daysToEnd(a?.endDate);
+  const bDays = daysToEnd(b?.endDate);
+  const aBucket = Number.isFinite(aDays) && aDays >= minimumDays && aDays <= preferredDays ? 0 : Number.isFinite(aDays) && aDays > 0 ? 1 : 2;
+  const bBucket = Number.isFinite(bDays) && bDays >= minimumDays && bDays <= preferredDays ? 0 : Number.isFinite(bDays) && bDays > 0 ? 1 : 2;
+  if (aBucket !== bBucket) return aBucket - bBucket;
+  if (Number.isFinite(aDays) && Number.isFinite(bDays) && aDays !== bDays) return aDays - bDays;
+  if (Number(b.marketProbability || 0) !== Number(a.marketProbability || 0)) return Number(b.marketProbability || 0) - Number(a.marketProbability || 0);
+  return Number(b.volume24hr || 0) - Number(a.volume24hr || 0);
 }
 
 function validMarketProbability(value) {
@@ -4247,27 +4346,52 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
 
 async function refreshMarketObservations(state) {
   const previousScan = normalizeMarketScan(state.marketScan);
-  const url = new URL("https://gamma-api.polymarket.com/markets");
-  url.searchParams.set("limit", String(Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE))));
-  url.searchParams.set("offset", String(previousScan.cursor));
-  url.searchParams.set("active", "true");
-  url.searchParams.set("closed", "false");
-  url.searchParams.set("order", "volume24hr");
-  url.searchParams.set("ascending", "false");
-  const markets = await fetchJson(url);
+  const preferredMarkets = await loadPreferredMarketScanBatch();
+  const broadBatches = [];
+  let broadCursor = previousScan.cursor;
+  const broadBatchCount = Math.max(1, Math.floor(Number(MARKET_SCAN_PREFETCH_BATCHES) || 1));
+  for (let index = 0; index < broadBatchCount; index += 1) {
+    const batch = await loadBroadMarketScanBatch({ cursor: broadCursor });
+    broadBatches.push(...(Array.isArray(batch) ? batch : []));
+    if (!Array.isArray(batch) || batch.length < MARKET_SCAN_BATCH_SIZE) {
+      broadCursor = 0;
+      break;
+    }
+    broadCursor += MARKET_SCAN_BATCH_SIZE;
+    if (broadCursor >= MARKET_SCAN_MAX_OFFSET) {
+      broadCursor = 0;
+      break;
+    }
+  }
+  const markets = mergeMarketLists(preferredMarkets, broadBatches).sort(compareMarketsForShortHorizon);
   const observedAt = nowIso();
   const observations = (Array.isArray(markets) ? markets : [])
     .map((market) => preferredMarketObservation(market, observedAt))
-    .filter(Boolean);
-  const nextCursor = Array.isArray(markets) && markets.length >= MARKET_SCAN_BATCH_SIZE
-    ? previousScan.cursor + MARKET_SCAN_BATCH_SIZE
-    : 0;
+    .filter((item) => {
+      if (!item) return false;
+      const probability = Number(item.marketProbability);
+      const days = daysToEnd(item.endDate);
+      const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+      return Number.isFinite(probability)
+        && probability >= MARKET_SCAN_MIN_PROBABILITY
+        && Number.isFinite(days)
+        && days >= minimumDays;
+    })
+    .sort(compareObservationsForMarketScan);
+  const shortHorizonCount = observations.filter((item) => {
+    const days = daysToEnd(item.endDate);
+    return Number.isFinite(days) && days > 0 && days <= MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS;
+  }).length;
   state.marketObservations = mergeMarketObservationLists(observations, state.marketObservations || []);
   state.marketScan = {
-    cursor: nextCursor >= MARKET_SCAN_MAX_OFFSET ? 0 : nextCursor,
+    cursor: broadCursor,
     lastScanAt: observedAt,
     lastBatchCount: Array.isArray(markets) ? markets.length : 0,
     lastPreferredCount: observations.length,
+    lastShortHorizonCount: shortHorizonCount,
+    preferredMaxResolutionDays: MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS,
+    minResolutionHours: MARKET_SCAN_MIN_RESOLUTION_HOURS,
+    lastScanError: null,
   };
   return observations;
 }

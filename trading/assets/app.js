@@ -90,6 +90,7 @@ const DEFAULT_MAX_RESOLUTION_DAYS = 7;
 const LIVE_STATE_REFRESH_MS = 15000;
 const LIVE_SYNC_REQUEST_MS = 30000;
 const USER_NAV_REFRESH_DEBOUNCE_MS = 250;
+const APP_BASE_PATH = "/trading/";
 
 const els = {
   shell: document.querySelector("[data-app-shell]"),
@@ -190,6 +191,12 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function appPath(path) {
+  const value = String(path || "");
+  if (/^(?:https?:)?\/\//i.test(value) || value.startsWith("/")) return value;
+  return `${APP_BASE_PATH}${value.replace(/^\.?\//, "")}`;
 }
 
 function money(value, digits = 2) {
@@ -3117,8 +3124,8 @@ async function fetchJson(path, options = {}) {
   const summary = options.summary ? `&summary=${encodeURIComponent(options.summary)}` : "";
   const cacheSummary = options.summary || "full";
   const url = stateTarget
-    ? `api.php?action=state&target=${stateTarget}${summary}&t=${Date.now()}`
-    : `${statePath}?t=${Date.now()}`;
+    ? appPath(`api.php?action=state&target=${stateTarget}${summary}&t=${Date.now()}`)
+    : appPath(`${statePath}?t=${Date.now()}`);
   try {
     const statePayload = await fetch(url, { cache: "no-store" });
     if (!statePayload.ok) throw new Error(`${path} HTTP ${statePayload.status}`);
@@ -3139,7 +3146,8 @@ async function fetchJson(path, options = {}) {
 }
 
 async function fetchApiJson(url, options = {}) {
-  const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`, {
+  const requestUrl = appPath(url);
+  const response = await fetch(`${requestUrl}${requestUrl.includes("?") ? "&" : "?"}t=${Date.now()}`, {
     cache: "no-store",
     ...options,
   });
@@ -3190,7 +3198,7 @@ async function requestLiveAccountSync(options = {}) {
   const minSeconds = Math.max(30, Math.round(Number(options.minSeconds || LIVE_SYNC_REQUEST_MS / 1000)));
   if (!quiet) setExecutionStatus("syncing live account");
   try {
-    const response = await fetch(`api.php?action=live-sync&minSeconds=${encodeURIComponent(minSeconds)}`, {
+    const response = await fetch(appPath(`api.php?action=live-sync&minSeconds=${encodeURIComponent(minSeconds)}`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       cache: "no-store",
@@ -3294,7 +3302,7 @@ async function triggerOneTimeExecution(target) {
 
   try {
     await savePortfolioConfigNow();
-    const response = await fetch("api.php?action=workflow", {
+    const response = await fetch(appPath("api.php?action=workflow"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3353,7 +3361,7 @@ async function triggerManualOpportunityEvaluation(item, trigger = null) {
   state.executionBusy = target;
   syncExecutionButtons();
   try {
-    const response = await fetch("api.php?action=workflow", {
+    const response = await fetch(appPath("api.php?action=workflow"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4517,6 +4525,7 @@ function renderScrapedOpportunities() {
     const marketProbability = Number(item.marketProbability);
     if (probabilityFilter > 0 && (!Number.isFinite(marketProbability) || marketProbability < probabilityFilter)) return false;
     const days = evaluationDaysLeft(item);
+    if (!Number.isFinite(days) || days < 0) return false;
     return daysFilter == null || (Number.isFinite(days) && days <= daysFilter);
   });
   const visible = sortedScrapedObservations(filtered).slice(0, 250);
@@ -4538,6 +4547,8 @@ function renderScrapedOpportunities() {
       `${formatInteger(observations.length) || observations.length} retained`,
       scan.lastBatchCount != null ? `${formatInteger(scan.lastBatchCount)} in last batch` : null,
       scan.lastPreferredCount != null ? `${formatInteger(scan.lastPreferredCount)} preferred outcomes` : null,
+      scan.lastShortHorizonCount != null ? `${formatInteger(scan.lastShortHorizonCount)} <= ${formatInteger(scan.preferredMaxResolutionDays || DEFAULT_MAX_RESOLUTION_DAYS)}d` : null,
+      scan.minResolutionHours != null ? `min ${formatInteger(scan.minResolutionHours) || scan.minResolutionHours}h` : null,
       `last scan ${lastScan}`,
       scan.lastScanError ? `scan error: ${scan.lastScanError}` : null,
     ].filter(Boolean).join(" / ");

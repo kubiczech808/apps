@@ -187,6 +187,9 @@ jobs:
       PAPER_MARKET_SCAN_BATCH_SIZE: "100"
       PAPER_MARKET_SCAN_MAX_OBSERVATIONS: "5000"
       PAPER_MARKET_SCAN_MAX_OFFSET: "5000"
+      PAPER_MARKET_SCAN_PREFETCH_BATCHES: "2"
+      PAPER_MARKET_SCAN_MIN_PROBABILITY: "0.5"
+      PAPER_MARKET_SCAN_MIN_RESOLUTION_HOURS: "1"
       PAPER_MAX_SPREAD: "0.08"
       PAPER_MIN_VOLUME_24H: "100"
       PAPER_MAX_RESOLUTION_DAYS: "7"
@@ -246,6 +249,7 @@ jobs:
 
           config = payload.get("config") or {}
           paper = config.get("paper") or {}
+          live = config.get("live") or {}
           mapping = {
               "conservative": "PAPER_CONSERVATIVE",
               "highReward": "PAPER_HIGH_REWARD",
@@ -268,6 +272,7 @@ jobs:
               emit(f"{prefix}_TRADE_CADENCE_HOURS", row.get("tradeCadenceHours"))
               emit(f"{prefix}_REQUIRE_MOST_PROBABLE", str(bool(row.get("requireMostProbableOutcome"))).lower())
               emit(f"{prefix}_PROBABILITY_SOURCE", row.get("probabilitySource"))
+          emit("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", live.get("maxResolutionDays"))
           PY
 
       - name: Run paper bot
