@@ -1373,10 +1373,9 @@ try {
         }
         $evaluationTokenId = preg_replace('/[^0-9]/', '', (string) ($payload['evaluation_token_id'] ?? $payload['evaluationTokenId'] ?? ''));
         $evaluationMarketSlug = preg_replace('/[^A-Za-z0-9_-]/', '', (string) ($payload['evaluation_market_slug'] ?? $payload['evaluationMarketSlug'] ?? ''));
-        $refreshTokenId = preg_replace('/[^0-9]/', '', (string) ($payload['refresh_token_id'] ?? $payload['refreshTokenId'] ?? ''));
         $refreshMarketSlug = preg_replace('/[^A-Za-z0-9_-]/', '', (string) ($payload['refresh_market_slug'] ?? $payload['refreshMarketSlug'] ?? ''));
-        if ($targetKey === 'paper-refresh' && $refreshTokenId === '' && $refreshMarketSlug === '') {
-            respond(['ok' => false, 'error' => 'A scraped market token ID or market slug is required for refresh.'], 400);
+        if ($targetKey === 'paper-refresh' && $refreshMarketSlug === '') {
+            respond(['ok' => false, 'error' => 'A scraped market slug is required for refresh.'], 400);
         }
         $paperStrategyId = paper_strategy_from_target($target) ?? normalized_paper_strategy_input($payload['paper_strategy_id'] ?? $payload['paperStrategyId'] ?? null);
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
@@ -1440,8 +1439,9 @@ try {
                 'workflow' => 'trading-paper-bot.yml',
                 'inputs' => array_filter([
                     'mode' => 'refresh',
-                    'refresh_token_id' => $refreshTokenId !== '' ? $refreshTokenId : null,
-                    'refresh_market_slug' => $refreshMarketSlug !== '' ? $refreshMarketSlug : null,
+                    // The paper workflow is at GitHub's 25-input limit. During
+                    // refresh mode this otherwise unused input carries the slug.
+                    'paper_strategy_id' => $refreshMarketSlug !== '' ? $refreshMarketSlug : null,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Focused scraped-market refresh workflow dispatched.',
             ];

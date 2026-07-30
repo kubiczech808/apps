@@ -17,16 +17,6 @@ on:
           - full
           - refresh
           - report
-      refresh_token_id:
-        description: "Optional Polymarket token ID for a single scraped-market refresh"
-        required: false
-        default: ""
-        type: string
-      refresh_market_slug:
-        description: "Optional Polymarket market slug for a single scraped-market refresh"
-        required: false
-        default: ""
-        type: string
       manual_run_once:
         description: "Manual Run once request; bypasses new-trade cadence only"
         required: false
@@ -223,8 +213,7 @@ jobs:
       PAPER_STRATEGY_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_strategy_id || '' }}
       PAPER_REPORT_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report') }}
       PAPER_REFRESH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' }}
-      PAPER_REFRESH_TOKEN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_token_id || '' }}
-      PAPER_REFRESH_MARKET_SLUG: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_market_slug || '' }}
+      PAPER_REFRESH_MARKET_SLUG: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' && inputs.paper_strategy_id || '' }}
       PAPER_SCHEDULED_CADENCE_POLL: ${{ github.event_name == 'schedule' && github.event.schedule != '17 1 * * *' && 'true' || 'false' }}
       PAPER_CONTINUOUS_EVALUATION: "true"
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET || secrets.GEMINI_API_KEY }}

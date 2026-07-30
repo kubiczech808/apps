@@ -3647,7 +3647,6 @@ async function waitForScrapedRefreshWorkflow(startedAt) {
 
 async function triggerScrapedOpportunityRefresh(item) {
   const key = scrapedRefreshKey(item);
-  const tokenId = String(item?.tokenId || "").trim();
   const slug = String(item?.slug || item?.eventSlug || "").trim();
   if (!key || !slug || state.scrapedRefreshKeys.has(key)) return;
 
@@ -3662,7 +3661,6 @@ async function triggerScrapedOpportunityRefresh(item) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         target: "paper-refresh",
-        refresh_token_id: tokenId,
         refresh_market_slug: slug,
       }),
     });
