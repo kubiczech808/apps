@@ -2706,15 +2706,15 @@ function runCronAiResearch(PDO $pdo, array $config): string
         }
     });
     try {
-        // Rozdelana prace ma absolutni prednost: novy seed se nezaklada, dokud existuje
-        // beh, ktery jeste neni dotazeny do konce. Jinak by se hromadily nedokoncene
-        // zaznamy a scraping i Gemini rozpocet by se tristily mezi ne.
-        $unfinished = runCronAiResearchUnfinished($pdo, $config);
-        $pending = aiResearchPendingRunSummary($pdo);
-        if ($unfinished !== '') {
-            $message = $unfinished;
-        } elseif ($pending !== '') {
-            $message = 'AI research: novy seed se nezaklada, dokud neni dokoncene ' . $pending . '.';
+        // Jeden seed subjekt naraz. Dokud rozdelany beh nedojde do stavu ready, cely tik
+        // patri jemu; novy subjekt se nezaklada. Rozhodnuti je stejne jako to, ktere se
+        // uzivateli ukazalo v logu jako naplanovana prace.
+        $work = aiResearchNextWork($pdo);
+        if (aiResearchWorkIsFinishing($work)) {
+            $message = runCronAiResearchUnfinished($pdo, $config, $work);
+            if ($message === '') {
+                $message = 'AI research: rozdelany beh se nepodarilo posunout, zkusi to dalsi cron.';
+            }
         } elseif (aiResearchDeadlineReached(55)) {
             $message = 'AI research: novy seed se odklada, cas tohoto behu uz padl na dokonceni rozdelane prace.';
         } else {
@@ -2753,35 +2753,6 @@ function runCronAiResearch(PDO $pdo, array $config): string
  * dalsi beh (kdy a jestli pujde o novy seed nebo dokonceni odlozeneho). Pri behu se
  * z nej stane radek s vysledkem a hned se naplanuje novy.
  */
-function aiResearchNextWorkKind(PDO $pdo): array
-{
-    try {
-        $stmt = $pdo->query('
-            SELECT id, seed_business, seed_email, plan_json
-            FROM ai_research_runs
-            WHERE status IN ("deferred", "failed")
-              AND updated_at >= ' . $pdo->quote(date('c', time() - 7 * 86400)) . '
-            ORDER BY updated_at DESC
-            LIMIT 5
-        ');
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $plan = json_decode((string)$row['plan_json'], true);
-            if (!is_array($plan) || (int)($plan['finish_attempts'] ?? 0) >= 3) {
-                continue;
-            }
-            $name = trim((string)($row['seed_business'] ?? '')) ?: trim((string)($row['seed_email'] ?? ''));
-            return [
-                'kind' => 'finish_deferred',
-                'run_id' => (int)$row['id'],
-                'subject' => $name,
-            ];
-        }
-    } catch (Throwable $e) {
-        error_log('AI research next work lookup failed: ' . $e->getMessage());
-    }
-    return ['kind' => 'new_seed', 'run_id' => 0, 'subject' => ''];
-}
-
 function aiResearchPlannedRunAt(array $config, array $settings): int
 {
     $nextAllowedAt = (int)($settings['ai_research_next_allowed_at'] ?? 0);
@@ -2796,7 +2767,7 @@ function aiResearchPlannedRunAt(array $config, array $settings): int
 function refreshAiResearchPlannedLog(PDO $pdo, array $config, array $settings): int
 {
     try {
-        $work = aiResearchNextWorkKind($pdo);
+        $work = aiResearchNextWork($pdo);
         // planned_at je pevny termin nejblizsiho tiku cronu, ne "za pet minut od teted".
         // Kdyz ten cas propadne a beh se nestal, je to videt jako zmeskany termin.
         $due = aiResearchPlannedRunAt($config, $settings);
@@ -2829,10 +2800,18 @@ function aiResearchPlannedLogMessage(array $work, array $settings, array $config
     $reason = $nextAllowedAt > time()
         ? 'Ceka se na uvolneni Gemini limitu.'
         : 'Ceka se na interval mezi behy (' . aiResearchIntervalLabel(aiResearchRunIntervalSeconds($config)) . ').';
-    return $work['kind'] === 'finish_deferred'
-        ? 'Dokonci se odlozeny beh #' . (int)$work['run_id']
-            . ($work['subject'] !== '' ? ' (' . $work['subject'] . ')' : '') . '. ' . $reason
-        : 'Vybere se novy seed subjekt z Firmy.cz. ' . $reason;
+    if (!aiResearchWorkIsFinishing($work)) {
+        return 'Vybere se novy seed subjekt z Firmy.cz, protoze vsechny predchozi jsou hotove. ' . $reason;
+    }
+    $label = trim((string)($work['label'] ?? '')) !== ''
+        ? (string)$work['label']
+        : 'beh #' . (int)$work['run_id'];
+    $what = [
+        'finish_deferred' => 'Dokonci se odlozeny ' . $label,
+        'finish_incomplete' => 'Dotahne se ' . $label . ' do stavu ready',
+        'finish_running' => 'Obnovi se preruseny ' . $label,
+    ][(string)$work['kind']] ?? 'Dokonci se ' . $label;
+    return $what . '. Novy seed subjekt se nezaklada, dokud tento neni hotovy. ' . $reason;
 }
 
 function planNextAiResearchLog(PDO $pdo, array $config): int
@@ -2900,6 +2879,8 @@ function aiResearchLogKindLabel(string $kind): string
     return [
         'new_seed' => 'novy seed subjekt',
         'finish_deferred' => 'dokonceni odlozeneho behu',
+        'finish_incomplete' => 'dotazeni behu do stavu ready',
+        'finish_running' => 'obnoveni preruseneho behu',
         'manual' => 'rucni spusteni',
     ][$kind] ?? $kind;
 }
@@ -6863,25 +6844,31 @@ function aiResearchWorkflowMissingSteps(array $checklist): array
 }
 
 /**
- * Popis rozdelane prace, ktera brani zalozeni noveho seedu. Prazdny string znamena,
- * ze vsechny predchozi seedy jsou dotazene do konce a muze se vzit novy.
- * Trvale uzavrene behy se nepocitaji - u tech uz neni co dokoncovat.
+ * Jedine rozhodnuti o tom, co ma automatika delat dal. Pouziva ho planovac v logu
+ * i samotny cron, takze sloupec "Prace" nikdy neslibi neco jineho, nez co se pak
+ * skutecne stane. Novy seed prijde na radu teprve tehdy, kdyz je kazdy predchozi
+ * seed dotazeny do konce nebo trvale uzavreny.
  */
-function aiResearchPendingRunSummary(PDO $pdo): string
+function aiResearchNextWork(PDO $pdo): array
 {
+    $newSeed = ['kind' => 'new_seed', 'run_id' => 0, 'subject' => '', 'label' => ''];
     try {
         $rows = $pdo->query('
-            SELECT id, seed_business, seed_email, status, plan_json, found_count, accepted_count, email_body_html
+            SELECT id, seed_business, seed_email, status, plan_json,
+                   COALESCE(found_count, 0) AS found_count,
+                   COALESCE(accepted_count, 0) AS accepted_count,
+                   email_body_html
             FROM ai_research_runs
             WHERE status IN ("running", "deferred", "failed", "done", "no_match")
             ORDER BY id DESC
-            LIMIT 30
+            LIMIT 40
         ')->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) {
-        error_log('AI research pending summary failed: ' . $e->getMessage());
-        return '';
+        error_log('AI research next work lookup failed: ' . $e->getMessage());
+        return $newSeed;
     }
-    foreach ($rows as $row) {
+    // Od nejstarsiho, aby se fronta vyprazdnovala v poradku, v jakem vznikla.
+    foreach (array_reverse($rows) as $row) {
         $plan = json_decode((string)$row['plan_json'], true);
         $plan = is_array($plan) ? $plan : [];
         if (!empty($plan['permanently_closed'])) {
@@ -6889,56 +6876,76 @@ function aiResearchPendingRunSummary(PDO $pdo): string
         }
         $status = (string)$row['status'];
         $name = trim((string)($row['seed_business'] ?? '')) ?: trim((string)($row['seed_email'] ?? ''));
-        $label = 'zpracovani behu #' . (int)$row['id'] . ($name !== '' ? ' (' . $name . ')' : '');
-        if (in_array($status, ['running', 'deferred', 'failed'], true)) {
-            return $label;
+        $work = [
+            'run_id' => (int)$row['id'],
+            'subject' => $name,
+            'label' => 'beh #' . (int)$row['id'] . ($name !== '' ? ' (' . $name . ')' : ''),
+            'row' => $row,
+            'plan' => $plan,
+        ];
+        if (in_array($status, ['deferred', 'failed'], true)) {
+            if ((int)($plan['finish_attempts'] ?? 0) >= 3) {
+                continue;
+            }
+            return $work + ['kind' => 'finish_deferred'];
+        }
+        if ($status === 'running') {
+            return $work + ['kind' => 'finish_running'];
         }
         // Hotovy beh jeste nemusi mit splnene vsechny povinne kroky workflow.
-        if ((int)($row['accepted_count'] ?? 0) > 0
+        if ((int)$row['accepted_count'] > 0
             && !aiResearchWorkflowRequiredDone(aiResearchWorkflowChecklist($pdo, $row, $plan))) {
-            return $label;
+            if ((int)($plan['finish_attempts'] ?? 0) >= 3) {
+                continue;
+            }
+            return $work + ['kind' => 'finish_incomplete'];
         }
     }
-    return '';
+    return $newSeed;
 }
 
-function runCronAiResearchUnfinished(PDO $pdo, array $config): string
+function aiResearchWorkIsFinishing(array $work): bool
 {
-    $stmt = $pdo->prepare('
-        SELECT id, plan_json, COALESCE(found_count, 0) AS found_count
-        FROM ai_research_runs
-        WHERE status IN ("deferred", "failed")
-          AND updated_at >= ?
-        ORDER BY updated_at DESC
-        LIMIT 5
-    ');
-    $stmt->execute([date('c', time() - 7 * 86400)]);
-    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-        $plan = json_decode((string)$row['plan_json'], true);
-        if (!is_array($plan) || !empty($plan['permanently_closed'])) {
-            continue;
-        }
-        // Po nekolika neuspesnych pokusech uz beh nezkousime, aby neblokoval nove seedy.
-        if ((int)($plan['finish_attempts'] ?? 0) >= 3) {
-            continue;
-        }
-        $runId = (int)$row['id'];
-        $plan['finish_attempts'] = (int)($plan['finish_attempts'] ?? 0) + 1;
-        $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
-        $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
-        try {
-            // Beh, ktery se zastavil uz na planu nebo bez kontaktu, nema co dokoncovat.
-            // Kontrola behu dogeneruje chybejici kroky vcetne planu a scrapingu.
-            if (aiResearchPrimaryKeyword($plan) === '' || (int)($row['found_count'] ?? 0) <= 0) {
-                return 'AI research dokonceni: ' . auditAiResearchRunNow($pdo, $config, $runId);
-            }
-            return 'AI research dokonceni: ' . finishAiResearchRunNow($pdo, $config, $runId);
-        } catch (Throwable $e) {
-            error_log('AI research finish for #' . $runId . ' failed: ' . $e->getMessage());
-            return 'AI research dokonceni behu #' . $runId . ' se nepodarilo: ' . $e->getMessage();
-        }
+    return in_array((string)($work['kind'] ?? ''), ['finish_deferred', 'finish_incomplete', 'finish_running'], true);
+}
+
+/**
+ * Dotahne rozdelany beh. Bezi vzdy jen jeden seed subjekt naraz: dokud tento beh
+ * nedojde do stavu ready, novy seed se nezaklada. Vraci prazdny string, kdyz uz neni
+ * co dokoncovat a muze se vzit dalsi subjekt.
+ */
+function runCronAiResearchUnfinished(PDO $pdo, array $config, ?array $work = null): string
+{
+    $work = $work ?? aiResearchNextWork($pdo);
+    if (!aiResearchWorkIsFinishing($work)) {
+        return '';
     }
-    return '';
+    $runId = (int)$work['run_id'];
+    $plan = (array)($work['plan'] ?? []);
+    $row = (array)($work['row'] ?? []);
+    // Beh, ktery zustal viset ve stavu running (hosting ukoncil request), se musi
+    // nejdriv uvolnit, jinak by ho nesla dokoncit zadna dalsi cesta.
+    if ((string)$work['kind'] === 'finish_running') {
+        markAiResearchRunDeferred($pdo, $runId, 'Beh byl preruseny ukoncenim requestu, pokracuje se v dokonceni.');
+    }
+    $plan['finish_attempts'] = (int)($plan['finish_attempts'] ?? 0) + 1;
+    $update = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
+    $update->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
+    try {
+        // Beh, ktery se zastavil uz na planu nebo bez kontaktu, nema co dokoncovat.
+        // Kontrola behu dogeneruje chybejici kroky vcetne planu a scrapingu.
+        if (aiResearchPrimaryKeyword($plan) === '' || (int)($row['found_count'] ?? 0) <= 0) {
+            return 'AI research dokonceni: ' . auditAiResearchRunNow($pdo, $config, $runId);
+        }
+        if ((string)$work['kind'] === 'finish_incomplete') {
+            // Hotovy beh bez splnenych kroku uz ma kontakty, chybi mu dalsi kroky workflow.
+            return 'AI research dokonceni: ' . auditAiResearchRunNow($pdo, $config, $runId);
+        }
+        return 'AI research dokonceni: ' . finishAiResearchRunNow($pdo, $config, $runId);
+    } catch (Throwable $e) {
+        error_log('AI research finish for #' . $runId . ' failed: ' . $e->getMessage());
+        return 'AI research dokonceni behu #' . $runId . ' se nepodarilo: ' . $e->getMessage();
+    }
 }
 
 function runCronAiResearchContactEstimates(PDO $pdo, array $config, int $budgetSeconds = 60): string
