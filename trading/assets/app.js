@@ -4601,6 +4601,9 @@ function renderBotEvaluations() {
     const aiUsageText = Number.isFinite(Number(aiUsage.requestsLast24Hours))
       ? `AI usage ${formatInteger(aiUsage.requestsLastMinute || 0)}/min / ${formatInteger(aiUsage.requestsLastHour || 0)}/h / ${formatInteger(aiUsage.requestsLast24Hours)} of ${formatInteger(aiUsage.maxRequestsPer24Hours)} in 24h; capacity ${formatInteger(aiUsage.estimatedDailyCapacity)}/day`
       : "AI usage pending";
+    const aiQuotaBackoffText = aiUsage.quotaBlockedUntil
+      ? `Gemini quota backoff until ${formatDate(aiUsage.quotaBlockedUntil)}`
+      : null;
     const retainedText = `${formatInteger(evaluations.length) || evaluations.length}${retainedLimit ? ` / ${retainedLimit} retained cap` : " retained"}`;
     els.evaluationSummary.textContent = [
       `${formatInteger(filteredCount) || filteredCount} shown`,
@@ -4611,6 +4614,7 @@ function renderBotEvaluations() {
       totalEvaluated ? `${totalEvaluated} evaluated by runs` : null,
       lastRunEvaluated ? `${lastRunEvaluated} last run` : null,
       aiUsageText,
+      aiQuotaBackoffText,
     ].filter(Boolean).join(" / ");
   }
 

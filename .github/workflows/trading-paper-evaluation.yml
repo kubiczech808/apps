@@ -47,14 +47,14 @@ jobs:
       PAPER_AI_EXECUTION_RESERVE_REQUESTS: "100"
       PAPER_AI_USAGE_HISTORY_LIMIT: "500"
       PAPER_AI_STOP_ON_QUOTA_ERROR: "true"
-      PAPER_AI_POSTMORTEM_LIMIT: "8"
+      PAPER_AI_POSTMORTEM_LIMIT: "1"
       PAPER_REQUIRE_GEMINI: "true"
       PAPER_EVALUATION_ONLY: "true"
       PAPER_EVALUATION_TOKEN_ID: ${{ inputs.evaluation_token_id }}
       PAPER_EVALUATION_MARKET_SLUG: ${{ inputs.evaluation_market_slug }}
       PAPER_PRIMARY_AI_PROVIDER: gemini
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET || secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-3-flash-preview
+      GEMINI_MODEL: gemini-3.5-flash
       GEMINI_SEARCH_GROUNDING: "true"
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}

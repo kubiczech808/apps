@@ -44,7 +44,7 @@ const MARKET_SCAN_BATCH_SIZE = envNumber("PAPER_MARKET_SCAN_BATCH_SIZE", 100);
 const MARKET_SCAN_MAX_OBSERVATIONS = envNumber("PAPER_MARKET_SCAN_MAX_OBSERVATIONS", 5000);
 const MARKET_SCAN_MAX_OFFSET = envNumber("PAPER_MARKET_SCAN_MAX_OFFSET", 5000);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3-flash-preview";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
 const REQUIRE_GEMINI = envBool("PAPER_REQUIRE_GEMINI", false);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
@@ -1969,7 +1969,9 @@ async function callGeminiJson(messages) {
       });
       if (!response.ok) {
         const detail = await response.text().catch(() => "");
-        throw new Error(`Gemini HTTP ${response.status}${detail ? `: ${detail.slice(0, 240)}` : ""}`);
+        // Gemini returns the quota dimension and sometimes a retry delay in this body.
+        // Preserve enough of it to distinguish RPM/TPM/RPD/project-limit responses.
+        throw new Error(`Gemini HTTP ${response.status}${detail ? `: ${detail.slice(0, 1800)}` : ""}`);
       }
       return response.json();
     } finally {
@@ -2245,7 +2247,10 @@ function markAiAnalysisUnavailable(item, message) {
 }
 
 function markAiAnalysisDeferred(item, message) {
-  const reason = compactSentence(message || "Gemini grounded AI analysis was deferred");
+  const reason = compactSentence(String(message || "Gemini grounded AI analysis was deferred")
+    .replace(/(?:Gemini grounded AI analysis is pending:\s*)+/gi, "")
+    .replace(/(?:\.?\s*The item will be retried by a later scheduled evaluation run\.?)+/gi, "")
+    .trim());
   return ensureEvaluationErrorMetadata({
     ...item,
     status: "ERROR",
@@ -2261,14 +2266,6 @@ function markAiAnalysisDeferred(item, message) {
     },
     analysisSummary: `Gemini grounded AI analysis is pending because the API rate limit or quota was reached: ${reason}. This is not an evaluated opportunity and cannot be selected for trading until a grounded memo is completed.`,
   });
-}
-
-function wasNeverReviewedBecauseOfQuota(item) {
-  if (item?.selectionStatus !== "AI_PENDING") return false;
-  const message = [item?.errorReason, item?.analysisSummary, item?.aiAnalysis?.aiModelError]
-    .filter(Boolean)
-    .join(" ");
-  return /stopped this run before the candidate could be reviewed/i.test(message);
 }
 
 function normalizeAiPendingEvaluation(item) {
@@ -2292,6 +2289,57 @@ function aiUsageEntries(state) {
   return Array.isArray(state?.aiUsageLog) ? state.aiUsageLog : [];
 }
 
+function pacificDateStamp(timestamp) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function nextPacificQuotaReset(now = Date.now()) {
+  try {
+    const currentDate = pacificDateStamp(now);
+    let lower = now;
+    let upper = now + 36 * 60 * 60 * 1000;
+    while (pacificDateStamp(upper) === currentDate) upper += 24 * 60 * 60 * 1000;
+    while (upper - lower > 1000) {
+      const midpoint = Math.floor((lower + upper) / 2);
+      if (pacificDateStamp(midpoint) === currentDate) lower = midpoint;
+      else upper = midpoint;
+    }
+    // Leave a small safety margin after the provider-side daily reset.
+    return new Date(upper + 5 * 60 * 1000).toISOString();
+  } catch {
+    return new Date(now + 24 * 60 * 60 * 1000).toISOString();
+  }
+}
+
+function quotaBackoffUntil(error, now = Date.now()) {
+  const text = String(error || "");
+  const match = text.match(/retry(?:\s+in|[_\s-]*delay)?[^\d]*(\d+(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)/i);
+  if (match) {
+    const amount = Number(match[1]);
+    const unit = match[2].toLowerCase();
+    const multiplier = unit.startsWith("h") ? 3600000 : unit.startsWith("m") ? 60000 : 1000;
+    if (Number.isFinite(amount) && amount > 0) return new Date(now + amount * multiplier + 5000).toISOString();
+  }
+  return nextPacificQuotaReset(now);
+}
+
+function recordAiQuotaBackoff(state, error) {
+  if (!state) return;
+  const now = Date.now();
+  state.aiUsage = {
+    ...aiUsageSnapshot(state, now),
+    quotaBlockedUntil: quotaBackoffUntil(error, now),
+    quotaBlockedReason: compactSentence(error || "Gemini quota/rate limit response"),
+  };
+}
+
 function aiUsageSnapshot(state, now = Date.now()) {
   const entries = aiUsageEntries(state).filter((entry) => {
     const time = Date.parse(entry.requestedAt || "");
@@ -2308,11 +2356,14 @@ function aiUsageSnapshot(state, now = Date.now()) {
   const oldestHour = hour[0] ? Date.parse(hour[0].requestedAt || "") + 3600000 : 0;
   const oldestMinute = minute[0] ? Date.parse(minute[0].requestedAt || "") + 60000 : 0;
   const oldestDay = entries[0] ? Date.parse(entries[0].requestedAt || "") + 86400000 : 0;
+  const storedQuotaBlockedUntil = Date.parse(state?.aiUsage?.quotaBlockedUntil || "") || 0;
+  const quotaBlockedUntil = storedQuotaBlockedUntil > now ? new Date(storedQuotaBlockedUntil).toISOString() : null;
   const nextAvailable = Math.max(
     nextFromInterval,
     minute.length >= AI_MAX_REQUESTS_PER_MINUTE ? oldestMinute : 0,
     hour.length >= AI_MAX_REQUESTS_PER_HOUR ? oldestHour : 0,
     entries.length >= AI_MAX_REQUESTS_PER_DAY ? oldestDay : 0,
+    storedQuotaBlockedUntil > now ? storedQuotaBlockedUntil : 0,
   );
   return {
     model: GEMINI_MODEL,
@@ -2336,6 +2387,8 @@ function aiUsageSnapshot(state, now = Date.now()) {
     lastRequestAt: last?.requestedAt || null,
     lastRequestStatus: last?.status || null,
     lastError: last?.error || null,
+    quotaBlockedUntil,
+    quotaBlockedReason: quotaBlockedUntil ? state?.aiUsage?.quotaBlockedReason || null : null,
     deferredRuns: Number(state?.aiUsage?.deferredRuns || 0),
     lastDeferredAt: state?.aiUsage?.lastDeferredAt || null,
   };
@@ -2383,6 +2436,9 @@ function deferAiRun(state, reason) {
 function aiSlotAvailability(state, nextInputTokens = 0) {
   const snapshot = aiUsageSnapshot(state);
   const backgroundDailyBudget = Math.max(0, AI_MAX_REQUESTS_PER_DAY - AI_EXECUTION_RESERVE_REQUESTS);
+  if (snapshot.quotaBlockedUntil) {
+    return { allowed: false, reason: `Gemini quota backoff until ${snapshot.quotaBlockedUntil}`, snapshot };
+  }
   if (snapshot.requestsLast24Hours >= backgroundDailyBudget) {
     return { allowed: false, reason: `AI background daily budget reached (${backgroundDailyBudget}/24h; ${AI_EXECUTION_RESERVE_REQUESTS} reserved for execution)`, snapshot };
   }
@@ -2507,10 +2563,14 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
       const message = result?.error || "Gemini public-research analysis unavailable";
       const quotaLimited = isQuotaError(result);
       if (requestId) finishAiRequest(state, requestId, quotaLimited ? "QUOTA_LIMITED" : "ERROR", message);
+      if (quotaLimited) recordAiQuotaBackoff(state, message);
+      const deferredMessage = quotaLimited && state?.aiUsage?.quotaBlockedUntil
+        ? `${message}. Retry deferred until ${state.aiUsage.quotaBlockedUntil}`
+        : message;
       byId.set(candidate.id, REQUIRE_GEMINI && !quotaLimited
         ? markAiAnalysisUnavailable(candidate, message)
         : quotaLimited
-          ? markAiAnalysisDeferred(candidate, message)
+          ? markAiAnalysisDeferred(candidate, deferredMessage)
           : {
             ...candidate,
             aiAnalysis: {
@@ -2563,7 +2623,11 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
       const message = criticResult?.error || "Gemini critic analysis unavailable";
       const quotaLimited = isQuotaError(criticResult);
       if (criticRequestId) finishAiRequest(state, criticRequestId, quotaLimited ? "QUOTA_LIMITED" : "ERROR", message);
-      byId.set(candidate.id, quotaLimited ? markAiAnalysisDeferred(candidate, message) : markAiAnalysisUnavailable(candidate, message));
+      if (quotaLimited) recordAiQuotaBackoff(state, message);
+      const deferredMessage = quotaLimited && state?.aiUsage?.quotaBlockedUntil
+        ? `${message}. Retry deferred until ${state.aiUsage.quotaBlockedUntil}`
+        : message;
+      byId.set(candidate.id, quotaLimited ? markAiAnalysisDeferred(candidate, deferredMessage) : markAiAnalysisUnavailable(candidate, message));
       if (AI_STOP_ON_QUOTA_ERROR && quotaLimited) {
         quotaResponseReceived = true;
         break;
@@ -3901,7 +3965,7 @@ function deterministicPostMortem(trade) {
   };
 }
 
-async function reviewClosedTradesWithAi(trades) {
+async function reviewClosedTradesWithAi(trades, state = null) {
   const reviewed = [];
   let remaining = AI_POSTMORTEM_LIMIT;
 
@@ -3943,10 +4007,37 @@ async function reviewClosedTradesWithAi(trades) {
         factorKeysToPenalize: ["factor:key"],
       },
     };
-    const result = await callAiJson([
+    const messages = [
       { role: "system", content: "You are a prediction-market calibration reviewer. Return only valid JSON." },
       { role: "user", content: JSON.stringify(prompt) },
-    ]);
+    ];
+    let result;
+    if (GEMINI_API_KEY) {
+      const estimatedInputTokens = Math.ceil(messagesToGeminiText(messages).length / 4) + 128;
+      const slot = state ? aiSlotAvailability(state, estimatedInputTokens) : { allowed: true };
+      if (!slot.allowed) {
+        if (state) deferAiRun(state, `post-mortem deferred: ${slot.reason}`);
+        reviewed.push({ ...trade, postMortem: { ...fallback, aiModelError: `Gemini post-mortem deferred: ${slot.reason}` } });
+        continue;
+      }
+      const requestId = state ? reserveAiRequest(state, estimatedInputTokens, {
+        evaluationKey: trade.sourceEvaluationId || trade.tokenId || trade.id,
+        phase: "postmortem",
+      }) : null;
+      result = await callGeminiJson(messages);
+      if (!result || result.error) {
+        const message = result?.error || "Gemini post-mortem unavailable";
+        const quotaLimited = isQuotaError(result);
+        if (requestId) finishAiRequest(state, requestId, quotaLimited ? "QUOTA_LIMITED" : "ERROR", message);
+        if (quotaLimited) recordAiQuotaBackoff(state, message);
+        reviewed.push({ ...trade, postMortem: { ...fallback, aiModelError: message } });
+        continue;
+      }
+      if (requestId) finishAiRequest(state, requestId, "SUCCESS", "", result._usage);
+      result = { ...result, _model: GEMINI_MODEL, _provider: "gemini" };
+    } else {
+      result = await callAiJson(messages);
+    }
     if (!result || result.error) {
       reviewed.push({ ...trade, postMortem: { ...fallback, aiModelError: result?.error || "OpenAI post-mortem unavailable" } });
       continue;
@@ -4734,7 +4825,6 @@ async function run() {
   syncLegacyPaperAliases(state);
   state.aiUsage = aiUsageSnapshot(state);
   state.evaluations = (await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || [])))
-    .filter((item) => !wasNeverReviewedBecauseOfQuota(item))
     .map(normalizeAiPendingEvaluation)
     .map(ensureEvaluationErrorMetadata);
   try {
@@ -4749,7 +4839,7 @@ async function run() {
   recoverLedgerGaps(state);
   for (const portfolioState of Object.values(state.paperPortfolios)) {
     portfolioState.trades = await refreshTrades(portfolioState.trades);
-    portfolioState.trades = await reviewClosedTradesWithAi(portfolioState.trades);
+    portfolioState.trades = await reviewClosedTradesWithAi(portfolioState.trades, state);
   }
   const allTrades = Object.values(state.paperPortfolios).flatMap((portfolioState) => portfolioState.trades || []);
   state.learningProfile = buildLearningProfile(allTrades, state.learningProfile);
