@@ -2892,17 +2892,45 @@ function aiResearchLogKindLabel(string $kind): string
 }
 
 /**
+ * Kdy nejdriv tikne cron. Odpovida planum v GitHub Actions: Email Campaign Cron jede
+ * kazdych 5 minut, AI research jednou v hodine v 17. minute. Bez tohoto vypoctu by
+ * sloupec "Naplanovano" rikal jen "pri nejblizsim cronu" a cas by chybel.
+ */
+function aiResearchNextCronTickAt(int $notBefore = 0, int $now = 0): int
+{
+    $from = max($now > 0 ? $now : time(), $notBefore);
+    // Kazdych 5 minut: nejblizsi nasobek 5 minut, ktery jeste nenastal.
+    $everyFive = (int)(ceil($from / 300) * 300);
+    // Hodinovy beh v 17. minute.
+    $hourly = mktime((int)date('H', $from), 17, 0, (int)date('n', $from), (int)date('j', $from), (int)date('Y', $from));
+    if ($hourly < $from) {
+        $hourly += 3600;
+    }
+    return min($everyFive, $hourly);
+}
+
+/**
+ * Casy naplanovaneho behu: kdy ho aplikace pusti (interval, backoff) a kdy ho
+ * realne nastartuje nejblizsi tik cronu.
+ */
+function aiResearchLogPlannedTimes(array $log): array
+{
+    $plannedAt = trim((string)($log['planned_at'] ?? ''));
+    $allowedFrom = $plannedAt !== '' ? (int)strtotime($plannedAt) : time();
+    return [
+        'allowed_from' => $allowedFrom,
+        'run_at' => aiResearchNextCronTickAt($allowedFrom),
+    ];
+}
+
+/**
  * U naplanovaneho zaznamu je zajimavy cas, kdy pobezi, u hotoveho cas dokonceni.
  */
 function aiResearchLogWhen(array $log): string
 {
     $status = (string)($log['status'] ?? '');
     if ($status === 'planned') {
-        $plannedAt = trim((string)($log['planned_at'] ?? ''));
-        if ($plannedAt === '' || strtotime($plannedAt) <= time()) {
-            return 'pri nejblizsim cronu';
-        }
-        return formatDateTime($plannedAt);
+        return formatDateTime(date('c', aiResearchLogPlannedTimes($log)['run_at']));
     }
     foreach (['finished_at', 'started_at', 'planned_at', 'created_at'] as $key) {
         $value = trim((string)($log[$key] ?? ''));
@@ -17703,6 +17731,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <div>
                 <h2>Logy a provoz automatiky</h2>
                 <p>Každý tik cronu se zapíše, i když se nakonec nic nespustí. První řádek je vždy <strong>naplánovaný běh</strong> &ndash; kdy poběží a jestli se bude hledat nový seed, nebo dokončovat odložený. Podle něj se pozná rozdíl mezi „čeká se na interval“ a „automatika stojí“.</p>
+                <p class="muted">Plán cronu: Email Campaign Cron každých 5 minut, AI research každou hodinu v 17. minutě (GitHub plánované běhy se v praxi zpožďují, takže sloupec Naplánováno je nejbližší možný čas, ne garantovaný).</p>
                 <p class="muted">Poslední tik cronu: <strong><?= $researchLastTickAt > 0 ? h(formatDateTime(date('c', $researchLastTickAt))) : 'zatím nezaznamenán' ?></strong><?php if ($researchLastTickAt > 0 && time() - $researchLastTickAt > 1800): ?> &ndash; <strong>to je víc než 30 minut, cron pravděpodobně neběží</strong><?php endif; ?>. Poslední dokončený běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Stav: <?= h($researchAutomationStatus) ?></p>
                 <p class="muted">Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Interval mezi běhy: <?= h(aiResearchIntervalLabel($researchIntervalSeconds)) ?>. Gemini rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
                 <p class="muted">Skutečně odeslané Gemini requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h. Podle těchto čísel se pozná, zda Google limituje po minutách, nebo po dnech.</p>
@@ -17724,7 +17753,12 @@ function renderApp(PDO $pdo, ?array $flash): void
                     <?php $logPlanned = (string)$logRow['status'] === 'planned'; ?>
                     <tr class="<?= $logPlanned ? 'research-log-planned' : '' ?>">
                         <td><?= statusBadge(aiResearchLogStatusLabel((string)$logRow['status'])) ?></td>
-                        <td><?= h(aiResearchLogWhen($logRow)) ?></td>
+                        <td><?= h(aiResearchLogWhen($logRow)) ?>
+                            <?php if ($logPlanned): ?>
+                                <?php $logTimes = aiResearchLogPlannedTimes($logRow); ?>
+                                <br><small class="muted">nejbližší tik cronu<?= $logTimes['allowed_from'] > time() ? ', povoleno od ' . h(formatDateTime(date('c', $logTimes['allowed_from']))) : '' ?></small>
+                            <?php endif; ?>
+                        </td>
                         <td><?= h(aiResearchLogKindLabel((string)$logRow['kind'])) ?></td>
                         <td><?= trim((string)$logRow['subject']) !== '' ? h((string)$logRow['subject']) : ((int)$logRow['run_id'] > 0 ? '#' . h((string)$logRow['run_id']) : '-') ?></td>
                         <td><?= trim((string)$logRow['model']) !== '' ? h(normalizeGeminiModelName((string)$logRow['model'])) : '-' ?></td>
