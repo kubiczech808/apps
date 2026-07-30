@@ -1654,7 +1654,8 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     original.marketPrice != null || original.entryPrice != null ? `Market entry: ${probability(Number(original.marketPrice ?? original.entryPrice))}` : "",
     original.edge != null ? `Edge: ${signedPercent(Number(original.edge))}` : "",
     original.expectedValueUsdc != null ? `Expected value: ${signedMoney(Number(original.expectedValueUsdc), 4)}` : "",
-    original.annualizedReturn != null ? `EV p.a.: ${signedPercent(Number(original.annualizedReturn))}` : "",
+    Number.isFinite(potentialAnnualizedReturn(original)) ? `Potential p.a.: ${signedPercent(potentialAnnualizedReturn(original))}` : "",
+    Number.isFinite(annualizedExpectedReturn(original)) ? `AI EV p.a.: ${signedPercent(annualizedExpectedReturn(original))}` : "",
     original.netGainIfWinUsdc != null ? `Win if correct: ${signedMoney(Number(original.netGainIfWinUsdc), 4)}` : "",
     original.riskReward != null ? `R/R: ${riskReward(Number(original.riskReward))}` : "",
     original.liquidity != null ? `Liquidity: ${money(Number(original.liquidity || 0))}` : "",
@@ -1689,7 +1690,8 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     current.unrealizedPnlUsdc != null ? `Current P/L: ${signedMoney(Number(current.unrealizedPnlUsdc))} / ${signedPercent(Number(current.unrealizedPnlPct))}` : "",
     current.edge != null ? detailNumber("Edge", Number(current.edge), Number(original.edge), signedPercent) : "",
     current.expectedValueUsdc != null ? detailNumber("Expected value", Number(current.expectedValueUsdc), Number(original.expectedValueUsdc), (value) => signedMoney(value, 4)) : "",
-    current.annualizedReturn != null ? detailNumber("EV p.a.", Number(current.annualizedReturn), Number(original.annualizedReturn), signedPercent) : "",
+    Number.isFinite(potentialAnnualizedReturn(current)) ? detailNumber("Potential p.a.", potentialAnnualizedReturn(current), potentialAnnualizedReturn(original), signedPercent) : "",
+    Number.isFinite(annualizedExpectedReturn(current)) ? detailNumber("AI EV p.a.", annualizedExpectedReturn(current), annualizedExpectedReturn(original), signedPercent) : "",
     current.netGainIfWinUsdc != null ? detailNumber("Win if correct", Number(current.netGainIfWinUsdc), Number(original.netGainIfWinUsdc), (value) => signedMoney(value, 4)) : "",
     current.riskReward != null ? detailNumber("R/R", Number(current.riskReward), Number(original.riskReward), riskReward) : "",
     current.liquidity != null ? detailNumber("Liquidity", Number(current.liquidity || 0), Number(original.liquidity || 0), money) : "",
@@ -4572,7 +4574,7 @@ function evaluationSortValue(item, key) {
   if (key === "netYield") return netYield(item);
   if (key === "riskReward") return evaluationRiskReward(item);
   if (key === "aiProbability") return Number(item.aiProbability);
-  if (key === "annualizedReturn") return annualizedExpectedReturn(item);
+  if (key === "potentialAnnualizedReturn") return potentialAnnualizedReturn(item);
   if (key === "updates") return Number(item.evaluationCount || 1);
   if (key === "analysis") return `${evaluationReasons(item).join("; ")} ${item.analysisSummary || ""}`.toLowerCase();
   return "";
@@ -4642,8 +4644,8 @@ function evaluationDaysLeftCell(item) {
   return Number.isFinite(days) ? compactDays(days) : "-";
 }
 
-function annualizedCell(item) {
-  const annualized = annualizedExpectedReturn(item);
+function evaluatedPotentialAnnualizedCell(item) {
+  const annualized = potentialAnnualizedReturn(item);
   return `<span class="${pnlClass(annualized)}">${signedPercent(annualized)}</span>`;
 }
 
@@ -4928,7 +4930,7 @@ function renderBotEvaluations() {
           ${sortableHeader("netYield", "Net yield %")}
           ${sortableHeader("riskReward", "R/R")}
           ${sortableHeader("aiProbability", "AI prob.")}
-          ${sortableHeader("annualizedReturn", "EV p.a.")}
+          ${sortableHeader("potentialAnnualizedReturn", "Potential p.a.")}
           ${sortableHeader("updates", "Updates")}
           ${sortableHeader("analysis", "Analysis")}
         </tr>
@@ -4951,7 +4953,7 @@ function renderBotEvaluations() {
             <td data-label="Net yield %">${netYieldCell(item)}</td>
             <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
             <td data-label="AI prob.">${probability(Number(item.aiProbability))}</td>
-            <td data-label="EV p.a.">${annualizedCell(item)}</td>
+            <td data-label="Potential p.a.">${evaluatedPotentialAnnualizedCell(item)}</td>
             <td data-label="Updates">${updateHistoryCell(item)}</td>
             <td data-label="Analysis">
               ${analysisBadge(item)}
@@ -6013,7 +6015,7 @@ els.botEvaluations?.addEventListener("click", (event) => {
     state.evaluationSort.direction = state.evaluationSort.direction === "asc" ? "desc" : "asc";
   } else {
     state.evaluationSort.key = key;
-    state.evaluationSort.direction = ["marketPrice", "odds", "gainIfWin", "netYield", "aiProbability", "annualizedReturn"].includes(key) ? "desc" : "asc";
+    state.evaluationSort.direction = ["marketPrice", "odds", "gainIfWin", "netYield", "aiProbability", "potentialAnnualizedReturn"].includes(key) ? "desc" : "asc";
   }
   renderBotEvaluations();
 });
