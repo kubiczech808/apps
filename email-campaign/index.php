@@ -6948,6 +6948,91 @@ function aiResearchNextWork(PDO $pdo): array
     return $newSeed;
 }
 
+/**
+ * Stavy ctyr sloupcu prehledu. Zobrazuje se jen "hotovo"; nedokoncene se nechava
+ * prazdne, aby prehled neplnily stavy typu queued, odlozeno nebo nepripraveno, ktere
+ * uzivateli nic nerikaji. "Pripravuje se" ma prave jeden beh a v nem prave jeden
+ * sloupec - ten, na kterem prace zrovna stoji.
+ */
+function aiResearchRowStates(PDO $pdo, array $run, array $plan, array $checklist, bool $isActive): array
+{
+    $done = [];
+    foreach ($checklist as $step) {
+        $done[(string)$step['key']] = !empty($step['done']);
+    }
+    $outreachStatus = (string)($run['seed_outreach_status'] ?? '');
+    $sent = in_array($outreachStatus, ['sent', 'done', 'unsubscribed'], true);
+
+    $states = [
+        // Osloveni je hotove, az kdyz projdou vsechny povinne kroky workflow.
+        'outreach' => ($sent || aiResearchWorkflowRequiredDone($checklist)) ? 'hotovo' : '',
+        'account' => !empty($done['workspace']) ? 'hotovo' : '',
+        'status' => in_array((string)$run['status'], ['done', 'no_match'], true) ? 'hotovo' : '',
+        'scraping' => !empty($done['first_batch']) ? 'hotovo' : '',
+    ];
+    if (!$isActive) {
+        return $states;
+    }
+    // Sloupec se vybira podle skutecne zavislosti kroku, ne podle poradi v checklistu:
+    // bez uctu treba nemuze scraping ani zacit, takze prace stoji na uctu.
+    $column = '';
+    foreach (aiResearchStepDependencyOrder() as $key) {
+        if (!array_key_exists($key, $done) || $done[$key]) {
+            continue;
+        }
+        $column = aiResearchStepColumn($key);
+        break;
+    }
+    if ($column !== '' && $states[$column] === '') {
+        $states[$column] = 'pripravuje se';
+    }
+    return $states;
+}
+
+/**
+ * Poradi, v jakem se kroky skutecne odemykaji. Plan musi byt driv nez keyword, ucet
+ * driv nez scraping do jeho databaze, kontakty driv nez vzory osloveni.
+ */
+function aiResearchStepDependencyOrder(): array
+{
+    return ['plan', 'targeting', 'markets', 'contacts', 'workspace', 'first_batch', 'drafts', 'estimate'];
+}
+
+function aiResearchStepColumn(string $stepKey): string
+{
+    return [
+        'plan' => 'status',
+        'targeting' => 'status',
+        'markets' => 'status',
+        'contacts' => 'status',
+        'workspace' => 'account',
+        'first_batch' => 'scraping',
+        'drafts' => 'outreach',
+        'estimate' => 'outreach',
+    ][$stepKey] ?? 'status';
+}
+
+/**
+ * Beh, na kterem automatika zrovna pracuje. Prave jeden, nebo zadny.
+ */
+function aiResearchActiveRunId(PDO $pdo): int
+{
+    try {
+        $running = (int)($pdo->query('SELECT id FROM ai_research_runs WHERE status="running" ORDER BY id DESC LIMIT 1')->fetchColumn() ?: 0);
+        if ($running > 0) {
+            return $running;
+        }
+        // Beh drzi zamek, ale radek uz stav "running" nema (dokoncuje se odlozeny).
+        if ((int)(loadSettings($pdo)['ai_research_lock_until'] ?? 0) <= time()) {
+            return 0;
+        }
+        return (int)($pdo->query('SELECT run_id FROM ai_research_logs WHERE status="running" ORDER BY id DESC LIMIT 1')->fetchColumn() ?: 0);
+    } catch (Throwable $e) {
+        error_log('AI research active run lookup failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
 function aiResearchWorkIsFinishing(array $work): bool
 {
     return in_array((string)($work['kind'] ?? ''), ['finish_deferred', 'finish_incomplete', 'finish_running'], true);
@@ -17862,6 +17947,8 @@ function renderApp(PDO $pdo, ?array $flash): void
             refreshAiResearchPlannedLog($pdo, $config, $researchSettings);
         }
         $researchLogs = $researchTab === 'logs' ? aiResearchLogEntries($pdo) : [];
+        // Prave jeden beh muze mit "pripravuje se", a to jen ve sloupci, kde prace stoji.
+        $researchActiveRunId = aiResearchActiveRunId($pdo);
     ?>
     <nav class="subtabs" aria-label="AI research sekce">
         <a href="?route=research" class="<?= $researchTab === 'results' ? 'active' : '' ?>">Výsledky</a>
@@ -17942,12 +18029,12 @@ function renderApp(PDO $pdo, ?array $flash): void
         <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>K oslovení</th></tr></thead><tbody>
         <?php if ($researchStarting): ?>
             <tr class="research-starting-row">
-                <td>-</td><td>-</td><td>-</td><td>-</td>
+                <td></td><td></td><td></td><td></td>
                 <td><?= h(formatDateTime(date('c'))) ?></td>
                 <td><strong>hledá se seed…</strong></td>
-                <td>-</td>
-                <td><?= statusBadge('bezi...') ?></td>
-                <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+                <td></td>
+                <td><?= statusBadge('pripravuje se') ?></td>
+                <td></td><td></td><td></td><td></td><td></td><td></td>
             </tr>
         <?php endif; ?>
         <?php if (!$aiResearchRuns && !$researchStarting): ?>
@@ -17962,6 +18049,8 @@ function renderApp(PDO $pdo, ?array $flash): void
             <?php $provisionUser = aiResearchProvisionedUser($pdo, $run); ?>
             <?php $runScraping = aiResearchScrapingProgress($pdo, $runPlan); ?>
             <?php $seedOutreachDraft = aiResearchSeedOutreachDraft($run, $runContacts, $runPlan, $runLanguage); ?>
+            <?php $rowChecklist = aiResearchWorkflowChecklist($pdo, $run, $runPlan); ?>
+            <?php $rowStates = aiResearchRowStates($pdo, $run, $runPlan, $rowChecklist, (int)$run['id'] === $researchActiveRunId); ?>
             <tr class="expandable-row" data-detail-target="ai-research-detail-<?= h((string)$run['id']) ?>" tabindex="0" aria-expanded="false">
                 <td>Zobrazit</td>
                 <td>
@@ -18024,39 +18113,24 @@ function renderApp(PDO $pdo, ?array $flash): void
                     </div>
                 </td>
                 <td>
-                    <?= statusBadge(aiResearchSeedOutreachStatusLabel((string)($run['seed_outreach_status'] ?? ''))) ?>
+                    <?php if ($rowStates['outreach'] !== ''): ?><?= statusBadge($rowStates['outreach']) ?><?php endif; ?>
                     <?php if ((string)($run['seed_outreach_sent_at'] ?? '') !== ''): ?><br><small>odesláno <?= h(formatDateTime((string)$run['seed_outreach_sent_at'])) ?></small><?php endif; ?>
                     <?php if ((string)($run['seed_outreach_unsubscribed_at'] ?? '') !== ''): ?><br><small>odhlášeno <?= h(formatDateTime((string)$run['seed_outreach_unsubscribed_at'])) ?></small><?php endif; ?>
                 </td>
                 <td>
-                    <?php if ($provisionUser): ?>
-                        <?= statusBadge('hotovo') ?><br><small><?= h((string)$provisionUser['email']) ?></small>
-                    <?php elseif ((int)$run['accepted_count'] > 0 && in_array((string)$run['status'], ['done', 'no_match'], true)): ?>
-                        <?= statusBadge('queued') ?><br><small>založí nejbližší cron</small>
-                    <?php elseif ((int)$run['accepted_count'] > 0): ?>
-                        <?= statusBadge('nepřipraveno') ?><br><small>běh není dokončený</small>
-                    <?php else: ?>
-                        -
-                    <?php endif; ?>
+                    <?php if ($rowStates['account'] !== ''): ?><?= statusBadge($rowStates['account']) ?><?php endif; ?>
+                    <?php if ($provisionUser): ?><br><small><?= h((string)$provisionUser['email']) ?></small><?php endif; ?>
                 </td>
                 <td><?= h(formatDateTime((string)$run['created_at'])) ?></td>
                 <td><strong><?= h((string)$run['seed_business']) ?></strong></td>
                 <td><?= h((string)$run['seed_email']) ?></td>
-                <td><?= statusBadge(aiResearchRunStatusLabel((string)$run['status'])) ?></td>
+                <td><?php if ($rowStates['status'] !== ''): ?><?= statusBadge($rowStates['status']) ?><?php endif; ?></td>
                 <td><?= h((string)($run['search_source_label'] ?? '-')) ?></td>
                 <?php $runUnderstood = trim((string)($runPlan['business_understanding'] ?? '')) !== ''; ?>
                 <?php // Bez vyhodnoceneho byznysu se keyword ani lokalita neukazuji - odhady nechceme. ?>
                 <td><?= $runUnderstood ? h((string)($run['scraping_keyword'] ?? '')) : '<small class="muted" title="Keyword se určí až po vyhodnocení byznysu seedu">čeká na plán</small>' ?></td>
                 <td><?= $runUnderstood ? h(aiResearchTargetAreaLabel($runPlan)) : '<small class="muted" title="Lokalita se určí až po vyhodnocení byznysu seedu">čeká na plán</small>' ?></td>
-                <td>
-                    <?php if ($runScraping && $runScraping['job']): ?>
-                        <?= statusBadge(scrapingStatusLabel((string)$runScraping['job']['status'])) ?>
-                    <?php elseif ($runScraping): ?>
-                        <?= statusBadge('ceka') ?>
-                    <?php else: ?>
-                        -
-                    <?php endif; ?>
-                </td>
+                <td><?php if ($rowStates['scraping'] !== ''): ?><?= statusBadge($rowStates['scraping']) ?><?php endif; ?></td>
                 <td><?= $runScraping ? h((string)$runScraping['contacts_total']) : '-' ?></td>
                 <td>
                     <?php $runEstimate = is_array($runPlan['contact_estimate'] ?? null) ? (array)$runPlan['contact_estimate'] : []; ?>
@@ -18127,7 +18201,8 @@ function renderApp(PDO $pdo, ?array $flash): void
                                     <span>Lokalita: <?= h(aiResearchTargetAreaLabel($runPlan)) ?></span>
                                 </div>
                                 <?php
-                                    $runChecklist = aiResearchWorkflowChecklist($pdo, $run, $runPlan);
+                                    // Checklist je uz spocitany pro radek prehledu, aby se nedelal dvakrat.
+                                    $runChecklist = $rowChecklist;
                                     $runMissing = aiResearchWorkflowMissingSteps($runChecklist);
                                 ?>
                                 <h4 class="workflow-checklist-title">Kroky workflow</h4>
