@@ -464,9 +464,25 @@ function mergeMarketObservationLists(primary = [], secondary = [], limit = MARKE
     const key = marketObservationKey(item);
     if (!key) continue;
     const current = byKey.get(key);
-    if (!current || marketObservationUpdateTime(item) >= marketObservationUpdateTime(current)) {
+    if (!current) {
       byKey.set(key, item);
+      continue;
     }
+    const incomingIsNewer = marketObservationUpdateTime(item) >= marketObservationUpdateTime(current);
+    const newer = incomingIsNewer ? item : current;
+    const older = incomingIsNewer ? current : item;
+    const newerVerification = newer.executionRevalidation;
+    const olderVerification = older.executionRevalidation;
+    const newerCheckedAt = Date.parse(newerVerification?.checkedAt || "") || 0;
+    const olderCheckedAt = Date.parse(olderVerification?.checkedAt || "") || 0;
+    // A Gamma refresh updates market quotes but cannot prove CLOB executability.
+    // Keep the latest live verdict until the next executor check replaces it.
+    const executionRevalidation = newerCheckedAt >= olderCheckedAt ? newerVerification : olderVerification;
+    byKey.set(key, {
+      ...older,
+      ...newer,
+      ...(executionRevalidation ? { executionRevalidation } : {}),
+    });
   }
   return [...byKey.values()]
     .map((item) => normalizeMarketObservationLifecycle(item))

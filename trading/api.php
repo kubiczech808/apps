@@ -234,6 +234,7 @@ function compact_market_observation(array $item): array
         'riskPrimaryEntity',
         'riskGroupKeys',
         'riskGroupLabels',
+        'rejectReasons',
         'marketPrice',
         'marketProbability',
         'binaryYesMarketProbability',
@@ -264,6 +265,12 @@ function compact_market_observation(array $item): array
         'feeRate',
         'marketDataUpdatedAt',
         'observedAt',
+        'updatedAt',
+        'orderPrice',
+        'orderSize',
+        'orderNotionalUsdc',
+        'minOrderSize',
+        'spread',
         'source',
     ];
     $compact = [];
@@ -271,6 +278,9 @@ function compact_market_observation(array $item): array
         if (array_key_exists($key, $item)) {
             $compact[$key] = $item[$key];
         }
+    }
+    if (isset($item['executionRevalidation']) && is_array($item['executionRevalidation'])) {
+        $compact['executionRevalidation'] = $item['executionRevalidation'];
     }
 
     return $compact;

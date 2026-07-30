@@ -263,29 +263,34 @@ jobs:
               remote = io.BytesIO()
               ftp.retrbinary("RETR paper-state.json", remote.write)
               state = json.loads(remote.getvalue().decode("utf-8"))
-              evaluations = state.get("evaluations")
-              if not isinstance(evaluations, list):
-                  raise SystemExit("Remote paper-state.json has no evaluations array")
+              def merge_revalidation(rows, label):
+                  if not isinstance(rows, list):
+                      return 0
+                  by_token = {str(item.get("tokenId")): item for item in rows if isinstance(item, dict) and item.get("tokenId")}
+                  merged = 0
+                  for update in updates:
+                      item = by_token.get(str(update["tokenId"]))
+                      if not item:
+                          continue
+                      existing = item.get("executionRevalidation") if isinstance(item.get("executionRevalidation"), dict) else {}
+                      if existing.get("checkedAt", "") > update.get("checkedAt", ""):
+                          continue
+                      item["executionRevalidation"] = update
+                      # The source record stays scraped/evaluated; this is the current
+                      # execution verdict for the portfolio shortlist.
+                      for field in ("marketPrice", "marketProbability", "annualizedReturn", "expectedValueUsdc", "daysToResolution", "liquidity", "netGainIfWinUsdc", "totalCostUsdc", "orderPrice", "orderSize", "orderNotionalUsdc", "minOrderSize", "spread", "feeRate"):
+                          if field in update:
+                              item[field] = update[field]
+                      item["updatedAt"] = update["checkedAt"]
+                      merged += 1
+                  print(f"Merged {merged} live revalidation updates into {label}.")
+                  return merged
 
-              by_token = {str(item.get("tokenId")): item for item in evaluations if isinstance(item, dict) and item.get("tokenId")}
-              merged = 0
-              for update in updates:
-                  item = by_token.get(str(update["tokenId"]))
-                  if not item:
-                      continue
-                  existing = item.get("executionRevalidation") if isinstance(item.get("executionRevalidation"), dict) else {}
-                  if existing.get("checkedAt", "") > update.get("checkedAt", ""):
-                      continue
-                  item["executionRevalidation"] = update
-                  # Current book economics are useful in the audit log, but never overwrite the AI thesis.
-                  for field in ("marketPrice", "annualizedReturn", "expectedValueUsdc", "daysToResolution", "liquidity", "netGainIfWinUsdc", "totalCostUsdc", "orderPrice", "orderSize", "orderNotionalUsdc", "minOrderSize", "spread", "feeRate"):
-                      if field in update:
-                          item[field] = update[field]
-                  item["updatedAt"] = update["checkedAt"]
-                  merged += 1
-
+              merged_evaluations = merge_revalidation(state.get("evaluations"), "evaluations")
+              merged_observations = merge_revalidation(state.get("marketObservations"), "market observations")
+              merged = merged_evaluations + merged_observations
               if not merged:
-                  print("Revalidated tokens were no longer present in remote paper-state.json.")
+                  print("Revalidated tokens were no longer present in remote evaluation or scraped market state.")
                   raise SystemExit(0)
 
               payload = (json.dumps(state, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
