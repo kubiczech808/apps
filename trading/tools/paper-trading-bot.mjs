@@ -3068,8 +3068,13 @@ function strategyEligibleCandidates(eligible, strategy) {
 
 function portfolioEconomics(item, strategy = PAPER_STRATEGIES.conservative) {
   const probabilitySource = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
-  const annualizedValue = Number(probabilitySource === "polymarket" ? item.marketAnnualizedReturn : item.annualizedReturn);
-  const expectedValue = Number(probabilitySource === "polymarket" ? item.marketExpectedValueUsdc : item.expectedValueUsdc);
+  const storedPotential = Number(item.potentialAnnualizedReturn);
+  const netYield = Number(item.netYield);
+  const potentialAnnualized = Number.isFinite(storedPotential)
+    ? storedPotential
+    : annualizedPotentialReturn(netYield, daysValue(item));
+  const annualizedValue = Number(probabilitySource === "polymarket" ? potentialAnnualized : item.annualizedReturn);
+  const expectedValue = Number(probabilitySource === "polymarket" ? item.netGainIfWinUsdc : item.expectedValueUsdc);
   return {
     probabilitySource,
     annualizedReturn: Number.isFinite(annualizedValue) ? annualizedValue : null,
@@ -3090,6 +3095,7 @@ function portfolioFilterResult(item, strategy) {
   const marketType = item.marketType || reportMarketType(item);
   const economics = portfolioEconomics(item, strategy);
   const annualizedReturn = economics.annualizedReturn;
+  const returnMetric = probabilitySource === "polymarket" ? "Potential p.a." : "EV p.a.";
 
   if (probabilitySource === "ai" && status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
   if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
@@ -3102,13 +3108,13 @@ function portfolioFilterResult(item, strategy) {
   }
   if (!Number.isFinite(annualizedReturn)) {
     const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
-    reasons.push(`missing ${label} EV p.a.`);
+    reasons.push(`missing ${label} ${returnMetric}`);
   } else if (annualizedReturn <= 0) {
     const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
-    reasons.push(`${label} EV p.a. ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
-  } else if (annualizedReturn < MIN_ANNUAL_RETURN) {
+    reasons.push(`${label} ${returnMetric} ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
+  } else if (probabilitySource !== "polymarket" && annualizedReturn < MIN_ANNUAL_RETURN) {
     const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
-    reasons.push(`${label} EV p.a. ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`);
+    reasons.push(`${label} ${returnMetric} ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`);
   }
   if (days > maxResolutionDays) {
     reasons.push(`resolution ${Number.isFinite(days) ? days.toFixed(2) : "-"} days exceeds max ${maxResolutionDays}`);

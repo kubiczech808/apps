@@ -392,7 +392,7 @@ function portfolioProbability(item, config = {}) {
 
 function portfolioExpectedValue(item, config = {}) {
   const value = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
-    ? marketExpectedValueFromQuote(item)
+    ? Number(item.netGainIfWinUsdc)
     : binarySideQuoteIsStale(item)
       ? expectedValue(item)
       : Number(item.expectedValueUsdc);
@@ -401,15 +401,19 @@ function portfolioExpectedValue(item, config = {}) {
 
 function portfolioAnnualizedReturn(item, config = {}) {
   const value = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
-    ? marketAnnualizedExpectedReturn(item)
+    ? potentialAnnualizedReturn(item)
     : binarySideQuoteIsStale(item)
       ? annualizedExpectedReturn(item)
       : Number(item.annualizedReturn);
   return Number.isFinite(value) ? value : null;
 }
 
-function selectionOrderLabel(value) {
-  return normalizeSelectionOrder(value) === "highest_reward_risk_first" ? "Reward/risk" : "EV p.a.";
+function portfolioReturnMetricLabel(config = {}) {
+  return normalizeProbabilitySource(config.probabilitySource) === "polymarket" ? "Potential p.a." : "EV p.a.";
+}
+
+function selectionOrderLabel(value, config = {}) {
+  return normalizeSelectionOrder(value) === "highest_reward_risk_first" ? "Reward/risk" : portfolioReturnMetricLabel(config);
 }
 
 function normalizeOptionalDays(value) {
@@ -2381,7 +2385,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.maxResolutionDays) els.maxResolutionDays.value = String(maxDays);
   if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = `${maxDays} d`;
   if (els.selectionOrder) els.selectionOrder.value = order;
-  if (els.selectionOrderLabel) els.selectionOrderLabel.textContent = selectionOrderLabel(order);
+  if (els.selectionOrderLabel) els.selectionOrderLabel.textContent = selectionOrderLabel(order, config);
   if (els.minLiquidity) els.minLiquidity.value = liquidity == null ? "" : String(liquidity);
   if (els.minLiquidityLabel) els.minLiquidityLabel.textContent = liquidity == null ? "none" : money(liquidity);
   if (els.tradeCadenceHours) els.tradeCadenceHours.value = String(cadence);
@@ -3606,9 +3610,10 @@ function portfolioRuleRows(portfolio = {}) {
   const threshold = thresholdForMode(mode);
   const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = Number(config.minLiquidityUsdc);
+  const returnMetric = portfolioReturnMetricLabel(config);
   const priority = config.selectionOrder === "highest_reward_risk_first"
-    ? "Highest reward/risk, then shorter resolution and EV"
-    : "Highest EV p.a., then shorter resolution and EV";
+    ? `Highest reward/risk, then shorter resolution and ${returnMetric}`
+    : `Highest ${returnMetric}, then shorter resolution and net gain`;
   const resolution = `Max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`;
   const rows = [
     ["Probability threshold", `${probabilitySourceLabel(config.probabilitySource)} >= ${percent(threshold)}`],
@@ -3626,9 +3631,10 @@ function livePortfolioRuleRows() {
   const config = portfolioConfigForMode("live");
   const maxResolutionDays = resolutionDaysForMode("live");
   const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
+  const returnMetric = portfolioReturnMetricLabel(config);
   const priority = config.selectionOrder === "highest_reward_risk_first"
-    ? "Highest reward/risk, then shorter resolution and EV"
-    : "Highest EV p.a., then shorter resolution and EV";
+    ? `Highest reward/risk, then shorter resolution and ${returnMetric}`
+    : `Highest ${returnMetric}, then shorter resolution and net gain`;
   return [
     ["Probability threshold", `${probabilitySourceLabel(config.probabilitySource)} >= ${percent(currentEligibilityThreshold())}`],
     ["Stake sizing", `${probability(currentRiskAllocation())} of live equity`],
@@ -3691,6 +3697,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(normalizedMode);
   const annualizedReturn = portfolioAnnualizedReturn(item, config);
+  const returnMetric = portfolioReturnMetricLabel(config);
   const aiPending = item.selectionStatus === "AI_PENDING" || item.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
   const executionCheck = item.executionRevalidation && typeof item.executionRevalidation === "object"
     ? item.executionRevalidation
@@ -3714,11 +3721,11 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     reasons.push(`${probabilitySourceLabel(probabilitySource)} ${probability(selectedProbability)} below ${probability(threshold)}`);
   }
   if (!Number.isFinite(annualizedReturn)) {
-    reasons.push("missing usable EV p.a.");
+    reasons.push(`missing usable ${returnMetric}`);
   } else if (annualizedReturn <= 0) {
-    reasons.push(`EV p.a. ${signedPercent(annualizedReturn)} is non-profitable after fees`);
-  } else if (annualizedReturn < MIN_PORTFOLIO_EV_PA) {
-    reasons.push(`EV p.a. ${signedPercent(annualizedReturn)} below ${signedPercent(MIN_PORTFOLIO_EV_PA)}`);
+    reasons.push(`${returnMetric} ${signedPercent(annualizedReturn)} is non-profitable after fees`);
+  } else if (probabilitySource !== "polymarket" && annualizedReturn < MIN_PORTFOLIO_EV_PA) {
+    reasons.push(`${returnMetric} ${signedPercent(annualizedReturn)} below ${signedPercent(MIN_PORTFOLIO_EV_PA)}`);
   }
   if (aiPending) reasons.push("grounded Gemini analysis is pending");
   if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY") {
@@ -3908,7 +3915,9 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
   }
   const live = normalizeMode(mode) === "live";
   const config = portfolioConfigForMode(mode);
-  const probabilityLabel = normalizeProbabilitySource(config.probabilitySource) === "polymarket" ? "Mkt prob." : "AI prob.";
+  const usesPolymarketPotential = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
+  const probabilityLabel = usesPolymarketPotential ? "Mkt prob." : "AI prob.";
+  const returnMetric = portfolioReturnMetricLabel(config);
   return `
     <table>
       <thead>
@@ -3920,8 +3929,8 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           <th>Days left</th>
           <th>${probabilityLabel}</th>
           <th>Mkt entry</th>
-          <th>EV p.a.</th>
-          <th>EV</th>
+          <th>${returnMetric}</th>
+          ${usesPolymarketPotential ? "" : "<th>EV</th>"}
           <th>Win</th>
           <th>R/R</th>
           <th>Analysis</th>
@@ -3945,8 +3954,8 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
               <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
               <td data-label="Mkt entry">${probability(evaluationEntryPrice(item))}</td>
-              <td data-label="EV p.a."><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
-              <td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>
+              <td data-label="${returnMetric}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
+              ${usesPolymarketPotential ? "" : `<td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>`}
               <td data-label="Win">${gainCell(item)}</td>
               <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
               <td data-label="Analysis">${analysisBadge(item)}</td>
@@ -4614,6 +4623,9 @@ function scrapedSortValue(item, key) {
 
 function sortedScrapedObservations(rows = []) {
   const direction = state.scrapedSort.direction === "asc" ? 1 : -1;
+  if (state.scrapedSort.key === "marketAnnualizedReturn") {
+    state.scrapedSort.key = "potentialAnnualizedReturn";
+  }
   const key = state.scrapedSort.key;
   return [...rows].sort((a, b) => {
     const aValue = scrapedSortValue(a, key);
@@ -4711,8 +4723,6 @@ function renderScrapedOpportunities() {
             ${scrapedSortableHeader("netYield", "Net yield %")}
             ${scrapedSortableHeader("potentialAnnualizedReturn", "Potential p.a.")}
             ${scrapedSortableHeader("riskReward", "R/R")}
-            ${scrapedSortableHeader("marketAnnualizedReturn", "Mkt EV p.a.")}
-            ${scrapedSortableHeader("marketExpectedValueUsdc", "EV")}
             <th>Yes / No</th>
             ${scrapedSortableHeader("liquidity", "Liquidity")}
             ${scrapedSortableHeader("volume24hr", "24h volume")}
@@ -4732,8 +4742,6 @@ function renderScrapedOpportunities() {
               <td data-label="Net yield %">${netYieldCell(item)}</td>
               <td data-label="Potential p.a."><span class="${pnlClass(potentialAnnualizedReturn(item))}">${signedPercent(potentialAnnualizedReturn(item))}</span></td>
               <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
-              <td data-label="Mkt EV p.a."><span class="${pnlClass(marketAnnualizedExpectedReturn(item))}">${signedPercent(marketAnnualizedExpectedReturn(item))}</span></td>
-              <td data-label="EV">${signedMoney(marketExpectedValueFromQuote(item), 4)}</td>
               <td data-label="Yes / No">${binaryMarketProbabilityCell(item)}</td>
               <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
               <td data-label="24h volume">${money(Number(item.volume24hr || 0))}</td>
@@ -5163,7 +5171,7 @@ function normalizeLiveExecutionRun(execution) {
     generatedAt: runAt,
     strategyId: "live",
     strategyLabel: "Live",
-    selectionMetric: "EV p.a.",
+    selectionMetric: settings.probabilitySource === "polymarket" ? "Potential p.a." : "EV p.a.",
     action: execution.action || "-",
     reason: execution.reason || "-",
     explanation: execution.reason || "Live execution state was recorded before detailed batch logs were introduced.",

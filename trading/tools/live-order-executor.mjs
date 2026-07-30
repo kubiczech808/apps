@@ -165,11 +165,21 @@ function selectedProbability(item) {
 }
 
 function selectedExpectedValue(item) {
-  return number(PROBABILITY_SOURCE === "polymarket" ? item?.marketExpectedValueUsdc : item?.expectedValueUsdc);
+  return number(PROBABILITY_SOURCE === "polymarket" ? item?.netGainIfWinUsdc : item?.expectedValueUsdc);
 }
 
 function selectedAnnualizedReturn(item) {
-  return number(PROBABILITY_SOURCE === "polymarket" ? item?.marketAnnualizedReturn : item?.annualizedReturn);
+  if (PROBABILITY_SOURCE !== "polymarket") return number(item?.annualizedReturn);
+  const gain = number(item?.netGainIfWinUsdc);
+  const cost = number(item?.totalCostUsdc ?? item?.stakeUsdc);
+  const days = localDaysToResolution(item);
+  if (gain == null || cost == null || cost <= 0) return null;
+  const netYield = gain / cost;
+  return Number.isFinite(days) && days > 0 ? netYield * (365 / days) : netYield;
+}
+
+function returnMetricLabel() {
+  return PROBABILITY_SOURCE === "polymarket" ? "Potential p.a." : "EV p.a.";
 }
 
 function hasOpenSellOrderForToken(liveState, tokenId) {
@@ -506,9 +516,9 @@ function prefilterLiveCandidate(item) {
   }
   const annualizedReturn = selectedAnnualizedReturn(item);
   if (!Number.isFinite(annualizedReturn)) {
-    reasons.push(`missing ${probabilitySourceLabel()} EV p.a.`);
+    reasons.push(`missing ${probabilitySourceLabel()} ${returnMetricLabel()}`);
   } else if (annualizedReturn <= 0) {
-    reasons.push(`${probabilitySourceLabel()} EV p.a. ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
+    reasons.push(`${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
   }
   if (Number.isFinite(endTime) && endTime <= Date.now()) {
     reasons.push("stored end date is in the past");
@@ -1019,7 +1029,8 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
   const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
     && edge >= OPPORTUNITY_MIN_EDGE
     && annualizedReturn >= OPPORTUNITY_MIN_ANNUAL_RETURN;
-  const returnOk = annualizedReturn >= MIN_ANNUAL_RETURN;
+  const minimumAnnualizedReturn = PROBABILITY_SOURCE === "polymarket" ? 0 : MIN_ANNUAL_RETURN;
+  const returnOk = annualizedReturn > minimumAnnualizedReturn;
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   return {
@@ -1029,8 +1040,8 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
       endOk ? null : "event end date is in the past",
       probabilityOk ? null : `${probabilitySourceLabel()} ${(qualificationProbability * 100).toFixed(1)}% below live threshold ${(MIN_PROBABILITY * 100).toFixed(1)}%`,
       annualizedReturn <= 0
-        ? `${probabilitySourceLabel()} EV p.a. ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
-        : (returnOk ? null : `${probabilitySourceLabel()} EV p.a. ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`),
+        ? `${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
+        : (returnOk ? null : `${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% below ${(minimumAnnualizedReturn * 100).toFixed(1)}%`),
       spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
       volumeOk ? null : "liquidity/volume too low",
     ].filter(Boolean),
@@ -1182,8 +1193,13 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   const marketExpectedValue = marketProbability * size - notional - fee;
   const marketExpectedRoi = totalCost > 0 ? marketExpectedValue / totalCost : 0;
   const marketAnnualizedReturn = days ? marketExpectedRoi * (365 / days) : marketExpectedRoi;
-  const selectedExpectedValueUsdc = PROBABILITY_SOURCE === "polymarket" ? marketExpectedValue : expectedValue;
-  const selectedAnnualizedReturn = PROBABILITY_SOURCE === "polymarket" ? marketAnnualizedReturn : annualizedReturn;
+  const netGainIfWin = size - notional - fee;
+  const potentialRoi = totalCost > 0 ? netGainIfWin / totalCost : null;
+  const potentialAnnualizedReturn = Number.isFinite(potentialRoi)
+    ? (days ? potentialRoi * (365 / days) : potentialRoi)
+    : null;
+  const selectedExpectedValueUsdc = PROBABILITY_SOURCE === "polymarket" ? netGainIfWin : expectedValue;
+  const selectedAnnualizedReturn = PROBABILITY_SOURCE === "polymarket" ? potentialAnnualizedReturn : annualizedReturn;
   const edge = Number.isFinite(aiProbability) ? aiProbability - price : marketProbability - price;
   const scored = scoreEconomics({
     probability: qualificationProbability,
@@ -1199,7 +1215,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     return {
       candidate: evaluation,
       eligible: false,
-      rejectReasons: ["current EV p.a. is non-profitable after fees"],
+      rejectReasons: [`current ${returnMetricLabel()} is non-profitable after fees`],
       currentPrice: price,
       minOrderSize,
     };
@@ -1242,7 +1258,8 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     aiAnnualizedReturn: Number.isFinite(annualizedReturn) ? Number(annualizedReturn.toFixed(4)) : null,
     marketExpectedValueUsdc: Number(marketExpectedValue.toFixed(4)),
     marketAnnualizedReturn: Number(marketAnnualizedReturn.toFixed(4)),
-    netGainIfWinUsdc: Number((size - notional - fee).toFixed(4)),
+    potentialAnnualizedReturn: Number.isFinite(potentialAnnualizedReturn) ? Number(potentialAnnualizedReturn.toFixed(4)) : null,
+    netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
     totalCostUsdc: Number(totalCost.toFixed(5)),
     tradingFeeUsdc: Number(fee.toFixed(5)),
     feeMode: USE_LIMIT_ORDERS && POST_ONLY ? "post-only maker fee assumed 0" : "taker fee estimate",
@@ -1869,7 +1886,7 @@ async function main() {
       runAt: new Date().toISOString(),
       strategyId: "live",
       strategyLabel: "Live",
-      selectionMetric: "EV p.a.",
+      selectionMetric: returnMetricLabel(),
       action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
       reason: actionReason,
       explanation: actionExplanation,
