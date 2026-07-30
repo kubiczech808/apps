@@ -1810,7 +1810,7 @@ function tradeSortArrow(tableKey, key) {
 
 const TRADE_HEADER_INFO = {
   market: "Market links directly to Polymarket. Row-specific risk notes and AI thesis are available from the AI probability info popup.",
-  currentPrice: "Current mark/final price as the primary value; entry price is shown below it for comparison.",
+  currentPrice: "Entry price is the primary value. The percentage in parentheses is the current mark/final price move relative to entry; hover it to see the exact current price.",
   aiProbability: "Original AI probability and thesis from the evaluation that selected this opportunity.",
   resolution: "Expected or observed resolution/end date for the market.",
   potentialGain: "Nominal profit if the selected outcome resolves in our favor; percent return is shown below it.",
@@ -1865,10 +1865,20 @@ function tradeTypeBadge(trade) {
 }
 
 function tradePriceCell(trade, showStatus = false) {
-  const currentLabel = showStatus ? "final" : "mark";
+  const currentLabel = showStatus ? "Final price" : "Current mark";
+  const entry = Number(trade.entryPrice);
+  const current = Number(trade.currentPrice);
+  const change = Number.isFinite(entry) && entry > 0 && Number.isFinite(current)
+    ? (current / entry) - 1
+    : null;
+  const comparison = Number.isFinite(current)
+    ? `${currentLabel}: ${probability(current)}; entry: ${probability(entry)}`
+    : "Current price is unavailable.";
   return `
-    ${probability(Number(trade.currentPrice))}
-    <span>${currentLabel}; entry ${probability(Number(trade.entryPrice))}</span>
+    <span class="trade-price-summary" title="${escapeHtml(comparison)}">
+      ${probability(entry)}
+      ${Number.isFinite(change) ? `<span class="${pnlClass(change)}">(${signedPercent(change)})</span>` : ""}
+    </span>
   `;
 }
 
@@ -1891,7 +1901,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
         <tr>
           ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
           ${tradeHeader(tableKey, "market", "Market")}
-          ${tradeHeader(tableKey, "currentPrice", showStatus ? "Final / entry" : "Mark / entry")}
+          ${tradeHeader(tableKey, "currentPrice", showStatus ? "Entry / final" : "Entry / mark")}
           ${tradeHeader(tableKey, "aiProbability", "AI prob.")}
           ${tradeHeader(tableKey, "resolution", "Resolution")}
           ${tradeHeader(tableKey, "potentialGain", "Win")}
@@ -1910,7 +1920,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
               ${tradeTypeBadge(trade)}
               ${marketAnchor(trade)}
             </td>
-            <td data-label="${showStatus ? "Final / entry" : "Mark / entry"}">${tradePriceCell(trade, showStatus)}</td>
+            <td data-label="${showStatus ? "Entry / final" : "Entry / mark"}">${tradePriceCell(trade, showStatus)}</td>
             <td data-label="AI prob.">
               <strong>${probability(tradeAiProbability(trade))}</strong>
               <span class="analysis-popover">
