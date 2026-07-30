@@ -1,7 +1,5 @@
 name: Trading Paper Bot
 
-run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' && format('Scraped refresh {0}', inputs.refresh_token_id || inputs.refresh_market_slug) || 'Paper bot' }}
-
 on:
   push:
     paths:

@@ -3634,12 +3634,11 @@ async function triggerManualOpportunityEvaluation(item, trigger = null) {
   }
 }
 
-async function waitForScrapedRefreshWorkflow(startedAt, runTitle) {
+async function waitForScrapedRefreshWorkflow(startedAt) {
   let latest = null;
   for (let attempt = 0; attempt < 64; attempt += 1) {
     const status = await fetchApiJson(`api.php?action=workflow-status&target=paper-refresh&since=${encodeURIComponent(startedAt)}`);
-    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)
-      && (!runTitle || run.displayTitle === runTitle)) || null;
+    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || status.latest || null;
     if (latest?.status === "completed") return latest;
     await sleep(3000);
   }
@@ -3657,7 +3656,6 @@ async function triggerScrapedOpportunityRefresh(item) {
   if (state.page === "opportunities" && state.opportunityView === "scraped") renderBotEvaluations();
 
   const startedAt = new Date().toISOString();
-  const runTitle = `Scraped refresh ${tokenId || slug}`;
   try {
     await fetchApiJson("api.php?action=workflow", {
       method: "POST",
@@ -3668,7 +3666,7 @@ async function triggerScrapedOpportunityRefresh(item) {
         refresh_market_slug: slug,
       }),
     });
-    const workflow = await waitForScrapedRefreshWorkflow(startedAt, runTitle);
+    const workflow = await waitForScrapedRefreshWorkflow(startedAt);
     if (!workflow || workflow.status !== "completed") {
       throw new Error("Refresh is still queued in the background. Try again in a moment.");
     }
