@@ -715,6 +715,7 @@ def _score_candidate(title: str, snippet: str, query: str) -> tuple[int, str]:
         "bitcoin": 18,
         "dca": 25,
         "dollar cost averaging": 28,
+        "dollar-cost averaging": 28,
         "recurring": 10,
         "automation": 12,
         "self custody": 12,
