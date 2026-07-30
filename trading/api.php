@@ -335,6 +335,7 @@ function default_portfolio_config(): array
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_ev_pa_first',
                 'minLiquidityUsdc' => null,
+                'minNetYield' => 0.0,
                 'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
@@ -345,6 +346,7 @@ function default_portfolio_config(): array
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_reward_risk_first',
                 'minLiquidityUsdc' => null,
+                'minNetYield' => 0.0,
                 'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
@@ -355,6 +357,7 @@ function default_portfolio_config(): array
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_reward_risk_first',
                 'minLiquidityUsdc' => 500000,
+                'minNetYield' => 0.0,
                 'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
@@ -366,6 +369,7 @@ function default_portfolio_config(): array
             'maxResolutionDays' => 7,
             'selectionOrder' => 'highest_ev_pa_first',
             'minLiquidityUsdc' => 100,
+            'minNetYield' => 0.0,
             'tradeCadenceHours' => 24,
             'useLimitOrders' => true,
             'requireMostProbableOutcome' => false,
@@ -433,6 +437,18 @@ function normalize_optional_money_value(mixed $value): ?float
     return max(0.0, round((float) $value, 2));
 }
 
+function normalize_net_yield_value(mixed $value, float $fallback): float
+{
+    if (!is_numeric($value)) {
+        return $fallback;
+    }
+    $yield = (float) $value;
+    if ($yield > 1) {
+        $yield /= 100;
+    }
+    return max(0.0, min(10.0, round($yield, 3)));
+}
+
 function normalize_cadence_hours_value(mixed $value, int $fallback): int
 {
     if (!is_numeric($value)) {
@@ -459,6 +475,7 @@ function normalize_strategy_config(array $input, array $defaults): array
         'maxResolutionDays' => normalize_days_value($input['maxResolutionDays'] ?? null, (int) $defaults['maxResolutionDays']),
         'selectionOrder' => normalize_selection_order_value($input['selectionOrder'] ?? $defaults['selectionOrder']),
         'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
+        'minNetYield' => normalize_net_yield_value($input['minNetYield'] ?? null, (float) $defaults['minNetYield']),
         'tradeCadenceHours' => normalize_cadence_hours_value($input['tradeCadenceHours'] ?? null, (int) $defaults['tradeCadenceHours']),
         'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
         'probabilitySource' => normalize_probability_source_value($input['probabilitySource'] ?? $defaults['probabilitySource']),
@@ -1059,6 +1076,22 @@ function normalized_fraction_input($value): ?string
     return rtrim(rtrim(number_format($fraction, 4, '.', ''), '0'), '.');
 }
 
+function normalized_nonnegative_yield_input($value): ?string
+{
+    if (!is_numeric($value)) {
+        return null;
+    }
+    $yield = (float) $value;
+    if ($yield > 1) {
+        $yield /= 100;
+    }
+    if ($yield < 0 || $yield > 10) {
+        return null;
+    }
+    $normalized = rtrim(rtrim(number_format($yield, 3, '.', ''), '0'), '.');
+    return $normalized === '' ? '0' : $normalized;
+}
+
 function normalized_days_input($value): ?string
 {
     if ($value === null || $value === '') {
@@ -1212,6 +1245,7 @@ try {
         $liveMaxResolutionDays = normalized_days_input($payload['maxResolutionDays'] ?? $payload['live_max_resolution_days'] ?? null);
         $liveSelectionOrder = normalized_selection_order_input($payload['selectionOrder'] ?? $payload['live_selection_order'] ?? null);
         $liveMinLiquidity = normalized_money_input($payload['minLiquidityUsdc'] ?? $payload['live_min_liquidity_usdc'] ?? null);
+        $liveMinNetYield = normalized_nonnegative_yield_input($payload['minNetYield'] ?? $payload['live_min_net_yield'] ?? null);
         $liveTradeCadenceHours = normalized_cadence_hours_input($payload['tradeCadenceHours'] ?? $payload['live_trade_cadence_hours'] ?? null);
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
@@ -1226,6 +1260,7 @@ try {
             $paperExtraInputs["paper_{$strategy}_max_resolution_days"] = normalized_days_input($payload["paper_{$strategy}_max_resolution_days"] ?? null);
             $paperExtraInputs["paper_{$strategy}_selection_order"] = normalized_selection_order_input($payload["paper_{$strategy}_selection_order"] ?? null);
             $paperExtraInputs["paper_{$strategy}_min_liquidity_usdc"] = normalized_money_input($payload["paper_{$strategy}_min_liquidity_usdc"] ?? null);
+            $paperExtraInputs["paper_{$strategy}_min_net_yield"] = normalized_nonnegative_yield_input($payload["paper_{$strategy}_min_net_yield"] ?? null);
             $paperExtraInputs["paper_{$strategy}_trade_cadence_hours"] = normalized_cadence_hours_input($payload["paper_{$strategy}_trade_cadence_hours"] ?? null);
             $paperExtraInputs["paper_{$strategy}_require_most_probable"] = normalized_bool_input($payload["paper_{$strategy}_require_most_probable"] ?? null);
         }
@@ -1252,6 +1287,7 @@ try {
                     'live_max_resolution_days' => $liveMaxResolutionDays,
                     'live_selection_order' => $liveSelectionOrder,
                     'live_min_liquidity_usdc' => $liveMinLiquidity,
+                    'live_min_net_yield' => $liveMinNetYield,
                     'live_trade_cadence_hours' => $liveTradeCadenceHours,
                     'live_use_limit_orders' => $liveUseLimitOrders,
                     'cross_live_portfolio_risk_diversification' => $crossLiveRiskDiversification,

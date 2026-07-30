@@ -336,6 +336,11 @@
           <strong data-min-liquidity-label>none</strong>
         </label>
         <label class="parameter-control">
+          <span>Minimum net profit after fees</span>
+          <input type="number" min="0" max="1000" step="0.1" value="0.0" data-min-net-yield>
+          <strong data-min-net-yield-label>0.0%</strong>
+        </label>
+        <label class="parameter-control">
           <span>New trade cadence</span>
           <input type="number" min="1" max="168" step="1" placeholder="24" data-trade-cadence-hours>
           <strong data-trade-cadence-hours-label>24h</strong>
@@ -355,6 +360,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260730-polymarket-potential-selection"></script>
+  <script src="assets/app.js?v=20260730-min-net-profit"></script>
 </body>
 </html>

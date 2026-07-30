@@ -39,6 +39,11 @@ on:
         required: false
         default: ""
         type: string
+      live_min_net_yield:
+        description: Minimum net profit after fees, decimal fraction
+        required: false
+        default: ""
+        type: string
       live_trade_cadence_hours:
         description: Minimum hours between new live orders
         required: false
@@ -107,6 +112,7 @@ jobs:
       LIVE_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.live_max_resolution_days || '' }}
       LIVE_SELECTION_ORDER: ${{ github.event.inputs.live_selection_order || '' }}
       LIVE_CONFIG_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.live_min_liquidity_usdc || '' }}
+      LIVE_MIN_NET_YIELD: ${{ github.event.inputs.live_min_net_yield || '' }}
       LIVE_CANDIDATE_SCAN_LIMIT: "120"
       LIVE_AUTO_ROTATE: "true"
       LIVE_EXECUTION_SOURCE: rpi-self-hosted
@@ -149,6 +155,7 @@ jobs:
               "LIVE_MAX_RESOLUTION_DAYS": live.get("maxResolutionDays"),
               "LIVE_SELECTION_ORDER": live.get("selectionOrder"),
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": live.get("minLiquidityUsdc"),
+              "LIVE_MIN_NET_YIELD": live.get("minNetYield"),
               "LIVE_TRADE_CADENCE_HOURS": live.get("tradeCadenceHours"),
               "USE_LIMIT_ORDERS": str(bool(live.get("useLimitOrders", True))).lower(),
               "LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION": str(bool(system.get("crossLivePortfolioRiskDiversification", True))).lower(),

@@ -146,6 +146,8 @@ const els = {
   selectionOrderLabel: document.querySelector("[data-selection-order-label]"),
   minLiquidity: document.querySelector("[data-min-liquidity]"),
   minLiquidityLabel: document.querySelector("[data-min-liquidity-label]"),
+  minNetYield: document.querySelector("[data-min-net-yield]"),
+  minNetYieldLabel: document.querySelector("[data-min-net-yield-label]"),
   tradeCadenceHours: document.querySelector("[data-trade-cadence-hours]"),
   tradeCadenceHoursLabel: document.querySelector("[data-trade-cadence-hours-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
@@ -330,6 +332,7 @@ function defaultPortfolioConfig() {
         maxResolutionDays: 7,
         selectionOrder: "highest_ev_pa_first",
         minLiquidityUsdc: null,
+        minNetYield: 0,
         tradeCadenceHours: 1,
         requireMostProbableOutcome: false,
         probabilitySource: "ai",
@@ -340,6 +343,7 @@ function defaultPortfolioConfig() {
         maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
         selectionOrder: "highest_reward_risk_first",
         minLiquidityUsdc: null,
+        minNetYield: 0,
         tradeCadenceHours: 1,
         requireMostProbableOutcome: false,
         probabilitySource: "ai",
@@ -350,6 +354,7 @@ function defaultPortfolioConfig() {
         maxResolutionDays: 7,
         selectionOrder: "highest_reward_risk_first",
         minLiquidityUsdc: 500000,
+        minNetYield: 0,
         tradeCadenceHours: 1,
         requireMostProbableOutcome: true,
         probabilitySource: "ai",
@@ -361,6 +366,7 @@ function defaultPortfolioConfig() {
       maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
       selectionOrder: "highest_ev_pa_first",
       minLiquidityUsdc: 100,
+      minNetYield: 0,
       tradeCadenceHours: 24,
       useLimitOrders: true,
       requireMostProbableOutcome: false,
@@ -778,6 +784,12 @@ function syncOpportunityViewControls() {
       button.textContent = status === "EVALUATED" ? "Evaluated" : status === "ALL" ? "All evaluated" : button.textContent;
     }
   });
+}
+
+function normalizeMinimumNetYield(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return 0;
+  return Math.min(10, Math.round(numeric * 1000) / 1000);
 }
 
 function setOpportunityView(view, { syncRoute = false, replace = false } = {}) {
@@ -2370,6 +2382,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const config = configOverride || portfolioConfigForMode(mode);
   const maxDays = normalizeOptionalDays(config.maxResolutionDays) || DEFAULT_MAX_RESOLUTION_DAYS;
   const liquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
+  const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const order = normalizeSelectionOrder(config.selectionOrder);
   const isLive = normalizeMode(mode) === "live";
   const cadence = normalizeCadenceHours(config.tradeCadenceHours, isLive ? 24 : 1);
@@ -2388,6 +2401,8 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.selectionOrderLabel) els.selectionOrderLabel.textContent = selectionOrderLabel(order, config);
   if (els.minLiquidity) els.minLiquidity.value = liquidity == null ? "" : String(liquidity);
   if (els.minLiquidityLabel) els.minLiquidityLabel.textContent = liquidity == null ? "none" : money(liquidity);
+  if (els.minNetYield) els.minNetYield.value = (minNetYield * 100).toFixed(1);
+  if (els.minNetYieldLabel) els.minNetYieldLabel.textContent = percent(minNetYield);
   if (els.tradeCadenceHours) els.tradeCadenceHours.value = String(cadence);
   if (els.tradeCadenceHoursLabel) els.tradeCadenceHoursLabel.textContent = `${cadence}h`;
   if (els.mostProbableOutcome) {
@@ -3337,6 +3352,9 @@ function paperThresholdPayload() {
     paper_conservative_min_liquidity_usdc: conservative.minLiquidityUsdc,
     paper_high_reward_min_liquidity_usdc: highReward.minLiquidityUsdc,
     paper_more_probable_min_liquidity_usdc: moreProbable.minLiquidityUsdc,
+    paper_conservative_min_net_yield: conservative.minNetYield,
+    paper_high_reward_min_net_yield: highReward.minNetYield,
+    paper_more_probable_min_net_yield: moreProbable.minNetYield,
     paper_conservative_trade_cadence_hours: conservative.tradeCadenceHours,
     paper_high_reward_trade_cadence_hours: highReward.tradeCadenceHours,
     paper_more_probable_trade_cadence_hours: moreProbable.tradeCadenceHours,
@@ -3610,6 +3628,7 @@ function portfolioRuleRows(portfolio = {}) {
   const threshold = thresholdForMode(mode);
   const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = Number(config.minLiquidityUsdc);
+  const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const returnMetric = portfolioReturnMetricLabel(config);
   const priority = config.selectionOrder === "highest_reward_risk_first"
     ? `Highest reward/risk, then shorter resolution and ${returnMetric}`
@@ -3623,6 +3642,7 @@ function portfolioRuleRows(portfolio = {}) {
     ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 1)}h between new paper trades`],
   ];
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Liquidity filter", `>= ${money(minLiquidityUsdc)}`]);
+  rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
   if (config.requireMostProbableOutcome) rows.push(["Market type filter", "Only multichoice events"]);
   return rows;
 }
@@ -3631,6 +3651,7 @@ function livePortfolioRuleRows() {
   const config = portfolioConfigForMode("live");
   const maxResolutionDays = resolutionDaysForMode("live");
   const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
+  const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const returnMetric = portfolioReturnMetricLabel(config);
   const priority = config.selectionOrder === "highest_reward_risk_first"
     ? `Highest reward/risk, then shorter resolution and ${returnMetric}`
@@ -3642,6 +3663,7 @@ function livePortfolioRuleRows() {
     ["Trade priority", priority],
     ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 24)}h between new live orders`],
     ["Liquidity / volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
+    ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
     ["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "Block correlated exposure" : "Allow correlated exposure"],
   ];
@@ -3695,6 +3717,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const days = evaluationDaysLeft(item);
   const liquidity = Number(item.liquidity || 0);
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
+  const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(normalizedMode);
   const annualizedReturn = portfolioAnnualizedReturn(item, config);
   const returnMetric = portfolioReturnMetricLabel(config);
@@ -3726,6 +3749,10 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     reasons.push(`${returnMetric} ${signedPercent(annualizedReturn)} is non-profitable after fees`);
   } else if (probabilitySource !== "polymarket" && annualizedReturn < MIN_PORTFOLIO_EV_PA) {
     reasons.push(`${returnMetric} ${signedPercent(annualizedReturn)} below ${signedPercent(MIN_PORTFOLIO_EV_PA)}`);
+  }
+  const candidateNetYield = netYield(item);
+  if (!Number.isFinite(candidateNetYield) || candidateNetYield < minNetYield) {
+    reasons.push(`net profit ${Number.isFinite(candidateNetYield) ? signedPercent(candidateNetYield) : "-"} below ${percent(minNetYield)} after fees`);
   }
   if (aiPending) reasons.push("grounded Gemini analysis is pending");
   if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY") {
@@ -5091,6 +5118,7 @@ function tradeBatchDetail(batch) {
     `Max resolution days: ${settings.maxResolutionDays == null ? "-" : settings.maxResolutionDays}`,
     `New trade cadence: ${settings.tradeCadenceHours == null ? "-" : `${settings.tradeCadenceHours}h`}`,
     `Min liquidity: ${settings.minLiquidityUsdc == null ? "-" : money(Number(settings.minLiquidityUsdc))}`,
+    `Minimum net profit after fees: ${settings.minNetYield == null ? "-" : percent(Number(settings.minNetYield))}`,
     `Selection order: ${settings.selectionOrder || "-"}`,
     settings.crossPortfolioRiskDiversification == null ? "" : `Cross-live risk diversification: ${settings.crossPortfolioRiskDiversification ? "on" : "off"}`,
     `Max stake: ${money(Number(settings.maxStakeUsdc || 0))}`,
@@ -5180,6 +5208,7 @@ function normalizeLiveExecutionRun(execution) {
       minAnnualReturn: settings.minAnnualReturn,
       maxSpread: settings.maxSpread,
       minVolume24hr: settings.minVolume24hr,
+      minNetYield: settings.minNetYield,
       tradeCadenceHours: settings.tradeCadenceHours,
       maxOrderFraction: account.maxOrderFraction,
       useLimitOrders: settings.useLimitOrders,
@@ -5812,6 +5841,23 @@ els.minLiquidity?.addEventListener("input", () => {
   const value = normalizeOptionalMoney(els.minLiquidity.value);
   if (updateParameterDraft({ minLiquidityUsdc: value })) return;
   updatePortfolioConfigForMode(state.mode, { minLiquidityUsdc: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.minNetYield?.addEventListener("input", () => {
+  if (parameterDraftInputIsEmpty(els.minNetYield)) {
+    if (els.minNetYieldLabel) els.minNetYieldLabel.textContent = "-";
+    return;
+  }
+  const value = normalizeMinimumNetYield(Number(els.minNetYield.value) / 100);
+  if (parameterDraftActive()) {
+    state.parameterDraft = { ...state.parameterDraft, minNetYield: value };
+    if (els.minNetYieldLabel) els.minNetYieldLabel.textContent = percent(value);
+    return;
+  }
+  updatePortfolioConfigForMode(state.mode, { minNetYield: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

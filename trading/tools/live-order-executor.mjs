@@ -24,6 +24,7 @@ const OPPORTUNITY_MIN_EDGE = envNumber("LIVE_OPPORTUNITY_MIN_EDGE", envNumber("P
 const OPPORTUNITY_MIN_ANNUAL_RETURN = envNumber("LIVE_OPPORTUNITY_MIN_ANNUAL_RETURN", envNumber("PAPER_OPPORTUNITY_MIN_ANNUAL_RETURN", 0.3));
 const MAX_SPREAD = envNumber("LIVE_MAX_SPREAD", envNumber("PAPER_MAX_SPREAD", 0.08));
 const MIN_VOLUME_24H = envNumber("LIVE_CONFIG_MIN_LIQUIDITY_USDC", envNumber("LIVE_MIN_VOLUME_24H", envNumber("PAPER_MIN_VOLUME_24H", 100)));
+const MIN_NET_YIELD = Math.max(0, envNumber("LIVE_MIN_NET_YIELD", 0));
 const MAX_ORDER_FRACTION = envNumber("MAX_ORDER_FRACTION", envNumber("LIVE_MAX_ORDER_FRACTION", 0.05));
 const MAX_ORDER_NOTIONAL_USDC = envNumber("MAX_ORDER_NOTIONAL_USDC", envNumber("LIVE_MAX_ORDER_NOTIONAL_USDC", Infinity));
 const CANDIDATE_SCAN_LIMIT = envNumber("LIVE_CANDIDATE_SCAN_LIMIT", 120);
@@ -484,6 +485,15 @@ function candidateEvaluatedAtTime(item) {
   return Date.parse(item?.evaluatedAt || item?.lastSeenAt || item?.observedAt || item?.marketDataUpdatedAt || item?.firstEvaluatedAt || "") || 0;
 }
 
+function netYieldAfterFees(item = {}) {
+  const stored = number(item.netYield);
+  if (stored != null) return stored;
+  const gain = number(item.netGainIfWinUsdc);
+  const cost = number(item.totalCostUsdc ?? item.stakeUsdc);
+  if (gain == null || cost == null || cost <= 0) return null;
+  return gain / cost;
+}
+
 function prefilterLiveCandidate(item) {
   const reasons = [];
   const tokenId = String(item?.tokenId || "");
@@ -519,6 +529,10 @@ function prefilterLiveCandidate(item) {
     reasons.push(`missing ${probabilitySourceLabel()} ${returnMetricLabel()}`);
   } else if (annualizedReturn <= 0) {
     reasons.push(`${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`);
+  }
+  const candidateNetYield = netYieldAfterFees(item);
+  if (candidateNetYield == null || candidateNetYield < MIN_NET_YIELD) {
+    reasons.push(`net profit ${candidateNetYield == null ? "-" : `${(candidateNetYield * 100).toFixed(1)}%`} below ${(MIN_NET_YIELD * 100).toFixed(1)}% after fees`);
   }
   if (Number.isFinite(endTime) && endTime <= Date.now()) {
     reasons.push("stored end date is in the past");
@@ -1036,17 +1050,18 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
   };
 }
 
-function scoreEconomics({ probability, qualificationProbability, annualizedReturn, edge, spread, volume24hr, liquidity, endOk }) {
+function scoreEconomics({ probability, qualificationProbability, annualizedReturn, netYield, edge, spread, volume24hr, liquidity, endOk }) {
   const probabilityOk = qualificationProbability >= MIN_PROBABILITY;
   const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
     && edge >= OPPORTUNITY_MIN_EDGE
     && annualizedReturn >= OPPORTUNITY_MIN_ANNUAL_RETURN;
   const minimumAnnualizedReturn = PROBABILITY_SOURCE === "polymarket" ? 0 : MIN_ANNUAL_RETURN;
   const returnOk = annualizedReturn > minimumAnnualizedReturn;
+  const netYieldOk = Number.isFinite(netYield) && netYield >= MIN_NET_YIELD;
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   return {
-    eligible: endOk && probabilityOk && returnOk && spreadOk && volumeOk,
+    eligible: endOk && probabilityOk && returnOk && netYieldOk && spreadOk && volumeOk,
     thesisType: probabilityOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY_BELOW_LIVE_THRESHOLD" : "REJECTED"),
     rejectReasons: [
       endOk ? null : "event end date is in the past",
@@ -1054,6 +1069,7 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
       annualizedReturn <= 0
         ? `${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% is non-profitable after fees`
         : (returnOk ? null : `${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% below ${(minimumAnnualizedReturn * 100).toFixed(1)}%`),
+      netYieldOk ? null : `net profit ${Number.isFinite(netYield) ? `${(netYield * 100).toFixed(1)}%` : "-"} below ${(MIN_NET_YIELD * 100).toFixed(1)}% after fees`,
       spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
       volumeOk ? null : "liquidity/volume too low",
     ].filter(Boolean),
@@ -1217,6 +1233,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     probability: qualificationProbability,
     qualificationProbability,
     annualizedReturn: selectedAnnualizedReturn,
+    netYield: potentialRoi,
     edge: qualificationProbability - price,
     spread: book.spread,
     volume24hr,
@@ -1272,6 +1289,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     marketAnnualizedReturn: Number(marketAnnualizedReturn.toFixed(4)),
     potentialAnnualizedReturn: Number.isFinite(potentialAnnualizedReturn) ? Number(potentialAnnualizedReturn.toFixed(4)) : null,
     netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
+    netYield: Number.isFinite(potentialRoi) ? Number(potentialRoi.toFixed(6)) : null,
     totalCostUsdc: Number(totalCost.toFixed(5)),
     tradingFeeUsdc: Number(fee.toFixed(5)),
     feeMode: USE_LIMIT_ORDERS && POST_ONLY ? "post-only maker fee assumed 0" : "taker fee estimate",
@@ -1873,6 +1891,7 @@ async function main() {
       minAnnualReturn: MIN_ANNUAL_RETURN,
       maxSpread: MAX_SPREAD,
       minVolume24hr: MIN_VOLUME_24H,
+      minNetYield: MIN_NET_YIELD,
       maxResolutionDays: MAX_RESOLUTION_DAYS,
       selectionOrder: SELECTION_ORDER,
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
@@ -1918,6 +1937,7 @@ async function main() {
         minAnnualReturn: MIN_ANNUAL_RETURN,
         maxSpread: MAX_SPREAD,
         minVolume24hr: MIN_VOLUME_24H,
+        minNetYield: MIN_NET_YIELD,
         maxResolutionDays: MAX_RESOLUTION_DAYS,
         tradeCadenceHours: TRADE_CADENCE_HOURS,
         ignoreTradeCadence: IGNORE_TRADE_CADENCE,

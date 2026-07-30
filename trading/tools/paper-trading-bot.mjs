@@ -96,6 +96,7 @@ const PAPER_STRATEGIES = {
     maxFraction: envNumber("PAPER_CONSERVATIVE_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
+    minNetYield: envNumber("PAPER_CONSERVATIVE_MIN_NET_YIELD", 0),
     tradeCadenceHours: envNumber("PAPER_CONSERVATIVE_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
@@ -110,6 +111,7 @@ const PAPER_STRATEGIES = {
     maxFraction: envNumber("PAPER_HIGH_REWARD_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
+    minNetYield: envNumber("PAPER_HIGH_REWARD_MIN_NET_YIELD", 0),
     tradeCadenceHours: envNumber("PAPER_HIGH_REWARD_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
@@ -124,6 +126,7 @@ const PAPER_STRATEGIES = {
     maxFraction: envNumber("PAPER_MORE_PROBABLE_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
+    minNetYield: envNumber("PAPER_MORE_PROBABLE_MIN_NET_YIELD", 0),
     tradeCadenceHours: envNumber("PAPER_MORE_PROBABLE_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
@@ -346,6 +349,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     maxFraction: strategy.maxFraction,
     maxResolutionDays: strategyMaxResolutionDays(strategy),
     minLiquidityUsdc: strategy.minLiquidityUsdc,
+    minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
     tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     probabilitySource: strategy.probabilitySource,
@@ -360,6 +364,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       opportunityMinAnnualReturn: Number(input.portfolio?.opportunityMinAnnualReturn || OPPORTUNITY_MIN_ANNUAL_RETURN),
       maxResolutionDays: strategyMaxResolutionDays(strategy),
       minLiquidityUsdc: strategy.minLiquidityUsdc == null ? null : Number(strategy.minLiquidityUsdc),
+      minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
@@ -3058,12 +3063,24 @@ function strategyEligibleCandidates(eligible, strategy) {
     if (daysValue(item) > maxResolutionDays) return false;
     const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
     if (Number.isFinite(minLiquidityUsdc) && Number(item.liquidity || 0) < minLiquidityUsdc) return false;
+    const minimumNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
+    const candidateNetYield = netYieldAfterFees(item);
+    if (!Number.isFinite(candidateNetYield) || candidateNetYield < minimumNetYield) return false;
     return true;
   });
   if (strategy.requireMostProbableOutcome) {
     rows = rows.filter((item) => item.marketType === "multi" || reportMarketType(item) === "multi");
   }
   return rows;
+}
+
+function netYieldAfterFees(item = {}) {
+  const stored = Number(item.netYield);
+  if (Number.isFinite(stored)) return stored;
+  const gain = Number(item.netGainIfWinUsdc);
+  const cost = Number(item.totalCostUsdc ?? item.stakeUsdc);
+  if (!Number.isFinite(gain) || !Number.isFinite(cost) || cost <= 0) return null;
+  return gain / cost;
 }
 
 function portfolioEconomics(item, strategy = PAPER_STRATEGIES.conservative) {
@@ -3088,6 +3105,7 @@ function portfolioFilterResult(item, strategy) {
   const minProbability = Number(strategy.minProbability);
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
   const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
+  const minNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
   const probabilitySource = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
   const selectedProbability = Number(probabilitySource === "polymarket" ? (item.marketProbability ?? item.marketPrice) : item.aiProbability);
   const days = daysValue(item);
@@ -3121,6 +3139,10 @@ function portfolioFilterResult(item, strategy) {
   }
   if (Number.isFinite(minLiquidityUsdc) && liquidity < minLiquidityUsdc) {
     reasons.push(`liquidity ${liquidity.toFixed(2)} below ${minLiquidityUsdc.toFixed(2)} USDC`);
+  }
+  const candidateNetYield = netYieldAfterFees(item);
+  if (!Number.isFinite(candidateNetYield) || candidateNetYield < minNetYield) {
+    reasons.push(`net profit ${Number.isFinite(candidateNetYield) ? `${(candidateNetYield * 100).toFixed(1)}%` : "-"} below ${(minNetYield * 100).toFixed(1)}% after fees`);
   }
   if (strategy.requireMostProbableOutcome && marketType !== "multi") {
     reasons.push(`market type ${marketType || "-"} is not multichoice`);
@@ -3531,6 +3553,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       maxFraction: strategy.maxFraction ?? null,
       maxResolutionDays: strategyMaxResolutionDays(strategy),
       minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
+      minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       selectionOrder: strategy.selectionOrder,
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
