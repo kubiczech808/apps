@@ -4556,7 +4556,9 @@ function quoteEconomicsForStoredEvaluation(evaluation, marketPrice, probability)
 }
 
 function binarySideQuoteIsStale(item) {
-  if (!item?.marketOutcomeFlipped) return false;
+  const hasBinaryMetadata = Boolean(item?.binaryYesTokenId || item?.binaryNoTokenId)
+    || (validMarketProbability(item?.binaryYesMarketProbability) != null && validMarketProbability(item?.binaryNoMarketProbability) != null);
+  if (!hasBinaryMetadata) return false;
   const entry = validMarketProbability(item.marketPrice);
   const selectedMarketProbability = validMarketProbability(item.marketProbability);
   return entry != null && selectedMarketProbability != null && Math.abs(entry - selectedMarketProbability) >= 0.1;

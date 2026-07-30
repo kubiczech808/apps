@@ -417,7 +417,9 @@ function marketProbabilityForToken(market, tokenIndex, book = {}, fallback = nul
 }
 
 function hasStaleBinarySideQuote(item) {
-  if (!item?.marketOutcomeFlipped) return false;
+  const hasBinaryMetadata = Boolean(item?.binaryYesTokenId || item?.binaryNoTokenId)
+    || (validProbability(item?.binaryYesMarketProbability) != null && validProbability(item?.binaryNoMarketProbability) != null);
+  if (!hasBinaryMetadata) return false;
   const entry = validProbability(item.marketPrice);
   const selectedMarketProbability = validProbability(item.marketProbability);
   // A large mismatch immediately after a recorded side flip means the row

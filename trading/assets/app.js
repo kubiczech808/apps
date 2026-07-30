@@ -955,7 +955,11 @@ function evaluationStake(item) {
 }
 
 function binarySideQuoteIsStale(item) {
-  if (!item?.marketOutcomeFlipped) return false;
+  const binaryYes = Number(item?.binaryYesMarketProbability);
+  const binaryNo = Number(item?.binaryNoMarketProbability);
+  const hasBinaryMetadata = Boolean(item?.binaryYesTokenId || item?.binaryNoTokenId)
+    || (Number.isFinite(binaryYes) && binaryYes > 0 && binaryYes < 1 && Number.isFinite(binaryNo) && binaryNo > 0 && binaryNo < 1);
+  if (!hasBinaryMetadata) return false;
   const entry = Number(item.marketPrice ?? item.entryPrice);
   const selectedMarketProbability = Number(item.marketProbability);
   return Number.isFinite(entry)
