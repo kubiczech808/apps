@@ -80,6 +80,8 @@ const ROTATION_MIN_SCORE_IMPROVEMENT = envNumber("PAPER_ROTATION_MIN_SCORE_IMPRO
 const ROTATION_MIN_EV_USDC_IMPROVEMENT = envNumber("PAPER_ROTATION_MIN_EV_USDC_IMPROVEMENT", 0.02);
 const ROTATION_MIN_HOLD_HOURS = envNumber("PAPER_ROTATION_MIN_HOLD_HOURS", 6);
 const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() === "true";
+const REFRESH_TOKEN_ID = String(process.env.PAPER_REFRESH_TOKEN_ID || "").trim();
+const REFRESH_MARKET_SLUG = String(process.env.PAPER_REFRESH_MARKET_SLUG || "").trim();
 const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
 const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
 const EVALUATION_ONLY = envBool("PAPER_EVALUATION_ONLY", false);
@@ -278,10 +280,14 @@ async function readState() {
     return normalizeState({});
   }
 
+  const focusedRefresh = REFRESH_TOKEN_ID !== "" || REFRESH_MARKET_SLUG !== "";
+  const remoteStateUrl = focusedRefresh && process.env.PAPER_REFRESH_STATE_URL
+    ? process.env.PAPER_REFRESH_STATE_URL
+    : REMOTE_STATE_URL;
   let remoteError = null;
-  if (REMOTE_STATE_URL) {
+  if (remoteStateUrl) {
     try {
-      const remote = await fetchJson(`${REMOTE_STATE_URL}${REMOTE_STATE_URL.includes("?") ? "&" : "?"}t=${Date.now()}`);
+      const remote = await fetchJson(`${remoteStateUrl}${remoteStateUrl.includes("?") ? "&" : "?"}t=${Date.now()}`);
       if (remote && typeof remote === "object" && (Array.isArray(remote.trades) || remote.paperPortfolios)) {
         const remoteState = normalizeState(remote);
         try {
@@ -299,12 +305,12 @@ async function readState() {
 
   try {
     const raw = await readFile(OUTPUT_PATH, "utf8");
-    if (REMOTE_STATE_URL && remoteError) {
+    if (remoteStateUrl && remoteError) {
       throw new Error(`Refusing to use repository paper-state fallback because remote state is unavailable: ${remoteError.message}`);
     }
     return normalizeState(JSON.parse(raw));
   } catch {
-    if (REMOTE_STATE_URL && remoteError) {
+    if (remoteStateUrl && remoteError) {
       throw remoteError;
     }
     return normalizeState({});
@@ -4557,6 +4563,61 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
 
 async function refreshMarketObservations(state) {
   const previousScan = normalizeMarketScan(state.marketScan);
+  const focusedRefresh = REFRESH_TOKEN_ID !== "" || REFRESH_MARKET_SLUG !== "";
+  if (focusedRefresh) {
+    const stored = [
+      ...(Array.isArray(state.marketObservations) ? state.marketObservations : []),
+      ...(Array.isArray(state.evaluations) ? state.evaluations : []),
+    ].find((item) => String(item?.tokenId || "") === REFRESH_TOKEN_ID
+      || (REFRESH_MARKET_SLUG !== "" && String(item?.slug || item?.eventSlug || "") === REFRESH_MARKET_SLUG));
+    const slug = REFRESH_MARKET_SLUG || String(stored?.slug || stored?.eventSlug || "");
+    const market = await fetchMarketBySlug(slug);
+    if (!market) {
+      throw new Error("selected scraped market was not found on Polymarket");
+    }
+
+    const observedAt = nowIso();
+    const endDate = correctedEndDate(market.question || "", market.endDate, market.createdAt || market.updatedAt);
+    let observation = preferredMarketObservation(market, observedAt);
+    const marketIsResolved = Boolean(market.closed) || market.acceptingOrders === false
+      || (Number.isFinite(Date.parse(endDate || "")) && Date.parse(endDate) <= Date.now());
+
+    if (observation && marketIsResolved) {
+      observation = {
+        ...observation,
+        status: "RESOLVED",
+        selectionStatus: "RESOLVED",
+        resolutionStatus: "PENDING_RESULT",
+        resolvedAt: endDate || observedAt,
+        resolvedDetectedAt: observedAt,
+      };
+    }
+    if (!observation && stored && marketIsResolved) {
+      observation = {
+        ...stored,
+        status: "RESOLVED",
+        selectionStatus: "RESOLVED",
+        resolutionStatus: stored.resolutionStatus || "PENDING_RESULT",
+        endDate: endDate || stored.endDate || null,
+        resolvedAt: stored.resolvedAt || endDate || observedAt,
+        resolvedDetectedAt: observedAt,
+        marketDataUpdatedAt: observedAt,
+        observedAt,
+      };
+    }
+    if (!observation) {
+      throw new Error("selected scraped market has no current executable Polymarket quote");
+    }
+
+    state.marketObservations = mergeMarketObservationLists([observation], state.marketObservations || [])
+      .map(normalizeMarketObservationEconomics);
+    state.marketScan = {
+      ...previousScan,
+      lastScanError: null,
+    };
+    return [observation];
+  }
+
   const preferredMarkets = await loadPreferredMarketScanBatch();
   const broadBatches = [];
   let broadCursor = previousScan.cursor;

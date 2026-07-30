@@ -35,6 +35,8 @@ const state = {
   scrapedMarketStateLoaded: false,
   scrapedMarketObservations: [],
   scrapedMarketScan: {},
+  scrapedRefreshKeys: new Set(),
+  scrapedRefreshErrors: new Map(),
   evaluationProbabilityFilter: 0,
   evaluationDaysFilter: null,
   evaluationNetYieldFilter: 0,
@@ -3632,6 +3634,57 @@ async function triggerManualOpportunityEvaluation(item, trigger = null) {
   }
 }
 
+async function waitForScrapedRefreshWorkflow(startedAt, runTitle) {
+  let latest = null;
+  for (let attempt = 0; attempt < 64; attempt += 1) {
+    const status = await fetchApiJson(`api.php?action=workflow-status&target=paper-refresh&since=${encodeURIComponent(startedAt)}`);
+    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)
+      && (!runTitle || run.displayTitle === runTitle)) || null;
+    if (latest?.status === "completed") return latest;
+    await sleep(3000);
+  }
+  return latest;
+}
+
+async function triggerScrapedOpportunityRefresh(item) {
+  const key = scrapedRefreshKey(item);
+  const tokenId = String(item?.tokenId || "").trim();
+  const slug = String(item?.slug || item?.eventSlug || "").trim();
+  if (!key || !slug || state.scrapedRefreshKeys.has(key)) return;
+
+  state.scrapedRefreshKeys.add(key);
+  state.scrapedRefreshErrors.delete(key);
+  if (state.page === "opportunities" && state.opportunityView === "scraped") renderBotEvaluations();
+
+  const startedAt = new Date().toISOString();
+  const runTitle = `Scraped refresh ${tokenId || slug}`;
+  try {
+    await fetchApiJson("api.php?action=workflow", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target: "paper-refresh",
+        refresh_token_id: tokenId,
+        refresh_market_slug: slug,
+      }),
+    });
+    const workflow = await waitForScrapedRefreshWorkflow(startedAt, runTitle);
+    if (!workflow || workflow.status !== "completed") {
+      throw new Error("Refresh is still queued in the background. Try again in a moment.");
+    }
+    if (workflow.conclusion !== "success") {
+      throw new Error(`Refresh workflow finished with ${workflow.conclusion || "an unknown error"}.`);
+    }
+    const refreshed = await fetchJson("data/paper-state.json", { summary: "scraped" });
+    storeScrapedMarketState(refreshed);
+  } catch (error) {
+    state.scrapedRefreshErrors.set(key, error?.message || "Could not refresh this Polymarket market.");
+  } finally {
+    state.scrapedRefreshKeys.delete(key);
+    if (state.page === "opportunities" && state.opportunityView === "scraped") renderBotEvaluations();
+  }
+}
+
 async function loadLiveState(options = {}) {
   try {
     const [liveResult, botResult, executionResult] = await Promise.allSettled([
@@ -4845,6 +4898,43 @@ function scrapedSortableHeader(key, label) {
   return `<th><div class="th-content"><button class="sort-button${active}" type="button" data-scraped-sort="${key}">${label}${arrow}</button></div></th>`;
 }
 
+function scrapedRefreshKey(item) {
+  return String(item?.marketKey || opportunityKey(item) || item?.id || "").trim();
+}
+
+function findScrapedOpportunityByKey(key) {
+  const wanted = String(key || "").trim();
+  if (!wanted) return null;
+  return scrapedMarketObservations().find((item) => scrapedRefreshKey(item) === wanted)
+    || scrapedMarketObservations().find((item) => opportunityKey(item) === wanted)
+    || null;
+}
+
+function scrapedRefreshControl(item) {
+  const key = scrapedRefreshKey(item);
+  if (!key || !item?.slug) return "-";
+  const refreshing = state.scrapedRefreshKeys.has(key);
+  const error = state.scrapedRefreshErrors.get(key);
+  const title = refreshing
+    ? "Refreshing this market from Polymarket..."
+    : (error ? `Last refresh failed: ${error}` : "Refresh this market from Polymarket");
+  return `
+    <button
+      class="scraped-refresh-button${refreshing ? " is-refreshing" : ""}${error ? " has-error" : ""}"
+      type="button"
+      data-scraped-refresh="${escapeHtml(key)}"
+      aria-label="${escapeHtml(title)}"
+      title="${escapeHtml(title)}"
+      ${refreshing ? "disabled" : ""}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M20 11a8 8 0 1 0 2.2 5.5"></path>
+        <path d="M20 4v7h-7"></path>
+      </svg>
+    </button>
+  `;
+}
+
 function binaryMarketProbabilityCell(item) {
   const yes = Number(item.binaryYesMarketProbability);
   const no = Number(item.binaryNoMarketProbability);
@@ -4930,6 +5020,7 @@ function renderScrapedOpportunities() {
             ${scrapedSortableHeader("liquidity", "Liquidity")}
             ${scrapedSortableHeader("volume24hr", "24h volume")}
             ${scrapedSortableHeader("outcomeCount", "Outcomes")}
+            <th><span class="table-action-heading" title="Refresh this one scraped market from Polymarket">Update</span></th>
           </tr>
         </thead>
         <tbody>
@@ -4949,6 +5040,7 @@ function renderScrapedOpportunities() {
               <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
               <td data-label="24h volume">${money(Number(item.volume24hr || 0))}</td>
               <td data-label="Outcomes">${formatInteger(Number(item.outcomeCount || 0)) || "-"}</td>
+              <td data-label="Update">${scrapedRefreshControl(item)}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -6105,6 +6197,14 @@ els.crossLiveRisk?.addEventListener("change", () => {
 });
 
 els.botEvaluations?.addEventListener("click", (event) => {
+  const scrapedRefreshButton = event.target.closest("[data-scraped-refresh]");
+  if (scrapedRefreshButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const item = findScrapedOpportunityByKey(scrapedRefreshButton.dataset.scrapedRefresh || "");
+    triggerScrapedOpportunityRefresh(item);
+    return;
+  }
   const scrapedButton = event.target.closest("[data-scraped-sort]");
   if (scrapedButton) {
     const key = scrapedButton.dataset.scrapedSort;

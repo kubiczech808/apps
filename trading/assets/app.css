@@ -875,6 +875,53 @@ button:disabled {
   background: #ccfbf1;
 }
 
+.table-action-heading {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+.scraped-refresh-button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--accent-dark);
+}
+
+.scraped-refresh-button:hover {
+  border-color: var(--accent);
+  background: #ccfbf1;
+}
+
+.scraped-refresh-button.has-error {
+  border-color: #f59e0b;
+  color: #b45309;
+}
+
+.scraped-refresh-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.scraped-refresh-button.is-refreshing svg {
+  animation: scraped-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes scraped-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .analysis-detail-link {
   display: inline-flex;
   align-items: center;

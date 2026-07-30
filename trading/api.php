@@ -328,6 +328,13 @@ function compact_state_payload(string $target, array $data, string $summary): ar
         ];
     }
 
+    // A focused scraped-market refresh must merge one updated quote into the
+    // complete persisted market set. This worker-only summary avoids dropping
+    // the retained observations that are omitted from normal dashboard reads.
+    if ($summary === 'refresh') {
+        return $data;
+    }
+
     // Raw market observations can contain thousands of rows. They are exposed
     // only through the lazy `scraped` summary used by the opportunities log.
     $compact = $data;
@@ -1065,6 +1072,7 @@ function workflow_status_payload(string $target): array
     $workflows = [
         'paper' => 'trading-paper-bot.yml',
         'paper-evaluation' => 'trading-paper-evaluation.yml',
+        'paper-refresh' => 'trading-paper-bot.yml',
         'live' => 'polymarket-live-limit-order-test.yml',
         'live-sync' => 'trading-live-account.yml',
     ];
@@ -1100,6 +1108,7 @@ function workflow_status_payload(string $target): array
         $runs[] = [
             'id' => $run['id'] ?? null,
             'name' => $run['name'] ?? '',
+            'displayTitle' => $run['display_title'] ?? '',
             'event' => $run['event'] ?? '',
             'status' => $run['status'] ?? '',
             'conclusion' => $run['conclusion'] ?? null,
@@ -1364,6 +1373,11 @@ try {
         }
         $evaluationTokenId = preg_replace('/[^0-9]/', '', (string) ($payload['evaluation_token_id'] ?? $payload['evaluationTokenId'] ?? ''));
         $evaluationMarketSlug = preg_replace('/[^A-Za-z0-9_-]/', '', (string) ($payload['evaluation_market_slug'] ?? $payload['evaluationMarketSlug'] ?? ''));
+        $refreshTokenId = preg_replace('/[^0-9]/', '', (string) ($payload['refresh_token_id'] ?? $payload['refreshTokenId'] ?? ''));
+        $refreshMarketSlug = preg_replace('/[^A-Za-z0-9_-]/', '', (string) ($payload['refresh_market_slug'] ?? $payload['refreshMarketSlug'] ?? ''));
+        if ($targetKey === 'paper-refresh' && $refreshTokenId === '' && $refreshMarketSlug === '') {
+            respond(['ok' => false, 'error' => 'A scraped market token ID or market slug is required for refresh.'], 400);
+        }
         $paperStrategyId = paper_strategy_from_target($target) ?? normalized_paper_strategy_input($payload['paper_strategy_id'] ?? $payload['paperStrategyId'] ?? null);
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
         $paperExtraInputs = [];
@@ -1418,6 +1432,18 @@ try {
                     'evaluation_market_slug' => $evaluationMarketSlug !== '' ? $evaluationMarketSlug : null,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Focused paper evaluation workflow dispatched.',
+            ];
+        }
+
+        if ($targetKey === 'paper-refresh') {
+            $workflows['paper-refresh'] = [
+                'workflow' => 'trading-paper-bot.yml',
+                'inputs' => array_filter([
+                    'mode' => 'refresh',
+                    'refresh_token_id' => $refreshTokenId !== '' ? $refreshTokenId : null,
+                    'refresh_market_slug' => $refreshMarketSlug !== '' ? $refreshMarketSlug : null,
+                ], static fn ($value): bool => $value !== null),
+                'message' => 'Focused scraped-market refresh workflow dispatched.',
             ];
         }
 
