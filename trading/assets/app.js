@@ -3482,8 +3482,11 @@ async function triggerOneTimeExecution(target) {
     }
     steps = addExecutionStep(steps, "Workflow dispatched", payload.workflow || payload.message || "GitHub Actions accepted the request", "done");
     setExecutionStatus(`${target} workflow started`);
-    steps = addExecutionStep(steps, "Revalidation running", live
-      ? "The runner refreshes account state, revalidates candidates, checks risk diversification, then submits an order only if criteria still pass."
+    const liveUsesPolymarketProbability = normalizeProbabilitySource(portfolioConfigForMode("live").probabilitySource) === "polymarket";
+    steps = addExecutionStep(steps, "Execution check running", live
+      ? (liveUsesPolymarketProbability
+        ? "The runner refreshes the account and current Polymarket quotes, recalculates fees and profitability for the ordered shortlist, then submits only the first candidate that still passes. No AI analysis is requested."
+        : "The runner refreshes account and market data, checks candidates against their stored AI assessment and risk diversification, then submits only if criteria still pass.")
       : "The evaluation engine scans markets, prioritizes new opportunities, updates known evaluations, and may open one paper trade.", "active");
     const workflow = await waitForWorkflowRun(target, startedAt, steps);
     steps = workflow.steps;
@@ -3803,7 +3806,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   if (!Number.isFinite(candidateNetYield) || candidateNetYield < minNetYield) {
     reasons.push(`net profit ${Number.isFinite(candidateNetYield) ? signedPercent(candidateNetYield) : "-"} below ${percent(minNetYield)} after fees`);
   }
-  if (aiPending) reasons.push("grounded Gemini analysis is pending");
+  if (probabilitySource === "ai" && aiPending) reasons.push("grounded Gemini analysis is pending");
   if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY") {
     const detail = Array.isArray(executionCheck.rejectReasons) && executionCheck.rejectReasons[0]
       ? `: ${executionCheck.rejectReasons[0]}`
@@ -4015,7 +4018,11 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
       </thead>
       <tbody>
         ${rows.slice(0, 80).map((item, index) => {
-          const status = live ? "will revalidate before live order" : "ready for next paper execution";
+          const status = !live
+            ? "ready for next paper execution"
+            : (usesPolymarketPotential
+              ? "will verify live quote, fees and ranking"
+              : "will verify live quote against stored AI assessment");
           const selectedProbability = portfolioProbability(item, config);
           const selectedAnnualizedReturn = portfolioAnnualizedReturn(item, config);
           const selectedExpectedValue = portfolioExpectedValue(item, config);
@@ -5027,14 +5034,17 @@ function tradeBatchDetail(batch) {
   const diversificationDiagnostics = batch.diversificationDiagnostics || null;
   const portfolioFilter = batch.portfolioFilter || {};
   const prevalidationFilter = batch.prevalidationFilter || {};
+  const usesPolymarketProbability = normalizeProbabilitySource(settings.probabilitySource) === "polymarket";
+  const probabilityMetricLabel = usesPolymarketProbability ? "Mkt" : "AI";
+  const returnMetricLabel = usesPolymarketProbability ? "Potential p.a." : "EV p.a.";
   const candidateMetricLine = (item) => [
-    `AI ${probability(Number(item.aiProbability))}`,
+    `${probabilityMetricLabel} ${probability(Number(usesPolymarketProbability ? item.marketProbability : item.aiProbability))}`,
     `entry ${probability(Number(item.marketPrice ?? item.orderPrice))}`,
     item.netGainIfWinUsdc != null ? `win ${signedMoney(Number(item.netGainIfWinUsdc), 4)}` : "",
     item.netYield != null ? `win ${signedPercent(Number(item.netYield))}` : "",
     item.riskReward != null ? `R/R ${riskReward(Number(item.riskReward))}` : "",
-    `EV p.a. ${signedPercent(Number(item.annualizedReturn))}`,
-    `EV ${signedMoney(Number(item.expectedValueUsdc), 4)}`,
+    `${returnMetricLabel} ${signedPercent(Number(item.annualizedReturn))}`,
+    `${usesPolymarketProbability ? "Potential" : "EV"} ${signedMoney(Number(item.expectedValueUsdc), 4)}`,
     item.daysToResolution != null ? `resolution ${Number(item.daysToResolution).toFixed(2)}d` : "",
     item.liquidity != null ? `liquidity ${money(Number(item.liquidity))}` : "",
   ].filter(Boolean).join(" / ");
@@ -5174,7 +5184,7 @@ function tradeBatchDetail(batch) {
     `Explanation: ${batch.explanation || "-"}`,
     "",
     `Rules:`,
-    `AI threshold: ${probability(Number(settings.minProbability))}`,
+    `${usesPolymarketProbability ? "Polymarket" : "AI"} threshold: ${probability(Number(settings.minProbability))}`,
     `Max resolution days: ${settings.maxResolutionDays == null ? "-" : settings.maxResolutionDays}`,
     `New trade cadence: ${settings.tradeCadenceHours == null ? "-" : `${settings.tradeCadenceHours}h`}`,
     `Min liquidity: ${settings.minLiquidityUsdc == null ? "-" : money(Number(settings.minLiquidityUsdc))}`,
@@ -5190,10 +5200,10 @@ function tradeBatchDetail(batch) {
       `Prepared execution shortlist:`,
       `Stored evaluations: ${Number(prevalidationFilter.storedEvaluations || 0)}`,
       `Unique markets/outcomes: ${Number(prevalidationFilter.uniqueEvaluations || 0)}`,
-      `Passed portfolio rules before revalidation: ${Number(prevalidationFilter.prefilterPassed || 0)}`,
-      `Selected for Polymarket revalidation: ${Number(prevalidationFilter.selectedForRevalidation || 0)} / limit ${Number(prevalidationFilter.scanLimit || 0)}`,
+      `Passed portfolio rules before market verification: ${Number(prevalidationFilter.prefilterPassed || 0)}`,
+      `Selected for Polymarket market verification: ${Number(prevalidationFilter.selectedForRevalidation || 0)} / limit ${Number(prevalidationFilter.scanLimit || 0)}`,
       "",
-      `Shortlist order before Polymarket revalidation:`,
+      `Shortlist order before Polymarket market verification:`,
       executionShortlistLines,
       "",
     ].join("\n") : "",
@@ -5227,7 +5237,7 @@ function tradeBatchDetail(batch) {
     `Position rotation review:`,
     rotationReviewLines,
     "",
-    `Revalidated candidates checked:`,
+    `Candidates checked against current Polymarket market data:`,
     revalidatedLines,
     "",
     `Eligible candidates checked:`,
@@ -5438,13 +5448,14 @@ function runDecisionSummary(run = {}) {
   const eligible = Number(run.eligibleCount ?? counts.rankedEligible ?? counts.eligibleCandidates);
   const riskSkipped = Number(run.riskSkippedCount ?? counts.skippedForRisk);
   const isLiveRun = String(run.strategyId || batch.strategyId || "").toLowerCase() === "live";
+  const usesPolymarketProbability = normalizeProbabilitySource(batch.settings?.probabilitySource) === "polymarket";
   const countParts = [
-    Number.isFinite(evaluated) ? `${evaluated} ${isLiveRun ? "revalidated" : "evaluated"}` : "",
+    Number.isFinite(evaluated) ? `${evaluated} ${isLiveRun ? "market-checked" : "evaluated"}` : "",
     Number.isFinite(eligible) ? `${eligible} ${isLiveRun ? "passed" : "eligible"}` : "",
     Number.isFinite(riskSkipped) ? `${riskSkipped} risk skipped` : "",
   ].filter(Boolean).join(" / ");
   const selectedText = selected
-    ? `${selected.outcome || "-"} ${selected.question || "-"} / AI ${probability(Number(selected.aiProbability))} / win ${signedMoney(Number(selected.netGainIfWinUsdc), 4)} ${selected.netYield != null ? `(${signedPercent(Number(selected.netYield))})` : ""}`
+    ? `${selected.outcome || "-"} ${selected.question || "-"} / ${usesPolymarketProbability ? "Mkt" : "AI"} ${probability(Number(usesPolymarketProbability ? selected.marketProbability : selected.aiProbability))} / win ${signedMoney(Number(selected.netGainIfWinUsdc), 4)} ${selected.netYield != null ? `(${signedPercent(Number(selected.netYield))})` : ""}`
     : "";
   return [humanRunReason(run), selectedText, countParts, runCapitalNote(run)].filter(Boolean).join(" / ");
 }

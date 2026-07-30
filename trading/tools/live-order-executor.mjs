@@ -524,7 +524,7 @@ function prefilterLiveCandidate(item) {
   } else if (PROBABILITY_SOURCE === "ai" && status && !["ELIGIBLE", "EVALUATED"].includes(status)) {
     reasons.push(`stored status ${status}`);
   }
-  if (aiPending) reasons.push("grounded Gemini analysis is pending");
+  if (PROBABILITY_SOURCE === "ai" && aiPending) reasons.push("grounded Gemini analysis is pending");
   if (item?.marketClosed === true || item?.closed === true || item?.resolved === true || item?.isResolved === true) {
     reasons.push("stored market is already closed/resolved");
   }

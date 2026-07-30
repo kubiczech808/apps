@@ -184,7 +184,7 @@ jobs:
         working-directory: trading
         run: npm run live:account
 
-      - name: Revalidate and maybe submit live order
+      - name: Verify current market and maybe submit live order
         working-directory: trading
         env:
           POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.live_confirm) || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
@@ -216,7 +216,7 @@ jobs:
         working-directory: trading
         run: npm run live:account
 
-      - name: Persist current live revalidation into evaluation state
+      - name: Persist current live market verification into evaluation state
         if: always()
         env:
           HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
