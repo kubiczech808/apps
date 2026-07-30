@@ -5037,14 +5037,24 @@ function tradeBatchDetail(batch) {
   const usesPolymarketProbability = normalizeProbabilitySource(settings.probabilitySource) === "polymarket";
   const probabilityMetricLabel = usesPolymarketProbability ? "Mkt" : "AI";
   const returnMetricLabel = usesPolymarketProbability ? "Potential p.a." : "EV p.a.";
+  const candidateSelectedAnnualizedReturn = (item) => {
+    if (!usesPolymarketProbability) return Number(item.annualizedReturn);
+    const net = Number(item.netYield);
+    const days = Number(item.daysToResolution);
+    if (!Number.isFinite(net)) return Number(item.annualizedReturn);
+    return Number.isFinite(days) && days > 0 ? net * (365 / days) : net;
+  };
+  const candidateSelectedValue = (item) => usesPolymarketProbability
+    ? Number(item.netGainIfWinUsdc)
+    : Number(item.expectedValueUsdc);
   const candidateMetricLine = (item) => [
     `${probabilityMetricLabel} ${probability(Number(usesPolymarketProbability ? item.marketProbability : item.aiProbability))}`,
     `entry ${probability(Number(item.marketPrice ?? item.orderPrice))}`,
     item.netGainIfWinUsdc != null ? `win ${signedMoney(Number(item.netGainIfWinUsdc), 4)}` : "",
     item.netYield != null ? `win ${signedPercent(Number(item.netYield))}` : "",
     item.riskReward != null ? `R/R ${riskReward(Number(item.riskReward))}` : "",
-    `${returnMetricLabel} ${signedPercent(Number(item.annualizedReturn))}`,
-    `${usesPolymarketProbability ? "Potential" : "EV"} ${signedMoney(Number(item.expectedValueUsdc), 4)}`,
+    `${returnMetricLabel} ${signedPercent(candidateSelectedAnnualizedReturn(item))}`,
+    `${usesPolymarketProbability ? "Potential" : "EV"} ${signedMoney(candidateSelectedValue(item), 4)}`,
     item.daysToResolution != null ? `resolution ${Number(item.daysToResolution).toFixed(2)}d` : "",
     item.liquidity != null ? `liquidity ${money(Number(item.liquidity))}` : "",
   ].filter(Boolean).join(" / ");

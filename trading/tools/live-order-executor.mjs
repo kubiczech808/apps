@@ -1549,6 +1549,17 @@ function liveBatchCandidateSummary(item) {
   const source = item?.candidate || item || {};
   const gain = number(item?.netGainIfWinUsdc ?? source.netGainIfWinUsdc);
   const cost = number(item?.totalCostUsdc ?? item?.orderNotionalUsdc ?? source.totalCostUsdc ?? source.stakeUsdc);
+  const daysToResolution = number(item?.daysToResolution ?? source.daysToResolution);
+  const netYield = gain != null && cost != null && cost > 0 ? gain / cost : null;
+  const potentialAnnualizedReturn = netYield != null
+    ? (daysToResolution != null && daysToResolution > 0 ? netYield * (365 / daysToResolution) : netYield)
+    : null;
+  const selectedAnnualizedReturn = PROBABILITY_SOURCE === "polymarket"
+    ? potentialAnnualizedReturn
+    : number(item?.annualizedReturn ?? source.annualizedReturn);
+  const selectedExpectedValue = PROBABILITY_SOURCE === "polymarket"
+    ? gain
+    : number(item?.expectedValueUsdc ?? source.expectedValueUsdc);
   return {
     question: item?.question || source.question || "",
     outcome: item?.outcome || source.outcome || "",
@@ -1558,17 +1569,17 @@ function liveBatchCandidateSummary(item) {
     aiProbability: number(item?.aiProbability ?? source.aiProbability),
     marketProbability: number(item?.marketProbability ?? source.marketProbability ?? item?.marketPrice ?? source.marketPrice),
     marketPrice: number(item?.marketPrice ?? source.marketPrice ?? item?.currentPrice),
-    annualizedReturn: number(item?.annualizedReturn ?? source.annualizedReturn),
-    expectedValueUsdc: number(item?.expectedValueUsdc ?? source.expectedValueUsdc),
+    annualizedReturn: selectedAnnualizedReturn,
+    expectedValueUsdc: selectedExpectedValue,
     aiAnnualizedReturn: number(item?.aiAnnualizedReturn ?? source.aiAnnualizedReturn),
     aiExpectedValueUsdc: number(item?.aiExpectedValueUsdc ?? source.aiExpectedValueUsdc),
     marketAnnualizedReturn: number(item?.marketAnnualizedReturn ?? source.marketAnnualizedReturn),
     marketExpectedValueUsdc: number(item?.marketExpectedValueUsdc ?? source.marketExpectedValueUsdc),
-    daysToResolution: number(item?.daysToResolution ?? source.daysToResolution),
+    daysToResolution,
     liquidity: number(item?.liquidity ?? source.liquidity),
     netGainIfWinUsdc: gain,
-    netYield: gain != null && cost != null && cost > 0 ? number(gain / cost) : null,
-    riskReward: gain != null && cost != null && cost > 0 ? number(gain / cost) : null,
+    netYield: netYield == null ? null : number(netYield),
+    riskReward: netYield == null ? null : number(netYield),
     orderPrice: number(item?.orderPrice),
     orderSize: number(item?.orderSize),
     orderNotionalUsdc: number(item?.orderNotionalUsdc),
