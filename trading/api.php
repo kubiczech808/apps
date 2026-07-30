@@ -215,6 +215,38 @@ function compact_evaluation(array $item): array
     return $compact;
 }
 
+function compact_market_observation(array $item): array
+{
+    $keys = [
+        'id',
+        'marketKey',
+        'marketId',
+        'question',
+        'slug',
+        'eventSlug',
+        'outcome',
+        'tokenId',
+        'marketProbability',
+        'binaryYesMarketProbability',
+        'binaryNoMarketProbability',
+        'outcomeCount',
+        'endDate',
+        'liquidity',
+        'volume24hr',
+        'marketDataUpdatedAt',
+        'observedAt',
+        'source',
+    ];
+    $compact = [];
+    foreach ($keys as $key) {
+        if (array_key_exists($key, $item)) {
+            $compact[$key] = $item[$key];
+        }
+    }
+
+    return $compact;
+}
+
 function compact_state_payload(string $target, array $data, string $summary): array
 {
     if ($target !== 'paper') {
@@ -243,7 +275,25 @@ function compact_state_payload(string $target, array $data, string $summary): ar
         return $compact;
     }
 
-    return $data;
+    if ($summary === 'scraped') {
+        $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
+        return [
+            'schemaVersion' => $data['schemaVersion'] ?? null,
+            'generatedAt' => $data['generatedAt'] ?? null,
+            'marketObservations' => array_map(
+                static fn($item): array => is_array($item) ? compact_market_observation($item) : [],
+                array_values(array_filter($observations, 'is_array'))
+            ),
+            'marketScan' => is_array($data['marketScan'] ?? null) ? $data['marketScan'] : [],
+            'marketDetailsMode' => 'compact',
+        ];
+    }
+
+    // Raw market observations can contain thousands of rows. They are exposed
+    // only through the lazy `scraped` summary used by the opportunities log.
+    $compact = $data;
+    unset($compact['marketObservations'], $compact['marketScan']);
+    return $compact;
 }
 
 function default_portfolio_config(): array

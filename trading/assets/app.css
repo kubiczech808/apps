@@ -615,7 +615,7 @@ button:disabled {
   scrollbar-width: thin;
 }
 
-.trade-ledger-table {
+.ledger-wide-table {
   min-width: 1280px;
 }
 
@@ -1844,7 +1844,7 @@ body.modal-open {
     padding-bottom: 6px;
   }
 
-  .ledger .trade-ledger-table {
+  .ledger .ledger-wide-table {
     display: table;
     min-width: 1180px;
     border-collapse: collapse;

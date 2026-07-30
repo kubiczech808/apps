@@ -26,6 +26,13 @@ const state = {
     },
   },
   evaluationStatus: "EVALUATED",
+  opportunityView: "evaluated",
+  scrapedSort: {
+    key: "observedAt",
+    direction: "desc",
+  },
+  scrapedMarketStateBusy: false,
+  scrapedMarketStateLoaded: false,
   evaluationProbabilityFilter: 0,
   evaluationDaysFilter: null,
   eligibilityThreshold: null,
@@ -144,6 +151,8 @@ const els = {
   nextAccountSync: document.querySelector("[data-next-account-sync]"),
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
+  opportunityViewButtons: document.querySelectorAll("[data-opportunity-view]"),
+  evaluationOnlyControls: document.querySelectorAll("[data-evaluation-only]"),
   parameterModal: document.querySelector("[data-parameter-modal]"),
   parameterModalClose: document.querySelector("[data-parameter-modal-close]"),
   parameterModalConfirm: document.querySelector("[data-parameter-modal-confirm]"),
@@ -648,6 +657,28 @@ function setEvaluationStatus(status) {
   renderBotEvaluations();
 }
 
+function normalizeOpportunityView(view) {
+  return view === "scraped" ? "scraped" : "evaluated";
+}
+
+function syncOpportunityViewControls() {
+  const scraped = state.opportunityView === "scraped";
+  els.opportunityViewButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.opportunityView === state.opportunityView);
+  });
+  els.evaluationOnlyControls.forEach((element) => {
+    element.hidden = scraped;
+  });
+  if (els.evaluationProbabilityFilter) els.evaluationProbabilityFilter.closest("label")?.toggleAttribute("hidden", scraped);
+}
+
+function setOpportunityView(view) {
+  state.opportunityView = normalizeOpportunityView(view);
+  syncOpportunityViewControls();
+  renderBotEvaluations();
+  if (state.opportunityView === "scraped") ensureScrapedMarketState();
+}
+
 function activatePage(page, { replace = false, preserveSearch = false } = {}) {
   const nextPage = ["settings", "opportunities", "portfolios"].includes(page) ? page : "portfolios";
   setPage(nextPage);
@@ -656,6 +687,7 @@ function activatePage(page, { replace = false, preserveSearch = false } = {}) {
     setEvaluationStatus("EVALUATED");
     activateTab("settings-runs");
     ensureFullBotState();
+    if (state.opportunityView === "scraped") ensureScrapedMarketState();
   } else if (nextPage === "settings") {
     setSettingsSection("calculations");
     activateTab("settings-runs");
@@ -1652,7 +1684,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
   const rows = sortedTrades(trades, tableKey);
   return `
     <div class="ledger-scroll" tabindex="0" aria-label="Scrollable trade table">
-    <table class="trade-ledger-table">
+    <table class="ledger-wide-table">
       <thead>
         <tr>
           ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
@@ -2908,7 +2940,7 @@ async function ensureFullBotState(options = {}) {
     if (dashboardLoadIsStale(options)) return;
     state.botStateFull = botStateIsFull(botState);
     if (normalizeMode(state.mode) === "live") {
-      state.botState = botState;
+      state.botState = botStateWithPreservedEvaluations(botState);
       if (state.liveState) renderLiveState(state.liveState);
       return;
     }
@@ -2920,6 +2952,37 @@ async function ensureFullBotState(options = {}) {
     }
   } finally {
     state.fullBotStateBusy = false;
+  }
+}
+
+function scrapedMarketStateIsLoaded() {
+  return state.scrapedMarketStateLoaded || Array.isArray(state.botState?.marketObservations);
+}
+
+async function ensureScrapedMarketState(options = {}) {
+  if (scrapedMarketStateIsLoaded() || state.scrapedMarketStateBusy) return;
+  state.scrapedMarketStateBusy = true;
+  if (state.opportunityView === "scraped" && els.botEvaluations) {
+    els.botEvaluations.innerHTML = '<div class="empty">Loading scraped Polymarket opportunities...</div>';
+  }
+  try {
+    const scrapedState = await fetchJson("data/paper-state.json", { summary: "scraped" });
+    if (dashboardLoadIsStale(options)) return;
+    state.botState = {
+      ...state.botState,
+      ...scrapedState,
+      marketObservations: Array.isArray(scrapedState.marketObservations) ? scrapedState.marketObservations : [],
+      marketScan: scrapedState.marketScan || {},
+    };
+    state.scrapedMarketStateLoaded = true;
+    if (state.opportunityView === "scraped") renderBotEvaluations();
+  } catch (error) {
+    rememberStateFetchError("paper", error);
+    if (state.opportunityView === "scraped" && els.botEvaluations) {
+      els.botEvaluations.innerHTML = `<div class="empty">${escapeHtml(error.message || "Scraped opportunities are not available yet.")}</div>`;
+    }
+  } finally {
+    state.scrapedMarketStateBusy = false;
   }
 }
 
@@ -3708,7 +3771,17 @@ function renderPortfolioRulesCard(title, rows) {
 }
 
 function renderBotState(botState) {
-  state.botState = botState;
+  state.botState = Array.isArray(botState?.marketObservations)
+    ? botState
+    : {
+        ...botState,
+        ...(Array.isArray(state.botState?.marketObservations)
+          ? {
+              marketObservations: state.botState.marketObservations,
+              marketScan: state.botState.marketScan || {},
+            }
+          : {}),
+      };
   syncModeUi();
   renderSystemStatus(state.liveState);
   if (els.accountSummary) {
@@ -4256,7 +4329,138 @@ function updateHistoryCell(item) {
   `;
 }
 
+function scrapedObservationStatus(item) {
+  const endTime = Date.parse(item?.endDate || "");
+  if (Number.isFinite(endTime) && endTime <= Date.now()) return "END DATE PASSED";
+  return "SCRAPED";
+}
+
+function scrapedObservationStatusClass(item) {
+  return scrapedObservationStatus(item) === "SCRAPED" ? "positive" : "muted";
+}
+
+function scrapedSortValue(item, key) {
+  if (key === "observedAt") return Date.parse(item.observedAt || item.marketDataUpdatedAt || "") || 0;
+  if (key === "status") return scrapedObservationStatus(item);
+  if (key === "market") return `${item.outcome || ""} ${item.question || ""}`.toLowerCase();
+  if (key === "endDate") return Date.parse(item.endDate || "") || 0;
+  if (key === "daysLeft") return evaluationDaysLeft(item);
+  if (key === "marketProbability") return Number(item.marketProbability);
+  if (key === "liquidity") return Number(item.liquidity);
+  if (key === "volume24hr") return Number(item.volume24hr);
+  if (key === "outcomeCount") return Number(item.outcomeCount);
+  return "";
+}
+
+function sortedScrapedObservations(rows = []) {
+  const direction = state.scrapedSort.direction === "asc" ? 1 : -1;
+  const key = state.scrapedSort.key;
+  return [...rows].sort((a, b) => {
+    const aValue = scrapedSortValue(a, key);
+    const bValue = scrapedSortValue(b, key);
+    const aMissing = aValue == null || Number.isNaN(aValue);
+    const bMissing = bValue == null || Number.isNaN(bValue);
+    if (aMissing && bMissing) return 0;
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+    if (typeof aValue === "number" && typeof bValue === "number") return (aValue - bValue) * direction;
+    return String(aValue).localeCompare(String(bValue)) * direction;
+  });
+}
+
+function scrapedSortableHeader(key, label) {
+  const active = state.scrapedSort.key === key ? " active" : "";
+  const arrow = state.scrapedSort.key === key ? sortDirectionIndicator(state.scrapedSort.direction) : "";
+  return `<th><div class="th-content"><button class="sort-button${active}" type="button" data-scraped-sort="${key}">${label}${arrow}</button></div></th>`;
+}
+
+function binaryMarketProbabilityCell(item) {
+  const yes = Number(item.binaryYesMarketProbability);
+  const no = Number(item.binaryNoMarketProbability);
+  if (!Number.isFinite(yes) && !Number.isFinite(no)) return "-";
+  return `<span>Yes ${probability(yes)} / No ${probability(no)}</span>`;
+}
+
+function renderScrapedOpportunities() {
+  const observations = Array.isArray(state.botState?.marketObservations) ? state.botState.marketObservations : [];
+  const daysFilter = currentEvaluationDaysFilter();
+  const filtered = observations.filter((item) => {
+    const days = evaluationDaysLeft(item);
+    return daysFilter == null || (Number.isFinite(days) && days <= daysFilter);
+  });
+  const visible = sortedScrapedObservations(filtered).slice(0, 250);
+  const scan = state.botState?.marketScan || {};
+
+  if (els.evaluationFilterCount) {
+    els.evaluationFilterCount.textContent = daysFilter == null
+      ? `${formatInteger(filtered.length) || filtered.length} scraped markets`
+      : `${formatInteger(filtered.length) || filtered.length} scraped / days <= ${daysFilter}`;
+  }
+  if (els.evaluationSummary) {
+    const lastScan = scan.lastScanAt ? formatDate(scan.lastScanAt) : "pending";
+    els.evaluationSummary.textContent = [
+      `${formatInteger(filtered.length) || filtered.length} shown`,
+      `${formatInteger(observations.length) || observations.length} retained`,
+      scan.lastBatchCount != null ? `${formatInteger(scan.lastBatchCount)} in last batch` : null,
+      scan.lastPreferredCount != null ? `${formatInteger(scan.lastPreferredCount)} preferred outcomes` : null,
+      `last scan ${lastScan}`,
+      scan.lastScanError ? `scan error: ${scan.lastScanError}` : null,
+    ].filter(Boolean).join(" / ");
+  }
+
+  if (!observations.length) {
+    els.botEvaluations.innerHTML = '<div class="empty">No scraped Polymarket opportunities are available yet. The next market scan will add them here.</div>';
+    return;
+  }
+  if (!visible.length) {
+    els.botEvaluations.innerHTML = '<div class="empty">No scraped opportunities match the selected days-left filter.</div>';
+    return;
+  }
+
+  els.botEvaluations.innerHTML = `
+    <div class="ledger-scroll" tabindex="0" aria-label="Scrollable scraped opportunities table">
+      <table class="ledger-wide-table">
+        <thead>
+          <tr>
+            ${scrapedSortableHeader("observedAt", "Scraped")}
+            ${scrapedSortableHeader("status", "Status")}
+            ${scrapedSortableHeader("market", "Market")}
+            ${scrapedSortableHeader("endDate", "End date")}
+            ${scrapedSortableHeader("daysLeft", "Days left")}
+            ${scrapedSortableHeader("marketProbability", "Mkt prob.")}
+            <th>Yes / No</th>
+            ${scrapedSortableHeader("liquidity", "Liquidity")}
+            ${scrapedSortableHeader("volume24hr", "24h volume")}
+            ${scrapedSortableHeader("outcomeCount", "Outcomes")}
+          </tr>
+        </thead>
+        <tbody>
+          ${visible.map((item) => `
+            <tr>
+              <td data-label="Scraped">${escapeHtml(formatDate(item.observedAt || item.marketDataUpdatedAt || ""))}</td>
+              <td data-label="Status" class="${scrapedObservationStatusClass(item)}"><strong>${scrapedObservationStatus(item)}</strong></td>
+              <td data-label="Market">${marketAnchor(item)}</td>
+              <td data-label="End date">${evaluationEndDateCell(item)}</td>
+              <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
+              <td data-label="Mkt prob.">${probability(Number(item.marketProbability))}</td>
+              <td data-label="Yes / No">${binaryMarketProbabilityCell(item)}</td>
+              <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
+              <td data-label="24h volume">${money(Number(item.volume24hr || 0))}</td>
+              <td data-label="Outcomes">${formatInteger(Number(item.outcomeCount || 0)) || "-"}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function renderBotEvaluations() {
+  syncOpportunityViewControls();
+  if (state.opportunityView === "scraped") {
+    renderScrapedOpportunities();
+    return;
+  }
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
   const evaluatedCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "EVALUATED").length;
   const resolvedCount = evaluations.filter((item) => portfolioEvaluationStatus(item) === "RESOLVED").length;
@@ -4312,7 +4516,8 @@ function renderBotEvaluations() {
   }
 
   els.botEvaluations.innerHTML = `
-    <table>
+    <div class="ledger-scroll" tabindex="0" aria-label="Scrollable evaluated opportunities table">
+    <table class="ledger-wide-table">
       <thead>
         <tr>
           ${sortableHeader("evaluatedAt", "Time")}
@@ -4359,6 +4564,7 @@ function renderBotEvaluations() {
         `).join("")}
       </tbody>
     </table>
+    </div>
   `;
 }
 
@@ -5133,6 +5339,12 @@ els.evaluationStatusButtons.forEach((button) => {
   });
 });
 
+els.opportunityViewButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    setOpportunityView(button.dataset.opportunityView);
+  });
+});
+
 els.evaluationProbabilityFilter?.addEventListener("input", () => {
   const raw = Number(els.evaluationProbabilityFilter.value);
   const value = normalizeEvaluationProbabilityFilter(Number.isFinite(raw) ? raw / 100 : 0);
@@ -5267,6 +5479,18 @@ els.crossLiveRisk?.addEventListener("change", () => {
 });
 
 els.botEvaluations?.addEventListener("click", (event) => {
+  const scrapedButton = event.target.closest("[data-scraped-sort]");
+  if (scrapedButton) {
+    const key = scrapedButton.dataset.scrapedSort;
+    if (state.scrapedSort.key === key) {
+      state.scrapedSort.direction = state.scrapedSort.direction === "asc" ? "desc" : "asc";
+    } else {
+      state.scrapedSort.key = key;
+      state.scrapedSort.direction = ["market", "status"].includes(key) ? "asc" : "desc";
+    }
+    renderBotEvaluations();
+    return;
+  }
   const button = event.target.closest("[data-evaluation-sort]");
   if (!button) return;
   const key = button.dataset.evaluationSort;
