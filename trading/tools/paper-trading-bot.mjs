@@ -1401,7 +1401,10 @@ function binaryYesNoOutcomeIndexes(outcomes = []) {
 
 function binaryEvaluationMarketKey(item) {
   const outcome = outcomeKind(item?.outcome);
-  const isBinary = item?.binaryYesTokenId || (Number(item?.outcomeCount) === 2 && (outcome === "YES" || outcome === "NO"));
+  // Older stored evaluations do not always carry outcomeCount or the paired
+  // token IDs. A Yes/No evaluation is still a binary market and must match the
+  // fresh Gamma snapshot by slug so its current Polymarket probability is kept.
+  const isBinary = item?.binaryYesTokenId || outcome === "YES" || outcome === "NO" || Number(item?.outcomeCount) === 2;
   if (!isBinary) return "";
   const slug = String(item?.slug || item?.eventSlug || "").trim().toLowerCase();
   const question = String(item?.question || "").trim().toLowerCase();
@@ -4181,7 +4184,10 @@ async function refreshMarketObservations(state) {
 function snapshotMatchesEvaluation(snapshot, evaluation) {
   if (!snapshot || !evaluation) return false;
   if (snapshot.marketKey.startsWith("binary:")) {
-    return binaryEvaluationMarketKey(evaluation) === snapshot.marketKey;
+    if (binaryEvaluationMarketKey(evaluation) === snapshot.marketKey) return true;
+    // Keep compatibility with evaluations written before binary metadata was
+    // persisted. Slugs identify the same binary contract across both sources.
+    return String(snapshot.slug || "").trim().toLowerCase() === String(evaluation.slug || "").trim().toLowerCase();
   }
   return String(snapshot.tokenId || "") === String(evaluation.tokenId || "");
 }

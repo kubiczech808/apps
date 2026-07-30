@@ -3001,7 +3001,9 @@ async function ensureFullBotState(options = {}) {
 }
 
 function scrapedMarketStateIsLoaded() {
-  return state.scrapedMarketStateLoaded || Array.isArray(state.botState?.marketObservations);
+  // The compact dashboard response deliberately omits raw observations. An empty
+  // array must not be treated as a successfully loaded scraped-market dataset.
+  return state.scrapedMarketStateLoaded;
 }
 
 async function ensureScrapedMarketState(options = {}) {
