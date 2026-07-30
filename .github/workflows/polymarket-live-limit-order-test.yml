@@ -64,6 +64,16 @@ on:
         required: false
         default: "false"
         type: string
+      live_execution_candidate_token_ids:
+        description: Ordered token IDs from the browser's current live execution shortlist
+        required: false
+        default: ""
+        type: string
+      live_execution_probability_source:
+        description: Probability source used to prepare the browser's shortlist
+        required: false
+        default: ""
+        type: string
   schedule:
     # GitHub Actions schedules can be delayed or dropped. Poll every ten minutes
     # away from the top of the hour; the executor itself keeps the configured
@@ -96,6 +106,8 @@ jobs:
       LIVE_ONE_TRADE_PER_DAY: "true"
       LIVE_TRADE_CADENCE_HOURS: ${{ github.event.inputs.live_trade_cadence_hours || '24' }}
       LIVE_IGNORE_TRADE_CADENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_ignore_trade_cadence == 'true' && 'true' || 'false' }}
+      LIVE_EXECUTION_CANDIDATE_TOKEN_IDS: ${{ github.event.inputs.live_execution_candidate_token_ids || '' }}
+      LIVE_EXECUTION_SHORTLIST_PROBABILITY_SOURCE: ${{ github.event.inputs.live_execution_probability_source || '' }}
       LIVE_SCHEDULED_CADENCE_POLL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.live_ignore_trade_cadence != 'true')) && 'true' || 'false' }}
       USE_LIMIT_ORDERS: ${{ github.event.inputs.live_use_limit_orders || 'true' }}
       LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION: ${{ github.event.inputs.cross_live_portfolio_risk_diversification || 'true' }}
@@ -343,7 +355,9 @@ jobs:
           PY
 
       - name: Send redeem alert emails
+        id: redeem_alerts
         if: always()
+        continue-on-error: true
         run: |
           python3 - <<'PY'
           import json
@@ -361,3 +375,8 @@ jobs:
           if not payload.get("ok") or int(payload.get("failedCount") or 0) > 0:
               sys.exit("Redeem alert email sending failed")
           PY
+
+      - name: Report redeem alert warning
+        if: always() && steps.redeem_alerts.outcome == 'failure'
+        run: |
+          echo "::warning::Redeem alert delivery failed after the trading decision. The order result and account synchronization were not affected."

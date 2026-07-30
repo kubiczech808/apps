@@ -986,6 +986,44 @@ function github_json_request(string $url): array
     return $decoded;
 }
 
+function workflow_failure_detail(array $run, array $config): ?string
+{
+    $runId = (int) ($run['id'] ?? 0);
+    $conclusion = strtolower((string) ($run['conclusion'] ?? ''));
+    if ($runId <= 0 || $conclusion === '' || $conclusion === 'success') {
+        return null;
+    }
+
+    $url = sprintf(
+        'https://api.github.com/repos/%s/actions/runs/%d/jobs?per_page=100',
+        rawurlencode($config['repo']),
+        $runId
+    );
+    $url = str_replace('%2F', '/', $url);
+    try {
+        $payload = github_json_request($url);
+    } catch (Throwable $e) {
+        return null;
+    }
+
+    foreach (($payload['jobs'] ?? []) as $job) {
+        if (!is_array($job) || strtolower((string) ($job['conclusion'] ?? '')) === 'success') {
+            continue;
+        }
+        $jobName = trim((string) ($job['name'] ?? 'GitHub Actions job'));
+        foreach (($job['steps'] ?? []) as $step) {
+            if (!is_array($step) || strtolower((string) ($step['conclusion'] ?? '')) === 'success') {
+                continue;
+            }
+            $stepName = trim((string) ($step['name'] ?? 'unnamed step'));
+            $stepConclusion = trim((string) ($step['conclusion'] ?? 'failed'));
+            return "{$jobName}: {$stepName} ({$stepConclusion})";
+        }
+        return $jobName . ' (' . (string) ($job['conclusion'] ?? 'failed') . ')';
+    }
+    return null;
+}
+
 function workflow_status_payload(string $target): array
 {
     $config = app_config();
@@ -1015,6 +1053,7 @@ function workflow_status_payload(string $target): array
     $payload = github_json_request($url);
     $since = strtotime((string) ($_GET['since'] ?? '')) ?: 0;
     $runs = [];
+    $rawRunsById = [];
     foreach (($payload['workflow_runs'] ?? []) as $run) {
         if (!is_array($run)) {
             continue;
@@ -1023,6 +1062,7 @@ function workflow_status_payload(string $target): array
         if ($since > 0 && $created > 0 && $created + 120 < $since) {
             continue;
         }
+        $rawRunsById[(string) ($run['id'] ?? '')] = $run;
         $runs[] = [
             'id' => $run['id'] ?? null,
             'name' => $run['name'] ?? '',
@@ -1033,6 +1073,10 @@ function workflow_status_payload(string $target): array
             'updatedAt' => $run['updated_at'] ?? null,
             'htmlUrl' => $run['html_url'] ?? null,
         ];
+    }
+
+    if (isset($runs[0]) && is_array($runs[0])) {
+        $runs[0]['failureDetail'] = workflow_failure_detail($rawRunsById[(string) ($runs[0]['id'] ?? '')] ?? [], $config);
     }
 
     return [
@@ -1154,6 +1198,35 @@ function normalized_selection_order_input($value): ?string
     return $value === 'highest_reward_risk_first' ? 'highest_reward_risk_first' : 'highest_ev_pa_first';
 }
 
+function normalized_probability_source_input($value): ?string
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    $source = strtolower(trim((string) $value));
+    return in_array($source, ['ai', 'polymarket'], true) ? $source : null;
+}
+
+function normalized_live_shortlist_token_ids_input($value): ?string
+{
+    if (!is_string($value) && !is_numeric($value)) {
+        return null;
+    }
+    $tokens = preg_split('/[\s,]+/', trim((string) $value)) ?: [];
+    $unique = [];
+    foreach ($tokens as $token) {
+        $token = trim($token);
+        if ($token === '' || !preg_match('/^[0-9]{8,100}$/', $token) || isset($unique[$token])) {
+            continue;
+        }
+        $unique[$token] = true;
+        if (count($unique) >= 120) {
+            break;
+        }
+    }
+    return $unique === [] ? null : implode(',', array_keys($unique));
+}
+
 function normalized_paper_strategy_input($value): ?string
 {
     if ($value === null || $value === '') {
@@ -1249,6 +1322,8 @@ try {
         $liveTradeCadenceHours = normalized_cadence_hours_input($payload['tradeCadenceHours'] ?? $payload['live_trade_cadence_hours'] ?? null);
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
+        $liveShortlistTokenIds = normalized_live_shortlist_token_ids_input($payload['live_execution_candidate_token_ids'] ?? null);
+        $liveShortlistProbabilitySource = normalized_probability_source_input($payload['live_execution_probability_source'] ?? null);
         $manualRunOnce = normalized_bool_input($payload['manual_run_once'] ?? $payload['manualRunOnce'] ?? null);
         $evaluationTokenId = preg_replace('/[^0-9]/', '', (string) ($payload['evaluation_token_id'] ?? $payload['evaluationTokenId'] ?? ''));
         $evaluationMarketSlug = preg_replace('/[^A-Za-z0-9_-]/', '', (string) ($payload['evaluation_market_slug'] ?? $payload['evaluationMarketSlug'] ?? ''));
@@ -1291,6 +1366,8 @@ try {
                     'live_use_limit_orders' => $liveUseLimitOrders,
                     'cross_live_portfolio_risk_diversification' => $crossLiveRiskDiversification,
                     'live_ignore_trade_cadence' => 'true',
+                    'live_execution_candidate_token_ids' => $liveShortlistTokenIds,
+                    'live_execution_probability_source' => $liveShortlistProbabilitySource,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
             ],

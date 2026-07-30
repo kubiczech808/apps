@@ -25,6 +25,13 @@ const OPPORTUNITY_MIN_ANNUAL_RETURN = envNumber("LIVE_OPPORTUNITY_MIN_ANNUAL_RET
 const MAX_SPREAD = envNumber("LIVE_MAX_SPREAD", envNumber("PAPER_MAX_SPREAD", 0.08));
 const MIN_VOLUME_24H = envNumber("LIVE_CONFIG_MIN_LIQUIDITY_USDC", envNumber("LIVE_MIN_VOLUME_24H", envNumber("PAPER_MIN_VOLUME_24H", 100)));
 const MIN_NET_YIELD = Math.max(0, envNumber("LIVE_MIN_NET_YIELD", 0));
+const MANUAL_SHORTLIST_TOKEN_IDS = [...new Set(String(process.env.LIVE_EXECUTION_CANDIDATE_TOKEN_IDS || "")
+  .split(",")
+  .map((tokenId) => tokenId.trim())
+  .filter((tokenId) => /^\d{8,100}$/.test(tokenId)))]
+  .slice(0, 120);
+const MANUAL_SHORTLIST_PROBABILITY_SOURCE = String(process.env.LIVE_EXECUTION_SHORTLIST_PROBABILITY_SOURCE || "").trim().toLowerCase();
+const HAS_MANUAL_SHORTLIST = MANUAL_SHORTLIST_TOKEN_IDS.length > 0;
 const MAX_ORDER_FRACTION = envNumber("MAX_ORDER_FRACTION", envNumber("LIVE_MAX_ORDER_FRACTION", 0.05));
 const MAX_ORDER_NOTIONAL_USDC = envNumber("MAX_ORDER_NOTIONAL_USDC", envNumber("LIVE_MAX_ORDER_NOTIONAL_USDC", Infinity));
 const CANDIDATE_SCAN_LIMIT = envNumber("LIVE_CANDIDATE_SCAN_LIMIT", 120);
@@ -603,8 +610,19 @@ function prepareLiveCandidatePool(evaluations = []) {
   }
 
   const ranked = sortLivePrefilterCandidates(prefilterPassed);
-  const selected = ranked.slice(0, Math.max(0, CANDIDATE_SCAN_LIMIT));
-  const skippedByLimit = ranked.slice(Math.max(0, CANDIDATE_SCAN_LIMIT));
+  const rankedByToken = new Map(ranked.map((item) => [String(item.tokenId || ""), item]));
+  const requestedShortlist = HAS_MANUAL_SHORTLIST
+    ? MANUAL_SHORTLIST_TOKEN_IDS.map((tokenId) => rankedByToken.get(tokenId)).filter(Boolean)
+    : [];
+  const missingManualShortlistTokenIds = HAS_MANUAL_SHORTLIST
+    ? MANUAL_SHORTLIST_TOKEN_IDS.filter((tokenId) => !rankedByToken.has(tokenId))
+    : [];
+  const selected = HAS_MANUAL_SHORTLIST
+    ? requestedShortlist
+    : ranked.slice(0, Math.max(0, CANDIDATE_SCAN_LIMIT));
+  const skippedByLimit = HAS_MANUAL_SHORTLIST
+    ? []
+    : ranked.slice(Math.max(0, CANDIDATE_SCAN_LIMIT));
   if (skippedByLimit.length) {
     incrementReason(reasonCounts, `outside live revalidation scan limit after short-expiry ranking (${CANDIDATE_SCAN_LIMIT})`);
   }
@@ -620,10 +638,14 @@ function prepareLiveCandidatePool(evaluations = []) {
       scanLimit: CANDIDATE_SCAN_LIMIT,
       skippedByScanLimit: skippedByLimit.length,
       prefilterRejected: prefilterRejectedCount,
+      manualShortlist: HAS_MANUAL_SHORTLIST,
+      manualShortlistTokenCount: MANUAL_SHORTLIST_TOKEN_IDS.length,
+      manualShortlistMatched: requestedShortlist.length,
+      manualShortlistMissingTokenIds: missingManualShortlistTokenIds,
       reasonCounts,
       rejectedSample: [],
       skippedByLimitSample: [],
-      executionShortlist: selected.slice(0, Math.min(20, CANDIDATE_SCAN_LIMIT)).map(liveBatchCandidateSummary),
+      executionShortlist: selected.slice(0, Math.min(20, HAS_MANUAL_SHORTLIST ? MANUAL_SHORTLIST_TOKEN_IDS.length : CANDIDATE_SCAN_LIMIT)).map(liveBatchCandidateSummary),
     },
   };
 }
@@ -1746,6 +1768,9 @@ async function main() {
     return;
   }
   const paperState = await loadJsonResource(PAPER_STATE_URL, "paper state");
+  if (HAS_MANUAL_SHORTLIST && MANUAL_SHORTLIST_PROBABILITY_SOURCE && MANUAL_SHORTLIST_PROBABILITY_SOURCE !== PROBABILITY_SOURCE) {
+    throw new Error(`manual execution shortlist uses ${MANUAL_SHORTLIST_PROBABILITY_SOURCE} probability, but the live portfolio is configured for ${PROBABILITY_SOURCE} probability`);
+  }
   const cash = liveCashUsdc(liveState);
   const tradingConfig = liveTradingConfig(liveState);
   const portfolioValue = livePortfolioValue(liveState, cash);
@@ -1794,7 +1819,9 @@ async function main() {
       funderAddress: tradingConfig.funderAddress,
       signatureType: tradingConfig.signatureType,
     }));
-  const eligible = sortLiveEligibleCandidates(allEligible);
+  const eligible = HAS_MANUAL_SHORTLIST
+    ? allEligible
+    : sortLiveEligibleCandidates(allEligible);
   const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
   const riskBlockedCandidates = checked.filter((item) => (item.rejectReasons || [])
     .some((reason) => /^(correlated live exposure|duplicate token already open)/i.test(String(reason || ""))));

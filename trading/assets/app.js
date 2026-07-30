@@ -3393,11 +3393,18 @@ function paperThresholdPayload() {
 }
 
 function liveWorkflowPayload() {
+  const config = portfolioConfigForMode("live");
+  const shortlistTokenIds = portfolioCandidateRows("live")
+    .map((item) => String(item?.tokenId || item?.clobTokenId || item?.assetId || ""))
+    .filter((tokenId) => /^\d{8,100}$/.test(tokenId))
+    .slice(0, 120);
   return {
-    ...portfolioConfigForMode("live"),
-    min_probability: currentEligibilityThreshold(),
-    max_order_fraction: currentRiskAllocation(),
-    use_limit_orders: currentLimitOrders(),
+    ...config,
+    min_probability: config.minProbability,
+    max_order_fraction: config.maxOrderFraction,
+    use_limit_orders: config.useLimitOrders,
+    live_execution_candidate_token_ids: shortlistTokenIds.join(","),
+    live_execution_probability_source: normalizeProbabilitySource(config.probabilitySource),
     cross_live_portfolio_risk_diversification: systemConfig().crossLivePortfolioRiskDiversification !== false,
   };
 }
@@ -3446,6 +3453,9 @@ async function triggerOneTimeExecution(target) {
 
   try {
     await savePortfolioConfigNow();
+    if (live && !liveWorkflowPayload().live_execution_candidate_token_ids) {
+      throw new Error("No current live execution candidates are available. Refresh the shortlist before starting a live order run.");
+    }
     const response = await fetch(appPath("api.php?action=workflow"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3472,15 +3482,18 @@ async function triggerOneTimeExecution(target) {
       : "The evaluation engine scans markets, prioritizes new opportunities, updates known evaluations, and may open one paper trade.", "active");
     const workflow = await waitForWorkflowRun(target, startedAt, steps);
     steps = workflow.steps;
-    if (workflow.run?.conclusion && workflow.run.conclusion !== "success") {
-      steps = addExecutionStep(steps, "Workflow finished with warning", `Conclusion: ${workflow.run.conclusion}`, "error");
-      setExecutionStatus(`${target} workflow ${workflow.run.conclusion}`, "error");
-      return;
-    }
     const result = await waitForExecutionResult(target, startedAt, steps, { paperStrategyId });
     steps = result.steps;
+    if (workflow.run?.conclusion && workflow.run.conclusion !== "success") {
+      const actualResult = live ? "The recorded live trading result is shown above; a post-trade maintenance step failed after it." : "The recorded paper decision is shown above.";
+      const failureDetail = workflow.run.failureDetail ? ` Failed step: ${workflow.run.failureDetail}.` : "";
+      steps = addExecutionStep(steps, "Workflow finished with warning", `Conclusion: ${workflow.run.conclusion}.${failureDetail} ${actualResult}`, "error");
+      setExecutionStatus(`${target} workflow ${workflow.run.conclusion}`, "error");
+    }
     steps = addExecutionStep(steps, "Dashboard refreshed", "Open positions and limit orders are shown in the tables below.", "done");
-    setExecutionStatus(`${target} workflow completed`);
+    if (!workflow.run?.conclusion || workflow.run.conclusion === "success") {
+      setExecutionStatus(`${target} workflow completed`);
+    }
     await loadDashboardState();
   } catch (error) {
     steps = addExecutionStep(steps, "Execution failed", error.message || "workflow failed", "error");
