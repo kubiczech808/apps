@@ -340,6 +340,7 @@ function defaultPortfolioConfig() {
         tradeCadenceHours: 1,
         requireMostProbableOutcome: false,
         probabilitySource: "ai",
+        excludedCandidateTokenIds: [],
       },
       highReward: {
         minProbability: 0.6,
@@ -351,6 +352,7 @@ function defaultPortfolioConfig() {
         tradeCadenceHours: 1,
         requireMostProbableOutcome: false,
         probabilitySource: "ai",
+        excludedCandidateTokenIds: [],
       },
       moreProbable: {
         minProbability: 0.6,
@@ -362,6 +364,7 @@ function defaultPortfolioConfig() {
         tradeCadenceHours: 1,
         requireMostProbableOutcome: true,
         probabilitySource: "ai",
+        excludedCandidateTokenIds: [],
       },
     },
     live: {
@@ -375,6 +378,7 @@ function defaultPortfolioConfig() {
       useLimitOrders: true,
       requireMostProbableOutcome: false,
       probabilitySource: "ai",
+      excludedCandidateTokenIds: [],
     },
     system: {
       crossLivePortfolioRiskDiversification: true,
@@ -495,6 +499,37 @@ function updatePortfolioConfigForMode(mode, updates) {
       },
     },
   };
+}
+
+function normalizedExcludedCandidateTokenIds(value) {
+  const tokens = Array.isArray(value) ? value : [];
+  return [...new Set(tokens
+    .map((token) => String(token || "").trim())
+    .filter((token) => /^\d{8,100}$/.test(token)))]
+    .slice(0, 500);
+}
+
+function excludedCandidateTokenIdsForMode(mode = state.mode) {
+  return normalizedExcludedCandidateTokenIds(portfolioConfigForMode(mode).excludedCandidateTokenIds);
+}
+
+async function setPortfolioCandidateExcluded(mode, tokenId, excluded) {
+  const normalizedTokenId = String(tokenId || "").trim();
+  if (!/^\d{8,100}$/.test(normalizedTokenId)) return;
+  const previous = excludedCandidateTokenIdsForMode(mode);
+  const next = excluded
+    ? [...new Set([...previous, normalizedTokenId])]
+    : previous.filter((value) => value !== normalizedTokenId);
+  updatePortfolioConfigForMode(mode, { excludedCandidateTokenIds: next });
+  renderPortfolioCandidates();
+  try {
+    await savePortfolioConfigNow();
+    setExecutionStatus(excluded ? "candidate excluded from this portfolio" : "candidate restored to this portfolio shortlist");
+  } catch (error) {
+    updatePortfolioConfigForMode(mode, { excludedCandidateTokenIds: previous });
+    renderPortfolioCandidates();
+    setExecutionStatus(error.message || "candidate exclusion could not be saved", "error");
+  }
 }
 
 function storedLiveExecutionArmed() {
@@ -3988,11 +4023,18 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
   const evaluations = latestUniquePortfolioEvaluations(usesPolymarketProbability ? scrapedObservations : baseEvaluations);
   const evaluationByToken = new Map(evaluations.map((item) => [String(item.tokenId || ""), item]).filter(([token]) => token));
   const activeRows = activeExposureRowsForMode(mode);
+  const manuallyExcludedTokenIds = new Set(excludedCandidateTokenIdsForMode(mode));
   const ready = [];
   const riskBlocked = [];
+  const manuallyExcluded = [];
   const filteredReasonCounts = new Map();
 
   for (const item of evaluations) {
+    const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
+    if (tokenId && manuallyExcludedTokenIds.has(tokenId)) {
+      manuallyExcluded.push({ ...item, manuallyExcluded: true });
+      continue;
+    }
     const reasons = portfolioCandidateFilterReasons(item, mode);
     if (reasons.length) {
       for (const reason of reasons) {
@@ -4013,6 +4055,7 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
   return {
     ready: sortPortfolioCandidates(ready, mode),
     riskBlocked: sortPortfolioCandidates(riskBlocked, mode),
+    manuallyExcluded: sortPortfolioCandidates(manuallyExcluded, mode),
     filteredReasonCounts,
   };
 }
@@ -4022,7 +4065,9 @@ function portfolioCandidateRows(mode = state.mode) {
 }
 
 function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics = null) {
-  if (!rows.length) {
+  const manuallyExcluded = diagnostics?.manuallyExcluded || [];
+  const visibleRows = [...rows, ...manuallyExcluded];
+  if (!visibleRows.length) {
     const config = portfolioConfigForMode(mode);
     const riskBlocked = diagnostics?.riskBlocked?.length || 0;
     const probabilitySource = normalizeProbabilitySource(config.probabilitySource);
@@ -4063,21 +4108,28 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
         </tr>
       </thead>
       <tbody>
-        ${rows.slice(0, 80).map((item, index) => {
-          const status = !live
+        ${visibleRows.slice(0, 80).map((item, index) => {
+          const excluded = Boolean(item.manuallyExcluded);
+          const status = excluded
+            ? "excluded manually for this portfolio"
+            : (!live
             ? "ready for next paper execution"
             : (usesPolymarketPotential
               ? "will verify live quote, fees and ranking"
-              : "will verify live quote against stored AI assessment");
+              : "will verify live quote against stored AI assessment"));
           const selectedProbability = portfolioProbability(item, config);
           const selectedAnnualizedReturn = portfolioAnnualizedReturn(item, config);
           const selectedExpectedValue = portfolioExpectedValue(item, config);
           return `
             <tr>
               <td data-label="#">${index + 1}</td>
-              <td data-label="Precheck" class="positive">
-                <strong>READY</strong>
+              <td data-label="Precheck" class="${excluded ? "negative" : "positive"}">
+                <strong>${excluded ? "EXCLUDED" : "READY"}</strong>
                 <span>${escapeHtml(status)}</span>
+                <label class="candidate-exclusion-control" title="Exclude this candidate from this portfolio's future executions">
+                  <input type="checkbox" data-portfolio-candidate-exclude data-portfolio-mode="${escapeHtml(mode)}" data-candidate-token-id="${escapeHtml(String(item.tokenId || item.clobTokenId || item.assetId || ""))}" ${excluded ? "checked" : ""}>
+                  <span>Exclude</span>
+                </label>
               </td>
               <td data-label="Market">${marketAnchor(item)}</td>
               <td data-label="End date">${evaluationEndDateCell(item)}</td>
@@ -4128,7 +4180,8 @@ function renderPortfolioCandidates() {
   if (els.portfolioCandidatesTitle) els.portfolioCandidatesTitle.textContent = `${label} execution candidates`;
   if (els.portfolioCandidatesSummary) {
     const blocked = diagnostics.riskBlocked.length;
-    els.portfolioCandidatesSummary.textContent = `${rows.length} ready${blocked ? ` / ${blocked} risk-blocked` : ""}`;
+    const excluded = diagnostics.manuallyExcluded.length;
+    els.portfolioCandidatesSummary.textContent = `${rows.length} ready${blocked ? ` / ${blocked} risk-blocked` : ""}${excluded ? ` / ${excluded} excluded` : ""}`;
   }
   els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode, diagnostics);
 }
@@ -6063,6 +6116,16 @@ els.botEvaluations?.addEventListener("click", (event) => {
     state.evaluationSort.direction = ["marketPrice", "odds", "gainIfWin", "netYield", "aiProbability", "potentialAnnualizedReturn"].includes(key) ? "desc" : "asc";
   }
   renderBotEvaluations();
+});
+
+document.addEventListener("change", (event) => {
+  const exclusion = event.target.closest("[data-portfolio-candidate-exclude]");
+  if (!exclusion) return;
+  setPortfolioCandidateExcluded(
+    exclusion.dataset.portfolioMode || state.mode,
+    exclusion.dataset.candidateTokenId || "",
+    Boolean(exclusion.checked),
+  );
 });
 
 document.addEventListener("click", (event) => {

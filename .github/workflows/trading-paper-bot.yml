@@ -274,6 +274,8 @@ jobs:
               emit(f"{prefix}_TRADE_CADENCE_HOURS", row.get("tradeCadenceHours"))
               emit(f"{prefix}_REQUIRE_MOST_PROBABLE", str(bool(row.get("requireMostProbableOutcome"))).lower())
               emit(f"{prefix}_PROBABILITY_SOURCE", row.get("probabilitySource"))
+              excluded_tokens = [str(token) for token in (row.get("excludedCandidateTokenIds") or []) if str(token).isdigit()]
+              emit(f"{prefix}_EXCLUDED_CANDIDATE_TOKEN_IDS", ",".join(excluded_tokens))
           emit("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", live.get("maxResolutionDays"))
           PY
 

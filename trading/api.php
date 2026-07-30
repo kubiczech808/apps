@@ -339,6 +339,7 @@ function default_portfolio_config(): array
                 'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
+                'excludedCandidateTokenIds' => [],
             ],
             'highReward' => [
                 'minProbability' => 0.6,
@@ -350,6 +351,7 @@ function default_portfolio_config(): array
                 'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
+                'excludedCandidateTokenIds' => [],
             ],
             'moreProbable' => [
                 'minProbability' => 0.6,
@@ -361,6 +363,7 @@ function default_portfolio_config(): array
                 'tradeCadenceHours' => 1,
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
+                'excludedCandidateTokenIds' => [],
             ],
         ],
         'live' => [
@@ -374,6 +377,7 @@ function default_portfolio_config(): array
             'useLimitOrders' => true,
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'ai',
+            'excludedCandidateTokenIds' => [],
         ],
         'system' => [
             'crossLivePortfolioRiskDiversification' => true,
@@ -467,6 +471,25 @@ function normalize_probability_source_value(mixed $value): string
     return $value === 'polymarket' ? 'polymarket' : 'ai';
 }
 
+function normalize_excluded_candidate_token_ids(mixed $value): array
+{
+    if (!is_array($value)) {
+        return [];
+    }
+    $tokens = [];
+    foreach ($value as $candidate) {
+        $token = trim((string) $candidate);
+        if (!preg_match('/^\d{8,100}$/', $token) || isset($tokens[$token])) {
+            continue;
+        }
+        $tokens[$token] = true;
+        if (count($tokens) >= 500) {
+            break;
+        }
+    }
+    return array_keys($tokens);
+}
+
 function normalize_strategy_config(array $input, array $defaults): array
 {
     return [
@@ -479,6 +502,7 @@ function normalize_strategy_config(array $input, array $defaults): array
         'tradeCadenceHours' => normalize_cadence_hours_value($input['tradeCadenceHours'] ?? null, (int) $defaults['tradeCadenceHours']),
         'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
         'probabilitySource' => normalize_probability_source_value($input['probabilitySource'] ?? $defaults['probabilitySource']),
+        'excludedCandidateTokenIds' => normalize_excluded_candidate_token_ids($input['excludedCandidateTokenIds'] ?? $defaults['excludedCandidateTokenIds'] ?? []),
     ];
 }
 

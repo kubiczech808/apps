@@ -797,6 +797,30 @@ button:disabled {
   margin-top: 0;
 }
 
+.candidate-exclusion-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.candidate-exclusion-control input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--danger);
+  cursor: pointer;
+}
+
+.ledger td .candidate-exclusion-control span {
+  display: inline;
+  margin: 0;
+}
+
 .market-link {
   display: block;
   color: inherit;

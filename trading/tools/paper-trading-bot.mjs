@@ -24,6 +24,13 @@ function envProbabilitySource(name, fallback = "ai") {
   return process.env[name] === "polymarket" ? "polymarket" : fallback;
 }
 
+function envTokenIdSet(name) {
+  return new Set(String(process.env[name] || "")
+    .split(",")
+    .map((tokenId) => tokenId.trim())
+    .filter((tokenId) => /^\d{8,100}$/.test(tokenId)));
+}
+
 const OUTPUT_PATH = process.env.PAPER_STATE_PATH || "data/paper-state.json";
 const REMOTE_STATE_URL = process.env.PAPER_STATE_URL || "";
 const PORTFOLIO_USDC = envNumber("PAPER_PORTFOLIO_USDC", 100);
@@ -100,6 +107,7 @@ const PAPER_STRATEGIES = {
     tradeCadenceHours: envNumber("PAPER_CONSERVATIVE_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
+    excludedCandidateTokenIds: envTokenIdSet("PAPER_CONSERVATIVE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
     selectionOrder: envSelectionOrder("PAPER_CONSERVATIVE_SELECTION_ORDER", "highest_ev_pa_first"),
     description: `Requires the configured probability source to meet ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then selects the highest EV p.a.`,
   },
@@ -115,6 +123,7 @@ const PAPER_STRATEGIES = {
     tradeCadenceHours: envNumber("PAPER_HIGH_REWARD_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
+    excludedCandidateTokenIds: envTokenIdSet("PAPER_HIGH_REWARD_EXCLUDED_CANDIDATE_TOKEN_IDS"),
     selectionOrder: envSelectionOrder("PAPER_HIGH_REWARD_SELECTION_ORDER", "highest_reward_risk_first"),
     description: `Requires the configured probability source to meet ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then prioritizes eligible opportunities by highest reward against risk.`,
   },
@@ -130,6 +139,7 @@ const PAPER_STRATEGIES = {
     tradeCadenceHours: envNumber("PAPER_MORE_PROBABLE_TRADE_CADENCE_HOURS", 1),
     requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
+    excludedCandidateTokenIds: envTokenIdSet("PAPER_MORE_PROBABLE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
     selectionOrder: envSelectionOrder("PAPER_MORE_PROBABLE_SELECTION_ORDER", "highest_reward_risk_first"),
     description: `Requires the configured probability source to meet ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, deep liquidity, and multichoice-style event markets.`,
   },
@@ -3057,6 +3067,8 @@ function latestNewTrade(portfolioState = {}) {
 function strategyEligibleCandidates(eligible, strategy) {
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
   let rows = [...eligible].filter((item) => {
+    const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
+    if (strategy.excludedCandidateTokenIds?.has(tokenId)) return false;
     const minProbability = Number(strategy.minProbability);
     const selectedProbability = Number(strategy.probabilitySource === "polymarket" ? (item.marketProbability ?? item.marketPrice) : item.aiProbability);
     if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) return false;
@@ -3101,6 +3113,7 @@ function portfolioEconomics(item, strategy = PAPER_STRATEGIES.conservative) {
 
 function portfolioFilterResult(item, strategy) {
   const reasons = [];
+  const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
   const status = String(item.status || "").toUpperCase();
   const minProbability = Number(strategy.minProbability);
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
@@ -3115,6 +3128,7 @@ function portfolioFilterResult(item, strategy) {
   const annualizedReturn = economics.annualizedReturn;
   const returnMetric = probabilitySource === "polymarket" ? "Potential p.a." : "EV p.a.";
 
+  if (strategy.excludedCandidateTokenIds?.has(tokenId)) reasons.push("manually excluded from this paper portfolio");
   if (probabilitySource === "ai" && status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
   if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
     reasons.push(`base status ${status || "UNKNOWN"} is not executable`);

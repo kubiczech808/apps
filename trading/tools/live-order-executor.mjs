@@ -10,6 +10,13 @@ function envNumber(name, fallback = null) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function envTokenIdSet(name) {
+  return new Set(String(process.env[name] || "")
+    .split(",")
+    .map((tokenId) => tokenId.trim())
+    .filter((tokenId) => /^\d{8,100}$/.test(tokenId)));
+}
+
 const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper";
 const PAPER_SCRAPED_STATE_URL = process.env.PAPER_SCRAPED_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=scraped";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
@@ -34,6 +41,7 @@ const MANUAL_SHORTLIST_TOKEN_IDS = [...new Set(String(process.env.LIVE_EXECUTION
   .slice(0, 120);
 const MANUAL_SHORTLIST_PROBABILITY_SOURCE = String(process.env.LIVE_EXECUTION_SHORTLIST_PROBABILITY_SOURCE || "").trim().toLowerCase();
 const HAS_MANUAL_SHORTLIST = MANUAL_SHORTLIST_TOKEN_IDS.length > 0;
+const EXCLUDED_CANDIDATE_TOKEN_IDS = envTokenIdSet("LIVE_EXCLUDED_CANDIDATE_TOKEN_IDS");
 const MAX_ORDER_FRACTION = envNumber("MAX_ORDER_FRACTION", envNumber("LIVE_MAX_ORDER_FRACTION", 0.05));
 const MAX_ORDER_NOTIONAL_USDC = envNumber("MAX_ORDER_NOTIONAL_USDC", envNumber("LIVE_MAX_ORDER_NOTIONAL_USDC", Infinity));
 const CANDIDATE_SCAN_LIMIT = envNumber("LIVE_CANDIDATE_SCAN_LIMIT", 120);
@@ -518,6 +526,7 @@ function prefilterLiveCandidate(item) {
   const days = localDaysToResolution(item);
 
   if (!tokenId) reasons.push("missing token id");
+  if (EXCLUDED_CANDIDATE_TOKEN_IDS.has(tokenId)) reasons.push("manually excluded from this live portfolio");
   if (status === "ERROR") {
     reasons.push("stored status ERROR");
   } else if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
