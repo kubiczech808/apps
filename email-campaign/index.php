@@ -21,9 +21,12 @@ const AI_RESEARCH_FINALIZE_RESERVE_SECONDS = 30;
 // Prihlaseni ma vydrzet i pres noc a pres zavreny prohlizec. Hodnota je zamerne
 // vyssi nez pozadovanych 24 h, aby uzivatel neprisel o session prave na hrane.
 const APP_SESSION_LIFETIME_SECONDS = 7 * 24 * 3600;
-// GitHub planovane behy bezne zpozdi o jednotky minut. Do teto tolerance je zpozdeni
-// normalni, po ni uz jde o chybu, kterou ma smysl resit.
-const AI_RESEARCH_CRON_TOLERANCE_SECONDS = 600;
+// Garantovany vstupni bod automatiky je hodinovy workflow (Email Campaign AI Research).
+// Petiminutovy cron muze beh spustit driv, ale slibit se da jen tento interval.
+const AI_RESEARCH_GUARANTEED_INTERVAL_SECONDS = 3600;
+// GitHub planovane behy zpozduje; rozptyl do teto hodnoty je normalni provoz,
+// po ni uz jde o chybu, kterou ma smysl resit.
+const AI_RESEARCH_CRON_TOLERANCE_SECONDS = 900;
 
 final class AiResearchTemporaryException extends RuntimeException
 {
@@ -2753,14 +2756,16 @@ function runCronAiResearch(PDO $pdo, array $config): string
  * dalsi beh (kdy a jestli pujde o novy seed nebo dokonceni odlozeneho). Pri behu se
  * z nej stane radek s vysledkem a hned se naplanuje novy.
  */
+/**
+ * Termin dalsiho behu: posledni beh + garantovany hodinovy interval. Zamerne se
+ * nepocita z petiminutoveho cronu ani se nezaokrouhluje na "teted" - jinak by se cas
+ * pri kazdem tiku posunul a nikdy by nemohl propadnout, takze by nic nerikal.
+ */
 function aiResearchPlannedRunAt(array $config, array $settings): int
 {
     $nextAllowedAt = (int)($settings['ai_research_next_allowed_at'] ?? 0);
     $lastRun = (int)($settings['ai_research_last_run_at'] ?? 0);
-    $interval = aiResearchRunIntervalSeconds($config);
-    // Zamerne se nezaokrouhluje na "teted": termin je dany poslednim behem a intervalem
-    // (pripadne backoffem). Kdyz uz propadl, je to zpozdeni k reseni, ne novy termin.
-    $due = $lastRun > 0 ? $lastRun + $interval : time();
+    $due = $lastRun > 0 ? $lastRun + AI_RESEARCH_GUARANTEED_INTERVAL_SECONDS : time();
     return max($due, $nextAllowedAt);
 }
 
@@ -2770,8 +2775,7 @@ function refreshAiResearchPlannedLog(PDO $pdo, array $config, array $settings): 
         $work = aiResearchNextWork($pdo);
         // planned_at je pevny termin nejblizsiho tiku cronu, ne "za pet minut od teted".
         // Kdyz ten cas propadne a beh se nestal, je to videt jako zmeskany termin.
-        $due = aiResearchPlannedRunAt($config, $settings);
-        $plannedAt = aiResearchNextCronTickAt($due, $due);
+        $plannedAt = aiResearchPlannedRunAt($config, $settings);
         $stmt = $pdo->query('SELECT id FROM ai_research_logs WHERE status="planned" ORDER BY id DESC LIMIT 1');
         $existingId = (int)($stmt->fetchColumn() ?: 0);
         $fields = [
@@ -2799,7 +2803,8 @@ function aiResearchPlannedLogMessage(array $work, array $settings, array $config
     $nextAllowedAt = (int)($settings['ai_research_next_allowed_at'] ?? 0);
     $reason = $nextAllowedAt > time()
         ? 'Ceka se na uvolneni Gemini limitu.'
-        : 'Ceka se na interval mezi behy (' . aiResearchIntervalLabel(aiResearchRunIntervalSeconds($config)) . ').';
+        : 'Termin je posledni beh + hodina, rozptyl cronu az '
+            . (int)(AI_RESEARCH_CRON_TOLERANCE_SECONDS / 60) . ' min.';
     if (!aiResearchWorkIsFinishing($work)) {
         return 'Vybere se novy seed subjekt z Firmy.cz, protoze vsechny predchozi jsou hotove. ' . $reason;
     }
@@ -2886,31 +2891,13 @@ function aiResearchLogKindLabel(string $kind): string
 }
 
 /**
- * Kdy nejdriv tikne cron. Odpovida planum v GitHub Actions: Email Campaign Cron jede
- * kazdych 5 minut, AI research jednou v hodine v 17. minute. Bez tohoto vypoctu by
- * sloupec "Naplanovano" rikal jen "pri nejblizsim cronu" a cas by chybel.
- */
-function aiResearchNextCronTickAt(int $notBefore = 0, int $now = 0): int
-{
-    $from = max($now > 0 ? $now : time(), $notBefore);
-    // Kazdych 5 minut: nejblizsi nasobek 5 minut, ktery jeste nenastal.
-    $everyFive = (int)(ceil($from / 300) * 300);
-    // Hodinovy beh v 17. minute.
-    $hourly = mktime((int)date('H', $from), 17, 0, (int)date('n', $from), (int)date('j', $from), (int)date('Y', $from));
-    if ($hourly < $from) {
-        $hourly += 3600;
-    }
-    return min($everyFive, $hourly);
-}
-
-/**
  * Casy naplanovaneho behu: kdy ho aplikace pusti (interval, backoff) a kdy ho
  * realne nastartuje nejblizsi tik cronu.
  */
 function aiResearchLogPlannedTimes(array $log): array
 {
     $plannedAt = trim((string)($log['planned_at'] ?? ''));
-    $runAt = $plannedAt !== '' ? (int)strtotime($plannedAt) : aiResearchNextCronTickAt();
+    $runAt = $plannedAt !== '' ? (int)strtotime($plannedAt) : time() + AI_RESEARCH_GUARANTEED_INTERVAL_SECONDS;
     // GitHub planovane behy zpozduje; do teto tolerance jde zpozdeni jeste na jeho vrub,
     // po ni uz je to chyba, kterou ma smysl resit.
     $deadline = $runAt + AI_RESEARCH_CRON_TOLERANCE_SECONDS;
@@ -2932,7 +2919,7 @@ function aiResearchLogWhen(array $log): string
         $plannedAt = trim((string)($log['planned_at'] ?? ''));
         return $plannedAt !== ''
             ? formatDateTime($plannedAt)
-            : formatDateTime(date('c', aiResearchNextCronTickAt()));
+            : formatDateTime(date('c', time() + AI_RESEARCH_GUARANTEED_INTERVAL_SECONDS));
     }
     foreach (['finished_at', 'started_at', 'planned_at', 'created_at'] as $key) {
         $value = trim((string)($log[$key] ?? ''));
@@ -4834,80 +4821,137 @@ function aiResearchSourceCountry(string $source): string
  * Kdyz firma cili mimo CR, nema smysl scrapovat Firmy.cz.
  */
 /**
- * Zjisti, kolik polozek katalog pro dany dotaz vubec ma, bez toho aby se prochazel cely.
- * Exponencialni sonda najde posledni neprazdnou stranku, binarni puleni ji doladi, takze
- * misto tisicu fetchu staci radove 12-18 a odpoved je do desitek sekund. Nezavisi na
- * formatu konkretniho katalogu, jen na tom, ze stranka N vraci polozky.
+ * Zmeri velikost katalogu JEDNIM dotazem. Z prvni stranky vysledku se precte bud
+ * uvedeny celkovy pocet firem, nebo pocet stranek strankovani, a vynasobi se poctem
+ * firem na strance. Drivejsi exponencialni sonda potrebovala 12-20 dotazu na katalog,
+ * coz je pri limitu 10 dotazu za minutu neprijatelne.
  */
-function aiResearchEstimateListingPages(callable $countItemsOnPage, int $maxProbePages = 2048): array
+function aiResearchListingSizeFromFirstPage(string $source, string $keyword, string $location): array
 {
-    $fetches = 0;
-    $count = static function (int $page) use ($countItemsOnPage, &$fetches): int {
-        $fetches++;
-        return max(0, $countItemsOnPage($page));
-    };
-
-    $firstPageItems = $count(1);
-    if ($firstPageItems <= 0) {
-        return ['pages' => 0, 'items_per_page' => 0, 'items_total' => 0, 'fetches' => $fetches, 'capped' => false];
+    $empty = ['items_total' => 0, 'items_per_page' => 0, 'pages' => 0, 'fetches' => 0, 'method' => 'nedostupne'];
+    $searches = aiResearchScrapingSearchUrls($source, $keyword, $location, 1);
+    $search = $searches[0] ?? null;
+    if (!is_array($search)) {
+        return $empty;
     }
-
-    $lastGood = 1;
-    $lastGoodItems = $firstPageItems;
-    $firstEmpty = 0;
-    $probe = 2;
-    while ($probe <= $maxProbePages) {
-        $items = $count($probe);
-        if ($items <= 0) {
-            $firstEmpty = $probe;
-            break;
-        }
-        $lastGood = $probe;
-        // Musi se drzet i pocet na te strance: kdyz sonda rovnou najde posledni stranku,
-        // binarni puleni uz ji znovu nenavstivi a jinak by se dopocital plny pocet.
-        $lastGoodItems = $items;
-        $probe *= 2;
+    try {
+        $html = (string)fetchScrapingSearch($search)['html'];
+    } catch (Throwable $e) {
+        error_log('AI research listing size failed [' . $source . ']: ' . $e->getMessage());
+        return $empty;
     }
-    $capped = false;
-    if ($firstEmpty === 0) {
-        $capped = true;
-        $firstEmpty = $maxProbePages + 1;
+    $itemsOnPage = count(extractCandidateUrls($html, (string)$search['url'], $source));
+    if ($itemsOnPage <= 0) {
+        return ['items_total' => 0, 'items_per_page' => 0, 'pages' => 0, 'fetches' => 1, 'method' => 'bez vysledku'];
     }
-
-    $low = $lastGood;
-    $high = $firstEmpty;
-    while ($high - $low > 1) {
-        $mid = intdiv($low + $high, 2);
-        $items = $count($mid);
-        if ($items > 0) {
-            $low = $mid;
-            $lastGoodItems = $items;
-        } else {
-            $high = $mid;
-        }
+    // Uvedeny celkovy pocet je nejpresnejsi udaj, ktery katalog nabizi.
+    $declared = aiResearchParseListingTotal($html);
+    if ($declared > 0) {
+        return [
+            'items_total' => $declared,
+            'items_per_page' => $itemsOnPage,
+            'pages' => (int)ceil($declared / max(1, $itemsOnPage)),
+            'fetches' => 1,
+            'method' => 'pocet uvedeny v katalogu',
+        ];
     }
-
+    // Jinak se vezme posledni cislo strankovani a vynasobi poctem firem na strance.
+    $pages = aiResearchParseListingPageCount($html);
+    if ($pages > 1) {
+        return [
+            'items_total' => $pages * $itemsOnPage,
+            'items_per_page' => $itemsOnPage,
+            'pages' => $pages,
+            'fetches' => 1,
+            'method' => 'stranky x firmy na strance',
+        ];
+    }
     return [
-        'pages' => $low,
-        'items_per_page' => $firstPageItems,
-        'items_total' => $low > 1 ? ($low - 1) * $firstPageItems + $lastGoodItems : $firstPageItems,
-        'fetches' => $fetches,
-        'capped' => $capped,
+        'items_total' => $itemsOnPage,
+        'items_per_page' => $itemsOnPage,
+        'pages' => 1,
+        'fetches' => 1,
+        'method' => 'jedina stranka vysledku',
     ];
 }
 
-function aiResearchCountListingItems(string $source, string $keyword, string $location, int $page): int
+/**
+ * Celkovy pocet vysledku, jak ho katalog sam uvadi ("3 858 firem", "z 3 858",
+ * "3.858 Treffer"). Bere se nejvetsi rozumne cislo u znameho slova, aby se necetlo
+ * napr. PSC nebo telefon.
+ */
+function aiResearchParseListingTotal(string $html): int
 {
-    $total = 0;
-    foreach (aiResearchScrapingSearchUrls($source, $keyword, $location, $page) as $search) {
-        try {
-            $html = (string)fetchScrapingSearch($search)['html'];
-        } catch (Throwable $e) {
-            continue;
+    $words = 'firem|firmy|firiem|podnik(?:u|ov)|zaznamu|vysledk\w*|resultat\w*|results?|Treffer|Eintr\w*|Ergebnis\w*|wynik\w*|ofert';
+    // Cislo se skupinami tisicu musi mit po oddelovaci presne tri cislice, jinak by
+    // se dve cisla za sebou spojila do jednoho.
+    $number = '([0-9]{1,3}(?:[\s\x{00A0}.,][0-9]{3})+|[0-9]+)';
+    $patterns = [
+        // "3 858 firem", "3.858 Treffer"
+        '/' . $number . '\s*(?:' . $words . ')/ui',
+        // "z 3 858", "von 3.858", "of 3,858"
+        '/(?:\bz|\bze|\bvon|\bof|\baus)\s+' . $number . '\b/ui',
+    ];
+    // Nejdriv po jednotlivych elementech: pocet vysledku katalogy uvadeji ve vlastnim
+    // prvku, takze se cislo neslepi s cislem v nazvu sousedni firmy.
+    $chunks = preg_split('/<[^>]*>/', $html) ?: [];
+    $chunks = array_values(array_filter(array_map(
+        static function (string $chunk): string {
+            $text = html_entity_decode($chunk, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            return trim(preg_replace('/\s+/u', ' ', $text) ?? $text);
+        },
+        $chunks
+    ), static fn(string $chunk): bool => $chunk !== ''));
+    // Fallback na cely slepeny text az kdyz po elementech nic nesedi.
+    $haystacks = array_merge($chunks, [implode(' ', $chunks)]);
+
+    foreach ($patterns as $pattern) {
+        $best = 0;
+        foreach ($haystacks as $haystack) {
+            if (!preg_match_all($pattern, $haystack, $matches)) {
+                continue;
+            }
+            foreach ($matches[1] as $raw) {
+                $value = (int)preg_replace('/[^0-9]/', '', (string)$raw);
+                // Nad milion uz to nebude pocet firem, spis nejake ID nebo cena.
+                if ($value > $best && $value <= 1000000) {
+                    $best = $value;
+                }
+            }
+            if ($best > 0) {
+                // Shoda v jednom elementu je spolehlivejsi nez v slepenem textu.
+                return $best;
+            }
         }
-        $total += count(extractCandidateUrls($html, (string)$search['url'], $source));
     }
-    return $total;
+    return 0;
+}
+
+/**
+ * Nejvyssi cislo stranky ve strankovani. Cte se z odkazu (page=, strana=, /p/) i
+ * z textu odkazu, protoze kazdy katalog strankuje jinak.
+ */
+function aiResearchParseListingPageCount(string $html): int
+{
+    $pages = 0;
+    if (preg_match_all('/[?&](?:page|strana|str|p|pn|seite|strona)=([0-9]{1,5})\b/i', $html, $matches)) {
+        foreach ($matches[1] as $value) {
+            $pages = max($pages, (int)$value);
+        }
+    }
+    if (preg_match_all('#/(?:page|strana|str|seite|strona)/([0-9]{1,5})#i', $html, $matches)) {
+        foreach ($matches[1] as $value) {
+            $pages = max($pages, (int)$value);
+        }
+    }
+    // Text odkazu ve strankovani: <a ...>12</a>. Omezeno na kratke cisla, aby se
+    // nenacetla treba cena nebo pocet zamestnancu.
+    if (preg_match_all('#<a\b[^>]*>\s*([0-9]{1,4})\s*</a>#i', $html, $matches)) {
+        foreach ($matches[1] as $value) {
+            $pages = max($pages, (int)$value);
+        }
+    }
+    return $pages;
 }
 
 /**
@@ -7024,8 +7068,8 @@ function aiResearchComputeContactEstimate(PDO $pdo, int $runId, array $plan, int
             'listing' => [
                 'items_total' => (int)($entry['listing_items'] ?? 0),
                 'pages' => (int)($entry['listing_pages'] ?? 0),
-                'capped' => !empty($entry['listing_capped']),
-                'items_per_page' => (int)($entry['items_per_page'] ?? ($existing['sample_visited'] ?? 0)),
+                'items_per_page' => (int)($entry['items_per_page'] ?? 0),
+                'method' => (string)($entry['method'] ?? ''),
                 'fetches' => 0,
             ],
             'location' => (string)($entry['location'] ?? ''),
@@ -7042,24 +7086,16 @@ function aiResearchComputeContactEstimate(PDO $pdo, int $runId, array $plan, int
             continue;
         }
         $location = $source === $homeSource ? (string)($plan['target_location'] ?? '') : '';
-        $ranOutOfTime = false;
         try {
-            $listing = aiResearchEstimateListingPages(
-                static function (int $page) use ($source, $keyword, $location, $deadline, &$ranOutOfTime): int {
-                    if (time() >= $deadline) {
-                        $ranOutOfTime = true;
-                        return 0;
-                    }
-                    return aiResearchCountListingItems($source, $keyword, $location, $page);
-                }
-            );
+            // Jeden dotaz na katalog: z prvni stranky se precte celkovy pocet firem.
+            $listing = aiResearchListingSizeFromFirstPage($source, $keyword, $location);
         } catch (Throwable $e) {
             error_log('AI research estimate for #' . $runId . ' source ' . $source . ' failed: ' . $e->getMessage());
             $pending[] = $source;
             continue;
         }
-        if ($ranOutOfTime) {
-            // Necely pruzkum by dosah podstrelil, takze se radeji nepocita vubec.
+        if ((int)($listing['items_total'] ?? 0) <= 0 && (int)($listing['fetches'] ?? 0) === 0) {
+            // Katalog vubec neodpovedel, zkusi se znovu, aby se dosah nepodstrelil.
             $pending[] = $source;
             continue;
         }
@@ -7072,24 +7108,15 @@ function aiResearchComputeContactEstimate(PDO $pdo, int $runId, array $plan, int
 }
 
 /**
- * Vytéznost emailu se meri na vzorku, ktery uz beh skutecne prosel, takze odhad
- * nepredstira, ze kazdy zaznam v katalogu ma dohledatelny email. Stejna vytéznost
- * se pouzije na vsechny katalogy - jina merena data pro zahranicni zdroje nemame.
+ * Dosah se pocita jako pocet firem v katalogu: u kazde se predpoklada dohledatelny
+ * email. Odhad je tim zamerne optimisticky horni hranice - cilem je jedno cislo
+ * zjistene jednim dotazem na katalog, ne presne merena vytéznost za desitky dotazu.
  */
 function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $primarySource, array $listings, array $pendingSources = []): array
 {
-    $stmt = $pdo->prepare('SELECT COUNT(*) FROM ai_research_contacts WHERE run_id=?');
-    $stmt->execute([$runId]);
-    $sampleWithEmail = (int)$stmt->fetchColumn();
-    $primaryListing = $listings[$primarySource]['listing'] ?? reset($listings)['listing'] ?? [];
-    $sampleVisited = max($sampleWithEmail, (int)($primaryListing['items_per_page'] ?? 0));
-    $yield = $sampleVisited > 0 ? $sampleWithEmail / $sampleVisited : 0.0;
-
     $itemsTotal = 0;
     $pagesTotal = 0;
     $fetchesTotal = 0;
-    $capped = false;
-    $reachable = 0;
     $breakdown = [];
     foreach ($listings as $source => $entry) {
         $listing = (array)$entry['listing'];
@@ -7097,9 +7124,6 @@ function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $primarySou
         $itemsTotal += $items;
         $pagesTotal += (int)($listing['pages'] ?? 0);
         $fetchesTotal += (int)($listing['fetches'] ?? 0);
-        $capped = $capped || !empty($listing['capped']);
-        $sourceReachable = (int)round($items * $yield);
-        $reachable += $sourceReachable;
         $breakdown[] = [
             'source' => $source,
             'source_label' => scrapingSourceLabel((string)$source),
@@ -7107,8 +7131,8 @@ function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $primarySou
             'listing_items' => $items,
             'listing_pages' => (int)($listing['pages'] ?? 0),
             'items_per_page' => (int)($listing['items_per_page'] ?? 0),
-            'listing_capped' => !empty($listing['capped']),
-            'reachable_contacts' => $sourceReachable,
+            'method' => (string)($listing['method'] ?? ''),
+            'reachable_contacts' => $items,
         ];
     }
 
@@ -7119,12 +7143,8 @@ function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $primarySou
         'complete' => !$pendingSources,
         'listing_items' => $itemsTotal,
         'listing_pages' => $pagesTotal,
-        'listing_capped' => $capped,
         'listing_fetches' => $fetchesTotal,
-        'sample_with_email' => $sampleWithEmail,
-        'sample_visited' => $sampleVisited,
-        'email_yield' => round($yield, 3),
-        'reachable_contacts' => $reachable,
+        'reachable_contacts' => $itemsTotal,
         'calculated_at' => date('c'),
     ];
 }
@@ -17853,7 +17873,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <div>
                 <h2>Logy a provoz automatiky</h2>
                 <p>Každý tik cronu se zapíše, i když se nakonec nic nespustí. První řádek je vždy <strong>naplánovaný běh</strong> &ndash; kdy poběží a jestli se bude hledat nový seed, nebo dokončovat odložený. Podle něj se pozná rozdíl mezi „čeká se na interval“ a „automatika stojí“.</p>
-                <p class="muted">Plán cronu: Email Campaign Cron každých 5 minut, AI research každou hodinu v 17. minutě (GitHub plánované běhy se v praxi zpožďují, takže sloupec Naplánováno je nejbližší možný čas, ne garantovaný).</p>
+                <p class="muted">Plán cronu: AI research má garantovaný běh <strong>každou hodinu</strong> (Email Campaign Cron ho každých 5 minut může spustit dřív). Sloupec Naplánováno je proto poslední běh + hodina a k němu <strong><?= h((string)(int)(AI_RESEARCH_CRON_TOLERANCE_SECONDS / 60)) ?> minut</strong> na rozptyl GitHubu. Když ten čas propadne, řádek to označí a je to chyba k řešení.</p>
                 <p class="muted">Poslední tik cronu: <strong><?= $researchLastTickAt > 0 ? h(formatDateTime(date('c', $researchLastTickAt))) : 'zatím nezaznamenán' ?></strong><?php if ($researchLastTickAt > 0 && time() - $researchLastTickAt > 1800): ?> &ndash; <strong>to je víc než 30 minut, cron pravděpodobně neběží</strong><?php endif; ?>. Poslední dokončený běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Stav: <?= h($researchAutomationStatus) ?></p>
                 <p class="muted">Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Interval mezi běhy: <?= h(aiResearchIntervalLabel($researchIntervalSeconds)) ?>. Gemini rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
                 <p class="muted">Skutečně odeslané Gemini requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h. Podle těchto čísel se pozná, zda Google limituje po minutách, nebo po dnech.</p>
@@ -17904,7 +17924,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <div>
                 <h2>AI research administrace</h2>
                 <p>Agent průběžně vybírá nové firmy z Firmy.cz / Vše pro firmy / Praha, projde jejich web, navrhne nejvhodnější B2B cílení včetně klíčového slova a lokality, najde max. 10 kontaktů a připraví dvě varianty oslovení. AI se používá jen na pochopení byznysu, výběr cílovky a texty; scraping kontaktů je čistá automatizace.</p>
-                <p class="muted">Dosažitelné kontakty se počítají napříč všemi katalogy, kde cílení dává smysl. Pokud web seed firmy není ani v angličtině, bere se cílení automaticky jako domácí a AI se na trhy vůbec neptáme; u anglického webu vyhodnotí AI, ve kterých zemích má hledání smysl, a jejich katalogy se do součtu přičtou. Reálně se scrapuje jen prvních <?= h((string)AI_RESEARCH_FIRST_BATCH_CONTACTS) ?> kontaktů pro první dávku.</p>
+                <p class="muted">Dosažitelné kontakty se počítají <strong>jedním dotazem na katalog</strong>: z první stránky výsledků se přečte, kolik firem katalog na dané klíčové slovo a lokalitu nabízí, a u každé se počítá s dohledatelným e-mailem. Sčítá se to napříč všemi katalogy, kde cílení dává smysl. Pokud web seed firmy není ani v angličtině, bere se cílení automaticky jako domácí a AI se na trhy vůbec neptáme; u anglického webu vyhodnotí AI, ve kterých zemích má hledání smysl, a jejich katalogy se do součtu přičtou. Reálně se scrapuje jen prvních <?= h((string)AI_RESEARCH_FIRST_BATCH_CONTACTS) ?> kontaktů pro první dávku.</p>
                 <p class="muted">Automatika se spouští cronem (GitHub plánované běhy se v praxi zpožďují, takže interval bývá delší než 5 minut). Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Gemini rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
                 <p class="muted">Poslední automatický běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Další nejdříve: <?= h($researchNextRunLabel) ?>. Stav: <?= h($researchAutomationStatus) ?></p>
                 <p class="muted">Skutečně odeslané Gemini requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h. Podle těchto čísel se pozná, zda Google limituje po minutách, nebo po dnech.</p>
@@ -18044,7 +18064,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                         <span title="<?= h(implode(' | ', array_map(
                             static fn(array $entry): string => (string)($entry['source_label'] ?? $entry['source'] ?? '') . ': ' . (int)($entry['reachable_contacts'] ?? 0),
                             array_filter((array)($runEstimate['sources'] ?? []), 'is_array')
-                        ))) ?>"><?= h((string)(int)($runEstimate['reachable_contacts'] ?? 0)) ?><?= !empty($runEstimate['listing_capped']) ? '+' : '' ?></span>
+                        ))) ?>"><?= h((string)(int)($runEstimate['reachable_contacts'] ?? 0)) ?></span>
                         <?php if (!empty($runEstimate['pending_sources'])): ?><small title="Dopočítávají se další katalogy">…</small><?php endif; ?>
                     <?php else: ?>
                         -
@@ -18158,14 +18178,14 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <?php if ($secondaryKeywords): ?><p><strong>Doplňkové keywordy:</strong> <?= h(implode(', ', $secondaryKeywords)) ?></p><?php endif; ?>
                                 <?php $estimate = is_array($runPlan['contact_estimate'] ?? null) ? (array)$runPlan['contact_estimate'] : []; ?>
                                 <?php if ($estimate): ?>
-                                    <p><strong>Dosažitelných kontaktů:</strong> <?= h((string)(int)($estimate['reachable_contacts'] ?? 0)) ?><?= !empty($estimate['listing_capped']) ? ' a více' : '' ?>
-                                        <small>(z <?= h((string)(int)($estimate['listing_items'] ?? 0)) ?> záznamů katalogu na <?= h((string)(int)($estimate['listing_pages'] ?? 0)) ?> stránkách, e-mail má <?= h((string)round(((float)($estimate['email_yield'] ?? 0)) * 100)) ?> % z nich; zjištěno <?= h((string)(int)($estimate['listing_fetches'] ?? 0)) ?> dotazy)</small></p>
+                                    <p><strong>Dosažitelných kontaktů:</strong> <?= h((string)(int)($estimate['reachable_contacts'] ?? 0)) ?>
+                                        <small>(<?= h((string)(int)($estimate['listing_items'] ?? 0)) ?> firem v <?= h((string)count((array)($estimate['sources'] ?? []))) ?> katalozích na <?= h((string)(int)($estimate['listing_pages'] ?? 0)) ?> stránkách; zjištěno <?= h((string)(int)($estimate['listing_fetches'] ?? 0)) ?> dotazy, jeden na katalog)</small></p>
                                     <?php if (count((array)($estimate['sources'] ?? [])) > 1): ?>
                                         <ul class="estimate-source-list">
                                             <?php foreach ((array)$estimate['sources'] as $estimateSource): ?>
                                                 <li><strong><?= h((string)($estimateSource['source_label'] ?? $estimateSource['source'] ?? '')) ?></strong>
                                                     <?= h((string)(int)($estimateSource['reachable_contacts'] ?? 0)) ?> kontaktů
-                                                    <small>(<?= h((string)(int)($estimateSource['listing_items'] ?? 0)) ?> záznamů<?= trim((string)($estimateSource['location'] ?? '')) !== '' ? ', ' . h((string)$estimateSource['location']) : ', celá země' ?>)</small></li>
+                                                    <small>(<?= h((string)(int)($estimateSource['listing_pages'] ?? 0)) ?> stránek &times; <?= h((string)(int)($estimateSource['items_per_page'] ?? 0)) ?> firem<?= trim((string)($estimateSource['location'] ?? '')) !== '' ? ', ' . h((string)$estimateSource['location']) : ', celá země' ?><?= trim((string)($estimateSource['method'] ?? '')) !== '' ? '; ' . h((string)$estimateSource['method']) : '' ?>)</small></li>
                                             <?php endforeach; ?>
                                         </ul>
                                     <?php endif; ?>
