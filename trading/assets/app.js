@@ -613,14 +613,20 @@ function portfolioTabRoutePath(tab = "daily-picks") {
   return `/trading/portfolios/${segment}/`;
 }
 
+function opportunityRoutePath(view = "evaluated") {
+  return `/trading/opportunities/${normalizeOpportunityView(view)}/`;
+}
+
 function currentRouteState() {
   const path = window.location.pathname.replace(/\/+$/, "/");
-  if (path.endsWith("/trading/opportunities/") || path.endsWith("/opportunities/")) {
+  const opportunityRoute = path.match(/(?:^|\/)opportunities(?:\/([^/]+))?\/$/);
+  if (opportunityRoute) {
     return {
       page: "opportunities",
       tab: "settings-runs",
       settingsSection: "evaluation-log",
       evaluationStatus: "EVALUATED",
+      opportunityView: normalizeOpportunityView(opportunityRoute[1]),
     };
   }
   if (path.endsWith("/trading/settings/") || path.endsWith("/settings/")) {
@@ -646,6 +652,7 @@ function currentRouteState() {
 function routePath(page, tab = "daily-picks") {
   const normalized = ["settings", "opportunities", "portfolios"].includes(page) ? page : "portfolios";
   if (normalized === "portfolios") return portfolioTabRoutePath(tab);
+  if (normalized === "opportunities") return opportunityRoutePath(tab);
   return `/trading/${normalized}/`;
 }
 
@@ -679,9 +686,7 @@ function setPage(page) {
   if (els.settingsPageEyebrow) {
     els.settingsPageEyebrow.textContent = state.page === "opportunities" ? "Market evaluation" : "Settings";
   }
-  if (els.settingsPageTitle) {
-    els.settingsPageTitle.textContent = state.page === "opportunities" ? "Evaluated opportunities" : "Automation settings";
-  }
+  syncOpportunityPageHeading();
 }
 
 function activateTab(target, { syncRoute = false, replace = false } = {}) {
@@ -733,6 +738,13 @@ function normalizeOpportunityView(view) {
   return view === "scraped" ? "scraped" : "evaluated";
 }
 
+function syncOpportunityPageHeading() {
+  if (!els.settingsPageTitle) return;
+  els.settingsPageTitle.textContent = state.page === "opportunities"
+    ? (state.opportunityView === "scraped" ? "Scraped opportunities" : "Evaluated opportunities")
+    : "Automation settings";
+}
+
 function syncOpportunityViewControls() {
   const scraped = state.opportunityView === "scraped";
   els.opportunityViewButtons.forEach((button) => {
@@ -743,11 +755,19 @@ function syncOpportunityViewControls() {
   });
 }
 
-function setOpportunityView(view) {
+function setOpportunityView(view, { syncRoute = false, replace = false } = {}) {
   state.opportunityView = normalizeOpportunityView(view);
+  syncOpportunityPageHeading();
   syncOpportunityViewControls();
   renderBotEvaluations();
   if (state.opportunityView === "scraped") ensureScrapedMarketState();
+  if (syncRoute && state.page === "opportunities") {
+    const targetPath = `${opportunityRoutePath(state.opportunityView)}${window.location.search}`;
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (currentPath !== targetPath) {
+      window.history[replace ? "replaceState" : "pushState"]({ page: "opportunities", opportunityView: state.opportunityView }, "", targetPath);
+    }
+  }
 }
 
 function activatePage(page, { replace = false, preserveSearch = false } = {}) {
@@ -766,7 +786,10 @@ function activatePage(page, { replace = false, preserveSearch = false } = {}) {
     activateTab("daily-picks");
   }
 
-  const nextPath = routePath(nextPage, nextPage === "portfolios" ? "daily-picks" : undefined);
+  const nextPath = routePath(
+    nextPage,
+    nextPage === "portfolios" ? "daily-picks" : nextPage === "opportunities" ? state.opportunityView : undefined,
+  );
   const targetPath = preserveSearch ? `${nextPath}${window.location.search}` : nextPath;
   const currentPath = `${window.location.pathname}${window.location.search}`;
   if (currentPath !== targetPath) {
@@ -778,6 +801,7 @@ function activatePage(page, { replace = false, preserveSearch = false } = {}) {
 function applyInitialRoute() {
   const route = currentRouteState();
   setPage(route.page);
+  if (route?.opportunityView) setOpportunityView(route.opportunityView);
   if (route?.settingsSection) setSettingsSection(route.settingsSection);
   if (route?.evaluationStatus) setEvaluationStatus(route.evaluationStatus);
   activateTab(route?.tab || "daily-picks");
@@ -1025,7 +1049,7 @@ function opportunityKey(item) {
 
 function opportunityDetailUrl(itemOrKey) {
   const key = typeof itemOrKey === "string" ? itemOrKey : opportunityKey(itemOrKey);
-  const url = new URL("/trading/opportunities/", window.location.origin);
+  const url = new URL(opportunityRoutePath("evaluated"), window.location.origin);
   if (key) url.searchParams.set("event", key);
   return url.pathname + url.search;
 }
@@ -2627,7 +2651,7 @@ function closeAnalysisModal() {
   modal.dataset.opportunityKey = "";
   document.body.classList.remove("modal-open");
   if (opportunityKey && currentOpportunityKeyFromUrl() === opportunityKey) {
-    window.history.replaceState({ page: "opportunities" }, "", routePath("opportunities"));
+    window.history.replaceState({ page: "opportunities", opportunityView: "evaluated" }, "", routePath("opportunities", "evaluated"));
     state.openedOpportunityKey = "";
   }
   if (analysisModal.lastTrigger instanceof HTMLElement) {
@@ -5532,7 +5556,7 @@ document.addEventListener("click", (event) => {
 
 els.opportunityViewButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    setOpportunityView(button.dataset.opportunityView);
+    setOpportunityView(button.dataset.opportunityView, { syncRoute: true });
   });
 });
 
