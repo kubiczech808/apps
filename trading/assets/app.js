@@ -4004,7 +4004,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           <th>End date</th>
           <th>Days left</th>
           <th>${probabilityLabel}</th>
-          <th>Mkt entry</th>
+          ${usesPolymarketPotential ? "" : "<th>Mkt entry</th>"}
           <th>${returnMetric}</th>
           ${usesPolymarketPotential ? "" : "<th>EV</th>"}
           <th>Win</th>
@@ -4030,7 +4030,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               <td data-label="End date">${evaluationEndDateCell(item)}</td>
               <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
               <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
-              <td data-label="Mkt entry">${probability(evaluationEntryPrice(item))}</td>
+              ${usesPolymarketPotential ? "" : `<td data-label="Mkt entry">${probability(evaluationEntryPrice(item))}</td>`}
               <td data-label="${returnMetric}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
               ${usesPolymarketPotential ? "" : `<td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>`}
               <td data-label="Win">${gainCell(item)}</td>
