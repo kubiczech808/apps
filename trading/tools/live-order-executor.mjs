@@ -888,7 +888,14 @@ function candidatePoolForRotation(baseCandidates = []) {
     .slice(0, ROTATION_CANDIDATE_SCAN_LIMIT);
 }
 
-async function reviewPositionRotation({ liveState, evaluationByToken, baseCandidates, cash, maxNotional }) {
+function candidateRequiresSpecificPositionExit(candidate, position, liveState, evaluationByToken = new Map()) {
+  const beforeExit = riskBlock(candidate, liveState, evaluationByToken);
+  if (!beforeExit) return false;
+  const afterExit = riskBlock(candidate, liveStateWithoutPosition(liveState, position), evaluationByToken);
+  return !afterExit;
+}
+
+async function reviewPositionRotation({ liveState, evaluationByToken, baseCandidates, cash, maxNotional, restrictToRiskReplacement = false }) {
   const positions = openPositionsForRotation(liveState)
     .map((position) => {
       const economics = positionRotationEconomics(position, evaluationByToken);
@@ -938,6 +945,9 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
     const rejectedCandidates = [];
     for (const evaluation of candidates) {
       if (String(evaluation.tokenId || "") === String(position.tokenId || position.assetId || "")) continue;
+      if (restrictToRiskReplacement && !candidateRequiresSpecificPositionExit(evaluation, position, liveState, evaluationByToken)) {
+        continue;
+      }
       try {
         const revalidated = await revalidateEvaluation(
           evaluation,
@@ -1017,7 +1027,9 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
   return {
     action: best ? "ROTATION_AVAILABLE" : "NO_ROTATION_CANDIDATE",
     reason: best
-      ? "a better candidate could be opened after selling an existing position; live sell/rebuy execution is not automated in this step"
+      ? (restrictToRiskReplacement
+        ? "a risk-blocked replacement becomes executable only after selling the overlapping live position"
+        : "a better candidate could be opened after selling an existing position; live sell/rebuy execution is not automated in this step")
       : "selling reviewed open positions did not produce a better executable candidate",
     reviews,
     best,
@@ -1766,13 +1778,18 @@ async function main() {
     }));
   const eligible = sortLiveEligibleCandidates(allEligible);
   const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
-  const rotationReview = (!eligible.length || cash <= 0)
+  const riskBlockedCandidates = checked.filter((item) => (item.rejectReasons || [])
+    .some((reason) => /^(correlated live exposure|duplicate token already open)/i.test(String(reason || ""))));
+  const needsCapitalRotation = !eligible.length && (cash <= 0 || capitalSizingBlocked.length > 0);
+  const needsRiskReplacement = !eligible.length && !needsCapitalRotation && riskBlockedCandidates.length > 0;
+  const rotationReview = !eligible.length && (needsCapitalRotation || needsRiskReplacement)
     ? await reviewPositionRotation({
         liveState,
         evaluationByToken,
         baseCandidates,
         cash,
         maxNotional,
+        restrictToRiskReplacement: needsRiskReplacement,
       })
     : null;
   const activeSellOrders = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
@@ -1798,7 +1815,9 @@ async function main() {
   const actionReason = activeSellOrders.length
     ? "waiting for an existing live sell order to reduce position exposure before any replacement buy"
     : (rotationAvailable && LIVE_AUTO_ROTATE
-      ? "a sell-and-replace rotation will submit the exit order before any replacement buy"
+      ? (needsRiskReplacement
+        ? "a risk-overlap replacement will sell the conflicting position before placing the replacement buy"
+        : "cash is insufficient for a direct order, so a sell-and-replace rotation will submit the exit order first")
       : (cadenceBlocked
         ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h)`
         : (best
@@ -1811,7 +1830,9 @@ async function main() {
   const actionExplanation = activeSellOrders.length
     ? "A live sell order is open. The system waits for account sync to confirm the exit before it can revalidate and place a replacement buy."
     : (rotationAvailable && LIVE_AUTO_ROTATE
-      ? "The system will sell the selected weaker position first. It will only consider a replacement after account sync confirms the exit."
+      ? (needsRiskReplacement
+        ? "The replacement conflicts with the selected live position under diversification rules, so the system sells that position first and waits for account sync before buying the replacement."
+        : "Available cash cannot support a direct order, so the system sells the selected weaker position first and waits for account sync before considering the replacement.")
       : (best && !cadenceBlocked
       ? "Live batch found an executable candidate after revalidation."
       : (cadenceBlocked
@@ -1873,6 +1894,7 @@ async function main() {
       openOrderReviewAfterHours: OPEN_ORDER_REVIEW_AFTER_HOURS,
       openOrderCancelAfterHours: OPEN_ORDER_CANCEL_AFTER_HOURS,
       openOrderRepriceThreshold: OPEN_ORDER_REPRICE_THRESHOLD,
+      rotationTrigger: needsRiskReplacement ? "risk-overlap" : (needsCapitalRotation ? "capital" : null),
     },
     orderManagement,
     rotationReview,
@@ -1927,6 +1949,7 @@ async function main() {
         openOrdersReviewed: orderManagement.reviews.length,
         positionsReviewedForRotation: rotationReview?.reviews?.length || 0,
         rotationAvailable,
+        riskBlockedCandidates: riskBlockedCandidates.length,
         rejectedCandidates: checked.filter((item) => item.status !== "ELIGIBLE").length,
         cadenceBlocked,
         rawCadenceBlocked: Boolean(monitoring.rawCadenceBlocked),
