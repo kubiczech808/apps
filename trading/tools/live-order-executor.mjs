@@ -1725,6 +1725,10 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
         const betterCandidate = bestOther && Number(bestOther.expectedValueUsdc || 0) > Number(revalidated.expectedValueUsdc || 0) + OPEN_ORDER_BETTER_CANDIDATE_EV_USDC
           ? bestOther
           : null;
+        const betterCandidateCost = number(betterCandidate?.totalCostUsdc ?? betterCandidate?.orderNotionalUsdc);
+        const freeCashCanFundBetterCandidate = betterCandidateCost != null
+          && number(cash, 0) + 0.00001 >= betterCandidateCost;
+        const betterCandidateNeedsReleasedCapital = betterCandidateCost != null && !freeCashCanFundBetterCandidate;
         const orderPrice = number(order.price);
         const newPrice = number(revalidated.orderPrice);
         const priceDelta = Number.isFinite(orderPrice) && Number.isFinite(newPrice) ? newPrice - orderPrice : 0;
@@ -1734,9 +1738,13 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
         if (revalidated.status !== "ELIGIBLE") {
           review.action = ageHours >= OPEN_ORDER_REVIEW_AFTER_HOURS ? "CANCEL" : "KEEP_WAITING";
           review.reason = `current revalidation no longer satisfies live rules: ${(revalidated.rejectReasons || []).join("; ") || "not eligible"}`;
-        } else if (betterCandidate) {
+        } else if (betterCandidate && betterCandidateNeedsReleasedCapital) {
           review.action = "CANCEL_FOR_BETTER_CANDIDATE";
-          review.reason = `a better candidate exceeds this order by at least ${OPEN_ORDER_BETTER_CANDIDATE_EV_USDC.toFixed(2)} USDC expected value`;
+          review.reason = `a better candidate exceeds this order by at least ${OPEN_ORDER_BETTER_CANDIDATE_EV_USDC.toFixed(2)} USDC expected value and needs this order's locked capital`;
+        } else if (betterCandidate) {
+          review.reason = betterCandidateCost != null
+            ? `a better candidate exists, but ${number(cash, 0).toFixed(4)} USDC free cash already covers its ${betterCandidateCost.toFixed(4)} USDC cost; keep this independent order open`
+            : "a better candidate exists without a current executable order cost; keep this independent order open";
         } else if (ageHours >= OPEN_ORDER_REVIEW_AFTER_HOURS && Math.abs(priceDelta) >= OPEN_ORDER_REPRICE_THRESHOLD) {
           review.action = "REPLACE";
           review.reason = priceDelta > 0
