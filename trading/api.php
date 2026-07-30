@@ -540,25 +540,21 @@ function send_redeem_alert_email(array $alert): bool
     }
 
     $recipient = 'jakub.elias88@gmail.com';
-    $subject = 'Polymarket winning position / redeem alert';
-    $type = (string) ($alert['type'] ?? '');
-    $headline = $type === 'REDEEM_CONFIRMED'
-        ? 'Vyherni Polymarket pozice byla nalezena jako redeemed.'
-        : 'Polymarket pozice vypada jako vyherne vyhodnocena a muze vyzadovat manualni redeem.';
+    $subject = 'Polymarket: vyherni pozice ceka na redeem';
     $lines = [
-        $headline,
+        'Polymarket tuto pozici vyhodnotil jako vyherni. Prostredky zatim cekaji na manualni redeem.',
         '',
         'Market: ' . (string) ($alert['question'] ?? '-'),
         'Outcome: ' . (string) ($alert['outcome'] ?? '-'),
-        'URL: ' . (string) ($alert['url'] ?? 'https://polymarket.com/'),
+        'Status: Redeem required',
+        'Polymarket position: ' . (string) ($alert['url'] ?? 'https://polymarket.com/'),
+        'Portfolio position: ' . (string) ($alert['portfolioUrl'] ?? 'https://www.osobnizkusenosti.cz/trading/portfolios/closed/'),
         'Stake: ' . money_text($alert['stakeUsdc'] ?? null),
         'Current value: ' . money_text($alert['currentValueUsdc'] ?? null),
-        'Realized P/L: ' . money_text($alert['realizedPnlUsdc'] ?? null),
-        'Realized P/L %: ' . percent_text($alert['realizedPnlPct'] ?? null),
         'Reason: ' . (string) ($alert['reason'] ?? '-'),
         'Detected at: ' . (string) ($alert['detectedAt'] ?? gmdate('c')),
         '',
-        'Pokud neni redeem automaticky proveden Polymarketem/API, otevri pozici a udelej redeem manualne.',
+        'Otevri pozici v Polymarketu a proved redeem. Po potvrzeni se prostredky uvolni pro dalsi obchody.',
     ];
     $body = implode("\n", $lines);
     $headers = [
@@ -570,6 +566,56 @@ function send_redeem_alert_email(array $alert): bool
     ];
 
     return mail($recipient, $subject, $body, implode("\r\n", $headers), '-f noreply@osobnizkusenosti.cz');
+}
+
+function redeem_alert_ledger_path(): string
+{
+    return __DIR__ . '/data/redeem-alert-ledger.json';
+}
+
+function with_redeem_alert_ledger(callable $callback): array
+{
+    $path = redeem_alert_ledger_path();
+    $directory = dirname($path);
+    if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
+        throw new RuntimeException('Unable to create redeem alert ledger directory.');
+    }
+    $handle = fopen($path, 'c+');
+    if ($handle === false) {
+        throw new RuntimeException('Unable to open redeem alert ledger.');
+    }
+
+    try {
+        if (!flock($handle, LOCK_EX)) {
+            throw new RuntimeException('Unable to lock redeem alert ledger.');
+        }
+        rewind($handle);
+        $raw = stream_get_contents($handle);
+        $decoded = json_decode(is_string($raw) ? $raw : '', true);
+        $ledger = is_array($decoded) ? $decoded : [];
+        if (!is_array($ledger['sent'] ?? null)) {
+            $ledger['sent'] = [];
+        }
+
+        $result = $callback($ledger);
+        $ledger['version'] = 1;
+        $ledger['updatedAt'] = gmdate('c');
+        $encoded = json_encode($ledger, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($encoded)) {
+            throw new RuntimeException('Unable to encode redeem alert ledger.');
+        }
+        rewind($handle);
+        if (!ftruncate($handle, 0) || fwrite($handle, $encoded . "\n") === false || !fflush($handle)) {
+            throw new RuntimeException('Unable to persist redeem alert ledger.');
+        }
+        flock($handle, LOCK_UN);
+        fclose($handle);
+        return is_array($result) ? $result : [];
+    } catch (Throwable $e) {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+        throw $e;
+    }
 }
 
 function redeem_alert_was_sent(array $alert, array $sentKeys): bool
@@ -598,67 +644,86 @@ function send_redeem_alerts(): array
     if (!is_array($state)) {
         respond(['ok' => false, 'error' => 'Live state file contains invalid JSON'], 502);
     }
+    if (strtoupper((string) ($state['mode'] ?? '')) !== 'LIVE') {
+        respond(['ok' => true, 'skipped' => 'Redeem emails are only enabled for the live Polymarket account.']);
+    }
 
     $notifications = is_array($state['notifications'] ?? null) ? $state['notifications'] : [];
     $alerts = is_array($notifications['redeemAlerts'] ?? null) ? $notifications['redeemAlerts'] : [];
-    $sentKeys = [];
+    $legacySentKeys = [];
     foreach ((array) ($notifications['sentRedeemAlertKeys'] ?? []) as $key) {
-        $sentKeys[(string) $key] = true;
+        $legacySentKeys[(string) $key] = true;
     }
 
-    $sent = [];
-    $failed = [];
-    foreach ($alerts as $index => $alert) {
-        if (!is_array($alert)) {
-            continue;
-        }
-        $key = (string) ($alert['key'] ?? '');
-        if ($key === '' || redeem_alert_was_sent($alert, $sentKeys)) {
-            continue;
-        }
-        $attemptAt = gmdate('c');
-        if (!isset($alerts[$index]['emailAttempts']) || !is_array($alerts[$index]['emailAttempts'])) {
-            $alerts[$index]['emailAttempts'] = [];
-        }
-        try {
-            if (!send_redeem_alert_email($alert)) {
-                throw new RuntimeException('PHP mail() returned false.');
+    $delivery = with_redeem_alert_ledger(function (array &$ledger) use (&$alerts, $legacySentKeys): array {
+        $sent = [];
+        $failed = [];
+        $skipped = 0;
+        $sentMap = is_array($ledger['sent'] ?? null) ? $ledger['sent'] : [];
+        foreach ($alerts as $index => $alert) {
+            if (!is_array($alert) || (string) ($alert['type'] ?? '') !== 'REDEEM_REQUIRED') {
+                $skipped++;
+                continue;
             }
-            $sentKeys[$key] = true;
-            $alerts[$index]['sent'] = true;
-            $alerts[$index]['sentAt'] = $attemptAt;
-            $alerts[$index]['emailAttempts'][] = [
-                'attemptedAt' => $attemptAt,
-                'status' => 'sent',
-            ];
-            $sent[] = [
-                'key' => $key,
-                'type' => (string) ($alert['type'] ?? ''),
-                'question' => (string) ($alert['question'] ?? ''),
-                'sentAt' => $alerts[$index]['sentAt'],
-            ];
-        } catch (Throwable $e) {
-            $alerts[$index]['sent'] = false;
-            $alerts[$index]['emailAttempts'][] = [
-                'attemptedAt' => $attemptAt,
-                'status' => 'failed',
-                'error' => $e->getMessage(),
-            ];
-            $failed[] = [
-                'key' => $key,
-                'error' => $e->getMessage(),
-            ];
+            $key = (string) ($alert['key'] ?? '');
+            if ($key === '') {
+                $skipped++;
+                continue;
+            }
+            $previousSentAt = trim((string) ($sentMap[$key] ?? ''));
+            if ($previousSentAt !== '' || isset($legacySentKeys[$key]) || redeem_alert_was_sent($alert, $legacySentKeys)) {
+                $alerts[$index]['sent'] = true;
+                $alerts[$index]['sentAt'] = $previousSentAt !== '' ? $previousSentAt : (string) ($alert['sentAt'] ?? gmdate('c'));
+                continue;
+            }
+            $attemptAt = gmdate('c');
+            if (!isset($alerts[$index]['emailAttempts']) || !is_array($alerts[$index]['emailAttempts'])) {
+                $alerts[$index]['emailAttempts'] = [];
+            }
+            try {
+                if (!send_redeem_alert_email($alert)) {
+                    throw new RuntimeException('PHP mail() returned false.');
+                }
+                $sentMap[$key] = $attemptAt;
+                $alerts[$index]['sent'] = true;
+                $alerts[$index]['sentAt'] = $attemptAt;
+                $alerts[$index]['emailAttempts'][] = [
+                    'attemptedAt' => $attemptAt,
+                    'status' => 'sent',
+                ];
+                $sent[] = [
+                    'key' => $key,
+                    'type' => 'REDEEM_REQUIRED',
+                    'question' => (string) ($alert['question'] ?? ''),
+                    'sentAt' => $attemptAt,
+                ];
+            } catch (Throwable $e) {
+                $alerts[$index]['sent'] = false;
+                $alerts[$index]['emailAttempts'][] = [
+                    'attemptedAt' => $attemptAt,
+                    'status' => 'failed',
+                    'error' => $e->getMessage(),
+                ];
+                $failed[] = [
+                    'key' => $key,
+                    'error' => $e->getMessage(),
+                ];
+            }
         }
-    }
+        $ledger['sent'] = $sentMap;
+        return ['sent' => $sent, 'failed' => $failed, 'skippedCount' => $skipped];
+    });
+    $sent = $delivery['sent'] ?? [];
+    $failed = $delivery['failed'] ?? [];
 
     $notifications['redeemAlerts'] = $alerts;
     $notifications['unsentRedeemAlerts'] = array_values(array_filter(
         $alerts,
-        static fn ($alert): bool => is_array($alert) && empty($alert['sent'])
+        static fn ($alert): bool => is_array($alert) && (string) ($alert['type'] ?? '') === 'REDEEM_REQUIRED' && empty($alert['sent'])
     ));
     $confirmedSentKeys = [];
     foreach ($alerts as $alert) {
-        if (!is_array($alert) || !redeem_alert_was_sent($alert, $sentKeys)) {
+        if (!is_array($alert) || (string) ($alert['type'] ?? '') !== 'REDEEM_REQUIRED' || empty($alert['sent'])) {
             continue;
         }
         $confirmedSentKeys[(string) $alert['key']] = true;
@@ -681,6 +746,7 @@ function send_redeem_alerts(): array
         'checked' => count($alerts),
         'sentCount' => count($sent),
         'failedCount' => count($failed),
+        'skippedCount' => (int) ($delivery['skippedCount'] ?? 0),
         'sent' => $sent,
         'failed' => $failed,
     ];

@@ -808,7 +808,13 @@ function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt
     });
 }
 
-function redeemNotifications(positions, closedTrades, previousState, generatedAt) {
+function livePortfolioPositionUrl(position) {
+  const reference = compactText(position.tokenId || position.conditionId || position.slug || position.id, "position");
+  const query = reference ? `?position=${encodeURIComponent(reference)}` : "";
+  return `https://www.osobnizkusenosti.cz/trading/portfolios/closed/${query}`;
+}
+
+function redeemNotifications(positions, previousState, generatedAt) {
   const previousNotifications = previousState?.notifications && typeof previousState.notifications === "object"
     ? previousState.notifications
     : {};
@@ -850,6 +856,7 @@ function redeemNotifications(positions, closedTrades, previousState, generatedAt
       question: position.question,
       outcome: position.outcome,
       url: position.url,
+      portfolioUrl: livePortfolioPositionUrl(position),
       tokenId: position.tokenId,
       conditionId: position.conditionId,
       openedAt: position.openedAt,
@@ -859,31 +866,6 @@ function redeemNotifications(positions, closedTrades, previousState, generatedAt
       stakeUsdc: number(position.stakeUsdc),
       unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
       reason: "Polymarket position is marked redeemable/claimable/resolved",
-    });
-  }
-
-  for (const trade of closedTrades) {
-    const realizedPnl = number(trade.realizedPnlUsdc, 0);
-    const status = String(trade.status || "").toUpperCase();
-    if (realizedPnl <= 0 || status !== "REDEEMED") continue;
-    addAlert({
-      key: redeemAlertId("redeem-confirmed", trade),
-      type: "REDEEM_CONFIRMED",
-      title: "Winning Polymarket position was redeemed",
-      message: "Pozice byla v historii uctu nalezena jako vyherni/redeemed. Zkontroluj pripadne volne prostredky pro dalsi obchody.",
-      question: trade.question,
-      outcome: trade.outcome,
-      url: trade.url,
-      tokenId: trade.tokenId,
-      conditionId: trade.conditionId,
-      openedAt: trade.openedAt,
-      closedAt: trade.closedAt,
-      detectedAt: generatedAt,
-      stakeUsdc: number(trade.stakeUsdc),
-      exitValueUsdc: number(trade.exitValueUsdc),
-      realizedPnlUsdc: realizedPnl,
-      realizedPnlPct: ratio(trade.realizedPnlPct),
-      reason: "Public activity contains redeem-like event with positive realized P/L",
     });
   }
 
@@ -1414,7 +1396,7 @@ async function main() {
     sync.message = `Live snapshot loaded with ledger reconciliation warnings: ${sync.warnings.join(" | ")}`;
   }
   const portfolioBase = portfolioSummary(reconciledPositions, valueRows, closedTrades);
-  const notifications = redeemNotifications(reconciledPositions, closedTrades, previousLiveState, generatedAt);
+  const notifications = redeemNotifications(reconciledPositions, previousLiveState, generatedAt);
   const cashUsdc = number(balanceAllowance?.collateral?.balanceUsdc);
   const pendingRedeemUsdc = number(portfolioBase.pendingRedeemUsdc, 0);
   const equityUsdc = cashUsdc == null
