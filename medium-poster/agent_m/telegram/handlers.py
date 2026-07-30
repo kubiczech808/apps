@@ -83,6 +83,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/engage_rules — show Medium engagement eligibility rules\n"
         "/engage_auto <0-10> — set daily scheduled Medium engagement proposals\n"
         "/engage_autopost on|off|status — post scheduled engagement without approval\n"
+        "/engage_notify on|off|status — immediate scheduled engagement Telegram updates\n"
         "/status — token usage & schedule\n"
         "/help — this message\n\n"
         "Slug is optional — without it, the next planned topic is used."
@@ -712,6 +713,43 @@ async def engage_autopost_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"Scheduled slots per day: {result['daily_proposals']}\n"
         f"Hard daily posting cap: {result['max_daily_posts']}\n"
         "Use /engage_auto <0-10> to change how many scheduled slots run each day."
+    )
+
+
+@admin_only
+async def engage_notify_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.message
+    if not msg:
+        return
+
+    from agent_m.medium_engagement import (
+        get_daily_proposal_count,
+        is_immediate_notifications_enabled,
+        set_immediate_notifications_enabled,
+    )
+
+    action = (context.args[0].lower() if context.args else "status").strip()
+    if action in {"on", "enable", "enabled", "zapnout"}:
+        result = set_immediate_notifications_enabled(True)
+    elif action in {"off", "disable", "disabled", "vypnout"}:
+        result = set_immediate_notifications_enabled(False)
+    elif action in {"status", "stav"}:
+        result = {
+            "immediate_notifications_enabled": is_immediate_notifications_enabled(),
+            "daily_proposals": get_daily_proposal_count(),
+            "max_daily_posts": 10,
+        }
+    else:
+        await msg.reply_text("Usage: /engage_notify on|off|status")
+        return
+
+    enabled = bool(result["immediate_notifications_enabled"])
+    await msg.reply_text(
+        "Medium engagement notifications\n"
+        f"Status: {'ON - every scheduled slot/post can send an immediate update' if enabled else 'OFF - daily summary only, errors still reported'}\n"
+        f"Scheduled slots per day: {result['daily_proposals']}\n"
+        f"Hard daily posting cap: {result['max_daily_posts']}\n"
+        "Use /engage_rules to show the full engagement setup."
     )
 
 

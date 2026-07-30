@@ -84,16 +84,19 @@ async def _scheduled_engagement_slot(context: ContextTypes.DEFAULT_TYPE) -> None
             approve_opportunity,
             format_opportunity_message,
             is_auto_post_enabled,
+            is_immediate_notifications_enabled,
             prepare_next_opportunity,
         )
 
+        immediate_notifications = is_immediate_notifications_enabled()
         result = await prepare_next_opportunity()
         if result.get("status") != "prepared":
             log.info("Medium engagement slot produced no proposal: %s", result)
-            await context.bot.send_message(
-                chat_id=config.telegram_admin_chat_id,
-                text=format_opportunity_message(result),
-            )
+            if immediate_notifications:
+                await context.bot.send_message(
+                    chat_id=config.telegram_admin_chat_id,
+                    text=format_opportunity_message(result),
+                )
             return
 
         op = result["opportunity"]
@@ -101,16 +104,17 @@ async def _scheduled_engagement_slot(context: ContextTypes.DEFAULT_TYPE) -> None
             log.info("Medium engagement auto-posting opportunity %s", op.get("id"))
             post_result = await approve_opportunity(op["id"])
             if post_result.get("status") == "posted":
-                await context.bot.send_message(
-                    chat_id=config.telegram_admin_chat_id,
-                    text=(
-                        "Medium engagement auto-posted\n"
-                        f"Time: {post_result.get('posted_at_local')}\n"
-                        f"Profile: {post_result.get('profile')}\n"
-                        f"Article: {post_result.get('article_url')}\n"
-                        f"Clapped: {'yes' if post_result.get('clapped') else 'not confirmed'}"
-                    ),
-                )
+                if immediate_notifications:
+                    await context.bot.send_message(
+                        chat_id=config.telegram_admin_chat_id,
+                        text=(
+                            "Medium engagement auto-posted\n"
+                            f"Time: {post_result.get('posted_at_local')}\n"
+                            f"Profile: {post_result.get('profile')}\n"
+                            f"Article: {post_result.get('article_url')}\n"
+                            f"Clapped: {'yes' if post_result.get('clapped') else 'not confirmed'}"
+                        ),
+                    )
                 return
 
             await context.bot.send_message(
@@ -201,6 +205,7 @@ _BOT_COMMANDS = [
     BotCommand("engage_rules", "Bez parametru - vypsat engagement pravidla"),
     BotCommand("engage_auto", "Param: <0-10> - denni pocet engagement navrhu"),
     BotCommand("engage_autopost", "Param: on|off|status - komentare bez schvalovani"),
+    BotCommand("engage_notify", "Param: on|off|status - okamzite engagement notifikace"),
     BotCommand("status", "Využití tokenů a rozvrh"),
     BotCommand("help", "Nápověda"),
 ]
@@ -259,6 +264,7 @@ def build_app():
     app.add_handler(CommandHandler("engage_rules", handlers.engage_rules_cmd))
     app.add_handler(CommandHandler("engage_auto", handlers.engage_auto_cmd))
     app.add_handler(CommandHandler("engage_autopost", handlers.engage_autopost_cmd))
+    app.add_handler(CommandHandler("engage_notify", handlers.engage_notify_cmd))
     app.add_handler(CommandHandler("status", handlers.status_cmd))
     app.add_handler(CommandHandler("feedback", handlers.feedback_cmd))
     app.add_handler(CommandHandler("feedback_clear", handlers.feedback_clear_cmd))

@@ -25,6 +25,7 @@ _OWN_MEDIUM_MARKERS = ("/@info_89535/", "medium.com/@info_89535")
 _PRAGUE = ZoneInfo("Europe/Prague")
 _DAILY_LIMIT = 10
 _DEFAULT_DAILY_PROPOSALS = 3
+_DEFAULT_IMMEDIATE_NOTIFICATIONS = False
 _MIN_RESPONSES = 3
 _MIN_FOLLOWERS = 100
 _SEARCH_RESULTS_PER_QUERY = 16
@@ -382,6 +383,12 @@ def is_auto_post_enabled() -> bool:
     return bool(settings.get("auto_post_enabled", False))
 
 
+def is_immediate_notifications_enabled() -> bool:
+    state = _read_state(_STATE_FILE)
+    settings = state.setdefault("settings", {})
+    return bool(settings.get("immediate_notifications_enabled", _DEFAULT_IMMEDIATE_NOTIFICATIONS))
+
+
 def set_auto_post_enabled(enabled: bool) -> dict:
     state = _read_state(_STATE_FILE)
     settings = state.setdefault("settings", {})
@@ -391,6 +398,20 @@ def set_auto_post_enabled(enabled: bool) -> dict:
     return {
         "status": "ok",
         "auto_post_enabled": bool(enabled),
+        "daily_proposals": _clamp_daily_proposals(settings.get("daily_proposals", _DEFAULT_DAILY_PROPOSALS)),
+        "max_daily_posts": _DAILY_LIMIT,
+    }
+
+
+def set_immediate_notifications_enabled(enabled: bool) -> dict:
+    state = _read_state(_STATE_FILE)
+    settings = state.setdefault("settings", {})
+    settings["immediate_notifications_enabled"] = bool(enabled)
+    settings["immediate_notifications_updated_at"] = datetime.now(timezone.utc).isoformat()
+    _write_state(_STATE_FILE, state)
+    return {
+        "status": "ok",
+        "immediate_notifications_enabled": bool(enabled),
         "daily_proposals": _clamp_daily_proposals(settings.get("daily_proposals", _DEFAULT_DAILY_PROPOSALS)),
         "max_daily_posts": _DAILY_LIMIT,
     }
@@ -426,6 +447,7 @@ def engagement_rules_status() -> dict:
         "daily_proposals": get_daily_proposal_count(),
         "max_daily_posts": _DAILY_LIMIT,
         "auto_post_enabled": is_auto_post_enabled(),
+        "immediate_notifications_enabled": is_immediate_notifications_enabled(),
         "blocked_profiles": len(blocked_profiles),
         "used_profiles_this_week": len(_used_profiles_this_week(state)),
         "pending": pending_count,
@@ -436,6 +458,11 @@ def engagement_rules_status() -> dict:
 def format_engagement_rules_status() -> str:
     rules = engagement_rules_status()
     mode = "auto-post without approval" if rules["auto_post_enabled"] else "proposal approval required"
+    notifications = (
+        "ON - immediate slot/post updates"
+        if rules["immediate_notifications_enabled"]
+        else "OFF - daily summary only, errors still reported"
+    )
     return (
         "Medium engagement rules\n\n"
         "Primary eligibility:\n"
@@ -457,11 +484,12 @@ def format_engagement_rules_status() -> str:
         f"- Daily proposal slots: {rules['daily_proposals']}\n"
         f"- Hard daily posted-comment cap: {rules['max_daily_posts']}\n"
         f"- Mode: {mode}\n"
+        f"- Immediate notifications: {notifications}\n"
         f"- Pending proposals: {rules['pending']}\n"
         f"- Blocked profiles: {rules['blocked_profiles']}\n"
         f"- Profiles already used this week: {rules['used_profiles_this_week']}\n\n"
         "Use /engage_auto <0-10> to change daily slots and /engage_autopost on|off|status "
-        "to change approval mode."
+        "to change approval mode. Use /engage_notify on|off|status to change immediate Telegram updates."
     )[:4096]
 
 
