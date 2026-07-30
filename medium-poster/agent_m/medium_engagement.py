@@ -37,6 +37,64 @@ _SUPPORTED_COMMENT_LANGUAGES = {
     "fr": "French",
     "pt": "Portuguese",
 }
+_TOPIC_ANCHOR_PATTERNS = (
+    "bitcoin",
+    "btc",
+    "satoshi",
+    "sats",
+    "dca",
+    "dollar cost averaging",
+    "dollar-cost averaging",
+    "recurring buy",
+    "recurring buys",
+    "stacking sats",
+    "self custody",
+    "self-custody",
+    "hardware wallet",
+    "cold wallet",
+    "utxo",
+    "halving",
+    "crypto",
+    "cryptocurrency",
+)
+_QUERY_TOPIC_TERMS = {
+    "allocation",
+    "automated",
+    "automation",
+    "averaging",
+    "bear",
+    "bull",
+    "cash",
+    "cold",
+    "cost",
+    "custody",
+    "cycle",
+    "dip",
+    "dollar",
+    "exchange",
+    "fees",
+    "halving",
+    "hardware",
+    "income",
+    "investing",
+    "investment",
+    "lump",
+    "market",
+    "portfolio",
+    "price",
+    "rebalancing",
+    "recurring",
+    "reserve",
+    "retirement",
+    "savings",
+    "self",
+    "strategy",
+    "tax",
+    "taxes",
+    "utxo",
+    "volatility",
+    "wallet",
+}
 _DEFAULT_QUERIES = [
     "bitcoin dca",
     "dollar cost averaging bitcoin",
@@ -561,6 +619,21 @@ def _rank_candidates(
             rejected.append({"url": url, "title": title, "reason": "non-public Medium URL"})
             continue
 
+        anchor = _topic_anchor_reason(title, snippet)
+        if not anchor:
+            rejected.append({
+                "title": title,
+                "url": url,
+                "profile": profile,
+                "snippet": snippet[:900],
+                "query": query,
+                "score": 0,
+                "rank_reason": "no Bitcoin/DCA/crypto topic anchor",
+                "reason": "no Bitcoin/DCA/crypto topic anchor in title/snippet",
+                "fallback_inspectable": False,
+            })
+            continue
+
         score, reason = _score_candidate(title, snippet, query)
         if score < _PREFILTER_SCORE:
             rejected.append({
@@ -667,6 +740,19 @@ def _score_candidate(title: str, snippet: str, query: str) -> tuple[int, str]:
     return score, ", ".join(reasons[:5]) or "query overlap"
 
 
+def _topic_anchor_reason(*parts: str) -> str:
+    haystack = _fold_latin(" ".join(parts).lower())
+    haystack = re.sub(r"\s+", " ", haystack)
+    for pattern in _TOPIC_ANCHOR_PATTERNS:
+        if " " in pattern or "-" in pattern:
+            if pattern in haystack:
+                return pattern
+            continue
+        if re.search(rf"\b{re.escape(pattern)}\b", haystack):
+            return pattern
+    return ""
+
+
 def _eligible_article(candidate: dict, details: dict) -> tuple[bool, str]:
     responses = int(details.get("responses") or 0)
     followers = int(details.get("followers") or 0)
@@ -675,6 +761,8 @@ def _eligible_article(candidate: dict, details: dict) -> tuple[bool, str]:
     if language not in _SUPPORTED_COMMENT_LANGUAGES:
         raw_lang = str(details.get("lang") or "").lower() or "unknown"
         return False, f"unsupported or unclear article language (lang={raw_lang})"
+    if not _topic_anchor_reason(_article_sample(candidate, details)):
+        return False, "not related to Bitcoin/DCA/crypto topic"
     if responses < _MIN_RESPONSES:
         return False, f"too few comments/responses ({responses} < {_MIN_RESPONSES})"
     if followers < _MIN_FOLLOWERS:
@@ -691,6 +779,8 @@ def _fallback_article(candidate: dict, details: dict) -> tuple[bool, str]:
     if language not in _SUPPORTED_COMMENT_LANGUAGES:
         raw_lang = str(details.get("lang") or "").lower() or "unknown"
         return False, f"fallback rejected: unsupported or unclear article language (lang={raw_lang})"
+    if not _topic_anchor_reason(_article_sample(candidate, details)):
+        return False, "fallback rejected: not related to Bitcoin/DCA/crypto topic"
     return True, "fallback eligible by highest known follower count"
 
 
@@ -1016,12 +1106,11 @@ def _query_from_title(title: str) -> str:
         "with", "from", "that", "this", "what", "when", "your", "into",
         "after", "still", "king", "actually", "keeps", "coming", "back",
     }
-    terms = [t for t in cleaned.split() if len(t) > 3 and t not in stop]
-    if "bitcoin" not in terms:
-        terms.insert(0, "bitcoin")
-    if "dca" not in terms:
-        terms.append("dca")
-    return " ".join(terms[:5])
+    terms = [
+        t for t in cleaned.split()
+        if len(t) > 3 and t not in stop and t in _QUERY_TOPIC_TERMS
+    ]
+    return " ".join(_dedupe(["bitcoin", "dca", *terms])[:6])
 
 
 def _clean_url(url: str) -> str:
