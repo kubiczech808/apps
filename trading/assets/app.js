@@ -3956,6 +3956,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           <th>${returnMetric}</th>
           ${usesPolymarketPotential ? "" : "<th>EV</th>"}
           <th>Win</th>
+          <th>Net yield %</th>
           <th>R/R</th>
           <th>Analysis</th>
         </tr>
@@ -3981,6 +3982,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               <td data-label="${returnMetric}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
               ${usesPolymarketPotential ? "" : `<td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>`}
               <td data-label="Win">${gainCell(item)}</td>
+              <td data-label="Net yield %">${netYieldCell(item)}</td>
               <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
               <td data-label="Analysis">${analysisBadge(item)}</td>
             </tr>
