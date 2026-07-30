@@ -2180,6 +2180,12 @@ function normalizeRiskAllocation(value) {
   return numeric;
 }
 
+function riskAllocationInputValue(value) {
+  const percentage = Number(value) * 100;
+  if (!Number.isFinite(percentage)) return "";
+  return percentage.toFixed(1).replace(/\.0$/, "");
+}
+
 function storedRiskAllocation() {
   try {
     const scopedKey = riskAllocationStorageKey();
@@ -2309,7 +2315,7 @@ function syncRiskAllocationControl(availableCapital = null, sourceLabel = "avail
   const available = Number(availableCapital);
   const stake = Number.isFinite(base) ? base * value : null;
   if (els.riskAllocation) {
-    els.riskAllocation.value = String(Math.round(value * 100));
+    els.riskAllocation.value = riskAllocationInputValue(value);
   }
   if (els.riskAllocationLabel) {
     els.riskAllocationLabel.textContent = probability(value);
@@ -2413,7 +2419,8 @@ function syncDraftRiskAllocationControl(value, context = {}) {
   const base = Number(context.baseCapital);
   const available = Number(context.availableCapital);
   const stake = Number.isFinite(base) ? base * normalized : null;
-  if (els.riskAllocation) els.riskAllocation.value = String(Math.round(normalized * 100));
+  const editingRiskAllocation = parameterDraftActive() && document.activeElement === els.riskAllocation;
+  if (els.riskAllocation && !editingRiskAllocation) els.riskAllocation.value = riskAllocationInputValue(normalized);
   if (els.riskAllocationLabel) els.riskAllocationLabel.textContent = probability(normalized);
   if (els.riskAllocationValue) els.riskAllocationValue.textContent = Number.isFinite(stake) ? money(stake) : "-";
   if (els.riskAllocationNote) els.riskAllocationNote.textContent = `maximum stake from ${context.sourceLabel || "portfolio capital"}`;
