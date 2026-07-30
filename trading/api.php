@@ -1260,7 +1260,6 @@ try {
             $paperExtraInputs["paper_{$strategy}_max_resolution_days"] = normalized_days_input($payload["paper_{$strategy}_max_resolution_days"] ?? null);
             $paperExtraInputs["paper_{$strategy}_selection_order"] = normalized_selection_order_input($payload["paper_{$strategy}_selection_order"] ?? null);
             $paperExtraInputs["paper_{$strategy}_min_liquidity_usdc"] = normalized_money_input($payload["paper_{$strategy}_min_liquidity_usdc"] ?? null);
-            $paperExtraInputs["paper_{$strategy}_min_net_yield"] = normalized_nonnegative_yield_input($payload["paper_{$strategy}_min_net_yield"] ?? null);
             $paperExtraInputs["paper_{$strategy}_trade_cadence_hours"] = normalized_cadence_hours_input($payload["paper_{$strategy}_trade_cadence_hours"] ?? null);
             $paperExtraInputs["paper_{$strategy}_require_most_probable"] = normalized_bool_input($payload["paper_{$strategy}_require_most_probable"] ?? null);
         }
