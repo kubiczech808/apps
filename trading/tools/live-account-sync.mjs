@@ -1421,6 +1421,11 @@ async function main() {
     ? portfolioBase.equityUsdc
     : cashUsdc + number(portfolioBase.marketValueUsdc, 0) + pendingRedeemUsdc;
   const depositedUsdc = number((equityUsdc - number(portfolioBase.totalPnlUsdc, 0)).toFixed(6));
+  // Dashboard portfolio returns use one consistent denominator: the estimated
+  // original account value, rather than turnover through individual trades.
+  const pnlPctOfOriginalValue = (pnl) => depositedUsdc > 0
+    ? number(number(pnl, 0) / depositedUsdc)
+    : null;
 
   const payload = {
     schemaVersion: 1,
@@ -1448,6 +1453,10 @@ async function main() {
       equityUsdc,
       cashUsdc,
       depositedUsdc,
+      pnlPercentageBasis: "original-value",
+      openPnlPct: pnlPctOfOriginalValue(portfolioBase.openPnlUsdc),
+      realizedPnlPct: pnlPctOfOriginalValue(portfolioBase.realizedPnlUsdc),
+      totalPnlPct: pnlPctOfOriginalValue(portfolioBase.totalPnlUsdc),
       depositedSource: "equity minus tracked Polymarket P/L",
       depositedNote: "Estimated original account capital currently visible to this app; deposits/withdrawals are not itemized by the public activity API.",
       equitySource: cashUsdc == null ? "polymarket-value-api-or-open-market-value" : "cash + open market value + pending redeem value",

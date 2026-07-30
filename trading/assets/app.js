@@ -4398,7 +4398,7 @@ function renderLiveState(liveState) {
     els.portfolioAnnualized.textContent = "-";
     els.portfolioAnnualized.className = "";
   }
-  if (els.portfolioPeriod) els.portfolioPeriod.textContent = "based on live account snapshot";
+  if (els.portfolioPeriod) els.portfolioPeriod.textContent = "P/L % vs Original value";
   els.portfolioRealized.textContent = signedMoney(realizedPnl);
   els.portfolioRealized.className = pnlClass(realizedPnl);
   els.portfolioRealizedPct.textContent = signedPercent(realizedPnlPct);
