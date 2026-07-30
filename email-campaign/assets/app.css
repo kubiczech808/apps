@@ -1147,6 +1147,61 @@ label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-
   font-weight: 800;
   flex: 0 0 28px;
 }
+.subtabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+}
+.subtabs a {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid #cfe0d9;
+  background: #fff;
+  color: #21443b;
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+}
+.subtabs a.active {
+  background: #16624c;
+  border-color: #16624c;
+  color: #fff;
+}
+.research-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.research-log-table th,
+.research-log-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #e4ece9;
+  text-align: left;
+  vertical-align: top;
+}
+.research-log-table th:nth-child(6),
+.research-log-table th:nth-child(7),
+.research-log-table th:nth-child(8),
+.research-log-table td:nth-child(6),
+.research-log-table td:nth-child(7),
+.research-log-table td:nth-child(8) {
+  text-align: right;
+  white-space: nowrap;
+}
+.research-log-table td:nth-child(2) {
+  white-space: nowrap;
+}
+.research-log-message {
+  min-width: 260px;
+  white-space: normal;
+  line-height: 1.45;
+}
+.research-log-planned {
+  background: #eef8f4;
+  font-weight: 600;
+}
+
 .workflow-checklist-title {
   margin: 14px 0 6px;
   font-size: 14px;
@@ -2063,7 +2118,7 @@ td a {
 .view-research .research-table {
   table-layout: fixed;
   width: 100%;
-  min-width: 1448px;
+  min-width: 1278px;
 }
 .view-research .research-table > thead > tr > th,
 .view-research .research-table > tbody > tr.expandable-row > td {
@@ -2092,15 +2147,11 @@ td a {
 .view-research .research-table > thead > tr > th:nth-child(12) { width: 80px; }
 .view-research .research-table > thead > tr > th:nth-child(13) { width: 82px; }
 .view-research .research-table > thead > tr > th:nth-child(14) { width: 94px; }
-.view-research .research-table > thead > tr > th:nth-child(15) { width: 54px; }
-.view-research .research-table > thead > tr > th:nth-child(16) { width: 116px; }
 .view-research .research-table > tbody > tr.expandable-row > td:nth-child(2) { overflow: visible; }
 .view-research .research-table > thead > tr > th:nth-child(13),
 .view-research .research-table > thead > tr > th:nth-child(14),
-.view-research .research-table > thead > tr > th:nth-child(15),
 .view-research .research-table > tbody > tr.expandable-row > td:nth-child(13),
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(14),
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(15) {
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(14) {
   text-align: right;
 }
 .view-research .research-table > tbody > tr.research-starting-row > td {

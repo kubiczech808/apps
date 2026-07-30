@@ -601,6 +601,27 @@ final class Database
                 INDEX ai_research_contacts_email_idx (email)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         $this->ensureColumn('ai_research_runs', 'scraping_keyword', "VARCHAR(255) NOT NULL DEFAULT ''");
+
+        // Provozni log automatiky. Vzdy obsahuje i jeden naplanovany zaznam dopredu,
+        // aby bylo videt, kdy a na cem se bude pracovat, i kdyz se dlouho nic nedeje.
+        $this->pdo->exec("CREATE TABLE IF NOT EXISTS ai_research_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                status VARCHAR(20) NOT NULL DEFAULT 'planned',
+                kind VARCHAR(40) NOT NULL DEFAULT 'new_seed',
+                planned_at VARCHAR(40) NOT NULL DEFAULT '',
+                started_at VARCHAR(40) NOT NULL DEFAULT '',
+                finished_at VARCHAR(40) NOT NULL DEFAULT '',
+                run_id INT NOT NULL DEFAULT 0,
+                subject VARCHAR(255) NOT NULL DEFAULT '',
+                model VARCHAR(80) NOT NULL DEFAULT '',
+                requests INT NOT NULL DEFAULT 0,
+                tokens INT NOT NULL DEFAULT 0,
+                duration_seconds INT NOT NULL DEFAULT 0,
+                message TEXT NOT NULL,
+                created_at VARCHAR(40) NOT NULL,
+                INDEX ai_research_logs_status_idx (status, id),
+                INDEX ai_research_logs_created_idx (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     }
 
     private function ensureAiResearchOutreachColumns(): void

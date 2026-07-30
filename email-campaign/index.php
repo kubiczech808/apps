@@ -253,6 +253,15 @@ function aiResearchRequestsMadeThisProcess(): int
     return count(aiResearchRequestTimestamps());
 }
 
+function aiResearchTokensUsedThisProcess(): int
+{
+    $tokens = 0;
+    foreach (aiResearchRequestTimestamps() as $entry) {
+        $tokens += (int)($entry['tokens'] ?? 0);
+    }
+    return $tokens;
+}
+
 function aiResearchSleepWithinDeadline(int $seconds, int $deadline): bool
 {
     $seconds = min($seconds, max(0, $deadline - time()));
@@ -2645,6 +2654,12 @@ function runCronAiResearch(PDO $pdo, array $config): string
 {
     $settings = loadSettings($pdo);
     $intervalSeconds = aiResearchRunIntervalSeconds($config);
+    // Kazdy tik cronu se zapise, i kdyz se nakonec nic nespusti. Bez toho neni z UI
+    // poznat rozdil mezi "ceka se na interval" a "cron vubec nebezi".
+    setSetting($pdo, 'ai_research_last_tick_at', (string)time());
+    // Naplanovany zaznam v logu se obnovi pri kazdem tiku, i kdyz se nakonec nic
+    // nespusti. Uzivatel tak vzdy vidi, kdy a na cem se bude pracovat.
+    $planned = refreshAiResearchPlannedLog($pdo, $config, $settings);
     $nextAllowedAt = (int)($settings['ai_research_next_allowed_at'] ?? 0);
     if ($nextAllowedAt > time()) {
         return 'AI research: Gemini je docasne omezeny, dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.';
@@ -2662,9 +2677,14 @@ function runCronAiResearch(PDO $pdo, array $config): string
     $usedToday = aiResearchGeminiRequestsUsedLast24h($pdo);
     $neededPerSeed = aiResearchEstimatedGeminiRequestsPerSeed($config);
     if ($usedToday + $neededPerSeed > $dailyBudget) {
-        return 'AI research: denni rozpocet Gemini pozadavku je vycerpany (' . $usedToday . '/' . $dailyBudget
+        $message = 'AI research: denni rozpocet Gemini pozadavku je vycerpany (' . $usedToday . '/' . $dailyBudget
             . ' za poslednich 24 h, jeden seed potrebuje ' . $neededPerSeed . '). Dalsi seed se spusti, az se klouzave okno uvolni.';
+        updateAiResearchLog($pdo, $planned, ['status' => 'skipped', 'message' => $message, 'finished_at' => date('c')]);
+        planNextAiResearchLog($pdo, $config);
+        return $message;
     }
+    $startedAt = time();
+    updateAiResearchLog($pdo, $planned, ['status' => 'running', 'started_at' => date('c'), 'message' => 'Beh probiha.']);
     // Zamek drzi jen o malo delsi dobu, nez je vlastni casovy budget behu. Kdyz hosting
     // pozadavek zabije, dalsi cron neceka 15 minut, ale hned to zkusi znovu.
     setSetting($pdo, 'ai_research_lock_until', (string)(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS + 60));
@@ -2695,6 +2715,7 @@ function runCronAiResearch(PDO $pdo, array $config): string
         setSetting($pdo, 'ai_research_last_run_at', (string)time());
         setSetting($pdo, 'ai_research_lock_until', '');
         setSetting($pdo, 'ai_research_next_allowed_at', '');
+        closeAiResearchLog($pdo, $planned, 'done', $message, $startedAt, $config);
         return $message . ' Gemini pozadavku v behu: ' . aiResearchRequestsMadeThisProcess()
             . ', za 24 h ' . ($usedToday + aiResearchRequestsMadeThisProcess()) . '/' . $dailyBudget . '.';
     } catch (AiResearchTemporaryException $e) {
@@ -2703,16 +2724,205 @@ function runCronAiResearch(PDO $pdo, array $config): string
             setSetting($pdo, 'ai_research_last_run_at', (string)time());
         }
         setSetting($pdo, 'ai_research_lock_until', '');
-        return 'AI research odlozen: ' . aiResearchFailureMessage($e)
-            . ($nextAllowedAt > 0 ? ' Dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.' : '')
+        $message = 'AI research odlozen: ' . aiResearchFailureMessage($e)
+            . ($nextAllowedAt > 0 ? ' Dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.' : '');
+        closeAiResearchLog($pdo, $planned, 'deferred', $message, $startedAt, $config);
+        return $message
             . ' Gemini pozadavku v behu: ' . aiResearchRequestsMadeThisProcess()
             . ', za 24 h ' . ($usedToday + aiResearchRequestsMadeThisProcess()) . '/' . $dailyBudget . '.';
     } catch (Throwable $e) {
         setSetting($pdo, 'ai_research_lock_until', '');
+        closeAiResearchLog($pdo, $planned, 'failed', 'AI research selhal: ' . $e->getMessage(), $startedAt, $config);
         return 'AI research selhal: ' . $e->getMessage();
     } finally {
         $lockHeld = false;
         aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
+    }
+}
+
+/**
+ * Log automatiky. Vzdy drzi presne jeden zaznam ve stavu "planned" - ten popisuje
+ * dalsi beh (kdy a jestli pujde o novy seed nebo dokonceni odlozeneho). Pri behu se
+ * z nej stane radek s vysledkem a hned se naplanuje novy.
+ */
+function aiResearchNextWorkKind(PDO $pdo): array
+{
+    try {
+        $stmt = $pdo->query('
+            SELECT id, seed_business, seed_email, plan_json
+            FROM ai_research_runs
+            WHERE status IN ("deferred", "failed")
+              AND updated_at >= ' . $pdo->quote(date('c', time() - 7 * 86400)) . '
+            ORDER BY updated_at DESC
+            LIMIT 5
+        ');
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $plan = json_decode((string)$row['plan_json'], true);
+            if (!is_array($plan) || (int)($plan['finish_attempts'] ?? 0) >= 3) {
+                continue;
+            }
+            $name = trim((string)($row['seed_business'] ?? '')) ?: trim((string)($row['seed_email'] ?? ''));
+            return [
+                'kind' => 'finish_deferred',
+                'run_id' => (int)$row['id'],
+                'subject' => $name,
+            ];
+        }
+    } catch (Throwable $e) {
+        error_log('AI research next work lookup failed: ' . $e->getMessage());
+    }
+    return ['kind' => 'new_seed', 'run_id' => 0, 'subject' => ''];
+}
+
+function aiResearchPlannedRunAt(array $config, array $settings): int
+{
+    $nextAllowedAt = (int)($settings['ai_research_next_allowed_at'] ?? 0);
+    $lastRun = (int)($settings['ai_research_last_run_at'] ?? 0);
+    $interval = aiResearchRunIntervalSeconds($config);
+    $earliest = $lastRun > 0 ? $lastRun + $interval : time();
+    return max($earliest, $nextAllowedAt, time());
+}
+
+function refreshAiResearchPlannedLog(PDO $pdo, array $config, array $settings): int
+{
+    try {
+        $work = aiResearchNextWorkKind($pdo);
+        $plannedAt = aiResearchPlannedRunAt($config, $settings);
+        $stmt = $pdo->query('SELECT id FROM ai_research_logs WHERE status="planned" ORDER BY id DESC LIMIT 1');
+        $existingId = (int)($stmt->fetchColumn() ?: 0);
+        $fields = [
+            'kind' => $work['kind'],
+            'run_id' => $work['run_id'],
+            'subject' => $work['subject'],
+            'planned_at' => date('c', $plannedAt),
+            'message' => aiResearchPlannedLogMessage($work, $settings, $config),
+        ];
+        if ($existingId > 0) {
+            updateAiResearchLog($pdo, $existingId, $fields);
+            // Starsi duplicity smaze, aby v logu nikdy nevisel vic nez jeden plan.
+            $pdo->exec('DELETE FROM ai_research_logs WHERE status="planned" AND id<>' . $existingId);
+            return $existingId;
+        }
+        return insertAiResearchLog($pdo, $fields + ['status' => 'planned']);
+    } catch (Throwable $e) {
+        error_log('AI research planned log refresh failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+function aiResearchPlannedLogMessage(array $work, array $settings, array $config): string
+{
+    $nextAllowedAt = (int)($settings['ai_research_next_allowed_at'] ?? 0);
+    $reason = $nextAllowedAt > time()
+        ? 'Ceka se na uvolneni Gemini limitu.'
+        : 'Ceka se na interval mezi behy (' . aiResearchIntervalLabel(aiResearchRunIntervalSeconds($config)) . ').';
+    return $work['kind'] === 'finish_deferred'
+        ? 'Dokonci se odlozeny beh #' . (int)$work['run_id']
+            . ($work['subject'] !== '' ? ' (' . $work['subject'] . ')' : '') . '. ' . $reason
+        : 'Vybere se novy seed subjekt z Firmy.cz. ' . $reason;
+}
+
+function planNextAiResearchLog(PDO $pdo, array $config): int
+{
+    return refreshAiResearchPlannedLog($pdo, $config, loadSettings($pdo));
+}
+
+function closeAiResearchLog(PDO $pdo, int $logId, string $status, string $message, int $startedAt, array $config): void
+{
+    updateAiResearchLog($pdo, $logId, [
+        'status' => $status,
+        'message' => $message,
+        'finished_at' => date('c'),
+        'duration_seconds' => max(0, time() - $startedAt),
+        'requests' => aiResearchRequestsMadeThisProcess(),
+        'tokens' => aiResearchTokensUsedThisProcess(),
+        'model' => aiResearchModelName($config),
+    ]);
+    planNextAiResearchLog($pdo, $config);
+}
+
+function insertAiResearchLog(PDO $pdo, array $fields): int
+{
+    $fields['created_at'] = date('c');
+    $columns = array_keys($fields);
+    $stmt = $pdo->prepare('INSERT INTO ai_research_logs (' . implode(', ', $columns) . ') VALUES ('
+        . implode(', ', array_fill(0, count($columns), '?')) . ')');
+    $stmt->execute(array_values($fields));
+    return (int)$pdo->lastInsertId();
+}
+
+function updateAiResearchLog(PDO $pdo, int $logId, array $fields): void
+{
+    if ($logId <= 0 || !$fields) {
+        return;
+    }
+    try {
+        $sets = [];
+        foreach (array_keys($fields) as $column) {
+            $sets[] = $column . '=?';
+        }
+        $values = array_values($fields);
+        $values[] = $logId;
+        $stmt = $pdo->prepare('UPDATE ai_research_logs SET ' . implode(', ', $sets) . ' WHERE id=?');
+        $stmt->execute($values);
+    } catch (Throwable $e) {
+        error_log('AI research log update failed: ' . $e->getMessage());
+    }
+}
+
+function aiResearchLogStatusLabel(string $status): string
+{
+    return [
+        'planned' => 'naplanovano',
+        'running' => 'bezi',
+        'done' => 'hotovo',
+        'deferred' => 'odlozeno',
+        'skipped' => 'preskoceno',
+        'failed' => 'chyba',
+    ][$status] ?? $status;
+}
+
+function aiResearchLogKindLabel(string $kind): string
+{
+    return [
+        'new_seed' => 'novy seed subjekt',
+        'finish_deferred' => 'dokonceni odlozeneho behu',
+        'manual' => 'rucni spusteni',
+    ][$kind] ?? $kind;
+}
+
+/**
+ * U naplanovaneho zaznamu je zajimavy cas, kdy pobezi, u hotoveho cas dokonceni.
+ */
+function aiResearchLogWhen(array $log): string
+{
+    $status = (string)($log['status'] ?? '');
+    if ($status === 'planned') {
+        $plannedAt = trim((string)($log['planned_at'] ?? ''));
+        if ($plannedAt === '' || strtotime($plannedAt) <= time()) {
+            return 'pri nejblizsim cronu';
+        }
+        return formatDateTime($plannedAt);
+    }
+    foreach (['finished_at', 'started_at', 'planned_at', 'created_at'] as $key) {
+        $value = trim((string)($log[$key] ?? ''));
+        if ($value !== '') {
+            return formatDateTime($value);
+        }
+    }
+    return '-';
+}
+
+function aiResearchLogEntries(PDO $pdo, int $limit = 60): array
+{
+    try {
+        $stmt = $pdo->prepare('SELECT * FROM ai_research_logs ORDER BY (status="planned") DESC, id DESC LIMIT ?');
+        $stmt->bindValue(1, $limit, PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) {
+        error_log('AI research log read failed: ' . $e->getMessage());
+        return [];
     }
 }
 
@@ -2752,15 +2962,29 @@ function runAiResearchWorker(PDO $pdo, array $config, int $resumeRunId = 0): str
             error_log('AI research worker cleanup failed: ' . $e->getMessage());
         }
     });
+    // Rucni spusteni ma v logu vlastni radek, aby bylo videt, ze beh nespustil cron.
+    $startedAt = time();
+    $logId = insertAiResearchLog($pdo, [
+        'status' => 'running',
+        'kind' => 'manual',
+        'run_id' => $resumeRunId,
+        'started_at' => date('c'),
+        'planned_at' => date('c'),
+        'message' => 'Rucne spusteny beh probiha.',
+    ]);
     try {
         $message = runAiResearchOnce($pdo, $config, true, $resumeRunId);
         setSetting($pdo, 'ai_research_last_run_at', (string)time());
         setSetting($pdo, 'ai_research_next_allowed_at', '');
+        closeAiResearchLog($pdo, $logId, 'done', $message, $startedAt, $config);
         return $message;
     } catch (AiResearchTemporaryException $e) {
         scheduleAiResearchTemporaryBackoff($pdo, $e, aiResearchRunIntervalSeconds($config));
-        return 'AI research odlozen: ' . aiResearchFailureMessage($e);
+        $message = 'AI research odlozen: ' . aiResearchFailureMessage($e);
+        closeAiResearchLog($pdo, $logId, 'deferred', $message, $startedAt, $config);
+        return $message;
     } catch (Throwable $e) {
+        closeAiResearchLog($pdo, $logId, 'failed', 'AI research selhal: ' . $e->getMessage(), $startedAt, $config);
         return 'AI research selhal: ' . $e->getMessage();
     } finally {
         $lockHeld = false;
@@ -17460,7 +17684,61 @@ function renderApp(PDO $pdo, ?array $flash): void
         $researchStarting = !$researchHasRunningRow
             && ($researchLockUntil > time() || ($researchManualPending > 0 && time() - $researchManualPending < 180));
         $researchAutoRefresh = $researchStarting || $researchHasRunningRow;
+        $researchTab = (string)($_GET['tab'] ?? '') === 'logs' ? 'logs' : 'results';
+        $researchLastTickAt = (int)($researchSettings['ai_research_last_tick_at'] ?? 0);
+        // Log si drzi jeden naplanovany zaznam dopredu. Kdyz cron jeste nikdy nebezel,
+        // zalozi se pri prvnim zobrazeni, aby tab nebyl prazdny.
+        if ($researchTab === 'logs') {
+            refreshAiResearchPlannedLog($pdo, $config, $researchSettings);
+        }
+        $researchLogs = $researchTab === 'logs' ? aiResearchLogEntries($pdo) : [];
     ?>
+    <nav class="subtabs" aria-label="AI research sekce">
+        <a href="?route=research" class="<?= $researchTab === 'results' ? 'active' : '' ?>">Výsledky</a>
+        <a href="?route=research&amp;tab=logs" class="<?= $researchTab === 'logs' ? 'active' : '' ?>">Logy a provoz</a>
+    </nav>
+    <?php if ($researchTab === 'logs'): ?>
+    <section class="panel">
+        <div class="section-header">
+            <div>
+                <h2>Logy a provoz automatiky</h2>
+                <p>Každý tik cronu se zapíše, i když se nakonec nic nespustí. První řádek je vždy <strong>naplánovaný běh</strong> &ndash; kdy poběží a jestli se bude hledat nový seed, nebo dokončovat odložený. Podle něj se pozná rozdíl mezi „čeká se na interval“ a „automatika stojí“.</p>
+                <p class="muted">Poslední tik cronu: <strong><?= $researchLastTickAt > 0 ? h(formatDateTime(date('c', $researchLastTickAt))) : 'zatím nezaznamenán' ?></strong><?php if ($researchLastTickAt > 0 && time() - $researchLastTickAt > 1800): ?> &ndash; <strong>to je víc než 30 minut, cron pravděpodobně neběží</strong><?php endif; ?>. Poslední dokončený běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Stav: <?= h($researchAutomationStatus) ?></p>
+                <p class="muted">Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Interval mezi běhy: <?= h(aiResearchIntervalLabel($researchIntervalSeconds)) ?>. Gemini rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
+                <p class="muted">Skutečně odeslané Gemini requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h. Podle těchto čísel se pozná, zda Google limituje po minutách, nebo po dnech.</p>
+            </div>
+            <div class="section-actions">
+                <form method="post" class="inline">
+                    <button type="submit" name="action" value="run_ai_research_now">Spustit research teď</button>
+                </form>
+            </div>
+        </div>
+        <div class="table-shell">
+            <table class="research-log-table">
+                <thead><tr><th>Stav</th><th>Naplánováno</th><th>Práce</th><th>Předmět</th><th>Model</th><th>Req.</th><th>Tokeny</th><th>Trvání</th><th>Zpráva</th></tr></thead>
+                <tbody>
+                <?php if (!$researchLogs): ?>
+                    <tr><td colspan="9">Log je zatím prázdný. Naplánovaný běh se zapíše při nejbližším tiku cronu.</td></tr>
+                <?php endif; ?>
+                <?php foreach ($researchLogs as $logRow): ?>
+                    <?php $logPlanned = (string)$logRow['status'] === 'planned'; ?>
+                    <tr class="<?= $logPlanned ? 'research-log-planned' : '' ?>">
+                        <td><?= statusBadge(aiResearchLogStatusLabel((string)$logRow['status'])) ?></td>
+                        <td><?= h(aiResearchLogWhen($logRow)) ?></td>
+                        <td><?= h(aiResearchLogKindLabel((string)$logRow['kind'])) ?></td>
+                        <td><?= trim((string)$logRow['subject']) !== '' ? h((string)$logRow['subject']) : ((int)$logRow['run_id'] > 0 ? '#' . h((string)$logRow['run_id']) : '-') ?></td>
+                        <td><?= trim((string)$logRow['model']) !== '' ? h(normalizeGeminiModelName((string)$logRow['model'])) : '-' ?></td>
+                        <td><?= (int)$logRow['requests'] > 0 ? h((string)(int)$logRow['requests']) : '-' ?></td>
+                        <td><?= (int)$logRow['tokens'] > 0 ? h(number_format((int)$logRow['tokens'], 0, ',', ' ')) : '-' ?></td>
+                        <td><?= (int)$logRow['duration_seconds'] > 0 ? h((string)(int)$logRow['duration_seconds']) . ' s' : '-' ?></td>
+                        <td class="research-log-message"><?= h((string)$logRow['message']) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </section>
+    <?php else: ?>
     <section class="panel">
         <div class="section-header">
             <div>
@@ -17481,7 +17759,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 </form>
             </div>
         </div>
-        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>K oslovení</th><th>Req.</th><th>Model</th></tr></thead><tbody>
+        <table class="research-table"><thead><tr><th>Detail</th><th>Návrhy</th><th>Oslovení</th><th>Účet</th><th>Kdy</th><th>Seed byznys</th><th>Email</th><th>Stav</th><th>Databáze</th><th>Klíčové slovo</th><th>Lokalita</th><th>Scraping</th><th>Kontakty</th><th>K oslovení</th></tr></thead><tbody>
         <?php if ($researchStarting): ?>
             <tr class="research-starting-row">
                 <td>-</td><td>-</td><td>-</td><td>-</td>
@@ -17489,11 +17767,11 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <td><strong>hledá se seed…</strong></td>
                 <td>-</td>
                 <td><?= statusBadge('bezi...') ?></td>
-                <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
+                <td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td>
             </tr>
         <?php endif; ?>
         <?php if (!$aiResearchRuns && !$researchStarting): ?>
-            <tr><td colspan="16">Zatim nejsou ulozene zadne AI research behy.</td></tr>
+            <tr><td colspan="14">Zatim nejsou ulozene zadne AI research behy.</td></tr>
         <?php endif; ?>
         <?php foreach ($aiResearchRuns as $run): ?>
             <?php $runContacts = $aiResearchContactsByRun[(int)$run['id']] ?? []; ?>
@@ -17612,11 +17890,9 @@ function renderApp(PDO $pdo, ?array $flash): void
                         -
                     <?php endif; ?>
                 </td>
-                <td><?= h((string)(int)($runPlan['gemini_requests'] ?? 0)) ?></td>
-                <td><?php $runModel = aiResearchLastAuditModel($runPlan); ?><?= $runModel !== '' ? h($runModel) : '-' ?></td>
             </tr>
             <tr class="detail-row hidden" id="ai-research-detail-<?= h((string)$run['id']) ?>">
-                <td colspan="16">
+                <td colspan="14">
                     <div class="scraping-detail">
                         <div class="scraping-detail-head">
                             <strong>AI plan #<?= h((string)$run['id']) ?></strong>
@@ -17927,6 +18203,7 @@ function renderApp(PDO $pdo, ?array $flash): void
         </script>
         <?php endif; ?>
     </section>
+    <?php endif; ?>
     <?php endif; ?>
 
     <?php if ($view === 'database_catalog'): ?>
