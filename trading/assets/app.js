@@ -1217,25 +1217,15 @@ function shortIdentifier(value) {
   return `${text.slice(0, 8)}...${text.slice(-6)}`;
 }
 
-function marketMetaLine(item) {
-  if (item.mode !== "LIVE_ORDER") return "";
-  const parts = [
-    item.orderId ? `order ${shortIdentifier(item.orderId)}` : "",
-    item.openedAt ? `created ${formatDate(item.openedAt)}` : "",
-    Number.isFinite(Number(item.entryPrice)) ? `limit ${probability(Number(item.entryPrice))}` : "",
-  ].filter(Boolean);
-  return parts.length ? `<span>${escapeHtml(parts.join(" / "))}</span>` : "";
-}
-
 function marketAnchor(item) {
-  const href = polymarketUrl(item);
-  return `
-    <a class="market-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">
-      <strong>${escapeHtml(item.outcome)}</strong>
-      <span>${escapeHtml(item.question)}</span>
-      ${marketMetaLine(item)}
-    </a>
-  `;
+  const question = String(item?.question || "").trim();
+  const outcome = String(item?.outcome || "-").trim() || "-";
+  const explicitUrl = String(item?.url || item?.marketUrl || "").trim();
+  const slug = String(item?.eventSlug || item?.slug || "").trim();
+  const hasMarketUrl = /^https:\/\/polymarket\.com\//i.test(explicitUrl) || /^[a-z0-9-]+$/i.test(slug);
+  const content = `<strong>${escapeHtml(outcome)}</strong>${question ? `<span>${escapeHtml(question)}</span>` : ""}`;
+  if (!hasMarketUrl) return `<div class="market-link">${content}</div>`;
+  return `<a class="market-link" href="${escapeHtml(polymarketUrl(item))}" target="_blank" rel="noopener noreferrer">${content}</a>`;
 }
 
 function tradePnlValue(trade) {
@@ -3282,7 +3272,13 @@ async function ensureScrapedMarketState(options = {}) {
     if (dashboardLoadIsStale(options)) return;
     storeScrapedMarketState(scrapedState);
     if (state.opportunityView === "scraped") renderBotEvaluations();
-    if (shouldRenderCandidateBotState()) renderPortfolioCandidates();
+    if (isLiveMode() && state.liveState) {
+      // Open CLOB orders only expose a token ID. Re-render after scraped market
+      // metadata arrives so the table can resolve its human market title.
+      renderLiveState(state.liveState);
+    } else if (shouldRenderCandidateBotState()) {
+      renderPortfolioCandidates();
+    }
   } catch (error) {
     rememberStateFetchError("paper", error);
     if (state.opportunityView === "scraped" && els.botEvaluations) {
@@ -4342,7 +4338,9 @@ function evaluationByTokenId(tokenId) {
   const token = String(tokenId || "");
   if (!token) return null;
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
-  return evaluations.find((item) => String(item.tokenId || item.clobTokenId || "") === token) || null;
+  const scraped = scrapedMarketObservations();
+  return [...evaluations, ...scraped]
+    .find((item) => String(item.tokenId || item.clobTokenId || item.assetId || "") === token) || null;
 }
 
 function normalizedMatchText(value) {
@@ -4413,11 +4411,11 @@ function normalizeLiveOpenOrderForTable(order) {
     orderId: order.id || order.orderID || order.orderId || null,
     mode: "LIVE_ORDER",
     status: "LIMIT ORDER",
-    question: source?.question || order.question || "Open live limit order",
+    question: source?.question || order.question || "",
     outcome: source?.outcome || order.outcome || order.side || "-",
     slug: source?.slug || source?.eventSlug || "",
     eventSlug: source?.eventSlug || source?.slug || "",
-    url: source ? polymarketUrl(source) : "https://polymarket.com/",
+    url: source ? polymarketUrl(source) : "",
     tokenId: order.tokenId || order.assetId || null,
     date: order.createdAt || null,
     openedAt: order.createdAt || null,
