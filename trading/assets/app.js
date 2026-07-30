@@ -3744,6 +3744,19 @@ function paperPortfolioTrades(portfolioState) {
     }));
 }
 
+function stakeSizingRuleValue(mode, portfolio = {}) {
+  const normalizedMode = normalizeMode(mode);
+  const config = portfolioConfigForMode(normalizedMode);
+  const allocation = normalizeRiskAllocation(config.maxOrderFraction) ?? DEFAULT_RISK_ALLOCATION;
+  const fallbackPortfolio = normalizedMode === "live"
+    ? state.liveState?.portfolio
+    : state.botState?.paperPortfolios?.[paperStrategyIdFromMode(normalizedMode)]?.portfolio;
+  const equity = Number(portfolio?.equityUsdc ?? fallbackPortfolio?.equityUsdc);
+  const equityLabel = normalizedMode === "live" ? "live equity" : "portfolio equity";
+  const nominalStake = Number.isFinite(equity) ? Math.max(0, equity) * allocation : null;
+  return `${probability(allocation)} of ${equityLabel}${Number.isFinite(nominalStake) ? ` (${money(nominalStake)})` : ""}`;
+}
+
 function portfolioRuleRows(portfolio = {}) {
   const mode = portfolio.id ? paperModeFromStrategyId(portfolio.id) : state.mode;
   const config = portfolioConfigForMode(mode);
@@ -3758,7 +3771,7 @@ function portfolioRuleRows(portfolio = {}) {
   const resolution = `Max ${maxResolutionDays.toLocaleString("en-US", { maximumFractionDigits: 0 })} days`;
   const rows = [
     ["Probability threshold", `${probabilitySourceLabel(config.probabilitySource)} >= ${percent(threshold)}`],
-    ["Stake sizing", `${probability(currentRiskAllocation())} of portfolio equity`],
+    ["Stake sizing", stakeSizingRuleValue(mode, portfolio)],
     ["Resolution filter", resolution],
     ["Trade priority", priority],
     ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 1)}h between new paper trades`],
@@ -3780,7 +3793,7 @@ function livePortfolioRuleRows() {
     : `Highest ${returnMetric}, then shorter resolution and net gain`;
   return [
     ["Probability threshold", `${probabilitySourceLabel(config.probabilitySource)} >= ${percent(currentEligibilityThreshold())}`],
-    ["Stake sizing", `${probability(currentRiskAllocation())} of live equity`],
+    ["Stake sizing", stakeSizingRuleValue("live", state.liveState?.portfolio)],
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
     ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 24)}h between new live orders`],
