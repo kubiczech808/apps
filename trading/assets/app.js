@@ -4058,6 +4058,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           <th>Win</th>
           <th>Net yield %</th>
           <th>R/R</th>
+          <th>Liquidity</th>
           <th>Analysis</th>
         </tr>
       </thead>
@@ -4088,6 +4089,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               <td data-label="Win">${gainCell(item)}</td>
               <td data-label="Net yield %">${netYieldCell(item)}</td>
               <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
+              <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
               <td data-label="Analysis">${analysisBadge(item)}</td>
             </tr>
           `;
