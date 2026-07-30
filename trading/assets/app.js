@@ -3691,30 +3691,59 @@ function sortPortfolioCandidates(rows = [], mode = state.mode) {
   ];
 }
 
-function portfolioCandidateRows(mode = state.mode) {
+function portfolioCandidateDiagnostics(mode = state.mode) {
   const evaluations = latestUniquePortfolioEvaluations(Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : []);
   const evaluationByToken = new Map(evaluations.map((item) => [String(item.tokenId || ""), item]).filter(([token]) => token));
   const activeRows = activeExposureRowsForMode(mode);
-  const rows = evaluations
-    .map((item) => {
-      const reasons = portfolioCandidateFilterReasons(item, mode);
-      if (reasons.length) return null;
-      const riskReason = candidateRiskBlockReason(item, activeRows, evaluationByToken);
-      const config = portfolioConfigForMode(mode);
-      return {
-        ...item,
-        annualizedReturn: portfolioAnnualizedReturn(item, config),
-        expectedValueUsdc: portfolioExpectedValue(item, config),
-        portfolioRiskBlockReason: riskReason,
-      };
-    })
-    .filter((item) => item && !item.portfolioRiskBlockReason);
-  return sortPortfolioCandidates(rows, mode);
+  const ready = [];
+  const riskBlocked = [];
+  const filteredReasonCounts = new Map();
+  const config = portfolioConfigForMode(mode);
+
+  for (const item of evaluations) {
+    const reasons = portfolioCandidateFilterReasons(item, mode);
+    if (reasons.length) {
+      for (const reason of reasons) {
+        filteredReasonCounts.set(reason, (filteredReasonCounts.get(reason) || 0) + 1);
+      }
+      continue;
+    }
+    const row = {
+      ...item,
+      annualizedReturn: portfolioAnnualizedReturn(item, config),
+      expectedValueUsdc: portfolioExpectedValue(item, config),
+      portfolioRiskBlockReason: candidateRiskBlockReason(item, activeRows, evaluationByToken),
+    };
+    if (row.portfolioRiskBlockReason) riskBlocked.push(row);
+    else ready.push(row);
+  }
+
+  return {
+    ready: sortPortfolioCandidates(ready, mode),
+    riskBlocked: sortPortfolioCandidates(riskBlocked, mode),
+    filteredReasonCounts,
+  };
 }
 
-function renderPortfolioCandidateRows(rows = [], mode = state.mode) {
+function portfolioCandidateRows(mode = state.mode) {
+  return portfolioCandidateDiagnostics(mode).ready;
+}
+
+function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics = null) {
   if (!rows.length) {
-    return '<div class="empty">No opportunities currently pass this portfolio shortlist. The next run will still refresh market data and re-evaluate newly analyzed opportunities.</div>';
+    const config = portfolioConfigForMode(mode);
+    const riskBlocked = diagnostics?.riskBlocked?.length || 0;
+    const probabilitySource = normalizeProbabilitySource(config.probabilitySource);
+    const nonProfitable = [...(diagnostics?.filteredReasonCounts || new Map()).entries()]
+      .filter(([reason]) => reason.includes("non-profitable after fees"))
+      .reduce((sum, [, count]) => sum + count, 0);
+    const details = [
+      riskBlocked ? `${riskBlocked} otherwise matching ${riskBlocked === 1 ? "opportunity is" : "opportunities are"} excluded because it overlaps an open position.` : "",
+      probabilitySource === "polymarket" && nonProfitable
+        ? `${nonProfitable} scraped market quote${nonProfitable === 1 ? " is" : "s are"} non-profitable after fees at the current entry price.`
+        : "",
+    ].filter(Boolean).join(" ");
+    return `<div class="empty">No opportunities currently pass this portfolio shortlist.${details ? ` ${escapeHtml(details)}` : " The next scan will refresh market data and newly analyzed opportunities."}</div>`;
   }
   const live = normalizeMode(mode) === "live";
   const config = portfolioConfigForMode(mode);
@@ -3784,13 +3813,15 @@ function renderPortfolioCandidates() {
     if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "loading";
     return;
   }
-  const rows = portfolioCandidateRows(mode);
+  const diagnostics = portfolioCandidateDiagnostics(mode);
+  const rows = diagnostics.ready;
   const label = normalizeMode(mode) === "live" ? "Live" : `Paper - ${paperModeLabel(mode)}`;
   if (els.portfolioCandidatesTitle) els.portfolioCandidatesTitle.textContent = `${label} execution candidates`;
   if (els.portfolioCandidatesSummary) {
-    els.portfolioCandidatesSummary.textContent = `${rows.length} ready / active risk overlaps excluded`;
+    const blocked = diagnostics.riskBlocked.length;
+    els.portfolioCandidatesSummary.textContent = `${rows.length} ready${blocked ? ` / ${blocked} risk-blocked` : ""}`;
   }
-  els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode);
+  els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode, diagnostics);
 }
 
 function renderPortfolioRulesCard(title, rows) {
