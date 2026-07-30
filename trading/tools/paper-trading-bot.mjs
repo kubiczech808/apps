@@ -4343,6 +4343,51 @@ function validMarketProbability(value) {
   return Number.isFinite(numeric) && numeric > 0 && numeric < 1 ? numeric : null;
 }
 
+function annualizedPotentialReturn(netYield, days) {
+  if (!Number.isFinite(netYield)) return null;
+  return Number.isFinite(days) && days > 0 ? netYield * (365 / days) : netYield;
+}
+
+function normalizeMarketObservationEconomics(observation) {
+  const price = validMarketProbability(observation?.marketPrice ?? observation?.marketProbability);
+  const probability = validMarketProbability(observation?.marketProbability);
+  const stake = Number(observation?.stakeUsdc);
+  if (!Number.isFinite(price) || !Number.isFinite(probability) || !Number.isFinite(stake) || stake <= 0) return observation;
+
+  const shares = stake / price;
+  const feeRate = Math.max(0, Number(observation?.feeRate) || 0);
+  const takerFee = takerFeeForFills([{ price, size: shares }], feeRate);
+  const totalCost = stake + takerFee;
+  const netGainIfWin = shares - totalCost;
+  const netYield = totalCost > 0 ? netGainIfWin / totalCost : null;
+  const expectedValue = probability * shares - totalCost;
+  const expectedRoi = totalCost > 0 ? expectedValue / totalCost : null;
+  const days = daysToEnd(observation.endDate);
+  const marketAnnualizedReturn = Number.isFinite(expectedRoi)
+    ? (Number.isFinite(days) && days > 0 ? expectedRoi * (365 / days) : expectedRoi)
+    : null;
+  const potentialAnnualizedReturn = annualizedPotentialReturn(netYield, days);
+
+  return {
+    ...observation,
+    marketPrice: Number(price.toFixed(4)),
+    marketProbability: Number(probability.toFixed(4)),
+    daysToResolution: Number.isFinite(days) ? Number(days.toFixed(2)) : observation.daysToResolution ?? null,
+    executableShares: Number(shares.toFixed(4)),
+    takerFeeUsdc: Number(takerFee.toFixed(5)),
+    totalCostUsdc: Number(totalCost.toFixed(5)),
+    netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
+    netYield: Number.isFinite(netYield) ? Number(netYield.toFixed(4)) : null,
+    riskReward: Number.isFinite(netYield) ? Number(netYield.toFixed(4)) : null,
+    potentialAnnualizedReturn: Number.isFinite(potentialAnnualizedReturn) ? Number(potentialAnnualizedReturn.toFixed(4)) : null,
+    marketExpectedValueUsdc: Number(expectedValue.toFixed(4)),
+    marketExpectedRoi: Number.isFinite(expectedRoi) ? Number(expectedRoi.toFixed(4)) : null,
+    marketAnnualizedReturn: Number.isFinite(marketAnnualizedReturn) ? Number(marketAnnualizedReturn.toFixed(4)) : null,
+    expectedValueUsdc: Number(expectedValue.toFixed(4)),
+    annualizedReturn: Number.isFinite(marketAnnualizedReturn) ? Number(marketAnnualizedReturn.toFixed(4)) : null,
+  };
+}
+
 function preferredMarketObservation(market, observedAt = nowIso()) {
   const outcomes = parseJsonField(market?.outcomes).map((outcome) => String(outcome || ""));
   const prices = parseJsonField(market?.outcomePrices).map(validMarketProbability);
@@ -4392,6 +4437,7 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
   const marketAnnualizedReturn = Number.isFinite(days) && days > 0 && Number.isFinite(marketExpectedRoi)
     ? marketExpectedRoi * (365 / days)
     : marketExpectedRoi;
+  const potentialAnnualizedReturn = annualizedPotentialReturn(netYield, days);
   const tags = tagQuestion(market.question || "");
   const risk = riskProfile({
     question: market.question || "",
@@ -4435,6 +4481,7 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
     netYield: Number.isFinite(netYield) ? Number(netYield.toFixed(4)) : null,
     riskReward: Number.isFinite(riskReward) ? Number(riskReward.toFixed(4)) : null,
+    potentialAnnualizedReturn: Number.isFinite(potentialAnnualizedReturn) ? Number(potentialAnnualizedReturn.toFixed(4)) : null,
     marketExpectedValueUsdc: Number(marketExpectedValue.toFixed(4)),
     marketExpectedRoi: Number.isFinite(marketExpectedRoi) ? Number(marketExpectedRoi.toFixed(4)) : null,
     marketAnnualizedReturn: Number.isFinite(marketAnnualizedReturn) ? Number(marketAnnualizedReturn.toFixed(4)) : null,
@@ -4487,7 +4534,8 @@ async function refreshMarketObservations(state) {
     const days = daysToEnd(item.endDate);
     return Number.isFinite(days) && days > 0 && days <= MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS;
   }).length;
-  state.marketObservations = mergeMarketObservationLists(observations, state.marketObservations || []);
+  state.marketObservations = mergeMarketObservationLists(observations, state.marketObservations || [])
+    .map(normalizeMarketObservationEconomics);
   state.marketScan = {
     cursor: broadCursor,
     lastScanAt: observedAt,
@@ -5129,6 +5177,7 @@ async function run() {
   state.evaluations = (await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || [])))
     .map(normalizeAiPendingEvaluation)
     .map(ensureEvaluationErrorMetadata);
+  state.marketObservations = (state.marketObservations || []).map(normalizeMarketObservationEconomics);
   // Repair records created before binary outcome flips rebuilt the full quote.
   // This runs even if the current market scan does not include that contract.
   state.evaluations = repairStaleBinarySideQuotes(state.evaluations);

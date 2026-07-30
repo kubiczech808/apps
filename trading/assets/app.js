@@ -1062,6 +1062,13 @@ function marketAnnualizedExpectedReturn(item) {
   return Number.isFinite(days) && days > 0 ? roi * (365 / days) : roi;
 }
 
+function potentialAnnualizedReturn(item) {
+  const yieldValue = netYield(item);
+  const days = evaluationDaysLeft(item);
+  if (!Number.isFinite(yieldValue)) return null;
+  return Number.isFinite(days) && days > 0 ? yieldValue * (365 / days) : yieldValue;
+}
+
 function daysToResolution(item) {
   const value = Number(item.daysToResolution);
   return Number.isFinite(value) ? value : null;
@@ -1795,9 +1802,10 @@ const EVALUATION_HEADER_INFO = {
   marketPrice: "Executable entry estimate, using the current order book rather than midpoint.",
   gainIfWin: "Profit at the standard $5 evaluation stake, after the currently selected fee mode.",
   netYield: "Profit if correct divided by evaluation stake/cost, after expected trading fees.",
+  potentialAnnualizedReturn: "Return if correct annualized by time to resolution, after fees. This is not probability-weighted expected value.",
   riskReward: "Reward divided by risk at the evaluated entry.",
   aiProbability: "AI-estimated probability for the selected outcome.",
-  annualizedReturn: "Expected value annualized by days to resolution, after fees.",
+  annualizedReturn: "Probability-weighted expected value annualized by days to resolution, after fees. With Polymarket probability equal to entry price, fees normally make this negative.",
   updates: "How many times this market/outcome was evaluated. Click row info for changes.",
   analysis: "AI thesis, evidence, counter-evidence, and portfolio filter notes.",
 };
@@ -4594,6 +4602,7 @@ function scrapedSortValue(item, key) {
   if (key === "marketProbability") return Number(item.marketProbability);
   if (key === "netGainIfWinUsdc") return gainIfWin(item);
   if (key === "netYield") return netYield(item);
+  if (key === "potentialAnnualizedReturn") return potentialAnnualizedReturn(item);
   if (key === "riskReward") return evaluationRiskReward(item);
   if (key === "marketAnnualizedReturn") return marketAnnualizedExpectedReturn(item);
   if (key === "marketExpectedValueUsdc") return marketExpectedValueFromQuote(item);
@@ -4700,8 +4709,9 @@ function renderScrapedOpportunities() {
             ${scrapedSortableHeader("marketProbability", "Mkt prob.")}
             ${scrapedSortableHeader("netGainIfWinUsdc", "Win @ $5")}
             ${scrapedSortableHeader("netYield", "Net yield %")}
+            ${scrapedSortableHeader("potentialAnnualizedReturn", "Potential p.a.")}
             ${scrapedSortableHeader("riskReward", "R/R")}
-            ${scrapedSortableHeader("marketAnnualizedReturn", "EV p.a.")}
+            ${scrapedSortableHeader("marketAnnualizedReturn", "Mkt EV p.a.")}
             ${scrapedSortableHeader("marketExpectedValueUsdc", "EV")}
             <th>Yes / No</th>
             ${scrapedSortableHeader("liquidity", "Liquidity")}
@@ -4720,8 +4730,9 @@ function renderScrapedOpportunities() {
               <td data-label="Mkt prob.">${probability(Number(item.marketProbability))}</td>
               <td data-label="Win @ $5">${gainCell(item)}</td>
               <td data-label="Net yield %">${netYieldCell(item)}</td>
+              <td data-label="Potential p.a."><span class="${pnlClass(potentialAnnualizedReturn(item))}">${signedPercent(potentialAnnualizedReturn(item))}</span></td>
               <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
-              <td data-label="EV p.a."><span class="${pnlClass(marketAnnualizedExpectedReturn(item))}">${signedPercent(marketAnnualizedExpectedReturn(item))}</span></td>
+              <td data-label="Mkt EV p.a."><span class="${pnlClass(marketAnnualizedExpectedReturn(item))}">${signedPercent(marketAnnualizedExpectedReturn(item))}</span></td>
               <td data-label="EV">${signedMoney(marketExpectedValueFromQuote(item), 4)}</td>
               <td data-label="Yes / No">${binaryMarketProbabilityCell(item)}</td>
               <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
