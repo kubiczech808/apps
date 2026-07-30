@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Setting up a recurring buy for a child&#x27;s cold card</title>
+<meta name="description" content="My parents set up a traditional savings account for me when I was a kid. By the time I turned 18, inflation had eaten a massive chunk of its purchasing..."/>
+<meta property="og:title" content="Setting up a recurring buy for a child&#x27;s cold card"/>
+<meta property="og:description" content="My parents set up a traditional savings account for me when I was a kid. By the time I turned 18, inflation had eaten a massive chunk of its purchasing..."/>
+<meta property="og:type" content="article"/>
+<link rel="canonical" href="https://btc-dca.com/articles/generated-202607300325.html"/>
+</head>
+<body>
+<article>
+<h1>Setting up a recurring buy for a child&#x27;s cold card</h1>
+<img src="https://kubiczech808.github.io/apps/articles/images/generated-202607300325.jpg" alt="Setting up a recurring buy for a child&#x27;s cold card" style="max-width:100%"/>
+<p>My parents set up a traditional savings account for me when I was a kid. By the time I turned 18, inflation had eaten a massive chunk of its purchasing power, leaving me with barely enough to buy a used laptop. I refuse to make the same mistake with my own kid. Instead of letting fiat rot in a bank, I decided to build a multi-decade Bitcoin stack for them. But doing this correctly is harder than it looks. You can't just mix their funds with your personal stack unless you want a massive tax and accounting headache down the road. That is why I started looking into <strong>setting up a recurring buy for a child's cold card / sub-account</strong> to keep everything perfectly separated.</p>
+
+<h2>Why separation of church and state matters in self-custody</h2>
+
+<p>Let's be honest: tracking different pots of money in a single Bitcoin wallet is a recipe for disaster. If you use one giant seed phrase for your retirement, your emergency fund, and your kid's future, you will eventually lose track of who owns what. Or worse, you might accidentally spend their share during a market cycle peak.</p>
+
+<p>To avoid this, I set a strict rule for myself: my kid's satoshis must live on a completely different derivation path or a separate physical device altogether.</p>
+
+<p>I chose to use a dedicated <a href="https://bit.ly/buy-trezor-t">Trezor hardware wallet</a> just for this goal. It sits in my safe, completely untouched, waiting for them to turn 18. But getting the Bitcoin there automatically without paying outrageous exchange fees every week was the real puzzle I had to solve. Most platforms charge a premium for automated buys, or they make it incredibly tedious to withdraw small amounts to cold storage manually.</p>
+
+<h2>The steps for setting up a recurring buy for a child's cold card / sub-account</h2>
+
+<p>If you want to keep things clean, you have two main choices. You can either open a separate sub-account on your favorite exchange, or you can use a dedicated API key that routes purchases to a specific wallet.</p>
+
+<p>For my setup, I use <a href="https://accounts.binance.com/en/register?ref=ABP939VR">Binance</a> (though <a href="https://coinmate.io/?affiliate=UlhaT1ZETjZNbkJ6V0hrd1IyeERZakEzVUdaV2R3PT0">Coinmate</a> is also a fantastic option if you are based in Europe). Many of these platforms allow you to create sub-accounts or at least separate digital envelopes.</p>
+
+<p>Once the exchange side is ready, the next step is automating the actual purchases. This is exactly why I built my own <a href="https://www.btc-dca.com">free Bitcoin DCA automation tool</a>. I wanted a way to connect to my exchange via API, execute a buy every week, and immediately withdraw those sats to my kid's cold storage.</p>
+
+<p>Here is the exact checklist I used when setting up a recurring buy for a child's cold card / sub-account:</p>
+
+<p>1. Set up a dedicated sub-account or separate account on your exchange of choice.</p>
+<p>2. Generate a restricted API key with "Trade" and "Withdraw" permissions only.</p>
+<p>3. Initialize a separate passphrase or wallet on your <a href="https://bit.ly/buy-trezor-t">Trezor hardware wallet</a> to generate a unique deposit address.</p>
+<p>4. Link the API to an automation tool that supports auto-withdrawals directly to that cold address.</p>
+
+<p>By automating this, I don't have to log in every Monday, deal with the temptation of trying to time the market, or manually transfer small amounts (which usually leads to leaving funds on the exchange for too long).</p>
+
+<h2>The cycle-aware math of a 15-year horizon</h2>
+
+<p>When you are investing for a child, your time horizon isn't two or three years; it's likely fifteen or twenty. Over that kind of timeframe, standard dollar-cost averaging models can get a bit weird because of Bitcoin's halving cycles and diminishing returns.</p>
+
+<p>If you want to play around with the numbers, I highly recommend using a <a href="https://www.btc-dca.com/dca-calculator.php">cycle-aware DCA calculator</a>. Most calculators assume linear growth, which is a dangerous assumption for Bitcoin. Modeling diminishing returns per halving gives you a much more realistic picture of what that college fund might actually look like in 2035.</p>
+
+<p>Personally, I'm not trying to get rich quick here. I'm just trying to make sure my kid has a hard-money lifeline when they enter an increasingly chaotic financial world. If you want to learn more about the mechanics behind this strategy, you can read more about <a href="https://www.btc-dca.com/dollar-cost-averaging">what is DCA</a> and how it dampens volatility over long horizons.</p>
+
+<p>Just a quick heads-up: obviously, I'm not your financial advisor, and this isn't legal or tax advice. Setting up custodial accounts or holding assets for minors can have different tax implications depending on where you live, so definitely do your own research before locking up funds.</p>
+
+<p>If you are thinking about setting up a recurring buy for a child's cold card / sub-account, remember that consistency beats timing every single time. It takes about twenty minutes to configure, but the payoff is generational.</p>
+
+<p>How are you planning to pass down your digital wealth to the next generation?</p>
+
+<p>This is also why I keep improving <a href="https://btc-dca.com">my Bitcoin DCA automation setup</a> instead of trying to make every buy decision manually.</p>
+</article>
+</body>
+</html>
