@@ -60,7 +60,14 @@ on:
         default: "false"
         type: string
   schedule:
-    - cron: '7,22,37,52 * * * *'
+    # GitHub Actions schedules can be delayed or dropped. Poll every ten minutes
+    # away from the top of the hour; the executor itself keeps the configured
+    # new-trade cadence and records only real decision runs.
+    - cron: '3,13,23,33,43,53 * * * *'
+
+concurrency:
+  group: trading-live-execution-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   live-limit-order-test:
