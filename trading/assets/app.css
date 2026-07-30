@@ -1249,6 +1249,7 @@ body.modal-open {
 }
 
 .run-log-filter-control {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -1266,14 +1267,71 @@ body.modal-open {
   text-transform: uppercase;
 }
 
-.run-log-filter-control select {
+.run-log-filter-toggle {
   min-width: 112px;
   max-width: 190px;
-  border: 0;
-  background: transparent;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
   color: var(--ink);
   font-size: 13px;
   font-weight: 750;
+  text-align: left;
+}
+
+.run-log-filter-toggle::after {
+  content: "+";
+  float: right;
+  margin-left: 10px;
+  color: var(--muted);
+}
+
+.run-log-filter-toggle[aria-expanded="true"]::after {
+  content: "-";
+}
+
+.run-log-filter-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  min-width: 210px;
+  max-height: min(320px, 60vh);
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.run-log-filter-menu[hidden] {
+  display: none;
+}
+
+.run-log-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.run-log-filter-option:hover {
+  background: var(--soft);
+}
+
+.run-log-filter-option input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
 }
 
 .settings-subtabs {
@@ -1798,9 +1856,16 @@ body.modal-open {
     min-width: 0;
   }
 
-  .run-log-filter-control select {
+  .run-log-filter-toggle {
     width: 100%;
     min-width: 0;
+    max-width: none;
+  }
+
+  .run-log-filter-menu {
+    right: auto;
+    left: 0;
+    width: min(100%, 280px);
   }
 
   .control-panel-head,

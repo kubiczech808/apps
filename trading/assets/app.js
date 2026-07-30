@@ -65,7 +65,7 @@ const state = {
     direction: "desc",
   },
   displayedRunLog: [],
-  runLogFilter: "ALL",
+  runLogFilters: [],
   userNavRefreshTimer: null,
   openedOpportunityKey: "",
 };
@@ -112,7 +112,9 @@ const els = {
   runLog: document.querySelector("[data-run-log]"),
   runLogSummary: document.querySelector("[data-run-log-summary]"),
   runLogTitle: document.querySelector("[data-run-log-title]"),
-  runLogFilter: document.querySelector("[data-run-log-filter]"),
+  runLogFilterControl: document.querySelector("[data-run-log-filter-control]"),
+  runLogFilterToggle: document.querySelector("[data-run-log-filter-toggle]"),
+  runLogFilterMenu: document.querySelector("[data-run-log-filter-menu]"),
   portfolioCandidates: document.querySelector("[data-portfolio-candidates]"),
   portfolioCandidatesRefresh: document.querySelector("[data-portfolio-candidates-refresh]"),
   portfolioCandidatesSummary: document.querySelector("[data-portfolio-candidates-summary]"),
@@ -253,21 +255,36 @@ function normalizeRunLogFilter(value) {
   return normalized || "ALL";
 }
 
+function normalizeRunLogFilters(value) {
+  let values = value;
+  if (typeof values === "string") {
+    try {
+      values = JSON.parse(values);
+    } catch {
+      values = [values];
+    }
+  }
+  if (!Array.isArray(values)) values = [values];
+  return [...new Set(values
+    .map(normalizeRunLogFilter)
+    .filter((action) => action !== "ALL"))];
+}
+
 function runLogFilterStorageKey(mode = state.mode) {
   return `${RUN_LOG_FILTER_STORAGE_PREFIX}:${normalizeMode(mode)}`;
 }
 
 function storedRunLogFilter(mode = state.mode) {
   try {
-    return normalizeRunLogFilter(localStorage.getItem(runLogFilterStorageKey(mode)));
+    return normalizeRunLogFilters(localStorage.getItem(runLogFilterStorageKey(mode)));
   } catch {
-    return "ALL";
+    return [];
   }
 }
 
 function saveRunLogFilter(value, mode = state.mode) {
   try {
-    localStorage.setItem(runLogFilterStorageKey(mode), normalizeRunLogFilter(value));
+    localStorage.setItem(runLogFilterStorageKey(mode), JSON.stringify(normalizeRunLogFilters(value)));
   } catch {
     // The filter remains active for this page load if local storage is unavailable.
   }
@@ -4997,14 +5014,34 @@ function runActionFilterLabel(action) {
 }
 
 function syncRunLogFilterControl(runs = []) {
-  if (!els.runLogFilter) return;
+  if (!els.runLogFilterMenu || !els.runLogFilterToggle) return;
   const actions = [...new Set(runs.map(runActionValue))].sort((a, b) => a.localeCompare(b));
-  const selected = normalizeRunLogFilter(state.runLogFilter);
-  if (selected !== "ALL" && !actions.includes(selected)) actions.push(selected);
-  els.runLogFilter.innerHTML = ["ALL", ...actions]
-    .map((action) => `<option value="${escapeHtml(action)}">${escapeHtml(runActionFilterLabel(action))}</option>`)
+  const selected = normalizeRunLogFilters(state.runLogFilters);
+  selected.forEach((action) => {
+    if (!actions.includes(action)) actions.push(action);
+  });
+  actions.sort((a, b) => a.localeCompare(b));
+  const allSelected = selected.length === 0;
+  els.runLogFilterMenu.innerHTML = ["ALL", ...actions]
+    .map((action) => {
+      const checked = action === "ALL" ? allSelected : selected.includes(action);
+      return `
+        <label class="run-log-filter-option">
+          <input type="checkbox" value="${escapeHtml(action)}" data-run-log-filter-option ${checked ? "checked" : ""}>
+          <span>${escapeHtml(runActionFilterLabel(action))}</span>
+        </label>
+      `;
+    })
     .join("");
-  els.runLogFilter.value = selected;
+  els.runLogFilterToggle.textContent = allSelected
+    ? "All statuses"
+    : (selected.length === 1 ? runActionFilterLabel(selected[0]) : `${selected.length} statuses`);
+}
+
+function setRunLogFilterMenuOpen(open) {
+  if (!els.runLogFilterMenu || !els.runLogFilterToggle) return;
+  els.runLogFilterMenu.hidden = !open;
+  els.runLogFilterToggle.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
 function runActionClass(action) {
@@ -5090,22 +5127,22 @@ function renderRunLog() {
   if (!els.runLog) return;
   const allRuns = currentPortfolioRunLog();
   syncRunLogFilterControl(allRuns);
-  const filter = normalizeRunLogFilter(state.runLogFilter);
-  const runs = filter === "ALL"
+  const filters = normalizeRunLogFilters(state.runLogFilters);
+  const runs = filters.length === 0
     ? allRuns
-    : allRuns.filter((run) => runActionValue(run) === filter);
+    : allRuns.filter((run) => filters.includes(runActionValue(run)));
   state.displayedRunLog = runs;
   const label = isLiveMode() ? "Live" : paperModeLabel();
   if (els.runLogTitle) {
     els.runLogTitle.textContent = `${label} run log`;
   }
   if (els.runLogSummary) {
-    els.runLogSummary.textContent = filter === "ALL"
+    els.runLogSummary.textContent = filters.length === 0
       ? `${runs.length} runs`
       : `${runs.length} / ${allRuns.length} runs`;
   }
   if (!runs.length) {
-    const actionText = filter === "ALL" ? "" : ` with status ${runActionFilterLabel(filter)}`;
+    const actionText = filters.length === 0 ? "" : ` with selected statuses ${filters.map(runActionFilterLabel).join(", ")}`;
     els.runLog.innerHTML = `<div class="empty">No ${escapeHtml(label)} trading decision runs${escapeHtml(actionText)} recorded yet.</div>`;
     return;
   }
@@ -5354,7 +5391,8 @@ els.modeButtons.forEach((button) => {
     if (state.mode === mode) return;
     state.mode = mode;
     saveMode(mode);
-    state.runLogFilter = storedRunLogFilter(mode);
+    state.runLogFilters = storedRunLogFilter(mode);
+    setRunLogFilterMenuOpen(false);
     state.eligibilityThreshold = null;
     state.eligibilityThresholdKey = "";
     state.riskAllocation = null;
@@ -5397,10 +5435,29 @@ els.evaluationStatusButtons.forEach((button) => {
   });
 });
 
-els.runLogFilter?.addEventListener("change", () => {
-  state.runLogFilter = normalizeRunLogFilter(els.runLogFilter.value);
-  saveRunLogFilter(state.runLogFilter);
+els.runLogFilterToggle?.addEventListener("click", () => {
+  const open = Boolean(els.runLogFilterMenu?.hidden);
+  setRunLogFilterMenuOpen(open);
+});
+
+els.runLogFilterMenu?.addEventListener("change", (event) => {
+  const input = event.target.closest("[data-run-log-filter-option]");
+  if (!input) return;
+  const action = normalizeRunLogFilter(input.value);
+  if (action === "ALL") {
+    state.runLogFilters = [];
+  } else {
+    const next = new Set(normalizeRunLogFilters(state.runLogFilters));
+    if (input.checked) next.add(action);
+    else next.delete(action);
+    state.runLogFilters = [...next];
+  }
+  saveRunLogFilter(state.runLogFilters);
   renderRunLog();
+});
+
+document.addEventListener("click", (event) => {
+  if (!els.runLogFilterControl?.contains(event.target)) setRunLogFilterMenuOpen(false);
 });
 
 els.opportunityViewButtons.forEach((button) => {
@@ -5704,7 +5761,7 @@ els.botTrades?.addEventListener("click", handleTradeSort);
 els.closedTrades?.addEventListener("click", handleTradeSort);
 
 state.mode = storedMode();
-state.runLogFilter = storedRunLogFilter(state.mode);
+state.runLogFilters = storedRunLogFilter(state.mode);
 state.liveExecutionArmed = storedLiveExecutionArmed();
 state.evaluationProbabilityFilter = storedEvaluationProbabilityFilter();
 state.evaluationDaysFilter = storedEvaluationDaysFilter();
