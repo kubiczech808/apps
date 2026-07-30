@@ -5513,8 +5513,8 @@ function setRunLogFilterMenuOpen(open) {
 
 function runActionClass(action) {
   const value = String(action || "").toUpperCase();
-  if (["OPEN", "OPENED", "SUBMIT", "SUBMITTED", "DRY_RUN_READY", "ROTATE", "ROTATED"].includes(value)) return "positive";
-  if (["SKIP", "REJECTED", "ERROR"].includes(value)) return "negative";
+  if (["OPEN", "OPENED", "SUBMIT", "SUBMITTED", "CANCELED_AND_SUBMITTED", "DRY_RUN_READY", "ROTATE", "ROTATED"].includes(value)) return "positive";
+  if (["SKIP", "REJECTED", "CANCELED_REPLACEMENT_REJECTED", "ERROR"].includes(value)) return "negative";
   return "";
 }
 

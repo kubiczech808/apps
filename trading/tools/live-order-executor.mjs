@@ -1898,11 +1898,17 @@ async function main() {
       });
 
   const best = eligible[0] || null;
+  // A cancelled buy order releases capital immediately. Continue with the same
+  // revalidated shortlist instead of leaving the portfolio idle until the next run.
+  const canceledForBetterCandidate = orderManagement.action === "CANCELED_FOR_BETTER_CANDIDATE";
   const appliedDirectStake = best?.totalCostUsdc != null
     ? number(best.totalCostUsdc, 0)
     : Math.min(maxNotional, Math.max(0, cash));
   const replacementDue = rotationReplacementDue(previousExecution, liveState);
-  const cadenceBlocked = Boolean(monitoring.cadenceBlocked) && !replacementDue;
+  // Replacing an order that this run just cancelled is order management, not an
+  // additional portfolio allocation. Do not strand its released capital behind
+  // the new-trade cadence.
+  const cadenceBlocked = Boolean(monitoring.cadenceBlocked) && !replacementDue && !canceledForBetterCandidate;
   const rotationAvailable = rotationReview?.action === "ROTATION_AVAILABLE";
   const actionReason = activeSellOrders.length
     ? "waiting for an existing live sell order to reduce position exposure before any replacement buy"
@@ -2088,7 +2094,7 @@ async function main() {
     return;
   }
 
-  if (orderManagement.action !== "NONE") {
+  if (orderManagement.action !== "NONE" && !canceledForBetterCandidate) {
     await emitDecision({
       ...decision,
       action: orderManagement.action,
@@ -2205,15 +2211,22 @@ async function main() {
       };
     }
     if (successfulOrderResponse(response)) {
+      const action = canceledForBetterCandidate ? "CANCELED_AND_SUBMITTED" : "SUBMITTED";
+      const reason = canceledForBetterCandidate
+        ? "waiting limit order cancelled and the better replacement order was accepted by Polymarket"
+        : "live order accepted by Polymarket";
+      const explanation = canceledForBetterCandidate
+        ? "The existing limit order was cancelled after the revalidated shortlist found a better candidate. The released capital was immediately used for the selected replacement order."
+        : "Live batch revalidated candidates and Polymarket accepted the selected order.";
       await emitDecision({
         ...decision,
-        action: "SUBMITTED",
-        reason: "live order accepted by Polymarket",
+        action,
+        reason,
         batchLog: {
           ...decision.batchLog,
-          action: "SUBMITTED",
-          reason: "live order accepted by Polymarket",
-          explanation: "Live batch revalidated candidates and Polymarket accepted the selected order.",
+          action,
+          reason,
+          explanation,
           selected: liveBatchCandidateSummary(candidate),
         },
         monitoring: {
@@ -2223,7 +2236,11 @@ async function main() {
         },
         selected: candidate,
         response,
-        attempts: [...attempts, orderAttemptSummary(candidate, response, { action: "SUBMITTED" })],
+        attempts: [
+          ...(canceledForBetterCandidate && orderManagement.selected ? [orderManagement.selected] : []),
+          ...attempts,
+          orderAttemptSummary(candidate, response, { action }),
+        ],
       });
       return;
     }
@@ -2236,37 +2253,55 @@ async function main() {
     });
     attempts.push(attempt);
     if (stopReason) {
+      const action = canceledForBetterCandidate ? "CANCELED_REPLACEMENT_REJECTED" : "REJECTED";
+      const reason = canceledForBetterCandidate
+        ? `waiting limit order was cancelled, but the replacement order was rejected: ${stopReason}`
+        : stopReason;
       await emitDecision({
         ...decision,
-        action: "REJECTED",
-        reason: stopReason,
+        action,
+        reason,
         batchLog: {
           ...decision.batchLog,
-          action: "REJECTED",
-          reason: stopReason,
-          explanation: `Live order was not opened because submission stopped: ${stopReason}.`,
+          action,
+          reason,
+          explanation: canceledForBetterCandidate
+            ? `The replacement order was not opened after cancellation because submission stopped: ${stopReason}.`
+            : `Live order was not opened because submission stopped: ${stopReason}.`,
           selected: liveBatchCandidateSummary(candidate),
         },
         selected: candidate,
         response,
-        attempts,
+        attempts: [
+          ...(canceledForBetterCandidate && orderManagement.selected ? [orderManagement.selected] : []),
+          ...attempts,
+        ],
       });
       process.exit(1);
     }
   }
 
+  const action = canceledForBetterCandidate ? "CANCELED_REPLACEMENT_REJECTED" : "REJECTED";
+  const reason = canceledForBetterCandidate
+    ? "waiting limit order was cancelled, but every replacement candidate was rejected by order submission"
+    : "all revalidated candidates were rejected by order submission";
   await emitDecision({
     ...decision,
-    action: "REJECTED",
-    reason: "all revalidated candidates were rejected by order submission",
+    action,
+    reason,
     batchLog: {
       ...decision.batchLog,
-      action: "REJECTED",
-      reason: "all revalidated candidates were rejected by order submission",
-      explanation: "Live order was not opened because every revalidated candidate failed during order submission.",
+      action,
+      reason,
+      explanation: canceledForBetterCandidate
+        ? "The cancelled order was not replaced because every current replacement candidate failed during submission."
+        : "Live order was not opened because every revalidated candidate failed during order submission.",
     },
     response: attempts.at(-1)?.response || null,
-    attempts,
+    attempts: [
+      ...(canceledForBetterCandidate && orderManagement.selected ? [orderManagement.selected] : []),
+      ...attempts,
+    ],
   });
   process.exit(1);
 }
