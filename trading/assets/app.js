@@ -391,14 +391,18 @@ function portfolioProbability(item, config = {}) {
 function portfolioExpectedValue(item, config = {}) {
   const value = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
     ? marketExpectedValueFromQuote(item)
-    : Number(item.expectedValueUsdc);
+    : binarySideQuoteIsStale(item)
+      ? expectedValue(item)
+      : Number(item.expectedValueUsdc);
   return Number.isFinite(value) ? value : null;
 }
 
 function portfolioAnnualizedReturn(item, config = {}) {
   const value = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
     ? marketAnnualizedExpectedReturn(item)
-    : Number(item.annualizedReturn);
+    : binarySideQuoteIsStale(item)
+      ? annualizedExpectedReturn(item)
+      : Number(item.annualizedReturn);
   return Number.isFinite(value) ? value : null;
 }
 
@@ -950,17 +954,48 @@ function evaluationStake(item) {
   return Number.isFinite(stake) && stake > 0 ? stake : 5;
 }
 
+function binarySideQuoteIsStale(item) {
+  if (!item?.marketOutcomeFlipped) return false;
+  const entry = Number(item.marketPrice ?? item.entryPrice);
+  const selectedMarketProbability = Number(item.marketProbability);
+  return Number.isFinite(entry)
+    && entry > 0
+    && entry < 1
+    && Number.isFinite(selectedMarketProbability)
+    && selectedMarketProbability > 0
+    && selectedMarketProbability < 1
+    && Math.abs(entry - selectedMarketProbability) >= 0.1;
+}
+
+function evaluationEntryPrice(item) {
+  if (binarySideQuoteIsStale(item)) return Number(item.marketProbability);
+  return Number(item.marketPrice ?? item.entryPrice);
+}
+
 function evaluationTradingFee(item) {
   if (currentLimitOrders()) return 0;
+  if (binarySideQuoteIsStale(item)) {
+    const stake = evaluationStake(item);
+    const price = evaluationEntryPrice(item);
+    const feeRate = Number(item.feeRate || 0);
+    if (Number.isFinite(stake) && Number.isFinite(price) && price > 0 && price < 1 && Number.isFinite(feeRate) && feeRate > 0) {
+      return (stake / price) * feeRate * price * (1 - price);
+    }
+  }
   const fee = Number(item.takerFeeUsdc || 0);
   return Number.isFinite(fee) && fee > 0 ? fee : 0;
 }
 
 function evaluationShares(item) {
+  if (binarySideQuoteIsStale(item)) {
+    const stake = evaluationStake(item);
+    const price = evaluationEntryPrice(item);
+    return Number.isFinite(price) && price > 0 ? stake / price : null;
+  }
   const shares = Number(item.executableShares || item.shares);
   if (Number.isFinite(shares) && shares > 0) return shares;
   const stake = evaluationStake(item);
-  const price = Number(item.marketPrice || item.entryPrice);
+  const price = evaluationEntryPrice(item);
   const decimal = decimalOdds(price);
   return decimal == null ? null : stake * decimal;
 }
@@ -3647,6 +3682,9 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(storedStatus)) {
     reasons.push(`base status ${storedStatus || "UNKNOWN"} is not executable`);
   }
+  if (binarySideQuoteIsStale(item)) {
+    reasons.push("binary YES/NO side changed and its quote is being refreshed");
+  }
   if (!Number.isFinite(selectedProbability)) {
     reasons.push(`missing ${probabilitySourceLabel(probabilitySource).toLowerCase()}`);
   } else if (selectedProbability < threshold) {
@@ -3883,7 +3921,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               <td data-label="End date">${evaluationEndDateCell(item)}</td>
               <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
               <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
-              <td data-label="Mkt entry">${probability(Number(item.marketPrice))}</td>
+              <td data-label="Mkt entry">${probability(evaluationEntryPrice(item))}</td>
               <td data-label="EV p.a."><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
               <td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>
               <td data-label="Win">${gainCell(item)}</td>

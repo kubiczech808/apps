@@ -493,7 +493,13 @@ const EVALUATION_CHANGE_FIELDS = [
   "marketExpectedValueUsdc",
   "marketExpectedRoi",
   "marketAnnualizedReturn",
+  "stakeUsdc",
+  "executableShares",
+  "totalCostUsdc",
+  "takerFeeUsdc",
   "netGainIfWinUsdc",
+  "riskReward",
+  "expectedRoi",
   "endDate",
   "marketClosed",
   "acceptingOrders",
@@ -1852,6 +1858,26 @@ function invertedNoModelAnalysis(modelAnalysis, yesProbability) {
   };
 }
 
+function modelProbabilityForCandidate(result, candidate) {
+  const expectedOutcome = String(candidate?.outcome || "").trim().toLowerCase();
+  const declaredOutcome = String(result?.evaluatedOutcome || result?.probabilityFor || result?.direction || "").trim().toLowerCase();
+  const probability = Number(result?.probability);
+  if (!Number.isFinite(probability)) {
+    return { valid: false, reason: "Gemini returned no valid probability" };
+  }
+  if (expectedOutcome && declaredOutcome && declaredOutcome !== expectedOutcome) {
+    return {
+      valid: false,
+      reason: `Gemini labelled probability as ${declaredOutcome.toUpperCase()}, but this pass must return probability for ${expectedOutcome.toUpperCase()} only`,
+    };
+  }
+  return {
+    valid: true,
+    probability: clamp(probability, 0.01, 0.995),
+    declaredOutcome: declaredOutcome || expectedOutcome,
+  };
+}
+
 async function materializePreferredBinaryOutcome(candidate, yesProbability, modelName, modelAnalysis) {
   const counterpart = candidate?._binaryCounterpart;
   if (!counterpart || yesProbability >= 0.5) {
@@ -2524,6 +2550,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
         "Do not write generic filler such as 'market conditions suggest' or 'current sentiment indicates' unless it is tied to a named public source and a concrete fact.",
         "For macro/central-bank markets, use official central-bank communications, inflation/jobs/activity data, and reputable reporting about policymakers; do not use prediction-market odds or betting consensus.",
         "For YES/NO markets, estimate the probability that the selected outcome is true by resolution time. For multi-outcome markets, estimate the selected outcome only.",
+        "For a binary market, this initial research pass always has candidate.outcome = YES. The probability field must therefore mean probability of YES only. Never select NO or return probability for NO; the application inverts a sub-50% YES result itself after the analysis is complete.",
         "Always include a fact-based human-language sentence explaining why the final probability is exactly in this range, grounded in the public evidence you found.",
         "Always explain the percentage-point calibration: which facts push probability upward, which facts cap or reduce it, and why the final percentage is not merely a vague likely/unlikely label.",
         "Write the rationale in Czech, concise but concrete. Keep each field short enough for a dashboard detail modal.",
@@ -2544,7 +2571,7 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
         promptRules: learningProfile.promptRules,
       },
       requiredJson: {
-        direction: "YES | NO | OUTCOME",
+        evaluatedOutcome: "must exactly repeat candidate.outcome; for a binary research pass this is always YES",
         probability: "number from 0.01 to 0.995",
         thesis: "one Czech sentence with the core forecast",
         finalHumanConclusion: "one Czech sentence: based on named public facts, why the final probability is exactly this high/low",
@@ -2661,13 +2688,16 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
     if (criticRequestId) finishAiRequest(state, criticRequestId, "SUCCESS", "", criticResult._usage);
     const researchResult = result;
     result = criticResult;
-    const probability = clamp(Number(result.probability), 0.01, 0.995);
-    if (!Number.isFinite(probability)) {
-      if (requestId) finishAiRequest(state, requestId, "ERROR", "Gemini returned no valid probability");
+    const probabilityResult = modelProbabilityForCandidate(result, candidate);
+    if (!probabilityResult.valid) {
+      if (requestId) finishAiRequest(state, requestId, "ERROR", probabilityResult.reason);
+      byId.set(candidate.id, markAiAnalysisUnavailable(candidate, probabilityResult.reason));
       continue;
     }
+    const probability = probabilityResult.probability;
     const modelAnalysis = {
-      direction: result.direction || outcomeKind(candidate.outcome),
+      direction: outcomeKind(candidate.outcome),
+      evaluatedOutcome: probabilityResult.declaredOutcome,
       thesis: result.thesis || candidate.probabilityThesis,
       finalHumanConclusion: result.finalHumanConclusion || "",
       probabilityRationale: result.probabilityRationale || "",
@@ -4480,29 +4510,111 @@ function snapshotMatchesEvaluation(snapshot, evaluation) {
   return String(snapshot.tokenId || "") === String(evaluation.tokenId || "");
 }
 
-function marketObservationChanges(previous, next) {
-  return ["outcome", "tokenId", "marketProbability", "marketDataUpdatedAt", "marketExpectedValueUsdc", "marketAnnualizedReturn"]
-    .map((field) => ({ field, from: comparableEvaluationValue(previous?.[field]), to: comparableEvaluationValue(next?.[field]) }))
-    .filter((change) => JSON.stringify(change.from) !== JSON.stringify(change.to));
+function quoteEconomicsForStoredEvaluation(evaluation, marketPrice, probability) {
+  const previousTotalCost = Number(evaluation.totalCostUsdc ?? evaluation.stakeUsdc);
+  const previousFee = Number(evaluation.takerFeeUsdc ?? 0);
+  const stake = Number(evaluation.stakeUsdc ?? evaluation.filledStakeUsdc ?? (previousTotalCost - previousFee));
+  const days = Number(evaluation.daysToResolution);
+  const feeRate = Number(evaluation.feeRate ?? 0);
+  if (!Number.isFinite(stake) || stake <= 0 || !Number.isFinite(marketPrice) || marketPrice <= 0 || marketPrice >= 1 || !Number.isFinite(probability)) {
+    return null;
+  }
+
+  // A binary YES/NO flip changes the actual token being bought. Rebuild every
+  // quote-dependent value from that token's price; retaining previous shares
+  // would combine the new side's probability with the old side's payoff.
+  const shares = stake / marketPrice;
+  const takerFee = takerFeeForFills([{ price: marketPrice, size: shares }], feeRate);
+  const totalCost = stake + takerFee;
+  const expectedValue = probability * shares - totalCost;
+  const expectedRoi = totalCost > 0 ? expectedValue / totalCost : null;
+  const annualizedReturn = Number.isFinite(expectedRoi) && Number.isFinite(days) && days > 0
+    ? expectedRoi * (365 / days)
+    : expectedRoi;
+  const netGainIfWin = shares - totalCost;
+  const netYield = totalCost > 0 ? netGainIfWin / totalCost : null;
+
+  return {
+    stakeUsdc: Number(stake.toFixed(2)),
+    executableShares: Number(shares.toFixed(4)),
+    filledStakeUsdc: Number(stake.toFixed(4)),
+    totalCostUsdc: Number(totalCost.toFixed(5)),
+    takerFeeUsdc: Number(takerFee.toFixed(5)),
+    grossGainIfWinUsdc: Number((shares - stake).toFixed(4)),
+    netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
+    netYield: Number.isFinite(netYield) ? Number(netYield.toFixed(4)) : null,
+    riskReward: Number.isFinite(netYield) ? Number(netYield.toFixed(4)) : null,
+    expectedValueUsdc: Number(expectedValue.toFixed(4)),
+    expectedRoi: Number.isFinite(expectedRoi) ? Number(expectedRoi.toFixed(4)) : null,
+    annualizedReturn: Number.isFinite(annualizedReturn) ? Number(annualizedReturn.toFixed(4)) : null,
+    marketFills: [{
+      price: Number(marketPrice.toFixed(4)),
+      size: Number(shares.toFixed(4)),
+      costUsdc: Number(stake.toFixed(4)),
+    }],
+  };
 }
 
-function marketEconomicsForStoredEvaluation(evaluation, marketProbability) {
-  const totalCost = Number(evaluation.totalCostUsdc ?? evaluation.stakeUsdc);
-  const storedFee = Number(evaluation.takerFeeUsdc ?? 0);
-  const stake = Number(evaluation.stakeUsdc ?? evaluation.filledStakeUsdc ?? (totalCost - storedFee));
-  const days = Number(evaluation.daysToResolution);
-  if (!Number.isFinite(stake) || stake <= 0 || !Number.isFinite(totalCost) || totalCost <= 0 || !Number.isFinite(marketProbability) || marketProbability <= 0) return null;
-  // The public market quote is both the implied probability and the fresh entry
-  // price. With no independent probability edge, the residual EV is the fee.
-  const sharesAtMarketQuote = stake / marketProbability;
-  const expectedValue = marketProbability * sharesAtMarketQuote - totalCost;
-  const expectedRoi = expectedValue / totalCost;
-  const annualizedReturn = Number.isFinite(days) && days > 0 ? expectedRoi * (365 / days) : expectedRoi;
+function binarySideQuoteIsStale(item) {
+  if (!item?.marketOutcomeFlipped) return false;
+  const entry = validMarketProbability(item.marketPrice);
+  const selectedMarketProbability = validMarketProbability(item.marketProbability);
+  return entry != null && selectedMarketProbability != null && Math.abs(entry - selectedMarketProbability) >= 0.1;
+}
+
+function repriceEvaluationForSelectedMarketQuote(evaluation, marketPrice, aiProbability = evaluation.aiProbability) {
+  const price = validMarketProbability(marketPrice);
+  const probability = Number(aiProbability);
+  const aiEconomics = quoteEconomicsForStoredEvaluation(evaluation, price, probability);
+  const marketEconomics = quoteEconomicsForStoredEvaluation(evaluation, price, price);
+  if (!aiEconomics || !marketEconomics) return evaluation;
+
   return {
-    expectedValueUsdc: Number(expectedValue.toFixed(4)),
-    expectedRoi: Number(expectedRoi.toFixed(4)),
-    annualizedReturn: Number(annualizedReturn.toFixed(4)),
+    ...evaluation,
+    marketPrice: Number(price.toFixed(4)),
+    bestAsk: Number(price.toFixed(4)),
+    executableDepthUsdc: null,
+    ...aiEconomics,
+    aiExpectedValueUsdc: aiEconomics.expectedValueUsdc,
+    aiAnnualizedReturn: aiEconomics.annualizedReturn,
+    marketExpectedValueUsdc: marketEconomics.expectedValueUsdc,
+    marketExpectedRoi: marketEconomics.expectedRoi,
+    marketAnnualizedReturn: marketEconomics.annualizedReturn,
+    edge: Number((probability - price).toFixed(4)),
+    marketQuoteSource: "polymarket-gamma-selected-token",
   };
+}
+
+function recordEvaluationUpdate(previous, next, source, changedAt) {
+  const changes = changedEvaluationFields(previous, next);
+  if (!changes.length) return previous;
+  return {
+    ...next,
+    updateHistory: [{
+      changedAt,
+      previousEvaluatedAt: previous.evaluatedAt || previous.lastSeenAt || null,
+      source,
+      changes,
+    }, ...(Array.isArray(previous.updateHistory) ? previous.updateHistory : [])].slice(0, 30),
+    lastChanges: changes,
+  };
+}
+
+function repairStaleBinarySideQuotes(evaluations = []) {
+  return evaluations.map((evaluation) => {
+    if (!binarySideQuoteIsStale(evaluation)) return evaluation;
+    const repaired = repriceEvaluationForSelectedMarketQuote(evaluation, evaluation.marketProbability, evaluation.aiProbability);
+    return recordEvaluationUpdate(
+      evaluation,
+      {
+        ...repaired,
+        marketSideQuoteRepairedAt: nowIso(),
+        marketSideQuoteRepairNote: "Rebuilt quote economics after a YES/NO token flip so entry, shares, fee, EV and R/R all use the selected outcome.",
+      },
+      "binary-side-quote-repair",
+      nowIso(),
+    );
+  });
 }
 
 function applyMarketObservationsToEvaluations(evaluations, observations) {
@@ -4520,7 +4632,6 @@ function applyMarketObservationsToEvaluations(evaluations, observations) {
     const nextAiProbability = Number.isFinite(yesProbability)
       ? Number((String(snapshot.outcome).toLowerCase() === "yes" ? yesProbability : 1 - yesProbability).toFixed(4))
       : evaluation.aiProbability;
-    const marketEconomics = outcomeChanged ? null : marketEconomicsForStoredEvaluation(evaluation, snapshot.marketProbability);
     const next = normalizeEvaluationRisk({
       ...evaluation,
       id: outcomeChanged ? `token:${snapshot.tokenId}` : evaluation.id,
@@ -4528,9 +4639,6 @@ function applyMarketObservationsToEvaluations(evaluations, observations) {
       outcome: snapshot.outcome,
       marketProbability: snapshot.marketProbability,
       marketDataUpdatedAt: snapshot.marketDataUpdatedAt,
-      marketExpectedValueUsdc: outcomeChanged ? null : (marketEconomics?.expectedValueUsdc ?? evaluation.marketExpectedValueUsdc ?? null),
-      marketExpectedRoi: outcomeChanged ? null : (marketEconomics?.expectedRoi ?? evaluation.marketExpectedRoi ?? null),
-      marketAnnualizedReturn: outcomeChanged ? null : (marketEconomics?.annualizedReturn ?? evaluation.marketAnnualizedReturn ?? null),
       binaryYesMarketProbability: snapshot.binaryYesMarketProbability,
       binaryNoMarketProbability: snapshot.binaryNoMarketProbability,
       binaryYesTokenId: snapshot.binaryYesTokenId || evaluation.binaryYesTokenId,
@@ -4547,18 +4655,11 @@ function applyMarketObservationsToEvaluations(evaluations, observations) {
         : evaluation.rawProbability,
       lastSeenAt: snapshot.marketDataUpdatedAt,
     });
-    const changes = marketObservationChanges(evaluation, next);
-    if (!changes.length) return evaluation;
-    return {
-      ...next,
-      updateHistory: [{
-        changedAt: snapshot.marketDataUpdatedAt,
-        previousEvaluatedAt: evaluation.evaluatedAt || evaluation.lastSeenAt || null,
-        source: "polymarket-market-scan",
-        changes,
-      }, ...(Array.isArray(evaluation.updateHistory) ? evaluation.updateHistory : [])].slice(0, 30),
-      lastChanges: changes,
-    };
+    // Gamma's outcome price is a current quote for the selected token. It is
+    // especially important after a YES/NO preference flip, when the old price
+    // and share count belong to the opposite token.
+    const repriced = repriceEvaluationForSelectedMarketQuote(next, snapshot.marketProbability, nextAiProbability);
+    return recordEvaluationUpdate(evaluation, repriced, "polymarket-market-scan", snapshot.marketDataUpdatedAt);
   });
 }
 
@@ -5024,6 +5125,9 @@ async function run() {
   state.evaluations = (await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || [])))
     .map(normalizeAiPendingEvaluation)
     .map(ensureEvaluationErrorMetadata);
+  // Repair records created before binary outcome flips rebuilt the full quote.
+  // This runs even if the current market scan does not include that contract.
+  state.evaluations = repairStaleBinarySideQuotes(state.evaluations);
   try {
     const observations = await refreshMarketObservations(state);
     state.evaluations = applyMarketObservationsToEvaluations(state.evaluations, observations);

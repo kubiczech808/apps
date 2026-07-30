@@ -416,6 +416,15 @@ function marketProbabilityForToken(market, tokenIndex, book = {}, fallback = nul
   return validProbability(fallback);
 }
 
+function hasStaleBinarySideQuote(item) {
+  if (!item?.marketOutcomeFlipped) return false;
+  const entry = validProbability(item.marketPrice);
+  const selectedMarketProbability = validProbability(item.marketProbability);
+  // A large mismatch immediately after a recorded side flip means the row
+  // still combines one token's entry price with the opposite token's outcome.
+  return entry != null && selectedMarketProbability != null && Math.abs(entry - selectedMarketProbability) >= 0.1;
+}
+
 function roundToTick(value, tick, direction = "nearest") {
   const scale = Math.round(1 / tick);
   if (!Number.isFinite(scale) || scale <= 0) return Number(value.toFixed(4));
@@ -485,6 +494,9 @@ function prefilterLiveCandidate(item) {
     reasons.push("stored market is already closed/resolved");
   }
   if (item?.acceptingOrders === false) reasons.push("stored market is not accepting orders");
+  if (hasStaleBinarySideQuote(item)) {
+    reasons.push("stored binary side quote is stale; waiting for a refreshed selected-token quote");
+  }
   if (!Number.isFinite(qualificationProbability)) {
     reasons.push(`missing ${probabilitySourceLabel().toLowerCase()}`);
   } else if (qualificationProbability < MIN_PROBABILITY) {
