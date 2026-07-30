@@ -253,6 +253,7 @@ function compact_market_observation(array $item): array
         'netGainIfWinUsdc',
         'netYield',
         'riskReward',
+        'potentialAnnualizedReturn',
         'marketExpectedValueUsdc',
         'marketExpectedRoi',
         'marketAnnualizedReturn',
