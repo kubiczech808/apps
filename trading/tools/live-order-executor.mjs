@@ -25,6 +25,7 @@ const OPPORTUNITY_MIN_ANNUAL_RETURN = envNumber("LIVE_OPPORTUNITY_MIN_ANNUAL_RET
 const MAX_SPREAD = envNumber("LIVE_MAX_SPREAD", envNumber("PAPER_MAX_SPREAD", 0.08));
 const MIN_VOLUME_24H = envNumber("LIVE_CONFIG_MIN_LIQUIDITY_USDC", envNumber("LIVE_MIN_VOLUME_24H", envNumber("PAPER_MIN_VOLUME_24H", 100)));
 const MIN_NET_YIELD = Math.max(0, envNumber("LIVE_MIN_NET_YIELD", 0));
+const EFFECTIVELY_CERTAIN_MARKET_PROBABILITY = 0.9995;
 const MANUAL_SHORTLIST_TOKEN_IDS = [...new Set(String(process.env.LIVE_EXECUTION_CANDIDATE_TOKEN_IDS || "")
   .split(",")
   .map((tokenId) => tokenId.trim())
@@ -501,6 +502,11 @@ function netYieldAfterFees(item = {}) {
   return gain / cost;
 }
 
+function marketProbabilityRoundsToCertain(item = {}) {
+  const marketProbability = number(item.marketProbability ?? item.marketPrice);
+  return marketProbability != null && marketProbability >= EFFECTIVELY_CERTAIN_MARKET_PROBABILITY;
+}
+
 function prefilterLiveCandidate(item) {
   const reasons = [];
   const tokenId = String(item?.tokenId || "");
@@ -525,6 +531,9 @@ function prefilterLiveCandidate(item) {
   if (item?.acceptingOrders === false) reasons.push("stored market is not accepting orders");
   if (hasStaleBinarySideQuote(item)) {
     reasons.push("stored binary side quote is stale; waiting for a refreshed selected-token quote");
+  }
+  if (marketProbabilityRoundsToCertain(item)) {
+    reasons.push("stored market probability rounds to 100.0%; no executable upside remains");
   }
   if (!Number.isFinite(qualificationProbability)) {
     reasons.push(`missing ${probabilitySourceLabel().toLowerCase()}`);
@@ -1208,6 +1217,17 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
 
   const aiProbability = number(evaluation.aiProbability);
   const marketProbability = marketProbabilityForToken(market, tokenIndex, book, evaluation.marketProbability ?? evaluation.marketPrice ?? price);
+  if (marketProbability != null && marketProbability >= EFFECTIVELY_CERTAIN_MARKET_PROBABILITY) {
+    return {
+      candidate: evaluation,
+      eligible: false,
+      status: "REJECTED",
+      rejectReasons: ["current market probability rounds to 100.0%; no executable upside remains"],
+      currentPrice: price,
+      marketProbability,
+      minOrderSize,
+    };
+  }
   const probability = PROBABILITY_SOURCE === "polymarket" ? marketProbability : aiProbability;
   if (!Number.isFinite(probability)) {
     return {

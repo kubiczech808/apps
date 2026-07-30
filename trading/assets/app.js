@@ -400,6 +400,11 @@ function portfolioProbability(item, config = {}) {
     : Number(item.aiProbability);
 }
 
+function marketProbabilityRoundsToCertain(item = {}) {
+  const marketProbability = Number(item.marketProbability ?? item.marketPrice);
+  return Number.isFinite(marketProbability) && marketProbability >= 0.9995;
+}
+
 function portfolioExpectedValue(item, config = {}) {
   const value = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
     ? Number(item.netGainIfWinUsdc)
@@ -3778,6 +3783,9 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   }
   if (binarySideQuoteIsStale(item)) {
     reasons.push("binary YES/NO side changed and its quote is being refreshed");
+  }
+  if (marketProbabilityRoundsToCertain(item)) {
+    reasons.push("market probability rounds to 100.0%; no executable upside remains");
   }
   if (!Number.isFinite(selectedProbability)) {
     reasons.push(`missing ${probabilitySourceLabel(probabilitySource).toLowerCase()}`);
