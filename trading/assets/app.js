@@ -33,6 +33,8 @@ const state = {
   },
   scrapedMarketStateBusy: false,
   scrapedMarketStateLoaded: false,
+  scrapedMarketObservations: [],
+  scrapedMarketScan: {},
   evaluationProbabilityFilter: 0,
   evaluationDaysFilter: null,
   eligibilityThreshold: null,
@@ -3085,12 +3087,7 @@ async function refreshPortfolioCandidates(options = {}) {
     ]);
     state.botState = botStateWithPreservedEvaluations(botState);
     if (scrapedState) {
-      state.botState = {
-        ...state.botState,
-        marketObservations: Array.isArray(scrapedState.marketObservations) ? scrapedState.marketObservations : [],
-        marketScan: scrapedState.marketScan || {},
-      };
-      state.scrapedMarketStateLoaded = true;
+      storeScrapedMarketState(scrapedState);
     }
     state.botStateFull = state.botStateFull || botStateIsFull(botState);
     if (liveState) {
@@ -3137,6 +3134,26 @@ function scrapedMarketStateIsLoaded() {
   return state.scrapedMarketStateLoaded;
 }
 
+function scrapedMarketObservations() {
+  if (state.scrapedMarketStateLoaded) return state.scrapedMarketObservations;
+  return Array.isArray(state.botState?.marketObservations) ? state.botState.marketObservations : [];
+}
+
+function scrapedMarketScan() {
+  if (state.scrapedMarketStateLoaded) return state.scrapedMarketScan || {};
+  return state.botState?.marketScan || {};
+}
+
+function storeScrapedMarketState(scrapedState = {}) {
+  state.scrapedMarketObservations = Array.isArray(scrapedState.marketObservations)
+    ? scrapedState.marketObservations
+    : [];
+  state.scrapedMarketScan = scrapedState.marketScan && typeof scrapedState.marketScan === "object"
+    ? scrapedState.marketScan
+    : {};
+  state.scrapedMarketStateLoaded = true;
+}
+
 async function ensureScrapedMarketState(options = {}) {
   if (scrapedMarketStateIsLoaded() || state.scrapedMarketStateBusy) return;
   state.scrapedMarketStateBusy = true;
@@ -3146,13 +3163,7 @@ async function ensureScrapedMarketState(options = {}) {
   try {
     const scrapedState = await fetchJson("data/paper-state.json", { summary: "scraped" });
     if (dashboardLoadIsStale(options)) return;
-    state.botState = {
-      ...state.botState,
-      ...scrapedState,
-      marketObservations: Array.isArray(scrapedState.marketObservations) ? scrapedState.marketObservations : [],
-      marketScan: scrapedState.marketScan || {},
-    };
-    state.scrapedMarketStateLoaded = true;
+    storeScrapedMarketState(scrapedState);
     if (state.opportunityView === "scraped") renderBotEvaluations();
     if (shouldRenderCandidateBotState()) renderPortfolioCandidates();
   } catch (error) {
@@ -3832,8 +3843,8 @@ function sortPortfolioCandidates(rows = [], mode = state.mode) {
 function portfolioCandidateDiagnostics(mode = state.mode) {
   const config = portfolioConfigForMode(mode);
   const baseEvaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
-  const scrapedObservations = normalizeProbabilitySource(config.probabilitySource) === "polymarket" && Array.isArray(state.botState?.marketObservations)
-    ? state.botState.marketObservations
+  const scrapedObservations = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
+    ? scrapedMarketObservations()
     : [];
   const evaluations = latestUniquePortfolioEvaluations([...scrapedObservations, ...baseEvaluations]);
   const evaluationByToken = new Map(evaluations.map((item) => [String(item.tokenId || ""), item]).filter(([token]) => token));
@@ -4622,7 +4633,7 @@ function binaryMarketProbabilityCell(item) {
 }
 
 function renderScrapedOpportunities() {
-  const observations = Array.isArray(state.botState?.marketObservations) ? state.botState.marketObservations : [];
+  const observations = scrapedMarketObservations();
   const probabilityFilter = currentEvaluationProbabilityFilter();
   const daysFilter = currentEvaluationDaysFilter();
   const statusFiltered = state.evaluationStatus === "ALL"
@@ -4636,7 +4647,7 @@ function renderScrapedOpportunities() {
     return daysFilter == null || (Number.isFinite(days) && days <= daysFilter);
   });
   const visible = sortedScrapedObservations(filtered).slice(0, 250);
-  const scan = state.botState?.marketScan || {};
+  const scan = scrapedMarketScan();
   const scrapedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "EVALUATED").length;
   const resolvedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "RESOLVED").length;
   const errorCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "ERROR").length;
