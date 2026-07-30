@@ -138,7 +138,7 @@ on:
         default: ""
         type: string
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '7,22,37,52 * * * *'
     - cron: '17 1 * * *'
 
 concurrency:
@@ -193,9 +193,10 @@ jobs:
       PAPER_MAX_SPREAD: "0.08"
       PAPER_MIN_VOLUME_24H: "100"
       PAPER_MAX_RESOLUTION_DAYS: "7"
-      # One grounded evaluation uses a research and an independent critic pass.
-      # One candidate per five-minute cycle means up to 576 core requests/day.
+      # One full grounded analysis runs every 15 minutes: at most 96 background
+      # requests per day, leaving the dedicated reserve for trade execution.
       PAPER_AI_ANALYSIS_LIMIT: "1"
+      PAPER_AI_CRITIC_ENABLED: "false"
       PAPER_AI_REQUEST_DELAY_MS: "7000"
       PAPER_AI_MIN_INTERVAL_SECONDS: "7"
       PAPER_AI_MAX_REQUESTS_PER_MINUTE: "10"

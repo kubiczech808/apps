@@ -65,6 +65,7 @@ const AI_EXECUTION_RESERVE_REQUESTS = envNumber("PAPER_AI_EXECUTION_RESERVE_REQU
 const AI_USAGE_HISTORY_LIMIT = envNumber("PAPER_AI_USAGE_HISTORY_LIMIT", 500);
 const AI_POSTMORTEM_LIMIT = envNumber("PAPER_AI_POSTMORTEM_LIMIT", 8);
 const AI_STOP_ON_QUOTA_ERROR = String(process.env.PAPER_AI_STOP_ON_QUOTA_ERROR ?? "true").toLowerCase() !== "false";
+const AI_CRITIC_ENABLED = envBool("PAPER_AI_CRITIC_ENABLED", false);
 const GROUNDED_AI_ANALYSIS_VERSION = "grounded-public-memo-v1";
 const DEFAULT_MAX_RESOLUTION_DAYS = envNumber("PAPER_MAX_RESOLUTION_DAYS", envNumber("PAPER_SHORT_HORIZON_DAYS", 7));
 const MORE_PROBABLE_MIN_LIQUIDITY_USDC = envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", 500000);
@@ -2637,57 +2638,58 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
     }
     if (requestId) finishAiRequest(state, requestId, "SUCCESS", "", result._usage);
 
-    // A second, independently grounded pass challenges the first probability
-    // before it becomes an executable portfolio evaluation.
-    await new Promise((resolve) => setTimeout(resolve, AI_REQUEST_DELAY_MS));
-    const criticPrompt = {
-      task: "Independently audit this prediction-market research. Search public sources yourself, challenge omissions and calibration, then return the final probability. Do not use market prices or betting consensus.",
-      candidate: prompt.candidate,
-      preliminaryResearch: {
-        probability: result.probability,
-        thesis: result.thesis,
-        keyFacts: result.keyFacts,
-        evidence: result.evidence,
-        counterEvidence: result.counterEvidence,
-        probabilityRationale: result.probabilityRationale,
-      },
-      strictRules: prompt.strictRules,
-      requiredJson: prompt.requiredJson,
-    };
-    const criticMessages = [
-      { role: "system", content: "You are an independent forecasting critic. Verify public facts yourself, correct unsupported claims, and return only valid JSON in Czech." },
-      { role: "user", content: JSON.stringify(criticPrompt) },
-    ];
-    const criticEstimate = Math.ceil(messagesToGeminiText(criticMessages).length / 4) + 128;
-    if (state) {
-      const slot = aiSlotAvailability(state, criticEstimate);
-      if (!slot.allowed) {
-        deferAiRun(state, slot.reason);
-        byId.set(candidate.id, markAiAnalysisDeferred(candidate, `Gemini critic pass deferred: ${slot.reason}`));
-        quotaResponseReceived = true;
-        break;
-      }
-    }
-    const criticRequestId = state ? reserveAiRequest(state, criticEstimate, { evaluationKey: evaluationKey(candidate), phase: "critic" }) : null;
-    const criticResult = await callGeminiJson(criticMessages);
-    if (!criticResult || criticResult.error) {
-      const message = criticResult?.error || "Gemini critic analysis unavailable";
-      const quotaLimited = isQuotaError(criticResult);
-      if (criticRequestId) finishAiRequest(state, criticRequestId, quotaLimited ? "QUOTA_LIMITED" : "ERROR", message);
-      if (quotaLimited) recordAiQuotaBackoff(state, message);
-      const deferredMessage = quotaLimited && state?.aiUsage?.quotaBlockedUntil
-        ? `${message}. Retry deferred until ${state.aiUsage.quotaBlockedUntil}`
-        : message;
-      byId.set(candidate.id, quotaLimited ? markAiAnalysisDeferred(candidate, deferredMessage) : markAiAnalysisUnavailable(candidate, message));
-      if (AI_STOP_ON_QUOTA_ERROR && quotaLimited) {
-        quotaResponseReceived = true;
-        break;
-      }
-      continue;
-    }
-    if (criticRequestId) finishAiRequest(state, criticRequestId, "SUCCESS", "", criticResult._usage);
     const researchResult = result;
-    result = criticResult;
+    let criticResult = null;
+    if (AI_CRITIC_ENABLED) {
+      await new Promise((resolve) => setTimeout(resolve, AI_REQUEST_DELAY_MS));
+      const criticPrompt = {
+        task: "Independently audit this prediction-market research. Search public sources yourself, challenge omissions and calibration, then return the final probability. Do not use market prices or betting consensus.",
+        candidate: prompt.candidate,
+        preliminaryResearch: {
+          probability: result.probability,
+          thesis: result.thesis,
+          keyFacts: result.keyFacts,
+          evidence: result.evidence,
+          counterEvidence: result.counterEvidence,
+          probabilityRationale: result.probabilityRationale,
+        },
+        strictRules: prompt.strictRules,
+        requiredJson: prompt.requiredJson,
+      };
+      const criticMessages = [
+        { role: "system", content: "You are an independent forecasting critic. Verify public facts yourself, correct unsupported claims, and return only valid JSON in Czech." },
+        { role: "user", content: JSON.stringify(criticPrompt) },
+      ];
+      const criticEstimate = Math.ceil(messagesToGeminiText(criticMessages).length / 4) + 128;
+      if (state) {
+        const slot = aiSlotAvailability(state, criticEstimate);
+        if (!slot.allowed) {
+          deferAiRun(state, slot.reason);
+          byId.set(candidate.id, markAiAnalysisDeferred(candidate, `Gemini critic pass deferred: ${slot.reason}`));
+          quotaResponseReceived = true;
+          break;
+        }
+      }
+      const criticRequestId = state ? reserveAiRequest(state, criticEstimate, { evaluationKey: evaluationKey(candidate), phase: "critic" }) : null;
+      criticResult = await callGeminiJson(criticMessages);
+      if (!criticResult || criticResult.error) {
+        const message = criticResult?.error || "Gemini critic analysis unavailable";
+        const quotaLimited = isQuotaError(criticResult);
+        if (criticRequestId) finishAiRequest(state, criticRequestId, quotaLimited ? "QUOTA_LIMITED" : "ERROR", message);
+        if (quotaLimited) recordAiQuotaBackoff(state, message);
+        const deferredMessage = quotaLimited && state?.aiUsage?.quotaBlockedUntil
+          ? `${message}. Retry deferred until ${state.aiUsage.quotaBlockedUntil}`
+          : message;
+        byId.set(candidate.id, quotaLimited ? markAiAnalysisDeferred(candidate, deferredMessage) : markAiAnalysisUnavailable(candidate, message));
+        if (AI_STOP_ON_QUOTA_ERROR && quotaLimited) {
+          quotaResponseReceived = true;
+          break;
+        }
+        continue;
+      }
+      if (criticRequestId) finishAiRequest(state, criticRequestId, "SUCCESS", "", criticResult._usage);
+      result = criticResult;
+    }
     const probabilityResult = modelProbabilityForCandidate(result, candidate);
     if (!probabilityResult.valid) {
       if (requestId) finishAiRequest(state, requestId, "ERROR", probabilityResult.reason);
@@ -2719,9 +2721,9 @@ async function enrichEvaluationsWithAi(evaluations, learningProfile, state = nul
         keyFacts: Array.isArray(researchResult.keyFacts) ? researchResult.keyFacts.slice(0, 6) : [],
       },
       aiRequestUsage: {
-        totalRequests: 2,
+        totalRequests: AI_CRITIC_ENABLED ? 2 : 1,
         research: researchResult._usage || null,
-        critic: criticResult._usage || null,
+        critic: criticResult?._usage || null,
       },
       _provider: "gemini",
     };
