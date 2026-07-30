@@ -714,7 +714,6 @@ function syncOpportunityViewControls() {
   els.evaluationOnlyControls.forEach((element) => {
     element.hidden = scraped;
   });
-  if (els.evaluationProbabilityFilter) els.evaluationProbabilityFilter.closest("label")?.toggleAttribute("hidden", scraped);
 }
 
 function setOpportunityView(view) {
@@ -4461,8 +4460,11 @@ function binaryMarketProbabilityCell(item) {
 
 function renderScrapedOpportunities() {
   const observations = Array.isArray(state.botState?.marketObservations) ? state.botState.marketObservations : [];
+  const probabilityFilter = currentEvaluationProbabilityFilter();
   const daysFilter = currentEvaluationDaysFilter();
   const filtered = observations.filter((item) => {
+    const marketProbability = Number(item.marketProbability);
+    if (probabilityFilter > 0 && (!Number.isFinite(marketProbability) || marketProbability < probabilityFilter)) return false;
     const days = evaluationDaysLeft(item);
     return daysFilter == null || (Number.isFinite(days) && days <= daysFilter);
   });
@@ -4470,9 +4472,13 @@ function renderScrapedOpportunities() {
   const scan = state.botState?.marketScan || {};
 
   if (els.evaluationFilterCount) {
-    els.evaluationFilterCount.textContent = daysFilter == null
-      ? `${formatInteger(filtered.length) || filtered.length} scraped markets`
-      : `${formatInteger(filtered.length) || filtered.length} scraped / days <= ${daysFilter}`;
+    const filters = [
+      probabilityFilter > 0 ? `market >= ${(probabilityFilter * 100).toFixed(0)}%` : "",
+      daysFilter != null ? `days <= ${daysFilter}` : "",
+    ].filter(Boolean);
+    els.evaluationFilterCount.textContent = filters.length
+      ? `${formatInteger(filtered.length) || filtered.length} scraped / ${filters.join(" / ")}`
+      : `${formatInteger(filtered.length) || filtered.length} scraped markets`;
   }
   if (els.evaluationSummary) {
     const lastScan = scan.lastScanAt ? formatDate(scan.lastScanAt) : "pending";
@@ -4491,7 +4497,7 @@ function renderScrapedOpportunities() {
     return;
   }
   if (!visible.length) {
-    els.botEvaluations.innerHTML = '<div class="empty">No scraped opportunities match the selected days-left filter.</div>';
+    els.botEvaluations.innerHTML = '<div class="empty">No scraped opportunities match the selected probability or days-left filters.</div>';
     return;
   }
 
