@@ -595,6 +595,24 @@ function syncExecutionButtons() {
   });
 }
 
+const PORTFOLIO_TAB_ROUTE_SEGMENTS = {
+  "daily-picks": "opened",
+  "closed-trades": "closed",
+  "portfolio-candidates": "candidates",
+  "run-log": "run-log",
+};
+
+function portfolioTabFromRouteSegment(segment) {
+  const normalized = String(segment || "").trim().toLowerCase();
+  return Object.entries(PORTFOLIO_TAB_ROUTE_SEGMENTS)
+    .find(([, value]) => value === normalized)?.[0] || "daily-picks";
+}
+
+function portfolioTabRoutePath(tab = "daily-picks") {
+  const segment = PORTFOLIO_TAB_ROUTE_SEGMENTS[tab] || PORTFOLIO_TAB_ROUTE_SEGMENTS["daily-picks"];
+  return `/trading/portfolios/${segment}/`;
+}
+
 function currentRouteState() {
   const path = window.location.pathname.replace(/\/+$/, "/");
   if (path.endsWith("/trading/opportunities/") || path.endsWith("/opportunities/")) {
@@ -612,10 +630,11 @@ function currentRouteState() {
       settingsSection: "calculations",
     };
   }
-  if (path.endsWith("/trading/portfolios/") || path.endsWith("/portfolios/")) {
+  const portfolioRoute = path.match(/(?:^|\/)portfolios(?:\/([^/]+))?\/$/);
+  if (portfolioRoute) {
     return {
       page: "portfolios",
-      tab: "daily-picks",
+      tab: portfolioTabFromRouteSegment(portfolioRoute[1]),
     };
   }
   return {
@@ -624,8 +643,9 @@ function currentRouteState() {
   };
 }
 
-function routePath(page) {
+function routePath(page, tab = "daily-picks") {
   const normalized = ["settings", "opportunities", "portfolios"].includes(page) ? page : "portfolios";
+  if (normalized === "portfolios") return portfolioTabRoutePath(tab);
   return `/trading/${normalized}/`;
 }
 
@@ -664,7 +684,7 @@ function setPage(page) {
   }
 }
 
-function activateTab(target) {
+function activateTab(target, { syncRoute = false, replace = false } = {}) {
   els.tabButtons.forEach((item) => {
     item.classList.toggle("active", item.dataset.tabTarget === target);
   });
@@ -674,6 +694,13 @@ function activateTab(target) {
   if (target === "portfolio-candidates") {
     renderPortfolioCandidates();
     refreshPortfolioCandidates({ quiet: true });
+  }
+  if (syncRoute && state.page === "portfolios") {
+    const targetPath = portfolioTabRoutePath(target);
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (currentPath !== targetPath) {
+      window.history[replace ? "replaceState" : "pushState"]({ page: "portfolios", tab: target }, "", targetPath);
+    }
   }
 }
 
@@ -739,7 +766,7 @@ function activatePage(page, { replace = false, preserveSearch = false } = {}) {
     activateTab("daily-picks");
   }
 
-  const nextPath = routePath(nextPage);
+  const nextPath = routePath(nextPage, nextPage === "portfolios" ? "daily-picks" : undefined);
   const targetPath = preserveSearch ? `${nextPath}${window.location.search}` : nextPath;
   const currentPath = `${window.location.pathname}${window.location.search}`;
   if (currentPath !== targetPath) {
@@ -5360,7 +5387,7 @@ els.tabButtons.forEach((button) => {
     if (button.tagName === "A") return;
     const target = button.dataset.tabTarget;
     event.preventDefault();
-    activateTab(target);
+    activateTab(target, { syncRoute: true });
     refreshDashboardAfterUserNavigation();
   });
 });
