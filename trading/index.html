@@ -225,6 +225,11 @@
                     <input type="number" min="0" max="3650" step="0.5" placeholder="All" data-evaluation-days-filter>
                     <strong data-evaluation-days-filter-label>All</strong>
                   </label>
+                  <label class="threshold-control evaluation-net-yield-control" title="Display-only minimum Net yield % filter after estimated trading fees. Portfolio rules are not changed.">
+                    <span>Net yield min</span>
+                    <input type="number" min="0" max="1000" step="0.1" value="0.0" data-evaluation-net-yield-filter>
+                    <strong data-evaluation-net-yield-filter-label>&gt;= 0.0%</strong>
+                  </label>
                   <div class="segmented" data-evaluation-filter data-evaluation-only>
                     <button class="segment-button active" type="button" data-evaluation-status="EVALUATED">Evaluated</button>
                     <button class="segment-button" type="button" data-evaluation-status="RESOLVED">Resolved</button>
@@ -360,6 +365,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260730-min-net-profit"></script>
+  <script src="assets/app.js?v=20260730-opportunity-net-yield-filter"></script>
 </body>
 </html>

@@ -37,6 +37,7 @@ const state = {
   scrapedMarketScan: {},
   evaluationProbabilityFilter: 0,
   evaluationDaysFilter: null,
+  evaluationNetYieldFilter: 0,
   eligibilityThreshold: null,
   eligibilityThresholdKey: "",
   riskAllocation: null,
@@ -75,6 +76,7 @@ const state = {
 const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshold";
 const EVALUATION_PROBABILITY_FILTER_STORAGE_KEY = "tradingEvaluationProbabilityFilter";
 const EVALUATION_DAYS_FILTER_STORAGE_KEY = "tradingEvaluationDaysFilter";
+const EVALUATION_NET_YIELD_FILTER_STORAGE_KEY = "tradingEvaluationNetYieldFilter";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
@@ -134,6 +136,8 @@ const els = {
   evaluationProbabilityFilterLabel: document.querySelector("[data-evaluation-probability-filter-label]"),
   evaluationDaysFilter: document.querySelector("[data-evaluation-days-filter]"),
   evaluationDaysFilterLabel: document.querySelector("[data-evaluation-days-filter-label]"),
+  evaluationNetYieldFilter: document.querySelector("[data-evaluation-net-yield-filter]"),
+  evaluationNetYieldFilterLabel: document.querySelector("[data-evaluation-net-yield-filter-label]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   riskAllocation: document.querySelector("[data-risk-allocation]"),
@@ -2253,6 +2257,33 @@ function syncEvaluationDaysFilterControl() {
   state.evaluationDaysFilter = value;
   if (els.evaluationDaysFilter) els.evaluationDaysFilter.value = value == null ? "" : String(value);
   if (els.evaluationDaysFilterLabel) els.evaluationDaysFilterLabel.textContent = value == null ? "All" : `<= ${value} d`;
+}
+
+function storedEvaluationNetYieldFilter() {
+  try {
+    return normalizeMinimumNetYield(Number(localStorage.getItem(EVALUATION_NET_YIELD_FILTER_STORAGE_KEY)));
+  } catch {
+    return 0;
+  }
+}
+
+function saveEvaluationNetYieldFilter(value) {
+  try {
+    localStorage.setItem(EVALUATION_NET_YIELD_FILTER_STORAGE_KEY, String(normalizeMinimumNetYield(value)));
+  } catch {
+    // Display-only preference; ignore storage failures.
+  }
+}
+
+function currentEvaluationNetYieldFilter() {
+  return normalizeMinimumNetYield(state.evaluationNetYieldFilter);
+}
+
+function syncEvaluationNetYieldFilterControl() {
+  const value = currentEvaluationNetYieldFilter();
+  state.evaluationNetYieldFilter = value;
+  if (els.evaluationNetYieldFilter) els.evaluationNetYieldFilter.value = (value * 100).toFixed(1);
+  if (els.evaluationNetYieldFilterLabel) els.evaluationNetYieldFilterLabel.textContent = `>= ${percent(value)}`;
 }
 
 function syncRiskAllocationControl(availableCapital = null, sourceLabel = "available capital", options = {}) {
@@ -4541,11 +4572,14 @@ function filteredEvaluations(evaluations) {
     : evaluations.filter((item) => portfolioEvaluationStatus(item) === state.evaluationStatus);
   const minProbability = currentEvaluationProbabilityFilter();
   const maxDays = currentEvaluationDaysFilter();
+  const minNetYield = currentEvaluationNetYieldFilter();
   return statusFiltered.filter((item) => {
     const aiProbability = Number(item.aiProbability);
     if (minProbability > 0 && (!Number.isFinite(aiProbability) || aiProbability < minProbability)) return false;
     const days = evaluationDaysLeft(item);
     if (maxDays != null && (!Number.isFinite(days) || days > maxDays)) return false;
+    const yieldValue = netYield(item);
+    if (minNetYield > 0 && (!Number.isFinite(yieldValue) || yieldValue < minNetYield)) return false;
     return true;
   });
 }
@@ -4683,6 +4717,7 @@ function renderScrapedOpportunities() {
   const observations = scrapedMarketObservations();
   const probabilityFilter = currentEvaluationProbabilityFilter();
   const daysFilter = currentEvaluationDaysFilter();
+  const minNetYield = currentEvaluationNetYieldFilter();
   const statusFiltered = state.evaluationStatus === "ALL"
     ? observations
     : observations.filter((item) => scrapedObservationFilterStatus(item) === state.evaluationStatus);
@@ -4691,7 +4726,9 @@ function renderScrapedOpportunities() {
     if (probabilityFilter > 0 && (!Number.isFinite(marketProbability) || marketProbability < probabilityFilter)) return false;
     const days = evaluationDaysLeft(item);
     if (!Number.isFinite(days)) return false;
-    return daysFilter == null || (Number.isFinite(days) && days <= daysFilter);
+    if (daysFilter != null && days > daysFilter) return false;
+    const yieldValue = netYield(item);
+    return minNetYield <= 0 || (Number.isFinite(yieldValue) && yieldValue >= minNetYield);
   });
   const visible = sortedScrapedObservations(filtered).slice(0, 250);
   const scan = scrapedMarketScan();
@@ -4703,6 +4740,7 @@ function renderScrapedOpportunities() {
     const filters = [
       probabilityFilter > 0 ? `market >= ${(probabilityFilter * 100).toFixed(0)}%` : "",
       daysFilter != null ? `days <= ${daysFilter}` : "",
+      minNetYield > 0 ? `net yield >= ${(minNetYield * 100).toFixed(1)}%` : "",
     ].filter(Boolean);
     els.evaluationFilterCount.textContent = filters.length
       ? `${formatInteger(filtered.length) || filtered.length} scraped / ${filters.join(" / ")}`
@@ -4730,7 +4768,7 @@ function renderScrapedOpportunities() {
     return;
   }
   if (!visible.length) {
-    els.botEvaluations.innerHTML = '<div class="empty">No scraped opportunities match the selected probability or days-left filters.</div>';
+    els.botEvaluations.innerHTML = '<div class="empty">No scraped opportunities match the selected probability, days-left, or net-yield filters.</div>';
     return;
   }
 
@@ -4794,12 +4832,14 @@ function renderBotEvaluations() {
   const filteredCount = filtered.length;
   const probabilityFilter = currentEvaluationProbabilityFilter();
   const daysFilter = currentEvaluationDaysFilter();
+  const minNetYield = currentEvaluationNetYieldFilter();
 
   if (els.evaluationFilterCount) {
     const countText = formatInteger(filteredCount) || String(filteredCount);
     const filters = [
       probabilityFilter > 0 ? `AI >= ${(probabilityFilter * 100).toFixed(0)}%` : "",
       daysFilter != null ? `days <= ${daysFilter}` : "",
+      minNetYield > 0 ? `net yield >= ${(minNetYield * 100).toFixed(1)}%` : "",
     ].filter(Boolean);
     els.evaluationFilterCount.textContent = filters.length
       ? `${countText} matching ${filters.join(" / ")}`
@@ -5769,6 +5809,15 @@ els.evaluationDaysFilter?.addEventListener("input", () => {
   renderBotEvaluations();
 });
 
+els.evaluationNetYieldFilter?.addEventListener("input", () => {
+  const raw = Number(els.evaluationNetYieldFilter.value);
+  const value = normalizeMinimumNetYield(Number.isFinite(raw) ? raw / 100 : 0);
+  state.evaluationNetYieldFilter = value;
+  saveEvaluationNetYieldFilter(value);
+  if (els.evaluationNetYieldFilterLabel) els.evaluationNetYieldFilterLabel.textContent = `>= ${percent(value)}`;
+  renderBotEvaluations();
+});
+
 els.eligibilityThreshold?.addEventListener("input", () => {
   if (parameterDraftInputIsEmpty(els.eligibilityThreshold)) {
     if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = "-";
@@ -6068,8 +6117,10 @@ state.runLogFilters = storedRunLogFilter(state.mode);
 state.liveExecutionArmed = storedLiveExecutionArmed();
 state.evaluationProbabilityFilter = storedEvaluationProbabilityFilter();
 state.evaluationDaysFilter = storedEvaluationDaysFilter();
+state.evaluationNetYieldFilter = storedEvaluationNetYieldFilter();
 syncEvaluationProbabilityFilterControl();
 syncEvaluationDaysFilterControl();
+syncEvaluationNetYieldFilterControl();
 applyInitialRoute();
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);
