@@ -95,6 +95,7 @@ jobs:
       POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
       POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '1' }}
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
+      PAPER_SCRAPED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=scraped
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
       LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
@@ -310,6 +311,7 @@ jobs:
           python3 - <<'PY'
           import ftplib
           import os
+          import time
           from pathlib import Path
 
           server = os.environ["HOSTING_FTP_SERVER"]
@@ -318,9 +320,6 @@ jobs:
           target = os.environ["TRADING_FTP_DIR"].strip("/")
           state_file = Path(os.environ["LIVE_STATE_FILE"])
           execution_file = Path(os.environ["LIVE_EXECUTION_STATE_FILE"])
-
-          if not state_file.exists():
-              raise SystemExit("live-state.json was not generated")
 
           def enter_dir(ftp, parts):
               try:
@@ -336,22 +335,37 @@ jobs:
                       ftp.mkd(part)
                       ftp.cwd(part)
 
-          with ftplib.FTP(server, timeout=30) as ftp:
-              ftp.login(username, password)
-              enter_dir(ftp, target.split("/"))
-              def upload_atomic(local_path, remote_name):
-                  tmp_name = f"{remote_name}.uploading"
-                  with local_path.open("rb") as handle:
-                      ftp.storbinary(f"STOR {tmp_name}", handle)
+          def upload_atomic(local_path, remote_name):
+              failures = []
+              for attempt in range(1, 4):
+                  tmp_name = f"{remote_name}.uploading-{attempt}"
                   try:
-                      ftp.rename(tmp_name, remote_name)
-                  except ftplib.all_errors:
-                      ftp.delete(remote_name)
-                      ftp.rename(tmp_name, remote_name)
+                      with ftplib.FTP(server, timeout=30) as ftp:
+                          ftp.login(username, password)
+                          enter_dir(ftp, target.split("/"))
+                          with local_path.open("rb") as handle:
+                              ftp.storbinary(f"STOR {tmp_name}", handle)
+                          try:
+                              ftp.rename(tmp_name, remote_name)
+                          except ftplib.all_errors:
+                              try:
+                                  ftp.delete(remote_name)
+                              except ftplib.all_errors:
+                                  pass
+                              ftp.rename(tmp_name, remote_name)
+                      print(f"Uploaded {remote_name} on attempt {attempt}")
+                      return
+                  except ftplib.all_errors as error:
+                      failures.append(str(error))
+                      time.sleep(attempt)
+              raise RuntimeError(f"Could not upload {remote_name} after 3 attempts: {' | '.join(failures)}")
 
-              upload_atomic(state_file, "live-state.json")
-              if execution_file.exists():
-                  upload_atomic(execution_file, "live-execution-state.json")
+          # Preserve the execution log even if the larger account-state upload fails.
+          if execution_file.exists():
+              upload_atomic(execution_file, "live-execution-state.json")
+          if not state_file.exists():
+              raise SystemExit("live-state.json was not generated")
+          upload_atomic(state_file, "live-state.json")
           PY
 
       - name: Send redeem alert emails

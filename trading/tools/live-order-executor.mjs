@@ -11,6 +11,7 @@ function envNumber(name, fallback = null) {
 }
 
 const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper";
+const PAPER_SCRAPED_STATE_URL = process.env.PAPER_SCRAPED_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=scraped";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
 const LIVE_EXECUTION_STATE_URL = process.env.LIVE_EXECUTION_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution";
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
@@ -1798,7 +1799,12 @@ async function main() {
     }, null, 2));
     return;
   }
-  const paperState = await loadJsonResource(PAPER_STATE_URL, "paper state");
+  const [paperState, scrapedState] = await Promise.all([
+    loadJsonResource(PAPER_STATE_URL, "paper state"),
+    PROBABILITY_SOURCE === "polymarket"
+      ? loadJsonResource(PAPER_SCRAPED_STATE_URL, "scraped Polymarket state")
+      : Promise.resolve(null),
+  ]);
   if (HAS_MANUAL_SHORTLIST && MANUAL_SHORTLIST_PROBABILITY_SOURCE && MANUAL_SHORTLIST_PROBABILITY_SOURCE !== PROBABILITY_SOURCE) {
     throw new Error(`manual execution shortlist uses ${MANUAL_SHORTLIST_PROBABILITY_SOURCE} probability, but the live portfolio is configured for ${PROBABILITY_SOURCE} probability`);
   }
@@ -1811,16 +1817,17 @@ async function main() {
   const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, cash - IDLE_CASH_MAX_USDC) : 0;
   const maxNotional = Number(regularMaxNotional.toFixed(5));
   const rawEvaluations = Array.isArray(paperState.evaluations) ? paperState.evaluations : [];
-  const rawMarketObservations = PROBABILITY_SOURCE === "polymarket" && Array.isArray(paperState.marketObservations)
-    ? paperState.marketObservations
+  const rawMarketObservations = PROBABILITY_SOURCE === "polymarket" && Array.isArray(scrapedState?.marketObservations)
+    ? scrapedState.marketObservations
     : [];
   const rawCandidateRows = PROBABILITY_SOURCE === "polymarket"
-    ? [...rawMarketObservations, ...rawEvaluations]
+    ? rawMarketObservations
     : rawEvaluations;
   const candidatePool = prepareLiveCandidatePool(rawCandidateRows);
   const latestEvaluations = candidatePool.uniqueEvaluations;
   const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
-  const baseCandidates = candidatePool.candidates;
+  const manualShortlistStale = HAS_MANUAL_SHORTLIST && candidatePool.diagnostics.manualShortlistMissingTokenIds.length > 0;
+  const baseCandidates = manualShortlistStale ? [] : candidatePool.candidates;
 
   const checked = [];
   for (const evaluation of baseCandidates) {
@@ -1856,9 +1863,9 @@ async function main() {
   const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
   const riskBlockedCandidates = checked.filter((item) => (item.rejectReasons || [])
     .some((reason) => /^(correlated live exposure|duplicate token already open)/i.test(String(reason || ""))));
-  const needsCapitalRotation = !eligible.length && (cash <= 0 || capitalSizingBlocked.length > 0);
-  const needsRiskReplacement = !eligible.length && !needsCapitalRotation && riskBlockedCandidates.length > 0;
-  const rotationReview = !eligible.length && (needsCapitalRotation || needsRiskReplacement)
+  const needsCapitalRotation = !manualShortlistStale && !eligible.length && (cash <= 0 || capitalSizingBlocked.length > 0);
+  const needsRiskReplacement = !manualShortlistStale && !eligible.length && !needsCapitalRotation && riskBlockedCandidates.length > 0;
+  const rotationReview = !manualShortlistStale && !eligible.length && (needsCapitalRotation || needsRiskReplacement)
     ? await reviewPositionRotation({
         liveState,
         evaluationByToken,
@@ -1870,7 +1877,7 @@ async function main() {
     : null;
   const activeSellOrders = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
     .filter((order) => String(order.side || "").toUpperCase().includes("SELL"));
-  const orderManagement = activeSellOrders.length
+  const orderManagement = manualShortlistStale || activeSellOrders.length
     ? { action: "NONE", reviews: [] }
     : await reviewOpenOrders({
         liveState,
@@ -2053,6 +2060,24 @@ async function main() {
         minOrderSize: item.minOrderSize || null,
       })),
   };
+
+  if (manualShortlistStale) {
+    const missingCount = candidatePool.diagnostics.manualShortlistMissingTokenIds.length;
+    const reason = `manual execution stopped: ${missingCount} submitted execution candidate${missingCount === 1 ? " is" : "s are"} no longer in the current scraped Polymarket shortlist`;
+    await emitDecision({
+      ...decision,
+      action: "SHORTLIST_STALE",
+      reason,
+      batchLog: {
+        ...decision.batchLog,
+        action: "SHORTLIST_STALE",
+        reason,
+        explanation: "No live order, open-order change, or position rotation was attempted. Refresh the execution shortlist and start a new run so the submitted token list exactly matches current scraped Polymarket data.",
+      },
+      attempts: [],
+    });
+    return;
+  }
 
   if (orderManagement.action !== "NONE") {
     await emitDecision({

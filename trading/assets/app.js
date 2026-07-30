@@ -3433,6 +3433,31 @@ function liveWorkflowPayload() {
   };
 }
 
+async function fetchFreshState(target, summary = "") {
+  const summaryQuery = summary ? `&summary=${encodeURIComponent(summary)}` : "";
+  const response = await fetch(appPath(`api.php?action=state&target=${target}${summaryQuery}&t=${Date.now()}`), {
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`${target} state HTTP ${response.status}`);
+  return response.json();
+}
+
+async function freshLiveWorkflowPayload() {
+  // A live click must submit precisely the same scraped shortlist the user sees,
+  // never a stale dashboard cache or the AI-evaluation dataset.
+  const [scrapedState, liveState] = await Promise.all([
+    fetchFreshState("paper", "scraped"),
+    fetchFreshState("live"),
+  ]);
+  storeScrapedMarketState(scrapedState);
+  state.liveState = liveState;
+  const payload = liveWorkflowPayload();
+  if (!payload.live_execution_candidate_token_ids) {
+    throw new Error("No current live execution candidates are available. Refresh the shortlist before starting a live order run.");
+  }
+  return payload;
+}
+
 async function triggerOneTimeExecution(target) {
   target = target === "live" ? "live" : (isPaperExecutionTarget(target) ? target : "paper");
   const live = target === "live";
@@ -3477,9 +3502,7 @@ async function triggerOneTimeExecution(target) {
 
   try {
     await savePortfolioConfigNow();
-    if (live && !liveWorkflowPayload().live_execution_candidate_token_ids) {
-      throw new Error("No current live execution candidates are available. Refresh the shortlist before starting a live order run.");
-    }
+    const workflowPayload = live ? await freshLiveWorkflowPayload() : null;
     const response = await fetch(appPath("api.php?action=workflow"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3491,7 +3514,7 @@ async function triggerOneTimeExecution(target) {
           max_order_fraction: currentRiskAllocation(),
           ...paperThresholdPayload(),
         } : {
-          ...liveWorkflowPayload(),
+          ...workflowPayload,
         }),
       }),
     });
@@ -3956,10 +3979,13 @@ function sortPortfolioCandidates(rows = [], mode = state.mode) {
 function portfolioCandidateDiagnostics(mode = state.mode) {
   const config = portfolioConfigForMode(mode);
   const baseEvaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
-  const scrapedObservations = normalizeProbabilitySource(config.probabilitySource) === "polymarket"
+  const usesPolymarketProbability = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
+  const scrapedObservations = usesPolymarketProbability
     ? scrapedMarketObservations()
     : [];
-  const evaluations = latestUniquePortfolioEvaluations([...scrapedObservations, ...baseEvaluations]);
+  // A Polymarket-probability portfolio must use only scraped order-book data.
+  // Mixing in AI evaluations makes the visible shortlist disagree with live execution.
+  const evaluations = latestUniquePortfolioEvaluations(usesPolymarketProbability ? scrapedObservations : baseEvaluations);
   const evaluationByToken = new Map(evaluations.map((item) => [String(item.tokenId || ""), item]).filter(([token]) => token));
   const activeRows = activeExposureRowsForMode(mode);
   const ready = [];
