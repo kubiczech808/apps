@@ -8848,9 +8848,11 @@ function sendAiResearchSeedOutreachTest(PDO $pdo, array $config, int $runId): st
     $language = aiResearchRunLanguage($run, $contacts);
     $draft = aiResearchSeedOutreachDraft($run, $contacts, $plan, $language);
     $subject = '[TEST] ' . (string)$draft['subject'];
-    $html = '<p style="font-size:12px;color:#67736d"><strong>Testovaci odeslani.</strong> Cilovy subjekt: '
-        . h((string)($run['seed_business'] ?? '')) . ' &lt;' . h((string)($run['seed_email'] ?? '')) . '&gt;.</p>'
-        . (string)$draft['html'];
+    // Poznamka o testu je az na konci: v nahledu notifikace ma byt videt skutecne
+    // znuni osloveni, ne technicky popis testovaciho odeslani.
+    $html = (string)$draft['html']
+        . '<p style="font-size:12px;color:#67736d"><strong>Testovaci odeslani.</strong> Cilovy subjekt: '
+        . h((string)($run['seed_business'] ?? '')) . ' &lt;' . h((string)($run['seed_email'] ?? '')) . '&gt;.</p>';
     (new SmtpMailer($config))->send(AI_RESEARCH_ALLOWED_EMAIL, $subject, $html, [
         'email' => AI_RESEARCH_ALLOWED_EMAIL,
         'name' => 'Admin test',
@@ -19579,8 +19581,9 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
     $targetLabel = $audience !== '' ? $audience : 'vybrané B2B kontakty';
 
     if ($language === 'de') {
-        $subject = 'Bringen Sie Ihr Geschaft in Fahrt - wir sprechen ' . $countLabel . ' passende Kontakte fuer Sie an';
-        $html = '<p>Guten Tag,</p>'
+        $subject = $countLabel . ' Kontakte warten auf Ihre Ansprache';
+        $html = '<p><strong>Wir sprechen sie fuer Sie an!</strong> ' . h($countLabel) . ' passende Kontakte fuer Ihr Geschaeft sind vorbereitet.</p>'
+            . '<p>Guten Tag,</p>'
             . '<p>wir haben uns auf eine konkrete Leistung aus Ihrem Angebot gestützt: <strong>' . h($offerSummary) . '</strong>.</p>'
             . '<p>Aktuell haben wir für Sie <strong>' . h($countLabel) . '</strong> passende Kontakte vorbereitet. Die Suche zielt auf <strong>' . h($audience) . '</strong> ab, mit dem Suchbegriff <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' und dem Gebiet <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Beispiele gefundener Kontakte: ' . h($sampleText) . '.</p>' : '')
@@ -19588,8 +19591,9 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . '<p>Möchten Sie fortfahren und die Ansprache prüfen?</p>'
             . $unsubscribeHtmlDe;
     } elseif ($language === 'en') {
-        $subject = 'Kick-start your business - we will reach out to ' . $countLabel . ' relevant contacts for you';
-        $html = '<p>Hello,</p>'
+        $subject = $countLabel . ' contacts waiting for your outreach';
+        $html = '<p><strong>We will reach out to them for you!</strong> ' . h($countLabel) . ' relevant contacts for your business are ready.</p>'
+            . '<p>Hello,</p>'
             . '<p>we focused on a concrete product or service from your offer: <strong>' . h($offerSummary) . '</strong>.</p>'
             . '<p>We have currently found <strong>' . h($countLabel) . '</strong> relevant contacts for you. The search focuses on <strong>' . h($audience) . '</strong>, using the keyword <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' in <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Examples of found companies: ' . h($sampleText) . '.</p>' : '')
@@ -19597,8 +19601,9 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . '<p>Would you like to continue and review the prepared campaign?</p>'
             . $unsubscribeHtmlEn;
     } elseif ($language === 'sk') {
-        $subject = 'Nastartujte svoje podnikanie - oslovime za vas ' . $countLabel . ' relevantnych kontaktov';
-        $html = '<p>Dobrý deň,</p>'
+        $subject = $countLabel . ' kontaktov čaká na vaše oslovenie';
+        $html = '<p><strong>Oslovíme ich za vás!</strong> ' . h($countLabel) . ' relevantných kontaktov pre vaše podnikanie čaká na oslovenie.</p>'
+            . '<p>Dobrý deň,</p>'
             . '<p>opreli sme sa o konkrétny produkt alebo službu z vašej ponuky: <strong>' . h($offerSummary) . '</strong>.</p>'
             . '<p>Aktuálne sme pre vás našli <strong>' . h($countLabel) . '</strong> relevantných kontaktov. Vyhľadávanie cieli na <strong>' . h($audience) . '</strong>, podľa kľúčového slova <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Príklady nájdených subjektov: ' . h($sampleText) . '.</p>' : '')
@@ -19606,8 +19611,9 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . '<p>Chcete pokračovať a pozrieť si pripravené oslovenie?</p>'
             . $unsubscribeHtmlSk;
     } elseif ($language === 'pl') {
-        $subject = 'Rozkrec swoj biznes - odezwiemy sie za Ciebie do ' . $countLabel . ' pasujacych kontaktow';
-        $html = '<p>Dzien dobry,</p>'
+        $subject = $countLabel . ' kontaktow czeka na Twoje zaproszenie';
+        $html = '<p><strong>Odezwiemy sie do nich za Ciebie!</strong> ' . h($countLabel) . ' pasujacych kontaktow dla Twojego biznesu jest gotowych.</p>'
+            . '<p>Dzien dobry,</p>'
             . '<p>oparlismy sie na konkretnym produkcie lub usludze z Panstwa oferty: <strong>' . h($offerSummary) . '</strong>.</p>'
             . '<p>Aktualnie znalezlismy <strong>' . h($countLabel) . '</strong> pasujacych kontaktow. Wyszukiwanie celuje w <strong>' . h($audience) . '</strong>, przy slowie kluczowym <strong>' . h($keyword) . '</strong>' . ($targetArea !== '' ? ' w obszarze <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . ($sampleText !== '' ? '<p>Przyklady znalezionych firm: ' . h($sampleText) . '.</p>' : '')
@@ -19615,8 +19621,9 @@ function aiResearchSeedOutreachDraft(array $run, array $contacts, array $plan, s
             . '<p>Czy chca Panstwo przejsc dalej i zobaczyc przygotowana kampanie?</p>'
             . $unsubscribeHtmlPl;
     } else {
-        $subject = 'Nastartujte své podnikání - oslovíme za vás ' . $countLabel . ' relevantních kontaktů';
-        $html = '<p>Dobrý den,</p>'
+        $subject = $countLabel . ' kontaktů čeká na vaše oslovení';
+        $html = '<p><strong>Oslovíme je za vás!</strong> ' . h($countLabel) . ' relevantních kontaktů pro vaše podnikání čeká na oslovení.</p>'
+            . '<p>Dobrý den,</p>'
             . '<p>opřeli jsme se o konkrétní produkt nebo službu z vaší nabídky: <strong>' . h($offerSummary) . '</strong>.</p>'
             . '<p>Na tomto základě jsme připravili oslovení pro <strong>' . h($countLabel) . '</strong> kontaktů ze segmentu <strong>' . h($targetLabel) . '</strong>' . ($targetArea !== '' && $targetArea !== '-' ? ' v oblasti <strong>' . h($targetArea) . '</strong>' : '') . '.</p>'
             . '<p>V návrhu jsme pro vás připravili:</p>'
