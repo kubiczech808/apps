@@ -5793,6 +5793,10 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
 
         // Audit musi po dokonceni kroku okamzite srovnat i stav osloveni. Jinak
         // mohl checklist hlasit hotovo, ale badge zustal do dalsiho cronu "pripravuje se".
+        $unviable = aiResearchOutreachUnviableReason($plan, aiResearchScrapedContactCount($pdo, $plan));
+        if ($unviable !== '') {
+            $blocked[] = 'seed se neoslovuje: ' . $unviable;
+        }
         aiResearchRefreshSeedOutreachStatus($pdo, $runId);
         // Beh musi po auditu opustit frontu rozdelane prace, jinak ho dalsi cron
         // vezme znovu a zpracovava porad ten samy seed.
@@ -6748,21 +6752,97 @@ function aiResearchStoreProvisionedContainer(PDO $pdo, int $runId, int $containe
  * Dokonci behy, kterym uz zbyva jen vzor osloveni. Vznikaji, kdyz hosting ukonci request
  * uprostred behu. Bez tohoto kroku by v prehledu zustavaly navzdy nedokoncene.
  */
+/**
+ * Osloveni ma smysl jen tehdy, kdyz je dosazitelnych kontaktu vic, nez kolik jich uz
+ * mame nascrapovanych. Kdyz je cislo stejne nebo mensi, nema kampan koho pridat -
+ * bud je trh vycerpany, nebo katalog nevydal pouzitelny pocet. Takovy seed se
+ * neoslovuje a duvod se uvede, at neni potreba dohledavat, proc vypadl.
+ */
+/**
+ * Vysvetleni stavu ve sloupci Osloveni pro title bunky.
+ */
+function aiResearchSeedOutreachStateHint(string $state): string
+{
+    return [
+        'osloven' => 'Seed subjekt uz nase osloveni dostal.',
+        'neoslovujeme' => 'Seed se neoslovuje.',
+        'ready' => 'Vsechny kroky workflow jsou hotove, osloveni jde odeslat.',
+        'not ready' => 'Osloveni jeste neni pripravene, chybi nektery krok workflow.',
+    ][$state] ?? '';
+}
+
+function aiResearchOutreachUnviableReason(array $plan, int $scrapedContacts): string
+{
+    if ($scrapedContacts <= 0) {
+        // Bez nascrapovanych kontaktu neni s cim srovnavat.
+        return '';
+    }
+    $estimate = is_array($plan['contact_estimate'] ?? null) ? (array)$plan['contact_estimate'] : [];
+    if ($estimate === [] || empty($estimate['complete'])) {
+        // Odhad se jeste dopocitava, zavery z necela spocitaneho cisla nedelame.
+        return '';
+    }
+    $reachable = (int)($estimate['reachable_contacts'] ?? 0);
+    if ($reachable > $scrapedContacts) {
+        return '';
+    }
+    return 'Dosazitelnych kontaktu (' . $reachable . ') neni vic nez uz nascrapovanych ('
+        . $scrapedContacts . '), osloveni by nemelo koho pridat.';
+}
+
+/**
+ * Kolik kontaktu pro tento beh scraping skutecne vytahl.
+ */
+function aiResearchScrapedContactCount(PDO $pdo, array $plan): int
+{
+    $progress = aiResearchScrapingProgress($pdo, $plan);
+    return is_array($progress) ? (int)($progress['contacts_total'] ?? 0) : 0;
+}
+
 function aiResearchRefreshSeedOutreachStatus(PDO $pdo, int $runId): string
 {
     $stmt = $pdo->prepare('SELECT id, plan_json, seed_outreach_status, found_count, accepted_count, email_body_html, message FROM ai_research_runs WHERE id=? LIMIT 1');
     $stmt->execute([$runId]);
     $run = $stmt->fetch(PDO::FETCH_ASSOC);
-    if (!$run || !in_array((string)($run['seed_outreach_status'] ?? ''), ['preparing', 'ready'], true)) {
+    if (!$run || !in_array((string)($run['seed_outreach_status'] ?? ''), ['preparing', 'ready', 'excluded'], true)) {
         return '';
     }
     $plan = json_decode((string)$run['plan_json'], true);
     if (!is_array($plan)) {
         return '';
     }
+    $currentStatus = (string)$run['seed_outreach_status'];
+    $autoExcluded = trim((string)($plan['outreach_unviable_reason'] ?? '')) !== '';
+    if ($currentStatus === 'excluded' && !$autoExcluded) {
+        // Rucne vyrazeny seed se sam nevraci.
+        return '';
+    }
+    $unviable = aiResearchOutreachUnviableReason($plan, aiResearchScrapedContactCount($pdo, $plan));
+    if ($unviable !== '' || $autoExcluded) {
+        $plan['outreach_unviable_reason'] = $unviable;
+        if ($unviable === '') {
+            unset($plan['outreach_unviable_reason']);
+        }
+        $store = $pdo->prepare('
+            UPDATE ai_research_runs
+            SET seed_outreach_status=?, message=?, plan_json=?, updated_at=?
+            WHERE id=? AND seed_outreach_status IN ("preparing", "ready", "excluded")
+        ');
+        $store->execute([
+            $unviable !== '' ? 'excluded' : 'preparing',
+            $unviable !== '' ? 'Seed se neoslovuje: ' . $unviable : 'Seed se vratil do oslovovani, dosah uz je vetsi nez nascrapovane kontakty.',
+            json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
+            date('c'),
+            $runId,
+        ]);
+        if ($unviable !== '') {
+            return 'excluded';
+        }
+        $currentStatus = 'preparing';
+        $run['seed_outreach_status'] = 'preparing';
+    }
     $checklist = aiResearchWorkflowChecklist($pdo, $run, $plan);
     $nextStatus = aiResearchWorkflowRequiredDone($checklist) ? 'ready' : 'preparing';
-    $currentStatus = (string)$run['seed_outreach_status'];
     $message = trim((string)$run['message']);
     $nextMessage = $message;
     $messageClaimsReady = str_contains(aiResearchFoldText($message), 'pripravene k odeslani');
@@ -18223,9 +18303,13 @@ function renderApp(PDO $pdo, ?array $flash): void
                     </dialog>
                     </div>
                 </td>
-                <?php $outreachState = aiResearchSeedOutreachColumnState($run, $runPlan, $rowChecklist); ?>
+                <?php $runScrapedContacts = (int)($runScraping['contacts_total'] ?? 0); ?>
+                <?php $outreachState = aiResearchSeedOutreachColumnState($run, $runPlan, $rowChecklist, $runScrapedContacts); ?>
+                <?php $outreachReason = trim((string)($runPlan['outreach_unviable_reason'] ?? '')) !== ''
+                    ? (string)$runPlan['outreach_unviable_reason']
+                    : aiResearchOutreachUnviableReason($runPlan, $runScrapedContacts); ?>
                 <td class="research-outreach-col">
-                    <?= statusBadge($outreachState) ?>
+                    <span title="<?= h($outreachReason !== '' ? $outreachReason : aiResearchSeedOutreachStateHint($outreachState)) ?>"><?= statusBadge($outreachState) ?></span>
                     <?php if ($outreachState !== 'osloven'): ?>
                     <form method="post" class="inline">
                         <input type="hidden" name="run_id" value="<?= h((string)$run['id']) ?>">
@@ -18338,6 +18422,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                                 <?php endif; ?>
                                 <?php if ((string)($run['seed_outreach_sent_at'] ?? '') !== ''): ?><p><strong>Naše oslovení odesláno:</strong> <?= h(formatDateTime((string)$run['seed_outreach_sent_at'])) ?></p><?php endif; ?>
                                 <?php if ((string)($run['seed_outreach_unsubscribed_at'] ?? '') !== ''): ?><p><strong>Odhlášeno:</strong> <?= h(formatDateTime((string)$run['seed_outreach_unsubscribed_at'])) ?></p><?php endif; ?>
+                                <?php if ($outreachReason !== ''): ?><p class="note-warning"><strong>Neoslovujeme:</strong> <?= h($outreachReason) ?></p><?php endif; ?>
                                 <?php if (trim((string)$run['message']) !== ''): ?><p><strong>Zpráva:</strong> <?= h((string)$run['message']) ?></p><?php endif; ?>
                             </section>
                             <section>
@@ -19455,7 +19540,7 @@ function aiResearchSeedOutreachStatusLabel(string $status): string
  *  - not ready: cokoli jineho. Zadne "pripravuje se" ani "queued" - ty patri
  *    do sloupcu jednotlivych kroku.
  */
-function aiResearchSeedOutreachColumnState(array $run, array $plan, array $checklist): string
+function aiResearchSeedOutreachColumnState(array $run, array $plan, array $checklist, int $scrapedContacts = 0): string
 {
     $status = trim((string)($run['seed_outreach_status'] ?? ''));
     if (in_array($status, ['sent', 'done'], true)) {
@@ -19465,6 +19550,10 @@ function aiResearchSeedOutreachColumnState(array $run, array $plan, array $check
         return 'neoslovujeme';
     }
     if (!empty($plan['seed_unsuitable']) || !empty($plan['permanently_closed'])) {
+        return 'neoslovujeme';
+    }
+    // Mensi dosah nez uz nascrapovane kontakty znamena, ze osloveni nema koho pridat.
+    if (aiResearchOutreachUnviableReason($plan, $scrapedContacts) !== '') {
         return 'neoslovujeme';
     }
     return aiResearchWorkflowRequiredDone($checklist) ? 'ready' : 'not ready';
