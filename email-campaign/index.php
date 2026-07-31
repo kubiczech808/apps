@@ -20119,11 +20119,19 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
 
 function statusBadge(string $text): string
 {
-    $class = in_array($text, ['ano', 'smtp prijato', 'vlozeno', 'aktualizovano', 'finished', 'hotovo', 'bezi', 'Active', 'active', 'ready', 'done', 'připraveno', 'osloveno', 'osloven'], true) || substr($text, -1) === 'x' ? 'good' : 'muted';
+    $class = in_array($text, ['ano', 'smtp prijato', 'vlozeno', 'aktualizovano', 'finished', 'hotovo', 'bezi', 'Active', 'active', 'done', 'připraveno', 'osloveno', 'osloven'], true) || substr($text, -1) === 'x' ? 'good' : 'muted';
     if (in_array($text, ['nezjisteno', 'nenapojeno', 'preskoceno', 'failed', 'chyba', 'paused', 'Paused', 'pozastaveno', 'not_ready', 'not ready', 'nepřipraveno'], true)) {
         $class = 'warn';
     }
-    if (in_array($text, ['cancelled', 'zruseno', 'unsubscribed', 'skipped_duplicate', 'odhlášeno', 'duplicitní', 'neoslovujeme'], true)) {
+    // Pripravene k odeslani je modre (ceka na rozhodnuti), odeslane zelene.
+    if (in_array($text, ['ready', 'připraveno k odeslání'], true)) {
+        $class = 'info';
+    }
+    // Vyrazene z oslovovani je cervene, at je v prehledu videt na prvni pohled.
+    if (in_array($text, ['neoslovujeme', 'unsubscribed', 'odhlášeno'], true)) {
+        $class = 'danger';
+    }
+    if (in_array($text, ['cancelled', 'zruseno', 'skipped_duplicate', 'duplicitní'], true)) {
         $class = 'muted';
     }
     if (in_array($text, ['bezi', 'bezi...', 'ceka'], true)) {

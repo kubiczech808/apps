@@ -1201,6 +1201,10 @@ label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-
   text-align: left;
   vertical-align: top;
 }
+/* Nazev sloupce se nikdy nesmi zlomit ani orezat - tabulka smi radeji rolovat. */
+.research-log-table th {
+  white-space: nowrap;
+}
 .research-log-table th:nth-child(6),
 .research-log-table th:nth-child(7),
 .research-log-table th:nth-child(8),
@@ -1312,6 +1316,8 @@ label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-
 .badge.good { background: #dff5ea; color: #14532d; }
 .badge.muted { background: #eef1ef; color: #52615b; }
 .badge.warn { background: #fff3cd; color: #7a4d00; }
+.badge.info { background: #e0ecff; color: #10387a; }
+.badge.danger { background: #fde3e1; color: #8f1d16; }
 .badge.live::after {
   content: "";
   display: inline-block;
@@ -2167,13 +2173,21 @@ td a {
 .view-research .research-table {
   table-layout: fixed;
   width: 100%;
-  min-width: 1292px;
+  /* Tabulka smi rolovat do strany. Sirky sloupcu jsou proto nastavene tak, aby se do
+     kazde hlavicky vesel cely nazev - orezany nazev sloupce je horsi nez skrolovani. */
+  min-width: 1564px;
 }
-.view-research .research-table > thead > tr > th,
 .view-research .research-table > tbody > tr.expandable-row > td {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  vertical-align: middle;
+}
+/* Hlavicka se nikdy neorezava: nazev sloupce musi byt cely citelny. */
+.view-research .research-table > thead > tr > th {
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
   vertical-align: middle;
 }
 .view-research .research-table > tbody > tr.expandable-row > td br,
@@ -2187,19 +2201,18 @@ td a {
   display: revert;
 }
 /* Sirky patri na hlavicku: table-layout:fixed cte sloupce z prvniho radku (thead),
-   takze widthy jen na tbody td se ignorovaly a vsechny sloupce byly stejne siroke.
-   Sloupce kroku workflow jsou uzke - vejde se do nich fajfka, nic vic tam nepatri. */
+   takze widthy jen na tbody td se ignorovaly a vsechny sloupce byly stejne siroke. */
 .view-research .research-table > thead > tr > th:nth-child(1) { width: 126px; }
 .view-research .research-table > thead > tr > th:nth-child(2) { width: 118px; }
-.view-research .research-table .research-step-col { width: 46px; text-align: center; padding-left: 4px; padding-right: 4px; }
+.view-research .research-table .research-step-col { width: 72px; text-align: center; padding-left: 6px; padding-right: 6px; }
 .view-research .research-table > thead > tr > th:nth-child(10) { width: 96px; }
 .view-research .research-table > thead > tr > th:nth-child(11) { width: 120px; }
 .view-research .research-table > thead > tr > th:nth-child(12) { width: 130px; }
-.view-research .research-table > thead > tr > th:nth-child(13) { width: 80px; }
-.view-research .research-table > thead > tr > th:nth-child(14) { width: 96px; }
-.view-research .research-table > thead > tr > th:nth-child(15) { width: 78px; }
-.view-research .research-table > thead > tr > th:nth-child(16) { width: 58px; }
-.view-research .research-table > thead > tr > th:nth-child(17) { width: 68px; }
+.view-research .research-table > thead > tr > th:nth-child(13) { width: 88px; }
+.view-research .research-table > thead > tr > th:nth-child(14) { width: 120px; }
+.view-research .research-table > thead > tr > th:nth-child(15) { width: 86px; }
+.view-research .research-table > thead > tr > th:nth-child(16) { width: 80px; }
+.view-research .research-table > thead > tr > th:nth-child(17) { width: 96px; }
 .view-research .research-table > tbody > tr.expandable-row > td:nth-child(1) { overflow: visible; }
 .view-research .research-table > thead > tr > th:nth-child(16),
 .view-research .research-table > thead > tr > th:nth-child(17),
