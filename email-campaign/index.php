@@ -7,7 +7,7 @@ const APP_VERSION = '2026-07-19-seed-outreach-status';
 // deklarace za polovinou souboru by v renderu jeste neexistovala.
 const APP_TOOL_NAME = 'Akvizice AI';
 const AI_RESEARCH_ALLOWED_EMAIL = 'jakub.elias88@gmail.com';
-const AI_RESEARCH_RESET_VERSION = '2026-07-29-gemini-3-flash-preview-v1';
+const AI_RESEARCH_RESET_VERSION = '2026-07-31-reopen-closed-seeds-v1';
 const AI_RESEARCH_CONTEXT_FIX_VERSION = '2026-07-19-emporo-context-v1';
 const AI_RESEARCH_MAX_BACKOFF_SECONDS = 1800;
 // Realne scrapujeme jen prvni davku pro osloveni, ne cely zdroj. Nezahrata adresa
@@ -868,7 +868,12 @@ function handlePost(PDO $pdo, array $config): ?string
     }
 
     if ($action === 'test_smtp') {
-        (new SmtpMailer($config))->testConnection();
+        try {
+            (new SmtpMailer($config))->testConnection();
+        } catch (Throwable $e) {
+            $hint = smtpFailureHint($e->getMessage(), (array)($config['smtp'] ?? []));
+            throw new RuntimeException($hint !== '' ? $hint : $e->getMessage(), 0, $e);
+        }
         return 'SMTP pripojeni a prihlaseni funguje.';
     }
 
@@ -3334,7 +3339,52 @@ function resetAiResearchDataIfNeeded(PDO $pdo): void
     // Behy odlozene kvuli chybe, ktera je uz opravena, si zaslouzi cistý pocet pokusu.
     // Bez toho by je strop finish_attempts drzel odlozene nadobro.
     resetAiResearchFinishAttempts($pdo);
+    reopenAiResearchRunsClosedForMissingContext($pdo);
     setSetting($pdo, 'ai_research_reset_version', AI_RESEARCH_RESET_VERSION);
+}
+
+/**
+ * Behy uzavrene proto, ze se z jejich webu nepodarilo vytahnout kontext, dostanou
+ * dalsi sanci. Kontext se od te doby cte i z hlavicky stranky a z popisu v katalogu,
+ * takze seed s funkcnim webem uz nema propadnout.
+ */
+function reopenAiResearchRunsClosedForMissingContext(PDO $pdo): void
+{
+    try {
+        $rows = $pdo->query('
+            SELECT id, plan_json
+            FROM ai_research_runs
+            WHERE plan_json LIKE "%permanently_closed%"
+            ORDER BY id DESC
+            LIMIT 200
+        ')->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        error_log('AI research reopen skipped: ' . $e->getMessage());
+        return;
+    }
+    $update = $pdo->prepare('
+        UPDATE ai_research_runs
+        SET plan_json=?, status="deferred", message=?, updated_at=?
+        WHERE id=?
+    ');
+    foreach ($rows as $row) {
+        $plan = json_decode((string)$row['plan_json'], true);
+        if (!is_array($plan) || empty($plan['permanently_closed'])) {
+            continue;
+        }
+        if ((string)($plan['permanently_closed_reason'] ?? '') !== 'seed bez citelneho webu') {
+            continue;
+        }
+        unset($plan['permanently_closed'], $plan['permanently_closed_reason'], $plan['finish_attempts']);
+        // Cache prazdneho kontextu by novy pokus zablokovala, web se precte znovu.
+        unset($plan['website_context_cache'], $plan['website_has_english']);
+        $update->execute([
+            json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: (string)$row['plan_json'],
+            'Beh se zkusi dokoncit znovu: kontext webu se ted cte i z hlavicky stranky a z popisu v katalogu.',
+            date('c'),
+            (int)$row['id'],
+        ]);
+    }
 }
 
 function resetAiResearchFinishAttempts(PDO $pdo): void
@@ -3607,8 +3657,12 @@ function aiResearchSeedWebsiteContext(string $website, ?bool &$hasEnglish = null
     $hasEnglish = aiResearchSiteHasEnglishVersion((string)$html);
     $homeText = aiResearchReadableWebsiteText($html);
     $pages[$loadedWebsite] = aiResearchImportantWebsiteText($homeText, 1300);
-    if ($pages[$loadedWebsite] === '' && aiResearchTextLength($homeText) >= 250) {
-        $pages[$loadedWebsite] = truncatePlainText($homeText, 1300);
+    if ($pages[$loadedWebsite] === '') {
+        // Striktni vytah nic nenasel. Nez seed zahodit, zkusi se jakykoli citelny text
+        // a hlavicka stranky - u e-shopu plnych dlazdic je to casto jediny zdroj.
+        $fallback = trim(truncatePlainText($homeText, 1300));
+        $meta = aiResearchWebsiteMetaContext((string)$html);
+        $pages[$loadedWebsite] = trim($meta . ($meta !== '' && $fallback !== '' ? '. ' : '') . $fallback);
     }
     foreach (array_slice(aiResearchRelevantInternalUrls($html, $loadedWebsite), 0, 10) as $url) {
         if (isset($pages[$url])) {
@@ -3783,6 +3837,43 @@ function aiResearchRelevantInternalUrls(string $html, string $baseUrl): array
     }
     arsort($candidates);
     return array_keys($candidates);
+}
+
+/**
+ * Zaloha, kdyz z tela stranky nejde vytahnout souvisly text - typicky e-shop plny
+ * dlazdic a navigace. Titulek, meta popisy a nadpisy o predmetu podnikani vypovidaji
+ * dost na to, aby se dal sestavit plan, a nemusi se cely seed zahodit.
+ */
+function aiResearchWebsiteMetaContext(string $html): string
+{
+    $parts = [];
+    if (preg_match('#<title[^>]*>(.*?)</title>#is', $html, $match)) {
+        $parts[] = $match[1];
+    }
+    $metaPatterns = [
+        '#<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)#i',
+        '#<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)#i',
+        '#<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)#i',
+        '#<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']description["\']#i',
+    ];
+    foreach ($metaPatterns as $pattern) {
+        if (preg_match($pattern, $html, $match)) {
+            $parts[] = $match[1];
+        }
+    }
+    if (preg_match_all('#<h[12][^>]*>(.*?)</h[12]>#is', $html, $matches)) {
+        foreach (array_slice($matches[1], 0, 8) as $heading) {
+            $parts[] = $heading;
+        }
+    }
+    $clean = [];
+    foreach ($parts as $part) {
+        $text = trim(preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags((string)$part), ENT_QUOTES | ENT_HTML5, 'UTF-8')) ?? '');
+        if ($text !== '' && !in_array($text, $clean, true)) {
+            $clean[] = $text;
+        }
+    }
+    return trim(implode('. ', $clean));
 }
 
 function aiResearchImportantWebsiteText(string $text, int $maxLength): string
@@ -3967,6 +4058,12 @@ function aiResearchPlan(array $config, array $seed, ?array &$fetchedContext = nu
         aiResearchFallbackTerms($business . ' ' . $websiteUnderstandingFallback . ' ' . truncatePlainText($websiteContext, 1400), $website, $address, aiResearchSeedCountry($seed)),
         (array)($fallback['candidate_terms'] ?? [])
     ))), 0, 8);
+    if ($websiteContext === '' && $seedDescription !== '') {
+        // Popis z katalogu je slabsi nez web, ale porad rika, cim se firma zabyva.
+        // Bez teto zalohy by seed s funkcnim, jen spatne citelnym webem propadl.
+        $websiteContext = 'Popis z katalogu (web se nepodarilo precist): ' . $seedDescription;
+        $fetchedContext = ['context' => $websiteContext, 'has_english' => $siteHasEnglish];
+    }
     if ($website === '' || $websiteContext === '') {
         return [
             'audience_label' => 'nevyhodnoceno',
@@ -8388,10 +8485,61 @@ function saveSmtpSettings(PDO $pdo): void
     foreach (['from_email', 'from_name', 'smtp_host', 'smtp_port', 'smtp_username', 'smtp_encryption', 'smtp_dkim_selector'] as $key) {
         setSetting($pdo, $key, trim((string)($_POST[$key] ?? '')));
     }
-    $smtpPassword = trim((string)($_POST['smtp_password'] ?? ''));
+    $smtpPassword = normalizeSmtpPassword(
+        (string)($_POST['smtp_password'] ?? ''),
+        (string)($_POST['smtp_host'] ?? '')
+    );
     if ($smtpPassword !== '') {
         setSetting($pdo, 'smtp_password', $smtpPassword);
     }
+}
+
+/**
+ * Google zobrazuje heslo aplikace po ctverkach ("abcd efgh ijkl mnop"), ale SMTP
+ * ho prijima jen bez mezer. Uzivatel ho zkopiruje vcetne mezer a prihlaseni pak
+ * selze, aniz by bylo z ceho poznat proc.
+ */
+function normalizeSmtpPassword(string $password, string $host): string
+{
+    $password = trim($password);
+    if ($password === '') {
+        return '';
+    }
+    if (!smtpHostIsGmail($host)) {
+        return $password;
+    }
+    $withoutSpaces = preg_replace('/\s+/u', '', $password) ?? $password;
+    // 16 znaku bez mezer je presne heslo aplikace; jinak se puvodni hodnota nemeni.
+    return preg_match('/^[a-z]{16}$/i', $withoutSpaces) === 1 ? $withoutSpaces : $password;
+}
+
+function smtpHostIsGmail(string $host): bool
+{
+    $host = strtolower(trim($host));
+    return $host === 'smtp.gmail.com' || str_ends_with($host, '.gmail.com') || $host === 'smtp.googlemail.com';
+}
+
+/**
+ * Prevede technickou odpoved SMTP serveru na vetu, ze ktere je poznat, co udelat.
+ * Google treba na bezne heslo k uctu odpovi kodem 534 a odkazem do napovedy.
+ */
+function smtpFailureHint(string $error, array $smtp): string
+{
+    $isGmail = smtpHostIsGmail((string)($smtp['host'] ?? ''));
+    if (preg_match('/application-specific password|InvalidSecondFactor|\b534\b/i', $error)) {
+        return 'Gmail nepustí běžné heslo k účtu. Vygeneruj heslo aplikace na '
+            . 'https://myaccount.google.com/apppasswords (vyžaduje zapnuté dvoufázové ověření) '
+            . 'a vlož ho sem místo hesla k účtu.';
+    }
+    if (preg_match('/username and password not accepted|\b535\b|5\.7\.8/i', $error)) {
+        return $isGmail
+            ? 'Gmail odmítl přihlašovací údaje. Uživatel musí být celá adresa a heslo musí být heslo aplikace z https://myaccount.google.com/apppasswords.'
+            : 'Server odmítl uživatelské jméno nebo heslo. U většiny poskytovatelů je uživatelem celá e-mailová adresa.';
+    }
+    if (preg_match('/could not connect|connection refused|timed? ?out|getaddrinfo/i', $error)) {
+        return 'Server neodpověděl. Zkontroluj adresu serveru a port (Gmail: smtp.gmail.com, port 587, TLS).';
+    }
+    return '';
 }
 
 function saveImapSettings(PDO $pdo): void
@@ -18633,16 +18781,35 @@ function renderApp(PDO $pdo, ?array $flash): void
             <div class="actions-row">
                 <button type="button" class="secondary" data-gmail-preset>Nastavit pro Gmail</button>
             </div>
-            <div class="note">Gmail: tlačítko doplní server, port a šifrování a jako uživatele použije adresu odesílatele. Do hesla patří <strong>heslo aplikace</strong> z Google účtu (Zabezpečení → Hesla aplikací), běžné heslo k účtu Gmail přes SMTP nefunguje.</div>
-            <label>SMTP server<input name="smtp_host" autocomplete="off" value="<?= h($config['smtp']['host']) ?>" data-smtp-host required></label>
-            <div class="row">
-                <label>Port<input type="number" name="smtp_port" autocomplete="off" value="<?= h((string)$config['smtp']['port']) ?>" data-smtp-port required></label>
-                <label>Sifrovani<select name="smtp_encryption" data-smtp-encryption><option value="tls" <?= $config['smtp']['encryption']==='tls'?'selected':'' ?>>TLS</option><option value="ssl" <?= $config['smtp']['encryption']==='ssl'?'selected':'' ?>>SSL</option><option value="" <?= $config['smtp']['encryption']===''?'selected':'' ?>>Bez</option></select></label>
+            <?php $smtpIsGmail = smtpHostIsGmail((string)$config['smtp']['host']); ?>
+            <?php $smtpHasPassword = trim((string)($config['smtp']['password'] ?? '')) !== ''; ?>
+            <div class="note">
+                <strong>Gmail potřebuje heslo aplikace, ne heslo k účtu.</strong>
+                Vygeneruj ho na <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a>
+                (nejdřív musí být zapnuté dvoufázové ověření) a vlož ho níž. Google ho ukazuje po čtveřicích &ndash;
+                mezery můžeš nechat, aplikace je odstraní sama. Server, port, šifrování i uživatele doplní tlačítko výše.
             </div>
-            <label>SMTP uzivatel<input name="smtp_username" autocomplete="off" data-lpignore="true" data-1p-ignore="true" value="<?= h($config['smtp']['username']) ?>" data-smtp-username required></label>
-            <label>SMTP heslo<input type="password" name="smtp_password" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true" placeholder="Prazdne = nemenit"></label>
-            <label>DKIM selector<input name="smtp_dkim_selector" autocomplete="off" value="<?= h((string)($config['smtp']['dkim_selector'] ?? '')) ?>" placeholder="napr. default, mail, selector1"></label>
-            <div class="note">Selector najdes u poskytovatele emailu. Kontrola overuje DNS zaznamy domeny odesilatele, ne samotny podpis konkretni zpravy.</div>
+            <label>
+                <?= $smtpIsGmail ? 'Heslo aplikace z Google účtu' : 'SMTP heslo' ?>
+                <input type="password" name="smtp_password" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true"
+                       placeholder="<?= $smtpHasPassword ? 'Uložené heslo zůstane, vyplň jen při změně' : ($smtpIsGmail ? 'abcd efgh ijkl mnop' : 'Zadej heslo k SMTP účtu') ?>">
+            </label>
+            <div class="note <?= $smtpHasPassword ? '' : 'note-warning' ?>">
+                <?= $smtpHasPassword
+                    ? 'Heslo je uložené. Pole je prázdné schválně &ndash; uložené heslo se nikdy nezobrazuje. Vyplň ho jen když ho chceš změnit.'
+                    : 'Heslo zatím není uložené, bez něj se odeslat nedá.' ?>
+            </div>
+            <details class="smtp-advanced"<?= $smtpIsGmail ? '' : ' open' ?>>
+                <summary>Ruční nastavení serveru</summary>
+                <label>SMTP server<input name="smtp_host" autocomplete="off" value="<?= h($config['smtp']['host']) ?>" data-smtp-host></label>
+                <div class="row">
+                    <label>Port<input type="number" name="smtp_port" autocomplete="off" value="<?= h((string)$config['smtp']['port']) ?>" data-smtp-port></label>
+                    <label>Sifrovani<select name="smtp_encryption" data-smtp-encryption><option value="tls" <?= $config['smtp']['encryption']==='tls'?'selected':'' ?>>TLS</option><option value="ssl" <?= $config['smtp']['encryption']==='ssl'?'selected':'' ?>>SSL</option><option value="" <?= $config['smtp']['encryption']===''?'selected':'' ?>>Bez</option></select></label>
+                </div>
+                <label>SMTP uzivatel<input name="smtp_username" autocomplete="off" data-lpignore="true" data-1p-ignore="true" value="<?= h($config['smtp']['username']) ?>" data-smtp-username></label>
+                <label>DKIM selector<input name="smtp_dkim_selector" autocomplete="off" value="<?= h((string)($config['smtp']['dkim_selector'] ?? '')) ?>" placeholder="napr. default, mail, selector1"></label>
+                <div class="note">DKIM selector najdeš u poskytovatele e-mailu; Gmail ho pro odesílání přes SMTP nepotřebuje. Kontrola ověřuje DNS záznamy domény odesílatele, ne podpis konkrétní zprávy.</div>
+            </details>
             <div class="modal-actions">
                 <button>Ulozit SMTP</button>
                 <button type="button" class="secondary" data-dialog-close>Zrusit</button>

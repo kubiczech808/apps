@@ -1147,6 +1147,27 @@ label { display: grid; gap: 7px; margin-bottom: 13px; color: var(--muted); font-
   font-weight: 800;
   flex: 0 0 28px;
 }
+.smtp-advanced {
+  border: 1px solid #dbe6e2;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 0 0 13px;
+}
+.smtp-advanced > summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #21443b;
+  padding: 2px 0;
+}
+.smtp-advanced[open] > summary {
+  margin-bottom: 10px;
+}
+.note.note-warning {
+  border-color: #e6c9a8;
+  background: #fdf3e7;
+  color: #6b4415;
+}
+
 .subtabs {
   display: flex;
   gap: 8px;

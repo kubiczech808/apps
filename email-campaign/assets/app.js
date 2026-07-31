@@ -385,7 +385,13 @@ document.querySelectorAll("[data-gmail-preset]").forEach((button) => {
     set("[data-smtp-port]", "587");
     set("[data-smtp-encryption]", "tls");
     set("[data-smtp-username]", email);
-    form.querySelector('[name="smtp_password"]')?.focus();
+    // Rucni nastaveni serveru uz je vyplnene, takze ho muzeme nechat sbalene a poslat
+    // uzivatele rovnou na jedine pole, ktere musi vyplnit sam.
+    form.querySelector(".smtp-advanced")?.removeAttribute("open");
+    var password = form.querySelector('[name="smtp_password"]');
+    if (password) {
+      password.focus();
+    }
   });
 });
 
