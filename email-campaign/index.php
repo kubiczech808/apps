@@ -5577,6 +5577,25 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
             $done[] = 'plan';
         }
 
+        // Pochopeni byznysu je prvni krok a vse dalsi z nej vychazi. Kdyz chybi, nema
+        // smysl hledat kontakty, generovat vzory osloveni ani pocitat dosah - jen by
+        // se pri kazdem cronu spalily Gemini pozadavky na praci, ktera nikam nevede.
+        if ($permanentlyBlocked || trim((string)($plan['business_understanding'] ?? '')) === '') {
+            $closure = closeAiResearchRunAfterAudit($pdo, $runId, $permanentlyBlocked);
+            if ($closure !== '') {
+                $fixed[] = $closure;
+            }
+            aiResearchRecordGeminiUsage($pdo, aiResearchRequestsMadeThisProcess());
+            aiResearchAddRunRequests($pdo, $runId, aiResearchRequestsMadeThisProcess());
+            $parts = [];
+            if ($fixed) {
+                $parts[] = 'doplneno: ' . implode(', ', $fixed);
+            }
+            $parts[] = 'zbyva: ' . implode('; ', $blocked ?: ['pochopeni byznysu z webu seedu']);
+            $parts[] = 'dalsi kroky se nespousti, dokud neni pochopeny byznys seedu';
+            return 'Kontrola behu #' . $runId . ' - ' . implode(' | ', $parts) . '.';
+        }
+
         // 2. Nalezene kontakty. Kdyz chybi, rovnou se dohledaji.
         if (!$contacts && $keyword !== '' && !aiResearchDeadlineReached(45)) {
             try {
@@ -5596,9 +5615,9 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
             }
         } elseif (!$contacts) {
             $blocked[] = 'beh nema zadne nalezene kontakty';
-        } else {
-            $done[] = 'kontakty (' . count($contacts) . ')';
         }
+        // Vzorek 10 kontaktu slouzi jen jako podklad pro vzory osloveni, neni to cil.
+        // Cilem je prvni davka AI_RESEARCH_FIRST_BATCH_CONTACTS kontaktu nize.
 
         // 3. Vzory osloveni, vcetne dvou variant a zakazu zastupnych mist.
         $variants = [];
@@ -5682,7 +5701,9 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
         } else {
             $estimate = aiResearchComputeContactEstimate($pdo, $runId, $plan, aiResearchDeadline());
             if ($estimate === null) {
-                $blocked[] = 'odhad dosahu nelze spocitat, plan nema pouzitelny keyword nebo zdroj';
+                $blocked[] = aiResearchPrimaryKeyword($plan) === ''
+                    ? 'odhad dosahu ceka na keyword, ktery vznikne az z pochopeni byznysu'
+                    : 'odhad dosahu nelze spocitat, zadny z katalogu pro vybrane trhy neni dostupny';
             } else {
                 $plan['contact_estimate'] = $estimate;
                 $store = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
@@ -5730,19 +5751,24 @@ function closeAiResearchRunAfterAudit(PDO $pdo, int $runId, bool $permanentlyBlo
     $stmt = $pdo->prepare('SELECT * FROM ai_research_runs WHERE id=? LIMIT 1');
     $stmt->execute([$runId]);
     $run = $stmt->fetch(PDO::FETCH_ASSOC);
-    if (!$run || !in_array((string)$run['status'], ['deferred', 'failed'], true)) {
+    if (!$run) {
         return '';
     }
     $plan = json_decode((string)$run['plan_json'], true);
     $plan = is_array($plan) ? $plan : [];
+    if (!empty($plan['permanently_closed'])) {
+        return '';
+    }
 
+    // Trvale uzavrit jde beh v jakemkoli stavu. Drive to slo jen u deferred/failed,
+    // takze beh ve stavu done s nepouzitelnym webem se dokola zpracovaval navzdy.
     if ($permanentlyBlocked) {
         $plan['permanently_closed'] = true;
         $plan['permanently_closed_reason'] = 'seed bez citelneho webu';
         $update = $pdo->prepare('
             UPDATE ai_research_runs
             SET status="no_match", plan_json=?, message=?, updated_at=?
-            WHERE id=? AND status IN ("deferred", "failed")
+            WHERE id=?
         ');
         $update->execute([
             json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}',
