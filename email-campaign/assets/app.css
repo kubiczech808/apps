@@ -1939,11 +1939,32 @@ form.inline { margin: 0; }
 }
 .email-preview {
   max-height: 460px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
+}
+/* Emailove HTML si nese vlastni sirky (tabulky, pevne px, nezlomitelne odkazy).
+   V nahledu je prebijime, aby byl cely text citelny bez skrolovani do strany. */
+.email-preview * {
+  max-width: 100%;
+  white-space: normal;
+}
+.email-preview p,
+.email-preview li,
+.email-preview td,
+.email-preview a {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.email-preview table {
+  width: 100%;
+  table-layout: fixed;
+}
+.email-preview img {
+  height: auto;
 }
 .onboarding-done {
   display: grid;
@@ -2146,7 +2167,7 @@ td a {
 .view-research .research-table {
   table-layout: fixed;
   width: 100%;
-  min-width: 1278px;
+  min-width: 1292px;
 }
 .view-research .research-table > thead > tr > th,
 .view-research .research-table > tbody > tr.expandable-row > td {
@@ -2159,28 +2180,51 @@ td a {
 .view-research .research-table > tbody > tr.expandable-row > td small {
   display: none;
 }
+/* Skryvani druhych radku plati jen pro samotny radek prehledu. Dialogy, ktere v bunce
+   visi, si musi zalomeni i drobny text nechat - jinak z nahledu emailu zmizi radky. */
+.view-research .research-table > tbody > tr.expandable-row > td .modal br,
+.view-research .research-table > tbody > tr.expandable-row > td .modal small {
+  display: revert;
+}
 /* Sirky patri na hlavicku: table-layout:fixed cte sloupce z prvniho radku (thead),
-   takze widthy jen na tbody td se ignorovaly a vsech 13 sloupcu bylo stejne sirokych. */
-.view-research .research-table > thead > tr > th:nth-child(1) { width: 84px; }
-.view-research .research-table > thead > tr > th:nth-child(2) { width: 142px; }
-.view-research .research-table > thead > tr > th:nth-child(3) { width: 80px; }
-.view-research .research-table > thead > tr > th:nth-child(4) { width: 70px; }
-.view-research .research-table > thead > tr > th:nth-child(5) { width: 114px; }
-.view-research .research-table > thead > tr > th:nth-child(6) { width: 102px; }
-.view-research .research-table > thead > tr > th:nth-child(7) { width: 82px; }
-.view-research .research-table > thead > tr > th:nth-child(8) { width: 70px; }
-.view-research .research-table > thead > tr > th:nth-child(9) { width: 82px; }
-.view-research .research-table > thead > tr > th:nth-child(10) { width: 116px; }
-.view-research .research-table > thead > tr > th:nth-child(11) { width: 80px; }
-.view-research .research-table > thead > tr > th:nth-child(12) { width: 80px; }
-.view-research .research-table > thead > tr > th:nth-child(13) { width: 82px; }
-.view-research .research-table > thead > tr > th:nth-child(14) { width: 94px; }
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(2) { overflow: visible; }
-.view-research .research-table > thead > tr > th:nth-child(13),
-.view-research .research-table > thead > tr > th:nth-child(14),
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(13),
-.view-research .research-table > tbody > tr.expandable-row > td:nth-child(14) {
+   takze widthy jen na tbody td se ignorovaly a vsechny sloupce byly stejne siroke.
+   Sloupce kroku workflow jsou uzke - vejde se do nich fajfka, nic vic tam nepatri. */
+.view-research .research-table > thead > tr > th:nth-child(1) { width: 126px; }
+.view-research .research-table > thead > tr > th:nth-child(2) { width: 118px; }
+.view-research .research-table .research-step-col { width: 46px; text-align: center; padding-left: 4px; padding-right: 4px; }
+.view-research .research-table > thead > tr > th:nth-child(10) { width: 96px; }
+.view-research .research-table > thead > tr > th:nth-child(11) { width: 120px; }
+.view-research .research-table > thead > tr > th:nth-child(12) { width: 130px; }
+.view-research .research-table > thead > tr > th:nth-child(13) { width: 80px; }
+.view-research .research-table > thead > tr > th:nth-child(14) { width: 96px; }
+.view-research .research-table > thead > tr > th:nth-child(15) { width: 78px; }
+.view-research .research-table > thead > tr > th:nth-child(16) { width: 58px; }
+.view-research .research-table > thead > tr > th:nth-child(17) { width: 68px; }
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(1) { overflow: visible; }
+.view-research .research-table > thead > tr > th:nth-child(16),
+.view-research .research-table > thead > tr > th:nth-child(17),
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(16),
+.view-research .research-table > tbody > tr.expandable-row > td:nth-child(17) {
   text-align: right;
+}
+/* Splneny krok je zelena fajfka ve stejnem stylu jako drivejsi badge "hotovo". */
+.badge.step-mark {
+  justify-content: center;
+  min-width: 24px;
+  padding: 3px 6px;
+}
+/* Sloupec Osloveni nese stav i tlacitko na jedno kliknuti, takze smi zlomit radek. */
+.view-research .research-table .research-outreach-col {
+  white-space: normal;
+  overflow: visible;
+}
+.view-research .research-table .research-outreach-col form {
+  display: block;
+  margin-top: 4px;
+}
+.view-research .research-table .research-outreach-col button {
+  padding: 2px 8px;
+  font-size: 12px;
 }
 .view-research .research-table > tbody > tr.research-starting-row > td {
   white-space: nowrap;
@@ -2196,6 +2240,15 @@ td a {
 }
 .ai-outreach-modal {
   max-width: min(820px, calc(100vw - 28px));
+}
+/* Dialogy visi uvnitr bunky tabulky, ktera ma white-space: nowrap kvuli jednoradkovemu
+   prehledu. Bez tohoto se text v dialogu nezlomil a musel se rolovat do strany. */
+.modal,
+.modal * {
+  white-space: normal;
+}
+.modal {
+  overflow-x: hidden;
 }
 .ai-outreach-meta {
   display: flex;
