@@ -2655,6 +2655,26 @@ function runCronAiResearch(PDO $pdo, array $config): string
     setSetting($pdo, 'ai_research_last_tick_at', (string)time());
     // Naplanovany zaznam v logu se obnovi pri kazdem tiku, i kdyz se nakonec nic
     // nespusti. Uzivatel tak vzdy vidi, kdy a na cem se bude pracovat.
+    // Radek, ktery zustal viset ve stavu "bezi", se nejdriv uzavre jako preruseny.
+    // Bez toho by log tvrdil, ze neco bezi, jeste hodiny po tom, co hosting request zabil.
+    aiResearchCloseStaleRunningLogs($pdo);
+    // Dokud predchozi beh skutecne bezi, tento tik se preskoci. Vzdy bezi jen jeden.
+    $running = aiResearchRunningLogRow($pdo);
+    if ($running !== null) {
+        $message = 'AI research: preskoceno, predchozi beh jeste bezi (od '
+            . formatDateTime((string)$running['started_at']) . ').';
+        insertAiResearchLog($pdo, [
+            'status' => 'skipped',
+            'kind' => (string)($running['kind'] ?? ''),
+            'run_id' => (int)($running['run_id'] ?? 0),
+            'subject' => (string)($running['subject'] ?? ''),
+            'planned_at' => date('c'),
+            'started_at' => date('c'),
+            'finished_at' => date('c'),
+            'message' => $message,
+        ]);
+        return $message;
+    }
     $planned = refreshAiResearchPlannedLog($pdo, $config, $settings);
     $nextAllowedAt = (int)($settings['ai_research_next_allowed_at'] ?? 0);
     if ($nextAllowedAt > time()) {
@@ -2681,9 +2701,9 @@ function runCronAiResearch(PDO $pdo, array $config): string
     }
     $startedAt = time();
     updateAiResearchLog($pdo, $planned, ['status' => 'running', 'started_at' => date('c'), 'message' => 'Beh probiha.']);
-    // Zamek drzi jen o malo delsi dobu, nez je vlastni casovy budget behu. Kdyz hosting
-    // pozadavek zabije, dalsi cron neceka 15 minut, ale hned to zkusi znovu.
-    setSetting($pdo, 'ai_research_lock_until', (string)(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS + 60));
+    // Zamek drzi presne tak dlouho, jak dlouho beh vubec muze zit (stejna hodnota jako
+    // u logu). Po ukonceni requestu hostingem se sam uvolni a dalsi cron pokracuje.
+    setSetting($pdo, 'ai_research_lock_until', (string)(time() + aiResearchRunMaxLifetimeSeconds()));
     aiResearchBeginRequestBudget();
     ignore_user_abort(true);
     $lockHeld = true;
@@ -2827,6 +2847,59 @@ function closeAiResearchLog(PDO $pdo, int $logId, string $status, string $messag
     planNextAiResearchLog($pdo, $config);
 }
 
+/**
+ * Radek logu, ktery prave bezi - nebo null, kdyz nic nebezi. Beh nemuze zit dele nez
+ * casovy budget plus rezerva na dopsani: hosting request driv nebo pozdeji ukonci.
+ * Starsi "bezici" radek uz tedy nebezi, jen po sobe neuklidil.
+ */
+function aiResearchRunningLogRow(PDO $pdo): ?array
+{
+    try {
+        $stmt = $pdo->prepare('
+            SELECT id, kind, run_id, subject, started_at
+            FROM ai_research_logs
+            WHERE status="running" AND started_at >= ?
+            ORDER BY id DESC
+            LIMIT 1
+        ');
+        $stmt->execute([date('c', time() - aiResearchRunMaxLifetimeSeconds())]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    } catch (Throwable $e) {
+        error_log('AI research running log lookup failed: ' . $e->getMessage());
+        return null;
+    }
+}
+
+function aiResearchRunMaxLifetimeSeconds(): int
+{
+    return AI_RESEARCH_REQUEST_BUDGET_SECONDS + 120;
+}
+
+/**
+ * Uzavre radky, ktere zustaly ve stavu "bezi" po ukonceni requestu hostingem. Prace se
+ * neztraci - rozdelany beh dokonci dalsi cron - ale log uz nesmi tvrdit, ze neco bezi.
+ */
+function aiResearchCloseStaleRunningLogs(PDO $pdo): int
+{
+    try {
+        $stmt = $pdo->prepare('
+            UPDATE ai_research_logs
+            SET status="interrupted", finished_at=?, message=?
+            WHERE status="running" AND started_at < ?
+        ');
+        $stmt->execute([
+            date('c'),
+            'Beh nedobehl - hosting ukoncil pozadavek. Rozdelanou praci dokonci dalsi cron.',
+            date('c', time() - aiResearchRunMaxLifetimeSeconds()),
+        ]);
+        return $stmt->rowCount();
+    } catch (Throwable $e) {
+        error_log('AI research stale log cleanup failed: ' . $e->getMessage());
+        return 0;
+    }
+}
+
 function insertAiResearchLog(PDO $pdo, array $fields): int
 {
     $fields['created_at'] = date('c');
@@ -2865,6 +2938,7 @@ function aiResearchLogStatusLabel(string $status): string
         'deferred' => 'odlozeno',
         'skipped' => 'preskoceno',
         'failed' => 'chyba',
+        'interrupted' => 'preruseno',
     ][$status] ?? $status;
 }
 
@@ -2950,10 +3024,12 @@ function runAiResearchWorker(PDO $pdo, array $config, int $resumeRunId = 0): str
         @set_time_limit(0);
     }
     $settings = loadSettings($pdo);
-    if ((int)($settings['ai_research_lock_until'] ?? 0) > time()) {
-        return 'AI research: uz bezi.';
+    aiResearchCloseStaleRunningLogs($pdo);
+    $running = aiResearchRunningLogRow($pdo);
+    if ((int)($settings['ai_research_lock_until'] ?? 0) > time() || $running !== null) {
+        return 'AI research: uz bezi, spusteni se preskocilo. Dalsi beh zacne, az tento dobehne.';
     }
-    setSetting($pdo, 'ai_research_lock_until', (string)(time() + AI_RESEARCH_REQUEST_BUDGET_SECONDS + 60));
+    setSetting($pdo, 'ai_research_lock_until', (string)(time() + aiResearchRunMaxLifetimeSeconds()));
     aiResearchBeginRequestBudget();
     $lockHeld = true;
     register_shutdown_function(static function () use ($pdo, &$lockHeld): void {
@@ -18152,6 +18228,7 @@ function renderApp(PDO $pdo, ?array $flash): void
                 <p class="muted">Poslední tik cronu: <strong><?= $researchLastTickAt > 0 ? h(formatDateTime(date('c', $researchLastTickAt))) : 'zatím nezaznamenán' ?></strong><?php if ($researchLastTickAt > 0 && time() - $researchLastTickAt > 1800): ?> &ndash; <strong>to je víc než 30 minut, cron pravděpodobně neběží</strong><?php endif; ?>. Poslední dokončený běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Stav: <?= h($researchAutomationStatus) ?></p>
                 <p class="muted">Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Interval mezi běhy: <?= h(aiResearchIntervalLabel($researchIntervalSeconds)) ?>. Gemini rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
                 <p class="muted">Skutečně odeslané Gemini requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h. Podle těchto čísel se pozná, zda Google limituje po minutách, nebo po dnech.</p>
+                <p class="muted">Vždy běží <strong>jen jeden</strong> běh: dokud předchozí neskončí, další tik cronu se přeskočí (řádek <em>přeskočeno</em>). Běh nemůže žít déle než <?= h((string)(int)(aiResearchRunMaxLifetimeSeconds() / 60)) ?> min &ndash; hosting požadavek ukončí &ndash; a takový řádek se pak uzavře jako <em>přerušeno</em>; rozdělanou práci dokončí další cron. Barvy stavů: <?= statusBadge('naplanovano') ?> čeká na svůj čas, <?= statusBadge('bezi') ?> právě pracuje, <?= statusBadge('hotovo') ?> dokončeno, <?= statusBadge('odlozeno') ?> pokračuje příště, <?= statusBadge('chyba') ?> chyba.</p>
                 <p class="muted">Sloupce <strong>Req.</strong> a <strong>Tokeny</strong> ukazují u dokončeného běhu i <strong>nulu</strong> &ndash; ta znamená, že běh Gemini vůbec nepotřeboval (typicky se zastavil na nečitelném webu seedu nebo na limitu ještě před prvním dotazem). Proč se běh zastavil, říká sloupec Zpráva; ta uvádí jen co běh zpracoval a proč skončil, kompletní stav kroků je v přehledu.</p>
             </div>
             <div class="section-actions">
@@ -20209,7 +20286,7 @@ function overviewStats(PDO $pdo, array $campaign, array $pace, array $config): a
 function statusBadge(string $text): string
 {
     $class = in_array($text, ['ano', 'smtp prijato', 'vlozeno', 'aktualizovano', 'finished', 'hotovo', 'bezi', 'Active', 'active', 'done', 'připraveno', 'osloveno', 'osloven'], true) || substr($text, -1) === 'x' ? 'good' : 'muted';
-    if (in_array($text, ['nezjisteno', 'nenapojeno', 'preskoceno', 'failed', 'chyba', 'paused', 'Paused', 'pozastaveno', 'not_ready', 'not ready', 'nepřipraveno'], true)) {
+    if (in_array($text, ['nezjisteno', 'nenapojeno', 'failed', 'chyba', 'paused', 'Paused', 'pozastaveno', 'not_ready', 'not ready', 'nepřipraveno'], true)) {
         $class = 'warn';
     }
     // Pripravene k odeslani je modre (ceka na rozhodnuti), odeslane zelene.
@@ -20220,11 +20297,18 @@ function statusBadge(string $text): string
     if (in_array($text, ['neoslovujeme', 'unsubscribed', 'odhlášeno'], true)) {
         $class = 'danger';
     }
-    if (in_array($text, ['cancelled', 'zruseno', 'skipped_duplicate', 'duplicitní'], true)) {
+    if (in_array($text, ['cancelled', 'zruseno', 'skipped_duplicate', 'duplicitní', 'preskoceno', 'přeskočeno', 'odlozeno', 'odloženo'], true)) {
         $class = 'muted';
     }
-    if (in_array($text, ['bezi', 'bezi...', 'ceka'], true)) {
-        $class .= ' live';
+    // Bezici prace je zluta, at je v logu videt, ze se na ni jeste ceka.
+    if (in_array($text, ['bezi', 'bezi...', 'běží', 'ceka', 'pripravuje se'], true)) {
+        $class = 'warn live';
+    }
+    if (in_array($text, ['naplanovano', 'naplánováno'], true)) {
+        $class = 'info';
+    }
+    if (in_array($text, ['chyba', 'selhalo', 'preruseno', 'přerušeno'], true)) {
+        $class = 'danger';
     }
     return '<span class="badge ' . $class . '">' . h($text) . '</span>';
 }
