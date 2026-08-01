@@ -235,6 +235,9 @@ function liveCashMonitoring(previousExecution, cash, now = new Date()) {
     ? Number(submittedHoursAgo ?? Infinity) < TRADE_CADENCE_HOURS
     : false;
   const cadenceBlocked = IGNORE_TRADE_CADENCE ? false : rawCadenceBlocked;
+  const cadenceRemainingHours = cadenceBlocked
+    ? Math.max(0, TRADE_CADENCE_HOURS - Number(submittedHoursAgo || 0))
+    : 0;
 
   return {
     idleCashLimitUsdc: IDLE_CASH_MAX_USDC,
@@ -245,6 +248,7 @@ function liveCashMonitoring(previousExecution, cash, now = new Date()) {
     idleCashOverdue: cashAboveLimit && Number(idleHours || 0) >= IDLE_CASH_GRACE_HOURS,
     lastSubmittedAt,
     submittedHoursAgo: submittedHoursAgo == null ? null : Number(submittedHoursAgo.toFixed(2)),
+    cadenceRemainingHours: Number(cadenceRemainingHours.toFixed(2)),
     submittedToday,
     cadenceBlocked,
     rawCadenceBlocked,
@@ -1525,7 +1529,29 @@ async function cancelOrder(order, tradingConfig = {}) {
 
 function orderResponseError(response) {
   if (!response) return "";
-  return String(response.error || response.errorMsg || response.message || "");
+  const error = response.error;
+  if (typeof error === "string" && error.trim()) return error.trim();
+  if (error && typeof error === "object") {
+    const nested = error.message || error.msg || error.reason || error.code;
+    if (nested != null && String(nested).trim()) return String(nested).trim();
+  }
+  const direct = response.errorMsg || response.message || response.reason || response.statusReason;
+  if (direct != null && String(direct).trim()) return String(direct).trim();
+  if (response.data && typeof response.data === "object") {
+    const nested = response.data.error || response.data.message || response.data.reason;
+    if (nested != null && String(nested).trim()) return String(nested).trim();
+  }
+  return "";
+}
+
+function compactOrderResponse(response) {
+  if (response == null) return "";
+  try {
+    const serialized = JSON.stringify(response);
+    return serialized.length > 600 ? `${serialized.slice(0, 597)}...` : serialized;
+  } catch {
+    return String(response);
+  }
 }
 
 function successfulOrderResponse(response) {
@@ -1557,6 +1583,9 @@ function orderAttemptSummary(candidate, response = null, extra = {}) {
     minSizeOverride: candidate.minSizeOverride,
     sizingNote: candidate.sizingNote,
     response,
+    responseStatus: response?.status ?? null,
+    responseError: orderResponseError(response) || null,
+    responseSummary: compactOrderResponse(response) || null,
     ...extra,
   };
 }
@@ -1986,7 +2015,7 @@ async function main() {
         ? "a risk-overlap replacement will sell the conflicting position before placing the replacement buy"
         : "cash is insufficient for a direct order, so a sell-and-replace rotation will submit the exit order first")
       : (cadenceBlocked
-        ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h)`
+        ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h; last accepted new order ${monitoring.lastSubmittedAt || "unknown"}; ${monitoring.cadenceRemainingHours}h remaining)`
         : (best
         ? "best currently revalidated executable candidate"
         : (rotationAvailable
@@ -2005,7 +2034,7 @@ async function main() {
       : (best && !cadenceBlocked
       ? "Live batch found an executable candidate after revalidation."
       : (cadenceBlocked
-        ? "No live order was submitted because the configured new-trade cadence is not elapsed yet. Open-order management still ran."
+        ? `No live order was submitted because the configured new-trade cadence is not elapsed yet. Last accepted new order: ${monitoring.lastSubmittedAt || "unknown"}; ${monitoring.submittedHoursAgo ?? "-"}h elapsed of ${TRADE_CADENCE_HOURS}h; approximately ${monitoring.cadenceRemainingHours}h remaining. Open-order management still ran.`
         : (rotationAvailable
             ? "No live order was submitted because opening the better candidate would first require selling an existing live position; this run records the rotation review but does not perform the sell/rebuy sequence automatically."
             : (capitalSizingBlocked.length
@@ -2050,6 +2079,9 @@ async function main() {
       idleCashGraceHours: IDLE_CASH_GRACE_HOURS,
       oneTradePerDay: ONE_TRADE_PER_DAY,
       tradeCadenceHours: TRADE_CADENCE_HOURS,
+      lastSubmittedAt: monitoring.lastSubmittedAt,
+      submittedHoursAgo: monitoring.submittedHoursAgo,
+      cadenceRemainingHours: monitoring.cadenceRemainingHours,
       ignoreTradeCadence: IGNORE_TRADE_CADENCE,
       freeCapitalPriority: true,
       capitalUtilizationOverride: monitoring.idleCashOverdue,
@@ -2092,6 +2124,9 @@ async function main() {
         minNetYield: MIN_NET_YIELD,
         maxResolutionDays: MAX_RESOLUTION_DAYS,
         tradeCadenceHours: TRADE_CADENCE_HOURS,
+        lastSubmittedAt: monitoring.lastSubmittedAt,
+        submittedHoursAgo: monitoring.submittedHoursAgo,
+        cadenceRemainingHours: monitoring.cadenceRemainingHours,
         ignoreTradeCadence: IGNORE_TRADE_CADENCE,
         freeCapitalPriority: true,
         selectionOrder: SELECTION_ORDER,
@@ -2355,9 +2390,16 @@ async function main() {
   }
 
   const action = canceledForBetterCandidate ? "CANCELED_REPLACEMENT_REJECTED" : "REJECTED";
+  const submissionFailures = attempts
+    .map((attempt, index) => {
+      const label = `${index + 1}. ${attempt.outcome || "candidate"} ${attempt.question || ""}`.trim();
+      const detail = attempt.responseError || attempt.responseSummary || "order was rejected";
+      return `${label}: ${detail}`;
+    })
+    .join("; ");
   const reason = canceledForBetterCandidate
-    ? "waiting limit order was cancelled, but every replacement candidate was rejected by order submission"
-    : "all revalidated candidates were rejected by order submission";
+    ? `waiting limit order was cancelled, but every replacement candidate was rejected by order submission${submissionFailures ? ` (${submissionFailures})` : ""}`
+    : `all revalidated candidates were rejected by order submission${submissionFailures ? ` (${submissionFailures})` : ""}`;
   await emitDecision({
     ...decision,
     action,
@@ -2367,8 +2409,8 @@ async function main() {
       action,
       reason,
       explanation: canceledForBetterCandidate
-        ? "The cancelled order was not replaced because every current replacement candidate failed during submission."
-        : "Live order was not opened because every revalidated candidate failed during order submission.",
+        ? `The cancelled order was not replaced because every current replacement candidate failed during submission.${submissionFailures ? ` Details: ${submissionFailures}` : ""}`
+        : `Live order was not opened because every revalidated candidate failed during order submission.${submissionFailures ? ` Details: ${submissionFailures}` : ""}`,
     },
     response: attempts.at(-1)?.response || null,
     attempts: [

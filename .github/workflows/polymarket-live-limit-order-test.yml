@@ -155,10 +155,14 @@ jobs:
           import urllib.request
 
           try:
-              payload = json.loads(urllib.request.urlopen("https://osobnizkusenosti.cz/trading/api.php?action=portfolio-config", timeout=20).read().decode("utf-8"))
+              request = urllib.request.Request(
+                  "https://www.osobnizkusenosti.cz/trading/api.php?action=portfolio-config",
+                  headers={"User-Agent": "trading-live-execution/1.0"},
+              )
+              payload = json.loads(urllib.request.urlopen(request, timeout=20).read().decode("utf-8"))
           except Exception as exc:
               print(f"portfolio config unavailable: {exc}")
-              raise SystemExit(0)
+              raise SystemExit(1)
           live = (payload.get("config") or {}).get("live") or {}
           system = (payload.get("config") or {}).get("system") or {}
           mapping = {
@@ -181,6 +185,13 @@ jobs:
                   print(f"{key}={value}")
                   handle.write(f"{key}={value}\n")
           PY
+
+      - name: Show effective live execution settings
+        run: |
+          echo "Live probability source: ${LIVE_PROBABILITY_SOURCE}"
+          echo "Live trade cadence hours: ${LIVE_TRADE_CADENCE_HOURS}"
+          echo "Live ignore cadence: ${LIVE_IGNORE_TRADE_CADENCE}"
+          echo "Live selection order: ${LIVE_SELECTION_ORDER}"
 
       - name: Generate fresh live account snapshot
         working-directory: trading

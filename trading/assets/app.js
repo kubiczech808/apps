@@ -5667,7 +5667,7 @@ function humanRunReason(run = {}) {
     return "No order placed: none of the candidates passed the fresh Polymarket verification.";
   }
   if (/live new-trade cadence blocked/i.test(reason)) {
-    return "No new order placed: the configured trade cadence has not elapsed. Existing orders were still reviewed.";
+    return `No new order placed: ${reason}. Existing orders were still reviewed.`;
   }
   if (action === "SKIP" && /no candidates passed/i.test(reason)) {
     return "No order placed: no candidate passed this portfolio's current rules.";
