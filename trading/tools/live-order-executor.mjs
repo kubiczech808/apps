@@ -890,6 +890,10 @@ function positionHoldExpectedValue(position, evaluationByToken = new Map()) {
 
 function positionHoldAnnualizedReturn(position, evaluationByToken = new Map()) {
   const economics = positionRotationEconomics(position, evaluationByToken);
+  const days = number(economics.source?.daysToResolution);
+  if (economics.holdExpectedPnl != null && economics.cost > 0 && days != null && days > 0) {
+    return (economics.holdExpectedPnl / economics.cost) * (365 / days);
+  }
   if (economics.continuationAnnualizedReturn != null) return economics.continuationAnnualizedReturn;
   return selectedAnnualizedReturn(economics.source) ?? 0;
 }
@@ -908,6 +912,24 @@ function rotationPriority(position, evaluationByToken = new Map()) {
     return { metric: "R/R", value: positionHoldRiskReward(position, evaluationByToken) };
   }
   return { metric: "EV p.a.", value: positionHoldAnnualizedReturn(position, evaluationByToken) };
+}
+
+function candidateRotationPriority(candidate) {
+  if (SELECTION_ORDER === "highest_reward_risk_first") {
+    const storedRiskReward = number(candidate?.riskReward);
+    const gain = number(candidate?.netGainIfWinUsdc);
+    const cost = number(candidate?.totalCostUsdc);
+    return {
+      metric: "R/R",
+      value: storedRiskReward != null
+        ? storedRiskReward
+        : (gain != null && cost != null && cost > 0 ? gain / cost : null),
+    };
+  }
+  return {
+    metric: returnMetricLabel(),
+    value: selectedAnnualizedReturn(candidate),
+  };
 }
 
 function rotationPositionSummary(position, evaluationByToken = new Map(), extra = {}) {
@@ -1027,32 +1049,59 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
         }
         const candidateEv = number(revalidated.expectedValueUsdc, 0);
         const candidateAnnualizedReturn = number(revalidated.annualizedReturn, 0);
+        const candidatePriority = candidateRotationPriority(revalidated);
         // Both paths now start from the same current portfolio state. The exit
         // P/L and estimated exit fee are included in the rotate path.
         const realizedPnlIfExit = economics.realizedPnlIfExit != null ? economics.realizedPnlIfExit : 0;
         const holdExpectedPnl = economics.holdExpectedPnl != null ? economics.holdExpectedPnl : holdEv;
         const rotatedExpectedPnl = realizedPnlIfExit + candidateEv;
         const evDelta = rotatedExpectedPnl - holdExpectedPnl;
-        const annualizedDelta = candidateAnnualizedReturn - holdAnnualizedReturn;
+        const candidateDays = number(revalidated.daysToResolution);
+        const rotationCapitalBase = Math.max(number(economics.cost, 0), number(revalidated.totalCostUsdc, 0), 0.000001);
+        const rotatedAnnualizedReturn = rotatedExpectedPnl != null && candidateDays != null && candidateDays > 0
+          ? (rotatedExpectedPnl / rotationCapitalBase) * (365 / candidateDays)
+          : candidateAnnualizedReturn;
+        const currentPriority = priority.value;
+        const replacementPriority = candidatePriority.metric === "R/R" ? candidatePriority.value : rotatedAnnualizedReturn;
+        const priorityDelta = replacementPriority - currentPriority;
         const rotationPreferred = evDelta >= ROTATION_MIN_EV_USDC_IMPROVEMENT
-          || (evDelta > 0 && annualizedDelta >= ROTATION_MIN_ANNUALIZED_IMPROVEMENT);
+          || (evDelta > 0 && priorityDelta >= ROTATION_MIN_ANNUALIZED_IMPROVEMENT);
+        const priorityComparison = {
+          metricLabel: candidatePriority.metric,
+          currentMetric: currentPriority,
+          replacementMetric: replacementPriority,
+          metricDelta: priorityDelta,
+          currentExpectedValue: holdExpectedPnl,
+          replacementExpectedValue: rotatedExpectedPnl,
+          replacementRanksAhead: priorityDelta > 0,
+          currentDaysToResolution: number(economics.source?.daysToResolution),
+          replacementDaysToResolution: candidateDays,
+          currentRealizedPnlIfExitUsdc: realizedPnlIfExit,
+          currentExitFeeUsdc: economics.exitFee,
+          replacementExpectedValueUsdc: candidateEv,
+          replacementCapitalBaseUsdc: rotationCapitalBase,
+        };
         const review = {
           position: baseReview,
           candidate: liveBatchCandidateSummary(revalidated),
+          priorityComparison,
           action: rotationPreferred ? "ROTATION_AVAILABLE" : "HOLD_CURRENT_POSITION",
           reason: rotationPreferred
-            ? `after estimated exit fees and realized P/L, candidate improves expected result by ${evDelta.toFixed(4)} USDC and EV p.a. by ${(annualizedDelta * 100).toFixed(1)} pts`
-            : `after estimated exit fees and realized P/L, candidate change is ${evDelta.toFixed(4)} USDC / ${(annualizedDelta * 100).toFixed(1)} EV p.a. pts and does not justify rotation`,
+            ? `after estimated exit fees and realized P/L, ${candidatePriority.metric} changes from ${(currentPriority * 100).toFixed(1)}% to ${(replacementPriority * 100).toFixed(1)}% and expected result changes by ${evDelta.toFixed(4)} USDC`
+            : `after estimated exit fees and realized P/L, ${candidatePriority.metric} changes by ${(priorityDelta * 100).toFixed(1)} pts and expected result changes by ${evDelta.toFixed(4)} USDC; rotation does not justify replacing the position`,
           cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
           evDeltaUsdc: Number(evDelta.toFixed(5)),
-          annualizedDelta: Number(annualizedDelta.toFixed(5)),
+          annualizedDelta: Number(priorityDelta.toFixed(5)),
+          currentAnnualizedReturn: Number(currentPriority.toFixed(5)),
+          replacementAnnualizedReturn: Number(replacementPriority.toFixed(5)),
+          rotatedAnnualizedReturn: Number(rotatedAnnualizedReturn.toFixed(5)),
           rotatedExpectedPnlUsdc: Number(rotatedExpectedPnl.toFixed(5)),
           holdExpectedPnlUsdc: Number(holdExpectedPnl.toFixed(5)),
           rejectedCandidates,
         };
         if (!bestForPosition
-          || annualizedDelta > bestForPosition.annualizedDelta
-          || (annualizedDelta === bestForPosition.annualizedDelta && evDelta > bestForPosition.evDeltaUsdc)) {
+          || priorityDelta > bestForPosition.annualizedDelta
+          || (priorityDelta === bestForPosition.annualizedDelta && evDelta > bestForPosition.evDeltaUsdc)) {
           bestForPosition = review;
         }
       } catch (error) {
@@ -1734,6 +1783,10 @@ function selectionComparison(current, replacement) {
       ? replacementExpectedValue - currentExpectedValue
       : null,
     replacementRanksAhead: compareLiveCandidatePriority(replacement, current) < 0,
+    currentDaysToResolution: number(current?.daysToResolution),
+    replacementDaysToResolution: number(replacement?.daysToResolution),
+    currentRealizedPnlIfExitUsdc: number(current?.realizedPnlIfExitUsdc),
+    replacementRealizedPnlIfExitUsdc: number(replacement?.realizedPnlIfExitUsdc),
   };
 }
 
@@ -1980,11 +2033,20 @@ async function main() {
   const activeSellOrders = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
     .filter((order) => String(order.side || "").toUpperCase().includes("SELL"));
   const best = eligible[0] || null;
+  const bestCandidateCost = best
+    ? number(best.totalCostUsdc ?? best.orderNotionalUsdc)
+    : null;
+  const directCandidateCanUseFreeCapital = Boolean(best
+    && Number.isFinite(bestCandidateCost)
+    && bestCandidateCost <= number(cash, 0) + 0.00001);
   const replacementDue = rotationReplacementDue(previousExecution, liveState);
   // Use free cash for a direct candidate before touching existing orders or
   // positions. An unrelated buy is allowed while a sell order is pending.
   const directCapitalPriority = Boolean(best && (!monitoring.cadenceBlocked || replacementDue));
-  const orderManagement = manualShortlistStale || activeSellOrders.length || directCapitalPriority
+  // A directly fundable candidate must also protect unrelated open orders from
+  // cancellation. Cadence may defer the new buy, but it must never trigger a
+  // needless cancellation just to make room for a trade that is already funded.
+  const orderManagement = manualShortlistStale || activeSellOrders.length || directCandidateCanUseFreeCapital
     ? { action: "NONE", reviews: [] }
     : await reviewOpenOrders({
         liveState,
@@ -2034,7 +2096,7 @@ async function main() {
       : (best && !cadenceBlocked
       ? "Live batch found an executable candidate after revalidation."
       : (cadenceBlocked
-        ? `No live order was submitted because the configured new-trade cadence is not elapsed yet. Last accepted new order: ${monitoring.lastSubmittedAt || "unknown"}; ${monitoring.submittedHoursAgo ?? "-"}h elapsed of ${TRADE_CADENCE_HOURS}h; approximately ${monitoring.cadenceRemainingHours}h remaining. Open-order management still ran.`
+        ? `No live order was submitted because the configured new-trade cadence is not elapsed yet. Last accepted new order: ${monitoring.lastSubmittedAt || "unknown"}; ${monitoring.submittedHoursAgo ?? "-"}h elapsed of ${TRADE_CADENCE_HOURS}h; approximately ${monitoring.cadenceRemainingHours}h remaining. ${directCandidateCanUseFreeCapital ? "A directly fundable candidate was preserved; no unrelated order or position was cancelled." : "Open-order management still ran."}`
         : (rotationAvailable
             ? "No live order was submitted because opening the better candidate would first require selling an existing live position; this run records the rotation review but does not perform the sell/rebuy sequence automatically."
             : (capitalSizingBlocked.length
@@ -2084,6 +2146,8 @@ async function main() {
       cadenceRemainingHours: monitoring.cadenceRemainingHours,
       ignoreTradeCadence: IGNORE_TRADE_CADENCE,
       freeCapitalPriority: true,
+      directCandidateCanUseFreeCapital,
+      directCandidateCostUsdc: bestCandidateCost,
       capitalUtilizationOverride: monitoring.idleCashOverdue,
       storedEvaluations: rawEvaluations.length,
       uniqueEvaluations: latestEvaluations.length,
@@ -2129,6 +2193,8 @@ async function main() {
         cadenceRemainingHours: monitoring.cadenceRemainingHours,
         ignoreTradeCadence: IGNORE_TRADE_CADENCE,
         freeCapitalPriority: true,
+        directCandidateCanUseFreeCapital,
+        directCandidateCostUsdc: bestCandidateCost,
         selectionOrder: SELECTION_ORDER,
         useLimitOrders: USE_LIMIT_ORDERS,
         crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,

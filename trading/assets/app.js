@@ -5279,7 +5279,13 @@ function tradeBatchDetail(batch) {
       ? riskReward(Number(value))
       : signedPercent(Number(value));
     const delta = comparison.metricDelta == null ? "-" : `${comparison.metricDelta >= 0 ? "+" : ""}${display(comparison.metricDelta)}`;
-    return `${metric}: ${display(comparison.currentMetric)} -> ${display(comparison.replacementMetric)} (${delta}); expected value ${signedMoney(Number(comparison.currentExpectedValue), 4)} -> ${signedMoney(Number(comparison.replacementExpectedValue), 4)} (${comparison.replacementRanksAhead ? "replacement ranks ahead" : "current order ranks ahead"})`;
+    const days = Number.isFinite(Number(comparison.currentDaysToResolution)) && Number.isFinite(Number(comparison.replacementDaysToResolution))
+      ? `; resolution ${Number(comparison.currentDaysToResolution).toFixed(2)}d -> ${Number(comparison.replacementDaysToResolution).toFixed(2)}d`
+      : "";
+    const exitPnl = Number.isFinite(Number(comparison.currentRealizedPnlIfExitUsdc))
+      ? `; exit P/L after fees ${signedMoney(Number(comparison.currentRealizedPnlIfExitUsdc), 4)}`
+      : "";
+    return `${metric}: ${display(comparison.currentMetric)} -> ${display(comparison.replacementMetric)} (${delta}); expected value ${signedMoney(Number(comparison.currentExpectedValue), 4)} -> ${signedMoney(Number(comparison.replacementExpectedValue), 4)}${days}${exitPnl} (${comparison.replacementRanksAhead ? "replacement ranks ahead" : "current order ranks ahead"})`;
   };
   const filterReasonLines = portfolioFilter.reasonCounts && typeof portfolioFilter.reasonCounts === "object"
     ? Object.entries(portfolioFilter.reasonCounts)
@@ -5417,6 +5423,9 @@ function tradeBatchDetail(batch) {
     `Reason: ${batch.reason || "-"}`,
     openOrderReviews.find((item) => item.selectionComparison)?.selectionComparison
       ? `Decision comparison: ${comparisonMetricLine(openOrderReviews.find((item) => item.selectionComparison).selectionComparison)}`
+      : "",
+    rotationReview?.best?.priorityComparison
+      ? `Rotation comparison: ${comparisonMetricLine(rotationReview.best.priorityComparison)}`
       : "",
     `Explanation: ${batch.explanation || "-"}`,
     "",
