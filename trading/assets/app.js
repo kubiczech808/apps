@@ -3942,7 +3942,12 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     reasons.push(`net profit ${Number.isFinite(candidateNetYield) ? signedPercent(candidateNetYield) : "-"} below ${percent(minNetYield)} after fees`);
   }
   if (probabilitySource === "ai" && aiPending) reasons.push("grounded Gemini analysis is pending");
-  if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY") {
+  // A live execution verdict can be temporary: capital or diversification may
+  // block this run while the same market remains a valid future candidate.
+  // Keep those rows in the shortlist so the next run can retry them after the
+  // blocking condition changes. Permanent market/quote failures still filter
+  // the row out here.
+  if (executionCheckIsCurrent && String(executionCheck.status || "").toUpperCase() !== "READY" && !executionCheck.retryable) {
     const detail = Array.isArray(executionCheck.rejectReasons) && executionCheck.rejectReasons[0]
       ? `: ${executionCheck.rejectReasons[0]}`
       : "";
@@ -4124,7 +4129,8 @@ function portfolioCandidateRows(mode = state.mode) {
 
 function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics = null) {
   const manuallyExcluded = diagnostics?.manuallyExcluded || [];
-  const visibleRows = [...rows, ...manuallyExcluded];
+  const riskBlocked = diagnostics?.riskBlocked || [];
+  const visibleRows = [...rows, ...riskBlocked, ...manuallyExcluded];
   if (!visibleRows.length) {
     const config = portfolioConfigForMode(mode);
     const riskBlocked = diagnostics?.riskBlocked?.length || 0;
@@ -4168,21 +4174,28 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
       <tbody>
         ${visibleRows.slice(0, 80).map((item, index) => {
           const excluded = Boolean(item.manuallyExcluded);
+          const riskBlockedRow = Boolean(item.portfolioRiskBlockReason);
+          const retryableExecution = item.executionRevalidation?.retryable === true;
           const status = excluded
             ? "excluded manually for this portfolio"
-            : (!live
-            ? "ready for next paper execution"
-            : (usesPolymarketPotential
-              ? "will verify live quote, fees and ranking"
-              : "will verify live quote against stored AI assessment"));
+            : (riskBlockedRow
+            ? item.portfolioRiskBlockReason
+            : (retryableExecution
+              ? (item.executionRevalidation.retryClass === "CAPITAL" ? "waiting for free capital; retry on the next execution" : "waiting for diversification capacity; retry on the next execution")
+              : (!live
+              ? "ready for next paper execution"
+              : (usesPolymarketPotential
+                ? "will verify live quote, fees and ranking"
+                : "will verify live quote against stored AI assessment"))));
+          const precheck = excluded ? "EXCLUDED" : (riskBlockedRow ? "RISK-BLOCKED" : (retryableExecution ? "WAITING" : "READY"));
           const selectedProbability = portfolioProbability(item, config);
           const selectedAnnualizedReturn = portfolioAnnualizedReturn(item, config);
           const selectedExpectedValue = portfolioExpectedValue(item, config);
           return `
             <tr>
               <td data-label="#">${index + 1}</td>
-              <td data-label="Precheck" class="${excluded ? "negative" : "positive"}">
-                <strong>${excluded ? "EXCLUDED" : "READY"}</strong>
+              <td data-label="Precheck" class="${excluded ? "negative" : (riskBlockedRow || retryableExecution ? "warning" : "positive")}">
+                <strong>${precheck}</strong>
                 <span>${escapeHtml(status)}</span>
                 <label class="candidate-exclusion-control" title="Exclude this candidate from this portfolio's future executions">
                   <input type="checkbox" data-portfolio-candidate-exclude data-portfolio-mode="${escapeHtml(mode)}" data-candidate-token-id="${escapeHtml(String(item.tokenId || item.clobTokenId || item.assetId || ""))}" ${excluded ? "checked" : ""}>

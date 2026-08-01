@@ -1754,6 +1754,10 @@ body.modal-open {
   color: var(--danger) !important;
 }
 
+.warning {
+  color: var(--warning) !important;
+}
+
 .trade-price-summary {
   white-space: nowrap;
 }

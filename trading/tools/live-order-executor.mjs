@@ -1610,6 +1610,12 @@ function liveBatchCandidateSummary(item) {
 function liveRevalidationUpdate(item, checkedAt) {
   const source = item?.candidate || item || {};
   const status = String(item?.status || "REJECTED").toUpperCase();
+  const rejectReasons = Array.isArray(item?.rejectReasons) ? item.rejectReasons.slice(0, 8) : [];
+  const retryClass = rejectReasons.some((reason) => /correlated live exposure|duplicate token already open|risk overlap/i.test(String(reason || "")))
+    ? "DIVERSIFICATION"
+    : (rejectReasons.some((reason) => /no available cash|above cash|insufficient.*(?:cash|USDC|capital)|minimum order .*costs|below the displayed .*share.*minimum/i.test(String(reason || "")))
+      ? "CAPITAL"
+      : null);
   const numericFields = [
     "marketPrice",
     "marketProbability",
@@ -1639,8 +1645,10 @@ function liveRevalidationUpdate(item, checkedAt) {
   return {
     tokenId: String(item?.tokenId || source.tokenId || ""),
     checkedAt,
-    status: status === "ELIGIBLE" ? "READY" : (status === "ERROR" ? "ERROR" : "REJECTED"),
-    rejectReasons: Array.isArray(item?.rejectReasons) ? item.rejectReasons.slice(0, 8) : [],
+    status: status === "ELIGIBLE" ? "READY" : (status === "ERROR" ? "ERROR" : (retryClass ? `WAITING_${retryClass}` : "REJECTED")),
+    retryable: Boolean(retryClass),
+    retryClass,
+    rejectReasons,
     question: item?.question || source.question || "",
     outcome: item?.outcome || source.outcome || "",
     ...metrics,
