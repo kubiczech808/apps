@@ -328,6 +328,11 @@ button:disabled {
   gap: 8px;
 }
 
+.dashboard-tabs > .tab-list {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .tab-button {
   min-height: 40px;
   padding: 0 14px;
@@ -631,6 +636,10 @@ button:disabled {
 
 .ledger-wide-table {
   min-width: 1280px;
+}
+
+.run-log-scroll > .portfolio-run-list {
+  min-width: 760px;
 }
 
 .bot-summary {
@@ -1883,6 +1892,18 @@ body.modal-open {
     padding-bottom: 4px;
   }
 
+  .dashboard-tabs > .tab-list {
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    touch-action: pan-x;
+  }
+
+  .dashboard-tabs > .tab-list .tab-button {
+    flex: 0 0 auto;
+  }
+
   .mode-switch {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2118,6 +2139,10 @@ body.modal-open {
 
   .run-card-head {
     flex-direction: column;
+  }
+
+  .run-log-scroll > .portfolio-run-list .trade-batch {
+    grid-template-columns: minmax(80px, 0.6fr) minmax(120px, 0.8fr) minmax(0, 2fr) minmax(160px, 1fr);
   }
 
   .run-counts {

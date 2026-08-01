@@ -4152,7 +4152,8 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
   const probabilityLabel = usesPolymarketPotential ? "Mkt prob." : "AI prob.";
   const returnMetric = portfolioReturnMetricLabel(config);
   return `
-    <table>
+    <div class="ledger-scroll" tabindex="0" aria-label="Scrollable execution candidates table">
+    <table class="ledger-wide-table">
       <thead>
         <tr>
           <th>#</th>
@@ -4219,6 +4220,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
         }).join("")}
       </tbody>
     </table>
+    </div>
   `;
 }
 
@@ -5741,6 +5743,7 @@ function renderRunLog() {
   }
 
   els.runLog.innerHTML = `
+    <div class="ledger-scroll run-log-scroll" tabindex="0" aria-label="Scrollable portfolio run log">
     <div class="trade-batches portfolio-run-list">
       ${runs.slice(0, 120).map((run, index) => {
         const batch = run.batchLog || run;
@@ -5753,6 +5756,7 @@ function renderRunLog() {
           </button>
         `;
       }).join("")}
+    </div>
     </div>
   `;
 }
