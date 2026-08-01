@@ -843,7 +843,7 @@ function syncOpportunityViewControls() {
   els.evaluationStatusButtons.forEach((button) => {
     const status = button.dataset.evaluationStatus;
     if (scraped) {
-      button.textContent = status === "EVALUATED" ? "Scraped" : status === "ALL" ? "All scraped" : button.textContent;
+      button.textContent = status === "EVALUATED" ? "Scraped" : status === "ALL" ? "All" : button.textContent;
     } else {
       button.textContent = status === "EVALUATED" ? "Evaluated" : status === "ALL" ? "All evaluated" : button.textContent;
     }
