@@ -1756,6 +1756,16 @@ function openOrderSummary(order, extra = {}) {
     notionalUsdc: number(order.notionalUsdc),
     createdAt: order.createdAt || null,
     ageHours: Number(openOrderAgeHours(order).toFixed(3)),
+    orderSnapshot: {
+      tokenId: order.tokenId || order.assetId || null,
+      orderPrice: number(order.price),
+      orderSize: number(order.remainingSize ?? order.size),
+      orderType: order.orderType || "GTC",
+      tickSize: order.tickSize || "0.01",
+      negRisk: Boolean(order.negRisk),
+      question: order.question || order.market || "",
+      outcome: order.outcome || "",
+    },
     ...extra,
   };
 }
@@ -1797,6 +1807,26 @@ function selectionMetricDisplay(comparison, value) {
     : `${(Number(value) * 100).toFixed(1)}%`;
 }
 
+async function restoreOpenOrder(review, tradingConfig = {}) {
+  const snapshot = review?.orderSnapshot;
+  if (!snapshot?.tokenId || snapshot.orderPrice == null || snapshot.orderSize == null || snapshot.orderSize <= 0) {
+    return { status: "restore_unavailable", error: "original order snapshot is incomplete" };
+  }
+  const order = {
+    ...snapshot,
+    side: "BUY",
+    funderAddress: tradingConfig.funderAddress,
+    signatureType: tradingConfig.signatureType,
+  };
+  try {
+    return DRY_RUN || !hasFlag("confirm-live")
+      ? { status: "dry_run_restore", success: true }
+      : await submitOrder(order);
+  } catch (error) {
+    return { status: "restore_exception", error: error?.message || String(error) };
+  }
+}
+
 async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, maxNotional, tradingConfig }) {
   const openOrders = Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
   const reviews = [];
@@ -1831,15 +1861,11 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
     });
 
     if (maxStakeBreached) {
-      review.action = "CANCEL";
-      review.reason = `open order notional ${lockedNotional.toFixed(4)} USDC exceeds max stake ${maxNotional.toFixed(4)} USDC`;
+      review.reason = `open order notional ${lockedNotional.toFixed(4)} USDC exceeds max stake ${maxNotional.toFixed(4)} USDC; kept because no replacement can be submitted atomically in this review`;
     } else if (!sourceEvaluation) {
       review.reason = ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS
-        ? "no current AI evaluation links to this open order and the order is stale"
-        : "no current AI evaluation links to this open order yet";
-      if (ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS) {
-        review.action = "CANCEL";
-      }
+        ? "no current evaluation links to this open order and the order is stale; kept because no replacement can be submitted atomically in this review"
+        : "no current evaluation links to this open order yet; kept waiting for a replacement decision";
     } else {
       try {
         const revalidated = await revalidateEvaluation(
@@ -1872,8 +1898,7 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
         review.priceDelta = Number(priceDelta.toFixed(4));
 
         if (revalidated.status !== "ELIGIBLE") {
-          review.action = ageHours >= OPEN_ORDER_REVIEW_AFTER_HOURS ? "CANCEL" : "KEEP_WAITING";
-          review.reason = `current revalidation no longer satisfies live rules: ${(revalidated.rejectReasons || []).join("; ") || "not eligible"}`;
+          review.reason = `current revalidation no longer satisfies live rules: ${(revalidated.rejectReasons || []).join("; ") || "not eligible"}; existing order kept because no replacement can be submitted atomically in this review`;
         } else if (betterCandidate && betterCandidateNeedsReleasedCapital) {
           review.action = "CANCEL_FOR_BETTER_CANDIDATE";
           review.reason = `${comparison.metricLabel} priority supports replacement (${comparison.metricLabel} ${selectionMetricDisplay(comparison, comparison.currentMetric)} -> ${selectionMetricDisplay(comparison, comparison.replacementMetric)}, ${comparison.metricDelta >= 0 ? "+" : ""}${selectionMetricDisplay(comparison, comparison.metricDelta)}); expected value ${Number(comparison.currentExpectedValue).toFixed(4)} -> ${Number(comparison.replacementExpectedValue).toFixed(4)} USDC, so the replacement needs this order's locked capital`;
@@ -1890,15 +1915,13 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
             : `current post-only level is lower by ${(Math.abs(priceDelta) * 100).toFixed(1)} pts; repost at updated economics`;
           review.replacementCandidate = revalidated;
         } else if (ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS) {
-          review.action = "CANCEL";
-          review.reason = `order has waited ${ageHours.toFixed(1)}h without fill; release capital for the next batch`;
+          review.reason = `order has waited ${ageHours.toFixed(1)}h without fill; kept because cancelling without an immediate replacement is not allowed`;
         } else {
           review.action = "KEEP_WAITING";
           review.reason = `still eligible and price gap ${Math.abs(priceDelta * 100).toFixed(1)} pts is below reprice threshold`;
         }
       } catch (error) {
-        review.action = ageHours >= OPEN_ORDER_REVIEW_AFTER_HOURS ? "CANCEL" : "KEEP_WAITING";
-        review.reason = `open order revalidation failed: ${error?.message || String(error)}`;
+        review.reason = `open order revalidation failed: ${error?.message || String(error)}; existing order kept because no replacement can be submitted atomically in this review`;
       }
     }
 
@@ -1927,8 +1950,18 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
             ...selectedAction.replacementCandidate,
             funderAddress: tradingConfig.funderAddress,
             signatureType: tradingConfig.signatureType,
-          });
-      selectedAction.action = successfulOrderResponse(selectedAction.replaceResponse) ? "REPLACED" : "REPLACE_REJECTED";
+        });
+      if (successfulOrderResponse(selectedAction.replaceResponse)) {
+        selectedAction.action = "REPLACED";
+      } else {
+        selectedAction.restoreResponse = await restoreOpenOrder(selectedAction, tradingConfig);
+        selectedAction.action = successfulOrderResponse(selectedAction.restoreResponse)
+          ? "REPLACE_REJECTED_ORDER_RESTORED"
+          : "REPLACE_REJECTED_ORDER_RESTORE_FAILED";
+        selectedAction.reason = successfulOrderResponse(selectedAction.restoreResponse)
+          ? `replacement order was rejected; original order was immediately restored: ${orderResponseError(selectedAction.replaceResponse) || "unknown replacement response"}`
+          : `replacement order was rejected and restoring the original order also failed: ${orderResponseError(selectedAction.replaceResponse) || "unknown replacement response"}`;
+      }
     } else {
       selectedAction.action = selectedAction.action === "CANCEL_FOR_BETTER_CANDIDATE" ? "CANCELED_FOR_BETTER_CANDIDATE" : "CANCELED";
     }
@@ -2314,56 +2347,20 @@ async function main() {
 
   if (rotationAvailable && LIVE_AUTO_ROTATE) {
     const rotation = rotationReview.best;
-    let exitOrder = null;
-    let exitResponse = null;
-    try {
-      exitOrder = await buildRotationExitOrder(rotation.position, evaluationByToken, tradingConfig);
-      exitResponse = DRY_RUN || !hasFlag("confirm-live")
-        ? { status: "dry_run_rotation_exit", success: true }
-        : await submitOrder(exitOrder);
-    } catch (error) {
-      exitResponse = { error: error?.message || String(error), status: "exception" };
-    }
-    const rotationExit = {
-      position: rotation.position,
-      replacementCandidate: rotation.candidate,
-      order: exitOrder,
-      response: exitResponse,
-      submittedAt: new Date().toISOString(),
-    };
-    if (successfulOrderResponse(exitResponse)) {
-      const action = DRY_RUN || !hasFlag("confirm-live") ? "ROTATION_EXIT_READY" : "ROTATION_EXIT_SUBMITTED";
-      await emitDecision({
-        ...decision,
-        action,
-        reason: "rotation exit accepted; wait for account sync before replacement buy",
-        rotationExit,
-        batchLog: {
-          ...decision.batchLog,
-          action,
-          reason: "rotation exit accepted; wait for account sync before replacement buy",
-          explanation: "The weaker position received a sell order at the current bid. A replacement is intentionally deferred until account sync confirms the sell has filled.",
-          selected: rotation.candidate,
-          rotationExit,
-        },
-        attempts: [orderAttemptSummary(exitOrder || rotation.position, exitResponse, { action, replacementCandidate: rotation.candidate })],
-      });
-      return;
-    }
+    const action = "ROTATION_BLOCKED_NO_ATOMIC_REPLACEMENT";
+    const reason = "rotation was not executed because a sell could not be atomically followed by a confirmed replacement buy; existing position preserved";
     await emitDecision({
       ...decision,
-      action: "ROTATION_EXIT_REJECTED",
-      reason: `rotation exit was not accepted: ${orderResponseError(exitResponse) || "unknown order response"}`,
-      rotationExit,
+      action,
+      reason,
       batchLog: {
         ...decision.batchLog,
-        action: "ROTATION_EXIT_REJECTED",
-        reason: `rotation exit was not accepted: ${orderResponseError(exitResponse) || "unknown order response"}`,
-        explanation: "The old position remains open and no replacement buy was attempted.",
+        action,
+        reason,
+        explanation: "The candidate requires releasing capital or risk capacity from an existing position, but the sell and replacement buy cannot be guaranteed as one atomic operation. No position or order was cancelled.",
         selected: rotation.candidate,
-        rotationExit,
       },
-      attempts: [orderAttemptSummary(exitOrder || rotation.position, exitResponse, { action: "ROTATION_EXIT_REJECTED", replacementCandidate: rotation.candidate })],
+      attempts: [orderAttemptSummary(rotation.candidate, null, { action, replacementCandidate: rotation.candidate })],
     });
     return;
   }
@@ -2374,6 +2371,12 @@ async function main() {
   }
 
   const attempts = [];
+  const restoreCanceledOrderIfNeeded = async () => {
+    if (!canceledForBetterCandidate || !orderManagement.selected) return null;
+    const restoreResponse = await restoreOpenOrder(orderManagement.selected, tradingConfig);
+    orderManagement.selected.restoreResponse = restoreResponse;
+    return restoreResponse;
+  };
   for (const candidate of eligible) {
     let response = null;
     try {
@@ -2427,9 +2430,11 @@ async function main() {
     });
     attempts.push(attempt);
     if (stopReason) {
+      const restoreResponse = await restoreCanceledOrderIfNeeded();
+      const restored = restoreResponse && successfulOrderResponse(restoreResponse);
       const action = canceledForBetterCandidate ? "CANCELED_REPLACEMENT_REJECTED" : "REJECTED";
       const reason = canceledForBetterCandidate
-        ? `waiting limit order was cancelled, but the replacement order was rejected: ${stopReason}`
+        ? `replacement order was rejected: ${stopReason}; original order ${restored ? "was immediately restored" : "could not be restored"}`
         : stopReason;
       await emitDecision({
         ...decision,
@@ -2440,7 +2445,7 @@ async function main() {
           action,
           reason,
           explanation: canceledForBetterCandidate
-            ? `The replacement order was not opened after cancellation because submission stopped: ${stopReason}.`
+            ? `The replacement order was not opened after cancellation because submission stopped: ${stopReason}. The original order ${restored ? "was immediately restored" : "could not be restored"}.`
             : `Live order was not opened because submission stopped: ${stopReason}.`,
           selected: liveBatchCandidateSummary(candidate),
         },
@@ -2455,6 +2460,8 @@ async function main() {
     }
   }
 
+  const restoreResponse = await restoreCanceledOrderIfNeeded();
+  const restored = restoreResponse && successfulOrderResponse(restoreResponse);
   const action = canceledForBetterCandidate ? "CANCELED_REPLACEMENT_REJECTED" : "REJECTED";
   const submissionFailures = attempts
     .map((attempt, index) => {
@@ -2464,7 +2471,7 @@ async function main() {
     })
     .join("; ");
   const reason = canceledForBetterCandidate
-    ? `waiting limit order was cancelled, but every replacement candidate was rejected by order submission${submissionFailures ? ` (${submissionFailures})` : ""}`
+    ? `every replacement candidate was rejected by order submission${submissionFailures ? ` (${submissionFailures})` : ""}; original order ${restored ? "was immediately restored" : "could not be restored"}`
     : `all revalidated candidates were rejected by order submission${submissionFailures ? ` (${submissionFailures})` : ""}`;
   await emitDecision({
     ...decision,
@@ -2475,7 +2482,7 @@ async function main() {
       action,
       reason,
       explanation: canceledForBetterCandidate
-        ? `The cancelled order was not replaced because every current replacement candidate failed during submission.${submissionFailures ? ` Details: ${submissionFailures}` : ""}`
+        ? `Every current replacement candidate failed during submission. The original order ${restored ? "was immediately restored" : "could not be restored"}.${submissionFailures ? ` Details: ${submissionFailures}` : ""}`
         : `Live order was not opened because every revalidated candidate failed during order submission.${submissionFailures ? ` Details: ${submissionFailures}` : ""}`,
     },
     response: attempts.at(-1)?.response || null,
