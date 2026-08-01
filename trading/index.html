@@ -230,6 +230,11 @@
                     <input type="number" min="0" max="1000" step="0.1" value="0.0" data-evaluation-net-yield-filter>
                     <strong data-evaluation-net-yield-filter-label>&gt;= 0.0%</strong>
                   </label>
+                  <label class="threshold-control evaluation-liquidity-control" data-scraped-only title="Display-only minimum market liquidity filter for Scraped opportunities.">
+                    <span>Liquidity min</span>
+                    <input type="number" min="0" max="1000000000" step="1000" placeholder="All" data-evaluation-liquidity-filter>
+                    <strong data-evaluation-liquidity-filter-label>All</strong>
+                  </label>
                   <div class="segmented" data-evaluation-filter data-evaluation-only>
                     <button class="segment-button active" type="button" data-evaluation-status="EVALUATED">Evaluated</button>
                     <button class="segment-button" type="button" data-evaluation-status="RESOLVED">Resolved</button>
@@ -365,6 +370,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260801-live-gate-mobile"></script>
+  <script src="assets/app.js?v=20260801-scraped-liquidity-filter"></script>
 </body>
 </html>

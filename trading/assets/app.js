@@ -40,6 +40,7 @@ const state = {
   evaluationProbabilityFilter: 0,
   evaluationDaysFilter: null,
   evaluationNetYieldFilter: 0,
+  evaluationLiquidityFilter: 0,
   eligibilityThreshold: null,
   eligibilityThresholdKey: "",
   riskAllocation: null,
@@ -79,6 +80,7 @@ const ELIGIBILITY_THRESHOLD_STORAGE_KEY = "tradingEligibilityProbabilityThreshol
 const EVALUATION_PROBABILITY_FILTER_STORAGE_KEY = "tradingEvaluationProbabilityFilter";
 const EVALUATION_DAYS_FILTER_STORAGE_KEY = "tradingEvaluationDaysFilter";
 const EVALUATION_NET_YIELD_FILTER_STORAGE_KEY = "tradingEvaluationNetYieldFilter";
+const EVALUATION_LIQUIDITY_FILTER_STORAGE_KEY = "tradingEvaluationLiquidityFilter";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
@@ -140,6 +142,8 @@ const els = {
   evaluationDaysFilterLabel: document.querySelector("[data-evaluation-days-filter-label]"),
   evaluationNetYieldFilter: document.querySelector("[data-evaluation-net-yield-filter]"),
   evaluationNetYieldFilterLabel: document.querySelector("[data-evaluation-net-yield-filter-label]"),
+  evaluationLiquidityFilter: document.querySelector("[data-evaluation-liquidity-filter]"),
+  evaluationLiquidityFilterLabel: document.querySelector("[data-evaluation-liquidity-filter-label]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   riskAllocation: document.querySelector("[data-risk-allocation]"),
@@ -169,6 +173,7 @@ const els = {
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
   opportunityViewButtons: document.querySelectorAll("[data-opportunity-view]"),
   evaluationOnlyControls: document.querySelectorAll("[data-evaluation-only]"),
+  scrapedOnlyControls: document.querySelectorAll("[data-scraped-only]"),
   parameterModal: document.querySelector("[data-parameter-modal]"),
   parameterModalClose: document.querySelector("[data-parameter-modal-close]"),
   parameterModalConfirm: document.querySelector("[data-parameter-modal-confirm]"),
@@ -831,6 +836,9 @@ function syncOpportunityViewControls() {
   });
   els.evaluationOnlyControls.forEach((element) => {
     element.hidden = false;
+  });
+  els.scrapedOnlyControls.forEach((element) => {
+    element.hidden = !scraped;
   });
   els.evaluationStatusButtons.forEach((button) => {
     const status = button.dataset.evaluationStatus;
@@ -4248,6 +4256,39 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
   `;
 }
 
+function storedEvaluationLiquidityFilter() {
+  try {
+    const value = Number(localStorage.getItem(EVALUATION_LIQUIDITY_FILTER_STORAGE_KEY));
+    return Number.isFinite(value) && value >= 0 ? Math.round(value * 100) / 100 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveEvaluationLiquidityFilter(value) {
+  try {
+    const normalized = Number(value);
+    localStorage.setItem(
+      EVALUATION_LIQUIDITY_FILTER_STORAGE_KEY,
+      String(Number.isFinite(normalized) && normalized >= 0 ? Math.round(normalized * 100) / 100 : 0),
+    );
+  } catch {
+    // Display-only preference; ignore storage failures.
+  }
+}
+
+function currentEvaluationLiquidityFilter() {
+  const value = Number(state.evaluationLiquidityFilter);
+  return Number.isFinite(value) && value >= 0 ? Math.round(value * 100) / 100 : 0;
+}
+
+function syncEvaluationLiquidityFilterControl() {
+  const value = currentEvaluationLiquidityFilter();
+  state.evaluationLiquidityFilter = value;
+  if (els.evaluationLiquidityFilter) els.evaluationLiquidityFilter.value = value > 0 ? String(value) : "";
+  if (els.evaluationLiquidityFilterLabel) els.evaluationLiquidityFilterLabel.textContent = value > 0 ? `>= ${money(value)}` : "All";
+}
+
 function renderPortfolioCandidates() {
   if (!els.portfolioCandidates) return;
   syncPortfolioCandidateRefreshControl();
@@ -4982,6 +5023,7 @@ function renderScrapedOpportunities() {
   const probabilityFilter = currentEvaluationProbabilityFilter();
   const daysFilter = currentEvaluationDaysFilter();
   const minNetYield = currentEvaluationNetYieldFilter();
+  const minLiquidity = currentEvaluationLiquidityFilter();
   const statusFiltered = state.evaluationStatus === "ALL"
     ? observations
     : observations.filter((item) => scrapedObservationFilterStatus(item) === state.evaluationStatus);
@@ -4992,7 +5034,9 @@ function renderScrapedOpportunities() {
     if (!Number.isFinite(days)) return false;
     if (daysFilter != null && days > daysFilter) return false;
     const yieldValue = netYield(item);
-    return minNetYield <= 0 || (Number.isFinite(yieldValue) && yieldValue >= minNetYield);
+    if (minNetYield > 0 && (!Number.isFinite(yieldValue) || yieldValue < minNetYield)) return false;
+    const liquidity = Number(item.liquidity);
+    return minLiquidity <= 0 || (Number.isFinite(liquidity) && liquidity >= minLiquidity);
   });
   const visible = sortedScrapedObservations(filtered).slice(0, 250);
   const scan = scrapedMarketScan();
@@ -5005,6 +5049,7 @@ function renderScrapedOpportunities() {
       probabilityFilter > 0 ? `market >= ${(probabilityFilter * 100).toFixed(0)}%` : "",
       daysFilter != null ? `days <= ${daysFilter}` : "",
       minNetYield > 0 ? `net yield >= ${(minNetYield * 100).toFixed(1)}%` : "",
+      minLiquidity > 0 ? `liquidity >= ${money(minLiquidity)}` : "",
     ].filter(Boolean);
     els.evaluationFilterCount.textContent = filters.length
       ? `${formatInteger(filtered.length) || filtered.length} scraped / ${filters.join(" / ")}`
@@ -5041,18 +5086,18 @@ function renderScrapedOpportunities() {
       <table class="ledger-wide-table">
         <thead>
           <tr>
-            ${scrapedSortableHeader("observedAt", "Scraped")}
-            ${scrapedSortableHeader("status", "Status")}
             ${scrapedSortableHeader("market", "Market")}
-            ${scrapedSortableHeader("endDate", "End date")}
             ${scrapedSortableHeader("daysLeft", "Days left")}
             ${scrapedSortableHeader("marketProbability", "Mkt prob.")}
             ${scrapedSortableHeader("netGainIfWinUsdc", "Win @ $5")}
             ${scrapedSortableHeader("netYield", "Net yield %")}
             ${scrapedSortableHeader("potentialAnnualizedReturn", "Potential p.a.")}
             ${scrapedSortableHeader("riskReward", "R/R")}
-            <th>Yes / No</th>
             ${scrapedSortableHeader("liquidity", "Liquidity")}
+            ${scrapedSortableHeader("observedAt", "Scraped")}
+            ${scrapedSortableHeader("status", "Status")}
+            ${scrapedSortableHeader("endDate", "End date")}
+            <th>Yes / No</th>
             ${scrapedSortableHeader("volume24hr", "24h volume")}
             ${scrapedSortableHeader("outcomeCount", "Outcomes")}
             <th><span class="table-action-heading" title="Refresh this one scraped market from Polymarket">Update</span></th>
@@ -5061,18 +5106,18 @@ function renderScrapedOpportunities() {
         <tbody>
           ${visible.map((item) => `
             <tr>
-              <td data-label="Scraped">${escapeHtml(formatDate(item.observedAt || item.marketDataUpdatedAt || ""))}</td>
-              <td data-label="Status" class="${scrapedObservationStatusClass(item)}"><strong>${scrapedObservationStatus(item)}</strong></td>
               <td data-label="Market">${marketAnchor(item)}</td>
-              <td data-label="End date">${evaluationEndDateCell(item)}</td>
               <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
               <td data-label="Mkt prob.">${probability(Number(item.marketProbability))}</td>
               <td data-label="Win @ $5">${gainCell(item)}</td>
               <td data-label="Net yield %">${netYieldCell(item)}</td>
               <td data-label="Potential p.a."><span class="${pnlClass(potentialAnnualizedReturn(item))}">${signedPercent(potentialAnnualizedReturn(item))}</span></td>
               <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
-              <td data-label="Yes / No">${binaryMarketProbabilityCell(item)}</td>
               <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
+              <td data-label="Scraped">${escapeHtml(formatDate(item.observedAt || item.marketDataUpdatedAt || ""))}</td>
+              <td data-label="Status" class="${scrapedObservationStatusClass(item)}"><strong>${scrapedObservationStatus(item)}</strong></td>
+              <td data-label="End date">${evaluationEndDateCell(item)}</td>
+              <td data-label="Yes / No">${binaryMarketProbabilityCell(item)}</td>
               <td data-label="24h volume">${money(Number(item.volume24hr || 0))}</td>
               <td data-label="Outcomes">${formatInteger(Number(item.outcomeCount || 0)) || "-"}</td>
               <td data-label="Update">${scrapedRefreshControl(item)}</td>
@@ -6125,6 +6170,15 @@ els.evaluationNetYieldFilter?.addEventListener("input", () => {
   renderBotEvaluations();
 });
 
+els.evaluationLiquidityFilter?.addEventListener("input", () => {
+  const raw = Number(els.evaluationLiquidityFilter.value);
+  const value = Number.isFinite(raw) && raw >= 0 ? Math.round(raw * 100) / 100 : 0;
+  state.evaluationLiquidityFilter = value;
+  saveEvaluationLiquidityFilter(value);
+  syncEvaluationLiquidityFilterControl();
+  renderBotEvaluations();
+});
+
 els.eligibilityThreshold?.addEventListener("input", () => {
   if (parameterDraftInputIsEmpty(els.eligibilityThreshold)) {
     if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = "-";
@@ -6443,9 +6497,11 @@ state.liveExecutionArmed = storedLiveExecutionArmed();
 state.evaluationProbabilityFilter = storedEvaluationProbabilityFilter();
 state.evaluationDaysFilter = storedEvaluationDaysFilter();
 state.evaluationNetYieldFilter = storedEvaluationNetYieldFilter();
+state.evaluationLiquidityFilter = storedEvaluationLiquidityFilter();
 syncEvaluationProbabilityFilterControl();
 syncEvaluationDaysFilterControl();
 syncEvaluationNetYieldFilterControl();
+syncEvaluationLiquidityFilterControl();
 applyInitialRoute();
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);
