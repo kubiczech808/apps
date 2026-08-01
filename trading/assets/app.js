@@ -3743,6 +3743,10 @@ async function loadLiveState(options = {}) {
     state.liveExecutionState = executionResult.status === "fulfilled" ? executionResult.value : state.liveExecutionState;
     const liveState = liveResult.value;
     renderLiveState(liveState);
+    // CLOB open orders expose only token/condition IDs. Load the shared scraped
+    // catalog in the background so opened-order rows can show their market,
+    // outcome and resolution metadata instead of an incomplete placeholder.
+    ensureScrapedMarketState(options);
     ensureCandidateBotState();
     ensureFullBotState(options);
     if (!options.skipAutoLiveSync) {
@@ -4499,6 +4503,33 @@ function evaluationByTokenId(tokenId) {
     .find((item) => String(item.tokenId || item.clobTokenId || item.assetId || "") === token) || null;
 }
 
+function liveMarketMetadataForTrade(item = {}) {
+  const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
+  const scraped = scrapedMarketObservations();
+  const sources = [...scraped, ...evaluations];
+  const tokenIds = new Set([
+    item.tokenId,
+    item.clobTokenId,
+    item.assetId,
+    item.asset,
+    item.tokenID,
+  ].map((value) => String(value || "").trim()).filter(Boolean));
+  const marketIds = new Set([
+    item.marketId,
+    item.conditionId,
+    item.market,
+  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean));
+  const tokenMatch = sources.find((candidate) => tokenIds.has(String(
+    candidate.tokenId || candidate.clobTokenId || candidate.assetId || candidate.asset || "",
+  ).trim()));
+  if (tokenMatch) return tokenMatch;
+  const marketMatch = sources.find((candidate) => marketIds.has(String(
+    candidate.marketId || candidate.conditionId || candidate.market || "",
+  ).trim().toLowerCase()));
+  if (marketMatch) return marketMatch;
+  return null;
+}
+
 function normalizedMatchText(value) {
   return String(value || "")
     .normalize("NFD")
@@ -4513,12 +4544,14 @@ function evaluationByTrade(item) {
   if (byToken) return byToken;
 
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
+  const scraped = scrapedMarketObservations();
+  const sources = [...scraped, ...evaluations];
   const outcome = normalizedMatchText(item?.outcome || item?.side);
   const slug = normalizedMatchText(item?.eventSlug || item?.slug);
   const question = normalizedMatchText(item?.question || item?.title || item?.market);
   if (!outcome) return null;
 
-  return evaluations.find((candidate) => {
+  return sources.find((candidate) => {
     const candidateOutcome = normalizedMatchText(candidate.outcome);
     if (candidateOutcome !== outcome) return false;
     const candidateSlug = normalizedMatchText(candidate.eventSlug || candidate.slug);
@@ -4529,18 +4562,27 @@ function evaluationByTrade(item) {
 }
 
 function decorateLiveTradeForTable(trade) {
-  if (trade.sourceEvaluation || tradeAiProbability(trade) != null) return trade;
-  const source = evaluationByTrade(trade);
+  const source = trade.sourceEvaluation || liveMarketMetadataForTrade(trade) || evaluationByTrade(trade);
   if (!source) {
     return {
       ...trade,
       analysisSummary: trade.analysisSummary || "No matching AI evaluation was found for this live Polymarket row. Treat this as an audit gap until the order/execution ledger links it back to an evaluated candidate.",
     };
   }
+  const hasQuestion = String(trade.question || "").trim() && String(trade.question || "").trim() !== "-";
+  const hasOutcome = String(trade.outcome || "").trim() && String(trade.outcome || "").trim() !== "-";
   return {
     ...trade,
-    aiProbability: numericOrNull(source.aiProbability),
-    rawProbability: numericOrNull(source.rawProbability),
+    question: hasQuestion ? trade.question : (source.question || trade.question || ""),
+    outcome: hasOutcome ? trade.outcome : (source.outcome || trade.outcome || "-"),
+    slug: trade.slug || source.slug || source.eventSlug || "",
+    eventSlug: trade.eventSlug || source.eventSlug || source.slug || "",
+    url: trade.url || polymarketUrl(source),
+    endDate: trade.endDate || source.endDate || source.resolutionDate || null,
+    daysToResolution: trade.daysToResolution ?? source.daysToResolution ?? null,
+    currentPrice: Number.isFinite(Number(trade.currentPrice)) ? trade.currentPrice : (source.marketPrice ?? null),
+    aiProbability: numericOrNull(trade.aiProbability) ?? numericOrNull(source.aiProbability),
+    rawProbability: numericOrNull(trade.rawProbability) ?? numericOrNull(source.rawProbability),
     thesisType: source.thesisType,
     annualizedReturn: trade.annualizedReturn ?? source.annualizedReturn,
     expectedValueUsdc: trade.expectedValueUsdc ?? source.expectedValueUsdc,
@@ -4557,35 +4599,39 @@ function decorateLiveTradeForTable(trade) {
 }
 
 function normalizeLiveOpenOrderForTable(order) {
-  const source = evaluationByTrade(order);
+  const source = liveMarketMetadataForTrade(order) || evaluationByTrade(order);
   const price = Number(order.price);
   const remainingSize = Number(order.remainingSize ?? order.originalSize ?? 0);
   const notional = Number(order.notionalUsdc);
   const stake = Number.isFinite(notional) ? notional : (Number.isFinite(price) ? price * remainingSize : 0);
+  const tokenId = order.tokenId || order.assetId || order.asset || order.tokenID || null;
   return {
     id: `open-order-${order.id}`,
     orderId: order.id || order.orderID || order.orderId || null,
     mode: "LIVE_ORDER",
     status: "LIMIT ORDER",
-    question: source?.question || order.question || "",
+    question: source?.question || order.question || order.title || "",
     outcome: source?.outcome || order.outcome || order.side || "-",
-    slug: source?.slug || source?.eventSlug || "",
-    eventSlug: source?.eventSlug || source?.slug || "",
-    url: source ? polymarketUrl(source) : "",
-    tokenId: order.tokenId || order.assetId || null,
+    slug: source?.slug || source?.eventSlug || order.slug || order.eventSlug || "",
+    eventSlug: source?.eventSlug || source?.slug || order.eventSlug || order.slug || "",
+    url: source ? polymarketUrl(source) : (order.url || order.marketUrl || ""),
+    tokenId,
+    marketId: source?.marketId || order.marketId || null,
+    conditionId: source?.conditionId || order.conditionId || order.market || null,
     date: order.createdAt || null,
     openedAt: order.createdAt || null,
     openedAtSource: order.createdAt ? "open-orders-api" : "unknown",
-    endDate: source?.endDate || null,
+    endDate: source?.endDate || order.endDate || order.resolutionDate || null,
+    daysToResolution: source?.daysToResolution ?? order.daysToResolution ?? null,
     entryPrice: price,
-    currentPrice: Number(source?.marketPrice),
+    currentPrice: Number(source?.marketPrice ?? source?.marketPriceProbability ?? order.currentPrice ?? price),
     shares: remainingSize,
     stakeUsdc: stake,
     totalCostUsdc: stake,
     netGainIfWinUsdc: Number.isFinite(remainingSize) ? remainingSize - stake : null,
     unrealizedPnlUsdc: 0,
     unrealizedPnlPct: 0,
-    aiProbability: numericOrNull(source?.aiProbability),
+    aiProbability: numericOrNull(source?.aiProbability ?? order.aiProbability),
     rawProbability: numericOrNull(source?.rawProbability),
     thesisType: source?.thesisType || "",
     annualizedReturn: source?.annualizedReturn,
@@ -4596,6 +4642,7 @@ function normalizeLiveOpenOrderForTable(order) {
     probabilityThesis: source?.probabilityThesis || source?.aiAnalysis?.thesis || "",
     analysisModel: source?.analysisModel || source?.aiAnalysis?.model || "",
     analysisSummary: [
+      source?.analysisSummary || source?.probabilityThesis || "",
       `Open ${order.side || ""} limit order ${shortIdentifier(order.id || order.orderID || order.orderId)}, ${remainingSize.toLocaleString("en-US", { maximumFractionDigits: 4 })} shares at ${probability(price)}.`,
       `Created ${order.createdAt ? formatDate(order.createdAt) : "-"}.`,
       `Matched ${Number(order.sizeMatched || 0).toLocaleString("en-US", { maximumFractionDigits: 4 })} shares.`,
