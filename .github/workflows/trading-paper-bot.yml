@@ -209,6 +209,8 @@ jobs:
       PAPER_AI_USAGE_HISTORY_LIMIT: "500"
       PAPER_AI_STOP_ON_QUOTA_ERROR: "true"
       PAPER_AI_POSTMORTEM_LIMIT: "1"
+      PAPER_SCRAPED_SIMULATION_STAKE_USDC: "5"
+      PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT: "120"
       PAPER_REQUIRE_GEMINI: "true"
       PAPER_MANUAL_RUN_ONCE: ${{ github.event_name == 'workflow_dispatch' && inputs.manual_run_once == 'true' && 'true' || 'false' }}
       PAPER_STRATEGY_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_strategy_id || '' }}

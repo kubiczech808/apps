@@ -91,12 +91,16 @@ const EVALUATION_MARKET_SLUG = String(process.env.PAPER_EVALUATION_MARKET_SLUG |
 const SCHEDULED_CADENCE_POLL = envBool("PAPER_SCHEDULED_CADENCE_POLL", false);
 const CONTINUOUS_EVALUATION = envBool("PAPER_CONTINUOUS_EVALUATION", false);
 const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
+const SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT", 120);
+const SCRAPED_SIMULATION_STAKE_USDC = envNumber("PAPER_SCRAPED_SIMULATION_STAKE_USDC", 5);
 const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable"].includes(process.env.PAPER_STRATEGY_ID)
   ? process.env.PAPER_STRATEGY_ID
   : "";
 const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
 const REPORT_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
+const SCRAPED_SIMULATION_MAX_DAYS = [1, 3, 7, 14, 30];
+const SCRAPED_SIMULATION_LIQUIDITY_FLOORS = [0, 10000, 40000, 100000];
 const PAPER_STRATEGIES = {
   conservative: {
     id: "conservative",
@@ -436,20 +440,49 @@ function marketObservationUpdateTime(item) {
   return Date.parse(item?.marketDataUpdatedAt || item?.observedAt || item?.updatedAt || "") || 0;
 }
 
+function firstObservationMetadata(item = {}) {
+  const firstObservedAt = item.firstObservedAt || item.observedAt || item.marketDataUpdatedAt || null;
+  const firstProbability = Number(item.firstMarketProbability ?? item.marketProbability ?? item.marketPrice);
+  const firstLiquidity = Number(item.firstLiquidity ?? item.liquidity);
+  const firstVolume = Number(item.firstVolume24hr ?? item.volume24hr);
+  const firstDays = Number(item.firstDaysToResolution ?? item.daysToResolution);
+  const firstFeeRate = Number(item.firstFeeRate ?? item.feeRate);
+  const currentTags = Array.isArray(item.tags) ? item.tags.filter(Boolean).map(String) : [];
+  return {
+    firstObservedAt,
+    firstMarketProbability: Number.isFinite(firstProbability) ? Number(firstProbability.toFixed(4)) : null,
+    firstLiquidity: Number.isFinite(firstLiquidity) ? Number(firstLiquidity.toFixed(2)) : null,
+    firstVolume24hr: Number.isFinite(firstVolume) ? Number(firstVolume.toFixed(2)) : null,
+    firstDaysToResolution: Number.isFinite(firstDays) ? Number(firstDays.toFixed(2)) : null,
+    firstFeeRate: Number.isFinite(firstFeeRate) ? Number(firstFeeRate.toFixed(8)) : null,
+    firstOutcome: item.firstOutcome || item.outcome || null,
+    firstTokenId: item.firstTokenId || item.tokenId || null,
+    firstCategory: item.firstCategory || item.riskCategory || currentTags[0] || "general",
+    firstTags: Array.isArray(item.firstTags) && item.firstTags.length ? item.firstTags : currentTags,
+  };
+}
+
+function withFirstObservationMetadata(item = {}) {
+  return {
+    ...item,
+    ...Object.fromEntries(Object.entries(firstObservationMetadata(item)).filter(([, value]) => value != null && value !== "")),
+  };
+}
+
 function normalizeMarketObservationLifecycle(item, checkedAt = nowIso()) {
   if (!item || typeof item !== "object") return item;
   const status = String(item.status || item.selectionStatus || "").trim().toUpperCase();
-  if (status === "ERROR" || status === "RESOLVED") return item;
+  if (status === "ERROR" || status === "RESOLVED") return withFirstObservationMetadata(item);
   const end = Date.parse(item.endDate || "");
-  if (!Number.isFinite(end) || end > Date.now()) return item;
-  return {
+  if (!Number.isFinite(end) || end > Date.now()) return withFirstObservationMetadata(item);
+  return withFirstObservationMetadata({
     ...item,
     status: "RESOLVED",
     selectionStatus: "RESOLVED",
     resolutionStatus: item.resolutionStatus || "PENDING_RESULT",
     resolvedAt: item.resolvedAt || item.closedTime || item.endDate || checkedAt,
     resolvedDetectedAt: item.resolvedDetectedAt || checkedAt,
-  };
+  });
 }
 
 function normalizeMarketScan(input = {}) {
@@ -470,7 +503,8 @@ function normalizeMarketScan(input = {}) {
 
 function mergeMarketObservationLists(primary = [], secondary = [], limit = MARKET_SCAN_MAX_OBSERVATIONS) {
   const byKey = new Map();
-  for (const item of [...secondary, ...primary]) {
+  for (const rawItem of [...secondary, ...primary]) {
+    const item = withFirstObservationMetadata(rawItem);
     const key = marketObservationKey(item);
     if (!key) continue;
     const current = byKey.get(key);
@@ -488,9 +522,18 @@ function mergeMarketObservationLists(primary = [], secondary = [], limit = MARKE
     // A Gamma refresh updates market quotes but cannot prove CLOB executability.
     // Keep the latest live verdict until the next executor check replaces it.
     const executionRevalidation = newerCheckedAt >= olderCheckedAt ? newerVerification : olderVerification;
+    const olderFirst = firstObservationMetadata(older);
+    const newerFirst = firstObservationMetadata(newer);
+    const firstTimes = [olderFirst.firstObservedAt, newerFirst.firstObservedAt]
+      .map((value) => ({ value, time: Date.parse(value || "") || Infinity }))
+      .sort((a, b) => a.time - b.time);
+    const first = firstTimes[0]?.time < Infinity ? (
+      firstTimes[0].value === olderFirst.firstObservedAt ? olderFirst : newerFirst
+    ) : newerFirst;
     byKey.set(key, {
       ...older,
       ...newer,
+      ...first,
       ...(executionRevalidation ? { executionRevalidation } : {}),
     });
   }
@@ -895,6 +938,74 @@ async function refreshStoredEvaluationResolutionStatuses(evaluations = []) {
         resolutionCheckedAt: checkedAt,
         resolutionCheckError: error?.message || String(error || "Unknown resolution sync error"),
       };
+    }
+  }
+  return next;
+}
+
+function marketObservationResolutionSlug(item) {
+  return String(item?.slug || item?.eventSlug || "").trim();
+}
+
+function resolvedMarketObservationFromMarket(item, market, checkedAt = nowIso()) {
+  const outcome = item.firstOutcome || item.outcome;
+  const tokenId = item.firstTokenId || item.tokenId;
+  const outcomeIndex = outcomeIndexForTrade(market, { outcome, tokenId });
+  const prices = parseOutcomePrices(market);
+  const resolvedPrice = outcomeIndex >= 0 ? prices[outcomeIndex] : null;
+  const endDate = correctedEndDate(market.question || item.question, market.endDate || item.endDate || null, item.firstObservedAt || item.observedAt);
+  const ended = Boolean(market.closed) || market.acceptingOrders === false
+    || (Number.isFinite(Date.parse(endDate || "")) && Date.parse(endDate) <= Date.now());
+  if (!ended) {
+    return {
+      ...item,
+      question: market.question || item.question,
+      endDate,
+      marketClosed: typeof market.closed === "boolean" ? market.closed : item.marketClosed ?? null,
+      acceptingOrders: typeof market.acceptingOrders === "boolean" ? market.acceptingOrders : item.acceptingOrders ?? null,
+      resolutionCheckedAt: checkedAt,
+    };
+  }
+  return withFirstObservationMetadata({
+    ...item,
+    question: market.question || item.question,
+    slug: market.slug || item.slug || "",
+    eventSlug: marketEventSlug(market) || item.eventSlug || "",
+    endDate,
+    marketClosed: typeof market.closed === "boolean" ? market.closed : item.marketClosed ?? null,
+    acceptingOrders: typeof market.acceptingOrders === "boolean" ? market.acceptingOrders : item.acceptingOrders ?? null,
+    closedTime: market.closedTime || item.closedTime || null,
+    finalOutcomePrice: market.closed && Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : item.finalOutcomePrice ?? null,
+    resolutionStatus: market.closed && Number.isFinite(resolvedPrice) ? "FINAL_PRICE_AVAILABLE" : (market.acceptingOrders === false ? "NOT_ACCEPTING_ORDERS" : "PENDING_RESULT"),
+    status: "RESOLVED",
+    selectionStatus: "RESOLVED",
+    resolvedAt: item.resolvedAt || market.closedTime || endDate || checkedAt,
+    resolvedDetectedAt: checkedAt,
+    resolutionCheckedAt: checkedAt,
+  });
+}
+
+async function refreshStoredMarketObservationResolutionStatuses(observations = []) {
+  const refreshable = observations
+    .map((item, index) => ({ item, index, slug: marketObservationResolutionSlug(item) }))
+    .filter(({ item, slug }) => {
+      const end = Date.parse(item.endDate || "");
+      const status = String(item.status || item.selectionStatus || "").toUpperCase();
+      const finalAvailable = Number.isFinite(Number(item.finalOutcomePrice));
+      return slug && !finalAvailable && (status === "RESOLVED" || (Number.isFinite(end) && end <= Date.now()));
+    })
+    .sort((a, b) => (Date.parse(a.item.endDate || "") || 0) - (Date.parse(b.item.endDate || "") || 0))
+    .slice(0, Math.max(0, SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT));
+  if (!refreshable.length) return observations;
+
+  const next = [...observations];
+  for (const entry of refreshable) {
+    const checkedAt = nowIso();
+    try {
+      const market = await fetchMarketBySlug(entry.slug);
+      if (market) next[entry.index] = resolvedMarketObservationFromMarket(entry.item, market, checkedAt);
+    } catch {
+      next[entry.index] = { ...entry.item, resolutionCheckedAt: checkedAt };
     }
   }
   return next;
@@ -4681,6 +4792,16 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     feeRate: fees.feeRate,
     marketDataUpdatedAt: observedAt,
     observedAt,
+    firstObservedAt: observedAt,
+    firstMarketProbability: Number(probability.toFixed(4)),
+    firstLiquidity: Number(Number(market.liquidity || 0).toFixed(2)),
+    firstVolume24hr: Number(Number(market.volume24hr || 0).toFixed(2)),
+    firstDaysToResolution: days == null ? null : Number(days.toFixed(2)),
+    firstFeeRate: fees.feeRate,
+    firstOutcome: outcomes[outcomeIndex],
+    firstTokenId: tokenId,
+    firstCategory: risk.category,
+    firstTags: tags,
     source: "polymarket-gamma",
   };
 }
@@ -5009,120 +5130,168 @@ function reportProbability(item, source) {
   return null;
 }
 
-function reportTradeKey(trade) {
-  return [
-    trade.strategyId || "paper",
-    trade.tokenId || trade.id || "",
-    trade.openedAt || trade.date || "",
-  ].join(":");
+function scrapedSimulationProbability(item) {
+  const value = Number(item?.firstMarketProbability ?? item?.marketProbability ?? item?.marketPrice);
+  return Number.isFinite(value) && value > 0 && value < 1 ? value : null;
 }
 
-function closedTradesForCalculation(state) {
-  const rows = [];
-  for (const portfolioState of Object.values(state.paperPortfolios || {})) {
-    for (const trade of portfolioState.trades || []) {
-      if (closedOutcome(trade) == null) continue;
-      rows.push({
-        ...trade,
-        strategyId: trade.strategyId || portfolioState.id,
-        strategyLabel: trade.strategyLabel || portfolioState.label,
-      });
-    }
-  }
-  return mergeUniqueById(rows, reportTradeKey, 5000);
+function scrapedSimulationDays(item) {
+  const value = Number(item?.firstDaysToResolution ?? item?.daysToResolution);
+  return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function tradeSimulationPnl(trade) {
-  const realized = Number(trade.realizedPnlUsdc);
-  if (Number.isFinite(realized)) return realized;
-  const cost = totalCost(trade);
-  const actual = closedOutcome(trade);
-  if (actual == null) return 0;
-  return actual ? Number((Number(trade.shares || 0) - cost).toFixed(4)) : Number((-cost).toFixed(4));
+function scrapedSimulationCategory(item) {
+  const tags = Array.isArray(item?.tags) ? item.tags.filter(Boolean).map(String) : [];
+  return String(item?.firstCategory || item?.riskCategory || tags[0] || "general");
 }
 
-function summarizeTradesForReport(trades) {
-  const stake = trades.reduce((sum, trade) => sum + totalCost(trade), 0);
-  const pnl = trades.reduce((sum, trade) => sum + tradeSimulationPnl(trade), 0);
-  const wins = trades.filter((trade) => closedOutcome(trade) === 1).length;
-  const avgAi = average(trades.map((trade) => Number(trade.aiProbability)).filter(Number.isFinite));
-  const avgPoly = average(trades.map(reportPolymarketProbability).filter(Number.isFinite));
+function scrapedSimulationTags(item) {
+  const tags = Array.isArray(item?.firstTags) && item.firstTags.length
+    ? item.firstTags.filter(Boolean).map(String)
+    : (Array.isArray(item?.tags) ? item.tags.filter(Boolean).map(String) : []);
+  return tags.length ? [...new Set(tags)] : [scrapedSimulationCategory(item)];
+}
+
+function scrapedSimulationOutcome(item) {
+  const value = Number(item?.finalOutcomePrice);
+  return Number.isFinite(value) ? (value >= 0.5 ? 1 : 0) : null;
+}
+
+function scrapedSimulationTrade(item) {
+  const entry = scrapedSimulationProbability(item);
+  if (!Number.isFinite(entry)) return null;
+  const stake = Math.max(0, SCRAPED_SIMULATION_STAKE_USDC);
+  const shares = stake / entry;
+  const feeRate = Math.max(0, Number(item?.firstFeeRate ?? item?.feeRate) || 0);
+  const fee = takerFeeForFills([{ price: entry, size: shares }], feeRate);
+  const total = stake + fee;
+  const outcome = scrapedSimulationOutcome(item);
+  const pnl = outcome == null ? null : (outcome ? shares - total : -total);
   return {
-    trades: trades.length,
-    wins,
-    losses: trades.length - wins,
-    stakeUsdc: Number(stake.toFixed(4)),
-    pnlUsdc: Number(pnl.toFixed(4)),
-    roi: stake > 0 ? Number((pnl / stake).toFixed(4)) : null,
-    winRate: trades.length ? Number((wins / trades.length).toFixed(4)) : null,
-    avgAiProbability: avgAi == null ? null : Number(avgAi.toFixed(4)),
-    avgPolymarketProbability: avgPoly == null ? null : Number(avgPoly.toFixed(4)),
+    item,
+    entry,
+    stake,
+    shares,
+    fee,
+    total,
+    outcome,
+    pnl: Number.isFinite(pnl) ? Number(pnl.toFixed(4)) : null,
+    category: scrapedSimulationCategory(item),
+    tags: scrapedSimulationTags(item),
+    marketType: reportMarketType(item),
+    days: scrapedSimulationDays(item),
+    liquidity: Number(item.firstLiquidity ?? item.liquidity),
+    firstObservedAt: item.firstObservedAt || item.observedAt || null,
   };
 }
 
-function buildCalculationReport(state) {
-  const trades = closedTradesForCalculation(state);
-  const generatedAt = state.generatedAt || nowIso();
-  const portfolioSummaries = Object.values(state.paperPortfolios || {}).map((portfolioState) => {
-    const closed = (portfolioState.trades || []).filter((trade) => closedOutcome(trade) != null);
-    return {
-      strategyId: portfolioState.id,
-      strategyLabel: portfolioState.label,
-      selectionMetric: portfolioState.selectionMetric,
-      minProbability: portfolioState.portfolio?.minProbability ?? portfolioState.minProbability ?? null,
-      maxResolutionDays: strategyMaxResolutionDays(portfolioState),
-      minLiquidityUsdc: portfolioState.portfolio?.minLiquidityUsdc ?? portfolioState.minLiquidityUsdc ?? null,
-      selectionOrder: portfolioState.selectionOrder,
-      ...summarizeTradesForReport(closed),
-    };
-  });
+function summarizeScrapedSimulationRows(rows) {
+  const resolved = rows.filter((row) => row.outcome != null);
+  const wins = resolved.filter((row) => row.outcome === 1).length;
+  const resolvedCost = resolved.reduce((sum, row) => sum + row.total, 0);
+  const deployedCost = rows.reduce((sum, row) => sum + row.total, 0);
+  const pnl = resolved.reduce((sum, row) => sum + Number(row.pnl || 0), 0);
+  const avgProbability = average(rows.map((row) => row.entry));
+  const avgLiquidity = average(rows.map((row) => row.liquidity).filter(Number.isFinite));
+  return {
+    trades: rows.length,
+    resolved: resolved.length,
+    pending: rows.length - resolved.length,
+    wins,
+    losses: resolved.length - wins,
+    stakeUsdc: Number(deployedCost.toFixed(4)),
+    resolvedStakeUsdc: Number(resolvedCost.toFixed(4)),
+    pnlUsdc: Number(pnl.toFixed(4)),
+    roi: resolvedCost > 0 ? Number((pnl / resolvedCost).toFixed(4)) : null,
+    winRate: resolved.length ? Number((wins / resolved.length).toFixed(4)) : null,
+    avgProbability: avgProbability == null ? null : Number(avgProbability.toFixed(4)),
+    avgLiquidity: avgLiquidity == null ? null : Number(avgLiquidity.toFixed(2)),
+  };
+}
 
-  const thresholdSummaries = [];
-  for (const source of ["ai", "polymarket", "combined"]) {
-    for (const marketType of ["binary", "multi"]) {
-      const typedTrades = trades.filter((trade) => reportMarketType(trade) === marketType);
-      for (const threshold of REPORT_THRESHOLDS) {
-        const selected = typedTrades.filter((trade) => {
-          const probability = reportProbability(trade, source);
-          return Number.isFinite(probability) && probability >= threshold;
-        });
-        thresholdSummaries.push({
-          source,
-          marketType,
-          threshold,
-          ...summarizeTradesForReport(selected),
-        });
+function scrapedSimulationParameterRows(trades) {
+  const rows = [];
+  for (const marketType of ["all", "binary", "multi"]) {
+    for (const threshold of REPORT_THRESHOLDS) {
+      for (const maxResolutionDays of SCRAPED_SIMULATION_MAX_DAYS) {
+        for (const minLiquidityUsdc of SCRAPED_SIMULATION_LIQUIDITY_FLOORS) {
+          const selected = trades.filter((trade) => (
+            (marketType === "all" || trade.marketType === marketType)
+            && trade.entry >= threshold
+            && (trade.days == null || trade.days <= maxResolutionDays)
+            && Number.isFinite(trade.liquidity)
+            && trade.liquidity >= minLiquidityUsdc
+          ));
+          rows.push({
+            probabilitySource: "polymarket",
+            marketType,
+            threshold,
+            maxResolutionDays,
+            minLiquidityUsdc,
+            ...summarizeScrapedSimulationRows(selected),
+          });
+        }
       }
     }
   }
+  return rows;
+}
 
+function scrapedSimulationCategoryRows(trades) {
+  const groups = new Map();
+  const add = (kind, label, trade) => {
+    const key = `${kind}:${label}`;
+    if (!groups.has(key)) groups.set(key, { kind, label, trades: [] });
+    groups.get(key).trades.push(trade);
+  };
+  for (const trade of trades) {
+    add("category", trade.category, trade);
+    for (const tag of trade.tags) add("tag", tag, trade);
+  }
+  return [...groups.values()]
+    .map((group) => ({ ...group, ...summarizeScrapedSimulationRows(group.trades) }))
+    .sort((a, b) => (b.resolved - a.resolved) || a.label.localeCompare(b.label));
+}
+
+function buildCalculationReport(state) {
+  const generatedAt = state.generatedAt || nowIso();
+  const trades = (Array.isArray(state.marketObservations) ? state.marketObservations : [])
+    .map(withFirstObservationMetadata)
+    .map(scrapedSimulationTrade)
+    .filter(Boolean);
+  const resolved = trades.filter((trade) => trade.outcome != null);
   return {
     id: `calculation-report-${generatedAt}`,
     generatedAt,
+    simulationType: "fresh_scraped_opportunities",
     sampleSize: trades.length,
-    resolvedBinaryCount: trades.filter((trade) => reportMarketType(trade) === "binary").length,
-    resolvedMultiCount: trades.filter((trade) => reportMarketType(trade) === "multi").length,
+    resolvedSampleSize: resolved.length,
+    pendingSampleSize: trades.length - resolved.length,
+    stakeUsdc: Number(SCRAPED_SIMULATION_STAKE_USDC.toFixed(4)),
+    resolvedBinaryCount: resolved.filter((trade) => trade.marketType === "binary").length,
+    resolvedMultiCount: resolved.filter((trade) => trade.marketType === "multi").length,
     sourceNotes: {
-      ai: "Uses our stored AI probability at evaluation/open time.",
-      polymarket: "Uses the executable Polymarket entry probability for the selected outcome.",
-      combined: "Uses the average of AI and Polymarket probabilities as a neutral blended filter.",
+      probability: "Polymarket probability captured on the first scraped observation; no AI analysis or portfolio filter is used.",
+      execution: `Each fresh scraped opportunity is simulated as an immediate market position with a fixed ${SCRAPED_SIMULATION_STAKE_USDC.toFixed(2)} USDC stake and the stored taker fee schedule.`,
+      resolution: "P/L and accuracy are counted only after the selected outcome has a final Polymarket resolution price.",
     },
-    portfolioSummaries,
-    thresholdSummaries,
+    parameterSummaries: scrapedSimulationParameterRows(trades),
+    categorySummaries: scrapedSimulationCategoryRows(trades),
     examples: trades.slice(0, 80).map((trade) => ({
-      id: trade.id,
-      strategyId: trade.strategyId,
-      strategyLabel: trade.strategyLabel,
-      marketType: reportMarketType(trade),
-      question: trade.question,
-      outcome: trade.outcome,
-      url: `https://polymarket.com/event/${trade.eventSlug || trade.slug || ""}`,
-      resolvedAt: trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || null,
-      status: trade.status,
-      aiProbability: Number.isFinite(Number(trade.aiProbability)) ? Number(Number(trade.aiProbability).toFixed(4)) : null,
-      polymarketProbability: reportPolymarketProbability(trade),
-      pnlUsdc: tradeSimulationPnl(trade),
-      stakeUsdc: totalCost(trade),
+      id: trade.item.id,
+      marketType: trade.marketType,
+      category: trade.category,
+      tags: trade.tags,
+      question: trade.item.question,
+      selectedOutcome: trade.item.firstOutcome || trade.item.outcome,
+      url: `https://polymarket.com/event/${trade.item.eventSlug || trade.item.slug || ""}`,
+      firstObservedAt: trade.firstObservedAt,
+      firstProbability: trade.entry,
+      firstLiquidity: trade.liquidity,
+      daysToResolution: trade.days,
+      finalOutcomePrice: trade.item.finalOutcomePrice ?? null,
+      resolvedOutcome: trade.outcome,
+      pnlUsdc: trade.pnl,
     })),
   };
 }
@@ -5439,6 +5608,7 @@ async function run() {
       lastScanError: error?.message || String(error),
     };
   }
+  state.marketObservations = await refreshStoredMarketObservationResolutionStatuses(state.marketObservations || []);
   recoverLedgerGaps(state);
   for (const portfolioState of Object.values(state.paperPortfolios)) {
     portfolioState.trades = await refreshTrades(portfolioState.trades);
@@ -5454,7 +5624,7 @@ async function run() {
     const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
       strategyId: portfolioState.id,
       action: "REPORT",
-      reason: "nightly resolved-event portfolio replay calculations updated",
+      reason: "nightly fresh-scraped opportunity simulation updated",
     }));
     recordRun(state, {
       decisions,
@@ -5464,7 +5634,7 @@ async function run() {
     await writeState(state);
     console.log(JSON.stringify({
       action: "REPORT",
-      reason: "nightly resolved-event portfolio replay calculations updated",
+      reason: "nightly fresh-scraped opportunity simulation updated",
       sampleSize: state.latestCalculationReport?.sampleSize || 0,
       strategies: decisions.map((decision) => decision.strategyId),
     }, null, 2));

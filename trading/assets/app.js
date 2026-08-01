@@ -5918,24 +5918,26 @@ function calculationMarketLabel(type) {
 }
 
 function calculationRows(report) {
-  const rows = Array.isArray(report?.thresholdSummaries) ? report.thresholdSummaries : [];
+  const rows = Array.isArray(report?.parameterSummaries) ? report.parameterSummaries : [];
   const filtered = rows.filter((row) => {
-    const sourceOk = state.calculationSource === "all" || row.source === state.calculationSource;
-    const marketOk = state.calculationMarket === "all" || row.marketType === state.calculationMarket;
-    return sourceOk && marketOk;
+    if (state.calculationMarket === "all") return true;
+    return row.marketType === state.calculationMarket;
   });
   return sortedCalculationRows(filtered);
 }
 
 function calculationSortValue(row, key) {
-  if (key === "source") return calculationSourceLabel(row.source).toLowerCase();
   if (key === "marketType") return calculationMarketLabel(row.marketType).toLowerCase();
   if (key === "threshold") return Number(row.threshold);
+  if (key === "maxResolutionDays") return Number(row.maxResolutionDays);
+  if (key === "minLiquidityUsdc") return Number(row.minLiquidityUsdc);
   if (key === "trades") return Number(row.trades || 0);
+  if (key === "resolved") return Number(row.resolved || 0);
   if (key === "accuracy") return Number(row.winRate);
   if (key === "pnl") return Number(row.pnlUsdc || 0);
   if (key === "roi") return Number(row.roi);
-  if (key === "avgProbability") return Number(row.avgAiProbability);
+  if (key === "avgProbability") return Number(row.avgProbability);
+  if (key === "avgLiquidity") return Number(row.avgLiquidity);
   return "";
 }
 
@@ -5973,8 +5975,10 @@ function renderCalculationReport() {
   }
 
   const rows = calculationRows(report);
-  const portfolios = Array.isArray(report.portfolioSummaries) ? report.portfolioSummaries : [];
+  const categories = Array.isArray(report.categorySummaries) ? report.categorySummaries : [];
   const sample = Number(report.sampleSize || 0);
+  const resolvedSample = Number(report.resolvedSampleSize || 0);
+  const pendingSample = Number(report.pendingSampleSize || Math.max(0, sample - resolvedSample));
   const binary = Number(report.resolvedBinaryCount || 0);
   const multi = Number(report.resolvedMultiCount || 0);
 
@@ -5983,72 +5987,86 @@ function renderCalculationReport() {
       <div>
         <span class="label">Last calculation</span>
         <strong>${escapeHtml(report.generatedAt ? formatDate(report.generatedAt) : "-")}</strong>
-        <span>night report mode / ${sample} resolved evaluated trades</span>
+        <span>${sample} fresh scraped opportunities / ${resolvedSample} resolved / ${pendingSample} pending</span>
       </div>
       <div>
-        <span class="label">Market split</span>
-        <strong>${binary} Yes/No / ${multi} multi</strong>
-        <span>filters below do not recalculate, they select report rows</span>
+        <span class="label">Simulation scope</span>
+        <strong>${money(Number(report.stakeUsdc || 0))} fixed stake</strong>
+        <span>first Polymarket probability and liquidity / ${binary} resolved Yes/No / ${multi} multi-outcome / market entry with fees</span>
       </div>
     </div>
     <div class="calculation-section">
-      <h3>Portfolio settings replay</h3>
+      <h3>Best parameter combinations</h3>
+      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests threshold, resolution horizon and minimum liquidity directly on every scraped opportunity.</p>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
             <tr>
-              <th>Portfolio</th>
-              <th>Rule</th>
+              ${calculationHeader("threshold", "Threshold")}
+              ${calculationHeader("marketType", "Market type")}
+              ${calculationHeader("maxResolutionDays", "Max days")}
+              ${calculationHeader("minLiquidityUsdc", "Min liquidity")}
               <th>Trades</th>
+              <th>Resolved</th>
               <th>Accuracy</th>
               <th>P/L</th>
               <th>ROI</th>
+              <th>Avg entry</th>
+              <th>Avg liquidity</th>
             </tr>
           </thead>
           <tbody>
-            ${portfolios.length ? portfolios.map((row) => `
+            ${rows.length ? rows.slice(0, 80).map((row) => `
               <tr>
-                <td><strong>${escapeHtml(row.strategyLabel || row.strategyId || "-")}</strong></td>
-                <td>${escapeHtml(row.selectionMetric || row.selectionOrder || "-")} / ${probability(Number(row.minProbability))}</td>
+                <td>${probability(Number(row.threshold))}</td>
+                <td>${escapeHtml(calculationMarketLabel(row.marketType))}</td>
+                <td>${Number(row.maxResolutionDays || 0)} d</td>
+                <td>${row.minLiquidityUsdc > 0 ? money(Number(row.minLiquidityUsdc)) : "All"}</td>
                 <td>${Number(row.trades || 0)}</td>
-                <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td>${Number(row.resolved || 0)} / ${Number(row.pending || 0)} pending</td>
+                <td>${Number(row.resolved || 0) ? `${Number(row.wins || 0)} / ${Number(row.resolved || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
+                <td>${probability(Number(row.avgProbability))}</td>
+                <td>${Number.isFinite(Number(row.avgLiquidity)) ? money(Number(row.avgLiquidity)) : "-"}</td>
               </tr>
-            `).join("") : '<tr><td colspan="6">No closed trades available for portfolio replay yet.</td></tr>'}
+            `).join("") : '<tr><td colspan="11">No scraped opportunity simulation is available yet.</td></tr>'}
           </tbody>
         </table>
       </div>
     </div>
     <div class="calculation-section">
-      <h3>Probability threshold simulation</h3>
+      <h3>Category and tag performance</h3>
+      <p class="calculation-note">Each opportunity contributes to its inferred category and each available tag. Pending resolutions are shown separately and do not distort realized accuracy or ROI.</p>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
             <tr>
-              ${calculationHeader("source", "Probability source")}
-              ${calculationHeader("marketType", "Market type")}
-              ${calculationHeader("threshold", "Threshold")}
-              ${calculationHeader("trades", "Trades")}
-              ${calculationHeader("accuracy", "Accuracy")}
-              ${calculationHeader("pnl", "P/L")}
-              ${calculationHeader("roi", "ROI")}
-              ${calculationHeader("avgProbability", "Avg AI / PM")}
+              <th>Type</th>
+              <th>Category / tag</th>
+              <th>Trades</th>
+              <th>Resolved</th>
+              <th>Accuracy</th>
+              <th>P/L</th>
+              <th>ROI</th>
+              <th>Avg entry</th>
+              <th>Avg liquidity</th>
             </tr>
           </thead>
           <tbody>
-            ${rows.length ? rows.map((row) => `
+            ${categories.length ? categories.map((row) => `
               <tr>
-                <td>${escapeHtml(calculationSourceLabel(row.source))}</td>
-                <td>${escapeHtml(calculationMarketLabel(row.marketType))}</td>
-                <td>${probability(Number(row.threshold))}</td>
+                <td>${escapeHtml(row.kind || "-")}</td>
+                <td><strong>${escapeHtml(row.label || "-")}</strong></td>
                 <td>${Number(row.trades || 0)}</td>
-                <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td>${Number(row.resolved || 0)} / ${Number(row.pending || 0)} pending</td>
+                <td>${Number(row.resolved || 0) ? `${Number(row.wins || 0)} / ${Number(row.resolved || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
-                <td>${probability(Number(row.avgAiProbability))} / ${probability(Number(row.avgPolymarketProbability))}</td>
+                <td>${probability(Number(row.avgProbability))}</td>
+                <td>${Number.isFinite(Number(row.avgLiquidity)) ? money(Number(row.avgLiquidity)) : "-"}</td>
               </tr>
-            `).join("") : '<tr><td colspan="8">No rows match the current report filters.</td></tr>'}
+            `).join("") : '<tr><td colspan="9">No category or tag statistics are available yet.</td></tr>'}
           </tbody>
         </table>
       </div>
