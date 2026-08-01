@@ -5840,6 +5840,12 @@ function runDecisionSummary(run = {}) {
   return [humanRunReason(run), selectedText, countParts, runCapitalNote(run)].filter(Boolean).join(" / ");
 }
 
+function portfolioRunSource(run = {}) {
+  const source = String(run.runSource || run.triggerSource || run.executionSource || "").trim().toUpperCase();
+  if (source === "MANUAL" || run.manualRunOnce === true || run.batchLog?.manualRunOnce === true) return "MANUAL";
+  return "AUTO";
+}
+
 function portfolioRunDetail(run = {}) {
   const batch = run.batchLog || run;
   const base = tradeBatchDetail(batch);
@@ -5894,6 +5900,7 @@ function renderRunLog() {
           <button class="trade-batch portfolio-run-row" type="button" data-portfolio-run="${index}">
             <span class="${runActionClass(run.action || batch.action)}">${escapeHtml(run.action || batch.action || "-")}</span>
             <strong>${escapeHtml(run.runAt || run.generatedAt ? formatDate(run.runAt || run.generatedAt) : "-")}</strong>
+            <span class="portfolio-run-source">${portfolioRunSource(run)}</span>
             <span>${escapeHtml(runDecisionSummary(run))}</span>
             <em>${escapeHtml(run.strategyLabel || batch.strategyLabel || run.strategyId || "-")}</em>
           </button>

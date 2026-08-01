@@ -1660,7 +1660,7 @@ body.modal-open {
 
 .trade-batch {
   display: grid;
-  grid-template-columns: minmax(80px, 0.6fr) minmax(120px, 0.8fr) minmax(0, 2fr) minmax(160px, 1fr);
+  grid-template-columns: minmax(80px, 0.6fr) minmax(120px, 0.8fr) minmax(68px, 0.45fr) minmax(0, 2fr) minmax(160px, 1fr);
   gap: 10px;
   align-items: start;
   width: 100%;
@@ -1691,6 +1691,13 @@ body.modal-open {
   color: var(--muted);
   font-style: normal;
   font-size: 12px;
+}
+
+.portfolio-run-source {
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.02em;
 }
 
 .run-event {
@@ -2160,7 +2167,7 @@ body.modal-open {
   }
 
   .run-log-scroll > .portfolio-run-list .trade-batch {
-    grid-template-columns: minmax(80px, 0.6fr) minmax(120px, 0.8fr) minmax(0, 2fr) minmax(160px, 1fr);
+    grid-template-columns: minmax(80px, 0.6fr) minmax(120px, 0.8fr) minmax(68px, 0.45fr) minmax(0, 2fr) minmax(160px, 1fr);
   }
 
   .run-counts {

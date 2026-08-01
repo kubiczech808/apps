@@ -5357,6 +5357,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
   const eligibleCount = Number.isFinite(portfolioEligibleCount) ? portfolioEligibleCount : eligible.length;
   portfolioState.lastDecision = {
     runAt,
+    runSource: MANUAL_RUN_ONCE ? "MANUAL" : "AUTO",
     strategyId: portfolioState.id,
     strategyLabel: portfolioState.label,
     selectionMetric: portfolioState.selectionMetric,
@@ -5382,6 +5383,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
   portfolioState.runLog = [
     {
       runAt,
+      runSource: MANUAL_RUN_ONCE ? "MANUAL" : "AUTO",
       strategyId: portfolioState.id,
       strategyLabel: portfolioState.label,
       selectionMetric: portfolioState.selectionMetric,
