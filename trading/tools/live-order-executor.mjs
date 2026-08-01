@@ -699,23 +699,29 @@ function compareShorterHorizon(a, b) {
   return Number.isFinite(delta) ? delta : 0;
 }
 
+// The portfolio's selection rule is the source of truth for every replacement
+// decision as well as for the initial shortlist.  Do not compare an open order
+// by absolute dollar EV when the portfolio is ranked by annualized return (or
+// R/R): that can replace a better-ranked order with a lower-ranked one.
+function compareLiveCandidatePriority(a, b) {
+  if (SELECTION_ORDER === "highest_reward_risk_first") {
+    const aRatio = Number(a?.riskReward || 0);
+    const bRatio = Number(b?.riskReward || 0);
+    if (bRatio !== aRatio) return bRatio - aRatio;
+  }
+  const aAnnualized = selectedAnnualizedReturn(a) ?? -Infinity;
+  const bAnnualized = selectedAnnualizedReturn(b) ?? -Infinity;
+  if (bAnnualized !== aAnnualized) return bAnnualized - aAnnualized;
+  const horizon = compareShorterHorizon(a, b);
+  if (horizon !== 0) return horizon;
+  return (selectedExpectedValue(b) ?? -Infinity) - (selectedExpectedValue(a) ?? -Infinity);
+}
+
 function sortLiveEligibleCandidates(rows = []) {
   return [...rows]
     .filter((item) => Number.isFinite(selectedAnnualizedReturn(item)) && selectedAnnualizedReturn(item) > 0)
     .filter((item) => Number.isFinite(selectedExpectedValue(item)) && selectedExpectedValue(item) > 0)
-    .sort((a, b) => {
-      if (SELECTION_ORDER === "highest_reward_risk_first") {
-        const aRatio = Number(a.riskReward || 0);
-        const bRatio = Number(b.riskReward || 0);
-        if (bRatio !== aRatio) return bRatio - aRatio;
-      }
-      const aAnnualized = selectedAnnualizedReturn(a) ?? -Infinity;
-      const bAnnualized = selectedAnnualizedReturn(b) ?? -Infinity;
-      if (bAnnualized !== aAnnualized) return bAnnualized - aAnnualized;
-      const horizon = compareShorterHorizon(a, b);
-      if (horizon !== 0) return horizon;
-      return (selectedExpectedValue(b) ?? -Infinity) - (selectedExpectedValue(a) ?? -Infinity);
-    });
+    .sort(compareLiveCandidatePriority);
 }
 
 function openOrderAgeHours(order) {
@@ -1668,6 +1674,39 @@ function openOrderSummary(order, extra = {}) {
   };
 }
 
+function selectionComparison(current, replacement) {
+  const metricLabel = SELECTION_ORDER === "highest_reward_risk_first" ? "R/R" : returnMetricLabel();
+  const currentMetric = SELECTION_ORDER === "highest_reward_risk_first"
+    ? number(current?.riskReward)
+    : selectedAnnualizedReturn(current);
+  const replacementMetric = SELECTION_ORDER === "highest_reward_risk_first"
+    ? number(replacement?.riskReward)
+    : selectedAnnualizedReturn(replacement);
+  const currentExpectedValue = selectedExpectedValue(current);
+  const replacementExpectedValue = selectedExpectedValue(replacement);
+  return {
+    metricLabel,
+    currentMetric,
+    replacementMetric,
+    metricDelta: Number.isFinite(currentMetric) && Number.isFinite(replacementMetric)
+      ? replacementMetric - currentMetric
+      : null,
+    currentExpectedValue,
+    replacementExpectedValue,
+    expectedValueDelta: Number.isFinite(currentExpectedValue) && Number.isFinite(replacementExpectedValue)
+      ? replacementExpectedValue - currentExpectedValue
+      : null,
+    replacementRanksAhead: compareLiveCandidatePriority(replacement, current) < 0,
+  };
+}
+
+function selectionMetricDisplay(comparison, value) {
+  if (!Number.isFinite(value)) return "-";
+  return comparison?.metricLabel === "R/R"
+    ? `${Number(value).toFixed(2)}:1`
+    : `${(Number(value) * 100).toFixed(1)}%`;
+}
+
 async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, maxNotional, tradingConfig }) {
   const openOrders = Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
   const reviews = [];
@@ -1722,7 +1761,13 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
         );
         review.currentEvaluation = liveBatchCandidateSummary(revalidated);
         const bestOther = eligible.find((candidate) => String(candidate.tokenId || "") !== tokenId) || null;
-        const betterCandidate = bestOther && Number(bestOther.expectedValueUsdc || 0) > Number(revalidated.expectedValueUsdc || 0) + OPEN_ORDER_BETTER_CANDIDATE_EV_USDC
+        const comparison = bestOther ? selectionComparison(revalidated, bestOther) : null;
+        // A replacement must rank ahead under the configured portfolio rule.
+        // Absolute EV is only a safety margin after that check; it must never
+        // override EV p.a./Potential p.a. (or R/R) ordering.
+        const betterCandidate = bestOther
+          && comparison?.replacementRanksAhead
+          && Number(comparison.expectedValueDelta || 0) >= OPEN_ORDER_BETTER_CANDIDATE_EV_USDC
           ? bestOther
           : null;
         const betterCandidateCost = number(betterCandidate?.totalCostUsdc ?? betterCandidate?.orderNotionalUsdc);
@@ -1733,6 +1778,7 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
         const newPrice = number(revalidated.orderPrice);
         const priceDelta = Number.isFinite(orderPrice) && Number.isFinite(newPrice) ? newPrice - orderPrice : 0;
         review.betterCandidate = betterCandidate ? liveBatchCandidateSummary(betterCandidate) : null;
+        review.selectionComparison = comparison;
         review.priceDelta = Number(priceDelta.toFixed(4));
 
         if (revalidated.status !== "ELIGIBLE") {
@@ -1740,11 +1786,13 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
           review.reason = `current revalidation no longer satisfies live rules: ${(revalidated.rejectReasons || []).join("; ") || "not eligible"}`;
         } else if (betterCandidate && betterCandidateNeedsReleasedCapital) {
           review.action = "CANCEL_FOR_BETTER_CANDIDATE";
-          review.reason = `a better candidate exceeds this order by at least ${OPEN_ORDER_BETTER_CANDIDATE_EV_USDC.toFixed(2)} USDC expected value and needs this order's locked capital`;
+          review.reason = `${comparison.metricLabel} priority supports replacement (${comparison.metricLabel} ${selectionMetricDisplay(comparison, comparison.currentMetric)} -> ${selectionMetricDisplay(comparison, comparison.replacementMetric)}, ${comparison.metricDelta >= 0 ? "+" : ""}${selectionMetricDisplay(comparison, comparison.metricDelta)}); expected value ${Number(comparison.currentExpectedValue).toFixed(4)} -> ${Number(comparison.replacementExpectedValue).toFixed(4)} USDC, so the replacement needs this order's locked capital`;
         } else if (betterCandidate) {
           review.reason = betterCandidateCost != null
-            ? `a better candidate exists, but ${number(cash, 0).toFixed(4)} USDC free cash already covers its ${betterCandidateCost.toFixed(4)} USDC cost; keep this independent order open`
-            : "a better candidate exists without a current executable order cost; keep this independent order open";
+            ? `${comparison.metricLabel} priority supports replacement, but ${number(cash, 0).toFixed(4)} USDC free cash already covers its ${betterCandidateCost.toFixed(4)} USDC cost; keep this independent order open (${comparison.metricLabel} ${selectionMetricDisplay(comparison, comparison.currentMetric)} -> ${selectionMetricDisplay(comparison, comparison.replacementMetric)})`
+            : `${comparison.metricLabel} priority supports replacement, but the candidate has no current executable order cost; keep this independent order open`;
+        } else if (comparison && !comparison.replacementRanksAhead && comparison.expectedValueDelta > OPEN_ORDER_BETTER_CANDIDATE_EV_USDC) {
+          review.reason = `a candidate has higher absolute expected value (${Number(comparison.currentExpectedValue).toFixed(4)} -> ${Number(comparison.replacementExpectedValue).toFixed(4)} USDC) but ranks lower by ${comparison.metricLabel} (${selectionMetricDisplay(comparison, comparison.currentMetric)} vs ${selectionMetricDisplay(comparison, comparison.replacementMetric)}); keep the current order`;
         } else if (ageHours >= OPEN_ORDER_REVIEW_AFTER_HOURS && Math.abs(priceDelta) >= OPEN_ORDER_REPRICE_THRESHOLD) {
           review.action = "REPLACE";
           review.reason = priceDelta > 0

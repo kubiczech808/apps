@@ -5257,6 +5257,15 @@ function tradeBatchDetail(batch) {
     item.daysToResolution != null ? `resolution ${Number(item.daysToResolution).toFixed(2)}d` : "",
     item.liquidity != null ? `liquidity ${money(Number(item.liquidity))}` : "",
   ].filter(Boolean).join(" / ");
+  const comparisonMetricLine = (comparison) => {
+    if (!comparison) return "";
+    const metric = String(comparison.metricLabel || "EV p.a.");
+    const display = (value) => metric === "R/R"
+      ? riskReward(Number(value))
+      : signedPercent(Number(value));
+    const delta = comparison.metricDelta == null ? "-" : `${comparison.metricDelta >= 0 ? "+" : ""}${display(comparison.metricDelta)}`;
+    return `${metric}: ${display(comparison.currentMetric)} -> ${display(comparison.replacementMetric)} (${delta}); expected value ${signedMoney(Number(comparison.currentExpectedValue), 4)} -> ${signedMoney(Number(comparison.replacementExpectedValue), 4)} (${comparison.replacementRanksAhead ? "replacement ranks ahead" : "current order ranks ahead"})`;
+  };
   const filterReasonLines = portfolioFilter.reasonCounts && typeof portfolioFilter.reasonCounts === "object"
     ? Object.entries(portfolioFilter.reasonCounts)
         .sort((a, b) => Number(b[1]) - Number(a[1]))
@@ -5323,6 +5332,7 @@ function tradeBatchDetail(batch) {
         `${index + 1}. ${item.action || "-"} / ${item.outcome || "-"} / ${item.question || item.tokenId || "-"}`,
         `   Order: ${item.orderId || "-"} / price ${probability(Number(item.price))} / remaining ${Number(item.remainingSize || 0).toLocaleString("en-US", { maximumFractionDigits: 4 })} / age ${Number(item.ageHours || 0).toFixed(1)}h`,
         item.priceDelta != null ? `   Reprice delta: ${(Number(item.priceDelta) * 100).toFixed(1)} pts` : "",
+        item.selectionComparison ? `   Priority comparison: ${comparisonMetricLine(item.selectionComparison)}` : "",
         `   Reason: ${item.reason || "-"}`,
         item.betterCandidate ? `   Better candidate: ${item.betterCandidate.outcome || "-"} - ${item.betterCandidate.question || "-"} / EV ${signedMoney(Number(item.betterCandidate.expectedValueUsdc), 4)}` : "",
         item.cancelResponse ? `   Cancel response: ${JSON.stringify(item.cancelResponse).slice(0, 240)}` : "",
@@ -5390,6 +5400,9 @@ function tradeBatchDetail(batch) {
     `Run time: ${batch.runAt ? formatDate(batch.runAt) : "-"}`,
     `Action: ${batch.action || "-"}`,
     `Reason: ${batch.reason || "-"}`,
+    openOrderReviews.find((item) => item.selectionComparison)?.selectionComparison
+      ? `Decision comparison: ${comparisonMetricLine(openOrderReviews.find((item) => item.selectionComparison).selectionComparison)}`
+      : "",
     `Explanation: ${batch.explanation || "-"}`,
     "",
     `Rules:`,
