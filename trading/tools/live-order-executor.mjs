@@ -520,6 +520,19 @@ function marketProbabilityRoundsToCertain(item = {}) {
   return marketProbability != null && marketProbability >= EFFECTIVELY_CERTAIN_MARKET_PROBABILITY;
 }
 
+function binaryOutcomeQuotesAreBothZero(item = {}) {
+  const hasBinaryMetadata = Boolean(item?.binaryYesTokenId || item?.binaryNoTokenId)
+    || String(item?.marketType || "").toLowerCase() === "binary"
+    || Number(item?.outcomeCount) === 2;
+  if (!hasBinaryMetadata) return false;
+  const yesRaw = item?.binaryYesMarketProbability;
+  const noRaw = item?.binaryNoMarketProbability;
+  if (yesRaw == null || noRaw == null || yesRaw === "" || noRaw === "") return false;
+  const yes = number(yesRaw);
+  const no = number(noRaw);
+  return yes === 0 && no === 0;
+}
+
 function prefilterLiveCandidate(item) {
   const reasons = [];
   const tokenId = String(item?.tokenId || "");
@@ -543,6 +556,7 @@ function prefilterLiveCandidate(item) {
     reasons.push("stored market is already closed/resolved");
   }
   if (item?.acceptingOrders === false) reasons.push("stored market is not accepting orders");
+  if (binaryOutcomeQuotesAreBothZero(item)) reasons.push("stored binary YES/NO quotes are both 0%; market appears resolved");
   if (hasStaleBinarySideQuote(item)) {
     reasons.push("stored binary side quote is stale; waiting for a refreshed selected-token quote");
   }

@@ -3150,6 +3150,7 @@ function portfolioFilterResult(item, strategy) {
   const annualizedReturn = economics.annualizedReturn;
   const returnMetric = probabilitySource === "polymarket" ? "Potential p.a." : "EV p.a.";
 
+  if (binaryOutcomeQuotesAreBothZero(item)) reasons.push("binary YES/NO quotes are both 0%; market appears resolved");
   if (strategy.excludedCandidateTokenIds?.has(tokenId)) reasons.push("manually excluded from this paper portfolio");
   if (probabilitySource === "ai" && status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
   if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
@@ -4408,12 +4409,35 @@ function validMarketProbability(value) {
   return Number.isFinite(numeric) && numeric > 0 && numeric < 1 ? numeric : null;
 }
 
+function binaryOutcomeQuotesAreBothZero(item = {}) {
+  const hasBinaryMetadata = Boolean(item?.binaryYesTokenId || item?.binaryNoTokenId)
+    || String(item?.marketType || "").toLowerCase() === "binary"
+    || Number(item?.outcomeCount) === 2;
+  if (!hasBinaryMetadata) return false;
+  const yesRaw = item?.binaryYesMarketProbability;
+  const noRaw = item?.binaryNoMarketProbability;
+  if (yesRaw == null || noRaw == null || yesRaw === "" || noRaw === "") return false;
+  const yes = Number(yesRaw);
+  const no = Number(noRaw);
+  return Number.isFinite(yes) && Number.isFinite(no) && yes === 0 && no === 0;
+}
+
 function annualizedPotentialReturn(netYield, days) {
   if (!Number.isFinite(netYield)) return null;
   return Number.isFinite(days) && days > 0 ? netYield * (365 / days) : netYield;
 }
 
 function normalizeMarketObservationEconomics(observation) {
+  if (binaryOutcomeQuotesAreBothZero(observation)) {
+    return {
+      ...observation,
+      status: "RESOLVED",
+      selectionStatus: "RESOLVED",
+      resolutionStatus: observation.resolutionStatus || "PENDING_RESULT",
+      resolvedAt: observation.resolvedAt || observation.endDate || nowIso(),
+      resolvedDetectedAt: observation.resolvedDetectedAt || nowIso(),
+    };
+  }
   const price = validMarketProbability(observation?.marketPrice ?? observation?.marketProbability);
   const probability = validMarketProbability(observation?.marketProbability);
   const stake = Number(observation?.stakeUsdc);

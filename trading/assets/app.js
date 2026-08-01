@@ -1186,6 +1186,7 @@ function evaluationDaysLeft(item) {
 function evaluationResolvedByMarket(item) {
   const status = String(item?.status || "").trim().toUpperCase();
   if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) return true;
+  if (binaryOutcomeQuotesAreBothZero(item)) return true;
   const resolutionStatus = String(item?.resolutionStatus || item?.umaResolutionStatus || "").trim().toUpperCase();
   if (["RESOLVED", "CLOSED", "FINAL", "FINALIZED", "SETTLED", "FINAL_PRICE_AVAILABLE", "NOT_ACCEPTING_ORDERS", "PENDING_RESULT"].includes(resolutionStatus)) {
     return true;
@@ -1194,6 +1195,19 @@ function evaluationResolvedByMarket(item) {
   if (item?.acceptingOrders === false) return true;
   const resolvedAt = Date.parse(item?.resolvedAt || item?.closedTime || item?.closedAt || item?.resolutionTime || "");
   return Number.isFinite(resolvedAt) && resolvedAt <= Date.now();
+}
+
+function binaryOutcomeQuotesAreBothZero(item) {
+  const hasBinaryMetadata = Boolean(item?.binaryYesTokenId || item?.binaryNoTokenId)
+    || String(item?.marketType || "").toLowerCase() === "binary"
+    || Number(item?.outcomeCount) === 2;
+  if (!hasBinaryMetadata) return false;
+  const yesRaw = item?.binaryYesMarketProbability;
+  const noRaw = item?.binaryNoMarketProbability;
+  if (yesRaw == null || noRaw == null || yesRaw === "" || noRaw === "") return false;
+  const yes = Number(yesRaw);
+  const no = Number(noRaw);
+  return Number.isFinite(yes) && Number.isFinite(no) && yes === 0 && no === 0;
 }
 
 function evaluationEnded(item) {
@@ -5012,9 +5026,12 @@ function scrapedRefreshControl(item) {
 }
 
 function binaryMarketProbabilityCell(item) {
+  const hasYes = item?.binaryYesMarketProbability != null && item.binaryYesMarketProbability !== "";
+  const hasNo = item?.binaryNoMarketProbability != null && item.binaryNoMarketProbability !== "";
+  if (!hasYes && !hasNo) return "-";
   const yes = Number(item.binaryYesMarketProbability);
   const no = Number(item.binaryNoMarketProbability);
-  if (!Number.isFinite(yes) && !Number.isFinite(no)) return "-";
+  if (!Number.isFinite(yes) || !Number.isFinite(no)) return "-";
   return `<span>Yes ${probability(yes)} / No ${probability(no)}</span>`;
 }
 
