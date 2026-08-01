@@ -535,18 +535,28 @@ async function setPortfolioCandidateExcluded(mode, tokenId, excluded) {
 }
 
 function storedLiveExecutionArmed() {
-  try {
-    return localStorage.getItem(LIVE_EXECUTION_STORAGE_KEY) === "true";
-  } catch {
-    return false;
+  for (const storageName of ["localStorage", "sessionStorage"]) {
+    try {
+      const storage = window[storageName];
+      const value = storage.getItem(LIVE_EXECUTION_STORAGE_KEY);
+      if (value === "true") return true;
+      if (value === "false") return false;
+    } catch {
+      // Continue with the next browser storage fallback.
+    }
   }
+  return false;
 }
 
 function saveLiveExecutionArmed(value) {
-  try {
-    localStorage.setItem(LIVE_EXECUTION_STORAGE_KEY, value ? "true" : "false");
-  } catch {
-    // Ignore localStorage failures; the guard still works for this page load.
+  const serialized = value ? "true" : "false";
+  for (const storageName of ["localStorage", "sessionStorage"]) {
+    try {
+      const storage = window[storageName];
+      storage.setItem(LIVE_EXECUTION_STORAGE_KEY, serialized);
+    } catch {
+      // A restricted mobile browser may reject one storage area; keep trying.
+    }
   }
 }
 
@@ -896,6 +906,20 @@ function syncLiveActivationUi() {
   els.liveActivation.classList.toggle("armed", state.liveExecutionArmed);
   els.liveActivation.setAttribute("aria-pressed", state.liveExecutionArmed ? "true" : "false");
   els.liveActivation.textContent = state.liveExecutionArmed ? "Live execution armed" : "Activate live execution";
+  els.liveActivation.title = state.liveExecutionArmed
+    ? "Live one-time execution is enabled on this browser. Tap to disable it."
+    : "Enable the live one-time execution gate on this browser.";
+}
+
+function toggleLiveExecutionGate() {
+  state.liveExecutionArmed = !state.liveExecutionArmed;
+  saveLiveExecutionArmed(state.liveExecutionArmed);
+  syncLiveActivationUi();
+  if (isLiveMode() && state.liveState) renderLiveState(state.liveState);
+  setExecutionStatus(
+    state.liveExecutionArmed ? "live execution gate activated on this browser" : "live execution gate deactivated",
+    state.liveExecutionArmed ? "" : "error",
+  );
 }
 
 function syncModeUi() {
@@ -6009,15 +6033,18 @@ els.modeButtons.forEach((button) => {
   });
 });
 
-els.liveActivation?.addEventListener("click", () => {
-  if (!state.liveExecutionArmed) {
-    const confirmed = window.confirm("Activate the live execution gate for this browser? Live one-time execution can submit real Polymarket orders after preflight checks.");
-    if (!confirmed) return;
-  }
-  state.liveExecutionArmed = !state.liveExecutionArmed;
-  saveLiveExecutionArmed(state.liveExecutionArmed);
-  syncLiveActivationUi();
-  if (isLiveMode() && state.liveState) renderLiveState(state.liveState);
+els.liveActivation?.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleLiveExecutionGate();
+});
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-live-activation]");
+  if (!button || button === els.liveActivation) return;
+  event.preventDefault();
+  event.stopPropagation();
+  toggleLiveExecutionGate();
 });
 
 els.executionButtons.forEach((button) => {
