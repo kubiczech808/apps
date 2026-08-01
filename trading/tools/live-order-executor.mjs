@@ -1950,7 +1950,12 @@ async function main() {
     : null;
   const activeSellOrders = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
     .filter((order) => String(order.side || "").toUpperCase().includes("SELL"));
-  const orderManagement = manualShortlistStale || activeSellOrders.length
+  const best = eligible[0] || null;
+  const replacementDue = rotationReplacementDue(previousExecution, liveState);
+  // Use free cash for a direct candidate before touching existing orders or
+  // positions. An unrelated buy is allowed while a sell order is pending.
+  const directCapitalPriority = Boolean(best && (!monitoring.cadenceBlocked || replacementDue));
+  const orderManagement = manualShortlistStale || activeSellOrders.length || directCapitalPriority
     ? { action: "NONE", reviews: [] }
     : await reviewOpenOrders({
         liveState,
@@ -1961,20 +1966,20 @@ async function main() {
         tradingConfig,
       });
 
-  const best = eligible[0] || null;
   // A cancelled buy order releases capital immediately. Continue with the same
   // revalidated shortlist instead of leaving the portfolio idle until the next run.
   const canceledForBetterCandidate = orderManagement.action === "CANCELED_FOR_BETTER_CANDIDATE";
   const appliedDirectStake = best?.totalCostUsdc != null
     ? number(best.totalCostUsdc, 0)
     : Math.min(maxNotional, Math.max(0, cash));
-  const replacementDue = rotationReplacementDue(previousExecution, liveState);
   // Replacing an order that this run just cancelled is order management, not an
   // additional portfolio allocation. Do not strand its released capital behind
   // the new-trade cadence.
   const cadenceBlocked = Boolean(monitoring.cadenceBlocked) && !replacementDue && !canceledForBetterCandidate;
   const rotationAvailable = rotationReview?.action === "ROTATION_AVAILABLE";
-  const actionReason = activeSellOrders.length
+  const actionReason = directCapitalPriority
+    ? "free capital prioritized: best direct candidate is submitted before order or position rotation"
+    : activeSellOrders.length
     ? "waiting for an existing live sell order to reduce position exposure before any replacement buy"
     : (rotationAvailable && LIVE_AUTO_ROTATE
       ? (needsRiskReplacement
@@ -1989,7 +1994,9 @@ async function main() {
             : (capitalSizingBlocked.length
                 ? `live candidates blocked by available USDC: ${capitalSizingBlocked.length} cannot meet the current Polymarket minimum order size`
                 : "no currently executable candidate after live revalidation")))));
-  const actionExplanation = activeSellOrders.length
+  const actionExplanation = directCapitalPriority
+    ? "A currently executable candidate has available free capital. The batch submits it first; existing orders and positions are considered for rotation only when no direct allocation is possible."
+    : activeSellOrders.length
     ? "A live sell order is open. The system waits for account sync to confirm the exit before it can revalidate and place a replacement buy."
     : (rotationAvailable && LIVE_AUTO_ROTATE
       ? (needsRiskReplacement
@@ -2044,6 +2051,7 @@ async function main() {
       oneTradePerDay: ONE_TRADE_PER_DAY,
       tradeCadenceHours: TRADE_CADENCE_HOURS,
       ignoreTradeCadence: IGNORE_TRADE_CADENCE,
+      freeCapitalPriority: true,
       capitalUtilizationOverride: monitoring.idleCashOverdue,
       storedEvaluations: rawEvaluations.length,
       uniqueEvaluations: latestEvaluations.length,
@@ -2085,6 +2093,7 @@ async function main() {
         maxResolutionDays: MAX_RESOLUTION_DAYS,
         tradeCadenceHours: TRADE_CADENCE_HOURS,
         ignoreTradeCadence: IGNORE_TRADE_CADENCE,
+        freeCapitalPriority: true,
         selectionOrder: SELECTION_ORDER,
         useLimitOrders: USE_LIMIT_ORDERS,
         crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,
@@ -2174,7 +2183,7 @@ async function main() {
     return;
   }
 
-  if (activeSellOrders.length) {
+  if (activeSellOrders.length && !best) {
     const pendingRotationExit = previousExecution?.rotationExit || null;
     await emitDecision({
       ...decision,
