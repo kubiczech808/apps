@@ -5083,6 +5083,7 @@ function renderScrapedOpportunities() {
       scan.lastBatchCount != null ? `${formatInteger(scan.lastBatchCount)} in last batch` : null,
       scan.lastPreferredCount != null ? `${formatInteger(scan.lastPreferredCount)} preferred outcomes` : null,
       scan.lastShortHorizonCount != null ? `${formatInteger(scan.lastShortHorizonCount)} <= ${formatInteger(scan.preferredMaxResolutionDays || DEFAULT_MAX_RESOLUTION_DAYS)}d` : null,
+      scan.lastCategoryCount != null ? `${formatInteger(scan.lastCategoryCount)} categories sampled` : null,
       scan.minResolutionHours != null ? `min ${formatInteger(scan.minResolutionHours) || scan.minResolutionHours}h` : null,
       `last scan ${lastScan}`,
       scan.lastScanError ? `scan error: ${scan.lastScanError}` : null,

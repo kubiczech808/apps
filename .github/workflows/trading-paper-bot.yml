@@ -138,7 +138,7 @@ on:
         default: ""
         type: string
   schedule:
-    - cron: '7,22,37,52 * * * *'
+    - cron: '7,17,27,37,47,57 * * * *'
     - cron: '17 1 * * *'
 
 concurrency:
@@ -187,14 +187,15 @@ jobs:
       PAPER_MAX_HISTORY: "5000"
       PAPER_MARKET_SCAN_BATCH_SIZE: "100"
       PAPER_MARKET_SCAN_MAX_OBSERVATIONS: "5000"
-      PAPER_MARKET_SCAN_MAX_OFFSET: "5000"
-      PAPER_MARKET_SCAN_PREFETCH_BATCHES: "2"
+      PAPER_MARKET_SCAN_MAX_OFFSET: "20000"
+      PAPER_MARKET_SCAN_PREFETCH_BATCHES: "4"
+      PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
       PAPER_MARKET_SCAN_MIN_PROBABILITY: "0.5"
       PAPER_MARKET_SCAN_MIN_RESOLUTION_HOURS: "1"
       PAPER_MAX_SPREAD: "0.08"
       PAPER_MIN_VOLUME_24H: "100"
       PAPER_MAX_RESOLUTION_DAYS: "7"
-      # One full grounded analysis runs every 15 minutes: at most 96 background
+      # One full grounded analysis runs every 10 minutes: at most 144 background
       # requests per day, leaving the dedicated reserve for trade execution.
       PAPER_AI_ANALYSIS_LIMIT: "1"
       PAPER_AI_CRITIC_ENABLED: "false"

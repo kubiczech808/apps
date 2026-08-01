@@ -51,6 +51,7 @@ const MARKET_SCAN_BATCH_SIZE = envNumber("PAPER_MARKET_SCAN_BATCH_SIZE", 100);
 const MARKET_SCAN_MAX_OBSERVATIONS = envNumber("PAPER_MARKET_SCAN_MAX_OBSERVATIONS", 5000);
 const MARKET_SCAN_MAX_OFFSET = envNumber("PAPER_MARKET_SCAN_MAX_OFFSET", 5000);
 const MARKET_SCAN_PREFETCH_BATCHES = envNumber("PAPER_MARKET_SCAN_PREFETCH_BATCHES", 2);
+const MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC", 40000);
 const MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", envNumber("PAPER_MAX_RESOLUTION_DAYS", 7));
 const MARKET_SCAN_MIN_PROBABILITY = envNumber("PAPER_MARKET_SCAN_MIN_PROBABILITY", 0.5);
 const MARKET_SCAN_MIN_RESOLUTION_HOURS = envNumber("PAPER_MARKET_SCAN_MIN_RESOLUTION_HOURS", 1);
@@ -460,6 +461,9 @@ function normalizeMarketScan(input = {}) {
     lastShortHorizonCount: Math.max(0, Math.floor(Number(input?.lastShortHorizonCount) || 0)),
     preferredMaxResolutionDays: Math.max(1, Math.floor(Number(input?.preferredMaxResolutionDays) || MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS)),
     minResolutionHours: Math.max(0, Number(input?.minResolutionHours) || MARKET_SCAN_MIN_RESOLUTION_HOURS),
+    lastCategoryCount: Math.max(0, Math.floor(Number(input?.lastCategoryCount) || 0)),
+    lastCategoryCounts: input?.lastCategoryCounts && typeof input.lastCategoryCounts === "object" ? input.lastCategoryCounts : {},
+    priorityLiquidityUsdc: Math.max(0, Number(input?.priorityLiquidityUsdc) || MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC),
     lastScanError: input?.lastScanError || null,
   };
 }
@@ -4349,6 +4353,102 @@ function compareMarketsForShortHorizon(a, b) {
   return Number(b.volume24hr || 0) - Number(a.volume24hr || 0);
 }
 
+function normalizedMarketCategory(value) {
+  const text = typeof value === "object" && value !== null
+    ? (value.slug || value.name || value.label || value.title || "")
+    : value;
+  return String(text || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+}
+
+function marketCategoryKeys(market = {}) {
+  const categories = new Set();
+  const add = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(add);
+      return;
+    }
+    if (typeof value === "string" && /[,|]/.test(value)) {
+      value.split(/[,|]/).forEach(add);
+      return;
+    }
+    const normalized = normalizedMarketCategory(value);
+    if (normalized && !/^\d+$/.test(normalized)) categories.add(normalized);
+  };
+
+  add(market.category);
+  add(market.categorySlug);
+  add(market.tags);
+  for (const event of Array.isArray(market.events) ? market.events : []) {
+    add(event?.category);
+    add(event?.categorySlug);
+    add(event?.tags);
+  }
+
+  const inferred = tagQuestion(market.question || "").filter((tag) => tag !== "clear-resolution");
+  inferred.forEach(add);
+  return categories.size ? [...categories] : ["general"];
+}
+
+function marketScanPriority(market = {}) {
+  const days = marketDaysLeft(market);
+  const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
+  const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+  const shortHorizon = Number.isFinite(days) && days >= minimumDays && days <= preferredDays;
+  const liquid = Number(market.liquidity || 0) >= MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC;
+  if (shortHorizon && liquid) return 0;
+  if (shortHorizon) return 1;
+  if (liquid) return 2;
+  return 3;
+}
+
+function compareMarketsForDiverseScan(a, b) {
+  const priorityDifference = marketScanPriority(a) - marketScanPriority(b);
+  if (priorityDifference !== 0) return priorityDifference;
+  const horizonDifference = compareMarketsForShortHorizon(a, b);
+  if (horizonDifference !== 0) return horizonDifference;
+  return Number(b.liquidity || 0) - Number(a.liquidity || 0);
+}
+
+function marketCategoryCounts(markets = []) {
+  const counts = {};
+  for (const market of markets) {
+    for (const category of marketCategoryKeys(market)) {
+      counts[category] = Number(counts[category] || 0) + 1;
+    }
+  }
+  return Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 32));
+}
+
+function diversifyMarketScanOrder(markets = []) {
+  const ordered = mergeMarketLists(markets).sort(compareMarketsForDiverseScan);
+  const buckets = new Map();
+  for (const market of ordered) {
+    for (const category of marketCategoryKeys(market)) {
+      if (!buckets.has(category)) buckets.set(category, []);
+      buckets.get(category).push(market);
+    }
+  }
+
+  const categoryFirstRows = [...buckets.entries()]
+    .sort((a, b) => compareMarketsForDiverseScan(a[1][0], b[1][0]) || a[0].localeCompare(b[0]))
+    .map(([, rows]) => rows[0]);
+  const firstByCategory = [];
+  const firstMarketKeys = new Set();
+  for (const market of categoryFirstRows) {
+    const key = marketIdentity(market);
+    if (!key || firstMarketKeys.has(key)) continue;
+    firstMarketKeys.add(key);
+    firstByCategory.push(market);
+  }
+  const selected = new Set(firstByCategory.map(marketIdentity));
+  return [...firstByCategory, ...ordered.filter((market) => !selected.has(marketIdentity(market)))];
+}
+
 async function loadMarkets() {
   const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
   const minimumHours = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0);
@@ -4369,13 +4469,13 @@ async function loadMarkets() {
   return mergeMarketLists(preferred, broad).sort(compareMarketsForShortHorizon);
 }
 
-async function loadBroadMarketScanBatch(previousScan) {
+async function loadBroadMarketScanBatch({ cursor = 0, order = "volume24hr" } = {}) {
   const limit = Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE));
   return fetchGammaMarkets({
     limit,
-    offset: previousScan.cursor,
-    order: "volume24hr",
-    ascending: "false",
+    offset: cursor,
+    order,
+    ascending: order === "endDate" ? "true" : "false",
   });
 }
 
@@ -4647,7 +4747,8 @@ async function refreshMarketObservations(state) {
   let broadCursor = previousScan.cursor;
   const broadBatchCount = Math.max(1, Math.floor(Number(MARKET_SCAN_PREFETCH_BATCHES) || 1));
   for (let index = 0; index < broadBatchCount; index += 1) {
-    const batch = await loadBroadMarketScanBatch({ cursor: broadCursor });
+    const order = index % 2 === 0 ? "volume24hr" : "endDate";
+    const batch = await loadBroadMarketScanBatch({ cursor: broadCursor, order });
     broadBatches.push(...(Array.isArray(batch) ? batch : []));
     if (!Array.isArray(batch) || batch.length < MARKET_SCAN_BATCH_SIZE) {
       broadCursor = 0;
@@ -4659,7 +4760,8 @@ async function refreshMarketObservations(state) {
       break;
     }
   }
-  const markets = mergeMarketLists(preferredMarkets, broadBatches).sort(compareMarketsForShortHorizon);
+  const markets = diversifyMarketScanOrder([...preferredMarkets, ...broadBatches]);
+  const categoryCounts = marketCategoryCounts(markets);
   const observedAt = nowIso();
   const observations = (Array.isArray(markets) ? markets : [])
     .map((market) => preferredMarketObservation(market, observedAt))
@@ -4688,6 +4790,9 @@ async function refreshMarketObservations(state) {
     lastShortHorizonCount: shortHorizonCount,
     preferredMaxResolutionDays: MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS,
     minResolutionHours: MARKET_SCAN_MIN_RESOLUTION_HOURS,
+    lastCategoryCount: Object.keys(categoryCounts).length,
+    lastCategoryCounts: categoryCounts,
+    priorityLiquidityUsdc: MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC,
     lastScanError: null,
   };
   return observations;
