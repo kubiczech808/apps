@@ -69,9 +69,10 @@ const MARKET_SCAN_TAG = String(process.env.PAPER_MARKET_SCAN_TAG || "").trim().t
 const MARKET_SCAN_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_MAX_RESOLUTION_DAYS", null);
 const MARKET_SCAN_MIN_NET_YIELD = envNumber("PAPER_MARKET_SCAN_MIN_NET_YIELD", 0);
 const MARKET_SCAN_MIN_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_MIN_LIQUIDITY_USDC", 0);
-// These are Polymarket's stable, broad navigation tags. The scan rotates
-// through them instead of repeatedly paging the same volume-ranked markets.
-// `general` is covered by the untagged broad request below.
+// These are Polymarket's broad navigation tags plus active geopolitical
+// subcategories. The scan rotates through them instead of repeatedly paging
+// the same volume-ranked markets. `general` is covered by the untagged broad
+// request below.
 const MARKET_SCAN_CATEGORY_TAGS = [
   { id: "1", slug: "sports" },
   { id: "2", slug: "politics" },
@@ -89,6 +90,13 @@ const MARKET_SCAN_CATEGORY_TAGS = [
   { id: "93", slug: "prediction-markets" },
   { id: "78", slug: "iran" },
   { id: "1396", slug: "international-affairs" },
+  { id: "100265", slug: "geopolitics" },
+  { id: "96", slug: "ukraine" },
+  { id: "102486", slug: "ukraine-map" },
+  { id: "154", slug: "middle-east" },
+  { id: "61", slug: "gaza" },
+  { id: "180", slug: "israel" },
+  { id: "303", slug: "china" },
 ];
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 // Gemini 3.5 Flash is the stable API model. Keeping the model name in one

@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 8
     env:
       PAPER_STATE_PATH: data/paper-state.json
-      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
+      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=refresh
       PAPER_PORTFOLIO_USDC: "100"
       PAPER_MAX_FRACTION: "0.05"
       PAPER_MAX_HISTORY: "5000"
@@ -53,7 +53,7 @@ jobs:
       PAPER_MARKET_SCAN_MAX_OFFSET: "20000"
       PAPER_MARKET_SCAN_PREFETCH_BATCHES: "1"
       PAPER_MARKET_SCAN_CATEGORY_BATCH_SIZE: "50"
-      PAPER_MARKET_SCAN_CATEGORIES_PER_RUN: "8"
+      PAPER_MARKET_SCAN_CATEGORIES_PER_RUN: "12"
       PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
       PAPER_MARKET_SCAN_MIN_PROBABILITY: ${{ inputs.market_scan_min_probability || '0.5' }}
       PAPER_MARKET_SCAN_MIN_RESOLUTION_MINUTES: "5"
