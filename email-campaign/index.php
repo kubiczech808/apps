@@ -23,8 +23,16 @@ const AI_RESEARCH_FINALIZE_RESERVE_SECONDS = 30;
 const AI_RESEARCH_MAX_STEPS_PER_TICK = 12;
 // Kolik casu musi v behu zbyvat, aby melo smysl zacit dalsi praci. Novy seed potrebuje
 // plan z webu i scraping, dokonceni rozdelaneho behu jen jeden dalsi krok.
-const AI_RESEARCH_NEW_SEED_RESERVE_SECONDS = 55;
-const AI_RESEARCH_FINISH_STEP_RESERVE_SECONDS = 25;
+const AI_RESEARCH_NEW_SEED_RESERVE_SECONDS = 45;
+const AI_RESEARCH_FINISH_STEP_RESERVE_SECONDS = 20;
+// Nejdelsi cas, ktery jeden beh venuje scrapovani kontaktu. Zbytek tiku patri dalsim
+// seedum a prvni davku stejne dotahuje scrapovaci worker na pozadi.
+const AI_RESEARCH_CONTACT_SCRAPE_SLICE_SECONDS = 20;
+// Dopocitavani poctu firem prochazenim katalogu: strop dotazu a casu na jeden katalog.
+// Pulenim intervalu se i desitky tisic firem najdou do dvaceti dotazu.
+const AI_RESEARCH_LISTING_COUNT_MAX_FETCHES = 22;
+const AI_RESEARCH_LISTING_COUNT_SLICE_SECONDS = 25;
+const AI_RESEARCH_LISTING_COUNT_MAX_ATTEMPTS = 3;
 // Kolik firem ma katalog na plne strance vysledku. Kdyz jich prvni stranka vrati
 // aspon tolik a katalog neuvadi celkovy pocet ani strankovani, je jasne, ze vysledku
 // je vic - jen jsme je neprecetli.
@@ -934,27 +942,10 @@ function handlePost(PDO $pdo, array $config): ?string
         if (!canAccessAiResearch()) {
             throw new RuntimeException('AI research neni pro tento ucet dostupny.');
         }
-        $researchSettings = loadSettings($pdo);
-        if ((int)($researchSettings['ai_research_lock_until'] ?? 0) > time()) {
-            return 'AI research uz bezi na pozadi. Prehled se sam obnovuje.';
-        }
-        // Radek vznikne uz tady, jeste nez odstartuje worker. Vyber seedu je levny a diky
-        // tomu je hned videt, co se zpracovava, i kdyby se worker vubec nerozjel.
-        $seed = selectAiResearchFirmySeedCompany($pdo);
-        if (!$seed) {
-            return 'AI research: nepodarilo se najit novou unikatni seed firmu z Firmy.cz / Vse pro firmy / Praha.';
-        }
-        $runId = startAiResearchRun(
-            $pdo,
-            $seed,
-            aiResearchBootstrapPlan($seed),
-            'AI research ceka na spusteni na pozadi.'
-        );
-        setSetting($pdo, 'ai_research_last_seed_source_url', (string)($seed['source_url'] ?? ''));
-        setSetting($pdo, 'ai_research_next_allowed_at', '');
-        triggerAiResearchWorker($pdo, $runId);
-        return 'AI research beh #' . $runId . ' zalozen pro ' . (string)$seed['email']
-            . ' a spusten na pozadi. Prehled se prubezne obnovuje.';
+        // Tlacitko dela presne totez co cron - stejny uklid, stejna fronta rozdelane
+        // prace, stejny zapis do logu. Rozdil je jen v tom, ze necheka na interval:
+        // kdyz o beh rekne clovek, nema mu automatika odpovedet "jeste neni na rade".
+        return runCronAiResearch($pdo, $config, true);
     }
 
     if ($action === 'audit_ai_research_run') {
@@ -2658,7 +2649,12 @@ function onboardingDemoSeedContacts(string $businessType, array $plan): array
     ], $rows);
 }
 
-function runCronAiResearch(PDO $pdo, array $config): string
+/**
+ * Jeden tik automatiky. $force pouziva tlacitko "Spustit research ted": preskoci
+ * cekani na interval a na backoff, ale ne pojistky, ktere chrani spravnost -
+ * jeden beh naraz a denni rozpocet Gemini pozadavku plati porad.
+ */
+function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
 {
     $settings = loadSettings($pdo);
     $intervalSeconds = aiResearchRunIntervalSeconds($config);
@@ -2689,11 +2685,11 @@ function runCronAiResearch(PDO $pdo, array $config): string
     }
     $planned = refreshAiResearchPlannedLog($pdo, $config, $settings);
     $nextAllowedAt = (int)($settings['ai_research_next_allowed_at'] ?? 0);
-    if ($nextAllowedAt > time()) {
+    if (!$force && $nextAllowedAt > time()) {
         return 'AI research: Gemini je docasne omezeny, dalsi pokus nejdrive ' . aiResearchBackoffLabel($nextAllowedAt) . '.';
     }
     $lastRun = (int)($settings['ai_research_last_run_at'] ?? 0);
-    if ($lastRun > 0 && time() - $lastRun < $intervalSeconds) {
+    if (!$force && $lastRun > 0 && time() - $lastRun < $intervalSeconds) {
         return 'AI research: dalsi beh jeste neni na rade. Rezim Gemini rozpoctu: '
             . aiResearchDailySeedBudget($config) . ' seedu/den, interval cca ' . aiResearchIntervalLabel($intervalSeconds) . '.';
     }
@@ -2771,9 +2767,9 @@ function runCronAiResearch(PDO $pdo, array $config): string
                 break;
             }
         }
-        $message = $processed > 1
-            ? 'AI research: v tomto behu zpracovano ' . $processed . ' kroku | ' . implode(' | ', $messages)
-            : (string)($messages[0] ?? 'AI research: nebylo co zpracovat.');
+        $message = $messages
+            ? 'AI research (kroku ' . $processed . '): ' . implode(' | ', $messages)
+            : 'AI research: nebylo co zpracovat.';
         setSetting($pdo, 'ai_research_last_run_at', (string)time());
         setSetting($pdo, 'ai_research_lock_until', '');
         setSetting($pdo, 'ai_research_next_allowed_at', '');
@@ -5079,18 +5075,26 @@ function aiResearchListingSizeFromFirstPage(string $source, string $keyword, str
     if (!is_array($search)) {
         return $empty;
     }
+    aiResearchFastFetchMode(true);
     try {
         $html = (string)fetchScrapingSearch($search)['html'];
     } catch (Throwable $e) {
         error_log('AI research listing size failed [' . $source . ']: ' . $e->getMessage());
         return $empty;
+    } finally {
+        aiResearchFastFetchMode(false);
     }
     $itemsOnPage = count(extractCandidateUrls($html, (string)$search['url'], $source));
     if ($itemsOnPage <= 0) {
         return ['items_total' => 0, 'items_per_page' => 0, 'pages' => 0, 'fetches' => 1, 'method' => 'bez vysledku'];
     }
-    // Uvedeny celkovy pocet je nejpresnejsi udaj, ktery katalog nabizi.
+    // Uvedeny celkovy pocet je nejpresnejsi udaj, ktery katalog nabizi - ale jen kdyz
+    // dava smysl. Cislo mensi nez pocet firem primo na strance neni celkovy pocet,
+    // ale nejaky jiny udaj ze stranky (pocet kategorii, poboček, recenzi).
     $declared = aiResearchParseListingTotal($html);
+    if ($declared > 0 && $declared < $itemsOnPage) {
+        $declared = 0;
+    }
     if ($declared > 0) {
         return [
             'items_total' => $declared,
@@ -5113,17 +5117,9 @@ function aiResearchListingSizeFromFirstPage(string $source, string $keyword, str
     }
     // Plna prvni stranka bez uvedeneho poctu a bez strankovani znamena, ze se pocet
     // precist nepodarilo - urcite to neni "jen tolik firem, kolik je na strance".
-    // Takove cislo se bere jen jako spodni hranice a oznaci se jako nejiste, aby se
-    // podle nej nezavrhl cely seed.
+    // Katalog se proto dopocita: hleda se posledni stranka s vysledky.
     if ($itemsOnPage >= AI_RESEARCH_FULL_LISTING_PAGE_ITEMS) {
-        return [
-            'items_total' => $itemsOnPage,
-            'items_per_page' => $itemsOnPage,
-            'pages' => 1,
-            'fetches' => 1,
-            'method' => 'pocet se z katalogu nepodarilo precist, jde o spodni hranici',
-            'uncertain' => true,
-        ];
+        return aiResearchCountListingByPaging($source, $keyword, $location, $itemsOnPage);
     }
     return [
         'items_total' => $itemsOnPage,
@@ -5131,6 +5127,89 @@ function aiResearchListingSizeFromFirstPage(string $source, string $keyword, str
         'pages' => 1,
         'fetches' => 1,
         'method' => 'jedina stranka vysledku',
+    ];
+}
+
+/**
+ * Kdyz katalog pocet neuvadi a strankovani nejde precist, spocita se sam: nejdriv se
+ * zdvojnasobovanim najde stranka, ktera uz je prazdna, pak se pulenim intervalu najde
+ * posledni stranka s vysledky. Vysledek je (posledni stranka - 1) x firmy na strance
+ * plus firmy na posledni strance.
+ *
+ * Pocet dotazu je logaritmicky, ne linearni: 10 000 firem se najde do ~15 dotazu.
+ * Kdyz rozpocet dotazu nebo cas dojde, vrati se aspon spodni hranice oznacena jako
+ * nejista - podle takoveho cisla se seed nikdy nevyrazuje.
+ */
+function aiResearchCountListingByPaging(string $source, string $keyword, string $location, int $itemsPerPage): array
+{
+    $fetches = 1;
+    $budget = AI_RESEARCH_LISTING_COUNT_MAX_FETCHES;
+    $deadline = min(time() + AI_RESEARCH_LISTING_COUNT_SLICE_SECONDS, aiResearchDeadline() - AI_RESEARCH_FINALIZE_RESERVE_SECONDS);
+    $itemsOnPage = static function (int $page) use ($source, $keyword, $location, &$fetches): ?int {
+        $search = aiResearchScrapingSearchUrls($source, $keyword, $location, $page)[0] ?? null;
+        if (!is_array($search)) {
+            return null;
+        }
+        aiResearchFastFetchMode(true);
+        try {
+            $html = (string)fetchScrapingSearch($search)['html'];
+        } catch (Throwable $e) {
+            error_log('AI research listing count failed [' . $source . ' p' . $page . ']: ' . $e->getMessage());
+            return null;
+        } finally {
+            aiResearchFastFetchMode(false);
+            $fetches++;
+        }
+        return count(extractCandidateUrls($html, (string)$search['url'], $source));
+    };
+
+    $lastKnown = 1;          // stranka, o ktere vime, ze vysledky ma
+    $lastKnownItems = $itemsPerPage;
+    $firstEmpty = 0;         // stranka, o ktere vime, ze uz vysledky nema
+    $page = 2;
+    while ($fetches < $budget && time() < $deadline) {
+        $count = $itemsOnPage($page);
+        if ($count === null) {
+            break;
+        }
+        if ($count <= 0) {
+            $firstEmpty = $page;
+            break;
+        }
+        $lastKnown = $page;
+        $lastKnownItems = $count;
+        $page *= 2;
+    }
+    if ($firstEmpty > 0) {
+        // Pulení intervalu mezi poslednim znamym vysledkem a prvni prazdnou strankou.
+        $low = $lastKnown;
+        $high = $firstEmpty;
+        while ($high - $low > 1 && $fetches < $budget && time() < $deadline) {
+            $mid = intdiv($low + $high, 2);
+            $count = $itemsOnPage($mid);
+            if ($count === null) {
+                break;
+            }
+            if ($count > 0) {
+                $low = $mid;
+                $lastKnownItems = $count;
+            } else {
+                $high = $mid;
+            }
+        }
+        $lastKnown = $low;
+    }
+    $complete = $firstEmpty > 0 && ($firstEmpty - $lastKnown) === 1;
+    $total = ($lastKnown - 1) * $itemsPerPage + $lastKnownItems;
+    return [
+        'items_total' => $total,
+        'items_per_page' => $itemsPerPage,
+        'pages' => $lastKnown,
+        'fetches' => $fetches,
+        'method' => $complete
+            ? 'dopocitano prochazenim katalogu (' . $lastKnown . ' stranek)'
+            : 'dopocitavani katalogu se nedokoncilo, zatim spodni hranice',
+        'uncertain' => !$complete,
     ];
 }
 
@@ -5594,6 +5673,21 @@ function aiResearchQuickScrapeContacts(array $plan, int $limit, int $pagesPerQue
 {
     $contacts = [];
     $seen = [];
+    // Scraping si z behu vezme jen svuj platek casu. Zbytek tiku patri dalsim seedum -
+    // jinak jeden beh spotrebuje celych 100 s na deset kontaktu jedineho subjektu.
+    $sliceEndsAt = min(time() + AI_RESEARCH_CONTACT_SCRAPE_SLICE_SECONDS, aiResearchDeadline() - max(0, $reserveSeconds));
+    aiResearchFastFetchMode(true);
+    try {
+        return aiResearchQuickScrapeContactsWithin($plan, $limit, $pagesPerQuery, $detailsPerPage, $pdo, $runId, $sliceEndsAt);
+    } finally {
+        aiResearchFastFetchMode(false);
+    }
+}
+
+function aiResearchQuickScrapeContactsWithin(array $plan, int $limit, int $pagesPerQuery, int $detailsPerPage, ?PDO $pdo, int $runId, int $sliceEndsAt): array
+{
+    $contacts = [];
+    $seen = [];
     foreach (array_slice((array)($plan['scraping_queries'] ?? []), 0, 3) as $query) {
         if (!is_array($query) || count($contacts) >= $limit) {
             continue;
@@ -5605,17 +5699,17 @@ function aiResearchQuickScrapeContacts(array $plan, int $limit, int $pagesPerQue
         }
         try {
             for ($page = 1; $page <= max(1, $pagesPerQuery); $page++) {
-                if (aiResearchDeadlineReached($reserveSeconds)) {
+                if (time() >= $sliceEndsAt) {
                     return $contacts;
                 }
                 foreach (aiResearchScrapingSearchUrls($source, $keyword, (string)($plan['target_location'] ?? ''), $page) as $search) {
-                    if (aiResearchDeadlineReached($reserveSeconds)) {
+                    if (time() >= $sliceEndsAt) {
                         return $contacts;
                     }
                     $searchResponse = fetchScrapingSearch($search);
                     $html = (string)$searchResponse['html'];
                     foreach (array_slice(extractCandidateUrls($html, $search['url'], $source), 0, max(1, $detailsPerPage)) as $url) {
-                        if (aiResearchDeadlineReached($reserveSeconds)) {
+                        if (time() >= $sliceEndsAt) {
                             return $contacts;
                         }
                         try {
@@ -5979,6 +6073,14 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
         }
 
         // 6. Odhad dosazitelnych kontaktu. Spocita se hned, pokud na to zbyva cas.
+        // Odhad nizsi nez pocet uz nascrapovanych kontaktu je nesmysl - zahodi se,
+        // aby se spocital znovu, misto aby podle nej beh tvrdil maly trh.
+        if (!aiResearchEstimateIsCredible($plan, aiResearchScrapedContactCount($pdo, $plan))) {
+            unset($plan['contact_estimate']);
+            $store = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
+            $store->execute([json_encode($plan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}', date('c'), $runId]);
+            $fixed[] = 'nedůveryhodny odhad dosahu zahozen, pocita se znovu';
+        }
         $estimateComplete = is_array($plan['contact_estimate'] ?? null)
             && !empty($plan['contact_estimate']['complete'])
             && !array_diff(aiResearchEstimateSourcesForPlan($plan), array_column((array)($plan['contact_estimate']['sources'] ?? []), 'source'));
@@ -7000,6 +7102,19 @@ function aiResearchSeedOutreachStateHint(string $state): string
     ][$state] ?? '';
 }
 
+/**
+ * Odhad, ktery tvrdi mensi cislo, nez kolik kontaktu uz z tehoz katalogu mame,
+ * je proste spatne precteny. Takovy se zahazuje a pocita znovu.
+ */
+function aiResearchEstimateIsCredible(array $plan, int $scrapedContacts): bool
+{
+    $estimate = is_array($plan['contact_estimate'] ?? null) ? (array)$plan['contact_estimate'] : [];
+    if ($estimate === [] || $scrapedContacts <= 0) {
+        return true;
+    }
+    return (int)($estimate['reachable_contacts'] ?? 0) >= $scrapedContacts;
+}
+
 function aiResearchOutreachUnviableReason(array $plan, int $scrapedContacts): string
 {
     if ($scrapedContacts <= 0) {
@@ -7018,6 +7133,12 @@ function aiResearchOutreachUnviableReason(array $plan, int $scrapedContacts): st
     }
     $reachable = (int)($estimate['reachable_contacts'] ?? 0);
     if ($reachable > $scrapedContacts) {
+        return '';
+    }
+    if ($reachable < $scrapedContacts) {
+        // Z toho sameho katalogu a keywordu uz mame vic kontaktu, nez kolik jich podle
+        // odhadu vubec existuje. To neni maly trh, to je spatne precteny pocet - seed
+        // se nevyrazuje a odhad se prepocita.
         return '';
     }
     return 'Dosazitelnych kontaktu (' . $reachable . ') neni vic nez uz nascrapovanych ('
@@ -7544,9 +7665,16 @@ function aiResearchComputeContactEstimate(PDO $pdo, int $runId, array $plan, int
     // predchozi beh nemel cas, aby soucet postupne dorostl na vsechny trhy.
     $listings = [];
     $existing = is_array($plan['contact_estimate'] ?? null) ? (array)$plan['contact_estimate'] : [];
+    // Kolikaty pokus o dopocitani to je. Katalog, ktery se nepodarilo spocitat, se
+    // zkousi znovu - ale ne donekonecna, po treti se bere spodni hranice.
+    $attempts = (int)($existing['attempts'] ?? 0) + 1;
     foreach ((array)($existing['sources'] ?? []) as $entry) {
         $done = (string)($entry['source'] ?? '');
         if ($done === '' || !in_array($done, $sources, true)) {
+            continue;
+        }
+        if (!empty($entry['uncertain']) && $attempts <= AI_RESEARCH_LISTING_COUNT_MAX_ATTEMPTS) {
+            // Nedopocitany katalog se ma zkusit znovu, ne prevzit jako hotovy.
             continue;
         }
         $listings[$done] = [
@@ -7554,7 +7682,8 @@ function aiResearchComputeContactEstimate(PDO $pdo, int $runId, array $plan, int
                 'items_total' => (int)($entry['listing_items'] ?? 0),
                 'pages' => (int)($entry['listing_pages'] ?? 0),
                 'items_per_page' => (int)($entry['items_per_page'] ?? 0),
-                'method' => (string)($entry['method'] ?? ''),
+                    'method' => (string)($entry['method'] ?? ''),
+                'uncertain' => !empty($entry['uncertain']),
                 'fetches' => 0,
             ],
             'location' => (string)($entry['location'] ?? ''),
@@ -7589,7 +7718,7 @@ function aiResearchComputeContactEstimate(PDO $pdo, int $runId, array $plan, int
     if (!$listings) {
         return null;
     }
-    return aiResearchBuildContactEstimate($pdo, $runId, $primary, $listings, $pending);
+    return aiResearchBuildContactEstimate($pdo, $runId, $primary, $listings, $pending, $attempts);
 }
 
 /**
@@ -7597,7 +7726,7 @@ function aiResearchComputeContactEstimate(PDO $pdo, int $runId, array $plan, int
  * email. Odhad je tim zamerne optimisticky horni hranice - cilem je jedno cislo
  * zjistene jednim dotazem na katalog, ne presne merena vytéznost za desitky dotazu.
  */
-function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $primarySource, array $listings, array $pendingSources = []): array
+function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $primarySource, array $listings, array $pendingSources = [], int $attempts = 1): array
 {
     $itemsTotal = 0;
     $pagesTotal = 0;
@@ -7628,7 +7757,10 @@ function aiResearchBuildContactEstimate(PDO $pdo, int $runId, string $primarySou
         'source' => $primarySource,
         'sources' => $breakdown,
         'pending_sources' => array_values($pendingSources),
-        'complete' => !$pendingSources,
+        // Nedopocitany katalog drzi odhad "nehotovy", aby ho dalsi cron zkusil znovu.
+        // Po nekolika pokusech se bere spodni hranice, at beh nevisi navzdy.
+        'complete' => !$pendingSources && (!$uncertain || $attempts > AI_RESEARCH_LISTING_COUNT_MAX_ATTEMPTS),
+        'attempts' => $attempts,
         'listing_items' => $itemsTotal,
         'listing_pages' => $pagesTotal,
         'listing_fetches' => $fetchesTotal,
@@ -11249,9 +11381,27 @@ function skipCachedScrapingItem(PDO $pdo, array $job, array $item): ?string
     return null;
 }
 
+/**
+ * AI research ma na cely beh 100 s, takze si nemuze dovolit cekat 25 s na jednu
+ * stranku a jeste to dvakrat opakovat. V tomto rezimu se pomaly detail proste
+ * preskoci - kontaktu je v katalogu dost a davku dotahne scrapovaci worker,
+ * ktery bezi na pozadi a cas ma.
+ */
+function aiResearchFastFetchMode(?bool $enabled = null): bool
+{
+    static $on = false;
+    if ($enabled !== null) {
+        $on = $enabled;
+    }
+    return $on;
+}
+
 function scrapingHttpTimeouts(string $url): array
 {
     $host = strtolower((string)(parse_url($url, PHP_URL_HOST) ?: ''));
+    if (aiResearchFastFetchMode()) {
+        return ['connect' => 4, 'total' => 8, 'attempts' => 1];
+    }
     if (in_array($host, ['dasoertliche.de', 'www.dasoertliche.de'], true)) {
         return ['connect' => 6, 'total' => 12, 'attempts' => 2];
     }
@@ -18471,7 +18621,7 @@ function renderApp(PDO $pdo, ?array $flash): void
             <div>
                 <h2>AI research administrace</h2>
                 <p>Agent průběžně vybírá nové firmy z Firmy.cz / Vše pro firmy / Praha, projde jejich web, navrhne nejvhodnější B2B cílení včetně klíčového slova a lokality, nascrapuje první dávku kontaktů a připraví dvě varianty oslovení. AI se používá jen na pochopení byznysu, výběr cílovky a texty; scraping kontaktů je čistá automatizace.</p>
-                <p class="muted">Dosažitelné kontakty se počítají <strong>jedním dotazem na katalog</strong>: z první stránky výsledků se přečte, kolik firem katalog na dané klíčové slovo a lokalitu nabízí, a u každé se počítá s dohledatelným e-mailem. Sčítá se to napříč všemi katalogy, kde cílení dává smysl. Pokud web seed firmy není ani v angličtině, bere se cílení automaticky jako domácí a AI se na trhy vůbec neptáme; u anglického webu vyhodnotí AI, ve kterých zemích má hledání smysl, a jejich katalogy se do součtu přičtou. Reálně se scrapuje jen prvních <?= h((string)AI_RESEARCH_FIRST_BATCH_CONTACTS) ?> kontaktů pro první dávku.</p>
+                <p class="muted">Dosažitelné kontakty se počítají <strong>jedním dotazem na katalog</strong>: z první stránky výsledků se přečte, kolik firem katalog na dané klíčové slovo a lokalitu nabízí, a u každé se počítá s dohledatelným e-mailem. Pokud katalog počet neuvádí ani nejde přečíst stránkování, <strong>dopočítá se prohledáním stránek</strong> (půlením intervalu, takže i desetitisíce firem stojí do dvaceti dotazů); dokud dopočet nedoběhne, je číslo označené jako spodní hranice a nikdy podle něj nevyřadíme seed. Sčítá se to napříč všemi katalogy, kde cílení dává smysl. Pokud web seed firmy není ani v angličtině, bere se cílení automaticky jako domácí a AI se na trhy vůbec neptáme; u anglického webu vyhodnotí AI, ve kterých zemích má hledání smysl, a jejich katalogy se do součtu přičtou. Reálně se scrapuje jen prvních <?= h((string)AI_RESEARCH_FIRST_BATCH_CONTACTS) ?> kontaktů pro první dávku.</p>
                 <p class="muted">Automatika se spouští cronem (GitHub plánované běhy se v praxi zpožďují, takže interval bývá delší než 5 minut). Jeden běh má časový limit <?= h((string)AI_RESEARCH_REQUEST_BUDGET_SECONDS) ?> s, protože hosting požadavek ukončí po cca 150 s; co se nestihne, dokončí další cron. Gemini rozpočet: <?= h((string)$researchGeminiRpmBudget) ?> requestů/min<?= h($researchDailyBudgetText) ?>, odhad <?= h((string)$researchGeminiRequestsPerSeed) ?> requesty/seed.</p>
                 <p class="muted">Poslední automatický běh: <?= $lastResearchRunAt > 0 ? h(formatDateTime(date('c', $lastResearchRunAt))) : 'zatím neproběhl' ?>. Další nejdříve: <?= h($researchNextRunLabel) ?>. Stav: <?= h($researchAutomationStatus) ?></p>
                 <p class="muted">Skutečně odeslané Gemini requesty: <?= h((string)$researchRequestsLastMinute) ?> za poslední minutu, <?= h((string)$researchRequestsLastHour) ?> za hodinu, <?= h((string)$researchRequestsLast24h) ?>/<?= h((string)$researchEffectiveDailyBudget) ?> za posledních 24 h. Podle těchto čísel se pozná, zda Google limituje po minutách, nebo po dnech.</p>
