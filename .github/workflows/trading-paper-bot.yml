@@ -232,7 +232,7 @@ jobs:
       PAPER_SCHEDULED_CADENCE_POLL: ${{ github.event_name == 'schedule' && github.event.schedule != '17 1 * * *' && 'true' || 'false' }}
       PAPER_CONTINUOUS_EVALUATION: "true"
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET || secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-3-flash
+      GEMINI_MODEL: gemini-3.5-flash
       GEMINI_SEARCH_GROUNDING: "true"
       PAPER_PRIMARY_AI_PROVIDER: gemini
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

@@ -61,9 +61,9 @@ const MARKET_SCAN_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_MAX_RESOLUT
 const MARKET_SCAN_MIN_NET_YIELD = envNumber("PAPER_MARKET_SCAN_MIN_NET_YIELD", 0);
 const MARKET_SCAN_MIN_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_MIN_LIQUIDITY_USDC", 0);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-// Use the model listed in the configured free-tier limits. Keeping the model
-// name in one constant also lets a stale quota backoff be scoped correctly.
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3-flash";
+// Gemini 3.5 Flash is the stable API model. Keeping the model name in one
+// constant also lets a stale quota backoff be scoped correctly.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
 const REQUIRE_GEMINI = envBool("PAPER_REQUIRE_GEMINI", false);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";

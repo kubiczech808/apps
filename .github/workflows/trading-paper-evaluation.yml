@@ -54,7 +54,7 @@ jobs:
       PAPER_EVALUATION_MARKET_SLUG: ${{ inputs.evaluation_market_slug }}
       PAPER_PRIMARY_AI_PROVIDER: gemini
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET || secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-3-flash
+      GEMINI_MODEL: gemini-3.5-flash
       GEMINI_SEARCH_GROUNDING: "true"
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
