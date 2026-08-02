@@ -26,7 +26,7 @@ const state = {
     },
   },
   evaluationStatus: "EVALUATED",
-  opportunityView: "evaluated",
+  opportunityView: "scraped",
   scrapedSort: {
     key: "observedAt",
     direction: "desc",
@@ -726,7 +726,7 @@ function portfolioTabRoutePath(tab = "daily-picks") {
   return `/trading/portfolios/${segment}/`;
 }
 
-function opportunityRoutePath(view = "evaluated") {
+function opportunityRoutePath(view = "scraped") {
   const normalized = normalizeOpportunityView(view);
   return normalized === "scan-log"
     ? "/trading/opportunities/scraped/scan-log/"
@@ -860,7 +860,7 @@ function setEvaluationStatus(status) {
 }
 
 function normalizeOpportunityView(view) {
-  return view === "scraped" || view === "scan-log" ? view : "evaluated";
+  return view === "evaluated" || view === "scan-log" ? view : "scraped";
 }
 
 function syncOpportunityPageHeading() {

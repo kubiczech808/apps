@@ -27,7 +27,7 @@
               </svg>
             </span>
           </a>
-          <a class="settings-tab-button" href="opportunities/evaluated/" data-page-link="opportunities" aria-label="Open evaluated opportunities" title="Evaluated opportunities">
+          <a class="settings-tab-button" href="opportunities/scraped/" data-page-link="opportunities" aria-label="Open scraped opportunities" title="Scraped opportunities">
             <span aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false">
                 <path d="M3 12h4"></path>
@@ -218,8 +218,8 @@
             <div class="settings-panel-body">
               <div class="evaluation-head" data-evaluation-controls>
                   <div class="segmented opportunity-view-toggle" data-opportunity-view-toggle>
-                    <button class="segment-button active" type="button" data-opportunity-view="evaluated">Evaluated</button>
-                    <button class="segment-button" type="button" data-opportunity-view="scraped">Scraped</button>
+                    <button class="segment-button" type="button" data-opportunity-view="evaluated">Evaluated</button>
+                    <button class="segment-button active" type="button" data-opportunity-view="scraped">Scraped</button>
                     <button class="segment-button" type="button" data-opportunity-view="scan-log">Scraping log</button>
                   </div>
                   <label class="threshold-control evaluation-probability-control" data-opportunity-filter title="Display-only filter. It uses AI probability in Evaluated and the current Polymarket probability in Scraped. Portfolio rules are not changed.">
@@ -378,6 +378,6 @@
     </section>
   </div>
 
-  <script src="assets/app.js?v=20260802-compact-run-detail"></script>
+  <script src="assets/app.js?v=20260802-scraped-opportunities-default"></script>
 </body>
 </html>
