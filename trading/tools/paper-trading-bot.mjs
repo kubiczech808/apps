@@ -636,10 +636,25 @@ function mergeMarketObservationLists(primary = [], secondary = [], limit = MARKE
       ...(executionRevalidation ? { executionRevalidation } : {}),
     });
   }
-  return [...byKey.values()]
+  const normalized = [...byKey.values()]
     .map((item) => normalizeMarketObservationLifecycle(item))
-    .sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a))
+    .sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a));
+  return compactActiveMarketObservationsByEvent(normalized)
     .slice(0, limit);
+}
+
+function compactActiveMarketObservationsByEvent(items = []) {
+  const activeEvents = new Set();
+  return items.filter((item) => {
+    const status = String(item?.status || item?.selectionStatus || "").toUpperCase();
+    if (status === "RESOLVED") return true;
+    const eventKey = marketScanEventIdentity(item);
+    if (!eventKey || !activeEvents.has(eventKey)) {
+      if (eventKey) activeEvents.add(eventKey);
+      return true;
+    }
+    return false;
+  });
 }
 
 function mergeUniqueById(items, idFn, limit = Infinity) {
@@ -4649,6 +4664,27 @@ function marketIdentity(market = {}) {
   return String(market.conditionId || market.id || market.slug || market.question || "").trim().toLowerCase();
 }
 
+function marketScanEventIdentity(market = {}) {
+  const events = Array.isArray(market.events) ? market.events : [];
+  const event = events.find((item) => item && typeof item === "object") || null;
+  const eventId = String(event?.id || market.eventId || market.gameId || "").trim();
+  if (eventId) return `event-id:${eventId.toLowerCase()}`;
+
+  const eventSlug = String(event?.slug || market.eventSlug || "").trim().toLowerCase();
+  if (eventSlug) return `event-slug:${eventSlug}`;
+
+  const risk = riskProfile({
+    question: market.question || "",
+    slug: market.slug || "",
+    eventSlug: marketEventSlug(market),
+    outcome: "",
+    tags: tagQuestion(market.question || ""),
+  });
+  const matchKey = (risk.keys || []).find((key) => key.startsWith("match:"));
+  if (matchKey) return matchKey;
+  return `market:${marketIdentity(market)}`;
+}
+
 function mergeMarketLists(...lists) {
   const byId = new Map();
   for (const list of lists) {
@@ -4855,6 +4891,22 @@ function diversifyMarketScanOrder(markets = []) {
   }
   const selected = new Set(firstByCategory.map(marketIdentity));
   return [...firstByCategory, ...ordered.filter((market) => !selected.has(marketIdentity(market)))];
+}
+
+function retainOneMarketPerScanEvent(markets = []) {
+  const retained = [];
+  const heldBack = [];
+  const selectedEvents = new Set();
+  for (const market of markets) {
+    const eventKey = marketScanEventIdentity(market);
+    if (!eventKey || !selectedEvents.has(eventKey)) {
+      if (eventKey) selectedEvents.add(eventKey);
+      retained.push(market);
+      continue;
+    }
+    heldBack.push(market);
+  }
+  return { retained, heldBack };
 }
 
 async function loadMarkets() {
@@ -5281,7 +5333,21 @@ async function refreshMarketObservations(state) {
     const fetchedMarkets = diversifyMarketScanOrder([...preferredMarkets, ...categoryMarkets, ...broadBatches]);
     // Keep already stored RESOLVED observations for history and the Resolved
     // UI tab, but never add them to the active scrape batch again.
-    const markets = fetchedMarkets.filter((market) => !marketIsResolvedForScan(market));
+    const scanReasonCounts = {};
+    const eligibleMarkets = [];
+    for (const market of fetchedMarkets) {
+      const reason = marketScanRetentionReason(market, scanRunAt);
+      if (reason) incrementMarketScanReason(scanReasonCounts, reason);
+      else eligibleMarkets.push(market);
+    }
+    // A single match frequently exposes winner, spread, totals and exact-score
+    // variants. Keep its strongest scanned representative first so one event
+    // cannot consume the batch that should cover other events.
+    const eventSelection = retainOneMarketPerScanEvent(eligibleMarkets);
+    const markets = eventSelection.retained;
+    for (const market of eventSelection.heldBack) {
+      incrementMarketScanReason(scanReasonCounts, "same_event_already_represented");
+    }
     const categoryCounts = marketCategoryCounts(markets);
     const tagCounts = marketTagCounts(markets);
     const observations = (Array.isArray(markets) ? markets : [])
@@ -5303,10 +5369,6 @@ async function refreshMarketObservations(state) {
       const status = String(item.status || item.selectionStatus || "").toUpperCase();
       return status !== "RESOLVED" && Number.isFinite(days) && days > 0 && days <= MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS;
     }).length;
-    const scanReasonCounts = {};
-    for (const market of fetchedMarkets) {
-      incrementMarketScanReason(scanReasonCounts, marketScanRetentionReason(market, scanRunAt));
-    }
     const resolvedReasonCount = Number(scanReasonCounts.resolved_or_closed || 0);
     const notRetainedReasonCounts = { ...scanReasonCounts };
     delete notRetainedReasonCounts.resolved_or_closed;
@@ -5333,6 +5395,7 @@ async function refreshMarketObservations(state) {
       lastCategoryCount: Object.keys(categoryCounts).length,
       lastCategoryCounts: categoryCounts,
       lastRequestedCategories: requestedCategories.map((category) => category.slug),
+      lastEventDuplicatesSkippedCount: eventSelection.heldBack.length,
       priorityLiquidityUsdc: MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC,
       lastTag: MARKET_SCAN_TAG,
       lastScanError: categoryErrors.length
@@ -5362,6 +5425,7 @@ async function refreshMarketObservations(state) {
         resolvedSkippedCount: resolvedObservationCount,
         notRetainedCount,
         notRetainedReasonCounts: sortedNotRetainedReasonCounts,
+        sameEventSkippedCount: eventSelection.heldBack.length,
         minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
         scanTag: MARKET_SCAN_TAG || null,
         tagMatchedCount: fetchedMarkets.length,
