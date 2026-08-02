@@ -1430,7 +1430,7 @@ try {
                     'live_use_limit_orders' => $liveUseLimitOrders,
                     'cross_live_portfolio_risk_diversification' => $crossLiveRiskDiversification,
                     'live_ignore_trade_cadence' => 'true',
-                    'live_run_source' => 'MANUAL',
+                    'live_run_source' => $manualRunOnce === true ? 'MANUAL' : 'AUTO',
                     'live_execution_candidate_token_ids' => $liveShortlistTokenIds,
                     'live_execution_probability_source' => $liveShortlistProbabilitySource,
                 ], static fn ($value): bool => $value !== null),
