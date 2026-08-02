@@ -1451,7 +1451,7 @@ async function main() {
   const originalValueUsdc = storedOriginalValueUsdc > 0
     ? storedOriginalValueUsdc
     : inferredOriginalValueUsdc;
-  const pnlPctOfOriginalValue = originalValueUsdc > 0
+  const pnlPctOfOriginalValue = (pnl) => originalValueUsdc > 0
     ? number(number(pnl, 0) / originalValueUsdc)
     : null;
 
