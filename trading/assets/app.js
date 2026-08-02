@@ -6417,7 +6417,7 @@ function renderCalculationReport() {
 
   if (!report) {
     els.calculationReport.innerHTML = `
-      <div class="empty">No nightly calculation report yet. It will be created by the scheduled report run and refreshed here automatically.</div>
+      <div class="empty">No calculation report yet. It is refreshed hourly from the stored scraped opportunities.</div>
     `;
     return;
   }

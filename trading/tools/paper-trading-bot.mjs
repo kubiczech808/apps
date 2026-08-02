@@ -6081,6 +6081,33 @@ async function run() {
     return;
   }
 
+  // Keep the parameter report independent from AI evaluation and trade
+  // execution. This scheduled path still refreshes the scraped catalogue
+  // above, then recalculates the report without spending Gemini quota or
+  // changing any portfolio positions.
+  if (REPORT_ONLY) {
+    state.generatedAt = nowIso();
+    updateCalculationReport(state);
+    const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
+      strategyId: portfolioState.id,
+      action: "REPORT",
+      reason: "hourly fresh-scraped opportunity simulation updated",
+    }));
+    recordRun(state, {
+      decisions,
+      eligible: [],
+      evaluations: [],
+    });
+    await writeState(state);
+    console.log(JSON.stringify({
+      action: "REPORT",
+      reason: "hourly fresh-scraped opportunity simulation updated",
+      sampleSize: state.latestCalculationReport?.sampleSize || 0,
+      strategies: decisions.map((decision) => decision.strategyId),
+    }, null, 2));
+    return;
+  }
+
   recoverLedgerGaps(state);
   for (const portfolioState of Object.values(state.paperPortfolios)) {
     portfolioState.trades = await refreshTrades(portfolioState.trades);
@@ -6093,27 +6120,6 @@ async function run() {
   state.generatedAt = nowIso();
   updatePortfolio(state);
   updateCalculationReport(state);
-
-  if (REPORT_ONLY) {
-    const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
-      strategyId: portfolioState.id,
-      action: "REPORT",
-      reason: "nightly fresh-scraped opportunity simulation updated",
-    }));
-    recordRun(state, {
-      decisions,
-      eligible: [],
-      evaluations: [],
-    });
-    await writeState(state);
-    console.log(JSON.stringify({
-      action: "REPORT",
-      reason: "nightly fresh-scraped opportunity simulation updated",
-      sampleSize: state.latestCalculationReport?.sampleSize || 0,
-      strategies: decisions.map((decision) => decision.strategyId),
-    }, null, 2));
-    return;
-  }
 
   if (REFRESH_ONLY) {
     const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
