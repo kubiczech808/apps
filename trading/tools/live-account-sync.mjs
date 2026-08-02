@@ -1441,11 +1441,18 @@ async function main() {
   const equityUsdc = cashUsdc == null
     ? portfolioBase.equityUsdc
     : cashUsdc + number(portfolioBase.marketValueUsdc, 0) + pendingRedeemUsdc;
-  const depositedUsdc = number((equityUsdc - number(portfolioBase.totalPnlUsdc, 0)).toFixed(6));
-  // Dashboard portfolio returns use one consistent denominator: the estimated
-  // original account value, rather than turnover through individual trades.
-  const pnlPctOfOriginalValue = (pnl) => depositedUsdc > 0
-    ? number(number(pnl, 0) / depositedUsdc)
+  const inferredOriginalValueUsdc = number((equityUsdc - number(portfolioBase.totalPnlUsdc, 0)).toFixed(6));
+  // This is a baseline, not a live accounting result. Preserve it after the
+  // first usable snapshot so reconciliation changes cannot masquerade as a
+  // deposit or withdrawal on the dashboard.
+  const storedOriginalValueUsdc = number(
+    previousLiveState?.portfolio?.originalValueUsdc ?? previousLiveState?.portfolio?.depositedUsdc,
+  );
+  const originalValueUsdc = storedOriginalValueUsdc > 0
+    ? storedOriginalValueUsdc
+    : inferredOriginalValueUsdc;
+  const pnlPctOfOriginalValue = originalValueUsdc > 0
+    ? number(number(pnl, 0) / originalValueUsdc)
     : null;
 
   const payload = {
@@ -1473,13 +1480,16 @@ async function main() {
       ...portfolioBase,
       equityUsdc,
       cashUsdc,
-      depositedUsdc,
+      // Keep the legacy field for the frontend while storing an explicit,
+      // immutable name for new snapshots.
+      depositedUsdc: originalValueUsdc,
+      originalValueUsdc,
       pnlPercentageBasis: "original-value",
       openPnlPct: pnlPctOfOriginalValue(portfolioBase.openPnlUsdc),
       realizedPnlPct: pnlPctOfOriginalValue(portfolioBase.realizedPnlUsdc),
       totalPnlPct: pnlPctOfOriginalValue(portfolioBase.totalPnlUsdc),
-      depositedSource: "equity minus tracked Polymarket P/L",
-      depositedNote: "Estimated original account capital currently visible to this app; deposits/withdrawals are not itemized by the public activity API.",
+      depositedSource: storedOriginalValueUsdc > 0 ? "persisted-original-value" : "initial-sync-estimate",
+      depositedNote: "Original account value is fixed from the first usable live snapshot. It changes only through an explicit future deposit/withdrawal reconciliation, never through position, redeem, or P/L sync changes.",
       equitySource: cashUsdc == null ? "polymarket-value-api-or-open-market-value" : "cash + open market value + pending redeem value",
       pendingRedeemNote: "Winning resolved positions that Polymarket exposes as redeemable are counted in equity until cash balance shows the manual redeem.",
       cashSource: balanceAllowance?.status === "OK" ? "clob-balance-allowance" : null,
