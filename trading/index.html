@@ -202,7 +202,7 @@
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Market evaluation</p>
-                <h2>Evaluated opportunities</h2>
+                <h2 data-opportunity-panel-title>Evaluated opportunities</h2>
               </div>
             </div>
             <div class="settings-panel-body">
@@ -210,28 +210,29 @@
                   <div class="segmented opportunity-view-toggle" data-opportunity-view-toggle>
                     <button class="segment-button active" type="button" data-opportunity-view="evaluated">Evaluated</button>
                     <button class="segment-button" type="button" data-opportunity-view="scraped">Scraped</button>
+                    <button class="segment-button" type="button" data-opportunity-view="scan-log">Scraping log</button>
                   </div>
-                  <label class="threshold-control evaluation-probability-control" title="Display-only filter. It uses AI probability in Evaluated and the current Polymarket probability in Scraped. Portfolio rules are not changed.">
+                  <label class="threshold-control evaluation-probability-control" data-opportunity-filter title="Display-only filter. It uses AI probability in Evaluated and the current Polymarket probability in Scraped. Portfolio rules are not changed.">
                     <span>Probability filter</span>
                     <input type="number" min="0" max="99" step="1" value="0" data-evaluation-probability-filter>
                     <strong data-evaluation-probability-filter-label>&gt;= 0.0%</strong>
                   </label>
-                  <label class="threshold-control evaluation-days-control" title="Display-only maximum days left filter. Portfolio rules are not changed.">
+                  <label class="threshold-control evaluation-days-control" data-opportunity-filter title="Display-only maximum days left filter. Portfolio rules are not changed.">
                     <span>Days left max</span>
                     <input type="number" min="0" max="3650" step="0.5" placeholder="All" data-evaluation-days-filter>
                     <strong data-evaluation-days-filter-label>All</strong>
                   </label>
-                  <label class="threshold-control evaluation-net-yield-control" title="Display-only minimum Net yield % filter after estimated trading fees. Portfolio rules are not changed.">
+                  <label class="threshold-control evaluation-net-yield-control" data-opportunity-filter title="Display-only minimum Net yield % filter after estimated trading fees. Portfolio rules are not changed.">
                     <span>Net yield min</span>
                     <input type="number" min="0" max="1000" step="0.1" value="0.0" data-evaluation-net-yield-filter>
                     <strong data-evaluation-net-yield-filter-label>&gt;= 0.0%</strong>
                   </label>
-                  <label class="threshold-control evaluation-liquidity-control" data-scraped-only title="Display-only minimum market liquidity filter for Scraped opportunities.">
+                  <label class="threshold-control evaluation-liquidity-control" data-scraped-only data-opportunity-filter title="Display-only minimum market liquidity filter for Scraped opportunities.">
                     <span>Liquidity min</span>
                     <input type="number" min="0" max="1000000000" step="1000" placeholder="All" data-evaluation-liquidity-filter>
                     <strong data-evaluation-liquidity-filter-label>All</strong>
                   </label>
-                  <div class="segmented" data-evaluation-filter data-evaluation-only>
+                  <div class="segmented" data-evaluation-filter data-evaluation-only data-opportunity-filter>
                     <button class="segment-button active" type="button" data-evaluation-status="EVALUATED">Evaluated</button>
                     <button class="segment-button" type="button" data-evaluation-status="RESOLVED">Resolved</button>
                     <button class="segment-button" type="button" data-evaluation-status="ERROR">Error</button>

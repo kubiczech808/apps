@@ -656,6 +656,17 @@ button:disabled {
   min-width: 1280px;
 }
 
+.scraping-run-log-table {
+  min-width: 1450px;
+}
+
+.scraping-run-log-table .table-secondary {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.82em;
+}
+
 .run-log-scroll > .portfolio-run-list {
   min-width: 0;
 }

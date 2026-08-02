@@ -35,6 +35,7 @@ const state = {
   scrapedMarketStateLoaded: false,
   scrapedMarketObservations: [],
   scrapedMarketScan: {},
+  scrapedMarketScanHistory: [],
   scrapedRefreshKeys: new Set(),
   scrapedRefreshErrors: new Map(),
   evaluationProbabilityFilter: 0,
@@ -132,6 +133,7 @@ const els = {
   portfolioCandidatesTitle: document.querySelector("[data-portfolio-candidates-title]"),
   settingsPageEyebrow: document.querySelector("[data-settings-page-eyebrow]"),
   settingsPageTitle: document.querySelector("[data-settings-page-title]"),
+  opportunityPanelTitle: document.querySelector("[data-opportunity-panel-title]"),
   settingsSectionButtons: document.querySelectorAll("[data-settings-section]"),
   settingsPanels: document.querySelectorAll("[data-settings-panel]"),
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
@@ -174,6 +176,7 @@ const els = {
   evaluationStatusButtons: document.querySelectorAll("[data-evaluation-status]"),
   evaluationControls: document.querySelector("[data-evaluation-controls]"),
   opportunityViewButtons: document.querySelectorAll("[data-opportunity-view]"),
+  opportunityFilterControls: document.querySelectorAll("[data-opportunity-filter]"),
   evaluationOnlyControls: document.querySelectorAll("[data-evaluation-only]"),
   scrapedOnlyControls: document.querySelectorAll("[data-scraped-only]"),
   parameterModal: document.querySelector("[data-parameter-modal]"),
@@ -700,11 +703,23 @@ function portfolioTabRoutePath(tab = "daily-picks") {
 }
 
 function opportunityRoutePath(view = "evaluated") {
-  return `/trading/opportunities/${normalizeOpportunityView(view)}/`;
+  const normalized = normalizeOpportunityView(view);
+  return normalized === "scan-log"
+    ? "/trading/opportunities/scraped/scan-log/"
+    : `/trading/opportunities/${normalized}/`;
 }
 
 function currentRouteState() {
   const path = window.location.pathname.replace(/\/+$/, "/");
+  if (/(?:^|\/)opportunities\/scraped\/scan-log\/$/.test(path)) {
+    return {
+      page: "opportunities",
+      tab: "settings-runs",
+      settingsSection: "evaluation-log",
+      evaluationStatus: "EVALUATED",
+      opportunityView: "scan-log",
+    };
+  }
   const opportunityRoute = path.match(/(?:^|\/)opportunities(?:\/([^/]+))?\/$/);
   if (opportunityRoute) {
     return {
@@ -821,26 +836,31 @@ function setEvaluationStatus(status) {
 }
 
 function normalizeOpportunityView(view) {
-  return view === "scraped" ? "scraped" : "evaluated";
+  return view === "scraped" || view === "scan-log" ? view : "evaluated";
 }
 
 function syncOpportunityPageHeading() {
-  if (!els.settingsPageTitle) return;
-  els.settingsPageTitle.textContent = state.page === "opportunities"
-    ? (state.opportunityView === "scraped" ? "Scraped opportunities" : "Evaluated opportunities")
+  const title = state.page === "opportunities"
+    ? (state.opportunityView === "scraped" ? "Scraped opportunities" : state.opportunityView === "scan-log" ? "Scraping log" : "Evaluated opportunities")
     : "Automation settings";
+  if (els.settingsPageTitle) els.settingsPageTitle.textContent = title;
+  if (els.opportunityPanelTitle) els.opportunityPanelTitle.textContent = title;
 }
 
 function syncOpportunityViewControls() {
   const scraped = state.opportunityView === "scraped";
+  const scanLog = state.opportunityView === "scan-log";
   els.opportunityViewButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.opportunityView === state.opportunityView);
   });
   els.evaluationOnlyControls.forEach((element) => {
-    element.hidden = false;
+    element.hidden = scraped || scanLog;
   });
   els.scrapedOnlyControls.forEach((element) => {
     element.hidden = !scraped;
+  });
+  els.opportunityFilterControls.forEach((element) => {
+    element.hidden = scanLog;
   });
   els.evaluationStatusButtons.forEach((button) => {
     const status = button.dataset.evaluationStatus;
@@ -863,7 +883,7 @@ function setOpportunityView(view, { syncRoute = false, replace = false } = {}) {
   syncOpportunityPageHeading();
   syncOpportunityViewControls();
   renderBotEvaluations();
-  if (state.opportunityView === "scraped") ensureScrapedMarketState();
+  if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") ensureScrapedMarketState();
   if (syncRoute && state.page === "opportunities") {
     const targetPath = `${opportunityRoutePath(state.opportunityView)}${window.location.search}`;
     const currentPath = `${window.location.pathname}${window.location.search}`;
@@ -881,7 +901,7 @@ function activatePage(page, { replace = false, preserveSearch = false } = {}) {
     setEvaluationStatus("EVALUATED");
     activateTab("settings-runs");
     ensureFullBotState();
-    if (state.opportunityView === "scraped") ensureScrapedMarketState();
+    if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") ensureScrapedMarketState();
   } else if (nextPage === "settings") {
     setSettingsSection("calculations");
     activateTab("settings-runs");
@@ -3331,20 +3351,23 @@ function storeScrapedMarketState(scrapedState = {}) {
   state.scrapedMarketScan = scrapedState.marketScan && typeof scrapedState.marketScan === "object"
     ? scrapedState.marketScan
     : {};
+  state.scrapedMarketScanHistory = Array.isArray(scrapedState.marketScanHistory)
+    ? scrapedState.marketScanHistory
+    : [];
   state.scrapedMarketStateLoaded = true;
 }
 
 async function ensureScrapedMarketState(options = {}) {
   if (scrapedMarketStateIsLoaded() || state.scrapedMarketStateBusy) return;
   state.scrapedMarketStateBusy = true;
-  if (state.opportunityView === "scraped" && els.botEvaluations) {
+  if ((state.opportunityView === "scraped" || state.opportunityView === "scan-log") && els.botEvaluations) {
     els.botEvaluations.innerHTML = '<div class="empty">Loading scraped Polymarket opportunities...</div>';
   }
   try {
     const scrapedState = await fetchJson("data/paper-state.json", { summary: "scraped" });
     if (dashboardLoadIsStale(options)) return;
     storeScrapedMarketState(scrapedState);
-    if (state.opportunityView === "scraped") renderBotEvaluations();
+    if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") renderBotEvaluations();
     if (isLiveMode() && state.liveState) {
       // Open CLOB orders only expose a token ID. Re-render after scraped market
       // metadata arrives so the table can resolve its human market title.
@@ -3354,7 +3377,7 @@ async function ensureScrapedMarketState(options = {}) {
     }
   } catch (error) {
     rememberStateFetchError("paper", error);
-    if (state.opportunityView === "scraped" && els.botEvaluations) {
+    if ((state.opportunityView === "scraped" || state.opportunityView === "scan-log") && els.botEvaluations) {
       els.botEvaluations.innerHTML = `<div class="empty">${escapeHtml(error.message || "Scraped opportunities are not available yet.")}</div>`;
     }
   } finally {
@@ -3774,7 +3797,7 @@ async function triggerScrapedOpportunityRefresh(item) {
 
   state.scrapedRefreshKeys.add(key);
   state.scrapedRefreshErrors.delete(key);
-  if (state.page === "opportunities" && state.opportunityView === "scraped") renderBotEvaluations();
+  if (state.page === "opportunities" && (state.opportunityView === "scraped" || state.opportunityView === "scan-log")) renderBotEvaluations();
 
   const startedAt = new Date().toISOString();
   try {
@@ -3799,7 +3822,7 @@ async function triggerScrapedOpportunityRefresh(item) {
     state.scrapedRefreshErrors.set(key, error?.message || "Could not refresh this Polymarket market.");
   } finally {
     state.scrapedRefreshKeys.delete(key);
-    if (state.page === "opportunities" && state.opportunityView === "scraped") renderBotEvaluations();
+    if (state.page === "opportunities" && (state.opportunityView === "scraped" || state.opportunityView === "scan-log")) renderBotEvaluations();
   }
 }
 
@@ -5295,8 +5318,104 @@ function renderScrapedOpportunities() {
   `;
 }
 
+function scanLogCounts(value) {
+  if (!value || typeof value !== "object") return "-";
+  const entries = Object.entries(value)
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 8);
+  return entries.length
+    ? entries.map(([label, count]) => `${label} (${formatInteger(count) || count})`).join(", ")
+    : "-";
+}
+
+function scanLogInterval(current, previous) {
+  const currentTime = Date.parse(current?.runAt || "");
+  const previousTime = Date.parse(previous?.runAt || "");
+  if (!Number.isFinite(currentTime) || !Number.isFinite(previousTime) || currentTime <= previousTime) return "-";
+  const minutes = Math.round((currentTime - previousTime) / 60000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = minutes / 60;
+  if (hours < 48) return `${hours.toFixed(hours >= 10 ? 0 : 1)} h`;
+  return `${(hours / 24).toFixed(1)} d`;
+}
+
+function renderScrapeRunLog() {
+  const history = (Array.isArray(state.scrapedMarketScanHistory) ? state.scrapedMarketScanHistory : [])
+    .slice()
+    .sort((a, b) => (Date.parse(b.runAt || "") || 0) - (Date.parse(a.runAt || "") || 0));
+  const latest = history[0] || scrapedMarketScan();
+  if (els.evaluationFilterCount) {
+    els.evaluationFilterCount.textContent = `${formatInteger(history.length) || history.length} recorded scraping runs`;
+  }
+  if (els.evaluationSummary) {
+    els.evaluationSummary.textContent = [
+      `${formatInteger(history.length) || history.length} runs recorded`,
+      latest?.runAt ? `last run ${formatDate(latest.runAt)}` : "last run pending",
+      latest?.status ? `last status ${String(latest.status).toLowerCase()}` : null,
+      latest?.retainedObservationCount != null ? `${formatInteger(latest.retainedObservationCount)} rows retained last run` : null,
+      latest?.error ? `last error: ${latest.error}` : null,
+    ].filter(Boolean).join(" / ");
+  }
+  if (!history.length) {
+    els.botEvaluations.innerHTML = '<div class="empty">No scraping runs have been recorded yet. The next scheduled market scan will appear here.</div>';
+    return;
+  }
+
+  els.botEvaluations.innerHTML = `
+    <div class="ledger-scroll" tabindex="0" aria-label="Scrollable Polymarket scraping run log">
+      <table class="ledger-wide-table scraping-run-log-table">
+        <thead>
+          <tr>
+            <th>Run time</th>
+            <th>Since previous</th>
+            <th>Trigger</th>
+            <th>Status</th>
+            <th>API calls</th>
+            <th>Markets pulled</th>
+            <th>Rows retained</th>
+            <th>New / updated</th>
+            <th>Resolved</th>
+            <th>Not retained</th>
+            <th>Categories</th>
+            <th>Tags</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${history.slice(0, 200).map((run, index) => {
+            const status = String(run.status || "UNKNOWN").toUpperCase();
+            const statusClass = status === "ERROR" ? "negative" : status === "SUCCESS" ? "positive" : "";
+            return `
+              <tr>
+                <td data-label="Run time"><strong>${escapeHtml(formatDate(run.runAt || ""))}</strong></td>
+                <td data-label="Since previous">${escapeHtml(scanLogInterval(run, history[index + 1]))}</td>
+                <td data-label="Trigger"><strong>${escapeHtml(run.trigger || "AUTO")}</strong></td>
+                <td data-label="Status" class="${statusClass}"><strong>${escapeHtml(status)}</strong></td>
+                <td data-label="API calls">${formatInteger(run.apiCalls) || "0"}</td>
+                <td data-label="Markets pulled"><strong>${formatInteger(run.rawMarketCount ?? run.loadedMarketCount) || "0"}</strong><small class="table-secondary">${formatInteger(run.loadedMarketCount) || "0"} unique / ${formatInteger(run.preferredMarketCount) || "0"} preferred / ${formatInteger(run.broadMarketCount) || "0"} broad</small></td>
+                <td data-label="Rows retained"><strong>${formatInteger(run.retainedObservationCount) || "0"}</strong><small class="table-secondary">${formatInteger(run.shortHorizonCount) || "0"} within preferred horizon</small></td>
+                <td data-label="New / updated">${formatInteger(run.newObservationCount) || "0"} / ${formatInteger(run.updatedObservationCount) || "0"}</td>
+                <td data-label="Resolved">${formatInteger(run.resolvedObservationCount) || "0"}</td>
+                <td data-label="Not retained">${formatInteger(run.notRetainedCount) || "0"}</td>
+                <td data-label="Categories">${escapeHtml(scanLogCounts(run.categoryCounts))}</td>
+                <td data-label="Tags">${escapeHtml(scanLogCounts(run.tagCounts))}</td>
+                <td data-label="Error" class="${run.error ? "negative" : ""}">${escapeHtml(run.error || "-")}</td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function renderBotEvaluations() {
   syncOpportunityViewControls();
+  if (state.opportunityView === "scan-log") {
+    renderScrapeRunLog();
+    return;
+  }
   if (state.opportunityView === "scraped") {
     renderScrapedOpportunities();
     return;

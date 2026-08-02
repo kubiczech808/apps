@@ -49,6 +49,7 @@ const MIN_VOLUME_24H = envNumber("PAPER_MIN_VOLUME_24H", 100);
 const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
 const MARKET_SCAN_BATCH_SIZE = envNumber("PAPER_MARKET_SCAN_BATCH_SIZE", 100);
 const MARKET_SCAN_MAX_OBSERVATIONS = envNumber("PAPER_MARKET_SCAN_MAX_OBSERVATIONS", 5000);
+const MARKET_SCAN_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_HISTORY_LIMIT", 200);
 const MARKET_SCAN_MAX_OFFSET = envNumber("PAPER_MARKET_SCAN_MAX_OFFSET", 5000);
 const MARKET_SCAN_PREFETCH_BATCHES = envNumber("PAPER_MARKET_SCAN_PREFETCH_BATCHES", 2);
 const MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC", 40000);
@@ -347,6 +348,7 @@ function normalizeState(input) {
     evaluations: mergeEvaluationLists(Array.isArray(input.evaluations) ? input.evaluations : []),
     marketObservations: mergeMarketObservationLists(Array.isArray(input.marketObservations) ? input.marketObservations : []),
     marketScan: normalizeMarketScan(input.marketScan),
+    marketScanHistory: normalizeMarketScanHistory(input.marketScanHistory),
     evaluationRunLog: Array.isArray(input.evaluationRunLog) ? input.evaluationRunLog.slice(0, 80) : [],
     calculationReports: Array.isArray(input.calculationReports) ? input.calculationReports.slice(0, 30) : [],
     latestCalculationReport: input.latestCalculationReport || (Array.isArray(input.calculationReports) ? input.calculationReports[0] || null : null),
@@ -512,6 +514,12 @@ function normalizeMarketScan(input = {}) {
     priorityLiquidityUsdc: Math.max(0, Number(input?.priorityLiquidityUsdc) || MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC),
     lastScanError: input?.lastScanError || null,
   };
+}
+
+function normalizeMarketScanHistory(input = []) {
+  return (Array.isArray(input) ? input : [])
+    .filter((item) => item && typeof item === "object")
+    .slice(0, Math.max(20, MARKET_SCAN_HISTORY_LIMIT));
 }
 
 function mergeMarketObservationLists(primary = [], secondary = [], limit = MARKET_SCAN_MAX_OBSERVATIONS) {
@@ -1060,6 +1068,11 @@ function mergeStates(primary, secondary) {
     evaluations: mergeEvaluationLists(base.evaluations || [], other.evaluations || []),
     marketObservations: mergeMarketObservationLists(base.marketObservations || [], other.marketObservations || []),
     marketScan: stateTime(base) >= stateTime(other) ? normalizeMarketScan(base.marketScan) : normalizeMarketScan(other.marketScan),
+    marketScanHistory: mergeUniqueById(
+      [...(base.marketScanHistory || []), ...(other.marketScanHistory || [])],
+      (item) => item.runAt || item.id || "",
+      Math.max(20, MARKET_SCAN_HISTORY_LIMIT),
+    ).sort((a, b) => (Date.parse(b.runAt || "") || 0) - (Date.parse(a.runAt || "") || 0)),
     evaluationRunLog: mergeUniqueById([...(base.evaluationRunLog || []), ...(other.evaluationRunLog || [])], (item) => item.runAt || item.id || "", 80),
     calculationReports: mergeUniqueById([...(base.calculationReports || []), ...(other.calculationReports || [])], (item) => item.id || item.generatedAt || "", 60)
       .sort((a, b) => (Date.parse(b.generatedAt || "") || 0) - (Date.parse(a.generatedAt || "") || 0))
@@ -4663,6 +4676,32 @@ function marketCategoryCounts(markets = []) {
   return Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 32));
 }
 
+function marketTagCounts(markets = []) {
+  const counts = {};
+  for (const market of markets) {
+    const tags = new Set();
+    const add = (value) => {
+      if (Array.isArray(value)) {
+        value.forEach(add);
+        return;
+      }
+      if (typeof value === "string" && /[,|]/.test(value)) {
+        value.split(/[,|]/).forEach(add);
+        return;
+      }
+      const normalized = normalizedMarketCategory(value);
+      if (normalized && !/^\d+$/.test(normalized)) tags.add(normalized);
+    };
+    add(market.tags);
+    for (const event of Array.isArray(market.events) ? market.events : []) add(event?.tags);
+    for (const tag of tagQuestion(market.question || "")) {
+      if (tag !== "clear-resolution") add(tag);
+    }
+    for (const tag of tags) counts[tag] = Number(counts[tag] || 0) + 1;
+  }
+  return Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 32));
+}
+
 function diversifyMarketScanOrder(markets = []) {
   const ordered = mergeMarketLists(markets).sort(compareMarketsForDiverseScan);
   const buckets = new Map();
@@ -5003,61 +5042,138 @@ async function refreshMarketObservations(state) {
     return [observation];
   }
 
-  const preferredMarkets = await loadPreferredMarketScanBatch();
+  const scanRunAt = nowIso();
+  const scanTrigger = MANUAL_RUN_ONCE ? "MANUAL" : "AUTO";
+  let attemptedApiCalls = 0;
+  let preferredMarkets = [];
   const broadBatches = [];
   let broadCursor = previousScan.cursor;
-  const broadBatchCount = Math.max(1, Math.floor(Number(MARKET_SCAN_PREFETCH_BATCHES) || 1));
-  for (let index = 0; index < broadBatchCount; index += 1) {
-    const order = index % 2 === 0 ? "volume24hr" : "endDate";
-    const batch = await loadBroadMarketScanBatch({ cursor: broadCursor, order });
-    broadBatches.push(...(Array.isArray(batch) ? batch : []));
-    if (!Array.isArray(batch) || batch.length < MARKET_SCAN_BATCH_SIZE) {
-      broadCursor = 0;
-      break;
+  try {
+    attemptedApiCalls += 1;
+    preferredMarkets = await loadPreferredMarketScanBatch();
+    const broadBatchCount = Math.max(1, Math.floor(Number(MARKET_SCAN_PREFETCH_BATCHES) || 1));
+    for (let index = 0; index < broadBatchCount; index += 1) {
+      const order = index % 2 === 0 ? "volume24hr" : "endDate";
+      attemptedApiCalls += 1;
+      const batch = await loadBroadMarketScanBatch({ cursor: broadCursor, order });
+      broadBatches.push(...(Array.isArray(batch) ? batch : []));
+      if (!Array.isArray(batch) || batch.length < MARKET_SCAN_BATCH_SIZE) {
+        broadCursor = 0;
+        break;
+      }
+      broadCursor += MARKET_SCAN_BATCH_SIZE;
+      if (broadCursor >= MARKET_SCAN_MAX_OFFSET) {
+        broadCursor = 0;
+        break;
+      }
     }
-    broadCursor += MARKET_SCAN_BATCH_SIZE;
-    if (broadCursor >= MARKET_SCAN_MAX_OFFSET) {
-      broadCursor = 0;
-      break;
-    }
-  }
-  const markets = diversifyMarketScanOrder([...preferredMarkets, ...broadBatches]);
-  const categoryCounts = marketCategoryCounts(markets);
-  const observedAt = nowIso();
-  const observations = (Array.isArray(markets) ? markets : [])
-    .map((market) => preferredMarketObservation(market, observedAt))
-    .filter((item) => {
-      if (!item) return false;
-      const probability = Number(item.marketProbability);
+    const markets = diversifyMarketScanOrder([...preferredMarkets, ...broadBatches]);
+    const categoryCounts = marketCategoryCounts(markets);
+    const tagCounts = marketTagCounts(markets);
+    const observations = (Array.isArray(markets) ? markets : [])
+      .map((market) => preferredMarketObservation(market, scanRunAt))
+      .filter((item) => {
+        if (!item) return false;
+        const probability = Number(item.marketProbability);
+        const days = daysToEnd(item.endDate);
+        const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+        const status = String(item.status || item.selectionStatus || "").toUpperCase();
+        return Number.isFinite(probability)
+          && probability >= MARKET_SCAN_MIN_PROBABILITY
+          && (status === "RESOLVED" || (Number.isFinite(days) && days >= minimumDays));
+      })
+      .sort(compareObservationsForMarketScan);
+    const shortHorizonCount = observations.filter((item) => {
       const days = daysToEnd(item.endDate);
-      const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
       const status = String(item.status || item.selectionStatus || "").toUpperCase();
-      return Number.isFinite(probability)
-        && probability >= MARKET_SCAN_MIN_PROBABILITY
-        && (status === "RESOLVED" || (Number.isFinite(days) && days >= minimumDays));
-    })
-    .sort(compareObservationsForMarketScan);
-  const shortHorizonCount = observations.filter((item) => {
-    const days = daysToEnd(item.endDate);
-    const status = String(item.status || item.selectionStatus || "").toUpperCase();
-    return status !== "RESOLVED" && Number.isFinite(days) && days > 0 && days <= MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS;
-  }).length;
-  state.marketObservations = mergeMarketObservationLists(observations, state.marketObservations || [])
-    .map(normalizeMarketObservationEconomics);
-  state.marketScan = {
-    cursor: broadCursor,
-    lastScanAt: observedAt,
-    lastBatchCount: Array.isArray(markets) ? markets.length : 0,
-    lastPreferredCount: observations.length,
-    lastShortHorizonCount: shortHorizonCount,
-    preferredMaxResolutionDays: MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS,
-    minResolutionHours: MARKET_SCAN_MIN_RESOLUTION_HOURS,
-    lastCategoryCount: Object.keys(categoryCounts).length,
-    lastCategoryCounts: categoryCounts,
-    priorityLiquidityUsdc: MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC,
-    lastScanError: null,
-  };
-  return observations;
+      return status !== "RESOLVED" && Number.isFinite(days) && days > 0 && days <= MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS;
+    }).length;
+    const previousKeys = new Set((state.marketObservations || []).map(marketObservationKey).filter(Boolean));
+    const observationKeys = observations.map(marketObservationKey).filter(Boolean);
+    const newObservationCount = observationKeys.filter((key) => !previousKeys.has(key)).length;
+    const updatedObservationCount = observationKeys.filter((key) => previousKeys.has(key)).length;
+    const resolvedObservationCount = observations.filter((item) => String(item.status || item.selectionStatus || "").toUpperCase() === "RESOLVED").length;
+    const notRetainedCount = Math.max(0, markets.length - observations.length);
+    state.marketObservations = mergeMarketObservationLists(observations, state.marketObservations || [])
+      .map(normalizeMarketObservationEconomics);
+    state.marketScan = {
+      cursor: broadCursor,
+      lastScanAt: scanRunAt,
+      lastBatchCount: Array.isArray(markets) ? markets.length : 0,
+      lastPreferredCount: Array.isArray(preferredMarkets) ? preferredMarkets.length : 0,
+      lastShortHorizonCount: shortHorizonCount,
+      preferredMaxResolutionDays: MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS,
+      minResolutionHours: MARKET_SCAN_MIN_RESOLUTION_HOURS,
+      lastCategoryCount: Object.keys(categoryCounts).length,
+      lastCategoryCounts: categoryCounts,
+      priorityLiquidityUsdc: MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC,
+      lastScanError: null,
+    };
+    state.marketScanHistory = [
+      {
+        id: `scan-${scanRunAt}`,
+        runAt: scanRunAt,
+        trigger: scanTrigger,
+        status: "SUCCESS",
+        apiCalls: attemptedApiCalls,
+        requestedBatches: attemptedApiCalls,
+        preferredMarketCount: preferredMarkets.length,
+        broadMarketCount: broadBatches.length,
+        rawMarketCount: preferredMarkets.length + broadBatches.length,
+        loadedMarketCount: markets.length,
+        retainedObservationCount: observations.length,
+        newObservationCount,
+        updatedObservationCount,
+        resolvedObservationCount,
+        notRetainedCount,
+        shortHorizonCount,
+        categoryCounts,
+        tagCounts,
+        error: null,
+      },
+      ...normalizeMarketScanHistory(state.marketScanHistory),
+    ].slice(0, Math.max(20, MARKET_SCAN_HISTORY_LIMIT));
+    return observations;
+  } catch (error) {
+    const partialMarkets = diversifyMarketScanOrder([...preferredMarkets, ...broadBatches]);
+    const categoryCounts = marketCategoryCounts(partialMarkets);
+    const tagCounts = marketTagCounts(partialMarkets);
+    const message = error?.message || String(error);
+    state.marketScan = {
+      ...previousScan,
+      lastScanAt: scanRunAt,
+      lastBatchCount: partialMarkets.length,
+      lastPreferredCount: preferredMarkets.length,
+      lastCategoryCount: Object.keys(categoryCounts).length,
+      lastCategoryCounts: categoryCounts,
+      lastScanError: message,
+    };
+    state.marketScanHistory = [
+      {
+        id: `scan-${scanRunAt}`,
+        runAt: scanRunAt,
+        trigger: scanTrigger,
+        status: "ERROR",
+        apiCalls: attemptedApiCalls,
+        requestedBatches: Math.max(1, attemptedApiCalls),
+        preferredMarketCount: preferredMarkets.length,
+        broadMarketCount: broadBatches.length,
+        rawMarketCount: preferredMarkets.length + broadBatches.length,
+        loadedMarketCount: partialMarkets.length,
+        retainedObservationCount: 0,
+        newObservationCount: 0,
+        updatedObservationCount: 0,
+        resolvedObservationCount: 0,
+        notRetainedCount: partialMarkets.length,
+        shortHorizonCount: 0,
+        categoryCounts,
+        tagCounts,
+        error: message,
+      },
+      ...normalizeMarketScanHistory(state.marketScanHistory),
+    ].slice(0, Math.max(20, MARKET_SCAN_HISTORY_LIMIT));
+    return [];
+  }
 }
 
 function snapshotMatchesEvaluation(snapshot, evaluation) {

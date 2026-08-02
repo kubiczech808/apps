@@ -344,6 +344,9 @@ function compact_state_payload(string $target, array $data, string $summary): ar
                 array_values(array_filter($observations, 'is_array'))
             ),
             'marketScan' => is_array($data['marketScan'] ?? null) ? $data['marketScan'] : [],
+            'marketScanHistory' => is_array($data['marketScanHistory'] ?? null)
+                ? array_slice(array_values(array_filter($data['marketScanHistory'], 'is_array')), 0, 200)
+                : [],
             'marketDetailsMode' => 'compact',
         ];
     }
