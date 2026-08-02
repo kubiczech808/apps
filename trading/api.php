@@ -415,6 +415,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => null,
                 'minNetYield' => 0.0,
                 'tradeCadenceHours' => 1,
+                'executionTrigger' => 'cron',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
@@ -427,6 +428,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => null,
                 'minNetYield' => 0.0,
                 'tradeCadenceHours' => 1,
+                'executionTrigger' => 'cron',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
@@ -439,6 +441,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => 500000,
                 'minNetYield' => 0.0,
                 'tradeCadenceHours' => 1,
+                'executionTrigger' => 'cron',
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
@@ -452,6 +455,7 @@ function default_portfolio_config(): array
             'minLiquidityUsdc' => 100,
             'minNetYield' => 0.0,
             'tradeCadenceHours' => 24,
+            'executionTrigger' => 'cron',
             'useLimitOrders' => true,
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'ai',
@@ -549,6 +553,11 @@ function normalize_probability_source_value(mixed $value): string
     return $value === 'polymarket' ? 'polymarket' : 'ai';
 }
 
+function normalize_execution_trigger_value(mixed $value): string
+{
+    return $value === 'after_scrape' ? 'after_scrape' : 'cron';
+}
+
 function normalize_excluded_candidate_token_ids(mixed $value): array
 {
     if (!is_array($value)) {
@@ -578,6 +587,7 @@ function normalize_strategy_config(array $input, array $defaults): array
         'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
         'minNetYield' => normalize_net_yield_value($input['minNetYield'] ?? null, (float) $defaults['minNetYield']),
         'tradeCadenceHours' => normalize_cadence_hours_value($input['tradeCadenceHours'] ?? null, (int) $defaults['tradeCadenceHours']),
+        'executionTrigger' => normalize_execution_trigger_value($input['executionTrigger'] ?? $defaults['executionTrigger']),
         'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
         'probabilitySource' => normalize_probability_source_value($input['probabilitySource'] ?? $defaults['probabilitySource']),
         'excludedCandidateTokenIds' => normalize_excluded_candidate_token_ids($input['excludedCandidateTokenIds'] ?? $defaults['excludedCandidateTokenIds'] ?? []),

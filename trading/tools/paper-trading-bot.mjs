@@ -90,11 +90,13 @@ const REFRESH_TOKEN_ID = String(process.env.PAPER_REFRESH_TOKEN_ID || "").trim()
 const REFRESH_MARKET_SLUG = String(process.env.PAPER_REFRESH_MARKET_SLUG || "").trim();
 const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
 const SCAN_ONLY = envBool("PAPER_SCAN_ONLY", false);
+const EXECUTION_ONLY = envBool("PAPER_EXECUTION_ONLY", false);
 const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
 const EVALUATION_ONLY = envBool("PAPER_EVALUATION_ONLY", false);
 const EVALUATION_TOKEN_ID = String(process.env.PAPER_EVALUATION_TOKEN_ID || "").trim();
 const EVALUATION_MARKET_SLUG = String(process.env.PAPER_EVALUATION_MARKET_SLUG || "").trim();
 const SCHEDULED_CADENCE_POLL = envBool("PAPER_SCHEDULED_CADENCE_POLL", false);
+const EXECUTION_TRIGGER = String(process.env.PAPER_EXECUTION_TRIGGER || (SCHEDULED_CADENCE_POLL ? "cron" : "manual")).trim().toLowerCase();
 const CONTINUOUS_EVALUATION = envBool("PAPER_CONTINUOUS_EVALUATION", false);
 const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
 const SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT", 120);
@@ -118,6 +120,7 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_CONSERVATIVE_MIN_NET_YIELD", 0),
     tradeCadenceHours: envNumber("PAPER_CONSERVATIVE_TRADE_CADENCE_HOURS", 1),
+    executionTrigger: normalizeExecutionTrigger(process.env.PAPER_CONSERVATIVE_EXECUTION_TRIGGER),
     requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_CONSERVATIVE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -134,6 +137,7 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_HIGH_REWARD_MIN_NET_YIELD", 0),
     tradeCadenceHours: envNumber("PAPER_HIGH_REWARD_TRADE_CADENCE_HOURS", 1),
+    executionTrigger: normalizeExecutionTrigger(process.env.PAPER_HIGH_REWARD_EXECUTION_TRIGGER),
     requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_HIGH_REWARD_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -150,6 +154,7 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
     minNetYield: envNumber("PAPER_MORE_PROBABLE_MIN_NET_YIELD", 0),
     tradeCadenceHours: envNumber("PAPER_MORE_PROBABLE_TRADE_CADENCE_HOURS", 1),
+    executionTrigger: normalizeExecutionTrigger(process.env.PAPER_MORE_PROBABLE_EXECUTION_TRIGGER),
     requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_MORE_PROBABLE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -163,6 +168,13 @@ function executionStrategies() {
     return [PAPER_STRATEGIES[PAPER_STRATEGY_ID]];
   }
   return Object.values(PAPER_STRATEGIES);
+}
+
+function strategyMatchesExecutionTrigger(strategy) {
+  if (MANUAL_RUN_ONCE || EVALUATION_ONLY) return true;
+  if (EXECUTION_TRIGGER === "after_scrape") return strategy.executionTrigger === "after_scrape";
+  if (EXECUTION_TRIGGER === "cron") return strategy.executionTrigger !== "after_scrape";
+  return true;
 }
 
 const LEDGER_RECOVERY_ANCHORS = [
@@ -385,6 +397,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     minLiquidityUsdc: strategy.minLiquidityUsdc,
     minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
     tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
+    executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     probabilitySource: strategy.probabilitySource,
     description: strategy.description,
@@ -400,6 +413,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       minLiquidityUsdc: strategy.minLiquidityUsdc == null ? null : Number(strategy.minLiquidityUsdc),
       minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
+      executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
     },
@@ -3302,6 +3316,10 @@ function normalizeTradeCadenceHours(value, fallback = 1) {
   return Math.min(168, Math.max(1, Math.round(hours)));
 }
 
+function normalizeExecutionTrigger(value) {
+  return String(value || "").trim().toLowerCase() === "after_scrape" ? "after_scrape" : "cron";
+}
+
 function hourKeyToDate(key) {
   const match = String(key || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})$/);
   if (!match) return null;
@@ -3331,7 +3349,7 @@ function latestPortfolioRunAt(portfolioState = {}) {
 }
 
 function portfolioRunDue(portfolioState, strategy, now = new Date()) {
-  if (!SCHEDULED_CADENCE_POLL || MANUAL_RUN_ONCE) return true;
+  if (!SCHEDULED_CADENCE_POLL || MANUAL_RUN_ONCE || EXECUTION_ONLY) return true;
   const lastRunAt = latestPortfolioRunAt(portfolioState);
   if (!lastRunAt) return true;
   const last = Date.parse(lastRunAt);
@@ -3343,6 +3361,7 @@ function portfolioRunDue(portfolioState, strategy, now = new Date()) {
 function dueExecutionStrategies(state) {
   const now = new Date();
   return executionStrategies().filter((strategy) => {
+    if (!strategyMatchesExecutionTrigger(strategy)) return false;
     const portfolioState = state.paperPortfolios?.[strategy.id];
     return portfolioRunDue(portfolioState, strategy, now);
   });
@@ -3862,6 +3881,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       selectionOrder: strategy.selectionOrder,
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
+      executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
       tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
       manualRunOnce: MANUAL_RUN_ONCE,
       cadenceIgnored: MANUAL_RUN_ONCE,
@@ -5812,7 +5832,9 @@ function updateEvaluationStats(state, { evaluations = [], retainedBefore = 0, re
   };
 }
 
-async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun) {
+async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun, options = {}) {
+  const ignoreCadence = options.ignoreCadence !== false;
+  const source = options.source || "manual";
   const evaluations = [];
   const eligible = [];
   const decisions = [];
@@ -5842,7 +5864,7 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
 
     const prevalidationFilter = {
       ...shortlist.diagnostics,
-      source: "stored_execution_candidates",
+      source: source === "after_scrape" ? "stored_execution_candidates_after_scrape" : "stored_execution_candidates",
       selectedForRevalidation: selectedForRevalidation.length,
       revalidatedCount: revalidated.length,
       revalidatedPortfolioEligible: rankedEligible.length,
@@ -5854,11 +5876,13 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
     };
 
     const decision = maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, revalidated, {
-      ignoreCadence: true,
+      ignoreCadence,
       prevalidationFilter,
       diversificationDiagnostics: {
-        source: "stored_execution_candidates",
-        note: "Manual paper run revalidated the current portfolio execution shortlist only; no unrelated fresh market scan was used.",
+        source: source === "after_scrape" ? "stored_execution_candidates_after_scrape" : "stored_execution_candidates",
+        note: source === "after_scrape"
+          ? "Post-scrape execution revalidated the current portfolio shortlist only; no AI analysis or unrelated market scan was used."
+          : "Manual paper run revalidated the current portfolio execution shortlist only; no unrelated fresh market scan was used.",
       },
     });
     decisions.push(decision);
@@ -5877,7 +5901,7 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
   await writeState(state);
   console.log(JSON.stringify({
     generatedAt: state.generatedAt,
-    source: "stored_execution_candidates",
+    source: source === "after_scrape" ? "stored_execution_candidates_after_scrape" : "stored_execution_candidates",
     decisions: Object.fromEntries(decisions.map((decision) => [decision.strategyId, {
       action: decision.action,
       reason: decision.reason,
@@ -5894,7 +5918,7 @@ async function writeState(state) {
 }
 
 async function run() {
-  if (REQUIRE_GEMINI && !GEMINI_API_KEY) {
+  if (REQUIRE_GEMINI && !GEMINI_API_KEY && !EXECUTION_ONLY) {
     throw new Error("PAPER_REQUIRE_GEMINI is true, but GEMINI_API_KEY is not available. Check GitHub secret GEMINI_API_KEY_POLYMARKET and workflow secret access.");
   }
   console.log(JSON.stringify({
@@ -5916,14 +5940,16 @@ async function run() {
   // Repair records created before binary outcome flips rebuilt the full quote.
   // This runs even if the current market scan does not include that contract.
   state.evaluations = repairStaleBinarySideQuotes(state.evaluations);
-  try {
-    const observations = await refreshMarketObservations(state);
-    state.evaluations = applyMarketObservationsToEvaluations(state.evaluations, observations);
-  } catch (error) {
-    state.marketScan = {
-      ...normalizeMarketScan(state.marketScan),
-      lastScanError: error?.message || String(error),
-    };
+  if (!EXECUTION_ONLY) {
+    try {
+      const observations = await refreshMarketObservations(state);
+      state.evaluations = applyMarketObservationsToEvaluations(state.evaluations, observations);
+    } catch (error) {
+      state.marketScan = {
+        ...normalizeMarketScan(state.marketScan),
+        lastScanError: error?.message || String(error),
+      };
+    }
   }
   if (!SCAN_ONLY) {
     state.marketObservations = await refreshStoredMarketObservationResolutionStatuses(state.marketObservations || []);
@@ -5948,7 +5974,9 @@ async function run() {
   recoverLedgerGaps(state);
   for (const portfolioState of Object.values(state.paperPortfolios)) {
     portfolioState.trades = await refreshTrades(portfolioState.trades);
-    portfolioState.trades = await reviewClosedTradesWithAi(portfolioState.trades, state);
+    if (!EXECUTION_ONLY) {
+      portfolioState.trades = await reviewClosedTradesWithAi(portfolioState.trades, state);
+    }
   }
   const allTrades = Object.values(state.paperPortfolios).flatMap((portfolioState) => portfolioState.trades || []);
   state.learningProfile = buildLearningProfile(allTrades, state.learningProfile);
@@ -5994,6 +6022,24 @@ async function run() {
         reason: "refreshed open positions and resolved markets only",
         strategies: decisions.map((decision) => decision.strategyId),
       }, null, 2));
+    return;
+  }
+
+  if (EXECUTION_ONLY) {
+    const strategiesForRun = dueExecutionStrategies(state);
+    if (!strategiesForRun.length) {
+      await writeState(state);
+      console.log(JSON.stringify({
+        action: "AFTER_SCRAPE_WAIT",
+        reason: "no paper portfolio is configured for after-scrape execution",
+        executionTrigger: EXECUTION_TRIGGER,
+      }, null, 2));
+      return;
+    }
+    await executeManualPaperRunFromStoredCandidates(state, strategiesForRun, {
+      ignoreCadence: false,
+      source: "after_scrape",
+    });
     return;
   }
 

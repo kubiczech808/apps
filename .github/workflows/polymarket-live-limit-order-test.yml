@@ -69,6 +69,11 @@ on:
         required: false
         default: "AUTO"
         type: string
+      live_execution_trigger:
+        description: Execution trigger source
+        required: false
+        default: "cron"
+        type: string
       live_execution_candidate_token_ids:
         description: Ordered token IDs from the browser's current live execution shortlist
         required: false
@@ -88,6 +93,9 @@ on:
 concurrency:
   group: trading-live-execution-${{ github.ref }}
   cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   live-limit-order-test:
@@ -113,9 +121,11 @@ jobs:
       LIVE_TRADE_CADENCE_HOURS: ${{ github.event.inputs.live_trade_cadence_hours || '24' }}
       LIVE_IGNORE_TRADE_CADENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_ignore_trade_cadence == 'true' && 'true' || 'false' }}
       LIVE_RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_run_source == 'MANUAL' && 'MANUAL' || 'AUTO' }}
+      LIVE_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.live_execution_trigger || 'cron' }}
       LIVE_EXECUTION_CANDIDATE_TOKEN_IDS: ${{ github.event.inputs.live_execution_candidate_token_ids || '' }}
       LIVE_EXECUTION_SHORTLIST_PROBABILITY_SOURCE: ${{ github.event.inputs.live_execution_probability_source || '' }}
-      LIVE_SCHEDULED_CADENCE_POLL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.live_ignore_trade_cadence != 'true')) && 'true' || 'false' }}
+      LIVE_SCHEDULED_CADENCE_POLL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.live_execution_trigger != 'after_scrape' && inputs.live_ignore_trade_cadence != 'true')) && 'true' || 'false' }}
+      LIVE_SKIP_SCHEDULED_EXECUTION: "false"
       USE_LIMIT_ORDERS: ${{ github.event.inputs.live_use_limit_orders || 'true' }}
       LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION: ${{ github.event.inputs.cross_live_portfolio_risk_diversification || 'true' }}
       POLYMARKET_POST_ONLY: "true"
@@ -179,11 +189,15 @@ jobs:
               "LIVE_SELECTION_ORDER": live.get("selectionOrder"),
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": live.get("minLiquidityUsdc"),
               "LIVE_MIN_NET_YIELD": live.get("minNetYield"),
+              "LIVE_EXECUTION_TRIGGER": live.get("executionTrigger"),
               "LIVE_TRADE_CADENCE_HOURS": live.get("tradeCadenceHours"),
               "LIVE_EXCLUDED_CANDIDATE_TOKEN_IDS": ",".join(str(token) for token in (live.get("excludedCandidateTokenIds") or []) if str(token).isdigit()),
               "USE_LIMIT_ORDERS": str(bool(live.get("useLimitOrders", True))).lower(),
               "LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION": str(bool(system.get("crossLivePortfolioRiskDiversification", True))).lower(),
           }
+          if live.get("executionTrigger") == "after_scrape":
+              if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+                  mapping["LIVE_SKIP_SCHEDULED_EXECUTION"] = "true"
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
               for key, value in mapping.items():
                   if value is None or value == "":
@@ -196,6 +210,7 @@ jobs:
         run: |
           echo "Live probability source: ${LIVE_PROBABILITY_SOURCE}"
           echo "Live trade cadence hours: ${LIVE_TRADE_CADENCE_HOURS}"
+          echo "Live execution trigger: ${LIVE_EXECUTION_TRIGGER}"
           echo "Live ignore cadence: ${LIVE_IGNORE_TRADE_CADENCE}"
           echo "Live selection order: ${LIVE_SELECTION_ORDER}"
 

@@ -29,6 +29,10 @@ on:
         default: "0"
         type: string
 
+permissions:
+  contents: read
+  actions: write
+
 concurrency:
   group: trading-paper-bot
   cancel-in-progress: false
@@ -121,3 +125,11 @@ jobs:
                       pass
                   ftp.rename(temporary, "paper-state.json")
           PY
+
+      - name: Dispatch post-scrape execution
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: node trading/tools/dispatch-after-scan.mjs

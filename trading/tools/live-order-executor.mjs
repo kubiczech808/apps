@@ -66,6 +66,7 @@ const ONE_TRADE_PER_DAY = HAS_EXPLICIT_TRADE_CADENCE
 const TRADE_CADENCE_HOURS = Math.min(168, Math.max(1, Math.round(envNumber("LIVE_TRADE_CADENCE_HOURS", ONE_TRADE_PER_DAY ? 24 : 1))));
 const IGNORE_TRADE_CADENCE = String(process.env.LIVE_IGNORE_TRADE_CADENCE || "").toLowerCase() === "true";
 const SCHEDULED_CADENCE_POLL = String(process.env.LIVE_SCHEDULED_CADENCE_POLL || "").toLowerCase() === "true";
+const SKIP_SCHEDULED_EXECUTION = String(process.env.LIVE_SKIP_SCHEDULED_EXECUTION || "").toLowerCase() === "true";
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
 const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
@@ -2496,6 +2497,14 @@ async function main() {
     loadOptionalJsonResource(LIVE_EXECUTION_STATE_URL, "previous live execution state"),
   ]);
   previousExecutionState = previousExecution;
+  if (SKIP_SCHEDULED_EXECUTION) {
+    console.log(JSON.stringify({
+      action: "TRIGGER_WAIT",
+      reason: "Live portfolio is configured to execute after each scraping batch; scheduled cron execution was skipped.",
+      executionTrigger: "after_scrape",
+    }, null, 2));
+    return;
+  }
   if (!liveExecutionRunDue(previousExecution, liveState)) {
     console.log(JSON.stringify({
       action: "CADENCE_WAIT",
@@ -2747,6 +2756,7 @@ async function main() {
         minNetYield: MIN_NET_YIELD,
         maxResolutionDays: MAX_RESOLUTION_DAYS,
         tradeCadenceHours: TRADE_CADENCE_HOURS,
+        executionTrigger: String(process.env.LIVE_EXECUTION_TRIGGER || "cron").toLowerCase() === "after_scrape" ? "after_scrape" : "cron",
         lastSubmittedAt: monitoring.lastSubmittedAt,
         submittedHoursAgo: monitoring.submittedHoursAgo,
         cadenceRemainingHours: monitoring.cadenceRemainingHours,

@@ -17,6 +17,7 @@ on:
           - full
           - refresh
           - report
+          - after_scan
       manual_run_once:
         description: "Manual Run once request; bypasses new-trade cadence only"
         required: false
@@ -149,6 +150,10 @@ concurrency:
   group: trading-paper-bot
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   paper:
     runs-on: ubuntu-latest
@@ -215,7 +220,9 @@ jobs:
       PAPER_AI_POSTMORTEM_LIMIT: "1"
       PAPER_SCRAPED_SIMULATION_STAKE_USDC: "5"
       PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT: "120"
-      PAPER_REQUIRE_GEMINI: "true"
+      PAPER_REQUIRE_GEMINI: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'false' || 'true' }}
+      PAPER_EXECUTION_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'true' || 'false' }}
+      PAPER_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'after_scrape' || 'cron' }}
       PAPER_MANUAL_RUN_ONCE: ${{ github.event_name == 'workflow_dispatch' && inputs.manual_run_once == 'true' && 'true' || 'false' }}
       PAPER_STRATEGY_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_strategy_id || '' }}
       PAPER_REPORT_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report') }}
@@ -282,6 +289,7 @@ jobs:
               emit(f"{prefix}_MIN_LIQUIDITY_USDC", row.get("minLiquidityUsdc"))
               emit(f"{prefix}_MIN_NET_YIELD", row.get("minNetYield"))
               emit(f"{prefix}_TRADE_CADENCE_HOURS", row.get("tradeCadenceHours"))
+              emit(f"{prefix}_EXECUTION_TRIGGER", row.get("executionTrigger"))
               emit(f"{prefix}_REQUIRE_MOST_PROBABLE", str(bool(row.get("requireMostProbableOutcome"))).lower())
               emit(f"{prefix}_PROBABILITY_SOURCE", row.get("probabilitySource"))
               excluded_tokens = [str(token) for token in (row.get("excludedCandidateTokenIds") or []) if str(token).isdigit()]
@@ -403,3 +411,11 @@ jobs:
                   ftp.delete("paper-state.json")
                   ftp.rename(tmp_name, "paper-state.json")
           PY
+
+      - name: Dispatch post-scrape execution
+        if: github.event_name == 'schedule' && github.event.schedule == '*/10 * * * *' && success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: node trading/tools/dispatch-after-scan.mjs

@@ -172,6 +172,8 @@ const els = {
   minNetYieldLabel: document.querySelector("[data-min-net-yield-label]"),
   tradeCadenceHours: document.querySelector("[data-trade-cadence-hours]"),
   tradeCadenceHoursLabel: document.querySelector("[data-trade-cadence-hours-label]"),
+  executionTrigger: document.querySelector("[data-execution-trigger]"),
+  executionTriggerLabel: document.querySelector("[data-execution-trigger-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
   polymarketProbability: document.querySelector("[data-polymarket-probability]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
@@ -358,6 +360,7 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: null,
         minNetYield: 0,
         tradeCadenceHours: 1,
+        executionTrigger: "cron",
         requireMostProbableOutcome: false,
         probabilitySource: "ai",
         excludedCandidateTokenIds: [],
@@ -370,6 +373,7 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: null,
         minNetYield: 0,
         tradeCadenceHours: 1,
+        executionTrigger: "cron",
         requireMostProbableOutcome: false,
         probabilitySource: "ai",
         excludedCandidateTokenIds: [],
@@ -382,6 +386,7 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: 500000,
         minNetYield: 0,
         tradeCadenceHours: 1,
+        executionTrigger: "cron",
         requireMostProbableOutcome: true,
         probabilitySource: "ai",
         excludedCandidateTokenIds: [],
@@ -395,6 +400,7 @@ function defaultPortfolioConfig() {
       minLiquidityUsdc: 100,
       minNetYield: 0,
       tradeCadenceHours: 24,
+      executionTrigger: "cron",
       useLimitOrders: true,
       requireMostProbableOutcome: false,
       probabilitySource: "ai",
@@ -412,6 +418,16 @@ function normalizeSelectionOrder(value) {
 
 function normalizeProbabilitySource(value) {
   return value === "polymarket" ? "polymarket" : "ai";
+}
+
+function normalizeExecutionTrigger(value) {
+  return value === "after_scrape" ? "after_scrape" : "cron";
+}
+
+function executionTriggerLabel(value) {
+  return normalizeExecutionTrigger(value) === "after_scrape"
+    ? "After each scraping batch"
+    : "Scheduled cron";
 }
 
 function probabilitySourceLabel(value) {
@@ -2648,6 +2664,9 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.minNetYieldLabel) els.minNetYieldLabel.textContent = percent(minNetYield);
   if (els.tradeCadenceHours) els.tradeCadenceHours.value = String(cadence);
   if (els.tradeCadenceHoursLabel) els.tradeCadenceHoursLabel.textContent = `${cadence}h`;
+  const trigger = normalizeExecutionTrigger(config.executionTrigger);
+  if (els.executionTrigger) els.executionTrigger.value = trigger;
+  if (els.executionTriggerLabel) els.executionTriggerLabel.textContent = executionTriggerLabel(trigger);
   if (els.mostProbableOutcome) {
     els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
     els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLive);
@@ -4125,6 +4144,7 @@ function portfolioRuleRows(portfolio = {}) {
     ["Resolution filter", resolution],
     ["Trade priority", priority],
     ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 1)}h between new paper trades`],
+    ["Execution trigger", executionTriggerLabel(config.executionTrigger)],
   ];
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Liquidity filter", `>= ${money(minLiquidityUsdc)}`]);
   rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
@@ -4147,6 +4167,7 @@ function livePortfolioRuleRows() {
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
     ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 24)}h between new live orders`],
+    ["Execution trigger", executionTriggerLabel(config.executionTrigger)],
     ["Liquidity / volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
@@ -6811,6 +6832,15 @@ els.tradeCadenceHours?.addEventListener("input", () => {
   const value = normalizeCadenceHours(els.tradeCadenceHours.value, fallback);
   if (updateParameterDraft({ tradeCadenceHours: value })) return;
   updatePortfolioConfigForMode(state.mode, { tradeCadenceHours: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.executionTrigger?.addEventListener("change", () => {
+  const value = normalizeExecutionTrigger(els.executionTrigger.value);
+  if (updateParameterDraft({ executionTrigger: value })) return;
+  updatePortfolioConfigForMode(state.mode, { executionTrigger: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();
