@@ -1965,6 +1965,7 @@ function tradeWinCell(trade) {
 function renderTradeRows(trades, emptyText, options = {}) {
   const tableKey = options.tableKey || "open";
   const showStatus = options.showStatus !== false;
+  const showAiProbability = options.showAiProbability !== false;
   if (!trades.length) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
   const rows = sortedTrades(trades, tableKey);
   return `
@@ -1975,7 +1976,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
           ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
           ${tradeHeader(tableKey, "market", "Market")}
           ${tradeHeader(tableKey, "currentPrice", showStatus ? "Entry / final" : "Entry / mark")}
-          ${tradeHeader(tableKey, "aiProbability", "AI prob.")}
+          ${showAiProbability ? tradeHeader(tableKey, "aiProbability", "AI prob.") : ""}
           ${tradeHeader(tableKey, "resolution", "Resolution")}
           ${tradeHeader(tableKey, "potentialGain", "Win")}
           ${tradeHeader(tableKey, "riskReward", "R/R")}
@@ -1994,13 +1995,13 @@ function renderTradeRows(trades, emptyText, options = {}) {
               ${marketAnchor(trade)}
             </td>
             <td data-label="${showStatus ? "Entry / final" : "Entry / mark"}">${tradePriceCell(trade, showStatus)}</td>
-            <td data-label="AI prob.">
+            ${showAiProbability ? `<td data-label="AI prob.">
               <strong>${probability(tradeAiProbability(trade))}</strong>
               <span class="analysis-popover">
                 <button class="info-button" type="button" aria-label="Show original AI analysis">i</button>
                 <span class="analysis-tooltip" role="tooltip">${escapeHtml(tradeAnalysisDetails(trade))}</span>
               </span>
-            </td>
+            </td>` : ""}
             <td data-label="Resolution">${resolutionCell(trade)}</td>
             <td data-label="Win">${tradeWinCell(trade)}</td>
             <td data-label="R/R"><span class="${riskRewardClass(tradeRiskReward(trade))}">${riskReward(tradeRiskReward(trade))}</span></td>
@@ -4458,6 +4459,7 @@ function renderBotState(botState) {
   els.botTrades.innerHTML = renderTradeRows(openTrades.slice(0, 12), "Zatim zadne otevrene autonomni paper obchody.", {
     tableKey: "open",
     showStatus: false,
+    showAiProbability: false,
   });
   if (els.closedSummary) {
     const closedPnl = closedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
@@ -4844,6 +4846,7 @@ function renderLiveState(liveState) {
   els.botTrades.innerHTML = renderTradeRows(openedRows, "Zatim zadne otevrene live pozice ani limit objednavky na napojenem Polymarket uctu.", {
     tableKey: "live",
     showStatus: false,
+    showAiProbability: false,
   });
   if (els.closedSummary) {
     const closedPnl = closedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
