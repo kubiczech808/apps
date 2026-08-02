@@ -57,7 +57,14 @@ const MARKET_SCAN_CATEGORIES_PER_RUN = envNumber("PAPER_MARKET_SCAN_CATEGORIES_P
 const MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC", 40000);
 const MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", envNumber("PAPER_MAX_RESOLUTION_DAYS", 7));
 const MARKET_SCAN_MIN_PROBABILITY = envNumber("PAPER_MARKET_SCAN_MIN_PROBABILITY", 0.5);
-const MARKET_SCAN_MIN_RESOLUTION_HOURS = envNumber("PAPER_MARKET_SCAN_MIN_RESOLUTION_HOURS", 1);
+// Keep a small operational buffer for fetching the quote and submitting an
+// order. A full hour would discard exactly the short-lived opportunities the
+// scanner is meant to find.
+const MARKET_SCAN_MIN_RESOLUTION_MINUTES = envNumber(
+  "PAPER_MARKET_SCAN_MIN_RESOLUTION_MINUTES",
+  Math.max(0, envNumber("PAPER_MARKET_SCAN_MIN_RESOLUTION_HOURS", 5 / 60) * 60),
+);
+const MARKET_SCAN_MIN_RESOLUTION_HOURS = MARKET_SCAN_MIN_RESOLUTION_MINUTES / 60;
 const MARKET_SCAN_TAG = String(process.env.PAPER_MARKET_SCAN_TAG || "").trim().toLowerCase();
 const MARKET_SCAN_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_MAX_RESOLUTION_DAYS", null);
 const MARKET_SCAN_MIN_NET_YIELD = envNumber("PAPER_MARKET_SCAN_MIN_NET_YIELD", 0);
@@ -553,6 +560,13 @@ function normalizeMarketObservationLifecycle(item, checkedAt = nowIso()) {
 }
 
 function normalizeMarketScan(input = {}) {
+  const storedMinutes = Number(input?.minResolutionMinutes);
+  const storedHours = Number(input?.minResolutionHours);
+  const minResolutionMinutes = Number.isFinite(storedMinutes)
+    ? Math.max(0, storedMinutes)
+    : Number.isFinite(storedHours)
+      ? Math.max(0, storedHours * 60)
+      : MARKET_SCAN_MIN_RESOLUTION_MINUTES;
   return {
     cursor: Math.max(0, Math.floor(Number(input?.cursor) || 0)),
     categoryCursor: Math.max(0, Math.floor(Number(input?.categoryCursor) || 0)),
@@ -561,7 +575,8 @@ function normalizeMarketScan(input = {}) {
     lastPreferredCount: Math.max(0, Math.floor(Number(input?.lastPreferredCount) || 0)),
     lastShortHorizonCount: Math.max(0, Math.floor(Number(input?.lastShortHorizonCount) || 0)),
     preferredMaxResolutionDays: Math.max(1, Math.floor(Number(input?.preferredMaxResolutionDays) || MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS)),
-    minResolutionHours: Math.max(0, Number(input?.minResolutionHours) || MARKET_SCAN_MIN_RESOLUTION_HOURS),
+    minResolutionMinutes,
+    minResolutionHours: minResolutionMinutes / 60,
     lastCategoryCount: Math.max(0, Math.floor(Number(input?.lastCategoryCount) || 0)),
     lastCategoryCounts: input?.lastCategoryCounts && typeof input.lastCategoryCounts === "object" ? input.lastCategoryCounts : {},
     lastRequestedCategories: Array.isArray(input?.lastRequestedCategories)
@@ -4659,6 +4674,10 @@ function marketDaysLeft(market = {}) {
   return daysToEnd(marketDateContext(market, market.createdAt || market.updatedAt).endDate);
 }
 
+function marketScanMinimumDays() {
+  return Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_MINUTES) || 0) / (24 * 60);
+}
+
 function marketIsResolvedForScan(market = {}) {
   const dateContext = marketDateContext(market, market.createdAt || market.updatedAt);
   const endTime = Date.parse(dateContext.endDate || "");
@@ -4688,7 +4707,7 @@ function marketScanRetentionReason(market = {}, observedAt = nowIso()) {
   }
 
   const days = daysToEnd(observation.endDate);
-  const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+  const minimumDays = marketScanMinimumDays();
   if (!Number.isFinite(days)) return "missing_resolution_date";
   if (days < minimumDays) return "too_close_to_resolution";
   if (MARKET_SCAN_MAX_RESOLUTION_DAYS != null && days > MARKET_SCAN_MAX_RESOLUTION_DAYS) {
@@ -4719,7 +4738,7 @@ function sortedMarketScanReasonCounts(counts = {}) {
 
 function compareMarketsForShortHorizon(a, b) {
   const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
-  const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+  const minimumDays = marketScanMinimumDays();
   const aDays = marketDaysLeft(a);
   const bDays = marketDaysLeft(b);
   const aBucket = Number.isFinite(aDays) && aDays >= minimumDays && aDays <= preferredDays ? 0 : Number.isFinite(aDays) && aDays > 0 ? 1 : 2;
@@ -4774,7 +4793,7 @@ function marketCategoryKeys(market = {}) {
 function marketScanPriority(market = {}) {
   const days = marketDaysLeft(market);
   const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
-  const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+  const minimumDays = marketScanMinimumDays();
   const shortHorizon = Number.isFinite(days) && days >= minimumDays && days <= preferredDays;
   const liquid = Number(market.liquidity || 0) >= MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC;
   if (shortHorizon && liquid) return 0;
@@ -4932,7 +4951,7 @@ async function loadCategoryMarketScanBatch(tag) {
 
 function compareObservationsForMarketScan(a, b) {
   const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
-  const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+  const minimumDays = marketScanMinimumDays();
   const aDays = daysToEnd(a?.endDate);
   const bDays = daysToEnd(b?.endDate);
   const aBucket = Number.isFinite(aDays) && aDays >= minimumDays && aDays <= preferredDays ? 0 : Number.isFinite(aDays) && aDays > 0 ? 1 : 2;
@@ -5269,7 +5288,7 @@ async function refreshMarketObservations(state) {
         if (!item) return false;
         const probability = Number(item.marketProbability);
         const days = daysToEnd(item.endDate);
-        const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+        const minimumDays = marketScanMinimumDays();
         const status = String(item.status || item.selectionStatus || "").toUpperCase();
         return Number.isFinite(probability)
           && probability >= MARKET_SCAN_MIN_PROBABILITY
@@ -5311,6 +5330,7 @@ async function refreshMarketObservations(state) {
       lastPreferredCount: Array.isArray(preferredMarkets) ? preferredMarkets.length : 0,
       lastShortHorizonCount: shortHorizonCount,
       preferredMaxResolutionDays: MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS,
+      minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
       minResolutionHours: MARKET_SCAN_MIN_RESOLUTION_HOURS,
       lastCategoryCount: Object.keys(categoryCounts).length,
       lastCategoryCounts: categoryCounts,
@@ -5344,6 +5364,7 @@ async function refreshMarketObservations(state) {
         resolvedSkippedCount: resolvedObservationCount,
         notRetainedCount,
         notRetainedReasonCounts: sortedNotRetainedReasonCounts,
+        minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
         scanTag: MARKET_SCAN_TAG || null,
         tagMatchedCount: tagFilteredMarkets.length,
         tagFilteredOutCount: Math.max(0, fetchedMarkets.length - tagFilteredMarkets.length),
@@ -5401,6 +5422,7 @@ async function refreshMarketObservations(state) {
         resolvedSkippedCount: resolvedSkippedMarkets.length,
         notRetainedCount: partialMarkets.length,
         notRetainedReasonCounts: errorReasonCounts,
+        minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
         scanTag: MARKET_SCAN_TAG || null,
         tagMatchedCount: tagFilteredMarkets.length,
         tagFilteredOutCount: Math.max(0, partialMarkets.length - tagFilteredMarkets.length),

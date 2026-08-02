@@ -5515,7 +5515,11 @@ function renderScrapedOpportunities() {
       scan.lastPreferredCount != null ? `${formatInteger(scan.lastPreferredCount)} preferred outcomes` : null,
       scan.lastShortHorizonCount != null ? `${formatInteger(scan.lastShortHorizonCount)} <= ${formatInteger(scan.preferredMaxResolutionDays || DEFAULT_MAX_RESOLUTION_DAYS)}d` : null,
       scan.lastCategoryCount != null ? `${formatInteger(scan.lastCategoryCount)} categories sampled` : null,
-      scan.minResolutionHours != null ? `min ${formatInteger(scan.minResolutionHours) || scan.minResolutionHours}h` : null,
+      scan.minResolutionMinutes != null
+        ? `min ${formatInteger(scan.minResolutionMinutes) || scan.minResolutionMinutes} min buffer`
+        : scan.minResolutionHours != null
+          ? `min ${formatInteger(scan.minResolutionHours) || scan.minResolutionHours}h`
+          : null,
       `last scan ${lastScan}`,
       scan.lastScanError ? `scan error: ${scan.lastScanError}` : null,
     ].filter(Boolean).join(" / ");
@@ -5589,13 +5593,15 @@ function scanLogCounts(value) {
     : "-";
 }
 
-function scanLogReasonCounts(value) {
+function scanLogReasonCounts(value, minimumMinutes = null) {
   const labels = {
     outside_selected_tag: "outside selected tag",
     no_valid_preferred_outcome_or_quote: "no valid preferred outcome/quote",
     probability_below_scan_minimum: "probability below scan minimum",
     missing_resolution_date: "missing resolution date",
-    too_close_to_resolution: "too close to resolution",
+    too_close_to_resolution: Number.isFinite(Number(minimumMinutes))
+      ? `less than ${Number(minimumMinutes)} min execution buffer`
+      : "too close to resolution",
     outside_resolution_horizon: "outside resolution horizon",
     net_yield_below_scan_minimum: "net yield below scan minimum",
     liquidity_below_scan_minimum: "liquidity below scan minimum",
@@ -5678,7 +5684,7 @@ function renderScrapeRunLog() {
                 <td data-label="New / updated">${formatInteger(run.newObservationCount) || "0"} / ${formatInteger(run.updatedObservationCount) || "0"}</td>
                 <td data-label="Resolved">${formatInteger(run.resolvedObservationCount) || "0"}</td>
                 <td data-label="Not retained">${formatInteger(run.notRetainedCount) || "0"}</td>
-                <td data-label="Why not retained"><small>${escapeHtml(scanLogReasonCounts(run.notRetainedReasonCounts))}</small></td>
+                <td data-label="Why not retained"><small>${escapeHtml(scanLogReasonCounts(run.notRetainedReasonCounts, run.minResolutionMinutes))}</small></td>
                 <td data-label="Categories"><strong>${escapeHtml(scanLogCounts(run.categoryCounts))}</strong>${Array.isArray(run.requestedCategories) && run.requestedCategories.length ? `<small class="table-secondary">API sweep: ${escapeHtml(run.requestedCategories.join(", "))}</small>` : ""}</td>
                 <td data-label="Tags">${escapeHtml(scanLogCounts(run.tagCounts))}</td>
                 <td data-label="Error" class="${run.error ? "negative" : ""}">${escapeHtml(run.error || "-")}</td>
