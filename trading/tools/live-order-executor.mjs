@@ -217,7 +217,8 @@ function rotationReplacementDue(previousExecution, liveState) {
   const tokenId = previousExecution?.rotationExit?.position?.tokenId;
   if (!tokenId) return false;
   const stillHeld = (Array.isArray(liveState?.positions) ? liveState.positions : [])
-    .some((position) => String(position.tokenId || position.assetId || "") === String(tokenId) && number(position.shares, 0) > 0);
+    .some((position) => String(position.tokenId || position.assetId || "") === String(tokenId)
+      && number(position.shares ?? position.size ?? position.balance, 0) > 0);
   return !stillHeld && !hasOpenSellOrderForToken(liveState, tokenId);
 }
 
@@ -913,20 +914,30 @@ function openPositionsForRotation(liveState) {
       const status = String(position.status || "OPEN").toUpperCase();
       if (!OPEN_STATUSES.has(status) && ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD"].includes(status)) return false;
       const tokenId = String(position.tokenId || position.assetId || "");
-      return number(position.shares, 0) > 0 && tokenId && !hasOpenSellOrderForToken(liveState, tokenId);
+      return number(position.shares ?? position.size ?? position.balance, 0) > 0
+        && tokenId
+        && !hasOpenSellOrderForToken(liveState, tokenId);
     });
 }
 
 function positionExitValue(position) {
   const explicit = number(position.currentValueUsdc ?? position.valueUsdc ?? position.marketValueUsdc);
-  if (explicit != null) return explicit;
   const price = number(position.currentPrice ?? position.markPrice ?? position.price);
   const shares = number(position.shares ?? position.size);
-  return price != null && shares != null ? price * shares : null;
+  const derived = price != null && shares != null ? price * shares : null;
+  // Some account snapshots briefly expose currentValueUsdc as zero while the
+  // mark and share balance are already available. Prefer the usable mark value
+  // so a zero-cash rotation is not skipped just because the snapshot lagged.
+  if (derived != null && derived > 0 && (explicit == null || explicit <= 0)) return derived;
+  return explicit ?? derived;
 }
 
 function positionCost(position) {
-  return number(position.totalCostUsdc ?? position.stakeUsdc ?? position.maxLossUsdc, 0);
+  const direct = number(position.totalCostUsdc ?? position.stakeUsdc ?? position.maxLossUsdc ?? position.initialValue);
+  if (direct != null) return direct;
+  const entry = number(position.entryPrice ?? position.avgPrice ?? position.averagePrice);
+  const shares = number(position.shares ?? position.size);
+  return entry != null && shares != null ? entry * shares : 0;
 }
 
 function positionSourceEvaluation(position, evaluationByToken = new Map()) {
@@ -934,12 +945,22 @@ function positionSourceEvaluation(position, evaluationByToken = new Map()) {
 }
 
 function positionExitFee(position, evaluationByToken = new Map()) {
-  if (USE_LIMIT_ORDERS && POST_ONLY) return 0;
+  // Rotation exits are intentionally marketable (the sell is submitted with
+  // postOnly=false), even when replacement buys use post-only limits. Always
+  // include the taker fee here so a rotation is not approved on overstated
+  // proceeds.
   const source = positionSourceEvaluation(position, evaluationByToken);
   const shares = number(position.shares ?? position.size);
-  const price = number(position.currentPrice ?? position.markPrice ?? position.price);
+  const price = number(
+    position.currentPrice
+      ?? position.markPrice
+      ?? position.price
+      ?? (number(position.currentValueUsdc ?? position.valueUsdc ?? position.marketValueUsdc) != null && shares > 0
+        ? number(position.currentValueUsdc ?? position.valueUsdc ?? position.marketValueUsdc) / shares
+        : null),
+  );
   if (shares == null || price == null) return 0;
-  return takerFee(shares, price, feeRateForEvaluation(source || {}));
+  return takerFee(shares, price, feeRateForEvaluation({ feeRate: position.feeRate ?? source?.feeRate }));
 }
 
 function positionRotationEconomics(position, evaluationByToken = new Map()) {
@@ -1418,6 +1439,8 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 })
   const appliedFeeRate = USE_LIMIT_ORDERS && POST_ONLY ? 0 : Math.max(0, number(feeRate, 0));
   const costPerShare = price * (1 + appliedFeeRate * (1 - price));
   const minNotional = price * minOrderSize;
+  const minimumOrderFee = appliedFeeRate > 0 ? takerFee(minOrderSize, price, appliedFeeRate) : 0;
+  const minimumOrderCost = minNotional + minimumOrderFee;
   let size = costPerShare > 0
     ? Math.floor((usableStake / costPerShare) * 10000) / 10000
     : 0;
@@ -1428,12 +1451,19 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 })
     size = Math.max(0, Number((size - 0.0001).toFixed(4)));
   }
   const belowExchangeMinimum = size > 0 && size + 0.000001 < minOrderSize;
+  const orderNotional = size > 0 ? price * size : 0;
+  const makerPrecisionBlocked = USE_LIMIT_ORDERS && POST_ONLY && size > 0 && orderNotional < 0.01 - 0.000001;
 
   return {
     size: size > 0 ? Number(size.toFixed(4)) : null,
     targetStake,
+    availableCash,
     usableStake,
     minNotional,
+    minimumOrderCost,
+    orderNotional,
+    makerPrecisionBlocked,
+    minimumFundingBlocked: availableCash <= 0.000001 || makerPrecisionBlocked,
     minSizeOverride: belowExchangeMinimum,
     sizingNote: size <= 0
       ? "no available cash for a positive stake"
@@ -1495,13 +1525,23 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   const estimatedFeeRate = feeRateForEvaluation(evaluation);
   const orderSizing = sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate: estimatedFeeRate });
   const size = orderSizing.size;
-  if (!Number.isFinite(size)) {
+  if (!Number.isFinite(size) || orderSizing.minimumFundingBlocked) {
+    const minimumCost = Number(orderSizing.minimumOrderCost || orderSizing.minNotional || 0);
+    const availableCash = Number(orderSizing.availableCash || 0);
+    const reason = availableCash <= 0.000001
+      ? "no available cash for a new order; rotation may release capital"
+      : (orderSizing.makerPrecisionBlocked
+        ? "available cash would produce a sub-cent maker amount; rotation may release capital"
+        : (minimumCost > 0
+          ? "minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above available cash " + availableCash.toFixed(4) + " USDC; rotation may release capital"
+          : orderSizing.sizingNote));
     return {
       candidate: evaluation,
       eligible: false,
-      rejectReasons: [orderSizing.sizingNote],
+      rejectReasons: [reason],
       currentPrice: price,
       minOrderSize,
+      minOrderNotionalUsdc: Number(minimumCost.toFixed(5)),
     };
   }
 
@@ -1710,7 +1750,8 @@ async function submitOrder(order) {
     negRisk: Boolean(order.negRisk),
   };
   const side = String(order.side || "BUY").toUpperCase() === "SELL" ? Side.SELL : Side.BUY;
-  if (!USE_LIMIT_ORDERS) {
+  const forceTaker = Boolean(order.forceTaker) || String(order.orderType || "").toUpperCase() === "FAK";
+  if (!USE_LIMIT_ORDERS || forceTaker) {
     const marketOrder = await client.createMarketOrder(
       {
         tokenID: order.tokenId,
@@ -1731,8 +1772,8 @@ async function submitOrder(order) {
     },
     options,
   );
-  // A rotation exit at the current bid is intentionally marketable. Post-only
-  // would reject it and leave the old correlated exposure in place.
+  // Buy limits may be post-only, but a rotation exit must be a taker order so
+  // released collateral can be used by the replacement on the next sync.
   return client.postOrder(signedOrder, OrderType.GTC, side === Side.SELL ? false : POST_ONLY);
 }
 
@@ -1801,7 +1842,8 @@ async function buildRotationExitOrder(position, evaluationByToken, tradingConfig
     outcome: position.outcome || source.outcome || "",
     tokenId,
     side: "SELL",
-    orderType: USE_LIMIT_ORDERS ? "GTC" : "FAK",
+    orderType: "FAK",
+    forceTaker: true,
     orderPrice,
     orderSize: Number(orderSize.toFixed(4)),
     orderNotionalUsdc: Number((orderPrice * orderSize).toFixed(5)),
@@ -2061,7 +2103,7 @@ function liveRevalidationUpdate(item, checkedAt) {
   const rejectReasons = Array.isArray(item?.rejectReasons) ? item.rejectReasons.slice(0, 8) : [];
   const retryClass = rejectReasons.some((reason) => /correlated live exposure|duplicate token already open|risk overlap/i.test(String(reason || "")))
     ? "DIVERSIFICATION"
-    : (rejectReasons.some((reason) => /no available cash|above cash|insufficient.*(?:cash|USDC|capital)|minimum order .*costs|below the displayed .*share.*minimum/i.test(String(reason || "")))
+    : (rejectReasons.some((reason) => /no available cash|sub-cent maker amount|above cash|insufficient.*(?:cash|USDC|capital)|minimum order .*costs|below the displayed .*share.*minimum/i.test(String(reason || "")))
       ? "CAPITAL"
       : null);
   const numericFields = [
@@ -2464,7 +2506,7 @@ async function main() {
   const eligible = HAS_MANUAL_SHORTLIST
     ? allEligible
     : sortLiveEligibleCandidates(allEligible);
-  const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
+  const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /no available cash|sub-cent maker amount|above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
   const riskBlockedCandidates = checked.filter((item) => (item.rejectReasons || [])
     .some((reason) => /^(correlated live exposure|duplicate token already open)/i.test(String(reason || ""))));
   const needsCapitalRotation = !manualShortlistStale && !eligible.length && (cash <= 0 || capitalSizingBlocked.length > 0);
