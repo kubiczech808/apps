@@ -5576,7 +5576,7 @@ function renderScrapeRunLog() {
                 <td data-label="New / updated">${formatInteger(run.newObservationCount) || "0"} / ${formatInteger(run.updatedObservationCount) || "0"}</td>
                 <td data-label="Resolved">${formatInteger(run.resolvedObservationCount) || "0"}</td>
                 <td data-label="Not retained">${formatInteger(run.notRetainedCount) || "0"}</td>
-                <td data-label="Categories">${escapeHtml(scanLogCounts(run.categoryCounts))}</td>
+                <td data-label="Categories"><strong>${escapeHtml(scanLogCounts(run.categoryCounts))}</strong>${Array.isArray(run.requestedCategories) && run.requestedCategories.length ? `<small class="table-secondary">API sweep: ${escapeHtml(run.requestedCategories.join(", "))}</small>` : ""}</td>
                 <td data-label="Tags">${escapeHtml(scanLogCounts(run.tagCounts))}</td>
                 <td data-label="Error" class="${run.error ? "negative" : ""}">${escapeHtml(run.error || "-")}</td>
               </tr>
