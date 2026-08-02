@@ -52,6 +52,11 @@ const MARKET_SCAN_MAX_OBSERVATIONS = envNumber("PAPER_MARKET_SCAN_MAX_OBSERVATIO
 const MARKET_SCAN_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_HISTORY_LIMIT", 200);
 const MARKET_SCAN_MAX_OFFSET = envNumber("PAPER_MARKET_SCAN_MAX_OFFSET", 5000);
 const MARKET_SCAN_PREFETCH_BATCHES = envNumber("PAPER_MARKET_SCAN_PREFETCH_BATCHES", 2);
+// Category requests are already sorted by the nearest Gamma end date. The
+// global volume-ranked fallback was useful while bootstrapping the catalog,
+// but it dilutes a short-resolution strategy with unrelated long-horizon
+// markets. Keep it opt-in for diagnostics or a deliberately broad manual run.
+const MARKET_SCAN_INCLUDE_BROAD_FALLBACK = String(process.env.PAPER_MARKET_SCAN_INCLUDE_BROAD_FALLBACK || "false").toLowerCase() === "true";
 const MARKET_SCAN_CATEGORY_BATCH_SIZE = envNumber("PAPER_MARKET_SCAN_CATEGORY_BATCH_SIZE", 50);
 const MARKET_SCAN_CATEGORIES_PER_RUN = envNumber("PAPER_MARKET_SCAN_CATEGORIES_PER_RUN", 8);
 const MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC", 40000);
@@ -5263,7 +5268,7 @@ async function refreshMarketObservations(state) {
         ? previousScan.categoryCursor
         : (Math.max(0, Math.floor(Number(previousScan.categoryCursor) || 0)) + requestedCategories.length) % categoryCount;
     }
-    if (!hasDirectTagScope) {
+    if (!hasDirectTagScope && MARKET_SCAN_INCLUDE_BROAD_FALLBACK) {
       const broadBatchCount = Math.max(1, Math.floor(Number(MARKET_SCAN_PREFETCH_BATCHES) || 1));
       for (let index = 0; index < broadBatchCount; index += 1) {
         const order = index % 2 === 0 ? "volume24hr" : "endDate";
