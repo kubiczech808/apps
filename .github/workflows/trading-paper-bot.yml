@@ -223,7 +223,9 @@ jobs:
       PAPER_AI_STOP_ON_QUOTA_ERROR: "true"
       PAPER_AI_POSTMORTEM_LIMIT: "1"
       PAPER_SCRAPED_SIMULATION_STAKE_USDC: "5"
-      PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT: "120"
+      # Hourly result reconciliation: include stale SCRAPED rows whose stored
+      # end date has passed, not only rows already labelled RESOLVED.
+      PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT: "300"
       PAPER_REQUIRE_GEMINI: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'false' || 'true' }}
       PAPER_EXECUTION_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'true' || 'false' }}
       PAPER_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'after_scrape' || 'cron' }}

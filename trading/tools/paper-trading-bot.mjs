@@ -140,7 +140,7 @@ const SCHEDULED_CADENCE_POLL = envBool("PAPER_SCHEDULED_CADENCE_POLL", false);
 const EXECUTION_TRIGGER = String(process.env.PAPER_EXECUTION_TRIGGER || (SCHEDULED_CADENCE_POLL ? "cron" : "manual")).trim().toLowerCase();
 const CONTINUOUS_EVALUATION = envBool("PAPER_CONTINUOUS_EVALUATION", false);
 const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
-const SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT", 120);
+const SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT", 300);
 const SCRAPED_SIMULATION_STAKE_USDC = envNumber("PAPER_SCRAPED_SIMULATION_STAKE_USDC", 5);
 const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable"].includes(process.env.PAPER_STRATEGY_ID)
   ? process.env.PAPER_STRATEGY_ID
@@ -1063,6 +1063,24 @@ function marketObservationResolutionSlug(item) {
   return String(item?.slug || item?.eventSlug || "").trim();
 }
 
+function marketObservationResolutionSyncPriority(item) {
+  if (finalOutcomePriceValue(item?.finalOutcomePrice) != null) return Infinity;
+  const status = String(item?.status || item?.selectionStatus || "").toUpperCase();
+  const checkedAt = Date.parse(item?.resolutionCheckedAt || "");
+  const checkedAgeHours = Number.isFinite(checkedAt) ? (Date.now() - checkedAt) / 3600000 : Infinity;
+  const endAt = Date.parse(item?.scheduledEventDate || item?.resolutionEndDate || item?.endDate || "");
+  const pastScheduledResolution = Number.isFinite(endAt) && endAt <= Date.now();
+  const marketEnded = item?.marketClosed === true || item?.acceptingOrders === false;
+
+  // A record may still be marked SCRAPED when Polymarket closes it between
+  // scans. Treat every matured record as a resolution candidate, not only
+  // rows that a previous scan already labelled RESOLVED.
+  if (marketEnded) return 0;
+  if (status === "RESOLVED") return checkedAgeHours >= 1 ? 1 : 8;
+  if (pastScheduledResolution) return checkedAgeHours >= 1 ? 2 : 9;
+  return Infinity;
+}
+
 function resolvedMarketObservationFromMarket(item, market, checkedAt = nowIso()) {
   const outcome = item.firstOutcome || item.outcome;
   const tokenId = item.firstTokenId || item.tokenId;
@@ -1109,13 +1127,17 @@ function resolvedMarketObservationFromMarket(item, market, checkedAt = nowIso())
 
 async function refreshStoredMarketObservationResolutionStatuses(observations = []) {
   const refreshable = observations
-    .map((item, index) => ({ item, index, slug: marketObservationResolutionSlug(item) }))
+    .map((item, index) => ({
+      item,
+      index,
+      slug: marketObservationResolutionSlug(item),
+      priority: marketObservationResolutionSyncPriority(item),
+    }))
     .filter(({ item, slug }) => {
-      const status = String(item.status || item.selectionStatus || "").toUpperCase();
-      const finalAvailable = finalOutcomePriceValue(item.finalOutcomePrice) != null;
-      return slug && !finalAvailable && status === "RESOLVED";
+      return Boolean(slug) && Number.isFinite(marketObservationResolutionSyncPriority(item));
     })
-    .sort((a, b) => (Date.parse(a.item.scheduledEventDate || a.item.endDate || "") || 0) - (Date.parse(b.item.scheduledEventDate || b.item.endDate || "") || 0))
+    .sort((a, b) => a.priority - b.priority
+      || (Date.parse(a.item.scheduledEventDate || a.item.endDate || "") || 0) - (Date.parse(b.item.scheduledEventDate || b.item.endDate || "") || 0))
     .slice(0, Math.max(0, SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT));
   if (!refreshable.length) return observations;
 
