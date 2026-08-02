@@ -3376,25 +3376,29 @@ async function refreshPortfolioCandidates(options = {}) {
   }
   if (!options.quiet) setExecutionStatus("refreshing execution shortlist");
   try {
-    const needsScraped = normalizeProbabilitySource(portfolioConfigForMode(state.mode).probabilitySource) === "polymarket";
-    // The stored shortlist is useful immediately. Scraped market economics can
-    // be a much larger response, so it is loaded after the shortlist rather
-    // than blocking the whole candidates panel.
-    const [botState, liveState] = await Promise.all([
+    // Always load the latest persisted scraped snapshot. It supplies current
+    // market probability and order-book economics for both AI and Polymarket
+    // probability portfolios; the selected source still controls eligibility.
+    const [botState, liveState, scrapedState] = await Promise.all([
       fetchJsonWithTimeout("data/paper-state.json", { summary: "candidates" }, 15000),
       isLiveMode() ? fetchJsonWithTimeout("data/live-state.json", {}, 15000) : Promise.resolve(null),
+      fetchJsonWithTimeout("data/paper-state.json", { summary: "execution" }, 15000),
     ]);
     state.botState = botStateWithPreservedEvaluations(botState);
     state.botStateFull = state.botStateFull || botStateIsFull(botState);
+    storeScrapedMarketState(scrapedState, "execution");
+    if (Array.isArray(state.botState?.evaluations) && Array.isArray(scrapedState?.marketObservations)) {
+      state.botState = {
+        ...state.botState,
+        evaluations: mergeCurrentMarketEconomics(state.botState.evaluations, scrapedState.marketObservations),
+      };
+    }
     if (liveState) {
       renderLiveState(liveState);
     } else {
       renderPortfolioCandidates();
     }
-    if (needsScraped) {
-      ensureScrapedMarketState({ force: true, summary: "execution" });
-    }
-    if (!options.quiet) setExecutionStatus(needsScraped ? "execution shortlist loaded; scraped economics refreshing" : "execution shortlist refreshed");
+    if (!options.quiet) setExecutionStatus("shortlist refreshed with current market quotes and calculated values");
   } catch (error) {
     if (!options.quiet) setExecutionStatus(error.message || "shortlist refresh failed", "error");
     renderPortfolioCandidates();
@@ -4202,6 +4206,77 @@ function latestUniquePortfolioEvaluations(evaluations = []) {
     byKey.set(key, item);
   }
   return [...byKey.values()];
+}
+
+function mergeCurrentMarketEconomics(evaluations = [], observations = []) {
+  const byToken = new Map(
+    (Array.isArray(observations) ? observations : [])
+      .map((item) => [String(item?.tokenId || item?.clobTokenId || item?.assetId || ""), item])
+      .filter(([token, item]) => token && item),
+  );
+  if (!byToken.size) return evaluations;
+
+  return (Array.isArray(evaluations) ? evaluations : []).map((item) => {
+    const token = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
+    const fresh = byToken.get(token);
+    if (!fresh) return item;
+
+    const current = { ...item };
+    const copyIfPresent = (key) => {
+      if (fresh[key] != null && fresh[key] !== "") current[key] = fresh[key];
+    };
+    [
+      "marketProbability",
+      "marketPrice",
+      "bestAsk",
+      "bestBid",
+      "spread",
+      "slippage",
+      "liquidity",
+      "volume24hr",
+      "endDate",
+      "scheduledEventDate",
+      "resolutionEndDate",
+      "daysToResolution",
+      "marketDataUpdatedAt",
+      "observedAt",
+      "feeRate",
+    ].forEach(copyIfPresent);
+
+    const cost = evaluationTotalCost(current);
+    const shares = evaluationShares(current);
+    const win = gainIfWin(current);
+    const marketValue = marketExpectedValueFromQuote(current);
+    const aiValue = expectedValue(current);
+    const days = daysToResolution(current);
+    const yieldValue = Number.isFinite(win) && Number.isFinite(cost) && cost > 0 ? win / cost : null;
+    const rewardRisk = Number.isFinite(win) && Number.isFinite(cost) && cost > 0 && win > 0 ? win / cost : null;
+    const annualized = Number.isFinite(aiValue) && Number.isFinite(cost) && cost > 0
+      ? (aiValue / cost) * (Number.isFinite(days) && days > 0 ? 365 / days : 1)
+      : null;
+    const marketRoi = Number.isFinite(marketValue) && Number.isFinite(cost) && cost > 0 ? marketValue / cost : null;
+    const marketAnnualized = Number.isFinite(marketRoi)
+      ? marketRoi * (Number.isFinite(days) && days > 0 ? 365 / days : 1)
+      : null;
+    const potentialAnnualized = Number.isFinite(yieldValue)
+      ? yieldValue * (Number.isFinite(days) && days > 0 ? 365 / days : 1)
+      : null;
+
+    return {
+      ...current,
+      executableShares: Number.isFinite(shares) ? Number(shares.toFixed(6)) : current.executableShares,
+      totalCostUsdc: Number.isFinite(cost) ? Number(cost.toFixed(5)) : current.totalCostUsdc,
+      netGainIfWinUsdc: Number.isFinite(win) ? Number(win.toFixed(5)) : current.netGainIfWinUsdc,
+      netYield: Number.isFinite(yieldValue) ? Number(yieldValue.toFixed(6)) : current.netYield,
+      riskReward: Number.isFinite(rewardRisk) ? Number(rewardRisk.toFixed(6)) : current.riskReward,
+      expectedValueUsdc: Number.isFinite(aiValue) ? Number(aiValue.toFixed(5)) : current.expectedValueUsdc,
+      annualizedReturn: Number.isFinite(annualized) ? Number(annualized.toFixed(6)) : current.annualizedReturn,
+      marketExpectedValueUsdc: Number.isFinite(marketValue) ? Number(marketValue.toFixed(5)) : current.marketExpectedValueUsdc,
+      marketExpectedRoi: Number.isFinite(marketRoi) ? Number(marketRoi.toFixed(6)) : current.marketExpectedRoi,
+      marketAnnualizedReturn: Number.isFinite(marketAnnualized) ? Number(marketAnnualized.toFixed(6)) : current.marketAnnualizedReturn,
+      potentialAnnualizedReturn: Number.isFinite(potentialAnnualized) ? Number(potentialAnnualized.toFixed(6)) : current.potentialAnnualizedReturn,
+    };
+  });
 }
 
 function candidateMarketType(item = {}) {
