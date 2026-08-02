@@ -846,7 +846,8 @@ function redeemNotifications(positions, previousState, generatedAt) {
   for (const position of positions) {
     const currentPrice = number(position.currentPrice);
     const currentValue = number(position.currentValueUsdc, 0);
-    const redeemable = positionOfficiallyResolved(position);
+    const redeemable = positionOfficiallyResolved(position)
+      || String(position.status || "").toUpperCase() === "REDEEM_REQUIRED";
     if (!redeemable) continue;
     addAlert({
       key: redeemAlertId("redeem-required", position),
@@ -1396,7 +1397,11 @@ async function main() {
     sync.message = `Live snapshot loaded with ledger reconciliation warnings: ${sync.warnings.join(" | ")}`;
   }
   const portfolioBase = portfolioSummary(reconciledPositions, valueRows, closedTrades);
-  const notifications = redeemNotifications(reconciledPositions, previousLiveState, generatedAt);
+  const pendingRedeemPositions = [
+    ...resolvedPositionRows,
+    ...closedTrades.filter((item) => String(item?.status || "").toUpperCase() === "REDEEM_REQUIRED"),
+  ];
+  const notifications = redeemNotifications(pendingRedeemPositions, previousLiveState, generatedAt);
   const cashUsdc = number(balanceAllowance?.collateral?.balanceUsdc);
   const pendingRedeemUsdc = number(portfolioBase.pendingRedeemUsdc, 0);
   const equityUsdc = cashUsdc == null
