@@ -1820,6 +1820,7 @@ function liveBatchCandidateSummary(item) {
     aiExpectedValueUsdc: number(item?.aiExpectedValueUsdc ?? source.aiExpectedValueUsdc),
     marketAnnualizedReturn: number(item?.marketAnnualizedReturn ?? source.marketAnnualizedReturn),
     marketExpectedValueUsdc: number(item?.marketExpectedValueUsdc ?? source.marketExpectedValueUsdc),
+    potentialAnnualizedReturn: potentialAnnualizedReturn == null ? null : number(potentialAnnualizedReturn),
     daysToResolution,
     liquidity: number(item?.liquidity ?? source.liquidity),
     netGainIfWinUsdc: gain,

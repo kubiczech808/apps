@@ -5964,6 +5964,29 @@ function runDecisionSummary(run = {}) {
   return [humanRunReason(run), selectedText, countParts, runCapitalNote(run)].filter(Boolean).join(" / ");
 }
 
+function submittedOrderSummaryMarkup(run = {}) {
+  const batch = run.batchLog || run;
+  const action = String(run.action || batch.action || "").toUpperCase();
+  const selected = batch.selected || run.selected || null;
+  if (!selected || !["SUBMITTED", "CANCELED_AND_SUBMITTED"].includes(action)) return "";
+  const settings = batch.settings || {};
+  const probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
+  const selectedProbability = probabilitySource === "polymarket"
+    ? Number(selected.marketProbability)
+    : Number(selected.aiProbability);
+  const days = Number(selected.daysToResolution);
+  const netYield = Number(selected.netYield);
+  const potentialPa = Number.isFinite(Number(selected.potentialAnnualizedReturn))
+    ? Number(selected.potentialAnnualizedReturn)
+    : (Number.isFinite(netYield) && Number.isFinite(days) && days > 0
+      ? netYield * (365 / days)
+      : Number(selected.annualizedReturn));
+  const question = selected.question || selected.market || "-";
+  const outcome = selected.outcome || "-";
+  const daysText = Number.isFinite(days) ? `${days.toFixed(1)} days` : "- days";
+  return `Placing order &quot;${escapeHtml(question)}&quot; with outcome <strong>${escapeHtml(outcome)}</strong> with net profit ${escapeHtml(signedMoney(Number(selected.netGainIfWinUsdc), 4))}, Potential p.a. ${escapeHtml(signedPercent(potentialPa))}, ${escapeHtml(daysText)} until resolution and probability ${escapeHtml(probability(selectedProbability))}.`;
+}
+
 function portfolioRunSource(run = {}) {
   const source = String(run.runSource || run.triggerSource || run.executionSource || "").trim().toUpperCase();
   if (source === "MANUAL" || run.manualRunOnce === true || run.batchLog?.manualRunOnce === true) return "MANUAL";
@@ -6024,7 +6047,7 @@ function renderRunLog() {
           <button class="trade-batch portfolio-run-row" type="button" data-portfolio-run="${index}">
             <span class="${runActionClass(run.action || batch.action)}">${escapeHtml(run.action || batch.action || "-")}</span>
             <strong>${escapeHtml(run.runAt || run.generatedAt ? formatDate(run.runAt || run.generatedAt) : "-")}</strong>
-            <span>${escapeHtml(runDecisionSummary(run))}</span>
+            <span>${submittedOrderSummaryMarkup(run) || escapeHtml(runDecisionSummary(run))}</span>
             <span class="portfolio-run-source">${portfolioRunSource(run)}</span>
           </button>
         `;
