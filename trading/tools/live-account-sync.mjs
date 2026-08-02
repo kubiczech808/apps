@@ -1104,6 +1104,52 @@ function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades
   };
 }
 
+function parseArrayField(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// CLOB open-order records contain trading fields only. Preserve the Gamma
+// event identity so another market from the same match is never treated as an
+// unrelated opportunity.
+async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync) {
+  return Promise.all(openOrders.map(async (order) => {
+    const tokenId = String(order?.tokenId || order?.assetId || "").trim();
+    if (!tokenId) return order;
+    try {
+      const markets = await fetchGammaJson("/markets", { clob_token_ids: tokenId });
+      const market = Array.isArray(markets) ? markets[0] : null;
+      if (!market) return order;
+      const tokenIds = parseArrayField(market.clobTokenIds).map(String);
+      const outcomes = parseArrayField(market.outcomes).map(String);
+      const outcomeIndex = tokenIds.indexOf(tokenId);
+      const event = Array.isArray(market.events) ? market.events.find((item) => item?.slug) : null;
+      const slug = market.slug || order.slug || "";
+      const eventSlug = event?.slug || market.eventSlug || order.eventSlug || slug;
+      return {
+        ...order,
+        question: order.question || market.question || "",
+        outcome: order.outcome || outcomes[outcomeIndex] || "",
+        slug,
+        eventSlug,
+        conditionId: order.conditionId || market.conditionId || order.market || null,
+        market: order.market || market.conditionId || null,
+        url: eventSlug ? `https://polymarket.com/event/${eventSlug}` : order.url,
+        marketMetadataSource: "gamma-clob-token",
+      };
+    } catch (error) {
+      sync.warnings.push(`open-order-market-${tokenId.slice(0, 12)}: ${error?.message || String(error)}`);
+      return order;
+    }
+  }));
+}
+
 function portfolioSummary(positions, valueRows, closedTrades = []) {
   const valueRow = Array.isArray(valueRows) ? valueRows.find((row) => String(row.user || "").toLowerCase() === ACCOUNT_ADDRESS) : null;
   const marketValue = positions.reduce((sum, item) => sum + number(item.currentValueUsdc, 0), 0);
@@ -1416,12 +1462,16 @@ async function main() {
   );
   const openApiPositions = positions.filter((position) => !positionLooksResolved(position) && !anySharedKey(position, knownClosedKeys));
   const closedTrades = [...historyClosedTrades, ...resolvedPositionRows];
+  const openOrders = await enrichOpenOrdersWithMarketMetadata(
+    Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
+    sync,
+  );
   const reconciliation = ledgerReconciliationFallbacks(
     tradeHistory,
     activity,
     openApiPositions,
     closedTrades,
-    Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
+    openOrders,
     generatedAt,
   );
   const reconciledPositions = [...openApiPositions];
@@ -1495,7 +1545,7 @@ async function main() {
       cashSource: balanceAllowance?.status === "OK" ? "clob-balance-allowance" : null,
     },
     balanceAllowance,
-    openOrders: Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
+    openOrders,
     positions: reconciledPositions,
     apiPositions: openApiPositions,
     resolvedApiPositions: resolvedPositionRows,

@@ -4395,7 +4395,21 @@ function activeExposureRowsForMode(mode = state.mode) {
     return [
       ...(Array.isArray(state.liveState?.positions) ? state.liveState.positions : []),
       ...(Array.isArray(state.liveState?.openOrders) ? state.liveState.openOrders : []),
-    ];
+    ].map((row) => {
+      const metadata = liveMarketMetadataForTrade(row);
+      if (!metadata) return row;
+      return {
+        ...metadata,
+        ...row,
+        question: row.question || metadata.question || "",
+        outcome: row.outcome || metadata.outcome || "",
+        slug: row.slug || metadata.slug || "",
+        eventSlug: row.eventSlug || metadata.eventSlug || metadata.slug || "",
+        riskGroupKeys: Array.isArray(row.riskGroupKeys) && row.riskGroupKeys.length
+          ? row.riskGroupKeys
+          : metadata.riskGroupKeys,
+      };
+    });
   }
   const portfolioState = selectedPaperPortfolio(state.botState || {});
   return paperPortfolioTrades(portfolioState).filter((trade) => !isClosedTrade(trade));
@@ -4461,6 +4475,8 @@ function candidateRiskBlockReason(item, activeRows = [], evaluationByToken = new
     const rowToken = String(row?.tokenId || row?.assetId || row?.asset || "");
     if (token && rowToken && token === rowToken) return "duplicate token already open";
     const overlap = riskKeysForRow(row, evaluationByToken).filter((key) => keys.has(key));
+    const sameEventOrMatch = overlap.filter((key) => key.startsWith("event:") || key.startsWith("match:"));
+    if (sameEventOrMatch.length) return `same event or match already open: ${sameEventOrMatch.slice(0, 2).join(", ")}`;
     if (overlap.length) return `risk overlap: ${overlap.slice(0, 3).join(", ")}`;
   }
   return "";
@@ -4908,7 +4924,16 @@ function evaluationByTokenId(tokenId) {
 function liveMarketMetadataForTrade(item = {}) {
   const evaluations = Array.isArray(state.botState?.evaluations) ? state.botState.evaluations : [];
   const scraped = scrapedMarketObservations();
-  const sources = [...scraped, ...evaluations];
+  const execution = state.liveExecutionState || {};
+  const executionRows = [
+    execution.selected,
+    ...(Array.isArray(execution.revalidationUpdates) ? execution.revalidationUpdates : []),
+    ...(Array.isArray(execution.attempts) ? execution.attempts : []),
+    ...(Array.isArray(execution.runLog)
+      ? execution.runLog.flatMap((run) => [run?.selected, ...(Array.isArray(run?.revalidationUpdates) ? run.revalidationUpdates : [])])
+      : []),
+  ].filter(Boolean);
+  const sources = [...executionRows, ...scraped, ...evaluations];
   const tokenIds = new Set([
     item.tokenId,
     item.clobTokenId,

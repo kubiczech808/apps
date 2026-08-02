@@ -785,6 +785,45 @@ async function fetchMarket(evaluation) {
   return Array.isArray(markets) ? markets[0] : null;
 }
 
+async function fetchMarketByToken(tokenId) {
+  if (!tokenId) return null;
+  const markets = await fetchJson(apiUrl(GAMMA_API, "/markets", { clob_token_ids: tokenId }), `Gamma market token ${tokenId}`);
+  return Array.isArray(markets) ? markets[0] : null;
+}
+
+async function hydrateLiveOpenOrderMetadata(liveState) {
+  const openOrders = Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
+  if (!openOrders.length) return liveState;
+  const enrichedOrders = await Promise.all(openOrders.map(async (order) => {
+    const tokenId = String(order?.tokenId || order?.assetId || "");
+    if (!tokenId || (order.eventSlug && order.question)) return order;
+    try {
+      const market = await fetchMarketByToken(tokenId);
+      if (!market) return order;
+      const tokenIds = parseJsonField(market.clobTokenIds).map(String);
+      const outcomes = parseJsonField(market.outcomes).map(String);
+      const tokenIndex = tokenIds.indexOf(tokenId);
+      const eventSlug = marketEventSlug(market);
+      return {
+        ...order,
+        question: order.question || market.question || "",
+        outcome: order.outcome || outcomes[tokenIndex] || "",
+        slug: order.slug || market.slug || "",
+        eventSlug: order.eventSlug || eventSlug,
+        conditionId: order.conditionId || market.conditionId || order.market || null,
+        market: order.market || market.conditionId || null,
+        url: order.url || (eventSlug ? `https://polymarket.com/event/${eventSlug}` : ""),
+        marketMetadataSource: "gamma-clob-token",
+      };
+    } catch {
+      // The account sync retries metadata lookups. A failure here must not
+      // make the order disappear or weaken the direct token safeguard.
+      return order;
+    }
+  }));
+  return { ...liveState, openOrders: enrichedOrders };
+}
+
 async function fetchClobMarket(conditionId) {
   if (!conditionId) return null;
   return fetchJson(new URL(`/clob-markets/${conditionId}`, CLOB_HOST), `CLOB market ${conditionId}`);
@@ -903,7 +942,6 @@ function riskBlock(candidate, liveState, evaluationByToken = new Map()) {
     if (String(item.tokenId || item.assetId || "") === String(candidate.tokenId || "")) {
       return { reason: "duplicate token already open", overlap: [String(candidate.tokenId)] };
     }
-    if (!CROSS_PORTFOLIO_RISK_DIVERSIFICATION) continue;
     const itemRisk = riskProfile({
       question: item.question || "",
       slug: item.slug || "",
@@ -912,6 +950,14 @@ function riskBlock(candidate, liveState, evaluationByToken = new Map()) {
       tags: item.tags || tagQuestion(item.question || ""),
     });
     const overlap = itemRisk.keys.filter((key) => candidateKeys.has(key));
+    const sameEventOrMatch = overlap.filter((key) => key.startsWith("event:") || key.startsWith("match:"));
+    // Multiple outcomes or sub-markets of one event/match are never separate
+    // diversification buckets. This stays enabled even when broader topic
+    // diversification across live portfolios is switched off.
+    if (sameEventOrMatch.length) {
+      return { reason: "same live event or match already open", overlap: sameEventOrMatch.slice(0, 4) };
+    }
+    if (!CROSS_PORTFOLIO_RISK_DIVERSIFICATION) continue;
     if (overlap.length) return { reason: "correlated live exposure", overlap: overlap.slice(0, 4) };
   }
   return null;
@@ -2129,6 +2175,12 @@ function liveBatchCandidateSummary(item) {
     question: item?.question || source.question || "",
     outcome: item?.outcome || source.outcome || "",
     tokenId: item?.tokenId || source.tokenId || null,
+    conditionId: item?.conditionId || source.conditionId || item?.market || source.market || null,
+    slug: item?.slug || source.slug || "",
+    eventSlug: item?.eventSlug || source.eventSlug || item?.slug || source.slug || "",
+    riskGroupKeys: Array.isArray(item?.riskGroupKeys)
+      ? item.riskGroupKeys
+      : (Array.isArray(source.riskGroupKeys) ? source.riskGroupKeys : []),
     evaluatedAt: item?.evaluatedAt || source.evaluatedAt || null,
     status: item?.status || source.status || null,
     aiProbability: number(item?.aiProbability ?? source.aiProbability),
@@ -2201,6 +2253,12 @@ function liveRevalidationUpdate(item, checkedAt) {
     rejectReasons,
     question: item?.question || source.question || "",
     outcome: item?.outcome || source.outcome || "",
+    slug: item?.slug || source.slug || "",
+    eventSlug: item?.eventSlug || source.eventSlug || item?.slug || source.slug || "",
+    conditionId: item?.conditionId || source.conditionId || item?.market || source.market || null,
+    riskGroupKeys: Array.isArray(item?.riskGroupKeys)
+      ? item.riskGroupKeys
+      : (Array.isArray(source.riskGroupKeys) ? source.riskGroupKeys : []),
     ...metrics,
   };
 }
@@ -2492,10 +2550,11 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
 }
 
 async function main() {
-  const [liveState, previousExecution] = await Promise.all([
+  const [loadedLiveState, previousExecution] = await Promise.all([
     loadJsonResource(LIVE_STATE_URL, "live state"),
     loadOptionalJsonResource(LIVE_EXECUTION_STATE_URL, "previous live execution state"),
   ]);
+  const liveState = await hydrateLiveOpenOrderMetadata(loadedLiveState);
   previousExecutionState = previousExecution;
   if (SKIP_SCHEDULED_EXECUTION) {
     console.log(JSON.stringify({
