@@ -414,6 +414,82 @@ function correctedEndDate(question, rawEndDate, fallbackDate = null) {
   return rawEndDate || inferred;
 }
 
+const SPORTS_MARKET_HINT = /\b(atp|wta|nba|nfl|mlb|nhl|ufc|fifa|world[- ]cup|soccer|football|tennis|baseball|basketball|hockey|esports|e[- ]?sports|lol|match|game|tournament|spread|moneyline|winner)\b/i;
+
+function isSportsMarket(market = {}) {
+  const events = Array.isArray(market.events) ? market.events : [];
+  const text = [
+    market.slug,
+    market.eventSlug,
+    market.question,
+    market.category,
+    market.categorySlug,
+    market.sportsMarketType,
+    market.marketType,
+    market.tags,
+    ...events.flatMap((event) => [event?.slug, event?.title, event?.category, event?.categorySlug, event?.tags]),
+  ].filter(Boolean).join(" ");
+  return Boolean(
+    market.gameStartTime
+    || market.eventStartTime
+    || market.gameId
+    || market.sportsMarketType
+    || market.teamAID
+    || market.teamBID
+    || SPORTS_MARKET_HINT.test(text),
+  );
+}
+
+function parseSportsDate(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    const date = new Date(Date.UTC(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]), 23, 59, 59));
+    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  }
+  const time = Date.parse(text);
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+}
+
+function sportsDateFromSlug(value) {
+  const match = String(value || "").match(/(?:^|[-_])((?:19|20)\d{2})-(\d{2})-(\d{2})(?:$|[-_])/);
+  if (!match) return null;
+  return parseSportsDate(`${match[1]}-${match[2]}-${match[3]}`);
+}
+
+function sportsScheduledEventDate(market = {}) {
+  if (!isSportsMarket(market)) return null;
+  const events = Array.isArray(market.events) ? market.events : [];
+  const candidates = [
+    market.gameStartTime,
+    market.eventStartTime,
+    ...events.flatMap((event) => [event?.gameStartTime, event?.eventStartTime, event?.startDateIso, event?.startDate]),
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseSportsDate(candidate);
+    if (parsed) return parsed;
+  }
+  return sportsDateFromSlug(market.slug) || sportsDateFromSlug(market.eventSlug) || sportsDateFromSlug(events.find((event) => event?.slug)?.slug) || null;
+}
+
+function marketDateContext(market = {}, fallbackDate = null) {
+  const rawResolutionEndDate = market.resolutionEndDate || market.endDate || null;
+  const resolutionEndDate = correctedEndDate(market.question || "", rawResolutionEndDate, fallbackDate);
+  const scheduledEventDate = sportsScheduledEventDate(market);
+  const scheduledTime = Date.parse(scheduledEventDate || "");
+  const resolutionTime = Date.parse(resolutionEndDate || "");
+  const useScheduledDate = Boolean(scheduledEventDate)
+    && (!Number.isFinite(resolutionTime) || (Number.isFinite(scheduledTime) && scheduledTime < resolutionTime));
+  return {
+    endDate: useScheduledDate ? scheduledEventDate : resolutionEndDate,
+    scheduledEventDate: scheduledEventDate || null,
+    resolutionEndDate: resolutionEndDate || null,
+    endDateSource: useScheduledDate ? "sports-event-start" : "polymarket-resolution-window",
+    sportsEventStarted: useScheduledDate && Number.isFinite(scheduledTime) && scheduledTime <= Date.now(),
+  };
+}
+
 function daysToEnd(endDate) {
   const end = Date.parse(endDate || "");
   if (!Number.isFinite(end)) return null;
@@ -1390,6 +1466,20 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     return { candidate: evaluation, eligible: false, rejectReasons: ["market is not accepting orders"] };
   }
 
+  const dateContext = marketDateContext({
+    ...market,
+    resolutionEndDate: market.endDate || evaluation.resolutionEndDate || evaluation.endDate || null,
+  });
+  if (!endDateIsFuture(dateContext.endDate)) {
+    return {
+      candidate: evaluation,
+      eligible: false,
+      rejectReasons: [dateContext.sportsEventStarted
+        ? "scheduled sports event has started; awaiting official Polymarket resolution"
+        : "market resolution date has passed"],
+    };
+  }
+
   const clobMarket = await fetchClobMarket(market.conditionId).catch(() => null);
   const book = bestBook(await fetchJson(new URL(`/book?token_id=${evaluation.tokenId}`, CLOB_HOST), `CLOB book ${evaluation.tokenId}`));
   const tick = number(clobMarket?.mts ?? market.orderPriceMinTickSize ?? evaluation.tickSize, 0.01);
@@ -1458,7 +1548,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     };
   }
   const qualificationProbability = probability;
-  const endDate = correctedEndDate(market.question || evaluation.question, market.endDate, market.createdAt || market.updatedAt);
+  const endDate = dateContext.endDate;
   const days = daysToEnd(endDate);
   const resolvedDays = daysValue({ daysToResolution: days });
   if (Number.isFinite(MAX_RESOLUTION_DAYS) && resolvedDays > MAX_RESOLUTION_DAYS) {
@@ -1522,6 +1612,9 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     eventSlug: marketEventSlug(market),
     outcome: outcomes[tokenIndex] || evaluation.outcome,
     endDate,
+    scheduledEventDate: dateContext.scheduledEventDate,
+    resolutionEndDate: dateContext.resolutionEndDate,
+    endDateSource: dateContext.endDateSource,
     currentBestBid: book.bestBid,
     currentBestAsk: book.bestAsk,
     currentSpread: book.spread,

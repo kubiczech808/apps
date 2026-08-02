@@ -471,17 +471,30 @@ function withFirstObservationMetadata(item = {}) {
 
 function normalizeMarketObservationLifecycle(item, checkedAt = nowIso()) {
   if (!item || typeof item !== "object") return item;
-  const status = String(item.status || item.selectionStatus || "").trim().toUpperCase();
-  if (status === "ERROR" || status === "RESOLVED") return withFirstObservationMetadata(item);
-  const end = Date.parse(item.endDate || "");
-  if (!Number.isFinite(end) || end > Date.now()) return withFirstObservationMetadata(item);
+  const timedItem = normalizeStoredMarketObservationTiming(item);
+  const status = String(timedItem.status || timedItem.selectionStatus || "").trim().toUpperCase();
+  if (status === "ERROR") return withFirstObservationMetadata(timedItem);
+  const scheduledTime = Date.parse(timedItem.scheduledEventDate || "");
+  const end = Date.parse(timedItem.endDate || "");
+  const sportsEventStarted = Number.isFinite(scheduledTime) && scheduledTime <= Date.now();
+  if (status === "RESOLVED" || sportsEventStarted) {
+    return withFirstObservationMetadata({
+      ...timedItem,
+      status: "RESOLVED",
+      selectionStatus: "RESOLVED",
+      resolutionStatus: timedItem.resolutionStatus || "PENDING_RESULT",
+      resolvedAt: timedItem.resolvedAt || timedItem.closedTime || timedItem.endDate || checkedAt,
+      resolvedDetectedAt: timedItem.resolvedDetectedAt || checkedAt,
+    });
+  }
+  if (!Number.isFinite(end) || end > Date.now()) return withFirstObservationMetadata(timedItem);
   return withFirstObservationMetadata({
-    ...item,
+    ...timedItem,
     status: "RESOLVED",
     selectionStatus: "RESOLVED",
-    resolutionStatus: item.resolutionStatus || "PENDING_RESULT",
-    resolvedAt: item.resolvedAt || item.closedTime || item.endDate || checkedAt,
-    resolvedDetectedAt: item.resolvedDetectedAt || checkedAt,
+    resolutionStatus: timedItem.resolutionStatus || "PENDING_RESULT",
+    resolvedAt: timedItem.resolvedAt || timedItem.closedTime || timedItem.endDate || checkedAt,
+    resolvedDetectedAt: timedItem.resolvedDetectedAt || checkedAt,
   });
 }
 
@@ -866,7 +879,8 @@ function resolvedEvaluationFromMarket(item, market, checkedAt = nowIso()) {
   const outcomeIndex = outcomeIndexForTrade(market, item);
   const prices = parseOutcomePrices(market);
   const resolvedPrice = outcomeIndex >= 0 ? prices[outcomeIndex] : null;
-  const endDate = correctedEndDate(market.question || item.question, market.endDate || item.endDate || null, item.evaluatedAt || item.firstEvaluatedAt);
+  const dateContext = marketDateContext({ ...market, resolutionEndDate: market.endDate || item.resolutionEndDate || item.endDate || null }, item.evaluatedAt || item.firstEvaluatedAt);
+  const endDate = dateContext.endDate;
   const remainingDays = endDate ? daysToEnd(endDate) : null;
   const patch = {
     question: market.question || item.question,
@@ -898,6 +912,15 @@ function resolvedEvaluationFromMarket(item, market, checkedAt = nowIso()) {
       thesisType: "RESOLVED",
       resolutionStatus: "NOT_ACCEPTING_ORDERS",
     }, "Polymarket market is no longer accepting orders; excluded from active evaluated opportunities", checkedAt);
+  }
+
+  if (dateContext.sportsEventStarted) {
+    return withEvaluationResolutionUpdate(item, {
+      ...patch,
+      status: "RESOLVED",
+      thesisType: "RESOLVED",
+      resolutionStatus: "PENDING_RESULT",
+    }, "scheduled sports event has started; awaiting official Polymarket resolution", checkedAt);
   }
 
   if (remainingDays != null && remainingDays <= 0) {
@@ -953,14 +976,19 @@ function resolvedMarketObservationFromMarket(item, market, checkedAt = nowIso())
   const outcomeIndex = outcomeIndexForTrade(market, { outcome, tokenId });
   const prices = parseOutcomePrices(market);
   const resolvedPrice = outcomeIndex >= 0 ? prices[outcomeIndex] : null;
-  const endDate = correctedEndDate(market.question || item.question, market.endDate || item.endDate || null, item.firstObservedAt || item.observedAt);
+  const dateContext = marketDateContext({ ...market, resolutionEndDate: market.endDate || item.resolutionEndDate || item.endDate || null }, item.firstObservedAt || item.observedAt);
+  const endDate = dateContext.endDate;
   const ended = Boolean(market.closed) || market.acceptingOrders === false
+    || dateContext.sportsEventStarted
     || (Number.isFinite(Date.parse(endDate || "")) && Date.parse(endDate) <= Date.now());
   if (!ended) {
     return {
       ...item,
       question: market.question || item.question,
       endDate,
+      scheduledEventDate: dateContext.scheduledEventDate,
+      resolutionEndDate: dateContext.resolutionEndDate,
+      endDateSource: dateContext.endDateSource,
       marketClosed: typeof market.closed === "boolean" ? market.closed : item.marketClosed ?? null,
       acceptingOrders: typeof market.acceptingOrders === "boolean" ? market.acceptingOrders : item.acceptingOrders ?? null,
       resolutionCheckedAt: checkedAt,
@@ -972,6 +1000,9 @@ function resolvedMarketObservationFromMarket(item, market, checkedAt = nowIso())
     slug: market.slug || item.slug || "",
     eventSlug: marketEventSlug(market) || item.eventSlug || "",
     endDate,
+    scheduledEventDate: dateContext.scheduledEventDate,
+    resolutionEndDate: dateContext.resolutionEndDate,
+    endDateSource: dateContext.endDateSource,
     marketClosed: typeof market.closed === "boolean" ? market.closed : item.marketClosed ?? null,
     acceptingOrders: typeof market.acceptingOrders === "boolean" ? market.acceptingOrders : item.acceptingOrders ?? null,
     closedTime: market.closedTime || item.closedTime || null,
@@ -989,12 +1020,12 @@ async function refreshStoredMarketObservationResolutionStatuses(observations = [
   const refreshable = observations
     .map((item, index) => ({ item, index, slug: marketObservationResolutionSlug(item) }))
     .filter(({ item, slug }) => {
-      const end = Date.parse(item.endDate || "");
+      const end = Date.parse(item.scheduledEventDate || item.endDate || "");
       const status = String(item.status || item.selectionStatus || "").toUpperCase();
       const finalAvailable = Number.isFinite(Number(item.finalOutcomePrice));
       return slug && !finalAvailable && (status === "RESOLVED" || (Number.isFinite(end) && end <= Date.now()));
     })
-    .sort((a, b) => (Date.parse(a.item.endDate || "") || 0) - (Date.parse(b.item.endDate || "") || 0))
+    .sort((a, b) => (Date.parse(a.item.scheduledEventDate || a.item.endDate || "") || 0) - (Date.parse(b.item.scheduledEventDate || b.item.endDate || "") || 0))
     .slice(0, Math.max(0, SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT));
   if (!refreshable.length) return observations;
 
@@ -1157,6 +1188,95 @@ function correctedEndDate(question, rawEndDate, fallbackDate = null) {
   const inferredTime = Date.parse(inferred);
   if (!Number.isFinite(rawTime) || inferredTime > rawTime) return inferred;
   return rawEndDate || inferred;
+}
+
+const SPORTS_MARKET_HINT = /\b(atp|wta|nba|nfl|mlb|nhl|ufc|fifa|world[- ]cup|soccer|football|tennis|baseball|basketball|hockey|esports|e[- ]?sports|lol|match|game|tournament|spread|moneyline|winner)\b/i;
+
+function isSportsMarket(market = {}) {
+  const events = Array.isArray(market.events) ? market.events : [];
+  const text = [
+    market.slug,
+    market.eventSlug,
+    market.question,
+    market.category,
+    market.categorySlug,
+    market.sportsMarketType,
+    market.marketType,
+    market.tags,
+    ...events.flatMap((event) => [event?.slug, event?.title, event?.category, event?.categorySlug, event?.tags]),
+  ].filter(Boolean).join(" ");
+  return Boolean(
+    market.gameStartTime
+    || market.eventStartTime
+    || market.gameId
+    || market.sportsMarketType
+    || market.teamAID
+    || market.teamBID
+    || SPORTS_MARKET_HINT.test(text),
+  );
+}
+
+function parseSportsDate(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const dateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    const date = new Date(Date.UTC(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]), 23, 59, 59));
+    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  }
+  const time = Date.parse(text);
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+}
+
+function sportsDateFromSlug(value) {
+  const match = String(value || "").match(/(?:^|[-_])((?:19|20)\d{2})-(\d{2})-(\d{2})(?:$|[-_])/);
+  if (!match) return null;
+  return parseSportsDate(`${match[1]}-${match[2]}-${match[3]}`);
+}
+
+function sportsScheduledEventDate(market = {}, fallbackDate = null) {
+  if (!isSportsMarket(market)) return null;
+  const events = Array.isArray(market.events) ? market.events : [];
+  const candidates = [
+    market.gameStartTime,
+    market.eventStartTime,
+    ...events.flatMap((event) => [event?.gameStartTime, event?.eventStartTime, event?.startDateIso, event?.startDate]),
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseSportsDate(candidate);
+    if (parsed) return parsed;
+  }
+  return sportsDateFromSlug(market.slug) || sportsDateFromSlug(market.eventSlug) || sportsDateFromSlug(events.find((event) => event?.slug)?.slug) || null;
+}
+
+function marketDateContext(market = {}, fallbackDate = null) {
+  const rawResolutionEndDate = market.resolutionEndDate || market.endDate || null;
+  const resolutionEndDate = correctedEndDate(market.question || "", rawResolutionEndDate, fallbackDate);
+  const scheduledEventDate = sportsScheduledEventDate(market, fallbackDate);
+  const scheduledTime = Date.parse(scheduledEventDate || "");
+  const resolutionTime = Date.parse(resolutionEndDate || "");
+  const useScheduledDate = Boolean(scheduledEventDate)
+    && (!Number.isFinite(resolutionTime) || (Number.isFinite(scheduledTime) && scheduledTime < resolutionTime));
+  const endDate = useScheduledDate ? scheduledEventDate : resolutionEndDate;
+  return {
+    endDate: endDate || null,
+    scheduledEventDate: scheduledEventDate || null,
+    resolutionEndDate: resolutionEndDate || null,
+    endDateSource: useScheduledDate ? "sports-event-start" : "polymarket-resolution-window",
+    sportsEventStarted: useScheduledDate && Number.isFinite(scheduledTime) && scheduledTime <= Date.now(),
+  };
+}
+
+function normalizeStoredMarketObservationTiming(item = {}) {
+  const context = marketDateContext(item, item.firstObservedAt || item.observedAt || item.marketDataUpdatedAt);
+  if (!context.endDate && !context.scheduledEventDate && !context.resolutionEndDate) return item;
+  return {
+    ...item,
+    endDate: context.endDate || item.endDate || null,
+    scheduledEventDate: context.scheduledEventDate || item.scheduledEventDate || null,
+    resolutionEndDate: item.resolutionEndDate || context.resolutionEndDate || null,
+    endDateSource: context.endDateSource || item.endDateSource || null,
+  };
 }
 
 function tagQuestion(question) {
@@ -1461,13 +1581,17 @@ async function markOpenTrade(trade) {
   const prices = parseOutcomePrices(market);
   const resolvedPrice = outcomeIndex >= 0 ? prices[outcomeIndex] : null;
   const eventSlug = marketEventSlug(market);
-  const endDate = correctedEndDate(market.question || trade.question, market.endDate || trade.endDate || null, trade.openedAt || trade.date);
+  const dateContext = marketDateContext({ ...market, resolutionEndDate: market.endDate || trade.resolutionEndDate || trade.endDate || null }, trade.openedAt || trade.date);
+  const endDate = dateContext.endDate;
   const remainingDays = endDate ? daysToEnd(endDate) : null;
   const base = {
     ...trade,
     question: market.question || trade.question,
     eventSlug,
     endDate,
+    scheduledEventDate: dateContext.scheduledEventDate,
+    resolutionEndDate: dateContext.resolutionEndDate,
+    endDateSource: dateContext.endDateSource,
     daysToResolution: remainingDays == null ? trade.daysToResolution ?? null : Number(remainingDays.toFixed(2)),
     marketClosed: Boolean(market.closed),
     marketActive: Boolean(market.active),
@@ -1508,7 +1632,7 @@ async function markOpenTrade(trade) {
     };
   }
 
-  if (remainingDays != null && remainingDays <= 0) {
+  if (dateContext.sportsEventStarted || (remainingDays != null && remainingDays <= 0)) {
     return {
       ...base,
       status: "PENDING_RESOLUTION",
@@ -1823,7 +1947,8 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   const tags = tagQuestion(question);
   const eventSlug = marketEventSlug(market);
   const risk = riskProfile({ question, slug: market.slug, eventSlug, outcome, tags });
-  const endDate = correctedEndDate(question, market.endDate, market.createdAt || market.updatedAt);
+  const dateContext = marketDateContext(market, market.createdAt || market.updatedAt);
+  const endDate = dateContext.endDate;
   const days = daysToEnd(endDate);
   const endOk = endDateIsFuture(endDate);
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
@@ -1902,6 +2027,9 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     marketType: outcomes.length > 2 ? "multi" : reportMarketType({ question, slug: market.slug, eventSlug, outcome }),
     tokenId,
     endDate,
+    scheduledEventDate: dateContext.scheduledEventDate,
+    resolutionEndDate: dateContext.resolutionEndDate,
+    endDateSource: dateContext.endDateSource,
     tags,
     riskCategory: risk.category,
     riskPrimaryEntity: risk.primaryEntity,
@@ -4449,7 +4577,7 @@ async function fetchGammaMarkets(params = {}) {
 }
 
 function marketDaysLeft(market = {}) {
-  return daysToEnd(correctedEndDate(market.question || "", market.endDate, market.createdAt || market.updatedAt));
+  return daysToEnd(marketDateContext(market, market.createdAt || market.updatedAt).endDate);
 }
 
 function compareMarketsForShortHorizon(a, b) {
@@ -4722,7 +4850,8 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     ? binaryMarketKeyFromMarket(market)
     : `token:${tokenId}`;
   if (!marketKey) return null;
-  const endDate = correctedEndDate(market.question || "", market.endDate, market.createdAt || market.updatedAt);
+  const dateContext = marketDateContext(market, market.createdAt || market.updatedAt);
+  const endDate = dateContext.endDate;
   const days = daysToEnd(endDate);
   const stake = PORTFOLIO_USDC * MAX_FRACTION;
   const fees = feeConfig(market);
@@ -4755,8 +4884,8 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     eventSlug: marketEventSlug(market),
     outcome: outcomes[outcomeIndex],
     tokenId,
-    status: "SCRAPED",
-    selectionStatus: "SCRAPED",
+    status: dateContext.sportsEventStarted || market.closed || market.acceptingOrders === false ? "RESOLVED" : "SCRAPED",
+    selectionStatus: dateContext.sportsEventStarted || market.closed || market.acceptingOrders === false ? "RESOLVED" : "SCRAPED",
     marketType: outcomes.length > 2 ? "multi" : reportMarketType({ question: market.question || "", slug: market.slug, eventSlug: marketEventSlug(market), outcome: outcomes[outcomeIndex] }),
     tags,
     riskCategory: risk.category,
@@ -4771,6 +4900,9 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     binaryNoTokenId: binary ? tokenIds[binary.noIndex] || "" : "",
     outcomeCount: outcomes.length,
     endDate,
+    scheduledEventDate: dateContext.scheduledEventDate,
+    resolutionEndDate: dateContext.resolutionEndDate,
+    endDateSource: dateContext.endDateSource,
     daysToResolution: days == null ? null : Number(days.toFixed(2)),
     liquidity: Number(market.liquidity || 0),
     volume24hr: Number(market.volume24hr || 0),
@@ -4822,9 +4954,11 @@ async function refreshMarketObservations(state) {
     }
 
     const observedAt = nowIso();
-    const endDate = correctedEndDate(market.question || "", market.endDate, market.createdAt || market.updatedAt);
+    const dateContext = marketDateContext(market, market.createdAt || market.updatedAt);
+    const endDate = dateContext.endDate;
     let observation = preferredMarketObservation(market, observedAt);
     const marketIsResolved = Boolean(market.closed) || market.acceptingOrders === false
+      || dateContext.sportsEventStarted
       || (Number.isFinite(Date.parse(endDate || "")) && Date.parse(endDate) <= Date.now());
 
     if (observation && marketIsResolved) {
@@ -4833,6 +4967,9 @@ async function refreshMarketObservations(state) {
         status: "RESOLVED",
         selectionStatus: "RESOLVED",
         resolutionStatus: "PENDING_RESULT",
+        scheduledEventDate: dateContext.scheduledEventDate,
+        resolutionEndDate: dateContext.resolutionEndDate,
+        endDateSource: dateContext.endDateSource,
         resolvedAt: endDate || observedAt,
         resolvedDetectedAt: observedAt,
       };
@@ -4844,6 +4981,9 @@ async function refreshMarketObservations(state) {
         selectionStatus: "RESOLVED",
         resolutionStatus: stored.resolutionStatus || "PENDING_RESULT",
         endDate: endDate || stored.endDate || null,
+        scheduledEventDate: dateContext.scheduledEventDate || stored.scheduledEventDate || null,
+        resolutionEndDate: dateContext.resolutionEndDate || stored.resolutionEndDate || null,
+        endDateSource: dateContext.endDateSource || stored.endDateSource || null,
         resolvedAt: stored.resolvedAt || endDate || observedAt,
         resolvedDetectedAt: observedAt,
         marketDataUpdatedAt: observedAt,
@@ -4891,15 +5031,16 @@ async function refreshMarketObservations(state) {
       const probability = Number(item.marketProbability);
       const days = daysToEnd(item.endDate);
       const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+      const status = String(item.status || item.selectionStatus || "").toUpperCase();
       return Number.isFinite(probability)
         && probability >= MARKET_SCAN_MIN_PROBABILITY
-        && Number.isFinite(days)
-        && days >= minimumDays;
+        && (status === "RESOLVED" || (Number.isFinite(days) && days >= minimumDays));
     })
     .sort(compareObservationsForMarketScan);
   const shortHorizonCount = observations.filter((item) => {
     const days = daysToEnd(item.endDate);
-    return Number.isFinite(days) && days > 0 && days <= MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS;
+    const status = String(item.status || item.selectionStatus || "").toUpperCase();
+    return status !== "RESOLVED" && Number.isFinite(days) && days > 0 && days <= MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS;
   }).length;
   state.marketObservations = mergeMarketObservationLists(observations, state.marketObservations || [])
     .map(normalizeMarketObservationEconomics);

@@ -256,16 +256,47 @@ function inferredEndDateFromQuestion(question, fallbackDate = null) {
   return Number.isFinite(inferred.getTime()) ? inferred.toISOString() : null;
 }
 
-function correctedEndDate(question, rawEndDate, fallbackDate = null) {
+function correctedEndDate(question, rawEndDate, fallbackDate = null, position = {}) {
   const raw = isoTime(rawEndDate);
   const inferred = inferredEndDateFromQuestion(question, raw || fallbackDate);
-  if (!inferred) return { endDate: raw, source: raw ? "positions-api" : "unknown", rawEndDate: raw };
-  const rawTime = Date.parse(raw || "");
-  const inferredTime = Date.parse(inferred);
-  if (!Number.isFinite(rawTime) || inferredTime > rawTime) {
-    return { endDate: inferred, source: raw ? "question-corrected" : "question-inferred", rawEndDate: raw };
+  const text = [position.slug, position.eventSlug, position.category, position.categorySlug, position.marketType, question].filter(Boolean).join(" ");
+  const isSports = Boolean(
+    position.gameStartTime
+    || position.eventStartTime
+    || position.gameId
+    || /\b(atp|wta|nba|nfl|mlb|nhl|ufc|fifa|soccer|football|tennis|baseball|basketball|hockey|esports|lol|match|game|tournament|spread|moneyline)\b/i.test(text),
+  );
+  const dateCandidates = [position.gameStartTime, position.eventStartTime, position.startDateIso];
+  let scheduledEventDate = null;
+  for (const candidate of dateCandidates) {
+    const value = String(candidate || "").trim();
+    if (!value) continue;
+    const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const parsed = dateOnly
+      ? new Date(Date.UTC(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]), 23, 59, 59))
+      : new Date(value);
+    if (Number.isFinite(parsed.getTime())) {
+      scheduledEventDate = parsed.toISOString();
+      break;
+    }
   }
-  return { endDate: raw || inferred, source: raw ? "positions-api" : "question-inferred", rawEndDate: raw };
+  if (!scheduledEventDate && isSports) {
+    const slugMatch = String(position.slug || position.eventSlug || "").match(/(?:^|[-_])((?:19|20)\d{2})-(\d{2})-(\d{2})(?:$|[-_])/);
+    if (slugMatch) scheduledEventDate = new Date(Date.UTC(Number(slugMatch[1]), Number(slugMatch[2]) - 1, Number(slugMatch[3]), 23, 59, 59)).toISOString();
+  }
+  const rawTime = Date.parse(raw || "");
+  const inferredTime = Date.parse(inferred || "");
+  const base = !inferred
+    ? { endDate: raw, source: raw ? "positions-api" : "unknown", rawEndDate: raw }
+    : (!Number.isFinite(rawTime) || inferredTime > rawTime
+      ? { endDate: inferred, source: raw ? "question-corrected" : "question-inferred", rawEndDate: raw }
+      : { endDate: raw || inferred, source: raw ? "positions-api" : "question-inferred", rawEndDate: raw });
+  const scheduledTime = Date.parse(scheduledEventDate || "");
+  const endTime = Date.parse(base.endDate || "");
+  if (isSports && scheduledEventDate && Number.isFinite(scheduledTime) && (!Number.isFinite(endTime) || scheduledTime < endTime)) {
+    return { ...base, endDate: scheduledEventDate, source: "sports-event-start", scheduledEventDate, resolutionEndDate: base.endDate || null };
+  }
+  return { ...base, scheduledEventDate: scheduledEventDate || null, resolutionEndDate: base.endDate || null };
 }
 
 function normalizePosition(position, generatedAt) {
@@ -279,7 +310,7 @@ function normalizePosition(position, generatedAt) {
   const pnlPct = ratio(position.percentPnl ?? position.pnlPercent ?? (initialValue > 0 ? cashPnl / initialValue : null));
   const realizedPnl = number(position.realizedPnl ?? position.cashPnlRealized, 0);
   const rawEndDate = isoTime(position.endDate ?? position.endDateIso ?? position.resolutionDate);
-  const endDateCorrection = correctedEndDate(question, rawEndDate, position.createdAt ?? position.timestamp ?? generatedAt);
+  const endDateCorrection = correctedEndDate(question, rawEndDate, position.createdAt ?? position.timestamp ?? generatedAt, position);
   const endDate = endDateCorrection.endDate;
   const redeemable = Boolean(position.redeemable ?? position.claimable ?? position.canRedeem ?? position.conditionRedeemable ?? false);
   const resolved = Boolean(position.resolved ?? position.isResolved ?? position.closed ?? false);
@@ -306,6 +337,8 @@ function normalizePosition(position, generatedAt) {
     endDate,
     rawEndDate,
     endDateSource: endDateCorrection.source,
+    scheduledEventDate: endDateCorrection.scheduledEventDate || null,
+    resolutionEndDate: endDateCorrection.resolutionEndDate || null,
     resolvedAt,
     entryPrice: avgPrice,
     currentPrice,
