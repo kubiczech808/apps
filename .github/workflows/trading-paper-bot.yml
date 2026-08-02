@@ -138,7 +138,11 @@ on:
         default: ""
         type: string
   schedule:
-    - cron: '7,17,27,37,47,57 * * * *'
+    # Keep the public scraped catalogue fresh independently of the slower AI
+    # and portfolio execution pass below.
+    - cron: '*/10 * * * *'
+    # Full grounded analysis and paper-trade decisions run once per hour.
+    - cron: '7 * * * *'
     - cron: '17 1 * * *'
 
 concurrency:
@@ -195,8 +199,8 @@ jobs:
       PAPER_MAX_SPREAD: "0.08"
       PAPER_MIN_VOLUME_24H: "100"
       PAPER_MAX_RESOLUTION_DAYS: "7"
-      # One full grounded analysis runs every 10 minutes: at most 144 background
-      # requests per day, leaving the dedicated reserve for trade execution.
+      # Scraping runs every ten minutes. Grounded analysis and paper-trade
+      # decisions run hourly, leaving a large reserve for execution requests.
       PAPER_AI_ANALYSIS_LIMIT: "1"
       PAPER_AI_CRITIC_ENABLED: "false"
       PAPER_AI_REQUEST_DELAY_MS: "7000"
@@ -216,6 +220,7 @@ jobs:
       PAPER_STRATEGY_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_strategy_id || '' }}
       PAPER_REPORT_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 1 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report') }}
       PAPER_REFRESH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' }}
+      PAPER_SCAN_ONLY: ${{ github.event_name == 'schedule' && github.event.schedule == '*/10 * * * *' && 'true' || 'false' }}
       PAPER_REFRESH_MARKET_SLUG: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' && inputs.paper_strategy_id || '' }}
       PAPER_SCHEDULED_CADENCE_POLL: ${{ github.event_name == 'schedule' && github.event.schedule != '17 1 * * *' && 'true' || 'false' }}
       PAPER_CONTINUOUS_EVALUATION: "true"

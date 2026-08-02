@@ -16,10 +16,13 @@ The browser only reads the published `data/paper-state.json`. Analysis, optional
 
 `.github/workflows/trading-paper-bot.yml` writes `trading/data/paper-state.json` to the public `/trading/data/` directory.
 
-It runs in two modes:
+It runs in three scheduled modes:
 
-- full analysis every hour at minute 7,
-- refresh-only checks at minutes 22, 37, and 52 to update open positions, resolved markets, post-mortems, and portfolio P/L without opening a new trade or rescanning candidates.
+- a lightweight scraped-market scan every 10 minutes,
+- full grounded analysis and paper-trade decisions every hour at minute 7,
+- a nightly report at 01:17.
+
+The 10-minute scan does not spend AI requests or open trades. It only refreshes the shared scraped catalogue and scan history, so a slower grounded analysis cannot delay fresh market data.
 
 The bot:
 

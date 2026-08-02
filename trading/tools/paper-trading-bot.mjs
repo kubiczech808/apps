@@ -85,6 +85,7 @@ const REFRESH_ONLY = String(process.env.PAPER_REFRESH_ONLY || "").toLowerCase() 
 const REFRESH_TOKEN_ID = String(process.env.PAPER_REFRESH_TOKEN_ID || "").trim();
 const REFRESH_MARKET_SLUG = String(process.env.PAPER_REFRESH_MARKET_SLUG || "").trim();
 const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
+const SCAN_ONLY = envBool("PAPER_SCAN_ONLY", false);
 const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
 const EVALUATION_ONLY = envBool("PAPER_EVALUATION_ONLY", false);
 const EVALUATION_TOKEN_ID = String(process.env.PAPER_EVALUATION_TOKEN_ID || "").trim();
@@ -5881,7 +5882,9 @@ async function run() {
   const state = await readState();
   syncLegacyPaperAliases(state);
   state.aiUsage = aiUsageSnapshot(state);
-  state.evaluations = (await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || [])))
+  state.evaluations = (SCAN_ONLY
+    ? expirePastEvaluations(state.evaluations || [])
+    : await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || [])))
     .map(normalizeAiPendingEvaluation)
     .map(ensureEvaluationErrorMetadata);
   state.marketObservations = (state.marketObservations || []).map(normalizeMarketObservationEconomics);
@@ -5897,7 +5900,26 @@ async function run() {
       lastScanError: error?.message || String(error),
     };
   }
-  state.marketObservations = await refreshStoredMarketObservationResolutionStatuses(state.marketObservations || []);
+  if (!SCAN_ONLY) {
+    state.marketObservations = await refreshStoredMarketObservationResolutionStatuses(state.marketObservations || []);
+  }
+
+  if (SCAN_ONLY) {
+    state.generatedAt = nowIso();
+    updatePortfolio(state);
+    updateCalculationReport(state);
+    await writeState(state);
+    console.log(JSON.stringify({
+      action: "MARKET_SCAN",
+      reason: "10-minute scraped market scan completed; AI evaluation and trade execution were intentionally skipped",
+      marketScanAt: state.marketScan?.lastScanAt || null,
+      marketBatchCount: state.marketScan?.lastBatchCount || 0,
+      retainedObservationCount: state.marketScanHistory?.[0]?.retainedObservationCount || 0,
+      resolvedSkippedCount: state.marketScanHistory?.[0]?.resolvedSkippedCount || 0,
+    }, null, 2));
+    return;
+  }
+
   recoverLedgerGaps(state);
   for (const portfolioState of Object.values(state.paperPortfolios)) {
     portfolioState.trades = await refreshTrades(portfolioState.trades);
