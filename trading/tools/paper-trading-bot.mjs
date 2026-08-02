@@ -61,7 +61,9 @@ const MARKET_SCAN_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_MAX_RESOLUT
 const MARKET_SCAN_MIN_NET_YIELD = envNumber("PAPER_MARKET_SCAN_MIN_NET_YIELD", 0);
 const MARKET_SCAN_MIN_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_MIN_LIQUIDITY_USDC", 0);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
+// Use the model listed in the configured free-tier limits. Keeping the model
+// name in one constant also lets a stale quota backoff be scoped correctly.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3-flash";
 const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
 const REQUIRE_GEMINI = envBool("PAPER_REQUIRE_GEMINI", false);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
@@ -373,6 +375,8 @@ function normalizeState(input) {
     marketScan: normalizeMarketScan(input.marketScan),
     marketScanHistory: normalizeMarketScanHistory(input.marketScanHistory),
     evaluationRunLog: Array.isArray(input.evaluationRunLog) ? input.evaluationRunLog.slice(0, 80) : [],
+    evaluationStats: input.evaluationStats && typeof input.evaluationStats === "object" ? input.evaluationStats : null,
+    aiEvaluation: input.aiEvaluation && typeof input.aiEvaluation === "object" ? input.aiEvaluation : null,
     calculationReports: Array.isArray(input.calculationReports) ? input.calculationReports.slice(0, 30) : [],
     latestCalculationReport: input.latestCalculationReport || (Array.isArray(input.calculationReports) ? input.calculationReports[0] || null : null),
     learningProfile: normalizeLearningProfile(input.learningProfile),
@@ -2726,7 +2730,10 @@ function aiUsageSnapshot(state, now = Date.now()) {
   const oldestHour = hour[0] ? Date.parse(hour[0].requestedAt || "") + 3600000 : 0;
   const oldestMinute = minute[0] ? Date.parse(minute[0].requestedAt || "") + 60000 : 0;
   const oldestDay = entries[0] ? Date.parse(entries[0].requestedAt || "") + 86400000 : 0;
-  const storedQuotaBlockedUntil = Date.parse(state?.aiUsage?.quotaBlockedUntil || "") || 0;
+  const storedQuotaModel = String(state?.aiUsage?.model || "");
+  const storedQuotaBlockedUntil = storedQuotaModel && storedQuotaModel !== GEMINI_MODEL
+    ? 0
+    : Date.parse(state?.aiUsage?.quotaBlockedUntil || "") || 0;
   const quotaBlockedUntil = storedQuotaBlockedUntil > now ? new Date(storedQuotaBlockedUntil).toISOString() : null;
   const nextAvailable = Math.max(
     nextFromInterval,
@@ -6157,7 +6164,21 @@ async function run() {
     }
   }
 
+  const aiCandidateCount = evaluations.length;
   evaluations = (await enrichEvaluationsWithAi(evaluations, state.learningProfile, state)).map(normalizeEvaluationRisk);
+  const aiBackoffUntil = state.aiUsage?.quotaBlockedUntil || null;
+  state.aiEvaluation = {
+    ...(state.aiEvaluation || {}),
+    model: GEMINI_MODEL,
+    lastRunAt: nowIso(),
+    lastStatus: aiBackoffUntil ? "QUOTA_BACKOFF" : "COMPLETED",
+    lastCandidateCount: aiCandidateCount,
+    lastEvaluatedCount: evaluations.filter((item) => String(item.status || "").toUpperCase() !== "ERROR").length,
+    nextRetryAt: aiBackoffUntil || state.aiUsage?.nextAvailableAt || null,
+    reason: aiBackoffUntil
+      ? `Gemini quota/rate-limit backoff is active until ${aiBackoffUntil}.`
+      : "Grounded Gemini evaluation completed for the candidates processed in this run.",
+  };
   const eligible = evaluations.filter((item) => item.status === "ELIGIBLE" && (!REQUIRE_GEMINI || hasGroundedPublicMemo(item)));
   const executionEvaluations = evaluations.filter((item) => item.status !== "ERROR" && (!REQUIRE_GEMINI || hasGroundedPublicMemo(item)));
   const decisions = EVALUATION_ONLY

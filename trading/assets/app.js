@@ -5626,12 +5626,15 @@ function renderBotEvaluations() {
     const totalEvaluated = formatInteger(stats.totalRunEvaluatedCount);
     const lastRunEvaluated = formatInteger(stats.lastRunEvaluatedCount);
     const aiUsage = state.botState?.aiUsage || stats.aiUsage || {};
+    const aiEvaluation = state.botState?.aiEvaluation || {};
     const aiUsageText = Number.isFinite(Number(aiUsage.requestsLast24Hours))
       ? `AI usage ${formatInteger(aiUsage.requestsLastMinute || 0)}/min / ${formatInteger(aiUsage.requestsLastHour || 0)}/h / ${formatInteger(aiUsage.requestsLast24Hours)} of ${formatInteger(aiUsage.maxRequestsPer24Hours)} in 24h; capacity ${formatInteger(aiUsage.estimatedDailyCapacity)}/day`
       : "AI usage pending";
-    const aiQuotaBackoffText = aiUsage.quotaBlockedUntil
-      ? `Gemini quota backoff until ${formatDate(aiUsage.quotaBlockedUntil)}`
-      : null;
+    const aiQuotaBackoffText = aiEvaluation.lastStatus === "QUOTA_BACKOFF" || aiUsage.quotaBlockedUntil
+      ? `AI evaluation paused until ${formatDate(aiEvaluation.nextRetryAt || aiUsage.quotaBlockedUntil)}`
+      : aiEvaluation.lastRunAt
+        ? `AI last run ${formatDate(aiEvaluation.lastRunAt)} / ${formatInteger(aiEvaluation.lastEvaluatedCount || 0)} evaluated`
+        : "AI evaluation has not run yet";
     const retainedText = `${formatInteger(evaluations.length) || evaluations.length}${retainedLimit ? ` / ${retainedLimit} retained cap` : " retained"}`;
     els.evaluationSummary.textContent = [
       `${formatInteger(filteredCount) || filteredCount} shown`,
