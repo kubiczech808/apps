@@ -260,6 +260,7 @@ function signedPercent(value) {
 
 function compactDays(value) {
   if (!Number.isFinite(value)) return "-";
+  if (value <= 0) return "due now";
   if (value > 0 && value < 0.1) return "< 0.1 d";
   if (value < 1) return `${Math.max(0, value).toFixed(1)} d`;
   return `${value.toFixed(1)} d`;
@@ -1302,7 +1303,7 @@ function potentialAnnualizedReturn(item) {
 
 function annualizationDays(value) {
   const days = Number(value);
-  if (!Number.isFinite(days) || days < 0) return null;
+  if (!Number.isFinite(days)) return null;
   return Math.max(MIN_ANNUALIZATION_DAYS, days);
 }
 

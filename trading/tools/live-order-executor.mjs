@@ -108,7 +108,7 @@ function number(value, fallback = null) {
 
 function annualizationDays(value) {
   const days = number(value);
-  if (days == null || days < 0) return null;
+  if (days == null) return null;
   return Math.max(MIN_ANNUALIZATION_DAYS, days);
 }
 

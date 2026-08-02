@@ -5029,7 +5029,7 @@ function binaryOutcomeQuotesAreBothZero(item = {}) {
 
 function annualizationDays(value) {
   const days = Number(value);
-  if (!Number.isFinite(days) || days < 0) return null;
+  if (!Number.isFinite(days)) return null;
   return Math.max(MIN_ANNUALIZATION_DAYS, days);
 }
 
