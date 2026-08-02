@@ -3565,7 +3565,8 @@ async function triggerOneTimeExecution(target) {
   }
   if (live) {
     steps = addExecutionStep(steps, "Waiting for browser confirmation", "Confirm the live one-time execution prompt to dispatch the workflow.", "active");
-    await sleep(80);
+    // Keep the native confirmation in the original tap/click activation.
+    // Mobile browsers can suppress confirm() after an async delay.
     const confirmed = window.confirm("Spustit jednorazovou LIVE exekuci? Workflow znovu overi kandidaty a muze poslat realny Polymarket order.");
     if (!confirmed) {
       steps = addExecutionStep(steps, "Live execution canceled", "The workflow was not dispatched because the browser confirmation was canceled.", "error");
