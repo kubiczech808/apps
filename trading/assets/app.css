@@ -657,7 +657,7 @@ button:disabled {
 }
 
 .run-log-scroll > .portfolio-run-list {
-  min-width: 760px;
+  min-width: 0;
 }
 
 .bot-summary {
@@ -1662,7 +1662,7 @@ body.modal-open {
 
 .trade-batch {
   display: grid;
-  grid-template-columns: minmax(80px, 0.6fr) minmax(120px, 0.8fr) minmax(68px, 0.45fr) minmax(0, 2fr) minmax(160px, 1fr);
+  grid-template-columns: minmax(96px, 0.55fr) minmax(130px, 0.75fr) minmax(0, 3fr) minmax(58px, 0.35fr);
   gap: 10px;
   align-items: start;
   width: 100%;
@@ -2168,15 +2168,46 @@ body.modal-open {
     flex-direction: column;
   }
 
-  .run-log-scroll > .portfolio-run-list .trade-batch {
-    grid-template-columns: minmax(80px, 0.6fr) minmax(120px, 0.8fr) minmax(68px, 0.45fr) minmax(0, 2fr) minmax(160px, 1fr);
+  .run-log-scroll {
+    overflow-x: visible;
+    touch-action: pan-y;
+  }
+
+  .run-log-scroll > .portfolio-run-list {
+    min-width: 0;
   }
 
   .run-counts {
     justify-content: flex-start;
   }
 
-  .trade-batch,
+  .trade-batch {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "action time"
+      "message message"
+      "source source";
+    gap: 5px 10px;
+  }
+
+  .trade-batch > span:first-child {
+    grid-area: action;
+  }
+
+  .trade-batch > strong {
+    grid-area: time;
+    text-align: right;
+  }
+
+  .trade-batch > span:nth-child(3) {
+    grid-area: message;
+  }
+
+  .trade-batch > .portfolio-run-source {
+    grid-area: source;
+    justify-self: start;
+  }
+
   .run-event {
     grid-template-columns: 1fr;
     gap: 4px;

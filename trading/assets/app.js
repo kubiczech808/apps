@@ -3580,6 +3580,7 @@ function liveWorkflowPayload() {
     min_probability: config.minProbability,
     max_order_fraction: config.maxOrderFraction,
     use_limit_orders: config.useLimitOrders,
+    live_run_source: "MANUAL",
     live_execution_candidate_token_ids: shortlistTokenIds.join(","),
     live_execution_probability_source: normalizeProbabilitySource(config.probabilitySource),
     cross_live_portfolio_risk_diversification: systemConfig().crossLivePortfolioRiskDiversification !== false,
@@ -6023,9 +6024,8 @@ function renderRunLog() {
           <button class="trade-batch portfolio-run-row" type="button" data-portfolio-run="${index}">
             <span class="${runActionClass(run.action || batch.action)}">${escapeHtml(run.action || batch.action || "-")}</span>
             <strong>${escapeHtml(run.runAt || run.generatedAt ? formatDate(run.runAt || run.generatedAt) : "-")}</strong>
-            <span class="portfolio-run-source">${portfolioRunSource(run)}</span>
             <span>${escapeHtml(runDecisionSummary(run))}</span>
-            <em>${escapeHtml(run.strategyLabel || batch.strategyLabel || run.strategyId || "-")}</em>
+            <span class="portfolio-run-source">${portfolioRunSource(run)}</span>
           </button>
         `;
       }).join("")}

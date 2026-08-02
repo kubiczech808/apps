@@ -2393,6 +2393,8 @@ async function main() {
       runAt: new Date().toISOString(),
       strategyId: "live",
       strategyLabel: "Live",
+      runSource: String(process.env.LIVE_RUN_SOURCE || "AUTO").toUpperCase() === "MANUAL" ? "MANUAL" : "AUTO",
+      manualRunOnce: String(process.env.LIVE_RUN_SOURCE || "").toUpperCase() === "MANUAL",
       selectionMetric: returnMetricLabel(),
       action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
       reason: actionReason,

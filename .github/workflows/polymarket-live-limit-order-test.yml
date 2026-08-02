@@ -64,6 +64,11 @@ on:
         required: false
         default: "false"
         type: string
+      live_run_source:
+        description: Source of this live execution run
+        required: false
+        default: "AUTO"
+        type: string
       live_execution_candidate_token_ids:
         description: Ordered token IDs from the browser's current live execution shortlist
         required: false
@@ -107,6 +112,7 @@ jobs:
       LIVE_ONE_TRADE_PER_DAY: "true"
       LIVE_TRADE_CADENCE_HOURS: ${{ github.event.inputs.live_trade_cadence_hours || '24' }}
       LIVE_IGNORE_TRADE_CADENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_ignore_trade_cadence == 'true' && 'true' || 'false' }}
+      LIVE_RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_run_source == 'MANUAL' && 'MANUAL' || 'AUTO' }}
       LIVE_EXECUTION_CANDIDATE_TOKEN_IDS: ${{ github.event.inputs.live_execution_candidate_token_ids || '' }}
       LIVE_EXECUTION_SHORTLIST_PROBABILITY_SOURCE: ${{ github.event.inputs.live_execution_probability_source || '' }}
       LIVE_SCHEDULED_CADENCE_POLL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.live_ignore_trade_cadence != 'true')) && 'true' || 'false' }}
