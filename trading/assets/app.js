@@ -4274,6 +4274,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
   const live = normalizeMode(mode) === "live";
   const config = portfolioConfigForMode(mode);
   const usesPolymarketPotential = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
+  const useLiveMarketColumnOrder = live && usesPolymarketPotential;
   const probabilityLabel = usesPolymarketPotential ? "Mkt prob." : "AI prob.";
   const returnMetric = portfolioReturnMetricLabel(config);
   return `
@@ -4284,16 +4285,27 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           <th>#</th>
           <th>Precheck</th>
           <th>Market</th>
-          <th>End date</th>
-          <th>Days left</th>
-          <th>${probabilityLabel}</th>
-          ${usesPolymarketPotential ? "" : "<th>Mkt entry</th>"}
-          <th>${returnMetric}</th>
-          ${usesPolymarketPotential ? "" : "<th>EV</th>"}
-          <th>Win</th>
-          <th>Net yield %</th>
-          <th>R/R</th>
-          <th>Liquidity</th>
+          ${useLiveMarketColumnOrder ? `
+            <th>Days left</th>
+            <th>${returnMetric}</th>
+            <th>Win</th>
+            <th>Net yield %</th>
+            <th>Liquidity</th>
+            <th>R/R</th>
+            <th>${probabilityLabel}</th>
+            <th>End date</th>
+          ` : `
+            <th>End date</th>
+            <th>Days left</th>
+            <th>${probabilityLabel}</th>
+            ${usesPolymarketPotential ? "" : "<th>Mkt entry</th>"}
+            <th>${returnMetric}</th>
+            ${usesPolymarketPotential ? "" : "<th>EV</th>"}
+            <th>Win</th>
+            <th>Net yield %</th>
+            <th>R/R</th>
+            <th>Liquidity</th>
+          `}
           <th>Analysis</th>
         </tr>
       </thead>
@@ -4305,7 +4317,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           const status = excluded
             ? "excluded manually for this portfolio"
             : (riskBlockedRow
-            ? item.portfolioRiskBlockReason
+            ? "excluded by diversification rules"
             : (retryableExecution
               ? (item.executionRevalidation.retryClass === "CAPITAL" ? "waiting for free capital; retry on the next execution" : "waiting for diversification capacity; retry on the next execution")
               : (!live
@@ -4329,16 +4341,27 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
                 </label>
               </td>
               <td data-label="Market">${marketAnchor(item)}</td>
-              <td data-label="End date">${evaluationEndDateCell(item)}</td>
-              <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
-              <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
-              ${usesPolymarketPotential ? "" : `<td data-label="Mkt entry">${probability(evaluationEntryPrice(item))}</td>`}
-              <td data-label="${returnMetric}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
-              ${usesPolymarketPotential ? "" : `<td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>`}
-              <td data-label="Win">${gainCell(item)}</td>
-              <td data-label="Net yield %">${netYieldCell(item)}</td>
-              <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
-              <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
+              ${useLiveMarketColumnOrder ? `
+                <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
+                <td data-label="${returnMetric}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
+                <td data-label="Win">${gainCell(item)}</td>
+                <td data-label="Net yield %">${netYieldCell(item)}</td>
+                <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
+                <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
+                <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
+                <td data-label="End date">${evaluationEndDateCell(item)}</td>
+              ` : `
+                <td data-label="End date">${evaluationEndDateCell(item)}</td>
+                <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
+                <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
+                ${usesPolymarketPotential ? "" : `<td data-label="Mkt entry">${probability(evaluationEntryPrice(item))}</td>`}
+                <td data-label="${returnMetric}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
+                ${usesPolymarketPotential ? "" : `<td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>`}
+                <td data-label="Win">${gainCell(item)}</td>
+                <td data-label="Net yield %">${netYieldCell(item)}</td>
+                <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
+                <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
+              `}
               <td data-label="Analysis">${analysisBadge(item)}</td>
             </tr>
           `;
