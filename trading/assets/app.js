@@ -5987,6 +5987,15 @@ function submittedOrderSummaryMarkup(run = {}) {
   return `Placing order &quot;${escapeHtml(question)}&quot; with outcome <strong>${escapeHtml(outcome)}</strong> with net profit ${escapeHtml(signedMoney(Number(selected.netGainIfWinUsdc), 4))}, Potential p.a. ${escapeHtml(signedPercent(potentialPa))}, ${escapeHtml(daysText)} until resolution and probability ${escapeHtml(probability(selectedProbability))}.`;
 }
 
+function runLogMessageMarkup(run = {}) {
+  const batch = run.batchLog || run;
+  const action = String(run.action || batch.action || "").toUpperCase();
+  if (action === "REJECTED") {
+    return escapeHtml(String(run.reason || batch.reason || humanRunReason(run) || "-"));
+  }
+  return submittedOrderSummaryMarkup(run) || escapeHtml(runDecisionSummary(run));
+}
+
 function portfolioRunSource(run = {}) {
   const source = String(run.runSource || run.triggerSource || run.executionSource || "").trim().toUpperCase();
   if (source === "MANUAL" || run.manualRunOnce === true || run.batchLog?.manualRunOnce === true) return "MANUAL";
@@ -6047,7 +6056,7 @@ function renderRunLog() {
           <button class="trade-batch portfolio-run-row" type="button" data-portfolio-run="${index}">
             <span class="${runActionClass(run.action || batch.action)}">${escapeHtml(run.action || batch.action || "-")}</span>
             <strong>${escapeHtml(run.runAt || run.generatedAt ? formatDate(run.runAt || run.generatedAt) : "-")}</strong>
-            <span>${submittedOrderSummaryMarkup(run) || escapeHtml(runDecisionSummary(run))}</span>
+            <span>${runLogMessageMarkup(run)}</span>
             <span class="portfolio-run-source">${portfolioRunSource(run)}</span>
           </button>
         `;
