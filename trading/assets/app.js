@@ -58,6 +58,7 @@ const state = {
   stateFetchErrors: {},
   executionBusy: null,
   autoLiveSyncBusy: false,
+  openedTradesRefreshBusy: false,
   dashboardLoadSeq: 0,
   fullBotStateBusy: false,
   candidateBotStateBusy: false,
@@ -108,6 +109,7 @@ const els = {
   botInlineAction: document.querySelector("[data-bot-inline-action]"),
   portfolioTitle: document.querySelector("[data-portfolio-title]"),
   primaryPanelTitle: document.querySelector("[data-primary-panel-title]"),
+  openedTradesRefresh: document.querySelector("[data-opened-trades-refresh]"),
   secondaryPanelTitle: document.querySelector("[data-secondary-panel-title]"),
   botStatus: document.querySelector("[data-bot-status]"),
   accountSummary: document.querySelector("[data-account-summary]"),
@@ -1432,6 +1434,28 @@ function averageRiskReward(items, mapper) {
 }
 
 function tradePotentialAnnualized(trade) {
+  if (!isClosedTrade(trade)) {
+    const shares = Number(trade.shares ?? trade.size);
+    const explicitValue = Number(trade.currentValueUsdc ?? trade.marketValueUsdc ?? trade.valueUsdc);
+    const currentPrice = Number(trade.currentPrice ?? trade.markPrice ?? trade.price);
+    const cost = tradeCostBasis(trade);
+    const unrealizedPnl = Number(trade.unrealizedPnlUsdc);
+    // The current mark already includes the unrealized P/L. Prefer the value
+    // from the fresh account snapshot, then reconstruct it from mark or cost
+    // plus unrealized P/L when a source omits currentValueUsdc.
+    const currentValue = Number.isFinite(explicitValue) && explicitValue > 0
+      ? explicitValue
+      : (Number.isFinite(currentPrice) && Number.isFinite(shares) && shares > 0
+        ? currentPrice * shares
+        : (Number.isFinite(cost) && Number.isFinite(unrealizedPnl) ? cost + unrealizedPnl : null));
+    const endDate = tradeEndDate(trade);
+    const remainingDays = daysUntil(endDate);
+    if (Number.isFinite(shares) && shares > 0 && Number.isFinite(currentValue) && currentValue > 0
+      && Number.isFinite(remainingDays) && remainingDays > 0) {
+      const remainingPotentialPct = (shares - currentValue) / currentValue;
+      return annualizedForPeriod(remainingPotentialPct, remainingDays);
+    }
+  }
   const gainPct = tradePotentialGainPct(trade);
   const endDate = tradeEndDate(trade);
   const totalPlannedDays = daysBetween(trade.openedAt || trade.date, endDate);
@@ -3464,6 +3488,55 @@ async function requestLiveAccountSync(options = {}) {
     if (!quiet) setExecutionStatus(error.message || "live sync failed", "error");
   } finally {
     state.autoLiveSyncBusy = false;
+  }
+}
+
+function syncOpenedTradesRefreshButton() {
+  if (!els.openedTradesRefresh) return;
+  els.openedTradesRefresh.disabled = state.openedTradesRefreshBusy;
+  els.openedTradesRefresh.textContent = state.openedTradesRefreshBusy ? "Refreshing..." : "Refresh values";
+}
+
+async function waitForFreshLiveSnapshot(previousGeneratedAt = "") {
+  let latest = state.liveState || null;
+  const previousTime = Date.parse(previousGeneratedAt || "");
+  for (let attempt = 0; attempt < 15; attempt += 1) {
+    latest = await fetchJson("data/live-state.json");
+    const currentTime = Date.parse(latest?.generatedAt || "");
+    if (!Number.isFinite(previousTime) || (Number.isFinite(currentTime) && currentTime > previousTime)) {
+      return latest;
+    }
+    await sleep(2000);
+  }
+  return latest;
+}
+
+async function refreshOpenedTradesValues() {
+  if (state.openedTradesRefreshBusy) return;
+  state.openedTradesRefreshBusy = true;
+  syncOpenedTradesRefreshButton();
+  setExecutionStatus("refreshing opened-trade values");
+  try {
+    if (isLiveMode()) {
+      const previousGeneratedAt = state.liveState?.generatedAt || "";
+      // Request the account sync first, then wait for the resulting snapshot
+      // so Win p.a. is calculated from current marks and current P/L.
+      await requestLiveAccountSync({ quiet: true, minSeconds: LIVE_SYNC_REQUEST_MS / 1000 });
+      const liveState = await waitForFreshLiveSnapshot(previousGeneratedAt);
+      if (liveState) renderLiveState(liveState);
+      setExecutionStatus("opened-trade values recalculated");
+    } else {
+      const botState = await fetchJson("data/paper-state.json");
+      state.botState = botStateWithPreservedEvaluations(botState);
+      state.botStateFull = botStateIsFull(state.botState);
+      renderBotState(state.botState);
+      setExecutionStatus("opened-trade values recalculated");
+    }
+  } catch (error) {
+    setExecutionStatus(error.message || "opened-trade refresh failed", "error");
+  } finally {
+    state.openedTradesRefreshBusy = false;
+    syncOpenedTradesRefreshButton();
   }
 }
 
@@ -6607,6 +6680,7 @@ function handleTradeSort(event) {
 
 els.botTrades?.addEventListener("click", handleTradeSort);
 els.closedTrades?.addEventListener("click", handleTradeSort);
+els.openedTradesRefresh?.addEventListener("click", refreshOpenedTradesValues);
 
 state.mode = storedMode();
 state.runLogFilters = storedRunLogFilter(state.mode);
