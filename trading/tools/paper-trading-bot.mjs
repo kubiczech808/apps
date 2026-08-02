@@ -69,6 +69,9 @@ const MARKET_SCAN_MIN_RESOLUTION_MINUTES = envNumber(
   0,
 );
 const MARKET_SCAN_MIN_RESOLUTION_HOURS = MARKET_SCAN_MIN_RESOLUTION_MINUTES / 60;
+// A market expiring in a few minutes is real, but multiplying that outcome by
+// hundreds of hypothetical intraday repeats makes p.a. unusable for ranking.
+const MIN_ANNUALIZATION_DAYS = Math.max(1, envNumber("PAPER_MIN_ANNUALIZATION_DAYS", 1));
 const MARKET_SCAN_TAG = String(process.env.PAPER_MARKET_SCAN_TAG || "").trim().toLowerCase();
 // These are Polymarket's broad navigation tags plus active geopolitical
 // subcategories. The scan rotates through them instead of repeatedly paging
@@ -1983,7 +1986,7 @@ function economicsForProbability({ probability, execution, stake, takerFee, tota
   const executionPrice = execution.avgPrice;
   const expectedValue = probability * execution.shares - stake - takerFee;
   const expectedRoi = totalCost > 0 ? expectedValue / totalCost : 0;
-  const annualizedReturn = days ? expectedRoi * (365 / days) : expectedRoi;
+  const annualizedReturn = annualizeReturn(expectedRoi, days);
   const edge = probability - executionPrice;
   const scored = scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, depthOk, endOk });
   return {
@@ -2093,7 +2096,7 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   const grossGainIfWin = execution.shares - stake;
   const netGainIfWin = execution.shares - stake - takerFee;
   const grossRoiIfWin = totalCost > 0 ? netGainIfWin / totalCost : 0;
-  const grossAnnualizedIfWin = days ? grossRoiIfWin * (365 / days) : grossRoiIfWin;
+  const grossAnnualizedIfWin = annualizeReturn(grossRoiIfWin, days);
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
   const depthOk = execution.fillable;
@@ -3487,11 +3490,11 @@ function netYieldAfterFees(item = {}) {
 
 function portfolioEconomics(item, strategy = PAPER_STRATEGIES.conservative) {
   const probabilitySource = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
-  const storedPotential = Number(item.potentialAnnualizedReturn);
   const netYield = Number(item.netYield);
-  const potentialAnnualized = Number.isFinite(storedPotential)
-    ? storedPotential
-    : annualizedPotentialReturn(netYield, daysValue(item));
+  // Recalculate instead of trusting an older persisted p.a. value. This keeps
+  // stored rows made before the one-day annualization floor from dominating a
+  // current portfolio shortlist.
+  const potentialAnnualized = annualizedPotentialReturn(netYield, daysValue(item));
   const annualizedValue = Number(probabilitySource === "polymarket" ? potentialAnnualized : item.annualizedReturn);
   const expectedValue = Number(probabilitySource === "polymarket" ? item.netGainIfWinUsdc : item.expectedValueUsdc);
   return {
@@ -5024,9 +5027,20 @@ function binaryOutcomeQuotesAreBothZero(item = {}) {
   return Number.isFinite(yes) && Number.isFinite(no) && yes === 0 && no === 0;
 }
 
+function annualizationDays(value) {
+  const days = Number(value);
+  if (!Number.isFinite(days) || days < 0) return null;
+  return Math.max(MIN_ANNUALIZATION_DAYS, days);
+}
+
+function annualizeReturn(value, days) {
+  if (!Number.isFinite(value)) return null;
+  const horizon = annualizationDays(days);
+  return horizon == null ? value : value * (365 / horizon);
+}
+
 function annualizedPotentialReturn(netYield, days) {
-  if (!Number.isFinite(netYield)) return null;
-  return Number.isFinite(days) && days > 0 ? netYield * (365 / days) : netYield;
+  return annualizeReturn(netYield, days);
 }
 
 function normalizeMarketObservationEconomics(observation) {
@@ -5055,7 +5069,7 @@ function normalizeMarketObservationEconomics(observation) {
   const expectedRoi = totalCost > 0 ? expectedValue / totalCost : null;
   const days = daysToEnd(observation.endDate);
   const marketAnnualizedReturn = Number.isFinite(expectedRoi)
-    ? (Number.isFinite(days) && days > 0 ? expectedRoi * (365 / days) : expectedRoi)
+    ? annualizeReturn(expectedRoi, days)
     : null;
   const potentialAnnualizedReturn = annualizedPotentialReturn(netYield, days);
 
@@ -5126,8 +5140,8 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
   const riskReward = totalCost > 0 ? netGainIfWin / totalCost : null;
   const marketExpectedValue = probability * shares - stake - takerFee;
   const marketExpectedRoi = totalCost > 0 ? marketExpectedValue / totalCost : null;
-  const marketAnnualizedReturn = Number.isFinite(days) && days > 0 && Number.isFinite(marketExpectedRoi)
-    ? marketExpectedRoi * (365 / days)
+  const marketAnnualizedReturn = Number.isFinite(marketExpectedRoi)
+    ? annualizeReturn(marketExpectedRoi, days)
     : marketExpectedRoi;
   const potentialAnnualizedReturn = annualizedPotentialReturn(netYield, days);
   const tags = tagQuestion(market.question || "");
@@ -5504,9 +5518,7 @@ function quoteEconomicsForStoredEvaluation(evaluation, marketPrice, probability)
   const totalCost = stake + takerFee;
   const expectedValue = probability * shares - totalCost;
   const expectedRoi = totalCost > 0 ? expectedValue / totalCost : null;
-  const annualizedReturn = Number.isFinite(expectedRoi) && Number.isFinite(days) && days > 0
-    ? expectedRoi * (365 / days)
-    : expectedRoi;
+  const annualizedReturn = annualizeReturn(expectedRoi, days);
   const netGainIfWin = shares - totalCost;
   const netYield = totalCost > 0 ? netGainIfWin / totalCost : null;
 

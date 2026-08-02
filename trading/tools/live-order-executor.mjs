@@ -27,6 +27,10 @@ const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
 const MIN_PROBABILITY = envNumber("LIVE_MIN_PROBABILITY", envNumber("PAPER_MIN_PROBABILITY", 0.95));
 const PROBABILITY_SOURCE = process.env.LIVE_PROBABILITY_SOURCE === "polymarket" ? "polymarket" : "ai";
 const MIN_ANNUAL_RETURN = envNumber("LIVE_MIN_ANNUAL_RETURN", envNumber("PAPER_MIN_ANNUAL_RETURN", 0.05));
+// Use a conservative one-day floor for p.a. comparisons. A short-lived
+// market can still be selected, but a few remaining minutes must not dominate
+// every candidate solely through annualization.
+const MIN_ANNUALIZATION_DAYS = Math.max(1, envNumber("LIVE_MIN_ANNUALIZATION_DAYS", 1));
 const OPPORTUNITY_MIN_PROBABILITY = envNumber("LIVE_OPPORTUNITY_MIN_PROBABILITY", envNumber("PAPER_OPPORTUNITY_MIN_PROBABILITY", 0.6));
 const OPPORTUNITY_MIN_EDGE = envNumber("LIVE_OPPORTUNITY_MIN_EDGE", envNumber("PAPER_OPPORTUNITY_MIN_EDGE", 0.04));
 const OPPORTUNITY_MIN_ANNUAL_RETURN = envNumber("LIVE_OPPORTUNITY_MIN_ANNUAL_RETURN", envNumber("PAPER_OPPORTUNITY_MIN_ANNUAL_RETURN", 0.3));
@@ -100,6 +104,19 @@ function hasFlag(name) {
 function number(value, fallback = null) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function annualizationDays(value) {
+  const days = number(value);
+  if (days == null || days < 0) return null;
+  return Math.max(MIN_ANNUALIZATION_DAYS, days);
+}
+
+function annualizeReturn(value, days) {
+  const numeric = number(value);
+  if (numeric == null) return null;
+  const horizon = annualizationDays(days);
+  return horizon == null ? numeric : numeric * (365 / horizon);
 }
 
 function clamp(value, min, max) {
@@ -207,7 +224,7 @@ function selectedAnnualizedReturn(item) {
   const days = localDaysToResolution(item);
   if (gain == null || cost == null || cost <= 0) return null;
   const netYield = gain / cost;
-  return Number.isFinite(days) && days > 0 ? netYield * (365 / days) : netYield;
+  return annualizeReturn(netYield, days);
 }
 
 function returnMetricLabel() {
@@ -1062,8 +1079,8 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
   const immediateCloseCandidate = noDaysLeft
     && winPnlGapPct != null
     && winPnlGapPct <= ROTATION_NO_DAYS_MAX_WIN_GAP;
-  const continuationAnnualizedReturn = continuationExpectedValue != null && netExitValue != null && netExitValue > 0 && days != null && days > 0
-    ? (continuationExpectedValue / netExitValue) * (365 / days)
+  const continuationAnnualizedReturn = continuationExpectedValue != null && netExitValue != null && netExitValue > 0
+    ? annualizeReturn(continuationExpectedValue / netExitValue, days)
     : null;
   return {
     source,
@@ -1099,13 +1116,11 @@ function positionHoldAnnualizedReturn(position, evaluationByToken = new Map()) {
   if (PROBABILITY_SOURCE === "polymarket"
     && economics.holdPotentialPnl != null
     && economics.netExitValue != null
-    && economics.netExitValue > 0
-    && days != null
-    && days > 0) {
-    return (economics.holdPotentialPnl / economics.netExitValue) * (365 / days);
+    && economics.netExitValue > 0) {
+    return annualizeReturn(economics.holdPotentialPnl / economics.netExitValue, days);
   }
-  if (economics.holdExpectedPnl != null && economics.cost > 0 && days != null && days > 0) {
-    return (economics.holdExpectedPnl / economics.cost) * (365 / days);
+  if (economics.holdExpectedPnl != null && economics.cost > 0) {
+    return annualizeReturn(economics.holdExpectedPnl / economics.cost, days);
   }
   if (economics.continuationAnnualizedReturn != null) return economics.continuationAnnualizedReturn;
   return selectedAnnualizedReturn(economics.source) ?? 0;
@@ -1714,14 +1729,14 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   const totalCost = notional + fee;
   const expectedValue = Number.isFinite(aiProbability) ? aiProbability * size - notional - fee : null;
   const expectedRoi = Number.isFinite(expectedValue) && totalCost > 0 ? expectedValue / totalCost : null;
-  const annualizedReturn = Number.isFinite(expectedRoi) ? (days ? expectedRoi * (365 / days) : expectedRoi) : null;
+  const annualizedReturn = Number.isFinite(expectedRoi) ? annualizeReturn(expectedRoi, days) : null;
   const marketExpectedValue = marketProbability * size - notional - fee;
   const marketExpectedRoi = totalCost > 0 ? marketExpectedValue / totalCost : 0;
-  const marketAnnualizedReturn = days ? marketExpectedRoi * (365 / days) : marketExpectedRoi;
+  const marketAnnualizedReturn = annualizeReturn(marketExpectedRoi, days);
   const netGainIfWin = size - notional - fee;
   const potentialRoi = totalCost > 0 ? netGainIfWin / totalCost : null;
   const potentialAnnualizedReturn = Number.isFinite(potentialRoi)
-    ? (days ? potentialRoi * (365 / days) : potentialRoi)
+    ? annualizeReturn(potentialRoi, days)
     : null;
   const selectedExpectedValueUsdc = PROBABILITY_SOURCE === "polymarket" ? netGainIfWin : expectedValue;
   const selectedAnnualizedReturn = PROBABILITY_SOURCE === "polymarket" ? potentialAnnualizedReturn : annualizedReturn;
@@ -2127,10 +2142,10 @@ function resizeCandidateForMakerPrecision(candidate, size) {
   const marketRoi = marketExpectedValue != null && totalCost > 0 ? marketExpectedValue / totalCost : null;
   const selectedExpectedValue = PROBABILITY_SOURCE === "polymarket" ? netGainIfWin : aiExpectedValue;
   const selectedRoi = PROBABILITY_SOURCE === "polymarket" ? potentialRoi : aiRoi;
-  const annualizedReturn = selectedRoi == null ? null : (days && days > 0 ? selectedRoi * (365 / days) : selectedRoi);
-  const potentialAnnualizedReturn = potentialRoi == null ? null : (days && days > 0 ? potentialRoi * (365 / days) : potentialRoi);
-  const aiAnnualizedReturn = aiRoi == null ? null : (days && days > 0 ? aiRoi * (365 / days) : aiRoi);
-  const marketAnnualizedReturn = marketRoi == null ? null : (days && days > 0 ? marketRoi * (365 / days) : marketRoi);
+  const annualizedReturn = selectedRoi == null ? null : annualizeReturn(selectedRoi, days);
+  const potentialAnnualizedReturn = potentialRoi == null ? null : annualizeReturn(potentialRoi, days);
+  const aiAnnualizedReturn = aiRoi == null ? null : annualizeReturn(aiRoi, days);
+  const marketAnnualizedReturn = marketRoi == null ? null : annualizeReturn(marketRoi, days);
 
   return {
     ...candidate,
@@ -2163,7 +2178,7 @@ function liveBatchCandidateSummary(item) {
   const daysToResolution = number(item?.daysToResolution ?? source.daysToResolution);
   const netYield = gain != null && cost != null && cost > 0 ? gain / cost : null;
   const potentialAnnualizedReturn = netYield != null
-    ? (daysToResolution != null && daysToResolution > 0 ? netYield * (365 / daysToResolution) : netYield)
+    ? annualizeReturn(netYield, daysToResolution)
     : null;
   const selectedAnnualizedReturn = PROBABILITY_SOURCE === "polymarket"
     ? potentialAnnualizedReturn

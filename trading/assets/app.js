@@ -102,6 +102,10 @@ const DEFAULT_RISK_ALLOCATION = 0.05;
 const MIN_RISK_ALLOCATION = 0.01;
 const MAX_RISK_ALLOCATION = 0.5;
 const DEFAULT_MAX_RESOLUTION_DAYS = 7;
+// Annualizing a few minutes as if the trade could be repeated continuously is
+// misleading. Keep the actual horizon visible, but use a conservative one-day
+// floor for every potential p.a. comparison.
+const MIN_ANNUALIZATION_DAYS = 1;
 const LIVE_STATE_REFRESH_MS = 15000;
 const LIVE_SYNC_REQUEST_MS = 30000;
 const USER_NAV_REFRESH_DEBOUNCE_MS = 250;
@@ -256,6 +260,7 @@ function signedPercent(value) {
 
 function compactDays(value) {
   if (!Number.isFinite(value)) return "-";
+  if (value > 0 && value < 0.1) return "< 0.1 d";
   if (value < 1) return `${Math.max(0, value).toFixed(1)} d`;
   return `${value.toFixed(1)} d`;
 }
@@ -1276,7 +1281,7 @@ function annualizedExpectedReturn(item) {
   if (!Number.isFinite(ev) || !Number.isFinite(cost) || cost <= 0) return null;
   const roi = ev / cost;
   const days = daysToResolution(item);
-  return Number.isFinite(days) && days > 0 ? roi * (365 / days) : roi;
+  return annualizeReturn(roi, days);
 }
 
 function marketAnnualizedExpectedReturn(item) {
@@ -1285,14 +1290,26 @@ function marketAnnualizedExpectedReturn(item) {
   if (!Number.isFinite(ev) || !Number.isFinite(cost) || cost <= 0) return null;
   const roi = ev / cost;
   const days = evaluationDaysLeft(item);
-  return Number.isFinite(days) && days > 0 ? roi * (365 / days) : roi;
+  return annualizeReturn(roi, days);
 }
 
 function potentialAnnualizedReturn(item) {
   const yieldValue = netYield(item);
   const days = evaluationDaysLeft(item);
   if (!Number.isFinite(yieldValue)) return null;
-  return Number.isFinite(days) && days > 0 ? yieldValue * (365 / days) : yieldValue;
+  return annualizeReturn(yieldValue, days);
+}
+
+function annualizationDays(value) {
+  const days = Number(value);
+  if (!Number.isFinite(days) || days < 0) return null;
+  return Math.max(MIN_ANNUALIZATION_DAYS, days);
+}
+
+function annualizeReturn(value, days) {
+  if (!Number.isFinite(value)) return null;
+  const horizon = annualizationDays(days);
+  return horizon == null ? value : value * (365 / horizon);
 }
 
 function daysToResolution(item) {
@@ -4278,14 +4295,14 @@ function mergeCurrentMarketEconomics(evaluations = [], observations = []) {
     const yieldValue = Number.isFinite(win) && Number.isFinite(cost) && cost > 0 ? win / cost : null;
     const rewardRisk = Number.isFinite(win) && Number.isFinite(cost) && cost > 0 && win > 0 ? win / cost : null;
     const annualized = Number.isFinite(aiValue) && Number.isFinite(cost) && cost > 0
-      ? (aiValue / cost) * (Number.isFinite(days) && days > 0 ? 365 / days : 1)
+      ? annualizeReturn(aiValue / cost, days)
       : null;
     const marketRoi = Number.isFinite(marketValue) && Number.isFinite(cost) && cost > 0 ? marketValue / cost : null;
     const marketAnnualized = Number.isFinite(marketRoi)
-      ? marketRoi * (Number.isFinite(days) && days > 0 ? 365 / days : 1)
+      ? annualizeReturn(marketRoi, days)
       : null;
     const potentialAnnualized = Number.isFinite(yieldValue)
-      ? yieldValue * (Number.isFinite(days) && days > 0 ? 365 / days : 1)
+      ? annualizeReturn(yieldValue, days)
       : null;
 
     return {
@@ -5964,7 +5981,7 @@ function tradeBatchDetail(batch) {
     const net = Number(item.netYield);
     const days = Number(item.daysToResolution);
     if (!Number.isFinite(net)) return Number(item.annualizedReturn);
-    return Number.isFinite(days) && days > 0 ? net * (365 / days) : net;
+    return annualizeReturn(net, days);
   };
   const candidateSelectedValue = (item) => usesPolymarketProbability
     ? Number(item.netGainIfWinUsdc)
@@ -6433,8 +6450,8 @@ function submittedOrderSummaryMarkup(run = {}) {
   const netYield = Number(selected.netYield);
   const potentialPa = Number.isFinite(Number(selected.potentialAnnualizedReturn))
     ? Number(selected.potentialAnnualizedReturn)
-    : (Number.isFinite(netYield) && Number.isFinite(days) && days > 0
-      ? netYield * (365 / days)
+    : (Number.isFinite(netYield)
+      ? annualizeReturn(netYield, days)
       : Number(selected.annualizedReturn));
   const question = selected.question || selected.market || "-";
   const outcome = selected.outcome || "-";
