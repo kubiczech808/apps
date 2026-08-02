@@ -5589,6 +5589,25 @@ function scanLogCounts(value) {
     : "-";
 }
 
+function scanLogReasonCounts(value) {
+  const labels = {
+    outside_selected_tag: "outside selected tag",
+    no_valid_preferred_outcome_or_quote: "no valid preferred outcome/quote",
+    probability_below_scan_minimum: "probability below scan minimum",
+    missing_resolution_date: "missing resolution date",
+    too_close_to_resolution: "too close to resolution",
+    outside_resolution_horizon: "outside resolution horizon",
+    net_yield_below_scan_minimum: "net yield below scan minimum",
+    liquidity_below_scan_minimum: "liquidity below scan minimum",
+    scan_failed_before_retention: "scan failed before retention",
+  };
+  const entries = Object.entries(value && typeof value === "object" ? value : {})
+    .filter(([, count]) => Number(count) > 0);
+  return entries.length
+    ? entries.map(([reason, count]) => `${labels[reason] || reason} (${formatInteger(count) || count})`).join(", ")
+    : "Breakdown not recorded for this run";
+}
+
 function scanLogInterval(current, previous) {
   const currentTime = Date.parse(current?.runAt || "");
   const previousTime = Date.parse(previous?.runAt || "");
@@ -5637,6 +5656,7 @@ function renderScrapeRunLog() {
             <th>New / updated</th>
             <th>Resolved</th>
             <th>Not retained</th>
+            <th>Why not retained</th>
             <th>Categories</th>
             <th>Tags</th>
             <th>Error</th>
@@ -5658,6 +5678,7 @@ function renderScrapeRunLog() {
                 <td data-label="New / updated">${formatInteger(run.newObservationCount) || "0"} / ${formatInteger(run.updatedObservationCount) || "0"}</td>
                 <td data-label="Resolved">${formatInteger(run.resolvedObservationCount) || "0"}</td>
                 <td data-label="Not retained">${formatInteger(run.notRetainedCount) || "0"}</td>
+                <td data-label="Why not retained"><small>${escapeHtml(scanLogReasonCounts(run.notRetainedReasonCounts))}</small></td>
                 <td data-label="Categories"><strong>${escapeHtml(scanLogCounts(run.categoryCounts))}</strong>${Array.isArray(run.requestedCategories) && run.requestedCategories.length ? `<small class="table-secondary">API sweep: ${escapeHtml(run.requestedCategories.join(", "))}</small>` : ""}</td>
                 <td data-label="Tags">${escapeHtml(scanLogCounts(run.tagCounts))}</td>
                 <td data-label="Error" class="${run.error ? "negative" : ""}">${escapeHtml(run.error || "-")}</td>

@@ -4675,6 +4675,48 @@ function marketMatchesScanTag(market = {}) {
   return marketCategoryKeys(market).some((tag) => tag === MARKET_SCAN_TAG);
 }
 
+function marketScanRetentionReason(market = {}, observedAt = nowIso()) {
+  if (!marketMatchesScanTag(market)) return "outside_selected_tag";
+  if (marketIsResolvedForScan(market)) return "resolved_or_closed";
+
+  const observation = preferredMarketObservation(market, observedAt);
+  if (!observation) return "no_valid_preferred_outcome_or_quote";
+
+  const probability = Number(observation.marketProbability);
+  if (!Number.isFinite(probability) || probability < MARKET_SCAN_MIN_PROBABILITY) {
+    return "probability_below_scan_minimum";
+  }
+
+  const days = daysToEnd(observation.endDate);
+  const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
+  if (!Number.isFinite(days)) return "missing_resolution_date";
+  if (days < minimumDays) return "too_close_to_resolution";
+  if (MARKET_SCAN_MAX_RESOLUTION_DAYS != null && days > MARKET_SCAN_MAX_RESOLUTION_DAYS) {
+    return "outside_resolution_horizon";
+  }
+  if (MARKET_SCAN_MIN_NET_YIELD > 0
+    && (!Number.isFinite(Number(observation.netYield)) || Number(observation.netYield) < MARKET_SCAN_MIN_NET_YIELD)) {
+    return "net_yield_below_scan_minimum";
+  }
+  if (MARKET_SCAN_MIN_LIQUIDITY_USDC > 0 && Number(observation.liquidity || 0) < MARKET_SCAN_MIN_LIQUIDITY_USDC) {
+    return "liquidity_below_scan_minimum";
+  }
+  return null;
+}
+
+function incrementMarketScanReason(counts, reason) {
+  if (!reason) return;
+  counts[reason] = Number(counts[reason] || 0) + 1;
+}
+
+function sortedMarketScanReasonCounts(counts = {}) {
+  return Object.fromEntries(
+    Object.entries(counts)
+      .filter(([, count]) => Number(count) > 0)
+      .sort((a, b) => Number(b[1]) - Number(a[1]) || a[0].localeCompare(b[0])),
+  );
+}
+
 function compareMarketsForShortHorizon(a, b) {
   const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
   const minimumDays = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0) / 24;
@@ -5216,7 +5258,6 @@ async function refreshMarketObservations(state) {
     const categoryMarkets = categoryBatches.flatMap((batch) => batch.markets);
     const fetchedMarkets = diversifyMarketScanOrder([...preferredMarkets, ...categoryMarkets, ...broadBatches]);
     const tagFilteredMarkets = fetchedMarkets.filter(marketMatchesScanTag);
-    const resolvedSkippedMarkets = tagFilteredMarkets.filter(marketIsResolvedForScan);
     // Keep already stored RESOLVED observations for history and the Resolved
     // UI tab, but never add them to the active scrape batch again.
     const markets = tagFilteredMarkets.filter((market) => !marketIsResolvedForScan(market));
@@ -5245,12 +5286,21 @@ async function refreshMarketObservations(state) {
       const status = String(item.status || item.selectionStatus || "").toUpperCase();
       return status !== "RESOLVED" && Number.isFinite(days) && days > 0 && days <= MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS;
     }).length;
+    const scanReasonCounts = {};
+    for (const market of fetchedMarkets) {
+      incrementMarketScanReason(scanReasonCounts, marketScanRetentionReason(market, scanRunAt));
+    }
+    const resolvedReasonCount = Number(scanReasonCounts.resolved_or_closed || 0);
+    const notRetainedReasonCounts = { ...scanReasonCounts };
+    delete notRetainedReasonCounts.resolved_or_closed;
+    const sortedNotRetainedReasonCounts = sortedMarketScanReasonCounts(notRetainedReasonCounts);
     const previousKeys = new Set((state.marketObservations || []).map(marketObservationKey).filter(Boolean));
     const observationKeys = observations.map(marketObservationKey).filter(Boolean);
     const newObservationCount = observationKeys.filter((key) => !previousKeys.has(key)).length;
     const updatedObservationCount = observationKeys.filter((key) => previousKeys.has(key)).length;
-    const resolvedObservationCount = resolvedSkippedMarkets.length;
-    const notRetainedCount = Math.max(0, fetchedMarkets.length - observations.length);
+    const resolvedObservationCount = resolvedReasonCount;
+    const notRetainedCount = Object.values(sortedNotRetainedReasonCounts)
+      .reduce((total, count) => total + Number(count || 0), 0);
     state.marketObservations = mergeMarketObservationLists(observations, state.marketObservations || [])
       .map(normalizeMarketObservationEconomics);
     state.marketScan = {
@@ -5291,8 +5341,9 @@ async function refreshMarketObservations(state) {
         newObservationCount,
         updatedObservationCount,
         resolvedObservationCount,
-        resolvedSkippedCount: resolvedSkippedMarkets.length,
+        resolvedSkippedCount: resolvedObservationCount,
         notRetainedCount,
+        notRetainedReasonCounts: sortedNotRetainedReasonCounts,
         scanTag: MARKET_SCAN_TAG || null,
         tagMatchedCount: tagFilteredMarkets.length,
         tagFilteredOutCount: Math.max(0, fetchedMarkets.length - tagFilteredMarkets.length),
@@ -5314,6 +5365,7 @@ async function refreshMarketObservations(state) {
     const categoryCounts = marketCategoryCounts(partialMarkets);
     const tagCounts = marketTagCounts(partialMarkets);
     const message = error?.message || String(error);
+    const errorReasonCounts = partialMarkets.length ? { scan_failed_before_retention: partialMarkets.length } : {};
     state.marketScan = {
       ...previousScan,
       lastScanAt: scanRunAt,
@@ -5347,7 +5399,8 @@ async function refreshMarketObservations(state) {
         updatedObservationCount: 0,
         resolvedObservationCount: resolvedSkippedMarkets.length,
         resolvedSkippedCount: resolvedSkippedMarkets.length,
-        notRetainedCount: tagFilteredMarkets.length,
+        notRetainedCount: partialMarkets.length,
+        notRetainedReasonCounts: errorReasonCounts,
         scanTag: MARKET_SCAN_TAG || null,
         tagMatchedCount: tagFilteredMarkets.length,
         tagFilteredOutCount: Math.max(0, partialMarkets.length - tagFilteredMarkets.length),
