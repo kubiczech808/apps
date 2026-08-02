@@ -2733,14 +2733,21 @@ function runCronAiResearch(PDO $pdo, array $config, bool $force = false): string
         $messages = [];
         $processed = 0;
         $lastSignature = '';
+        $skipRunIds = [];
         // Strop je pojistka proti zacykleni: kdyby nejaky krok skoncil hned a nic
         // nezmenil, nesmi se opakovat porad dokola az do konce casoveho budgetu.
         while ($processed < AI_RESEARCH_MAX_STEPS_PER_TICK) {
-            $work = aiResearchNextWork($pdo);
+            $work = aiResearchNextWork($pdo, $skipRunIds);
             $finishing = aiResearchWorkIsFinishing($work);
             $signature = (string)$work['kind'] . '#' . (int)$work['run_id'];
             if ($processed > 0 && $signature === $lastSignature) {
-                // Stejna prace podruhe za sebou znamena, ze se beh neposunul.
+                // Beh se neposunul. Neni duvod kvuli nemu ukoncit cely tik - preskoci
+                // se a cas dostane dalsi prace, treba uplne novy seed.
+                if ((int)$work['run_id'] > 0) {
+                    $skipRunIds[] = (int)$work['run_id'];
+                    $lastSignature = '';
+                    continue;
+                }
                 break;
             }
             $lastSignature = $signature;
@@ -5684,10 +5691,44 @@ function aiResearchQuickScrapeContacts(array $plan, int $limit, int $pagesPerQue
     }
 }
 
+/**
+ * Co se pri poslednim scrapovani doopravdy stalo. Bez toho zprava tvrdi "katalog nenasel
+ * zadny kontakt" i tehdy, kdyz katalog firmy vratil a jen se nestihly otevrit jejich detaily.
+ */
+function aiResearchScrapeDiagnostics(?array $set = null): array
+{
+    static $diag = ['listings' => 0, 'candidates' => 0, 'details' => 0, 'emails' => 0, 'timeout' => false];
+    if ($set !== null) {
+        $diag = $set + $diag;
+    }
+    return $diag;
+}
+
+function aiResearchScrapeDiagnosticsText(): string
+{
+    $d = aiResearchScrapeDiagnostics();
+    if ((int)$d['listings'] === 0) {
+        return 'katalog neodpovedel';
+    }
+    if ((int)$d['candidates'] === 0) {
+        return 'katalog na tento keyword a lokalitu nevratil zadnou firmu';
+    }
+    if ((int)$d['details'] === 0) {
+        return 'katalog vratil ' . (int)$d['candidates'] . ' firem, ale na otevreni jejich detailu uz nezbyl cas';
+    }
+    return 'z ' . (int)$d['details'] . ' otevrenych detailu (katalog nabidl ' . (int)$d['candidates'] . ' firem) nemel email zadny'
+        . (!empty($d['timeout']) ? '; cast detailu se nestihla nacist' : '');
+}
+
 function aiResearchQuickScrapeContactsWithin(array $plan, int $limit, int $pagesPerQuery, int $detailsPerPage, ?PDO $pdo, int $runId, int $sliceEndsAt): array
 {
     $contacts = [];
     $seen = [];
+    aiResearchScrapeDiagnostics(['listings' => 0, 'candidates' => 0, 'details' => 0, 'emails' => 0, 'timeout' => false]);
+    $diag = static function (string $key, int $add = 1): void {
+        $current = aiResearchScrapeDiagnostics();
+        aiResearchScrapeDiagnostics([$key => (int)$current[$key] + $add]);
+    };
     foreach (array_slice((array)($plan['scraping_queries'] ?? []), 0, 3) as $query) {
         if (!is_array($query) || count($contacts) >= $limit) {
             continue;
@@ -5708,10 +5749,15 @@ function aiResearchQuickScrapeContactsWithin(array $plan, int $limit, int $pages
                     }
                     $searchResponse = fetchScrapingSearch($search);
                     $html = (string)$searchResponse['html'];
-                    foreach (array_slice(extractCandidateUrls($html, $search['url'], $source), 0, max(1, $detailsPerPage)) as $url) {
+                    $diag('listings');
+                    $candidates = extractCandidateUrls($html, $search['url'], $source);
+                    $diag('candidates', count($candidates));
+                    foreach (array_slice($candidates, 0, max(1, $detailsPerPage)) as $url) {
                         if (time() >= $sliceEndsAt) {
+                            aiResearchScrapeDiagnostics(['timeout' => true]);
                             return $contacts;
                         }
+                        $diag('details');
                         try {
                             $contact = extractContactFromHtml(httpGet($url), $url);
                         } catch (Throwable $e) {
@@ -5728,6 +5774,7 @@ function aiResearchQuickScrapeContactsWithin(array $plan, int $limit, int $pages
                         ], $plan);
                         $contact['search_url'] = (string)$search['url'];
                         $contacts[] = $contact;
+                        $diag('emails');
                         if ($pdo && $runId > 0) {
                             upsertAiResearchRunContacts($pdo, $runId, [$contact], 'pending');
                         }
@@ -6001,7 +6048,7 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
                     $contacts = aiResearchRunActionContext($pdo, $runId)['contacts'];
                     $fixed[] = 'kontakty dohledany (' . count($contacts) . ')';
                 } else {
-                    $blocked[] = 'scraping pro tento keyword a lokalitu nenasel zadny kontakt s emailem';
+                    $blocked[] = 'scraping nenasel kontakt s emailem: ' . aiResearchScrapeDiagnosticsText();
                 }
             } catch (Throwable $e) {
                 $blocked[] = 'hledani kontaktu: ' . $e->getMessage();
@@ -6092,9 +6139,18 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
         } else {
             $estimate = aiResearchComputeContactEstimate($pdo, $runId, $plan, aiResearchDeadline());
             if ($estimate === null) {
-                $blocked[] = aiResearchPrimaryKeyword($plan) === ''
-                    ? 'odhad dosahu ceka na keyword, ktery vznikne az z pochopeni byznysu'
-                    : 'odhad dosahu nelze spocitat, zadny z katalogu pro vybrane trhy neni dostupny';
+                // Rozlisit, proc odhad nevznikl. "Katalog neni dostupny" je pravda jen
+                // tehdy, kdyz pro vybrane trhy zadny aktivni katalog neexistuje - kdyz
+                // katalog mame a jen neodpovedel nebo dosel cas, patri do zpravy tohle.
+                $estimateSources = aiResearchEstimateSourcesForPlan($plan);
+                if (aiResearchPrimaryKeyword($plan) === '') {
+                    $blocked[] = 'odhad dosahu ceka na keyword, ktery vznikne az z pochopeni byznysu';
+                } elseif (!$estimateSources) {
+                    $blocked[] = 'odhad dosahu nelze spocitat, pro vybrane trhy nemame zadny aktivni katalog';
+                } else {
+                    $blocked[] = 'odhad dosahu: katalog ' . implode(', ', array_map('scrapingSourceLabel', $estimateSources))
+                        . ' neodpovedel v case tohoto behu, dopocita ho dalsi cron';
+                }
             } else {
                 $plan['contact_estimate'] = $estimate;
                 $store = $pdo->prepare('UPDATE ai_research_runs SET plan_json=?, updated_at=? WHERE id=?');
@@ -7387,9 +7443,10 @@ function aiResearchWorkflowMissingSteps(array $checklist): array
  * skutecne stane. Novy seed prijde na radu teprve tehdy, kdyz je kazdy predchozi
  * seed dotazeny do konce nebo trvale uzavreny.
  */
-function aiResearchNextWork(PDO $pdo): array
+function aiResearchNextWork(PDO $pdo, array $skipRunIds = []): array
 {
     $newSeed = ['kind' => 'new_seed', 'run_id' => 0, 'subject' => '', 'label' => ''];
+    $skip = array_flip(array_map('intval', $skipRunIds));
     try {
         $rows = $pdo->query('
             SELECT id, seed_business, seed_email, status, plan_json,
@@ -7410,6 +7467,11 @@ function aiResearchNextWork(PDO $pdo): array
         $plan = json_decode((string)$row['plan_json'], true);
         $plan = is_array($plan) ? $plan : [];
         if (!empty($plan['permanently_closed'])) {
+            continue;
+        }
+        if (isset($skip[(int)$row['id']])) {
+            // V tomto tiku uz se na nem pracovalo a neposunul se. Dalsi pokus ma smysl
+            // az priste; ted patri cas nekomu jinemu.
             continue;
         }
         $status = (string)$row['status'];

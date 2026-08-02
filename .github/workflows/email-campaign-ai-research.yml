@@ -1,11 +1,12 @@
 name: Email Campaign AI Research
 
 on:
-  # Doplnek k Email Campaign Cron: planovane behy GitHubu se v praxi zpozduji, takze
-  # samotny */5 cron nestaci. Jeden seed stoji 2 Gemini pozadavky a aplikace ma interval,
-  # zamek i denni rozpocet, takze druhy vstupni bod uz kvotu neprepali.
+  # AI research ma vlastni endpoint a bezi co peti minut. Hodinovy interval byl duvod,
+  # proc se za den zpracovaly jednotky zaznamu: jeden tik zvladne nekolik kroku, ale
+  # kdyz prijde jednou za hodinu, je celkovy vykon dany prave tim. Soubeh nehrozi -
+  # aplikace drzi zamek a preskoci tik, dokud predchozi beh nedobehne.
   schedule:
-    - cron: '17 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 concurrency:
