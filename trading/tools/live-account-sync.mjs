@@ -412,7 +412,7 @@ function normalizeOpenOrder(order) {
   const matched = number(order.sizeMatched ?? order.size_matched ?? order.matchedSize ?? order.matched_size, 0);
   const remaining = Math.max(0, size - matched);
   const price = number(order.price);
-  const tokenId = order.assetId || order.asset_id || order.tokenID || order.tokenId || null;
+  const tokenId = order.assetId || order.asset_id || order.asset || order.tokenID || order.tokenId || order.token_id || null;
   return {
     id: String(order.id || order.orderID || order.orderId || `${tokenId || "order"}-${price || ""}`),
     status: order.status || order.orderStatus || "ORDER_STATUS_LIVE",
@@ -1115,17 +1115,47 @@ function parseArrayField(value) {
   }
 }
 
+function openOrderMetadataIndex(previousState = null) {
+  const index = new Map();
+  const rows = Array.isArray(previousState?.openOrders) ? previousState.openOrders : [];
+  for (const row of rows) {
+    if (!row || (!row.question && !row.slug && !row.eventSlug)) continue;
+    for (const key of [row.tokenId, row.assetId, row.asset, row.id, row.orderId, row.orderID]) {
+      const normalized = String(key || "").trim();
+      if (normalized) index.set(normalized, row);
+    }
+  }
+  return index;
+}
+
+async function gammaMarketForOpenOrder(tokenId) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const markets = await fetchGammaJson("/markets", { clob_token_ids: tokenId });
+      const market = Array.isArray(markets) ? markets[0] : null;
+      if (market) return market;
+      lastError = new Error("Gamma returned no market for CLOB token");
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+  }
+  throw lastError || new Error("Gamma market lookup failed");
+}
+
 // CLOB open-order records contain trading fields only. Preserve the Gamma
 // event identity so another market from the same match is never treated as an
-// unrelated opportunity.
-async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync) {
+// unrelated opportunity. Gamma can occasionally return an empty response
+// during settlement; retain the last confirmed metadata rather than rendering
+// a nameless order in the meantime.
+async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync, previousState = null) {
+  const previousMetadata = openOrderMetadataIndex(previousState);
   return Promise.all(openOrders.map(async (order) => {
     const tokenId = String(order?.tokenId || order?.assetId || "").trim();
     if (!tokenId) return order;
     try {
-      const markets = await fetchGammaJson("/markets", { clob_token_ids: tokenId });
-      const market = Array.isArray(markets) ? markets[0] : null;
-      if (!market) return order;
+      const market = await gammaMarketForOpenOrder(tokenId);
       const tokenIds = parseArrayField(market.clobTokenIds).map(String);
       const outcomes = parseArrayField(market.outcomes).map(String);
       const outcomeIndex = tokenIds.indexOf(tokenId);
@@ -1144,6 +1174,23 @@ async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync) {
         marketMetadataSource: "gamma-clob-token",
       };
     } catch (error) {
+      const previous = previousMetadata.get(tokenId)
+        || previousMetadata.get(String(order?.id || "").trim())
+        || previousMetadata.get(String(order?.orderId || order?.orderID || "").trim());
+      if (previous) {
+        sync.warnings.push(`open-order-market-${tokenId.slice(0, 12)}: Gamma lookup failed; retained last confirmed market metadata`);
+        return {
+          ...previous,
+          ...order,
+          question: order.question || previous.question || "",
+          outcome: order.outcome || previous.outcome || "",
+          slug: order.slug || previous.slug || "",
+          eventSlug: order.eventSlug || previous.eventSlug || "",
+          conditionId: order.conditionId || previous.conditionId || order.market || null,
+          url: order.url || previous.url || "",
+          marketMetadataSource: "previous-live-snapshot",
+        };
+      }
       sync.warnings.push(`open-order-market-${tokenId.slice(0, 12)}: ${error?.message || String(error)}`);
       return order;
     }
@@ -1465,6 +1512,7 @@ async function main() {
   const openOrders = await enrichOpenOrdersWithMarketMetadata(
     Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
     sync,
+    previousLiveState,
   );
   const reconciliation = ledgerReconciliationFallbacks(
     tradeHistory,

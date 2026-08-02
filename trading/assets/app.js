@@ -5037,7 +5037,7 @@ function normalizeLiveOpenOrderForTable(order) {
     orderId: order.id || order.orderID || order.orderId || null,
     mode: "LIVE_ORDER",
     status: "LIMIT ORDER",
-    question: source?.question || order.question || order.title || "",
+    question: source?.question || order.question || order.title || "Market title is synchronizing",
     outcome: source?.outcome || order.outcome || order.side || "-",
     slug: source?.slug || source?.eventSlug || order.slug || order.eventSlug || "",
     eventSlug: source?.eventSlug || source?.slug || order.eventSlug || order.slug || "",
