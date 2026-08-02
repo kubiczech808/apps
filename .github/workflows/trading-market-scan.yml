@@ -1,0 +1,123 @@
+name: Trading Market Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      market_scan_tag:
+        description: "Optional Polymarket tag"
+        required: false
+        default: ""
+        type: string
+      market_scan_min_probability:
+        description: "Minimum market probability, decimal 0.5-1"
+        required: false
+        default: "0.5"
+        type: string
+      market_scan_max_resolution_days:
+        description: "Maximum days to resolution"
+        required: false
+        default: ""
+        type: string
+      market_scan_min_net_yield:
+        description: "Minimum net yield after fees, decimal"
+        required: false
+        default: "0"
+        type: string
+      market_scan_min_liquidity:
+        description: "Minimum liquidity in USDC"
+        required: false
+        default: "0"
+        type: string
+
+concurrency:
+  group: trading-paper-bot
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PAPER_STATE_PATH: data/paper-state.json
+      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
+      PAPER_PORTFOLIO_USDC: "100"
+      PAPER_MAX_FRACTION: "0.05"
+      PAPER_MAX_HISTORY: "5000"
+      PAPER_MARKET_SCAN_BATCH_SIZE: "100"
+      PAPER_MARKET_SCAN_MAX_OBSERVATIONS: "5000"
+      PAPER_MARKET_SCAN_HISTORY_LIMIT: "200"
+      PAPER_MARKET_SCAN_MAX_OFFSET: "20000"
+      PAPER_MARKET_SCAN_PREFETCH_BATCHES: "4"
+      PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
+      PAPER_MARKET_SCAN_MIN_PROBABILITY: ${{ inputs.market_scan_min_probability || '0.5' }}
+      PAPER_MARKET_SCAN_MIN_RESOLUTION_HOURS: "1"
+      PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || '' }}
+      PAPER_MARKET_SCAN_TRIGGER: "MANUAL"
+      PAPER_MARKET_SCAN_MAX_RESOLUTION_DAYS: ${{ inputs.market_scan_max_resolution_days || '' }}
+      PAPER_MARKET_SCAN_MIN_NET_YIELD: ${{ inputs.market_scan_min_net_yield || '0' }}
+      PAPER_MARKET_SCAN_MIN_LIQUIDITY_USDC: ${{ inputs.market_scan_min_liquidity || '0' }}
+      PAPER_MAX_RESOLUTION_DAYS: "7"
+      PAPER_SCAN_ONLY: "true"
+      PAPER_REQUIRE_GEMINI: "false"
+      PAPER_PRIMARY_AI_PROVIDER: gemini
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify trading target
+        run: |
+          if grep -R -n -E "server-dir:.*email[-]campaign|local-dir:.*email[-]campaign|/www/email[-]campaign/" .github/workflows/trading-market-scan.yml trading; then
+            echo "Trading market scan must not target email-campaign."
+            exit 1
+          fi
+
+      - name: Run tagged market scan
+        working-directory: trading
+        run: npm run paper:bot
+
+      - name: Upload paper state
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+          PAPER_STATE_FILE: trading/data/paper-state.json
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          from pathlib import Path
+
+          state_file = Path(os.environ["PAPER_STATE_FILE"])
+          if not state_file.exists():
+              raise SystemExit("paper-state.json was not generated")
+
+          def enter_dir(ftp, parts):
+              ftp.cwd("/")
+              for part in parts:
+                  if not part:
+                      continue
+                  try:
+                      ftp.cwd(part)
+                  except ftplib.error_perm:
+                      ftp.mkd(part)
+                      ftp.cwd(part)
+
+          with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=30) as ftp:
+              ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
+              enter_dir(ftp, os.environ["TRADING_FTP_DIR"].strip("/").split("/"))
+              temporary = "paper-state.json.scan-uploading"
+              with state_file.open("rb") as handle:
+                  ftp.storbinary(f"STOR {temporary}", handle)
+              try:
+                  ftp.rename(temporary, "paper-state.json")
+              except ftplib.all_errors:
+                  try:
+                      ftp.delete("paper-state.json")
+                  except ftplib.all_errors:
+                      pass
+                  ftp.rename(temporary, "paper-state.json")
+          PY

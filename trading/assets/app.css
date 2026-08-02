@@ -475,6 +475,53 @@ button:disabled {
   gap: 8px;
 }
 
+.scraped-scan-controls {
+  align-items: center;
+}
+
+.scraped-scan-select-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 3px 8px 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.scraped-scan-select-label span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.scraped-scan-select-label select {
+  min-width: 132px;
+  min-height: 29px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.scraped-scan-status {
+  max-width: 210px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.scraped-scan-status.error {
+  color: var(--danger);
+}
+
 .shortlist-refresh-button {
   min-height: 32px;
   text-transform: none;

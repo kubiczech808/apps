@@ -244,6 +244,7 @@ function compact_market_observation(array $item): array
         'selectionStatus',
         'marketType',
         'tags',
+        'polymarketTags',
         'riskCategory',
         'riskPrimaryEntity',
         'riskGroupKeys',
@@ -1131,6 +1132,7 @@ function workflow_status_payload(string $target): array
     $targetKey = workflow_target_key($target);
     $workflows = [
         'paper' => 'trading-paper-bot.yml',
+        'paper-scan' => 'trading-market-scan.yml',
         'paper-evaluation' => 'trading-paper-evaluation.yml',
         'paper-refresh' => 'trading-paper-bot.yml',
         'live' => 'polymarket-live-limit-order-test.yml',
@@ -1275,6 +1277,42 @@ function normalized_money_input($value): ?string
     return rtrim(rtrim(number_format($money, 2, '.', ''), '0'), '.');
 }
 
+function normalized_scan_tag_input($value): ?string
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    $tag = strtolower(trim((string) $value));
+    $tag = preg_replace('/[^a-z0-9_-]+/', '-', $tag) ?? '';
+    $tag = trim($tag, '-_');
+    return $tag === '' ? null : substr($tag, 0, 80);
+}
+
+function normalized_scan_days_input($value): ?string
+{
+    if ($value === null || $value === '' || !is_numeric($value)) {
+        return null;
+    }
+    $days = max(0.5, min(3650, round((float) $value * 2) / 2));
+    return rtrim(rtrim(number_format($days, 1, '.', ''), '0'), '.');
+}
+
+function normalized_scan_probability_input($value): ?string
+{
+    if ($value === null || $value === '' || !is_numeric($value)) {
+        return null;
+    }
+    $probability = (float) $value;
+    if ($probability > 1) {
+        $probability /= 100;
+    }
+    if ($probability <= 0) {
+        return null;
+    }
+    $probability = min(1, $probability);
+    return rtrim(rtrim(number_format($probability, 4, '.', ''), '0'), '.');
+}
+
 function normalized_bool_input($value): ?string
 {
     if ($value === null) {
@@ -1416,6 +1454,11 @@ try {
         $paperConservativeMinProbability = normalized_probability_input($payload['paper_conservative_min_probability'] ?? null);
         $paperHighRewardMinProbability = normalized_probability_input($payload['paper_high_reward_min_probability'] ?? null);
         $paperMoreProbableMinProbability = normalized_probability_input($payload['paper_more_probable_min_probability'] ?? null);
+        $scanTag = normalized_scan_tag_input($payload['market_scan_tag'] ?? null);
+        $scanMinProbability = normalized_scan_probability_input($payload['market_scan_min_probability'] ?? null);
+        $scanMaxResolutionDays = normalized_scan_days_input($payload['market_scan_max_resolution_days'] ?? null);
+        $scanMinNetYield = normalized_nonnegative_yield_input($payload['market_scan_min_net_yield'] ?? null);
+        $scanMinLiquidity = normalized_money_input($payload['market_scan_min_liquidity'] ?? null);
         $liveMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['live_max_order_fraction'] ?? null);
         $paperMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['paper_max_order_fraction'] ?? null);
         $liveMaxResolutionDays = normalized_days_input($payload['maxResolutionDays'] ?? $payload['live_max_resolution_days'] ?? null);
@@ -1481,6 +1524,17 @@ try {
                     'live_execution_probability_source' => $liveShortlistProbabilitySource,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
+            ],
+            'paper-scan' => [
+                'workflow' => 'trading-market-scan.yml',
+                'inputs' => array_filter([
+                    'market_scan_tag' => $scanTag,
+                    'market_scan_min_probability' => $scanMinProbability,
+                    'market_scan_max_resolution_days' => $scanMaxResolutionDays,
+                    'market_scan_min_net_yield' => $scanMinNetYield,
+                    'market_scan_min_liquidity' => $scanMinLiquidity,
+                ], static fn ($value): bool => $value !== null),
+                'message' => 'One-time tagged Polymarket scan workflow dispatched.',
             ],
         ];
 

@@ -38,6 +38,9 @@ const state = {
   scrapedMarketObservations: [],
   scrapedMarketScan: {},
   scrapedMarketScanHistory: [],
+  scrapedScanTag: "",
+  scrapedScanBusy: false,
+  scrapedScanStatus: "",
   scrapedRefreshKeys: new Set(),
   scrapedRefreshErrors: new Map(),
   evaluationProbabilityFilter: 0,
@@ -136,6 +139,9 @@ const els = {
   settingsPageEyebrow: document.querySelector("[data-settings-page-eyebrow]"),
   settingsPageTitle: document.querySelector("[data-settings-page-title]"),
   opportunityPanelTitle: document.querySelector("[data-opportunity-panel-title]"),
+  scrapedScanTag: document.querySelector("[data-scraped-scan-tag]"),
+  scrapedScanButton: document.querySelector("[data-scraped-scan]"),
+  scrapedScanStatus: document.querySelector("[data-scraped-scan-status]"),
   settingsSectionButtons: document.querySelectorAll("[data-settings-section]"),
   settingsPanels: document.querySelectorAll("[data-settings-panel]"),
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
@@ -872,6 +878,68 @@ function syncOpportunityViewControls() {
       button.textContent = status === "EVALUATED" ? "Evaluated" : status === "ALL" ? "All evaluated" : button.textContent;
     }
   });
+  renderScrapedScanControls();
+}
+
+function normalizedScrapedScanTag(value) {
+  return String(value || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+function scrapedScanTagOptions() {
+  const counts = new Map();
+  const addCount = (rawTag, count = 1) => {
+    const tag = normalizedScrapedScanTag(rawTag);
+    if (!tag || tag === "clear-resolution") return;
+    counts.set(tag, Number(counts.get(tag) || 0) + Math.max(1, Number(count) || 1));
+  };
+  for (const item of scrapedMarketObservations()) {
+    const tags = [
+      ...(Array.isArray(item?.polymarketTags) ? item.polymarketTags : []),
+      ...(Array.isArray(item?.tags) ? item.tags : []),
+      item?.riskCategory,
+    ];
+    tags.forEach((rawTag) => addCount(rawTag));
+  }
+  for (const [tag, count] of Object.entries(state.scrapedMarketScan?.lastCategoryCounts || {})) {
+    addCount(tag, count);
+  }
+  for (const [tag, count] of Object.entries(state.scrapedMarketScanHistory?.[0]?.tagCounts || {})) {
+    addCount(tag, count);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function scrapedScanTagLabel(tag) {
+  return String(tag || "")
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function renderScrapedScanControls() {
+  if (!els.scrapedScanTag) return;
+  const options = scrapedScanTagOptions();
+  const availableTags = new Set(options.map(([tag]) => tag));
+  if (state.scrapedScanTag && !availableTags.has(state.scrapedScanTag)) state.scrapedScanTag = "";
+  els.scrapedScanTag.innerHTML = [
+    '<option value="">All tags</option>',
+    ...options.map(([tag, count]) => `<option value="${escapeHtml(tag)}">${escapeHtml(scrapedScanTagLabel(tag))} (${formatInteger(count) || count})</option>`),
+  ].join("");
+  els.scrapedScanTag.value = state.scrapedScanTag;
+  if (els.scrapedScanButton) {
+    els.scrapedScanButton.disabled = state.scrapedScanBusy;
+    els.scrapedScanButton.textContent = state.scrapedScanBusy ? "Scanning..." : "Scan Polymarket";
+  }
+  if (els.scrapedScanStatus) {
+    els.scrapedScanStatus.textContent = state.scrapedScanStatus || "";
+    els.scrapedScanStatus.className = `scraped-scan-status${state.scrapedScanStatus?.startsWith("Error") ? " error" : ""}`;
+  }
 }
 
 function normalizeMinimumNetYield(value) {
@@ -3819,6 +3887,61 @@ async function waitForScrapedRefreshWorkflow(startedAt) {
   return latest;
 }
 
+async function waitForScrapedScanWorkflow(startedAt) {
+  let latest = null;
+  for (let attempt = 0; attempt < 64; attempt += 1) {
+    const status = await fetchApiJson(`api.php?action=workflow-status&target=paper-scan&since=${encodeURIComponent(startedAt)}`);
+    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || status.latest || null;
+    if (latest?.status === "completed") return latest;
+    state.scrapedScanStatus = latest ? `Scan ${workflowStatusText(latest)}` : "Scan queued...";
+    renderScrapedScanControls();
+    await sleep(3000);
+  }
+  return latest;
+}
+
+async function triggerOneTimeMarketScan() {
+  if (state.scrapedScanBusy) return;
+  state.scrapedScanBusy = true;
+  state.scrapedScanStatus = "Starting scan...";
+  renderScrapedScanControls();
+  const startedAt = new Date().toISOString();
+  try {
+    await fetchApiJson("api.php?action=workflow", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target: "paper-scan",
+        market_scan_tag: state.scrapedScanTag,
+        market_scan_min_probability: currentEvaluationProbabilityFilter(),
+        market_scan_max_resolution_days: currentEvaluationDaysFilter(),
+        market_scan_min_net_yield: currentEvaluationNetYieldFilter(),
+        market_scan_min_liquidity: currentEvaluationLiquidityFilter(),
+      }),
+    });
+    state.scrapedScanStatus = "Scan queued...";
+    renderScrapedScanControls();
+    const workflow = await waitForScrapedScanWorkflow(startedAt);
+    if (!workflow || workflow.status !== "completed") {
+      throw new Error("Scan is still queued in the background. Try again in a moment.");
+    }
+    if (workflow.conclusion !== "success") {
+      throw new Error(`Scan workflow finished with ${workflow.conclusion || "an unknown error"}.`);
+    }
+    const refreshed = await fetchJson("api.php?action=state&target=paper&summary=scraped");
+    storeScrapedMarketState(refreshed);
+    state.scrapedScanStatus = `Updated ${formatDate(refreshed.marketScan?.lastScanAt || "")}`;
+    if (state.page === "opportunities") renderBotEvaluations();
+    else rerenderCurrentDashboard();
+  } catch (error) {
+    state.scrapedScanStatus = `Error: ${error?.message || "scan failed"}`;
+  } finally {
+    state.scrapedScanBusy = false;
+    renderScrapedScanControls();
+    if (state.page === "opportunities") renderBotEvaluations();
+  }
+}
+
 async function triggerScrapedOpportunityRefresh(item) {
   const key = scrapedRefreshKey(item);
   const slug = String(item?.slug || item?.eventSlug || "").trim();
@@ -6540,6 +6663,15 @@ els.opportunityViewButtons.forEach((button) => {
   button.addEventListener("click", () => {
     setOpportunityView(button.dataset.opportunityView, { syncRoute: true });
   });
+});
+
+els.scrapedScanTag?.addEventListener("change", () => {
+  state.scrapedScanTag = normalizedScrapedScanTag(els.scrapedScanTag.value);
+  renderScrapedScanControls();
+});
+
+els.scrapedScanButton?.addEventListener("click", () => {
+  triggerOneTimeMarketScan();
 });
 
 els.evaluationProbabilityFilter?.addEventListener("input", () => {

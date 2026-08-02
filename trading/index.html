@@ -204,6 +204,16 @@
                 <p class="eyebrow">Market evaluation</p>
                 <h2 data-opportunity-panel-title>Evaluated opportunities</h2>
               </div>
+              <div class="panel-head-actions scraped-scan-controls" data-scraped-only>
+                <label class="scraped-scan-select-label" for="scraped-scan-tag">
+                  <span>Polymarket tag</span>
+                  <select id="scraped-scan-tag" data-scraped-scan-tag aria-label="Polymarket tag for one-time scan">
+                    <option value="">All tags</option>
+                  </select>
+                </label>
+                <button class="execution-button" type="button" data-scraped-scan title="Run a one-time Polymarket scan using the selected tag and current table filters">Scan Polymarket</button>
+                <span class="scraped-scan-status" data-scraped-scan-status aria-live="polite"></span>
+              </div>
             </div>
             <div class="settings-panel-body">
               <div class="evaluation-head" data-evaluation-controls>
