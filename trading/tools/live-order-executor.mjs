@@ -1643,6 +1643,56 @@ async function submitOrder(order) {
   return client.postOrder(signedOrder, OrderType.GTC, side === Side.SELL ? false : POST_ONLY);
 }
 
+async function submitOrderWithMakerPrecisionRecovery(order) {
+  const attempts = [];
+  let response = null;
+  try {
+    response = await submitOrder(order);
+  } catch (error) {
+    response = {
+      error: error?.message || String(error),
+      data: error?.response?.data || error?.data || null,
+      status: "exception",
+    };
+  }
+  attempts.push({ order, response, precisionRecovery: false });
+
+  const side = String(order.side || "BUY").toUpperCase();
+  const minOrderSize = number(order.minOrderSize);
+  if (
+    successfulOrderResponse(response)
+    || !USE_LIMIT_ORDERS
+    || side !== "BUY"
+    || !isMakerAmountPrecisionError(response)
+    || minOrderSize == null
+  ) {
+    return { order, response, attempts };
+  }
+
+  const price = number(order.orderPrice ?? order.marketPrice);
+  const originalSize = number(order.orderSize);
+  const safeSize = price != null && originalSize != null
+    ? largestTwoDecimalMakerSafeSize({ price, size: originalSize, minOrderSize })
+    : null;
+  if (safeSize == null || safeSize >= originalSize - 0.000001) {
+    return { order, response, attempts };
+  }
+
+  const adjustedOrder = resizeCandidateForMakerPrecision(order, safeSize);
+  let adjustedResponse = null;
+  try {
+    adjustedResponse = await submitOrder(adjustedOrder);
+  } catch (error) {
+    adjustedResponse = {
+      error: error?.message || String(error),
+      data: error?.response?.data || error?.data || null,
+      status: "exception",
+    };
+  }
+  attempts.push({ order: adjustedOrder, response: adjustedResponse, precisionRecovery: true });
+  return { order: adjustedOrder, response: adjustedResponse, attempts };
+}
+
 async function buildRotationExitOrder(position, evaluationByToken, tradingConfig) {
   const tokenId = String(position.tokenId || position.assetId || "");
   const orderSize = number(position.shares ?? position.size);
@@ -1787,6 +1837,81 @@ function orderAttemptSummary(candidate, response = null, extra = {}) {
     responseError: orderResponseError(response) || null,
     responseSummary: compactOrderResponse(response) || null,
     ...extra,
+  };
+}
+
+function hasTwoDecimalMakerAmount(price, size) {
+  const makerAmount = Number(price) * Number(size);
+  if (!Number.isFinite(makerAmount)) return false;
+  const cents = Math.round(makerAmount * 100);
+  return Math.abs(makerAmount * 100 - cents) <= 0.0000001;
+}
+
+function largestTwoDecimalMakerSafeSize({ price, size, minOrderSize = 0 }) {
+  const maximumCents = Math.floor(Number(size) * 100 + 0.0000001);
+  const minimumCents = Math.ceil(Number(minOrderSize) * 100 - 0.0000001);
+  if (!Number.isFinite(maximumCents) || !Number.isFinite(minimumCents) || maximumCents < minimumCents) return null;
+
+  // Polymarket's BUY maker amount is the USDC notional (price * shares).
+  // Keep the original price and find the largest two-decimal share quantity
+  // whose resulting maker amount has no fractional cent.
+  for (let cents = maximumCents; cents >= minimumCents; cents -= 1) {
+    const candidateSize = cents / 100;
+    if (hasTwoDecimalMakerAmount(price, candidateSize)) return Number(candidateSize.toFixed(2));
+  }
+  return null;
+}
+
+function isMakerAmountPrecisionError(response) {
+  const message = `${orderResponseError(response)} ${compactOrderResponse(response)}`.toLowerCase();
+  return /invalid maker amount|invalid amounts.*maker amount|maker amount.*(?:accuracy|decimal|precision)/i.test(message);
+}
+
+function resizeCandidateForMakerPrecision(candidate, size) {
+  const price = number(candidate.orderPrice ?? candidate.marketPrice);
+  if (price == null || !Number.isFinite(size) || size <= 0) return candidate;
+
+  const feeRate = feeRateForEvaluation(candidate);
+  const fee = USE_LIMIT_ORDERS && POST_ONLY ? 0 : takerFee(size, price, feeRate);
+  const notional = Number((price * size).toFixed(5));
+  const totalCost = notional + fee;
+  const aiProbability = number(candidate.aiProbability);
+  const marketProbability = number(candidate.marketProbability);
+  const days = number(candidate.daysToResolution);
+  const aiExpectedValue = aiProbability == null ? null : aiProbability * size - notional - fee;
+  const marketExpectedValue = marketProbability == null ? null : marketProbability * size - notional - fee;
+  const netGainIfWin = size - notional - fee;
+  const potentialRoi = totalCost > 0 ? netGainIfWin / totalCost : null;
+  const aiRoi = aiExpectedValue != null && totalCost > 0 ? aiExpectedValue / totalCost : null;
+  const marketRoi = marketExpectedValue != null && totalCost > 0 ? marketExpectedValue / totalCost : null;
+  const selectedExpectedValue = PROBABILITY_SOURCE === "polymarket" ? netGainIfWin : aiExpectedValue;
+  const selectedRoi = PROBABILITY_SOURCE === "polymarket" ? potentialRoi : aiRoi;
+  const annualizedReturn = selectedRoi == null ? null : (days && days > 0 ? selectedRoi * (365 / days) : selectedRoi);
+  const potentialAnnualizedReturn = potentialRoi == null ? null : (days && days > 0 ? potentialRoi * (365 / days) : potentialRoi);
+  const aiAnnualizedReturn = aiRoi == null ? null : (days && days > 0 ? aiRoi * (365 / days) : aiRoi);
+  const marketAnnualizedReturn = marketRoi == null ? null : (days && days > 0 ? marketRoi * (365 / days) : marketRoi);
+
+  return {
+    ...candidate,
+    orderSize: Number(size.toFixed(2)),
+    orderNotionalUsdc: notional,
+    appliedStakeUsdc: Number(totalCost.toFixed(5)),
+    minOrderNotionalUsdc: Number((price * number(candidate.minOrderSize, 0)).toFixed(5)),
+    expectedValueUsdc: selectedExpectedValue == null ? null : Number(selectedExpectedValue.toFixed(4)),
+    annualizedReturn: annualizedReturn == null ? null : Number(annualizedReturn.toFixed(4)),
+    aiExpectedValueUsdc: aiExpectedValue == null ? null : Number(aiExpectedValue.toFixed(4)),
+    aiAnnualizedReturn: aiAnnualizedReturn == null ? null : Number(aiAnnualizedReturn.toFixed(4)),
+    marketExpectedValueUsdc: marketExpectedValue == null ? null : Number(marketExpectedValue.toFixed(4)),
+    marketAnnualizedReturn: marketAnnualizedReturn == null ? null : Number(marketAnnualizedReturn.toFixed(4)),
+    potentialAnnualizedReturn: potentialAnnualizedReturn == null ? null : Number(potentialAnnualizedReturn.toFixed(4)),
+    netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
+    netYield: potentialRoi == null ? null : Number(potentialRoi.toFixed(6)),
+    riskReward: potentialRoi == null ? null : Number(potentialRoi.toFixed(6)),
+    totalCostUsdc: Number(totalCost.toFixed(5)),
+    tradingFeeUsdc: Number(fee.toFixed(5)),
+    sizingNote: `maker amount precision recovery: reduced from ${Number(candidate.orderSize).toFixed(4)} to ${Number(size).toFixed(2)} shares at the same limit price`,
+    makerPrecisionAdjusted: true,
+    originalOrderSize: Number(Number(candidate.orderSize).toFixed(4)),
   };
 }
 
@@ -2125,13 +2250,30 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
       return { action: selectedAction.action, selected: selectedAction, reviews };
     }
     if (selectedAction.action === "REPLACE" && selectedAction.replacementCandidate) {
-      selectedAction.replaceResponse = DRY_RUN || !hasFlag("confirm-live")
-        ? { status: "dry_run_replace", success: true }
-        : await submitOrder({
-            ...selectedAction.replacementCandidate,
-            funderAddress: tradingConfig.funderAddress,
-            signatureType: tradingConfig.signatureType,
-        });
+      const replacementOrder = {
+        ...selectedAction.replacementCandidate,
+        funderAddress: tradingConfig.funderAddress,
+        signatureType: tradingConfig.signatureType,
+      };
+      const replacementSubmission = DRY_RUN || !hasFlag("confirm-live")
+        ? {
+            order: replacementOrder,
+            response: { status: "dry_run_replace", success: true },
+            attempts: [{ order: replacementOrder, response: { status: "dry_run_replace", success: true }, precisionRecovery: false }],
+          }
+        : await submitOrderWithMakerPrecisionRecovery(replacementOrder);
+      selectedAction.replacementCandidate = replacementSubmission.order;
+      selectedAction.replaceResponse = replacementSubmission.response;
+      selectedAction.replacementAttempts = replacementSubmission.attempts.map((attempt) => orderAttemptSummary(
+        attempt.order,
+        attempt.response,
+        {
+          makerPrecisionRecovery: attempt.precisionRecovery,
+          action: attempt.precisionRecovery
+            ? (successfulOrderResponse(attempt.response) ? "PRECISION_RETRY_ACCEPTED" : "PRECISION_RETRY_REJECTED")
+            : "REPLACE_ATTEMPT",
+        },
+      ));
       if (successfulOrderResponse(selectedAction.replaceResponse)) {
         selectedAction.action = "REPLACED";
       } else {
@@ -2610,23 +2752,28 @@ async function main() {
     return restoreResponse;
   };
   for (const candidate of eligible) {
-    let response = null;
-    try {
-      response = await submitOrder(candidate);
-    } catch (error) {
-      response = {
-        error: error?.message || String(error),
-        status: "exception",
-      };
-    }
+    const submission = await submitOrderWithMakerPrecisionRecovery(candidate);
+    const response = submission.response;
+    const submittedCandidate = submission.order;
+    const submissionAttempts = submission.attempts.map((attempt) => orderAttemptSummary(
+      attempt.order,
+      attempt.response,
+      {
+        makerPrecisionRecovery: attempt.precisionRecovery,
+        action: attempt.precisionRecovery ? "PRECISION_RETRY" : "SUBMIT_ATTEMPT",
+      },
+    ));
     if (successfulOrderResponse(response)) {
       const action = canceledForBetterCandidate ? "CANCELED_AND_SUBMITTED" : "SUBMITTED";
+      const precisionNote = submittedCandidate.makerPrecisionAdjusted
+        ? ` The same limit price was kept and the share size was reduced to ${Number(submittedCandidate.orderSize).toFixed(2)} so Polymarket's maker amount has valid precision.`
+        : "";
       const reason = canceledForBetterCandidate
-        ? "waiting limit order cancelled and the better replacement order was accepted by Polymarket"
-        : "live order accepted by Polymarket";
+        ? `waiting limit order cancelled and the better replacement order was accepted by Polymarket${precisionNote}`
+        : `live order accepted by Polymarket${precisionNote}`;
       const explanation = canceledForBetterCandidate
-        ? "The existing limit order was cancelled after the revalidated shortlist found a better candidate. The released capital was immediately used for the selected replacement order."
-        : "Live batch revalidated candidates and Polymarket accepted the selected order.";
+        ? `The existing limit order was cancelled after the revalidated shortlist found a better candidate. The released capital was immediately used for the selected replacement order.${precisionNote}`
+        : `Live batch revalidated candidates and Polymarket accepted the selected order.${precisionNote}`;
       await emitDecision({
         ...decision,
         action,
@@ -2636,31 +2783,34 @@ async function main() {
           action,
           reason,
           explanation,
-          selected: liveBatchCandidateSummary(candidate),
+          selected: liveBatchCandidateSummary(submittedCandidate),
         },
         monitoring: {
           ...monitoring,
           lastSubmittedAt: new Date().toISOString(),
-          estimatedCashAfterOrderUsdc: Number(Math.max(0, cash - Number(candidate.totalCostUsdc || candidate.orderNotionalUsdc || 0)).toFixed(5)),
+          estimatedCashAfterOrderUsdc: Number(Math.max(0, cash - Number(submittedCandidate.totalCostUsdc || submittedCandidate.orderNotionalUsdc || 0)).toFixed(5)),
         },
-        selected: candidate,
+        selected: submittedCandidate,
         response,
         attempts: [
           ...(canceledForBetterCandidate && orderManagement.selected ? [orderManagement.selected] : []),
           ...attempts,
-          orderAttemptSummary(candidate, response, { action }),
+          ...submissionAttempts.map((attempt) => ({
+            ...attempt,
+            action: attempt.makerPrecisionRecovery ? "PRECISION_RETRY_ACCEPTED" : action,
+          })),
         ],
       });
       return;
     }
 
     const stopReason = nonRetryableOrderFailure(response);
-    const attempt = orderAttemptSummary(candidate, response, {
-      action: stopReason ? "STOP" : "RETRY_NEXT",
-      rejectReason: orderResponseError(response) || "order was rejected",
-      stopReason,
-    });
-    attempts.push(attempt);
+    attempts.push(...submissionAttempts.map((attempt) => ({
+      ...attempt,
+      action: stopReason ? "STOP" : (attempt.makerPrecisionRecovery ? "PRECISION_RETRY_REJECTED" : "RETRY_NEXT"),
+      rejectReason: orderResponseError(attempt.response) || "order was rejected",
+      stopReason: attempt.response === response ? stopReason : null,
+    })));
     if (stopReason) {
       const restoreResponse = await restoreCanceledOrderIfNeeded();
       const restored = restoreResponse && successfulOrderResponse(restoreResponse);
@@ -2679,9 +2829,9 @@ async function main() {
           explanation: canceledForBetterCandidate
             ? `The replacement order was not opened after cancellation because submission stopped: ${stopReason}. The original order ${restored ? "was immediately restored" : "could not be restored"}.`
             : `Live order was not opened because submission stopped: ${stopReason}.`,
-          selected: liveBatchCandidateSummary(candidate),
+          selected: liveBatchCandidateSummary(submittedCandidate),
         },
-        selected: candidate,
+        selected: submittedCandidate,
         response,
         attempts: [
           ...(canceledForBetterCandidate && orderManagement.selected ? [orderManagement.selected] : []),
