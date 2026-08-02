@@ -314,6 +314,28 @@ function compact_market_observation(array $item): array
     return $compact;
 }
 
+function is_active_scraped_market_observation(array $item): bool
+{
+    $status = strtoupper((string) ($item['status'] ?? $item['selectionStatus'] ?? ''));
+    if (in_array($status, ['RESOLVED', 'CLOSED', 'EXPIRED', 'FINALIZED', 'SETTLED'], true)) {
+        return false;
+    }
+    $resolutionStatus = strtoupper((string) ($item['resolutionStatus'] ?? ''));
+    if (in_array($resolutionStatus, ['PENDING_RESULT', 'FINAL_PRICE_AVAILABLE', 'NOT_ACCEPTING_ORDERS'], true)) {
+        return false;
+    }
+    $probability = (float) ($item['marketProbability'] ?? 0);
+    if ($probability < 0.5 || $probability >= 1) {
+        return false;
+    }
+    $scheduledEvent = strtotime((string) ($item['scheduledEventDate'] ?? ''));
+    if ($scheduledEvent !== false && $scheduledEvent <= time()) {
+        return false;
+    }
+    $endDate = strtotime((string) ($item['endDate'] ?? $item['resolutionEndDate'] ?? ''));
+    return $endDate === false || $endDate > time();
+}
+
 function compact_state_payload(string $target, array $data, string $summary): array
 {
     if ($target !== 'paper') {
@@ -346,21 +368,7 @@ function compact_state_payload(string $target, array $data, string $summary): ar
 
     if ($summary === 'execution') {
         $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
-        $active = array_values(array_filter($observations, static function ($item): bool {
-            if (!is_array($item)) {
-                return false;
-            }
-            $status = strtoupper((string) ($item['status'] ?? $item['selectionStatus'] ?? ''));
-            if (in_array($status, ['RESOLVED', 'CLOSED', 'EXPIRED'], true)) {
-                return false;
-            }
-            $probability = (float) ($item['marketProbability'] ?? 0);
-            if ($probability < 0.5 || $probability >= 1) {
-                return false;
-            }
-            $endDate = strtotime((string) ($item['endDate'] ?? $item['resolutionEndDate'] ?? ''));
-            return $endDate === false || $endDate > time();
-        }));
+        $active = array_values(array_filter($observations, static fn($item): bool => is_array($item) && is_active_scraped_market_observation($item)));
         return [
             'schemaVersion' => $data['schemaVersion'] ?? null,
             'generatedAt' => $data['generatedAt'] ?? null,
@@ -374,12 +382,13 @@ function compact_state_payload(string $target, array $data, string $summary): ar
 
     if ($summary === 'scraped') {
         $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
+        $active = array_values(array_filter($observations, static fn($item): bool => is_array($item) && is_active_scraped_market_observation($item)));
         return [
             'schemaVersion' => $data['schemaVersion'] ?? null,
             'generatedAt' => $data['generatedAt'] ?? null,
             'marketObservations' => array_map(
                 static fn($item): array => is_array($item) ? compact_market_observation($item) : [],
-                array_values(array_filter($observations, 'is_array'))
+                $active
             ),
             'marketScan' => is_array($data['marketScan'] ?? null) ? $data['marketScan'] : [],
             'marketScanHistory' => is_array($data['marketScanHistory'] ?? null)

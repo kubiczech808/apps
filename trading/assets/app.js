@@ -5489,7 +5489,6 @@ function renderScrapedOpportunities() {
   const visible = sortedScrapedObservations(filtered).slice(0, 250);
   const scan = scrapedMarketScan();
   const scrapedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "EVALUATED").length;
-  const resolvedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "RESOLVED").length;
   const errorCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "ERROR").length;
 
   if (els.evaluationFilterCount) {
@@ -5509,7 +5508,6 @@ function renderScrapedOpportunities() {
       `${formatInteger(filtered.length) || filtered.length} shown`,
       `${formatInteger(observations.length) || observations.length} retained`,
       `${formatInteger(scrapedCount) || scrapedCount} scraped`,
-      `${formatInteger(resolvedCount) || resolvedCount} resolved`,
       errorCount ? `${formatInteger(errorCount) || errorCount} error` : null,
       scan.lastBatchCount != null ? `${formatInteger(scan.lastBatchCount)} in last batch` : null,
       scan.lastPreferredCount != null ? `${formatInteger(scan.lastPreferredCount)} preferred outcomes` : null,
