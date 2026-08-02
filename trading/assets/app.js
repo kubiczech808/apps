@@ -2928,12 +2928,19 @@ function renderAnalysisComparison(originalSection, currentSection) {
   `;
 }
 
-function renderAnalysisModalHtml(text) {
+function renderAnalysisModalHtml(text, options = {}) {
   const lines = String(text || "No analysis detail available.").split(/\r?\n/);
   const sectionTitles = new Set([
     "ERROR REASON",
     "Original AI probability decision",
     "Current reassessment",
+    "Run summary",
+    "Order placed",
+    "Candidates not used",
+    "Open orders",
+    "Position rotation",
+    "Risk diversification",
+    "Capital",
     "Portfolio run row",
     "Rules:",
     "Capital:",
@@ -2972,7 +2979,7 @@ function renderAnalysisModalHtml(text) {
   const comparisonHtml = originalSection || currentSection ? renderAnalysisComparison(originalSection, currentSection) : "";
 
   return `
-    <div class="analysis-detail-sections">
+    <div class="analysis-detail-sections${options.singleColumn ? " single-column" : ""}">
       ${visibleSections.map((section) => `
         <section class="analysis-detail-section ${section.title === "ERROR REASON" ? "error" : ""} ${section.title === "Analysis" ? "overview" : ""}">
           <h3>${escapeHtml(section.title)}</h3>
@@ -2992,7 +2999,7 @@ function openAnalysisModal(text, trigger, options = {}) {
   const title = modal.querySelector("#analysis-modal-title");
   if (title) title.textContent = options.title || "Analysis detail";
   const body = modal.querySelector("[data-analysis-modal-body]");
-  if (body) body.innerHTML = renderAnalysisModalHtml(text || "No analysis detail available.");
+  if (body) body.innerHTML = renderAnalysisModalHtml(text || "No analysis detail available.", options);
   modal.dataset.opportunityKey = options.opportunityKey || "";
   modal.hidden = false;
   document.body.classList.add("modal-open");
@@ -5968,87 +5975,70 @@ function tradeBatchDetail(batch) {
       }).join("\n")
     : "-";
 
-  return [
-    `${batch.strategyLabel || batch.strategyId || "Portfolio"} trade batch`,
-    "",
+  const normalizeDetailText = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const action = String(batch.action || "-").toUpperCase();
+  const primaryReason = String(batch.humanReason || batch.reason || batch.explanation || "-").trim();
+  const explanation = String(batch.explanation || "").trim();
+  const reviewedCandidates = (rejected.length
+    ? rejected
+    : revalidated.filter((item) => String(item.status || "").toUpperCase() !== "ELIGIBLE"))
+    .slice(0, 12);
+  const reviewedCandidateLines = reviewedCandidates.map((item, index) => {
+    const name = `${item.outcome || "-"} - ${item.question || "-"}`;
+    const reason = rejectionReasonLine(item);
+    return `${index + 1}. ${name}${reason ? ` — ${reason}` : ""}`;
+  }).join("\n");
+  const orderReviewSummary = openOrderReviews.map((item, index) => {
+    const name = item.question || item.outcome || item.tokenId || "open order";
+    return `${index + 1}. ${item.action || "REVIEWED"}: ${name}${item.reason ? ` — ${item.reason}` : ""}`;
+  }).join("\n");
+  const rotationPosition = rotationReview?.best?.position || null;
+  const rotationCandidate = rotationReview?.best?.candidate || null;
+  const rotationSummary = rotationReview ? [
+    rotationPosition && rotationCandidate
+      ? `Replace ${rotationPosition.outcome || "-"} - ${rotationPosition.question || "-"} with ${rotationCandidate.outcome || "-"} - ${rotationCandidate.question || "-"}`
+      : rotationReview.action ? `Decision: ${rotationReview.action}` : "",
+    rotationReview.best?.priorityComparison ? comparisonMetricLine(rotationReview.best.priorityComparison) : "",
+    rotationReview.reason ? `Reason: ${rotationReview.reason}` : "",
+  ].filter(Boolean).join("\n") : (rotationComparison.length ? rotationComparisonLines : "");
+  const capitalText = [
+    Number.isFinite(Number(capital.availableUsdc)) ? `${money(Number(capital.availableUsdc))} available` : "",
+    Number.isFinite(Number(capital.requiredStakeUsdc)) ? `${money(Number(capital.requiredStakeUsdc))} required` : "",
+    capital.insufficientCapital ? "capital insufficient" : "",
+  ].filter(Boolean).join(" / ");
+  const capitalRelevant = capitalText && (
+    capital.insufficientCapital
+    || /cash|capital|stake|fund|minimum order/i.test(`${batch.reason || ""} ${batch.explanation || ""}`)
+    || action.includes("ROTATION")
+  );
+  const riskText = Number(counts.skippedForRisk || 0) > 0 || blocked.length
+    ? `${Number(counts.skippedForRisk || blocked.length || 0)} candidate(s) blocked by risk diversification`
+    : "";
+  const lines = [
+    "Run summary",
+    `Portfolio: ${batch.strategyLabel || batch.strategyId || "-"}`,
     `Run time: ${batch.runAt ? formatDate(batch.runAt) : "-"}`,
-    `Action: ${batch.action || "-"}`,
-    `Reason: ${batch.reason || "-"}`,
-    batch.humanReason ? `Human summary: ${batch.humanReason}` : "",
-    openOrderReviews.find((item) => item.selectionComparison)?.selectionComparison
-      ? `Decision comparison: ${comparisonMetricLine(openOrderReviews.find((item) => item.selectionComparison).selectionComparison)}`
-      : "",
-    rotationReview?.best?.priorityComparison
-      ? `Rotation comparison: ${comparisonMetricLine(rotationReview.best.priorityComparison)}`
-      : "",
-    `Explanation: ${batch.explanation || "-"}`,
-    "",
-    `Capital replacement comparison:`,
-    rotationComparisonLines,
-    "",
-    `Rules:`,
-    `${usesPolymarketProbability ? "Polymarket" : "AI"} threshold: ${probability(Number(settings.minProbability))}`,
-    `Max resolution days: ${settings.maxResolutionDays == null ? "-" : settings.maxResolutionDays}`,
-    `New trade cadence: ${settings.tradeCadenceHours == null ? "-" : `${settings.tradeCadenceHours}h`}`,
-    `Min liquidity: ${settings.minLiquidityUsdc == null ? "-" : money(Number(settings.minLiquidityUsdc))}`,
-    `Minimum net profit after fees: ${settings.minNetYield == null ? "-" : percent(Number(settings.minNetYield))}`,
-    `Selection order: ${settings.selectionOrder || "-"}`,
-    settings.crossPortfolioRiskDiversification == null ? "" : `Cross-live risk diversification: ${settings.crossPortfolioRiskDiversification ? "on" : "off"}`,
-    `Max stake: ${money(Number(settings.maxStakeUsdc || 0))}`,
-    "",
-    `Capital: ${money(Number(capital.availableUsdc || 0))} available / ${money(Number(capital.requiredStakeUsdc || 0))} required`,
-    `Insufficient capital: ${capital.insufficientCapital ? "yes" : "no"}`,
-    "",
-    prevalidationFilter.uniqueEvaluations != null ? [
-      `Prepared execution shortlist:`,
-      `Stored evaluations: ${Number(prevalidationFilter.storedEvaluations || 0)}`,
-      `Unique markets/outcomes: ${Number(prevalidationFilter.uniqueEvaluations || 0)}`,
-      `Passed portfolio rules before market verification: ${Number(prevalidationFilter.prefilterPassed || 0)}`,
-      `Selected for Polymarket market verification: ${Number(prevalidationFilter.selectedForRevalidation || 0)} / limit ${Number(prevalidationFilter.scanLimit || 0)}`,
+    `Action: ${action}`,
+    `Reason: ${primaryReason}`,
+  ];
+  if (explanation && normalizeDetailText(explanation) !== normalizeDetailText(primaryReason)) {
+    lines.push(`Note: ${explanation}`);
+  }
+  if (selected) {
+    lines.push(
       "",
-      `Shortlist order before Polymarket market verification:`,
-      executionShortlistLines,
-      "",
-    ].join("\n") : "",
-    `Counts: ${Number(counts.rankedEligible ?? counts.eligibleCandidates ?? 0)} ranked eligible / ${Number(counts.skippedForRisk || 0)} skipped for risk / ${Number(counts.openTrades || 0)} open trades / ${Number(counts.openOrdersReviewed || 0)} open orders reviewed`,
-    portfolioFilter.totalEvaluated != null ? [
-      "",
-      `Portfolio filter diagnostics:`,
-      `Evaluated in this run: ${Number(portfolioFilter.totalEvaluated || 0)}`,
-      `Base ELIGIBLE before portfolio rules: ${Number(portfolioFilter.baseEligible || 0)}`,
-      `Eligible after ${batch.strategyLabel || batch.strategyId || "portfolio"} rules: ${Number(portfolioFilter.portfolioEligible || 0)}`,
-      `Excluded by portfolio rules/status: ${Number(portfolioFilter.excludedCount || 0)}`,
-      `Filter reason counts:`,
-      filterReasonLines,
-    ].join("\n") : "",
-    "",
-    selected ? [
-      `Selected: ${selected.outcome || "-"} - ${selected.question || "-"}`,
-      `Selected metrics: ${candidateMetricLine(selected)}`,
-      selected.url ? `Selected market: ${selected.url}` : "",
-    ].filter(Boolean).join("\n") : "Selected: none",
-    "",
-    `Risk-blocked candidates:`,
-    blockedLines,
-    "",
-    `Open order review:`,
-    orderReviewLines,
-    "",
-    `Pre-evaluation diversification steering:`,
-    diversificationLines,
-    "",
-    `Position rotation review:`,
-    rotationReviewLines,
-    "",
-    `Candidates checked against current Polymarket market data:`,
-    revalidatedLines,
-    "",
-    `Eligible candidates checked:`,
-    candidateLines,
-    "",
-    `Rejected candidates checked:`,
-    rejectedLines,
-  ].join("\n");
+      "Order placed",
+      `${selected.outcome || "-"} - ${selected.question || "-"}`,
+      candidateMetricLine(selected),
+      selected.url ? `Market: ${selected.url}` : "",
+    );
+  }
+  if (reviewedCandidateLines) lines.push("", "Candidates not used", reviewedCandidateLines);
+  if (orderReviewSummary) lines.push("", "Open orders", orderReviewSummary);
+  if (rotationSummary) lines.push("", "Position rotation", rotationSummary);
+  if (riskText) lines.push("", "Risk diversification", riskText);
+  if (capitalRelevant) lines.push("", "Capital", capitalText);
+  return lines.filter((line, index) => line || index === 0).join("\n");
 }
 
 function normalizeLiveExecutionRun(execution) {
@@ -6304,23 +6294,14 @@ function portfolioRunSource(run = {}) {
 
 function portfolioRunDetail(run = {}) {
   const batch = run.batchLog || run;
-  const base = tradeBatchDetail(batch);
-  const extra = [
-    "",
-    "Portfolio run row",
-    `Run time: ${run.runAt || run.generatedAt ? formatDate(run.runAt || run.generatedAt) : "-"}`,
-    `Portfolio: ${run.strategyLabel || run.strategyId || "-"}`,
-    `Action: ${run.action || batch.action || "-"}`,
-    `Reason: ${humanRunReason(run)}`,
-    `Evaluated: ${Number(run.evaluatedCount ?? batch.counts?.scannedCandidates ?? 0)}`,
-    `Eligible for this portfolio: ${Number(run.eligibleCount ?? batch.counts?.eligibleCandidates ?? 0)}`,
-    `Risk skipped: ${Number(run.riskSkippedCount ?? batch.counts?.skippedForRisk ?? 0)}`,
-    `Capital: ${runCapitalNote(run) || "-"}`,
-    run.rotationReview?.note ? `Rotation review: ${run.rotationReview.note}` : "",
-    run.refreshOnly ? "Refresh-only run: yes" : "",
-    run.reportOnly ? "Report-only run: yes" : "",
-  ].filter(Boolean).join("\n");
-  return `${base}\n${extra}`;
+  return tradeBatchDetail({
+    ...batch,
+    runAt: batch.runAt || run.runAt || run.generatedAt,
+    strategyId: batch.strategyId || run.strategyId,
+    strategyLabel: batch.strategyLabel || run.strategyLabel,
+    action: batch.action || run.action,
+    humanReason: batch.humanReason || humanRunReason(run),
+  });
 }
 
 function renderRunLog() {
@@ -6974,7 +6955,7 @@ document.addEventListener("click", (event) => {
   if (portfolioRunButton) {
     event.preventDefault();
     const run = state.displayedRunLog[Number(portfolioRunButton.dataset.portfolioRun)];
-    openAnalysisModal(portfolioRunDetail(run || {}), portfolioRunButton, { title: "Execution run log" });
+    openAnalysisModal(portfolioRunDetail(run || {}), portfolioRunButton, { title: "Execution run log", singleColumn: true });
     return;
   }
 
@@ -6984,14 +6965,14 @@ document.addEventListener("click", (event) => {
     const [runIndexRaw, decisionIndexRaw] = String(runBatchButton.dataset.runBatch || "").split(":");
     const run = (Array.isArray(state.botState?.evaluationRunLog) ? state.botState.evaluationRunLog : [])[Number(runIndexRaw)];
     const decision = Array.isArray(run?.decisions) ? run.decisions[Number(decisionIndexRaw)] : null;
-    openAnalysisModal(tradeBatchDetail(decision?.batchLog || decision || {}), runBatchButton);
+    openAnalysisModal(tradeBatchDetail(decision?.batchLog || decision || {}), runBatchButton, { title: "Execution run log", singleColumn: true });
     return;
   }
 
   const liveBatchButton = event.target.closest("[data-live-batch]");
   if (liveBatchButton) {
     event.preventDefault();
-    openAnalysisModal(tradeBatchDetail(state.liveExecutionState?.batchLog || state.liveExecutionState || {}), liveBatchButton);
+    openAnalysisModal(tradeBatchDetail(state.liveExecutionState?.batchLog || state.liveExecutionState || {}), liveBatchButton, { title: "Execution run log", singleColumn: true });
     return;
   }
 

@@ -1105,6 +1105,14 @@ body.modal-open {
   white-space: normal;
 }
 
+.analysis-detail-sections.single-column {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.analysis-detail-sections.single-column .analysis-detail-section {
+  grid-column: 1;
+}
+
 .analysis-detail-section {
   display: grid;
   align-content: start;
