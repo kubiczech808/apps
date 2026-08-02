@@ -903,10 +903,17 @@ function syncOpportunityViewControls() {
   els.opportunityFilterControls.forEach((element) => {
     element.hidden = scanLog;
   });
+  const scrapedCounts = scraped ? scrapedOpportunityStatusCounts() : null;
   els.evaluationStatusButtons.forEach((button) => {
     const status = button.dataset.evaluationStatus;
     if (scraped) {
-      button.textContent = status === "EVALUATED" ? "Scraped" : status === "ALL" ? "All" : button.textContent;
+      const labels = {
+        EVALUATED: `Scraped (${formatInteger(scrapedCounts.scraped)})`,
+        RESOLVED: `Resolved (${formatInteger(scrapedCounts.resolved)})`,
+        ERROR: `Error (${formatInteger(scrapedCounts.error)})`,
+        ALL: `All (${formatInteger(scrapedCounts.all)})`,
+      };
+      button.textContent = labels[status] || status;
     } else {
       button.textContent = status === "EVALUATED" ? "Evaluated" : status === "ALL" ? "All evaluated" : button.textContent;
     }
@@ -5633,6 +5640,18 @@ function scanLogCounts(value) {
   return entries.length
     ? entries.map(([label, count]) => `${label} (${formatInteger(count) || count})`).join(", ")
     : "-";
+}
+
+function scrapedOpportunityStatusCounts() {
+  const counts = { all: 0, scraped: 0, resolved: 0, error: 0 };
+  for (const item of scrapedMarketObservations()) {
+    counts.all += 1;
+    const status = scrapedObservationStatus(item);
+    if (status === "SCRAPED") counts.scraped += 1;
+    else if (status === "RESOLVED") counts.resolved += 1;
+    else if (status === "ERROR") counts.error += 1;
+  }
+  return counts;
 }
 
 function scanLogReasonCounts(value, minimumMinutes = null) {
