@@ -1060,10 +1060,14 @@ function ledgerReconciliationFallbacks(trades, activity, positions, closedTrades
 
   return {
     status: orphanedTrades.length ? "WARNING" : "OK",
-    orphanedTrades,
+    // Trade/activity history is an audit trail, not proof of a currently
+    // held position. Only the current positions endpoint and active CLOB
+    // orders may affect open risk, equity, or execution sizing.
+    orphanedTrades: [],
+    auditOnlyTrades: orphanedTrades,
     orphanedCount: orphanedTrades.length,
     checkedGroups: groups.size,
-    invariant: "Every known live buy is represented in open positions/orders, closed trades, or ledger fallback rows.",
+    invariant: "Only current Polymarket positions and active CLOB orders count as open exposure; unmatched history is audit-only.",
   };
 }
 
@@ -1387,13 +1391,10 @@ async function main() {
     Array.isArray(balanceAllowance?.openOrders) ? balanceAllowance.openOrders : [],
     generatedAt,
   );
-  const reconciledPositions = [
-    ...openApiPositions,
-    ...reconciliation.orphanedTrades,
-  ];
+  const reconciledPositions = [...openApiPositions];
   if (reconciliation.orphanedCount > 0) {
     sync.status = sync.status === "ERROR" ? "ERROR" : "PARTIAL";
-    sync.warnings.push(`${reconciliation.orphanedCount} live ledger trade(s) are visible only via activity/trade history and were kept as open reconciliation rows`);
+    sync.warnings.push(`${reconciliation.orphanedCount} live ledger trade(s) are visible only via activity/trade history and were kept as audit-only reconciliation rows`);
     sync.message = `Live snapshot loaded with ledger reconciliation warnings: ${sync.warnings.join(" | ")}`;
   }
   const portfolioBase = portfolioSummary(reconciledPositions, valueRows, closedTrades);
