@@ -33,6 +33,8 @@ const state = {
   },
   scrapedMarketStateBusy: false,
   scrapedMarketStateLoaded: false,
+  scrapedMarketStateSummary: "",
+  scrapedMarketStateError: "",
   scrapedMarketObservations: [],
   scrapedMarketScan: {},
   scrapedMarketScanHistory: [],
@@ -3243,7 +3245,7 @@ async function ensureCandidateBotState(options = {}) {
   if (candidateBotStateIsLoaded()) return;
   state.candidateBotStateBusy = true;
   try {
-    const botState = await fetchJson("data/paper-state.json", { summary: "candidates" });
+    const botState = await fetchJsonWithTimeout("data/paper-state.json", { summary: "candidates" }, 15000);
     if (dashboardLoadIsStale(options)) return;
     state.botState = botStateWithPreservedEvaluations(botState);
     state.botStateFull = state.botStateFull || botStateIsFull(botState);
@@ -3272,6 +3274,7 @@ function syncPortfolioCandidateRefreshControl() {
 async function refreshPortfolioCandidates(options = {}) {
   if (state.candidateRefreshBusy || state.candidateBotStateBusy) return;
   state.candidateRefreshBusy = true;
+  state.scrapedMarketStateError = "";
   syncPortfolioCandidateRefreshControl();
   if (activeTabTarget() === "portfolio-candidates" && els.portfolioCandidates) {
     els.portfolioCandidates.innerHTML = '<div class="empty">Loading the latest portfolio execution shortlist...</div>';
@@ -3280,22 +3283,24 @@ async function refreshPortfolioCandidates(options = {}) {
   if (!options.quiet) setExecutionStatus("refreshing execution shortlist");
   try {
     const needsScraped = normalizeProbabilitySource(portfolioConfigForMode(state.mode).probabilitySource) === "polymarket";
-    const [botState, scrapedState, liveState] = await Promise.all([
-      fetchJson("data/paper-state.json", { summary: "candidates" }),
-      needsScraped ? fetchJson("data/paper-state.json", { summary: "scraped" }) : Promise.resolve(null),
-      isLiveMode() ? fetchJson("data/live-state.json") : Promise.resolve(null),
+    // The stored shortlist is useful immediately. Scraped market economics can
+    // be a much larger response, so it is loaded after the shortlist rather
+    // than blocking the whole candidates panel.
+    const [botState, liveState] = await Promise.all([
+      fetchJsonWithTimeout("data/paper-state.json", { summary: "candidates" }, 15000),
+      isLiveMode() ? fetchJsonWithTimeout("data/live-state.json", {}, 15000) : Promise.resolve(null),
     ]);
     state.botState = botStateWithPreservedEvaluations(botState);
-    if (scrapedState) {
-      storeScrapedMarketState(scrapedState);
-    }
     state.botStateFull = state.botStateFull || botStateIsFull(botState);
     if (liveState) {
       renderLiveState(liveState);
     } else {
       renderPortfolioCandidates();
     }
-    if (!options.quiet) setExecutionStatus("execution shortlist refreshed");
+    if (needsScraped) {
+      ensureScrapedMarketState({ force: true, summary: "execution" });
+    }
+    if (!options.quiet) setExecutionStatus(needsScraped ? "execution shortlist loaded; scraped economics refreshing" : "execution shortlist refreshed");
   } catch (error) {
     if (!options.quiet) setExecutionStatus(error.message || "shortlist refresh failed", "error");
     renderPortfolioCandidates();
@@ -3344,7 +3349,7 @@ function scrapedMarketScan() {
   return state.botState?.marketScan || {};
 }
 
-function storeScrapedMarketState(scrapedState = {}) {
+function storeScrapedMarketState(scrapedState = {}, summary = "scraped") {
   state.scrapedMarketObservations = Array.isArray(scrapedState.marketObservations)
     ? scrapedState.marketObservations
     : [];
@@ -3354,19 +3359,23 @@ function storeScrapedMarketState(scrapedState = {}) {
   state.scrapedMarketScanHistory = Array.isArray(scrapedState.marketScanHistory)
     ? scrapedState.marketScanHistory
     : [];
+  state.scrapedMarketStateSummary = summary;
+  state.scrapedMarketStateError = "";
   state.scrapedMarketStateLoaded = true;
 }
 
 async function ensureScrapedMarketState(options = {}) {
-  if (scrapedMarketStateIsLoaded() || state.scrapedMarketStateBusy) return;
+  const summary = options.summary || (shouldRenderCandidateBotState() ? "execution" : "scraped");
+  if ((!options.force && scrapedMarketStateIsLoaded() && state.scrapedMarketStateSummary === summary) || state.scrapedMarketStateBusy) return;
   state.scrapedMarketStateBusy = true;
+  state.scrapedMarketStateError = "";
   if ((state.opportunityView === "scraped" || state.opportunityView === "scan-log") && els.botEvaluations) {
     els.botEvaluations.innerHTML = '<div class="empty">Loading scraped Polymarket opportunities...</div>';
   }
   try {
-    const scrapedState = await fetchJson("data/paper-state.json", { summary: "scraped" });
+    const scrapedState = await fetchJsonWithTimeout("data/paper-state.json", { summary }, 10000);
     if (dashboardLoadIsStale(options)) return;
-    storeScrapedMarketState(scrapedState);
+    storeScrapedMarketState(scrapedState, summary);
     if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") renderBotEvaluations();
     if (isLiveMode() && state.liveState) {
       // Open CLOB orders only expose a token ID. Re-render after scraped market
@@ -3376,10 +3385,12 @@ async function ensureScrapedMarketState(options = {}) {
       renderPortfolioCandidates();
     }
   } catch (error) {
+    state.scrapedMarketStateError = error?.message || "Scraped Polymarket data could not be loaded.";
     rememberStateFetchError("paper", error);
     if ((state.opportunityView === "scraped" || state.opportunityView === "scan-log") && els.botEvaluations) {
       els.botEvaluations.innerHTML = `<div class="empty">${escapeHtml(error.message || "Scraped opportunities are not available yet.")}</div>`;
     }
+    if (shouldRenderCandidateBotState()) renderPortfolioCandidates();
   } finally {
     state.scrapedMarketStateBusy = false;
   }
@@ -3422,7 +3433,9 @@ async function fetchJson(path, options = {}) {
     ? appPath(`api.php?action=state&target=${stateTarget}${summary}&t=${Date.now()}`)
     : appPath(`${statePath}?t=${Date.now()}`);
   try {
-    const statePayload = await fetch(url, { cache: "no-store" });
+    const fetchOptions = { cache: "no-store" };
+    if (options.signal) fetchOptions.signal = options.signal;
+    const statePayload = await fetch(url, fetchOptions);
     if (!statePayload.ok) throw new Error(`${path} HTTP ${statePayload.status}`);
     const payload = await statePayload.json();
     if (stateTarget) {
@@ -3437,6 +3450,22 @@ async function fetchJson(path, options = {}) {
       if (cached) return cached;
     }
     throw error;
+  }
+}
+
+async function fetchJsonWithTimeout(path, options = {}, timeoutMs = 15000) {
+  if (typeof AbortController === "undefined") return fetchJson(path, options);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchJson(path, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`${path} timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
   }
 }
 
@@ -4440,8 +4469,13 @@ function renderPortfolioCandidates() {
   }
   const config = portfolioConfigForMode(mode);
   if (normalizeProbabilitySource(config.probabilitySource) === "polymarket" && !scrapedMarketStateIsLoaded()) {
-    ensureScrapedMarketState();
-    els.portfolioCandidates.innerHTML = '<div class="empty">Loading scraped Polymarket economics for this portfolio shortlist...</div>';
+    if (state.scrapedMarketStateError) {
+      els.portfolioCandidates.innerHTML = `<div class="empty">Scraped Polymarket economics could not be loaded: ${escapeHtml(state.scrapedMarketStateError)}. Use “Refresh shortlist” to try again.</div>`;
+      if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "scraped data unavailable";
+      return;
+    }
+    ensureScrapedMarketState({ summary: "execution" });
+    els.portfolioCandidates.innerHTML = '<div class="empty">Loading the focused scraped market shortlist...</div>';
     if (els.portfolioCandidatesSummary) els.portfolioCandidatesSummary.textContent = "loading scraped";
     return;
   }

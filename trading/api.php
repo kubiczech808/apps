@@ -337,8 +337,38 @@ function compact_state_payload(string $target, array $data, string $summary): ar
             static fn($item): array => is_array($item) ? compact_evaluation($item) : [],
             array_values(array_filter($evaluations, 'is_array'))
         );
+        // Keep this response focused on stored AI evaluations. Polymarket
+        // portfolios use the lighter `execution` summary below for quotes.
         $compact['evaluationDetailsMode'] = 'compact';
         return $compact;
+    }
+
+    if ($summary === 'execution') {
+        $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
+        $active = array_values(array_filter($observations, static function ($item): bool {
+            if (!is_array($item)) {
+                return false;
+            }
+            $status = strtoupper((string) ($item['status'] ?? $item['selectionStatus'] ?? ''));
+            if (in_array($status, ['RESOLVED', 'CLOSED', 'EXPIRED'], true)) {
+                return false;
+            }
+            $probability = (float) ($item['marketProbability'] ?? 0);
+            if ($probability < 0.5 || $probability >= 1) {
+                return false;
+            }
+            $endDate = strtotime((string) ($item['endDate'] ?? $item['resolutionEndDate'] ?? ''));
+            return $endDate === false || $endDate > time();
+        }));
+        return [
+            'schemaVersion' => $data['schemaVersion'] ?? null,
+            'generatedAt' => $data['generatedAt'] ?? null,
+            'marketObservations' => array_map(
+                static fn($item): array => is_array($item) ? compact_market_observation($item) : [],
+                $active
+            ),
+            'marketDetailsMode' => 'compact',
+        ];
     }
 
     if ($summary === 'scraped') {
