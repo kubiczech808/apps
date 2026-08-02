@@ -574,10 +574,19 @@ function storedLiveExecutionArmed() {
       const storage = window[storageName];
       const value = storage.getItem(LIVE_EXECUTION_STORAGE_KEY);
       if (value === "true") return true;
-      if (value === "false") return false;
     } catch {
       // Continue with the next browser storage fallback.
     }
+  }
+  try {
+    const cookieValue = document.cookie
+      .split(";")
+      .map((entry) => entry.trim())
+      .find((entry) => entry.startsWith(`${LIVE_EXECUTION_STORAGE_KEY}=`))
+      ?.split("=")[1];
+    if (cookieValue === "true") return true;
+  } catch {
+    // Storage remains optional; the live confirmation still protects dispatch.
   }
   return false;
 }
@@ -591,6 +600,14 @@ function saveLiveExecutionArmed(value) {
     } catch {
       // A restricted mobile browser may reject one storage area; keep trying.
     }
+  }
+  try {
+    const sharedDomain = /(^|\.)osobnizkusenosti\.cz$/i.test(window.location.hostname)
+      ? "; Domain=.osobnizkusenosti.cz"
+      : "";
+    document.cookie = `${LIVE_EXECUTION_STORAGE_KEY}=${serialized}; Path=/; Max-Age=7776000; SameSite=Lax; Secure${sharedDomain}`;
+  } catch {
+    // The browser storage values above remain the fallback outside production.
   }
 }
 
@@ -3783,6 +3800,12 @@ async function triggerOneTimeExecution(target) {
     return;
   }
 
+  if (live && !state.liveExecutionArmed) {
+    // Re-read durable browser state before refusing a real click. This covers
+    // navigation between the www and apex host without weakening confirmation.
+    state.liveExecutionArmed = storedLiveExecutionArmed();
+    syncLiveActivationUi();
+  }
   if (live && !state.liveExecutionArmed) {
     steps = addExecutionStep(steps, "Live gate is inactive on this browser", "Open Settings and activate the live execution gate once on this device. Scheduled server automation still uses stored secrets; this only protects manual live clicks from the browser UI.", "error");
     setExecutionStatus("live execution blocked: gate inactive", "error");
