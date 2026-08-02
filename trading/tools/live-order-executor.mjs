@@ -79,6 +79,14 @@ const ROTATION_MIN_PRIORITY_IMPROVEMENT = Math.max(
   MIN_NET_YIELD,
   envNumber("LIVE_ROTATION_MIN_PRIORITY_IMPROVEMENT", MIN_NET_YIELD),
 );
+// When Polymarket has not supplied a usable remaining horizon, a position
+// whose current sell P/L is already within this fraction of its maximum win
+// has almost no remaining economic upside. It can be sold immediately during
+// a capital rotation instead of waiting for an unavailable resolution date.
+const ROTATION_NO_DAYS_MAX_WIN_GAP = Math.max(
+  0,
+  envNumber("LIVE_ROTATION_NO_DAYS_MAX_WIN_GAP", 0.01),
+);
 const LIVE_AUTO_ROTATE = String(process.env.LIVE_AUTO_ROTATE ?? "true").toLowerCase() !== "false";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
 const TZ = "Europe/Prague";
@@ -991,6 +999,22 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
     ? expectedPayout - netExitValue
     : null;
   const days = number(source?.daysToResolution);
+  const currentSellPnl = realizedPnlIfExit ?? number(position.unrealizedPnlUsdc);
+  const maximumWinPnl = number(
+    position.netGainIfWinUsdc
+      ?? source?.netGainIfWinUsdc
+      ?? (shares != null && cost != null ? shares - cost : null),
+  );
+  const winPnlGapUsdc = currentSellPnl != null && maximumWinPnl != null
+    ? Math.abs(maximumWinPnl - currentSellPnl)
+    : null;
+  const winPnlGapPct = winPnlGapUsdc != null && cost != null && cost > 0
+    ? winPnlGapUsdc / cost
+    : null;
+  const noDaysLeft = days == null || days <= 0;
+  const immediateCloseCandidate = noDaysLeft
+    && winPnlGapPct != null
+    && winPnlGapPct <= ROTATION_NO_DAYS_MAX_WIN_GAP;
   const continuationAnnualizedReturn = continuationExpectedValue != null && netExitValue != null && netExitValue > 0 && days != null && days > 0
     ? (continuationExpectedValue / netExitValue) * (365 / days)
     : null;
@@ -1006,6 +1030,12 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
     holdExpectedPnl,
     continuationExpectedValue,
     continuationAnnualizedReturn,
+    currentSellPnl,
+    maximumWinPnl,
+    winPnlGapUsdc,
+    winPnlGapPct,
+    noDaysLeft,
+    immediateCloseCandidate,
   };
 }
 
@@ -1094,6 +1124,12 @@ function rotationPositionSummary(position, evaluationByToken = new Map(), extra 
     estimatedExitValueUsdc: exitValue == null ? null : Number(exitValue.toFixed(5)),
     estimatedExitFeeUsdc: Number(economics.exitFee.toFixed(5)),
     unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
+    currentSellPnlUsdc: economics.currentSellPnl == null ? null : Number(economics.currentSellPnl.toFixed(5)),
+    maximumWinPnlUsdc: economics.maximumWinPnl == null ? null : Number(economics.maximumWinPnl.toFixed(5)),
+    winPnlGapUsdc: economics.winPnlGapUsdc == null ? null : Number(economics.winPnlGapUsdc.toFixed(5)),
+    winPnlGapPct: economics.winPnlGapPct == null ? null : Number(economics.winPnlGapPct.toFixed(5)),
+    noDaysLeft: economics.noDaysLeft,
+    immediateCloseCandidate: economics.immediateCloseCandidate,
     realizedPnlIfExitUsdc: economics.realizedPnlIfExit == null ? null : Number(economics.realizedPnlIfExit.toFixed(5)),
     potentialWinIfHeldUsdc: economics.holdPotentialPnl == null ? null : Number(economics.holdPotentialPnl.toFixed(5)),
     holdExpectedValueUsdc: Number(holdEv.toFixed(5)),
@@ -1206,12 +1242,20 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
         const currentPriority = priority.value;
         const replacementPriority = candidatePriority.metric === "R/R" ? candidatePriority.value : rotatedAnnualizedReturn;
         const priorityDelta = replacementPriority - currentPriority;
+        const immediateCloseAllowed = economics.immediateCloseCandidate
+          && Number.isFinite(candidateEv)
+          && candidateEv > 0
+          && Number.isFinite(candidatePriority.value)
+          && candidatePriority.value > 0;
         // The replacement must improve the portfolio's ranking metric by at
         // least the configured minimum net profit, and the net expected result
-        // after selling fees must also improve. A large nominal win alone is
-        // not enough to justify rotating capital.
-        const rotationPreferred = evDelta > 0
-          && priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT;
+        // after selling fees must also improve. The no-days/near-max-win rule
+        // is the explicit exception: the current position has no usable
+        // horizon and almost no remaining upside, so a valid replacement can
+        // use the released capital even when the stale hold EV cannot be
+        // annualized meaningfully.
+        const rotationPreferred = immediateCloseAllowed
+          || (evDelta > 0 && priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT);
         const priorityComparison = {
           metricLabel: candidatePriority.metric,
           currentMetric: currentPriority,
@@ -1225,6 +1269,13 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           replacementDaysToResolution: candidateDays,
           currentRealizedPnlIfExitUsdc: realizedPnlIfExit,
           currentExitFeeUsdc: economics.exitFee,
+          immediateCloseCandidate: Boolean(economics.immediateCloseCandidate),
+          immediateCloseAllowed,
+          currentSellPnlUsdc: economics.currentSellPnl,
+          maximumWinPnlUsdc: economics.maximumWinPnl,
+          winPnlGapUsdc: economics.winPnlGapUsdc,
+          winPnlGapPct: economics.winPnlGapPct,
+          immediateCloseThreshold: ROTATION_NO_DAYS_MAX_WIN_GAP,
           replacementExpectedValueUsdc: candidateEv,
           replacementCapitalBaseUsdc: rotationCapitalBase,
           replacementNetYield: number(revalidated.netYield),
@@ -1250,7 +1301,9 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           priorityComparison,
           action: rotationPreferred ? "ROTATION_AVAILABLE" : "HOLD_CURRENT_POSITION",
           reason: rotationPreferred
-            ? `after estimated exit fees and current P/L, ${candidatePriority.metric} improves by ${(priorityDelta * 100).toFixed(1)} pts and expected result improves by ${evDelta.toFixed(4)} USDC`
+            ? (immediateCloseAllowed
+              ? `no usable days-left value is available and current sell P/L is within ${(ROTATION_NO_DAYS_MAX_WIN_GAP * 100).toFixed(1)}% of the maximum win; close this position and replace it with a validated candidate`
+              : `after estimated exit fees and current P/L, ${candidatePriority.metric} improves by ${(priorityDelta * 100).toFixed(1)} pts and expected result improves by ${evDelta.toFixed(4)} USDC`)
             : `after estimated exit fees and current P/L, ${candidatePriority.metric} changes by ${(priorityDelta * 100).toFixed(1)} pts and expected result changes by ${evDelta.toFixed(4)} USDC; minimum improvement is ${(ROTATION_MIN_PRIORITY_IMPROVEMENT * 100).toFixed(1)} pts`,
           cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
           evDeltaUsdc: Number(evDelta.toFixed(5)),
@@ -1336,6 +1389,9 @@ function rotationComparisonRows(rotationReview = null, openOrderReviews = []) {
         daysToResolution: number(comparison.currentDaysToResolution),
         potentialWinUsdc: number(position.potentialWinIfHeldUsdc),
         unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
+        winPnlGapUsdc: number(position.winPnlGapUsdc),
+        winPnlGapPct: number(position.winPnlGapPct),
+        immediateCloseCandidate: Boolean(position.immediateCloseCandidate),
       },
       candidate: candidate ? {
         label: rotationOpportunityLabel(candidate),
@@ -1394,6 +1450,9 @@ function rotationHumanComparison(review) {
     return `${numeric >= 0 ? "+" : ""}${formatMetric(numeric)}`;
   };
   const days = (value) => Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)}d` : "-";
+  if (comparison.immediateCloseAllowed) {
+    return `Close ${rotationOpportunityLabel(position)} now (${days(comparison.currentDaysToResolution)}, current sell P/L ${Number(comparison.currentSellPnlUsdc || 0).toFixed(4)} USDC vs maximum win ${Number(comparison.maximumWinPnlUsdc || 0).toFixed(4)} USDC; gap ${(Number(comparison.winPnlGapPct || 0) * 100).toFixed(2)}%) and replace it with ${rotationOpportunityLabel(candidate)} (${formatMetric(comparison.replacementMetric)}, ${days(comparison.replacementDaysToResolution)}, potential win ${Number(candidate.netGainIfWinUsdc || 0).toFixed(4)} USDC).`;
+  }
   return `Replace ${rotationOpportunityLabel(position)} (${formatMetric(comparison.currentMetric)}, ${days(comparison.currentDaysToResolution)}, potential win ${Number(position.potentialWinIfHeldUsdc || 0).toFixed(4)} USDC) with ${rotationOpportunityLabel(candidate)} (${formatMetric(comparison.replacementMetric)}, ${days(comparison.replacementDaysToResolution)}, potential win ${Number(candidate.netGainIfWinUsdc || 0).toFixed(4)} USDC); after fees the ${metric} improvement is ${formatDelta(comparison.metricDelta)} and expected P/L changes by ${Number(review.evDeltaUsdc || 0).toFixed(4)} USDC.`;
 }
 
@@ -2658,6 +2717,7 @@ async function main() {
       openOrderRepriceThreshold: OPEN_ORDER_REPRICE_THRESHOLD,
       rotationTrigger: needsRiskReplacement ? "risk-overlap" : (needsCapitalRotation ? "capital" : null),
       rotationMinimumPriorityImprovement: ROTATION_MIN_PRIORITY_IMPROVEMENT,
+      rotationNoDaysMaxWinGap: ROTATION_NO_DAYS_MAX_WIN_GAP,
     },
     orderManagement,
     rotationReview,
@@ -2700,6 +2760,7 @@ async function main() {
         liveAutoRotate: LIVE_AUTO_ROTATE,
         maxOrderFraction: MAX_ORDER_FRACTION,
         rotationMinimumPriorityImprovement: ROTATION_MIN_PRIORITY_IMPROVEMENT,
+        rotationNoDaysMaxWinGap: ROTATION_NO_DAYS_MAX_WIN_GAP,
       },
       capital: {
         availableUsdc: cash,
