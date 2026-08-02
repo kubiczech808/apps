@@ -3966,9 +3966,9 @@ async function triggerOneTimeMarketScan() {
       body: JSON.stringify({
         target: "paper-scan",
         market_scan_tag: state.scrapedScanTag,
-        market_scan_min_probability: currentEvaluationProbabilityFilter(),
+        // Gamma supports these request-side constraints. Probability and net
+        // yield remain display filters because they are not Gamma parameters.
         market_scan_max_resolution_days: currentEvaluationDaysFilter(),
-        market_scan_min_net_yield: currentEvaluationNetYieldFilter(),
         market_scan_min_liquidity: currentEvaluationLiquidityFilter(),
       }),
     });

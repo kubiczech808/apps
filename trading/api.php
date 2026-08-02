@@ -1474,9 +1474,7 @@ try {
         $paperHighRewardMinProbability = normalized_probability_input($payload['paper_high_reward_min_probability'] ?? null);
         $paperMoreProbableMinProbability = normalized_probability_input($payload['paper_more_probable_min_probability'] ?? null);
         $scanTag = normalized_scan_tag_input($payload['market_scan_tag'] ?? null);
-        $scanMinProbability = normalized_scan_probability_input($payload['market_scan_min_probability'] ?? null);
         $scanMaxResolutionDays = normalized_scan_days_input($payload['market_scan_max_resolution_days'] ?? null);
-        $scanMinNetYield = normalized_nonnegative_yield_input($payload['market_scan_min_net_yield'] ?? null);
         $scanMinLiquidity = normalized_money_input($payload['market_scan_min_liquidity'] ?? null);
         $liveMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['live_max_order_fraction'] ?? null);
         $paperMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['paper_max_order_fraction'] ?? null);
@@ -1548,9 +1546,7 @@ try {
                 'workflow' => 'trading-market-scan.yml',
                 'inputs' => array_filter([
                     'market_scan_tag' => $scanTag,
-                    'market_scan_min_probability' => $scanMinProbability,
                     'market_scan_max_resolution_days' => $scanMaxResolutionDays,
-                    'market_scan_min_net_yield' => $scanMinNetYield,
                     'market_scan_min_liquidity' => $scanMinLiquidity,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'One-time tagged Polymarket scan workflow dispatched.',

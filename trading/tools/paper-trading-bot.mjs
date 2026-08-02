@@ -56,7 +56,6 @@ const MARKET_SCAN_CATEGORY_BATCH_SIZE = envNumber("PAPER_MARKET_SCAN_CATEGORY_BA
 const MARKET_SCAN_CATEGORIES_PER_RUN = envNumber("PAPER_MARKET_SCAN_CATEGORIES_PER_RUN", 8);
 const MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC", 40000);
 const MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", envNumber("PAPER_MAX_RESOLUTION_DAYS", 7));
-const MARKET_SCAN_MIN_PROBABILITY = envNumber("PAPER_MARKET_SCAN_MIN_PROBABILITY", 0.5);
 // Keep a small operational buffer for fetching the quote and submitting an
 // order. A full hour would discard exactly the short-lived opportunities the
 // scanner is meant to find.
@@ -67,7 +66,6 @@ const MARKET_SCAN_MIN_RESOLUTION_MINUTES = envNumber(
 const MARKET_SCAN_MIN_RESOLUTION_HOURS = MARKET_SCAN_MIN_RESOLUTION_MINUTES / 60;
 const MARKET_SCAN_TAG = String(process.env.PAPER_MARKET_SCAN_TAG || "").trim().toLowerCase();
 const MARKET_SCAN_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_MAX_RESOLUTION_DAYS", null);
-const MARKET_SCAN_MIN_NET_YIELD = envNumber("PAPER_MARKET_SCAN_MIN_NET_YIELD", 0);
 const MARKET_SCAN_MIN_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_MIN_LIQUIDITY_USDC", 0);
 // These are Polymarket's broad navigation tags plus active geopolitical
 // subcategories. The scan rotates through them instead of repeatedly paging
@@ -4697,37 +4695,16 @@ function marketIsResolvedForScan(market = {}) {
   );
 }
 
-function marketMatchesScanTag(market = {}) {
-  if (!MARKET_SCAN_TAG || MARKET_SCAN_TAG === "all") return true;
-  return marketCategoryKeys(market).some((tag) => tag === MARKET_SCAN_TAG);
-}
-
 function marketScanRetentionReason(market = {}, observedAt = nowIso()) {
-  if (!marketMatchesScanTag(market)) return "outside_selected_tag";
   if (marketIsResolvedForScan(market)) return "resolved_or_closed";
 
   const observation = preferredMarketObservation(market, observedAt);
   if (!observation) return "no_valid_preferred_outcome_or_quote";
 
-  const probability = Number(observation.marketProbability);
-  if (!Number.isFinite(probability) || probability < MARKET_SCAN_MIN_PROBABILITY) {
-    return "probability_below_scan_minimum";
-  }
-
   const days = daysToEnd(observation.endDate);
   const minimumDays = marketScanMinimumDays();
   if (!Number.isFinite(days)) return "missing_resolution_date";
   if (days < minimumDays) return "too_close_to_resolution";
-  if (MARKET_SCAN_MAX_RESOLUTION_DAYS != null && days > MARKET_SCAN_MAX_RESOLUTION_DAYS) {
-    return "outside_resolution_horizon";
-  }
-  if (MARKET_SCAN_MIN_NET_YIELD > 0
-    && (!Number.isFinite(Number(observation.netYield)) || Number(observation.netYield) < MARKET_SCAN_MIN_NET_YIELD)) {
-    return "net_yield_below_scan_minimum";
-  }
-  if (MARKET_SCAN_MIN_LIQUIDITY_USDC > 0 && Number(observation.liquidity || 0) < MARKET_SCAN_MIN_LIQUIDITY_USDC) {
-    return "liquidity_below_scan_minimum";
-  }
   return null;
 }
 
@@ -4905,25 +4882,33 @@ async function loadMarkets() {
 async function loadBroadMarketScanBatch({ cursor = 0, order = "volume24hr" } = {}) {
   const limit = Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE));
   const minimumHours = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0);
-  return fetchGammaMarkets({
+  const params = {
     limit,
     offset: cursor,
     order,
     ascending: order === "endDate" ? "true" : "false",
     end_date_min: new Date(Date.now() + minimumHours * 3600000).toISOString(),
-  });
+  };
+  if (MARKET_SCAN_MAX_RESOLUTION_DAYS != null) {
+    params.end_date_max = new Date(Date.now() + MARKET_SCAN_MAX_RESOLUTION_DAYS * 86400000).toISOString();
+  }
+  if (MARKET_SCAN_MIN_LIQUIDITY_USDC > 0) params.liquidity_num_min = MARKET_SCAN_MIN_LIQUIDITY_USDC;
+  return fetchGammaMarkets(params);
 }
 
 async function loadPreferredMarketScanBatch() {
   const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
   const minimumHours = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0);
-  return fetchGammaMarkets({
+  const maximumDays = MARKET_SCAN_MAX_RESOLUTION_DAYS == null ? preferredDays : MARKET_SCAN_MAX_RESOLUTION_DAYS;
+  const params = {
     limit: Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE)),
     order: "endDate",
     ascending: "true",
     end_date_min: new Date(Date.now() + minimumHours * 3600000).toISOString(),
-    end_date_max: new Date(Date.now() + preferredDays * 86400000).toISOString(),
-  });
+    end_date_max: new Date(Date.now() + maximumDays * 86400000).toISOString(),
+  };
+  if (MARKET_SCAN_MIN_LIQUIDITY_USDC > 0) params.liquidity_num_min = MARKET_SCAN_MIN_LIQUIDITY_USDC;
+  return fetchGammaMarkets(params);
 }
 
 function scanCategoriesForRun(previousScan = {}) {
@@ -4946,14 +4931,17 @@ function annotateCategoryScanMarkets(markets, tag) {
 async function loadCategoryMarketScanBatch(tag) {
   const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
   const minimumHours = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0);
-  const markets = await fetchGammaMarkets({
+  const maximumDays = MARKET_SCAN_MAX_RESOLUTION_DAYS == null ? preferredDays : MARKET_SCAN_MAX_RESOLUTION_DAYS;
+  const params = {
     limit: Math.max(1, Math.min(100, MARKET_SCAN_CATEGORY_BATCH_SIZE)),
     tag_id: tag.id,
     order: "endDate",
     ascending: "true",
     end_date_min: new Date(Date.now() + minimumHours * 3600000).toISOString(),
-    end_date_max: new Date(Date.now() + preferredDays * 86400000).toISOString(),
-  });
+    end_date_max: new Date(Date.now() + maximumDays * 86400000).toISOString(),
+  };
+  if (MARKET_SCAN_MIN_LIQUIDITY_USDC > 0) params.liquidity_num_min = MARKET_SCAN_MIN_LIQUIDITY_USDC;
+  const markets = await fetchGammaMarkets(params);
   return annotateCategoryScanMarkets(markets, tag);
 }
 
@@ -5247,10 +5235,15 @@ async function refreshMarketObservations(state) {
   const broadBatches = [];
   let broadCursor = previousScan.cursor;
   const requestedCategories = scanCategoriesForRun(previousScan);
+  // A known selected tag is already expressed as Gamma's tag_id. Do not fetch
+  // broad pages and discard them locally just to recreate that API filter.
+  const hasDirectTagScope = Boolean(MARKET_SCAN_TAG && MARKET_SCAN_TAG !== "all" && requestedCategories.length);
   let categoryCursor = previousScan.categoryCursor;
   try {
-    attemptedApiCalls += 1;
-    preferredMarkets = await loadPreferredMarketScanBatch();
+    if (!hasDirectTagScope) {
+      attemptedApiCalls += 1;
+      preferredMarkets = await loadPreferredMarketScanBatch();
+    }
     for (const category of requestedCategories) {
       attemptedApiCalls += 1;
       try {
@@ -5266,28 +5259,29 @@ async function refreshMarketObservations(state) {
         ? previousScan.categoryCursor
         : (Math.max(0, Math.floor(Number(previousScan.categoryCursor) || 0)) + requestedCategories.length) % categoryCount;
     }
-    const broadBatchCount = Math.max(1, Math.floor(Number(MARKET_SCAN_PREFETCH_BATCHES) || 1));
-    for (let index = 0; index < broadBatchCount; index += 1) {
-      const order = index % 2 === 0 ? "volume24hr" : "endDate";
-      attemptedApiCalls += 1;
-      const batch = await loadBroadMarketScanBatch({ cursor: broadCursor, order });
-      broadBatches.push(...(Array.isArray(batch) ? batch : []));
-      if (!Array.isArray(batch) || batch.length < MARKET_SCAN_BATCH_SIZE) {
-        broadCursor = 0;
-        break;
-      }
-      broadCursor += MARKET_SCAN_BATCH_SIZE;
-      if (broadCursor >= MARKET_SCAN_MAX_OFFSET) {
-        broadCursor = 0;
-        break;
+    if (!hasDirectTagScope) {
+      const broadBatchCount = Math.max(1, Math.floor(Number(MARKET_SCAN_PREFETCH_BATCHES) || 1));
+      for (let index = 0; index < broadBatchCount; index += 1) {
+        const order = index % 2 === 0 ? "volume24hr" : "endDate";
+        attemptedApiCalls += 1;
+        const batch = await loadBroadMarketScanBatch({ cursor: broadCursor, order });
+        broadBatches.push(...(Array.isArray(batch) ? batch : []));
+        if (!Array.isArray(batch) || batch.length < MARKET_SCAN_BATCH_SIZE) {
+          broadCursor = 0;
+          break;
+        }
+        broadCursor += MARKET_SCAN_BATCH_SIZE;
+        if (broadCursor >= MARKET_SCAN_MAX_OFFSET) {
+          broadCursor = 0;
+          break;
+        }
       }
     }
     const categoryMarkets = categoryBatches.flatMap((batch) => batch.markets);
     const fetchedMarkets = diversifyMarketScanOrder([...preferredMarkets, ...categoryMarkets, ...broadBatches]);
-    const tagFilteredMarkets = fetchedMarkets.filter(marketMatchesScanTag);
     // Keep already stored RESOLVED observations for history and the Resolved
     // UI tab, but never add them to the active scrape batch again.
-    const markets = tagFilteredMarkets.filter((market) => !marketIsResolvedForScan(market));
+    const markets = fetchedMarkets.filter((market) => !marketIsResolvedForScan(market));
     const categoryCounts = marketCategoryCounts(markets);
     const tagCounts = marketTagCounts(markets);
     const observations = (Array.isArray(markets) ? markets : [])
@@ -5299,13 +5293,9 @@ async function refreshMarketObservations(state) {
         const minimumDays = marketScanMinimumDays();
         const status = String(item.status || item.selectionStatus || "").toUpperCase();
         return Number.isFinite(probability)
-          && probability >= MARKET_SCAN_MIN_PROBABILITY
           && status !== "RESOLVED"
           && Number.isFinite(days)
-          && days >= minimumDays
-          && (MARKET_SCAN_MAX_RESOLUTION_DAYS == null || days <= MARKET_SCAN_MAX_RESOLUTION_DAYS)
-          && (MARKET_SCAN_MIN_NET_YIELD <= 0 || (Number.isFinite(Number(item.netYield)) && Number(item.netYield) >= MARKET_SCAN_MIN_NET_YIELD))
-          && (MARKET_SCAN_MIN_LIQUIDITY_USDC <= 0 || Number(item.liquidity || 0) >= MARKET_SCAN_MIN_LIQUIDITY_USDC);
+          && days >= minimumDays;
       })
       .sort(compareObservationsForMarketScan);
     const shortHorizonCount = observations.filter((item) => {
@@ -5374,8 +5364,8 @@ async function refreshMarketObservations(state) {
         notRetainedReasonCounts: sortedNotRetainedReasonCounts,
         minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
         scanTag: MARKET_SCAN_TAG || null,
-        tagMatchedCount: tagFilteredMarkets.length,
-        tagFilteredOutCount: Math.max(0, fetchedMarkets.length - tagFilteredMarkets.length),
+        tagMatchedCount: fetchedMarkets.length,
+        tagFilteredOutCount: 0,
         shortHorizonCount,
         categoryCounts,
         tagCounts,
@@ -5389,8 +5379,7 @@ async function refreshMarketObservations(state) {
   } catch (error) {
     const categoryMarkets = categoryBatches.flatMap((batch) => batch.markets);
     const partialMarkets = diversifyMarketScanOrder([...preferredMarkets, ...categoryMarkets, ...broadBatches]);
-    const tagFilteredMarkets = partialMarkets.filter(marketMatchesScanTag);
-    const resolvedSkippedMarkets = tagFilteredMarkets.filter(marketIsResolvedForScan);
+    const resolvedSkippedMarkets = partialMarkets.filter(marketIsResolvedForScan);
     const categoryCounts = marketCategoryCounts(partialMarkets);
     const tagCounts = marketTagCounts(partialMarkets);
     const message = error?.message || String(error);
@@ -5432,8 +5421,8 @@ async function refreshMarketObservations(state) {
         notRetainedReasonCounts: errorReasonCounts,
         minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
         scanTag: MARKET_SCAN_TAG || null,
-        tagMatchedCount: tagFilteredMarkets.length,
-        tagFilteredOutCount: Math.max(0, partialMarkets.length - tagFilteredMarkets.length),
+        tagMatchedCount: partialMarkets.length,
+        tagFilteredOutCount: 0,
         shortHorizonCount: 0,
         categoryCounts,
         tagCounts,
