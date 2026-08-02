@@ -61,12 +61,10 @@ const MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_P
 // scanner is meant to find.
 const MARKET_SCAN_MIN_RESOLUTION_MINUTES = envNumber(
   "PAPER_MARKET_SCAN_MIN_RESOLUTION_MINUTES",
-  Math.max(0, envNumber("PAPER_MARKET_SCAN_MIN_RESOLUTION_HOURS", 5 / 60) * 60),
+  0,
 );
 const MARKET_SCAN_MIN_RESOLUTION_HOURS = MARKET_SCAN_MIN_RESOLUTION_MINUTES / 60;
 const MARKET_SCAN_TAG = String(process.env.PAPER_MARKET_SCAN_TAG || "").trim().toLowerCase();
-const MARKET_SCAN_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_MAX_RESOLUTION_DAYS", null);
-const MARKET_SCAN_MIN_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_MIN_LIQUIDITY_USDC", 0);
 // These are Polymarket's broad navigation tags plus active geopolitical
 // subcategories. The scan rotates through them instead of repeatedly paging
 // the same volume-ranked markets. `general` is covered by the untagged broad
@@ -541,10 +539,7 @@ function normalizeMarketObservationLifecycle(item, checkedAt = nowIso()) {
   const timedItem = normalizeStoredMarketObservationTiming(item);
   const status = String(timedItem.status || timedItem.selectionStatus || "").trim().toUpperCase();
   if (status === "ERROR") return withFirstObservationMetadata(timedItem);
-  const scheduledTime = Date.parse(timedItem.scheduledEventDate || "");
-  const end = Date.parse(timedItem.endDate || "");
-  const sportsEventStarted = Number.isFinite(scheduledTime) && scheduledTime <= Date.now();
-  if (status === "RESOLVED" || sportsEventStarted) {
+  if (status === "RESOLVED") {
     return withFirstObservationMetadata({
       ...timedItem,
       status: "RESOLVED",
@@ -554,15 +549,7 @@ function normalizeMarketObservationLifecycle(item, checkedAt = nowIso()) {
       resolvedDetectedAt: timedItem.resolvedDetectedAt || checkedAt,
     });
   }
-  if (!Number.isFinite(end) || end > Date.now()) return withFirstObservationMetadata(timedItem);
-  return withFirstObservationMetadata({
-    ...timedItem,
-    status: "RESOLVED",
-    selectionStatus: "RESOLVED",
-    resolutionStatus: timedItem.resolutionStatus || "PENDING_RESULT",
-    resolvedAt: timedItem.resolvedAt || timedItem.closedTime || timedItem.endDate || checkedAt,
-    resolvedDetectedAt: timedItem.resolvedDetectedAt || checkedAt,
-  });
+  return withFirstObservationMetadata(timedItem);
 }
 
 function normalizeMarketScan(input = {}) {
@@ -1079,9 +1066,7 @@ function resolvedMarketObservationFromMarket(item, market, checkedAt = nowIso())
   const resolvedPrice = outcomeIndex >= 0 ? prices[outcomeIndex] : null;
   const dateContext = marketDateContext({ ...market, resolutionEndDate: market.endDate || item.resolutionEndDate || item.endDate || null }, item.firstObservedAt || item.observedAt);
   const endDate = dateContext.endDate;
-  const ended = Boolean(market.closed) || market.acceptingOrders === false
-    || dateContext.sportsEventStarted
-    || (Number.isFinite(Date.parse(endDate || "")) && Date.parse(endDate) <= Date.now());
+  const ended = Boolean(market.closed) || market.acceptingOrders === false;
   if (!ended) {
     return {
       ...item,
@@ -1121,10 +1106,9 @@ async function refreshStoredMarketObservationResolutionStatuses(observations = [
   const refreshable = observations
     .map((item, index) => ({ item, index, slug: marketObservationResolutionSlug(item) }))
     .filter(({ item, slug }) => {
-      const end = Date.parse(item.scheduledEventDate || item.endDate || "");
       const status = String(item.status || item.selectionStatus || "").toUpperCase();
       const finalAvailable = finalOutcomePriceValue(item.finalOutcomePrice) != null;
-      return slug && !finalAvailable && (status === "RESOLVED" || (Number.isFinite(end) && end <= Date.now()));
+      return slug && !finalAvailable && status === "RESOLVED";
     })
     .sort((a, b) => (Date.parse(a.item.scheduledEventDate || a.item.endDate || "") || 0) - (Date.parse(b.item.scheduledEventDate || b.item.endDate || "") || 0))
     .slice(0, Math.max(0, SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT));
@@ -4721,26 +4705,29 @@ function marketScanMinimumDays() {
 }
 
 function marketIsResolvedForScan(market = {}) {
-  const dateContext = marketDateContext(market, market.createdAt || market.updatedAt);
-  const endTime = Date.parse(dateContext.endDate || "");
   return Boolean(
     market.closed
     || market.acceptingOrders === false
-    || dateContext.sportsEventStarted
-    || (Number.isFinite(endTime) && endTime <= Date.now()),
   );
 }
 
 function marketScanRetentionReason(market = {}, observedAt = nowIso()) {
   if (marketIsResolvedForScan(market)) return "resolved_or_closed";
 
+  const rawPrices = parseJsonField(market?.outcomePrices)
+    .map((value) => Number(value))
+    .filter(Number.isFinite);
+  if (rawPrices.length && rawPrices.every((price) => price <= 0 || price >= 1)) {
+    return "settled_outcome_probability";
+  }
+
   const observation = preferredMarketObservation(market, observedAt);
   if (!observation) return "no_valid_preferred_outcome_or_quote";
 
-  const days = daysToEnd(observation.endDate);
-  const minimumDays = marketScanMinimumDays();
-  if (!Number.isFinite(days)) return "missing_resolution_date";
-  if (days < minimumDays) return "too_close_to_resolution";
+  const probability = Number(observation.marketProbability);
+  if (!Number.isFinite(probability) || probability <= 0 || probability >= 1) {
+    return "settled_outcome_probability";
+  }
   return null;
 }
 
@@ -4910,16 +4897,10 @@ function retainOneMarketPerScanEvent(markets = []) {
 }
 
 async function loadMarkets() {
-  const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
-  const minimumHours = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0);
-  const start = new Date(Date.now() + minimumHours * 3600000).toISOString();
-  const preferredEnd = new Date(Date.now() + preferredDays * 86400000).toISOString();
   const preferred = await fetchGammaMarkets({
     limit: "60",
     order: "endDate",
     ascending: "true",
-    end_date_min: start,
-    end_date_max: preferredEnd,
   });
   const broad = await fetchGammaMarkets({
     limit: "60",
@@ -4933,33 +4914,21 @@ async function loadMarkets() {
 
 async function loadBroadMarketScanBatch({ cursor = 0, order = "volume24hr" } = {}) {
   const limit = Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE));
-  const minimumHours = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0);
   const params = {
     limit,
     offset: cursor,
     order,
     ascending: order === "endDate" ? "true" : "false",
-    end_date_min: new Date(Date.now() + minimumHours * 3600000).toISOString(),
   };
-  if (MARKET_SCAN_MAX_RESOLUTION_DAYS != null) {
-    params.end_date_max = new Date(Date.now() + MARKET_SCAN_MAX_RESOLUTION_DAYS * 86400000).toISOString();
-  }
-  if (MARKET_SCAN_MIN_LIQUIDITY_USDC > 0) params.liquidity_num_min = MARKET_SCAN_MIN_LIQUIDITY_USDC;
   return fetchGammaMarkets(params);
 }
 
 async function loadPreferredMarketScanBatch() {
-  const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
-  const minimumHours = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0);
-  const maximumDays = MARKET_SCAN_MAX_RESOLUTION_DAYS == null ? preferredDays : MARKET_SCAN_MAX_RESOLUTION_DAYS;
   const params = {
     limit: Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE)),
     order: "endDate",
     ascending: "true",
-    end_date_min: new Date(Date.now() + minimumHours * 3600000).toISOString(),
-    end_date_max: new Date(Date.now() + maximumDays * 86400000).toISOString(),
   };
-  if (MARKET_SCAN_MIN_LIQUIDITY_USDC > 0) params.liquidity_num_min = MARKET_SCAN_MIN_LIQUIDITY_USDC;
   return fetchGammaMarkets(params);
 }
 
@@ -4981,18 +4950,12 @@ function annotateCategoryScanMarkets(markets, tag) {
 }
 
 async function loadCategoryMarketScanBatch(tag) {
-  const preferredDays = Math.max(1, Number(MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS) || DEFAULT_MAX_RESOLUTION_DAYS);
-  const minimumHours = Math.max(0, Number(MARKET_SCAN_MIN_RESOLUTION_HOURS) || 0);
-  const maximumDays = MARKET_SCAN_MAX_RESOLUTION_DAYS == null ? preferredDays : MARKET_SCAN_MAX_RESOLUTION_DAYS;
   const params = {
     limit: Math.max(1, Math.min(100, MARKET_SCAN_CATEGORY_BATCH_SIZE)),
     tag_id: tag.id,
     order: "endDate",
     ascending: "true",
-    end_date_min: new Date(Date.now() + minimumHours * 3600000).toISOString(),
-    end_date_max: new Date(Date.now() + maximumDays * 86400000).toISOString(),
   };
-  if (MARKET_SCAN_MIN_LIQUIDITY_USDC > 0) params.liquidity_num_min = MARKET_SCAN_MIN_LIQUIDITY_USDC;
   const markets = await fetchGammaMarkets(params);
   return annotateCategoryScanMarkets(markets, tag);
 }
@@ -5158,8 +5121,8 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     eventSlug: marketEventSlug(market),
     outcome: outcomes[outcomeIndex],
     tokenId,
-    status: dateContext.sportsEventStarted || market.closed || market.acceptingOrders === false ? "RESOLVED" : "SCRAPED",
-    selectionStatus: dateContext.sportsEventStarted || market.closed || market.acceptingOrders === false ? "RESOLVED" : "SCRAPED",
+    status: market.closed || market.acceptingOrders === false ? "RESOLVED" : "SCRAPED",
+    selectionStatus: market.closed || market.acceptingOrders === false ? "RESOLVED" : "SCRAPED",
     marketType: outcomes.length > 2 ? "multi" : reportMarketType({ question: market.question || "", slug: market.slug, eventSlug: marketEventSlug(market), outcome: outcomes[outcomeIndex] }),
     tags,
     polymarketTags,
@@ -5229,12 +5192,8 @@ async function refreshMarketObservations(state) {
     }
 
     const observedAt = nowIso();
-    const dateContext = marketDateContext(market, market.createdAt || market.updatedAt);
-    const endDate = dateContext.endDate;
     let observation = preferredMarketObservation(market, observedAt);
-    const marketIsResolved = Boolean(market.closed) || market.acceptingOrders === false
-      || dateContext.sportsEventStarted
-      || (Number.isFinite(Date.parse(endDate || "")) && Date.parse(endDate) <= Date.now());
+    const marketIsResolved = marketIsResolvedForScan(market);
 
     if (observation && marketIsResolved) {
       observation = {
@@ -5242,10 +5201,7 @@ async function refreshMarketObservations(state) {
         status: "RESOLVED",
         selectionStatus: "RESOLVED",
         resolutionStatus: "PENDING_RESULT",
-        scheduledEventDate: dateContext.scheduledEventDate,
-        resolutionEndDate: dateContext.resolutionEndDate,
-        endDateSource: dateContext.endDateSource,
-        resolvedAt: endDate || observedAt,
+        resolvedAt: market.closedTime || observedAt,
         resolvedDetectedAt: observedAt,
       };
     }
@@ -5255,11 +5211,7 @@ async function refreshMarketObservations(state) {
         status: "RESOLVED",
         selectionStatus: "RESOLVED",
         resolutionStatus: stored.resolutionStatus || "PENDING_RESULT",
-        endDate: endDate || stored.endDate || null,
-        scheduledEventDate: dateContext.scheduledEventDate || stored.scheduledEventDate || null,
-        resolutionEndDate: dateContext.resolutionEndDate || stored.resolutionEndDate || null,
-        endDateSource: dateContext.endDateSource || stored.endDateSource || null,
-        resolvedAt: stored.resolvedAt || endDate || observedAt,
+        resolvedAt: stored.resolvedAt || market.closedTime || observedAt,
         resolvedDetectedAt: observedAt,
         marketDataUpdatedAt: observedAt,
         observedAt,
@@ -5355,13 +5307,11 @@ async function refreshMarketObservations(state) {
       .filter((item) => {
         if (!item) return false;
         const probability = Number(item.marketProbability);
-        const days = daysToEnd(item.endDate);
-        const minimumDays = marketScanMinimumDays();
         const status = String(item.status || item.selectionStatus || "").toUpperCase();
         return Number.isFinite(probability)
-          && status !== "RESOLVED"
-          && Number.isFinite(days)
-          && days >= minimumDays;
+          && probability > 0
+          && probability < 1
+          && status !== "RESOLVED";
       })
       .sort(compareObservationsForMarketScan);
     const shortHorizonCount = observations.filter((item) => {

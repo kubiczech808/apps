@@ -3966,10 +3966,6 @@ async function triggerOneTimeMarketScan() {
       body: JSON.stringify({
         target: "paper-scan",
         market_scan_tag: state.scrapedScanTag,
-        // Gamma supports these request-side constraints. Probability and net
-        // yield remain display filters because they are not Gamma parameters.
-        market_scan_max_resolution_days: currentEvaluationDaysFilter(),
-        market_scan_min_liquidity: currentEvaluationLiquidityFilter(),
       }),
     });
     state.scrapedScanStatus = "Scan queued...";
@@ -5618,6 +5614,7 @@ function scanLogReasonCounts(value, minimumMinutes = null) {
   const labels = {
     outside_selected_tag: "outside selected tag",
     no_valid_preferred_outcome_or_quote: "no valid preferred outcome/quote",
+    settled_outcome_probability: "outcome already at 0% or 100%",
     probability_below_scan_minimum: "probability below scan minimum",
     missing_resolution_date: "missing resolution date",
     same_event_already_represented: "same event already represented",

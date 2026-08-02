@@ -8,16 +8,6 @@ on:
         required: false
         default: ""
         type: string
-      market_scan_max_resolution_days:
-        description: "Maximum days to resolution"
-        required: false
-        default: ""
-        type: string
-      market_scan_min_liquidity:
-        description: "Minimum liquidity in USDC"
-        required: false
-        default: "0"
-        type: string
 
 permissions:
   contents: read
@@ -45,11 +35,8 @@ jobs:
       PAPER_MARKET_SCAN_CATEGORY_BATCH_SIZE: "50"
       PAPER_MARKET_SCAN_CATEGORIES_PER_RUN: "12"
       PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
-      PAPER_MARKET_SCAN_MIN_RESOLUTION_MINUTES: "5"
       PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || '' }}
       PAPER_MARKET_SCAN_TRIGGER: "MANUAL"
-      PAPER_MARKET_SCAN_MAX_RESOLUTION_DAYS: ${{ inputs.market_scan_max_resolution_days || '' }}
-      PAPER_MARKET_SCAN_MIN_LIQUIDITY_USDC: ${{ inputs.market_scan_min_liquidity || '0' }}
       PAPER_MAX_RESOLUTION_DAYS: "7"
       PAPER_SCAN_ONLY: "true"
       PAPER_REQUIRE_GEMINI: "false"
