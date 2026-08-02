@@ -311,12 +311,18 @@ async function readState() {
 
   try {
     const raw = await readFile(OUTPUT_PATH, "utf8");
-    if (remoteStateUrl && remoteError) {
+    // A missing remote state is recoverable: the repository copy is the
+    // bootstrap snapshot used to recreate the public state file. Other
+    // remote failures stay fail-closed so a transient 502 cannot overwrite
+    // valid hosted data with an old checkout copy.
+    const remoteStateIsMissing = remoteError && /HTTP 404\b/.test(String(remoteError.message || remoteError));
+    if (remoteStateUrl && remoteError && !remoteStateIsMissing) {
       throw new Error(`Refusing to use repository paper-state fallback because remote state is unavailable: ${remoteError.message}`);
     }
     return normalizeState(JSON.parse(raw));
   } catch {
-    if (remoteStateUrl && remoteError) {
+    const remoteStateIsMissing = remoteError && /HTTP 404\b/.test(String(remoteError.message || remoteError));
+    if (remoteStateUrl && remoteError && !remoteStateIsMissing) {
       throw remoteError;
     }
     return normalizeState({});

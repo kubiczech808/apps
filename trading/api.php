@@ -102,6 +102,13 @@ function state_payload(string $target): array
     }
 
     $path = $files[$target];
+    // FTP state replacement briefly removes the old file on hosts that do not
+    // support an atomic overwrite. Give the upload a short window to finish
+    // before reporting a real missing-state error to the browser.
+    for ($attempt = 0; $attempt < 4 && !is_file($path); $attempt++) {
+        usleep(250000);
+        clearstatcache(true, $path);
+    }
     if (!is_file($path)) {
         respond(['ok' => false, 'error' => 'State file is not available yet'], 404);
     }
