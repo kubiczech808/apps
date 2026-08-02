@@ -72,8 +72,13 @@ const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOL
 const OPEN_ORDER_BETTER_CANDIDATE_EV_USDC = envNumber("LIVE_OPEN_ORDER_BETTER_CANDIDATE_EV_USDC", 0.02);
 const ROTATION_CANDIDATE_SCAN_LIMIT = envNumber("LIVE_ROTATION_CANDIDATE_SCAN_LIMIT", 10);
 const ROTATION_POSITION_SCAN_LIMIT = envNumber("LIVE_ROTATION_POSITION_SCAN_LIMIT", 6);
-const ROTATION_MIN_EV_USDC_IMPROVEMENT = envNumber("LIVE_ROTATION_MIN_EV_USDC_IMPROVEMENT", 0.02);
-const ROTATION_MIN_ANNUALIZED_IMPROVEMENT = envNumber("LIVE_ROTATION_MIN_ANNUALIZED_IMPROVEMENT", 0.25);
+// A rotation must improve the configured portfolio metric by at least the
+// portfolio's minimum net profit. This keeps the exit fee and required return
+// threshold in one place instead of using an unrelated dollar EV margin.
+const ROTATION_MIN_PRIORITY_IMPROVEMENT = Math.max(
+  MIN_NET_YIELD,
+  envNumber("LIVE_ROTATION_MIN_PRIORITY_IMPROVEMENT", MIN_NET_YIELD),
+);
 const LIVE_AUTO_ROTATE = String(process.env.LIVE_AUTO_ROTATE ?? "true").toLowerCase() !== "false";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
 const TZ = "Europe/Prague";
@@ -873,7 +878,18 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
     : number(source?.aiProbability);
   const expectedPayout = shares != null && probability != null ? shares * probability : null;
   const realizedPnlIfExit = netExitValue == null ? null : netExitValue - cost;
-  const holdExpectedPnl = expectedPayout == null ? null : expectedPayout - cost;
+  // For a Polymarket-probability portfolio the stored market price is not an
+  // expected payout. It is the amount currently recoverable per share. The
+  // relevant comparison is therefore the remaining win upside (one dollar per
+  // winning share minus the net exit value), not shares * mark - cost. The
+  // latter only describes today's mark-to-cost P/L and made a held position
+  // look artificially risk-free during rotation reviews.
+  const holdPotentialPnl = PROBABILITY_SOURCE === "polymarket" && shares != null && netExitValue != null
+    ? shares - netExitValue
+    : null;
+  const holdExpectedPnl = PROBABILITY_SOURCE === "polymarket" && shares != null && cost != null
+    ? shares - cost
+    : (expectedPayout == null ? null : expectedPayout - cost);
   const continuationExpectedValue = expectedPayout != null && netExitValue != null
     ? expectedPayout - netExitValue
     : null;
@@ -889,6 +905,7 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
     cost,
     expectedPayout,
     realizedPnlIfExit,
+    holdPotentialPnl,
     holdExpectedPnl,
     continuationExpectedValue,
     continuationAnnualizedReturn,
@@ -905,6 +922,14 @@ function positionHoldExpectedValue(position, evaluationByToken = new Map()) {
 function positionHoldAnnualizedReturn(position, evaluationByToken = new Map()) {
   const economics = positionRotationEconomics(position, evaluationByToken);
   const days = number(economics.source?.daysToResolution);
+  if (PROBABILITY_SOURCE === "polymarket"
+    && economics.holdPotentialPnl != null
+    && economics.netExitValue != null
+    && economics.netExitValue > 0
+    && days != null
+    && days > 0) {
+    return (economics.holdPotentialPnl / economics.netExitValue) * (365 / days);
+  }
   if (economics.holdExpectedPnl != null && economics.cost > 0 && days != null && days > 0) {
     return (economics.holdExpectedPnl / economics.cost) * (365 / days);
   }
@@ -913,6 +938,13 @@ function positionHoldAnnualizedReturn(position, evaluationByToken = new Map()) {
 }
 
 function positionHoldRiskReward(position, evaluationByToken = new Map()) {
+  const economics = positionRotationEconomics(position, evaluationByToken);
+  if (PROBABILITY_SOURCE === "polymarket"
+    && economics.holdPotentialPnl != null
+    && economics.netExitValue != null
+    && economics.netExitValue > 0) {
+    return economics.holdPotentialPnl / economics.netExitValue;
+  }
   const source = positionSourceEvaluation(position, evaluationByToken);
   const sourceRatio = number(source?.riskReward);
   if (sourceRatio != null) return sourceRatio;
@@ -966,6 +998,7 @@ function rotationPositionSummary(position, evaluationByToken = new Map(), extra 
     estimatedExitFeeUsdc: Number(economics.exitFee.toFixed(5)),
     unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
     realizedPnlIfExitUsdc: economics.realizedPnlIfExit == null ? null : Number(economics.realizedPnlIfExit.toFixed(5)),
+    potentialWinIfHeldUsdc: economics.holdPotentialPnl == null ? null : Number(economics.holdPotentialPnl.toFixed(5)),
     holdExpectedValueUsdc: Number(holdEv.toFixed(5)),
     holdExpectedPnlUsdc: economics.holdExpectedPnl == null ? null : Number(economics.holdExpectedPnl.toFixed(5)),
     holdAnnualizedReturn: Number(holdAnnualizedReturn.toFixed(5)),
@@ -981,11 +1014,9 @@ function candidatePoolForRotation(baseCandidates = []) {
     .filter((item) => Number.isFinite(selectedProbability(item)))
     .filter((item) => Number.isFinite(selectedAnnualizedReturn(item)) && selectedAnnualizedReturn(item) > 0)
     .filter((item) => Number.isFinite(selectedExpectedValue(item)) && selectedExpectedValue(item) > 0)
-    .sort((a, b) => {
-      const annualized = (selectedAnnualizedReturn(b) ?? 0) - (selectedAnnualizedReturn(a) ?? 0);
-      if (annualized) return annualized;
-      return (selectedExpectedValue(b) ?? 0) - (selectedExpectedValue(a) ?? 0);
-    })
+    // Rotation must use exactly the portfolio's configured ordering. In
+    // particular, high-reward portfolios must not silently fall back to EV p.a.
+    .sort(compareLiveCandidatePriority)
     .slice(0, ROTATION_CANDIDATE_SCAN_LIMIT);
 }
 
@@ -1078,13 +1109,18 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
         const currentPriority = priority.value;
         const replacementPriority = candidatePriority.metric === "R/R" ? candidatePriority.value : rotatedAnnualizedReturn;
         const priorityDelta = replacementPriority - currentPriority;
-        const rotationPreferred = evDelta >= ROTATION_MIN_EV_USDC_IMPROVEMENT
-          || (evDelta > 0 && priorityDelta >= ROTATION_MIN_ANNUALIZED_IMPROVEMENT);
+        // The replacement must improve the portfolio's ranking metric by at
+        // least the configured minimum net profit, and the net expected result
+        // after selling fees must also improve. A large nominal win alone is
+        // not enough to justify rotating capital.
+        const rotationPreferred = evDelta > 0
+          && priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT;
         const priorityComparison = {
           metricLabel: candidatePriority.metric,
           currentMetric: currentPriority,
           replacementMetric: replacementPriority,
           metricDelta: priorityDelta,
+          minimumImprovement: ROTATION_MIN_PRIORITY_IMPROVEMENT,
           currentExpectedValue: holdExpectedPnl,
           replacementExpectedValue: rotatedExpectedPnl,
           replacementRanksAhead: priorityDelta > 0,
@@ -1094,15 +1130,31 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           currentExitFeeUsdc: economics.exitFee,
           replacementExpectedValueUsdc: candidateEv,
           replacementCapitalBaseUsdc: rotationCapitalBase,
+          replacementNetYield: number(revalidated.netYield),
         };
         const review = {
           position: baseReview,
+          positionOrder: {
+            tokenId: position.tokenId || position.assetId,
+            assetId: position.assetId || position.tokenId,
+            shares: number(position.shares ?? position.size),
+            size: number(position.size ?? position.shares),
+            currentPrice: number(position.currentPrice ?? position.markPrice ?? position.price),
+            price: number(position.price ?? position.currentPrice ?? position.markPrice),
+            market: position.market || position.conditionId || null,
+            conditionId: position.conditionId || null,
+            question: position.question || position.market || "",
+            outcome: position.outcome || position.side || "",
+            eventSlug: position.eventSlug || position.slug || "",
+            slug: position.slug || position.eventSlug || "",
+          },
           candidate: liveBatchCandidateSummary(revalidated),
+          candidateTokenId: revalidated.tokenId || null,
           priorityComparison,
           action: rotationPreferred ? "ROTATION_AVAILABLE" : "HOLD_CURRENT_POSITION",
           reason: rotationPreferred
-            ? `after estimated exit fees and realized P/L, ${candidatePriority.metric} changes from ${(currentPriority * 100).toFixed(1)}% to ${(replacementPriority * 100).toFixed(1)}% and expected result changes by ${evDelta.toFixed(4)} USDC`
-            : `after estimated exit fees and realized P/L, ${candidatePriority.metric} changes by ${(priorityDelta * 100).toFixed(1)} pts and expected result changes by ${evDelta.toFixed(4)} USDC; rotation does not justify replacing the position`,
+            ? `after estimated exit fees and current P/L, ${candidatePriority.metric} improves by ${(priorityDelta * 100).toFixed(1)} pts and expected result improves by ${evDelta.toFixed(4)} USDC`
+            : `after estimated exit fees and current P/L, ${candidatePriority.metric} changes by ${(priorityDelta * 100).toFixed(1)} pts and expected result changes by ${evDelta.toFixed(4)} USDC; minimum improvement is ${(ROTATION_MIN_PRIORITY_IMPROVEMENT * 100).toFixed(1)} pts`,
           cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
           evDeltaUsdc: Number(evDelta.toFixed(5)),
           annualizedDelta: Number(priorityDelta.toFixed(5)),
@@ -1157,11 +1209,95 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
     reason: best
       ? (restrictToRiskReplacement
         ? "a risk-blocked replacement becomes executable only after selling the overlapping live position"
-        : "a better candidate could be opened after selling an existing position; live sell/rebuy execution is not automated in this step")
+        : "a better candidate can replace the weakest live position after the sell is confirmed and cash is synced")
       : "selling reviewed open positions did not produce a better executable candidate",
     reviews,
     best,
   };
+}
+
+function rotationOpportunityLabel(item = {}) {
+  const outcome = String(item.outcome || item.side || "").trim();
+  const question = String(item.question || item.market || "").trim();
+  return [outcome, question].filter(Boolean).join(" - ") || "unnamed opportunity";
+}
+
+function rotationComparisonRows(rotationReview = null, openOrderReviews = []) {
+  const rows = [];
+  for (const review of Array.isArray(rotationReview?.reviews) ? rotationReview.reviews : []) {
+    const position = review.position || {};
+    const candidate = review.candidate || null;
+    const comparison = review.priorityComparison || {};
+    rows.push({
+      kind: "position",
+      action: review.action || null,
+      reason: review.reason || null,
+      current: {
+        label: rotationOpportunityLabel(position),
+        metricLabel: position.rotationPriorityMetric || comparison.metricLabel || returnMetricLabel(),
+        metricValue: number(position.rotationPriorityValue),
+        daysToResolution: number(comparison.currentDaysToResolution),
+        potentialWinUsdc: number(position.potentialWinIfHeldUsdc),
+        unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
+      },
+      candidate: candidate ? {
+        label: rotationOpportunityLabel(candidate),
+        metricLabel: comparison.metricLabel || returnMetricLabel(),
+        metricValue: number(comparison.replacementMetric),
+        daysToResolution: number(comparison.replacementDaysToResolution),
+        potentialWinUsdc: number(candidate.netGainIfWinUsdc),
+      } : null,
+      metricDelta: number(comparison.metricDelta),
+      expectedValueDeltaUsdc: number(review.evDeltaUsdc),
+      minimumImprovement: number(comparison.minimumImprovement, ROTATION_MIN_PRIORITY_IMPROVEMENT),
+    });
+  }
+  for (const review of Array.isArray(openOrderReviews) ? openOrderReviews : []) {
+    const current = review.currentEvaluation || null;
+    const candidate = review.betterCandidate || null;
+    const comparison = review.selectionComparison || {};
+    if (!current && !candidate) continue;
+    rows.push({
+      kind: "order",
+      action: review.action || null,
+      reason: review.reason || null,
+      current: current ? {
+        label: rotationOpportunityLabel(current),
+        metricLabel: comparison.metricLabel || returnMetricLabel(),
+        metricValue: number(comparison.currentMetric),
+        daysToResolution: number(comparison.currentDaysToResolution),
+        potentialWinUsdc: number(current.netGainIfWinUsdc),
+      } : null,
+      candidate: candidate ? {
+        label: rotationOpportunityLabel(candidate),
+        metricLabel: comparison.metricLabel || returnMetricLabel(),
+        metricValue: number(comparison.replacementMetric),
+        daysToResolution: number(comparison.replacementDaysToResolution),
+        potentialWinUsdc: number(candidate.netGainIfWinUsdc),
+      } : null,
+      metricDelta: number(comparison.metricDelta),
+      expectedValueDeltaUsdc: number(comparison.expectedValueDelta),
+      minimumImprovement: ROTATION_MIN_PRIORITY_IMPROVEMENT,
+    });
+  }
+  return rows;
+}
+
+function rotationHumanComparison(review) {
+  const comparison = review?.priorityComparison;
+  const position = review?.position;
+  const candidate = review?.candidate;
+  if (!comparison || !position || !candidate) return "";
+  const metric = comparison.metricLabel || returnMetricLabel();
+  const formatMetric = (value) => metric === "R/R"
+    ? `${Number(value || 0).toFixed(2)}:1`
+    : `${(Number(value || 0) * 100).toFixed(1)}%`;
+  const formatDelta = (value) => {
+    const numeric = Number(value || 0);
+    return `${numeric >= 0 ? "+" : ""}${formatMetric(numeric)}`;
+  };
+  const days = (value) => Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)}d` : "-";
+  return `Replace ${rotationOpportunityLabel(position)} (${formatMetric(comparison.currentMetric)}, ${days(comparison.currentDaysToResolution)}, potential win ${Number(position.potentialWinIfHeldUsdc || 0).toFixed(4)} USDC) with ${rotationOpportunityLabel(candidate)} (${formatMetric(comparison.replacementMetric)}, ${days(comparison.replacementDaysToResolution)}, potential win ${Number(candidate.netGainIfWinUsdc || 0).toFixed(4)} USDC); after fees the ${metric} improvement is ${formatDelta(comparison.metricDelta)} and expected P/L changes by ${Number(review.evDeltaUsdc || 0).toFixed(4)} USDC.`;
 }
 
 function scoreEconomics({ probability, qualificationProbability, annualizedReturn, netYield, edge, spread, volume24hr, liquidity, endOk }) {
@@ -1415,6 +1551,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     potentialAnnualizedReturn: Number.isFinite(potentialAnnualizedReturn) ? Number(potentialAnnualizedReturn.toFixed(4)) : null,
     netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
     netYield: Number.isFinite(potentialRoi) ? Number(potentialRoi.toFixed(6)) : null,
+    riskReward: Number.isFinite(potentialRoi) ? Number(potentialRoi.toFixed(6)) : null,
     totalCostUsdc: Number(totalCost.toFixed(5)),
     tradingFeeUsdc: Number(fee.toFixed(5)),
     feeMode: USE_LIMIT_ORDERS && POST_ONLY ? "post-only maker fee assumed 0" : "taker fee estimate",
@@ -1841,7 +1978,7 @@ async function restoreOpenOrder(review, tradingConfig = {}) {
   }
 }
 
-async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, maxNotional, tradingConfig }) {
+async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotationCandidates = [], cash, maxNotional, tradingConfig }) {
   const openOrders = Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
   const reviews = [];
   let selectedAction = null;
@@ -1890,7 +2027,36 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, cash, 
           evaluationByToken,
         );
         review.currentEvaluation = liveBatchCandidateSummary(revalidated);
-        const bestOther = eligible.find((candidate) => String(candidate.tokenId || "") !== tokenId) || null;
+        // When cash is locked in an open order, the normal eligible list can
+        // be empty because it was sized against free cash. Revalidate a small
+        // portfolio-ordered pool with this order's released notional so a
+        // waiting order is compared against the same candidates that position
+        // rotation sees.
+        const alternativePool = eligible.length
+          ? eligible.filter((candidate) => String(candidate.tokenId || "") !== tokenId)
+          : candidatePoolForRotation(rotationCandidates).filter((candidate) => String(candidate.tokenId || "") !== tokenId);
+        const alternativeCandidates = [];
+        for (const alternative of alternativePool.slice(0, ROTATION_CANDIDATE_SCAN_LIMIT)) {
+          if (eligible.length) {
+            alternativeCandidates.push(alternative);
+            continue;
+          }
+          try {
+            const alternativeRevalidated = await revalidateEvaluation(
+              alternative,
+              liveStateWithoutOpenOrder(liveState, order),
+              effectiveCash,
+              maxNotional,
+              evaluationByToken,
+            );
+            if (alternativeRevalidated.status === "ELIGIBLE") alternativeCandidates.push(alternativeRevalidated);
+          } catch {
+            // The current order remains protected when an alternative cannot be
+            // freshly verified in this batch.
+          }
+        }
+        const rankedAlternatives = sortLiveEligibleCandidates(alternativeCandidates);
+        const bestOther = rankedAlternatives[0] || null;
         const comparison = bestOther ? selectionComparison(revalidated, bestOther) : null;
         // A replacement must rank ahead under the configured portfolio rule.
         // Absolute EV is only a safety margin after that check; it must never
@@ -2077,6 +2243,7 @@ async function main() {
         restrictToRiskReplacement: needsRiskReplacement,
       })
     : null;
+  const rotationCandidatePool = candidatePoolForRotation(baseCandidates);
   const activeSellOrders = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
     .filter((order) => String(order.side || "").toUpperCase().includes("SELL"));
   const best = eligible[0] || null;
@@ -2096,10 +2263,11 @@ async function main() {
   const orderManagement = manualShortlistStale || activeSellOrders.length || directCandidateCanUseFreeCapital
     ? { action: "NONE", reviews: [] }
     : await reviewOpenOrders({
-        liveState,
-        evaluationByToken,
-        eligible,
-        cash,
+      liveState,
+      evaluationByToken,
+      eligible,
+      rotationCandidates: rotationCandidatePool,
+      cash,
         maxNotional,
         tradingConfig,
       });
@@ -2115,14 +2283,16 @@ async function main() {
   // the new-trade cadence.
   const cadenceBlocked = Boolean(monitoring.cadenceBlocked) && !replacementDue && !canceledForBetterCandidate;
   const rotationAvailable = rotationReview?.action === "ROTATION_AVAILABLE";
+  const rotationComparison = rotationComparisonRows(rotationReview, orderManagement.reviews);
+  const rotationHumanReason = rotationAvailable ? rotationHumanComparison(rotationReview.best) : "";
   const actionReason = directCapitalPriority
     ? "free capital prioritized: best direct candidate is submitted before order or position rotation"
     : activeSellOrders.length
     ? "waiting for an existing live sell order to reduce position exposure before any replacement buy"
     : (rotationAvailable && LIVE_AUTO_ROTATE
       ? (needsRiskReplacement
-        ? "a risk-overlap replacement will sell the conflicting position before placing the replacement buy"
-        : "cash is insufficient for a direct order, so a sell-and-replace rotation will submit the exit order first")
+        ? `${rotationHumanReason || "A risk-overlap replacement will sell the conflicting position before placing the replacement buy."}`
+        : `${rotationHumanReason || "Cash is insufficient for a direct order, so the weakest position will be sold before the replacement buy."}`)
       : (cadenceBlocked
         ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h; last accepted new order ${monitoring.lastSubmittedAt || "unknown"}; ${monitoring.cadenceRemainingHours}h remaining)`
         : (best
@@ -2209,6 +2379,7 @@ async function main() {
       openOrderCancelAfterHours: OPEN_ORDER_CANCEL_AFTER_HOURS,
       openOrderRepriceThreshold: OPEN_ORDER_REPRICE_THRESHOLD,
       rotationTrigger: needsRiskReplacement ? "risk-overlap" : (needsCapitalRotation ? "capital" : null),
+      rotationMinimumPriorityImprovement: ROTATION_MIN_PRIORITY_IMPROVEMENT,
     },
     orderManagement,
     rotationReview,
@@ -2226,6 +2397,7 @@ async function main() {
       action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
       reason: actionReason,
       explanation: actionExplanation,
+      humanReason: rotationHumanReason || null,
       settings: {
         minProbability: MIN_PROBABILITY,
         probabilitySource: PROBABILITY_SOURCE,
@@ -2247,6 +2419,7 @@ async function main() {
         crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,
         liveAutoRotate: LIVE_AUTO_ROTATE,
         maxOrderFraction: MAX_ORDER_FRACTION,
+        rotationMinimumPriorityImprovement: ROTATION_MIN_PRIORITY_IMPROVEMENT,
       },
       capital: {
         availableUsdc: cash,
@@ -2276,6 +2449,7 @@ async function main() {
         rawCadenceBlocked: Boolean(monitoring.rawCadenceBlocked),
       },
       openOrderReviews: orderManagement.reviews,
+      rotationComparison,
       rotationReview,
       prevalidationFilter: candidatePool.diagnostics,
       selected: best ? liveBatchCandidateSummary(best) : null,
@@ -2361,21 +2535,62 @@ async function main() {
 
   if (rotationAvailable && LIVE_AUTO_ROTATE) {
     const rotation = rotationReview.best;
-    const action = "ROTATION_BLOCKED_NO_ATOMIC_REPLACEMENT";
-    const reason = "rotation was not executed because a sell could not be atomically followed by a confirmed replacement buy; existing position preserved";
+    let exitOrder = null;
+    let response = null;
+    try {
+      exitOrder = await buildRotationExitOrder(
+        rotation.positionOrder || rotation.position,
+        evaluationByToken,
+        tradingConfig,
+      );
+      response = DRY_RUN || !hasFlag("confirm-live")
+        ? { status: "dry_run_rotation_exit", success: true }
+        : await submitOrder(exitOrder);
+    } catch (error) {
+      response = { status: "exception", error: error?.message || String(error) };
+    }
+    const accepted = successfulOrderResponse(response);
+    const action = accepted
+      ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_ROTATION_EXIT" : "ROTATION_EXIT_SUBMITTED")
+      : "ROTATION_EXIT_REJECTED";
+    const reason = accepted
+      ? `${rotationHumanReason || "A weaker live position is being replaced by a better candidate."} Sell order submitted; the replacement buy will follow the next confirmed account sync.`
+      : `Rotation sell order was not accepted: ${orderResponseError(response) || "unknown Polymarket response"}; the existing position was preserved`;
+    const explanation = accepted
+      ? "The selected position passed the portfolio-metric comparison after estimated sell fees and current P/L. The sell was submitted first; the next run will sync released cash and revalidate the selected replacement before buying it."
+      : "The selected replacement was not executed because its sell order was not accepted. No position or unrelated order was cancelled.";
     await emitDecision({
       ...decision,
       action,
       reason,
+      rotationExit: accepted ? {
+        position: rotation.position,
+        candidate: rotation.candidate,
+        candidateTokenId: rotation.candidateTokenId || rotation.candidate?.tokenId || null,
+        order: exitOrder ? orderAttemptSummary(exitOrder, response, { action }) : null,
+        submittedAt: new Date().toISOString(),
+      } : null,
       batchLog: {
         ...decision.batchLog,
         action,
         reason,
-        explanation: "The candidate requires releasing capital or risk capacity from an existing position, but the sell and replacement buy cannot be guaranteed as one atomic operation. No position or order was cancelled.",
+        explanation,
+        humanReason: rotationHumanReason || null,
         selected: rotation.candidate,
+        rotationExit: accepted ? {
+          position: rotation.position,
+          candidate: rotation.candidate,
+          candidateTokenId: rotation.candidateTokenId || rotation.candidate?.tokenId || null,
+          order: exitOrder ? orderAttemptSummary(exitOrder, response, { action }) : null,
+        } : null,
       },
-      attempts: [orderAttemptSummary(rotation.candidate, null, { action, replacementCandidate: rotation.candidate })],
+      response,
+      selected: rotation.candidate,
+      attempts: [
+        ...(exitOrder ? [orderAttemptSummary(exitOrder, response, { action, replacementCandidate: rotation.candidate })] : []),
+      ],
     });
+    if (!accepted && !DRY_RUN && hasFlag("confirm-live")) process.exit(1);
     return;
   }
 

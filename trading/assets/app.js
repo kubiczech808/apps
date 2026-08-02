@@ -5380,6 +5380,7 @@ function tradeBatchDetail(batch) {
     : [...candidates, ...rejected];
   const openOrderReviews = Array.isArray(batch.openOrderReviews) ? batch.openOrderReviews : [];
   const rotationReview = batch.rotationReview || null;
+  const rotationComparison = Array.isArray(batch.rotationComparison) ? batch.rotationComparison : [];
   const diversificationDiagnostics = batch.diversificationDiagnostics || null;
   const portfolioFilter = batch.portfolioFilter || {};
   const prevalidationFilter = batch.prevalidationFilter || {};
@@ -5549,6 +5550,23 @@ function tradeBatchDetail(batch) {
         ].join("\n") : "",
       ].filter(Boolean).join("\n")
     : "-";
+  const rotationComparisonLines = rotationComparison.length
+    ? rotationComparison.slice(0, 12).map((item, index) => {
+        const metric = String(item.current?.metricLabel || item.candidate?.metricLabel || returnMetricLabel);
+        const formatMetric = (value) => metric === "R/R"
+          ? riskReward(Number(value))
+          : signedPercent(Number(value));
+        const current = item.current || {};
+        const candidate = item.candidate || null;
+        const currentText = `${current.label || "current exposure"} (${formatMetric(current.metricValue)}, ${Number.isFinite(Number(current.daysToResolution)) ? `${Number(current.daysToResolution).toFixed(2)}d` : "-"}, potential win ${money(Number(current.potentialWinUsdc || 0))})`;
+        const candidateText = candidate
+          ? `${candidate.label || "replacement candidate"} (${formatMetric(candidate.metricValue)}, ${Number.isFinite(Number(candidate.daysToResolution)) ? `${Number(candidate.daysToResolution).toFixed(2)}d` : "-"}, potential win ${money(Number(candidate.potentialWinUsdc || 0))})`
+          : "no executable replacement";
+        const improvement = item.metricDelta == null ? "" : `; improvement ${formatMetric(item.metricDelta)} (minimum ${formatMetric(Number(item.minimumImprovement || 0))})`;
+        const result = item.expectedValueDeltaUsdc == null ? "" : `; expected P/L delta ${signedMoney(Number(item.expectedValueDeltaUsdc), 4)}`;
+        return `${index + 1}. ${item.kind === "order" ? "Order" : "Position"}: ${currentText} -> ${candidateText}${improvement}${result}; ${item.action || "reviewed"}`;
+      }).join("\n")
+    : "-";
 
   return [
     `${batch.strategyLabel || batch.strategyId || "Portfolio"} trade batch`,
@@ -5556,6 +5574,7 @@ function tradeBatchDetail(batch) {
     `Run time: ${batch.runAt ? formatDate(batch.runAt) : "-"}`,
     `Action: ${batch.action || "-"}`,
     `Reason: ${batch.reason || "-"}`,
+    batch.humanReason ? `Human summary: ${batch.humanReason}` : "",
     openOrderReviews.find((item) => item.selectionComparison)?.selectionComparison
       ? `Decision comparison: ${comparisonMetricLine(openOrderReviews.find((item) => item.selectionComparison).selectionComparison)}`
       : "",
@@ -5563,6 +5582,9 @@ function tradeBatchDetail(batch) {
       ? `Rotation comparison: ${comparisonMetricLine(rotationReview.best.priorityComparison)}`
       : "",
     `Explanation: ${batch.explanation || "-"}`,
+    "",
+    `Capital replacement comparison:`,
+    rotationComparisonLines,
     "",
     `Rules:`,
     `${usesPolymarketProbability ? "Polymarket" : "AI"} threshold: ${probability(Number(settings.minProbability))}`,
@@ -5784,7 +5806,7 @@ function setRunLogFilterMenuOpen(open) {
 
 function runActionClass(action) {
   const value = String(action || "").toUpperCase();
-  if (["OPEN", "OPENED", "SUBMIT", "SUBMITTED", "CANCELED_AND_SUBMITTED", "DRY_RUN_READY", "ROTATE", "ROTATED"].includes(value)) return "positive";
+  if (["OPEN", "OPENED", "SUBMIT", "SUBMITTED", "CANCELED_AND_SUBMITTED", "DRY_RUN_READY", "DRY_RUN_ROTATION_EXIT", "ROTATION_EXIT_SUBMITTED", "ROTATE", "ROTATED"].includes(value)) return "positive";
   if (["SKIP", "REJECTED", "CANCELED_REPLACEMENT_REJECTED", "ERROR"].includes(value)) return "negative";
   return "";
 }
@@ -5806,6 +5828,7 @@ function humanRunReason(run = {}) {
   const batch = run.batchLog || run;
   const action = String(run.action || batch.action || "").toUpperCase();
   const reason = String(run.reason || batch.reason || "");
+  if (batch.humanReason) return String(batch.humanReason);
   if (/live candidates blocked by available USDC/i.test(reason)) {
     return "No order placed: the revalidated candidate met the trading rules, but available USDC cannot cover Polymarket's current minimum order size.";
   }
