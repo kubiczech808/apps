@@ -1087,7 +1087,7 @@ async function refreshStoredMarketObservationResolutionStatuses(observations = [
     .filter(({ item, slug }) => {
       const end = Date.parse(item.scheduledEventDate || item.endDate || "");
       const status = String(item.status || item.selectionStatus || "").toUpperCase();
-      const finalAvailable = Number.isFinite(Number(item.finalOutcomePrice));
+      const finalAvailable = finalOutcomePriceValue(item.finalOutcomePrice) != null;
       return slug && !finalAvailable && (status === "RESOLVED" || (Number.isFinite(end) && end <= Date.now()));
     })
     .sort((a, b) => (Date.parse(a.item.scheduledEventDate || a.item.endDate || "") || 0) - (Date.parse(b.item.scheduledEventDate || b.item.endDate || "") || 0))
@@ -4906,6 +4906,12 @@ function validMarketProbability(value) {
   return Number.isFinite(numeric) && numeric > 0 && numeric < 1 ? numeric : null;
 }
 
+function finalOutcomePriceValue(value) {
+  if (value == null || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 && numeric <= 1 ? numeric : null;
+}
+
 function binaryOutcomeQuotesAreBothZero(item = {}) {
   const hasBinaryMetadata = Boolean(item?.binaryYesTokenId || item?.binaryNoTokenId)
     || String(item?.marketType || "").toLowerCase() === "binary"
@@ -5590,8 +5596,8 @@ function scrapedSimulationTags(item) {
 }
 
 function scrapedSimulationOutcome(item) {
-  const value = Number(item?.finalOutcomePrice);
-  return Number.isFinite(value) ? (value >= 0.5 ? 1 : 0) : null;
+  const value = finalOutcomePriceValue(item?.finalOutcomePrice);
+  return value == null ? null : (value >= 0.5 ? 1 : 0);
 }
 
 function scrapedSimulationTrade(item) {

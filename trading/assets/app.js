@@ -6389,17 +6389,22 @@ function calculationRows(report) {
 }
 
 function calculationSortValue(row, key) {
+  const numeric = (value) => {
+    if (value == null || value === "") return null;
+    const result = Number(value);
+    return Number.isFinite(result) ? result : null;
+  };
   if (key === "marketType") return calculationMarketLabel(row.marketType).toLowerCase();
-  if (key === "threshold") return Number(row.threshold);
-  if (key === "maxResolutionDays") return Number(row.maxResolutionDays);
-  if (key === "minLiquidityUsdc") return Number(row.minLiquidityUsdc);
-  if (key === "trades") return Number(row.trades || 0);
-  if (key === "resolved") return Number(row.resolved || 0);
-  if (key === "accuracy") return Number(row.winRate);
-  if (key === "pnl") return Number(row.pnlUsdc || 0);
-  if (key === "roi") return Number(row.roi);
-  if (key === "avgProbability") return Number(row.avgProbability);
-  if (key === "avgLiquidity") return Number(row.avgLiquidity);
+  if (key === "threshold") return numeric(row.threshold);
+  if (key === "maxResolutionDays") return numeric(row.maxResolutionDays);
+  if (key === "minLiquidityUsdc") return numeric(row.minLiquidityUsdc);
+  if (key === "trades") return numeric(row.trades ?? 0);
+  if (key === "resolved") return numeric(row.resolved ?? 0);
+  if (key === "accuracy") return numeric(row.winRate);
+  if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
+  if (key === "roi") return numeric(row.roi);
+  if (key === "avgProbability") return numeric(row.avgProbability);
+  if (key === "avgLiquidity") return numeric(row.avgLiquidity);
   return "";
 }
 
@@ -6468,13 +6473,13 @@ function renderCalculationReport() {
               ${calculationHeader("marketType", "Market type")}
               ${calculationHeader("maxResolutionDays", "Max days")}
               ${calculationHeader("minLiquidityUsdc", "Min liquidity")}
-              <th>Trades</th>
-              <th>Resolved</th>
-              <th>Accuracy</th>
-              <th>P/L</th>
-              <th>ROI</th>
-              <th>Avg entry</th>
-              <th>Avg liquidity</th>
+              ${calculationHeader("trades", "Trades")}
+              ${calculationHeader("resolved", "Resolved")}
+              ${calculationHeader("accuracy", "Accuracy")}
+              ${calculationHeader("pnl", "P/L")}
+              ${calculationHeader("roi", "ROI")}
+              ${calculationHeader("avgProbability", "Avg entry")}
+              ${calculationHeader("avgLiquidity", "Avg liquidity")}
             </tr>
           </thead>
           <tbody>
