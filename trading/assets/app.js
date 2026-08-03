@@ -5878,19 +5878,26 @@ function renderScanAuditModal(payload = {}) {
         <h3>Markets obtained from returned events</h3>
         <div class="analysis-candidate-table-wrap">
           <table class="analysis-candidate-table scan-audit-market-table">
-            <thead><tr><th>Market</th><th>Outcome</th><th>Probability</th><th>Categories</th><th>Result</th><th>Reason</th></tr></thead>
+            <thead><tr><th>Market</th><th>Outcome</th><th>Probability</th><th>Days left</th><th>Liquidity</th><th>Categories</th><th>Result</th><th>Reason</th></tr></thead>
             <tbody>${markets.length ? markets.map((market) => {
               const href = /^https:\/\//i.test(String(market?.url || "")) ? String(market.url) : "";
               const action = String(market?.action || "NOT_SAVED").toUpperCase();
+              const recordedDays = Number(market?.daysToEnd);
+              const daysLeft = Number.isFinite(recordedDays)
+                ? recordedDays
+                : daysUntil(market?.endDate);
+              const liquidity = Number(market?.liquidityUsdc ?? market?.liquidity);
               return `<tr>
                 <td>${href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(market?.question || "Untitled Polymarket market")}</strong></a>` : `<strong>${escapeHtml(market?.question || "Untitled Polymarket market")}</strong>`}</td>
                 <td>${escapeHtml(market?.outcome || "-")}</td>
                 <td>${Number.isFinite(Number(market?.marketProbability)) ? probability(Number(market.marketProbability)) : "-"}</td>
+                <td>${compactDays(daysLeft)}</td>
+                <td>${Number.isFinite(liquidity) ? money(liquidity) : "-"}</td>
                 <td>${escapeHtml(Array.isArray(market?.categories) ? market.categories.join(", ") : market?.categories || "-")}</td>
                 <td class="${scanAuditActionClass(action)}"><strong>${escapeHtml(action.replace("_", " "))}</strong></td>
                 <td>${escapeHtml(market?.reason || "-")}</td>
               </tr>`;
-            }).join("") : '<tr><td colspan="6">No market rows were returned by this scan.</td></tr>'}</tbody>
+            }).join("") : '<tr><td colspan="8">No market rows were returned by this scan.</td></tr>'}</tbody>
           </table>
         </div>
       </section>

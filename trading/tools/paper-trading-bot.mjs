@@ -5118,6 +5118,8 @@ function marketScanAuditRows({
       .filter(([key]) => Boolean(key)),
   );
   return fetchedMarkets.slice(0, MARKET_SCAN_AUDIT_ROW_LIMIT).map((market) => {
+    const dateContext = marketDateContext(market, market.createdAt || market.updatedAt);
+    const daysLeft = daysToEnd(dateContext.endDate);
     const reasonCode = marketScanRetentionReason(market, observedAt);
     const candidate = reasonCode ? null : preferredMarketObservation(market, observedAt);
     const candidateKey = candidate ? marketObservationKey(candidate) : "";
@@ -5143,6 +5145,9 @@ function marketScanAuditRows({
       url: marketScanAuditUrl(market),
       outcome: String(outcome || ""),
       marketProbability: Number.isFinite(Number(probability)) ? Number(probability) : null,
+      endDate: dateContext.endDate || null,
+      daysToEnd: Number.isFinite(daysLeft) ? Number(daysLeft.toFixed(2)) : null,
+      liquidityUsdc: Number.isFinite(Number(market.liquidity)) ? Number(market.liquidity) : null,
       categories: marketCategoryKeys(market),
       action,
       reason,
