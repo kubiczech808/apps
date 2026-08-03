@@ -423,7 +423,6 @@ function default_portfolio_config(): array
                 'selectionOrder' => 'highest_ev_pa_first',
                 'minLiquidityUsdc' => null,
                 'minNetYield' => 0.0,
-                'tradeCadenceHours' => 1,
                 'executionTrigger' => 'cron',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
@@ -436,7 +435,6 @@ function default_portfolio_config(): array
                 'selectionOrder' => 'highest_reward_risk_first',
                 'minLiquidityUsdc' => null,
                 'minNetYield' => 0.0,
-                'tradeCadenceHours' => 1,
                 'executionTrigger' => 'cron',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
@@ -449,7 +447,6 @@ function default_portfolio_config(): array
                 'selectionOrder' => 'highest_reward_risk_first',
                 'minLiquidityUsdc' => 500000,
                 'minNetYield' => 0.0,
-                'tradeCadenceHours' => 1,
                 'executionTrigger' => 'cron',
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
@@ -463,7 +460,6 @@ function default_portfolio_config(): array
             'selectionOrder' => 'highest_ev_pa_first',
             'minLiquidityUsdc' => 100,
             'minNetYield' => 0.0,
-            'tradeCadenceHours' => 24,
             'executionTrigger' => 'cron',
             'useLimitOrders' => true,
             'requireMostProbableOutcome' => false,
@@ -544,14 +540,6 @@ function normalize_net_yield_value(mixed $value, float $fallback): float
     return max(0.0, min(10.0, round($yield, 3)));
 }
 
-function normalize_cadence_hours_value(mixed $value, int $fallback): int
-{
-    if (!is_numeric($value)) {
-        return max(1, min(168, $fallback));
-    }
-    return max(1, min(168, (int) round((float) $value)));
-}
-
 function normalize_selection_order_value(mixed $value): string
 {
     return $value === 'highest_reward_risk_first' ? 'highest_reward_risk_first' : 'highest_ev_pa_first';
@@ -595,7 +583,6 @@ function normalize_strategy_config(array $input, array $defaults): array
         'selectionOrder' => normalize_selection_order_value($input['selectionOrder'] ?? $defaults['selectionOrder']),
         'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
         'minNetYield' => normalize_net_yield_value($input['minNetYield'] ?? null, (float) $defaults['minNetYield']),
-        'tradeCadenceHours' => normalize_cadence_hours_value($input['tradeCadenceHours'] ?? null, (int) $defaults['tradeCadenceHours']),
         'executionTrigger' => normalize_execution_trigger_value($input['executionTrigger'] ?? $defaults['executionTrigger']),
         'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
         'probabilitySource' => normalize_probability_source_value($input['probabilitySource'] ?? $defaults['probabilitySource']),
@@ -1272,18 +1259,6 @@ function normalized_days_input($value): ?string
     return (string) $days;
 }
 
-function normalized_cadence_hours_input($value): ?string
-{
-    if ($value === null || $value === '') {
-        return null;
-    }
-    if (!is_numeric($value)) {
-        return null;
-    }
-    $hours = max(1, min(168, (int) round((float) $value)));
-    return (string) $hours;
-}
-
 function normalized_money_input($value): ?string
 {
     if ($value === null || $value === '') {
@@ -1480,7 +1455,6 @@ try {
         $liveSelectionOrder = normalized_selection_order_input($payload['selectionOrder'] ?? $payload['live_selection_order'] ?? null);
         $liveMinLiquidity = normalized_money_input($payload['minLiquidityUsdc'] ?? $payload['live_min_liquidity_usdc'] ?? null);
         $liveMinNetYield = normalized_nonnegative_yield_input($payload['minNetYield'] ?? $payload['live_min_net_yield'] ?? null);
-        $liveTradeCadenceHours = normalized_cadence_hours_input($payload['tradeCadenceHours'] ?? $payload['live_trade_cadence_hours'] ?? null);
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
         $liveShortlistTokenIds = normalized_live_shortlist_token_ids_input($payload['live_execution_candidate_token_ids'] ?? null);
@@ -1503,7 +1477,6 @@ try {
             $paperExtraInputs["paper_{$strategy}_max_resolution_days"] = normalized_days_input($payload["paper_{$strategy}_max_resolution_days"] ?? null);
             $paperExtraInputs["paper_{$strategy}_selection_order"] = normalized_selection_order_input($payload["paper_{$strategy}_selection_order"] ?? null);
             $paperExtraInputs["paper_{$strategy}_min_liquidity_usdc"] = normalized_money_input($payload["paper_{$strategy}_min_liquidity_usdc"] ?? null);
-            $paperExtraInputs["paper_{$strategy}_trade_cadence_hours"] = normalized_cadence_hours_input($payload["paper_{$strategy}_trade_cadence_hours"] ?? null);
             $paperExtraInputs["paper_{$strategy}_require_most_probable"] = normalized_bool_input($payload["paper_{$strategy}_require_most_probable"] ?? null);
         }
         $workflows = [
@@ -1530,10 +1503,8 @@ try {
                     'live_selection_order' => $liveSelectionOrder,
                     'live_min_liquidity_usdc' => $liveMinLiquidity,
                     'live_min_net_yield' => $liveMinNetYield,
-                    'live_trade_cadence_hours' => $liveTradeCadenceHours,
                     'live_use_limit_orders' => $liveUseLimitOrders,
                     'cross_live_portfolio_risk_diversification' => $crossLiveRiskDiversification,
-                    'live_ignore_trade_cadence' => 'true',
                     'live_run_source' => $manualRunOnce === true ? 'MANUAL' : 'AUTO',
                     'live_execution_candidate_token_ids' => $liveShortlistTokenIds,
                     'live_execution_probability_source' => $liveShortlistProbabilitySource,

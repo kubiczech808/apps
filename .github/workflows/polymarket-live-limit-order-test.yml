@@ -44,11 +44,6 @@ on:
         required: false
         default: ""
         type: string
-      live_trade_cadence_hours:
-        description: Minimum hours between new live orders
-        required: false
-        default: ""
-        type: string
       live_use_limit_orders:
         description: Use limit orders instead of market orders
         required: false
@@ -58,11 +53,6 @@ on:
         description: Block correlated exposure across live portfolios
         required: false
         default: "true"
-        type: string
-      live_ignore_trade_cadence:
-        description: Manual Run once request; bypasses new-trade cadence only
-        required: false
-        default: "false"
         type: string
       live_run_source:
         description: Source of this live execution run
@@ -86,8 +76,7 @@ on:
         type: string
   schedule:
     # GitHub Actions schedules can be delayed or dropped. Poll every ten minutes
-    # away from the top of the hour; the executor itself keeps the configured
-    # new-trade cadence and records only real decision runs.
+    # away from the top of the hour; every run may place a new eligible order.
     - cron: '3,13,23,33,43,53 * * * *'
 
 concurrency:
@@ -117,14 +106,10 @@ jobs:
       MAX_ORDER_NOTIONAL_USDC: "50"
       LIVE_IDLE_CASH_MAX_USDC: "5"
       LIVE_IDLE_CASH_GRACE_HOURS: "24"
-      LIVE_ONE_TRADE_PER_DAY: "true"
-      LIVE_TRADE_CADENCE_HOURS: ${{ github.event.inputs.live_trade_cadence_hours || '24' }}
-      LIVE_IGNORE_TRADE_CADENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_ignore_trade_cadence == 'true' && 'true' || 'false' }}
       LIVE_RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_run_source == 'MANUAL' && 'MANUAL' || 'AUTO' }}
       LIVE_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.live_execution_trigger || 'cron' }}
       LIVE_EXECUTION_CANDIDATE_TOKEN_IDS: ${{ github.event.inputs.live_execution_candidate_token_ids || '' }}
       LIVE_EXECUTION_SHORTLIST_PROBABILITY_SOURCE: ${{ github.event.inputs.live_execution_probability_source || '' }}
-      LIVE_SCHEDULED_CADENCE_POLL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.live_execution_trigger != 'after_scrape' && inputs.live_ignore_trade_cadence != 'true')) && 'true' || 'false' }}
       LIVE_SKIP_SCHEDULED_EXECUTION: "false"
       USE_LIMIT_ORDERS: ${{ github.event.inputs.live_use_limit_orders || 'true' }}
       LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION: ${{ github.event.inputs.cross_live_portfolio_risk_diversification || 'true' }}
@@ -190,7 +175,6 @@ jobs:
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": live.get("minLiquidityUsdc"),
               "LIVE_MIN_NET_YIELD": live.get("minNetYield"),
               "LIVE_EXECUTION_TRIGGER": live.get("executionTrigger"),
-              "LIVE_TRADE_CADENCE_HOURS": live.get("tradeCadenceHours"),
               "LIVE_EXCLUDED_CANDIDATE_TOKEN_IDS": ",".join(str(token) for token in (live.get("excludedCandidateTokenIds") or []) if str(token).isdigit()),
               "USE_LIMIT_ORDERS": str(bool(live.get("useLimitOrders", True))).lower(),
               "LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION": str(bool(system.get("crossLivePortfolioRiskDiversification", True))).lower(),
@@ -209,9 +193,7 @@ jobs:
       - name: Show effective live execution settings
         run: |
           echo "Live probability source: ${LIVE_PROBABILITY_SOURCE}"
-          echo "Live trade cadence hours: ${LIVE_TRADE_CADENCE_HOURS}"
           echo "Live execution trigger: ${LIVE_EXECUTION_TRIGGER}"
-          echo "Live ignore cadence: ${LIVE_IGNORE_TRADE_CADENCE}"
           echo "Live selection order: ${LIVE_SELECTION_ORDER}"
 
       - name: Generate fresh live account snapshot

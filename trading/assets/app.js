@@ -174,8 +174,6 @@ const els = {
   minLiquidityLabel: document.querySelector("[data-min-liquidity-label]"),
   minNetYield: document.querySelector("[data-min-net-yield]"),
   minNetYieldLabel: document.querySelector("[data-min-net-yield-label]"),
-  tradeCadenceHours: document.querySelector("[data-trade-cadence-hours]"),
-  tradeCadenceHoursLabel: document.querySelector("[data-trade-cadence-hours-label]"),
   executionTrigger: document.querySelector("[data-execution-trigger]"),
   executionTriggerLabel: document.querySelector("[data-execution-trigger-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
@@ -365,7 +363,6 @@ function defaultPortfolioConfig() {
         selectionOrder: "highest_ev_pa_first",
         minLiquidityUsdc: null,
         minNetYield: 0,
-        tradeCadenceHours: 1,
         executionTrigger: "cron",
         requireMostProbableOutcome: false,
         probabilitySource: "ai",
@@ -378,7 +375,6 @@ function defaultPortfolioConfig() {
         selectionOrder: "highest_reward_risk_first",
         minLiquidityUsdc: null,
         minNetYield: 0,
-        tradeCadenceHours: 1,
         executionTrigger: "cron",
         requireMostProbableOutcome: false,
         probabilitySource: "ai",
@@ -391,7 +387,6 @@ function defaultPortfolioConfig() {
         selectionOrder: "highest_reward_risk_first",
         minLiquidityUsdc: 500000,
         minNetYield: 0,
-        tradeCadenceHours: 1,
         executionTrigger: "cron",
         requireMostProbableOutcome: true,
         probabilitySource: "ai",
@@ -405,7 +400,6 @@ function defaultPortfolioConfig() {
       selectionOrder: "highest_ev_pa_first",
       minLiquidityUsdc: 100,
       minNetYield: 0,
-      tradeCadenceHours: 24,
       executionTrigger: "cron",
       useLimitOrders: true,
       requireMostProbableOutcome: false,
@@ -493,12 +487,6 @@ function normalizeOptionalMoney(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) return null;
   return Math.round(numeric * 100) / 100;
-}
-
-function normalizeCadenceHours(value, fallback = 24) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
-  return Math.min(168, Math.max(1, Math.round(numeric)));
 }
 
 function portfolioConfigForMode(mode = state.mode) {
@@ -2686,7 +2674,6 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const order = normalizeSelectionOrder(config.selectionOrder);
   const isLive = normalizeMode(mode) === "live";
-  const cadence = normalizeCadenceHours(config.tradeCadenceHours, isLive ? 24 : 1);
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(mode);
   const allocation = normalizeRiskAllocation(config.maxOrderFraction) ?? DEFAULT_RISK_ALLOCATION;
   const limitOrders = config.useLimitOrders ?? isLive;
@@ -2704,8 +2691,6 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.minLiquidityLabel) els.minLiquidityLabel.textContent = liquidity == null ? "none" : money(liquidity);
   if (els.minNetYield) els.minNetYield.value = (minNetYield * 100).toFixed(1);
   if (els.minNetYieldLabel) els.minNetYieldLabel.textContent = percent(minNetYield);
-  if (els.tradeCadenceHours) els.tradeCadenceHours.value = String(cadence);
-  if (els.tradeCadenceHoursLabel) els.tradeCadenceHoursLabel.textContent = `${cadence}h`;
   const trigger = normalizeExecutionTrigger(config.executionTrigger);
   if (els.executionTrigger) els.executionTrigger.value = trigger;
   if (els.executionTriggerLabel) els.executionTriggerLabel.textContent = executionTriggerLabel(trigger);
@@ -3845,9 +3830,6 @@ function paperThresholdPayload() {
     paper_conservative_min_liquidity_usdc: conservative.minLiquidityUsdc,
     paper_high_reward_min_liquidity_usdc: highReward.minLiquidityUsdc,
     paper_more_probable_min_liquidity_usdc: moreProbable.minLiquidityUsdc,
-    paper_conservative_trade_cadence_hours: conservative.tradeCadenceHours,
-    paper_high_reward_trade_cadence_hours: highReward.tradeCadenceHours,
-    paper_more_probable_trade_cadence_hours: moreProbable.tradeCadenceHours,
     paper_conservative_require_most_probable: conservative.requireMostProbableOutcome,
     paper_high_reward_require_most_probable: highReward.requireMostProbableOutcome,
     paper_more_probable_require_most_probable: moreProbable.requireMostProbableOutcome,
@@ -4293,7 +4275,6 @@ function portfolioRuleRows(portfolio = {}) {
     ["Stake sizing", stakeSizingRuleValue(mode, portfolio)],
     ["Resolution filter", resolution],
     ["Trade priority", priority],
-    ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 1)}h between new paper trades`],
     ["Execution trigger", executionTriggerLabel(config.executionTrigger)],
   ];
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Liquidity filter", `>= ${money(minLiquidityUsdc)}`]);
@@ -4316,7 +4297,6 @@ function livePortfolioRuleRows() {
     ["Stake sizing", stakeSizingRuleValue("live", state.liveState?.portfolio)],
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
-    ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 24)}h between new live orders`],
     ["Execution trigger", executionTriggerLabel(config.executionTrigger)],
     ["Liquidity filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
@@ -6347,7 +6327,6 @@ function normalizeLiveExecutionRun(execution) {
       maxSpread: settings.maxSpread,
       minVolume24hr: settings.minVolume24hr,
       minNetYield: settings.minNetYield,
-      tradeCadenceHours: settings.tradeCadenceHours,
       maxOrderFraction: account.maxOrderFraction,
       useLimitOrders: settings.useLimitOrders,
       crossPortfolioRiskDiversification: settings.crossPortfolioRiskDiversification,
@@ -7092,20 +7071,6 @@ els.minNetYield?.addEventListener("input", () => {
     return;
   }
   updatePortfolioConfigForMode(state.mode, { minNetYield: value });
-  savePortfolioConfigSoon();
-  syncPortfolioParameterControls();
-  rerenderCurrentDashboard();
-});
-
-els.tradeCadenceHours?.addEventListener("input", () => {
-  if (parameterDraftInputIsEmpty(els.tradeCadenceHours)) {
-    if (els.tradeCadenceHoursLabel) els.tradeCadenceHoursLabel.textContent = "-";
-    return;
-  }
-  const fallback = isLiveMode() ? 24 : 1;
-  const value = normalizeCadenceHours(els.tradeCadenceHours.value, fallback);
-  if (updateParameterDraft({ tradeCadenceHours: value })) return;
-  updatePortfolioConfigForMode(state.mode, { tradeCadenceHours: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

@@ -276,7 +276,7 @@
                   <input type="checkbox" data-cross-live-risk checked>
                   <span>Block correlated trades across live portfolios</span>
                 </label>
-                <p class="system-status-note">Default on. Live portfolios may share one account, so correlated open exposure is blocked across live portfolios while paper portfolios keep their own cadence and trade independently.</p>
+                <p class="system-status-note">Default on. Live portfolios may share one account, so correlated open exposure is blocked across live portfolios while paper portfolios trade independently.</p>
                 <p class="system-status-note">One-time browser-side confirmation for this connected live account. Keep it here for account setup or future reconnection; normal scheduled automation uses stored server secrets.</p>
               </div>
               <div class="calculation-controls">
@@ -349,11 +349,6 @@
           <span>Minimum net profit after fees</span>
           <input type="number" min="0" max="1000" step="0.1" value="0.0" data-min-net-yield>
           <strong data-min-net-yield-label>0.0%</strong>
-        </label>
-        <label class="parameter-control">
-          <span>New trade cadence</span>
-          <input type="number" min="1" max="168" step="1" placeholder="24" data-trade-cadence-hours>
-          <strong data-trade-cadence-hours-label>24h</strong>
         </label>
         <label class="parameter-control">
           <span>Execution trigger</span>

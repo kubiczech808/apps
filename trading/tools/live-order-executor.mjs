@@ -63,13 +63,6 @@ const FUNDER_ADDRESS = process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLY
 const EXECUTION_STATE_PATH = process.env.LIVE_EXECUTION_STATE_PATH || "";
 const IDLE_CASH_MAX_USDC = Number(process.env.LIVE_IDLE_CASH_MAX_USDC || 5);
 const IDLE_CASH_GRACE_HOURS = Number(process.env.LIVE_IDLE_CASH_GRACE_HOURS || 24);
-const HAS_EXPLICIT_TRADE_CADENCE = process.env.LIVE_TRADE_CADENCE_HOURS != null && process.env.LIVE_TRADE_CADENCE_HOURS !== "";
-const ONE_TRADE_PER_DAY = HAS_EXPLICIT_TRADE_CADENCE
-  ? false
-  : String(process.env.LIVE_ONE_TRADE_PER_DAY ?? "true").toLowerCase() !== "false";
-const TRADE_CADENCE_HOURS = Math.min(168, Math.max(1, Math.round(envNumber("LIVE_TRADE_CADENCE_HOURS", ONE_TRADE_PER_DAY ? 24 : 1))));
-const IGNORE_TRADE_CADENCE = String(process.env.LIVE_IGNORE_TRADE_CADENCE || "").toLowerCase() === "true";
-const SCHEDULED_CADENCE_POLL = String(process.env.LIVE_SCHEDULED_CADENCE_POLL || "").toLowerCase() === "true";
 const SKIP_SCHEDULED_EXECUTION = String(process.env.LIVE_SKIP_SCHEDULED_EXECUTION || "").toLowerCase() === "true";
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
@@ -94,7 +87,6 @@ const ROTATION_NO_DAYS_MAX_WIN_GAP = Math.max(
 );
 const LIVE_AUTO_ROTATE = String(process.env.LIVE_AUTO_ROTATE ?? "true").toLowerCase() !== "false";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
-const TZ = "Europe/Prague";
 let previousExecutionState = null;
 
 function hasFlag(name) {
@@ -165,44 +157,10 @@ async function loadOptionalJsonResource(location, label = location) {
   }
 }
 
-function pragueDateKey(date = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-}
-
 function hoursSince(value, now = new Date()) {
   const time = Date.parse(value || "");
   if (!Number.isFinite(time)) return null;
   return Math.max(0, (now.getTime() - time) / 3600000);
-}
-
-function isCadenceWaitRun(row = {}) {
-  const action = String(row.action || row.batchLog?.action || "").toUpperCase();
-  const reason = String(row.reason || row.batchLog?.reason || "");
-  return action === "CADENCE_WAIT" || /cadence poll is not due|poll is not due/i.test(reason);
-}
-
-function latestLiveExecutionRunAt(previousExecution = {}) {
-  const fromLog = Array.isArray(previousExecution?.runLog)
-    ? previousExecution.runLog.find((row) => !isCadenceWaitRun(row))?.runAt
-    : null;
-  const rootGeneratedAt = isCadenceWaitRun(previousExecution) ? null : previousExecution?.generatedAt;
-  const rootBatchAt = isCadenceWaitRun(previousExecution?.batchLog || {}) ? null : previousExecution?.batchLog?.runAt;
-  const candidates = [fromLog, rootGeneratedAt, rootBatchAt];
-  return candidates.find((value) => Number.isFinite(Date.parse(value || ""))) || null;
-}
-
-function liveExecutionRunDue(previousExecution, liveState, now = new Date()) {
-  if (!SCHEDULED_CADENCE_POLL || IGNORE_TRADE_CADENCE) return true;
-  if (rotationReplacementDue(previousExecution, liveState)) return true;
-  if (Array.isArray(liveState?.openOrders) && liveState.openOrders.length > 0) return true;
-  const lastRunAt = latestLiveExecutionRunAt(previousExecution);
-  if (!lastRunAt) return true;
-  return Number(hoursSince(lastRunAt, now) ?? Infinity) >= TRADE_CADENCE_HOURS;
 }
 
 function probabilitySourceLabel() {
@@ -239,15 +197,6 @@ function hasOpenSellOrderForToken(liveState, tokenId) {
   });
 }
 
-function rotationReplacementDue(previousExecution, liveState) {
-  const tokenId = previousExecution?.rotationExit?.position?.tokenId;
-  if (!tokenId) return false;
-  const stillHeld = (Array.isArray(liveState?.positions) ? liveState.positions : [])
-    .some((position) => String(position.tokenId || position.assetId || "") === String(tokenId)
-      && number(position.shares ?? position.size ?? position.balance, 0) > 0);
-  return !stillHeld && !hasOpenSellOrderForToken(liveState, tokenId);
-}
-
 function liveCashMonitoring(previousExecution, cash, now = new Date()) {
   const previousMonitoring = previousExecution?.monitoring || {};
   const previousCash = number(previousExecution?.account?.cashUsdc);
@@ -256,21 +205,6 @@ function liveCashMonitoring(previousExecution, cash, now = new Date()) {
     ? (previousCash != null && previousCash > IDLE_CASH_MAX_USDC ? previousMonitoring.idleCashSince : null) || now.toISOString()
     : null;
   const idleHours = idleCashSince ? hoursSince(idleCashSince, now) : 0;
-  const lastSubmittedAt = previousExecution?.action === "SUBMITTED"
-    ? previousExecution.generatedAt
-    : previousMonitoring.lastSubmittedAt || null;
-  const submittedHoursAgo = lastSubmittedAt ? hoursSince(lastSubmittedAt, now) : null;
-  const submittedToday = ONE_TRADE_PER_DAY
-    && lastSubmittedAt
-    && pragueDateKey(new Date(lastSubmittedAt)) === pragueDateKey(now);
-  const rawCadenceBlocked = lastSubmittedAt
-    ? Number(submittedHoursAgo ?? Infinity) < TRADE_CADENCE_HOURS
-    : false;
-  const cadenceBlocked = IGNORE_TRADE_CADENCE ? false : rawCadenceBlocked;
-  const cadenceRemainingHours = cadenceBlocked
-    ? Math.max(0, TRADE_CADENCE_HOURS - Number(submittedHoursAgo || 0))
-    : 0;
-
   return {
     idleCashLimitUsdc: IDLE_CASH_MAX_USDC,
     idleCashGraceHours: IDLE_CASH_GRACE_HOURS,
@@ -278,15 +212,6 @@ function liveCashMonitoring(previousExecution, cash, now = new Date()) {
     idleCashSince,
     idleCashHours: idleHours == null ? null : Number(idleHours.toFixed(2)),
     idleCashOverdue: cashAboveLimit && Number(idleHours || 0) >= IDLE_CASH_GRACE_HOURS,
-    lastSubmittedAt,
-    submittedHoursAgo: submittedHoursAgo == null ? null : Number(submittedHoursAgo.toFixed(2)),
-    cadenceRemainingHours: Number(cadenceRemainingHours.toFixed(2)),
-    submittedToday,
-    cadenceBlocked,
-    rawCadenceBlocked,
-    ignoreTradeCadence: IGNORE_TRADE_CADENCE,
-    tradeCadenceHours: TRADE_CADENCE_HOURS,
-    oneTradePerDay: ONE_TRADE_PER_DAY,
   };
 }
 
@@ -1824,7 +1749,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
 
 async function emitDecision(payload) {
   const previousRunLog = Array.isArray(previousExecutionState?.runLog)
-    ? previousExecutionState.runLog.filter((row) => !isCadenceWaitRun(row))
+    ? previousExecutionState.runLog
     : [];
   const runEntry = {
     ...(payload.batchLog || {}),
@@ -2585,14 +2510,6 @@ async function main() {
     }, null, 2));
     return;
   }
-  if (!liveExecutionRunDue(previousExecution, liveState)) {
-    console.log(JSON.stringify({
-      action: "CADENCE_WAIT",
-      reason: "Scheduled polling skipped: no live execution review is due yet.",
-      lastFullRunAt: latestLiveExecutionRunAt(previousExecution),
-    }, null, 2));
-    return;
-  }
   const [paperState, scrapedState] = await Promise.all([
     loadJsonResource(PAPER_STATE_URL, "paper state"),
     PROBABILITY_SOURCE === "polymarket"
@@ -2679,13 +2596,12 @@ async function main() {
   const directCandidateCanUseFreeCapital = Boolean(best
     && Number.isFinite(bestCandidateCost)
     && bestCandidateCost <= number(cash, 0) + 0.00001);
-  const replacementDue = rotationReplacementDue(previousExecution, liveState);
   // Use free cash for a direct candidate before touching existing orders or
   // positions. An unrelated buy is allowed while a sell order is pending.
-  const directCapitalPriority = Boolean(best && (!monitoring.cadenceBlocked || replacementDue));
+  const directCapitalPriority = Boolean(best);
   // A directly fundable candidate must also protect unrelated open orders from
-  // cancellation. Cadence may defer the new buy, but it must never trigger a
-  // needless cancellation just to make room for a trade that is already funded.
+  // cancellation. A funded buy must never trigger a needless cancellation just
+  // to make room for a trade that is already funded.
   const orderManagement = manualShortlistStale || activeSellOrders.length || directCandidateCanUseFreeCapital
     ? { action: "NONE", reviews: [] }
     : await reviewOpenOrders({
@@ -2705,9 +2621,8 @@ async function main() {
     ? number(best.totalCostUsdc, 0)
     : Math.min(maxNotional, Math.max(0, cash));
   // Replacing an order that this run just cancelled is order management, not an
-  // additional portfolio allocation. Do not strand its released capital behind
-  // the new-trade cadence.
-  const cadenceBlocked = Boolean(monitoring.cadenceBlocked) && !replacementDue && !canceledForBetterCandidate;
+  // additional portfolio allocation. Continue with its released capital in
+  // this same batch.
   const rotationAvailable = rotationReview?.action === "ROTATION_AVAILABLE";
   const rotationComparison = rotationComparisonRows(rotationReview, orderManagement.reviews);
   const rotationHumanReason = rotationAvailable ? rotationHumanComparison(rotationReview.best) : "";
@@ -2719,15 +2634,13 @@ async function main() {
       ? (needsRiskReplacement
         ? `${rotationHumanReason || "A risk-overlap replacement will sell the conflicting position before placing the replacement buy."}`
         : `${rotationHumanReason || "Cash is insufficient for a direct order, so the weakest position will be sold before the replacement buy."}`)
-      : (cadenceBlocked
-        ? `live new-trade cadence blocked (${TRADE_CADENCE_HOURS}h; last accepted new order ${monitoring.lastSubmittedAt || "unknown"}; ${monitoring.cadenceRemainingHours}h remaining)`
-        : (best
+      : (best
         ? "best currently revalidated executable candidate"
         : (rotationAvailable
             ? "cash is insufficient for a new direct order; a sell-and-replace rotation candidate was identified"
             : (capitalSizingBlocked.length
                 ? `live candidates blocked by available USDC: ${capitalSizingBlocked.length} cannot meet the current Polymarket minimum order size`
-                : "no currently executable candidate after live revalidation")))));
+                : "no currently executable candidate after live revalidation"))));
   const actionExplanation = directCapitalPriority
     ? "A currently executable candidate has available free capital. The batch submits it first; existing orders and positions are considered for rotation only when no direct allocation is possible."
     : activeSellOrders.length
@@ -2736,18 +2649,16 @@ async function main() {
       ? (needsRiskReplacement
         ? "The replacement conflicts with the selected live position under diversification rules, so the system sells that position first and waits for account sync before buying the replacement."
         : "Available cash cannot support a direct order, so the system sells the selected weaker position first and waits for account sync before considering the replacement.")
-      : (best && !cadenceBlocked
+      : (best
       ? "Live batch found an executable candidate after revalidation."
-      : (cadenceBlocked
-        ? `No live order was submitted because the configured new-trade cadence is not elapsed yet. Last accepted new order: ${monitoring.lastSubmittedAt || "unknown"}; ${monitoring.submittedHoursAgo ?? "-"}h elapsed of ${TRADE_CADENCE_HOURS}h; approximately ${monitoring.cadenceRemainingHours}h remaining. ${directCandidateCanUseFreeCapital ? "A directly fundable candidate was preserved; no unrelated order or position was cancelled." : "Open-order management still ran."}`
-        : (rotationAvailable
+      : (rotationAvailable
             ? "No live order was submitted because opening the better candidate would first require selling an existing live position; this run records the rotation review but does not perform the sell/rebuy sequence automatically."
             : (capitalSizingBlocked.length
                 ? "No live order was submitted because available USDC cannot cover the exchange minimum size for the revalidated candidate(s)."
-                : "No live order was submitted because all revalidated candidates failed current execution criteria.")))));
+                : "No live order was submitted because all revalidated candidates failed current execution criteria."))));
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
-    action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
+    action: best ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
     reason: actionReason,
     generatedAt: new Date().toISOString(),
     account: {
@@ -2782,12 +2693,6 @@ async function main() {
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
       idleCashMaxUsdc: IDLE_CASH_MAX_USDC,
       idleCashGraceHours: IDLE_CASH_GRACE_HOURS,
-      oneTradePerDay: ONE_TRADE_PER_DAY,
-      tradeCadenceHours: TRADE_CADENCE_HOURS,
-      lastSubmittedAt: monitoring.lastSubmittedAt,
-      submittedHoursAgo: monitoring.submittedHoursAgo,
-      cadenceRemainingHours: monitoring.cadenceRemainingHours,
-      ignoreTradeCadence: IGNORE_TRADE_CADENCE,
       freeCapitalPriority: true,
       directCandidateCanUseFreeCapital,
       directCandidateCostUsdc: bestCandidateCost,
@@ -2823,7 +2728,7 @@ async function main() {
       runSource: String(process.env.LIVE_RUN_SOURCE || "AUTO").toUpperCase() === "MANUAL" ? "MANUAL" : "AUTO",
       manualRunOnce: String(process.env.LIVE_RUN_SOURCE || "").toUpperCase() === "MANUAL",
       selectionMetric: returnMetricLabel(),
-      action: best && !cadenceBlocked ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
+      action: best ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
       reason: actionReason,
       explanation: actionExplanation,
       humanReason: rotationHumanReason || null,
@@ -2835,12 +2740,7 @@ async function main() {
         minVolume24hr: MIN_VOLUME_24H,
         minNetYield: MIN_NET_YIELD,
         maxResolutionDays: MAX_RESOLUTION_DAYS,
-        tradeCadenceHours: TRADE_CADENCE_HOURS,
         executionTrigger: String(process.env.LIVE_EXECUTION_TRIGGER || "cron").toLowerCase() === "after_scrape" ? "after_scrape" : "cron",
-        lastSubmittedAt: monitoring.lastSubmittedAt,
-        submittedHoursAgo: monitoring.submittedHoursAgo,
-        cadenceRemainingHours: monitoring.cadenceRemainingHours,
-        ignoreTradeCadence: IGNORE_TRADE_CADENCE,
         freeCapitalPriority: true,
         directCandidateCanUseFreeCapital,
         directCandidateCostUsdc: bestCandidateCost,
@@ -2876,8 +2776,6 @@ async function main() {
         rotationAvailable,
         riskBlockedCandidates: riskBlockedCandidates.length,
         rejectedCandidates: checked.filter((item) => item.status !== "ELIGIBLE").length,
-        cadenceBlocked,
-        rawCadenceBlocked: Boolean(monitoring.rawCadenceBlocked),
       },
       openOrderReviews: orderManagement.reviews,
       rotationComparison,
@@ -3025,7 +2923,7 @@ async function main() {
     return;
   }
 
-  if (!best || cadenceBlocked || DRY_RUN || !hasFlag("confirm-live")) {
+  if (!best || DRY_RUN || !hasFlag("confirm-live")) {
     await emitDecision({ ...decision, attempts: best ? [orderAttemptSummary(best, null, { action: decision.action })] : [] });
     return;
   }

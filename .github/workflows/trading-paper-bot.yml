@@ -19,7 +19,7 @@ on:
           - report
           - after_scan
       manual_run_once:
-        description: "Manual Run once request; bypasses new-trade cadence only"
+        description: "Manual Run once request"
         required: false
         default: "false"
         type: string
@@ -108,21 +108,6 @@ on:
         required: false
         default: ""
         type: string
-      paper_conservative_trade_cadence_hours:
-        description: "Conservative new trade cadence in hours"
-        required: false
-        default: ""
-        type: string
-      paper_high_reward_trade_cadence_hours:
-        description: "High reward new trade cadence in hours"
-        required: false
-        default: ""
-        type: string
-      paper_more_probable_trade_cadence_hours:
-        description: "More probable new trade cadence in hours"
-        required: false
-        default: ""
-        type: string
       paper_conservative_require_most_probable:
         description: "Conservative only multichoice events"
         required: false
@@ -181,9 +166,6 @@ jobs:
       PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.paper_conservative_min_liquidity_usdc || '' }}
       PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.paper_high_reward_min_liquidity_usdc || '' }}
       PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.paper_more_probable_min_liquidity_usdc || '' }}
-      PAPER_CONSERVATIVE_TRADE_CADENCE_HOURS: ${{ github.event.inputs.paper_conservative_trade_cadence_hours || '' }}
-      PAPER_HIGH_REWARD_TRADE_CADENCE_HOURS: ${{ github.event.inputs.paper_high_reward_trade_cadence_hours || '' }}
-      PAPER_MORE_PROBABLE_TRADE_CADENCE_HOURS: ${{ github.event.inputs.paper_more_probable_trade_cadence_hours || '' }}
       PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_conservative_require_most_probable || '' }}
       PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_high_reward_require_most_probable || '' }}
       PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_more_probable_require_most_probable || '' }}
@@ -235,7 +217,6 @@ jobs:
       PAPER_REFRESH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' }}
       PAPER_SCAN_ONLY: ${{ github.event_name == 'schedule' && github.event.schedule == '*/10 * * * *' && 'true' || 'false' }}
       PAPER_REFRESH_MARKET_SLUG: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' && inputs.paper_strategy_id || '' }}
-      PAPER_SCHEDULED_CADENCE_POLL: ${{ github.event_name == 'schedule' && github.event.schedule != '17 * * * *' && 'true' || 'false' }}
       PAPER_CONTINUOUS_EVALUATION: "true"
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET || secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-3.5-flash
@@ -294,7 +275,6 @@ jobs:
               emit(f"{prefix}_SELECTION_ORDER", row.get("selectionOrder"))
               emit(f"{prefix}_MIN_LIQUIDITY_USDC", row.get("minLiquidityUsdc"))
               emit(f"{prefix}_MIN_NET_YIELD", row.get("minNetYield"))
-              emit(f"{prefix}_TRADE_CADENCE_HOURS", row.get("tradeCadenceHours"))
               emit(f"{prefix}_EXECUTION_TRIGGER", row.get("executionTrigger"))
               emit(f"{prefix}_REQUIRE_MOST_PROBABLE", str(bool(row.get("requireMostProbableOutcome"))).lower())
               emit(f"{prefix}_PROBABILITY_SOURCE", row.get("probabilitySource"))

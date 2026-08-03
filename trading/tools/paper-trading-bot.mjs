@@ -139,8 +139,7 @@ const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
 const EVALUATION_ONLY = envBool("PAPER_EVALUATION_ONLY", false);
 const EVALUATION_TOKEN_ID = String(process.env.PAPER_EVALUATION_TOKEN_ID || "").trim();
 const EVALUATION_MARKET_SLUG = String(process.env.PAPER_EVALUATION_MARKET_SLUG || "").trim();
-const SCHEDULED_CADENCE_POLL = envBool("PAPER_SCHEDULED_CADENCE_POLL", false);
-const EXECUTION_TRIGGER = String(process.env.PAPER_EXECUTION_TRIGGER || (SCHEDULED_CADENCE_POLL ? "cron" : "manual")).trim().toLowerCase();
+const EXECUTION_TRIGGER = String(process.env.PAPER_EXECUTION_TRIGGER || "manual").trim().toLowerCase();
 const CONTINUOUS_EVALUATION = envBool("PAPER_CONTINUOUS_EVALUATION", false);
 const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
 const SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT", 300);
@@ -163,7 +162,6 @@ const PAPER_STRATEGIES = {
     maxResolutionDays: envNumber("PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_CONSERVATIVE_MIN_NET_YIELD", 0),
-    tradeCadenceHours: envNumber("PAPER_CONSERVATIVE_TRADE_CADENCE_HOURS", 1),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_CONSERVATIVE_EXECUTION_TRIGGER),
     requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
@@ -180,7 +178,6 @@ const PAPER_STRATEGIES = {
     maxResolutionDays: envNumber("PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_HIGH_REWARD_MIN_NET_YIELD", 0),
-    tradeCadenceHours: envNumber("PAPER_HIGH_REWARD_TRADE_CADENCE_HOURS", 1),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_HIGH_REWARD_EXECUTION_TRIGGER),
     requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
@@ -197,7 +194,6 @@ const PAPER_STRATEGIES = {
     maxResolutionDays: envNumber("PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
     minNetYield: envNumber("PAPER_MORE_PROBABLE_MIN_NET_YIELD", 0),
-    tradeCadenceHours: envNumber("PAPER_MORE_PROBABLE_TRADE_CADENCE_HOURS", 1),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_MORE_PROBABLE_EXECUTION_TRIGGER),
     requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
@@ -442,7 +438,6 @@ function normalizePaperPortfolio(strategy, input = {}) {
     maxResolutionDays: strategyMaxResolutionDays(strategy),
     minLiquidityUsdc: strategy.minLiquidityUsdc,
     minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
-    tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
     executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     probabilitySource: strategy.probabilitySource,
@@ -458,7 +453,6 @@ function normalizePaperPortfolio(strategy, input = {}) {
       maxResolutionDays: strategyMaxResolutionDays(strategy),
       minLiquidityUsdc: strategy.minLiquidityUsdc == null ? null : Number(strategy.minLiquidityUsdc),
       minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
-      tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
       executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
@@ -3394,67 +3388,12 @@ function strategyMaxResolutionDays(strategy) {
   return Number.isFinite(days) && days > 0 ? days : DEFAULT_MAX_RESOLUTION_DAYS;
 }
 
-function normalizeTradeCadenceHours(value, fallback = 1) {
-  const hours = Number(value);
-  if (!Number.isFinite(hours) || hours <= 0) return fallback;
-  return Math.min(168, Math.max(1, Math.round(hours)));
-}
-
 function normalizeExecutionTrigger(value) {
   return String(value || "").trim().toLowerCase() === "after_scrape" ? "after_scrape" : "cron";
 }
 
-function hourKeyToDate(key) {
-  const match = String(key || "").match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})$/);
-  if (!match) return null;
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4])));
-  return Number.isFinite(date.getTime()) ? date : null;
-}
-
-function cadenceBlocked(lastTradeHour, currentHour, cadenceHours) {
-  const cadence = normalizeTradeCadenceHours(cadenceHours, 1);
-  if (cadence <= 1) return lastTradeHour === currentHour;
-  const previous = hourKeyToDate(lastTradeHour);
-  const current = hourKeyToDate(currentHour);
-  if (!previous || !current) return false;
-  return (current.getTime() - previous.getTime()) / 3600000 < cadence;
-}
-
-function latestPortfolioRunAt(portfolioState = {}) {
-  const isTradeEvaluationRun = (row = {}) => {
-    if (row.refreshOnly || row.reportOnly) return false;
-    return !["REFRESH", "REPORT", "CADENCE_WAIT"].includes(String(row.action || "").toUpperCase());
-  };
-  const candidates = [
-    isTradeEvaluationRun(portfolioState.lastDecision) ? portfolioState.lastDecision?.runAt : null,
-    ...(Array.isArray(portfolioState.runLog) ? portfolioState.runLog.filter(isTradeEvaluationRun).map((row) => row.runAt) : []),
-  ];
-  return candidates.find((value) => Number.isFinite(Date.parse(value || ""))) || null;
-}
-
-function portfolioRunDue(portfolioState, strategy, now = new Date()) {
-  if (!SCHEDULED_CADENCE_POLL || MANUAL_RUN_ONCE || EXECUTION_ONLY) return true;
-  const lastRunAt = latestPortfolioRunAt(portfolioState);
-  if (!lastRunAt) return true;
-  const last = Date.parse(lastRunAt);
-  if (!Number.isFinite(last)) return true;
-  const cadence = normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1);
-  return (now.getTime() - last) / 3600000 >= cadence;
-}
-
 function dueExecutionStrategies(state) {
-  const now = new Date();
-  return executionStrategies().filter((strategy) => {
-    if (!strategyMatchesExecutionTrigger(strategy)) return false;
-    const portfolioState = state.paperPortfolios?.[strategy.id];
-    return portfolioRunDue(portfolioState, strategy, now);
-  });
-}
-
-function latestNewTrade(portfolioState = {}) {
-  return (portfolioState.trades || [])
-    .filter((trade) => !trade.openedAfterRotationOfTradeId)
-    .sort((a, b) => tradeUpdateTime(b) - tradeUpdateTime(a))[0] || null;
+  return executionStrategies().filter((strategy) => strategyMatchesExecutionTrigger(strategy));
 }
 
 function strategyEligibleCandidates(eligible, strategy) {
@@ -3931,11 +3870,11 @@ async function revalidateStoredExecutionShortlist(shortlist, learningProfile, st
     raw.push(await revalidateStoredExecutionCandidate(item, learningProfile));
   }
   // Execution verifies price, liquidity and diversification only. AI research
-  // belongs to the background evaluation budget, never to execution cadence.
+  // belongs to the background evaluation budget, never to order execution.
   return raw.map(normalizeEvaluationRisk);
 }
 
-function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, cadenceBlocked = false, rotationReview = null, diversificationDiagnostics = null, prevalidationFilter = null }) {
+function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligible, rankedEligible, action, reason, available, stake, selected = null, skippedForRisk = 0, insufficientCapital = false, rotationReview = null, diversificationDiagnostics = null, prevalidationFilter = null }) {
   const evaluated = Array.isArray(eligible) ? eligible : [];
   const ranked = Array.isArray(rankedEligible) ? rankedEligible : evaluated;
   const blocked = ranked.filter((item) => item.selectionStatus === "RISK_BLOCKED" || item.riskBlockedReason);
@@ -3966,9 +3905,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
       executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
-      tradeCadenceHours: normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1),
       manualRunOnce: MANUAL_RUN_ONCE,
-      cadenceIgnored: MANUAL_RUN_ONCE,
       requestedStrategyId: PAPER_STRATEGY_ID || null,
       maxStakeUsdc: Number(stake.toFixed(2)),
     },
@@ -3982,7 +3919,6 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       skippedForRisk,
       riskBlocked: blocked.length,
       openTrades: openTrades(portfolioState.trades || []).length,
-      cadenceBlocked: Boolean(cadenceBlocked),
     },
     portfolioFilter: portfolioFilterDiagnostics(evaluations, strategy),
     selected: tradeBatchCandidateSummary(selected),
@@ -4111,38 +4047,6 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   const available = Math.max(0, sizingCapital - openRisk(portfolioState.trades));
   const maxFraction = Number(strategy.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION);
   const stake = sizingCapital * maxFraction;
-
-  const tradeCadenceHours = normalizeTradeCadenceHours(strategy.tradeCadenceHours, 1);
-  const ignoreCadence = Boolean(options.ignoreCadence);
-
-  if (!ignoreCadence && cadenceBlocked(portfolioState.lastTradeHour, currentHour, tradeCadenceHours)) {
-    const latest = latestNewTrade(portfolioState);
-    const latestLabel = latest
-      ? `${latest.strategyLabel || strategy.label}: ${latest.outcome || "-"} / ${latest.question || "-"}`
-      : strategy.label;
-    const reason = `${strategy.label} paper trade cadence blocked: this portfolio last opened a new trade at ${portfolioState.lastTradeHour || "-"}, cadence ${tradeCadenceHours}h. Other paper portfolios do not block this cadence. Last trade: ${latestLabel}`;
-    return {
-      action: "SKIP",
-      reason,
-      available,
-      requiredStake: stake,
-      strategyId: strategy.id,
-      batchLog: buildTradeBatchLog({
-        portfolioState,
-        strategy,
-        evaluations,
-        eligible,
-        rankedEligible: eligible,
-        action: "SKIP",
-        reason,
-        available,
-        stake,
-        cadenceBlocked: true,
-        diversificationDiagnostics: options.diversificationDiagnostics || null,
-        prevalidationFilter: options.prevalidationFilter || null,
-      }),
-    };
-  }
 
   const rotation = rotationReview(portfolioState, eligible, strategy, available, stake);
   if (rotation) {
@@ -6068,7 +5972,6 @@ function updateEvaluationStats(state, { evaluations = [], retainedBefore = 0, re
 }
 
 async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun, options = {}) {
-  const ignoreCadence = options.ignoreCadence !== false;
   const source = options.source || "manual";
   const evaluations = [];
   const eligible = [];
@@ -6111,7 +6014,6 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
     };
 
     const decision = maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, revalidated, {
-      ignoreCadence,
       prevalidationFilter,
       diversificationDiagnostics: {
         source: source === "after_scrape" ? "stored_execution_candidates_after_scrape" : "stored_execution_candidates",
@@ -6278,7 +6180,6 @@ async function run() {
       return;
     }
     await executeManualPaperRunFromStoredCandidates(state, strategiesForRun, {
-      ignoreCadence: false,
       source: "after_scrape",
     });
     return;
@@ -6291,14 +6192,9 @@ async function run() {
   if (!strategiesForRun.length) {
     await writeState(state);
     console.log(JSON.stringify({
-      action: "CADENCE_WAIT",
-      reason: "no paper portfolio is due for a new trading evaluation run yet",
-      scheduledCadencePoll: SCHEDULED_CADENCE_POLL,
-      portfolios: Object.values(state.paperPortfolios || {}).map((portfolioState) => ({
-        strategyId: portfolioState.id,
-        lastRunAt: latestPortfolioRunAt(portfolioState),
-        tradeCadenceHours: normalizeTradeCadenceHours(PAPER_STRATEGIES[portfolioState.id]?.tradeCadenceHours, 1),
-      })),
+      action: "EXECUTION_TRIGGER_WAIT",
+      reason: "no paper portfolio is configured for this execution trigger",
+      executionTrigger: EXECUTION_TRIGGER,
     }, null, 2));
     return;
   }
@@ -6425,7 +6321,7 @@ async function run() {
         batchLog: {
           action: "EVALUATION_ONLY",
           reason: "manual single-opportunity evaluation",
-          explanation: "A single Polymarket opportunity was evaluated on demand. Portfolio positions and trade cadence were not changed.",
+          explanation: "A single Polymarket opportunity was evaluated on demand. Portfolio positions were not changed.",
           evaluatedCount: evaluations.length,
           eligibleCount: eligible.length,
           selected: evaluations[0] ? tradeBatchCandidateSummary(evaluations[0]) : null,
@@ -6439,7 +6335,7 @@ async function run() {
           strategyExecutionRows.filter((item) => portfolioFilterResult(item, strategy).eligible),
           strategy,
         );
-        return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, strategyExecutionRows, { ignoreCadence: MANUAL_RUN_ONCE, diversificationDiagnostics });
+        return maybeOpenScheduledTrade(portfolioState, rankedEligible, strategy, strategyExecutionRows, { diversificationDiagnostics });
       });
 
   state.generatedAt = nowIso();

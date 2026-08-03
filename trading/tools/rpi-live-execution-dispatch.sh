@@ -35,5 +35,5 @@ if [ -n "$latest_created" ]; then
   fi
 fi
 
-gh workflow run "$WORKFLOW" --repo "$REPO" --ref "$REF" -f live_confirm=true -f live_ignore_trade_cadence=false -f live_execution_trigger=cron
+gh workflow run "$WORKFLOW" --repo "$REPO" --ref "$REF" -f live_confirm=true -f live_execution_trigger=cron
 echo "[$(date -Is)] dispatched $WORKFLOW on $REF"
