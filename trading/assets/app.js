@@ -1607,8 +1607,19 @@ function tradePotentialAnnualized(trade) {
   }
   const gainPct = tradePotentialGainPct(trade);
   const endDate = tradeEndDate(trade);
+  const remainingDays = daysUntil(endDate);
+  const storedDays = Number(trade.daysToResolution);
+  const awaitingSettlement = String(trade.status || "").toUpperCase() === "PENDING_RESOLUTION";
   const totalPlannedDays = daysBetween(trade.openedAt || trade.date, endDate);
-  return annualizedForPeriod(gainPct, totalPlannedDays);
+  // A stale or partial account snapshot can omit the live mark/share value.
+  // Keep settlement-pending positions comparable by annualizing their known
+  // remaining win with the synchronized horizon instead of returning a dash.
+  const fallbackHorizon = Number.isFinite(remainingDays) && remainingDays > 0
+    ? remainingDays
+    : (Number.isFinite(storedDays) && storedDays > 0
+      ? storedDays
+      : (awaitingSettlement ? MIN_ANNUALIZATION_DAYS : totalPlannedDays));
+  return annualizedForPeriod(gainPct, fallbackHorizon);
 }
 
 function resolutionCell(trade) {
