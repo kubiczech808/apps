@@ -5787,7 +5787,6 @@ function scanLogReasonCounts(value, minimumMinutes = null) {
     resolved_or_closed: "market already resolved, closed, or not accepting orders",
     probability_below_scan_minimum: "probability below scan minimum",
     missing_resolution_date: "missing resolution date",
-    same_event_already_represented: "same event already represented",
     too_close_to_resolution: Number.isFinite(Number(minimumMinutes))
       ? `less than ${Number(minimumMinutes)} min execution buffer`
       : "too close to resolution",
@@ -5977,7 +5976,7 @@ function renderScrapeRunLog() {
                 <td data-label="Status" class="${statusClass}"><strong>${escapeHtml(status)}</strong></td>
                 <td data-label="API calls">${formatInteger(run.apiCalls) || "0"}</td>
                 <td data-label="Markets pulled"><strong>${formatInteger(run.rawMarketCount ?? run.loadedMarketCount) || "0"}</strong><small class="table-secondary">${formatInteger(run.loadedMarketCount) || "0"} unique / ${formatInteger(run.preferredMarketCount) || "0"} preferred / ${formatInteger(run.broadMarketCount) || "0"} broad</small></td>
-                <td data-label="Rows retained"><strong>${formatInteger(run.retainedObservationCount) || "0"}</strong><small class="table-secondary">${formatInteger(run.shortHorizonCount) || "0"} within preferred horizon${Number(run.sameEventSkippedCount || 0) > 0 ? ` / ${formatInteger(run.sameEventSkippedCount)} same-event variants held back` : ""}</small></td>
+                <td data-label="Rows retained"><strong>${formatInteger(run.retainedObservationCount) || "0"}</strong><small class="table-secondary">${formatInteger(run.shortHorizonCount) || "0"} within preferred horizon</small></td>
                 <td data-label="New / updated">${formatInteger(run.newObservationCount) || "0"} / ${formatInteger(run.updatedObservationCount) || "0"}</td>
                 <td data-label="Resolved">${formatInteger(run.resolvedObservationCount) || "0"}</td>
                 <td data-label="Not retained">${formatInteger(run.notRetainedCount) || "0"}</td>

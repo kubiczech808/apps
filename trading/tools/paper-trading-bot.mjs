@@ -4818,7 +4818,6 @@ function marketScanReasonText(reason) {
     resolved_or_closed: "market is already resolved, closed, or no longer accepting orders",
     settled_outcome_probability: "outcome probability is already settled at 0% or 100%",
     no_valid_preferred_outcome_or_quote: "no executable outcome with a current quote was available",
-    same_event_already_represented: "another market from the same event was retained for this scan",
     scan_failed_before_retention: "scan stopped before this market could be retained",
   };
   return labels[reason] || String(reason || "not retained").replace(/_/g, " ");
@@ -4833,7 +4832,6 @@ function marketScanAuditRows({
   fetchedMarkets = [],
   observations = [],
   previousKeys = new Set(),
-  heldBackMarkets = [],
   observedAt = nowIso(),
 } = {}) {
   const retainedByKey = new Map(
@@ -4841,10 +4839,7 @@ function marketScanAuditRows({
       .map((item) => [marketObservationKey(item), item])
       .filter(([key]) => Boolean(key)),
   );
-  const heldBackIds = new Set(heldBackMarkets.map(marketIdentity).filter(Boolean));
-
   return fetchedMarkets.map((market) => {
-    const auditKey = marketIdentity(market);
     const reasonCode = marketScanRetentionReason(market, observedAt);
     const candidate = reasonCode ? null : preferredMarketObservation(market, observedAt);
     const candidateKey = candidate ? marketObservationKey(candidate) : "";
@@ -4854,9 +4849,7 @@ function marketScanAuditRows({
     let outcome = candidate?.outcome || "";
     let probability = candidate?.marketProbability;
 
-    if (heldBackIds.has(auditKey)) {
-      reason = marketScanReasonText("same_event_already_represented");
-    } else if (observation) {
+    if (observation) {
       action = previousKeys.has(candidateKey) ? "UPDATE" : "INSERT";
       reason = action === "INSERT"
         ? "new preferred outcome saved to the scraped catalogue"
@@ -5013,22 +5006,6 @@ function diversifyMarketScanOrder(markets = []) {
   }
   const selected = new Set(firstByCategory.map(marketIdentity));
   return [...firstByCategory, ...ordered.filter((market) => !selected.has(marketIdentity(market)))];
-}
-
-function retainOneMarketPerScanEvent(markets = []) {
-  const retained = [];
-  const heldBack = [];
-  const selectedEvents = new Set();
-  for (const market of markets) {
-    const eventKey = marketScanEventIdentity(market);
-    if (!eventKey || !selectedEvents.has(eventKey)) {
-      if (eventKey) selectedEvents.add(eventKey);
-      retained.push(market);
-      continue;
-    }
-    heldBack.push(market);
-  }
-  return { retained, heldBack };
 }
 
 function activeScanEventKeys(observations = []) {
@@ -5555,14 +5532,9 @@ async function refreshMarketObservations(state) {
       if (reason) incrementMarketScanReason(scanReasonCounts, reason);
       else eligibleMarkets.push(market);
     }
-    // A single match frequently exposes winner, spread, totals and exact-score
-    // variants. Keep its strongest scanned representative first so one event
-    // cannot consume the batch that should cover other events.
-    const eventSelection = retainOneMarketPerScanEvent(eligibleMarkets);
-    const markets = eventSelection.retained;
-    for (const market of eventSelection.heldBack) {
-      incrementMarketScanReason(scanReasonCounts, "same_event_already_represented");
-    }
+    // Store every active market quote. Event-level diversification belongs to
+    // a portfolio's execution shortlist, not to the shared market catalogue.
+    const markets = eligibleMarkets;
     const categoryCounts = marketCategoryCounts(markets);
     const tagCounts = marketTagCounts(markets);
     const observations = (Array.isArray(markets) ? markets : [])
@@ -5597,7 +5569,6 @@ async function refreshMarketObservations(state) {
       fetchedMarkets,
       observations,
       previousKeys,
-      heldBackMarkets: eventSelection.heldBack,
       observedAt: scanRunAt,
     });
     state.marketObservations = mergeMarketObservationLists(observations, state.marketObservations || [])
@@ -5619,7 +5590,7 @@ async function refreshMarketObservations(state) {
       lastRequestedCategories: requestedCategories.map((category) => category.slug),
       lastUnseenEventCount: unseenEventCount,
       lastExtraCategoryPages: extraCategoryPages,
-      lastEventDuplicatesSkippedCount: eventSelection.heldBack.length,
+      lastEventDuplicatesSkippedCount: 0,
       priorityLiquidityUsdc: MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC,
       liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
       lastTag: MARKET_SCAN_TAG,
@@ -5654,7 +5625,7 @@ async function refreshMarketObservations(state) {
         resolvedSkippedCount: resolvedObservationCount,
         notRetainedCount,
         notRetainedReasonCounts: sortedNotRetainedReasonCounts,
-        sameEventSkippedCount: eventSelection.heldBack.length,
+        sameEventSkippedCount: 0,
         minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
         liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
         scanTag: MARKET_SCAN_TAG || null,
