@@ -51,6 +51,9 @@ const MAX_EVALUATIONS_PER_RUN = envNumber("PAPER_MAX_EVALUATIONS_PER_RUN", 80);
 const MAX_SPREAD = envNumber("PAPER_MAX_SPREAD", 0.08);
 const MIN_VOLUME_24H = envNumber("PAPER_MIN_VOLUME_24H", 100);
 const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
+const PAPER_CLOSED_TRADE_HISTORY_LIMIT = Math.max(50, envNumber("PAPER_CLOSED_TRADE_HISTORY_LIMIT", 300));
+const EVALUATION_RUN_LOG_LIMIT = Math.max(12, envNumber("PAPER_EVALUATION_RUN_LOG_LIMIT", 24));
+const CALCULATION_REPORT_HISTORY_LIMIT = Math.max(2, envNumber("PAPER_CALCULATION_REPORT_HISTORY_LIMIT", 6));
 // Every scan persists a Gamma keyset cursor. A single run processes one
 // bounded page, while later runs continue exactly where the prior one ended.
 // This makes the catalogue exhaustive over time without producing a huge
@@ -66,7 +69,7 @@ const MARKET_SCAN_AUDIT_ROW_LIMIT = Math.max(100, envNumber("PAPER_MARKET_SCAN_A
 // this bounded prevents the state file from growing on every ten-minute scan.
 const MARKET_SCAN_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_HISTORY_LIMIT", 20);
 const MARKET_SCAN_AUDIT_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT", 3);
-const PORTFOLIO_RUN_LOG_LIMIT = Math.max(20, envNumber("PAPER_PORTFOLIO_RUN_LOG_LIMIT", 80));
+const PORTFOLIO_RUN_LOG_LIMIT = Math.max(20, envNumber("PAPER_PORTFOLIO_RUN_LOG_LIMIT", 24));
 const TRADE_BATCH_CANDIDATE_LOG_LIMIT = Math.max(4, envNumber("PAPER_TRADE_BATCH_CANDIDATE_LOG_LIMIT", 12));
 const TRADE_BATCH_REASON_LOG_LIMIT = Math.max(5, envNumber("PAPER_TRADE_BATCH_REASON_LOG_LIMIT", 24));
 const MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC", 40000);
@@ -451,11 +454,11 @@ function normalizeState(input) {
     marketScan: normalizeMarketScan(input.marketScan),
     marketScanHistory: normalizeMarketScanHistory(input.marketScanHistory),
     evaluationRunLog: Array.isArray(input.evaluationRunLog)
-      ? input.evaluationRunLog.slice(0, 80).map(compactEvaluationRunRecord).filter(Boolean)
+      ? input.evaluationRunLog.slice(0, EVALUATION_RUN_LOG_LIMIT).map(compactEvaluationRunRecord).filter(Boolean)
       : [],
     evaluationStats: input.evaluationStats && typeof input.evaluationStats === "object" ? input.evaluationStats : null,
     aiEvaluation: input.aiEvaluation && typeof input.aiEvaluation === "object" ? input.aiEvaluation : null,
-    calculationReports: Array.isArray(input.calculationReports) ? input.calculationReports.slice(0, 30) : [],
+    calculationReports: Array.isArray(input.calculationReports) ? input.calculationReports.slice(0, CALCULATION_REPORT_HISTORY_LIMIT) : [],
     latestCalculationReport: input.latestCalculationReport || (Array.isArray(input.calculationReports) ? input.calculationReports[0] || null : null),
     learningProfile: normalizeLearningProfile(input.learningProfile),
     aiUsageLog: Array.isArray(input.aiUsageLog) ? input.aiUsageLog.slice(-Math.max(20, AI_USAGE_HISTORY_LIMIT)) : [],
@@ -497,9 +500,9 @@ function normalizePaperPortfolio(strategy, input = {}) {
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
     },
-    trades: Array.isArray(input.trades)
+    trades: retainPaperTrades(Array.isArray(input.trades)
       ? input.trades.map((trade) => normalizeTrade({ ...trade, strategyId: trade.strategyId || strategy.id, strategyLabel: trade.strategyLabel || strategy.label }))
-      : [],
+      : []),
     lastTradeDate: input.lastTradeDate || null,
     lastTradeHour: input.lastTradeHour || null,
     lastDecision: compactPortfolioRunRecord(input.lastDecision),
@@ -1436,6 +1439,19 @@ function mergeTrade(existing, incoming) {
   return tradeUpdateTime(incoming) >= tradeUpdateTime(existing) ? incoming : existing;
 }
 
+function retainPaperTrades(trades = []) {
+  const active = [];
+  const closed = [];
+  for (const trade of Array.isArray(trades) ? trades : []) {
+    const status = String(trade?.status || "OPEN").toUpperCase();
+    (["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED"].includes(status) ? closed : active).push(trade);
+  }
+  return [
+    ...active,
+    ...closed.sort((a, b) => tradeUpdateTime(b) - tradeUpdateTime(a)).slice(0, PAPER_CLOSED_TRADE_HISTORY_LIMIT),
+  ].sort((a, b) => tradeUpdateTime(b) - tradeUpdateTime(a));
+}
+
 function mergeStates(primary, secondary) {
   const base = stateTime(primary) >= stateTime(secondary) ? primary : secondary;
   const other = base === primary ? secondary : primary;
@@ -1449,10 +1465,10 @@ function mergeStates(primary, secondary) {
       (item) => item.runAt || item.id || "",
       Math.max(20, MARKET_SCAN_HISTORY_LIMIT),
     ).sort((a, b) => (Date.parse(b.runAt || "") || 0) - (Date.parse(a.runAt || "") || 0)),
-    evaluationRunLog: mergeUniqueById([...(base.evaluationRunLog || []), ...(other.evaluationRunLog || [])], (item) => item.runAt || item.id || "", 80),
-    calculationReports: mergeUniqueById([...(base.calculationReports || []), ...(other.calculationReports || [])], (item) => item.id || item.generatedAt || "", 60)
+    evaluationRunLog: mergeUniqueById([...(base.evaluationRunLog || []), ...(other.evaluationRunLog || [])], (item) => item.runAt || item.id || "", EVALUATION_RUN_LOG_LIMIT),
+    calculationReports: mergeUniqueById([...(base.calculationReports || []), ...(other.calculationReports || [])], (item) => item.id || item.generatedAt || "", CALCULATION_REPORT_HISTORY_LIMIT)
       .sort((a, b) => (Date.parse(b.generatedAt || "") || 0) - (Date.parse(a.generatedAt || "") || 0))
-      .slice(0, 30),
+      .slice(0, CALCULATION_REPORT_HISTORY_LIMIT),
   };
   merged.latestCalculationReport = merged.calculationReports?.[0] || base.latestCalculationReport || other.latestCalculationReport || null;
   merged.paperPortfolios = {};
@@ -1465,8 +1481,8 @@ function mergeStates(primary, secondary) {
     }
     merged.paperPortfolios[strategy.id] = {
       ...basePortfolio,
-      trades: [...tradesById.values()].sort((a, b) => tradeUpdateTime(b) - tradeUpdateTime(a)),
-      runLog: mergeUniqueById([...(basePortfolio.runLog || []), ...(otherPortfolio.runLog || [])], (item) => `${item.runAt || ""}:${item.strategyId || strategy.id}`, 120),
+      trades: retainPaperTrades([...tradesById.values()]),
+      runLog: mergeUniqueById([...(basePortfolio.runLog || []), ...(otherPortfolio.runLog || [])], (item) => `${item.runAt || ""}:${item.strategyId || strategy.id}`, PORTFOLIO_RUN_LOG_LIMIT),
     };
   }
   syncLegacyPaperAliases(merged);
@@ -6533,7 +6549,7 @@ function buildCalculationReport(state) {
 
 function updateCalculationReport(state) {
   const report = buildCalculationReport(state);
-  state.calculationReports = mergeUniqueById([report, ...(state.calculationReports || [])], (item) => item.id || item.generatedAt || "", 30)
+  state.calculationReports = mergeUniqueById([report, ...(state.calculationReports || [])], (item) => item.id || item.generatedAt || "", CALCULATION_REPORT_HISTORY_LIMIT)
     .sort((a, b) => (Date.parse(b.generatedAt || "") || 0) - (Date.parse(a.generatedAt || "") || 0));
   state.latestCalculationReport = state.calculationReports[0] || report;
   return report;
@@ -6640,7 +6656,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
       brierScore: state.learningProfile.brierScore,
     },
     ...portfolioState.runLog,
-  ].slice(0, 120);
+  ].slice(0, PORTFOLIO_RUN_LOG_LIMIT);
   syncLegacyPaperAliases(state);
 }
 
@@ -6708,7 +6724,7 @@ function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
       })),
     },
     ...(state.evaluationRunLog || []),
-  ].slice(0, 80);
+  ].slice(0, EVALUATION_RUN_LOG_LIMIT);
 }
 
 function updateEvaluationStats(state, { evaluations = [], retainedBefore = 0, retainedAfter = 0 } = {}) {
