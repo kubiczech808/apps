@@ -4096,6 +4096,7 @@ async function triggerOneTimeMarketScan() {
         target: "paper-scan",
         market_scan_tag: state.scrapedScanTag,
         market_scan_liquidity_min: currentEvaluationLiquidityFilter(),
+        market_scan_max_days: currentEvaluationDaysFilter(),
       }),
     });
     state.scrapedScanStatus = "Scan queued...";
@@ -5842,7 +5843,7 @@ function renderScanAuditModal(payload = {}) {
             <thead><tr><th>#</th><th>Scope</th><th>Parameters</th><th>Events / markets</th><th>Status</th></tr></thead>
             <tbody>${apiCalls.length ? apiCalls.map((call, index) => {
               const parameters = Object.entries(call?.parameters && typeof call.parameters === "object" ? call.parameters : {})
-                .map(([key, value]) => `${key}=${value}`)
+                .map(([key, value]) => key === "limit" ? `page_size=${value} (all pages)` : `${key}=${value}`)
                 .join(" / ");
               const href = /^https:\/\//i.test(String(call?.url || "")) ? String(call.url) : "";
               const callStatus = String(call?.status || "UNKNOWN").toUpperCase();
@@ -5902,7 +5903,7 @@ async function openScrapeRunAudit(run, trigger) {
   }
 }
 
-function persistScrapedScanLiquidityPreference(value) {
+function persistScrapedScanPreferences() {
   if (state.scrapedScanPreferenceSaveTimer) {
     clearTimeout(state.scrapedScanPreferenceSaveTimer);
   }
@@ -5911,7 +5912,10 @@ function persistScrapedScanLiquidityPreference(value) {
       await fetchApiJson("api.php?action=scan-preferences", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ liquidityMin: value }),
+        body: JSON.stringify({
+          liquidityMin: currentEvaluationLiquidityFilter(),
+          maxDays: currentEvaluationDaysFilter(),
+        }),
       });
     } catch {
       // The local value remains usable for this manual scan; a later change retries persistence.
@@ -5975,7 +5979,7 @@ function renderScrapeRunLog() {
                 <td data-label="Trigger"><strong>${escapeHtml(run.trigger || "AUTO")}</strong></td>
                 <td data-label="Status" class="${statusClass}"><strong>${escapeHtml(status)}</strong></td>
                 <td data-label="API calls">${formatInteger(run.apiCalls) || "0"}</td>
-                <td data-label="Markets pulled"><strong>${formatInteger(run.rawMarketCount ?? run.loadedMarketCount) || "0"}</strong><small class="table-secondary">${formatInteger(run.loadedMarketCount) || "0"} unique / ${formatInteger(run.preferredMarketCount) || "0"} preferred / ${formatInteger(run.broadMarketCount) || "0"} broad</small></td>
+                <td data-label="Markets pulled"><strong>${formatInteger(run.rawMarketCount ?? run.loadedMarketCount) || "0"}</strong><small class="table-secondary">${formatInteger(run.loadedMarketCount) || "0"} unique / all returned pages / ${formatInteger((run.requestedCategories || []).length) || "0"} category scopes</small></td>
                 <td data-label="Rows retained"><strong>${formatInteger(run.retainedObservationCount) || "0"}</strong><small class="table-secondary">${formatInteger(run.shortHorizonCount) || "0"} within preferred horizon</small></td>
                 <td data-label="New / updated">${formatInteger(run.newObservationCount) || "0"} / ${formatInteger(run.updatedObservationCount) || "0"}</td>
                 <td data-label="Resolved">${formatInteger(run.resolvedObservationCount) || "0"}</td>
@@ -7096,6 +7100,7 @@ els.evaluationDaysFilter?.addEventListener("input", () => {
   const value = normalizeEvaluationDaysFilter(els.evaluationDaysFilter.value);
   state.evaluationDaysFilter = value;
   saveEvaluationDaysFilter(value);
+  persistScrapedScanPreferences();
   syncEvaluationDaysFilterControl();
   renderBotEvaluations();
 });
@@ -7114,7 +7119,7 @@ els.evaluationLiquidityFilter?.addEventListener("input", () => {
   const value = Number.isFinite(raw) && raw >= 0 ? Math.round(raw * 100) / 100 : 0;
   state.evaluationLiquidityFilter = value;
   saveEvaluationLiquidityFilter(value);
-  persistScrapedScanLiquidityPreference(value);
+  persistScrapedScanPreferences();
   syncEvaluationLiquidityFilterControl();
   renderBotEvaluations();
 });
@@ -7454,7 +7459,7 @@ syncEvaluationProbabilityFilterControl();
 syncEvaluationDaysFilterControl();
 syncEvaluationNetYieldFilterControl();
 syncEvaluationLiquidityFilterControl();
-persistScrapedScanLiquidityPreference(state.evaluationLiquidityFilter);
+persistScrapedScanPreferences();
 applyInitialRoute();
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);

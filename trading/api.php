@@ -498,16 +498,27 @@ function normalize_scan_liquidity_preference(mixed $value): float
     return max(0.0, min(1000000000.0, round((float) $value, 2)));
 }
 
+function normalize_scan_days_preference(mixed $value): ?float
+{
+    if ($value === null || $value === '' || !is_numeric($value)) {
+        return null;
+    }
+    return max(0.0, min(3650.0, round((float) $value, 2)));
+}
+
 function load_scan_preferences(): array
 {
     $path = scan_preferences_path();
     if (!is_file($path)) {
-        return ['liquidityMin' => 0.0];
+        return ['liquidityMin' => 0.0, 'maxDays' => 7.0];
     }
     $raw = file_get_contents($path);
     $data = json_decode(is_string($raw) ? $raw : '', true);
     return [
         'liquidityMin' => normalize_scan_liquidity_preference(is_array($data) ? ($data['liquidityMin'] ?? 0) : 0),
+        'maxDays' => normalize_scan_days_preference(
+            is_array($data) && array_key_exists('maxDays', $data) ? $data['maxDays'] : 7
+        ),
     ];
 }
 
@@ -515,6 +526,7 @@ function save_scan_preferences(array $input): array
 {
     $preferences = [
         'liquidityMin' => normalize_scan_liquidity_preference($input['liquidityMin'] ?? $input['liquidity_min'] ?? 0),
+        'maxDays' => normalize_scan_days_preference($input['maxDays'] ?? $input['market_scan_max_days'] ?? null),
         'updatedAt' => gmdate('c'),
     ];
     $path = scan_preferences_path();
@@ -1334,6 +1346,21 @@ function normalized_scan_tag_input($value): ?string
     return $tag === '' ? null : substr($tag, 0, 80);
 }
 
+function normalized_scan_max_days_input($value): ?string
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+    if (!is_numeric($value)) {
+        return null;
+    }
+    $days = (float) $value;
+    if ($days < 0) {
+        return '-1';
+    }
+    return rtrim(rtrim(number_format(min(3650.0, max(0.0, $days)), 2, '.', ''), '0'), '.');
+}
+
 function normalized_scan_days_input($value): ?string
 {
     if ($value === null || $value === '' || !is_numeric($value)) {
@@ -1502,6 +1529,7 @@ try {
         $paperMoreProbableMinProbability = normalized_probability_input($payload['paper_more_probable_min_probability'] ?? null);
         $scanTag = normalized_scan_tag_input($payload['market_scan_tag'] ?? null);
         $scanLiquidityMin = normalized_money_input($payload['market_scan_liquidity_min'] ?? $payload['marketScanLiquidityMin'] ?? null);
+        $scanMaxDays = normalized_scan_max_days_input($payload['market_scan_max_days'] ?? $payload['marketScanMaxDays'] ?? null);
         $liveMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['live_max_order_fraction'] ?? null);
         $paperMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['paper_max_order_fraction'] ?? null);
         $liveMaxResolutionDays = normalized_days_input($payload['maxResolutionDays'] ?? $payload['live_max_resolution_days'] ?? null);
@@ -1569,6 +1597,7 @@ try {
                 'inputs' => array_filter([
                     'market_scan_tag' => $scanTag,
                     'market_scan_liquidity_min' => $scanLiquidityMin,
+                    'market_scan_max_days' => $scanMaxDays ?? '-1',
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'One-time tagged Polymarket scan workflow dispatched.',
             ],

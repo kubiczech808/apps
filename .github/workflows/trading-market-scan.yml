@@ -13,6 +13,11 @@ on:
         required: false
         default: "0"
         type: string
+      market_scan_max_days:
+        description: "Maximum days until event end; -1 means no end-date filter"
+        required: false
+        default: "-1"
+        type: string
 
 permissions:
   contents: read
@@ -25,26 +30,22 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    # A complete scan follows all Gamma response pages for the selected
+    # liquidity/end-date scope, so this must not become an implicit page cap.
+    timeout-minutes: 45
     env:
       PAPER_STATE_PATH: data/paper-state.json
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=refresh
       PAPER_PORTFOLIO_USDC: "100"
       PAPER_MAX_FRACTION: "0.05"
       PAPER_MAX_HISTORY: "5000"
-      PAPER_MARKET_SCAN_BATCH_SIZE: "100"
-      PAPER_MARKET_SCAN_MAX_OBSERVATIONS: "5000"
+      PAPER_MARKET_SCAN_PAGE_SIZE: "500"
       PAPER_MARKET_SCAN_HISTORY_LIMIT: "20"
       PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT: "20"
-      PAPER_MARKET_SCAN_MAX_OFFSET: "20000"
-      PAPER_MARKET_SCAN_PREFETCH_BATCHES: "1"
-      PAPER_MARKET_SCAN_CATEGORY_BATCH_SIZE: "50"
-      PAPER_MARKET_SCAN_CATEGORIES_PER_RUN: "12"
       PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
-      PAPER_MARKET_SCAN_MIN_NEW_EVENTS_PER_RUN: "80"
-      PAPER_MARKET_SCAN_MAX_EXTRA_CATEGORY_PAGES: "12"
       PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || '' }}
       PAPER_MARKET_SCAN_LIQUIDITY_MIN: ${{ inputs.market_scan_liquidity_min || '0' }}
+      PAPER_MARKET_SCAN_MAX_DAYS: ${{ inputs.market_scan_max_days || '-1' }}
       PAPER_MARKET_SCAN_TRIGGER: "MANUAL"
       PAPER_MAX_RESOLUTION_DAYS: "7"
       PAPER_SCAN_ONLY: "true"

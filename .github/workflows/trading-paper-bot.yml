@@ -178,18 +178,12 @@ jobs:
       PAPER_OPPORTUNITY_MIN_ANNUAL_RETURN: "0.30"
       PAPER_MAX_EVALUATIONS_PER_RUN: "80"
       PAPER_MAX_HISTORY: "5000"
-      PAPER_MARKET_SCAN_BATCH_SIZE: "100"
-      PAPER_MARKET_SCAN_MAX_OBSERVATIONS: "5000"
+      PAPER_MARKET_SCAN_PAGE_SIZE: "500"
       PAPER_MARKET_SCAN_HISTORY_LIMIT: "20"
       PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT: "20"
-      PAPER_MARKET_SCAN_MAX_OFFSET: "20000"
-      PAPER_MARKET_SCAN_PREFETCH_BATCHES: "1"
-      PAPER_MARKET_SCAN_CATEGORY_BATCH_SIZE: "50"
-      PAPER_MARKET_SCAN_CATEGORIES_PER_RUN: "12"
       PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
       PAPER_MARKET_SCAN_LIQUIDITY_MIN: "0"
-      PAPER_MARKET_SCAN_MIN_NEW_EVENTS_PER_RUN: "80"
-      PAPER_MARKET_SCAN_MAX_EXTRA_CATEGORY_PAGES: "12"
+      PAPER_MARKET_SCAN_MAX_DAYS: "7"
       PAPER_MARKET_SCAN_MIN_PROBABILITY: "0.5"
       PAPER_MARKET_SCAN_MIN_RESOLUTION_MINUTES: "5"
       PAPER_MAX_SPREAD: "0.08"
@@ -292,6 +286,8 @@ jobs:
               preference_payload = json.loads(urllib.request.urlopen(preference_url, timeout=20).read().decode("utf-8"))
               preferences = preference_payload.get("preferences") or {}
               emit("PAPER_MARKET_SCAN_LIQUIDITY_MIN", preferences.get("liquidityMin"))
+              max_days = preferences.get("maxDays")
+              emit("PAPER_MARKET_SCAN_MAX_DAYS", -1 if max_days is None else max_days)
           except Exception as exc:
               print(f"scraping preferences unavailable: {exc}")
           PY
