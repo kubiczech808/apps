@@ -1552,15 +1552,11 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     ...market,
     resolutionEndDate: market.endDate || evaluation.resolutionEndDate || evaluation.endDate || null,
   });
-  if (!endDateIsFuture(dateContext.endDate)) {
-    return {
-      candidate: evaluation,
-      eligible: false,
-      rejectReasons: [dateContext.sportsEventStarted
-        ? "scheduled sports event has started; awaiting official Polymarket resolution"
-        : "market resolution date has passed"],
-    };
-  }
+  // Gamma's scheduled date often marks a match start, not the point at which
+  // Polymarket stops accepting trades. As long as the market is active and
+  // accepting orders, verify its live CLOB quote instead of rejecting it just
+  // because that scheduled date has elapsed.
+  const awaitingResolutionWhileTradable = !endDateIsFuture(dateContext.endDate);
 
   const clobMarket = await fetchClobMarket(market.conditionId).catch(() => null);
   const book = bestBook(await fetchJson(new URL(`/book?token_id=${evaluation.tokenId}`, CLOB_HOST), `CLOB book ${evaluation.tokenId}`));
@@ -1652,7 +1648,9 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
       minOrderSize,
     };
   }
-  const endOk = endDateIsFuture(endDate);
+  // The exchange state above is authoritative. A past scheduled date is not
+  // a disqualifier while Polymarket still accepts the trade.
+  const endOk = true;
   const volume24hr = number(market.volume24hr, number(evaluation.volume24hr, 0));
   const liquidity = number(market.liquidity, number(evaluation.liquidity, 0));
   const notional = Number((price * size).toFixed(5));
@@ -1727,6 +1725,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     marketProbability: Number(marketProbability.toFixed(4)),
     edge: Number(edge.toFixed(4)),
     daysToResolution: days == null ? null : Number(days.toFixed(2)),
+    awaitingResolutionWhileTradable,
     expectedValueUsdc: Number(selectedExpectedValueUsdc.toFixed(4)),
     annualizedReturn: Number(selectedAnnualizedReturn.toFixed(4)),
     aiExpectedValueUsdc: Number.isFinite(expectedValue) ? Number(expectedValue.toFixed(4)) : null,
@@ -2574,8 +2573,12 @@ async function main() {
   const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /no available cash|sub-cent maker amount|above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
   const riskBlockedCandidates = checked.filter((item) => (item.rejectReasons || [])
     .some((reason) => /^(correlated live exposure|duplicate token already open)/i.test(String(reason || ""))));
-  const needsCapitalRotation = !manualShortlistStale && !eligible.length && (cash <= 0 || capitalSizingBlocked.length > 0);
-  const needsRiskReplacement = !manualShortlistStale && !eligible.length && !needsCapitalRotation && riskBlockedCandidates.length > 0;
+  // Never disturb an existing position or limit order while the account still
+  // has usable free cash. A direct allocation is always preferred; rotations
+  // are reserved for an actually unfunded account.
+  const hasUsableFreeCash = number(cash, 0) > 0.01;
+  const needsCapitalRotation = !manualShortlistStale && !eligible.length && !hasUsableFreeCash && (cash <= 0 || capitalSizingBlocked.length > 0);
+  const needsRiskReplacement = !manualShortlistStale && !eligible.length && !hasUsableFreeCash && !needsCapitalRotation && riskBlockedCandidates.length > 0;
   const rotationReview = !manualShortlistStale && !eligible.length && (needsCapitalRotation || needsRiskReplacement)
     ? await reviewPositionRotation({
         liveState,
@@ -2602,7 +2605,7 @@ async function main() {
   // A directly fundable candidate must also protect unrelated open orders from
   // cancellation. A funded buy must never trigger a needless cancellation just
   // to make room for a trade that is already funded.
-  const orderManagement = manualShortlistStale || activeSellOrders.length || directCandidateCanUseFreeCapital
+  const orderManagement = manualShortlistStale || activeSellOrders.length || hasUsableFreeCash || directCandidateCanUseFreeCapital
     ? { action: "NONE", reviews: [] }
     : await reviewOpenOrders({
       liveState,
@@ -2694,6 +2697,7 @@ async function main() {
       idleCashMaxUsdc: IDLE_CASH_MAX_USDC,
       idleCashGraceHours: IDLE_CASH_GRACE_HOURS,
       freeCapitalPriority: true,
+      hasUsableFreeCash,
       directCandidateCanUseFreeCapital,
       directCandidateCostUsdc: bestCandidateCost,
       capitalUtilizationOverride: monitoring.idleCashOverdue,
@@ -2742,6 +2746,7 @@ async function main() {
         maxResolutionDays: MAX_RESOLUTION_DAYS,
         executionTrigger: String(process.env.LIVE_EXECUTION_TRIGGER || "cron").toLowerCase() === "after_scrape" ? "after_scrape" : "cron",
         freeCapitalPriority: true,
+        hasUsableFreeCash,
         directCandidateCanUseFreeCapital,
         directCandidateCostUsdc: bestCandidateCost,
         selectionOrder: SELECTION_ORDER,
