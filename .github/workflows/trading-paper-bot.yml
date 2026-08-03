@@ -15,6 +15,7 @@ on:
         type: choice
         options:
           - full
+          - repair
           - refresh
           - report
           - after_scan
@@ -148,6 +149,8 @@ jobs:
       PAPER_STATE_PATH: data/paper-state.json
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=refresh
       PAPER_REFRESH_STATE_URL: "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=refresh"
+      PAPER_STATIC_STATE_URL: https://osobnizkusenosti.cz/trading/data/paper-state.json
+      NODE_OPTIONS: --max-old-space-size=6144
       PAPER_PORTFOLIO_USDC: "100"
       PAPER_MAX_FRACTION: ${{ github.event.inputs.paper_max_order_fraction || '0.05' }}
       PAPER_MIN_PROBABILITY: "0.95"
@@ -180,12 +183,12 @@ jobs:
       PAPER_MAX_HISTORY: "5000"
       PAPER_MARKET_SCAN_PAGE_SIZE: "500"
       PAPER_MARKET_SCAN_HISTORY_LIMIT: "20"
-      PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT: "20"
+      PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT: "3"
       PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
       PAPER_MARKET_SCAN_LIQUIDITY_MIN: "0"
       PAPER_MARKET_SCAN_MAX_DAYS: "7"
       PAPER_MARKET_SCAN_MIN_PROBABILITY: "0.5"
-      PAPER_MARKET_SCAN_MIN_RESOLUTION_MINUTES: "5"
+      PAPER_MARKET_SCAN_MIN_RESOLUTION_MINUTES: "0"
       PAPER_MAX_SPREAD: "0.08"
       PAPER_MIN_VOLUME_24H: "100"
       PAPER_MAX_RESOLUTION_DAYS: "7"
@@ -207,8 +210,9 @@ jobs:
       # Hourly result reconciliation: include stale SCRAPED rows whose stored
       # end date has passed, not only rows already labelled RESOLVED.
       PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT: "300"
-      PAPER_REQUIRE_GEMINI: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'false' || 'true' }}
+      PAPER_REQUIRE_GEMINI: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'after_scan' || inputs.mode == 'repair') && 'false' || 'true' }}
       PAPER_EXECUTION_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'true' || 'false' }}
+      PAPER_COMPACT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'repair' && 'true' || 'false' }}
       PAPER_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'after_scrape' || 'cron' }}
       PAPER_MANUAL_RUN_ONCE: ${{ github.event_name == 'workflow_dispatch' && inputs.manual_run_once == 'true' && 'true' || 'false' }}
       PAPER_STRATEGY_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_strategy_id || '' }}

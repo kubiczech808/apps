@@ -33,6 +33,10 @@ function envTokenIdSet(name) {
 
 const OUTPUT_PATH = process.env.PAPER_STATE_PATH || "data/paper-state.json";
 const REMOTE_STATE_URL = process.env.PAPER_STATE_URL || "";
+// The PHP summary endpoint is preferred because it is small and validated by
+// the app. The static file is a recovery path for a state that is temporarily
+// too large for PHP to parse during a migration.
+const STATIC_STATE_URL = process.env.PAPER_STATIC_STATE_URL || "";
 const PORTFOLIO_USDC = envNumber("PAPER_PORTFOLIO_USDC", 100);
 const MAX_FRACTION = envNumber("PAPER_MAX_FRACTION", 0.05);
 const MIN_PROBABILITY = envNumber("PAPER_MIN_PROBABILITY", 0.95);
@@ -53,7 +57,10 @@ const MARKET_SCAN_PAGE_SIZE = Math.max(1, Math.min(500, envNumber("PAPER_MARKET_
 // Each retained scan carries its full request and market audit trail. Keeping
 // this bounded prevents the state file from growing on every ten-minute scan.
 const MARKET_SCAN_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_HISTORY_LIMIT", 20);
-const MARKET_SCAN_AUDIT_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT", 20);
+const MARKET_SCAN_AUDIT_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT", 3);
+const PORTFOLIO_RUN_LOG_LIMIT = Math.max(20, envNumber("PAPER_PORTFOLIO_RUN_LOG_LIMIT", 80));
+const TRADE_BATCH_CANDIDATE_LOG_LIMIT = Math.max(4, envNumber("PAPER_TRADE_BATCH_CANDIDATE_LOG_LIMIT", 12));
+const TRADE_BATCH_REASON_LOG_LIMIT = Math.max(5, envNumber("PAPER_TRADE_BATCH_REASON_LOG_LIMIT", 24));
 const MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC", 40000);
 // This is the user's last saved scraped-opportunities liquidity filter. It is
 // passed to Gamma before response data is transferred or stored.
@@ -136,6 +143,7 @@ const REFRESH_MARKET_SLUG = String(process.env.PAPER_REFRESH_MARKET_SLUG || "").
 const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() === "true";
 const SCAN_ONLY = envBool("PAPER_SCAN_ONLY", false);
 const EXECUTION_ONLY = envBool("PAPER_EXECUTION_ONLY", false);
+const COMPACT_ONLY = envBool("PAPER_COMPACT_ONLY", false);
 const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
 const EVALUATION_ONLY = envBool("PAPER_EVALUATION_ONLY", false);
 const EVALUATION_TOKEN_ID = String(process.env.PAPER_EVALUATION_TOKEN_ID || "").trim();
@@ -367,6 +375,25 @@ async function readState() {
     }
   }
 
+  // A malformed or oversized historical state can make PHP return 500 before
+  // it reaches the lightweight summary response. In that one case recover
+  // from the static JSON, compact it on the next write, and keep the full
+  // scraped catalogue intact rather than falling back to an old repository
+  // snapshot.
+  if (remoteError && STATIC_STATE_URL) {
+    try {
+      const separator = STATIC_STATE_URL.includes("?") ? "&" : "?";
+      const remote = await fetchJson(`${STATIC_STATE_URL}${separator}t=${Date.now()}`);
+      if (remote && typeof remote === "object" && (Array.isArray(remote.trades) || remote.paperPortfolios)) {
+        console.warn(`Primary paper state endpoint failed (${remoteError.message}); recovering from static state file.`);
+        return normalizeState(remote);
+      }
+      remoteError = new Error("Static paper state did not contain a trades array");
+    } catch (error) {
+      remoteError = new Error(`Primary state failed and static recovery failed: ${remoteError.message}; ${error?.message || error}`);
+    }
+  }
+
   try {
     const raw = await readFile(OUTPUT_PATH, "utf8");
     // A missing remote state is recoverable: the repository copy is the
@@ -413,7 +440,9 @@ function normalizeState(input) {
     marketObservations: mergeMarketObservationLists(Array.isArray(input.marketObservations) ? input.marketObservations : []),
     marketScan: normalizeMarketScan(input.marketScan),
     marketScanHistory: normalizeMarketScanHistory(input.marketScanHistory),
-    evaluationRunLog: Array.isArray(input.evaluationRunLog) ? input.evaluationRunLog.slice(0, 80) : [],
+    evaluationRunLog: Array.isArray(input.evaluationRunLog)
+      ? input.evaluationRunLog.slice(0, 80).map(compactEvaluationRunRecord).filter(Boolean)
+      : [],
     evaluationStats: input.evaluationStats && typeof input.evaluationStats === "object" ? input.evaluationStats : null,
     aiEvaluation: input.aiEvaluation && typeof input.aiEvaluation === "object" ? input.aiEvaluation : null,
     calculationReports: Array.isArray(input.calculationReports) ? input.calculationReports.slice(0, 30) : [],
@@ -463,8 +492,184 @@ function normalizePaperPortfolio(strategy, input = {}) {
       : [],
     lastTradeDate: input.lastTradeDate || null,
     lastTradeHour: input.lastTradeHour || null,
-    lastDecision: input.lastDecision || null,
-    runLog: Array.isArray(input.runLog) ? input.runLog : [],
+    lastDecision: compactPortfolioRunRecord(input.lastDecision),
+    runLog: Array.isArray(input.runLog)
+      ? input.runLog.slice(0, PORTFOLIO_RUN_LOG_LIMIT).map(compactPortfolioRunRecord).filter(Boolean)
+      : [],
+  };
+}
+
+function compactReasonCounts(reasonCounts) {
+  if (!reasonCounts || typeof reasonCounts !== "object") return {};
+  return Object.fromEntries(Object.entries(reasonCounts)
+    .map(([reason, count]) => [String(reason || "Unknown reason").slice(0, 220), Number(count || 0)])
+    .filter(([, count]) => Number.isFinite(count) && count > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, TRADE_BATCH_REASON_LOG_LIMIT));
+}
+
+function compactCandidateLogRows(rows, limit = TRADE_BATCH_CANDIDATE_LOG_LIMIT) {
+  return (Array.isArray(rows) ? rows : [])
+    .slice(0, limit)
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const summary = tradeBatchCandidateSummary(item) || {};
+      return {
+        ...summary,
+        selectionDecision: item.selectionDecision || null,
+        portfolioRejectReasons: Array.isArray(item.portfolioRejectReasons)
+          ? item.portfolioRejectReasons.slice(0, 4).map((reason) => String(reason).slice(0, 220))
+          : [],
+      };
+    })
+    .filter(Boolean);
+}
+
+function compactPortfolioFilterDiagnostics(input) {
+  if (!input || typeof input !== "object") return null;
+  return {
+    totalEvaluated: Number(input.totalEvaluated || 0),
+    baseEligible: Number(input.baseEligible || 0),
+    portfolioEligible: Number(input.portfolioEligible || 0),
+    excludedCount: Number(input.excludedCount || 0),
+    reasonCounts: compactReasonCounts(input.reasonCounts),
+    excludedSample: compactCandidateLogRows(input.excludedSample, 8),
+  };
+}
+
+function compactPrevalidationFilter(input) {
+  if (!input || typeof input !== "object") return null;
+  return {
+    source: input.source || null,
+    storedEvaluations: Number(input.storedEvaluations || 0),
+    storedMarketObservations: Number(input.storedMarketObservations || 0),
+    uniqueEvaluations: Number(input.uniqueEvaluations || 0),
+    prefilterPassed: Number(input.prefilterPassed || 0),
+    prefilterRejected: Number(input.prefilterRejected || 0),
+    selectedForRevalidation: Number(input.selectedForRevalidation || 0),
+    revalidatedCount: Number(input.revalidatedCount || 0),
+    revalidatedPortfolioEligible: Number(input.revalidatedPortfolioEligible || 0),
+    revalidatedRejected: Number(input.revalidatedRejected || 0),
+    skippedByScanLimit: Number(input.skippedByScanLimit || 0),
+    reasonCounts: compactReasonCounts(input.reasonCounts),
+    executionShortlist: compactCandidateLogRows(input.executionShortlist, 8),
+    rejectedSample: compactCandidateLogRows(input.rejectedSample, 8),
+    revalidatedCandidates: compactCandidateLogRows(input.revalidatedCandidates, 8),
+    revalidatedRejectedSample: compactCandidateLogRows(input.revalidatedRejectedSample, 8),
+  };
+}
+
+function compactTradeBatchLog(input) {
+  if (!input || typeof input !== "object") return null;
+  return {
+    id: input.id || null,
+    runAt: input.runAt || null,
+    strategyId: input.strategyId || null,
+    strategyLabel: input.strategyLabel || null,
+    selectionMetric: input.selectionMetric || null,
+    action: input.action || null,
+    reason: String(input.reason || "").slice(0, 1000),
+    explanation: String(input.explanation || "").slice(0, 1600),
+    settings: input.settings && typeof input.settings === "object" ? input.settings : null,
+    capital: input.capital && typeof input.capital === "object" ? input.capital : null,
+    counts: input.counts && typeof input.counts === "object" ? input.counts : null,
+    portfolioFilter: compactPortfolioFilterDiagnostics(input.portfolioFilter),
+    selected: compactCandidateLogRows([input.selected], 1)[0] || null,
+    eligibleCandidates: compactCandidateLogRows(input.eligibleCandidates),
+    topCandidates: compactCandidateLogRows(input.topCandidates, 8),
+    revalidatedCandidates: compactCandidateLogRows(input.revalidatedCandidates, 8),
+    topRejected: compactCandidateLogRows(input.topRejected, 8),
+    riskBlocked: compactCandidateLogRows(input.riskBlocked, 8),
+    rotationReview: input.rotationReview && typeof input.rotationReview === "object" ? input.rotationReview : null,
+    diversificationDiagnostics: input.diversificationDiagnostics && typeof input.diversificationDiagnostics === "object"
+      ? input.diversificationDiagnostics
+      : null,
+    prevalidationFilter: compactPrevalidationFilter(input.prevalidationFilter),
+  };
+}
+
+function compactPortfolioRunRecord(input) {
+  if (!input || typeof input !== "object") return null;
+  return {
+    runAt: input.runAt || null,
+    runSource: input.runSource || null,
+    strategyId: input.strategyId || null,
+    strategyLabel: input.strategyLabel || null,
+    selectionMetric: input.selectionMetric || null,
+    evaluatedCount: Number(input.evaluatedCount || 0),
+    eligibleCount: Number(input.eligibleCount || 0),
+    action: input.action || null,
+    reason: String(input.reason || "").slice(0, 1000),
+    tradeId: input.tradeId || null,
+    closedTradeId: input.closedTradeId || null,
+    rotationReview: input.rotationReview && typeof input.rotationReview === "object" ? input.rotationReview : null,
+    batchLog: compactTradeBatchLog(input.batchLog),
+    availableCapitalUsdc: input.availableCapitalUsdc ?? null,
+    requiredStakeUsdc: input.requiredStakeUsdc ?? null,
+    insufficientCapital: Boolean(input.insufficientCapital),
+    selectedHorizonDays: input.selectedHorizonDays ?? null,
+    riskSkippedCount: Number(input.riskSkippedCount || 0),
+    refreshOnly: Boolean(input.refreshOnly),
+    reportOnly: Boolean(input.reportOnly),
+    learningSampleSize: Number(input.learningSampleSize || 0),
+    brierScore: input.brierScore ?? null,
+    calibrationBias: input.calibrationBias ?? null,
+  };
+}
+
+function compactEvaluationRunRecord(input) {
+  if (!input || typeof input !== "object") return null;
+  return {
+    id: input.id || null,
+    runAt: input.runAt || null,
+    refreshOnly: Boolean(input.refreshOnly),
+    reportOnly: Boolean(input.reportOnly),
+    evaluatedCount: Number(input.evaluatedCount || 0),
+    eligibleCount: Number(input.eligibleCount || 0),
+    rejectedCount: Number(input.rejectedCount || 0),
+    errorCount: Number(input.errorCount || 0),
+    statusCounts: input.statusCounts && typeof input.statusCounts === "object" ? input.statusCounts : {},
+    decisions: (Array.isArray(input.decisions) ? input.decisions : []).slice(0, 4).map((decision) => ({
+      strategyId: decision.strategyId || null,
+      action: decision.action || null,
+      reason: String(decision.reason || "").slice(0, 1000),
+      tradeId: decision.tradeId || null,
+      closedTradeId: decision.closedTradeId || null,
+      rotationReview: decision.rotationReview && typeof decision.rotationReview === "object" ? decision.rotationReview : null,
+      batchLog: compactTradeBatchLog(decision.batchLog),
+      availableCapitalUsdc: decision.availableCapitalUsdc ?? null,
+      requiredStakeUsdc: decision.requiredStakeUsdc ?? null,
+      insufficientCapital: Boolean(decision.insufficientCapital),
+    })),
+    // This run-level log points to examples; the full opportunity catalogue
+    // remains in state.evaluations/state.marketObservations.
+    events: (Array.isArray(input.events) ? input.events : []).slice(0, 30).map((event) => ({
+      id: event.id || null,
+      evaluatedAt: event.evaluatedAt || null,
+      evaluationResult: event.evaluationResult || null,
+      portfolioFilterStatus: event.portfolioFilterStatus || null,
+      status: event.status || null,
+      question: event.question || "",
+      outcome: event.outcome || "",
+      slug: event.slug || null,
+      eventSlug: event.eventSlug || null,
+      tokenId: event.tokenId || null,
+      url: event.url || null,
+      aiProbability: event.aiProbability ?? null,
+      marketPrice: event.marketPrice ?? null,
+      annualizedReturn: event.annualizedReturn ?? null,
+      expectedValueUsdc: event.expectedValueUsdc ?? null,
+      netGainIfWinUsdc: event.netGainIfWinUsdc ?? null,
+      riskReward: event.riskReward ?? null,
+      liquidity: event.liquidity ?? null,
+      endDate: event.endDate || null,
+      daysToResolution: event.daysToResolution ?? null,
+      rejectReasons: Array.isArray(event.rejectReasons) ? event.rejectReasons.slice(0, 3) : [],
+      analysisSummary: String(event.analysisSummary || "").slice(0, 600),
+      probabilityThesis: String(event.probabilityThesis || "").slice(0, 600),
+      analysisModel: event.analysisModel || null,
+      riskGroupLabels: Array.isArray(event.riskGroupLabels) ? event.riskGroupLabels.slice(0, 5) : [],
+    })),
   };
 }
 
@@ -596,13 +801,11 @@ function normalizeMarketScan(input = {}) {
 }
 
 function normalizeMarketScanHistory(input = []) {
-  return (Array.isArray(input) ? input : [])
-    .filter((item) => item && typeof item === "object")
-    .slice(0, Math.max(20, MARKET_SCAN_HISTORY_LIMIT));
+  return trimMarketScanHistory(Array.isArray(input) ? input : []);
 }
 
 function trimMarketScanHistory(input = []) {
-  const historyLimit = Math.max(20, MARKET_SCAN_HISTORY_LIMIT);
+  const historyLimit = Math.max(5, MARKET_SCAN_HISTORY_LIMIT);
   const auditLimit = Math.min(historyLimit, Math.max(1, MARKET_SCAN_AUDIT_HISTORY_LIMIT));
   // The scan-log UI exposes every retained row as a drill-down audit. Discard
   // legacy summary-only rows when the first audited run is written rather than
@@ -3734,8 +3937,8 @@ function portfolioFilterDiagnostics(evaluations, strategy) {
     baseEligible,
     portfolioEligible,
     excludedCount: Math.max(0, rows.length - portfolioEligible),
-    reasonCounts,
-    excludedSample,
+    reasonCounts: compactReasonCounts(reasonCounts),
+    excludedSample: compactCandidateLogRows(excludedSample, 8),
   };
 }
 
@@ -3892,6 +4095,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
   const ranked = Array.isArray(rankedEligible) ? rankedEligible : evaluated;
   const blocked = ranked.filter((item) => item.selectionStatus === "RISK_BLOCKED" || item.riskBlockedReason);
   const eligibleCandidates = ranked
+    .slice(0, TRADE_BATCH_CANDIDATE_LOG_LIMIT)
     .map((item) => ({
       ...tradeBatchCandidateSummary(item),
       selectionDecision: candidateSelectionDecision({ candidate: item, portfolioState, selected, action, reason }),
@@ -3937,12 +4141,12 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
     selected: tradeBatchCandidateSummary(selected),
     eligibleCandidates,
     topCandidates: ranked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
-    revalidatedCandidates: prevalidationFilter?.revalidatedCandidates || null,
-    topRejected: prevalidationFilter?.revalidatedRejectedSample || null,
+    revalidatedCandidates: compactCandidateLogRows(prevalidationFilter?.revalidatedCandidates, 8),
+    topRejected: compactCandidateLogRows(prevalidationFilter?.revalidatedRejectedSample, 8),
     riskBlocked: blocked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
     rotationReview: rotationReview || null,
     diversificationDiagnostics: diversificationDiagnostics || null,
-    prevalidationFilter: prevalidationFilter || null,
+    prevalidationFilter: compactPrevalidationFilter(prevalidationFilter),
   };
 }
 
@@ -6279,7 +6483,11 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
 
 async function writeState(state) {
   await mkdir(dirname(OUTPUT_PATH), { recursive: true });
-  await writeFile(OUTPUT_PATH, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  // Normalize immediately before persistence. This protects the public state
+  // file from accidental growth when a scan sees many valid markets while
+  // retaining every market observation themselves.
+  const persisted = normalizeState(state);
+  await writeFile(OUTPUT_PATH, `${JSON.stringify(persisted)}\n`, "utf8");
 }
 
 async function run() {
@@ -6302,6 +6510,19 @@ async function run() {
     .map(normalizeAiPendingEvaluation)
     .map(ensureEvaluationErrorMetadata);
   state.marketObservations = (state.marketObservations || []).map(normalizeMarketObservationEconomics);
+  if (COMPACT_ONLY) {
+    state.generatedAt = nowIso();
+    updatePortfolio(state);
+    await writeState(state);
+    console.log(JSON.stringify({
+      action: "STATE_COMPACTED",
+      reason: "Recovered the stored paper state without rescanning markets or changing trades.",
+      evaluations: state.evaluations.length,
+      marketObservations: state.marketObservations.length,
+      scanHistory: state.marketScanHistory.length,
+    }, null, 2));
+    return;
+  }
   // Repair records created before binary outcome flips rebuilt the full quote.
   // This runs even if the current market scan does not include that contract.
   state.evaluations = repairStaleBinarySideQuotes(state.evaluations);

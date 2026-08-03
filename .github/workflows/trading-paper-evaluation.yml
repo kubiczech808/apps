@@ -22,6 +22,8 @@ jobs:
     env:
       PAPER_STATE_PATH: data/paper-state.json
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
+      PAPER_STATIC_STATE_URL: https://osobnizkusenosti.cz/trading/data/paper-state.json
+      NODE_OPTIONS: --max-old-space-size=6144
       PAPER_PORTFOLIO_USDC: "100"
       PAPER_MAX_FRACTION: "0.05"
       PAPER_MIN_PROBABILITY: "0.95"
