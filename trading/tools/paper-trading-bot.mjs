@@ -60,6 +60,8 @@ const MARKET_SCAN_INCLUDE_BROAD_FALLBACK = String(process.env.PAPER_MARKET_SCAN_
 const MARKET_SCAN_CATEGORY_BATCH_SIZE = envNumber("PAPER_MARKET_SCAN_CATEGORY_BATCH_SIZE", 50);
 const MARKET_SCAN_CATEGORIES_PER_RUN = envNumber("PAPER_MARKET_SCAN_CATEGORIES_PER_RUN", 8);
 const MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC", 40000);
+const MARKET_SCAN_MIN_NEW_EVENTS_PER_RUN = envNumber("PAPER_MARKET_SCAN_MIN_NEW_EVENTS_PER_RUN", 80);
+const MARKET_SCAN_MAX_EXTRA_CATEGORY_PAGES = envNumber("PAPER_MARKET_SCAN_MAX_EXTRA_CATEGORY_PAGES", 12);
 const MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", envNumber("PAPER_MAX_RESOLUTION_DAYS", 7));
 // Keep a small operational buffer for fetching the quote and submitting an
 // order. A full hour would discard exactly the short-lived opportunities the
@@ -4837,6 +4839,26 @@ function retainOneMarketPerScanEvent(markets = []) {
   return { retained, heldBack };
 }
 
+function activeScanEventKeys(observations = []) {
+  const keys = new Set();
+  for (const observation of observations) {
+    const status = String(observation?.status || observation?.selectionStatus || "").toUpperCase();
+    if (status === "RESOLVED") continue;
+    const key = marketScanEventIdentity(observation);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+function unseenScanEventCount(markets = [], knownEventKeys = new Set()) {
+  const unseen = new Set();
+  for (const market of markets) {
+    const key = marketScanEventIdentity(market);
+    if (key && !knownEventKeys.has(key)) unseen.add(key);
+  }
+  return unseen.size;
+}
+
 async function loadMarkets() {
   const preferred = await fetchGammaMarkets({
     limit: "60",
@@ -5203,6 +5225,10 @@ async function refreshMarketObservations(state) {
   let preferredCursor = previousScan.preferredCursor;
   const categoryOffsets = { ...(previousScan.categoryOffsets || {}) };
   const requestedCategories = scanCategoriesForRun(previousScan);
+  const knownEventKeys = activeScanEventKeys(state.marketObservations || []);
+  const exhaustedCategoryTags = new Set();
+  let extraCategoryPages = 0;
+  let unseenEventCount = 0;
   // A known selected tag is already expressed as Gamma's tag_id. Do not fetch
   // broad pages and discard them locally just to recreate that API filter.
   const hasDirectTagScope = Boolean(MARKET_SCAN_TAG && MARKET_SCAN_TAG !== "all" && requestedCategories.length);
@@ -5228,8 +5254,57 @@ async function refreshMarketObservations(state) {
           Array.isArray(batch) ? batch.length : 0,
           Math.max(1, Math.min(100, MARKET_SCAN_CATEGORY_BATCH_SIZE)),
         );
+        if (categoryOffsets[category.slug] === 0) exhaustedCategoryTags.add(category.slug);
       } catch (error) {
         categoryErrors.push({ tag: category.slug, error: error?.message || String(error) });
+        exhaustedCategoryTags.add(category.slug);
+      }
+    }
+    // The first page of a category is frequently dominated by markets already
+    // stored in the catalogue. Continue into the next category pages when the
+    // initial batch does not add enough distinct events, rather than spending
+    // each scan mostly refreshing equivalent outcome variants.
+    unseenEventCount = unseenScanEventCount(
+      [...preferredMarkets, ...categoryBatches.flatMap((batch) => batch.markets), ...broadBatches],
+      knownEventKeys,
+    );
+    let categoryIndex = 0;
+    while (
+      requestedCategories.length
+      && unseenEventCount < MARKET_SCAN_MIN_NEW_EVENTS_PER_RUN
+      && extraCategoryPages < MARKET_SCAN_MAX_EXTRA_CATEGORY_PAGES
+      && exhaustedCategoryTags.size < requestedCategories.length
+    ) {
+      let category = null;
+      for (let attempt = 0; attempt < requestedCategories.length; attempt += 1) {
+        const candidate = requestedCategories[categoryIndex % requestedCategories.length];
+        categoryIndex += 1;
+        if (!exhaustedCategoryTags.has(candidate.slug)) {
+          category = candidate;
+          break;
+        }
+      }
+      if (!category) break;
+
+      attemptedApiCalls += 1;
+      extraCategoryPages += 1;
+      try {
+        const categoryOffset = Math.max(0, Math.floor(Number(categoryOffsets[category.slug]) || 0));
+        const batch = await loadCategoryMarketScanBatch(category, { cursor: categoryOffset });
+        categoryBatches.push({ tag: category, markets: Array.isArray(batch) ? batch : [] });
+        categoryOffsets[category.slug] = nextMarketScanCursor(
+          categoryOffset,
+          Array.isArray(batch) ? batch.length : 0,
+          Math.max(1, Math.min(100, MARKET_SCAN_CATEGORY_BATCH_SIZE)),
+        );
+        if (categoryOffsets[category.slug] === 0) exhaustedCategoryTags.add(category.slug);
+        unseenEventCount = unseenScanEventCount(
+          [...preferredMarkets, ...categoryBatches.flatMap((entry) => entry.markets), ...broadBatches],
+          knownEventKeys,
+        );
+      } catch (error) {
+        categoryErrors.push({ tag: category.slug, error: error?.message || String(error) });
+        exhaustedCategoryTags.add(category.slug);
       }
     }
     if (requestedCategories.length) {
@@ -5322,6 +5397,8 @@ async function refreshMarketObservations(state) {
       lastCategoryCount: Object.keys(categoryCounts).length,
       lastCategoryCounts: categoryCounts,
       lastRequestedCategories: requestedCategories.map((category) => category.slug),
+      lastUnseenEventCount: unseenEventCount,
+      lastExtraCategoryPages: extraCategoryPages,
       lastEventDuplicatesSkippedCount: eventSelection.heldBack.length,
       priorityLiquidityUsdc: MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC,
       lastTag: MARKET_SCAN_TAG,
@@ -5344,6 +5421,8 @@ async function refreshMarketObservations(state) {
         requestedCategories: requestedCategories.map((category) => category.slug),
         preferredCursor,
         categoryOffsets,
+        unseenEventCount,
+        extraCategoryPages,
         broadMarketCount: broadBatches.length,
         rawMarketCount: fetchedMarkets.length,
         loadedMarketCount: fetchedMarkets.length,
