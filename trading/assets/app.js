@@ -3912,16 +3912,10 @@ async function triggerOneTimeExecution(target) {
     return;
   }
   if (live) {
-    steps = addExecutionStep(steps, "Waiting for browser confirmation", "Confirm the live one-time execution prompt to dispatch the workflow.", "active");
-    // Keep the native confirmation in the original tap/click activation.
-    // Mobile browsers can suppress confirm() after an async delay.
-    const confirmed = window.confirm("Spustit jednorazovou LIVE exekuci? Workflow znovu overi kandidaty a muze poslat realny Polymarket order.");
-    if (!confirmed) {
-      steps = addExecutionStep(steps, "Live execution canceled", "The workflow was not dispatched because the browser confirmation was canceled.", "error");
-      setExecutionStatus("live workflow canceled", "error");
-      return;
-    }
-    steps = addExecutionStep(steps, "Live execution confirmed", "Dispatching GitHub workflow with the current portfolio parameters.", "done");
+    // The armed gate is an explicit, durable confirmation. Native confirm()
+    // dialogs are inconsistently suppressed on mobile and can falsely look as
+    // though GitHub cancelled a workflow before it was even dispatched.
+    steps = addExecutionStep(steps, "Live execution confirmed", "The live execution gate is active on this browser. Dispatching GitHub workflow with the current portfolio parameters.", "done");
   }
 
   state.executionBusy = target;
