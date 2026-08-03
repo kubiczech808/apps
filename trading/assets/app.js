@@ -3209,7 +3209,9 @@ function sleep(ms) {
 function runMatchesStart(run, startedAt) {
   const created = Date.parse(run?.createdAt || "");
   const start = Date.parse(startedAt || "");
-  return !Number.isFinite(start) || !Number.isFinite(created) || created >= start - 120000;
+  // GitHub creates the run shortly after dispatch. Allow a little clock skew,
+  // but never attach a manual action to a previous completed workflow.
+  return !Number.isFinite(start) || !Number.isFinite(created) || created >= start - 10000;
 }
 
 function workflowStatusText(run) {
@@ -3222,7 +3224,7 @@ async function waitForWorkflowRun(target, startedAt, steps) {
   let latest = null;
   for (let attempt = 0; attempt < 32; attempt += 1) {
     const status = await fetchApiJson(`api.php?action=workflow-status&target=${encodeURIComponent(target)}&since=${encodeURIComponent(startedAt)}`);
-    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || status.latest || null;
+    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || null;
     const detail = latest?.htmlUrl ? `${workflowStatusText(latest)} / ${latest.htmlUrl}` : workflowStatusText(latest);
     steps = addExecutionStep(steps, attempt === 0 ? "Workflow status" : "Workflow update", detail, latest?.status === "completed" ? "done" : "active");
     if (latest?.status === "completed") return { run: latest, steps };
@@ -4027,7 +4029,7 @@ async function waitForScrapedRefreshWorkflow(startedAt) {
   let latest = null;
   for (let attempt = 0; attempt < 64; attempt += 1) {
     const status = await fetchApiJson(`api.php?action=workflow-status&target=paper-refresh&since=${encodeURIComponent(startedAt)}`);
-    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || status.latest || null;
+    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || null;
     if (latest?.status === "completed") return latest;
     await sleep(3000);
   }
@@ -4038,13 +4040,45 @@ async function waitForScrapedScanWorkflow(startedAt) {
   let latest = null;
   for (let attempt = 0; attempt < 64; attempt += 1) {
     const status = await fetchApiJson(`api.php?action=workflow-status&target=paper-scan&since=${encodeURIComponent(startedAt)}`);
-    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || status.latest || null;
+    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || null;
     if (latest?.status === "completed") return latest;
     state.scrapedScanStatus = latest ? `Scan ${workflowStatusText(latest)}` : "Scan queued...";
     renderScrapedScanControls();
     await sleep(3000);
   }
   return latest;
+}
+
+function scrapedScanWasPublishedAfter(scrapedState, startedAt) {
+  const start = Date.parse(startedAt || "");
+  if (!Number.isFinite(start)) return true;
+  const scanTimes = [
+    scrapedState?.marketScan?.lastScanAt,
+    ...(Array.isArray(scrapedState?.marketScanHistory)
+      ? scrapedState.marketScanHistory.slice(0, 3).map((item) => item?.runAt)
+      : []),
+  ];
+  return scanTimes.some((value) => {
+    const timestamp = Date.parse(value || "");
+    return Number.isFinite(timestamp) && timestamp >= start - 10000;
+  });
+}
+
+async function waitForScrapedScanPublication(startedAt) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      const scrapedState = await fetchJson("data/paper-state.json", { summary: "scraped" });
+      if (scrapedScanWasPublishedAfter(scrapedState, startedAt)) return scrapedState;
+    } catch (error) {
+      lastError = error;
+    }
+    state.scrapedScanStatus = "Publishing scan results...";
+    renderScrapedScanControls();
+    await sleep(2000);
+  }
+  if (lastError) throw lastError;
+  throw new Error("The scan workflow finished, but its new scraped data has not been published yet.");
 }
 
 async function triggerOneTimeMarketScan() {
@@ -4071,7 +4105,9 @@ async function triggerOneTimeMarketScan() {
     if (workflow.conclusion !== "success") {
       throw new Error(`Scan workflow finished with ${workflow.conclusion || "an unknown error"}.`);
     }
-    const refreshed = await fetchJson("data/paper-state.json", { summary: "scraped" });
+    state.scrapedScanStatus = "Publishing scan results...";
+    renderScrapedScanControls();
+    const refreshed = await waitForScrapedScanPublication(startedAt);
     if (!storeScrapedMarketState(refreshed, "scraped")) {
       throw new Error("The refreshed scan response did not include scraped opportunities.");
     }
