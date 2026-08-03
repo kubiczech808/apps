@@ -6532,12 +6532,7 @@ function submittedOrderSummaryMarkup(run = {}) {
 }
 
 function runLogMessageMarkup(run = {}) {
-  const batch = run.batchLog || run;
-  const action = String(run.action || batch.action || "").toUpperCase();
-  if (action === "REJECTED") {
-    return escapeHtml(String(run.reason || batch.reason || humanRunReason(run) || "-"));
-  }
-  return submittedOrderSummaryMarkup(run) || escapeHtml(runDecisionSummary(run));
+  return submittedOrderSummaryMarkup(run) || escapeHtml(humanRunReason(run));
 }
 
 function portfolioRunSource(run = {}) {
