@@ -5310,12 +5310,6 @@ function renderLiveState(liveState) {
   const reconciliation = liveState.reconciliation || {};
   const reconciliationGaps = Number(reconciliation.orphanedCount || 0);
   const sources = Array.isArray(sync.sources) ? sync.sources : [];
-  const totalPnl = Number(portfolio.totalPnlUsdc);
-  const totalPnlPct = Number(portfolio.totalPnlPct);
-  const realizedPnl = Number(portfolio.realizedPnlUsdc);
-  const realizedPnlPct = Number(portfolio.realizedPnlPct);
-  const openPnl = Number(portfolio.openPnlUsdc);
-  const openPnlPct = Number(portfolio.openPnlPct);
   const marketValue = Number(portfolio.marketValueUsdc);
   const cash = Number(portfolio.cashUsdc);
   const openOrderRisk = openOrderRows.reduce((sum, order) => sum + Number(order.totalCostUsdc || order.stakeUsdc || 0), 0);
@@ -5334,6 +5328,22 @@ function renderLiveState(liveState) {
     ? Number(portfolio.equityUsdc)
     : (Number.isFinite(marketValue) ? marketValue : 0);
   const deposited = Number(portfolio.depositedUsdc);
+  const rawTotalPnl = Number(portfolio.totalPnlUsdc);
+  const rawTotalPnlPct = Number(portfolio.totalPnlPct);
+  const rawRealizedPnl = Number(portfolio.realizedPnlUsdc);
+  const rawRealizedPnlPct = Number(portfolio.realizedPnlPct);
+  const rawOpenPnl = Number(portfolio.openPnlUsdc);
+  const rawOpenPnlPct = Number(portfolio.openPnlPct);
+  const hasOriginalValue = Number.isFinite(deposited) && deposited > 0;
+  // The account snapshot's equity is authoritative. Its public activity feed
+  // can be temporarily incomplete, so derive the headline and the realized
+  // remainder from equity to avoid a false red total P/L during a sync.
+  const totalPnl = hasOriginalValue ? equity - deposited : rawTotalPnl;
+  const totalPnlPct = hasOriginalValue ? totalPnl / deposited : rawTotalPnlPct;
+  const openPnl = Number.isFinite(rawOpenPnl) ? rawOpenPnl : 0;
+  const openPnlPct = hasOriginalValue ? openPnl / deposited : rawOpenPnlPct;
+  const realizedPnl = hasOriginalValue ? totalPnl - openPnl : rawRealizedPnl;
+  const realizedPnlPct = hasOriginalValue ? realizedPnl / deposited : rawRealizedPnlPct;
   const depositedLine = Number.isFinite(deposited)
     ? `Original value ${money(deposited)}`
     : "Original value not available";

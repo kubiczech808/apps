@@ -1549,6 +1549,11 @@ async function main() {
   const originalValueUsdc = storedOriginalValueUsdc > 0
     ? storedOriginalValueUsdc
     : inferredOriginalValueUsdc;
+  // Public activity/history endpoints can briefly omit older closes. Equity
+  // comes from the live collateral plus marked positions, so it is the stable
+  // source of truth for total account P/L against the fixed original value.
+  const equityDeltaPnlUsdc = number((equityUsdc - originalValueUsdc).toFixed(6));
+  const reconciledRealizedPnlUsdc = number((equityDeltaPnlUsdc - number(portfolioBase.openPnlUsdc, 0)).toFixed(6));
   const pnlPctOfOriginalValue = (pnl) => originalValueUsdc > 0
     ? number(number(pnl, 0) / originalValueUsdc)
     : null;
@@ -1584,8 +1589,16 @@ async function main() {
       originalValueUsdc,
       pnlPercentageBasis: "original-value",
       openPnlPct: pnlPctOfOriginalValue(portfolioBase.openPnlUsdc),
-      realizedPnlPct: pnlPctOfOriginalValue(portfolioBase.realizedPnlUsdc),
-      totalPnlPct: pnlPctOfOriginalValue(portfolioBase.totalPnlUsdc),
+      // Keep total P/L stable even when the public closed-trade history is
+      // temporarily incomplete. Realized P/L is the remainder after the
+      // current marked open P/L, therefore the dashboard always reconciles.
+      realizedPnlUsdc: reconciledRealizedPnlUsdc,
+      realizedPnlPct: pnlPctOfOriginalValue(reconciledRealizedPnlUsdc),
+      totalPnlUsdc: equityDeltaPnlUsdc,
+      totalPnlPct: pnlPctOfOriginalValue(equityDeltaPnlUsdc),
+      ledgerDerivedRealizedPnlUsdc: portfolioBase.realizedPnlUsdc,
+      ledgerDerivedTotalPnlUsdc: portfolioBase.totalPnlUsdc,
+      pnlSource: "equity-minus-original-value",
       depositedSource: storedOriginalValueUsdc > 0 ? "persisted-original-value" : "initial-sync-estimate",
       depositedNote: "Original account value is fixed from the first usable live snapshot. It changes only through an explicit future deposit/withdrawal reconciliation, never through position, redeem, or P/L sync changes.",
       equitySource: cashUsdc == null ? "polymarket-value-api-or-open-market-value" : "cash + open market value + pending redeem value",
