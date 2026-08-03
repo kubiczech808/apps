@@ -204,6 +204,11 @@ jobs:
         working-directory: trading
         env:
           POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.live_confirm) || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
+          # The preceding sync has just fetched the CLOB balance and open
+          # orders. Execute against that local snapshot, not a potentially
+          # older copy that is still being served from the hosting.
+          LIVE_STATE_URL: data/live-state.json
+          LIVE_EXECUTION_STATE_URL: data/live-execution-state.json
         run: |
           npm run live:execute -- --confirm-live
 

@@ -199,7 +199,10 @@ function hasOpenSellOrderForToken(liveState, tokenId) {
 
 function liveCashMonitoring(previousExecution, cash, now = new Date()) {
   const previousMonitoring = previousExecution?.monitoring || {};
-  const previousCash = number(previousExecution?.account?.cashUsdc);
+  const previousCash = number(
+    previousExecution?.account?.availableCashUsdc
+    ?? previousExecution?.account?.cashUsdc,
+  );
   const cashAboveLimit = Number.isFinite(cash) && cash > IDLE_CASH_MAX_USDC;
   const idleCashSince = cashAboveLimit
     ? (previousCash != null && previousCash > IDLE_CASH_MAX_USDC ? previousMonitoring.idleCashSince : null) || now.toISOString()
@@ -787,6 +790,42 @@ function liveCashUsdc(liveState) {
   const cash = number(liveState?.portfolio?.cashUsdc);
   if (cash != null) return cash;
   return number(liveState?.portfolio?.equityUsdc, 0);
+}
+
+function activeBuyOrderReservationUsdc(liveState) {
+  const terminalStatuses = new Set([
+    "CANCELED",
+    "CANCELLED",
+    "CANCELLED_BY_USER",
+    "FILLED",
+    "MATCHED",
+    "EXPIRED",
+    "ORDER_STATUS_CANCELED",
+    "ORDER_STATUS_CANCELLED",
+    "ORDER_STATUS_FILLED",
+    "ORDER_STATUS_EXPIRED",
+  ]);
+  return (Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+    .filter((order) => {
+      const side = String(order?.side || "BUY").toUpperCase();
+      if (side.includes("SELL")) return false;
+      const status = String(order?.status || order?.rawStatus || "").toUpperCase();
+      if (terminalStatuses.has(status)) return false;
+      return number(order?.remainingSize ?? order?.originalSize ?? order?.size, 0) > 0.000001;
+    })
+    .reduce((sum, order) => {
+      const notional = number(
+        order?.notionalUsdc,
+        number(order?.price, 0) * number(order?.remainingSize ?? order?.originalSize ?? order?.size, 0),
+      );
+      return sum + Math.max(0, number(notional, 0));
+    }, 0);
+}
+
+function availableLiveCashUsdc(liveState, grossCash = liveCashUsdc(liveState)) {
+  // CLOB collateral is the account balance before the notional locked in
+  // pending BUY orders. A new order may only consume the remainder.
+  return Math.max(0, number(grossCash, 0) - activeBuyOrderReservationUsdc(liveState));
 }
 
 function daysValue(item) {
@@ -1521,7 +1560,11 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 })
     minimumOrderCost,
     orderNotional,
     makerPrecisionBlocked,
-    minimumFundingBlocked: availableCash <= 0.000001 || makerPrecisionBlocked,
+    // `mos` is an exchange acceptance requirement, not merely a display
+    // hint. Do not submit an under-sized maker order and discover the problem
+    // only after Polymarket rejects it; let the capital-rotation path decide
+    // whether releasing a weaker order or position is worthwhile.
+    minimumFundingBlocked: availableCash <= 0.000001 || makerPrecisionBlocked || belowExchangeMinimum,
     minSizeOverride: belowExchangeMinimum,
     sizingNote: size <= 0
       ? "no available cash for a positive stake"
@@ -2411,6 +2454,10 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
           review.reason = `current revalidation no longer satisfies live rules: ${(revalidated.rejectReasons || []).join("; ") || "not eligible"}; existing order kept because no replacement can be submitted atomically in this review`;
         } else if (betterCandidate && betterCandidateNeedsReleasedCapital) {
           review.action = "CANCEL_FOR_BETTER_CANDIDATE";
+          // Keep the freshly validated order payload. After the cancellation
+          // succeeds, main() submits this exact replacement immediately and
+          // restores the original order if that submission fails.
+          review.replacementCandidate = betterCandidate;
           review.reason = `${comparison.metricLabel} priority supports replacement (${comparison.metricLabel} ${selectionMetricDisplay(comparison, comparison.currentMetric)} -> ${selectionMetricDisplay(comparison, comparison.replacementMetric)}, ${comparison.metricDelta >= 0 ? "+" : ""}${selectionMetricDisplay(comparison, comparison.metricDelta)}); expected value ${Number(comparison.currentExpectedValue).toFixed(4)} -> ${Number(comparison.replacementExpectedValue).toFixed(4)} USDC, so the replacement needs this order's locked capital`;
         } else if (betterCandidate) {
           review.reason = betterCandidateCost != null
@@ -2525,13 +2572,16 @@ async function main() {
     throw new Error(`manual execution shortlist uses ${MANUAL_SHORTLIST_PROBABILITY_SOURCE} probability, but the live portfolio is configured for ${PROBABILITY_SOURCE} probability`);
   }
   const cash = liveCashUsdc(liveState);
+  const reservedOpenOrderUsdc = activeBuyOrderReservationUsdc(liveState);
+  const availableCash = availableLiveCashUsdc(liveState, cash);
   const tradingConfig = liveTradingConfig(liveState);
   const portfolioValue = livePortfolioValue(liveState, cash);
   const fractionNotional = portfolioValue * MAX_ORDER_FRACTION;
-  const monitoring = liveCashMonitoring(previousExecution, cash);
+  const monitoring = liveCashMonitoring(previousExecution, availableCash);
   const regularMaxNotional = Math.min(fractionNotional, MAX_ORDER_NOTIONAL_USDC);
-  const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, cash - IDLE_CASH_MAX_USDC) : 0;
+  const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, availableCash - IDLE_CASH_MAX_USDC) : 0;
   const maxNotional = Number(regularMaxNotional.toFixed(5));
+  const directMaxNotional = Number(Math.min(maxNotional, availableCash).toFixed(5));
   const rawEvaluations = Array.isArray(paperState.evaluations) ? paperState.evaluations : [];
   const rawMarketObservations = PROBABILITY_SOURCE === "polymarket" && Array.isArray(scrapedState?.marketObservations)
     ? scrapedState.marketObservations
@@ -2548,7 +2598,7 @@ async function main() {
   const checked = [];
   for (const evaluation of baseCandidates) {
     try {
-      checked.push(await revalidateEvaluation(evaluation, liveState, cash, maxNotional, evaluationByToken));
+      checked.push(await revalidateEvaluation(evaluation, liveState, availableCash, directMaxNotional, evaluationByToken));
     } catch (error) {
       checked.push({
         candidate: {
@@ -2579,18 +2629,18 @@ async function main() {
   const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /no available cash|sub-cent maker amount|above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
   const riskBlockedCandidates = checked.filter((item) => (item.rejectReasons || [])
     .some((reason) => /^(correlated live exposure|duplicate token already open)/i.test(String(reason || ""))));
-  // Never disturb an existing position or limit order while the account still
-  // has usable free cash. A direct allocation is always preferred; rotations
-  // are reserved for an actually unfunded account.
-  const hasUsableFreeCash = number(cash, 0) > 0.01;
-  const needsCapitalRotation = !eligible.length && !hasUsableFreeCash && (cash <= 0 || capitalSizingBlocked.length > 0);
-  const needsRiskReplacement = !eligible.length && !hasUsableFreeCash && !needsCapitalRotation && riskBlockedCandidates.length > 0;
+  // A small remainder of cash is useful only if it can fund a valid exchange
+  // order. If it cannot satisfy Polymarket's minimum size, assess a genuine
+  // rotation instead of silently treating reserved order money as available.
+  const hasUsableFreeCash = availableCash > 0.01;
+  const needsCapitalRotation = !eligible.length && capitalSizingBlocked.length > 0;
+  const needsRiskReplacement = !eligible.length && !needsCapitalRotation && riskBlockedCandidates.length > 0;
   const rotationReview = !eligible.length && (needsCapitalRotation || needsRiskReplacement)
     ? await reviewPositionRotation({
         liveState,
         evaluationByToken,
         baseCandidates,
-        cash,
+        cash: availableCash,
         maxNotional,
         restrictToRiskReplacement: needsRiskReplacement,
       })
@@ -2598,27 +2648,27 @@ async function main() {
   const rotationCandidatePool = candidatePoolForRotation(baseCandidates);
   const activeSellOrders = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
     .filter((order) => String(order.side || "").toUpperCase().includes("SELL"));
-  const best = eligible[0] || null;
-  const bestCandidateCost = best
-    ? number(best.totalCostUsdc ?? best.orderNotionalUsdc)
+  const directBest = eligible[0] || null;
+  const directCandidateCost = directBest
+    ? number(directBest.totalCostUsdc ?? directBest.orderNotionalUsdc)
     : null;
-  const directCandidateCanUseFreeCapital = Boolean(best
-    && Number.isFinite(bestCandidateCost)
-    && bestCandidateCost <= number(cash, 0) + 0.00001);
+  const directCandidateCanUseFreeCapital = Boolean(directBest
+    && Number.isFinite(directCandidateCost)
+    && directCandidateCost <= availableCash + 0.00001);
   // Use free cash for a direct candidate before touching existing orders or
   // positions. An unrelated buy is allowed while a sell order is pending.
-  const directCapitalPriority = Boolean(best);
+  const directCapitalPriority = directCandidateCanUseFreeCapital;
   // A directly fundable candidate must also protect unrelated open orders from
   // cancellation. A funded buy must never trigger a needless cancellation just
   // to make room for a trade that is already funded.
-  const orderManagement = activeSellOrders.length || hasUsableFreeCash || directCandidateCanUseFreeCapital
+  const orderManagement = activeSellOrders.length || directCandidateCanUseFreeCapital
     ? { action: "NONE", reviews: [] }
     : await reviewOpenOrders({
       liveState,
       evaluationByToken,
       eligible,
       rotationCandidates: rotationCandidatePool,
-      cash,
+      cash: availableCash,
         maxNotional,
         tradingConfig,
       });
@@ -2626,16 +2676,33 @@ async function main() {
   // A cancelled buy order releases capital immediately. Continue with the same
   // revalidated shortlist instead of leaving the portfolio idle until the next run.
   const canceledForBetterCandidate = orderManagement.action === "CANCELED_FOR_BETTER_CANDIDATE";
+  const best = canceledForBetterCandidate && orderManagement.selected?.replacementCandidate
+    ? orderManagement.selected.replacementCandidate
+    : directBest;
+  const bestCandidateCost = best
+    ? number(best.totalCostUsdc ?? best.orderNotionalUsdc)
+    : null;
+  const releasedOrderNotional = canceledForBetterCandidate
+    ? number(
+      orderManagement.selected?.lockedNotionalUsdc
+      ?? orderManagement.selected?.notionalUsdc
+      ?? orderManagement.selected?.orderNotionalUsdc,
+      0,
+    )
+    : 0;
+  const availableCashAfterOrderManagement = availableCash + releasedOrderNotional;
   const appliedDirectStake = best?.totalCostUsdc != null
     ? number(best.totalCostUsdc, 0)
-    : Math.min(maxNotional, Math.max(0, cash));
+    : Math.min(maxNotional, Math.max(0, availableCashAfterOrderManagement));
   // Replacing an order that this run just cancelled is order management, not an
   // additional portfolio allocation. Continue with its released capital in
   // this same batch.
   const rotationAvailable = rotationReview?.action === "ROTATION_AVAILABLE";
   const rotationComparison = rotationComparisonRows(rotationReview, orderManagement.reviews);
   const rotationHumanReason = rotationAvailable ? rotationHumanComparison(rotationReview.best) : "";
-  const actionReason = directCapitalPriority
+  const actionReason = canceledForBetterCandidate
+    ? "a waiting order released its locked capital and the better validated replacement is submitted immediately"
+    : directCapitalPriority
     ? "free capital prioritized: best direct candidate is submitted before order or position rotation"
     : activeSellOrders.length
     ? "waiting for an existing live sell order to reduce position exposure before any replacement buy"
@@ -2650,7 +2717,9 @@ async function main() {
             : (capitalSizingBlocked.length
                 ? `live candidates blocked by available USDC: ${capitalSizingBlocked.length} cannot meet the current Polymarket minimum order size`
                 : "no currently executable candidate after live revalidation"))));
-  const actionExplanation = directCapitalPriority
+  const actionExplanation = canceledForBetterCandidate
+    ? "The waiting order released its own locked capital only after a better candidate passed the portfolio comparison. The replacement is submitted in this same batch; if submission fails, the original order is restored."
+    : directCapitalPriority
     ? "A currently executable candidate has available free capital. The batch submits it first; existing orders and positions are considered for rotation only when no direct allocation is possible."
     : activeSellOrders.length
     ? "A live sell order is open. The system waits for account sync to confirm the exit before it can revalidate and place a replacement buy."
@@ -2675,6 +2744,8 @@ async function main() {
       funderAddress: tradingConfig.funderAddress,
       signatureType: tradingConfig.signatureType,
       cashUsdc: cash,
+      reservedOpenOrderUsdc: Number(reservedOpenOrderUsdc.toFixed(5)),
+      availableCashUsdc: Number(availableCash.toFixed(5)),
       portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
       maxOrderFraction: MAX_ORDER_FRACTION,
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
@@ -2705,7 +2776,7 @@ async function main() {
       freeCapitalPriority: true,
       hasUsableFreeCash,
       directCandidateCanUseFreeCapital,
-      directCandidateCostUsdc: bestCandidateCost,
+      directCandidateCostUsdc: directCandidateCost,
       manualShortlistFallback,
       capitalUtilizationOverride: monitoring.idleCashOverdue,
       storedEvaluations: rawEvaluations.length,
@@ -2755,7 +2826,7 @@ async function main() {
         freeCapitalPriority: true,
         hasUsableFreeCash,
         directCandidateCanUseFreeCapital,
-        directCandidateCostUsdc: bestCandidateCost,
+        directCandidateCostUsdc: directCandidateCost,
         manualShortlistFallback,
         selectionOrder: SELECTION_ORDER,
         useLimitOrders: USE_LIMIT_ORDERS,
@@ -2766,11 +2837,13 @@ async function main() {
         rotationNoDaysMaxWinGap: ROTATION_NO_DAYS_MAX_WIN_GAP,
       },
       capital: {
-        availableUsdc: cash,
+        availableUsdc: availableCash,
+        grossCashUsdc: cash,
+        reservedOpenOrderUsdc: Number(reservedOpenOrderUsdc.toFixed(5)),
         portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
         targetStakeUsdc: maxNotional,
         requiredStakeUsdc: Number(appliedDirectStake.toFixed(5)),
-        insufficientCapital: !Number.isFinite(maxNotional) || maxNotional <= 0 || cash <= 0 || (!allEligible.length && capitalSizingBlocked.length > 0),
+        insufficientCapital: !best && (!Number.isFinite(maxNotional) || maxNotional <= 0 || capitalSizingBlocked.length > 0),
         capitalSizingBlockedCandidates: capitalSizingBlocked.length,
       },
       counts: {
@@ -2924,13 +2997,19 @@ async function main() {
   }
 
   const attempts = [];
+  // A cancel-and-replace path validates its replacement with the capital that
+  // the cancelled order releases. It therefore is not present in `eligible`,
+  // which was intentionally checked against the pre-cancellation free cash.
+  const submissionCandidates = canceledForBetterCandidate && best
+    ? [best]
+    : eligible;
   const restoreCanceledOrderIfNeeded = async () => {
     if (!canceledForBetterCandidate || !orderManagement.selected) return null;
     const restoreResponse = await restoreOpenOrder(orderManagement.selected, tradingConfig);
     orderManagement.selected.restoreResponse = restoreResponse;
     return restoreResponse;
   };
-  for (const candidate of eligible) {
+  for (const candidate of submissionCandidates) {
     const submission = await submitOrderWithMakerPrecisionRecovery(candidate);
     const response = submission.response;
     const submittedCandidate = submission.order;
@@ -2967,7 +3046,7 @@ async function main() {
         monitoring: {
           ...monitoring,
           lastSubmittedAt: new Date().toISOString(),
-          estimatedCashAfterOrderUsdc: Number(Math.max(0, cash - Number(submittedCandidate.totalCostUsdc || submittedCandidate.orderNotionalUsdc || 0)).toFixed(5)),
+          estimatedCashAfterOrderUsdc: Number(Math.max(0, availableCashAfterOrderManagement - Number(submittedCandidate.totalCostUsdc || submittedCandidate.orderNotionalUsdc || 0)).toFixed(5)),
         },
         selected: submittedCandidate,
         response,
