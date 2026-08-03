@@ -564,7 +564,14 @@ function normalizeMarketScan(input = {}) {
       : MARKET_SCAN_MIN_RESOLUTION_MINUTES;
   return {
     cursor: Math.max(0, Math.floor(Number(input?.cursor) || 0)),
+    preferredCursor: Math.max(0, Math.floor(Number(input?.preferredCursor) || 0)),
     categoryCursor: Math.max(0, Math.floor(Number(input?.categoryCursor) || 0)),
+    categoryOffsets: Object.fromEntries(
+      Object.entries(input?.categoryOffsets && typeof input.categoryOffsets === "object" ? input.categoryOffsets : {})
+        .map(([tag, offset]) => [String(tag || "").trim().toLowerCase(), Math.max(0, Math.floor(Number(offset) || 0))])
+        .filter(([tag]) => Boolean(tag))
+        .slice(0, MARKET_SCAN_CATEGORY_TAGS.length),
+    ),
     lastScanAt: input?.lastScanAt || null,
     lastBatchCount: Math.max(0, Math.floor(Number(input?.lastBatchCount) || 0)),
     lastPreferredCount: Math.max(0, Math.floor(Number(input?.lastPreferredCount) || 0)),
@@ -4857,9 +4864,18 @@ async function loadBroadMarketScanBatch({ cursor = 0, order = "volume24hr" } = {
   return fetchGammaMarkets(params);
 }
 
-async function loadPreferredMarketScanBatch() {
+function nextMarketScanCursor(cursor, receivedCount, pageSize) {
+  const current = Math.max(0, Math.floor(Number(cursor) || 0));
+  const received = Math.max(0, Math.floor(Number(receivedCount) || 0));
+  const expected = Math.max(1, Math.floor(Number(pageSize) || 1));
+  const next = current + received;
+  return received < expected || next >= MARKET_SCAN_MAX_OFFSET ? 0 : next;
+}
+
+async function loadPreferredMarketScanBatch({ cursor = 0 } = {}) {
   const params = {
     limit: Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE)),
+    offset: Math.max(0, Math.floor(Number(cursor) || 0)),
     order: "endDate",
     ascending: "true",
   };
@@ -4883,9 +4899,10 @@ function annotateCategoryScanMarkets(markets, tag) {
   }));
 }
 
-async function loadCategoryMarketScanBatch(tag) {
+async function loadCategoryMarketScanBatch(tag, { cursor = 0 } = {}) {
   const params = {
     limit: Math.max(1, Math.min(100, MARKET_SCAN_CATEGORY_BATCH_SIZE)),
+    offset: Math.max(0, Math.floor(Number(cursor) || 0)),
     tag_id: tag.id,
     order: "endDate",
     ascending: "true",
@@ -5183,6 +5200,8 @@ async function refreshMarketObservations(state) {
   const categoryErrors = [];
   const broadBatches = [];
   let broadCursor = previousScan.cursor;
+  let preferredCursor = previousScan.preferredCursor;
+  const categoryOffsets = { ...(previousScan.categoryOffsets || {}) };
   const requestedCategories = scanCategoriesForRun(previousScan);
   // A known selected tag is already expressed as Gamma's tag_id. Do not fetch
   // broad pages and discard them locally just to recreate that API filter.
@@ -5191,13 +5210,24 @@ async function refreshMarketObservations(state) {
   try {
     if (!hasDirectTagScope) {
       attemptedApiCalls += 1;
-      preferredMarkets = await loadPreferredMarketScanBatch();
+      preferredMarkets = await loadPreferredMarketScanBatch({ cursor: preferredCursor });
+      preferredCursor = nextMarketScanCursor(
+        preferredCursor,
+        Array.isArray(preferredMarkets) ? preferredMarkets.length : 0,
+        Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE)),
+      );
     }
     for (const category of requestedCategories) {
       attemptedApiCalls += 1;
       try {
-        const batch = await loadCategoryMarketScanBatch(category);
+        const categoryOffset = Math.max(0, Math.floor(Number(categoryOffsets[category.slug]) || 0));
+        const batch = await loadCategoryMarketScanBatch(category, { cursor: categoryOffset });
         categoryBatches.push({ tag: category, markets: Array.isArray(batch) ? batch : [] });
+        categoryOffsets[category.slug] = nextMarketScanCursor(
+          categoryOffset,
+          Array.isArray(batch) ? batch.length : 0,
+          Math.max(1, Math.min(100, MARKET_SCAN_CATEGORY_BATCH_SIZE)),
+        );
       } catch (error) {
         categoryErrors.push({ tag: category.slug, error: error?.message || String(error) });
       }
@@ -5279,7 +5309,9 @@ async function refreshMarketObservations(state) {
       .map(normalizeMarketObservationEconomics);
     state.marketScan = {
       cursor: broadCursor,
+      preferredCursor,
       categoryCursor,
+      categoryOffsets,
       lastScanAt: scanRunAt,
       lastBatchCount: Array.isArray(fetchedMarkets) ? fetchedMarkets.length : 0,
       lastPreferredCount: Array.isArray(preferredMarkets) ? preferredMarkets.length : 0,
@@ -5310,6 +5342,8 @@ async function refreshMarketObservations(state) {
         categoryApiCalls: categoryBatches.length,
         categoryErrors,
         requestedCategories: requestedCategories.map((category) => category.slug),
+        preferredCursor,
+        categoryOffsets,
         broadMarketCount: broadBatches.length,
         rawMarketCount: fetchedMarkets.length,
         loadedMarketCount: fetchedMarkets.length,
