@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'trading/tools/live-account-sync.mjs'
+      - 'trading/tools/restore-live-execution-history.mjs'
       - 'trading/package.json'
       - '.github/workflows/trading-live-account.yml'
   workflow_dispatch:
@@ -13,6 +14,10 @@ on:
 concurrency:
   group: trading-live-account-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   live-account:
@@ -47,6 +52,16 @@ jobs:
         working-directory: trading
         run: npm run live:account
 
+      - name: Restore lost live run log history
+        working-directory: trading
+        env:
+          LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
+          LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
+          LIVE_RUN_LOG_RECOVER: "true"
+          LIVE_EXECUTION_WORKFLOW_FILE: polymarket-live-limit-order-test.yml
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/restore-live-execution-history.mjs
+
       - name: Upload live state
         env:
           HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
@@ -54,6 +69,7 @@ jobs:
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
           TRADING_FTP_DIR: /www/trading/data
           LIVE_STATE_FILE: trading/data/live-state.json
+          LIVE_EXECUTION_STATE_FILE: trading/data/live-execution-state.json
         run: |
           python3 - <<'PY'
           import ftplib
@@ -65,9 +81,12 @@ jobs:
           password = os.environ["HOSTING_FTP_PASSWORD"]
           target = os.environ["TRADING_FTP_DIR"].strip("/")
           state_file = Path(os.environ["LIVE_STATE_FILE"])
+          execution_file = Path(os.environ["LIVE_EXECUTION_STATE_FILE"])
 
           if not state_file.exists():
               raise SystemExit("live-state.json was not generated")
+          if not execution_file.exists():
+              raise SystemExit("live-execution-state.json was not restored")
 
           def enter_dir(ftp, parts):
               try:
@@ -83,17 +102,21 @@ jobs:
                       ftp.mkd(part)
                       ftp.cwd(part)
 
+          def upload_atomic(ftp, local_path, remote_name):
+              tmp_name = f"{remote_name}.uploading"
+              with local_path.open("rb") as handle:
+                  ftp.storbinary(f"STOR {tmp_name}", handle)
+              try:
+                  ftp.rename(tmp_name, remote_name)
+              except ftplib.all_errors:
+                  ftp.delete(remote_name)
+                  ftp.rename(tmp_name, remote_name)
+
           with ftplib.FTP(server, timeout=30) as ftp:
               ftp.login(username, password)
               enter_dir(ftp, target.split("/"))
-              tmp_name = "live-state.json.uploading"
-              with state_file.open("rb") as handle:
-                  ftp.storbinary(f"STOR {tmp_name}", handle)
-              try:
-                  ftp.rename(tmp_name, "live-state.json")
-              except ftplib.all_errors:
-                  ftp.delete("live-state.json")
-                  ftp.rename(tmp_name, "live-state.json")
+              upload_atomic(ftp, execution_file, "live-execution-state.json")
+              upload_atomic(ftp, state_file, "live-state.json")
           PY
 
       - name: Send redeem alert emails

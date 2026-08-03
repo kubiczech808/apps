@@ -6751,6 +6751,7 @@ function runLogMessageMarkup(run = {}) {
 function portfolioRunSource(run = {}) {
   const source = String(run.runSource || run.triggerSource || run.executionSource || "").trim().toUpperCase();
   if (source === "MANUAL" || run.manualRunOnce === true || run.batchLog?.manualRunOnce === true) return "MANUAL";
+  if (source === "RECOVERED" || run.historicalRecovery === true) return "RECOVERED";
   return "AUTO";
 }
 

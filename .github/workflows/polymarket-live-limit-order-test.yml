@@ -85,6 +85,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   live-limit-order-test:
@@ -106,7 +107,7 @@ jobs:
       MAX_ORDER_NOTIONAL_USDC: "50"
       LIVE_IDLE_CASH_MAX_USDC: "5"
       LIVE_IDLE_CASH_GRACE_HOURS: "24"
-      LIVE_RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_run_source == 'MANUAL' && 'MANUAL' || 'AUTO' }}
+      LIVE_RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && (inputs.live_run_source || 'AUTO') || 'AUTO' }}
       LIVE_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.live_execution_trigger || 'cron' }}
       LIVE_EXECUTION_CANDIDATE_TOKEN_IDS: ${{ github.event.inputs.live_execution_candidate_token_ids || '' }}
       LIVE_EXECUTION_SHORTLIST_PROBABILITY_SOURCE: ${{ github.event.inputs.live_execution_probability_source || '' }}
@@ -199,6 +200,17 @@ jobs:
       - name: Generate fresh live account snapshot
         working-directory: trading
         run: npm run live:account
+
+      - name: Restore live execution run history
+        working-directory: trading
+        env:
+          # The runner starts from a clean checkout. Restore the hosted log
+          # before the executor appends this decision, otherwise each run
+          # would replace the full history with a single row.
+          LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
+          LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
+          LIVE_RUN_LOG_RECOVER: "false"
+        run: node tools/restore-live-execution-history.mjs
 
       - name: Verify current market and maybe submit live order
         working-directory: trading
