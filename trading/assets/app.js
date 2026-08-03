@@ -3490,9 +3490,14 @@ function scrapedMarketScan() {
 }
 
 function storeScrapedMarketState(scrapedState = {}, summary = "scraped") {
-  state.scrapedMarketObservations = Array.isArray(scrapedState.marketObservations)
-    ? scrapedState.marketObservations
-    : [];
+  // The scraped view requires an explicit observations array. A compact
+  // dashboard response intentionally omits it, and must never clear a loaded
+  // catalogue just because a caller requested the wrong response summary.
+  if (!Array.isArray(scrapedState.marketObservations)) {
+    state.scrapedMarketStateError = "Scraped state response did not include market observations.";
+    return false;
+  }
+  state.scrapedMarketObservations = scrapedState.marketObservations;
   state.scrapedMarketScan = scrapedState.marketScan && typeof scrapedState.marketScan === "object"
     ? scrapedState.marketScan
     : {};
@@ -3502,6 +3507,7 @@ function storeScrapedMarketState(scrapedState = {}, summary = "scraped") {
   state.scrapedMarketStateSummary = summary;
   state.scrapedMarketStateError = "";
   state.scrapedMarketStateLoaded = true;
+  return true;
 }
 
 async function ensureScrapedMarketState(options = {}) {
@@ -4002,8 +4008,10 @@ async function triggerOneTimeMarketScan() {
     if (workflow.conclusion !== "success") {
       throw new Error(`Scan workflow finished with ${workflow.conclusion || "an unknown error"}.`);
     }
-    const refreshed = await fetchJson("api.php?action=state&target=paper&summary=scraped");
-    storeScrapedMarketState(refreshed);
+    const refreshed = await fetchJson("data/paper-state.json", { summary: "scraped" });
+    if (!storeScrapedMarketState(refreshed, "scraped")) {
+      throw new Error("The refreshed scan response did not include scraped opportunities.");
+    }
     state.scrapedScanStatus = `Updated ${formatDate(refreshed.marketScan?.lastScanAt || "")}`;
     if (state.page === "opportunities") renderBotEvaluations();
     else rerenderCurrentDashboard();
