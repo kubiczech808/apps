@@ -114,7 +114,7 @@ jobs:
 
           def clean_data_dir(ftp):
               current = ftp.pwd()
-              keep = {"paper-state.json", "live-state.json", "live-execution-state.json", "portfolio-config.json", "redeem-alert-ledger.json"}
+              keep = {"paper-state.json", "live-state.json", "live-execution-state.json", "portfolio-config.json", "scrape-scan-preferences.json", "redeem-alert-ledger.json"}
               try:
                   ftp.cwd("data")
               except ftplib.all_errors:

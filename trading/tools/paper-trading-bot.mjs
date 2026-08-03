@@ -63,6 +63,9 @@ const MARKET_SCAN_INCLUDE_BROAD_FALLBACK = String(process.env.PAPER_MARKET_SCAN_
 const MARKET_SCAN_CATEGORY_BATCH_SIZE = envNumber("PAPER_MARKET_SCAN_CATEGORY_BATCH_SIZE", 50);
 const MARKET_SCAN_CATEGORIES_PER_RUN = envNumber("PAPER_MARKET_SCAN_CATEGORIES_PER_RUN", 8);
 const MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC", 40000);
+// This is the user's last saved scraped-opportunities liquidity filter. It is
+// passed to Gamma before response data is transferred or stored.
+const MARKET_SCAN_LIQUIDITY_MIN = Math.max(0, envNumber("PAPER_MARKET_SCAN_LIQUIDITY_MIN", 0));
 const MARKET_SCAN_MIN_NEW_EVENTS_PER_RUN = envNumber("PAPER_MARKET_SCAN_MIN_NEW_EVENTS_PER_RUN", 80);
 const MARKET_SCAN_MAX_EXTRA_CATEGORY_PAGES = envNumber("PAPER_MARKET_SCAN_MAX_EXTRA_CATEGORY_PAGES", 12);
 const MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS = envNumber("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", envNumber("PAPER_MAX_RESOLUTION_DAYS", 7));
@@ -4643,8 +4646,8 @@ function mergeMarketLists(...lists) {
   return [...byId.values()];
 }
 
-function gammaMarketsUrl(params = {}) {
-  const url = new URL("https://gamma-api.polymarket.com/markets");
+function gammaResourceUrl(resource, params = {}) {
+  const url = new URL(`https://gamma-api.polymarket.com/${resource}`);
   url.searchParams.set("active", "true");
   url.searchParams.set("closed", "false");
   for (const [key, value] of Object.entries(params)) {
@@ -4654,14 +4657,21 @@ function gammaMarketsUrl(params = {}) {
   return url;
 }
 
-async function fetchGammaMarkets(params = {}, audit = null) {
-  const url = gammaMarketsUrl(params);
+function gammaMarketsUrl(params = {}) {
+  return gammaResourceUrl("markets", params);
+}
+
+function gammaEventsUrl(params = {}) {
+  return gammaResourceUrl("events", params);
+}
+
+async function fetchGammaResource(url, audit = null) {
   const auditCalls = Array.isArray(audit?.calls) ? audit.calls : null;
   const auditRow = auditCalls
     ? {
       sequence: auditCalls.length + 1,
       scope: String(audit.scope || "market_scan"),
-      label: String(audit.label || "Polymarket markets"),
+      label: String(audit.label || "Polymarket Gamma API"),
       category: audit.category ? String(audit.category) : null,
       url: url.toString(),
       parameters: Object.fromEntries(url.searchParams.entries()),
@@ -4689,6 +4699,70 @@ async function fetchGammaMarkets(params = {}, audit = null) {
     }
     throw error;
   }
+}
+
+async function fetchGammaMarkets(params = {}, audit = null) {
+  return fetchGammaResource(gammaMarketsUrl(params), audit);
+}
+
+async function fetchGammaEvents(params = {}, audit = null) {
+  return fetchGammaResource(gammaEventsUrl(params), audit);
+}
+
+function scanEventRequestParams(params = {}) {
+  return {
+    ...params,
+    ...(MARKET_SCAN_LIQUIDITY_MIN > 0 ? { liquidity_min: MARKET_SCAN_LIQUIDITY_MIN } : {}),
+  };
+}
+
+function flattenEventMarkets(events = [], auditCalls = null) {
+  const sourceEvents = Array.isArray(events) ? events : [];
+  const markets = [];
+  for (const event of sourceEvents) {
+    if (!event || typeof event !== "object") continue;
+    const eventContext = {
+      id: event.id,
+      slug: event.slug,
+      title: event.title,
+      category: event.category,
+      categorySlug: event.categorySlug,
+      tags: event.tags,
+      endDate: event.endDate || event.end_date,
+    };
+    const eventMarkets = parseJsonField(event.markets);
+    for (const market of Array.isArray(eventMarkets) ? eventMarkets : []) {
+      if (!market || typeof market !== "object") continue;
+      const nestedEvents = Array.isArray(market.events)
+        ? market.events.filter((item) => item && typeof item === "object")
+        : [];
+      const hasSameEvent = nestedEvents.some((item) => String(item.id || item.slug || "") === String(eventContext.id || eventContext.slug || ""));
+      markets.push({
+        ...market,
+        endDate: market.endDate || market.end_date || eventContext.endDate,
+        category: market.category || eventContext.category,
+        categorySlug: market.categorySlug || eventContext.categorySlug,
+        tags: market.tags || eventContext.tags,
+        events: hasSameEvent ? nestedEvents : [eventContext, ...nestedEvents],
+      });
+    }
+  }
+  const auditRow = Array.isArray(auditCalls) ? auditCalls[auditCalls.length - 1] : null;
+  if (auditRow && typeof auditRow === "object") {
+    auditRow.returnedCount = sourceEvents.length;
+    auditRow.returnedEventCount = sourceEvents.length;
+    auditRow.returnedMarketCount = markets.length;
+  }
+  Object.defineProperty(markets, "__scanSourceCount", {
+    value: sourceEvents.length,
+    enumerable: false,
+  });
+  return markets;
+}
+
+async function loadEventMarketScanBatch(params = {}, audit = null) {
+  const events = await fetchGammaEvents(scanEventRequestParams(params), audit);
+  return flattenEventMarkets(events, audit?.calls);
 }
 
 function marketDaysLeft(market = {}) {
@@ -5001,10 +5075,10 @@ async function loadBroadMarketScanBatch({ cursor = 0, order = "volume24hr", audi
     order,
     ascending: order === "endDate" ? "true" : "false",
   };
-  return fetchGammaMarkets(params, {
+  return loadEventMarketScanBatch(params, {
     calls: auditCalls,
     scope: "broad_fallback",
-    label: `Broad markets by ${order}`,
+    label: `Broad events by ${order}`,
   });
 }
 
@@ -5016,6 +5090,12 @@ function nextMarketScanCursor(cursor, receivedCount, pageSize) {
   return received < expected || next >= MARKET_SCAN_MAX_OFFSET ? 0 : next;
 }
 
+function scanBatchSourceCount(batch = []) {
+  const eventCount = Number(batch?.__scanSourceCount);
+  if (Number.isFinite(eventCount) && eventCount >= 0) return Math.floor(eventCount);
+  return Array.isArray(batch) ? batch.length : 0;
+}
+
 async function loadPreferredMarketScanBatch({ cursor = 0, auditCalls = null } = {}) {
   const params = {
     limit: Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE)),
@@ -5023,10 +5103,10 @@ async function loadPreferredMarketScanBatch({ cursor = 0, auditCalls = null } = 
     order: "endDate",
     ascending: "true",
   };
-  return fetchGammaMarkets(params, {
+  return loadEventMarketScanBatch(params, {
     calls: auditCalls,
     scope: "preferred_horizon",
-    label: "Preferred near-resolution markets",
+    label: "Preferred near-resolution events",
   });
 }
 
@@ -5055,7 +5135,7 @@ async function loadCategoryMarketScanBatch(tag, { cursor = 0, auditCalls = null 
     order: "endDate",
     ascending: "true",
   };
-  const markets = await fetchGammaMarkets(params, {
+  const markets = await loadEventMarketScanBatch(params, {
     calls: auditCalls,
     scope: "category",
     label: `Category: ${tag.slug}`,
@@ -5371,7 +5451,7 @@ async function refreshMarketObservations(state) {
       preferredMarkets = await loadPreferredMarketScanBatch({ cursor: preferredCursor, auditCalls: apiCallAudit });
       preferredCursor = nextMarketScanCursor(
         preferredCursor,
-        Array.isArray(preferredMarkets) ? preferredMarkets.length : 0,
+        scanBatchSourceCount(preferredMarkets),
         Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE)),
       );
     }
@@ -5383,7 +5463,7 @@ async function refreshMarketObservations(state) {
         categoryBatches.push({ tag: category, markets: Array.isArray(batch) ? batch : [] });
         categoryOffsets[category.slug] = nextMarketScanCursor(
           categoryOffset,
-          Array.isArray(batch) ? batch.length : 0,
+          scanBatchSourceCount(batch),
           Math.max(1, Math.min(100, MARKET_SCAN_CATEGORY_BATCH_SIZE)),
         );
         if (categoryOffsets[category.slug] === 0) exhaustedCategoryTags.add(category.slug);
@@ -5426,7 +5506,7 @@ async function refreshMarketObservations(state) {
         categoryBatches.push({ tag: category, markets: Array.isArray(batch) ? batch : [] });
         categoryOffsets[category.slug] = nextMarketScanCursor(
           categoryOffset,
-          Array.isArray(batch) ? batch.length : 0,
+          scanBatchSourceCount(batch),
           Math.max(1, Math.min(100, MARKET_SCAN_CATEGORY_BATCH_SIZE)),
         );
         if (categoryOffsets[category.slug] === 0) exhaustedCategoryTags.add(category.slug);
@@ -5452,11 +5532,12 @@ async function refreshMarketObservations(state) {
         attemptedApiCalls += 1;
         const batch = await loadBroadMarketScanBatch({ cursor: broadCursor, order, auditCalls: apiCallAudit });
         broadBatches.push(...(Array.isArray(batch) ? batch : []));
-        if (!Array.isArray(batch) || batch.length < MARKET_SCAN_BATCH_SIZE) {
+        const sourceCount = scanBatchSourceCount(batch);
+        if (!Array.isArray(batch) || sourceCount < MARKET_SCAN_BATCH_SIZE) {
           broadCursor = 0;
           break;
         }
-        broadCursor += MARKET_SCAN_BATCH_SIZE;
+        broadCursor += sourceCount;
         if (broadCursor >= MARKET_SCAN_MAX_OFFSET) {
           broadCursor = 0;
           break;
@@ -5540,6 +5621,7 @@ async function refreshMarketObservations(state) {
       lastExtraCategoryPages: extraCategoryPages,
       lastEventDuplicatesSkippedCount: eventSelection.heldBack.length,
       priorityLiquidityUsdc: MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC,
+      liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
       lastTag: MARKET_SCAN_TAG,
       lastScanError: categoryErrors.length
         ? categoryErrors.map((item) => `${item.tag}: ${item.error}`).join("; ")
@@ -5574,6 +5656,7 @@ async function refreshMarketObservations(state) {
         notRetainedReasonCounts: sortedNotRetainedReasonCounts,
         sameEventSkippedCount: eventSelection.heldBack.length,
         minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
+        liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
         scanTag: MARKET_SCAN_TAG || null,
         tagMatchedCount: fetchedMarkets.length,
         tagFilteredOutCount: 0,
@@ -5608,6 +5691,7 @@ async function refreshMarketObservations(state) {
       lastRequestedCategories: requestedCategories.map((category) => category.slug),
       lastCategoryCount: Object.keys(categoryCounts).length,
       lastCategoryCounts: categoryCounts,
+      liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
       lastTag: MARKET_SCAN_TAG,
       lastScanError: message,
     };
@@ -5646,6 +5730,7 @@ async function refreshMarketObservations(state) {
         notRetainedCount: partialMarkets.length,
         notRetainedReasonCounts: errorReasonCounts,
         minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
+        liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
         scanTag: MARKET_SCAN_TAG || null,
         tagMatchedCount: partialMarkets.length,
         tagFilteredOutCount: 0,

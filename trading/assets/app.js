@@ -41,6 +41,7 @@ const state = {
   scrapedScanTag: "",
   scrapedScanBusy: false,
   scrapedScanStatus: "",
+  scrapedScanPreferenceSaveTimer: null,
   scrapedRefreshKeys: new Set(),
   scrapedRefreshErrors: new Map(),
   evaluationProbabilityFilter: 0,
@@ -4094,6 +4095,7 @@ async function triggerOneTimeMarketScan() {
       body: JSON.stringify({
         target: "paper-scan",
         market_scan_tag: state.scrapedScanTag,
+        market_scan_liquidity_min: currentEvaluationLiquidityFilter(),
       }),
     });
     state.scrapedScanStatus = "Scan queued...";
@@ -5835,10 +5837,10 @@ function renderScanAuditModal(payload = {}) {
         ${run.error ? `<div class="analysis-kv"><strong>Error:</strong><span class="negative">${escapeHtml(run.error)}</span></div>` : ""}
       </section>
       <section class="analysis-detail-section">
-        <h3>Gamma API calls</h3>
+        <h3>Gamma Events API calls</h3>
         <div class="analysis-candidate-table-wrap">
           <table class="analysis-candidate-table scan-audit-api-table">
-            <thead><tr><th>#</th><th>Scope</th><th>Parameters</th><th>Returned</th><th>Status</th></tr></thead>
+            <thead><tr><th>#</th><th>Scope</th><th>Parameters</th><th>Events / markets</th><th>Status</th></tr></thead>
             <tbody>${apiCalls.length ? apiCalls.map((call, index) => {
               const parameters = Object.entries(call?.parameters && typeof call.parameters === "object" ? call.parameters : {})
                 .map(([key, value]) => `${key}=${value}`)
@@ -5849,7 +5851,9 @@ function renderScanAuditModal(payload = {}) {
                 <td>${formatInteger(call?.sequence ?? index + 1) || index + 1}</td>
                 <td><strong>${escapeHtml(call?.label || call?.scope || "Polymarket markets")}</strong>${call?.category ? `<small class="table-secondary">${escapeHtml(call.category)}</small>` : ""}</td>
                 <td>${href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(parameters || href)}</a>` : escapeHtml(parameters || "-")}</td>
-                <td>${formatInteger(call?.returnedCount) || "0"}</td>
+                <td>${Number.isFinite(Number(call?.returnedMarketCount))
+                  ? `${formatInteger(call?.returnedEventCount ?? call?.returnedCount) || "0"} / ${formatInteger(call?.returnedMarketCount) || "0"}`
+                  : (formatInteger(call?.returnedCount) || "0")}</td>
                 <td class="${callStatus === "SUCCESS" ? "positive" : "negative"}"><strong>${escapeHtml(callStatus)}</strong>${call?.error ? `<small class="table-secondary">${escapeHtml(call.error)}</small>` : ""}</td>
               </tr>`;
             }).join("") : '<tr><td colspan="5">No API-call audit was recorded for this older run.</td></tr>'}</tbody>
@@ -5857,7 +5861,7 @@ function renderScanAuditModal(payload = {}) {
         </div>
       </section>
       <section class="analysis-detail-section">
-        <h3>Markets returned by this scan</h3>
+        <h3>Markets obtained from returned events</h3>
         <div class="analysis-candidate-table-wrap">
           <table class="analysis-candidate-table scan-audit-market-table">
             <thead><tr><th>Market</th><th>Outcome</th><th>Probability</th><th>Categories</th><th>Result</th><th>Reason</th></tr></thead>
@@ -5897,6 +5901,25 @@ async function openScrapeRunAudit(run, trigger) {
       body.innerHTML = `<div class="error">${escapeHtml(error?.message || "Scraping audit could not be loaded.")}</div>`;
     }
   }
+}
+
+function persistScrapedScanLiquidityPreference(value) {
+  if (state.scrapedScanPreferenceSaveTimer) {
+    clearTimeout(state.scrapedScanPreferenceSaveTimer);
+  }
+  state.scrapedScanPreferenceSaveTimer = window.setTimeout(async () => {
+    try {
+      await fetchApiJson("api.php?action=scan-preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ liquidityMin: value }),
+      });
+    } catch {
+      // The local value remains usable for this manual scan; a later change retries persistence.
+    } finally {
+      state.scrapedScanPreferenceSaveTimer = null;
+    }
+  }, 350);
 }
 
 function renderScrapeRunLog() {
@@ -7092,6 +7115,7 @@ els.evaluationLiquidityFilter?.addEventListener("input", () => {
   const value = Number.isFinite(raw) && raw >= 0 ? Math.round(raw * 100) / 100 : 0;
   state.evaluationLiquidityFilter = value;
   saveEvaluationLiquidityFilter(value);
+  persistScrapedScanLiquidityPreference(value);
   syncEvaluationLiquidityFilterControl();
   renderBotEvaluations();
 });
@@ -7431,6 +7455,7 @@ syncEvaluationProbabilityFilterControl();
 syncEvaluationDaysFilterControl();
 syncEvaluationNetYieldFilterControl();
 syncEvaluationLiquidityFilterControl();
+persistScrapedScanLiquidityPreference(state.evaluationLiquidityFilter);
 applyInitialRoute();
 updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);

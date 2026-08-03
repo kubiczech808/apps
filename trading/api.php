@@ -485,6 +485,50 @@ function portfolio_config_path(): string
     return __DIR__ . '/data/portfolio-config.json';
 }
 
+function scan_preferences_path(): string
+{
+    return __DIR__ . '/data/scrape-scan-preferences.json';
+}
+
+function normalize_scan_liquidity_preference(mixed $value): float
+{
+    if (!is_numeric($value)) {
+        return 0.0;
+    }
+    return max(0.0, min(1000000000.0, round((float) $value, 2)));
+}
+
+function load_scan_preferences(): array
+{
+    $path = scan_preferences_path();
+    if (!is_file($path)) {
+        return ['liquidityMin' => 0.0];
+    }
+    $raw = file_get_contents($path);
+    $data = json_decode(is_string($raw) ? $raw : '', true);
+    return [
+        'liquidityMin' => normalize_scan_liquidity_preference(is_array($data) ? ($data['liquidityMin'] ?? 0) : 0),
+    ];
+}
+
+function save_scan_preferences(array $input): array
+{
+    $preferences = [
+        'liquidityMin' => normalize_scan_liquidity_preference($input['liquidityMin'] ?? $input['liquidity_min'] ?? 0),
+        'updatedAt' => gmdate('c'),
+    ];
+    $path = scan_preferences_path();
+    $dir = dirname($path);
+    if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        respond(['ok' => false, 'error' => 'Unable to create data directory'], 500);
+    }
+    $encoded = json_encode($preferences, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($encoded) || file_put_contents($path, $encoded . "\n", LOCK_EX) === false) {
+        respond(['ok' => false, 'error' => 'Unable to persist scraping preferences'], 500);
+    }
+    return $preferences;
+}
+
 function normalize_probability_value(mixed $value, float $fallback): float
 {
     if (!is_numeric($value)) {
@@ -1457,6 +1501,7 @@ try {
         $paperHighRewardMinProbability = normalized_probability_input($payload['paper_high_reward_min_probability'] ?? null);
         $paperMoreProbableMinProbability = normalized_probability_input($payload['paper_more_probable_min_probability'] ?? null);
         $scanTag = normalized_scan_tag_input($payload['market_scan_tag'] ?? null);
+        $scanLiquidityMin = normalized_money_input($payload['market_scan_liquidity_min'] ?? $payload['marketScanLiquidityMin'] ?? null);
         $liveMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['live_max_order_fraction'] ?? null);
         $paperMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['paper_max_order_fraction'] ?? null);
         $liveMaxResolutionDays = normalized_days_input($payload['maxResolutionDays'] ?? $payload['live_max_resolution_days'] ?? null);
@@ -1523,6 +1568,7 @@ try {
                 'workflow' => 'trading-market-scan.yml',
                 'inputs' => array_filter([
                     'market_scan_tag' => $scanTag,
+                    'market_scan_liquidity_min' => $scanLiquidityMin,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'One-time tagged Polymarket scan workflow dispatched.',
             ],
@@ -1583,6 +1629,22 @@ try {
         respond([
             'ok' => true,
             'config' => load_portfolio_config(),
+            'generatedAt' => gmdate('c'),
+        ]);
+    }
+
+    if ($action === 'scan-preferences') {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $saved = save_scan_preferences(request_payload());
+            respond([
+                'ok' => true,
+                'preferences' => $saved,
+                'generatedAt' => gmdate('c'),
+            ]);
+        }
+        respond([
+            'ok' => true,
+            'preferences' => load_scan_preferences(),
             'generatedAt' => gmdate('c'),
         ]);
     }

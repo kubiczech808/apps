@@ -8,6 +8,11 @@ on:
         required: false
         default: ""
         type: string
+      market_scan_liquidity_min:
+        description: "Minimum event liquidity in USDC"
+        required: false
+        default: "0"
+        type: string
 
 permissions:
   contents: read
@@ -39,6 +44,7 @@ jobs:
       PAPER_MARKET_SCAN_MIN_NEW_EVENTS_PER_RUN: "80"
       PAPER_MARKET_SCAN_MAX_EXTRA_CATEGORY_PAGES: "12"
       PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || '' }}
+      PAPER_MARKET_SCAN_LIQUIDITY_MIN: ${{ inputs.market_scan_liquidity_min || '0' }}
       PAPER_MARKET_SCAN_TRIGGER: "MANUAL"
       PAPER_MAX_RESOLUTION_DAYS: "7"
       PAPER_SCAN_ONLY: "true"
