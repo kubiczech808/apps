@@ -615,9 +615,9 @@ function prefilterLiveCandidate(item) {
   if (liquidity < MIN_VOLUME_24H) {
     reasons.push(`liquidity ${liquidity.toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`);
   }
-  if (Number.isFinite(endTime) && endTime <= Date.now()) {
-    reasons.push("stored end date is in the past");
-  }
+  // Gamma's end date can be a scheduled start or an outdated estimate. The
+  // live market check is authoritative: retain this row until Gamma/CLOB says
+  // the market is closed or no longer accepting orders.
   if (Number.isFinite(MAX_RESOLUTION_DAYS) && Number.isFinite(days) && days > MAX_RESOLUTION_DAYS) {
     reasons.push(`stored resolution ${days.toFixed(2)} days exceeds live max ${MAX_RESOLUTION_DAYS} days`);
   }
@@ -691,10 +691,15 @@ function prepareLiveCandidatePool(evaluations = []) {
   const missingManualShortlistTokenIds = HAS_MANUAL_SHORTLIST
     ? MANUAL_SHORTLIST_TOKEN_IDS.filter((tokenId) => !rankedByToken.has(tokenId))
     : [];
-  const selected = HAS_MANUAL_SHORTLIST
+  // A browser can hold a shortlist for a few seconds while a scraping batch
+  // replaces its local rows. Do not abort a manual order run in that race.
+  // Fall back to the freshly ranked portfolio shortlist, which is safer than
+  // acting on stale token ids and keeps the run executable.
+  const manualShortlistFallback = HAS_MANUAL_SHORTLIST && missingManualShortlistTokenIds.length > 0;
+  const selected = HAS_MANUAL_SHORTLIST && !manualShortlistFallback
     ? requestedShortlist
     : ranked.slice(0, Math.max(0, CANDIDATE_SCAN_LIMIT));
-  const skippedByLimit = HAS_MANUAL_SHORTLIST
+  const skippedByLimit = HAS_MANUAL_SHORTLIST && !manualShortlistFallback
     ? []
     : ranked.slice(Math.max(0, CANDIDATE_SCAN_LIMIT));
   if (skippedByLimit.length) {
@@ -716,6 +721,7 @@ function prepareLiveCandidatePool(evaluations = []) {
       manualShortlistTokenCount: MANUAL_SHORTLIST_TOKEN_IDS.length,
       manualShortlistMatched: requestedShortlist.length,
       manualShortlistMissingTokenIds: missingManualShortlistTokenIds,
+      manualShortlistFallback,
       reasonCounts,
       rejectedSample: [],
       skippedByLimitSample: [],
@@ -2536,8 +2542,8 @@ async function main() {
   const candidatePool = prepareLiveCandidatePool(rawCandidateRows);
   const latestEvaluations = candidatePool.uniqueEvaluations;
   const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
-  const manualShortlistStale = HAS_MANUAL_SHORTLIST && candidatePool.diagnostics.manualShortlistMissingTokenIds.length > 0;
-  const baseCandidates = manualShortlistStale ? [] : candidatePool.candidates;
+  const manualShortlistFallback = candidatePool.diagnostics.manualShortlistFallback === true;
+  const baseCandidates = candidatePool.candidates;
 
   const checked = [];
   for (const evaluation of baseCandidates) {
@@ -2567,7 +2573,7 @@ async function main() {
       funderAddress: tradingConfig.funderAddress,
       signatureType: tradingConfig.signatureType,
     }));
-  const eligible = HAS_MANUAL_SHORTLIST
+  const eligible = HAS_MANUAL_SHORTLIST && !manualShortlistFallback
     ? allEligible
     : sortLiveEligibleCandidates(allEligible);
   const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /no available cash|sub-cent maker amount|above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
@@ -2577,9 +2583,9 @@ async function main() {
   // has usable free cash. A direct allocation is always preferred; rotations
   // are reserved for an actually unfunded account.
   const hasUsableFreeCash = number(cash, 0) > 0.01;
-  const needsCapitalRotation = !manualShortlistStale && !eligible.length && !hasUsableFreeCash && (cash <= 0 || capitalSizingBlocked.length > 0);
-  const needsRiskReplacement = !manualShortlistStale && !eligible.length && !hasUsableFreeCash && !needsCapitalRotation && riskBlockedCandidates.length > 0;
-  const rotationReview = !manualShortlistStale && !eligible.length && (needsCapitalRotation || needsRiskReplacement)
+  const needsCapitalRotation = !eligible.length && !hasUsableFreeCash && (cash <= 0 || capitalSizingBlocked.length > 0);
+  const needsRiskReplacement = !eligible.length && !hasUsableFreeCash && !needsCapitalRotation && riskBlockedCandidates.length > 0;
+  const rotationReview = !eligible.length && (needsCapitalRotation || needsRiskReplacement)
     ? await reviewPositionRotation({
         liveState,
         evaluationByToken,
@@ -2605,7 +2611,7 @@ async function main() {
   // A directly fundable candidate must also protect unrelated open orders from
   // cancellation. A funded buy must never trigger a needless cancellation just
   // to make room for a trade that is already funded.
-  const orderManagement = manualShortlistStale || activeSellOrders.length || hasUsableFreeCash || directCandidateCanUseFreeCapital
+  const orderManagement = activeSellOrders.length || hasUsableFreeCash || directCandidateCanUseFreeCapital
     ? { action: "NONE", reviews: [] }
     : await reviewOpenOrders({
       liveState,
@@ -2700,6 +2706,7 @@ async function main() {
       hasUsableFreeCash,
       directCandidateCanUseFreeCapital,
       directCandidateCostUsdc: bestCandidateCost,
+      manualShortlistFallback,
       capitalUtilizationOverride: monitoring.idleCashOverdue,
       storedEvaluations: rawEvaluations.length,
       uniqueEvaluations: latestEvaluations.length,
@@ -2749,6 +2756,7 @@ async function main() {
         hasUsableFreeCash,
         directCandidateCanUseFreeCapital,
         directCandidateCostUsdc: bestCandidateCost,
+        manualShortlistFallback,
         selectionOrder: SELECTION_ORDER,
         useLimitOrders: USE_LIMIT_ORDERS,
         crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,
@@ -2804,24 +2812,6 @@ async function main() {
         minOrderSize: item.minOrderSize || null,
       })),
   };
-
-  if (manualShortlistStale) {
-    const missingCount = candidatePool.diagnostics.manualShortlistMissingTokenIds.length;
-    const reason = `manual execution stopped: ${missingCount} submitted execution candidate${missingCount === 1 ? " is" : "s are"} no longer in the current scraped Polymarket shortlist`;
-    await emitDecision({
-      ...decision,
-      action: "SHORTLIST_STALE",
-      reason,
-      batchLog: {
-        ...decision.batchLog,
-        action: "SHORTLIST_STALE",
-        reason,
-        explanation: "No live order, open-order change, or position rotation was attempted. Refresh the execution shortlist and start a new run so the submitted token list exactly matches current scraped Polymarket data.",
-      },
-      attempts: [],
-    });
-    return;
-  }
 
   if (orderManagement.action !== "NONE" && !canceledForBetterCandidate) {
     await emitDecision({
