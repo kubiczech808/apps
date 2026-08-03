@@ -5843,7 +5843,11 @@ function renderScanAuditModal(payload = {}) {
             <thead><tr><th>#</th><th>Scope</th><th>Parameters</th><th>Events / markets</th><th>Status</th></tr></thead>
             <tbody>${apiCalls.length ? apiCalls.map((call, index) => {
               const parameters = Object.entries(call?.parameters && typeof call.parameters === "object" ? call.parameters : {})
-                .map(([key, value]) => key === "limit" ? `page_size=${value} (all pages)` : `${key}=${value}`)
+                .map(([key, value]) => {
+                  if (key === "limit") return `page_size=${value} (all pages)`;
+                  if (key === "after_cursor") return "after_cursor=previous page";
+                  return `${key}=${value}`;
+                })
                 .join(" / ");
               const href = /^https:\/\//i.test(String(call?.url || "")) ? String(call.url) : "";
               const callStatus = String(call?.status || "UNKNOWN").toUpperCase();

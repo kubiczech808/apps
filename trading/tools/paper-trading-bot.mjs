@@ -4643,8 +4643,8 @@ function gammaMarketsUrl(params = {}) {
   return gammaResourceUrl("markets", params);
 }
 
-function gammaEventsUrl(params = {}) {
-  return gammaResourceUrl("events", params);
+function gammaEventsKeysetUrl(params = {}) {
+  return gammaResourceUrl("events/keyset", params);
 }
 
 async function fetchGammaResource(url, audit = null) {
@@ -4687,8 +4687,12 @@ async function fetchGammaMarkets(params = {}, audit = null) {
   return fetchGammaResource(gammaMarketsUrl(params), audit);
 }
 
-async function fetchGammaEvents(params = {}, audit = null) {
-  return fetchGammaResource(gammaEventsUrl(params), audit);
+async function fetchGammaEventsKeyset(params = {}, audit = null) {
+  const page = await fetchGammaResource(gammaEventsKeysetUrl(params), audit);
+  if (!page || typeof page !== "object" || !Array.isArray(page.events)) {
+    throw new Error("Gamma events/keyset returned an invalid page payload");
+  }
+  return page;
 }
 
 function scanEventRequestParams(params = {}) {
@@ -4739,16 +4743,17 @@ function flattenEventMarkets(events = [], auditCalls = null) {
     auditRow.returnedEventCount = sourceEvents.length;
     auditRow.returnedMarketCount = markets.length;
   }
-  Object.defineProperty(markets, "__scanSourceCount", {
-    value: sourceEvents.length,
-    enumerable: false,
-  });
   return markets;
 }
 
 async function loadEventMarketScanBatch(params = {}, audit = null) {
-  const events = await fetchGammaEvents(scanEventRequestParams(params), audit);
-  return flattenEventMarkets(events, audit?.calls);
+  const page = await fetchGammaEventsKeyset(scanEventRequestParams(params), audit);
+  const markets = flattenEventMarkets(page.events, audit?.calls);
+  Object.defineProperty(markets, "__scanNextCursor", {
+    value: typeof page.next_cursor === "string" && page.next_cursor.trim() ? page.next_cursor : null,
+    enumerable: false,
+  });
+  return markets;
 }
 
 function marketDaysLeft(market = {}) {
@@ -5030,26 +5035,17 @@ async function loadMarkets() {
     .sort(compareMarketsForShortHorizon);
 }
 
-function nextMarketScanCursor(cursor, receivedCount, pageSize) {
-  const current = Math.max(0, Math.floor(Number(cursor) || 0));
-  const received = Math.max(0, Math.floor(Number(receivedCount) || 0));
-  const expected = Math.max(1, Math.floor(Number(pageSize) || 1));
-  const next = current + received;
-  return received < expected ? 0 : next;
+function scanBatchNextCursor(batch = []) {
+  const cursor = String(batch?.__scanNextCursor || "").trim();
+  return cursor || null;
 }
 
-function scanBatchSourceCount(batch = []) {
-  const eventCount = Number(batch?.__scanSourceCount);
-  if (Number.isFinite(eventCount) && eventCount >= 0) return Math.floor(eventCount);
-  return Array.isArray(batch) ? batch.length : 0;
-}
-
-async function loadPreferredMarketScanBatch({ cursor = 0, auditCalls = null } = {}) {
+async function loadPreferredMarketScanBatch({ afterCursor = null, auditCalls = null } = {}) {
   const params = {
     limit: MARKET_SCAN_PAGE_SIZE,
-    offset: Math.max(0, Math.floor(Number(cursor) || 0)),
     order: "endDate",
     ascending: "true",
+    ...(afterCursor ? { after_cursor: afterCursor } : {}),
   };
   return loadEventMarketScanBatch(params, {
     calls: auditCalls,
@@ -5067,19 +5063,24 @@ function scanCategoriesForRun(previousScan = {}) {
 }
 
 function annotateCategoryScanMarkets(markets, tag) {
-  return (Array.isArray(markets) ? markets : []).map((market) => ({
+  const annotated = (Array.isArray(markets) ? markets : []).map((market) => ({
     ...market,
     __scanCategoryTags: [...new Set([...(Array.isArray(market.__scanCategoryTags) ? market.__scanCategoryTags : []), tag.slug])],
   }));
+  Object.defineProperty(annotated, "__scanNextCursor", {
+    value: scanBatchNextCursor(markets),
+    enumerable: false,
+  });
+  return annotated;
 }
 
-async function loadCategoryMarketScanBatch(tag, { cursor = 0, auditCalls = null } = {}) {
+async function loadCategoryMarketScanBatch(tag, { afterCursor = null, auditCalls = null } = {}) {
   const params = {
     limit: MARKET_SCAN_PAGE_SIZE,
-    offset: Math.max(0, Math.floor(Number(cursor) || 0)),
     tag_id: tag.id,
     order: "endDate",
     ascending: "true",
+    ...(afterCursor ? { after_cursor: afterCursor } : {}),
   };
   const markets = await loadEventMarketScanBatch(params, {
     calls: auditCalls,
@@ -5386,27 +5387,29 @@ async function refreshMarketObservations(state) {
   const hasDirectTagScope = Boolean(MARKET_SCAN_TAG && MARKET_SCAN_TAG !== "all" && requestedCategories.length);
   const collectAllPages = async (loadPage) => {
     const markets = [];
-    let offset = 0;
+    let afterCursor = null;
+    const cursors = new Set();
     while (true) {
       attemptedApiCalls += 1;
-      const page = await loadPage(offset);
+      const page = await loadPage(afterCursor);
       if (Array.isArray(page)) markets.push(...page);
-      const next = nextMarketScanCursor(offset, scanBatchSourceCount(page), MARKET_SCAN_PAGE_SIZE);
-      if (next === 0) return markets;
-      offset = next;
+      const nextCursor = scanBatchNextCursor(page);
+      if (!nextCursor || cursors.has(nextCursor)) return markets;
+      cursors.add(nextCursor);
+      afterCursor = nextCursor;
     }
   };
   try {
     if (!hasDirectTagScope) {
-      preferredMarkets = await collectAllPages((offset) => loadPreferredMarketScanBatch({
-        cursor: offset,
+      preferredMarkets = await collectAllPages((afterCursor) => loadPreferredMarketScanBatch({
+        afterCursor,
         auditCalls: apiCallAudit,
       }));
     }
     for (const category of requestedCategories) {
       try {
-        const markets = await collectAllPages((offset) => loadCategoryMarketScanBatch(category, {
-          cursor: offset,
+        const markets = await collectAllPages((afterCursor) => loadCategoryMarketScanBatch(category, {
+          afterCursor,
           auditCalls: apiCallAudit,
         }));
         categoryBatches.push({ tag: category, markets });
