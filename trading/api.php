@@ -383,6 +383,16 @@ function compact_state_payload(string $target, array $data, string $summary): ar
     if ($summary === 'scraped') {
         $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
         $active = array_values(array_filter($observations, static fn($item): bool => is_array($item) && is_active_scraped_market_observation($item)));
+        $scanHistory = is_array($data['marketScanHistory'] ?? null)
+            ? array_slice(array_values(array_filter($data['marketScanHistory'], 'is_array')), 0, 200)
+            : [];
+        // Full audit rows can contain hundreds of markets. The log list only
+        // needs scan summaries; the browser fetches a selected run's audit on
+        // demand through action=scan-audit.
+        $scanHistory = array_map(static function (array $item): array {
+            unset($item['audit']);
+            return $item;
+        }, $scanHistory);
         return [
             'schemaVersion' => $data['schemaVersion'] ?? null,
             'generatedAt' => $data['generatedAt'] ?? null,
@@ -391,9 +401,7 @@ function compact_state_payload(string $target, array $data, string $summary): ar
                 $active
             ),
             'marketScan' => is_array($data['marketScan'] ?? null) ? $data['marketScan'] : [],
-            'marketScanHistory' => is_array($data['marketScanHistory'] ?? null)
-                ? array_slice(array_values(array_filter($data['marketScanHistory'], 'is_array')), 0, 200)
-                : [],
+            'marketScanHistory' => $scanHistory,
             'marketDetailsMode' => 'compact',
         ];
     }
@@ -1596,6 +1604,34 @@ try {
             $payload = compact_state_payload($target, $payload, $summary);
         }
         respond($payload);
+    }
+
+    if ($action === 'scan-audit') {
+        $runId = trim((string) ($_GET['run_id'] ?? ''));
+        if ($runId === '' || !preg_match('/^scan-[A-Za-z0-9:.+_-]{10,80}$/', $runId)) {
+            respond(['ok' => false, 'error' => 'A valid scraping run id is required'], 400);
+        }
+        $state = state_payload('paper');
+        $history = is_array($state['marketScanHistory'] ?? null) ? $state['marketScanHistory'] : [];
+        foreach ($history as $run) {
+            if (!is_array($run) || (string) ($run['id'] ?? '') !== $runId) {
+                continue;
+            }
+            $audit = is_array($run['audit'] ?? null) ? $run['audit'] : null;
+            if ($audit === null) {
+                respond(['ok' => false, 'error' => 'Detailed audit is no longer retained for this scraping run'], 404);
+            }
+            $summary = $run;
+            unset($summary['audit']);
+            respond([
+                'ok' => true,
+                'run' => $summary,
+                'apiCalls' => array_values(array_filter($audit['apiCalls'] ?? [], 'is_array')),
+                'markets' => array_values(array_filter($audit['markets'] ?? [], 'is_array')),
+                'generatedAt' => gmdate('c'),
+            ]);
+        }
+        respond(['ok' => false, 'error' => 'Scraping run was not found'], 404);
     }
 
     if ($action === 'markets') {

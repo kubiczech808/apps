@@ -49,7 +49,10 @@ const MIN_VOLUME_24H = envNumber("PAPER_MIN_VOLUME_24H", 100);
 const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
 const MARKET_SCAN_BATCH_SIZE = envNumber("PAPER_MARKET_SCAN_BATCH_SIZE", 100);
 const MARKET_SCAN_MAX_OBSERVATIONS = envNumber("PAPER_MARKET_SCAN_MAX_OBSERVATIONS", 5000);
-const MARKET_SCAN_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_HISTORY_LIMIT", 200);
+// Each retained scan carries its full request and market audit trail. Keeping
+// this bounded prevents the state file from growing on every ten-minute scan.
+const MARKET_SCAN_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_HISTORY_LIMIT", 20);
+const MARKET_SCAN_AUDIT_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT", 20);
 const MARKET_SCAN_MAX_OFFSET = envNumber("PAPER_MARKET_SCAN_MAX_OFFSET", 5000);
 const MARKET_SCAN_PREFETCH_BATCHES = envNumber("PAPER_MARKET_SCAN_PREFETCH_BATCHES", 2);
 // Category requests are already sorted by the nearest Gamma end date. The
@@ -596,6 +599,22 @@ function normalizeMarketScanHistory(input = []) {
   return (Array.isArray(input) ? input : [])
     .filter((item) => item && typeof item === "object")
     .slice(0, Math.max(20, MARKET_SCAN_HISTORY_LIMIT));
+}
+
+function trimMarketScanHistory(input = []) {
+  const historyLimit = Math.max(20, MARKET_SCAN_HISTORY_LIMIT);
+  const auditLimit = Math.min(historyLimit, Math.max(1, MARKET_SCAN_AUDIT_HISTORY_LIMIT));
+  // The scan-log UI exposes every retained row as a drill-down audit. Discard
+  // legacy summary-only rows when the first audited run is written rather than
+  // showing rows that cannot satisfy that contract.
+  return (Array.isArray(input) ? input : [])
+    .filter((item) => item && typeof item === "object" && item.audit && typeof item.audit === "object")
+    .slice(0, historyLimit)
+    .map((item, index) => {
+      if (index < auditLimit || !item || typeof item !== "object") return item;
+      const { audit, ...summary } = item;
+      return summary;
+    });
 }
 
 function mergeMarketObservationLists(primary = [], secondary = [], limit = MARKET_SCAN_MAX_OBSERVATIONS) {
@@ -4635,8 +4654,41 @@ function gammaMarketsUrl(params = {}) {
   return url;
 }
 
-async function fetchGammaMarkets(params = {}) {
-  return fetchJson(gammaMarketsUrl(params));
+async function fetchGammaMarkets(params = {}, audit = null) {
+  const url = gammaMarketsUrl(params);
+  const auditCalls = Array.isArray(audit?.calls) ? audit.calls : null;
+  const auditRow = auditCalls
+    ? {
+      sequence: auditCalls.length + 1,
+      scope: String(audit.scope || "market_scan"),
+      label: String(audit.label || "Polymarket markets"),
+      category: audit.category ? String(audit.category) : null,
+      url: url.toString(),
+      parameters: Object.fromEntries(url.searchParams.entries()),
+      startedAt: nowIso(),
+      status: "PENDING",
+      returnedCount: 0,
+      error: null,
+    }
+    : null;
+  if (auditRow) auditCalls.push(auditRow);
+
+  try {
+    const markets = await fetchJson(url);
+    if (auditRow) {
+      auditRow.status = "SUCCESS";
+      auditRow.returnedCount = Array.isArray(markets) ? markets.length : 0;
+      auditRow.completedAt = nowIso();
+    }
+    return markets;
+  } catch (error) {
+    if (auditRow) {
+      auditRow.status = "ERROR";
+      auditRow.error = error?.message || String(error);
+      auditRow.completedAt = nowIso();
+    }
+    throw error;
+  }
 }
 
 function marketDaysLeft(market = {}) {
@@ -4685,6 +4737,72 @@ function sortedMarketScanReasonCounts(counts = {}) {
       .filter(([, count]) => Number(count) > 0)
       .sort((a, b) => Number(b[1]) - Number(a[1]) || a[0].localeCompare(b[0])),
   );
+}
+
+function marketScanReasonText(reason) {
+  const labels = {
+    resolved_or_closed: "market is already resolved, closed, or no longer accepting orders",
+    settled_outcome_probability: "outcome probability is already settled at 0% or 100%",
+    no_valid_preferred_outcome_or_quote: "no executable outcome with a current quote was available",
+    same_event_already_represented: "another market from the same event was retained for this scan",
+    scan_failed_before_retention: "scan stopped before this market could be retained",
+  };
+  return labels[reason] || String(reason || "not retained").replace(/_/g, " ");
+}
+
+function marketScanAuditUrl(market = {}) {
+  const slug = String(market.slug || market.eventSlug || "").trim();
+  return slug ? `https://polymarket.com/event/${encodeURIComponent(slug)}` : null;
+}
+
+function marketScanAuditRows({
+  fetchedMarkets = [],
+  observations = [],
+  previousKeys = new Set(),
+  heldBackMarkets = [],
+  observedAt = nowIso(),
+} = {}) {
+  const retainedByKey = new Map(
+    observations
+      .map((item) => [marketObservationKey(item), item])
+      .filter(([key]) => Boolean(key)),
+  );
+  const heldBackIds = new Set(heldBackMarkets.map(marketIdentity).filter(Boolean));
+
+  return fetchedMarkets.map((market) => {
+    const auditKey = marketIdentity(market);
+    const reasonCode = marketScanRetentionReason(market, observedAt);
+    const candidate = reasonCode ? null : preferredMarketObservation(market, observedAt);
+    const candidateKey = candidate ? marketObservationKey(candidate) : "";
+    const observation = candidateKey ? retainedByKey.get(candidateKey) : null;
+    let action = "NOT_SAVED";
+    let reason = reasonCode ? marketScanReasonText(reasonCode) : "no preferred outcome was retained";
+    let outcome = candidate?.outcome || "";
+    let probability = candidate?.marketProbability;
+
+    if (heldBackIds.has(auditKey)) {
+      reason = marketScanReasonText("same_event_already_represented");
+    } else if (observation) {
+      action = previousKeys.has(candidateKey) ? "UPDATE" : "INSERT";
+      reason = action === "INSERT"
+        ? "new preferred outcome saved to the scraped catalogue"
+        : "existing scraped opportunity refreshed with current market data";
+      outcome = observation.outcome || outcome;
+      probability = observation.marketProbability ?? probability;
+    }
+
+    return {
+      marketId: String(market.conditionId || market.id || ""),
+      slug: String(market.slug || ""),
+      question: String(market.question || market.title || "Untitled Polymarket market"),
+      url: marketScanAuditUrl(market),
+      outcome: String(outcome || ""),
+      marketProbability: Number.isFinite(Number(probability)) ? Number(probability) : null,
+      categories: marketCategoryKeys(market),
+      action,
+      reason,
+    };
+  });
 }
 
 function compareMarketsForShortHorizon(a, b) {
@@ -4875,7 +4993,7 @@ async function loadMarkets() {
     .sort(compareMarketsForShortHorizon);
 }
 
-async function loadBroadMarketScanBatch({ cursor = 0, order = "volume24hr" } = {}) {
+async function loadBroadMarketScanBatch({ cursor = 0, order = "volume24hr", auditCalls = null } = {}) {
   const limit = Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE));
   const params = {
     limit,
@@ -4883,7 +5001,11 @@ async function loadBroadMarketScanBatch({ cursor = 0, order = "volume24hr" } = {
     order,
     ascending: order === "endDate" ? "true" : "false",
   };
-  return fetchGammaMarkets(params);
+  return fetchGammaMarkets(params, {
+    calls: auditCalls,
+    scope: "broad_fallback",
+    label: `Broad markets by ${order}`,
+  });
 }
 
 function nextMarketScanCursor(cursor, receivedCount, pageSize) {
@@ -4894,14 +5016,18 @@ function nextMarketScanCursor(cursor, receivedCount, pageSize) {
   return received < expected || next >= MARKET_SCAN_MAX_OFFSET ? 0 : next;
 }
 
-async function loadPreferredMarketScanBatch({ cursor = 0 } = {}) {
+async function loadPreferredMarketScanBatch({ cursor = 0, auditCalls = null } = {}) {
   const params = {
     limit: Math.max(1, Math.min(500, MARKET_SCAN_BATCH_SIZE)),
     offset: Math.max(0, Math.floor(Number(cursor) || 0)),
     order: "endDate",
     ascending: "true",
   };
-  return fetchGammaMarkets(params);
+  return fetchGammaMarkets(params, {
+    calls: auditCalls,
+    scope: "preferred_horizon",
+    label: "Preferred near-resolution markets",
+  });
 }
 
 function scanCategoriesForRun(previousScan = {}) {
@@ -4921,7 +5047,7 @@ function annotateCategoryScanMarkets(markets, tag) {
   }));
 }
 
-async function loadCategoryMarketScanBatch(tag, { cursor = 0 } = {}) {
+async function loadCategoryMarketScanBatch(tag, { cursor = 0, auditCalls = null } = {}) {
   const params = {
     limit: Math.max(1, Math.min(100, MARKET_SCAN_CATEGORY_BATCH_SIZE)),
     offset: Math.max(0, Math.floor(Number(cursor) || 0)),
@@ -4929,7 +5055,12 @@ async function loadCategoryMarketScanBatch(tag, { cursor = 0 } = {}) {
     order: "endDate",
     ascending: "true",
   };
-  const markets = await fetchGammaMarkets(params);
+  const markets = await fetchGammaMarkets(params, {
+    calls: auditCalls,
+    scope: "category",
+    label: `Category: ${tag.slug}`,
+    category: tag.slug,
+  });
   return annotateCategoryScanMarkets(markets, tag);
 }
 
@@ -5217,6 +5348,7 @@ async function refreshMarketObservations(state) {
   const scanRunAt = nowIso();
   const scanTrigger = String(process.env.PAPER_MARKET_SCAN_TRIGGER || (MANUAL_RUN_ONCE ? "MANUAL" : "AUTO")).toUpperCase();
   let attemptedApiCalls = 0;
+  const apiCallAudit = [];
   let preferredMarkets = [];
   const categoryBatches = [];
   const categoryErrors = [];
@@ -5236,7 +5368,7 @@ async function refreshMarketObservations(state) {
   try {
     if (!hasDirectTagScope) {
       attemptedApiCalls += 1;
-      preferredMarkets = await loadPreferredMarketScanBatch({ cursor: preferredCursor });
+      preferredMarkets = await loadPreferredMarketScanBatch({ cursor: preferredCursor, auditCalls: apiCallAudit });
       preferredCursor = nextMarketScanCursor(
         preferredCursor,
         Array.isArray(preferredMarkets) ? preferredMarkets.length : 0,
@@ -5247,7 +5379,7 @@ async function refreshMarketObservations(state) {
       attemptedApiCalls += 1;
       try {
         const categoryOffset = Math.max(0, Math.floor(Number(categoryOffsets[category.slug]) || 0));
-        const batch = await loadCategoryMarketScanBatch(category, { cursor: categoryOffset });
+        const batch = await loadCategoryMarketScanBatch(category, { cursor: categoryOffset, auditCalls: apiCallAudit });
         categoryBatches.push({ tag: category, markets: Array.isArray(batch) ? batch : [] });
         categoryOffsets[category.slug] = nextMarketScanCursor(
           categoryOffset,
@@ -5290,7 +5422,7 @@ async function refreshMarketObservations(state) {
       extraCategoryPages += 1;
       try {
         const categoryOffset = Math.max(0, Math.floor(Number(categoryOffsets[category.slug]) || 0));
-        const batch = await loadCategoryMarketScanBatch(category, { cursor: categoryOffset });
+        const batch = await loadCategoryMarketScanBatch(category, { cursor: categoryOffset, auditCalls: apiCallAudit });
         categoryBatches.push({ tag: category, markets: Array.isArray(batch) ? batch : [] });
         categoryOffsets[category.slug] = nextMarketScanCursor(
           categoryOffset,
@@ -5318,7 +5450,7 @@ async function refreshMarketObservations(state) {
       for (let index = 0; index < broadBatchCount; index += 1) {
         const order = index % 2 === 0 ? "volume24hr" : "endDate";
         attemptedApiCalls += 1;
-        const batch = await loadBroadMarketScanBatch({ cursor: broadCursor, order });
+        const batch = await loadBroadMarketScanBatch({ cursor: broadCursor, order, auditCalls: apiCallAudit });
         broadBatches.push(...(Array.isArray(batch) ? batch : []));
         if (!Array.isArray(batch) || batch.length < MARKET_SCAN_BATCH_SIZE) {
           broadCursor = 0;
@@ -5380,6 +5512,13 @@ async function refreshMarketObservations(state) {
     const resolvedObservationCount = resolvedReasonCount;
     const notRetainedCount = Object.values(sortedNotRetainedReasonCounts)
       .reduce((total, count) => total + Number(count || 0), 0);
+    const auditRows = marketScanAuditRows({
+      fetchedMarkets,
+      observations,
+      previousKeys,
+      heldBackMarkets: eventSelection.heldBack,
+      observedAt: scanRunAt,
+    });
     state.marketObservations = mergeMarketObservationLists(observations, state.marketObservations || [])
       .map(normalizeMarketObservationEconomics);
     state.marketScan = {
@@ -5406,13 +5545,13 @@ async function refreshMarketObservations(state) {
         ? categoryErrors.map((item) => `${item.tag}: ${item.error}`).join("; ")
         : null,
     };
-    state.marketScanHistory = [
+    state.marketScanHistory = trimMarketScanHistory([
       {
         id: `scan-${scanRunAt}`,
         runAt: scanRunAt,
         trigger: scanTrigger,
         status: categoryErrors.length ? "PARTIAL" : "SUCCESS",
-        apiCalls: attemptedApiCalls,
+        apiCalls: apiCallAudit.length || attemptedApiCalls,
         requestedBatches: attemptedApiCalls,
         preferredMarketCount: preferredMarkets.length,
         categoryMarketCount: categoryMarkets.length,
@@ -5441,12 +5580,16 @@ async function refreshMarketObservations(state) {
         shortHorizonCount,
         categoryCounts,
         tagCounts,
+        audit: {
+          apiCalls: apiCallAudit,
+          markets: auditRows,
+        },
         error: categoryErrors.length
           ? categoryErrors.map((item) => `${item.tag}: ${item.error}`).join("; ")
           : null,
       },
       ...normalizeMarketScanHistory(state.marketScanHistory),
-    ].slice(0, Math.max(20, MARKET_SCAN_HISTORY_LIMIT));
+    ]);
     return observations;
   } catch (error) {
     const categoryMarkets = categoryBatches.flatMap((batch) => batch.markets);
@@ -5468,13 +5611,24 @@ async function refreshMarketObservations(state) {
       lastTag: MARKET_SCAN_TAG,
       lastScanError: message,
     };
-    state.marketScanHistory = [
+    const errorAuditRows = partialMarkets.map((market) => ({
+      marketId: String(market.conditionId || market.id || ""),
+      slug: String(market.slug || ""),
+      question: String(market.question || market.title || "Untitled Polymarket market"),
+      url: marketScanAuditUrl(market),
+      outcome: "",
+      marketProbability: null,
+      categories: marketCategoryKeys(market),
+      action: "NOT_SAVED",
+      reason: marketScanReasonText("scan_failed_before_retention"),
+    }));
+    state.marketScanHistory = trimMarketScanHistory([
       {
         id: `scan-${scanRunAt}`,
         runAt: scanRunAt,
         trigger: scanTrigger,
         status: "ERROR",
-        apiCalls: attemptedApiCalls,
+        apiCalls: apiCallAudit.length || attemptedApiCalls,
         requestedBatches: Math.max(1, attemptedApiCalls),
         preferredMarketCount: preferredMarkets.length,
         categoryMarketCount: categoryMarkets.length,
@@ -5498,10 +5652,14 @@ async function refreshMarketObservations(state) {
         shortHorizonCount: 0,
         categoryCounts,
         tagCounts,
+        audit: {
+          apiCalls: apiCallAudit,
+          markets: errorAuditRows,
+        },
         error: message,
       },
       ...normalizeMarketScanHistory(state.marketScanHistory),
-    ].slice(0, Math.max(20, MARKET_SCAN_HISTORY_LIMIT));
+    ]);
     return [];
   }
 }

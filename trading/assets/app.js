@@ -5782,6 +5782,7 @@ function scanLogReasonCounts(value, minimumMinutes = null) {
     outside_selected_tag: "outside selected tag",
     no_valid_preferred_outcome_or_quote: "no valid preferred outcome/quote",
     settled_outcome_probability: "outcome already at 0% or 100%",
+    resolved_or_closed: "market already resolved, closed, or not accepting orders",
     probability_below_scan_minimum: "probability below scan minimum",
     missing_resolution_date: "missing resolution date",
     same_event_already_represented: "same event already represented",
@@ -5809,6 +5810,93 @@ function scanLogInterval(current, previous) {
   const hours = minutes / 60;
   if (hours < 48) return `${hours.toFixed(hours >= 10 ? 0 : 1)} h`;
   return `${(hours / 24).toFixed(1)} d`;
+}
+
+function scanAuditActionClass(action) {
+  const normalized = String(action || "").toUpperCase();
+  if (normalized === "INSERT") return "positive";
+  if (normalized === "UPDATE") return "muted";
+  return "negative";
+}
+
+function renderScanAuditModal(payload = {}) {
+  const run = payload?.run && typeof payload.run === "object" ? payload.run : {};
+  const apiCalls = Array.isArray(payload?.apiCalls) ? payload.apiCalls : [];
+  const markets = Array.isArray(payload?.markets) ? payload.markets : [];
+  const status = String(run.status || "UNKNOWN").toUpperCase();
+  return `
+    <div class="analysis-detail-sections single-column scan-audit-detail">
+      <section class="analysis-detail-section overview">
+        <h3>Scan summary</h3>
+        <div class="analysis-kv"><strong>Run:</strong><span>${escapeHtml(formatDate(run.runAt || ""))}</span></div>
+        <div class="analysis-kv"><strong>Trigger:</strong><span>${escapeHtml(run.trigger || "AUTO")}</span></div>
+        <div class="analysis-kv"><strong>Status:</strong><span class="analysis-status ${analysisStatusClass(status)}">${escapeHtml(status)}</span></div>
+        <div class="analysis-kv"><strong>Markets:</strong><span>${formatInteger(markets.length) || "0"} recorded from ${formatInteger(apiCalls.length) || "0"} API calls</span></div>
+        ${run.error ? `<div class="analysis-kv"><strong>Error:</strong><span class="negative">${escapeHtml(run.error)}</span></div>` : ""}
+      </section>
+      <section class="analysis-detail-section">
+        <h3>Gamma API calls</h3>
+        <div class="analysis-candidate-table-wrap">
+          <table class="analysis-candidate-table scan-audit-api-table">
+            <thead><tr><th>#</th><th>Scope</th><th>Parameters</th><th>Returned</th><th>Status</th></tr></thead>
+            <tbody>${apiCalls.length ? apiCalls.map((call, index) => {
+              const parameters = Object.entries(call?.parameters && typeof call.parameters === "object" ? call.parameters : {})
+                .map(([key, value]) => `${key}=${value}`)
+                .join(" / ");
+              const href = /^https:\/\//i.test(String(call?.url || "")) ? String(call.url) : "";
+              const callStatus = String(call?.status || "UNKNOWN").toUpperCase();
+              return `<tr>
+                <td>${formatInteger(call?.sequence ?? index + 1) || index + 1}</td>
+                <td><strong>${escapeHtml(call?.label || call?.scope || "Polymarket markets")}</strong>${call?.category ? `<small class="table-secondary">${escapeHtml(call.category)}</small>` : ""}</td>
+                <td>${href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(parameters || href)}</a>` : escapeHtml(parameters || "-")}</td>
+                <td>${formatInteger(call?.returnedCount) || "0"}</td>
+                <td class="${callStatus === "SUCCESS" ? "positive" : "negative"}"><strong>${escapeHtml(callStatus)}</strong>${call?.error ? `<small class="table-secondary">${escapeHtml(call.error)}</small>` : ""}</td>
+              </tr>`;
+            }).join("") : '<tr><td colspan="5">No API-call audit was recorded for this older run.</td></tr>'}</tbody>
+          </table>
+        </div>
+      </section>
+      <section class="analysis-detail-section">
+        <h3>Markets returned by this scan</h3>
+        <div class="analysis-candidate-table-wrap">
+          <table class="analysis-candidate-table scan-audit-market-table">
+            <thead><tr><th>Market</th><th>Outcome</th><th>Probability</th><th>Categories</th><th>Result</th><th>Reason</th></tr></thead>
+            <tbody>${markets.length ? markets.map((market) => {
+              const href = /^https:\/\//i.test(String(market?.url || "")) ? String(market.url) : "";
+              const action = String(market?.action || "NOT_SAVED").toUpperCase();
+              return `<tr>
+                <td>${href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(market?.question || "Untitled Polymarket market")}</strong></a>` : `<strong>${escapeHtml(market?.question || "Untitled Polymarket market")}</strong>`}</td>
+                <td>${escapeHtml(market?.outcome || "-")}</td>
+                <td>${Number.isFinite(Number(market?.marketProbability)) ? probability(Number(market.marketProbability)) : "-"}</td>
+                <td>${escapeHtml(Array.isArray(market?.categories) ? market.categories.join(", ") : market?.categories || "-")}</td>
+                <td class="${scanAuditActionClass(action)}"><strong>${escapeHtml(action.replace("_", " "))}</strong></td>
+                <td>${escapeHtml(market?.reason || "-")}</td>
+              </tr>`;
+            }).join("") : '<tr><td colspan="6">No market rows were returned by this scan.</td></tr>'}</tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+async function openScrapeRunAudit(run, trigger) {
+  const runId = String(run?.id || "").trim();
+  if (!runId) return;
+  openAnalysisModal("Loading scraping audit...", trigger, {
+    title: "Scraping run detail",
+    singleColumn: true,
+  });
+  const modal = analysisModal();
+  const body = modal.querySelector("[data-analysis-modal-body]");
+  try {
+    const payload = await fetchApiJson(`api.php?action=scan-audit&run_id=${encodeURIComponent(runId)}`);
+    if (!modal.hidden && body) body.innerHTML = renderScanAuditModal(payload);
+  } catch (error) {
+    if (!modal.hidden && body) {
+      body.innerHTML = `<div class="error">${escapeHtml(error?.message || "Scraping audit could not be loaded.")}</div>`;
+    }
+  }
 }
 
 function renderScrapeRunLog() {
@@ -5859,8 +5947,8 @@ function renderScrapeRunLog() {
             const status = String(run.status || "UNKNOWN").toUpperCase();
             const statusClass = status === "ERROR" ? "negative" : status === "SUCCESS" ? "positive" : "";
             return `
-              <tr>
-                <td data-label="Run time"><strong>${escapeHtml(formatDate(run.runAt || ""))}</strong></td>
+              <tr class="scrape-run-row" data-scrape-run-audit="${escapeHtml(run.id || "")}" tabindex="0" role="button" aria-label="Open scraping audit for ${escapeHtml(formatDate(run.runAt || ""))}">
+                <td data-label="Run time"><strong>${escapeHtml(formatDate(run.runAt || ""))}</strong><small class="table-secondary">Open audit</small></td>
                 <td data-label="Since previous">${escapeHtml(scanLogInterval(run, history[index + 1]))}</td>
                 <td data-label="Trigger"><strong>${escapeHtml(run.trigger || "AUTO")}</strong></td>
                 <td data-label="Status" class="${statusClass}"><strong>${escapeHtml(status)}</strong></td>
@@ -7137,6 +7225,14 @@ els.crossLiveRisk?.addEventListener("change", () => {
 });
 
 els.botEvaluations?.addEventListener("click", (event) => {
+  const scrapeRunRow = event.target.closest("[data-scrape-run-audit]");
+  if (scrapeRunRow) {
+    const runId = scrapeRunRow.dataset.scrapeRunAudit || "";
+    const run = (Array.isArray(state.scrapedMarketScanHistory) ? state.scrapedMarketScanHistory : [])
+      .find((item) => String(item?.id || "") === runId);
+    if (run) openScrapeRunAudit(run, scrapeRunRow);
+    return;
+  }
   const scrapedRefreshButton = event.target.closest("[data-scraped-refresh]");
   if (scrapedRefreshButton) {
     event.preventDefault();
@@ -7167,6 +7263,14 @@ els.botEvaluations?.addEventListener("click", (event) => {
     state.evaluationSort.direction = ["marketPrice", "odds", "gainIfWin", "netYield", "aiProbability", "potentialAnnualizedReturn"].includes(key) ? "desc" : "asc";
   }
   renderBotEvaluations();
+});
+
+els.botEvaluations?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const scrapeRunRow = event.target.closest("[data-scrape-run-audit]");
+  if (!scrapeRunRow) return;
+  event.preventDefault();
+  scrapeRunRow.click();
 });
 
 document.addEventListener("change", (event) => {
