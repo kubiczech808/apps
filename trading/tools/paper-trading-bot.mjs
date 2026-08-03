@@ -51,9 +51,17 @@ const MAX_EVALUATIONS_PER_RUN = envNumber("PAPER_MAX_EVALUATIONS_PER_RUN", 80);
 const MAX_SPREAD = envNumber("PAPER_MAX_SPREAD", 0.08);
 const MIN_VOLUME_24H = envNumber("PAPER_MIN_VOLUME_24H", 100);
 const MAX_HISTORY = envNumber("PAPER_MAX_HISTORY", 5000);
-// Gamma returns one response page at a time. This is transport pagination,
-// not an intake cap: every page that matches the saved API filters is read.
+// Every scan persists a Gamma keyset cursor. A single run processes one
+// bounded page, while later runs continue exactly where the prior one ended.
+// This makes the catalogue exhaustive over time without producing a huge
+// state file or repeatedly re-reading the same API pages.
 const MARKET_SCAN_PAGE_SIZE = Math.max(1, Math.min(500, envNumber("PAPER_MARKET_SCAN_PAGE_SIZE", 500)));
+const MARKET_SCAN_EVENT_BATCH_LIMIT = Math.max(1, Math.min(500, envNumber("PAPER_MARKET_SCAN_EVENT_BATCH_LIMIT", MARKET_SCAN_PAGE_SIZE)));
+// These are retention limits for the local, UI-facing quote cache. They do
+// not limit Gamma intake: keyset cursors keep advancing through every result.
+const MARKET_OBSERVATION_RETAIN_LIMIT = Math.max(500, envNumber("PAPER_MARKET_OBSERVATION_RETAIN_LIMIT", 5000));
+const MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT = Math.max(100, envNumber("PAPER_MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT", 1000));
+const MARKET_SCAN_AUDIT_ROW_LIMIT = Math.max(100, envNumber("PAPER_MARKET_SCAN_AUDIT_ROW_LIMIT", 750));
 // Each retained scan carries its full request and market audit trail. Keeping
 // this bounded prevents the state file from growing on every ten-minute scan.
 const MARKET_SCAN_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_HISTORY_LIMIT", 20);
@@ -437,7 +445,9 @@ function normalizeState(input) {
     portfolio: paperPortfolios.conservative.portfolio,
     trades: paperPortfolios.conservative.trades,
     evaluations: mergeEvaluationLists(Array.isArray(input.evaluations) ? input.evaluations : []),
-    marketObservations: mergeMarketObservationLists(Array.isArray(input.marketObservations) ? input.marketObservations : []),
+    marketObservations: retainMarketObservations(
+      mergeMarketObservationLists(Array.isArray(input.marketObservations) ? input.marketObservations : []),
+    ),
     marketScan: normalizeMarketScan(input.marketScan),
     marketScanHistory: normalizeMarketScanHistory(input.marketScanHistory),
     evaluationRunLog: Array.isArray(input.evaluationRunLog)
@@ -778,6 +788,19 @@ function normalizeMarketScan(input = {}) {
         .filter(([tag]) => Boolean(tag))
         .slice(0, MARKET_SCAN_CATEGORY_TAGS.length),
     ),
+    scanCursors: Object.fromEntries(
+      Object.entries(input?.scanCursors && typeof input.scanCursors === "object" ? input.scanCursors : {})
+        .map(([scope, cursor]) => [String(scope || "").trim().toLowerCase(), String(cursor || "").trim()])
+        .filter(([scope, cursor]) => Boolean(scope) && Boolean(cursor))
+        .slice(0, MARKET_SCAN_CATEGORY_TAGS.length + 1),
+    ),
+    scanScopeCursor: Math.max(0, Math.floor(Number(input?.scanScopeCursor) || 0)),
+    scanQuerySignature: String(input?.scanQuerySignature || "").slice(0, 500),
+    lastScope: String(input?.lastScope || "").slice(0, 120),
+    lastScopeCursor: String(input?.lastScopeCursor || "").slice(0, 1000) || null,
+    lastScopeNextCursor: String(input?.lastScopeNextCursor || "").slice(0, 1000) || null,
+    lastBatchEventCount: Math.max(0, Math.floor(Number(input?.lastBatchEventCount) || 0)),
+    lastBatchEndDate: String(input?.lastBatchEndDate || "").slice(0, 80) || null,
     lastScanAt: input?.lastScanAt || null,
     lastBatchCount: Math.max(0, Math.floor(Number(input?.lastBatchCount) || 0)),
     lastPreferredCount: Math.max(0, Math.floor(Number(input?.lastPreferredCount) || 0)),
@@ -814,7 +837,21 @@ function trimMarketScanHistory(input = []) {
     .filter((item) => item && typeof item === "object" && item.audit && typeof item.audit === "object")
     .slice(0, historyLimit)
     .map((item, index) => {
-      if (index < auditLimit || !item || typeof item !== "object") return item;
+      if (index < auditLimit || !item || typeof item !== "object") {
+        if (!item?.audit || typeof item.audit !== "object") return item;
+        const auditMarkets = Array.isArray(item.audit.markets) ? item.audit.markets : [];
+        const truncated = auditMarkets.length > MARKET_SCAN_AUDIT_ROW_LIMIT;
+        return {
+          ...item,
+          audit: {
+            ...item.audit,
+            totalMarkets: Number(item.audit.totalMarkets || auditMarkets.length),
+            truncatedCount: Number(item.audit.truncatedCount || 0) + Math.max(0, auditMarkets.length - MARKET_SCAN_AUDIT_ROW_LIMIT),
+            markets: auditMarkets.slice(0, MARKET_SCAN_AUDIT_ROW_LIMIT),
+            truncated,
+          },
+        };
+      }
       const { audit, ...summary } = item;
       return summary;
     });
@@ -860,6 +897,28 @@ function mergeMarketObservationLists(primary = [], secondary = []) {
     .map((item) => normalizeMarketObservationLifecycle(item))
     .sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a));
   return normalized;
+}
+
+function retainMarketObservations(items = []) {
+  const active = [];
+  const resolved = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const status = String(item?.status || item?.selectionStatus || "").toUpperCase();
+    (status === "RESOLVED" ? resolved : active).push(item);
+  }
+  const compareActive = (a, b) => {
+    const aDays = daysToEnd(a?.endDate);
+    const bDays = daysToEnd(b?.endDate);
+    const aBucket = Number.isFinite(aDays) && aDays >= 0 ? 0 : 1;
+    const bBucket = Number.isFinite(bDays) && bDays >= 0 ? 0 : 1;
+    if (aBucket !== bBucket) return aBucket - bBucket;
+    if (Number.isFinite(aDays) && Number.isFinite(bDays) && aDays !== bDays) return aDays - bDays;
+    return marketObservationUpdateTime(b) - marketObservationUpdateTime(a);
+  };
+  return [
+    ...active.sort(compareActive).slice(0, MARKET_OBSERVATION_RETAIN_LIMIT),
+    ...resolved.sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a)).slice(0, MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT),
+  ].sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a));
 }
 
 function mergeUniqueById(items, idFn, limit = Infinity) {
@@ -4957,6 +5016,14 @@ async function loadEventMarketScanBatch(params = {}, audit = null) {
     value: typeof page.next_cursor === "string" && page.next_cursor.trim() ? page.next_cursor : null,
     enumerable: false,
   });
+  Object.defineProperty(markets, "__scanEventCount", {
+    value: Array.isArray(page.events) ? page.events.length : 0,
+    enumerable: false,
+  });
+  Object.defineProperty(markets, "__scanLastEndDate", {
+    value: String(page.events?.[page.events.length - 1]?.endDate || page.events?.[page.events.length - 1]?.end_date || "") || null,
+    enumerable: false,
+  });
   return markets;
 }
 
@@ -5034,7 +5101,7 @@ function marketScanAuditRows({
       .map((item) => [marketObservationKey(item), item])
       .filter(([key]) => Boolean(key)),
   );
-  return fetchedMarkets.map((market) => {
+  return fetchedMarkets.slice(0, MARKET_SCAN_AUDIT_ROW_LIMIT).map((market) => {
     const reasonCode = marketScanRetentionReason(market, observedAt);
     const candidate = reasonCode ? null : preferredMarketObservation(market, observedAt);
     const candidateKey = candidate ? marketObservationKey(candidate) : "";
@@ -5246,7 +5313,7 @@ function scanBatchNextCursor(batch = []) {
 
 async function loadPreferredMarketScanBatch({ afterCursor = null, auditCalls = null } = {}) {
   const params = {
-    limit: MARKET_SCAN_PAGE_SIZE,
+    limit: MARKET_SCAN_EVENT_BATCH_LIMIT,
     order: "endDate",
     ascending: "true",
     ...(afterCursor ? { after_cursor: afterCursor } : {}),
@@ -5275,12 +5342,20 @@ function annotateCategoryScanMarkets(markets, tag) {
     value: scanBatchNextCursor(markets),
     enumerable: false,
   });
+  Object.defineProperty(annotated, "__scanEventCount", {
+    value: Number(markets?.__scanEventCount || 0),
+    enumerable: false,
+  });
+  Object.defineProperty(annotated, "__scanLastEndDate", {
+    value: markets?.__scanLastEndDate || null,
+    enumerable: false,
+  });
   return annotated;
 }
 
 async function loadCategoryMarketScanBatch(tag, { afterCursor = null, auditCalls = null } = {}) {
   const params = {
-    limit: MARKET_SCAN_PAGE_SIZE,
+    limit: MARKET_SCAN_EVENT_BATCH_LIMIT,
     tag_id: tag.id,
     order: "endDate",
     ascending: "true",
@@ -5522,7 +5597,263 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
   };
 }
 
+function marketScanQuerySignature() {
+  return JSON.stringify({
+    tag: MARKET_SCAN_TAG || "all",
+    liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
+    maxDays: MARKET_SCAN_MAX_DAYS,
+    batchEvents: MARKET_SCAN_EVENT_BATCH_LIMIT,
+  });
+}
+
+function marketScanScopes() {
+  if (MARKET_SCAN_TAG && MARKET_SCAN_TAG !== "all") {
+    const selected = MARKET_SCAN_CATEGORY_TAGS.find((tag) => tag.slug === MARKET_SCAN_TAG);
+    return selected ? [{ key: `tag:${selected.slug}`, label: `Category: ${selected.slug}`, tag: selected }] : [];
+  }
+  return [
+    { key: "all", label: "All active events", tag: null },
+    ...MARKET_SCAN_CATEGORY_TAGS.map((tag) => ({ key: `tag:${tag.slug}`, label: `Category: ${tag.slug}`, tag })),
+  ];
+}
+
 async function refreshMarketObservations(state) {
+  const previousScan = normalizeMarketScan(state.marketScan);
+  const focusedRefresh = REFRESH_TOKEN_ID !== "" || REFRESH_MARKET_SLUG !== "";
+  if (focusedRefresh) {
+    const stored = [
+      ...(Array.isArray(state.marketObservations) ? state.marketObservations : []),
+      ...(Array.isArray(state.evaluations) ? state.evaluations : []),
+    ].find((item) => String(item?.tokenId || "") === REFRESH_TOKEN_ID
+      || (REFRESH_MARKET_SLUG !== "" && String(item?.slug || item?.eventSlug || "") === REFRESH_MARKET_SLUG));
+    const slug = REFRESH_MARKET_SLUG || String(stored?.slug || stored?.eventSlug || "");
+    const market = await fetchMarketBySlug(slug);
+    if (!market) throw new Error("selected scraped market was not found on Polymarket");
+
+    const observedAt = nowIso();
+    let observation = preferredMarketObservation(market, observedAt);
+    const marketIsResolved = marketIsResolvedForScan(market);
+    if (observation && marketIsResolved) {
+      observation = {
+        ...observation,
+        status: "RESOLVED",
+        selectionStatus: "RESOLVED",
+        resolutionStatus: "PENDING_RESULT",
+        resolvedAt: market.closedTime || observedAt,
+        resolvedDetectedAt: observedAt,
+      };
+    }
+    if (!observation && stored && marketIsResolved) {
+      observation = {
+        ...stored,
+        status: "RESOLVED",
+        selectionStatus: "RESOLVED",
+        resolutionStatus: stored.resolutionStatus || "PENDING_RESULT",
+        resolvedAt: stored.resolvedAt || market.closedTime || observedAt,
+        resolvedDetectedAt: observedAt,
+        marketDataUpdatedAt: observedAt,
+        observedAt,
+      };
+    }
+    if (!observation) throw new Error("selected scraped market has no current executable Polymarket quote");
+    state.marketObservations = retainMarketObservations(
+      mergeMarketObservationLists([observation], state.marketObservations || []).map(normalizeMarketObservationEconomics),
+    );
+    state.marketScan = { ...previousScan, lastScanError: null };
+    return [observation];
+  }
+
+  const scanRunAt = nowIso();
+  const scanTrigger = String(process.env.PAPER_MARKET_SCAN_TRIGGER || (MANUAL_RUN_ONCE ? "MANUAL" : "AUTO")).toUpperCase();
+  const scopes = marketScanScopes();
+  if (!scopes.length) throw new Error(`unknown Polymarket scan tag: ${MARKET_SCAN_TAG}`);
+  const querySignature = marketScanQuerySignature();
+  const savedCursors = previousScan.scanQuerySignature === querySignature ? { ...previousScan.scanCursors } : {};
+  const scopeIndex = Math.max(0, previousScan.scanScopeCursor % scopes.length);
+  const scope = scopes[scopeIndex];
+  const afterCursor = savedCursors[scope.key] || null;
+  const apiCallAudit = [];
+
+  try {
+    const batch = scope.tag
+      ? await loadCategoryMarketScanBatch(scope.tag, { afterCursor, auditCalls: apiCallAudit })
+      : await loadPreferredMarketScanBatch({ afterCursor, auditCalls: apiCallAudit });
+    const nextCursor = scanBatchNextCursor(batch);
+    if (nextCursor) savedCursors[scope.key] = nextCursor;
+    else delete savedCursors[scope.key];
+
+    const fetchedMarkets = diversifyMarketScanOrder(batch);
+    const knownEventKeys = activeScanEventKeys(state.marketObservations || []);
+    const unseenEventCount = unseenScanEventCount(fetchedMarkets, knownEventKeys);
+    const scanReasonCounts = {};
+    const markets = [];
+    for (const market of fetchedMarkets) {
+      const reason = marketScanRetentionReason(market, scanRunAt);
+      if (reason) incrementMarketScanReason(scanReasonCounts, reason);
+      else markets.push(market);
+    }
+    const observations = markets
+      .map((market) => preferredMarketObservation(market, scanRunAt))
+      .filter((item) => {
+        const probability = Number(item?.marketProbability);
+        const status = String(item?.status || item?.selectionStatus || "").toUpperCase();
+        return item && Number.isFinite(probability) && probability > 0 && probability < 1 && status !== "RESOLVED";
+      })
+      .sort(compareObservationsForMarketScan);
+    const previousKeys = new Set((state.marketObservations || []).map(marketObservationKey).filter(Boolean));
+    const observationKeys = observations.map(marketObservationKey).filter(Boolean);
+    const newObservationCount = observationKeys.filter((key) => !previousKeys.has(key)).length;
+    const updatedObservationCount = observationKeys.filter((key) => previousKeys.has(key)).length;
+    const categoryCounts = marketCategoryCounts(markets);
+    const tagCounts = marketTagCounts(markets);
+    const shortHorizonCount = observations.filter((item) => {
+      const days = daysToEnd(item.endDate);
+      return Number.isFinite(days) && days > 0 && days <= MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS;
+    }).length;
+    const resolvedObservationCount = Number(scanReasonCounts.resolved_or_closed || 0);
+    const notRetainedReasonCounts = { ...scanReasonCounts };
+    delete notRetainedReasonCounts.resolved_or_closed;
+    const sortedNotRetainedReasonCounts = sortedMarketScanReasonCounts(notRetainedReasonCounts);
+    const auditRows = marketScanAuditRows({ fetchedMarkets, observations, previousKeys, observedAt: scanRunAt });
+
+    state.marketObservations = retainMarketObservations(
+      mergeMarketObservationLists(observations, state.marketObservations || []).map(normalizeMarketObservationEconomics),
+    );
+    state.marketScan = {
+      ...previousScan,
+      scanCursors: savedCursors,
+      scanScopeCursor: (scopeIndex + 1) % scopes.length,
+      scanQuerySignature: querySignature,
+      lastScope: scope.label,
+      lastScopeCursor: afterCursor,
+      lastScopeNextCursor: nextCursor,
+      lastBatchEventCount: Number(batch?.__scanEventCount || 0),
+      lastBatchEndDate: batch?.__scanLastEndDate || null,
+      lastScanAt: scanRunAt,
+      lastBatchCount: fetchedMarkets.length,
+      lastPreferredCount: scope.tag ? 0 : fetchedMarkets.length,
+      lastShortHorizonCount: shortHorizonCount,
+      preferredMaxResolutionDays: MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS,
+      minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
+      minResolutionHours: MARKET_SCAN_MIN_RESOLUTION_HOURS,
+      lastCategoryCount: Object.keys(categoryCounts).length,
+      lastCategoryCounts: categoryCounts,
+      lastRequestedCategories: [scope.tag?.slug || "all"],
+      lastUnseenEventCount: unseenEventCount,
+      lastEventDuplicatesSkippedCount: 0,
+      priorityLiquidityUsdc: MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC,
+      liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
+      maxDays: MARKET_SCAN_MAX_DAYS,
+      lastTag: MARKET_SCAN_TAG,
+      lastScanError: null,
+    };
+    state.marketScanHistory = trimMarketScanHistory([
+      {
+        id: `scan-${scanRunAt}`,
+        runAt: scanRunAt,
+        trigger: scanTrigger,
+        status: "SUCCESS",
+        apiCalls: apiCallAudit.length || 1,
+        requestedBatches: 1,
+        preferredMarketCount: scope.tag ? 0 : fetchedMarkets.length,
+        categoryMarketCount: scope.tag ? fetchedMarkets.length : 0,
+        categoryApiCalls: scope.tag ? 1 : 0,
+        categoryErrors: [],
+        requestedCategories: [scope.tag?.slug || "all"],
+        preferredCursor: scope.tag ? 0 : 1,
+        categoryOffsets: {},
+        scanScope: scope.label,
+        scanScopeCursor: afterCursor,
+        scanScopeNextCursor: nextCursor,
+        scanScopeComplete: !nextCursor,
+        batchEventCount: Number(batch?.__scanEventCount || 0),
+        batchEndDate: batch?.__scanLastEndDate || null,
+        unseenEventCount,
+        rawMarketCount: fetchedMarkets.length,
+        loadedMarketCount: fetchedMarkets.length,
+        retainedObservationCount: observations.length,
+        newObservationCount,
+        updatedObservationCount,
+        resolvedObservationCount,
+        resolvedSkippedCount: resolvedObservationCount,
+        notRetainedCount: Object.values(sortedNotRetainedReasonCounts).reduce((total, count) => total + Number(count || 0), 0),
+        notRetainedReasonCounts: sortedNotRetainedReasonCounts,
+        sameEventSkippedCount: 0,
+        minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
+        liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
+        maxDays: MARKET_SCAN_MAX_DAYS,
+        scanTag: MARKET_SCAN_TAG || null,
+        tagMatchedCount: fetchedMarkets.length,
+        tagFilteredOutCount: 0,
+        shortHorizonCount,
+        categoryCounts,
+        tagCounts,
+        audit: {
+          apiCalls: apiCallAudit,
+          totalMarkets: fetchedMarkets.length,
+          truncatedCount: Math.max(0, fetchedMarkets.length - auditRows.length),
+          markets: auditRows,
+        },
+        error: null,
+      },
+      ...normalizeMarketScanHistory(state.marketScanHistory),
+    ]);
+    return observations;
+  } catch (error) {
+    const message = error?.message || String(error);
+    state.marketScan = {
+      ...previousScan,
+      lastScanAt: scanRunAt,
+      lastScope: scope.label,
+      lastScopeCursor: afterCursor,
+      lastScanError: message,
+      liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
+      maxDays: MARKET_SCAN_MAX_DAYS,
+      lastTag: MARKET_SCAN_TAG,
+    };
+    state.marketScanHistory = trimMarketScanHistory([
+      {
+        id: `scan-${scanRunAt}`,
+        runAt: scanRunAt,
+        trigger: scanTrigger,
+        status: "ERROR",
+        apiCalls: apiCallAudit.length || 1,
+        requestedBatches: 1,
+        preferredMarketCount: 0,
+        categoryMarketCount: 0,
+        categoryApiCalls: scope.tag ? 1 : 0,
+        categoryErrors: scope.tag ? [{ tag: scope.tag.slug, error: message }] : [{ tag: "all", error: message }],
+        requestedCategories: [scope.tag?.slug || "all"],
+        scanScope: scope.label,
+        scanScopeCursor: afterCursor,
+        rawMarketCount: 0,
+        loadedMarketCount: 0,
+        retainedObservationCount: 0,
+        newObservationCount: 0,
+        updatedObservationCount: 0,
+        resolvedObservationCount: 0,
+        resolvedSkippedCount: 0,
+        notRetainedCount: 0,
+        notRetainedReasonCounts: {},
+        minResolutionMinutes: MARKET_SCAN_MIN_RESOLUTION_MINUTES,
+        liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
+        maxDays: MARKET_SCAN_MAX_DAYS,
+        scanTag: MARKET_SCAN_TAG || null,
+        tagMatchedCount: 0,
+        tagFilteredOutCount: 0,
+        shortHorizonCount: 0,
+        categoryCounts: {},
+        tagCounts: {},
+        audit: { apiCalls: apiCallAudit, totalMarkets: 0, truncatedCount: 0, markets: [] },
+        error: message,
+      },
+      ...normalizeMarketScanHistory(state.marketScanHistory),
+    ]);
+    return [];
+  }
+}
+
+async function refreshMarketObservationsLegacyFullSweep(state) {
   const previousScan = normalizeMarketScan(state.marketScan);
   const focusedRefresh = REFRESH_TOKEN_ID !== "" || REFRESH_MARKET_SLUG !== "";
   if (focusedRefresh) {

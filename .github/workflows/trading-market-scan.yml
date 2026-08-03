@@ -30,9 +30,9 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    # A complete scan follows all Gamma response pages for the selected
-    # liquidity/end-date scope, so this must not become an implicit page cap.
-    timeout-minutes: 45
+    # One request batch is persisted with a keyset cursor. The next run
+    # continues the same API scope instead of reloading every result at once.
+    timeout-minutes: 15
     env:
       PAPER_STATE_PATH: data/paper-state.json
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=refresh
@@ -42,6 +42,10 @@ jobs:
       PAPER_MAX_FRACTION: "0.05"
       PAPER_MAX_HISTORY: "5000"
       PAPER_MARKET_SCAN_PAGE_SIZE: "500"
+      PAPER_MARKET_SCAN_EVENT_BATCH_LIMIT: "500"
+      PAPER_MARKET_OBSERVATION_RETAIN_LIMIT: "5000"
+      PAPER_MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT: "1000"
+      PAPER_MARKET_SCAN_AUDIT_ROW_LIMIT: "750"
       PAPER_MARKET_SCAN_HISTORY_LIMIT: "20"
       PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT: "3"
       PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
