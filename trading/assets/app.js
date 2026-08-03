@@ -1494,7 +1494,15 @@ function inferredDateFromQuestion(trade) {
 function tradeEndDate(trade) {
   const stored = trade.endDate || trade.closedTime || trade.resolvedAt || null;
   const inferred = inferredDateFromQuestion(trade);
-  if (!inferred) return stored;
+  if (!inferred) {
+    if (stored || isClosedTrade(trade) || trade.mode !== "LIVE_ORDER") return stored;
+    // A CLOB order without Gamma timing must still have a stable, conservative
+    // holding horizon. The account sync replaces this with Gamma's exact
+    // fixture time as soon as it is available.
+    const createdAt = Date.parse(trade.openedAt || trade.date || "");
+    const fallback = (Number.isFinite(createdAt) ? createdAt : Date.now()) + (24 * 60 * 60 * 1000);
+    return new Date(fallback).toISOString();
+  }
   const storedTime = Date.parse(stored || "");
   const inferredTime = Date.parse(inferred);
   if (!Number.isFinite(storedTime)) return inferred;
@@ -1522,7 +1530,7 @@ function tradeHoldingDays(trade) {
 
 function annualizedForPeriod(returnPct, days) {
   if (!Number.isFinite(returnPct) || !Number.isFinite(days) || days <= 0) return null;
-  return returnPct * (365 / Math.max(days, 1 / 24));
+  return returnPct * (365 / Math.max(days, MIN_ANNUALIZATION_DAYS));
 }
 
 function tradePotentialGain(trade) {
@@ -5181,10 +5189,10 @@ function normalizeLiveOpenOrderForTable(order) {
     date: order.createdAt || null,
     openedAt: order.createdAt || null,
     openedAtSource: order.createdAt ? "open-orders-api" : "unknown",
-    endDate: source?.endDate || order.endDate || order.resolutionDate || null,
-    daysToResolution: source?.daysToResolution ?? order.daysToResolution ?? null,
+    endDate: order.endDate || order.resolutionEndDate || source?.endDate || source?.resolutionEndDate || order.resolutionDate || null,
+    daysToResolution: order.daysToResolution ?? source?.daysToResolution ?? null,
     entryPrice: price,
-    currentPrice: Number(source?.marketPrice ?? source?.marketPriceProbability ?? order.currentPrice ?? price),
+    currentPrice: Number(order.currentPrice ?? price ?? source?.marketPrice ?? source?.marketPriceProbability),
     shares: remainingSize,
     stakeUsdc: stake,
     totalCostUsdc: stake,

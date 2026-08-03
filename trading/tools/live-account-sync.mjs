@@ -19,6 +19,7 @@ const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "";
 const ACTIVITY_LIMIT = Number(process.env.LIVE_ACTIVITY_LIMIT || 50);
 const TRADE_LIMIT = Number(process.env.LIVE_TRADE_LIMIT || 500);
 const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || 1);
+const OPEN_ORDER_FALLBACK_HORIZON_MS = 24 * 60 * 60 * 1000;
 let ACCOUNT_ADDRESS = CONFIGURED_ACCOUNT_ADDRESS;
 let ACTIVE_FUNDER_ADDRESS = CONFIGURED_FUNDER_ADDRESS;
 let ACTIVE_SIGNATURE_TYPE = SIGNATURE_TYPE;
@@ -1144,6 +1145,53 @@ async function gammaMarketForOpenOrder(tokenId) {
   throw lastError || new Error("Gamma market lookup failed");
 }
 
+function openOrderMarketDates(market = {}, order = {}, generatedAt = new Date().toISOString()) {
+  const event = Array.isArray(market.events) ? market.events.find((item) => item?.slug) : null;
+  // Gamma stores the fixture kickoff on either the market or its parent event.
+  // Prefer it for sports: it is the useful capital-lock horizon even when final
+  // settlement happens later. The actual resolution window stays in the record
+  // separately for auditability.
+  const scheduledEventDate = isoTime(
+    market.gameStartTime
+      ?? market.eventStartTime
+      ?? event?.gameStartTime
+      ?? event?.eventStartTime
+      ?? event?.startTime
+      ?? null,
+  );
+  const resolutionEndDate = isoTime(market.endDate ?? market.endDateIso ?? event?.endDate ?? null);
+  const dateContext = correctedEndDate(
+    market.question || order.question || "",
+    resolutionEndDate,
+    order.createdAt || generatedAt,
+    {
+      ...market,
+      eventSlug: event?.slug || market.eventSlug || order.eventSlug || "",
+      gameStartTime: scheduledEventDate || market.gameStartTime || event?.startTime || null,
+      eventStartTime: scheduledEventDate || market.eventStartTime || event?.startTime || null,
+      startDateIso: market.startDateIso || event?.startDateIso || event?.startDate || null,
+    },
+  );
+  let endDate = dateContext.endDate;
+  let endDateSource = dateContext.source === "positions-api" ? "gamma-market-end-date" : dateContext.source;
+  if (!endDate) {
+    const createdAt = Date.parse(order.createdAt || generatedAt || "");
+    const fallbackTime = (Number.isFinite(createdAt) ? createdAt : Date.now()) + OPEN_ORDER_FALLBACK_HORIZON_MS;
+    endDate = new Date(fallbackTime).toISOString();
+    endDateSource = "open-order-24h-fallback";
+  }
+  const remainingDays = (Date.parse(endDate) - Date.now()) / OPEN_ORDER_FALLBACK_HORIZON_MS;
+  return {
+    endDate,
+    endDateSource,
+    scheduledEventDate: dateContext.scheduledEventDate || scheduledEventDate || null,
+    resolutionEndDate: dateContext.resolutionEndDate || resolutionEndDate || null,
+    // Annualized returns intentionally use the same conservative one-day
+    // minimum as portfolio candidate selection.
+    daysToResolution: Math.max(1, Number.isFinite(remainingDays) ? remainingDays : 1),
+  };
+}
+
 // CLOB open-order records contain trading fields only. Preserve the Gamma
 // event identity so another market from the same match is never treated as an
 // unrelated opportunity. Gamma can occasionally return an empty response
@@ -1162,6 +1210,7 @@ async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync, previou
       const event = Array.isArray(market.events) ? market.events.find((item) => item?.slug) : null;
       const slug = market.slug || order.slug || "";
       const eventSlug = event?.slug || market.eventSlug || order.eventSlug || slug;
+      const dates = openOrderMarketDates(market, { ...order, eventSlug }, new Date().toISOString());
       return {
         ...order,
         question: order.question || market.question || "",
@@ -1171,6 +1220,7 @@ async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync, previou
         conditionId: order.conditionId || market.conditionId || order.market || null,
         market: order.market || market.conditionId || null,
         url: eventSlug ? `https://polymarket.com/event/${eventSlug}` : order.url,
+        ...dates,
         marketMetadataSource: "gamma-clob-token",
       };
     } catch (error) {

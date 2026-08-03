@@ -751,7 +751,10 @@ async function hydrateLiveOpenOrderMetadata(liveState) {
   if (!openOrders.length) return liveState;
   const enrichedOrders = await Promise.all(openOrders.map(async (order) => {
     const tokenId = String(order?.tokenId || order?.assetId || "");
-    if (!tokenId || (order.eventSlug && order.question)) return order;
+    // Older account snapshots contained a label and an event slug but omitted
+    // the Gamma fixture time. Hydrate such orders as well: the date is needed
+    // for the same conservative one-day P.A. calculation used by rotation.
+    if (!tokenId) return order;
     try {
       const market = await fetchMarketByToken(tokenId);
       if (!market) return order;
@@ -759,6 +762,7 @@ async function hydrateLiveOpenOrderMetadata(liveState) {
       const outcomes = parseJsonField(market.outcomes).map(String);
       const tokenIndex = tokenIds.indexOf(tokenId);
       const eventSlug = marketEventSlug(market);
+      const dates = marketDateContext(market, order.createdAt || liveState?.generatedAt || null);
       return {
         ...order,
         question: order.question || market.question || "",
@@ -768,6 +772,11 @@ async function hydrateLiveOpenOrderMetadata(liveState) {
         conditionId: order.conditionId || market.conditionId || order.market || null,
         market: order.market || market.conditionId || null,
         url: order.url || (eventSlug ? `https://polymarket.com/event/${eventSlug}` : ""),
+        endDate: dates.endDate || order.endDate || null,
+        endDateSource: dates.endDateSource || order.endDateSource || null,
+        scheduledEventDate: dates.scheduledEventDate || order.scheduledEventDate || null,
+        resolutionEndDate: dates.resolutionEndDate || order.resolutionEndDate || null,
+        daysToResolution: daysToEnd(dates.endDate || order.endDate) ?? Math.max(1, number(order.daysToResolution, 1)),
         marketMetadataSource: "gamma-clob-token",
       };
     } catch {
@@ -1036,7 +1045,13 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
   const continuationExpectedValue = expectedPayout != null && netExitValue != null
     ? expectedPayout - netExitValue
     : null;
-  const days = number(source?.daysToResolution);
+  const storedDays = number(position.daysToResolution ?? source?.daysToResolution);
+  const endTime = Date.parse(position.endDate || source?.endDate || "");
+  const days = storedDays != null
+    ? Math.max(MIN_ANNUALIZATION_DAYS, storedDays)
+    : (Number.isFinite(endTime)
+      ? Math.max(MIN_ANNUALIZATION_DAYS, (endTime - Date.now()) / 86400000)
+      : MIN_ANNUALIZATION_DAYS);
   const currentSellPnl = realizedPnlIfExit ?? number(position.unrealizedPnlUsdc);
   const maximumWinPnl = number(
     position.netGainIfWinUsdc
@@ -1049,7 +1064,7 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
   const winPnlGapPct = winPnlGapUsdc != null && cost != null && cost > 0
     ? winPnlGapUsdc / cost
     : null;
-  const noDaysLeft = days == null || days <= 0;
+  const noDaysLeft = !Number.isFinite(endTime) && storedDays == null;
   const immediateCloseCandidate = noDaysLeft
     && winPnlGapPct != null
     && winPnlGapPct <= ROTATION_NO_DAYS_MAX_WIN_GAP;
@@ -1068,6 +1083,7 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
     holdExpectedPnl,
     continuationExpectedValue,
     continuationAnnualizedReturn,
+    daysToResolution: days,
     currentSellPnl,
     maximumWinPnl,
     winPnlGapUsdc,
@@ -1086,7 +1102,7 @@ function positionHoldExpectedValue(position, evaluationByToken = new Map()) {
 
 function positionHoldAnnualizedReturn(position, evaluationByToken = new Map()) {
   const economics = positionRotationEconomics(position, evaluationByToken);
-  const days = number(economics.source?.daysToResolution);
+  const days = number(economics.daysToResolution, MIN_ANNUALIZATION_DAYS);
   if (PROBABILITY_SOURCE === "polymarket"
     && economics.holdPotentialPnl != null
     && economics.netExitValue != null
