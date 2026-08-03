@@ -59,6 +59,9 @@ jobs:
           LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
           LIVE_RUN_LOG_RECOVER: "true"
           LIVE_EXECUTION_WORKFLOW_FILE: polymarket-live-limit-order-test.yml
+          # User-confirmed one-time browser execution that was overwritten
+          # before persistent run-log storage was added.
+          LIVE_CONFIRMED_MANUAL_RUN_IDS: "30846520601"
           GITHUB_TOKEN: ${{ github.token }}
         run: node tools/restore-live-execution-history.mjs
 

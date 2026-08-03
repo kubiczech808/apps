@@ -8,6 +8,12 @@ const githubToken = String(process.env.GITHUB_TOKEN || "").trim();
 const githubRepository = String(process.env.GITHUB_REPOSITORY || "").trim();
 const githubRef = String(process.env.GITHUB_REF_NAME || "").trim();
 const workflowFile = String(process.env.LIVE_EXECUTION_WORKFLOW_FILE || "polymarket-live-limit-order-test.yml").trim();
+const confirmedManualRunIds = new Set(
+  String(process.env.LIVE_CONFIRMED_MANUAL_RUN_IDS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
 
 function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -42,6 +48,18 @@ function findMatchingStoredRun(rows, run) {
   });
 }
 
+function applyConfirmedManualSources(rows) {
+  return rows.map((row) => {
+    if (!confirmedManualRunIds.has(String(row.workflowRunId || ""))) return row;
+    return {
+      ...row,
+      runSource: "MANUAL",
+      manualRunOnce: true,
+      sourceVerifiedByUser: true,
+    };
+  });
+}
+
 async function restoreHistoricalRows(payload) {
   if (!shouldRecoverHistory || payload.historyRecoveryCompletedAt || !githubToken || !githubRepository) return payload;
 
@@ -61,7 +79,8 @@ async function restoreHistoricalRows(payload) {
           workflowUrl: run.html_url,
         };
       }
-      const source = run.event === "schedule" ? "AUTO" : "RECOVERED";
+      const manuallyConfirmed = confirmedManualRunIds.has(String(run.id));
+      const source = manuallyConfirmed ? "MANUAL" : (run.event === "schedule" ? "AUTO" : "RECOVERED");
       return {
         id: `github-live-history-${run.id}`,
         workflowRunId: run.id,
@@ -71,13 +90,14 @@ async function restoreHistoricalRows(payload) {
         strategyId: "live",
         strategyLabel: "Live",
         runSource: source,
-        manualRunOnce: false,
+        manualRunOnce: manuallyConfirmed,
         action: "HISTORY_RECOVERED",
         reason: `Historical GitHub Actions run completed with ${run.conclusion}.`,
         explanation: run.event === "workflow_dispatch"
           ? "The previous detailed decision payload was overwritten. Its dispatch source is not recoverable from GitHub's run metadata."
           : "The previous detailed decision payload was overwritten; this scheduled execution was recovered from GitHub Actions metadata.",
         historicalRecovery: true,
+        sourceVerifiedByUser: manuallyConfirmed,
       };
     });
 
@@ -94,6 +114,7 @@ async function main() {
 
   payload.runLog = normalizedRunLog(payload.runLog);
   payload = await restoreHistoricalRows(payload);
+  payload.runLog = normalizedRunLog(applyConfirmedManualSources(payload.runLog));
   await mkdir(dirname(executionStatePath), { recursive: true });
   await writeFile(executionStatePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   console.log(`Restored ${payload.runLog.length} live execution run-log rows.`);
