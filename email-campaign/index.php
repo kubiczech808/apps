@@ -15,31 +15,47 @@ const AI_RESEARCH_MAX_BACKOFF_SECONDS = 1800;
 const AI_RESEARCH_FIRST_BATCH_CONTACTS = 100;
 // Hosting uzavre pozadavek 504 Gateway Timeout cca po 150 s, bez ohledu na set_time_limit().
 // Beh proto musi skoncit driv a rozdelanou praci nechat na dalsi cron.
-const AI_RESEARCH_REQUEST_BUDGET_SECONDS = 100;
+const AI_RESEARCH_REQUEST_BUDGET_SECONDS = 70;
 // Rezerva na vygenerovani emailu a dopsani behu do DB, kdyz scraping dojede az na hranu.
-const AI_RESEARCH_FINALIZE_RESERVE_SECONDS = 30;
+const AI_RESEARCH_FINALIZE_RESERVE_SECONDS = 12;
 // Nejvic kroku, ktere jeden tik cronu zpracuje. Casovy budget skonci vetsinou driv,
 // tohle je jen pojistka proti kroku, ktery se vraci hned a nic nemeni.
 const AI_RESEARCH_MAX_STEPS_PER_TICK = 12;
 // Kolik casu musi v behu zbyvat, aby melo smysl zacit dalsi praci. Novy seed potrebuje
 // plan z webu i scraping, dokonceni rozdelaneho behu jen jeden dalsi krok.
-const AI_RESEARCH_NEW_SEED_RESERVE_SECONDS = 45;
+const AI_RESEARCH_NEW_SEED_RESERVE_SECONDS = 35;
 const AI_RESEARCH_FINISH_STEP_RESERVE_SECONDS = 20;
 // Nejdelsi cas, ktery jeden beh venuje scrapovani kontaktu. Zbytek tiku patri dalsim
 // seedum a prvni davku stejne dotahuje scrapovaci worker na pozadi.
-const AI_RESEARCH_CONTACT_SCRAPE_SLICE_SECONDS = 20;
+const AI_RESEARCH_CONTACT_SCRAPE_SLICE_SECONDS = 10;
 // Dopocitavani poctu firem prochazenim katalogu: strop dotazu a casu na jeden katalog.
 // Pulenim intervalu se i desitky tisic firem najdou do dvaceti dotazu.
-const AI_RESEARCH_LISTING_COUNT_MAX_FETCHES = 22;
-const AI_RESEARCH_LISTING_COUNT_SLICE_SECONDS = 25;
+const AI_RESEARCH_LISTING_COUNT_MAX_FETCHES = 8;
+const AI_RESEARCH_LISTING_COUNT_SLICE_SECONDS = 12;
 const AI_RESEARCH_LISTING_COUNT_MAX_ATTEMPTS = 3;
+// Kolik detailu firem smi jeden beh otevrit. Detail je nejdrazsi operace celeho
+// pipeline (jeden HTTP request na firmu), a na prvni davku 100 kontaktu je tu
+// scrapovaci worker, ktery bezi na pozadi a casem omezeny neni. Beh potrebuje jen
+// nekolik kontaktu, aby mohl zalozit ucet a napsat osloveni.
+const AI_RESEARCH_INLINE_DETAILS_MAX = 6;
+// Nejmensi cas, ktery musi zbyvat na jeden Gemini pozadavek. Kdyz je ho méně, pozadavek
+// se vubec neposila a dokonci ho dalsi tik - nezacina se prace, ktera by nedobehla.
+const AI_RESEARCH_GEMINI_CALL_RESERVE_SECONDS = 12;
+// Web seedu: kolik podstranek se jeste precte a jak dlouho. Deset podstranek s beznym
+// timeoutem byla nejdrazsi operace celeho pipeline.
+const AI_RESEARCH_WEBSITE_SUBPAGES_MAX = 3;
+const AI_RESEARCH_WEBSITE_SUBPAGE_SLICE_SECONDS = 8;
+// Vyber seedu z katalogu: stropy a casovy platek. Bez nich slo o desitky requestu.
+const AI_RESEARCH_SEED_PICK_PAGES_MAX = 3;
+const AI_RESEARCH_SEED_PICK_DETAILS_MAX = 8;
+const AI_RESEARCH_SEED_PICK_SLICE_SECONDS = 10;
 // Kolik firem ma katalog na plne strance vysledku. Kdyz jich prvni stranka vrati
 // aspon tolik a katalog neuvadi celkovy pocet ani strankovani, je jasne, ze vysledku
 // je vic - jen jsme je neprecetli.
 const AI_RESEARCH_FULL_LISTING_PAGE_ITEMS = 8;
 // Scraping kontaktu si bere jen cast casu behu. Zbytek patri vzorum osloveni, odhadu
 // dosahu a zalozeni workspace, aby beh neskoncil s kontakty, ale bez zbytku workflow.
-const AI_RESEARCH_CONTACT_SCRAPE_RESERVE_SECONDS = 50;
+const AI_RESEARCH_CONTACT_SCRAPE_RESERVE_SECONDS = 20;
 // Prihlaseni ma vydrzet i pres noc a pres zavreny prohlizec. Hodnota je zamerne
 // vyssi nez pozadovanych 24 h, aby uzivatel neprisel o session prave na hrane.
 const APP_SESSION_LIFETIME_SECONDS = 7 * 24 * 3600;
@@ -314,14 +330,15 @@ function aiResearchTokensUsedThisProcess(): int
     return $tokens;
 }
 
+/**
+ * V requestu se nikdy nespi. Cekani na minutovy limit Gemini bylo jednou z veci, kvuli
+ * kterym hosting beh ukoncil: request drzel spojeni a delal presne nic. Misto pauzy se
+ * tik ukonci a prace pokracuje pri dalsim cronu - stav je po kazdem kroku ulozeny,
+ * takze se nic neztrati.
+ */
 function aiResearchSleepWithinDeadline(int $seconds, int $deadline): bool
 {
-    $seconds = min($seconds, max(0, $deadline - time()));
-    if ($seconds <= 0) {
-        return false;
-    }
-    sleep($seconds);
-    return true;
+    return false;
 }
 
 /**
@@ -346,28 +363,16 @@ function aiResearchThrottleBeforeRequest(array $config, int $deadline, int $plan
         return $recent;
     };
 
-    for ($guard = 0; $guard < 3; $guard++) {
-        $recent = $window();
-        if (count($recent) < $requestBudget) {
-            break;
-        }
-        $oldest = (int)$recent[0]['at'];
-        if (!aiResearchSleepWithinDeadline(max(1, $oldest + 61 - time()), $deadline)) {
-            return false;
-        }
-    }
-
     $recent = $window();
+    if (count($recent) >= $requestBudget) {
+        // Minutove okno je plne. Necekame - tik konci a dalsi cron je za par minut,
+        // to je stejne dlouho jako cekani, ale bez drzeni requestu.
+        return false;
+    }
     $tokensInWindow = array_sum(array_map(static fn(array $r): int => (int)$r['tokens'], $recent));
     $wouldExceed = $plannedTokens > 0 && ($tokensInWindow + $plannedTokens) > $tokenBudget;
-    $alreadyNear = $tokensInWindow >= $nearTokenLimit;
-    if ($wouldExceed || $alreadyNear) {
-        // Musi se pockat cela minuta. Kratsi pauza okno nevyprazdni, takze kdyz se do
-        // casoveho budgetu behu nevejde, pozadavek se neposila a dokonci ho dalsi cron.
-        if ($deadline - time() < 60) {
-            return false;
-        }
-        aiResearchSleepWithinDeadline(60, $deadline);
+    if ($wouldExceed || $tokensInWindow >= $nearTokenLimit) {
+        return false;
     }
     return true;
 }
@@ -392,7 +397,7 @@ function aiResearchGeminiCall(array $config, string $step, array $payload, int $
         throw new AiResearchTemporaryException('AI ' . $step . ' nema nastaveny Gemini API klic, beh se neulozil jako fallback.');
     }
     $deadline = aiResearchDeadline();
-    if (aiResearchDeadlineReached()) {
+    if (aiResearchDeadlineReached(AI_RESEARCH_GEMINI_CALL_RESERVE_SECONDS)) {
         throw new AiResearchTemporaryException('AI ' . $step . ' se nevesel do casoveho budgetu pozadavku, beh pokracuje pri dalsim cronu.');
     }
     $maxAttempts = 3;
@@ -2918,7 +2923,7 @@ function aiResearchRunningLogRow(PDO $pdo): ?array
 
 function aiResearchRunMaxLifetimeSeconds(): int
 {
-    return AI_RESEARCH_REQUEST_BUDGET_SECONDS + 120;
+    return AI_RESEARCH_REQUEST_BUDGET_SECONDS + 60;
 }
 
 /**
@@ -3605,11 +3610,25 @@ function releaseAiResearchRunsWithFixedWebsiteContext(PDO $pdo): void
     setSetting($pdo, 'ai_research_context_fix_version', AI_RESEARCH_CONTEXT_FIX_VERSION);
 }
 
+/**
+ * Vyber noveho seed subjektu z katalogu. Drive to bylo az dvanact strankovych requestu
+ * a neomezeny pocet detailu s beznym timeoutem - jedina nejdrazsi operace celeho behu
+ * a nejcastejsi duvod, proc hosting request ukoncil. Ted plati rychly rezim, strop
+ * stranek i detailu a casovy platek; kdyz se seed nenajde, zkusi ho dalsi tik.
+ */
 function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
 {
     $pages = range(1, 12);
     shuffle($pages);
+    $pages = array_slice($pages, 0, AI_RESEARCH_SEED_PICK_PAGES_MAX);
+    $detailsLeft = AI_RESEARCH_SEED_PICK_DETAILS_MAX;
+    $sliceEndsAt = min(time() + AI_RESEARCH_SEED_PICK_SLICE_SECONDS, aiResearchDeadline() - AI_RESEARCH_GEMINI_CALL_RESERVE_SECONDS);
+    aiResearchFastFetchMode(true);
+    try {
     foreach ($pages as $page) {
+        if (time() >= $sliceEndsAt || $detailsLeft <= 0) {
+            break;
+        }
         $searchUrl = aiResearchFirmySeedCatalogUrl($page);
         try {
             $html = httpGet($searchUrl);
@@ -3620,9 +3639,13 @@ function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
         $urls = extractCandidateUrls($html, $searchUrl, 'firmy_cz');
         shuffle($urls);
         foreach ($urls as $detailUrl) {
+            if (time() >= $sliceEndsAt || $detailsLeft <= 0) {
+                break;
+            }
             if (aiResearchSeedAlreadySeen($pdo, '', $detailUrl)) {
                 continue;
             }
+            $detailsLeft--;
             try {
                 $detailHtml = httpGet($detailUrl);
             } catch (Throwable $e) {
@@ -3661,6 +3684,9 @@ function selectAiResearchFirmySeedCompany(PDO $pdo): ?array
                 'seed_database_name' => 'AI research seedy',
             ];
         }
+    }
+    } finally {
+        aiResearchFastFetchMode(false);
     }
     return null;
 }
@@ -3815,15 +3841,21 @@ function aiResearchSeedWebsiteContext(string $website, ?bool &$hasEnglish = null
         $meta = aiResearchWebsiteMetaContext((string)$html);
         $pages[$loadedWebsite] = trim($meta . ($meta !== '' && $fallback !== '' ? '. ' : '') . $fallback);
     }
-    foreach (array_slice(aiResearchRelevantInternalUrls($html, $loadedWebsite), 0, 10) as $url) {
-        if (isset($pages[$url])) {
+    // Podstranky byly nejdrazsi cast celeho behu: az deset requestu, kazdy s beznym
+    // timeoutem 25 s a tremi pokusy. Ted jsou tri, v rychlem rezimu a jen dokud zbyva cas.
+    $subpageEndsAt = min(time() + AI_RESEARCH_WEBSITE_SUBPAGE_SLICE_SECONDS, aiResearchDeadline() - AI_RESEARCH_GEMINI_CALL_RESERVE_SECONDS);
+    foreach (array_slice(aiResearchRelevantInternalUrls($html, $loadedWebsite), 0, AI_RESEARCH_WEBSITE_SUBPAGES_MAX) as $url) {
+        if (isset($pages[$url]) || time() >= $subpageEndsAt) {
             continue;
         }
+        aiResearchFastFetchMode(true);
         try {
             $pageHtml = httpGet($url);
         } catch (Throwable $e) {
             error_log('AI research seed subpage skipped [' . $url . ']: ' . $e->getMessage());
             continue;
+        } finally {
+            aiResearchFastFetchMode(false);
         }
         $text = aiResearchImportantWebsiteText(aiResearchReadableWebsiteText($pageHtml), 1100);
         if ($text !== '') {
@@ -3866,13 +3898,26 @@ function aiResearchFetchSeedWebsiteHtml(string $website): array
             }
         }
     }
+    // Varianty adresy (https/http, s www i bez) se zkousi v rychlem rezimu a jen dokud
+    // zbyva cas. S beznym timeoutem 25 s a tremi pokusy stalo ctyri neuspesne varianty
+    // klidne pet minut - presne to hosting ukoncoval.
     $lastError = '';
-    foreach (array_values(array_unique($candidates)) as $candidate) {
-        try {
-            return [httpGet($candidate), $candidate];
-        } catch (Throwable $e) {
-            $lastError = $e->getMessage();
+    aiResearchFastFetchMode(true);
+    try {
+        foreach (array_values(array_unique($candidates)) as $candidate) {
+            if (aiResearchDeadlineReached(AI_RESEARCH_GEMINI_CALL_RESERVE_SECONDS)) {
+                throw new AiResearchTemporaryException('web seedu se do casoveho budgetu behu nevesel, zkusi ho dalsi cron');
+            }
+            try {
+                return [httpGet($candidate), $candidate];
+            } catch (AiResearchTemporaryException $e) {
+                throw $e;
+            } catch (Throwable $e) {
+                $lastError = $e->getMessage();
+            }
         }
+    } finally {
+        aiResearchFastFetchMode(false);
     }
     throw new RuntimeException($lastError !== '' ? $lastError : 'web se nepodarilo nacist');
 }
@@ -5658,9 +5703,9 @@ function aiResearchFindContacts(PDO $pdo, array $seed, array $plan, int $limit =
     $plan = aiResearchPrimaryQueryPlan($plan);
     $contacts = aiResearchQuickScrapeContacts(
         $plan,
-        $limit,
-        10,
-        30,
+        min($limit, AI_RESEARCH_INLINE_DETAILS_MAX),
+        2,
+        AI_RESEARCH_INLINE_DETAILS_MAX,
         $pdo,
         $runId,
         AI_RESEARCH_CONTACT_SCRAPE_RESERVE_SECONDS
@@ -5724,6 +5769,9 @@ function aiResearchQuickScrapeContactsWithin(array $plan, int $limit, int $pages
 {
     $contacts = [];
     $seen = [];
+    // Strop otevrenych detailu plati pro cely beh, ne pro jednu stranku: detail je
+    // jediny drahy krok a tri keywordy krat deset detailu je uz pul minuty.
+    $detailsLeft = AI_RESEARCH_INLINE_DETAILS_MAX;
     aiResearchScrapeDiagnostics(['listings' => 0, 'candidates' => 0, 'details' => 0, 'emails' => 0, 'timeout' => false]);
     $diag = static function (string $key, int $add = 1): void {
         $current = aiResearchScrapeDiagnostics();
@@ -5757,6 +5805,10 @@ function aiResearchQuickScrapeContactsWithin(array $plan, int $limit, int $pages
                             aiResearchScrapeDiagnostics(['timeout' => true]);
                             return $contacts;
                         }
+                        if ($detailsLeft <= 0) {
+                            return $contacts;
+                        }
+                        $detailsLeft--;
                         $diag('details');
                         try {
                             $contact = extractContactFromHtml(httpGet($url), $url);
@@ -6040,7 +6092,7 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
         // 2. Nalezene kontakty. Kdyz chybi, rovnou se dohledaji - v cilove velikosti
         // prvni davky, ne v symbolickem vzorku. Vhodnost se neposuzuje: kontakt prisel
         // z katalogu presne na keyword a lokalitu z planu, takze do davky patri.
-        if (!$contacts && $keyword !== '' && !aiResearchDeadlineReached(AI_RESEARCH_CONTACT_SCRAPE_RESERVE_SECONDS)) {
+        if (!$contacts && $keyword !== '' && !aiResearchDeadlineReached(AI_RESEARCH_CONTACT_SCRAPE_SLICE_SECONDS)) {
             try {
                 $found = aiResearchFindContacts($pdo, $seed, $plan, AI_RESEARCH_FIRST_BATCH_CONTACTS, $runId);
                 if ($found) {
@@ -6134,7 +6186,7 @@ function auditAiResearchRunNow(PDO $pdo, array $config, int $runId): string
         if ($estimateComplete) {
             // Hotovy odhad se do zpravy nepise, je videt v prehledu.
             $estimate = null;
-        } elseif (aiResearchDeadlineReached(30)) {
+        } elseif (aiResearchDeadlineReached(AI_RESEARCH_LISTING_COUNT_SLICE_SECONDS)) {
             $blocked[] = 'odhad dosahu se do casoveho limitu nevesel, dopocita ho nejblizsi cron';
         } else {
             $estimate = aiResearchComputeContactEstimate($pdo, $runId, $plan, aiResearchDeadline());
