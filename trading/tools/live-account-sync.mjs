@@ -313,6 +313,10 @@ function normalizePosition(position, generatedAt) {
   const rawEndDate = isoTime(position.endDate ?? position.endDateIso ?? position.resolutionDate);
   const endDateCorrection = correctedEndDate(question, rawEndDate, position.createdAt ?? position.timestamp ?? generatedAt, position);
   const endDate = endDateCorrection.endDate;
+  const endTime = Date.parse(endDate || "");
+  const daysToResolution = Number.isFinite(endTime)
+    ? Math.max(1, (endTime - Date.now()) / OPEN_ORDER_FALLBACK_HORIZON_MS)
+    : null;
   const redeemable = Boolean(position.redeemable ?? position.claimable ?? position.canRedeem ?? position.conditionRedeemable ?? false);
   const resolved = Boolean(position.resolved ?? position.isResolved ?? position.closed ?? false);
   const claimable = Boolean(position.claimable ?? position.canRedeem ?? false);
@@ -340,6 +344,7 @@ function normalizePosition(position, generatedAt) {
     endDateSource: endDateCorrection.source,
     scheduledEventDate: endDateCorrection.scheduledEventDate || null,
     resolutionEndDate: endDateCorrection.resolutionEndDate || null,
+    daysToResolution,
     resolvedAt,
     entryPrice: avgPrice,
     currentPrice,

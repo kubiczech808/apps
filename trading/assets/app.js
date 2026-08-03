@@ -1595,10 +1595,16 @@ function tradePotentialAnnualized(trade) {
         : (Number.isFinite(cost) && Number.isFinite(unrealizedPnl) ? cost + unrealizedPnl : null));
     const endDate = tradeEndDate(trade);
     const remainingDays = daysUntil(endDate);
-    if (Number.isFinite(shares) && shares > 0 && Number.isFinite(currentValue) && currentValue > 0
-      && Number.isFinite(remainingDays) && remainingDays > 0) {
+    if (Number.isFinite(shares) && shares > 0 && Number.isFinite(currentValue) && currentValue > 0) {
       const remainingPotentialPct = (shares - currentValue) / currentValue;
-      return annualizedForPeriod(remainingPotentialPct, remainingDays);
+      // A position can remain open while Polymarket awaits official settlement
+      // after its scheduled end. Its remaining upside is still real, but is
+      // compared with the portfolio's conservative one-day floor rather than
+      // disappearing from the rotation calculation.
+      const horizon = Number.isFinite(remainingDays) && remainingDays > 0
+        ? remainingDays
+        : MIN_ANNUALIZATION_DAYS;
+      return annualizedForPeriod(remainingPotentialPct, horizon);
     }
   }
   const gainPct = tradePotentialGainPct(trade);
@@ -1611,12 +1617,20 @@ function resolutionCell(trade) {
   const endDate = tradeEndDate(trade);
   const remaining = isClosedTrade(trade) ? null : daysUntil(endDate);
   const storedDays = Number(trade.daysToResolution);
-  const days = Number.isFinite(remaining) && remaining > 0 ? remaining : storedDays;
+  const awaitingSettlement = !isClosedTrade(trade)
+    && String(trade.status || "").toUpperCase() === "PENDING_RESOLUTION";
+  const days = Number.isFinite(remaining) && remaining > 0
+    ? remaining
+    : (Number.isFinite(storedDays) ? storedDays : (awaitingSettlement ? MIN_ANNUALIZATION_DAYS : null));
   const inferred = inferredDateFromQuestion(trade);
   const inferredNote = inferred && trade.endDate && Date.parse(inferred) > Date.parse(trade.endDate) ? "from question" : "";
   return `
     ${escapeHtml(endDate ? formatDate(endDate) : "-")}
-    <span>${isClosedTrade(trade) ? "resolved" : `${compactDays(days)} left${inferredNote ? `, ${inferredNote}` : ""}`}</span>
+    <span>${isClosedTrade(trade)
+      ? "resolved"
+      : (awaitingSettlement
+        ? `awaiting settlement, ${compactDays(days)} calc horizon`
+        : `${compactDays(days)} left${inferredNote ? `, ${inferredNote}` : ""}`)}</span>
   `;
 }
 
