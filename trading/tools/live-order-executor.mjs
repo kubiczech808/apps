@@ -649,6 +649,7 @@ function prefilterLiveCandidate(item) {
   const qualificationProbability = selectedProbability(item);
   const endTime = Date.parse(item?.endDate || "");
   const days = localDaysToResolution(item);
+  const liquidity = number(item?.liquidity, 0);
 
   if (!tokenId) reasons.push("missing token id");
   if (EXCLUDED_CANDIDATE_TOKEN_IDS.has(tokenId)) reasons.push("manually excluded from this live portfolio");
@@ -685,6 +686,9 @@ function prefilterLiveCandidate(item) {
   const candidateNetYield = netYieldAfterFees(item);
   if (candidateNetYield == null || candidateNetYield < MIN_NET_YIELD) {
     reasons.push(`net profit ${candidateNetYield == null ? "-" : `${(candidateNetYield * 100).toFixed(1)}%`} below ${(MIN_NET_YIELD * 100).toFixed(1)}% after fees`);
+  }
+  if (liquidity < MIN_VOLUME_24H) {
+    reasons.push(`liquidity ${liquidity.toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`);
   }
   if (Number.isFinite(endTime) && endTime <= Date.now()) {
     reasons.push("stored end date is in the past");
@@ -1527,9 +1531,11 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
   const returnOk = annualizedReturn > minimumAnnualizedReturn;
   const netYieldOk = Number.isFinite(netYield) && netYield >= MIN_NET_YIELD;
   const spreadOk = spread != null && spread <= MAX_SPREAD;
-  const volumeOk = volume24hr >= MIN_VOLUME_24H || liquidity >= MIN_VOLUME_24H;
+  // `minLiquidityUsdc` is a portfolio liquidity floor.  24h volume is useful
+  // context but must not substitute for executable order-book liquidity.
+  const liquidityOk = liquidity >= MIN_VOLUME_24H;
   return {
-    eligible: endOk && probabilityOk && returnOk && netYieldOk && spreadOk && volumeOk,
+    eligible: endOk && probabilityOk && returnOk && netYieldOk && spreadOk && liquidityOk,
     thesisType: probabilityOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY_BELOW_LIVE_THRESHOLD" : "REJECTED"),
     rejectReasons: [
       endOk ? null : "event end date is in the past",
@@ -1539,7 +1545,7 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
         : (returnOk ? null : `${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% below ${(minimumAnnualizedReturn * 100).toFixed(1)}%`),
       netYieldOk ? null : `net profit ${Number.isFinite(netYield) ? `${(netYield * 100).toFixed(1)}%` : "-"} below ${(MIN_NET_YIELD * 100).toFixed(1)}% after fees`,
       spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
-      volumeOk ? null : "liquidity/volume too low",
+      liquidityOk ? null : `liquidity ${Number(liquidity || 0).toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`,
     ].filter(Boolean),
   };
 }

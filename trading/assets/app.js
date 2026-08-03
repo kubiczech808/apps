@@ -2970,6 +2970,93 @@ function renderAnalysisComparison(originalSection, currentSection) {
   `;
 }
 
+function executionCandidateRejectionReason(item = {}) {
+  const reasons = [
+    ...(Array.isArray(item.rejectReasons) ? item.rejectReasons : []),
+    ...(Array.isArray(item.portfolioRejectReasons) ? item.portfolioRejectReasons : []),
+    item.riskBlockedReason,
+    item.sizingNote,
+  ].map((reason) => String(reason || "").trim()).filter(Boolean);
+  if (reasons.length) return reasons.join("; ");
+  const status = String(item.status || "").trim();
+  return status && status.toUpperCase() !== "ELIGIBLE"
+    ? `status ${status}`
+    : "No rejection reason was recorded.";
+}
+
+function executionCandidatesNotUsed(batch = {}) {
+  const candidates = Array.isArray(batch.eligibleCandidates) && batch.eligibleCandidates.length
+    ? batch.eligibleCandidates
+    : (Array.isArray(batch.topCandidates) ? batch.topCandidates : []);
+  const rejected = Array.isArray(batch.topRejected) ? batch.topRejected : [];
+  const revalidated = Array.isArray(batch.revalidatedCandidates) && batch.revalidatedCandidates.length
+    ? batch.revalidatedCandidates
+    : [...candidates, ...rejected];
+  const minimumLiquidity = Number(batch.settings?.minVolume24hr ?? batch.settings?.minLiquidityUsdc);
+  return (rejected.length
+    ? rejected
+    : revalidated.filter((item) => String(item.status || "").toUpperCase() !== "ELIGIBLE"))
+    .filter((item) => {
+      const liquidity = Number(item?.liquidity);
+      return !Number.isFinite(minimumLiquidity) || minimumLiquidity <= 0 || !Number.isFinite(liquidity) || liquidity >= minimumLiquidity;
+    })
+    .slice(0, 12);
+}
+
+function executionCandidatePotentialPa(item = {}, probabilitySource = "ai") {
+  if (normalizeProbabilitySource(probabilitySource) !== "polymarket") return Number(item.annualizedReturn);
+  const netYield = Number(item.netYield);
+  const days = Number(item.daysToResolution);
+  return Number.isFinite(netYield) && Number.isFinite(days)
+    ? annualizeReturn(netYield, days)
+    : Number(item.annualizedReturn);
+}
+
+function renderExecutionCandidatesNotUsedTable(candidates = [], probabilitySource = "ai") {
+  if (!candidates.length) return "";
+  const usesPolymarketProbability = normalizeProbabilitySource(probabilitySource) === "polymarket";
+  const probabilityLabel = usesPolymarketProbability ? "Mkt prob." : "AI prob.";
+  return `
+    <div class="analysis-candidate-table-wrap" tabindex="0" aria-label="Rejected execution candidates table">
+      <table class="analysis-candidate-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Market</th>
+            <th>${probabilityLabel}</th>
+            <th>Liquidity</th>
+            <th>Net yield</th>
+            <th>Potential p.a.</th>
+            <th>Why not</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${candidates.map((item, index) => {
+            const question = item.question || "-";
+            const outcome = item.outcome || "-";
+            const url = String(item.url || "").trim();
+            const selectedProbability = Number(usesPolymarketProbability ? item.marketProbability : item.aiProbability);
+            const liquidity = Number(item.liquidity);
+            const netYield = Number(item.netYield);
+            const potentialPa = executionCandidatePotentialPa(item, probabilitySource);
+            return `
+              <tr>
+                <td data-label="#">${index + 1}</td>
+                <td data-label="Market"><strong>${escapeHtml(outcome)}</strong><span>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(question)}</a>` : escapeHtml(question)}</span></td>
+                <td data-label="${probabilityLabel}">${Number.isFinite(selectedProbability) ? probability(selectedProbability) : "-"}</td>
+                <td data-label="Liquidity">${Number.isFinite(liquidity) ? money(liquidity) : "-"}</td>
+                <td data-label="Net yield" class="${pnlClass(netYield)}">${Number.isFinite(netYield) ? signedPercent(netYield) : "-"}</td>
+                <td data-label="Potential p.a." class="${pnlClass(potentialPa)}">${Number.isFinite(potentialPa) ? signedPercent(potentialPa) : "-"}</td>
+                <td data-label="Why not">${escapeHtml(executionCandidateRejectionReason(item))}</td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function renderAnalysisModalHtml(text, options = {}) {
   const lines = String(text || "No analysis detail available.").split(/\r?\n/);
   const sectionTitles = new Set([
@@ -3025,9 +3112,9 @@ function renderAnalysisModalHtml(text, options = {}) {
       ${visibleSections.map((section) => `
         <section class="analysis-detail-section ${section.title === "ERROR REASON" ? "error" : ""} ${section.title === "Analysis" ? "overview" : ""}">
           <h3>${escapeHtml(section.title)}</h3>
-          <div class="analysis-detail-lines">
-            ${section.lines.map(renderAnalysisLine).filter(Boolean).join("")}
-          </div>
+          ${section.title === "Candidates not used" && Array.isArray(options.executionCandidatesNotUsed)
+            ? renderExecutionCandidatesNotUsedTable(options.executionCandidatesNotUsed, options.executionProbabilitySource)
+            : `<div class="analysis-detail-lines">${section.lines.map(renderAnalysisLine).filter(Boolean).join("")}</div>`}
         </section>
       `).join("")}
       ${comparisonHtml}
@@ -4231,7 +4318,7 @@ function livePortfolioRuleRows() {
     ["Trade priority", priority],
     ["New trade cadence", `${normalizeCadenceHours(config.tradeCadenceHours, 24)}h between new live orders`],
     ["Execution trigger", executionTriggerLabel(config.executionTrigger)],
-    ["Liquidity / volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
+    ["Liquidity filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
     ["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "Block correlated exposure" : "Allow correlated exposure"],
@@ -6170,13 +6257,10 @@ function tradeBatchDetail(batch) {
   const action = String(batch.action || "-").toUpperCase();
   const primaryReason = String(batch.humanReason || batch.reason || batch.explanation || "-").trim();
   const explanation = String(batch.explanation || "").trim();
-  const reviewedCandidates = (rejected.length
-    ? rejected
-    : revalidated.filter((item) => String(item.status || "").toUpperCase() !== "ELIGIBLE"))
-    .slice(0, 12);
+  const reviewedCandidates = executionCandidatesNotUsed(batch);
   const reviewedCandidateLines = reviewedCandidates.map((item, index) => {
     const name = `${item.outcome || "-"} - ${item.question || "-"}`;
-    const reason = rejectionReasonLine(item);
+    const reason = executionCandidateRejectionReason(item);
     return `${index + 1}. ${name}${reason ? ` — ${reason}` : ""}`;
   }).join("\n");
   const orderReviewSummary = openOrderReviews.map((item, index) => {
@@ -6483,15 +6567,25 @@ function portfolioRunSource(run = {}) {
   return "AUTO";
 }
 
-function portfolioRunDetail(run = {}) {
+function portfolioRunBatch(run = {}) {
   const batch = run.batchLog || run;
-  return tradeBatchDetail({
+  return {
     ...batch,
     runAt: batch.runAt || run.runAt || run.generatedAt,
     strategyId: batch.strategyId || run.strategyId,
     strategyLabel: batch.strategyLabel || run.strategyLabel,
     action: batch.action || run.action,
     humanReason: batch.humanReason || humanRunReason(run),
+  };
+}
+
+function openExecutionRunDetail(batch, trigger) {
+  const normalizedBatch = batch || {};
+  openAnalysisModal(tradeBatchDetail(normalizedBatch), trigger, {
+    title: "Execution run log",
+    singleColumn: true,
+    executionCandidatesNotUsed: executionCandidatesNotUsed(normalizedBatch),
+    executionProbabilitySource: normalizedBatch.settings?.probabilitySource,
   });
 }
 
@@ -7146,7 +7240,7 @@ document.addEventListener("click", (event) => {
   if (portfolioRunButton) {
     event.preventDefault();
     const run = state.displayedRunLog[Number(portfolioRunButton.dataset.portfolioRun)];
-    openAnalysisModal(portfolioRunDetail(run || {}), portfolioRunButton, { title: "Execution run log", singleColumn: true });
+    openExecutionRunDetail(portfolioRunBatch(run || {}), portfolioRunButton);
     return;
   }
 
@@ -7156,14 +7250,14 @@ document.addEventListener("click", (event) => {
     const [runIndexRaw, decisionIndexRaw] = String(runBatchButton.dataset.runBatch || "").split(":");
     const run = (Array.isArray(state.botState?.evaluationRunLog) ? state.botState.evaluationRunLog : [])[Number(runIndexRaw)];
     const decision = Array.isArray(run?.decisions) ? run.decisions[Number(decisionIndexRaw)] : null;
-    openAnalysisModal(tradeBatchDetail(decision?.batchLog || decision || {}), runBatchButton, { title: "Execution run log", singleColumn: true });
+    openExecutionRunDetail(decision?.batchLog || decision || {}, runBatchButton);
     return;
   }
 
   const liveBatchButton = event.target.closest("[data-live-batch]");
   if (liveBatchButton) {
     event.preventDefault();
-    openAnalysisModal(tradeBatchDetail(state.liveExecutionState?.batchLog || state.liveExecutionState || {}), liveBatchButton, { title: "Execution run log", singleColumn: true });
+    openExecutionRunDetail(state.liveExecutionState?.batchLog || state.liveExecutionState || {}, liveBatchButton);
     return;
   }
 
