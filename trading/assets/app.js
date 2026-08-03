@@ -940,12 +940,6 @@ function scrapedScanTagOptions() {
     ];
     tags.forEach((rawTag) => addCount(rawTag));
   }
-  for (const [tag, count] of Object.entries(state.scrapedMarketScan?.lastCategoryCounts || {})) {
-    addCount(tag, count);
-  }
-  for (const [tag, count] of Object.entries(state.scrapedMarketScanHistory?.[0]?.tagCounts || {})) {
-    addCount(tag, count);
-  }
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
@@ -961,10 +955,11 @@ function renderScrapedScanControls() {
   if (!els.scrapedScanTag) return;
   const options = scrapedScanTagOptions();
   const availableTags = new Set(options.map(([tag]) => tag));
+  const selectedOption = options.find(([tag]) => tag === state.scrapedScanTag) || null;
   if (state.scrapedScanTag && !availableTags.has(state.scrapedScanTag)) state.scrapedScanTag = "";
   els.scrapedScanTag.innerHTML = [
     '<option value="">All tags</option>',
-    ...options.map(([tag, count]) => `<option value="${escapeHtml(tag)}">${escapeHtml(scrapedScanTagLabel(tag))} (${formatInteger(count) || count})</option>`),
+    ...options.map(([tag, count]) => `<option value="${escapeHtml(tag)}">${escapeHtml(scrapedScanTagLabel(tag))} (${formatInteger(count) || count} stored)</option>`),
   ].join("");
   els.scrapedScanTag.value = state.scrapedScanTag;
   if (els.scrapedScanButton) {
@@ -972,7 +967,10 @@ function renderScrapedScanControls() {
     els.scrapedScanButton.textContent = state.scrapedScanBusy ? "Scanning..." : "Scan Polymarket";
   }
   if (els.scrapedScanStatus) {
-    els.scrapedScanStatus.textContent = state.scrapedScanStatus || "";
+    const storedNote = selectedOption
+      ? `${formatInteger(selectedOption[1]) || selectedOption[1]} currently stored; scan result may differ.`
+      : "Choose a tag; counts show currently stored outcomes.";
+    els.scrapedScanStatus.textContent = state.scrapedScanStatus || storedNote;
     els.scrapedScanStatus.className = `scraped-scan-status${state.scrapedScanStatus?.startsWith("Error") ? " error" : ""}`;
   }
 }
@@ -4087,6 +4085,23 @@ function scrapedScanWasPublishedAfter(scrapedState, startedAt) {
   });
 }
 
+function publishedScanSummary(scrapedState, startedAt, selectedTag = "") {
+  const startedAtMs = Date.parse(startedAt || "");
+  const recentRuns = Array.isArray(scrapedState?.marketScanHistory)
+    ? scrapedState.marketScanHistory
+    : [];
+  const run = recentRuns.find((item) => {
+    const runAt = Date.parse(item?.runAt || "");
+    return Number.isFinite(runAt) && (!Number.isFinite(startedAtMs) || runAt >= startedAtMs - 10000);
+  });
+  const label = scrapedScanTagLabel(run?.scanTag || selectedTag || "all tags");
+  if (!run) return `Updated ${formatDate(scrapedState?.marketScan?.lastScanAt || "")}`;
+  const added = Number(run.newObservationCount || 0);
+  const updated = Number(run.updatedObservationCount || 0);
+  const retained = Number(run.retainedObservationCount || 0);
+  return `${label}: ${formatInteger(added)} new / ${formatInteger(updated)} updated (${formatInteger(retained)} saved from this scan)`;
+}
+
 async function waitForScrapedScanPublication(startedAt) {
   let lastError = null;
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -4136,7 +4151,7 @@ async function triggerOneTimeMarketScan() {
     if (!storeScrapedMarketState(refreshed, "scraped")) {
       throw new Error("The refreshed scan response did not include scraped opportunities.");
     }
-    state.scrapedScanStatus = `Updated ${formatDate(refreshed.marketScan?.lastScanAt || "")}`;
+    state.scrapedScanStatus = publishedScanSummary(refreshed, startedAt, state.scrapedScanTag);
     if (state.page === "opportunities") renderBotEvaluations();
     else rerenderCurrentDashboard();
   } catch (error) {
@@ -7123,6 +7138,7 @@ els.opportunityViewButtons.forEach((button) => {
 
 els.scrapedScanTag?.addEventListener("change", () => {
   state.scrapedScanTag = normalizedScrapedScanTag(els.scrapedScanTag.value);
+  state.scrapedScanStatus = "";
   renderScrapedScanControls();
 });
 
