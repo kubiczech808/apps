@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 function envNumber(name, fallback = null) {
@@ -32,6 +32,7 @@ function envTokenIdSet(name) {
 }
 
 const OUTPUT_PATH = process.env.PAPER_STATE_PATH || "data/paper-state.json";
+const SCAN_HISTORY_ENTRY_PATH = process.env.PAPER_SCAN_HISTORY_ENTRY_PATH || "data/market-scan-history-entry.ndjson";
 const REMOTE_STATE_URL = process.env.PAPER_STATE_URL || "";
 // The PHP summary endpoint is preferred because it is small and validated by
 // the app. The static file is a recovery path for a state that is temporarily
@@ -65,9 +66,9 @@ const MARKET_SCAN_EVENT_BATCH_LIMIT = Math.max(1, Math.min(500, envNumber("PAPER
 const MARKET_OBSERVATION_RETAIN_LIMIT = Math.max(500, envNumber("PAPER_MARKET_OBSERVATION_RETAIN_LIMIT", 5000));
 const MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT = Math.max(100, envNumber("PAPER_MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT", 1000));
 const MARKET_SCAN_AUDIT_ROW_LIMIT = Math.max(100, envNumber("PAPER_MARKET_SCAN_AUDIT_ROW_LIMIT", 750));
-// Each retained scan carries its full request and market audit trail. Keeping
-// this bounded prevents the state file from growing on every ten-minute scan.
-const MARKET_SCAN_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_HISTORY_LIMIT", 20);
+// The public state keeps a short working cache; the workflow appends every
+// compact scan summary to the separate scan-history journal.
+const MARKET_SCAN_HISTORY_LIMIT = Math.max(5, Math.floor(envNumber("PAPER_MARKET_SCAN_HISTORY_LIMIT", 20)));
 const MARKET_SCAN_AUDIT_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT", 3);
 const PORTFOLIO_RUN_LOG_LIMIT = Math.max(20, envNumber("PAPER_PORTFOLIO_RUN_LOG_LIMIT", 24));
 const TRADE_BATCH_CANDIDATE_LOG_LIMIT = Math.max(4, envNumber("PAPER_TRADE_BATCH_CANDIDATE_LOG_LIMIT", 12));
@@ -831,14 +832,22 @@ function normalizeMarketScanHistory(input = []) {
 }
 
 function trimMarketScanHistory(input = []) {
-  const historyLimit = Math.max(5, MARKET_SCAN_HISTORY_LIMIT);
-  const auditLimit = Math.min(historyLimit, Math.max(1, MARKET_SCAN_AUDIT_HISTORY_LIMIT));
-  // The scan-log UI exposes every retained row as a drill-down audit. Discard
-  // legacy summary-only rows when the first audited run is written rather than
-  // showing rows that cannot satisfy that contract.
-  return (Array.isArray(input) ? input : [])
-    .filter((item) => item && typeof item === "object" && item.audit && typeof item.audit === "object")
-    .slice(0, historyLimit)
+  const historyLimit = MARKET_SCAN_HISTORY_LIMIT;
+  const auditLimit = Math.max(1, MARKET_SCAN_AUDIT_HISTORY_LIMIT);
+  const seen = new Set();
+  // Older rows deliberately retain only their compact summary. They must stay
+  // visible in the log even though their per-market drill-down has expired.
+  const history = (Array.isArray(input) ? input : [])
+    .filter((item) => item && typeof item === "object" && (item.id || item.runAt))
+    .filter((item) => {
+      const key = String(item.id || item.runAt);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => (Date.parse(b.runAt || "") || 0) - (Date.parse(a.runAt || "") || 0))
+    .slice(0, historyLimit);
+  return history
     .map((item, index) => {
       if (index < auditLimit || !item || typeof item !== "object") {
         if (!item?.audit || typeof item.audit !== "object") return item;
@@ -1463,7 +1472,7 @@ function mergeStates(primary, secondary) {
     marketScanHistory: mergeUniqueById(
       [...(base.marketScanHistory || []), ...(other.marketScanHistory || [])],
       (item) => item.runAt || item.id || "",
-      Math.max(20, MARKET_SCAN_HISTORY_LIMIT),
+      MARKET_SCAN_HISTORY_LIMIT,
     ).sort((a, b) => (Date.parse(b.runAt || "") || 0) - (Date.parse(a.runAt || "") || 0)),
     evaluationRunLog: mergeUniqueById([...(base.evaluationRunLog || []), ...(other.evaluationRunLog || [])], (item) => item.runAt || item.id || "", EVALUATION_RUN_LOG_LIMIT),
     calculationReports: mergeUniqueById([...(base.calculationReports || []), ...(other.calculationReports || [])], (item) => item.id || item.generatedAt || "", CALCULATION_REPORT_HISTORY_LIMIT)
@@ -6842,6 +6851,19 @@ async function writeState(state) {
   await writeFile(OUTPUT_PATH, `${JSON.stringify(persisted)}\n`, "utf8");
 }
 
+function compactScanHistoryEntry(run) {
+  if (!run || typeof run !== "object" || (!run.id && !run.runAt)) return null;
+  const { audit, ...summary } = run;
+  return summary;
+}
+
+async function writeScanHistoryEntry(run) {
+  const entry = compactScanHistoryEntry(run);
+  if (!entry) return;
+  await mkdir(dirname(SCAN_HISTORY_ENTRY_PATH), { recursive: true });
+  await writeFile(SCAN_HISTORY_ENTRY_PATH, `${JSON.stringify(entry)}\n`, "utf8");
+}
+
 async function run() {
   if (REQUIRE_GEMINI && !GEMINI_API_KEY && !EXECUTION_ONLY) {
     throw new Error("PAPER_REQUIRE_GEMINI is true, but GEMINI_API_KEY is not available. Check GitHub secret GEMINI_API_KEY_POLYMARKET and workflow secret access.");
@@ -6853,7 +6875,11 @@ async function run() {
     requireGemini: REQUIRE_GEMINI,
     aiAnalysisLimit: AI_ANALYSIS_LIMIT,
   }));
+  await rm(SCAN_HISTORY_ENTRY_PATH, { force: true }).catch(() => {});
   const state = await readState();
+  const priorScanRunIds = new Set((state.marketScanHistory || [])
+    .map((item) => String(item?.id || item?.runAt || ""))
+    .filter(Boolean));
   syncLegacyPaperAliases(state);
   state.aiUsage = aiUsageSnapshot(state);
   state.evaluations = (SCAN_ONLY
@@ -6882,6 +6908,10 @@ async function run() {
     try {
       const observations = await refreshMarketObservations(state);
       state.evaluations = applyMarketObservationsToEvaluations(state.evaluations, observations);
+      const latestScanRun = state.marketScanHistory?.[0];
+      if (latestScanRun && !priorScanRunIds.has(String(latestScanRun.id || latestScanRun.runAt || ""))) {
+        await writeScanHistoryEntry(latestScanRun);
+      }
     } catch (error) {
       state.marketScan = {
         ...normalizeMarketScan(state.marketScan),

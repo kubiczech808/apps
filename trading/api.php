@@ -336,6 +336,47 @@ function is_active_scraped_market_observation(array $item): bool
     return $endDate === false || $endDate > time();
 }
 
+function compact_market_scan_history_entry(array $item): array
+{
+    $item['auditAvailable'] = isset($item['audit']) && is_array($item['audit']);
+    unset($item['audit']);
+    return $item;
+}
+
+function market_scan_history_records(array $fallback = []): array
+{
+    $byId = [];
+    $archiveFiles = glob(__DIR__ . '/data/market-scan-history/*.ndjson') ?: [];
+    sort($archiveFiles, SORT_STRING);
+    foreach ($archiveFiles as $archiveFile) {
+        $handle = @fopen($archiveFile, 'rb');
+        if ($handle === false) {
+            continue;
+        }
+        while (($line = fgets($handle)) !== false) {
+            $item = json_decode(trim($line), true);
+            if (!is_array($item) || (!isset($item['id']) && !isset($item['runAt']))) {
+                continue;
+            }
+            $key = (string) ($item['id'] ?? $item['runAt']);
+            $byId[$key] = compact_market_scan_history_entry($item);
+        }
+        fclose($handle);
+    }
+    foreach ($fallback as $item) {
+        if (!is_array($item) || (!isset($item['id']) && !isset($item['runAt']))) {
+            continue;
+        }
+        $key = (string) ($item['id'] ?? $item['runAt']);
+        $byId[$key] = compact_market_scan_history_entry($item);
+    }
+    $records = array_values($byId);
+    usort($records, static function (array $left, array $right): int {
+        return strtotime((string) ($right['runAt'] ?? '')) <=> strtotime((string) ($left['runAt'] ?? ''));
+    });
+    return $records;
+}
+
 function compact_state_payload(string $target, array $data, string $summary): array
 {
     if ($target !== 'paper') {
@@ -384,15 +425,12 @@ function compact_state_payload(string $target, array $data, string $summary): ar
         $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
         $active = array_values(array_filter($observations, static fn($item): bool => is_array($item) && is_active_scraped_market_observation($item)));
         $scanHistory = is_array($data['marketScanHistory'] ?? null)
-            ? array_slice(array_values(array_filter($data['marketScanHistory'], 'is_array')), 0, 200)
+            ? array_values(array_filter($data['marketScanHistory'], 'is_array'))
             : [];
         // Full audit rows can contain hundreds of markets. The log list only
         // needs scan summaries; the browser fetches a selected run's audit on
         // demand through action=scan-audit.
-        $scanHistory = array_map(static function (array $item): array {
-            unset($item['audit']);
-            return $item;
-        }, $scanHistory);
+        $scanHistory = array_map('compact_market_scan_history_entry', $scanHistory);
         return [
             'schemaVersion' => $data['schemaVersion'] ?? null,
             'generatedAt' => $data['generatedAt'] ?? null,
@@ -1727,6 +1765,23 @@ try {
             ]);
         }
         respond(['ok' => false, 'error' => 'Scraping run was not found'], 404);
+    }
+
+    if ($action === 'scan-history') {
+        $page = max(0, (int) ($_GET['page'] ?? 0));
+        $pageSize = min(200, max(25, (int) ($_GET['page_size'] ?? 100)));
+        $state = state_payload('paper');
+        $fallback = is_array($state['marketScanHistory'] ?? null) ? $state['marketScanHistory'] : [];
+        $records = market_scan_history_records($fallback);
+        $offset = $page * $pageSize;
+        respond([
+            'ok' => true,
+            'records' => array_slice($records, $offset, $pageSize),
+            'page' => $page,
+            'pageSize' => $pageSize,
+            'total' => count($records),
+            'hasMore' => $offset + $pageSize < count($records),
+        ]);
     }
 
     if ($action === 'markets') {

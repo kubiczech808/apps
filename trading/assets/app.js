@@ -38,6 +38,11 @@ const state = {
   scrapedMarketObservations: [],
   scrapedMarketScan: {},
   scrapedMarketScanHistory: [],
+  scrapeHistoryPage: -1,
+  scrapeHistoryTotal: 0,
+  scrapeHistoryHasMore: false,
+  scrapeHistoryBusy: false,
+  scrapeHistoryError: "",
   scrapedScanTag: "",
   scrapedScanBusy: false,
   scrapedScanStatus: "",
@@ -987,6 +992,7 @@ function setOpportunityView(view, { syncRoute = false, replace = false } = {}) {
   syncOpportunityViewControls();
   renderBotEvaluations();
   if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") ensureScrapedMarketState();
+  if (state.opportunityView === "scan-log") loadScrapeRunHistory({ reset: true });
   if (syncRoute && state.page === "opportunities") {
     const targetPath = `${opportunityRoutePath(state.opportunityView)}${window.location.search}`;
     const currentPath = `${window.location.pathname}${window.location.search}`;
@@ -3638,9 +3644,11 @@ function storeScrapedMarketState(scrapedState = {}, summary = "scraped") {
   state.scrapedMarketScan = scrapedState.marketScan && typeof scrapedState.marketScan === "object"
     ? scrapedState.marketScan
     : {};
-  state.scrapedMarketScanHistory = Array.isArray(scrapedState.marketScanHistory)
-    ? scrapedState.marketScanHistory
-    : [];
+  if (state.scrapeHistoryPage < 0) {
+    state.scrapedMarketScanHistory = Array.isArray(scrapedState.marketScanHistory)
+      ? scrapedState.marketScanHistory
+      : [];
+  }
   state.scrapedMarketStateSummary = summary;
   state.scrapedMarketStateError = "";
   state.scrapedMarketStateLoaded = true;
@@ -4126,6 +4134,35 @@ function scrapedScanWasPublishedAfter(scrapedState, startedAt) {
     const timestamp = Date.parse(value || "");
     return Number.isFinite(timestamp) && timestamp >= start - 10000;
   });
+}
+
+async function loadScrapeRunHistory({ reset = false } = {}) {
+  if (state.scrapeHistoryBusy || (!reset && !state.scrapeHistoryHasMore)) return;
+  const page = reset ? 0 : state.scrapeHistoryPage + 1;
+  state.scrapeHistoryBusy = true;
+  state.scrapeHistoryError = "";
+  if (state.page === "opportunities" && state.opportunityView === "scan-log") renderScrapeRunLog();
+  try {
+    const payload = await fetchApiJson(`api.php?action=scan-history&page=${page}&page_size=100`);
+    const incoming = Array.isArray(payload.records) ? payload.records : [];
+    const merged = new Map((reset ? [] : state.scrapedMarketScanHistory)
+      .map((item) => [String(item?.id || item?.runAt || ""), item])
+      .filter(([key]) => key));
+    incoming.forEach((item) => {
+      const key = String(item?.id || item?.runAt || "");
+      if (key) merged.set(key, item);
+    });
+    state.scrapedMarketScanHistory = [...merged.values()]
+      .sort((a, b) => (Date.parse(b?.runAt || "") || 0) - (Date.parse(a?.runAt || "") || 0));
+    state.scrapeHistoryPage = Number(payload.page ?? page);
+    state.scrapeHistoryTotal = Number(payload.total ?? state.scrapedMarketScanHistory.length);
+    state.scrapeHistoryHasMore = Boolean(payload.hasMore);
+  } catch (error) {
+    state.scrapeHistoryError = error?.message || "Scraping history could not be loaded.";
+  } finally {
+    state.scrapeHistoryBusy = false;
+    if (state.page === "opportunities" && state.opportunityView === "scan-log") renderScrapeRunLog();
+  }
 }
 
 function publishedScanSummary(scrapedState, startedAt, selectedTag = "") {
@@ -5893,17 +5930,6 @@ function scanLogReasonCounts(value, minimumMinutes = null) {
     : "Breakdown not recorded for this run";
 }
 
-function scanLogInterval(current, previous) {
-  const currentTime = Date.parse(current?.runAt || "");
-  const previousTime = Date.parse(previous?.runAt || "");
-  if (!Number.isFinite(currentTime) || !Number.isFinite(previousTime) || currentTime <= previousTime) return "-";
-  const minutes = Math.round((currentTime - previousTime) / 60000);
-  if (minutes < 60) return `${minutes} min`;
-  const hours = minutes / 60;
-  if (hours < 48) return `${hours.toFixed(hours >= 10 ? 0 : 1)} h`;
-  return `${(hours / 24).toFixed(1)} d`;
-}
-
 function scanAuditActionClass(action) {
   const normalized = String(action || "").toUpperCase();
   if (normalized === "INSERT") return "positive";
@@ -6032,7 +6058,10 @@ function renderScrapeRunLog() {
     .sort((a, b) => (Date.parse(b.runAt || "") || 0) - (Date.parse(a.runAt || "") || 0));
   const latest = history[0] || scrapedMarketScan();
   if (els.evaluationFilterCount) {
-    els.evaluationFilterCount.textContent = `${formatInteger(history.length) || history.length} recorded scraping runs`;
+    const total = Number.isFinite(state.scrapeHistoryTotal) && state.scrapeHistoryTotal > 0
+      ? state.scrapeHistoryTotal
+      : history.length;
+    els.evaluationFilterCount.textContent = `${formatInteger(total) || total} recorded scraping runs`;
   }
   if (els.evaluationSummary) {
     els.evaluationSummary.textContent = [
@@ -6042,6 +6071,10 @@ function renderScrapeRunLog() {
       latest?.retainedObservationCount != null ? `${formatInteger(latest.retainedObservationCount)} rows retained last run` : null,
       latest?.error ? `last error: ${latest.error}` : null,
     ].filter(Boolean).join(" / ");
+  }
+  if (!history.length && state.scrapeHistoryBusy) {
+    els.botEvaluations.innerHTML = '<div class="empty">Loading complete scraping history...</div>';
+    return;
   }
   if (!history.length) {
     els.botEvaluations.innerHTML = '<div class="empty">No scraping runs have been recorded yet. The next scheduled market scan will appear here.</div>';
@@ -6054,7 +6087,6 @@ function renderScrapeRunLog() {
         <thead>
           <tr>
             <th>Run time</th>
-            <th>Since previous</th>
             <th>Trigger</th>
             <th>Status</th>
             <th>API calls</th>
@@ -6070,13 +6102,13 @@ function renderScrapeRunLog() {
           </tr>
         </thead>
         <tbody>
-          ${history.slice(0, 200).map((run, index) => {
+          ${history.map((run) => {
             const status = String(run.status || "UNKNOWN").toUpperCase();
             const statusClass = status === "ERROR" ? "negative" : status === "SUCCESS" ? "positive" : "";
+            const auditAvailable = Boolean(run.auditAvailable);
             return `
-              <tr class="scrape-run-row" data-scrape-run-audit="${escapeHtml(run.id || "")}" tabindex="0" role="button" aria-label="Open scraping audit for ${escapeHtml(formatDate(run.runAt || ""))}">
-                <td data-label="Run time"><strong>${escapeHtml(formatDate(run.runAt || ""))}</strong><small class="table-secondary">Open audit</small></td>
-                <td data-label="Since previous">${escapeHtml(scanLogInterval(run, history[index + 1]))}</td>
+              <tr class="${auditAvailable ? "scrape-run-row" : ""}" ${auditAvailable ? `data-scrape-run-audit="${escapeHtml(run.id || "")}" tabindex="0" role="button" aria-label="Open scraping audit for ${escapeHtml(formatDate(run.runAt || ""))}"` : ""}>
+                <td data-label="Run time"><strong>${escapeHtml(formatDate(run.runAt || ""))}</strong><small class="table-secondary">${auditAvailable ? "Open audit" : "Summary retained"}</small></td>
                 <td data-label="Trigger"><strong>${escapeHtml(run.trigger || "AUTO")}</strong></td>
                 <td data-label="Status" class="${statusClass}"><strong>${escapeHtml(status)}</strong></td>
                 <td data-label="API calls">${formatInteger(run.apiCalls) || "0"}</td>
@@ -6095,6 +6127,8 @@ function renderScrapeRunLog() {
         </tbody>
       </table>
     </div>
+    ${state.scrapeHistoryError ? `<div class="empty negative">${escapeHtml(state.scrapeHistoryError)}</div>` : ""}
+    ${state.scrapeHistoryHasMore ? `<div class="table-load-more"><button class="execution-button" type="button" data-scrape-history-load-more ${state.scrapeHistoryBusy ? "disabled" : ""}>${state.scrapeHistoryBusy ? "Loading..." : "Load older runs"}</button></div>` : ""}
   `;
 }
 
@@ -7375,6 +7409,11 @@ els.crossLiveRisk?.addEventListener("change", () => {
 });
 
 els.botEvaluations?.addEventListener("click", (event) => {
+  const loadMoreScrapeHistory = event.target.closest("[data-scrape-history-load-more]");
+  if (loadMoreScrapeHistory) {
+    loadScrapeRunHistory();
+    return;
+  }
   const scrapeRunRow = event.target.closest("[data-scrape-run-audit]");
   if (scrapeRunRow) {
     const runId = scrapeRunRow.dataset.scrapeRunAudit || "";
