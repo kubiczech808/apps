@@ -90,7 +90,86 @@ function parse_json_field(mixed $value): array
     return [];
 }
 
-function state_payload(string $target): array
+/**
+ * Heavy state collections the bot publishes as sibling files. Decoding the whole
+ * catalogue for a request that only shows portfolio numbers is what pushed
+ * json_decode past memory_limit and answered 500, so each caller declares which
+ * segments it needs and pays for nothing else.
+ */
+function state_segment_fields(): array
+{
+    return [
+        'observations' => ['marketObservations', 'marketScan'],
+        'evaluations' => ['evaluations'],
+        // Scan history is small in row count but carries per-run audits, and the
+        // audit endpoints read nothing else. Keeping it separate lets them skip
+        // the market catalogue entirely.
+        'scanHistory' => ['marketScanHistory'],
+    ];
+}
+
+/**
+ * Which segments a summary genuinely reads. Anything not listed here gets the
+ * core file alone.
+ */
+function state_segments_for_summary(string $summary): array
+{
+    switch ($summary) {
+        case 'dashboard':
+            return [];
+        case 'candidates':
+            return ['evaluations'];
+        case 'execution':
+            return ['observations'];
+        case 'scraped':
+            return ['observations', 'scanHistory'];
+        case 'refresh':
+            // The worker fetches segments straight from the data directory, so
+            // this response only carries the core and the manifest that names
+            // them. Reassembling the catalogue here is what made the bot's own
+            // state read the most memory-hungry request on the hosting. A
+            // pre-segmentation state has no manifest, and state_payload() then
+            // returns it whole regardless of what is requested here.
+            return [];
+        default:
+            // The unnamed summary drops the market catalogue on the way out, so
+            // there is no reason to decode it on the way in.
+            return ['evaluations', 'scanHistory'];
+    }
+}
+
+function decode_state_file(string $path, bool $waitForUpload = true): ?array
+{
+    // FTP state replacement briefly removes the old file on hosts that do not
+    // support an atomic overwrite. Give the upload a short window to finish
+    // before reporting a real missing-state error to the browser.
+    if ($waitForUpload) {
+        for ($attempt = 0; $attempt < 4 && !is_file($path); $attempt++) {
+            usleep(250000);
+            clearstatcache(true, $path);
+        }
+    }
+    if (!is_file($path)) {
+        return null;
+    }
+
+    for ($attempt = 0; $attempt < 4; $attempt++) {
+        clearstatcache(true, $path);
+        $raw = @file_get_contents($path);
+        if ($raw !== false) {
+            $data = json_decode($raw, true);
+            unset($raw);
+            if (is_array($data)) {
+                return $data;
+            }
+        }
+        usleep(150000);
+    }
+
+    return null;
+}
+
+function state_payload(string $target, array $segments = ['observations', 'evaluations']): array
 {
     $files = [
         'paper' => __DIR__ . '/data/paper-state.json',
@@ -102,34 +181,44 @@ function state_payload(string $target): array
     }
 
     $path = $files[$target];
-    // FTP state replacement briefly removes the old file on hosts that do not
-    // support an atomic overwrite. Give the upload a short window to finish
-    // before reporting a real missing-state error to the browser.
-    for ($attempt = 0; $attempt < 4 && !is_file($path); $attempt++) {
-        usleep(250000);
-        clearstatcache(true, $path);
-    }
-    if (!is_file($path)) {
-        respond(['ok' => false, 'error' => 'State file is not available yet'], 404);
-    }
-
-    $lastError = 'State file contains invalid JSON';
-    for ($attempt = 0; $attempt < 4; $attempt++) {
-        clearstatcache(true, $path);
-        $raw = @file_get_contents($path);
-        if ($raw === false) {
-            $lastError = 'State file could not be read';
-        } else {
-            $data = json_decode($raw, true);
-            if (is_array($data)) {
-                return $data;
-            }
-            $lastError = 'State file contains invalid JSON';
+    $data = decode_state_file($path);
+    if ($data === null) {
+        if (!is_file($path)) {
+            respond(['ok' => false, 'error' => 'State file is not available yet'], 404);
         }
-        usleep(150000);
+        respond(['ok' => false, 'error' => 'State file contains invalid JSON'], 502);
     }
 
-    respond(['ok' => false, 'error' => $lastError], 502);
+    $manifest = is_array($data['stateSegments'] ?? null) ? $data['stateSegments'] : [];
+    if ($manifest === []) {
+        // A state written before segmentation carries every collection inline.
+        return $data;
+    }
+
+    $known = state_segment_fields();
+    foreach ($segments as $name) {
+        if (!isset($manifest[$name]) || !is_array($manifest[$name]) || !isset($known[$name])) {
+            continue;
+        }
+        $file = (string) ($manifest[$name]['file'] ?? '');
+        // The manifest is generated data, but it still reaches this code as file
+        // content, so the name is constrained to a plain sibling file.
+        if (!preg_match('/^[A-Za-z0-9._-]+\.json$/', $file)) {
+            continue;
+        }
+        $segment = decode_state_file(dirname($path) . '/' . $file, false);
+        if (!is_array($segment)) {
+            continue;
+        }
+        foreach ($known[$name] as $field) {
+            if (array_key_exists($field, $segment) && $segment[$field] !== null) {
+                $data[$field] = $segment[$field];
+            }
+        }
+        unset($segment);
+    }
+
+    return $data;
 }
 
 function compact_text(mixed $value, int $limit = 700): string
@@ -417,6 +506,11 @@ function compact_state_payload(string $target, array $data, string $summary): ar
     if ($summary === 'dashboard') {
         $compact = $data;
         $compact['evaluations'] = [];
+        // Scraping history is read only from the scraped/execution state, never
+        // from the dashboard payload, so this view does not load that segment.
+        // Emptying it here keeps the response shape stable whether or not the
+        // published state is segmented.
+        $compact['marketScanHistory'] = [];
         unset($compact['evaluationRunLog'], $compact['calculationReports'], $compact['runLog'], $compact['marketObservations'], $compact['marketScan']);
         $compact['evaluationDetailsMode'] = 'dashboard';
         return $compact;
@@ -1779,8 +1873,10 @@ try {
 
     if ($action === 'state') {
         $target = (string) ($_GET['target'] ?? '');
-        $payload = state_payload($target);
         $summary = (string) ($_GET['summary'] ?? '');
+        // Load the segments this summary reads before decoding anything else. The
+        // dashboard is by far the most requested view and needs none of them.
+        $payload = state_payload($target, state_segments_for_summary($summary));
         if ($target === 'paper') {
             $payload = compact_state_payload($target, $payload, $summary);
         }
@@ -1792,7 +1888,7 @@ try {
         if ($runId === '' || !preg_match('/^scan-[A-Za-z0-9:.+_-]{10,80}$/', $runId)) {
             respond(['ok' => false, 'error' => 'A valid scraping run id is required'], 400);
         }
-        $state = state_payload('paper');
+        $state = state_payload('paper', ['scanHistory']);
         $history = is_array($state['marketScanHistory'] ?? null) ? $state['marketScanHistory'] : [];
         foreach ($history as $run) {
             if (!is_array($run) || (string) ($run['id'] ?? '') !== $runId) {
@@ -1818,7 +1914,7 @@ try {
     if ($action === 'scan-history') {
         $page = max(0, (int) ($_GET['page'] ?? 0));
         $pageSize = min(200, max(25, (int) ($_GET['page_size'] ?? 100)));
-        $state = state_payload('paper');
+        $state = state_payload('paper', ['scanHistory']);
         $fallback = is_array($state['marketScanHistory'] ?? null) ? $state['marketScanHistory'] : [];
         $records = market_scan_history_records($fallback);
         $offset = $page * $pageSize;

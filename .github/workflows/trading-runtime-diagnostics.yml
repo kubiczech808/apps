@@ -58,6 +58,12 @@ jobs:
 
           STATE_FILES = [
               "paper-state.json",
+              # The heavy collections are published as siblings of the core state.
+              # Their sizes are the number to watch: a core that stays small while
+              # these carry the bulk is the segmented layout working as intended.
+              "paper-state.observations.json",
+              "paper-state.evaluations.json",
+              "paper-state.scanHistory.json",
               "live-state.json",
               "live-execution-state.json",
               "portfolio-config.json",
@@ -141,10 +147,25 @@ jobs:
               summary["generatedAt"] = state.get("generatedAt")
               summary["cadence"] = state.get("cadence") if isinstance(state.get("cadence"), dict) else None
               summary["hasPaperPortfolios"] = isinstance(state.get("paperPortfolios"), dict)
+              # Once the state is segmented these collections are empty in the core
+              # file and their real counts come from the manifest. Reporting both
+              # tells a segmented state apart from one that genuinely lost its rows.
+              manifest = state.get("stateSegments") if isinstance(state.get("stateSegments"), dict) else {}
+              manifest_counts = {}
+              for entry in manifest.values():
+                  if isinstance(entry, dict) and isinstance(entry.get("counts"), dict):
+                      manifest_counts.update(entry["counts"])
+              summary["isSegmented"] = bool(manifest)
+              summary["segmentFiles"] = sorted(
+                  str(entry.get("file")) for entry in manifest.values() if isinstance(entry, dict)
+              )
               for key in ("evaluations", "marketObservations", "marketScanHistory",
                           "evaluationRunLog", "calculationReports", "aiUsageLog"):
                   value = state.get(key)
-                  summary[f"{key}Count"] = len(value) if isinstance(value, list) else None
+                  inline = len(value) if isinstance(value, list) else None
+                  summary[f"{key}Count"] = manifest_counts.get(key, inline)
+                  if key in manifest_counts:
+                      summary[f"{key}InCoreFile"] = inline
               # The manual-scan UI decides "published" from these two fields, so report
               # them verbatim to tell a missing publication apart from a failing check.
               scan = state.get("marketScan") if isinstance(state.get("marketScan"), dict) else {}
@@ -233,8 +254,28 @@ jobs:
                   return {"listLength": len(state)}
               return {"type": type(state).__name__}
 
+          def summarize_segment(state):
+              """A heavy segment: row counts per field, nothing from inside the rows."""
+              if not isinstance(state, dict):
+                  return summarize_generic(state)
+              summary = {"topLevelKeys": sorted(k for k in state if not is_blocked(k))}
+              for key, value in state.items():
+                  if is_blocked(key):
+                      continue
+                  if isinstance(value, list):
+                      summary[f"{key}Count"] = len(value)
+                  elif isinstance(value, dict):
+                      summary[f"{key}Keys"] = len(value)
+              observations = state.get("marketObservations")
+              if isinstance(observations, list):
+                  summary["observationStatusCounts"] = status_histogram(observations)
+              return summary
+
           SUMMARIZERS = {
               "paper-state.json": summarize_paper,
+              "paper-state.observations.json": summarize_segment,
+              "paper-state.evaluations.json": summarize_segment,
+              "paper-state.scanHistory.json": summarize_segment,
               "live-state.json": summarize_live,
               "live-execution-state.json": summarize_live_execution,
           }

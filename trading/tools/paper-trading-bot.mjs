@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 function envNumber(name, fallback = null) {
@@ -39,6 +39,11 @@ const REMOTE_STATE_URL = process.env.PAPER_STATE_URL || "";
 // the app. The static file is a recovery path for a state that is temporarily
 // too large for PHP to parse during a migration.
 const STATIC_STATE_URL = process.env.PAPER_STATIC_STATE_URL || "";
+// Heavy state segments are fetched straight from the hosting directory. Default
+// to the directory that holds the static state file so a single configured URL
+// keeps covering both.
+const STATE_SEGMENT_BASE_URL = (process.env.PAPER_STATE_SEGMENT_BASE_URL
+  || (STATIC_STATE_URL ? STATIC_STATE_URL.replace(/\/[^/?#]*(?:[?#].*)?$/, "/") : "")).trim();
 const PORTFOLIO_USDC = envNumber("PAPER_PORTFOLIO_USDC", 100);
 const MAX_FRACTION = envNumber("PAPER_MAX_FRACTION", 0.05);
 const MIN_PROBABILITY = envNumber("PAPER_MIN_PROBABILITY", 0.95);
@@ -392,6 +397,123 @@ async function fetchJson(url) {
   return response.json();
 }
 
+// The retained catalogue is two orders of magnitude larger than the numbers the
+// dashboard shows. Keeping it in one file made every read decode all of it, and
+// PHP answered 500 once json_decode of the whole document exceeded memory_limit
+// — which took the bot's own state read down with it. The heavy collections are
+// therefore published as sibling files so each reader pays only for what it
+// needs: the dashboard decodes the core alone, and the scraped views decode the
+// observations alone.
+const STATE_SEGMENT_FIELDS = {
+  observations: ["marketObservations", "marketScan"],
+  evaluations: ["evaluations"],
+  // Scan history is short but carries per-run audits, and the audit endpoints
+  // read nothing else. A separate file lets them skip the market catalogue.
+  scanHistory: ["marketScanHistory"],
+};
+
+function stateSegmentFileName(name) {
+  const base = basename(OUTPUT_PATH).replace(/\.json$/i, "");
+  return `${base}.${name}.json`;
+}
+
+function stateSegmentPath(name) {
+  return join(dirname(OUTPUT_PATH), stateSegmentFileName(name));
+}
+
+// An absent field and an empty field are not the same thing here: a reader that
+// finds `marketObservations: []` in the core file must be able to tell "this
+// state has no markets" from "the markets live in a segment". The manifest is
+// that signal, and it carries counts so a truncated upload is detectable.
+function splitStateIntoSegments(state) {
+  const core = { ...state };
+  const segments = {};
+  const manifest = {};
+  for (const [name, fields] of Object.entries(STATE_SEGMENT_FIELDS)) {
+    const payload = {};
+    const counts = {};
+    for (const field of fields) {
+      const value = state[field];
+      payload[field] = value === undefined ? null : value;
+      if (Array.isArray(value)) counts[field] = value.length;
+      core[field] = Array.isArray(value) ? [] : (value && typeof value === "object" ? {} : value);
+    }
+    segments[name] = payload;
+    manifest[name] = { file: stateSegmentFileName(name), fields, counts };
+  }
+  core.stateSegments = manifest;
+  return { core, segments };
+}
+
+function mergeStateSegment(state, segment) {
+  if (!segment || typeof segment !== "object") return state;
+  const merged = { ...state };
+  for (const fields of Object.values(STATE_SEGMENT_FIELDS)) {
+    for (const field of fields) {
+      if (!(field in segment)) continue;
+      const value = segment[field];
+      if (value === null || value === undefined) continue;
+      merged[field] = value;
+    }
+  }
+  return merged;
+}
+
+function stateSegmentUrls(manifest) {
+  if (!manifest || typeof manifest !== "object") return [];
+  const base = STATE_SEGMENT_BASE_URL;
+  if (!base) return [];
+  const prefix = base.endsWith("/") ? base : `${base}/`;
+  return Object.values(manifest)
+    .map((entry) => String(entry?.file || "").trim())
+    .filter((file) => /^[A-Za-z0-9._-]+\.json$/.test(file))
+    .map((file) => `${prefix}${file}`);
+}
+
+// A checked-out or previously written state on disk is segmented the same way,
+// so local reads have to reassemble it before the shape checks run.
+async function readLocalStateFile(path) {
+  const raw = await readFile(path, "utf8");
+  let parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || !parsed.stateSegments) return parsed;
+  for (const name of Object.keys(STATE_SEGMENT_FIELDS)) {
+    try {
+      parsed = mergeStateSegment(parsed, JSON.parse(await readFile(stateSegmentPath(name), "utf8")));
+    } catch {
+      // A missing sibling leaves the core's empty collections in place, which is
+      // the correct reading of a partially written state.
+    }
+  }
+  return parsed;
+}
+
+// Segments are fetched as static files rather than through the PHP endpoint on
+// purpose: bypassing json_decode is the whole point of splitting them out.
+async function readStateWithSegments(payload) {
+  const manifest = payload?.stateSegments;
+  const declared = manifest && typeof manifest === "object" ? Object.keys(manifest) : [];
+  if (declared.length === 0) return payload;
+
+  const urls = stateSegmentUrls(manifest);
+  // The core file's collections are empty by construction once segments exist.
+  // Continuing without them would normalize an empty catalogue and publish it
+  // over the hosting, so an unfetchable segment has to stop the run instead.
+  if (urls.length !== declared.length) {
+    throw new Error(
+      `Published paper state declares ${declared.length} heavy segment(s) but only ${urls.length} could be addressed. `
+      + "Set PAPER_STATE_SEGMENT_BASE_URL (or PAPER_STATIC_STATE_URL) to the hosted data directory; "
+      + "refusing to continue with an incomplete state.",
+    );
+  }
+
+  let merged = payload;
+  for (const url of urls) {
+    const segment = await fetchJson(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`);
+    merged = mergeStateSegment(merged, segment);
+  }
+  return merged;
+}
+
 async function readState() {
   if (String(process.env.PAPER_RESET_STATE || "").toLowerCase() === "true") {
     return normalizeState({});
@@ -404,12 +526,12 @@ async function readState() {
   let remoteError = null;
   if (remoteStateUrl) {
     try {
-      const remote = await fetchJson(`${remoteStateUrl}${remoteStateUrl.includes("?") ? "&" : "?"}t=${Date.now()}`);
+      const core = await fetchJson(`${remoteStateUrl}${remoteStateUrl.includes("?") ? "&" : "?"}t=${Date.now()}`);
+      const remote = await readStateWithSegments(core);
       if (remote && typeof remote === "object" && (Array.isArray(remote.trades) || remote.paperPortfolios)) {
         const remoteState = normalizeState(remote);
         try {
-          const rawLocal = await readFile(OUTPUT_PATH, "utf8");
-          return mergeStates(remoteState, normalizeState(JSON.parse(rawLocal)));
+          return mergeStates(remoteState, normalizeState(await readLocalStateFile(OUTPUT_PATH)));
         } catch {
           return remoteState;
         }
@@ -428,7 +550,9 @@ async function readState() {
   if (remoteError && STATIC_STATE_URL) {
     try {
       const separator = STATIC_STATE_URL.includes("?") ? "&" : "?";
-      const remote = await fetchJson(`${STATIC_STATE_URL}${separator}t=${Date.now()}`);
+      const remote = await readStateWithSegments(
+        await fetchJson(`${STATIC_STATE_URL}${separator}t=${Date.now()}`),
+      );
       if (remote && typeof remote === "object" && (Array.isArray(remote.trades) || remote.paperPortfolios)) {
         console.warn(`Primary paper state endpoint failed (${remoteError.message}); recovering from static state file.`);
         return normalizeState(remote);
@@ -446,18 +570,18 @@ async function readState() {
     throw new Error(`Refusing to continue because the published paper state is unavailable: ${remoteError.message}`);
   }
 
-  let localRaw = null;
+  let parsedLocal = null;
   try {
-    localRaw = await readFile(OUTPUT_PATH, "utf8");
+    parsedLocal = await readLocalStateFile(OUTPUT_PATH);
   } catch {
-    localRaw = null;
+    parsedLocal = null;
   }
 
   // Without a remote endpoint this is a local run (tests, manual inspection), so
   // the checked-out file is the intended input.
   if (!remoteStateUrl) {
-    if (localRaw === null) return normalizeState({});
-    return normalizeState(JSON.parse(localRaw));
+    if (parsedLocal === null) return normalizeState({});
+    return normalizeState(parsedLocal);
   }
 
   if (!remoteError) {
@@ -471,15 +595,6 @@ async function readState() {
   // never become production state by accident: it is a test fixture, not a
   // backup. Recovering from it requires the current schema AND an explicit
   // opt-in, otherwise this run fails loudly and leaves the hosting untouched.
-  let parsedLocal = null;
-  if (localRaw !== null) {
-    try {
-      parsedLocal = JSON.parse(localRaw);
-    } catch {
-      parsedLocal = null;
-    }
-  }
-
   if (parsedLocal === null) {
     throw new Error(
       "Published paper state is missing (HTTP 404) and no readable local snapshot exists. "
@@ -7054,7 +7169,12 @@ async function writeState(state) {
   // file from accidental growth when a scan sees many valid markets while
   // retaining every market observation themselves.
   const persisted = normalizeState(state);
-  await writeFile(OUTPUT_PATH, `${JSON.stringify(persisted)}\n`, "utf8");
+  const { core, segments } = splitStateIntoSegments(persisted);
+  await Promise.all([
+    writeFile(OUTPUT_PATH, `${JSON.stringify(core)}\n`, "utf8"),
+    ...Object.entries(segments).map(([name, payload]) =>
+      writeFile(stateSegmentPath(name), `${JSON.stringify(payload)}\n`, "utf8")),
+  ]);
 }
 
 function compactScanHistoryEntry(run) {
@@ -7447,12 +7567,17 @@ export {
   normalizeState,
   openRisk,
   pnlPercent,
+  readState,
   resolveScheduledCadence,
   riskProfile,
   simulateMarketBuy,
+  splitStateIntoSegments,
   stateHasCurrentSchema,
+  stateSegmentFileName,
+  mergeStateSegment,
   takerFeeForFills,
   totalCost,
   updatePaperPortfolio,
   withLastLiveMarketProbability,
+  writeState,
 };

@@ -87,42 +87,11 @@ jobs:
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
           TRADING_FTP_DIR: /www/trading/data
           PAPER_STATE_FILE: trading/data/paper-state.json
-        run: |
-          python3 - <<'PY'
-          import ftplib
-          import os
-          from pathlib import Path
-
-          state_file = Path(os.environ["PAPER_STATE_FILE"])
-          if not state_file.exists():
-              raise SystemExit("paper-state.json was not generated")
-
-          def enter_dir(ftp, parts):
-              ftp.cwd("/")
-              for part in parts:
-                  if not part:
-                      continue
-                  try:
-                      ftp.cwd(part)
-                  except ftplib.error_perm:
-                      ftp.mkd(part)
-                      ftp.cwd(part)
-
-          with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=30) as ftp:
-              ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
-              enter_dir(ftp, os.environ["TRADING_FTP_DIR"].strip("/").split("/"))
-              temporary = "paper-state.json.scan-uploading"
-              with state_file.open("rb") as handle:
-                  ftp.storbinary(f"STOR {temporary}", handle)
-              try:
-                  ftp.rename(temporary, "paper-state.json")
-              except ftplib.all_errors:
-                  try:
-                      ftp.delete("paper-state.json")
-                  except ftplib.all_errors:
-                      pass
-                  ftp.rename(temporary, "paper-state.json")
-          PY
+          PAPER_UPLOAD_SUFFIX: scan-uploading
+        # Publishes the core state and every segment its manifest names. Uploading
+        # the core alone would leave the hosting advertising the previous run's
+        # catalogue. See trading/tools/publish-paper-state.py.
+        run: python3 trading/tools/publish-paper-state.py
 
       - name: Append compact scraping history entry
         if: success()

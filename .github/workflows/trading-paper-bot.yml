@@ -356,47 +356,10 @@ jobs:
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
           TRADING_FTP_DIR: /www/trading/data
           PAPER_STATE_FILE: trading/data/paper-state.json
-        run: |
-          python3 - <<'PY'
-          import ftplib
-          import os
-          from pathlib import Path
-
-          server = os.environ["HOSTING_FTP_SERVER"]
-          username = os.environ["HOSTING_FTP_USERNAME"]
-          password = os.environ["HOSTING_FTP_PASSWORD"]
-          target = os.environ["TRADING_FTP_DIR"].strip("/")
-          state_file = Path(os.environ["PAPER_STATE_FILE"])
-
-          if not state_file.exists():
-              raise SystemExit("paper-state.json was not generated")
-
-          def enter_dir(ftp, parts):
-              try:
-                  ftp.cwd("/")
-              except ftplib.all_errors:
-                  pass
-              for part in parts:
-                  if not part:
-                      continue
-                  try:
-                      ftp.cwd(part)
-                  except ftplib.error_perm:
-                      ftp.mkd(part)
-                      ftp.cwd(part)
-
-          with ftplib.FTP(server, timeout=30) as ftp:
-              ftp.login(username, password)
-              enter_dir(ftp, target.split("/"))
-              tmp_name = "paper-state.json.uploading"
-              with state_file.open("rb") as handle:
-                  ftp.storbinary(f"STOR {tmp_name}", handle)
-              try:
-                  ftp.rename(tmp_name, "paper-state.json")
-              except ftplib.all_errors:
-                  ftp.delete("paper-state.json")
-                  ftp.rename(tmp_name, "paper-state.json")
-          PY
+          PAPER_UPLOAD_SUFFIX: bot-uploading
+        # Publishes the core state and every segment its manifest names. See
+        # trading/tools/publish-paper-state.py for why the order matters.
+        run: python3 trading/tools/publish-paper-state.py
 
       - name: Append compact scraping history entry
         if: always()

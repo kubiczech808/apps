@@ -682,3 +682,156 @@ test("scraping: a market that already reads 100% is not stored", () => {
   // The threshold is exactly the rounding boundary, shared with the executor.
   assert.equal(bot.EFFECTIVELY_CERTAIN_MARKET_PROBABILITY, 0.9995);
 });
+
+test("state segments: the core file never carries the heavy collections", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const state = bot.normalizeState(
+    JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
+  );
+  // The fixture has to actually exercise all three segments, or this proves nothing.
+  assert.ok(state.marketObservations.length > 0, "fixture must have market observations");
+  assert.ok(state.evaluations.length > 0, "fixture must have evaluations");
+  assert.ok(state.marketScanHistory.length > 0, "fixture must have scan history");
+
+  const { core, segments } = bot.splitStateIntoSegments(state);
+  assert.deepEqual(Object.keys(segments).sort(), ["evaluations", "observations", "scanHistory"]);
+
+  // The whole point is that a reader of the core file decodes none of the catalogue.
+  assert.deepEqual(core.marketObservations, []);
+  assert.deepEqual(core.evaluations, []);
+  assert.deepEqual(core.marketScanHistory, []);
+  assert.deepEqual(core.marketScan, {});
+  // Portfolio numbers stay in the core: they are what the dashboard renders.
+  assert.equal(core.paperPortfolios.conservative.portfolio.equityUsdc, state.paperPortfolios.conservative.portfolio.equityUsdc);
+  assert.ok(Array.isArray(core.trades), "trades stay in the core so the shape check still passes");
+
+  // The manifest is the signal that empty collections mean "segmented", not "no data".
+  assert.equal(core.stateSegments.observations.file, "paper-state.observations.json");
+  assert.equal(core.stateSegments.evaluations.file, "paper-state.evaluations.json");
+  assert.equal(core.stateSegments.scanHistory.file, "paper-state.scanHistory.json");
+  assert.equal(core.stateSegments.observations.counts.marketObservations, state.marketObservations.length);
+  assert.equal(core.stateSegments.evaluations.counts.evaluations, state.evaluations.length);
+  assert.equal(core.stateSegments.scanHistory.counts.marketScanHistory, state.marketScanHistory.length);
+
+  // Splitting must be lossless, or publishing it destroys retained history.
+  let rebuilt = { ...core };
+  for (const payload of Object.values(segments)) rebuilt = bot.mergeStateSegment(rebuilt, payload);
+  delete rebuilt.stateSegments;
+  assert.deepEqual(rebuilt, state, "split then merge must reproduce the state exactly");
+});
+
+test("state segments: writeState publishes siblings that readState reassembles", async () => {
+  const { mkdtemp, readFile, readdir } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "paper-state-segments-"));
+
+  // A fresh module instance is needed because OUTPUT_PATH is read at import time.
+  const previous = process.env.PAPER_STATE_PATH;
+  process.env.PAPER_STATE_PATH = join(dir, "paper-state.json");
+  process.env.PAPER_STATE_URL = "";
+  try {
+    const scoped = await import(`../tools/paper-trading-bot.mjs?segments=${Date.now()}`);
+    const source = scoped.normalizeState(
+      JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
+    );
+    await scoped.writeState(source);
+
+    const published = (await readdir(dir)).sort();
+    assert.deepEqual(published, [
+      "paper-state.evaluations.json",
+      "paper-state.json",
+      "paper-state.observations.json",
+      "paper-state.scanHistory.json",
+    ]);
+
+    // The published core must be small: that is the property that stops PHP 500s.
+    const coreRaw = await readFile(join(dir, "paper-state.json"), "utf8");
+    const catalogueRaw = await readFile(join(dir, "paper-state.observations.json"), "utf8");
+    assert.ok(!coreRaw.includes(source.marketObservations[0].tokenId),
+      "no observation may leak into the core file");
+    assert.ok(catalogueRaw.includes(source.marketObservations[0].tokenId),
+      "the observation segment must carry them instead");
+
+    // And reading it back has to restore everything the bot needs to keep merging.
+    const restored = await scoped.readState();
+    assert.equal(restored.marketObservations.length, source.marketObservations.length);
+    assert.equal(restored.evaluations.length, source.evaluations.length);
+    assert.equal(restored.marketScanHistory.length, source.marketScanHistory.length);
+    assert.deepEqual(restored.marketScan, source.marketScan);
+  } finally {
+    if (previous === undefined) delete process.env.PAPER_STATE_PATH;
+    else process.env.PAPER_STATE_PATH = previous;
+  }
+});
+
+test("state segments: api.php loads only the segments a summary reads", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+
+  // The segment field map has to match the bot's, or a published field is never served.
+  assert.match(api, /'observations' => \['marketObservations', 'marketScan'\]/);
+  assert.match(api, /'evaluations' => \['evaluations'\]/);
+  assert.match(api, /'scanHistory' => \['marketScanHistory'\]/);
+
+  // Every state read must declare its segments; an undeclared one decodes the lot.
+  // Comments and the compact_state_payload() helper are not call sites.
+  const reads = (api.match(/(?<![\w])state_payload\([^;\n]*/g) || [])
+    .filter((call) => !/^state_payload\((?:\)|string)/.test(call));
+  assert.ok(reads.length >= 3, `expected at least three state reads, found ${reads.length}: ${reads.join(" | ")}`);
+  for (const call of reads) {
+    assert.match(call, /,\s*(\[|state_segments_for_summary)/, `${call} must declare which segments it needs`);
+  }
+
+  // The two reads that made PHP decode everything must now decode nothing heavy.
+  assert.match(api, /case 'dashboard':\s*\n\s*return \[\];/);
+  assert.match(api, /case 'refresh':(?:\s*\n\s*\/\/[^\n]*)+\s*\n\s*return \[\];/);
+  // The audit endpoints only ever needed the scan history.
+  assert.equal((api.match(/state_payload\('paper', \['scanHistory'\]\)/g) || []).length, 2);
+
+  // A state published before segmentation has no manifest and must still serve whole.
+  assert.match(api, /if \(\$manifest === \[\]\) \{\s*\n\s*\/\/[^\n]*\n\s*return \$data;/);
+  // A segment file name arrives as file content, so it stays a plain sibling name.
+  assert.match(api, /preg_match\('\/\^\[A-Za-z0-9\._-\]\+\\\.json\$\/', \$file\)/);
+});
+
+test("state segments: every state-writing workflow publishes them", async () => {
+  const { readFile } = await import("node:fs/promises");
+  // Three workflows write paper state. One that uploads only the core would leave
+  // the hosting advertising the previous run's catalogue, so they all publish
+  // through the shared script.
+  const writers = ["trading-paper-bot", "trading-market-scan", "trading-paper-evaluation"];
+  const suffixes = new Set();
+  for (const name of writers) {
+    const workflow = await readFile(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), "utf8");
+    assert.match(workflow, /run: python3 trading\/tools\/publish-paper-state\.py/,
+      `${name} must publish through the shared script`);
+    assert.ok(!/STOR paper-state\.json/.test(workflow),
+      `${name} must not upload the core state inline`);
+    const suffix = workflow.match(/PAPER_UPLOAD_SUFFIX: (\S+)/)?.[1];
+    assert.ok(suffix, `${name} must set its own upload suffix`);
+    // A shared temp name would let two concurrent runs overwrite each other's upload.
+    assert.ok(!suffixes.has(suffix), `${name} reuses upload suffix ${suffix}`);
+    suffixes.add(suffix);
+  }
+
+  // The publisher must send the core last, or the manifest points at files that
+  // are not there yet.
+  const publisher = await readFile(new URL("../tools/publish-paper-state.py", import.meta.url), "utf8");
+  assert.match(publisher, /uploads = declared_segments\(state_file\) \+ \[state_file\]/);
+  // And a manifest naming a file that was never written has to fail the run.
+  assert.match(publisher, /was not generated/);
+});
+
+test("state segments: the publisher refuses to write outside the trading tree", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const publisher = await readFile(new URL("../tools/publish-paper-state.py", import.meta.url), "utf8");
+  // The remote directory arrives from the environment and this script writes over
+  // FTP, so it must not be able to reach anything but /www/trading/.
+  assert.match(publisher, /if not remote_dir\.startswith\("www\/trading\/"\) or "\.\." in remote_dir:/);
+  assert.match(publisher, /Refusing to publish outside \/www\/trading\//);
+  // Nothing read from the environment may be echoed into the log.
+  for (const secret of ["HOSTING_FTP_PASSWORD", "HOSTING_FTP_USERNAME"]) {
+    assert.ok(!new RegExp(`print\\([^)]*${secret}`).test(publisher), `${secret} must never be printed`);
+  }
+});
