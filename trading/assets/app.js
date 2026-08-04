@@ -4154,26 +4154,35 @@ function scanHistoryIds(scrapedState) {
     .filter(Boolean));
 }
 
-function scrapedScanWasPublishedAfter(scrapedState, startedAt, previousScanIds = new Set()) {
-  const start = Date.parse(startedAt || "");
-  if (!Number.isFinite(start)) return true;
+function newestScanTime(scrapedState) {
+  const scanHistory = Array.isArray(scrapedState?.marketScanHistory) ? scrapedState.marketScanHistory : [];
+  const times = [scrapedState?.marketScan?.lastScanAt, ...scanHistory.map((item) => item?.runAt)]
+    .map((value) => Date.parse(value || ""))
+    .filter((value) => Number.isFinite(value));
+  return times.length ? Math.max(...times) : null;
+}
+
+// Compares the published state against the snapshot taken before the scan was
+// dispatched, never against the browser clock. Every timestamp involved is written
+// by the runner, so a browser running a few minutes fast or slow used to reject a
+// publication that had plainly landed.
+function scrapedScanWasPublishedAfter(scrapedState, baseline = {}) {
   const scanHistory = Array.isArray(scrapedState?.marketScanHistory)
     ? scrapedState.marketScanHistory
     : [];
+  const previousScanIds = baseline.scanIds instanceof Set ? baseline.scanIds : new Set();
   if (scanHistory.some((item) => {
     const id = String(item?.id || item?.runAt || "");
     return id && !previousScanIds.has(id);
   })) {
     return true;
   }
-  // A state replacement can arrive through FTP with a timestamp sourced from
-  // the runner rather than the browser. Keep a modest clock-skew fallback, but
-  // prefer the newly created scan id above whenever it is available.
-  const scanTimes = [scrapedState?.marketScan?.lastScanAt, ...scanHistory.map((item) => item?.runAt)];
-  return scanTimes.some((value) => {
-    const timestamp = Date.parse(value || "");
-    return Number.isFinite(timestamp) && timestamp >= start - 180000;
-  });
+  // No new id yet. A state replacement can still be recognised by its newest scan
+  // timestamp moving forward relative to the pre-dispatch snapshot.
+  const newest = newestScanTime(scrapedState);
+  if (newest == null) return false;
+  if (baseline.newestScanTime == null) return true;
+  return newest > baseline.newestScanTime;
 }
 
 async function loadScrapeRunHistory({ reset = false } = {}) {
@@ -4225,12 +4234,15 @@ function publishedScanSummary(scrapedState, startedAt, selectedTag = "", previou
   return `${label}: ${formatInteger(added)} new / ${formatInteger(updated)} updated (${formatInteger(retained)} saved from this scan)`;
 }
 
-async function waitForScrapedScanPublication(startedAt, previousScanIds = new Set()) {
+async function waitForScrapedScanPublication(baseline = {}) {
   let lastError = null;
+  let lastState = null;
   for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
       const scrapedState = await fetchJson("data/paper-state.json", { summary: "scraped" });
-      if (scrapedScanWasPublishedAfter(scrapedState, startedAt, previousScanIds)) return scrapedState;
+      lastError = null;
+      lastState = scrapedState;
+      if (scrapedScanWasPublishedAfter(scrapedState, baseline)) return { state: scrapedState, confirmed: true };
     } catch (error) {
       lastError = error;
     }
@@ -4239,7 +4251,11 @@ async function waitForScrapedScanPublication(startedAt, previousScanIds = new Se
     await sleep(2000);
   }
   if (lastError) throw lastError;
-  throw new Error("The scan workflow finished, but its new scraped data has not been published yet.");
+  // The workflow itself succeeded, so the scan did run and its data is on the way.
+  // Returning the last readable state keeps the catalogue usable and reports a
+  // wait rather than an error, which is what this used to get wrong.
+  if (lastState) return { state: lastState, confirmed: false };
+  throw new Error("The scan workflow finished, but no scraped state could be read afterwards.");
 }
 
 async function triggerOneTimeMarketScan() {
@@ -4247,12 +4263,13 @@ async function triggerOneTimeMarketScan() {
   state.scrapedScanBusy = true;
   state.scrapedScanStatus = "Starting scan...";
   renderScrapedScanControls();
-  let previousScanIds = new Set();
+  let baseline = { scanIds: new Set(), newestScanTime: null };
   try {
-    previousScanIds = scanHistoryIds(await fetchJson("data/paper-state.json", { summary: "scraped" }));
+    const before = await fetchJson("data/paper-state.json", { summary: "scraped" });
+    baseline = { scanIds: scanHistoryIds(before), newestScanTime: newestScanTime(before) };
   } catch {
-    // The post-workflow wait still has timestamp fallback when the initial
-    // state snapshot is temporarily unavailable during an FTP replacement.
+    // With no snapshot every published scan id counts as new, which is the safe
+    // direction: the wait can only end early, never hang on a stale comparison.
   }
   const startedAt = new Date().toISOString();
   try {
@@ -4277,11 +4294,13 @@ async function triggerOneTimeMarketScan() {
     }
     state.scrapedScanStatus = "Publishing scan results...";
     renderScrapedScanControls();
-    const refreshed = await waitForScrapedScanPublication(startedAt, previousScanIds);
+    const { state: refreshed, confirmed } = await waitForScrapedScanPublication(baseline);
     if (!storeScrapedMarketState(refreshed, "scraped")) {
       throw new Error("The refreshed scan response did not include scraped opportunities.");
     }
-    state.scrapedScanStatus = publishedScanSummary(refreshed, startedAt, state.scrapedScanTag, previousScanIds);
+    state.scrapedScanStatus = confirmed
+      ? publishedScanSummary(refreshed, startedAt, state.scrapedScanTag, baseline.scanIds)
+      : "Scan completed. Its results are still being published; reload in a moment to see them.";
     if (state.page === "opportunities") renderBotEvaluations();
     else rerenderCurrentDashboard();
   } catch (error) {

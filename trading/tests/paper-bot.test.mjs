@@ -603,3 +603,28 @@ test("fixture: resolved observations carry a preserved live probability", async 
   assert.ok(settled, "one resolved row must already show a settled book");
   assert.equal(settled.lastLiveMarketProbability, 0.96);
 });
+
+test("manual scan: publication is confirmed against the runner, not the browser clock", async () => {
+  // The reported failure: the scan workflow succeeded and its run really was in the
+  // published state (id scan-2026-08-04T20:27:55.054Z, uploaded at 20:28:00), yet the
+  // UI reported the data as unpublished. The old check compared the runner's
+  // timestamps against `new Date()` in the browser, so a clock a few minutes off
+  // rejected a publication that had plainly landed.
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  const fn = app.slice(
+    app.indexOf("function scrapedScanWasPublishedAfter"),
+    app.indexOf("function loadScrapeRunHistory"),
+  );
+  assert.ok(fn.length > 0, "the publication check must exist");
+  assert.doesNotMatch(fn, /startedAt/, "the check must not depend on a browser timestamp");
+  assert.doesNotMatch(fn, /Date\.now\(\)/, "nor on the browser clock at all");
+  assert.match(fn, /baseline\.newestScanTime/, "it compares against the pre-dispatch snapshot");
+
+  // A successful workflow must never be reported as an error just because the
+  // publication was not observed within the wait.
+  assert.match(app, /return \{ state: lastState, confirmed: false \};/);
+  assert.doesNotMatch(app, /its new scraped data has not been published yet/);
+  assert.match(app, /Scan completed\. Its results are still being published/);
+});
