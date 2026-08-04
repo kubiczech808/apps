@@ -145,6 +145,16 @@ jobs:
                           "evaluationRunLog", "calculationReports", "aiUsageLog"):
                   value = state.get(key)
                   summary[f"{key}Count"] = len(value) if isinstance(value, list) else None
+              # The manual-scan UI decides "published" from these two fields, so report
+              # them verbatim to tell a missing publication apart from a failing check.
+              scan = state.get("marketScan") if isinstance(state.get("marketScan"), dict) else {}
+              summary["marketScanLastScanAt"] = scan.get("lastScanAt")
+              summary["marketScanLastTag"] = scan.get("lastTag")
+              history = state.get("marketScanHistory") if isinstance(state.get("marketScanHistory"), list) else []
+              summary["latestScanRuns"] = [
+                  {"id": row.get("id"), "runAt": row.get("runAt"), "tagLabel": row.get("tagLabel")}
+                  for row in history[:5] if isinstance(row, dict)
+              ]
               observations = state.get("marketObservations")
               if isinstance(observations, list):
                   summary["observationStatusCounts"] = status_histogram(observations)
@@ -342,6 +352,12 @@ jobs:
                       f"free={aggregates.get('freeCapitalUsdc')}"
                   )
                   print(f"    fieldCompleteness={portfolio['tradeFieldCompleteness']}")
+          for name, entry in report["files"].items():
+              summary = entry.get("summary") or {}
+              if summary.get("marketScanLastScanAt") or summary.get("latestScanRuns"):
+                  print(f"  {name} marketScan.lastScanAt={summary.get('marketScanLastScanAt')} lastTag={summary.get('marketScanLastTag')}")
+                  for row in summary.get("latestScanRuns") or []:
+                      print(f"    scanRun id={row.get('id')} runAt={row.get('runAt')} tag={row.get('tagLabel')}")
           if report["scanHistory"].get("files"):
               print(f"market-scan-history: {report['scanHistory']['files']}")
           for note in report["notes"]:
