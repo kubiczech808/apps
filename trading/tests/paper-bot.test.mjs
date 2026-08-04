@@ -432,3 +432,30 @@ test("fixture: normalizing the fixture is a no-op for its aggregates", async () 
     );
   }
 });
+
+test("candidates: the precheck column has no WAITING state", async () => {
+  // The precheck column is informational. Execution revalidates every shortlisted
+  // candidate from scratch and the shortlist is dispatched without consulting the
+  // column, so a retryable verdict from a previous run is not a gate. Guarding the
+  // vocabulary here keeps WAITING from silently returning as a pseudo-state.
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  const precheckLine = app.split("\n").find((line) => line.includes("const precheck ="));
+  assert.ok(precheckLine, "the precheck label assignment must exist");
+  assert.match(precheckLine, /"EXCLUDED"/);
+  assert.match(precheckLine, /"RISK-BLOCKED"/);
+  assert.match(precheckLine, /"READY"/);
+  assert.doesNotMatch(precheckLine, /WAITING/, "a retryable verdict must not render as its own precheck state");
+
+  // The retention rule must survive: a temporary block keeps the row in the
+  // shortlist so the next run can retry it, while a permanent failure drops it.
+  assert.ok(
+    app.includes("!executionCheck.retryable"),
+    "retryable revalidation verdicts must still keep the candidate in the shortlist",
+  );
+
+  // The dispatched shortlist must not be filtered by the precheck column.
+  const payload = app.slice(app.indexOf("function liveWorkflowPayload"), app.indexOf("async function fetchFreshState"));
+  assert.doesNotMatch(payload, /precheck|retryable|RISK-BLOCKED/, "the shortlist dispatch must not depend on precheck state");
+});

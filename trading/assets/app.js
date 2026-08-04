@@ -4900,26 +4900,30 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
         ${visibleRows.slice(0, 80).map((item, index) => {
           const excluded = Boolean(item.manuallyExcluded);
           const riskBlockedRow = Boolean(item.portfolioRiskBlockReason);
-          const retryableExecution = item.executionRevalidation?.retryable === true;
+          // A retryable verdict from the previous run is not a precheck state of
+          // its own. Every execution revalidates each shortlisted candidate from
+          // scratch, and the shortlist is dispatched without consulting this
+          // column, so a past temporary capital or diversification block says
+          // nothing about whether the row can trade now. It used to render as
+          // WAITING, which read like a gate that does not exist. The reason the
+          // previous run did not take it stays visible in the run log.
           const status = excluded
             ? "excluded manually for this portfolio"
             : (riskBlockedRow
             ? "excluded by diversification rules"
-            : (retryableExecution
-              ? (item.executionRevalidation.retryClass === "CAPITAL" ? "waiting for free capital; retry on the next execution" : "waiting for diversification capacity; retry on the next execution")
-              : (!live
+            : (!live
               ? "ready for next paper execution"
               : (usesPolymarketPotential
                 ? "will verify live quote, fees and ranking"
-                : "will verify live quote against stored AI assessment"))));
-          const precheck = excluded ? "EXCLUDED" : (riskBlockedRow ? "RISK-BLOCKED" : (retryableExecution ? "WAITING" : "READY"));
+                : "will verify live quote against stored AI assessment")));
+          const precheck = excluded ? "EXCLUDED" : (riskBlockedRow ? "RISK-BLOCKED" : "READY");
           const selectedProbability = portfolioProbability(item, config);
           const selectedAnnualizedReturn = portfolioAnnualizedReturn(item, config);
           const selectedExpectedValue = portfolioExpectedValue(item, config);
           return `
             <tr>
               <td data-label="#">${index + 1}</td>
-              <td data-label="Precheck" class="${excluded ? "negative" : (riskBlockedRow || retryableExecution ? "warning" : "positive")}">
+              <td data-label="Precheck" class="${excluded ? "negative" : (riskBlockedRow ? "warning" : "positive")}">
                 <strong>${precheck}</strong>
                 <span>${escapeHtml(status)}</span>
                 <label class="candidate-exclusion-control" title="Exclude this candidate from this portfolio's future executions">
