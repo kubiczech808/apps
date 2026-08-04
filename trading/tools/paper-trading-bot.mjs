@@ -93,7 +93,14 @@ const MARKET_SCAN_MIN_RESOLUTION_MINUTES = envNumber(
 const MARKET_SCAN_MIN_RESOLUTION_HOURS = MARKET_SCAN_MIN_RESOLUTION_MINUTES / 60;
 // A market expiring in a few minutes is real, but multiplying that outcome by
 // hundreds of hypothetical intraday repeats makes p.a. unusable for ranking.
-const MIN_ANNUALIZATION_DAYS = Math.max(1, envNumber("PAPER_MIN_ANNUALIZATION_DAYS", 1));
+// One hour, not one day. The strategy deliberately targets markets resolving the
+// same day or already running, so a one-day floor made every one of them report an
+// identical potential p.a. and the ranking could not tell a live event from one
+// twelve hours out. Annualizing to the hour keeps that ordering precise instead of
+// idling capital for a day. Sub-hour horizons still share the floor, which is what
+// stops a 0.0 day denominator from running away.
+const ONE_HOUR_IN_DAYS = 1 / 24;
+const MIN_ANNUALIZATION_DAYS = Math.max(ONE_HOUR_IN_DAYS, envNumber("PAPER_MIN_ANNUALIZATION_DAYS", ONE_HOUR_IN_DAYS));
 const MARKET_SCAN_TAG = String(process.env.PAPER_MARKET_SCAN_TAG || "").trim().toLowerCase();
 // These are Polymarket's broad navigation tags plus active geopolitical
 // subcategories. Every scheduled catalogue scan walks every page of every

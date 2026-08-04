@@ -109,9 +109,11 @@ const MIN_RISK_ALLOCATION = 0.01;
 const MAX_RISK_ALLOCATION = 0.5;
 const DEFAULT_MAX_RESOLUTION_DAYS = 7;
 // Annualizing a few minutes as if the trade could be repeated continuously is
-// misleading. Keep the actual horizon visible, but use a conservative one-day
-// floor for every potential p.a. comparison.
-const MIN_ANNUALIZATION_DAYS = 1;
+// misleading, so potential p.a. is floored. The floor is one hour rather than one
+// day: the strategy targets markets resolving the same day or already running, and
+// a one-day floor gave all of them the same p.a., so the ranking could not prefer a
+// live event over one still hours away. Keep the actual horizon visible beside it.
+const MIN_ANNUALIZATION_DAYS = 1 / 24;
 const LIVE_STATE_REFRESH_MS = 15000;
 const LIVE_SYNC_REQUEST_MS = 30000;
 const USER_NAV_REFRESH_DEBOUNCE_MS = 250;
@@ -162,7 +164,7 @@ const els = {
   evaluationProbabilityFilterLabel: document.querySelector("[data-evaluation-probability-filter-label]"),
   evaluationDaysFilter: document.querySelector("[data-evaluation-days-filter]"),
   evaluationDaysFilterLabel: document.querySelector("[data-evaluation-days-filter-label]"),
-  evaluationDaysControls: document.querySelectorAll("[data-evaluation-days-control]"),
+  tradabilityFilterControls: document.querySelectorAll("[data-tradability-filter]"),
   evaluationNetYieldFilter: document.querySelector("[data-evaluation-net-yield-filter]"),
   evaluationNetYieldFilterLabel: document.querySelector("[data-evaluation-net-yield-filter-label]"),
   evaluationLiquidityFilter: document.querySelector("[data-evaluation-liquidity-filter]"),
@@ -904,11 +906,11 @@ function syncOpportunityViewControls() {
   els.opportunityFilterControls.forEach((element) => {
     element.hidden = scanLog;
   });
-  // A resolved market has no remaining horizon, so a "days left max" filter can
-  // only ever hide the whole tab. Hide the control there instead of letting it
-  // silently empty the list.
-  els.evaluationDaysControls.forEach((element) => {
-    element.hidden = scanLog || daysFilterIsIrrelevant();
+  // Days left, net yield and liquidity all describe whether a market can be traded
+  // now. On the Resolved tab they can only ever empty the list, so hide them there
+  // instead of letting a leftover value silently blank the whole tab.
+  els.tradabilityFilterControls.forEach((element) => {
+    element.hidden = scanLog || tradabilityFiltersAreIrrelevant();
   });
   const scrapedCounts = scraped ? scrapedOpportunityStatusCounts() : null;
   els.evaluationStatusButtons.forEach((button) => {
@@ -5727,9 +5729,9 @@ function scrapedDisplayProbability(item) {
   return preserved == null ? current : preserved;
 }
 
-// The Resolved tab lists markets whose horizon is already behind them, so the
-// days-left filter has nothing to select on there.
-function daysFilterIsIrrelevant() {
+// The Resolved tab lists markets that no longer trade, so every tradability filter
+// has nothing left to select on there.
+function tradabilityFiltersAreIrrelevant() {
   return state.opportunityView === "scraped" && state.evaluationStatus === "RESOLVED";
 }
 
@@ -5854,14 +5856,13 @@ function renderScrapedOpportunities() {
   const filtered = statusFiltered.filter((item) => {
     const marketProbability = Number(scrapedDisplayProbability(item));
     if (probabilityFilter > 0 && (!Number.isFinite(marketProbability) || marketProbability < probabilityFilter)) return false;
-    // A resolved market is past its horizon, so neither a missing "days left" nor
-    // a days ceiling may exclude it. Applying either would empty the Resolved tab.
-    const resolved = scrapedObservationStatus(item) === "RESOLVED";
-    if (!resolved) {
-      const days = evaluationDaysLeft(item);
-      if (!Number.isFinite(days)) return false;
-      if (daysFilter != null && days > daysFilter) return false;
-    }
+    // A resolved market no longer trades, so the tradability filters must not apply
+    // to it. A missing "days left", a days ceiling, a stale net yield or a collapsed
+    // post-settlement liquidity would each empty the Resolved tab on their own.
+    if (scrapedObservationStatus(item) === "RESOLVED") return true;
+    const days = evaluationDaysLeft(item);
+    if (!Number.isFinite(days)) return false;
+    if (daysFilter != null && days > daysFilter) return false;
     const yieldValue = netYield(item);
     if (minNetYield > 0 && (!Number.isFinite(yieldValue) || yieldValue < minNetYield)) return false;
     const liquidity = Number(item.liquidity);

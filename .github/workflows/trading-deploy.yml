@@ -48,6 +48,37 @@ jobs:
           Path("trading/config.php").write_text(body, encoding="utf-8")
           PY
 
+      - name: Stamp asset cache-busting versions
+        # index.html referenced assets/app.js?v=<hand-written tag>. Forgetting to bump
+        # that tag ships the new file but leaves every browser on the cached old one,
+        # which looks exactly like the change not working. Stamping the commit SHA here
+        # makes the query string change whenever the asset does, so it can no longer be
+        # forgotten. Applied to the uploaded copy only; the file in git keeps its tag.
+        env:
+          ASSET_VERSION: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = (os.environ.get("ASSET_VERSION") or "")[:12] or "dev"
+          page = Path("trading/index.html")
+          html = page.read_text(encoding="utf-8")
+          stamped, count = re.subn(
+              r'(href|src)="(assets/[^"?]+)(?:\?v=[^"]*)?"',
+              lambda m: f'{m.group(1)}="{m.group(2)}?v={version}"',
+              html,
+          )
+          if count == 0:
+              raise SystemExit("No asset references found in trading/index.html; refusing to deploy an unstamped page.")
+          page.write_text(stamped, encoding="utf-8")
+          print(f"Stamped {count} asset reference(s) with v={version}")
+          for line in stamped.splitlines():
+              if "assets/" in line and "?v=" in line:
+                  print(f"  {line.strip()}")
+          PY
+
       - name: Upload to hosting
         env:
           HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}

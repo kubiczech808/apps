@@ -3,7 +3,7 @@
 // because the bot reads them from the environment at import time.
 process.env.PAPER_PORTFOLIO_USDC = "100";
 process.env.PAPER_MAX_FRACTION = "0.05";
-process.env.PAPER_MIN_ANNUALIZATION_DAYS = "1";
+process.env.PAPER_MIN_ANNUALIZATION_DAYS = String(1 / 24);
 process.env.PAPER_FULL_CADENCE_MINUTES = "55";
 process.env.PAPER_REPORT_CADENCE_MINUTES = "55";
 
@@ -44,16 +44,29 @@ test("economics: stake sizing uses the deposit, never the potential win", () => 
   assert.equal(bot.totalCost({ potentialWinUsdc: 5 }), 0);
 });
 
-test("economics: a 0.0 day horizon cannot produce a millions-of-percent P.A.", () => {
-  assert.equal(bot.annualizationDays(0), 1, "the horizon is floored at one day");
-  assert.equal(bot.annualizationDays(0.0001), 1);
+test("economics: a 0.0 day horizon is floored at one hour, not left unbounded", () => {
+  const hour = 1 / 24;
+  assert.equal(bot.annualizationDays(0), hour, "the horizon is floored at one hour");
+  assert.equal(bot.annualizationDays(0.0001), hour);
   assert.equal(bot.annualizationDays(7), 7);
   assert.equal(bot.annualizationDays("nonsense"), null);
 
   const potential = bot.annualizedPotentialReturn(0.01, 0);
-  assert.equal(potential, 0.01 * 365, "1% over a floored single day is 365%, not unbounded");
-  assert.ok(Number.isFinite(potential));
-  assert.ok(potential < 100, "a 1% yield must never annualize past 10000%");
+  assert.equal(potential, 0.01 * (365 / hour));
+  assert.ok(Number.isFinite(potential), "a zero horizon must never divide by zero");
+});
+
+test("economics: same-day horizons rank apart instead of collapsing", () => {
+  // The reason the floor moved from a day to an hour: the strategy targets markets
+  // resolving today or already running, and a one-day floor gave every one of them
+  // the same potential p.a., so a live event could not outrank one hours away.
+  const netYield = 0.111121;
+  const pa = (days) => bot.annualizedPotentialReturn(netYield, days);
+
+  assert.ok(pa(0.1) > pa(0.3), "a market two hours out must outrank one seven hours out");
+  assert.ok(pa(0.3) > pa(0.5), "and that ordering must hold across the whole day");
+  assert.ok(pa(0.02) === pa(0.04), "below one hour they still share the floor");
+  assert.equal(pa(1 / 24), netYield * 365 * 24, "one hour is the first horizon reported directly");
 });
 
 test("economics: potential P.A. scales with the remaining horizon", () => {
@@ -460,33 +473,25 @@ test("candidates: the precheck column has no WAITING state", async () => {
   assert.doesNotMatch(payload, /precheck|retryable|RISK-BLOCKED/, "the shortlist dispatch must not depend on precheck state");
 });
 
-test("annualization: sub-cycle horizons collapse to one p.a. by design", () => {
-  // Reproduces the reported shortlist exactly: six candidates at 11.1% net yield
-  // resolving in 0.1 to 0.5 days all reported +4,055.9% p.a. That is the 1 day
-  // floor, not an arithmetic error -- 0.111121 * 365 = 40.559.
+test("annualization: the reported shortlist figures came from the old one-day floor", () => {
+  // Kept as the record of the diagnosis: 0.111121 * 365 / 1 day = 4,055.9%, which is
+  // why six candidates between 0.1 and 0.5 days all reported the same number. With
+  // the one-hour floor those same rows now differ.
   const netYield = 0.111121;
-  const pa = (days) => Number((bot.annualizedPotentialReturn(netYield, days) * 100).toFixed(1));
+  const oldFloorPa = (days) => Number((netYield * 365 / Math.max(1, days) * 100).toFixed(1));
+  assert.equal(oldFloorPa(0.1), 4055.9);
+  assert.equal(oldFloorPa(0.5), 4055.9);
 
-  assert.equal(pa(0.05), 4055.9);
-  assert.equal(pa(0.1), 4055.9);
-  assert.equal(pa(0.3), 4055.9);
-  assert.equal(pa(0.5), 4055.9);
-  assert.equal(pa(1), 4055.9, "one day is the floor, so it is the first horizon reported honestly");
-
-  // The second reported row: 9.9% net yield under a day.
-  assert.equal(Number((bot.annualizedPotentialReturn(0.0989, 0.05) * 100).toFixed(1)), 3609.9);
-
-  // Beyond the floor the metric does discriminate.
-  assert.ok(pa(2) < pa(1), "a two day horizon must report a lower p.a. than a one day one");
-  assert.equal(pa(2), Number((netYield * 365 / 2 * 100).toFixed(1)));
+  const now = (days) => Number((bot.annualizedPotentialReturn(netYield, days) * 100).toFixed(1));
+  assert.notEqual(now(0.1), now(0.5), "the same two rows must no longer tie");
+  assert.ok(now(0.1) > now(0.5));
 });
 
 test("annualization: the floor is what keeps a 0.0 day horizon finite", () => {
-  assert.equal(bot.annualizationDays(0), 1);
+  assert.equal(bot.annualizationDays(0), 1 / 24);
   const withFloor = bot.annualizedPotentialReturn(0.111121, 0);
-  assert.ok(Number.isFinite(withFloor));
-  // Without a floor this is what the same row would report, which is why the cap exists.
-  assert.equal(Math.round(0.111121 * 365 / 0.05 * 100), 81118, "the same row would report 81,118% without the floor");
+  assert.ok(Number.isFinite(withFloor), "a zero horizon must stay finite");
+  assert.equal(withFloor, 0.111121 * 365 * 24, "a zero horizon reports the one-hour figure");
 });
 
 test("annualization: the floor is identical in the bot, the executor and the UI", async () => {
@@ -498,12 +503,13 @@ test("annualization: the floor is identical in the bot, the executor and the UI"
     readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
   ]);
 
-  assert.equal(bot.annualizationDays(0.3), 1, "bot floor is one day");
-  assert.match(app, /const MIN_ANNUALIZATION_DAYS = 1;/, "UI floor must stay one day");
+  assert.equal(bot.annualizationDays(0.3), 0.3, "a horizon above the floor is used as-is");
+  assert.equal(bot.annualizationDays(0), 1 / 24, "bot floor is one hour");
+  assert.match(app, /const MIN_ANNUALIZATION_DAYS = 1 \/ 24;/, "UI floor must stay one hour");
   assert.match(
     executor,
-    /MIN_ANNUALIZATION_DAYS = Math\.max\(1, envNumber\("LIVE_MIN_ANNUALIZATION_DAYS", 1\)\)/,
-    "executor floor must stay one day and must never fall below it",
+    /MIN_ANNUALIZATION_DAYS = Math\.max\(ONE_HOUR_IN_DAYS, envNumber\("LIVE_MIN_ANNUALIZATION_DAYS", ONE_HOUR_IN_DAYS\)\)/,
+    "executor floor must stay one hour and must never fall below it",
   );
 
   // The UI must annualize with the same formula, otherwise the displayed ranking
@@ -558,10 +564,23 @@ test("resolved observations: the scraped view surfaces them without a days filte
     assert.ok(api.includes(field), `compact_market_observation must keep ${field}`);
   }
 
-  // The days ceiling must not apply to a resolved row, and the control is hidden there.
-  assert.match(app, /const resolved = scrapedObservationStatus\(item\) === "RESOLVED";/);
-  assert.match(app, /function daysFilterIsIrrelevant/);
-  assert.match(app, /element\.hidden = scanLog \|\| daysFilterIsIrrelevant\(\);/);
+  // No tradability filter may apply to a resolved row, and all of them are hidden there.
+  assert.match(app, /if \(scrapedObservationStatus\(item\) === "RESOLVED"\) return true;/);
+  assert.match(app, /function tradabilityFiltersAreIrrelevant/);
+  assert.match(app, /element\.hidden = scanLog \|\| tradabilityFiltersAreIrrelevant\(\);/);
+  // The markup must mark every one of them, or a leftover value silently empties the tab.
+  const marked = (await readFile(new URL("../index.html", import.meta.url), "utf8"))
+    .split("\n").filter((line) => line.includes("data-tradability-filter"));
+  assert.equal(marked.length, 3, "days left, net yield and liquidity must all be marked");
+  for (const needle of ["evaluation-days-control", "evaluation-net-yield-control", "evaluation-liquidity-control"]) {
+    assert.ok(marked.some((line) => line.includes(needle)), `${needle} must be a tradability filter`);
+  }
+
+  // The asset cache-busting version must be stamped at deploy time. A hand-written
+  // tag that nobody bumps ships new JS that every browser ignores.
+  const deploy = await readFile(new URL("../../.github/workflows/trading-deploy.yml", import.meta.url), "utf8");
+  assert.match(deploy, /Stamp asset cache-busting versions/);
+  assert.match(deploy, /ASSET_VERSION: \$\{\{ github\.sha \}\}/);
   // The displayed probability goes through the preserving helper.
   assert.match(app, /function scrapedDisplayProbability/);
   assert.match(app, /probability\(Number\(scrapedDisplayProbability\(item\)\)\)/);

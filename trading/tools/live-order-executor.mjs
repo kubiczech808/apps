@@ -30,7 +30,11 @@ const MIN_ANNUAL_RETURN = envNumber("LIVE_MIN_ANNUAL_RETURN", envNumber("PAPER_M
 // Use a conservative one-day floor for p.a. comparisons. A short-lived
 // market can still be selected, but a few remaining minutes must not dominate
 // every candidate solely through annualization.
-const MIN_ANNUALIZATION_DAYS = Math.max(1, envNumber("LIVE_MIN_ANNUALIZATION_DAYS", 1));
+// One hour, matching the paper bot and the UI. See the note there: a one-day floor
+// flattened every same-day and live market to one potential p.a., so the shortlist
+// could not rank a running event ahead of one later in the day.
+const ONE_HOUR_IN_DAYS = 1 / 24;
+const MIN_ANNUALIZATION_DAYS = Math.max(ONE_HOUR_IN_DAYS, envNumber("LIVE_MIN_ANNUALIZATION_DAYS", ONE_HOUR_IN_DAYS));
 const OPPORTUNITY_MIN_PROBABILITY = envNumber("LIVE_OPPORTUNITY_MIN_PROBABILITY", envNumber("PAPER_OPPORTUNITY_MIN_PROBABILITY", 0.6));
 const OPPORTUNITY_MIN_EDGE = envNumber("LIVE_OPPORTUNITY_MIN_EDGE", envNumber("PAPER_OPPORTUNITY_MIN_EDGE", 0.04));
 const OPPORTUNITY_MIN_ANNUAL_RETURN = envNumber("LIVE_OPPORTUNITY_MIN_ANNUAL_RETURN", envNumber("PAPER_OPPORTUNITY_MIN_ANNUAL_RETURN", 0.3));
