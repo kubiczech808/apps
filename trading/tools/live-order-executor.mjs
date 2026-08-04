@@ -98,6 +98,12 @@ const ROTATION_NEAR_MAX_WIN_GAP = Math.max(
   0,
   envNumber("LIVE_ROTATION_NEAR_MAX_WIN_GAP", 0.01),
 );
+// The exchange minimum is a market property, not a fixed dollar amount: `mos` shares
+// cost price * mos, so 5 shares are $4.95 at 0.99 but $2.50 at 0.50. When the
+// portfolio percentage lands below that, the stake is raised to exactly the market's
+// minimum rather than refusing to trade. This ceiling stops an unusual `mos` from
+// dragging the stake somewhere the portfolio never agreed to.
+const MIN_ORDER_STAKE_CEILING_USDC = Math.max(0, envNumber("LIVE_MIN_ORDER_STAKE_CEILING_USDC", 10));
 const ROTATION_TIE_EPSILON = 0.000001;
 const LIVE_AUTO_ROTATE = String(process.env.LIVE_AUTO_ROTATE ?? "true").toLowerCase() !== "false";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
@@ -1692,9 +1698,6 @@ function orderPriceForBook(book, tick) {
 function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 }) {
   const targetStake = Math.max(0, number(maxNotional, 0));
   const availableCash = Math.max(0, number(cash, 0));
-  // The portfolio percentage caps the cash committed, not the potential payout.
-  // For taker orders, reserve the estimated fee inside that cap as well.
-  const usableStake = Math.min(targetStake, availableCash);
   const appliedFeeRate = USE_LIMIT_ORDERS && POST_ONLY ? 0 : Math.max(0, number(feeRate, 0));
   const costPerShare = price * (1 + appliedFeeRate * (1 - price));
   const minNotional = price * minOrderSize;
@@ -1702,8 +1705,23 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 })
   const minimumOrderCost = minNotional + minimumOrderFee;
   const cashBelowExchangeMinimum = minimumOrderCost > 0
     && availableCash + 0.000001 < minimumOrderCost;
+  // Derived from this market, not configured: exactly what `mos` shares cost at the
+  // current price including the taker fee at that size. Applied only when free cash
+  // actually covers it, so a genuine cash shortfall still goes to rotation review,
+  // and only up to the ceiling, so an unusual `mos` cannot run away with the stake.
+  const stakeFloorUsdc = minimumOrderCost > 0 && minimumOrderCost <= MIN_ORDER_STAKE_CEILING_USDC
+    ? minimumOrderCost
+    : 0;
+  const stakeFloorApplied = stakeFloorUsdc > 0
+    && targetStake + 0.000001 < stakeFloorUsdc
+    && availableCash + 0.000001 >= stakeFloorUsdc;
+  const effectiveStake = stakeFloorApplied ? stakeFloorUsdc : targetStake;
+  // The portfolio percentage caps the cash committed, not the potential payout.
+  // For taker orders, reserve the estimated fee inside that cap as well.
+  const usableStake = Math.min(effectiveStake, availableCash);
   const stakeCapBelowExchangeMinimum = minimumOrderCost > 0
     && !cashBelowExchangeMinimum
+    && !stakeFloorApplied
     && targetStake + 0.000001 < minimumOrderCost;
   let size = costPerShare > 0
     ? Math.floor((usableStake / costPerShare) * 10000) / 10000
@@ -1721,6 +1739,10 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 })
   return {
     size: size > 0 ? Number(size.toFixed(4)) : null,
     targetStake,
+    effectiveStake,
+    stakeFloorUsdc,
+    stakeFloorApplied,
+    stakeFloorCeilingUsdc: MIN_ORDER_STAKE_CEILING_USDC,
     availableCash,
     usableStake,
     minNotional,
@@ -1739,9 +1761,11 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 })
       ? "no available cash for a positive stake"
       : (belowExchangeMinimum
         ? `sized to the available ${usableStake.toFixed(4)} USDC stake (below the displayed ${minOrderSize.toFixed(4)}-share exchange minimum; submission will verify acceptance)`
-        : (usableStake < targetStake
-          ? "sized from available cash below the configured portfolio stake"
-          : "sized from the configured portfolio stake")),
+        : (stakeFloorApplied
+          ? `raised from the configured ${targetStake.toFixed(4)} USDC stake to this market's ${stakeFloorUsdc.toFixed(4)} USDC minimum (${minOrderSize.toFixed(4)} shares at ${price.toFixed(4)}), which free cash covers`
+          : (usableStake < targetStake
+            ? "sized from available cash below the configured portfolio stake"
+            : "sized from the configured portfolio stake"))),
   };
 }
 
@@ -1803,7 +1827,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     const reason = orderSizing.cashBelowExchangeMinimum
       ? "no available cash for a new order; rotation may release capital"
       : (orderSizing.stakeCapBelowExchangeMinimum
-        ? "Polymarket minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above this portfolio's max per trade " + targetStake.toFixed(4) + " USDC; " + availableCash.toFixed(4) + " USDC remains free, so rotation is not needed"
+        ? "Polymarket minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above this portfolio's max per trade " + targetStake.toFixed(4) + " USDC and above the " + Number(orderSizing.stakeFloorCeilingUsdc || 0).toFixed(2) + " USDC stake-floor ceiling, so the stake was not raised to meet it; " + availableCash.toFixed(4) + " USDC remains free, so rotation is not needed"
         : (orderSizing.makerPrecisionBlocked
           ? "configured stake would produce a sub-cent maker amount; changing the stake or order mode is required"
           : (minimumCost > 0
@@ -3363,6 +3387,8 @@ if (invokedDirectly) {
 
 // Exported for tests only.
 export {
+  MIN_ORDER_STAKE_CEILING_USDC,
   ROTATION_PROTECT_REMAINING_GAIN_USDC,
   positionRotationEconomics,
+  sharesForOrder,
 };

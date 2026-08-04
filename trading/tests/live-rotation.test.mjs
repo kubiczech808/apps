@@ -178,3 +178,78 @@ test("rotation: a replacement that resolves later is refused", async () => {
   assert.match(source, /const positionRemainingDays = number\(economics\.rawRemainingDays\);/);
   assert.ok(source.includes("selling now would forfeit a nearer payout for a more distant one"));
 });
+
+// --- Market-derived minimum order stake -------------------------------------------
+// The exchange minimum is `mos` shares, not a fixed dollar amount, so its cost moves
+// with the price. These pin that the stake is raised to exactly the market's own
+// minimum when the portfolio percentage lands below it.
+
+const sizing = (options) => executor.sharesForOrder({
+  price: 0.9,
+  minOrderSize: 5,
+  maxNotional: 15,
+  cash: 100,
+  feeRate: 0,
+  ...options,
+});
+
+test("order sizing: the exchange minimum is priced from the market, not fixed at $5", () => {
+  assert.ok(Math.abs(sizing({ price: 0.99 }).minimumOrderCost - 4.95) < 1e-9);
+  assert.ok(Math.abs(sizing({ price: 0.9 }).minimumOrderCost - 4.5) < 1e-9);
+  assert.ok(Math.abs(sizing({ price: 0.5 }).minimumOrderCost - 2.5) < 1e-9);
+  // A larger mos scales it too, which is why a ceiling exists.
+  assert.ok(Math.abs(sizing({ price: 0.9, minOrderSize: 10 }).minimumOrderCost - 9) < 1e-9);
+});
+
+test("order sizing: a stake cap below the market minimum is raised to it", () => {
+  // Previously this refused to trade with "max per trade is below Polymarket's
+  // exchange minimum" while free cash was sufficient.
+  const result = sizing({ price: 0.9, maxNotional: 1.5, cash: 100 });
+  assert.equal(result.stakeFloorApplied, true);
+  assert.ok(Math.abs(result.effectiveStake - 4.5) < 1e-9, `expected 4.5, got ${result.effectiveStake}`);
+  assert.equal(result.stakeCapBelowExchangeMinimum, false, "the cap must no longer block the order");
+  assert.equal(result.minimumFundingBlocked, false);
+  assert.ok(result.size >= 5, `the order must reach the ${5}-share minimum, got ${result.size}`);
+  assert.match(result.sizingNote, /raised from the configured 1\.5000 USDC stake to this market's 4\.5000 USDC minimum/);
+});
+
+test("order sizing: the floor never exceeds free cash", () => {
+  // A real cash shortfall must still go to rotation review rather than being papered
+  // over by the floor.
+  const result = sizing({ price: 0.9, maxNotional: 1.5, cash: 2 });
+  assert.equal(result.stakeFloorApplied, false);
+  assert.equal(result.cashBelowExchangeMinimum, true);
+  assert.equal(result.minimumFundingBlocked, true);
+});
+
+test("order sizing: the floor is capped so an unusual mos cannot run away", () => {
+  // 200 shares at 0.9 would demand a 180 USDC stake. The ceiling refuses that and the
+  // order is reported as blocked by the cap instead of silently oversizing.
+  const result = sizing({ price: 0.9, minOrderSize: 200, maxNotional: 15, cash: 1000 });
+  assert.ok(result.minimumOrderCost > executor.MIN_ORDER_STAKE_CEILING_USDC);
+  assert.equal(result.stakeFloorApplied, false);
+  assert.equal(result.stakeCapBelowExchangeMinimum, true);
+});
+
+test("order sizing: a sufficient stake cap is left exactly as configured", () => {
+  const result = sizing({ price: 0.9, maxNotional: 15, cash: 100 });
+  assert.equal(result.stakeFloorApplied, false);
+  assert.equal(result.effectiveStake, 15, "the percentage cap stays authoritative when it can be met");
+  assert.match(result.sizingNote, /sized from the configured portfolio stake/);
+});
+
+test("order sizing: a post-only limit order reserves no taker fee in the minimum", () => {
+  // Default mode is post-only limit, which pays the maker side and therefore
+  // deliberately reserves no taker fee. The market minimum is then exactly
+  // price * mos, and passing a fee rate must not inflate it.
+  const withFeeRate = executor.sharesForOrder({
+    price: 0.9, minOrderSize: 5, maxNotional: 1, cash: 100, feeRate: 0.02,
+  });
+  assert.ok(Math.abs(withFeeRate.minimumOrderCost - 4.5) < 1e-9,
+    `post-only must not reserve a taker fee, got ${withFeeRate.minimumOrderCost}`);
+
+  // The floor still lifts the stake to that minimum.
+  assert.equal(withFeeRate.stakeFloorApplied, true);
+  assert.ok(withFeeRate.effectiveStake >= withFeeRate.minimumOrderCost - 1e-9);
+  assert.ok(withFeeRate.size >= 5, `the order must reach the minimum size, got ${withFeeRate.size}`);
+});
