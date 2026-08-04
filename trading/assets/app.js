@@ -6628,6 +6628,10 @@ function liveRunLogRows() {
   if (executionRun) rows.unshift(executionRun);
   return mergeUniqueByRun(rows)
     .filter((row) => !isCadenceWaitRun(row))
+    // Recovery rows only prove that an old GitHub workflow existed. They do
+    // not contain a preserved trading decision, so showing them as portfolio
+    // runs is misleading and provides no actionable audit detail.
+    .filter((row) => !isHistoryRecoveryRun(row))
     .slice(0, 120);
 }
 
@@ -6636,6 +6640,11 @@ function isCadenceWaitRun(row = {}) {
   const action = String(row.action || batch.action || "").toUpperCase();
   const reason = String(row.reason || batch.reason || "");
   return action === "CADENCE_WAIT" || /cadence poll is not due|polling skipped: no live execution review is due/i.test(reason);
+}
+
+function isHistoryRecoveryRun(row = {}) {
+  const batch = row.batchLog || row;
+  return String(row.action || batch.action || "").toUpperCase() === "HISTORY_RECOVERED";
 }
 
 function mergeUniqueByRun(rows = []) {
