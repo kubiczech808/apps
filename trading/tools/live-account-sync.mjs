@@ -1440,9 +1440,24 @@ async function discoverTradingAccount(sync) {
       }
     }
 
+    const proxyWallet = String(profile?.proxyWallet || "").toLowerCase();
+    const isDepositWallet = proxyWallet === address;
+    // CLOB balance queries can return the same collateral balance for several
+    // signature types. For a discovered deposit wallet the order signer must
+    // nevertheless be POLY_1271; choosing the first equal-balance row here
+    // caused intermittent invalid-signature SELL orders during rotations.
+    const signaturePreference = (item) => {
+      if (isDepositWallet && item.signatureType === 3) return 30;
+      if (address === signerAddress && item.signatureType === 0) return 20;
+      if (address === CONFIGURED_FUNDER_ADDRESS && item.signatureType === SIGNATURE_TYPE) return 10;
+      return 0;
+    };
     const bestClob = clobChecks
       .filter((item) => item.status === "OK")
-      .sort((a, b) => b.balanceUsdc - a.balanceUsdc)[0] || null;
+      .sort((a, b) => (
+        b.balanceUsdc - a.balanceUsdc
+        || signaturePreference(b) - signaturePreference(a)
+      ))[0] || null;
     candidates.push({
       address,
       roles: [

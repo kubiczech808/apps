@@ -1977,6 +1977,23 @@ async function submitOrder(order) {
   };
   const side = String(order.side || "BUY").toUpperCase() === "SELL" ? Side.SELL : Side.BUY;
   const forceTaker = Boolean(order.forceTaker) || String(order.orderType || "").toUpperCase() === "FAK";
+  // A rotation exit must consume the best bid immediately, but it still needs
+  // the normal V2 limit-order signature. `createMarketOrder` has a separate
+  // payload builder; using the standard FAK path keeps the POLY_1271 wrapper
+  // identical to the order shape verified by the CLOB.
+  if (side === Side.SELL && forceTaker) {
+    return client.createAndPostOrder(
+      {
+        tokenID: order.tokenId,
+        price: order.orderPrice,
+        size: order.orderSize,
+        side,
+      },
+      options,
+      OrderType.FAK,
+      false,
+    );
+  }
   if (!USE_LIMIT_ORDERS || forceTaker) {
     const marketOrder = await client.createMarketOrder(
       {
@@ -2060,7 +2077,9 @@ async function buildRotationExitOrder(position, evaluationByToken, tradingConfig
   const source = positionSourceEvaluation(position, evaluationByToken) || {};
   const book = bestBook(await fetchJson(new URL(`/book?token_id=${tokenId}`, CLOB_HOST), `CLOB rotation exit book ${tokenId}`));
   if (book.bestBid == null || book.bestBid <= 0) throw new Error("rotation exit has no executable bid in the order book");
-  const clobMarket = await fetchClobMarket(position.market || position.conditionId || source.conditionId).catch(() => null);
+  // `conditionId` is the documented key of /clob-markets. `market` is an
+  // account-data fallback and can be absent or refer to an older identifier.
+  const clobMarket = await fetchClobMarket(position.conditionId || source.conditionId || position.market).catch(() => null);
   const tickSize = number(clobMarket?.mts ?? source.tickSize, 0.01);
   const orderPrice = roundToTick(book.bestBid, tickSize, "down");
   return {
@@ -3125,7 +3144,6 @@ async function main() {
         ...(exitOrder ? [orderAttemptSummary(exitOrder, response, { action, replacementCandidate: rotation.candidate })] : []),
       ],
     });
-    if (!accepted && !DRY_RUN && hasFlag("confirm-live")) process.exit(1);
     return;
   }
 
