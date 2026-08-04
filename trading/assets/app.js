@@ -1686,8 +1686,20 @@ function decoratePendingLiveAnnualization(trades = []) {
   });
 }
 
+// Polymarket's own date for the market. Deliberately never falls back to
+// closedTime or resolvedAt: those are when we exited or booked the result, and
+// using them made every closed row repeat its own Closed timestamp in the
+// Resolution column. Horizon maths keeps using tradeEndDate, which may fall back.
+function tradeResolutionDate(trade) {
+  for (const value of [trade?.endDate, trade?.resolutionEndDate, trade?.scheduledEventDate]) {
+    if (Number.isFinite(Date.parse(value || ""))) return value;
+  }
+  return null;
+}
+
 function resolutionCell(trade) {
   const endDate = tradeEndDate(trade);
+  const resolutionDate = tradeResolutionDate(trade);
   const remaining = isClosedTrade(trade) ? null : daysUntil(endDate);
   const storedDays = Number(trade.daysToResolution);
   const awaitingSettlement = !isClosedTrade(trade)
@@ -1698,9 +1710,9 @@ function resolutionCell(trade) {
   const inferred = inferredDateFromQuestion(trade);
   const inferredNote = inferred && trade.endDate && Date.parse(inferred) > Date.parse(trade.endDate) ? "from question" : "";
   return `
-    ${escapeHtml(endDate ? formatDate(endDate) : "-")}
+    ${escapeHtml(resolutionDate ? formatDate(resolutionDate) : "-")}
     <span>${isClosedTrade(trade)
-      ? "resolved"
+      ? (resolutionDate ? "Polymarket resolution" : "no Polymarket date")
       : (awaitingSettlement
         ? `awaiting settlement, ${compactDays(days)} calc horizon`
         : `${compactDays(days)} left${inferredNote ? `, ${inferredNote}` : ""}`)}</span>

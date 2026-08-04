@@ -628,3 +628,26 @@ test("manual scan: publication is confirmed against the runner, not the browser 
   assert.doesNotMatch(app, /its new scraped data has not been published yet/);
   assert.match(app, /Scan completed\. Its results are still being published/);
 });
+
+test("closed trades: the Resolution column shows Polymarket's date, not our close time", async () => {
+  // Reported bug: every closed live row repeated its own Closed timestamp in the
+  // Resolution column, because the date accessor fell back to closedTime and then
+  // resolvedAt whenever Polymarket's endDate was absent.
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  const accessor = app.slice(
+    app.indexOf("function tradeResolutionDate"),
+    app.indexOf("function resolutionCell"),
+  );
+  assert.ok(accessor.length > 0, "a dedicated Polymarket-date accessor must exist");
+  assert.doesNotMatch(accessor, /closedTime/, "the resolution date must never come from our close time");
+  assert.doesNotMatch(accessor, /resolvedAt/, "nor from when we booked the result");
+  assert.match(accessor, /trade\?\.endDate/, "it reads Polymarket's end date");
+
+  // The cell must render that accessor, not the fallback-bearing one.
+  const cell = app.slice(app.indexOf("function resolutionCell"), app.indexOf("function holdingCell"));
+  assert.match(cell, /escapeHtml\(resolutionDate \? formatDate\(resolutionDate\) : "-"\)/);
+  // The horizon maths keeps its own fallback, so days-left behaviour is untouched.
+  assert.match(cell, /const endDate = tradeEndDate\(trade\);/);
+});
