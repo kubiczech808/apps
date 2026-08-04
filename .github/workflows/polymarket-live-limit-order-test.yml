@@ -210,6 +210,7 @@ jobs:
           LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
           LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
           LIVE_RUN_LOG_RECOVER: "false"
+          LIVE_CONFIRMED_MANUAL_RUN_IDS: "30846520601,30885038395"
         run: node tools/restore-live-execution-history.mjs
 
       - name: Verify current market and maybe submit live order

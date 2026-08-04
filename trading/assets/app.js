@@ -3912,6 +3912,7 @@ function liveWorkflowPayload() {
     min_probability: config.minProbability,
     max_order_fraction: config.maxOrderFraction,
     use_limit_orders: config.useLimitOrders,
+    manual_run_once: true,
     live_run_source: "MANUAL",
     live_execution_candidate_token_ids: shortlistTokenIds.join(","),
     live_execution_probability_source: normalizeProbabilitySource(config.probabilitySource),
@@ -6644,7 +6645,12 @@ function isCadenceWaitRun(row = {}) {
 
 function isHistoryRecoveryRun(row = {}) {
   const batch = row.batchLog || row;
-  return String(row.action || batch.action || "").toUpperCase() === "HISTORY_RECOVERED";
+  const action = String(row.action || batch.action || "").trim().toUpperCase();
+  const id = String(row.id || batch.id || "");
+  return action === "HISTORY_RECOVERED"
+    || row.historicalRecovery === true
+    || batch.historicalRecovery === true
+    || id.startsWith("github-live-history-");
 }
 
 function mergeUniqueByRun(rows = []) {

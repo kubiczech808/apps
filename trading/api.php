@@ -1541,6 +1541,10 @@ try {
         $liveShortlistTokenIds = normalized_live_shortlist_token_ids_input($payload['live_execution_candidate_token_ids'] ?? null);
         $liveShortlistProbabilitySource = normalized_probability_source_input($payload['live_execution_probability_source'] ?? null);
         $manualRunOnce = normalized_bool_input($payload['manual_run_once'] ?? $payload['manualRunOnce'] ?? null);
+        $requestedLiveRunSource = strtoupper(trim((string) ($payload['live_run_source'] ?? $payload['liveRunSource'] ?? '')));
+        if ($targetKey === 'live' && $requestedLiveRunSource === 'MANUAL') {
+            $manualRunOnce = true;
+        }
         if ($targetKey === 'live' && $manualRunOnce === true && ($liveShortlistTokenIds === null || $liveShortlistProbabilitySource === null)) {
             respond(['ok' => false, 'error' => 'Manual live execution requires a current execution shortlist and its probability source. Refresh the shortlist before running.'], 400);
         }

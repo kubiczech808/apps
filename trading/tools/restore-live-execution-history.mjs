@@ -19,10 +19,20 @@ function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+function isHistoryRecoveryPlaceholder(row) {
+  const action = String(row?.action || row?.batchLog?.action || "").trim().toUpperCase();
+  const id = String(row?.id || row?.batchLog?.id || "");
+  return action === "HISTORY_RECOVERED"
+    || row?.historicalRecovery === true
+    || row?.batchLog?.historicalRecovery === true
+    || id.startsWith("github-live-history-");
+}
+
 function normalizedRunLog(rows) {
   const seen = new Set();
   return (Array.isArray(rows) ? rows : [])
     .filter((row) => row && typeof row === "object")
+    .filter((row) => !isHistoryRecoveryPlaceholder(row))
     .filter((row) => {
       const key = row.id || `${row.workflowRunId || ""}:${row.runAt || row.generatedAt || ""}:${row.action || ""}`;
       if (!key || seen.has(key)) return false;
@@ -79,27 +89,11 @@ async function restoreHistoricalRows(payload) {
           workflowUrl: run.html_url,
         };
       }
-      const manuallyConfirmed = confirmedManualRunIds.has(String(run.id));
-      const source = manuallyConfirmed ? "MANUAL" : (run.event === "schedule" ? "AUTO" : "RECOVERED");
-      return {
-        id: `github-live-history-${run.id}`,
-        workflowRunId: run.id,
-        workflowUrl: run.html_url,
-        runAt: run.updated_at || run.created_at,
-        generatedAt: run.updated_at || run.created_at,
-        strategyId: "live",
-        strategyLabel: "Live",
-        runSource: source,
-        manualRunOnce: manuallyConfirmed,
-        action: "HISTORY_RECOVERED",
-        reason: `Historical GitHub Actions run completed with ${run.conclusion}.`,
-        explanation: run.event === "workflow_dispatch"
-          ? "The previous detailed decision payload was overwritten. Its dispatch source is not recoverable from GitHub's run metadata."
-          : "The previous detailed decision payload was overwritten; this scheduled execution was recovered from GitHub Actions metadata.",
-        historicalRecovery: true,
-        sourceVerifiedByUser: manuallyConfirmed,
-      };
-    });
+      // GitHub exposes the run result but not the detailed portfolio decision.
+      // Do not invent a partial record: it is less useful than no row at all.
+      return null;
+    })
+    .filter(Boolean);
 
   return {
     ...payload,
