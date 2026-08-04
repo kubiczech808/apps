@@ -1648,6 +1648,11 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 })
   const minNotional = price * minOrderSize;
   const minimumOrderFee = appliedFeeRate > 0 ? takerFee(minOrderSize, price, appliedFeeRate) : 0;
   const minimumOrderCost = minNotional + minimumOrderFee;
+  const cashBelowExchangeMinimum = minimumOrderCost > 0
+    && availableCash + 0.000001 < minimumOrderCost;
+  const stakeCapBelowExchangeMinimum = minimumOrderCost > 0
+    && !cashBelowExchangeMinimum
+    && targetStake + 0.000001 < minimumOrderCost;
   let size = costPerShare > 0
     ? Math.floor((usableStake / costPerShare) * 10000) / 10000
     : 0;
@@ -1671,10 +1676,12 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 })
     orderNotional,
     makerPrecisionBlocked,
     // `mos` is an exchange acceptance requirement, not merely a display
-    // hint. Do not submit an under-sized maker order and discover the problem
-    // only after Polymarket rejects it; let the capital-rotation path decide
-    // whether releasing a weaker order or position is worthwhile.
-    minimumFundingBlocked: availableCash <= 0.000001 || makerPrecisionBlocked || belowExchangeMinimum,
+    // hint. Only a genuine free-cash shortfall can justify rotating another
+    // order or position; a configured stake cap must never be misreported as
+    // unavailable cash.
+    minimumFundingBlocked: cashBelowExchangeMinimum || stakeCapBelowExchangeMinimum || makerPrecisionBlocked || belowExchangeMinimum,
+    cashBelowExchangeMinimum,
+    stakeCapBelowExchangeMinimum,
     minSizeOverride: belowExchangeMinimum,
     sizingNote: size <= 0
       ? "no available cash for a positive stake"
@@ -1735,17 +1742,26 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   if (!Number.isFinite(size) || orderSizing.minimumFundingBlocked) {
     const minimumCost = Number(orderSizing.minimumOrderCost || orderSizing.minNotional || 0);
     const availableCash = Number(orderSizing.availableCash || 0);
-    const reason = availableCash <= 0.000001
+    const targetStake = Number(orderSizing.targetStake || 0);
+    const executionBlocker = orderSizing.cashBelowExchangeMinimum
+      ? "CASH"
+      : (orderSizing.stakeCapBelowExchangeMinimum
+        ? "STAKE_CAP"
+        : (orderSizing.makerPrecisionBlocked ? "MAKER_PRECISION" : "ORDER_SIZE"));
+    const reason = orderSizing.cashBelowExchangeMinimum
       ? "no available cash for a new order; rotation may release capital"
-      : (orderSizing.makerPrecisionBlocked
-        ? "available cash would produce a sub-cent maker amount; rotation may release capital"
-        : (minimumCost > 0
-          ? "minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above available cash " + availableCash.toFixed(4) + " USDC; rotation may release capital"
-          : orderSizing.sizingNote));
+      : (orderSizing.stakeCapBelowExchangeMinimum
+        ? "Polymarket minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above this portfolio's max per trade " + targetStake.toFixed(4) + " USDC; " + availableCash.toFixed(4) + " USDC remains free, so rotation is not needed"
+        : (orderSizing.makerPrecisionBlocked
+          ? "configured stake would produce a sub-cent maker amount; changing the stake or order mode is required"
+          : (minimumCost > 0
+            ? "minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above the current executable stake"
+            : orderSizing.sizingNote)));
     return {
       candidate: evaluation,
       eligible: false,
       rejectReasons: [reason],
+      executionBlocker,
       currentPrice: price,
       minOrderSize,
       minOrderNotionalUsdc: Number(minimumCost.toFixed(5)),
@@ -2736,14 +2752,15 @@ async function main() {
   const eligible = HAS_MANUAL_SHORTLIST && !manualShortlistFallback
     ? allEligible
     : sortLiveEligibleCandidates(allEligible);
-  const capitalSizingBlocked = checked.filter((item) => (item.rejectReasons || []).some((reason) => /no available cash|sub-cent maker amount|above cash|insufficient.*(?:cash|USDC)|minimum order .* costs/i.test(String(reason || ""))));
+  const cashSizingBlocked = checked.filter((item) => item.executionBlocker === "CASH");
+  const stakeCapBlockedCandidates = checked.filter((item) => item.executionBlocker === "STAKE_CAP");
+  const makerPrecisionBlockedCandidates = checked.filter((item) => item.executionBlocker === "MAKER_PRECISION");
   const riskBlockedCandidates = checked.filter((item) => (item.rejectReasons || [])
     .some((reason) => /^(correlated live exposure|duplicate token already open)/i.test(String(reason || ""))));
-  // A small remainder of cash is useful only if it can fund a valid exchange
-  // order. If it cannot satisfy Polymarket's minimum size, assess a genuine
-  // rotation instead of silently treating reserved order money as available.
+  // A rotation is justified only for a genuine free-cash shortfall. A minimum
+  // order above the configured stake cap cannot be fixed by freeing more cash.
   const hasUsableFreeCash = availableCash > 0.01;
-  const needsCapitalRotation = !eligible.length && capitalSizingBlocked.length > 0;
+  const needsCapitalRotation = !eligible.length && cashSizingBlocked.length > 0;
   const needsRiskReplacement = !eligible.length && !needsCapitalRotation && riskBlockedCandidates.length > 0;
   const rotationReview = !eligible.length && (needsCapitalRotation || needsRiskReplacement)
     ? await reviewPositionRotation({
@@ -2824,9 +2841,11 @@ async function main() {
         ? "best currently revalidated executable candidate"
         : (rotationAvailable
             ? "cash is insufficient for a new direct order; a sell-and-replace rotation candidate was identified"
-            : (capitalSizingBlocked.length
-                ? `live candidates blocked by available USDC: ${capitalSizingBlocked.length} cannot meet the current Polymarket minimum order size`
-                : "no currently executable candidate after live revalidation"))));
+            : (cashSizingBlocked.length
+                ? `live candidates blocked by available USDC: ${cashSizingBlocked.length} cannot meet the current Polymarket minimum order size`
+                : (stakeCapBlockedCandidates.length
+                  ? `free cash is sufficient, but ${stakeCapBlockedCandidates.length} live candidate${stakeCapBlockedCandidates.length === 1 ? " is" : "s are"} below Polymarket's minimum order size at the configured max per trade`
+                  : "no currently executable candidate after live revalidation")))));
   const actionExplanation = canceledForBetterCandidate
     ? "The waiting order released its own locked capital only after a better candidate passed the portfolio comparison. The replacement is submitted in this same batch; if submission fails, the original order is restored."
     : directCapitalPriority
@@ -2841,9 +2860,11 @@ async function main() {
       ? "Live batch found an executable candidate after revalidation."
       : (rotationAvailable
             ? "No live order was submitted because opening the better candidate would first require selling an existing live position; this run records the rotation review but does not perform the sell/rebuy sequence automatically."
-            : (capitalSizingBlocked.length
+            : (cashSizingBlocked.length
                 ? "No live order was submitted because available USDC cannot cover the exchange minimum size for the revalidated candidate(s)."
-                : "No live order was submitted because all revalidated candidates failed current execution criteria."))));
+                : (stakeCapBlockedCandidates.length
+                  ? "No live order was submitted because the configured max per trade is below Polymarket's exchange minimum. Free cash was sufficient, so no order or position was rotated."
+                  : "No live order was submitted because all revalidated candidates failed current execution criteria.")))));
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
     action: best ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
@@ -2897,7 +2918,9 @@ async function main() {
       scannedCandidates: baseCandidates.length,
       revalidatedCandidates: checked.length,
       eligibleCandidates: allEligible.length,
-      capitalSizingBlockedCandidates: capitalSizingBlocked.length,
+      capitalSizingBlockedCandidates: cashSizingBlocked.length,
+      stakeCapBlockedCandidates: stakeCapBlockedCandidates.length,
+      makerPrecisionBlockedCandidates: makerPrecisionBlockedCandidates.length,
       openOrderReviewAfterHours: OPEN_ORDER_REVIEW_AFTER_HOURS,
       openOrderCancelAfterHours: OPEN_ORDER_CANCEL_AFTER_HOURS,
       openOrderRepriceThreshold: OPEN_ORDER_REPRICE_THRESHOLD,
@@ -2955,8 +2978,9 @@ async function main() {
         portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
         targetStakeUsdc: maxNotional,
         requiredStakeUsdc: Number(appliedDirectStake.toFixed(5)),
-        insufficientCapital: !best && (!Number.isFinite(maxNotional) || maxNotional <= 0 || capitalSizingBlocked.length > 0),
-        capitalSizingBlockedCandidates: capitalSizingBlocked.length,
+        insufficientCapital: !best && (!Number.isFinite(maxNotional) || maxNotional <= 0 || cashSizingBlocked.length > 0),
+        capitalSizingBlockedCandidates: cashSizingBlocked.length,
+        stakeCapBlockedCandidates: stakeCapBlockedCandidates.length,
       },
       counts: {
         storedEvaluations: rawEvaluations.length,
@@ -2967,7 +2991,9 @@ async function main() {
         scannedCandidates: baseCandidates.length,
         revalidatedCandidates: checked.length,
         eligibleCandidates: allEligible.length,
-        capitalSizingBlockedCandidates: capitalSizingBlocked.length,
+        capitalSizingBlockedCandidates: cashSizingBlocked.length,
+        stakeCapBlockedCandidates: stakeCapBlockedCandidates.length,
+        makerPrecisionBlockedCandidates: makerPrecisionBlockedCandidates.length,
         rankedEligibleCandidates: eligible.length,
         openOrdersReviewed: orderManagement.reviews.length,
         positionsReviewedForRotation: rotationReview?.reviews?.length || 0,
