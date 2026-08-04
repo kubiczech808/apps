@@ -125,13 +125,14 @@ on:
         default: ""
         type: string
   schedule:
-    # Keep the public scraped catalogue fresh independently of the slower AI
-    # and portfolio execution pass below.
+    # These three entries are only delivery attempts, not modes. GitHub delays and
+    # drops scheduled ticks heavily, so the bot resolves what to do from the
+    # cadence it stored in paper-state.json: portfolio execution when the last full
+    # pass is older than PAPER_FULL_CADENCE_MINUTES, otherwise the report when that
+    # is due, otherwise a catalogue-only scan. More entries simply mean more
+    # chances that an overdue pass gets picked up.
     - cron: '*/10 * * * *'
-    # Full grounded analysis and paper-trade decisions run once per hour.
     - cron: '7 * * * *'
-    # The scraped-opportunity parameter report is refreshed independently
-    # from AI evaluation and trade execution once per hour.
     - cron: '17 * * * *'
 
 concurrency:
@@ -225,9 +226,16 @@ jobs:
       PAPER_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'after_scrape' || 'cron' }}
       PAPER_MANUAL_RUN_ONCE: ${{ github.event_name == 'workflow_dispatch' && inputs.manual_run_once == 'true' && 'true' || 'false' }}
       PAPER_STRATEGY_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_strategy_id || '' }}
-      PAPER_REPORT_ONLY: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 * * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'report') }}
+      PAPER_REPORT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'report' }}
       PAPER_REFRESH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' }}
-      PAPER_SCAN_ONLY: ${{ github.event_name == 'schedule' && github.event.schedule == '*/10 * * * *' && 'true' || 'false' }}
+      PAPER_SCAN_ONLY: "false"
+      # Scheduled ticks pick their own mode from the cadence stored in state.
+      # Binding portfolio execution to a single cron expression starved it: GitHub
+      # drops most scheduled ticks, and `7 * * * *` is one tick out of eight per
+      # hour, so the portfolios stood still while the `*/10` scans kept running.
+      PAPER_SCHEDULED_CADENCE: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
+      PAPER_FULL_CADENCE_MINUTES: "55"
+      PAPER_REPORT_CADENCE_MINUTES: "55"
       PAPER_REFRESH_MARKET_SLUG: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' && inputs.paper_strategy_id || '' }}
       PAPER_CONTINUOUS_EVALUATION: "true"
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET || secrets.GEMINI_API_KEY }}
@@ -468,7 +476,9 @@ jobs:
           PY
 
       - name: Dispatch post-scrape execution
-        if: github.event_name == 'schedule' && github.event.schedule == '*/10 * * * *' && success()
+        # Every scheduled tick refreshes the scraped catalogue now, so the trigger
+        # is "a scheduled scrape finished" rather than one specific cron entry.
+        if: github.event_name == 'schedule' && success()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}

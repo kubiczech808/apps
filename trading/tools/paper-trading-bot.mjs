@@ -156,6 +156,19 @@ const REPORT_ONLY = String(process.env.PAPER_REPORT_ONLY || "").toLowerCase() ==
 const SCAN_ONLY = envBool("PAPER_SCAN_ONLY", false);
 const EXECUTION_ONLY = envBool("PAPER_EXECUTION_ONLY", false);
 const COMPACT_ONLY = envBool("PAPER_COMPACT_ONLY", false);
+// GitHub Actions drops most scheduled ticks under load, so binding a mode to one
+// cron expression starves whatever that expression owns. Portfolio execution used
+// to run only on the hourly `7 * * * *` tick, which is a single tick out of eight
+// per hour; the surviving `*/10` scans kept refreshing the catalogue while the
+// portfolios stood still. Scheduled runs now resolve their own mode from the
+// cadence stored in state, so whichever tick arrives performs the overdue work.
+const SCHEDULED_CADENCE = envBool("PAPER_SCHEDULED_CADENCE", false);
+const FULL_CADENCE_MINUTES = envNumber("PAPER_FULL_CADENCE_MINUTES", 55);
+const REPORT_CADENCE_MINUTES = envNumber("PAPER_REPORT_CADENCE_MINUTES", 55);
+// Effective modes. A scheduled run overrides these from the stored cadence; a
+// manual dispatch keeps exactly the mode it asked for.
+let scanOnly = SCAN_ONLY;
+let reportOnly = REPORT_ONLY;
 const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
 const EVALUATION_ONLY = envBool("PAPER_EVALUATION_ONLY", false);
 const EVALUATION_TOKEN_ID = String(process.env.PAPER_EVALUATION_TOKEN_ID || "").trim();
@@ -445,6 +458,7 @@ function normalizeState(input) {
   return {
     schemaVersion: 2,
     generatedAt: input.generatedAt || null,
+    cadence: normalizeCadence(input.cadence),
     paperPortfolios,
     portfolio: paperPortfolios.conservative.portfolio,
     trades: paperPortfolios.conservative.trades,
@@ -1461,6 +1475,75 @@ function retainPaperTrades(trades = []) {
   ].sort((a, b) => tradeUpdateTime(b) - tradeUpdateTime(a));
 }
 
+function isoOrNull(value) {
+  const time = Date.parse(String(value || ""));
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+}
+
+function normalizeCadence(input = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  return {
+    lastRunAt: isoOrNull(source.lastRunAt),
+    lastScanAt: isoOrNull(source.lastScanAt),
+    lastReportAt: isoOrNull(source.lastReportAt),
+    lastFullAt: isoOrNull(source.lastFullAt),
+    lastStage: typeof source.lastStage === "string" && source.lastStage ? source.lastStage : null,
+  };
+}
+
+function mergeCadence(primary, secondary) {
+  const a = normalizeCadence(primary);
+  const b = normalizeCadence(secondary);
+  const later = (left, right) => {
+    if (!left) return right;
+    if (!right) return left;
+    return Date.parse(left) >= Date.parse(right) ? left : right;
+  };
+  const lastRunAt = later(a.lastRunAt, b.lastRunAt);
+  return {
+    lastRunAt,
+    lastScanAt: later(a.lastScanAt, b.lastScanAt),
+    lastReportAt: later(a.lastReportAt, b.lastReportAt),
+    lastFullAt: later(a.lastFullAt, b.lastFullAt),
+    lastStage: lastRunAt && lastRunAt === a.lastRunAt ? a.lastStage : b.lastStage,
+  };
+}
+
+function minutesSinceIso(value, now = Date.now()) {
+  const time = Date.parse(String(value || ""));
+  if (!Number.isFinite(time)) return Infinity;
+  return (now - time) / 60000;
+}
+
+// A full pass also recalculates the report, and every pass refreshes the scraped
+// catalogue, so satisfying a later stage implicitly satisfies the earlier ones.
+function markCadenceStage(state, stage) {
+  const at = state.generatedAt || nowIso();
+  const cadence = normalizeCadence(state.cadence);
+  cadence.lastRunAt = at;
+  cadence.lastStage = stage;
+  cadence.lastScanAt = at;
+  if (stage === "report" || stage === "full") cadence.lastReportAt = at;
+  if (stage === "full") cadence.lastFullAt = at;
+  state.cadence = cadence;
+  return state;
+}
+
+// Decide what a scheduled tick should do. Overdue portfolio execution always wins
+// over a report, and a report wins over another catalogue-only scan.
+function resolveScheduledCadence(state) {
+  const cadence = normalizeCadence(state.cadence);
+  const fullAgeMinutes = minutesSinceIso(cadence.lastFullAt);
+  if (fullAgeMinutes >= FULL_CADENCE_MINUTES) {
+    return { stage: "full", scanOnly: false, reportOnly: false, fullAgeMinutes };
+  }
+  const reportAgeMinutes = minutesSinceIso(cadence.lastReportAt);
+  if (reportAgeMinutes >= REPORT_CADENCE_MINUTES) {
+    return { stage: "report", scanOnly: false, reportOnly: true, fullAgeMinutes, reportAgeMinutes };
+  }
+  return { stage: "scan", scanOnly: true, reportOnly: false, fullAgeMinutes, reportAgeMinutes };
+}
+
 function mergeStates(primary, secondary) {
   const base = stateTime(primary) >= stateTime(secondary) ? primary : secondary;
   const other = base === primary ? secondary : primary;
@@ -1480,6 +1563,9 @@ function mergeStates(primary, secondary) {
       .slice(0, CALCULATION_REPORT_HISTORY_LIMIT),
   };
   merged.latestCalculationReport = merged.calculationReports?.[0] || base.latestCalculationReport || other.latestCalculationReport || null;
+  // Keep the furthest-advanced cadence from either side. A stale repository
+  // snapshot must never move a cadence clock backwards and re-trigger a pass.
+  merged.cadence = mergeCadence(base.cadence, other.cadence);
   merged.paperPortfolios = {};
   for (const strategy of Object.values(PAPER_STRATEGIES)) {
     const basePortfolio = base.paperPortfolios?.[strategy.id] || normalizePaperPortfolio(strategy, {});
@@ -6640,7 +6726,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
     selectedHorizonDays: decision.trade?.daysToResolution ?? null,
     riskSkippedCount: decision.skippedForRisk || 0,
     refreshOnly: REFRESH_ONLY,
-    reportOnly: REPORT_ONLY,
+    reportOnly,
     learningSampleSize: state.learningProfile.sampleSize,
     brierScore: state.learningProfile.brierScore,
     calibrationBias: state.learningProfile.calibrationBias,
@@ -6665,7 +6751,7 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
       insufficientCapital: Boolean(decision.insufficientCapital),
       riskSkippedCount: decision.skippedForRisk || 0,
       refreshOnly: REFRESH_ONLY,
-      reportOnly: REPORT_ONLY,
+      reportOnly,
       learningSampleSize: state.learningProfile.sampleSize,
       brierScore: state.learningProfile.brierScore,
     },
@@ -6685,7 +6771,7 @@ function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
       id: `evaluation-run-${state.generatedAt}`,
       runAt: state.generatedAt,
       refreshOnly: REFRESH_ONLY,
-      reportOnly: REPORT_ONLY,
+      reportOnly,
       evaluatedCount: evaluations.length,
       eligibleCount: eligible.length,
       rejectedCount: evaluations.filter((item) => String(item.status || "").toUpperCase() === "REJECTED").length,
@@ -6877,12 +6963,27 @@ async function run() {
   }));
   await rm(SCAN_HISTORY_ENTRY_PATH, { force: true }).catch(() => {});
   const state = await readState();
+  if (SCHEDULED_CADENCE && !COMPACT_ONLY && !REFRESH_ONLY && !EXECUTION_ONLY && !EVALUATION_ONLY) {
+    const cadence = resolveScheduledCadence(state);
+    scanOnly = cadence.scanOnly;
+    reportOnly = cadence.reportOnly;
+    console.log(JSON.stringify({
+      action: "SCHEDULED_CADENCE",
+      resolvedStage: cadence.stage,
+      reason: `scheduled tick resolved to ${cadence.stage} from the stored cadence instead of the cron expression`,
+      lastFullAt: normalizeCadence(state.cadence).lastFullAt,
+      lastReportAt: normalizeCadence(state.cadence).lastReportAt,
+      fullAgeMinutes: Number.isFinite(cadence.fullAgeMinutes) ? Number(cadence.fullAgeMinutes.toFixed(1)) : null,
+      fullCadenceMinutes: FULL_CADENCE_MINUTES,
+      reportCadenceMinutes: REPORT_CADENCE_MINUTES,
+    }));
+  }
   const priorScanRunIds = new Set((state.marketScanHistory || [])
     .map((item) => String(item?.id || item?.runAt || ""))
     .filter(Boolean));
   syncLegacyPaperAliases(state);
   state.aiUsage = aiUsageSnapshot(state);
-  state.evaluations = (SCAN_ONLY
+  state.evaluations = (scanOnly
     ? expirePastEvaluations(state.evaluations || [])
     : await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || [])))
     .map(normalizeAiPendingEvaluation)
@@ -6919,14 +7020,15 @@ async function run() {
       };
     }
   }
-  if (!SCAN_ONLY) {
+  if (!scanOnly) {
     state.marketObservations = await refreshStoredMarketObservationResolutionStatuses(state.marketObservations || []);
   }
 
-  if (SCAN_ONLY) {
+  if (scanOnly) {
     state.generatedAt = nowIso();
     updatePortfolio(state);
     updateCalculationReport(state);
+    markCadenceStage(state, "scan");
     await writeState(state);
     console.log(JSON.stringify({
       action: "MARKET_SCAN",
@@ -6943,7 +7045,7 @@ async function run() {
   // execution. This scheduled path still refreshes the scraped catalogue
   // above, then recalculates the report without spending Gemini quota or
   // changing any portfolio positions.
-  if (REPORT_ONLY) {
+  if (reportOnly) {
     state.generatedAt = nowIso();
     updateCalculationReport(state);
     const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
@@ -6956,6 +7058,7 @@ async function run() {
       eligible: [],
       evaluations: [],
     });
+    markCadenceStage(state, "report");
     await writeState(state);
     console.log(JSON.stringify({
       action: "REPORT",
@@ -6978,6 +7081,12 @@ async function run() {
   state.generatedAt = nowIso();
   updatePortfolio(state);
   updateCalculationReport(state);
+  // Trades were refreshed and the report recalculated, so this tick has done the
+  // full portfolio pass. Mark it before the narrower manual modes below, which
+  // must not move the scheduled cadence clocks.
+  if (!REFRESH_ONLY && !EXECUTION_ONLY && !EVALUATION_ONLY) {
+    markCadenceStage(state, "full");
+  }
 
   if (REFRESH_ONLY) {
     const decisions = Object.values(state.paperPortfolios).map((portfolioState) => ({
