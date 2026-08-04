@@ -1577,6 +1577,16 @@ function averageRiskReward(items, mapper) {
 }
 
 function tradePotentialAnnualized(trade) {
+  const storedPendingReference = Number(trade.pendingResolutionAnnualizedReference);
+  const resolutionTime = Date.parse(tradeEndDate(trade) || "");
+  const resolutionPast = Number.isFinite(resolutionTime) && resolutionTime <= Date.now();
+  // The scheduled end has passed, so a one-day annualization would be made
+  // up. The live rotation ledger supplies the weakest still-measurable open
+  // Win P.A. as a conservative reference for comparing settlement-pending
+  // positions by their genuinely remaining nominal gain.
+  if (!isClosedTrade(trade) && resolutionPast && Number.isFinite(storedPendingReference)) {
+    return storedPendingReference;
+  }
   if (!isClosedTrade(trade)) {
     const shares = Number(trade.shares ?? trade.size);
     const explicitValue = Number(trade.currentValueUsdc ?? trade.marketValueUsdc ?? trade.valueUsdc);
@@ -1620,6 +1630,27 @@ function tradePotentialAnnualized(trade) {
       ? storedDays
       : (awaitingSettlement ? MIN_ANNUALIZATION_DAYS : totalPlannedDays));
   return annualizedForPeriod(gainPct, fallbackHorizon);
+}
+
+function decoratePendingLiveAnnualization(trades = []) {
+  const currentOpenReturns = trades
+    .filter((trade) => trade.mode === "LIVE" && !isClosedTrade(trade))
+    .filter((trade) => {
+      const end = Date.parse(tradeEndDate(trade) || "");
+      return !Number.isFinite(end) || end > Date.now();
+    })
+    .map((trade) => tradePotentialAnnualized(trade))
+    .filter(Number.isFinite);
+  const reference = currentOpenReturns.length ? Math.min(...currentOpenReturns) : 0;
+  return trades.map((trade) => {
+    const end = Date.parse(tradeEndDate(trade) || "");
+    const resolutionPast = Number.isFinite(end) && end <= Date.now();
+    if (trade.mode !== "LIVE" || isClosedTrade(trade) || !resolutionPast) return trade;
+    return {
+      ...trade,
+      pendingResolutionAnnualizedReference: reference,
+    };
+  });
 }
 
 function resolutionCell(trade) {
@@ -5347,10 +5378,10 @@ function renderLiveState(liveState) {
   const positions = livePositions(liveState).map(decorateLiveTradeForTable);
   const openOrders = liveOpenOrders(liveState);
   const openOrderRows = openOrders.map(normalizeLiveOpenOrderForTable);
-  const openedRows = [
+  const openedRows = decoratePendingLiveAnnualization([
     ...positions,
     ...openOrderRows,
-  ];
+  ]);
   const activity = liveActivity(liveState);
   const closedTrades = liveClosedTrades(liveState).map(decorateLiveTradeForTable);
   const portfolioRiskReward = averageRiskReward([...openedRows, ...closedTrades], tradeRiskReward);
@@ -6400,6 +6431,7 @@ function tradeBatchDetail(batch) {
           `   Estimated exit: ${money(Number(rotationReview.best.position.estimatedExitValueUsdc || 0))} / current P/L ${signedMoney(Number(rotationReview.best.position.unrealizedPnlUsdc || 0), 4)}`,
           rotationReview.best.position.estimatedExitFeeUsdc != null ? `   Estimated exit fee: ${money(Number(rotationReview.best.position.estimatedExitFeeUsdc))} / net P/L if exited: ${signedMoney(Number(rotationReview.best.position.realizedPnlIfExitUsdc || 0), 4)}` : "",
           rotationReview.best.position.rotationPriorityValue != null ? `   Rotation priority (${rotationReview.best.position.rotationPriorityMetric || "EV p.a."}): ${rotationReview.best.position.rotationPriorityMetric === "R/R" ? `${Number(rotationReview.best.position.rotationPriorityValue).toFixed(2)}:1` : signedPercent(Number(rotationReview.best.position.rotationPriorityValue))}` : "",
+          rotationReview.best.position.usesPendingResolutionReference ? `   Pending settlement reference: ${signedPercent(Number(rotationReview.best.position.pendingResolutionReferenceAnnualizedReturn || 0))}; remaining potential gain ${signedMoney(Number(rotationReview.best.position.remainingPotentialGainUsdc || 0), 4)}` : "",
           rotationReview.best.position.url ? `   Polymarket: ${rotationReview.best.position.url}` : "",
         ].filter(Boolean).join("\n") : "",
         rotationReview.best?.candidate ? [
@@ -6416,6 +6448,7 @@ function tradeBatchDetail(batch) {
             return [
               `${index + 1}. ${position.outcome || item.outcome || "-"} - ${position.question || item.question || "-"}`,
               position.rotationPriorityValue != null ? `   Rotation priority (${position.rotationPriorityMetric || "EV p.a."}): ${position.rotationPriorityMetric === "R/R" ? `${Number(position.rotationPriorityValue).toFixed(2)}:1` : signedPercent(Number(position.rotationPriorityValue))}` : "",
+              position.usesPendingResolutionReference ? `   Settlement-pending reference: ${signedPercent(Number(position.pendingResolutionReferenceAnnualizedReturn || 0))}; remaining potential gain ${signedMoney(Number(position.remainingPotentialGainUsdc || 0), 4)}` : "",
               position.estimatedExitFeeUsdc != null ? `   Net P/L if exited now: ${signedMoney(Number(position.realizedPnlIfExitUsdc || 0), 4)} after estimated ${money(Number(position.estimatedExitFeeUsdc))} exit fee` : "",
               `   Action: ${item.action || "-"}`,
               `   Reason: ${item.reason || "-"}`,
@@ -6442,7 +6475,10 @@ function tradeBatchDetail(batch) {
           : "no executable replacement";
         const improvement = item.metricDelta == null ? "" : `; improvement ${formatMetric(item.metricDelta)} (minimum ${formatMetric(Number(item.minimumImprovement || 0))})`;
         const result = item.expectedValueDeltaUsdc == null ? "" : `; expected P/L delta ${signedMoney(Number(item.expectedValueDeltaUsdc), 4)}`;
-        return `${index + 1}. ${item.kind === "order" ? "Order" : "Position"}: ${currentText} -> ${candidateText}${improvement}${result}; ${item.action || "reviewed"}`;
+        const pendingReference = current.usesPendingResolutionReference
+          ? `; pending-settlement reference ${formatMetric(current.pendingResolutionReferenceAnnualizedReturn)}, remaining potential gain ${signedMoney(Number(current.remainingPotentialGainUsdc || 0), 4)}`
+          : "";
+        return `${index + 1}. ${item.kind === "order" ? "Order" : "Position"}: ${currentText} -> ${candidateText}${improvement}${result}${pendingReference}; ${item.action || "reviewed"}`;
       }).join("\n")
     : "-";
 

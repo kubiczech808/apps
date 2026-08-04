@@ -89,6 +89,7 @@ const ROTATION_NO_DAYS_MAX_WIN_GAP_USDC = Math.max(
   0,
   envNumber("LIVE_ROTATION_NO_DAYS_MAX_WIN_GAP_USDC", 0.01),
 );
+const ROTATION_TIE_EPSILON = 0.000001;
 const LIVE_AUTO_ROTATE = String(process.env.LIVE_AUTO_ROTATE ?? "true").toLowerCase() !== "false";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
 let previousExecutionState = null;
@@ -1068,7 +1069,14 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
   const winPnlGapPct = winPnlGapUsdc != null && cost != null && cost > 0
     ? winPnlGapUsdc / cost
     : null;
-  const resolutionDueOrUnknown = !Number.isFinite(endTime) || endTime <= Date.now();
+  // Unlike the absolute gap used for the "safe to close" check below, this
+  // keeps the direction. It answers the rotation question directly: how much
+  // profit can this position still add if it is held to a winning settlement?
+  const remainingPotentialGainUsdc = currentSellPnl != null && maximumWinPnl != null
+    ? maximumWinPnl - currentSellPnl
+    : null;
+  const resolutionPast = Number.isFinite(endTime) && endTime <= Date.now();
+  const resolutionDueOrUnknown = !Number.isFinite(endTime) || resolutionPast;
   const nearMaximumWin = (winPnlGapUsdc != null && winPnlGapUsdc <= ROTATION_NO_DAYS_MAX_WIN_GAP_USDC)
     || (winPnlGapPct != null && winPnlGapPct <= ROTATION_NO_DAYS_MAX_WIN_GAP);
   const noDaysLeft = resolutionDueOrUnknown;
@@ -1094,6 +1102,8 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
     maximumWinPnl,
     winPnlGapUsdc,
     winPnlGapPct,
+    remainingPotentialGainUsdc,
+    resolutionPast,
     noDaysLeft,
     immediateCloseCandidate,
   };
@@ -1138,11 +1148,58 @@ function positionHoldRiskReward(position, evaluationByToken = new Map()) {
   return gain != null && cost != null && cost > 0 ? gain / cost : 0;
 }
 
-function rotationPriority(position, evaluationByToken = new Map()) {
+function rotationPriority(position, evaluationByToken = new Map(), options = {}) {
   if (SELECTION_ORDER === "highest_reward_risk_first") {
     return { metric: "R/R", value: positionHoldRiskReward(position, evaluationByToken) };
   }
-  return { metric: "EV p.a.", value: positionHoldAnnualizedReturn(position, evaluationByToken) };
+  const holdAnnualizedReturn = number(options.holdAnnualizedReturn);
+  return {
+    metric: returnMetricLabel(),
+    value: holdAnnualizedReturn != null
+      ? holdAnnualizedReturn
+      : positionHoldAnnualizedReturn(position, evaluationByToken),
+  };
+}
+
+function rotationPositionEntries(liveState, evaluationByToken = new Map()) {
+  const entries = openPositionsForRotation(liveState).map((position) => {
+    const economics = positionRotationEconomics(position, evaluationByToken);
+    return {
+      position,
+      exitValue: economics.netExitValue,
+      holdEv: positionHoldExpectedValue(position, evaluationByToken),
+      measuredAnnualizedReturn: positionHoldAnnualizedReturn(position, evaluationByToken),
+      economics,
+    };
+  });
+  // A resolution date in the past is not a one-day investment horizon. Use
+  // the weakest still-measurable live position as its conservative Win P.A.
+  // reference, then distinguish pending settlements by the profit that is
+  // genuinely still left to gain rather than by a fabricated annualization.
+  const measuredReturns = entries
+    .filter((item) => !item.economics.resolutionPast)
+    .map((item) => item.measuredAnnualizedReturn)
+    .filter(Number.isFinite);
+  const pendingResolutionReferenceAnnualizedReturn = measuredReturns.length
+    ? Math.min(...measuredReturns)
+    : 0;
+
+  return entries.map((item) => {
+    const usesPendingResolutionReference = item.economics.resolutionPast;
+    const holdAnnualizedReturn = usesPendingResolutionReference
+      ? pendingResolutionReferenceAnnualizedReturn
+      : item.measuredAnnualizedReturn;
+    return {
+      ...item,
+      holdAnnualizedReturn,
+      pendingResolutionReferenceAnnualizedReturn: usesPendingResolutionReference
+        ? pendingResolutionReferenceAnnualizedReturn
+        : null,
+      usesPendingResolutionReference,
+      priority: rotationPriority(item.position, evaluationByToken, { holdAnnualizedReturn }),
+      tieBreak: Math.random(),
+    };
+  });
 }
 
 function candidateRotationPriority(candidate) {
@@ -1168,8 +1225,9 @@ function rotationPositionSummary(position, evaluationByToken = new Map(), extra 
   const exitValue = economics.netExitValue;
   const cost = economics.cost;
   const holdEv = positionHoldExpectedValue(position, evaluationByToken);
-  const holdAnnualizedReturn = positionHoldAnnualizedReturn(position, evaluationByToken);
-  const priority = rotationPriority(position, evaluationByToken);
+  const measuredAnnualizedReturn = positionHoldAnnualizedReturn(position, evaluationByToken);
+  const holdAnnualizedReturn = number(extra.holdAnnualizedReturn, measuredAnnualizedReturn);
+  const priority = extra.priority || rotationPriority(position, evaluationByToken, { holdAnnualizedReturn });
   return {
     question: position.question || position.market || "",
     outcome: position.outcome || position.side || "",
@@ -1186,13 +1244,18 @@ function rotationPositionSummary(position, evaluationByToken = new Map(), extra 
     maximumWinPnlUsdc: economics.maximumWinPnl == null ? null : Number(economics.maximumWinPnl.toFixed(5)),
     winPnlGapUsdc: economics.winPnlGapUsdc == null ? null : Number(economics.winPnlGapUsdc.toFixed(5)),
     winPnlGapPct: economics.winPnlGapPct == null ? null : Number(economics.winPnlGapPct.toFixed(5)),
+    remainingPotentialGainUsdc: economics.remainingPotentialGainUsdc == null ? null : Number(economics.remainingPotentialGainUsdc.toFixed(5)),
+    resolutionPast: economics.resolutionPast,
     noDaysLeft: economics.noDaysLeft,
     immediateCloseCandidate: economics.immediateCloseCandidate,
     realizedPnlIfExitUsdc: economics.realizedPnlIfExit == null ? null : Number(economics.realizedPnlIfExit.toFixed(5)),
     potentialWinIfHeldUsdc: economics.holdPotentialPnl == null ? null : Number(economics.holdPotentialPnl.toFixed(5)),
     holdExpectedValueUsdc: Number(holdEv.toFixed(5)),
     holdExpectedPnlUsdc: economics.holdExpectedPnl == null ? null : Number(economics.holdExpectedPnl.toFixed(5)),
+    measuredAnnualizedReturn: Number(measuredAnnualizedReturn.toFixed(5)),
     holdAnnualizedReturn: Number(holdAnnualizedReturn.toFixed(5)),
+    pendingResolutionReferenceAnnualizedReturn: number(extra.pendingResolutionReferenceAnnualizedReturn),
+    usesPendingResolutionReference: Boolean(extra.usesPendingResolutionReference),
     rotationPriorityMetric: priority.metric,
     rotationPriorityValue: Number(priority.value.toFixed(5)),
     url: position.url || `https://polymarket.com/event/${position.eventSlug || position.slug || ""}`,
@@ -1219,23 +1282,24 @@ function candidateRequiresSpecificPositionExit(candidate, position, liveState, e
 }
 
 async function reviewPositionRotation({ liveState, evaluationByToken, baseCandidates, cash, maxNotional, restrictToRiskReplacement = false }) {
-  const positions = openPositionsForRotation(liveState)
-    .map((position) => {
-      const economics = positionRotationEconomics(position, evaluationByToken);
-      return {
-        position,
-        exitValue: economics.netExitValue,
-        holdEv: positionHoldExpectedValue(position, evaluationByToken),
-        holdAnnualizedReturn: positionHoldAnnualizedReturn(position, evaluationByToken),
-        priority: rotationPriority(position, evaluationByToken),
-        economics,
-      };
-    })
-    // Review the weakest held position first according to this portfolio's own selection rule.
+  const positions = rotationPositionEntries(liveState, evaluationByToken)
+    // Review the weakest held position first according to this portfolio's own
+    // selection rule. Settlement-pending positions share the conservative
+    // reference Win P.A.; among that tie, exit the one with the least profit
+    // still available before settlement. A true tie is intentionally mixed so
+    // one stale row cannot monopolize every rotation run.
     .sort((a, b) => {
       if (a.priority.value !== b.priority.value) return a.priority.value - b.priority.value;
+      const aRemaining = number(a.economics.remainingPotentialGainUsdc, Infinity);
+      const bRemaining = number(b.economics.remainingPotentialGainUsdc, Infinity);
+      const pendingReferenceTie = a.usesPendingResolutionReference && b.usesPendingResolutionReference;
+      if (pendingReferenceTie && Math.abs(aRemaining - bRemaining) > ROTATION_TIE_EPSILON) {
+        return aRemaining - bRemaining;
+      }
       if (a.holdAnnualizedReturn !== b.holdAnnualizedReturn) return a.holdAnnualizedReturn - b.holdAnnualizedReturn;
-      return a.holdEv - b.holdEv;
+      if (Math.abs(aRemaining - bRemaining) > ROTATION_TIE_EPSILON) return aRemaining - bRemaining;
+      if (a.holdEv !== b.holdEv) return a.holdEv - b.holdEv;
+      return a.tieBreak - b.tieBreak;
     })
     .slice(0, ROTATION_POSITION_SCAN_LIMIT);
   const candidates = candidatePoolForRotation(baseCandidates);
@@ -1251,9 +1315,23 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
     };
   }
 
-  for (const item of positions) {
-    const { position, exitValue, holdEv, holdAnnualizedReturn, priority, economics } = item;
-    const baseReview = rotationPositionSummary(position, evaluationByToken);
+  for (const [positionRank, item] of positions.entries()) {
+    const {
+      position,
+      exitValue,
+      holdEv,
+      holdAnnualizedReturn,
+      priority,
+      economics,
+      pendingResolutionReferenceAnnualizedReturn,
+      usesPendingResolutionReference,
+    } = item;
+    const baseReview = rotationPositionSummary(position, evaluationByToken, {
+      holdAnnualizedReturn,
+      priority,
+      pendingResolutionReferenceAnnualizedReturn,
+      usesPendingResolutionReference,
+    });
     if (exitValue == null || exitValue <= 0) {
       reviews.push({
         ...baseReview,
@@ -1333,6 +1411,9 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           maximumWinPnlUsdc: economics.maximumWinPnl,
           winPnlGapUsdc: economics.winPnlGapUsdc,
           winPnlGapPct: economics.winPnlGapPct,
+          remainingPotentialGainUsdc: economics.remainingPotentialGainUsdc,
+          pendingResolutionReferenceAnnualizedReturn,
+          usesPendingResolutionReference,
           immediateCloseThreshold: ROTATION_NO_DAYS_MAX_WIN_GAP,
           immediateCloseThresholdUsdc: ROTATION_NO_DAYS_MAX_WIN_GAP_USDC,
           replacementExpectedValueUsdc: candidateEv,
@@ -1357,6 +1438,7 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           },
           candidate: liveBatchCandidateSummary(revalidated),
           candidateTokenId: revalidated.tokenId || null,
+          positionRank,
           priorityComparison,
           action: rotationPreferred ? "ROTATION_AVAILABLE" : "HOLD_CURRENT_POSITION",
           reason: rotationPreferred
@@ -1391,8 +1473,10 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
     if (bestForPosition) {
       reviews.push(bestForPosition);
       if (bestForPosition.action === "ROTATION_AVAILABLE" && (!best
-        || bestForPosition.annualizedDelta > best.annualizedDelta
-        || (bestForPosition.annualizedDelta === best.annualizedDelta && bestForPosition.evDeltaUsdc > best.evDeltaUsdc))) {
+        || bestForPosition.positionRank < best.positionRank
+        || (bestForPosition.positionRank === best.positionRank
+          && (bestForPosition.annualizedDelta > best.annualizedDelta
+            || (bestForPosition.annualizedDelta === best.annualizedDelta && bestForPosition.evDeltaUsdc > best.evDeltaUsdc))))) {
         best = bestForPosition;
       }
     } else {
@@ -1450,6 +1534,9 @@ function rotationComparisonRows(rotationReview = null, openOrderReviews = []) {
         unrealizedPnlUsdc: number(position.unrealizedPnlUsdc),
         winPnlGapUsdc: number(position.winPnlGapUsdc),
         winPnlGapPct: number(position.winPnlGapPct),
+        remainingPotentialGainUsdc: number(position.remainingPotentialGainUsdc),
+        pendingResolutionReferenceAnnualizedReturn: number(position.pendingResolutionReferenceAnnualizedReturn),
+        usesPendingResolutionReference: Boolean(position.usesPendingResolutionReference),
         immediateCloseCandidate: Boolean(position.immediateCloseCandidate),
       },
       candidate: candidate ? {
