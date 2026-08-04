@@ -2,6 +2,7 @@
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 
 function envNumber(name, fallback = null) {
   const value = process.env[name];
@@ -162,6 +163,10 @@ const COMPACT_ONLY = envBool("PAPER_COMPACT_ONLY", false);
 // per hour; the surviving `*/10` scans kept refreshing the catalogue while the
 // portfolios stood still. Scheduled runs now resolve their own mode from the
 // cadence stored in state, so whichever tick arrives performs the overdue work.
+// Restoring production from the repository snapshot is an explicit, deliberate act.
+// Left off, a missing hosted state fails the run instead of silently republishing
+// a historical seed over the live portfolios.
+const ALLOW_SEED_BOOTSTRAP = envBool("PAPER_ALLOW_SEED_BOOTSTRAP", false);
 const SCHEDULED_CADENCE = envBool("PAPER_SCHEDULED_CADENCE", false);
 const FULL_CADENCE_MINUTES = envNumber("PAPER_FULL_CADENCE_MINUTES", 55);
 const REPORT_CADENCE_MINUTES = envNumber("PAPER_REPORT_CADENCE_MINUTES", 55);
@@ -419,24 +424,80 @@ async function readState() {
     }
   }
 
-  try {
-    const raw = await readFile(OUTPUT_PATH, "utf8");
-    // A missing remote state is recoverable: the repository copy is the
-    // bootstrap snapshot used to recreate the public state file. Other
-    // remote failures stay fail-closed so a transient 502 cannot overwrite
-    // valid hosted data with an old checkout copy.
-    const remoteStateIsMissing = remoteError && /HTTP 404\b/.test(String(remoteError.message || remoteError));
-    if (remoteStateUrl && remoteError && !remoteStateIsMissing) {
-      throw new Error(`Refusing to use repository paper-state fallback because remote state is unavailable: ${remoteError.message}`);
-    }
-    return normalizeState(JSON.parse(raw));
-  } catch {
-    const remoteStateIsMissing = remoteError && /HTTP 404\b/.test(String(remoteError.message || remoteError));
-    if (remoteStateUrl && remoteError && !remoteStateIsMissing) {
-      throw remoteError;
-    }
-    return normalizeState({});
+  const remoteStateIsMissing = remoteError && /HTTP 404\b/.test(String(remoteError.message || remoteError));
+  // Any remote failure other than a clean 404 stays fail-closed: a transient 500
+  // or 502 must never let this run publish a substitute over valid hosted data.
+  if (remoteStateUrl && remoteError && !remoteStateIsMissing) {
+    throw new Error(`Refusing to continue because the published paper state is unavailable: ${remoteError.message}`);
   }
+
+  let localRaw = null;
+  try {
+    localRaw = await readFile(OUTPUT_PATH, "utf8");
+  } catch {
+    localRaw = null;
+  }
+
+  // Without a remote endpoint this is a local run (tests, manual inspection), so
+  // the checked-out file is the intended input.
+  if (!remoteStateUrl) {
+    if (localRaw === null) return normalizeState({});
+    return normalizeState(JSON.parse(localRaw));
+  }
+
+  if (!remoteError) {
+    // The remote read succeeded but the payload failed the shape check above.
+    // That is handled by the fail-closed branch, so this is unreachable in
+    // practice; keep it explicit rather than silently publishing something.
+    throw new Error("Published paper state could not be interpreted and no recovery source is available.");
+  }
+
+  // The published state is genuinely gone. A historical repository snapshot must
+  // never become production state by accident: it is a test fixture, not a
+  // backup. Recovering from it requires the current schema AND an explicit
+  // opt-in, otherwise this run fails loudly and leaves the hosting untouched.
+  let parsedLocal = null;
+  if (localRaw !== null) {
+    try {
+      parsedLocal = JSON.parse(localRaw);
+    } catch {
+      parsedLocal = null;
+    }
+  }
+
+  if (parsedLocal === null) {
+    throw new Error(
+      "Published paper state is missing (HTTP 404) and no readable local snapshot exists. "
+      + "Refusing to publish an empty state over the hosting; restore data/paper-state.json on the hosting first.",
+    );
+  }
+  if (!stateHasCurrentSchema(parsedLocal)) {
+    throw new Error(
+      "Published paper state is missing (HTTP 404) and the repository snapshot uses an obsolete schema "
+      + "without paperPortfolios. Refusing to publish it as production state; restore the hosted state file, "
+      + "or replace the snapshot with a current-schema one and set PAPER_ALLOW_SEED_BOOTSTRAP=true.",
+    );
+  }
+  if (!ALLOW_SEED_BOOTSTRAP) {
+    throw new Error(
+      "Published paper state is missing (HTTP 404). Refusing to auto-restore production from the repository "
+      + "snapshot; re-run with PAPER_ALLOW_SEED_BOOTSTRAP=true to allow that explicitly.",
+    );
+  }
+  console.warn("Published paper state is missing; restoring from the explicitly allowed current-schema snapshot.");
+  return normalizeState(parsedLocal);
+}
+
+// The multi-portfolio schema is the only shape the dashboard can render. A
+// snapshot without it would blank all three paper portfolios.
+function stateHasCurrentSchema(input) {
+  return Boolean(
+    input
+    && typeof input === "object"
+    && input.paperPortfolios
+    && typeof input.paperPortfolios === "object"
+    && !Array.isArray(input.paperPortfolios),
+  );
 }
 
 function normalizeState(input) {
@@ -7297,7 +7358,39 @@ async function run() {
   }, null, 2));
 }
 
-run().catch((error) => {
-  console.error(error?.stack || error?.message || String(error));
-  process.exit(1);
-});
+// Importing this module must not start a run, otherwise the test suite would hit
+// the network and the hosting. Only a direct `node tools/paper-trading-bot.mjs`
+// invocation executes.
+const invokedDirectly = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (invokedDirectly) {
+  run().catch((error) => {
+    console.error(error?.stack || error?.message || String(error));
+    process.exit(1);
+  });
+}
+
+// Exported for tests only. These are the pure calculations behind the numbers the
+// dashboard shows, plus the guards that keep a stale snapshot out of production.
+export {
+  annualizationDays,
+  annualizeReturn,
+  annualizedPotentialReturn,
+  markCadenceStage,
+  mergeCadence,
+  minutesSinceIso,
+  netYieldAfterFees,
+  normalizeCadence,
+  normalizeState,
+  openRisk,
+  pnlPercent,
+  resolveScheduledCadence,
+  riskProfile,
+  simulateMarketBuy,
+  stateHasCurrentSchema,
+  takerFeeForFills,
+  totalCost,
+  updatePaperPortfolio,
+};

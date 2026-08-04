@@ -317,25 +317,22 @@ jobs:
         working-directory: trading
         run: npm run paper:bot
 
-      - name: Bootstrap missing paper state
+      - name: Report missing paper state
+        # This step used to publish trading/data/paper-state.json over FTP whenever
+        # the hosted state answered 404. That snapshot is a historical test fixture,
+        # not a backup: it can be weeks old and can predate the multi-portfolio
+        # schema, so restoring it would silently blank all three paper portfolios.
+        # A missing hosted state is now reported, never overwritten. Recovery is a
+        # deliberate act (see PAPER_ALLOW_SEED_BOOTSTRAP in the bot).
         if: always()
-        env:
-          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
-          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
-          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
-          TRADING_FTP_DIR: /www/trading/data
-          PAPER_STATE_FILE: trading/data/paper-state.json
         run: |
           python3 - <<'PY'
-          import ftplib
-          import os
-          from pathlib import Path
           from urllib.error import HTTPError
           from urllib.request import Request, urlopen
 
           state_url = "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper"
           try:
-              with urlopen(Request(state_url, headers={"User-Agent": "TradingPaperBootstrap/1.0"}), timeout=20) as response:
+              with urlopen(Request(state_url, headers={"User-Agent": "TradingPaperStateCheck/1.0"}), timeout=20) as response:
                   status = response.status
           except HTTPError as error:
               status = error.code
@@ -343,40 +340,13 @@ jobs:
               print(f"Could not verify hosted paper state: {error}; leaving hosted data untouched")
               raise SystemExit(0)
 
-          if status != 404:
-              print(f"Hosted paper state returned HTTP {status}; no bootstrap upload needed")
-              raise SystemExit(0)
+          if status == 404:
+              print("::error::Hosted paper-state.json is missing (HTTP 404). Not restoring it automatically:")
+              print("::error::the repository snapshot is a fixture and may use an obsolete schema.")
+              print("::error::Run Trading Runtime Diagnostics to inspect the hosting, then restore deliberately.")
+              raise SystemExit(1)
 
-          state_file = Path(os.environ["PAPER_STATE_FILE"])
-          if not state_file.exists():
-              raise SystemExit("paper-state.json bootstrap snapshot is missing")
-
-          def enter_dir(ftp, parts):
-              ftp.cwd("/")
-              for part in parts:
-                  if not part:
-                      continue
-                  try:
-                      ftp.cwd(part)
-                  except ftplib.error_perm:
-                      ftp.mkd(part)
-                      ftp.cwd(part)
-
-          with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=30) as ftp:
-              ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
-              enter_dir(ftp, os.environ["TRADING_FTP_DIR"].strip("/").split("/"))
-              temporary = "paper-state.json.bootstrap"
-              with state_file.open("rb") as handle:
-                  ftp.storbinary(f"STOR {temporary}", handle)
-              try:
-                  ftp.rename(temporary, "paper-state.json")
-              except ftplib.all_errors:
-                  try:
-                      ftp.delete("paper-state.json")
-                  except ftplib.all_errors:
-                      pass
-                  ftp.rename(temporary, "paper-state.json")
-          print("Bootstrapped missing paper-state.json")
+          print(f"Hosted paper state returned HTTP {status}; nothing to report")
           PY
 
       - name: Upload paper state

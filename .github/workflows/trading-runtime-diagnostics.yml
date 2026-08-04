@@ -1,0 +1,352 @@
+name: Trading Runtime Diagnostics
+
+# Read-only inspection of the published runtime state on the hosting.
+#
+# The agent working on this app has no HTTPS egress to osobnizkusenosti.cz, so
+# production state cannot be read directly. This workflow closes that gap without
+# guessing: it reads the state files over the existing FTP secrets and emits a
+# sanitized summary (counts, sizes, hashes, timestamps, field-completeness) as an
+# Actions artifact.
+#
+# Hard boundaries:
+# - workflow_dispatch only, never scheduled;
+# - reads only, never writes, renames or deletes anything on the hosting;
+# - never deploys and never touches order execution;
+# - never prints secret values;
+# - emits no account addresses, order IDs, wallet data or private keys.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_state_mb:
+        description: "Skip parsing a state file larger than this many MB (report size only)"
+        required: false
+        default: "10"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trading-runtime-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect published runtime state
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DATA_DIR: /www/trading/data
+          MAX_STATE_MB: ${{ github.event.inputs.max_state_mb || '10' }}
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path
+
+          data_dir = os.environ["TRADING_FTP_DATA_DIR"].strip("/")
+          if "email-campaign" in data_dir:
+              raise SystemExit("Refusing to inspect anything outside /www/trading/.")
+          max_bytes = int(float(os.environ.get("MAX_STATE_MB") or 10) * 1024 * 1024)
+
+          STATE_FILES = [
+              "paper-state.json",
+              "live-state.json",
+              "live-execution-state.json",
+              "portfolio-config.json",
+              "scrape-scan-preferences.json",
+              "redeem-alert-ledger.json",
+          ]
+
+          # Anything whose key looks identifying must never reach the artifact.
+          BLOCKED_KEY_PARTS = (
+              "address", "privatekey", "private_key", "secret", "token", "apikey",
+              "api_key", "passphrase", "signature", "funder", "maker", "signer",
+              "wallet", "orderid", "order_id", "proxy", "email", "password",
+          )
+
+          def is_blocked(key):
+              lowered = str(key).lower()
+              return any(part in lowered for part in BLOCKED_KEY_PARTS)
+
+          def safe_number(value):
+              try:
+                  number = float(value)
+              except (TypeError, ValueError):
+                  return None
+              if number != number or number in (float("inf"), float("-inf")):
+                  return None
+              return round(number, 6)
+
+          def numeric_fields(source):
+              """Public numeric aggregates only. The dashboard already shows these."""
+              if not isinstance(source, dict):
+                  return {}
+              out = {}
+              for key, value in source.items():
+                  if is_blocked(key) or not isinstance(value, (int, float)) or isinstance(value, bool):
+                      continue
+                  out[key] = safe_number(value)
+              return out
+
+          def status_histogram(rows):
+              counts = {}
+              for row in rows:
+                  status = str((row or {}).get("status") or "MISSING_STATUS").upper()
+                  counts[status] = counts.get(status, 0) + 1
+              return dict(sorted(counts.items()))
+
+          def field_completeness(rows, fields):
+              """How many rows are missing each field. This is what pins down a
+              dashboard tile that renders zero while rows clearly exist."""
+              out = {}
+              for field in fields:
+                  missing = 0
+                  for row in rows:
+                      value = (row or {}).get(field)
+                      try:
+                          number = float(value)
+                          finite = number == number
+                      except (TypeError, ValueError):
+                          finite = False
+                      if not finite:
+                          missing += 1
+                  out[field] = {"present": len(rows) - missing, "missing": missing}
+              return out
+
+          def sum_field(rows, field):
+              total = 0.0
+              for row in rows:
+                  try:
+                      total += float((row or {}).get(field) or 0)
+                  except (TypeError, ValueError):
+                      continue
+              return round(total, 6)
+
+          TRADE_FIELDS = [
+              "realizedPnlUsdc", "unrealizedPnlUsdc", "stakeUsdc", "maxLossUsdc",
+              "shares", "entryPrice", "currentPrice", "daysToResolution",
+          ]
+
+          def summarize_paper(state):
+              summary = {"topLevelKeys": sorted(k for k in state if not is_blocked(k))}
+              summary["schemaVersion"] = state.get("schemaVersion")
+              summary["generatedAt"] = state.get("generatedAt")
+              summary["cadence"] = state.get("cadence") if isinstance(state.get("cadence"), dict) else None
+              summary["hasPaperPortfolios"] = isinstance(state.get("paperPortfolios"), dict)
+              for key in ("evaluations", "marketObservations", "marketScanHistory",
+                          "evaluationRunLog", "calculationReports", "aiUsageLog"):
+                  value = state.get(key)
+                  summary[f"{key}Count"] = len(value) if isinstance(value, list) else None
+              observations = state.get("marketObservations")
+              if isinstance(observations, list):
+                  summary["observationStatusCounts"] = status_histogram(observations)
+              evaluations = state.get("evaluations")
+              if isinstance(evaluations, list):
+                  summary["evaluationStatusCounts"] = status_histogram(evaluations)
+
+              portfolios = state.get("paperPortfolios")
+              summary["portfolios"] = {}
+              if isinstance(portfolios, dict):
+                  for name, portfolio in portfolios.items():
+                      if not isinstance(portfolio, dict):
+                          continue
+                      trades = portfolio.get("trades") if isinstance(portfolio.get("trades"), list) else []
+                      run_log = portfolio.get("runLog") if isinstance(portfolio.get("runLog"), list) else []
+                      last_decision = portfolio.get("lastDecision") or {}
+                      summary["portfolios"][name] = {
+                          "tradeCount": len(trades),
+                          "tradeStatusCounts": status_histogram(trades),
+                          "tradeFieldCompleteness": field_completeness(trades, TRADE_FIELDS),
+                          "sumRealizedPnlUsdc": sum_field(trades, "realizedPnlUsdc"),
+                          "sumUnrealizedPnlUsdc": sum_field(trades, "unrealizedPnlUsdc"),
+                          "sumStakeUsdc": sum_field(trades, "stakeUsdc"),
+                          "portfolioAggregates": numeric_fields(portfolio.get("portfolio")),
+                          "runLogCount": len(run_log),
+                          "lastRunAt": (run_log[0] or {}).get("runAt") if run_log else None,
+                          "lastDecisionAction": last_decision.get("action"),
+                          "lastDecisionRunSource": last_decision.get("runSource"),
+                          "lastDecisionRunAt": last_decision.get("runAt"),
+                      }
+              return summary
+
+          def summarize_live(state):
+              account = state.get("account") if isinstance(state.get("account"), dict) else {}
+              positions = state.get("positions") if isinstance(state.get("positions"), list) else []
+              orders = state.get("orders") if isinstance(state.get("orders"), list) else []
+              return {
+                  "topLevelKeys": sorted(k for k in state if not is_blocked(k)),
+                  "generatedAt": state.get("generatedAt") or state.get("updatedAt"),
+                  "positionCount": len(positions),
+                  "positionStatusCounts": status_histogram(positions),
+                  "positionFieldCompleteness": field_completeness(positions, TRADE_FIELDS),
+                  "orderCount": len(orders),
+                  "orderStatusCounts": status_histogram(orders),
+                  "portfolioAggregates": numeric_fields(state.get("portfolio")),
+                  # `account` carries addresses; only its numeric, non-identifying
+                  # fields are reported.
+                  "accountNumerics": numeric_fields(account),
+                  "accountKeys": sorted(k for k in account if not is_blocked(k)),
+              }
+
+          def summarize_live_execution(state):
+              run_log = state.get("runLog") if isinstance(state.get("runLog"), list) else []
+              recent = []
+              for row in run_log[:10]:
+                  if not isinstance(row, dict):
+                      continue
+                  recent.append({
+                      "runAt": row.get("runAt"),
+                      "action": row.get("action"),
+                      "runSource": row.get("runSource"),
+                      "reason": str(row.get("reason") or "")[:200],
+                  })
+              return {
+                  "topLevelKeys": sorted(k for k in state if not is_blocked(k)),
+                  "generatedAt": state.get("generatedAt"),
+                  "runLogCount": len(run_log),
+                  "runLogActionCounts": status_histogram([{"status": r.get("action")} for r in run_log if isinstance(r, dict)]),
+                  "recentRuns": recent,
+              }
+
+          def summarize_generic(state):
+              if isinstance(state, dict):
+                  return {"topLevelKeys": sorted(k for k in state if not is_blocked(k))}
+              if isinstance(state, list):
+                  return {"listLength": len(state)}
+              return {"type": type(state).__name__}
+
+          SUMMARIZERS = {
+              "paper-state.json": summarize_paper,
+              "live-state.json": summarize_live,
+              "live-execution-state.json": summarize_live_execution,
+          }
+
+          report = {"dataDir": f"/{data_dir}", "files": {}, "scanHistory": {}, "notes": []}
+
+          with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=60) as ftp:
+              ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
+              ftp.cwd("/")
+              for part in data_dir.split("/"):
+                  if part:
+                      ftp.cwd(part)
+
+              try:
+                  present = [name for name in ftp.nlst() if name not in {".", ".."}]
+              except ftplib.all_errors as error:
+                  present = []
+                  report["notes"].append(f"Directory listing unavailable: {error}")
+              report["directoryEntries"] = sorted(present)
+
+              for name in STATE_FILES:
+                  entry = {"exists": False}
+                  try:
+                      ftp.voidcmd("TYPE I")
+                      size = ftp.size(name)
+                  except ftplib.all_errors:
+                      size = None
+                  if size is None and name not in present:
+                      report["files"][name] = entry
+                      continue
+                  entry["exists"] = True
+                  entry["sizeBytes"] = size
+                  if size is not None:
+                      entry["sizeMb"] = round(size / 1024 / 1024, 3)
+                  if size is not None and size > max_bytes:
+                      entry["skipped"] = f"larger than {max_bytes} bytes; reported size only"
+                      report["notes"].append(
+                          f"{name} is {entry['sizeMb']} MB, above the {os.environ.get('MAX_STATE_MB')} MB parse limit"
+                      )
+                      report["files"][name] = entry
+                      continue
+
+                  buffer = io.BytesIO()
+                  try:
+                      ftp.retrbinary(f"RETR {name}", buffer.write)
+                  except ftplib.all_errors as error:
+                      entry["readError"] = str(error)
+                      report["files"][name] = entry
+                      continue
+                  raw = buffer.getvalue()
+                  entry["downloadedBytes"] = len(raw)
+                  entry["sha256"] = hashlib.sha256(raw).hexdigest()
+                  try:
+                      parsed = json.loads(raw.decode("utf-8"))
+                  except Exception as error:
+                      entry["parseError"] = str(error)[:300]
+                      report["files"][name] = entry
+                      continue
+                  entry["summary"] = SUMMARIZERS.get(name, summarize_generic)(parsed)
+                  report["files"][name] = entry
+
+              try:
+                  ftp.cwd("market-scan-history")
+              except ftplib.all_errors as error:
+                  report["scanHistory"]["error"] = f"not available: {error}"
+              else:
+                  files = {}
+                  try:
+                      names = [n for n in ftp.nlst() if n not in {".", ".."}]
+                  except ftplib.all_errors as error:
+                      names = []
+                      report["scanHistory"]["listError"] = str(error)
+                  for journal in sorted(names):
+                      try:
+                          files[journal] = ftp.size(journal)
+                      except ftplib.all_errors:
+                          files[journal] = None
+                  report["scanHistory"]["files"] = files
+                  report["scanHistory"]["totalBytes"] = sum(v for v in files.values() if isinstance(v, int))
+
+          out = Path("runtime-diagnostics.json")
+          out.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+
+          # Concise, greppable log. The artifact carries the full detail.
+          print("=== Trading runtime diagnostics ===")
+          for name, entry in report["files"].items():
+              if not entry.get("exists"):
+                  print(f"{name}: MISSING")
+                  continue
+              bits = [f"{entry.get('sizeMb')} MB", f"sha256={str(entry.get('sha256'))[:12]}"]
+              for key in ("skipped", "readError", "parseError"):
+                  if entry.get(key):
+                      bits.append(f"{key}={entry[key]}")
+              summary = entry.get("summary") or {}
+              if summary.get("generatedAt"):
+                  bits.append(f"generatedAt={summary['generatedAt']}")
+              print(f"{name}: " + ", ".join(str(b) for b in bits))
+              for portfolio_name, portfolio in (summary.get("portfolios") or {}).items():
+                  aggregates = portfolio.get("portfolioAggregates") or {}
+                  print(
+                      f"  {portfolio_name}: trades={portfolio['tradeCount']} "
+                      f"statuses={portfolio['tradeStatusCounts']} "
+                      f"sumRealized={portfolio['sumRealizedPnlUsdc']} "
+                      f"sumUnrealized={portfolio['sumUnrealizedPnlUsdc']} "
+                      f"sumStake={portfolio['sumStakeUsdc']} "
+                      f"equity={aggregates.get('equityUsdc')} "
+                      f"realizedAgg={aggregates.get('realizedPnlUsdc')} "
+                      f"openRisk={aggregates.get('openRiskUsdc')} "
+                      f"free={aggregates.get('freeCapitalUsdc')}"
+                  )
+                  print(f"    fieldCompleteness={portfolio['tradeFieldCompleteness']}")
+          if report["scanHistory"].get("files"):
+              print(f"market-scan-history: {report['scanHistory']['files']}")
+          for note in report["notes"]:
+              print(f"NOTE: {note}")
+          PY
+
+      - name: Upload sanitized diagnostics artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-runtime-diagnostics
+          path: runtime-diagnostics.json
+          if-no-files-found: warn
+          retention-days: 7

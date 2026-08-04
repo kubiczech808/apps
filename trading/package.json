@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --test \"tests/**/*.test.mjs\"",
     "order:poc": "node tools/polymarket-order-poc.mjs",
     "live:execute": "node tools/live-order-executor.mjs",
     "live:account": "node tools/live-account-sync.mjs",
