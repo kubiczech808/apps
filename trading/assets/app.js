@@ -1294,6 +1294,24 @@ function potentialAnnualizedReturn(item) {
   return annualizeReturn(yieldValue, days);
 }
 
+// Anything resolving sooner than the minimum capital cycle is annualized over
+// that floor, not over its real horizon. Without the floor a 0.1 d hold would
+// report five figures and a 0.0 d hold would be unbounded, so the cap is
+// deliberate. It does mean every sub-cycle candidate with the same net yield
+// reports the same p.a., which is unreadable unless the row says so: the number
+// cannot otherwise be reconciled with the "Days left" column beside it.
+function annualizationHorizonNote(item) {
+  const days = evaluationDaysLeft(item);
+  if (!Number.isFinite(days)) return "annualized over the minimum capital cycle; resolution date is unknown";
+  const horizon = annualizationDays(days);
+  if (!Number.isFinite(horizon) || horizon <= days) {
+    return `annualized over ${days.toFixed(2)} days to resolution`;
+  }
+  return `annualized over the ${horizon} day minimum capital cycle, not the ${days.toFixed(2)} days to resolution, `
+    + "because capital cannot be recycled faster than settlement allows; candidates that resolve sooner than that "
+    + "therefore share one p.a. for a given net yield and are ranked by the shorter horizon instead";
+}
+
 function annualizationDays(value) {
   const days = Number(value);
   if (!Number.isFinite(days)) return null;
@@ -4934,7 +4952,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
               <td data-label="Market">${marketAnchor(item)}</td>
               ${useLiveMarketColumnOrder ? `
                 <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
-                <td data-label="${returnMetric}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
+                <td data-label="${returnMetric}" title="${escapeHtml(annualizationHorizonNote(item))}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
                 <td data-label="Win">${gainCell(item)}</td>
                 <td data-label="Net yield %">${netYieldCell(item)}</td>
                 <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
@@ -4946,7 +4964,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
                 <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
                 <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
                 ${usesPolymarketPotential ? "" : `<td data-label="Mkt entry">${probability(evaluationEntryPrice(item))}</td>`}
-                <td data-label="${returnMetric}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
+                <td data-label="${returnMetric}" title="${escapeHtml(annualizationHorizonNote(item))}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
                 ${usesPolymarketPotential ? "" : `<td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>`}
                 <td data-label="Win">${gainCell(item)}</td>
                 <td data-label="Net yield %">${netYieldCell(item)}</td>

@@ -459,3 +459,54 @@ test("candidates: the precheck column has no WAITING state", async () => {
   const payload = app.slice(app.indexOf("function liveWorkflowPayload"), app.indexOf("async function fetchFreshState"));
   assert.doesNotMatch(payload, /precheck|retryable|RISK-BLOCKED/, "the shortlist dispatch must not depend on precheck state");
 });
+
+test("annualization: sub-cycle horizons collapse to one p.a. by design", () => {
+  // Reproduces the reported shortlist exactly: six candidates at 11.1% net yield
+  // resolving in 0.1 to 0.5 days all reported +4,055.9% p.a. That is the 1 day
+  // floor, not an arithmetic error -- 0.111121 * 365 = 40.559.
+  const netYield = 0.111121;
+  const pa = (days) => Number((bot.annualizedPotentialReturn(netYield, days) * 100).toFixed(1));
+
+  assert.equal(pa(0.05), 4055.9);
+  assert.equal(pa(0.1), 4055.9);
+  assert.equal(pa(0.3), 4055.9);
+  assert.equal(pa(0.5), 4055.9);
+  assert.equal(pa(1), 4055.9, "one day is the floor, so it is the first horizon reported honestly");
+
+  // The second reported row: 9.9% net yield under a day.
+  assert.equal(Number((bot.annualizedPotentialReturn(0.0989, 0.05) * 100).toFixed(1)), 3609.9);
+
+  // Beyond the floor the metric does discriminate.
+  assert.ok(pa(2) < pa(1), "a two day horizon must report a lower p.a. than a one day one");
+  assert.equal(pa(2), Number((netYield * 365 / 2 * 100).toFixed(1)));
+});
+
+test("annualization: the floor is what keeps a 0.0 day horizon finite", () => {
+  assert.equal(bot.annualizationDays(0), 1);
+  const withFloor = bot.annualizedPotentialReturn(0.111121, 0);
+  assert.ok(Number.isFinite(withFloor));
+  // Without a floor this is what the same row would report, which is why the cap exists.
+  assert.equal(Math.round(0.111121 * 365 / 0.05 * 100), 81118, "the same row would report 81,118% without the floor");
+});
+
+test("annualization: the floor is identical in the bot, the executor and the UI", async () => {
+  // Three independent copies of this constant exist. If they drift, the shortlist
+  // the browser ranks stops matching the shortlist the executor trades.
+  const { readFile } = await import("node:fs/promises");
+  const [app, executor] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+  ]);
+
+  assert.equal(bot.annualizationDays(0.3), 1, "bot floor is one day");
+  assert.match(app, /const MIN_ANNUALIZATION_DAYS = 1;/, "UI floor must stay one day");
+  assert.match(
+    executor,
+    /MIN_ANNUALIZATION_DAYS = Math\.max\(1, envNumber\("LIVE_MIN_ANNUALIZATION_DAYS", 1\)\)/,
+    "executor floor must stay one day and must never fall below it",
+  );
+
+  // The UI must annualize with the same formula, otherwise the displayed ranking
+  // metric is not the one execution uses.
+  assert.match(app, /value \* \(365 \/ horizon\)/);
+});
