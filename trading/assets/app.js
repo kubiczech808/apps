@@ -4121,18 +4121,31 @@ async function waitForScrapedScanWorkflow(startedAt) {
   return latest;
 }
 
-function scrapedScanWasPublishedAfter(scrapedState, startedAt) {
+function scanHistoryIds(scrapedState) {
+  return new Set((Array.isArray(scrapedState?.marketScanHistory) ? scrapedState.marketScanHistory : [])
+    .map((item) => String(item?.id || item?.runAt || ""))
+    .filter(Boolean));
+}
+
+function scrapedScanWasPublishedAfter(scrapedState, startedAt, previousScanIds = new Set()) {
   const start = Date.parse(startedAt || "");
   if (!Number.isFinite(start)) return true;
-  const scanTimes = [
-    scrapedState?.marketScan?.lastScanAt,
-    ...(Array.isArray(scrapedState?.marketScanHistory)
-      ? scrapedState.marketScanHistory.slice(0, 3).map((item) => item?.runAt)
-      : []),
-  ];
+  const scanHistory = Array.isArray(scrapedState?.marketScanHistory)
+    ? scrapedState.marketScanHistory
+    : [];
+  if (scanHistory.some((item) => {
+    const id = String(item?.id || item?.runAt || "");
+    return id && !previousScanIds.has(id);
+  })) {
+    return true;
+  }
+  // A state replacement can arrive through FTP with a timestamp sourced from
+  // the runner rather than the browser. Keep a modest clock-skew fallback, but
+  // prefer the newly created scan id above whenever it is available.
+  const scanTimes = [scrapedState?.marketScan?.lastScanAt, ...scanHistory.map((item) => item?.runAt)];
   return scanTimes.some((value) => {
     const timestamp = Date.parse(value || "");
-    return Number.isFinite(timestamp) && timestamp >= start - 10000;
+    return Number.isFinite(timestamp) && timestamp >= start - 180000;
   });
 }
 
@@ -4165,14 +4178,17 @@ async function loadScrapeRunHistory({ reset = false } = {}) {
   }
 }
 
-function publishedScanSummary(scrapedState, startedAt, selectedTag = "") {
+function publishedScanSummary(scrapedState, startedAt, selectedTag = "", previousScanIds = new Set()) {
   const startedAtMs = Date.parse(startedAt || "");
   const recentRuns = Array.isArray(scrapedState?.marketScanHistory)
     ? scrapedState.marketScanHistory
     : [];
   const run = recentRuns.find((item) => {
+    const id = String(item?.id || item?.runAt || "");
+    return id && !previousScanIds.has(id);
+  }) || recentRuns.find((item) => {
     const runAt = Date.parse(item?.runAt || "");
-    return Number.isFinite(runAt) && (!Number.isFinite(startedAtMs) || runAt >= startedAtMs - 10000);
+    return Number.isFinite(runAt) && (!Number.isFinite(startedAtMs) || runAt >= startedAtMs - 180000);
   });
   const label = scrapedScanTagLabel(run?.scanTag || selectedTag || "all tags");
   if (!run) return `Updated ${formatDate(scrapedState?.marketScan?.lastScanAt || "")}`;
@@ -4182,12 +4198,12 @@ function publishedScanSummary(scrapedState, startedAt, selectedTag = "") {
   return `${label}: ${formatInteger(added)} new / ${formatInteger(updated)} updated (${formatInteger(retained)} saved from this scan)`;
 }
 
-async function waitForScrapedScanPublication(startedAt) {
+async function waitForScrapedScanPublication(startedAt, previousScanIds = new Set()) {
   let lastError = null;
   for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
       const scrapedState = await fetchJson("data/paper-state.json", { summary: "scraped" });
-      if (scrapedScanWasPublishedAfter(scrapedState, startedAt)) return scrapedState;
+      if (scrapedScanWasPublishedAfter(scrapedState, startedAt, previousScanIds)) return scrapedState;
     } catch (error) {
       lastError = error;
     }
@@ -4204,6 +4220,13 @@ async function triggerOneTimeMarketScan() {
   state.scrapedScanBusy = true;
   state.scrapedScanStatus = "Starting scan...";
   renderScrapedScanControls();
+  let previousScanIds = new Set();
+  try {
+    previousScanIds = scanHistoryIds(await fetchJson("data/paper-state.json", { summary: "scraped" }));
+  } catch {
+    // The post-workflow wait still has timestamp fallback when the initial
+    // state snapshot is temporarily unavailable during an FTP replacement.
+  }
   const startedAt = new Date().toISOString();
   try {
     await fetchApiJson("api.php?action=workflow", {
@@ -4227,11 +4250,11 @@ async function triggerOneTimeMarketScan() {
     }
     state.scrapedScanStatus = "Publishing scan results...";
     renderScrapedScanControls();
-    const refreshed = await waitForScrapedScanPublication(startedAt);
+    const refreshed = await waitForScrapedScanPublication(startedAt, previousScanIds);
     if (!storeScrapedMarketState(refreshed, "scraped")) {
       throw new Error("The refreshed scan response did not include scraped opportunities.");
     }
-    state.scrapedScanStatus = publishedScanSummary(refreshed, startedAt, state.scrapedScanTag);
+    state.scrapedScanStatus = publishedScanSummary(refreshed, startedAt, state.scrapedScanTag, previousScanIds);
     if (state.page === "opportunities") renderBotEvaluations();
     else rerenderCurrentDashboard();
   } catch (error) {

@@ -35,6 +35,7 @@ jobs:
     timeout-minutes: 15
     env:
       PAPER_STATE_PATH: data/paper-state.json
+      PAPER_SCAN_HISTORY_ENTRY_PATH: data/market-scan-history-entry.ndjson
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=refresh
       PAPER_STATIC_STATE_URL: https://osobnizkusenosti.cz/trading/data/paper-state.json
       NODE_OPTIONS: --max-old-space-size=6144
@@ -121,6 +122,53 @@ jobs:
                   except ftplib.all_errors:
                       pass
                   ftp.rename(temporary, "paper-state.json")
+          PY
+
+      - name: Append compact scraping history entry
+        if: success()
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+          PAPER_SCAN_HISTORY_ENTRY_PATH: trading/data/market-scan-history-entry.ndjson
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          entry = Path(os.environ["PAPER_SCAN_HISTORY_ENTRY_PATH"])
+          if not entry.exists() or not entry.read_text(encoding="utf-8").strip():
+              print("No new scraping history entry to append")
+              raise SystemExit(0)
+
+          record = json.loads(entry.read_text(encoding="utf-8").splitlines()[0])
+          run_at = str(record.get("runAt") or "")
+          month = run_at[:7] if re.fullmatch(r"\d{4}-\d{2}", run_at[:7]) else "unknown"
+
+          def enter_dir(ftp, parts):
+              try:
+                  ftp.cwd("/")
+              except ftplib.all_errors:
+                  pass
+              for part in parts:
+                  if not part:
+                      continue
+                  try:
+                      ftp.cwd(part)
+                  except ftplib.error_perm:
+                      ftp.mkd(part)
+                      ftp.cwd(part)
+
+          with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=30) as ftp:
+              ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
+              enter_dir(ftp, os.environ["TRADING_FTP_DIR"].strip("/").split("/") + ["market-scan-history"])
+              with entry.open("rb") as handle:
+                  ftp.storbinary(f"APPE {month}.ndjson", handle)
+          print(f"Appended compact scan history entry to {month}.ndjson")
           PY
 
       - name: Dispatch post-scrape execution
