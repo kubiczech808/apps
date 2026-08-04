@@ -510,3 +510,77 @@ test("annualization: the floor is identical in the bot, the executor and the UI"
   // metric is not the one execution uses.
   assert.match(app, /value \* \(365 \/ horizon\)/);
 });
+
+test("resolved observations: the last live quote survives settlement", () => {
+  // A settled book prints 0 or 1. Without a preserved value every resolved row in
+  // the scraped list would read 0% or 100% instead of the probability the market
+  // carried while it was tradable.
+  const live = bot.withLastLiveMarketProbability({ status: "SCRAPED", marketProbability: 0.93 });
+  assert.equal(live.lastLiveMarketProbability, 0.93);
+
+  // While tradable it tracks the current quote, it does not freeze on the first one.
+  const moved = bot.withLastLiveMarketProbability({ ...live, marketProbability: 0.97 });
+  assert.equal(moved.lastLiveMarketProbability, 0.97);
+
+  // Once resolved it freezes, whatever the book now says.
+  const settled = bot.withLastLiveMarketProbability({ ...moved, status: "RESOLVED", marketProbability: 1 });
+  assert.equal(settled.lastLiveMarketProbability, 0.97, "settlement must not overwrite the last live quote");
+  const again = bot.withLastLiveMarketProbability({ ...settled, marketProbability: 0 });
+  assert.equal(again.lastLiveMarketProbability, 0.97, "a later resolution update must not move it either");
+
+  // Resolving while the book still quotes normally captures that quote.
+  const captured = bot.withLastLiveMarketProbability({ status: "RESOLVED", marketProbability: 0.88 });
+  assert.equal(captured.lastLiveMarketProbability, 0.88);
+
+  // A row that is already settled and never had a live quote stays untouched.
+  const noQuote = bot.withLastLiveMarketProbability({ status: "RESOLVED", marketProbability: 1 });
+  assert.equal(noQuote.lastLiveMarketProbability, undefined);
+
+  // marketClosed / acceptingOrders count as resolved even without the status.
+  const closed = bot.withLastLiveMarketProbability({ marketProbability: 0.91, marketClosed: true });
+  assert.equal(closed.lastLiveMarketProbability, 0.91);
+  const frozenByClose = bot.withLastLiveMarketProbability({ ...closed, marketProbability: 1, marketClosed: true });
+  assert.equal(frozenByClose.lastLiveMarketProbability, 0.91);
+});
+
+test("resolved observations: the scraped view surfaces them without a days filter", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, api] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../api.php", import.meta.url), "utf8"),
+  ]);
+
+  // The backend must send resolved rows, otherwise the tab can never list or count them.
+  assert.match(api, /function is_resolved_scraped_market_observation/);
+  assert.match(api, /\$active = array_merge\(\$active, \$resolved\);/);
+  // And the fields the tab needs must survive compaction.
+  for (const field of ["'lastLiveMarketProbability'", "'finalOutcomePrice'", "'marketClosed'", "'acceptingOrders'"]) {
+    assert.ok(api.includes(field), `compact_market_observation must keep ${field}`);
+  }
+
+  // The days ceiling must not apply to a resolved row, and the control is hidden there.
+  assert.match(app, /const resolved = scrapedObservationStatus\(item\) === "RESOLVED";/);
+  assert.match(app, /function daysFilterIsIrrelevant/);
+  assert.match(app, /element\.hidden = scanLog \|\| daysFilterIsIrrelevant\(\);/);
+  // The displayed probability goes through the preserving helper.
+  assert.match(app, /function scrapedDisplayProbability/);
+  assert.match(app, /probability\(Number\(scrapedDisplayProbability\(item\)\)\)/);
+});
+
+test("fixture: resolved observations carry a preserved live probability", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const fixture = JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8"));
+  const resolved = fixture.marketObservations.filter((row) => String(row.status).toUpperCase() === "RESOLVED");
+  assert.ok(resolved.length >= 2, "the fixture must exercise the Resolved tab");
+
+  for (const row of resolved) {
+    const preserved = Number(row.lastLiveMarketProbability);
+    assert.ok(preserved > 0 && preserved < 1, `${row.id} must keep a live probability, got ${preserved}`);
+    assert.equal(row.finalOutcomePrice, 1, `${row.id} must report its settlement outcome separately`);
+  }
+
+  // The already-settled row proves the settled book did not overwrite the quote.
+  const settled = resolved.find((row) => Number(row.marketProbability) >= 1);
+  assert.ok(settled, "one resolved row must already show a settled book");
+  assert.equal(settled.lastLiveMarketProbability, 0.96);
+});

@@ -162,6 +162,7 @@ const els = {
   evaluationProbabilityFilterLabel: document.querySelector("[data-evaluation-probability-filter-label]"),
   evaluationDaysFilter: document.querySelector("[data-evaluation-days-filter]"),
   evaluationDaysFilterLabel: document.querySelector("[data-evaluation-days-filter-label]"),
+  evaluationDaysControls: document.querySelectorAll("[data-evaluation-days-control]"),
   evaluationNetYieldFilter: document.querySelector("[data-evaluation-net-yield-filter]"),
   evaluationNetYieldFilterLabel: document.querySelector("[data-evaluation-net-yield-filter-label]"),
   evaluationLiquidityFilter: document.querySelector("[data-evaluation-liquidity-filter]"),
@@ -902,6 +903,12 @@ function syncOpportunityViewControls() {
   });
   els.opportunityFilterControls.forEach((element) => {
     element.hidden = scanLog;
+  });
+  // A resolved market has no remaining horizon, so a "days left max" filter can
+  // only ever hide the whole tab. Hide the control there instead of letting it
+  // silently empty the list.
+  els.evaluationDaysControls.forEach((element) => {
+    element.hidden = scanLog || daysFilterIsIrrelevant();
   });
   const scrapedCounts = scraped ? scrapedOpportunityStatusCounts() : null;
   els.evaluationStatusButtons.forEach((button) => {
@@ -5706,6 +5713,26 @@ function updateHistoryCell(item) {
   `;
 }
 
+// A settled book prints 0 or 1, which would otherwise replace the market
+// probability the row carried while it was still tradable and make every resolved
+// entry read 0% or 100%. Keep showing the last live quote; the settlement outcome
+// is reported separately through finalOutcomePrice and the resolution status.
+function scrapedDisplayProbability(item) {
+  const current = Number(item?.marketProbability ?? item?.marketPrice);
+  const looksSettled = !Number.isFinite(current) || current <= 0 || current >= 1;
+  if (!looksSettled) return current;
+  const preserved = [item?.lastLiveMarketProbability, item?.firstMarketProbability]
+    .map(Number)
+    .find((value) => Number.isFinite(value) && value > 0 && value < 1);
+  return preserved == null ? current : preserved;
+}
+
+// The Resolved tab lists markets whose horizon is already behind them, so the
+// days-left filter has nothing to select on there.
+function daysFilterIsIrrelevant() {
+  return state.opportunityView === "scraped" && state.evaluationStatus === "RESOLVED";
+}
+
 function scrapedObservationStatus(item) {
   const status = String(item?.status || item?.selectionStatus || "").trim().toUpperCase();
   if (status === "ERROR") return "ERROR";
@@ -5730,7 +5757,7 @@ function scrapedSortValue(item, key) {
   if (key === "market") return `${item.outcome || ""} ${item.question || ""}`.toLowerCase();
   if (key === "endDate") return Date.parse(item.endDate || "") || 0;
   if (key === "daysLeft") return evaluationDaysLeft(item);
-  if (key === "marketProbability") return Number(item.marketProbability);
+  if (key === "marketProbability") return Number(scrapedDisplayProbability(item));
   if (key === "netGainIfWinUsdc") return gainIfWin(item);
   if (key === "netYield") return netYield(item);
   if (key === "potentialAnnualizedReturn") return potentialAnnualizedReturn(item);
@@ -5825,11 +5852,16 @@ function renderScrapedOpportunities() {
     ? observations
     : observations.filter((item) => scrapedObservationFilterStatus(item) === state.evaluationStatus);
   const filtered = statusFiltered.filter((item) => {
-    const marketProbability = Number(item.marketProbability);
+    const marketProbability = Number(scrapedDisplayProbability(item));
     if (probabilityFilter > 0 && (!Number.isFinite(marketProbability) || marketProbability < probabilityFilter)) return false;
-    const days = evaluationDaysLeft(item);
-    if (!Number.isFinite(days)) return false;
-    if (daysFilter != null && days > daysFilter) return false;
+    // A resolved market is past its horizon, so neither a missing "days left" nor
+    // a days ceiling may exclude it. Applying either would empty the Resolved tab.
+    const resolved = scrapedObservationStatus(item) === "RESOLVED";
+    if (!resolved) {
+      const days = evaluationDaysLeft(item);
+      if (!Number.isFinite(days)) return false;
+      if (daysFilter != null && days > daysFilter) return false;
+    }
     const yieldValue = netYield(item);
     if (minNetYield > 0 && (!Number.isFinite(yieldValue) || yieldValue < minNetYield)) return false;
     const liquidity = Number(item.liquidity);
@@ -5908,7 +5940,7 @@ function renderScrapedOpportunities() {
             <tr>
               <td data-label="Market">${marketAnchor(item)}</td>
               <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
-              <td data-label="Mkt prob.">${probability(Number(item.marketProbability))}</td>
+              <td data-label="Mkt prob.">${probability(Number(scrapedDisplayProbability(item)))}</td>
               <td data-label="Win @ $5">${gainCell(item)}</td>
               <td data-label="Net yield %">${netYieldCell(item)}</td>
               <td data-label="Potential p.a."><span class="${pnlClass(potentialAnnualizedReturn(item))}">${signedPercent(potentialAnnualizedReturn(item))}</span></td>

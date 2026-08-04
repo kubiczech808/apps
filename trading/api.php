@@ -262,6 +262,15 @@ function compact_market_observation(array $item): array
         'resolvedAt',
         'resolvedDetectedAt',
         'resolutionStatus',
+        // The Resolved tab needs the settlement outcome and the closed/accepting
+        // flags to classify and describe a row, and the last live quote so a
+        // settled 0/1 book does not replace the probability the market carried
+        // while it was still tradable.
+        'finalOutcomePrice',
+        'marketClosed',
+        'acceptingOrders',
+        'umaResolutionStatus',
+        'lastLiveMarketProbability',
         'daysToResolution',
         'liquidity',
         'volume24hr',
@@ -334,6 +343,28 @@ function is_active_scraped_market_observation(array $item): bool
     }
     $endDate = strtotime((string) ($item['endDate'] ?? $item['resolutionEndDate'] ?? ''));
     return $endDate === false || $endDate > time();
+}
+
+// The scraped view also lists markets whose result is already in or is being
+// settled, so the Resolved tab can show them and report a count. This is the
+// deliberate complement of is_active_scraped_market_observation: a row that is
+// merely unattractive (an inverted sub-50% leftover) is still excluded, only rows
+// that genuinely reached the end of their life are reported here.
+function is_resolved_scraped_market_observation(array $item): bool
+{
+    $status = strtoupper((string) ($item['status'] ?? $item['selectionStatus'] ?? ''));
+    if (in_array($status, ['RESOLVED', 'CLOSED', 'EXPIRED', 'FINALIZED', 'SETTLED'], true)) {
+        return true;
+    }
+    $resolutionStatus = strtoupper((string) ($item['resolutionStatus'] ?? ''));
+    if (in_array($resolutionStatus, ['PENDING_RESULT', 'FINAL_PRICE_AVAILABLE', 'NOT_ACCEPTING_ORDERS'], true)) {
+        return true;
+    }
+    if (($item['marketClosed'] ?? null) === true || ($item['acceptingOrders'] ?? null) === false) {
+        return true;
+    }
+
+    return false;
 }
 
 function compact_market_scan_history_entry(array $item): array
@@ -424,6 +455,23 @@ function compact_state_payload(string $target, array $data, string $summary): ar
     if ($summary === 'scraped') {
         $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
         $active = array_values(array_filter($observations, static fn($item): bool => is_array($item) && is_active_scraped_market_observation($item)));
+        // Resolved markets belong in this view too: the Resolved tab lists them and
+        // shows their count. They are appended rather than merged into $active so the
+        // active catalogue keeps its own ordering, and they are capped because the
+        // retained resolved history is far longer than a browser needs at once.
+        $resolved = array_values(array_filter(
+            $observations,
+            static fn($item): bool => is_array($item)
+                && !is_active_scraped_market_observation($item)
+                && is_resolved_scraped_market_observation($item),
+        ));
+        usort($resolved, static function (array $a, array $b): int {
+            $left = strtotime((string) ($a['resolvedAt'] ?? $a['endDate'] ?? '')) ?: 0;
+            $right = strtotime((string) ($b['resolvedAt'] ?? $b['endDate'] ?? '')) ?: 0;
+            return $right <=> $left;
+        });
+        $resolved = array_slice($resolved, 0, 500);
+        $active = array_merge($active, $resolved);
         $scanHistory = is_array($data['marketScanHistory'] ?? null)
             ? array_values(array_filter($data['marketScanHistory'], 'is_array'))
             : [];

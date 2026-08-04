@@ -833,9 +833,38 @@ function firstObservationMetadata(item = {}) {
   };
 }
 
+// Once a market settles its book prints 0 or 1, which would overwrite the market
+// probability the row carried while it was tradable and leave every resolved entry
+// reading 0% or 100%. Remember the last quote seen while the market was genuinely
+// live; the settlement outcome is kept separately in finalOutcomePrice. Sticky, so
+// a later resolution update can never move it.
+function withLastLiveMarketProbability(item = {}) {
+  const current = Number(item.marketProbability ?? item.marketPrice);
+  const currentIsLive = Number.isFinite(current) && current > 0 && current < 1;
+  const stored = Number(item.lastLiveMarketProbability);
+  const hasStored = Number.isFinite(stored) && stored > 0 && stored < 1;
+
+  const status = String(item.status || item.selectionStatus || "").trim().toUpperCase();
+  const resolved = ["RESOLVED", "CLOSED", "EXPIRED", "FINALIZED", "SETTLED"].includes(status)
+    || item.marketClosed === true
+    || item.acceptingOrders === false;
+
+  if (resolved) {
+    // Frozen from here on. If the transition to resolved happens while the book is
+    // still quoting normally, that quote is the last live one worth keeping.
+    if (hasStored || !currentIsLive) return item;
+    return { ...item, lastLiveMarketProbability: Number(current.toFixed(4)) };
+  }
+
+  // Still tradable, so track the current quote rather than the first one.
+  if (!currentIsLive) return item;
+  if (hasStored && Number(stored.toFixed(4)) === Number(current.toFixed(4))) return item;
+  return { ...item, lastLiveMarketProbability: Number(current.toFixed(4)) };
+}
+
 function withFirstObservationMetadata(item = {}) {
   return {
-    ...item,
+    ...withLastLiveMarketProbability(item),
     ...Object.fromEntries(Object.entries(firstObservationMetadata(item)).filter(([, value]) => value != null && value !== "")),
   };
 }
@@ -7408,4 +7437,5 @@ export {
   takerFeeForFills,
   totalCost,
   updatePaperPortfolio,
+  withLastLiveMarketProbability,
 };
