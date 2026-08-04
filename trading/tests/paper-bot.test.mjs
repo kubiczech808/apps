@@ -137,11 +137,87 @@ test("portfolio: an empty portfolio reports original value and full free capital
   assert.equal(empty.portfolio.openRiskUsdc, 0);
 });
 
-test("portfolio: closed trades with no booked P/L are indistinguishable from a fresh portfolio", () => {
-  // This is the shape behind the reported dashboard symptom: trades exist and
-  // read as closed, yet every tile shows the opening balance. It is pinned here
-  // so the aggregation contract is explicit -- equity can only ever move when a
-  // trade actually carries realizedPnlUsdc.
+test("portfolio: persisting a state must not strip the computed aggregates", () => {
+  // The reported dashboard bug. writeState() normalizes right before writing, and
+  // normalizePaperPortfolio rebuilt `portfolio` from a configuration-only
+  // whitelist, so equity and P/L never reached the published file. The frontend
+  // then fell back to initialUsdc / 0 and showed "$100.00, +$0.00, $0.00 risk"
+  // forever. Shape and numbers below mirror the live conservative portfolio
+  // measured in production: 9 trades, 4 WON, realized 0.734, unrealized 0.079.
+  const live = {
+    paperPortfolios: {
+      conservative: {
+        trades: [
+          { id: "w1", status: "WON", realizedPnlUsdc: 0.184, stakeUsdc: 5, maxLossUsdc: 5 },
+          { id: "w2", status: "WON", realizedPnlUsdc: 0.18, stakeUsdc: 5, maxLossUsdc: 5 },
+          { id: "w3", status: "WON", realizedPnlUsdc: 0.19, stakeUsdc: 5, maxLossUsdc: 5 },
+          { id: "w4", status: "WON", realizedPnlUsdc: 0.18, stakeUsdc: 5, maxLossUsdc: 5 },
+          { id: "o1", status: "OPEN", unrealizedPnlUsdc: 0.04, stakeUsdc: 5, maxLossUsdc: 5 },
+          { id: "o2", status: "OPEN", unrealizedPnlUsdc: 0.039, stakeUsdc: 5, maxLossUsdc: 5 },
+          { id: "p1", status: "PENDING_RESOLUTION", unrealizedPnlUsdc: 0, stakeUsdc: 5, maxLossUsdc: 5 },
+          { id: "p2", status: "PENDING_RESOLUTION", unrealizedPnlUsdc: 0, stakeUsdc: 5, maxLossUsdc: 5 },
+          { id: "p3", status: "PENDING_RESOLUTION", unrealizedPnlUsdc: 0, stakeUsdc: 5.16, maxLossUsdc: 5.16 },
+        ],
+        portfolio: {},
+      },
+    },
+  };
+
+  const persisted = bot.normalizeState(live);
+  const conservative = persisted.paperPortfolios.conservative.portfolio;
+
+  for (const field of [
+    "equityUsdc", "realizedPnlUsdc", "realizedPnlPct", "openPnlUsdc",
+    "openPnlPct", "totalPnlUsdc", "totalPnlPct", "openRiskUsdc", "freeCapitalUsdc",
+  ]) {
+    assert.ok(
+      conservative[field] !== undefined,
+      `${field} must survive normalization, otherwise the dashboard tile renders a default`,
+    );
+  }
+
+  assert.equal(conservative.realizedPnlUsdc, 0.734, "the four settled wins must be booked");
+  assert.ok(conservative.equityUsdc > 100, `equity must exceed the opening balance, got ${conservative.equityUsdc}`);
+  assert.ok(conservative.openRiskUsdc > 0, "five open or pending positions still tie up capital");
+  assert.ok(conservative.freeCapitalUsdc < 100, "free capital cannot still be the full opening balance");
+  // The exact symptom, asserted so it can never silently return.
+  assert.notEqual(conservative.equityUsdc, 100);
+  assert.notEqual(conservative.totalPnlUsdc, 0);
+});
+
+test("portfolio: aggregates survive a repeated normalize round-trip", () => {
+  const state = {
+    paperPortfolios: {
+      conservative: {
+        trades: [{ id: "w1", status: "WON", realizedPnlUsdc: 0.25, stakeUsdc: 5, maxLossUsdc: 5 }],
+        portfolio: {},
+      },
+    },
+  };
+  const once = bot.normalizeState(state);
+  const twice = bot.normalizeState(once);
+  assert.equal(
+    twice.paperPortfolios.conservative.portfolio.equityUsdc,
+    once.paperPortfolios.conservative.portfolio.equityUsdc,
+  );
+  assert.equal(twice.paperPortfolios.conservative.portfolio.realizedPnlUsdc, 0.25);
+});
+
+test("portfolio: normalization keeps the per-portfolio stake fraction", () => {
+  // portfolio-config is the source of truth; the global fraction must not win.
+  const portfolioState = {
+    id: "highReward",
+    maxFraction: 0.12,
+    trades: [],
+    portfolio: {},
+  };
+  bot.updatePaperPortfolio(portfolioState);
+  assert.equal(portfolioState.portfolio.maxFraction, 0.12);
+  assert.equal(portfolioState.portfolio.maxStakeUsdc, Number((100 * 0.12).toFixed(2)));
+});
+
+test("portfolio: closed trades with no booked P/L cannot invent equity", () => {
+  // The counterpart guard: aggregates are derived, never fabricated.
   const unbooked = {
     id: "conservative",
     trades: [
@@ -154,7 +230,6 @@ test("portfolio: closed trades with no booked P/L are indistinguishable from a f
   assert.equal(unbooked.portfolio.equityUsdc, 100);
   assert.equal(unbooked.portfolio.realizedPnlUsdc, 0);
   assert.equal(unbooked.portfolio.openRiskUsdc, 0, "RESOLVED releases the reserved cash");
-  assert.equal(unbooked.trades.length, 2, "the trades are still listed, which is why the UI looks inconsistent");
 });
 
 test("bootstrap: only the multi-portfolio schema may ever restore production", () => {

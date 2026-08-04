@@ -297,6 +297,12 @@ jobs:
                   except ftplib.all_errors as error:
                       names = []
                       report["scanHistory"]["listError"] = str(error)
+                  # SIZE is refused in ASCII mode, so switch to binary first or
+                  # every journal reports an unhelpful null.
+                  try:
+                      ftp.voidcmd("TYPE I")
+                  except ftplib.all_errors:
+                      pass
                   for journal in sorted(names):
                       try:
                           files[journal] = ftp.size(journal)

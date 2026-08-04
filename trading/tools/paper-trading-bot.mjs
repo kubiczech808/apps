@@ -547,7 +547,7 @@ function normalizeState(input) {
 }
 
 function normalizePaperPortfolio(strategy, input = {}) {
-  return {
+  const normalized = {
     id: strategy.id,
     label: strategy.label,
     selectionMetric: strategy.selectionMetric,
@@ -586,6 +586,15 @@ function normalizePaperPortfolio(strategy, input = {}) {
       ? input.runLog.slice(0, PORTFOLIO_RUN_LOG_LIMIT).map(compactPortfolioRunRecord).filter(Boolean)
       : [],
   };
+  // The block above is a configuration whitelist, so it silently dropped every
+  // computed aggregate. Because writeState() normalizes immediately before
+  // persisting, equityUsdc / realizedPnlUsdc / openPnlUsdc / openRiskUsdc /
+  // freeCapitalUsdc never reached the published state, and the dashboard fell
+  // back to "$100.00 equity, $0.00 P/L, $0.00 risk" no matter what the trades
+  // said. Deriving them from the normalized trades here keeps a persisted state
+  // internally consistent and impossible to strip.
+  updatePaperPortfolio(normalized);
+  return normalized;
 }
 
 function compactReasonCounts(reasonCounts) {
@@ -6723,6 +6732,9 @@ function updatePaperPortfolio(portfolioState) {
     .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
   const openRiskValue = openRisk(portfolioState.trades);
   const equity = PORTFOLIO_USDC + realizedPnl + openPnl;
+  const portfolioMaxFraction = Number(
+    portfolioState.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION,
+  );
   const freeCapital = Math.max(0, PORTFOLIO_USDC + realizedPnl - openRiskValue);
   portfolioState.portfolio = {
     ...(portfolioState.portfolio || {}),
@@ -6732,8 +6744,11 @@ function updatePaperPortfolio(portfolioState) {
     selectionOrder: portfolioState.selectionOrder,
     strategyDescription: portfolioState.description,
     initialUsdc: PORTFOLIO_USDC,
-    maxFraction: MAX_FRACTION,
-    maxStakeUsdc: Number((equity * MAX_FRACTION).toFixed(2)),
+    // The per-portfolio setting is the source of truth. Using the global fraction
+    // here would overwrite it in the persisted state, so the UI, the backend and
+    // the workflow would stop agreeing on the same stake sizing.
+    maxFraction: portfolioMaxFraction,
+    maxStakeUsdc: Number((equity * portfolioMaxFraction).toFixed(2)),
     minProbability: Number(portfolioState.minProbability ?? MIN_PROBABILITY),
     minAnnualReturn: MIN_ANNUAL_RETURN,
     opportunityMinProbability: OPPORTUNITY_MIN_PROBABILITY,
