@@ -371,3 +371,64 @@ test("risk: both sides of one football match collide", () => {
     "the same fixture must be one risk group regardless of which side is quoted",
   );
 });
+
+test("fixture: the committed paper fixture matches the current schema", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const raw = await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8");
+  const fixture = JSON.parse(raw);
+
+  assert.equal(bot.stateHasCurrentSchema(fixture), true, "the fixture must never regress to the legacy schema");
+  assert.deepEqual(
+    Object.keys(fixture.paperPortfolios).sort(),
+    ["conservative", "highReward", "moreProbable"],
+    "all three paper portfolios must be present",
+  );
+
+  for (const [name, portfolio] of Object.entries(fixture.paperPortfolios)) {
+    assert.ok(portfolio.trades.length > 0, `${name} must carry trades`);
+    for (const field of ["equityUsdc", "realizedPnlUsdc", "openPnlUsdc", "openRiskUsdc", "freeCapitalUsdc", "totalPnlUsdc"]) {
+      assert.equal(typeof portfolio.portfolio[field], "number", `${name}.${field} must be a number`);
+    }
+    assert.notEqual(portfolio.portfolio.equityUsdc, 100, `${name} equity must be realistic, not the bare opening balance`);
+    assert.ok(portfolio.portfolio.openRiskUsdc > 0, `${name} must hold capital at risk`);
+    assert.ok(portfolio.portfolio.freeCapitalUsdc < 100, `${name} free capital must reflect the reserved cash`);
+    assert.ok(portfolio.runLog.length > 0, `${name} must carry a run log`);
+  }
+
+  // A losing portfolio and a winning one, so P/L formatting is exercised both ways.
+  assert.ok(fixture.paperPortfolios.highReward.portfolio.realizedPnlUsdc < 0);
+  assert.ok(fixture.paperPortfolios.conservative.portfolio.realizedPnlUsdc > 0);
+
+  const statuses = new Set(
+    Object.values(fixture.paperPortfolios).flatMap((p) => p.trades.map((t) => t.status)),
+  );
+  for (const expected of ["OPEN", "WON", "LOST", "PENDING_RESOLUTION"]) {
+    assert.ok(statuses.has(expected), `the fixture must include a ${expected} trade`);
+  }
+
+  assert.ok(fixture.marketObservations.length > 0, "scraped opportunities must be present");
+  assert.ok(fixture.evaluations.length > 0, "evaluated opportunities must be present");
+  assert.ok(fixture.marketScanHistory.length > 0, "a scan log must be present");
+
+  // Only the four global statuses are allowed on opportunities.
+  const allowed = new Set(["SCRAPED", "EVALUATED", "RESOLVED", "ERROR"]);
+  for (const row of [...fixture.marketObservations, ...fixture.evaluations]) {
+    assert.ok(allowed.has(String(row.status)), `unexpected opportunity status ${row.status}`);
+  }
+
+  // Anonymized: no real wallet, order or account identifiers.
+  assert.ok(!/0x[a-fA-F0-9]{40}/.test(raw), "the fixture must not contain any wallet address");
+});
+
+test("fixture: normalizing the fixture is a no-op for its aggregates", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const fixture = JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8"));
+  const renormalized = bot.normalizeState(fixture);
+  for (const name of ["conservative", "highReward", "moreProbable"]) {
+    assert.equal(
+      renormalized.paperPortfolios[name].portfolio.equityUsdc,
+      fixture.paperPortfolios[name].portfolio.equityUsdc,
+      `${name} equity must be stable across a normalize round-trip`,
+    );
+  }
+});
