@@ -651,3 +651,34 @@ test("closed trades: the Resolution column shows Polymarket's date, not our clos
   // The horizon maths keeps its own fallback, so days-left behaviour is untouched.
   assert.match(cell, /const endDate = tradeEndDate\(trade\);/);
 });
+
+test("scraping: a market that already reads 100% is not stored", () => {
+  // Reported gap: resolved rows often showed 100% market probability. A quote of
+  // 0.9996 displays as 100.0% but passed the bare `>= 1` test, so it was scraped with
+  // no upside left. Anything that rounds to 100.0% now counts as settled.
+  const market = (yesPrice) => ({
+    conditionId: "0xfixture",
+    question: "Fixture market",
+    slug: "fixture-market",
+    active: true,
+    closed: false,
+    acceptingOrders: true,
+    outcomes: JSON.stringify(["Yes", "No"]),
+    outcomePrices: JSON.stringify([String(yesPrice), String(1 - yesPrice)]),
+    clobTokenIds: JSON.stringify(["1000000000000000001", "1000000000000000002"]),
+    endDate: new Date(Date.now() + 2 * 86400000).toISOString(),
+  });
+
+  assert.equal(bot.marketScanRetentionReason(market(0.9996)), "settled_outcome_probability",
+    "a quote that displays as 100.0% must not be stored");
+  assert.equal(bot.marketScanRetentionReason(market(1)), "settled_outcome_probability");
+  assert.equal(bot.marketScanRetentionReason(market(0.0004)), "settled_outcome_probability",
+    "the settled side is symmetric");
+
+  // A genuinely tradable quote is still retained.
+  assert.equal(bot.marketScanRetentionReason(market(0.95)), null);
+  assert.equal(bot.marketScanRetentionReason(market(0.99)), null);
+
+  // The threshold is exactly the rounding boundary, shared with the executor.
+  assert.equal(bot.EFFECTIVELY_CERTAIN_MARKET_PROBABILITY, 0.9995);
+});

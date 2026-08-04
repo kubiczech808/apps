@@ -69,6 +69,14 @@ const MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT = Math.max(100, envNumber("PAPER_
 const MARKET_SCAN_AUDIT_ROW_LIMIT = Math.max(100, envNumber("PAPER_MARKET_SCAN_AUDIT_ROW_LIMIT", 750));
 // The public state keeps a short working cache; the workflow appends every
 // compact scan summary to the separate scan-history journal.
+// A quote of 0.9996 is displayed as 100.0% and has no executable upside left, but a
+// bare `>= 1` test lets it through, which is how resolved rows ended up showing 100%
+// market probability. Anything that rounds to 100.0% counts as settled at scrape time
+// and is not stored. Mirrors EFFECTIVELY_CERTAIN_MARKET_PROBABILITY in the executor.
+const EFFECTIVELY_CERTAIN_MARKET_PROBABILITY = Math.min(
+  1,
+  envNumber("PAPER_EFFECTIVELY_CERTAIN_MARKET_PROBABILITY", 0.9995),
+);
 const MARKET_SCAN_HISTORY_LIMIT = Math.max(5, Math.floor(envNumber("PAPER_MARKET_SCAN_HISTORY_LIMIT", 20)));
 const MARKET_SCAN_AUDIT_HISTORY_LIMIT = envNumber("PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT", 3);
 const PORTFOLIO_RUN_LOG_LIMIT = Math.max(20, envNumber("PAPER_PORTFOLIO_RUN_LOG_LIMIT", 24));
@@ -5265,7 +5273,7 @@ function marketScanRetentionReason(market = {}, observedAt = nowIso()) {
   const rawPrices = parseJsonField(market?.outcomePrices)
     .map((value) => Number(value))
     .filter(Number.isFinite);
-  if (rawPrices.length && rawPrices.every((price) => price <= 0 || price >= 1)) {
+  if (rawPrices.length && rawPrices.every((price) => price <= 0 || price >= EFFECTIVELY_CERTAIN_MARKET_PROBABILITY)) {
     return "settled_outcome_probability";
   }
 
@@ -5273,7 +5281,7 @@ function marketScanRetentionReason(market = {}, observedAt = nowIso()) {
   if (!observation) return "no_valid_preferred_outcome_or_quote";
 
   const probability = Number(observation.marketProbability);
-  if (!Number.isFinite(probability) || probability <= 0 || probability >= 1) {
+  if (!Number.isFinite(probability) || probability <= 0 || probability >= EFFECTIVELY_CERTAIN_MARKET_PROBABILITY) {
     return "settled_outcome_probability";
   }
   return null;
@@ -5295,7 +5303,7 @@ function sortedMarketScanReasonCounts(counts = {}) {
 function marketScanReasonText(reason) {
   const labels = {
     resolved_or_closed: "market is already resolved, closed, or no longer accepting orders",
-    settled_outcome_probability: "outcome probability is already settled at 0% or 100%",
+    settled_outcome_probability: "outcome probability is already settled or effectively certain, rounding to 0% or 100%",
     no_valid_preferred_outcome_or_quote: "no executable outcome with a current quote was available",
     scan_failed_before_retention: "scan stopped before this market could be retained",
   };
@@ -7426,6 +7434,8 @@ if (invokedDirectly) {
 // Exported for tests only. These are the pure calculations behind the numbers the
 // dashboard shows, plus the guards that keep a stale snapshot out of production.
 export {
+  EFFECTIVELY_CERTAIN_MARKET_PROBABILITY,
+  marketScanRetentionReason,
   annualizationDays,
   annualizeReturn,
   annualizedPotentialReturn,
