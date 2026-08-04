@@ -82,12 +82,12 @@ const ROTATION_MIN_PRIORITY_IMPROVEMENT = Math.max(
   MIN_NET_YIELD,
   envNumber("LIVE_ROTATION_MIN_PRIORITY_IMPROVEMENT", MIN_NET_YIELD),
 );
-// A position that is only waiting on the last couple of cents before it settles is
-// protected from rotation, however much better a candidate's potential p.a. looks.
-// Selling it pays a taker exit fee and then the replacement's entry fee to buy back
-// upside the position was about to collect for free, so the swap destroys value even
-// when the ranking metric says otherwise. Above this remaining gain the position is
-// rotatable like any other.
+// Once a position is past its end date it is waiting on settlement, and its ranking
+// metric is meaningless there: the horizon is gone while the upside is not. If it
+// still has more than this much left to collect, it is protected from rotation and
+// simply held until it settles, however much better a candidate looks. Once the
+// remaining gain falls to this much or less there is nothing worth waiting for, so
+// the capital is released rather than parked until settlement.
 const ROTATION_PROTECT_REMAINING_GAIN_USDC = Math.max(
   0,
   envNumber("LIVE_ROTATION_PROTECT_REMAINING_GAIN_USDC", 0.02),
@@ -1088,11 +1088,15 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
   const resolutionDueOrUnknown = !Number.isFinite(endTime) || resolutionPast;
   const nearMaximumWin = winPnlGapPct != null && winPnlGapPct <= ROTATION_NEAR_MAX_WIN_GAP;
   const noDaysLeft = resolutionDueOrUnknown;
-  // The protection is measured on the directional remaining gain, not the absolute
-  // gap: a position that can still add real profit stays rotatable, one that is
-  // waiting on a couple of cents does not.
-  const settlementLocked = remainingPotentialGainUsdc != null
+  // Measured on the directional remaining gain after exit fees, not on an absolute
+  // gap, so a position that can still add real profit is told apart from one with
+  // nothing left to collect.
+  const upsideExhausted = remainingPotentialGainUsdc != null
     && remainingPotentialGainUsdc <= ROTATION_PROTECT_REMAINING_GAIN_USDC;
+  // Protected only while awaiting settlement with real upside still outstanding. A
+  // missing end date does not count as elapsed: sports rows often carry unreliable
+  // dates, and treating unknown as past would strand capital indefinitely.
+  const settlementLocked = resolutionPast && !upsideExhausted;
   const continuationAnnualizedReturn = continuationExpectedValue != null && netExitValue != null && netExitValue > 0
     ? annualizeReturn(continuationExpectedValue / netExitValue, days)
     : null;
@@ -1117,6 +1121,7 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
     resolutionPast,
     noDaysLeft,
     nearMaximumWin,
+    upsideExhausted,
     settlementLocked,
   };
 }
@@ -1260,6 +1265,7 @@ function rotationPositionSummary(position, evaluationByToken = new Map(), extra 
     resolutionPast: economics.resolutionPast,
     noDaysLeft: economics.noDaysLeft,
     settlementLocked: economics.settlementLocked,
+    upsideExhausted: economics.upsideExhausted,
     nearMaximumWin: economics.nearMaximumWin,
     realizedPnlIfExitUsdc: economics.realizedPnlIfExit == null ? null : Number(economics.realizedPnlIfExit.toFixed(5)),
     potentialWinIfHeldUsdc: economics.holdPotentialPnl == null ? null : Number(economics.holdPotentialPnl.toFixed(5)),
@@ -1391,17 +1397,25 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
         const currentPriority = priority.value;
         const replacementPriority = candidatePriority.metric === "R/R" ? candidatePriority.value : rotatedAnnualizedReturn;
         const priorityDelta = replacementPriority - currentPriority;
-        // A position waiting on the last couple of cents is never rotated. This is a
-        // hard veto, checked before the ranking metric, because the metric is exactly
-        // what misleads here: an almost-settled position shows a poor remaining
-        // return while being the safest money in the book.
+        // Past its end date with real upside still outstanding: hold it. This is a hard
+        // veto checked before the ranking metric, because the metric is exactly what
+        // misleads here. The horizon is gone, so the remaining return looks poor while
+        // the position is in fact waiting on money it is likely to collect.
         const settlementLocked = Boolean(economics.settlementLocked);
+        // Nothing left to collect, so there is nothing to wait for either. The metric
+        // cannot judge this case for the same reason, so a valid candidate may take the
+        // capital without clearing the improvement threshold.
+        const upsideExhausted = Boolean(economics.upsideExhausted)
+          && Number.isFinite(candidateEv)
+          && candidateEv > 0
+          && Number.isFinite(candidatePriority.value)
+          && candidatePriority.value > 0;
         // Otherwise the replacement must improve the portfolio's ranking metric by at
         // least the configured minimum net profit, and the net expected result after
         // selling fees must improve too.
         const rotationPreferred = !settlementLocked
-          && evDelta > 0
-          && priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT;
+          && (upsideExhausted
+            || (evDelta > 0 && priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT));
         const priorityComparison = {
           metricLabel: candidatePriority.metric,
           currentMetric: currentPriority,
@@ -1416,6 +1430,7 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           currentRealizedPnlIfExitUsdc: realizedPnlIfExit,
           currentExitFeeUsdc: economics.exitFee,
           settlementLocked,
+          upsideExhausted,
           nearMaximumWin: Boolean(economics.nearMaximumWin),
           currentSellPnlUsdc: economics.currentSellPnl,
           maximumWinPnlUsdc: economics.maximumWinPnl,
@@ -1451,9 +1466,11 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           priorityComparison,
           action: rotationPreferred ? "ROTATION_AVAILABLE" : "HOLD_CURRENT_POSITION",
           reason: rotationPreferred
-            ? `after estimated exit fees and current P/L, ${candidatePriority.metric} improves by ${(priorityDelta * 100).toFixed(1)} pts and expected result improves by ${evDelta.toFixed(4)} USDC`
+            ? (upsideExhausted
+              ? `this position is only $${Number(economics.remainingPotentialGainUsdc ?? 0).toFixed(4)} short of its maximum win, within the $${ROTATION_PROTECT_REMAINING_GAIN_USDC.toFixed(2)} threshold, so there is nothing left worth waiting for; release the capital instead of holding until settlement`
+              : `after estimated exit fees and current P/L, ${candidatePriority.metric} improves by ${(priorityDelta * 100).toFixed(1)} pts and expected result improves by ${evDelta.toFixed(4)} USDC`)
             : (settlementLocked
-              ? `this position is only waiting on $${Number(economics.remainingPotentialGainUsdc ?? 0).toFixed(4)} more before it settles, which is within the $${ROTATION_PROTECT_REMAINING_GAIN_USDC.toFixed(2)} protection, so it is held even though ${candidatePriority.metric} would look ${(priorityDelta * 100).toFixed(1)} pts better elsewhere; selling now would pay an exit fee and a new entry fee to buy back upside it is about to collect`
+              ? `resolution is already past and this position still has $${Number(economics.remainingPotentialGainUsdc ?? 0).toFixed(4)} to collect, above the $${ROTATION_PROTECT_REMAINING_GAIN_USDC.toFixed(2)} threshold, so it is held until it settles even though ${candidatePriority.metric} would look ${(priorityDelta * 100).toFixed(1)} pts better elsewhere`
               : `after estimated exit fees and current P/L, ${candidatePriority.metric} changes by ${(priorityDelta * 100).toFixed(1)} pts and expected result changes by ${evDelta.toFixed(4)} USDC; minimum improvement is ${(ROTATION_MIN_PRIORITY_IMPROVEMENT * 100).toFixed(1)} pts`),
           cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),
           evDeltaUsdc: Number(evDelta.toFixed(5)),
@@ -1547,6 +1564,7 @@ function rotationComparisonRows(rotationReview = null, openOrderReviews = []) {
         pendingResolutionReferenceAnnualizedReturn: number(position.pendingResolutionReferenceAnnualizedReturn),
         usesPendingResolutionReference: Boolean(position.usesPendingResolutionReference),
         settlementLocked: Boolean(position.settlementLocked),
+        upsideExhausted: Boolean(position.upsideExhausted),
       },
       candidate: candidate ? {
         label: rotationOpportunityLabel(candidate),
@@ -1606,7 +1624,10 @@ function rotationHumanComparison(review) {
   };
   const days = (value) => Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)}d` : "-";
   if (comparison.settlementLocked) {
-    return `Hold ${rotationOpportunityLabel(position)} (${days(comparison.currentDaysToResolution)}, current sell P/L ${Number(comparison.currentSellPnlUsdc || 0).toFixed(4)} USDC vs maximum win ${Number(comparison.maximumWinPnlUsdc || 0).toFixed(4)} USDC) because it is waiting on only ${Number(comparison.remainingPotentialGainUsdc || 0).toFixed(4)} USDC more, within the ${Number(comparison.settlementLockThresholdUsdc || 0).toFixed(2)} USDC protection. ${rotationOpportunityLabel(candidate)} is not taken even though it shows ${formatMetric(comparison.replacementMetric)}.`;
+    return `Hold ${rotationOpportunityLabel(position)} (resolution already past, current sell P/L ${Number(comparison.currentSellPnlUsdc || 0).toFixed(4)} USDC vs maximum win ${Number(comparison.maximumWinPnlUsdc || 0).toFixed(4)} USDC) because it still has ${Number(comparison.remainingPotentialGainUsdc || 0).toFixed(4)} USDC to collect, above the ${Number(comparison.settlementLockThresholdUsdc || 0).toFixed(2)} USDC threshold. ${rotationOpportunityLabel(candidate)} is not taken even though it shows ${formatMetric(comparison.replacementMetric)}.`;
+  }
+  if (comparison.upsideExhausted) {
+    return `Close ${rotationOpportunityLabel(position)} now (${days(comparison.currentDaysToResolution)}, only ${Number(comparison.remainingPotentialGainUsdc || 0).toFixed(4)} USDC short of its maximum win) and replace it with ${rotationOpportunityLabel(candidate)} (${formatMetric(comparison.replacementMetric)}, ${days(comparison.replacementDaysToResolution)}, potential win ${Number(candidate.netGainIfWinUsdc || 0).toFixed(4)} USDC); there is nothing left worth waiting for.`;
   }
   return `Replace ${rotationOpportunityLabel(position)} (${formatMetric(comparison.currentMetric)}, ${days(comparison.currentDaysToResolution)}, potential win ${Number(position.potentialWinIfHeldUsdc || 0).toFixed(4)} USDC) with ${rotationOpportunityLabel(candidate)} (${formatMetric(comparison.replacementMetric)}, ${days(comparison.replacementDaysToResolution)}, potential win ${Number(candidate.netGainIfWinUsdc || 0).toFixed(4)} USDC); after fees the ${metric} improvement is ${formatDelta(comparison.metricDelta)} and expected P/L changes by ${Number(review.evDeltaUsdc || 0).toFixed(4)} USDC.`;
 }
