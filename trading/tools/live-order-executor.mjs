@@ -1066,6 +1066,12 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
     : (Number.isFinite(endTime)
       ? Math.max(MIN_ANNUALIZATION_DAYS, (endTime - Date.now()) / 86400000)
       : MIN_ANNUALIZATION_DAYS);
+  // The annualization floor is deliberately applied to `days` above, so it cannot be
+  // used to compare horizons: every sub-hour position would look like an hour. This
+  // is the real remaining time, which may be zero or negative when settlement is due.
+  const rawRemainingDays = Number.isFinite(endTime)
+    ? (endTime - Date.now()) / 86400000
+    : (Number.isFinite(storedDays) ? storedDays : null);
   const currentSellPnl = realizedPnlIfExit ?? number(position.unrealizedPnlUsdc);
   const maximumWinPnl = number(
     position.netGainIfWinUsdc
@@ -1119,6 +1125,7 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
     winPnlGapPct,
     remainingPotentialGainUsdc,
     resolutionPast,
+    rawRemainingDays,
     noDaysLeft,
     nearMaximumWin,
     upsideExhausted,
@@ -1410,12 +1417,23 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           && candidateEv > 0
           && Number.isFinite(candidatePriority.value)
           && candidatePriority.value > 0;
+        // Selling a position that resolves sooner than its replacement swaps a nearer
+        // payout for a more distant one. The running position is given up early and
+        // its remaining profit forfeited, while the candidate will in all likelihood
+        // still be there once the position has settled, so the swap gains nothing but
+        // risk. Only a candidate that resolves sooner justifies it.
+        const positionRemainingDays = number(economics.rawRemainingDays);
+        const candidateResolvesLater = positionRemainingDays != null
+          && candidateDays != null
+          && candidateDays >= positionRemainingDays;
         // Otherwise the replacement must improve the portfolio's ranking metric by at
         // least the configured minimum net profit, and the net expected result after
         // selling fees must improve too.
         const rotationPreferred = !settlementLocked
           && (upsideExhausted
-            || (evDelta > 0 && priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT));
+            || (!candidateResolvesLater
+              && evDelta > 0
+              && priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT));
         const priorityComparison = {
           metricLabel: candidatePriority.metric,
           currentMetric: currentPriority,
@@ -1431,6 +1449,8 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           currentExitFeeUsdc: economics.exitFee,
           settlementLocked,
           upsideExhausted,
+          candidateResolvesLater,
+          currentRemainingDays: positionRemainingDays,
           nearMaximumWin: Boolean(economics.nearMaximumWin),
           currentSellPnlUsdc: economics.currentSellPnl,
           maximumWinPnlUsdc: economics.maximumWinPnl,
@@ -1469,7 +1489,9 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
             ? (upsideExhausted
               ? `this position is only $${Number(economics.remainingPotentialGainUsdc ?? 0).toFixed(4)} short of its maximum win, within the $${ROTATION_PROTECT_REMAINING_GAIN_USDC.toFixed(2)} threshold, so there is nothing left worth waiting for; release the capital instead of holding until settlement`
               : `after estimated exit fees and current P/L, ${candidatePriority.metric} improves by ${(priorityDelta * 100).toFixed(1)} pts and expected result improves by ${evDelta.toFixed(4)} USDC`)
-            : (settlementLocked
+            : (candidateResolvesLater && !settlementLocked
+              ? `this position resolves in ${Number(positionRemainingDays ?? 0).toFixed(2)} days and the replacement not until ${Number(candidateDays ?? 0).toFixed(2)} days, so selling now would forfeit a nearer payout for a more distant one; the candidate should still be available once this settles`
+              : settlementLocked
               ? `resolution is already past and this position still has $${Number(economics.remainingPotentialGainUsdc ?? 0).toFixed(4)} to collect, above the $${ROTATION_PROTECT_REMAINING_GAIN_USDC.toFixed(2)} threshold, so it is held until it settles even though ${candidatePriority.metric} would look ${(priorityDelta * 100).toFixed(1)} pts better elsewhere`
               : `after estimated exit fees and current P/L, ${candidatePriority.metric} changes by ${(priorityDelta * 100).toFixed(1)} pts and expected result changes by ${evDelta.toFixed(4)} USDC; minimum improvement is ${(ROTATION_MIN_PRIORITY_IMPROVEMENT * 100).toFixed(1)} pts`),
           cashAfterExitUsdc: Number(cashAfterExit.toFixed(5)),

@@ -124,10 +124,57 @@ test("rotation: the veto precedes the ranking metric and exhaustion bypasses it"
   // The veto is evaluated first, and an exhausted position may rotate without
   // clearing the improvement threshold, because the metric cannot judge either case.
   assert.match(source, /const rotationPreferred = !settlementLocked/);
-  assert.match(source, /\(upsideExhausted\s*\n\s*\|\| \(evDelta > 0 && priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT\)\)/);
+  // The exact decision shape is asserted by the horizon test below; here it is enough
+  // that exhaustion is an alternative to the improvement threshold, not a precondition.
+  assert.match(source, /\(upsideExhausted\s*\n\s*\|\|/);
   assert.equal(/const settlementLocked = resolutionPast && !upsideExhausted;/.test(source), true);
 
   // Both outcomes must be explained in words in the run log.
   assert.ok(source.includes("resolution is already past and this position still has $"));
   assert.ok(source.includes("short of its maximum win, within the $"));
+});
+
+test("rotation: the real remaining horizon is reported unfloored", () => {
+  // The annualization floor is one hour, so the floored `daysToResolution` cannot be
+  // used to compare horizons: every sub-hour position would look like a full hour and
+  // tie with the candidate. rawRemainingDays keeps the true value, including zero and
+  // negative when settlement is overdue.
+  const soon = executor.positionRotationEconomics(position({
+    remaining: 0.3,
+    endDate: new Date(Date.now() + 3600000).toISOString(),
+  }));
+  assert.ok(Math.abs(soon.rawRemainingDays - 1 / 24) < 0.01, `expected ~1h, got ${soon.rawRemainingDays}`);
+  assert.ok(soon.daysToResolution >= 1 / 24, "the floored value is still available for annualization");
+
+  const overdue = executor.positionRotationEconomics(position({
+    remaining: 0.3,
+    endDate: new Date(Date.now() - 7200000).toISOString(),
+  }));
+  assert.ok(overdue.rawRemainingDays < 0, "an overdue position reports a negative horizon");
+
+  const unknown = executor.positionRotationEconomics(position({ remaining: 0.3, endDate: null }));
+  assert.equal(unknown.rawRemainingDays, null, "an unknown horizon stays null rather than guessing");
+});
+
+test("rotation: a replacement that resolves later is refused", async () => {
+  // Selling a nearer payout to buy a more distant one forfeits the running position's
+  // remaining profit, and the candidate is very likely still available afterwards.
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  assert.match(
+    source,
+    /const candidateResolvesLater = positionRemainingDays != null\s*\n\s*&& candidateDays != null\s*\n\s*&& candidateDays >= positionRemainingDays;/,
+    "an equal or later candidate horizon must block the swap",
+  );
+  // It gates the metric path but must not gate the exhausted-upside path, which is the
+  // case where holding earns nothing more.
+  assert.match(
+    source,
+    /\(upsideExhausted\s*\n\s*\|\| \(!candidateResolvesLater\s*\n\s*&& evDelta > 0/,
+    "exhausted upside still releases capital regardless of horizons",
+  );
+  // The horizon comparison must use the unfloored value.
+  assert.match(source, /const positionRemainingDays = number\(economics\.rawRemainingDays\);/);
+  assert.ok(source.includes("selling now would forfeit a nearer payout for a more distant one"));
 });
