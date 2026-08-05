@@ -550,12 +550,22 @@ function latestUniqueEvaluations(evaluations, limit = Infinity) {
   return [...byToken.values()];
 }
 
+// Time remaining right now, not the time that remained when the row was scraped.
+//
+// This used to return the stored daysToResolution whenever it existed, and that value is
+// captured at scrape time. A market stored with 1.00 day left and executed twelve hours
+// later still reported 1.00 day, so its potential p.a. was annualized over twice the real
+// horizon and came out at half its true value. The error grows with the age of the row,
+// so ranking systematically favoured freshly scraped candidates and disagreed with the
+// dashboard, which recomputes from endDate. That is the inconsistency between the
+// shortlist shown and the order actually placed.
+//
+// The stored value is only a fallback for a row whose end date is unusable.
 function localDaysToResolution(item) {
+  const end = Date.parse(item?.endDate || item?.resolutionEndDate || "");
+  if (Number.isFinite(end)) return (end - Date.now()) / 86400000;
   const stored = number(item?.daysToResolution);
-  if (stored != null) return stored;
-  const end = Date.parse(item?.endDate || "");
-  if (!Number.isFinite(end)) return Infinity;
-  return (end - Date.now()) / 86400000;
+  return stored != null ? stored : Infinity;
 }
 
 function candidateEvaluatedAtTime(item) {
@@ -3388,6 +3398,9 @@ if (invokedDirectly) {
 // Exported for tests only.
 export {
   MIN_ORDER_STAKE_CEILING_USDC,
+  annualizeReturn,
+  localDaysToResolution,
+  selectedAnnualizedReturn,
   ROTATION_PROTECT_REMAINING_GAIN_USDC,
   positionRotationEconomics,
   sharesForOrder,

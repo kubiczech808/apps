@@ -369,3 +369,28 @@ test("live portfolio: the deposited baseline is configured, never inferred from 
     assert.match(workflow, /LIVE_ADDITIONAL_DEPOSIT_ID: \$\{\{ vars\.LIVE_ADDITIONAL_DEPOSIT_ID \}\}/);
   }
 });
+
+test("live ranking: the horizon is recomputed, not read from the scrape", async () => {
+  const executor = await import("../tools/live-order-executor.mjs");
+
+  // The reported bug. A market resolving 06.08 00:00, executed 05.08 12:23, was
+  // annualized over "resolution 1.00d" while the dashboard showed 0.5 d left. Its
+  // potential p.a. came out +4,055.3% instead of +8,399.3% -- half its real value,
+  // because the stored daysToResolution was captured when the row was scraped.
+  const endDate = new Date(Date.now() + 11.6 * 3600000).toISOString();
+  const stale = { endDate, daysToResolution: 1 };
+  const fresh = executor.localDaysToResolution(stale);
+  assert.ok(fresh > 0.4 && fresh < 0.55, `expected ~0.48 d from the end date, got ${fresh}`);
+  assert.ok(fresh < stale.daysToResolution, "the stored scrape-time horizon must not win");
+
+  // Ranking follows, so an older row is no longer penalised against a fresher one.
+  const pa = executor.annualizeReturn(0.111, fresh);
+  assert.ok(pa > 70, `potential p.a. should be ~83x, got ${pa}`);
+
+  // A row with no usable end date still falls back rather than becoming Infinity.
+  assert.equal(executor.localDaysToResolution({ daysToResolution: 3 }), 3);
+  assert.equal(executor.localDaysToResolution({}), Infinity);
+  // resolutionEndDate is accepted too, since scraped rows carry either name.
+  const viaResolution = executor.localDaysToResolution({ resolutionEndDate: endDate, daysToResolution: 9 });
+  assert.ok(viaResolution < 1, "resolutionEndDate must also outrank the stored value");
+});
