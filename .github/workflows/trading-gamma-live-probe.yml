@@ -1,0 +1,27 @@
+name: Trading Gamma Live Probe
+
+# Read-only diagnostic, manual only. It asks Polymarket's public Gamma API how it
+# describes live sports and esports events, and prints counts and field names.
+#
+# It deliberately has no access to anything: no secrets, no FTP, no deploy, no state
+# file, and contents: read only. Its whole purpose is to replace guesswork before the
+# scan pipeline is changed, so it must not be able to affect production.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Probe Gamma for live events
+        working-directory: trading
+        run: node tools/gamma-live-probe.mjs
