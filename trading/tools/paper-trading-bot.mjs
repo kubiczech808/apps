@@ -221,6 +221,14 @@ const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]
 const REPORT_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
 const SCRAPED_SIMULATION_MAX_DAYS = [1, 3, 7, 14, 30];
 const SCRAPED_SIMULATION_LIQUIDITY_FLOORS = [0, 10000, 40000, 100000];
+// Each scraped market contributes to its category and to every tag it carries. Both
+// bounds keep the calculation report proportionate: it is stored in the core state
+// file, which every dashboard read decodes.
+const SCRAPED_SIMULATION_TAGS_PER_TRADE = Math.max(1, envNumber("PAPER_SCRAPED_SIMULATION_TAGS_PER_TRADE", 8));
+const SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT = Math.max(
+  20,
+  envNumber("PAPER_SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT", 300),
+);
 const PAPER_STRATEGIES = {
   conservative: {
     id: "conservative",
@@ -6802,11 +6810,32 @@ function scrapedSimulationCategory(item) {
   return String(item?.firstCategory || item?.riskCategory || tags[0] || "general");
 }
 
+// Tags come from several places and the report only used one of them, so most of
+// Polymarket's own taxonomy never reached the table. The scrape-time tags stay
+// first because they describe the market as it was when the entry price was taken.
 function scrapedSimulationTags(item) {
-  const tags = Array.isArray(item?.firstTags) && item.firstTags.length
-    ? item.firstTags.filter(Boolean).map(String)
-    : (Array.isArray(item?.tags) ? item.tags.filter(Boolean).map(String) : []);
-  return tags.length ? [...new Set(tags)] : [scrapedSimulationCategory(item)];
+  const sources = [
+    Array.isArray(item?.firstTags) ? item.firstTags : [],
+    Array.isArray(item?.tags) ? item.tags : [],
+    Array.isArray(item?.polymarketTags) ? item.polymarketTags : [],
+    Array.isArray(item?.riskGroupLabels) ? item.riskGroupLabels : [],
+  ];
+  const seen = new Set();
+  const tags = [];
+  for (const source of sources) {
+    for (const raw of source) {
+      // Gamma returns tags both as plain strings and as {label,slug} objects.
+      const text = String(
+        raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : (raw ?? ""),
+      ).trim().toLowerCase();
+      if (!text || text.length > 60) continue;
+      if (seen.has(text)) continue;
+      seen.add(text);
+      tags.push(text);
+      if (tags.length >= SCRAPED_SIMULATION_TAGS_PER_TRADE) return tags;
+    }
+  }
+  return tags.length ? tags : [scrapedSimulationCategory(item)];
 }
 
 function scrapedSimulationOutcome(item) {
@@ -6850,6 +6879,26 @@ function summarizeScrapedSimulationRows(rows) {
   const pnl = resolved.reduce((sum, row) => sum + Number(row.pnl || 0), 0);
   const avgProbability = average(rows.map((row) => row.entry));
   const avgLiquidity = average(rows.map((row) => row.liquidity).filter(Number.isFinite));
+  const avgDays = average(rows.map((row) => row.days).filter(Number.isFinite));
+  // Net yield per trade at the simulated stake: what one win pays on what it cost.
+  const avgNetYield = average(rows
+    .map((row) => (row.total > 0 ? (row.shares - row.total) / row.total : null))
+    .filter(Number.isFinite));
+  const roi = resolvedCost > 0 ? pnl / resolvedCost : null;
+  // Capital cycles faster in some categories than others, so ROI alone ranks a slow
+  // category above a fast one with the same return. Annualizing over the observed
+  // horizon is the comparison the strategy actually cares about, and it uses the same
+  // one-hour floor as every other p.a. figure in the system.
+  //
+  // The finite check is not redundant: annualizationDays(null) coerces to 0 and is
+  // then floored to one hour, which turned an unknown horizon into a confident
+  // four-figure p.a. A group with no measured horizon has no p.a. at all.
+  const annualizedRoi = roi == null || !Number.isFinite(avgDays)
+    ? null
+    : annualizeReturn(roi, avgDays);
+  const resolutionTimes = resolved
+    .map((row) => Date.parse(row.item?.resolvedAt || row.item?.endDate || ""))
+    .filter(Number.isFinite);
   return {
     trades: rows.length,
     resolved: resolved.length,
@@ -6859,10 +6908,17 @@ function summarizeScrapedSimulationRows(rows) {
     stakeUsdc: Number(deployedCost.toFixed(4)),
     resolvedStakeUsdc: Number(resolvedCost.toFixed(4)),
     pnlUsdc: Number(pnl.toFixed(4)),
-    roi: resolvedCost > 0 ? Number((pnl / resolvedCost).toFixed(4)) : null,
+    roi: roi == null ? null : Number(roi.toFixed(4)),
+    annualizedRoi: annualizedRoi == null ? null : Number(annualizedRoi.toFixed(4)),
+    pnlPerTradeUsdc: resolved.length ? Number((pnl / resolved.length).toFixed(4)) : null,
     winRate: resolved.length ? Number((wins / resolved.length).toFixed(4)) : null,
     avgProbability: avgProbability == null ? null : Number(avgProbability.toFixed(4)),
     avgLiquidity: avgLiquidity == null ? null : Number(avgLiquidity.toFixed(2)),
+    avgDaysToResolution: avgDays == null ? null : Number(avgDays.toFixed(3)),
+    avgNetYield: avgNetYield == null ? null : Number(avgNetYield.toFixed(4)),
+    // A category that has not resolved anything for weeks should be visibly stale
+    // rather than quietly ranked next to a current one.
+    lastResolvedAt: resolutionTimes.length ? new Date(Math.max(...resolutionTimes)).toISOString() : null,
   };
 }
 
@@ -6905,9 +6961,17 @@ function scrapedSimulationCategoryRows(trades) {
     add("category", trade.category, trade);
     for (const tag of trade.tags) add("tag", tag, trade);
   }
-  return [...groups.values()]
-    .map((group) => ({ ...group, ...summarizeScrapedSimulationRows(group.trades) }))
-    .sort((a, b) => (b.resolved - a.resolved) || a.label.localeCompare(b.label));
+  const rows = [...groups.values()]
+    .map(({ trades: groupTrades, ...group }) => ({
+      ...group,
+      ...summarizeScrapedSimulationRows(groupTrades),
+    }))
+    // Rank by evidence first: a group with one resolved trade is noise next to one
+    // with fifty, whatever its ROI looks like.
+    .sort((a, b) => (b.resolved - a.resolved) || (b.trades - a.trades) || a.label.localeCompare(b.label));
+  // This report lives in the core state file, which every dashboard read decodes, so
+  // the row count cannot be left to however many tags Polymarket happens to publish.
+  return rows.slice(0, SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT);
 }
 
 function buildCalculationReport(state) {
@@ -7638,6 +7702,7 @@ export {
   annualizationDays,
   annualizeReturn,
   annualizedPotentialReturn,
+  buildCalculationReport,
   markCadenceStage,
   mergeCadence,
   minutesSinceIso,

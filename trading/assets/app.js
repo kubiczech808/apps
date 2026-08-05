@@ -83,6 +83,13 @@ const state = {
     key: "roi",
     direction: "desc",
   },
+  // The category/tag table sorts independently of the parameter table above it;
+  // sharing one sort state made clicking either one scramble the other.
+  categorySort: {
+    key: "resolved",
+    direction: "desc",
+  },
+  categoryKind: "all",
   displayedRunLog: [],
   runLogFilters: [],
   userNavRefreshTimer: null,
@@ -7236,6 +7243,62 @@ function calculationHeader(key, label) {
   return `<th><div class="th-content"><button class="sort-button${active}" type="button" data-calculation-sort="${key}">${label}${calculationSortArrow(key)}</button></div></th>`;
 }
 
+function categorySortArrow(key) {
+  if (state.categorySort.key !== key) return "";
+  return sortDirectionIndicator(state.categorySort.direction);
+}
+
+function categoryHeader(key, label, title = "") {
+  const active = state.categorySort.key === key ? " active" : "";
+  const tooltip = title ? ` title="${escapeHtml(title)}"` : "";
+  return `<th><div class="th-content"><button class="sort-button${active}" type="button"`
+    + ` data-category-sort="${key}"${tooltip}>${label}${categorySortArrow(key)}</button></div></th>`;
+}
+
+function categorySortValue(row, key) {
+  const numeric = (value) => {
+    if (value == null || value === "") return null;
+    const result = Number(value);
+    return Number.isFinite(result) ? result : null;
+  };
+  if (key === "kind") return String(row.kind || "").toLowerCase();
+  if (key === "label") return String(row.label || "").toLowerCase();
+  if (key === "accuracy") return numeric(row.winRate);
+  if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
+  if (key === "lastResolvedAt") return Date.parse(row.lastResolvedAt || "") || null;
+  return numeric(row[key]);
+}
+
+function categoryRows(report) {
+  const rows = (Array.isArray(report?.categorySummaries) ? report.categorySummaries : [])
+    .filter((row) => state.categoryKind === "all" || String(row.kind || "") === state.categoryKind);
+  const sort = state.categorySort || { key: "resolved", direction: "desc" };
+  const direction = sort.direction === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const aValue = categorySortValue(a, sort.key);
+    const bValue = categorySortValue(b, sort.key);
+    const aMissing = aValue == null || Number.isNaN(aValue);
+    const bMissing = bValue == null || Number.isNaN(bValue);
+    // Groups with no data always sort last, in either direction, so they never
+    // occupy the top of the table just because a column is empty.
+    if (aMissing && bMissing) return 0;
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+    if (typeof aValue === "number" && typeof bValue === "number") return (aValue - bValue) * direction;
+    return String(aValue).localeCompare(String(bValue)) * direction;
+  });
+}
+
+// Matches the segmented filters already in this panel. It is rendered from JS rather
+// than sitting in index.html because the table it filters is rendered from JS too.
+function categoryKindFilter() {
+  const options = [["all", "All"], ["category", "Categories"], ["tag", "Tags"]];
+  return `<div class="segmented" data-category-kind-filter>${options.map(([value, label]) => `
+    <button class="segment-button${state.categoryKind === value ? " active" : ""}" type="button"
+      data-category-kind="${value}">${label}</button>
+  `).join("")}</div>`;
+}
+
 function renderCalculationReport() {
   if (!els.calculationReport) return;
   const report = state.botState?.latestCalculationReport
@@ -7249,7 +7312,7 @@ function renderCalculationReport() {
   }
 
   const rows = calculationRows(report);
-  const categories = Array.isArray(report.categorySummaries) ? report.categorySummaries : [];
+  const categories = categoryRows(report);
   const sample = Number(report.sampleSize || 0);
   const resolvedSample = Number(report.resolvedSampleSize || 0);
   const pendingSample = Number(report.pendingSampleSize || Math.max(0, sample - resolvedSample));
@@ -7311,36 +7374,49 @@ function renderCalculationReport() {
     </div>
     <div class="calculation-section">
       <h3>Category and tag performance</h3>
-      <p class="calculation-note">Each opportunity contributes to its inferred category and each available tag. Pending resolutions are shown separately and do not distort realized accuracy or ROI.</p>
+      <p class="calculation-note">Each opportunity contributes to its inferred category and to every tag it carries, including Polymarket's own tags and risk labels. Pending resolutions are shown separately and do not distort realized accuracy or ROI. Every column sorts; groups with no data for the sorted column stay at the bottom.</p>
+      ${categoryKindFilter()}
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
             <tr>
-              <th>Type</th>
-              <th>Category / tag</th>
-              <th>Trades</th>
-              <th>Resolved</th>
-              <th>Accuracy</th>
-              <th>P/L</th>
-              <th>ROI</th>
-              <th>Avg entry</th>
-              <th>Avg liquidity</th>
+              ${categoryHeader("kind", "Type")}
+              ${categoryHeader("label", "Category / tag")}
+              ${categoryHeader("trades", "Trades")}
+              ${categoryHeader("resolved", "Resolved")}
+              ${categoryHeader("accuracy", "Accuracy")}
+              ${categoryHeader("pnl", "P/L")}
+              ${categoryHeader("pnlPerTradeUsdc", "P/L per trade", "Realized P/L divided by the number of resolved trades, so groups of different sizes compare directly.")}
+              ${categoryHeader("roi", "ROI")}
+              ${categoryHeader("annualizedRoi", "ROI p.a.", "Realized ROI annualized over the group's average time to resolution. This is what ranks a fast category above a slow one with the same return.")}
+              ${categoryHeader("avgNetYield", "Avg net yield", "Average payout of a winning trade measured against what it cost, after fees.")}
+              ${categoryHeader("avgDaysToResolution", "Avg days", "Average time to resolution across the group.")}
+              ${categoryHeader("avgProbability", "Avg entry")}
+              ${categoryHeader("avgLiquidity", "Avg liquidity")}
+              ${categoryHeader("lastResolvedAt", "Last resolved", "Most recent resolution in this group. A stale group is not comparable to a current one.")}
             </tr>
           </thead>
           <tbody>
             ${categories.length ? categories.map((row) => `
               <tr>
-                <td>${escapeHtml(row.kind || "-")}</td>
-                <td><strong>${escapeHtml(row.label || "-")}</strong></td>
-                <td>${Number(row.trades || 0)}</td>
-                <td>${Number(row.resolved || 0)} / ${Number(row.pending || 0)} pending</td>
-                <td>${Number(row.resolved || 0) ? `${Number(row.wins || 0)} / ${Number(row.resolved || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
-                <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
-                <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
-                <td>${probability(Number(row.avgProbability))}</td>
-                <td>${Number.isFinite(Number(row.avgLiquidity)) ? money(Number(row.avgLiquidity)) : "-"}</td>
+                <td data-label="Type">${escapeHtml(row.kind || "-")}</td>
+                <td data-label="Category / tag"><strong>${escapeHtml(row.label || "-")}</strong></td>
+                <td data-label="Trades">${Number(row.trades || 0)}</td>
+                <td data-label="Resolved">${Number(row.resolved || 0)} / ${Number(row.pending || 0)} pending</td>
+                <td data-label="Accuracy">${Number(row.resolved || 0) ? `${Number(row.wins || 0)} / ${Number(row.resolved || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
+                <td data-label="P/L per trade" class="${pnlClass(Number(row.pnlPerTradeUsdc || 0))}">${row.pnlPerTradeUsdc == null ? "-" : signedMoney(Number(row.pnlPerTradeUsdc), 4)}</td>
+                <td data-label="ROI" class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
+                <td data-label="ROI p.a." class="${pnlClass(Number(row.annualizedRoi || 0))}">${row.annualizedRoi == null ? "-" : signedPercent(Number(row.annualizedRoi))}</td>
+                <td data-label="Avg net yield">${row.avgNetYield == null ? "-" : percent(Number(row.avgNetYield))}</td>
+                <td data-label="Avg days">${row.avgDaysToResolution == null ? "-" : compactDays(Number(row.avgDaysToResolution))}</td>
+                <td data-label="Avg entry">${probability(Number(row.avgProbability))}</td>
+                <td data-label="Avg liquidity">${Number.isFinite(Number(row.avgLiquidity)) ? money(Number(row.avgLiquidity)) : "-"}</td>
+                <td data-label="Last resolved">${escapeHtml(row.lastResolvedAt ? formatDate(row.lastResolvedAt) : "-")}</td>
               </tr>
-            `).join("") : '<tr><td colspan="9">No category or tag statistics are available yet.</td></tr>'}
+            `).join("") : `<tr><td colspan="14">${state.categoryKind === "all"
+              ? "No category or tag statistics are available yet."
+              : "No rows of this type. Switch the filter above to see the others."}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -7405,6 +7481,30 @@ els.calculationMarketButtons.forEach((button) => {
 });
 
 els.calculationReport?.addEventListener("click", (event) => {
+  const categoryKind = event.target.closest("[data-category-kind]");
+  if (categoryKind) {
+    state.categoryKind = categoryKind.dataset.categoryKind;
+    renderCalculationReport();
+    return;
+  }
+
+  // The two tables in this panel share one container, so each sort control is
+  // matched by its own attribute rather than by position.
+  const categoryButton = event.target.closest("[data-category-sort]");
+  if (categoryButton) {
+    const key = categoryButton.dataset.categorySort;
+    if (state.categorySort.key === key) {
+      state.categorySort.direction = state.categorySort.direction === "asc" ? "desc" : "asc";
+    } else {
+      state.categorySort.key = key;
+      // Text and horizon columns read naturally ascending; every performance
+      // column is most useful with the best value first.
+      state.categorySort.direction = ["kind", "label", "avgDaysToResolution"].includes(key) ? "asc" : "desc";
+    }
+    renderCalculationReport();
+    return;
+  }
+
   const button = event.target.closest("[data-calculation-sort]");
   if (!button) return;
   const key = button.dataset.calculationSort;

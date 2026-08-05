@@ -1144,3 +1144,92 @@ test("state segments: retention is not silently throttled by workflow env", asyn
     }
   }
 });
+
+test("category performance: the report carries the decision-relevant columns", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const state = bot.normalizeState(
+    JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
+  );
+  // Tags arrive from four places and in two shapes; the report used to read one.
+  state.marketObservations = state.marketObservations.map((row, index) => ({
+    ...row,
+    firstDaysToResolution: 4,
+    daysToResolution: 4,
+    firstLiquidity: 52000,
+    polymarketTags: index % 2 ? [{ slug: "nba" }, { label: "Sports" }] : ["crypto"],
+    riskGroupLabels: ["entity:acme"],
+  }));
+
+  const rows = bot.buildCalculationReport(state).categorySummaries;
+  const labels = rows.map((row) => row.label);
+  for (const expected of ["nba", "sports", "crypto", "entity:acme"]) {
+    assert.ok(labels.includes(expected), `${expected} must appear as a tag row`);
+  }
+  assert.ok(rows.some((row) => row.kind === "category"), "categories are still grouped");
+
+  const resolvedGroup = rows.find((row) => row.resolved > 0);
+  assert.ok(resolvedGroup, "the fixture must resolve at least one trade");
+  for (const field of ["pnlPerTradeUsdc", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "lastResolvedAt"]) {
+    assert.ok(resolvedGroup[field] != null, `${field} must be reported`);
+  }
+  // ROI p.a. must be ROI over the group's own horizon, not over a default.
+  assert.ok(
+    Math.abs(resolvedGroup.annualizedRoi - resolvedGroup.roi * (365 / resolvedGroup.avgDaysToResolution)) < 0.01,
+    "ROI p.a. must annualize over the measured horizon",
+  );
+});
+
+test("category performance: an unknown horizon reports no p.a. at all", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const state = bot.normalizeState(
+    JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
+  );
+  // annualizationDays(null) coerces to 0 and is floored to one hour, which turned a
+  // group with no measured horizon into a confident four-figure p.a.
+  state.marketObservations = state.marketObservations.map((row) => {
+    const stripped = { ...row };
+    delete stripped.daysToResolution;
+    delete stripped.firstDaysToResolution;
+    delete stripped.endDate;
+    delete stripped.resolutionEndDate;
+    delete stripped.scheduledEventDate;
+    return stripped;
+  });
+
+  const rows = bot.buildCalculationReport(state).categorySummaries;
+  for (const row of rows) {
+    if (row.avgDaysToResolution == null) {
+      assert.equal(row.annualizedRoi, null,
+        `${row.label} has no horizon, so it must not report ${row.annualizedRoi} p.a.`);
+    }
+  }
+});
+
+test("category performance: the table sorts independently and is bounded", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Both tables share one container, so each needs its own sort state and attribute;
+  // one shared state made clicking either scramble the other.
+  assert.match(app, /categorySort: \{/);
+  assert.match(app, /data-category-sort="\$\{key\}"/);
+  assert.match(app, /const categoryButton = event\.target\.closest\("\[data-category-sort\]"\);/);
+  assert.match(app, /const button = event\.target\.closest\("\[data-calculation-sort\]"\);/);
+  // Every column must be sortable, which is what was asked for.
+  const sorted = [...app.matchAll(/categoryHeader\("([a-zA-Z]+)"/g)].map((match) => match[1]);
+  for (const key of ["kind", "label", "trades", "resolved", "accuracy", "pnl", "pnlPerTradeUsdc",
+    "roi", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "avgProbability", "avgLiquidity", "lastResolvedAt"]) {
+    assert.ok(sorted.includes(key), `${key} column must be sortable`);
+  }
+  // The header count must match the colspan on the empty row, or the layout breaks.
+  assert.match(app, /colspan="14"/);
+  assert.equal(sorted.length, 14);
+  // The filter must use the segmented control this panel already uses.
+  assert.match(app, /class="segment-button\$\{state\.categoryKind === value \? " active" : ""\}"/);
+
+  // The report is stored in the core state file, so its row count must be bounded.
+  const botSource = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(botSource, /SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT/);
+  assert.match(botSource, /return rows\.slice\(0, SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT\);/);
+  assert.match(botSource, /if \(tags\.length >= SCRAPED_SIMULATION_TAGS_PER_TRADE\) return tags;/);
+});
