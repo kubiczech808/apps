@@ -689,6 +689,10 @@ function prefilterReasonCountKey(reason) {
   if (/(AI|Polymarket) probability .* below live threshold/i.test(text)) return "selected probability below live threshold";
   if (/stored resolution .* exceeds live max/i.test(text)) return "stored resolution exceeds live max days";
   if (/outside live revalidation scan limit/i.test(text)) return "outside live revalidation scan limit after short-expiry ranking";
+  // Each of these carries its own overlap keys, so grouping strips them back down to one
+  // count per reason instead of one bucket per distinct event/match combination.
+  if (/^same live event or match already open/i.test(text)) return "same live event or match already open";
+  if (/^correlated live exposure/i.test(text)) return "correlated live exposure";
   return text || "unknown prevalidation reason";
 }
 
@@ -697,15 +701,23 @@ function incrementReason(counts, reason) {
   counts[key] = number(counts[key], 0) + 1;
 }
 
-function prepareLiveCandidatePool(evaluations = []) {
+function prepareLiveCandidatePool(evaluations = [], liveState = null) {
   const uniqueEvaluations = latestUniqueEvaluations(evaluations);
   const reasonCounts = {};
   let prefilterRejectedCount = 0;
   const prefilterPassed = [];
 
+  // Built from this same row set so a candidate never needs a network fetch to learn
+  // that a position already open on its event/match would reject it anyway.
+  const evaluationByTokenForRisk = new Map(
+    uniqueEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId),
+  );
+  const held = liveState ? heldRiskItems(liveState, evaluationByTokenForRisk) : [];
+
   for (const item of uniqueEvaluations) {
     const result = prefilterLiveCandidate(item);
-    if (result.passed) {
+    const riskReason = result.passed ? earlyRiskBlockReason(item, held) : null;
+    if (result.passed && !riskReason) {
       prefilterPassed.push({
         ...item,
         daysToResolution: Number.isFinite(result.days) ? Number(result.days.toFixed(2)) : item.daysToResolution,
@@ -713,6 +725,7 @@ function prepareLiveCandidatePool(evaluations = []) {
       continue;
     }
     for (const reason of result.reasons) incrementReason(reasonCounts, reason);
+    if (riskReason) incrementReason(reasonCounts, riskReason);
     prefilterRejectedCount += 1;
   }
 
@@ -1004,6 +1017,62 @@ function riskBlock(candidate, liveState, evaluationByToken = new Map()) {
     }
     if (!CROSS_PORTFOLIO_RISK_DIVERSIFICATION) continue;
     if (overlap.length) return { reason: "correlated live exposure", overlap: overlap.slice(0, 4) };
+  }
+  return null;
+}
+
+// Risk keys for every currently open position/order, computed once per run rather than
+// once per candidate. Used stored metadata when it exists (the merge in
+// openLiveRiskItems() already attaches it from the matching evaluation); recomputing
+// from question/tags is the same deterministic profile riskBlock() would derive anyway.
+function heldRiskItems(liveState, evaluationByToken = new Map()) {
+  return openLiveRiskItems(liveState, evaluationByToken).map((item) => {
+    const keys = Array.isArray(item.riskGroupKeys) && item.riskGroupKeys.length
+      ? item.riskGroupKeys
+      : riskProfile({
+        question: item.question || "",
+        slug: item.slug || "",
+        eventSlug: item.eventSlug || "",
+        outcome: item.outcome || "",
+        tags: item.tags || tagQuestion(item.question || ""),
+      }).keys;
+    return { tokenId: String(item.tokenId || item.assetId || ""), keys };
+  });
+}
+
+// A cheaper version of riskBlock() that judges a candidate purely from data already on
+// its stored row -- riskGroupKeys, populated by the scan/evaluation that produced it --
+// against the same stored data for open positions. No book fetch, no live re-evaluation.
+//
+// This exists because a candidate that obviously collides with an already-open position
+// on the same event or match used to reach a live CLOB book fetch and a full evaluation
+// before riskBlock() rejected it during revalidation. With dozens of scraped rows sharing
+// one event (every "Exact Score" sub-market of the same match, for instance), that meant
+// paying for a network round trip per row only to reject nearly all of them for a reason
+// that was knowable up front. It also meant the browser's own READY/RISK-BLOCKED split
+// disagreed with what the executor actually tried: rows the dashboard already marked
+// RISK-BLOCKED were still being sent through revalidation.
+//
+// The stored riskGroupKeys can be absent or stale (an event's keys generally do not
+// change, but nothing here assumes they never could), so this is a fast-path only.
+// riskBlock() still runs during revalidation as the authoritative check.
+function earlyRiskBlockReason(candidate, held) {
+  const candidateKeys = Array.isArray(candidate?.riskGroupKeys) ? candidate.riskGroupKeys : [];
+  if (!candidateKeys.length || !held.length) return null;
+  const tokenId = String(candidate?.tokenId || "");
+  const candidateKeySet = new Set(candidateKeys);
+  for (const item of held) {
+    if (item.tokenId && item.tokenId === tokenId) {
+      return "duplicate token already open";
+    }
+    const overlap = item.keys.filter((key) => candidateKeySet.has(key));
+    const sameEventOrMatch = overlap.filter((key) => key.startsWith("event:") || key.startsWith("match:"));
+    if (sameEventOrMatch.length) {
+      return `same live event or match already open: ${sameEventOrMatch.slice(0, 4).join(", ")}`;
+    }
+    if (CROSS_PORTFOLIO_RISK_DIVERSIFICATION && overlap.length) {
+      return `correlated live exposure: ${overlap.slice(0, 4).join(", ")}`;
+    }
   }
   return null;
 }
@@ -2835,7 +2904,7 @@ async function main() {
   const rawCandidateRows = PROBABILITY_SOURCE === "polymarket"
     ? rawMarketObservations
     : rawEvaluations;
-  const candidatePool = prepareLiveCandidatePool(rawCandidateRows);
+  const candidatePool = prepareLiveCandidatePool(rawCandidateRows, liveState);
   const latestEvaluations = candidatePool.uniqueEvaluations;
   const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
   const manualShortlistFallback = candidatePool.diagnostics.manualShortlistFallback === true;
@@ -3419,4 +3488,7 @@ export {
   ROTATION_PROTECT_REMAINING_GAIN_USDC,
   positionRotationEconomics,
   sharesForOrder,
+  prepareLiveCandidatePool,
+  heldRiskItems,
+  earlyRiskBlockReason,
 };

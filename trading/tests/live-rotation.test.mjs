@@ -419,3 +419,85 @@ test("live shortlist: one stale token id must not discard the whole shortlist", 
   assert.match(executor, /not in the current scraped catalogue when the run started/);
   assert.match(executor, /of \$\{MANUAL_SHORTLIST_TOKEN_IDS\.length\} requested/);
 });
+
+test("live candidates: an obvious risk collision is filtered before revalidation, not after", () => {
+  // The reported bug: a browser shortlist of ~56 candidates, most of them different
+  // sub-markets ("Exact Score", "Under", "Spread"...) of one already-open match, was
+  // sent whole into revalidation. Every one of them paid for a live CLOB book fetch
+  // only to be rejected afterwards for a reason knowable from stored data alone: the
+  // dashboard's own READY/RISK-BLOCKED split already knew this without a network call.
+  const liveState = {
+    positions: [{
+      tokenId: "held-token",
+      status: "OPEN",
+      shares: 10,
+      question: "Exact Score: Chelsea FC 2 - 2 Juventus Turin?",
+      slug: "clf-cfc-juv-2026-08-05-exact-score",
+      eventSlug: "clf-cfc-juv-2026-08-05",
+      outcome: "Yes",
+    }],
+    openOrders: [],
+  };
+
+  // Otherwise-eligible on every threshold the prefilter checks (probability, net
+  // yield, liquidity, horizon), so the only thing distinguishing them is the risk
+  // collision -- proving the rejection comes from that check and nothing else.
+  const eligibleFields = {
+    aiProbability: 0.97,
+    annualizedReturn: 0.4,
+    expectedValueUsdc: 0.3,
+    netYield: 0.08,
+    liquidity: 60000,
+    daysToResolution: 0.3,
+    status: "EVALUATED",
+  };
+  const sameMatchCandidate = {
+    ...eligibleFields,
+    tokenId: "candidate-same-match",
+    question: "Exact Score: Chelsea FC 1 - 2 Juventus Turin?",
+    slug: "clf-cfc-juv-2026-08-05-exact-score-alt",
+    eventSlug: "clf-cfc-juv-2026-08-05",
+    outcome: "No",
+    riskGroupKeys: ["event:clf-cfc-juv-2026-08-05", "match:chelsea fc-vs-juventus turin"],
+  };
+  const unrelatedCandidate = {
+    ...eligibleFields,
+    tokenId: "candidate-unrelated",
+    question: "Associação Chapecoense de Futebol leading at halftime?",
+    slug: "brco-cru-cha-2026-08-05-halftime-result",
+    eventSlug: "brco-cru-cha-2026-08-05",
+    outcome: "No",
+    riskGroupKeys: ["event:brco-cru-cha-2026-08-05", "match:associacao chapecoense-vs-cruzeiro"],
+  };
+
+  const held = executor.heldRiskItems(liveState);
+  assert.equal(held.length, 1);
+  assert.ok(held[0].keys.includes("match:chelsea fc-vs-juventus turin") || held[0].keys.some((k) => k.startsWith("match:")),
+    "the held position must carry a match: risk key derived from its own question");
+
+  const blockedReason = executor.earlyRiskBlockReason(sameMatchCandidate, held);
+  assert.match(blockedReason, /^same live event or match already open/);
+
+  const clearReason = executor.earlyRiskBlockReason(unrelatedCandidate, held);
+  assert.equal(clearReason, null, "an unrelated match must not be blocked");
+
+  // And the whole pool-building step must exclude it before anything expensive runs.
+  const pool = executor.prepareLiveCandidatePool([sameMatchCandidate, unrelatedCandidate], liveState);
+  const poolTokenIds = pool.candidates.map((item) => item.tokenId);
+  assert.ok(!poolTokenIds.includes("candidate-same-match"), "the colliding candidate must never reach revalidation");
+  assert.ok(poolTokenIds.includes("candidate-unrelated"), "the unrelated candidate must still be considered");
+  assert.ok(
+    Object.keys(pool.diagnostics.reasonCounts).some((key) => key.startsWith("same live event or match already open")),
+    "the rejection must still be visible in the run's reason counts, not silently dropped",
+  );
+});
+
+test("live candidates: with no riskGroupKeys stored, the cheap filter defers to the live check", () => {
+  // A row without stored risk keys cannot be judged cheaply. It must fall through
+  // rather than being wrongly waved through as clear -- the authoritative riskBlock()
+  // during revalidation is what actually decides it.
+  const held = [{ tokenId: "held", keys: ["event:x", "match:y"] }];
+  const noKeys = { tokenId: "candidate", question: "..." };
+  assert.equal(executor.earlyRiskBlockReason(noKeys, held), null);
+  assert.equal(executor.earlyRiskBlockReason(noKeys, []), null, "no held positions means nothing to collide with either");
+});
