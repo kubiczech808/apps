@@ -394,3 +394,24 @@ test("live ranking: the horizon is recomputed, not read from the scrape", async 
   const viaResolution = executor.localDaysToResolution({ resolutionEndDate: endDate, daysToResolution: 9 });
   assert.ok(viaResolution < 1, "resolutionEndDate must also outrank the stored value");
 });
+
+test("live shortlist: one stale token id must not discard the whole shortlist", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // The reported bug: a match sitting in the dashboard as READY never appeared in the
+  // run log at all, neither placed nor rejected. The shortlist selection was
+  // all-or-nothing -- a single token id missing from the ranked pool discarded every
+  // other one and the run silently evaluated the executor's own top-N instead. With
+  // ~120 ids and a scraping batch landing mid-run, that is close to guaranteed.
+  assert.match(executor, /const manualShortlistFallback = HAS_MANUAL_SHORTLIST && requestedShortlist\.length === 0;/);
+  assert.ok(
+    !/manualShortlistFallback = HAS_MANUAL_SHORTLIST && missingManualShortlistTokenIds\.length > 0/.test(executor),
+    "a missing id must no longer discard the surviving ones",
+  );
+  // The survivors are used in the order the browser asked for.
+  assert.match(executor, /const selected = usesRequestedShortlist\s*\n?\s*\? requestedShortlist/);
+  // And the dropped ids are reported rather than vanishing without a trace.
+  assert.match(executor, /not in the current scraped catalogue when the run started/);
+  assert.match(executor, /of \$\{MANUAL_SHORTLIST_TOKEN_IDS\.length\} requested/);
+});

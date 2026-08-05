@@ -724,15 +724,30 @@ function prepareLiveCandidatePool(evaluations = []) {
   const missingManualShortlistTokenIds = HAS_MANUAL_SHORTLIST
     ? MANUAL_SHORTLIST_TOKEN_IDS.filter((tokenId) => !rankedByToken.has(tokenId))
     : [];
-  // A browser can hold a shortlist for a few seconds while a scraping batch
-  // replaces its local rows. Do not abort a manual order run in that race.
-  // Fall back to the freshly ranked portfolio shortlist, which is safer than
-  // acting on stale token ids and keeps the run executable.
-  const manualShortlistFallback = HAS_MANUAL_SHORTLIST && missingManualShortlistTokenIds.length > 0;
-  const selected = HAS_MANUAL_SHORTLIST && !manualShortlistFallback
+  // A browser can hold a shortlist for a few seconds while a scraping batch replaces
+  // its local rows, so some token ids may no longer be in the ranked pool.
+  //
+  // This used to be all-or-nothing: a single missing id discarded the entire requested
+  // shortlist and the run silently evaluated the executor's own top-N instead. With a
+  // shortlist of ~120 ids that is close to guaranteed, which is why candidates sitting
+  // in the dashboard as READY never appeared in the run log at all -- they were never
+  // evaluated, and nothing said so.
+  //
+  // The surviving ids are now used as-is, in the order the browser asked for. Falling
+  // back to the ranked pool only happens when none of them survived, because then there
+  // is genuinely no shortlist left to honour.
+  const manualShortlistFallback = HAS_MANUAL_SHORTLIST && requestedShortlist.length === 0;
+  const usesRequestedShortlist = HAS_MANUAL_SHORTLIST && !manualShortlistFallback;
+  if (usesRequestedShortlist && missingManualShortlistTokenIds.length) {
+    incrementReason(
+      reasonCounts,
+      `not in the current scraped catalogue when the run started (${missingManualShortlistTokenIds.length} of ${MANUAL_SHORTLIST_TOKEN_IDS.length} requested)`,
+    );
+  }
+  const selected = usesRequestedShortlist
     ? requestedShortlist
     : ranked.slice(0, Math.max(0, CANDIDATE_SCAN_LIMIT));
-  const skippedByLimit = HAS_MANUAL_SHORTLIST && !manualShortlistFallback
+  const skippedByLimit = usesRequestedShortlist
     ? []
     : ranked.slice(Math.max(0, CANDIDATE_SCAN_LIMIT));
   if (skippedByLimit.length) {
