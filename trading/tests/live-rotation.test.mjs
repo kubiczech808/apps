@@ -549,6 +549,33 @@ test("live positions: a date-only resolution date means the end of that day", as
   assert.ok(openedAt < endOfDay, "and before end-of-day, which is the correct reading");
 });
 
+test("live revalidation: the market is found by token id, not only by slug", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // Reported: execution rejected candidates with "market not found in Gamma" while the
+  // shortlist showed them with six-figure liquidity and Polymarket showed them live. The
+  // lookup keyed on the stored slug, but several scraped rows hold the parent EVENT slug
+  // in `slug` (slug === eventSlug, seen on esports fixtures), and /markets?slug=<event>
+  // matches nothing. The CLOB token id is what an order is placed against and Gamma
+  // indexes markets by it, so it resolves the market unambiguously.
+  const fetchMarket = source.slice(source.indexOf("async function fetchMarket(evaluation)"));
+  const body = fetchMarket.slice(0, fetchMarket.indexOf("\nasync function fetchMarketByToken"));
+  assert.match(body, /const byToken = await fetchMarketByToken\(tokenId\)/,
+    "the token lookup must be tried first");
+  const tokenAt = body.indexOf("fetchMarketByToken(tokenId)");
+  const slugAt = body.indexOf('apiUrl(GAMMA_API, "/markets", { slug })');
+  assert.ok(tokenAt > 0 && slugAt > tokenAt, "slug must remain only the fallback");
+  // A slug can resolve to several of an event's sub-markets, so the one carrying this
+  // token has to win over whichever Gamma happened to return first.
+  assert.match(body, /markets\.find\(\(market\) => parseJsonField\(market\?\.clobTokenIds\)\.map\(String\)\.includes\(tokenId\)\)/);
+  // A token-lookup failure must fall through to the slug rather than abort the candidate.
+  assert.match(body, /fetchMarketByToken\(tokenId\)\.catch\(\(\) => null\)/);
+
+  // fetchMarketByToken must keep using the parameter Gamma actually indexes.
+  assert.match(source, /apiUrl\(GAMMA_API, "\/markets", \{ clob_token_ids: tokenId \}\)/);
+});
+
 test("live candidates: an execution rejection survives the next scrape", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");

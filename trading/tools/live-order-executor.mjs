@@ -798,11 +798,30 @@ function prepareLiveCandidatePool(evaluations = [], liveState = null) {
   };
 }
 
+// The CLOB token id is the thing an order is actually placed against, and Gamma indexes
+// markets by it, so it identifies the market unambiguously. The stored slug does not: for
+// several scraped rows -- esports fixtures especially -- `slug` holds the parent EVENT
+// slug (slug === eventSlug), and /markets?slug=<event-slug> matches nothing. That made
+// live revalidation report "market not found in Gamma" and reject candidates the scrape
+// had just found with six-figure liquidity, so a real, tradable market looked dead.
+// Slug stays as the fallback for rows that have no token id.
 async function fetchMarket(evaluation) {
+  const tokenId = String(evaluation?.tokenId || "").trim();
+  if (tokenId) {
+    const byToken = await fetchMarketByToken(tokenId).catch(() => null);
+    if (byToken) return byToken;
+  }
   const slug = evaluation.slug || evaluation.marketSlug;
   if (!slug) return null;
   const markets = await fetchJson(apiUrl(GAMMA_API, "/markets", { slug }), `Gamma market ${slug}`);
-  return Array.isArray(markets) ? markets[0] : null;
+  if (!Array.isArray(markets) || !markets.length) return null;
+  // A slug can resolve to several markets (an event's sub-markets share a prefix), so
+  // prefer the one that actually carries this token over whichever came back first.
+  if (tokenId) {
+    const owning = markets.find((market) => parseJsonField(market?.clobTokenIds).map(String).includes(tokenId));
+    if (owning) return owning;
+  }
+  return markets[0];
 }
 
 async function fetchMarketByToken(tokenId) {
