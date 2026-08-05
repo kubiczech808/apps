@@ -4705,6 +4705,42 @@ function evaluationUpdateMs(item) {
   );
 }
 
+// The execution run's own verdict, straight from live-execution-state.json.
+//
+// A verdict also gets merged back into the scraped rows as `executionRevalidation`, but
+// that path is a read-modify-write of a large file over FTP that the market scan writes
+// too, so an update can be lost to a concurrent upload or land on a row the scan has
+// since replaced with a newer `evaluatedAt` -- and then the shortlist quietly shows a
+// market as READY that execution has already rejected. This state is written and
+// uploaded by the execution run itself, so it needs neither the merge nor luck.
+function liveExecutionVerdictByToken() {
+  const updates = Array.isArray(state.liveExecutionState?.revalidationUpdates)
+    ? state.liveExecutionState.revalidationUpdates
+    : [];
+  const byToken = new Map();
+  for (const update of updates) {
+    const token = String(update?.tokenId || "").trim();
+    if (!token) continue;
+    const previous = byToken.get(token);
+    if (previous && (Date.parse(previous.checkedAt || "") || 0) > (Date.parse(update.checkedAt || "") || 0)) continue;
+    byToken.set(token, update);
+  }
+  return byToken;
+}
+
+function latestLiveExecutionVerdict(item) {
+  const merged = item?.executionRevalidation && typeof item.executionRevalidation === "object"
+    ? item.executionRevalidation
+    : null;
+  const token = String(item?.tokenId || item?.clobTokenId || item?.assetId || "").trim();
+  const published = token ? liveExecutionVerdictByToken().get(token) || null : null;
+  if (!merged) return published;
+  if (!published) return merged;
+  return (Date.parse(published.checkedAt || "") || 0) >= (Date.parse(merged.checkedAt || "") || 0)
+    ? published
+    : merged;
+}
+
 function latestUniquePortfolioEvaluations(evaluations = []) {
   const byKey = new Map();
   const ordered = [...evaluations].sort((a, b) => evaluationUpdateMs(b) - evaluationUpdateMs(a));
@@ -4818,11 +4854,14 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const annualizedReturn = portfolioAnnualizedReturn(item, config);
   const returnMetric = portfolioReturnMetricLabel(config);
   const aiPending = item.selectionStatus === "AI_PENDING" || item.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
-  const executionCheck = item.executionRevalidation && typeof item.executionRevalidation === "object"
-    ? item.executionRevalidation
-    : null;
-  const executionCheckIsCurrent = executionCheck
-    && (Date.parse(executionCheck.checkedAt || "") || 0) >= (Date.parse(item.evaluatedAt || "") || 0);
+  const executionCheck = latestLiveExecutionVerdict(item);
+  // A re-scrape used to invalidate the execution verdict, because a newer `evaluatedAt`
+  // made it look stale. But a scrape only refreshes Gamma's listing: it cannot know that
+  // the market is gone from Gamma, that the book has no usable ask, or that live
+  // liquidity is a fraction of the listed figure -- those are exactly what execution
+  // measured. So the verdict stands until execution itself replaces it, and only a
+  // retryable one (capital, diversification) lets the row back into the shortlist.
+  const executionCheckIsCurrent = Boolean(executionCheck);
 
   if (displayStatus !== "EVALUATED") reasons.push(`status ${displayStatus}`);
   if (probabilitySource === "ai" && normalizedMode !== "live" && storedStatus !== "ELIGIBLE") {

@@ -81,6 +81,21 @@ function isoTime(value) {
     const ms = numeric < 1000000000000 ? numeric * 1000 : numeric;
     return new Date(ms).toISOString();
   }
+  // "2026-08-05" carries no time, and JS reads it as midnight UTC -- the START of the
+  // day. As a resolution date that is wrong in the worst direction: every position
+  // opened during that day looks past resolution, which zeroes its potential p.a. and
+  // (via the settlement-locked veto) freezes it out of rotation, while the fixture is
+  // still being played. A day without a time ends when the day ends. The date-only
+  // kickoff parsing below already used 23:59:59; this brings the rest in line.
+  const dateOnly = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    return new Date(Date.UTC(
+      Number(dateOnly[1]),
+      Number(dateOnly[2]) - 1,
+      Number(dateOnly[3]),
+      23, 59, 59,
+    )).toISOString();
+  }
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
@@ -295,7 +310,15 @@ function correctedEndDate(question, rawEndDate, fallbackDate = null, position = 
       : { endDate: raw || inferred, source: raw ? "positions-api" : "question-inferred", rawEndDate: raw });
   const scheduledTime = Date.parse(scheduledEventDate || "");
   const endTime = Date.parse(base.endDate || "");
-  if (isSports && scheduledEventDate && Number.isFinite(scheduledTime) && (!Number.isFinite(endTime) || scheduledTime < endTime)) {
+  // A kickoff still in the future wins even when it falls after the market's own end
+  // date, because that end date is sometimes a stale pre-reschedule estimate and a
+  // fixture cannot be past resolution before it has been played. Same correction as
+  // marketDateContext() in paper-trading-bot.mjs.
+  const scheduledIsFuture = Number.isFinite(scheduledTime) && scheduledTime > Date.now();
+  if (isSports
+    && scheduledEventDate
+    && Number.isFinite(scheduledTime)
+    && (!Number.isFinite(endTime) || scheduledTime < endTime || scheduledIsFuture)) {
     return { ...base, endDate: scheduledEventDate, source: "sports-event-start", scheduledEventDate, resolutionEndDate: base.endDate || null };
   }
   return { ...base, scheduledEventDate: scheduledEventDate || null, resolutionEndDate: base.endDate || null };

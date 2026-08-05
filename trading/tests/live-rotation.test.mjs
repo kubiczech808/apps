@@ -523,6 +523,62 @@ test("released capital: the account sync dispatches the execution workflow", asy
   assert.match(syncSource, /releasedOrderCapital,/);
 });
 
+test("live positions: a date-only resolution date means the end of that day", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8");
+
+  // Reported: positions on fixtures still being played showed "05. 08. 2026 02:00" and
+  // "awaiting settlement" while their own Polymarket page showed a live countdown. 02:00
+  // Prague is midnight UTC -- Polymarket sent "2026-08-05" with no time, and JS reads a
+  // bare date as the START of the day, so every position opened during it looked past
+  // resolution. That zeroes potential p.a. and freezes the position out of rotation.
+  assert.match(source, /const dateOnly = String\(value\)\.trim\(\)\.match\(\/\^\(\\d\{4\}\)-\(\\d\{2\}\)-\(\\d\{2\}\)\$\/\);/);
+  assert.match(source, /23, 59, 59,\s*\n\s*\)\)\.toISOString\(\);/);
+
+  // And the same future-kickoff correction as the paper side: an end date earlier than a
+  // kickoff that has not happened yet is a stale estimate, not a resolution.
+  assert.match(source, /const scheduledIsFuture = Number\.isFinite\(scheduledTime\) && scheduledTime > Date\.now\(\);/);
+  assert.match(source, /\|\| scheduledTime < endTime \|\| scheduledIsFuture\)\)/);
+
+  // Verify the arithmetic the fix relies on, so a future refactor cannot silently
+  // reintroduce start-of-day semantics.
+  const startOfDay = Date.parse("2026-08-05T00:00:00.000Z");
+  const endOfDay = Date.UTC(2026, 7, 5, 23, 59, 59);
+  const openedAt = Date.parse("2026-08-05T08:31:00.000Z");
+  assert.ok(openedAt > startOfDay, "the reported position was opened after start-of-day, hence 'already resolved'");
+  assert.ok(openedAt < endOfDay, "and before end-of-day, which is the correct reading");
+});
+
+test("live candidates: an execution rejection survives the next scrape", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: execution returned SKIP with every candidate rejected ("market not found
+  // in Gamma", "no valid current entry price", live liquidity far below the listed
+  // figure) and they all stayed READY in the shortlist. The verdict was only honoured
+  // while checkedAt >= evaluatedAt, so the next scrape -- which cannot know any of those
+  // things, it only re-reads Gamma's listing -- silently reinstated the row.
+  assert.ok(!/executionCheckIsCurrent = executionCheck\s*\n\s*&& \(Date\.parse\(executionCheck\.checkedAt/.test(app),
+    "a re-scrape must not invalidate what execution measured");
+  assert.match(app, /const executionCheckIsCurrent = Boolean\(executionCheck\);/);
+
+  // The verdict is read from live-execution-state.json, which the execution run writes
+  // and uploads itself, rather than depending on the FTP merge into paper-state.json.
+  assert.match(app, /function liveExecutionVerdictByToken\(\)/);
+  assert.match(app, /state\.liveExecutionState\?\.revalidationUpdates/);
+  assert.match(app, /function latestLiveExecutionVerdict\(item\)/);
+  assert.match(app, /const executionCheck = latestLiveExecutionVerdict\(item\);/);
+
+  // Retryable verdicts (capital, diversification) must still return to the shortlist:
+  // those block one run, not the market itself.
+  assert.match(app, /!executionCheck\.retryable/);
+
+  // And the executor must still classify only those two as retryable.
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  assert.match(executor, /\? "DIVERSIFICATION"/);
+  assert.match(executor, /\? "CAPITAL"/);
+});
+
 test("live ranking: the horizon is recomputed, not read from the scrape", async () => {
   const executor = await import("../tools/live-order-executor.mjs");
 
