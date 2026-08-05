@@ -62,6 +62,7 @@ jobs:
               # Their sizes are the number to watch: a core that stays small while
               # these carry the bulk is the segmented layout working as intended.
               "paper-state.observations.json",
+              "paper-state.resolvedObservations.json",
               "paper-state.evaluations.json",
               "paper-state.scanHistory.json",
               "live-state.json",
@@ -274,6 +275,7 @@ jobs:
           SUMMARIZERS = {
               "paper-state.json": summarize_paper,
               "paper-state.observations.json": summarize_segment,
+              "paper-state.resolvedObservations.json": summarize_segment,
               "paper-state.evaluations.json": summarize_segment,
               "paper-state.scanHistory.json": summarize_segment,
               "live-state.json": summarize_live,
