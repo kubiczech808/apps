@@ -860,13 +860,32 @@ function openOrderIdentityKeys(order = {}) {
     .filter(Boolean);
 }
 
-// An open order that disappears without becoming a position has released its locked
-// capital back to cash, and that capital sits idle until the next scheduled execution
-// run -- up to three hours of the portfolio doing nothing. Detecting it here lets the
-// account sync dispatch an execution run immediately instead.
+// Below this the difference is share/price rounding, not capital worth acting on.
+const RELEASED_CAPITAL_EPSILON_USDC = 0.01;
+
+function positionSharesByToken(positions = []) {
+  const shares = new Map();
+  for (const position of Array.isArray(positions) ? positions : []) {
+    const size = number(position?.shares ?? position?.size, 0);
+    if (!(size > 0)) continue;
+    for (const key of [position?.tokenId, position?.assetId, position?.conditionId]) {
+      const normalized = String(key || "").trim();
+      // Several positions can share a conditionId, so accumulate rather than overwrite.
+      if (normalized) shares.set(normalized, number(shares.get(normalized), 0) + size);
+    }
+  }
+  return shares;
+}
+
+// An open order that leaves the book without filling hands its locked capital back as
+// cash, where it sits idle until the next scheduled execution run picks it up hours
+// later. Detecting it here lets the account sync dispatch a run for it immediately.
 //
-// A fill is deliberately NOT reported: the order became a position, so no capital was
-// freed and the existing fill/rotation handling already covers it.
+// The question is how much capital came back, not merely whether a position exists: an
+// order can partially fill and have its remainder cancelled, which puts shares into a
+// position AND frees the unfilled rest. Comparing the position's shares before and
+// after tells the two apart, so a full fill (nothing freed) stays quiet while a partial
+// one is reported for exactly the remainder.
 function vanishedOpenOrders(previousState, openOrders = [], positions = [], sync = null, generatedAt = new Date().toISOString()) {
   // getOpenOrders() failing leaves the list empty while the sync still reports OK, so
   // without this guard a transient CLOB error would look like every order vanishing at
@@ -879,29 +898,49 @@ function vanishedOpenOrders(previousState, openOrders = [], positions = [], sync
   }
 
   const liveKeys = new Set(openOrders.flatMap(openOrderIdentityKeys));
-  const positionKeys = new Set(positions
-    .filter((position) => number(position?.shares ?? position?.size, 0) > 0)
-    .flatMap((position) => [position.tokenId, position.assetId, position.conditionId]
-      .map((key) => String(key || "").trim())
-      .filter(Boolean)));
+  const sharesBefore = positionSharesByToken(previousState?.positions);
+  const sharesNow = positionSharesByToken(positions);
 
   const vanished = [];
   for (const order of previousOrders) {
     const keys = openOrderIdentityKeys(order);
     if (!keys.length || keys.some((key) => liveKeys.has(key))) continue;
-    // Filled: the capital moved into a position rather than back to cash.
-    if (keys.some((key) => positionKeys.has(key))) continue;
+
+    const token = String(order.tokenId || order.assetId || "").trim();
+    const lockedSize = number(order.remainingSize ?? order.originalSize, 0);
+    const price = number(order.price, 0);
+    // How much of this order actually became shares, measured on its own token so a
+    // position opened elsewhere in the same run cannot be mistaken for this fill.
+    const filledSize = token
+      ? Math.max(0, number(sharesNow.get(token), 0) - number(sharesBefore.get(token), 0))
+      : 0;
+    const releasedSize = Math.max(0, lockedSize - filledSize);
+    // A stored order without a usable size/price pair cannot be apportioned, so its
+    // recorded notional stands. Losing an older row's release entirely would be worse
+    // than treating it as fully released -- the execution run still decides what fits.
+    const releasedCapitalUsdc = lockedSize > 0 && price > 0
+      ? Number((releasedSize * price).toFixed(6))
+      : number(order.notionalUsdc, 0);
+    // Fully filled: the capital moved into the position, nothing came back to cash.
+    if (releasedCapitalUsdc < RELEASED_CAPITAL_EPSILON_USDC) continue;
+
+    const partiallyFilled = filledSize > 0;
     vanished.push({
       id: order.id || null,
       tokenId: order.tokenId || order.assetId || null,
       question: order.question || "",
       outcome: order.outcome || "",
-      price: number(order.price),
-      remainingSize: number(order.remainingSize ?? order.originalSize),
-      releasedCapitalUsdc: number(order.notionalUsdc),
+      price,
+      remainingSize: lockedSize,
+      filledSize: Number(filledSize.toFixed(6)),
+      releasedSize: Number(releasedSize.toFixed(6)),
+      releasedCapitalUsdc,
+      partiallyFilled,
       createdAt: order.createdAt || null,
       detectedAt: generatedAt,
-      reason: "open order left the book without becoming a position; its locked capital is free again",
+      reason: partiallyFilled
+        ? "open order left the book after filling only part of its size; the unfilled remainder is free capital again"
+        : "open order left the book without becoming a position; its locked capital is free again",
     });
   }
 

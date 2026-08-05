@@ -401,39 +401,74 @@ test("live portfolio: the deposited baseline is configured, never inferred from 
 
 test("released capital: an order that leaves the book without filling triggers a run", async () => {
   const sync = await import("../tools/live-account-sync.mjs");
-  const order = (id, tokenId, notional) => ({
+  const order = (id, tokenId, size) => ({
     id, tokenId, assetId: tokenId, question: `Q-${id}`, outcome: "No",
-    price: 0.9, remainingSize: 5.68, notionalUsdc: notional,
+    price: 0.9, remainingSize: size, notionalUsdc: Number((size * 0.9).toFixed(4)),
   });
-  const previousState = { openOrders: [order("a", "111", 5.11), order("b", "222", 4.5)] };
+  const previousState = { openOrders: [order("a", "111", 5.68), order("b", "222", 5)] };
 
   // "b" is still on the book, "a" is gone and never became a position: its locked
   // capital is back as cash and would otherwise sit idle until the next cron run.
-  const released = sync.vanishedOpenOrders(previousState, [order("b", "222", 4.5)], [], null, "2026-08-05T14:00:00Z");
+  const released = sync.vanishedOpenOrders(previousState, [order("b", "222", 5)], [], null, "2026-08-05T14:00:00Z");
   assert.equal(released.vanished.length, 1);
   assert.equal(released.vanished[0].id, "a");
-  assert.equal(released.freedCapitalUsdc, 5.11, "the freed capital is reported for the dispatch log");
+  assert.equal(released.vanished[0].partiallyFilled, false);
+  assert.equal(released.freedCapitalUsdc, 5.112, "the freed capital is reported for the dispatch log");
   assert.equal(released.ordersUnavailable, false);
+
+  // An older stored row may carry only the notional, with no size/price to apportion.
+  // Dropping its release would be worse than crediting all of it.
+  const legacyOnly = sync.vanishedOpenOrders(
+    { openOrders: [{ id: "c", tokenId: "333", assetId: "333", notionalUsdc: 4.87 }] },
+    [], [], null, "2026-08-05T14:00:00Z",
+  );
+  assert.equal(legacyOnly.vanished.length, 1, "a legacy row must still be detected");
+  assert.equal(legacyOnly.freedCapitalUsdc, 4.87);
 });
 
-test("released capital: a fill is not a disappearance", async () => {
+test("released capital: how much came back decides, not whether a position exists", async () => {
   const sync = await import("../tools/live-account-sync.mjs");
-  const order = { id: "a", tokenId: "111", assetId: "111", price: 0.9, notionalUsdc: 5.11 };
-  const previousState = { openOrders: [order] };
+  const order = {
+    id: "a", tokenId: "111", assetId: "111", price: 0.9,
+    remainingSize: 5.68, notionalUsdc: 5.112,
+  };
+  const at = "2026-08-05T14:00:00Z";
+  const released = (previousState, positions) => sync.vanishedOpenOrders(previousState, [], positions, null, at);
+  const noPosition = { openOrders: [order] };
 
-  // The order left the book because it filled, so the capital moved into a position
-  // rather than back to cash. Nothing was released and no run is warranted.
-  const filled = sync.vanishedOpenOrders(previousState, [], [{ tokenId: "111", shares: 5.68 }], null, "2026-08-05T14:00:00Z");
-  assert.equal(filled.vanished.length, 0, "a filled order must not be reported as released capital");
+  // Fully filled: the whole locked size became shares, so nothing returned to cash.
+  assert.equal(released(noPosition, [{ tokenId: "111", shares: 5.68 }]).vanished.length, 0,
+    "a fully filled order released no capital");
 
-  // A zero-share row is not a real position, so that same order did vanish.
-  const empty = sync.vanishedOpenOrders(previousState, [], [{ tokenId: "111", shares: 0 }], null, "2026-08-05T14:00:00Z");
-  assert.equal(empty.vanished.length, 1);
+  // Partially filled with the remainder cancelled: shares went into a position AND the
+  // unfilled rest came back as cash. Checking only for a position's existence missed
+  // this entirely, even though there is real capital to redeploy.
+  const partial = released(noPosition, [{ tokenId: "111", shares: 2 }]);
+  assert.equal(partial.vanished.length, 1, "the unfilled remainder is released capital");
+  assert.equal(partial.vanished[0].partiallyFilled, true);
+  assert.equal(partial.freedCapitalUsdc, 3.312, "only the unfilled part counts: (5.68 - 2) * 0.9");
+
+  // A zero-share row is not a real position, so that order did vanish outright.
+  assert.equal(released(noPosition, [{ tokenId: "111", shares: 0 }]).vanished.length, 1);
+
+  // Shares are compared before/after, so a position that already existed on this token
+  // is not mistaken for this order's fill. Judging by existence alone got this wrong,
+  // and it is the live portfolio's normal shape -- orders and positions on one event.
+  const hadPosition = { openOrders: [order], positions: [{ tokenId: "111", shares: 3 }] };
+  assert.equal(released(hadPosition, [{ tokenId: "111", shares: 3 }]).vanished.length, 1,
+    "an unchanged pre-existing position means this order filled nothing");
+  assert.equal(released(hadPosition, [{ tokenId: "111", shares: 8.68 }]).vanished.length, 0,
+    "shares growing by the full locked size is a fill, not a release");
+
+  // A fill on some other token must not be credited to this order either.
+  assert.equal(released(noPosition, [{ tokenId: "999", shares: 5.68 }]).vanished.length, 1);
 });
 
 test("released capital: a failed open-orders fetch never looks like a mass cancellation", async () => {
   const sync = await import("../tools/live-account-sync.mjs");
-  const previousState = { openOrders: [{ id: "a", tokenId: "111", notionalUsdc: 5.11 }] };
+  const previousState = {
+    openOrders: [{ id: "a", tokenId: "111", assetId: "111", price: 0.9, remainingSize: 5.68, notionalUsdc: 5.112 }],
+  };
 
   // getOpenOrders() throwing leaves the list empty while the sync still reports OK, so
   // without this guard one transient CLOB error would look like every order vanishing
