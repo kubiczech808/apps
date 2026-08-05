@@ -501,3 +501,47 @@ test("live candidates: with no riskGroupKeys stored, the cheap filter defers to 
   assert.equal(executor.earlyRiskBlockReason(noKeys, held), null);
   assert.equal(executor.earlyRiskBlockReason(noKeys, []), null, "no held positions means nothing to collide with either");
 });
+
+test("live run log: revalidatedCandidates does not get stored 160 times over", () => {
+  // Why the run's own decision JSON could not be read back from GitHub Actions logs:
+  // emitDecision() spread the ENTIRE batchLog into every historical run-log entry,
+  // including revalidatedCandidates -- every candidate the run touched, unbounded
+  // now that a stale token id no longer discards the whole manual shortlist. Stored
+  // across up to 160 retained runs, that duplicated the same few dozen KB up to 160
+  // times over, in both the published live-execution-state.json and the console
+  // dump printed on every run -- well past what a log reader can fetch in one request.
+  const candidate = (i) => ({
+    tokenId: String(i), question: `Q${i}`, marketProbability: 0.93, netGainIfWinUsdc: 0.3,
+  });
+  const batchLog = {
+    id: "b1", action: "SKIP", reason: "no eligible candidate",
+    topCandidates: [candidate(1)],
+    topRejected: [candidate(2)],
+    revalidatedCandidates: Array.from({ length: 120 }, (_, i) => candidate(i)),
+    rotationReview: { action: "NO_ROTATION_CANDIDATE" },
+  };
+  const compacted = executor.compactLiveRunRecord(batchLog);
+  assert.ok(!("revalidatedCandidates" in compacted), "the unbounded field must be dropped from the stored record");
+  // Everything tradeBatchDetail()'s fallback ([...topCandidates, ...topRejected]) and
+  // the run-log list rendering need must survive untouched.
+  for (const field of ["id", "action", "reason", "topCandidates", "topRejected", "rotationReview"]) {
+    assert.deepEqual(compacted[field], batchLog[field], `${field} must be preserved as-is`);
+  }
+  // Applying it twice (as happens to the already-stored backlog on every run) must
+  // not change anything further -- it only ever removes the one named field.
+  assert.deepEqual(executor.compactLiveRunRecord(compacted), compacted);
+
+  // Confirms the fix actually addresses the reported log size, not just in theory.
+  const bulky = Buffer.byteLength(JSON.stringify(batchLog));
+  const slim = Buffer.byteLength(JSON.stringify(compacted));
+  assert.ok(slim < bulky / 3, `expected a large reduction, got ${bulky} -> ${slim}`);
+});
+
+test("live run log: the already-stored backlog is compacted on the next run too", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  // Fixing only new entries would leave up to 160 already-bloated ones in place for
+  // roughly a day (this run cadence) before they aged out on their own. Reading the
+  // previously stored log through the same compaction fixes the backlog immediately.
+  assert.match(source, /const previousRunLog = \(Array\.isArray\(previousExecutionState\?\.runLog\)\s*\n?\s*\? previousExecutionState\.runLog\s*\n?\s*: \[\]\)\.map\(compactLiveRunRecord\);/);
+});

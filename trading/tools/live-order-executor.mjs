@@ -2091,12 +2091,29 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   };
 }
 
+// The stored run-log entry is history, retained for up to 160 runs. Spreading the
+// whole batchLog into it duplicated `revalidatedCandidates` -- every candidate the
+// run touched, unbounded now that a manual shortlist of ~120 rows is no longer
+// discarded on one stale id -- into every one of those 160 stored entries. That is
+// what made the published live-execution-state.json and this script's own console
+// output balloon far past a size any log reader, human or otherwise, could fetch
+// in one request. topCandidates and topRejected are already capped and cover the
+// same ground for a past run's "Candidates not used" view (tradeBatchDetail() in
+// the frontend already falls back to them when revalidatedCandidates is absent).
+function compactLiveRunRecord(batchLog = {}) {
+  const { revalidatedCandidates, ...rest } = batchLog;
+  return rest;
+}
+
 async function emitDecision(payload) {
-  const previousRunLog = Array.isArray(previousExecutionState?.runLog)
+  // Compact entries already stored from before this existed too, so the backlog
+  // shrinks on the very next run instead of only stopping further growth and
+  // waiting ~160 runs (about a day at this cadence) for it to age out on its own.
+  const previousRunLog = (Array.isArray(previousExecutionState?.runLog)
     ? previousExecutionState.runLog
-    : [];
+    : []).map(compactLiveRunRecord);
   const runEntry = {
-    ...(payload.batchLog || {}),
+    ...compactLiveRunRecord(payload.batchLog || {}),
     id: payload.batchLog?.id || `live-trade-batch-${payload.generatedAt || new Date().toISOString()}`,
     runAt: payload.batchLog?.runAt || payload.generatedAt || new Date().toISOString(),
     generatedAt: payload.generatedAt || payload.batchLog?.runAt || new Date().toISOString(),
@@ -3491,4 +3508,5 @@ export {
   prepareLiveCandidatePool,
   heldRiskItems,
   earlyRiskBlockReason,
+  compactLiveRunRecord,
 };
