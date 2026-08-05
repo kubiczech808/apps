@@ -73,6 +73,11 @@ const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HO
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
 const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
 const OPEN_ORDER_BETTER_CANDIDATE_EV_USDC = envNumber("LIVE_OPEN_ORDER_BETTER_CANDIDATE_EV_USDC", 0.02);
+// A rotation exit is a FAK taker order: it fills against the bid at once or is killed.
+// Anything still resting after this long never filled, and it reserves the position's
+// shares while it sits there, so it is cancelled and re-closed at the current bid rather
+// than waited on. Deliberately short -- there is nothing to wait for.
+const ROTATION_EXIT_STALE_MINUTES = envNumber("LIVE_ROTATION_EXIT_STALE_MINUTES", 2);
 const ROTATION_CANDIDATE_SCAN_LIMIT = envNumber("LIVE_ROTATION_CANDIDATE_SCAN_LIMIT", 10);
 const ROTATION_POSITION_SCAN_LIMIT = envNumber("LIVE_ROTATION_POSITION_SCAN_LIMIT", 6);
 // A rotation must improve the configured portfolio metric by at least the
@@ -3357,6 +3362,77 @@ async function main() {
 
   if (activeSellOrders.length && !best) {
     const pendingRotationExit = previousExecution?.rotationExit || null;
+    // A rotation exit is submitted as FAK: it fills against the bid immediately or it is
+    // killed. So a sell order still resting here means the exit never completed -- the
+    // book moved away from the price it was posted at. Waiting cannot fix that: the
+    // resting order reserves the position's shares, so the position can be neither sold
+    // nor rotated, and every later run takes this same early return. That is a deadlock,
+    // and it is what left a 93%-entry position frozen while the market traded at 25%.
+    //
+    // Cancel the stale order and close the position at the current bid instead, which is
+    // what a market close means here. The run then reports ROTATION_EXIT_SUBMITTED, so
+    // the workflow's immediate-replacement step buys the selected opportunity in the
+    // same run rather than waiting for a fill that is not coming.
+    const staleSellOrders = activeSellOrders
+      .filter((order) => openOrderAgeHours(order) * 60 >= ROTATION_EXIT_STALE_MINUTES);
+    if (staleSellOrders.length) {
+      const repairs = [];
+      for (const order of staleSellOrders) {
+        const cancelResponse = DRY_RUN || !hasFlag("confirm-live")
+          ? { status: "dry_run_cancel", success: true }
+          : await cancelOrder(order, tradingConfig);
+        if (!successfulCancelResponse(cancelResponse, order.id || order.orderID || order.orderId)) {
+          repairs.push({ order, cancelResponse, response: null, action: "ROTATION_EXIT_CANCEL_FAILED" });
+          continue;
+        }
+        // Re-price against the book as it stands now, not the price that failed.
+        let exitOrder = null;
+        let response = null;
+        try {
+          exitOrder = await buildRotationExitOrder(
+            { ...order, shares: number(order.remainingSize ?? order.originalSize) },
+            evaluationByToken,
+            tradingConfig,
+          );
+          response = DRY_RUN || !hasFlag("confirm-live")
+            ? { status: "dry_run_rotation_exit", success: true }
+            : await submitOrder(exitOrder);
+        } catch (error) {
+          response = { status: "exception", error: error?.message || String(error) };
+        }
+        repairs.push({
+          order: exitOrder || order,
+          cancelResponse,
+          response,
+          action: successfulOrderResponse(response) ? "ROTATION_EXIT_REPRICED" : "ROTATION_EXIT_REPRICE_REJECTED",
+        });
+      }
+      const repriced = repairs.filter((repair) => repair.action === "ROTATION_EXIT_REPRICED");
+      const action = repriced.length
+        ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_ROTATION_EXIT" : "ROTATION_EXIT_SUBMITTED")
+        : "ROTATION_EXIT_REJECTED";
+      const reason = repriced.length
+        ? `stale rotation exit re-closed at the current bid after ${ROTATION_EXIT_STALE_MINUTES} minutes without a fill; the replacement buy follows in this run`
+        : `stale rotation exit could not be re-closed: ${repairs.map((repair) => orderResponseError(repair.response) || orderResponseError(repair.cancelResponse) || repair.action).join("; ")}`;
+      await emitDecision({
+        ...decision,
+        action,
+        reason,
+        rotationExit: repriced.length ? { ...(pendingRotationExit || {}), repricedAt: new Date().toISOString() } : pendingRotationExit,
+        batchLog: {
+          ...decision.batchLog,
+          action,
+          reason,
+          explanation: "A rotation exit is a taker order, so a sell still resting on the book never filled. It was cancelled and re-closed against the current bid; leaving it would reserve the position's shares and block every later run.",
+          rotationExit: repriced.length ? { ...(pendingRotationExit || {}), repricedAt: new Date().toISOString() } : pendingRotationExit,
+        },
+        attempts: repairs.map((repair) => orderAttemptSummary(repair.order, repair.response, {
+          action: repair.action,
+          cancelResponse: repair.cancelResponse,
+        })),
+      });
+      return;
+    }
     await emitDecision({
       ...decision,
       action: "ROTATION_EXIT_WAITING",

@@ -623,6 +623,48 @@ test("live revalidation: a market Gamma no longer lists is closed out, not re-fe
   assert.match(workflow, /item\["acceptingOrders"\] = False/);
 });
 
+test("rotation exit: a sell that never filled is re-closed, not waited on forever", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // Observed at 21:48: action ROTATION_EXIT_WAITING with a SELL of the full 5.5 shares
+  // resting at 0.25 on a position entered at 0.93 -- nothing filled. A rotation exit is
+  // built as FAK (forceTaker), so it fills against the bid at once or is killed; a fully
+  // unfilled sell resting on the book means the exit never completed. Waiting cannot fix
+  // it, because the resting order reserves the position's shares: the position can be
+  // neither sold nor rotated and every later run takes the same early return. Deadlock.
+  assert.match(source, /orderType: "FAK",\s*\n\s*forceTaker: true,/,
+    "the exit must remain a taker order");
+  assert.match(source, /const ROTATION_EXIT_STALE_MINUTES = envNumber\("LIVE_ROTATION_EXIT_STALE_MINUTES", 2\)/);
+
+  const waiting = source.slice(source.indexOf("if (activeSellOrders.length && !best) {"));
+  const block = waiting.slice(0, waiting.indexOf('action: "ROTATION_EXIT_WAITING"'));
+  // The stale order is cancelled first: its reservation is what blocks the re-close.
+  assert.match(block, /const staleSellOrders = activeSellOrders/);
+  assert.match(block, /openOrderAgeHours\(order\) \* 60 >= ROTATION_EXIT_STALE_MINUTES/);
+  assert.match(block, /await cancelOrder\(order, tradingConfig\)/);
+  assert.match(block, /if \(!successfulCancelResponse\(cancelResponse/,
+    "a failed cancel must not be followed by a second sell of the same shares");
+  // Then re-priced against the book as it stands now, not the price that failed.
+  assert.match(block, /exitOrder = await buildRotationExitOrder\(/);
+  const cancelAt = block.indexOf("cancelOrder(order, tradingConfig)");
+  const rebuildAt = block.indexOf("buildRotationExitOrder(");
+  assert.ok(cancelAt > 0 && rebuildAt > cancelAt, "cancel must precede the re-close");
+  // Reporting ROTATION_EXIT_SUBMITTED is what makes the workflow buy the replacement in
+  // this same run instead of deferring it to a fill that is not coming.
+  assert.match(block, /\? \(DRY_RUN \|\| !hasFlag\("confirm-live"\) \? "DRY_RUN_ROTATION_EXIT" : "ROTATION_EXIT_SUBMITTED"\)/);
+  // A dry run must never cancel or sell for real.
+  assert.match(block, /DRY_RUN \|\| !hasFlag\("confirm-live"\)\s*\n?\s*\? \{ status: "dry_run_cancel", success: true \}/);
+
+  // The workflow's immediate-replacement step keys off exactly that action.
+  const workflow = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+  assert.match(workflow, /state\.action === "ROTATION_EXIT_SUBMITTED"/);
+  assert.match(workflow, /npm run live:execute -- --confirm-live/);
+
+  // Still waiting is correct while the order is fresh: a FAK can be in flight.
+  assert.match(source, /action: "ROTATION_EXIT_WAITING"/);
+});
+
 test("live candidates: an execution rejection survives the next scrape", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
