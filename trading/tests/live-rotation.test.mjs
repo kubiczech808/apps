@@ -502,6 +502,40 @@ test("live candidates: with no riskGroupKeys stored, the cheap filter defers to 
   assert.equal(executor.earlyRiskBlockReason(noKeys, []), null, "no held positions means nothing to collide with either");
 });
 
+test("live candidates: liquidity and net-profit reject reasons collapse into one bucket each, not one per value", () => {
+  // Both reason strings carry a per-candidate number (a USDC amount, a percentage).
+  // Left ungrouped, every distinct value became its own bucket -- for liquidity
+  // specifically this turned one homogeneous rejection reason into thousands of
+  // one-off entries in production, which was most of a run's console/log output.
+  const eligibleFields = {
+    aiProbability: 0.97,
+    annualizedReturn: 0.4,
+    expectedValueUsdc: 0.3,
+    netYield: 0.08,
+    liquidity: 60000,
+    daysToResolution: 0.3,
+    status: "EVALUATED",
+  };
+  // Default thresholds with no env override (see MIN_VOLUME_24H/MIN_NET_YIELD in the
+  // source): liquidity must be below 100, net yield below 0.
+  const rows = [
+    ...Array.from({ length: 5 }, (_, i) => ({
+      ...eligibleFields, tokenId: `low-liquidity-${i}`, question: `Q${i}`, liquidity: 1 + i,
+    })),
+    ...Array.from({ length: 4 }, (_, i) => ({
+      ...eligibleFields, tokenId: `low-yield-${i}`, question: `Y${i}`, netYield: -0.01 * (i + 1),
+    })),
+  ];
+  const pool = executor.prepareLiveCandidatePool(rows, null);
+  const counts = pool.diagnostics.reasonCounts;
+  const liquidityKeys = Object.keys(counts).filter((key) => /liquidity/i.test(key));
+  const yieldKeys = Object.keys(counts).filter((key) => /net profit/i.test(key));
+  assert.equal(liquidityKeys.length, 1, `expected one grouped liquidity bucket, got ${JSON.stringify(liquidityKeys)}`);
+  assert.equal(counts[liquidityKeys[0]], 5);
+  assert.equal(yieldKeys.length, 1, `expected one grouped net-profit bucket, got ${JSON.stringify(yieldKeys)}`);
+  assert.equal(counts[yieldKeys[0]], 4);
+});
+
 test("live run log: revalidatedCandidates does not get stored 160 times over", () => {
   // Why the run's own decision JSON could not be read back from GitHub Actions logs:
   // emitDecision() spread the ENTIRE batchLog into every historical run-log entry,

@@ -687,6 +687,13 @@ function sortLivePrefilterCandidates(rows = []) {
 function prefilterReasonCountKey(reason) {
   const text = String(reason || "");
   if (/(AI|Polymarket) probability .* below live threshold/i.test(text)) return "selected probability below live threshold";
+  // These three also carry a per-candidate number (a percentage or a USDC amount) baked
+  // into the reason text. Left ungrouped, every distinct value became its own bucket --
+  // for liquidity specifically this turned a single homogeneous rejection reason into
+  // thousands of one-off entries and was the dominant contributor to run-log size.
+  if (/annualized return .* is non-profitable after fees/i.test(text)) return "annualized return non-profitable after fees";
+  if (/^net profit .* below .* after fees/i.test(text)) return "net profit below live minimum after fees";
+  if (/^liquidity .* below live minimum .* USDC/i.test(text)) return "liquidity below live minimum";
   if (/stored resolution .* exceeds live max/i.test(text)) return "stored resolution exceeds live max days";
   if (/outside live revalidation scan limit/i.test(text)) return "outside live revalidation scan limit after short-expiry ranking";
   // Each of these carries its own overlap keys, so grouping strips them back down to one
