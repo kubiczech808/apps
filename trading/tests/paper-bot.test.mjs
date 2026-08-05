@@ -447,6 +447,37 @@ test("fixture: normalizing the fixture is a no-op for its aggregates", async () 
   }
 });
 
+test("trade table: every header lines up with the cell beneath it", async () => {
+  // Headers and cells are two separate lists in one template, so reordering columns can
+  // silently shift values under the wrong heading -- a P/L read as a stake is worse than
+  // a missing column. This pins them together whatever order they are in.
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  const fn = app.slice(app.indexOf("function renderTradeRows"));
+  const body = fn.slice(0, fn.indexOf("\nfunction ", 1));
+  const thead = body.slice(body.indexOf("<thead>"), body.indexOf("</thead>"));
+  const tbody = body.slice(body.indexOf("<tbody>"), body.indexOf("</tbody>"));
+
+  const conditional = (text) => {
+    const match = /\?\s*"([^"]+)"\s*:\s*"([^"]+)"/.exec(text);
+    return match ? `${match[1]}|${match[2]}` : text.replaceAll('"', "").trim();
+  };
+  const headers = [...thead.matchAll(/tradeHeader\(tableKey,\s*(?:showStatus \? "\w+" : "\w+"|"\w+"),\s*(showStatus \? "[^"]+" : "[^"]+"|"[^"]+")\)/g)]
+    .map((match) => conditional(match[1]));
+  const cells = [...tbody.matchAll(/<td data-label="(\$\{showStatus \? "[^"]+" : "[^"]+"\}|[^"]+)"/g)]
+    .map((match) => conditional(match[1]));
+
+  assert.ok(headers.length >= 10, `expected the full column set, found ${headers.length}`);
+  assert.deepEqual(cells, headers, "each column's cell must sit under its own header");
+
+  // The two columns that only exist in one of the two views must stay conditional, or
+  // the closed table gains an empty column and the open one loses a value.
+  assert.ok(thead.includes('showStatus ? tradeHeader(tableKey, "status", "Result")'));
+  assert.ok(tbody.includes('showStatus ? `<td data-label="Result"'));
+  assert.ok(thead.includes('showAiProbability ? tradeHeader(tableKey, "aiProbability", "AI prob.")'));
+});
+
 test("candidates: the precheck column has no WAITING state", async () => {
   // The precheck column is informational. Execution revalidates every shortlisted
   // candidate from scratch and the shortlist is dispatched without consulting the

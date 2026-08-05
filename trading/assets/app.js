@@ -2248,27 +2248,36 @@ function renderTradeRows(trades, emptyText, options = {}) {
     <table class="ledger-wide-table">
       <thead>
         <tr>
-          ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
-          ${tradeHeader(tableKey, "market", "Market")}
-          ${tradeHeader(tableKey, "currentPrice", showStatus ? "Entry / final" : "Entry / mark")}
-          ${showAiProbability ? tradeHeader(tableKey, "aiProbability", "AI prob.") : ""}
-          ${tradeHeader(tableKey, "resolution", "Resolution")}
           ${tradeHeader(tableKey, "potentialGain", "Win")}
-          ${tradeHeader(tableKey, "riskReward", "R/R")}
-          ${tradeHeader(tableKey, "potentialAnnualized", "Win p.a.")}
           ${showStatus ? tradeHeader(tableKey, "status", "Result") : ""}
           ${tradeHeader(tableKey, "pnl", "P/L")}
+          ${tradeHeader(tableKey, "market", "Market")}
+          ${tradeHeader(tableKey, "potentialAnnualized", "Win p.a.")}
+          ${tradeHeader(tableKey, "resolution", "Resolution")}
+          ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
+          ${tradeHeader(tableKey, "currentPrice", showStatus ? "Entry / final" : "Entry / mark")}
+          ${showAiProbability ? tradeHeader(tableKey, "aiProbability", "AI prob.") : ""}
           ${tradeHeader(tableKey, "stake", "Stake")}
+          ${tradeHeader(tableKey, "riskReward", "R/R")}
         </tr>
       </thead>
       <tbody>
         ${rows.map((trade) => `
           <tr>
-            <td data-label="${showStatus ? "Closed" : "Opened"}">${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
+            <td data-label="Win">${tradeWinCell(trade)}</td>
+            ${showStatus ? `<td data-label="Result">
+              ${escapeHtml(trade.status || "OPEN")}
+            </td>` : ""}
+            <td data-label="P/L" class="${pnlClass(tradePnlValue(trade))}">
+              ${signedMoney(tradePnlValue(trade))}
+            </td>
             <td data-label="Market">
               ${tradeTypeBadge(trade)}
               ${marketAnchor(trade)}
             </td>
+            <td data-label="Win p.a.">${potentialAnnualizedCell(trade)}</td>
+            <td data-label="Resolution">${resolutionCell(trade)}</td>
+            <td data-label="${showStatus ? "Closed" : "Opened"}">${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
             <td data-label="${showStatus ? "Entry / final" : "Entry / mark"}">${tradePriceCell(trade, showStatus)}</td>
             ${showAiProbability ? `<td data-label="AI prob.">
               <strong>${probability(tradeAiProbability(trade))}</strong>
@@ -2277,17 +2286,8 @@ function renderTradeRows(trades, emptyText, options = {}) {
                 <span class="analysis-tooltip" role="tooltip">${escapeHtml(tradeAnalysisDetails(trade))}</span>
               </span>
             </td>` : ""}
-            <td data-label="Resolution">${resolutionCell(trade)}</td>
-            <td data-label="Win">${tradeWinCell(trade)}</td>
-            <td data-label="R/R"><span class="${riskRewardClass(tradeRiskReward(trade))}">${riskReward(tradeRiskReward(trade))}</span></td>
-            <td data-label="Win p.a.">${potentialAnnualizedCell(trade)}</td>
-            ${showStatus ? `<td data-label="Result">
-              ${escapeHtml(trade.status || "OPEN")}
-            </td>` : ""}
-            <td data-label="P/L" class="${pnlClass(tradePnlValue(trade))}">
-              ${signedMoney(tradePnlValue(trade))}
-            </td>
             <td data-label="Stake">${money(Number(trade.stakeUsdc || 0))}</td>
+            <td data-label="R/R"><span class="${riskRewardClass(tradeRiskReward(trade))}">${riskReward(tradeRiskReward(trade))}</span></td>
           </tr>
         `).join("")}
       </tbody>
