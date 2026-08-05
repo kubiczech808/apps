@@ -1609,24 +1609,62 @@ async function main() {
   const equityUsdc = cashUsdc == null
     ? portfolioBase.equityUsdc
     : cashUsdc + number(portfolioBase.marketValueUsdc, 0) + pendingRedeemUsdc;
-  const inferredOriginalValueUsdc = number((equityUsdc - number(portfolioBase.totalPnlUsdc, 0)).toFixed(6));
-  // This is a baseline, not a live accounting result. Preserve it after the
-  // first usable snapshot so reconciliation changes cannot masquerade as a
-  // deposit or withdrawal on the dashboard.
+  // The deposited amount is an external fact: what was actually paid into the account.
+  // It used to be inferred as equity - totalPnlUsdc on the first snapshot and then kept
+  // sticky forever, so one bad totalPnlUsdc reading was permanently baked in as the
+  // deposit. That is how "Original value $33.36" appeared: equity 26.93 minus a -6.43
+  // P/L that was not itself a real result. Every percentage on the card then derives
+  // from that wrong baseline, so the error sustains itself.
+  //
+  // It is now configured, never derived. LIVE_ORIGINAL_VALUE_USDC is authoritative when
+  // set; otherwise the stored baseline is kept. If neither exists it stays null and the
+  // dashboard reports it as unavailable, because inventing a baseline that then sticks
+  // forever is worse than saying it is unknown.
   const storedOriginalValueUsdc = number(
     previousLiveState?.portfolio?.originalValueUsdc ?? previousLiveState?.portfolio?.depositedUsdc,
   );
-  const originalValueUsdc = storedOriginalValueUsdc > 0
-    ? storedOriginalValueUsdc
-    : inferredOriginalValueUsdc;
+  const configuredOriginalValueUsdc = number(process.env.LIVE_ORIGINAL_VALUE_USDC);
+  // A later top-up is added once and recorded, so repeated runs cannot count it twice.
+  const appliedDeposits = (Array.isArray(previousLiveState?.portfolio?.appliedDeposits)
+    ? previousLiveState.portfolio.appliedDeposits
+    : []).filter((entry) => entry && typeof entry === "object").slice(0, 50);
+  const additionalDepositUsdc = number(process.env.LIVE_ADDITIONAL_DEPOSIT_USDC);
+  const additionalDepositId = String(process.env.LIVE_ADDITIONAL_DEPOSIT_ID || "").trim()
+    || (additionalDepositUsdc > 0 ? `deposit-${additionalDepositUsdc}` : "");
+  const depositIsNew = additionalDepositUsdc > 0
+    && additionalDepositId !== ""
+    && !appliedDeposits.some((entry) => String(entry.id || "") === additionalDepositId);
+
+  let baselineUsdc = configuredOriginalValueUsdc > 0
+    ? configuredOriginalValueUsdc
+    : (storedOriginalValueUsdc > 0 ? storedOriginalValueUsdc : null);
+  if (depositIsNew) {
+    baselineUsdc = number((number(baselineUsdc, 0) + additionalDepositUsdc).toFixed(6));
+    appliedDeposits.unshift({
+      id: additionalDepositId,
+      amountUsdc: additionalDepositUsdc,
+      appliedAt: generatedAt,
+      baselineAfterUsdc: baselineUsdc,
+    });
+    console.warn(`Applied deposit ${additionalDepositUsdc} USDC (${additionalDepositId}); baseline is now ${baselineUsdc}.`);
+  }
+  const originalValueUsdc = baselineUsdc;
   // Public activity/history endpoints can briefly omit older closes. Equity
   // comes from the live collateral plus marked positions, so it is the stable
   // source of truth for total account P/L against the fixed original value.
-  const equityDeltaPnlUsdc = number((equityUsdc - originalValueUsdc).toFixed(6));
-  const reconciledRealizedPnlUsdc = number((equityDeltaPnlUsdc - number(portfolioBase.openPnlUsdc, 0)).toFixed(6));
-  const pnlPctOfOriginalValue = (pnl) => originalValueUsdc > 0
+  // Only meaningful against a known baseline. Without one, `equityUsdc - null` would
+  // coerce to equity itself and report the entire balance as profit, so the ledger
+  // values are reported instead and the card says the baseline is unavailable.
+  const hasBaseline = number(originalValueUsdc, 0) > 0;
+  const equityDeltaPnlUsdc = hasBaseline
+    ? number((equityUsdc - originalValueUsdc).toFixed(6))
+    : number(portfolioBase.totalPnlUsdc);
+  const reconciledRealizedPnlUsdc = hasBaseline
+    ? number((equityDeltaPnlUsdc - number(portfolioBase.openPnlUsdc, 0)).toFixed(6))
+    : number(portfolioBase.realizedPnlUsdc);
+  const pnlPctOfOriginalValue = (pnl) => (hasBaseline
     ? number(number(pnl, 0) / originalValueUsdc)
-    : null;
+    : null);
 
   const payload = {
     schemaVersion: 1,
@@ -1657,7 +1695,13 @@ async function main() {
       // immutable name for new snapshots.
       depositedUsdc: originalValueUsdc,
       originalValueUsdc,
-      pnlPercentageBasis: "original-value",
+      // Where the baseline came from, so a wrong one is traceable instead of
+      // anonymous, and the applied top-ups so none is ever counted twice.
+      originalValueSource: configuredOriginalValueUsdc > 0
+        ? "configured"
+        : (storedOriginalValueUsdc > 0 ? "stored" : "unavailable"),
+      appliedDeposits,
+      pnlPercentageBasis: hasBaseline ? "original-value" : "ledger",
       openPnlPct: pnlPctOfOriginalValue(portfolioBase.openPnlUsdc),
       // Keep total P/L stable even when the public closed-trade history is
       // temporarily incomplete. Realized P/L is the remainder after the

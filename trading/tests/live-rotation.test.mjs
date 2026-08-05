@@ -337,3 +337,35 @@ test("live run log: an upload never leaves the hosted path empty", async () => {
   assert.match(publisher, /backup = f"\{source\.name\}\.previous"/);
   assert.match(publisher, /ftp\.rename\(backup, source\.name\)/);
 });
+
+test("live portfolio: the deposited baseline is configured, never inferred from P/L", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const sync = await readFile(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8");
+
+  // The reported bug: "Original value $33.36" was equity 26.93 minus a -6.43 P/L that
+  // was not a real result, inferred on the first snapshot and then kept sticky forever.
+  // Every percentage on the card derived from that wrong baseline, so it sustained itself.
+  assert.ok(!/inferredOriginalValueUsdc/.test(sync), "the baseline must not be inferred at all");
+  assert.ok(!/equityUsdc - number\(portfolioBase\.totalPnlUsdc/.test(sync),
+    "deriving the deposit from P/L is what corrupted it");
+  assert.match(sync, /process\.env\.LIVE_ORIGINAL_VALUE_USDC/);
+
+  // A configured amount outranks a stored one, so a bad stored baseline can be corrected.
+  assert.match(sync, /baselineUsdc = configuredOriginalValueUsdc > 0/);
+  // A top-up is applied once and remembered, so runs cannot double-count it.
+  assert.match(sync, /!appliedDeposits\.some\(\(entry\) => String\(entry\.id \|\| ""\) === additionalDepositId\)/);
+  assert.match(sync, /appliedDeposits\.unshift\(\{/);
+  // With no baseline, P/L must come from the ledger. `equity - null` coerces to equity
+  // and would report the entire balance as profit.
+  assert.match(sync, /const hasBaseline = number\(originalValueUsdc, 0\) > 0;/);
+  assert.match(sync, /: number\(portfolioBase\.totalPnlUsdc\)/);
+  assert.match(sync, /originalValueSource: configuredOriginalValueUsdc > 0/);
+
+  // Both workflows that sync the account must pass the baseline through.
+  for (const name of ["polymarket-live-limit-order-test", "trading-live-account"]) {
+    const workflow = await readFile(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), "utf8");
+    assert.match(workflow, /LIVE_ORIGINAL_VALUE_USDC: \$\{\{ vars\.LIVE_ORIGINAL_VALUE_USDC \}\}/,
+      `${name} must pass the configured baseline`);
+    assert.match(workflow, /LIVE_ADDITIONAL_DEPOSIT_ID: \$\{\{ vars\.LIVE_ADDITIONAL_DEPOSIT_ID \}\}/);
+  }
+});

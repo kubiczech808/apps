@@ -134,6 +134,13 @@ jobs:
       LIVE_CANDIDATE_SCAN_LIMIT: "120"
       LIVE_AUTO_ROTATE: "true"
       LIVE_EXECUTION_SOURCE: rpi-self-hosted
+      # The deposited baseline is an external fact, not something to infer from P/L.
+      # Set LIVE_ORIGINAL_VALUE_USDC to the amount actually paid into the Polymarket
+      # account. To record a later top-up, set LIVE_ADDITIONAL_DEPOSIT_USDC together
+      # with a unique LIVE_ADDITIONAL_DEPOSIT_ID; it is added once and remembered.
+      LIVE_ORIGINAL_VALUE_USDC: ${{ vars.LIVE_ORIGINAL_VALUE_USDC }}
+      LIVE_ADDITIONAL_DEPOSIT_USDC: ${{ vars.LIVE_ADDITIONAL_DEPOSIT_USDC }}
+      LIVE_ADDITIONAL_DEPOSIT_ID: ${{ vars.LIVE_ADDITIONAL_DEPOSIT_ID }}
     steps:
       - uses: actions/checkout@v4
 
