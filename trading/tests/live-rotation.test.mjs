@@ -171,12 +171,37 @@ test("rotation: a replacement that resolves later is refused", async () => {
   // case where holding earns nothing more.
   assert.match(
     source,
-    /\(upsideExhausted\s*\n\s*\|\| \(!candidateResolvesLater\s*\n\s*&& evDelta > 0/,
+    /\(upsideExhausted\s*\n\s*\|\| \(!candidateResolvesLater\s*\n\s*&& priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT/,
     "exhausted upside still releases capital regardless of horizons",
   );
   // The horizon comparison must use the unfloored value.
   assert.match(source, /const positionRemainingDays = number\(economics\.rawRemainingDays\);/);
   assert.ok(source.includes("selling now would forfeit a nearer payout for a more distant one"));
+});
+
+test("rotation: ranking decides on its own, not gated by a separate absolute-USD requirement", async () => {
+  // The user's point: a shorter-horizon candidate can legitimately rank higher on p.a.
+  // while paying fewer raw dollars than the position/order it would replace. Requiring
+  // the absolute USD result to ALSO improve meant the portfolio kept a worse-ranked
+  // position purely because it happened to be a bigger single payout -- ranking alone
+  // must decide, once the position clears the veto and the minimum-improvement floor.
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  assert.match(
+    source,
+    /\(!candidateResolvesLater\s*\n\s*&& priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT\)\)/,
+    "position rotation must not also require evDelta > 0",
+  );
+  assert.ok(!/&& evDelta > 0\s*\n\s*&& priorityDelta/.test(source), "the old absolute-USD gate must be gone, not just reordered");
+
+  // Open orders must use the same ranking-metric threshold as positions, not a
+  // dollar EV margin -- the two paths were inconsistent before this fix.
+  assert.match(
+    source,
+    /comparison\?\.replacementRanksAhead\s*\n\s*&& Number\(comparison\.metricDelta \|\| 0\) >= ROTATION_MIN_PRIORITY_IMPROVEMENT/,
+    "open-order replacement must gate on the ranking metric, not an unrelated dollar EV margin",
+  );
 });
 
 // --- Market-derived minimum order stake -------------------------------------------

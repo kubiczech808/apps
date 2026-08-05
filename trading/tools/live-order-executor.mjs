@@ -1534,12 +1534,15 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           && candidateDays != null
           && candidateDays >= positionRemainingDays;
         // Otherwise the replacement must improve the portfolio's ranking metric by at
-        // least the configured minimum net profit, and the net expected result after
-        // selling fees must improve too.
+        // least the configured minimum net profit. A separate requirement that the
+        // absolute USD result also improve was removed: the ranking metric (p.a.) is
+        // exactly what the portfolio is optimised for, and a shorter-horizon candidate
+        // can legitimately rank higher while paying fewer raw dollars -- gating on
+        // evDelta as well meant the portfolio kept a worse-ranked position/order simply
+        // because it happened to be a bigger single payout.
         const rotationPreferred = !settlementLocked
           && (upsideExhausted
             || (!candidateResolvesLater
-              && evDelta > 0
               && priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT));
         const priorityComparison = {
           metricLabel: candidatePriority.metric,
@@ -1595,7 +1598,7 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           reason: rotationPreferred
             ? (upsideExhausted
               ? `this position is only $${Number(economics.remainingPotentialGainUsdc ?? 0).toFixed(4)} short of its maximum win, within the $${ROTATION_PROTECT_REMAINING_GAIN_USDC.toFixed(2)} threshold, so there is nothing left worth waiting for; release the capital instead of holding until settlement`
-              : `after estimated exit fees and current P/L, ${candidatePriority.metric} improves by ${(priorityDelta * 100).toFixed(1)} pts and expected result improves by ${evDelta.toFixed(4)} USDC`)
+              : `after estimated exit fees and current P/L, ${candidatePriority.metric} improves by ${(priorityDelta * 100).toFixed(1)} pts; expected result changes by ${evDelta >= 0 ? "+" : ""}${evDelta.toFixed(4)} USDC`)
             : (candidateResolvesLater && !settlementLocked
               ? `this position resolves in ${Number(positionRemainingDays ?? 0).toFixed(2)} days and the replacement not until ${Number(candidateDays ?? 0).toFixed(2)} days, so selling now would forfeit a nearer payout for a more distant one; the candidate should still be available once this settles`
               : settlementLocked
@@ -2815,12 +2818,15 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
         const rankedAlternatives = sortLiveEligibleCandidates(alternativeCandidates);
         const bestOther = rankedAlternatives[0] || null;
         const comparison = bestOther ? selectionComparison(revalidated, bestOther) : null;
-        // A replacement must rank ahead under the configured portfolio rule.
-        // Absolute EV is only a safety margin after that check; it must never
-        // override EV p.a./Potential p.a. (or R/R) ordering.
+        // A replacement must rank ahead under the configured portfolio rule, by at
+        // least the same minimum-improvement margin position rotation uses -- not by
+        // a dollar EV margin. A shorter-horizon candidate can legitimately rank higher
+        // on p.a. while paying fewer raw dollars; requiring absolute EV to improve too
+        // meant a worse-ranked, longer-resting order was kept over one the portfolio's
+        // own ranking metric preferred, for no reason but that it happened to pay more.
         const betterCandidate = bestOther
           && comparison?.replacementRanksAhead
-          && Number(comparison.expectedValueDelta || 0) >= OPEN_ORDER_BETTER_CANDIDATE_EV_USDC
+          && Number(comparison.metricDelta || 0) >= ROTATION_MIN_PRIORITY_IMPROVEMENT
           ? bestOther
           : null;
         const betterCandidateCost = number(betterCandidate?.totalCostUsdc ?? betterCandidate?.orderNotionalUsdc);
