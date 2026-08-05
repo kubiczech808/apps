@@ -412,6 +412,13 @@ jobs:
                   print(f"    fieldCompleteness={portfolio['tradeFieldCompleteness']}")
           for name, entry in report["files"].items():
               summary = entry.get("summary") or {}
+              # The core state file is read by every dashboard request, so what is
+              # actually taking up room in it belongs in the console output, not only
+              # in the artifact.
+              if summary.get("coreBytesByKey"):
+                  print(f"  {name} largest top-level keys:")
+                  for key, size in summary["coreBytesByKey"].items():
+                      print(f"    {size / 1024 / 1024:8.3f} MB  {key}")
               if summary.get("marketScanLastScanAt") or summary.get("latestScanRuns"):
                   print(f"  {name} marketScan.lastScanAt={summary.get('marketScanLastScanAt')} lastTag={summary.get('marketScanLastTag')}")
                   for row in summary.get("latestScanRuns") or []:
