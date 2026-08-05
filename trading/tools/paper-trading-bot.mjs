@@ -101,6 +101,27 @@ const MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC = envNumber("PAPER_MARKET_SCAN_DIVERS
 // This is the user's last saved scraped-opportunities liquidity filter. It is
 // passed to Gamma before response data is transferred or stored.
 const MARKET_SCAN_LIQUIDITY_MIN = Math.max(0, envNumber("PAPER_MARKET_SCAN_LIQUIDITY_MIN", 0));
+// Events shown on polymarket.com/sports/live and /esports/live. Measured against the
+// Gamma API (see tools/gamma-live-probe.mjs), not assumed:
+//
+//   * `live=true` is a real server-side filter. The same sports query returned 100
+//     events unfiltered with 1 live among them, and exactly 2 events with the filter,
+//     both live and both tradable. The live set is therefore tiny and cheap to fetch
+//     in full on every run, instead of waiting for the round-robin to reach sports
+//     roughly once every twenty runs while a match lasts two hours.
+//   * `end_date_min` is honoured. Without it, ordering by endDate ascending puts
+//     months-old closed events at the head of every page: the first samples came back
+//     `closed=true` with prices 1/0, which the retention filter then discards, so the
+//     page budget was spent learning nothing. With it, every event on the page had a
+//     tradable market (sports 100/100, esports 44/44, none fully closed).
+//   * `start_date_max` is silently ignored, so "has it started" is still derived from
+//     gameStartTime/eventStartTime as sportsScheduledEventDate already does.
+const MARKET_SCAN_LIVE_ENABLED = envBool("PAPER_MARKET_SCAN_LIVE", true);
+const MARKET_SCAN_LIVE_TAG_SLUGS = ["sports", "esports"];
+const MARKET_SCAN_LIVE_WINDOW_HOURS = Math.max(1, envNumber("PAPER_MARKET_SCAN_LIVE_WINDOW_HOURS", 12));
+// A market whose end date has just passed can still be trading and is exactly the kind
+// the rotation rules care about, so the lower bound sits a little in the past.
+const MARKET_SCAN_END_DATE_GRACE_HOURS = Math.max(0, envNumber("PAPER_MARKET_SCAN_END_DATE_GRACE_HOURS", 6));
 const MARKET_SCAN_MAX_DAYS_RAW = envNumber("PAPER_MARKET_SCAN_MAX_DAYS", 7);
 const MARKET_SCAN_MAX_DAYS = Number.isFinite(MARKET_SCAN_MAX_DAYS_RAW) && MARKET_SCAN_MAX_DAYS_RAW >= 0
   ? Math.min(3650, MARKET_SCAN_MAX_DAYS_RAW)
@@ -1151,6 +1172,14 @@ function normalizeMarketScan(input = {}) {
       ? Math.min(3650, Number(input.maxDays))
       : null,
     lastTag: String(input?.lastTag || "").trim().toLowerCase(),
+    // This function is a whitelist, so anything the scan records has to be listed here
+    // or it never reaches the published state.
+    liveScanEnabled: input?.liveScanEnabled !== false,
+    liveScanWindowHours: Math.max(0, Number(input?.liveScanWindowHours) || 0),
+    liveScanCount: Math.max(0, Math.floor(Number(input?.liveScanCount) || 0)),
+    liveScanCounts: input?.liveScanCounts && typeof input.liveScanCounts === "object" ? input.liveScanCounts : {},
+    liveScanError: input?.liveScanError || null,
+    endDateGraceHours: Math.max(0, Number(input?.endDateGraceHours) || 0),
     lastScanError: input?.lastScanError || null,
   };
 }
@@ -5387,11 +5416,49 @@ function scanEventRequestParams(params = {}) {
   const endDateMax = MARKET_SCAN_MAX_DAYS == null
     ? null
     : new Date(Date.now() + MARKET_SCAN_MAX_DAYS * 86400000).toISOString();
+  // Without a lower bound, ordering by endDate ascending starts every page on events
+  // that ended months ago and are already closed, which retention then throws away.
+  // See the note on MARKET_SCAN_LIVE_ENABLED for the measurement. A caller that has
+  // already set its own bound keeps it.
+  const endDateMin = new Date(Date.now() - MARKET_SCAN_END_DATE_GRACE_HOURS * 3600000).toISOString();
   return {
+    end_date_min: endDateMin,
     ...params,
     ...(MARKET_SCAN_LIQUIDITY_MIN > 0 ? { liquidity_min: MARKET_SCAN_LIQUIDITY_MIN } : {}),
-    ...(endDateMax ? { end_date_max: endDateMax } : {}),
+    ...(endDateMax && !params.end_date_max ? { end_date_max: endDateMax } : {}),
   };
+}
+
+function marketScanLiveTags() {
+  return MARKET_SCAN_CATEGORY_TAGS.filter((tag) => MARKET_SCAN_LIVE_TAG_SLUGS.includes(tag.slug));
+}
+
+// One bounded request per live tag, fetched in full on every run. The live set is small
+// enough that this needs no cursor: the whole point is that a match in progress cannot
+// wait for the round-robin to come back round to sports.
+async function loadLiveMarketScanBatch({ auditCalls = null } = {}) {
+  const endDateMax = new Date(Date.now() + MARKET_SCAN_LIVE_WINDOW_HOURS * 3600000).toISOString();
+  const markets = [];
+  const perTag = {};
+  for (const tag of marketScanLiveTags()) {
+    const batch = await loadEventMarketScanBatch({
+      limit: MARKET_SCAN_EVENT_BATCH_LIMIT,
+      tag_id: tag.id,
+      order: "endDate",
+      ascending: "true",
+      live: "true",
+      end_date_max: endDateMax,
+    }, {
+      calls: auditCalls,
+      scope: "live",
+      label: `Live: ${tag.slug}`,
+      category: tag.slug,
+    });
+    const annotated = annotateCategoryScanMarkets(batch, tag);
+    perTag[tag.slug] = annotated.length;
+    markets.push(...annotated);
+  }
+  return { markets, perTag };
 }
 
 function flattenEventMarkets(events = [], auditCalls = null) {
@@ -6112,7 +6179,26 @@ async function refreshMarketObservations(state) {
     if (nextCursor) savedCursors[scope.key] = nextCursor;
     else delete savedCursors[scope.key];
 
-    const fetchedMarkets = diversifyMarketScanOrder(batch);
+    // Live events are fetched in addition to the rotating scope, never instead of it.
+    // A failure here is logged and dropped: the catalogue scan is the job that must
+    // keep working, and losing one live batch costs nothing the next run cannot redo.
+    let liveMarkets = [];
+    let liveScanPerTag = {};
+    let liveScanError = null;
+    if (MARKET_SCAN_LIVE_ENABLED) {
+      try {
+        const live = await loadLiveMarketScanBatch({ auditCalls: apiCallAudit });
+        liveMarkets = live.markets;
+        liveScanPerTag = live.perTag;
+      } catch (error) {
+        liveScanError = error?.message || String(error);
+        console.warn(`Live event scan failed (${liveScanError}); continuing with the rotating scope only.`);
+      }
+    }
+
+    // Live rows go first so that if anything downstream is bounded, the events that are
+    // happening right now are the ones that survive.
+    const fetchedMarkets = [...liveMarkets, ...diversifyMarketScanOrder(batch)];
     const knownEventKeys = activeScanEventKeys(state.marketObservations || []);
     const unseenEventCount = unseenScanEventCount(fetchedMarkets, knownEventKeys);
     const scanReasonCounts = {};
@@ -6175,6 +6261,12 @@ async function refreshMarketObservations(state) {
       liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
       maxDays: MARKET_SCAN_MAX_DAYS,
       lastTag: MARKET_SCAN_TAG,
+      liveScanEnabled: MARKET_SCAN_LIVE_ENABLED,
+      liveScanWindowHours: MARKET_SCAN_LIVE_WINDOW_HOURS,
+      liveScanCount: liveMarkets.length,
+      liveScanCounts: liveScanPerTag,
+      liveScanError,
+      endDateGraceHours: MARKET_SCAN_END_DATE_GRACE_HOURS,
       lastScanError: null,
     };
     state.marketScanHistory = trimMarketScanHistory([
@@ -7699,6 +7791,8 @@ export {
   MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT,
   MARKET_OBSERVATION_RETAIN_LIMIT,
   marketScanRetentionReason,
+  marketScanLiveTags,
+  scanEventRequestParams,
   annualizationDays,
   annualizeReturn,
   annualizedPotentialReturn,

@@ -1233,3 +1233,60 @@ test("category performance: the table sorts independently and is bounded", async
   assert.match(botSource, /return rows\.slice\(0, SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT\);/);
   assert.match(botSource, /if \(tags\.length >= SCRAPED_SIMULATION_TAGS_PER_TRADE\) return tags;/);
 });
+
+test("live events: the scan asks Gamma only for what was measured to work", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // Every parameter here was verified against the live API by tools/gamma-live-probe.mjs
+  // rather than assumed. live=true is a real server-side filter (the same sports query
+  // returned 100 events with 1 live, and 2 events both live with the filter), and
+  // end_date_min is honoured. start_date_max is silently ignored and must not be used.
+  assert.match(source, /live: "true"/, "the live scope must use the server-side filter");
+  // Check code, not the comment that explains why the parameter is avoided.
+  const code = source.split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
+  assert.ok(!/start_date_max/.test(code), "start_date_max is ignored by Gamma and must not be sent");
+
+  // The lower bound is the fix for pages that started on months-old closed events.
+  const params = bot.scanEventRequestParams({ tag_id: "1", order: "endDate", ascending: "true" });
+  assert.ok(params.end_date_min, "every scan request needs a lower end-date bound");
+  const graceHours = (Date.now() - Date.parse(params.end_date_min)) / 3600000;
+  assert.ok(graceHours > 0, "the bound must sit in the past so just-ended tradable markets survive");
+  assert.ok(graceHours <= 24, `the grace window is too wide at ${graceHours}h`);
+  // A caller with its own window must keep it.
+  const windowed = bot.scanEventRequestParams({ tag_id: "1", end_date_max: "2026-08-05T20:00:00.000Z" });
+  assert.equal(windowed.end_date_max, "2026-08-05T20:00:00.000Z");
+
+  // Exactly the two tags behind polymarket.com/sports/live and /esports/live.
+  assert.deepEqual(bot.marketScanLiveTags().map((tag) => tag.slug), ["sports", "esports"]);
+  assert.deepEqual(bot.marketScanLiveTags().map((tag) => tag.id), ["1", "64"]);
+
+  // A live-scan failure must never take the catalogue scan down with it: the rotating
+  // scope is the job that has to keep working.
+  assert.match(source, /Live event scan failed \(\$\{liveScanError\}\); continuing with the rotating scope only\./);
+  assert.match(source, /const fetchedMarkets = \[\.\.\.liveMarkets, \.\.\.diversifyMarketScanOrder\(batch\)\];/,
+    "live rows go first so bounded downstream steps keep them");
+
+  // normalizeMarketScan is a whitelist; unlisted fields never reach the published state.
+  for (const field of ["liveScanEnabled", "liveScanWindowHours", "liveScanCount", "liveScanCounts", "liveScanError", "endDateGraceHours"]) {
+    assert.ok(
+      new RegExp(`${field}: `).test(source.slice(source.indexOf("function normalizeMarketScan"), source.indexOf("function normalizeMarketScanHistory"))),
+      `${field} must be whitelisted in normalizeMarketScan or it is silently dropped`,
+    );
+  }
+  const scan = bot.normalizeState({ marketScan: { liveScanCount: 7, liveScanCounts: { sports: 5, esports: 2 } } }).marketScan;
+  assert.equal(scan.liveScanCount, 7);
+  assert.deepEqual(scan.liveScanCounts, { sports: 5, esports: 2 });
+});
+
+test("live events: the probe that justified this stays read-only", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-gamma-live-probe.yml", import.meta.url), "utf8");
+  const body = workflow.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+  // It reaches a third-party API from a runner, so it must stay unable to touch anything.
+  for (const forbidden of ["secrets.", "ftplib", "storbinary", "HOSTING_", "upload-artifact"]) {
+    assert.ok(!body.includes(forbidden), `the probe must not use ${forbidden}`);
+  }
+  assert.match(body, /permissions:\n\s+contents: read/);
+  assert.match(body, /on:\n\s+workflow_dispatch:/);
+});
