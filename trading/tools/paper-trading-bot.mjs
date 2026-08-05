@@ -2098,8 +2098,14 @@ function marketDateContext(market = {}, fallbackDate = null) {
   const scheduledEventDate = sportsScheduledEventDate(market, fallbackDate);
   const scheduledTime = Date.parse(scheduledEventDate || "");
   const resolutionTime = Date.parse(resolutionEndDate || "");
+  // A kickoff that hasn't happened yet must win even when it falls after the market's
+  // own resolution window: that window is sometimes a stale pre-reschedule estimate
+  // (seen live on an exact-score market whose resolutionEndDate said 02:00 while
+  // Polymarket's own event page still showed a ~2h countdown to an 18:30 kickoff), and
+  // a game cannot be past resolution before it has actually been played.
+  const scheduledIsFuture = Number.isFinite(scheduledTime) && scheduledTime > Date.now();
   const useScheduledDate = Boolean(scheduledEventDate)
-    && (!Number.isFinite(resolutionTime) || (Number.isFinite(scheduledTime) && scheduledTime < resolutionTime));
+    && (!Number.isFinite(resolutionTime) || (Number.isFinite(scheduledTime) && scheduledTime < resolutionTime) || scheduledIsFuture);
   const endDate = useScheduledDate ? scheduledEventDate : resolutionEndDate;
   return {
     endDate: endDate || null,
@@ -7811,6 +7817,7 @@ export {
   rounded,
   MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT,
   MARKET_OBSERVATION_RETAIN_LIMIT,
+  marketDateContext,
   marketScanRetentionReason,
   marketScanLiveTags,
   scanEventRequestParams,

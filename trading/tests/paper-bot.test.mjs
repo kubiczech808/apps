@@ -1347,3 +1347,41 @@ test("execution revalidation: a polymarket-source portfolio is judged on market 
   assert.equal(economics.expectedValueUsdc, 0.32, "the market path uses the net gain, not the AI expected value");
   assert.ok(economics.annualizedReturn > 0);
 });
+
+test("market dates: a kickoff that hasn't happened yet outranks a stale resolution window", () => {
+  // Live bug: an exact-score sub-market's own resolutionEndDate said 02:00 (already
+  // past), while Polymarket's own event page still showed a ~2h countdown to an 18:30
+  // kickoff -- gameStartTime is the fresher, sports-API-sourced signal and must win
+  // whenever it is still in the future, even though it falls after resolutionEndDate.
+  const kickoff = new Date(Date.now() + 2 * 3600000).toISOString();
+  const staleResolutionWindow = new Date(Date.now() - 3 * 3600000).toISOString();
+  const context = bot.marketDateContext({
+    question: "Exact Score: SSC Napoli 1 - 0 CA Osasuna?",
+    gameStartTime: kickoff,
+    resolutionEndDate: staleResolutionWindow,
+  });
+  assert.equal(context.endDate, kickoff, "the future kickoff must win over the stale, already-past resolution window");
+  assert.equal(context.endDateSource, "sports-event-start");
+  assert.equal(context.sportsEventStarted, false, "the game has not kicked off yet");
+});
+
+test("market dates: with no scheduled kickoff at all, the resolution window is still used", () => {
+  const resolutionWindow = new Date(Date.now() + 3600000).toISOString();
+  const context = bot.marketDateContext({ question: "Will it rain tomorrow?", resolutionEndDate: resolutionWindow });
+  assert.equal(context.endDate, resolutionWindow);
+  assert.equal(context.endDateSource, "polymarket-resolution-window");
+});
+
+test("market dates: an already-past kickoff still yields to an even-earlier-closing resolution window", () => {
+  // Not the common shape, but confirms the fix's new future-kickoff branch does not
+  // swallow the original comparison when both dates are already in the past.
+  const kickoff = new Date(Date.now() - 3600000).toISOString();
+  const resolutionWindow = new Date(Date.now() - 2 * 3600000).toISOString();
+  const context = bot.marketDateContext({
+    question: "Exact Score: SSC Napoli 1 - 0 CA Osasuna?",
+    gameStartTime: kickoff,
+    resolutionEndDate: resolutionWindow,
+  });
+  assert.equal(context.endDate, resolutionWindow);
+  assert.equal(context.endDateSource, "polymarket-resolution-window");
+});
