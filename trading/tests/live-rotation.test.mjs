@@ -576,6 +576,53 @@ test("live revalidation: the market is found by token id, not only by slug", asy
   assert.match(source, /apiUrl\(GAMMA_API, "\/markets", \{ clob_token_ids: tokenId \}\)/);
 });
 
+test("live revalidation: a market Gamma no longer lists is closed out, not re-fetched forever", async () => {
+  const executor = await import("../tools/live-order-executor.mjs");
+
+  // Verified against a production dry run: four short-dated esports legs ("Game 2
+  // Winner", "Map 2 Winner", 0.18 d left) were absent from Gamma by token id AND by
+  // slug, because such markets are delisted once they settle. That is a market that no
+  // longer exists, not one that failed a threshold, so it must leave the pool for good
+  // rather than costing a live fetch on every run for as long as the row is retained.
+  const gone = executor.liveRevalidationUpdate({
+    candidate: { tokenId: "111", question: "Dota 2: PlayTime vs Yakult Brothers - Game 2 Winner" },
+    eligible: false,
+    marketGone: true,
+    rejectReasons: ["market no longer listed in Gamma by token id or slug; treated as closed"],
+  }, "2026-08-05T19:36:31Z");
+  assert.equal(gone.tokenId, "111", "the token id must come through for the merge to find the row");
+  assert.equal(gone.status, "CLOSED", "a vanished market is closed, not merely rejected");
+  assert.equal(gone.marketGone, true, "the persist step keys the close-out off this flag");
+  assert.equal(gone.retryable, false, "it can never come back, so it must not be retried");
+  assert.equal(gone.retryClass, null);
+
+  // A capital block is the opposite case and must stay retryable.
+  const blocked = executor.liveRevalidationUpdate({
+    tokenId: "222",
+    status: "REJECTED",
+    rejectReasons: ["minimum order of 5 shares costs 4.55 USDC, above cash 2.70 USDC"],
+  }, "2026-08-05T19:36:31Z");
+  assert.equal(blocked.status, "WAITING_CAPITAL");
+  assert.equal(blocked.retryable, true);
+  assert.equal(blocked.marketGone, false);
+
+  // Once closed out, the cheap prefilter drops the row with no network call at all.
+  const pool = executor.prepareLiveCandidatePool([{
+    tokenId: "111", question: "Dota 2: PlayTime vs Yakult Brothers - Game 2 Winner",
+    status: "CLOSED", marketClosed: true, acceptingOrders: false,
+    aiProbability: 0.97, annualizedReturn: 2.1, expectedValueUsdc: 0.5,
+    netYield: 0.1, liquidity: 84775, daysToResolution: 0.18,
+  }], null);
+  assert.equal(pool.candidates.length, 0, "a closed-out row must never reach revalidation again");
+
+  // And the workflow must actually write that status back, or the loop never closes.
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+  assert.match(workflow, /if update\.get\("marketGone"\):/);
+  assert.match(workflow, /item\["status"\] = "CLOSED"/);
+  assert.match(workflow, /item\["acceptingOrders"\] = False/);
+});
+
 test("live candidates: an execution rejection survives the next scrape", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");

@@ -305,6 +305,7 @@ jobs:
               remote = io.BytesIO()
               ftp.retrbinary("RETR paper-state.json", remote.write)
               state = json.loads(remote.getvalue().decode("utf-8"))
+              closed_out = []
               def merge_revalidation(rows, label):
                   if not isinstance(rows, list):
                       return 0
@@ -323,6 +324,17 @@ jobs:
                       for field in ("marketPrice", "marketProbability", "annualizedReturn", "expectedValueUsdc", "daysToResolution", "liquidity", "netGainIfWinUsdc", "totalCostUsdc", "orderPrice", "orderSize", "orderNotionalUsdc", "minOrderSize", "spread", "feeRate"):
                           if field in update:
                               item[field] = update[field]
+                      # A market Gamma no longer lists, or one that stopped accepting
+                      # orders, cannot come back. Closing the stored row out is what
+                      # removes it from the candidate list for good; otherwise the
+                      # prefilter keeps shortlisting it and every run pays for a live
+                      # fetch just to reject it again.
+                      if update.get("marketGone"):
+                          item["status"] = "CLOSED"
+                          item["selectionStatus"] = "CLOSED"
+                          item["marketClosed"] = True
+                          item["acceptingOrders"] = False
+                          closed_out.append(str(update["tokenId"]))
                       item["updatedAt"] = update["checkedAt"]
                       merged += 1
                   print(f"Merged {merged} live revalidation updates into {label}.")
@@ -331,6 +343,8 @@ jobs:
               merged_evaluations = merge_revalidation(state.get("evaluations"), "evaluations")
               merged_observations = merge_revalidation(state.get("marketObservations"), "market observations")
               merged = merged_evaluations + merged_observations
+              if closed_out:
+                  print(f"Closed out {len(set(closed_out))} rows whose market no longer exists: {sorted(set(closed_out))}")
               if not merged:
                   print("Revalidated tokens were no longer present in remote evaluation or scraped market state.")
                   raise SystemExit(0)

@@ -1904,13 +1904,37 @@ function livePortfolioValue(liveState, cash) {
 
 async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, evaluationByToken = new Map()) {
   const market = await fetchMarket(evaluation);
-  if (!market) return { candidate: evaluation, eligible: false, rejectReasons: ["market not found in Gamma"] };
+  // Gamma knows this token neither by its id nor by its slug. Short-dated markets --
+  // esports "Game 2 Winner"/"Map 2 Winner" legs especially -- are delisted once they
+  // settle, so this is a market that no longer exists rather than one that failed a
+  // threshold. `marketGone` marks it terminal so the stored row is closed out instead
+  // of being re-fetched and re-rejected on every run for as long as it is retained.
+  if (!market) {
+    return {
+      candidate: evaluation,
+      eligible: false,
+      marketGone: true,
+      rejectReasons: ["market no longer listed in Gamma by token id or slug; treated as closed"],
+    };
+  }
   const outcomes = parseJsonField(market.outcomes).map(String);
   const tokenIds = parseJsonField(market.clobTokenIds).map(String);
   const tokenIndex = tokenIds.findIndex((tokenId) => tokenId === String(evaluation.tokenId || ""));
-  if (tokenIndex < 0) return { candidate: evaluation, eligible: false, rejectReasons: ["token no longer belongs to Gamma market"] };
+  if (tokenIndex < 0) {
+    return {
+      candidate: evaluation,
+      eligible: false,
+      marketGone: true,
+      rejectReasons: ["token no longer belongs to Gamma market"],
+    };
+  }
   if (market.closed || market.active === false || market.acceptingOrders === false) {
-    return { candidate: evaluation, eligible: false, rejectReasons: ["market is not accepting orders"] };
+    return {
+      candidate: evaluation,
+      eligible: false,
+      marketGone: true,
+      rejectReasons: ["market is not accepting orders"],
+    };
   }
 
   const dateContext = marketDateContext({
@@ -2644,12 +2668,22 @@ function liveRevalidationUpdate(item, checkedAt) {
     const value = Number(item?.[field]);
     if (Number.isFinite(value)) metrics[field === "currentPrice" ? "marketPrice" : field] = value;
   }
+  // A market that no longer exists can never come back, so it is reported as CLOSED
+  // rather than merely rejected: the persist step closes the stored row out on this,
+  // which takes it out of the candidate pool for good instead of leaving it to be
+  // re-fetched and re-rejected every run.
+  const marketGone = Boolean(item?.marketGone);
   return {
     tokenId: String(item?.tokenId || source.tokenId || ""),
     checkedAt,
-    status: status === "ELIGIBLE" ? "READY" : (status === "ERROR" ? "ERROR" : (retryClass ? `WAITING_${retryClass}` : "REJECTED")),
-    retryable: Boolean(retryClass),
-    retryClass,
+    status: status === "ELIGIBLE"
+      ? "READY"
+      : (status === "ERROR"
+        ? "ERROR"
+        : (marketGone ? "CLOSED" : (retryClass ? `WAITING_${retryClass}` : "REJECTED"))),
+    retryable: Boolean(retryClass) && !marketGone,
+    retryClass: marketGone ? null : retryClass,
+    marketGone,
     rejectReasons,
     question: item?.question || source.question || "",
     outcome: item?.outcome || source.outcome || "",
@@ -3584,6 +3618,7 @@ export {
   positionRotationEconomics,
   sharesForOrder,
   prepareLiveCandidatePool,
+  liveRevalidationUpdate,
   heldRiskItems,
   earlyRiskBlockReason,
   compactLiveRunRecord,
