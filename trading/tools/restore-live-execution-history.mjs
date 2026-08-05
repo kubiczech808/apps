@@ -45,8 +45,31 @@ function normalizedRunLog(rows) {
 
 async function fetchJson(url, headers = {}) {
   const response = await fetch(url, { headers: { Accept: "application/vnd.github+json", ...headers } });
-  if (!response.ok) throw new Error(`HTTP ${response.status} while loading ${url}`);
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status} while loading ${url}`);
+    error.status = response.status;
+    throw error;
+  }
   return response.json();
+}
+
+// A hosted state that answers 404 has no history to restore. That is the normal
+// first-run state, and treating it as fatal created a deadlock: the step failed, the
+// order-submission step after it was skipped, so no execution state was ever produced
+// or uploaded, so the next run answered 404 again. Trading stayed blocked indefinitely.
+//
+// Any other failure still throws. There the data probably exists but could not be
+// read, and continuing with an empty log would let the upload replace real history.
+async function loadPublishedExecutionState(url) {
+  try {
+    return { payload: asObject(await fetchJson(url)), existed: true };
+  } catch (error) {
+    if (error?.status === 404) {
+      console.warn(`No live execution state is published yet (HTTP 404 for ${url}); starting with an empty run log.`);
+      return { payload: {}, existed: false };
+    }
+    throw error;
+  }
 }
 
 function findMatchingStoredRun(rows, run) {
@@ -104,7 +127,8 @@ async function restoreHistoricalRows(payload) {
 
 async function main() {
   if (!executionStateUrl) throw new Error("LIVE_EXECUTION_STATE_URL is required");
-  let payload = asObject(await fetchJson(executionStateUrl));
+  const { payload: published } = await loadPublishedExecutionState(executionStateUrl);
+  let payload = published;
 
   payload.runLog = normalizedRunLog(payload.runLog);
   payload = await restoreHistoricalRows(payload);

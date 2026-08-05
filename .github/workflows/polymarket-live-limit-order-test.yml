@@ -339,6 +339,18 @@ jobs:
               print(f"Persisted {merged} live revalidation updates into paper-state.json at {datetime.now(timezone.utc).isoformat()}")
           PY
 
+      - name: Merge published run-log history before upload
+        if: always()
+        working-directory: trading
+        env:
+          # Read the hosted state, not the local copy the executor just wrote.
+          LIVE_EXECUTION_PUBLISHED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
+          LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
+        # The upload replaces the hosted file outright, so a run that started from an
+        # empty local log would publish that empty log over the real history. This makes
+        # the file about to be uploaded a superset of the one it replaces.
+        run: node tools/merge-live-execution-history.mjs
+
       - name: Upload live state
         if: always()
         env:
@@ -376,6 +388,47 @@ jobs:
                       ftp.mkd(part)
                       ftp.cwd(part)
 
+          def swap_into_place(ftp, tmp_name, remote_name):
+              """Replace remote_name with tmp_name without ever leaving nothing behind.
+
+              The previous version deleted remote_name and then renamed. If that rename
+              failed, the hosted file was simply gone -- and for live-execution-state.json
+              that is the entire run-log history. The existing file is now moved aside to
+              a backup first, so a failure at any point still leaves a recoverable copy,
+              and the backup is only removed once the new file is confirmed in place.
+              """
+              try:
+                  ftp.rename(tmp_name, remote_name)
+                  return
+              except ftplib.all_errors:
+                  pass
+              backup_name = f"{remote_name}.previous"
+              try:
+                  ftp.delete(backup_name)
+              except ftplib.all_errors:
+                  pass
+              moved_aside = False
+              try:
+                  ftp.rename(remote_name, backup_name)
+                  moved_aside = True
+              except ftplib.all_errors:
+                  pass
+              try:
+                  ftp.rename(tmp_name, remote_name)
+              except ftplib.all_errors:
+                  if moved_aside:
+                      # Put the original back rather than leaving the path empty.
+                      try:
+                          ftp.rename(backup_name, remote_name)
+                      except ftplib.all_errors:
+                          pass
+                  raise
+              if moved_aside:
+                  try:
+                      ftp.delete(backup_name)
+                  except ftplib.all_errors:
+                      pass
+
           def upload_atomic(local_path, remote_name):
               failures = []
               for attempt in range(1, 4):
@@ -386,14 +439,7 @@ jobs:
                           enter_dir(ftp, target.split("/"))
                           with local_path.open("rb") as handle:
                               ftp.storbinary(f"STOR {tmp_name}", handle)
-                          try:
-                              ftp.rename(tmp_name, remote_name)
-                          except ftplib.all_errors:
-                              try:
-                                  ftp.delete(remote_name)
-                              except ftplib.all_errors:
-                                  pass
-                              ftp.rename(tmp_name, remote_name)
+                          swap_into_place(ftp, tmp_name, remote_name)
                       print(f"Uploaded {remote_name} on attempt {attempt}")
                       return
                   except ftplib.all_errors as error:

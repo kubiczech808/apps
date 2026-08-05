@@ -253,3 +253,87 @@ test("order sizing: a post-only limit order reserves no taker fee in the minimum
   assert.ok(withFeeRate.effectiveStake >= withFeeRate.minimumOrderCost - 1e-9);
   assert.ok(withFeeRate.size >= 5, `the order must reach the minimum size, got ${withFeeRate.size}`);
 });
+
+test("live run log: publishing can never shrink the hosted history", async () => {
+  const merge = await import("../tools/merge-live-execution-history.mjs");
+
+  const published = [
+    { id: "row-3", runAt: "2026-08-05T07:00:00.000Z", action: "SKIP" },
+    { id: "row-2", runAt: "2026-08-04T07:00:00.000Z", action: "SUBMIT" },
+    { id: "row-1", runAt: "2026-08-03T07:00:00.000Z", action: "SUBMIT" },
+  ];
+
+  // The reported failure: a run started from an empty local log and published it over
+  // three real rows, emptying the Live run log.
+  const fromEmpty = merge.mergeRunLogs([], published);
+  assert.equal(fromEmpty.length, 3, "an empty local log must not erase published history");
+  assert.deepEqual(fromEmpty.map((row) => row.id), ["row-3", "row-2", "row-1"]);
+
+  // A normal run adds exactly one row and keeps the rest.
+  const withNew = merge.mergeRunLogs(
+    [{ id: "row-4", runAt: "2026-08-05T07:45:00.000Z", action: "SUBMIT" }],
+    published,
+  );
+  assert.equal(withNew.length, 4);
+  assert.equal(withNew[0].id, "row-4", "newest row sorts first");
+
+  // The same run seen twice must not duplicate, and the local copy wins because it
+  // carries this run's fresh decision.
+  const deduped = merge.mergeRunLogs(
+    [{ id: "row-3", runAt: "2026-08-05T07:00:00.000Z", action: "ROTATION_EXIT_SUBMITTED" }],
+    published,
+  );
+  assert.equal(deduped.length, 3, "a re-seen row must not duplicate");
+  assert.equal(deduped.find((row) => row.id === "row-3").action, "ROTATION_EXIT_SUBMITTED");
+
+  // Rows without an id are keyed by run id, time and action, matching the restore step.
+  const keyed = merge.mergeRunLogs(
+    [{ workflowRunId: "99", runAt: "2026-08-05T08:00:00.000Z", action: "SUBMIT" }],
+    [{ workflowRunId: "99", runAt: "2026-08-05T08:00:00.000Z", action: "SUBMIT" }],
+  );
+  assert.equal(keyed.length, 1, "identical rows without an id must still dedupe");
+});
+
+test("live run log: a missing published state does not block order submission", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const restore = await readFile(new URL("../tools/restore-live-execution-history.mjs", import.meta.url), "utf8");
+
+  // The deadlock: the restore step exited 1 on a 404, so the order-submission step
+  // after it was skipped, so no execution state was produced or uploaded, so the next
+  // run got another 404. Trading stayed blocked run after run.
+  assert.match(restore, /async function loadPublishedExecutionState/);
+  assert.match(restore, /if \(error\?\.status === 404\) \{/);
+  assert.match(restore, /starting with an empty run log/);
+  // Any other status must still throw: there the data probably exists and continuing
+  // with an empty log would let the upload replace it.
+  assert.match(restore, /throw error;/);
+  assert.match(restore, /error\.status = response\.status;/);
+
+  const workflow = await readFile(
+    new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+  // The merge guard must run before the upload, and on every run.
+  const mergeAt = workflow.indexOf("merge-live-execution-history.mjs");
+  const uploadAt = workflow.indexOf("- name: Upload live state");
+  assert.ok(mergeAt > 0, "the merge guard must be wired into the workflow");
+  assert.ok(mergeAt < uploadAt, "the merge must run before the upload, not after");
+  assert.match(workflow, /- name: Merge published run-log history before upload\n\s+if: always\(\)/);
+});
+
+test("live run log: an upload never leaves the hosted path empty", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(
+    new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+  const publisher = await readFile(new URL("../tools/publish-paper-state.py", import.meta.url), "utf8");
+
+  // delete-then-rename loses the file outright if the rename fails, and for
+  // live-execution-state.json that file is the whole run-log history.
+  assert.match(workflow, /def swap_into_place\(ftp, tmp_name, remote_name\):/);
+  assert.match(workflow, /backup_name = f"\{remote_name\}\.previous"/);
+  assert.match(workflow, /ftp\.rename\(backup_name, remote_name\)/, "a failed swap must restore the original");
+  assert.ok(!/ftp\.delete\(remote_name\)\n\s+except ftplib\.all_errors:\n\s+pass\n\s+ftp\.rename\(tmp_name, remote_name\)/.test(workflow),
+    "the delete-then-rename pattern must be gone");
+
+  // The paper-state publisher had the same hazard.
+  assert.match(publisher, /backup = f"\{source\.name\}\.previous"/);
+  assert.match(publisher, /ftp\.rename\(backup, source\.name\)/);
+});

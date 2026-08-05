@@ -65,8 +65,10 @@ def enter_dir(ftp: ftplib.FTP, parts: list[str]) -> None:
 def publish(ftp: ftplib.FTP, source: Path, suffix: str) -> None:
     """Upload under a temporary name, then swap it in.
 
-    Hosts that cannot overwrite atomically need the delete-then-rename fallback;
-    a failed delete is not fatal because the rename below is what has to succeed.
+    Hosts that cannot overwrite atomically need a fallback, but deleting the live
+    file first means a failure at the next step leaves nothing at all. The existing
+    file is moved aside to a backup instead, restored if the swap fails, and the
+    backup removed only once the new file is in place.
     """
     temporary = f"{source.name}.{suffix}"
     with source.open("rb") as handle:
@@ -74,11 +76,31 @@ def publish(ftp: ftplib.FTP, source: Path, suffix: str) -> None:
     try:
         ftp.rename(temporary, source.name)
     except ftplib.all_errors:
+        backup = f"{source.name}.previous"
         try:
-            ftp.delete(source.name)
+            ftp.delete(backup)
         except ftplib.all_errors:
             pass
-        ftp.rename(temporary, source.name)
+        moved_aside = False
+        try:
+            ftp.rename(source.name, backup)
+            moved_aside = True
+        except ftplib.all_errors:
+            pass
+        try:
+            ftp.rename(temporary, source.name)
+        except ftplib.all_errors:
+            if moved_aside:
+                try:
+                    ftp.rename(backup, source.name)
+                except ftplib.all_errors:
+                    pass
+            raise
+        if moved_aside:
+            try:
+                ftp.delete(backup)
+            except ftplib.all_errors:
+                pass
     print(f"published {source.name} ({source.stat().st_size} bytes)")
 
 
