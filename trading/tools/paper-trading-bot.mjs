@@ -1047,9 +1047,31 @@ function marketObservationUpdateTime(item) {
   return Date.parse(item?.marketDataUpdatedAt || item?.observedAt || item?.updatedAt || "") || 0;
 }
 
+// A settled book prints 0 or 1, and `firstMarketProbability` used to be seeded from
+// `marketProbability` before `lastLiveMarketProbability` existed. Rows that resolved
+// back then carry a stuck 0/1 entry price, and scrapedSimulationTrade() discards any
+// row whose entry is not strictly between 0 and 1 -- so resolved observations dropped
+// out of the parameter simulation entirely instead of being counted in it, which is
+// why "Resolved" there fell far short of the resolved list's own count. Any genuinely
+// live quote on the row beats a settlement print, whichever field it sits in.
+function firstLiveProbability(...candidates) {
+  for (const candidate of candidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0 && numeric < 1) return numeric;
+  }
+  return null;
+}
+
 function firstObservationMetadata(item = {}) {
   const firstObservedAt = item.firstObservedAt || item.observedAt || item.marketDataUpdatedAt || null;
-  const firstProbability = Number(item.firstMarketProbability ?? item.marketProbability ?? item.marketPrice);
+  // Falls back to the raw value when no live quote was ever recorded, so the row stays
+  // excluded downstream -- a 0%/100% entry price is not a tradable simulation.
+  const firstProbability = firstLiveProbability(
+    item.firstMarketProbability,
+    item.lastLiveMarketProbability,
+    item.marketProbability,
+    item.marketPrice,
+  ) ?? Number(item.firstMarketProbability ?? item.marketProbability ?? item.marketPrice);
   const firstLiquidity = Number(item.firstLiquidity ?? item.liquidity);
   const firstVolume = Number(item.firstVolume24hr ?? item.volume24hr);
   const firstDays = Number(item.firstDaysToResolution ?? item.daysToResolution);
@@ -6921,9 +6943,27 @@ function scrapedSimulationDays(item) {
   return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+// Risk labels/keys are namespaced dedup identifiers for one specific market, event,
+// fixture or pairing -- "market: uwcl-faw-haj-2026-08-05-corners-team-home-4pt5" and
+// the like. They are what the overlap check needs, but as report rows they are noise:
+// each one groups a single opportunity, so it can never carry a comparable sample.
+// Only the real taxonomy (sports, esports, politics, geopolitics, crypto, ...) belongs
+// in this table, so anything wearing a risk namespace is dropped.
+const RISK_NAMESPACE_TAG = /^(market|event|team|match|topic|entity)\s*:/i;
+// A slug carrying a calendar date is one fixture, not a category.
+const DATED_FIXTURE_SLUG_TAG = /-(?:19|20)\d{2}-\d{2}-\d{2}(?:-|$)/;
+
+function isPerFixtureLabel(value) {
+  const text = String(value || "");
+  return RISK_NAMESPACE_TAG.test(text) || DATED_FIXTURE_SLUG_TAG.test(text);
+}
+
 function scrapedSimulationCategory(item) {
   const tags = Array.isArray(item?.tags) ? item.tags.filter(Boolean).map(String) : [];
-  return String(item?.firstCategory || item?.riskCategory || tags[0] || "general");
+  const category = String(item?.firstCategory || item?.riskCategory || tags[0] || "general");
+  // Same reasoning as the tag filter: a per-fixture identifier is not a category, and
+  // `firstCategory` was seeded from `tags[0]`, which legacy rows filled with risk labels.
+  return isPerFixtureLabel(category) ? "general" : category;
 }
 
 // Tags come from several places and the report only used one of them, so most of
@@ -6934,7 +6974,6 @@ function scrapedSimulationTags(item) {
     Array.isArray(item?.firstTags) ? item.firstTags : [],
     Array.isArray(item?.tags) ? item.tags : [],
     Array.isArray(item?.polymarketTags) ? item.polymarketTags : [],
-    Array.isArray(item?.riskGroupLabels) ? item.riskGroupLabels : [],
   ];
   const seen = new Set();
   const tags = [];
@@ -6945,6 +6984,9 @@ function scrapedSimulationTags(item) {
         raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : (raw ?? ""),
       ).trim().toLowerCase();
       if (!text || text.length > 60) continue;
+      // Legacy rows stored risk labels in `tags` too, and a raw per-fixture slug is
+      // just as useless as a namespaced one: it groups exactly one opportunity.
+      if (isPerFixtureLabel(text)) continue;
       if (seen.has(text)) continue;
       seen.add(text);
       tags.push(text);
@@ -7048,8 +7090,15 @@ function scrapedSimulationParameterRows(trades) {
             (marketType === "all" || trade.marketType === marketType)
             && trade.entry >= threshold
             && (trade.days == null || trade.days <= maxResolutionDays)
-            && Number.isFinite(trade.liquidity)
-            && trade.liquidity >= minLiquidityUsdc
+            // An unrecorded liquidity cannot satisfy a real floor, but the no-floor row
+            // is labelled "All" and must mean it. Requiring a finite value there dropped
+            // every opportunity whose liquidity was never stored out of all 360
+            // combinations at once, which is why this table reported far fewer resolved
+            // opportunities than the resolved list itself. Unknown horizons are already
+            // treated this way on the line above.
+            && (minLiquidityUsdc <= 0
+              ? true
+              : Number.isFinite(trade.liquidity) && trade.liquidity >= minLiquidityUsdc)
           ));
           rows.push({
             probabilitySource: "polymarket",

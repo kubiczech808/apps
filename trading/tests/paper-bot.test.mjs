@@ -1163,10 +1163,14 @@ test("category performance: the report carries the decision-relevant columns", a
 
   const rows = bot.buildCalculationReport(state).categorySummaries;
   const labels = rows.map((row) => row.label);
-  for (const expected of ["nba", "sports", "crypto", "entity:acme"]) {
+  for (const expected of ["nba", "sports", "crypto"]) {
     assert.ok(labels.includes(expected), `${expected} must appear as a tag row`);
   }
   assert.ok(rows.some((row) => row.kind === "category"), "categories are still grouped");
+  // Risk labels are per-fixture dedup identifiers, not taxonomy: each groups exactly
+  // one opportunity, so it can never carry a comparable sample and only crowds out the
+  // real categories. They used to be fed straight into this table.
+  assert.ok(!labels.includes("entity:acme"), "a risk label must not become a tag row");
 
   const resolvedGroup = rows.find((row) => row.resolved > 0);
   assert.ok(resolvedGroup, "the fixture must resolve at least one trade");
@@ -1178,6 +1182,119 @@ test("category performance: the report carries the decision-relevant columns", a
     Math.abs(resolvedGroup.annualizedRoi - resolvedGroup.roi * (365 / resolvedGroup.avgDaysToResolution)) < 0.01,
     "ROI p.a. must annualize over the measured horizon",
   );
+});
+
+test("category performance: per-fixture slugs never become their own rows", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const state = bot.normalizeState(
+    JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
+  );
+  // The exact shapes seen in production: risk labels reached the table as rows like
+  // "market: uwcl-faw-haj-2026-08-05-corners-team-home-4pt5". Only the real taxonomy
+  // (sports, esports, politics, geopolitics, ...) belongs here.
+  state.marketObservations = state.marketObservations.map((row) => ({
+    ...row,
+    firstDaysToResolution: 4,
+    daysToResolution: 4,
+    firstLiquidity: 52000,
+    firstCategory: "Market: uwcl-faw-haj-2026-08-05-corners-team-home-4pt5",
+    tags: ["Match: FC Bayern vs Hajduk", "esports"],
+    polymarketTags: [{ slug: "sports" }, { slug: "ucl-fen-stu1-2026-08-05-exact-score" }],
+    riskGroupLabels: [
+      "Market: uwcl-faw-haj-2026-08-05-corners-team-home-4pt5",
+      "Event: uwcl-faw-haj-2026-08-05",
+      "Team: sk brann",
+      "Topic: bitcoin",
+    ],
+  }));
+
+  const rows = bot.buildCalculationReport(state).categorySummaries;
+  const labels = rows.map((row) => row.label);
+  for (const noise of [
+    "market: uwcl-faw-haj-2026-08-05-corners-team-home-4pt5",
+    "event: uwcl-faw-haj-2026-08-05",
+    "team: sk brann",
+    "topic: bitcoin",
+    "match: fc bayern vs hajduk",
+    "ucl-fen-stu1-2026-08-05-exact-score",
+  ]) {
+    assert.ok(!labels.includes(noise), `${noise} must not appear as a row`);
+  }
+  // The genuine taxonomy on the same rows must survive the filter.
+  for (const kept of ["esports", "sports"]) {
+    assert.ok(labels.includes(kept), `${kept} must still be reported`);
+  }
+  // A category that was nothing but a fixture slug falls back rather than leaking.
+  assert.ok(
+    !labels.some((label) => /-(?:19|20)\d{2}-\d{2}-\d{2}/.test(label)),
+    `no row may carry a dated fixture slug, got ${JSON.stringify(labels)}`,
+  );
+});
+
+test("parameter combinations: a resolved row keeps its scrape-time entry price", () => {
+  // Why "Resolved" in Best parameter combinations fell far short of the resolved list's
+  // own count: a settled book prints 0 or 1, firstMarketProbability was seeded from it
+  // before lastLiveMarketProbability existed, and an entry price of exactly 0 or 1 is
+  // discarded -- so those resolved rows left the simulation altogether instead of
+  // being counted in it.
+  const resolvedRow = {
+    tokenId: "12345678901234567890",
+    question: "Exact Score: SSC Napoli 1 - 0 CA Osasuna?",
+    status: "RESOLVED",
+    marketClosed: true,
+    // The settlement print, which must not be taken as the entry price.
+    marketProbability: 1,
+    firstMarketProbability: 1,
+    // The quote the market actually carried while it was tradable.
+    lastLiveMarketProbability: 0.9,
+    finalOutcomePrice: 1,
+    firstLiquidity: 60000,
+    firstDaysToResolution: 1,
+  };
+  const state = bot.normalizeState({ marketObservations: [resolvedRow] });
+  const report = bot.buildCalculationReport(state);
+  assert.equal(report.sampleSize, 1, "the resolved row must reach the simulation at all");
+  assert.equal(report.resolvedSampleSize, 1, "and must be counted as resolved, not dropped");
+  assert.equal(report.examples[0].firstProbability, 0.9, "the scrape-time quote is the entry price");
+
+  // A row that genuinely never had a live quote stays excluded: a 0%/100% entry is not
+  // a tradable simulation, which is the caveat the report is expected to keep.
+  const neverLive = bot.normalizeState({
+    marketObservations: [{ ...resolvedRow, lastLiveMarketProbability: null }],
+  });
+  assert.equal(bot.buildCalculationReport(neverLive).sampleSize, 0);
+});
+
+test("parameter combinations: the no-floor liquidity row really means all", async () => {
+  // The dominant reason this table reported far fewer resolved opportunities than the
+  // resolved list: every combination required a finite liquidity, including the row the
+  // UI labels "All" (floor 0). An opportunity whose liquidity was never stored was
+  // therefore dropped from all 360 combinations at once. Unknown horizons were already
+  // tolerated, so the two filters disagreed on how to treat missing data.
+  const { readFile } = await import("node:fs/promises");
+  const state = bot.normalizeState(
+    JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
+  );
+  const report = bot.buildCalculationReport(state);
+  const noFloor = report.parameterSummaries.filter((row) => row.marketType === "all"
+    && row.minLiquidityUsdc === 0
+    && row.threshold === 0.5);
+  assert.ok(noFloor.length, "the fixture must produce a no-floor row");
+  assert.ok(
+    noFloor.some((row) => row.trades === report.sampleSize),
+    `the widest no-floor row must hold every simulated opportunity (${report.sampleSize}), got ${JSON.stringify(noFloor.map((r) => r.trades))}`,
+  );
+  assert.ok(
+    noFloor.some((row) => row.resolved === report.resolvedSampleSize),
+    `and every resolved one (${report.resolvedSampleSize}), got ${JSON.stringify(noFloor.map((r) => r.resolved))}`,
+  );
+
+  // A real floor still excludes an unknown liquidity: it cannot be shown to clear it.
+  const withFloor = report.parameterSummaries.find((row) => row.marketType === "all"
+    && row.minLiquidityUsdc === 100000
+    && row.threshold === 0.5
+    && row.maxResolutionDays === 30);
+  assert.equal(withFloor.trades, 0, "an unrecorded liquidity must not pass a real floor");
 });
 
 test("category performance: an unknown horizon reports no p.a. at all", async () => {
