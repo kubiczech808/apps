@@ -1125,3 +1125,22 @@ test("state segments: segments can be merged in any order", async () => {
   }
   assert.equal(checked, 24, "all four segment orderings must be covered");
 });
+
+test("state segments: retention is not silently throttled by workflow env", async () => {
+  // The resolved cap that made the counts churn was pinned in the workflow env, so
+  // raising the default in the bot changed nothing in production. Any workflow that
+  // overrides these must agree with what the response sizing allows.
+  const { readFile } = await import("node:fs/promises");
+  for (const name of ["trading-paper-bot", "trading-market-scan"]) {
+    const workflow = await readFile(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), "utf8");
+    const active = Number(workflow.match(/PAPER_MARKET_OBSERVATION_RETAIN_LIMIT: "(\d+)"/)?.[1]);
+    const resolved = Number(workflow.match(/PAPER_MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT: "(\d+)"/)?.[1]);
+    if (Number.isFinite(active)) {
+      assert.ok(active >= 5000, `${name} throttles the active catalogue to ${active}`);
+    }
+    if (Number.isFinite(resolved)) {
+      assert.ok(resolved >= 3000, `${name} throttles resolved history to ${resolved}, so it cannot accumulate`);
+      assert.ok(resolved <= 5000, `${name} would serve ${resolved} resolved rows at once and risk a 500`);
+    }
+  }
+});
