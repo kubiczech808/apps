@@ -2,6 +2,7 @@
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const DATA_API = process.env.POLYMARKET_DATA_API || "https://data-api.polymarket.com";
 const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymarket.com";
@@ -853,6 +854,66 @@ function livePortfolioPositionUrl(position) {
   return `https://www.osobnizkusenosti.cz/trading/portfolios/closed/${query}`;
 }
 
+function openOrderIdentityKeys(order = {}) {
+  return [order.id, order.orderId, order.orderID, order.tokenId, order.assetId, order.asset]
+    .map((key) => String(key || "").trim())
+    .filter(Boolean);
+}
+
+// An open order that disappears without becoming a position has released its locked
+// capital back to cash, and that capital sits idle until the next scheduled execution
+// run -- up to three hours of the portfolio doing nothing. Detecting it here lets the
+// account sync dispatch an execution run immediately instead.
+//
+// A fill is deliberately NOT reported: the order became a position, so no capital was
+// freed and the existing fill/rotation handling already covers it.
+function vanishedOpenOrders(previousState, openOrders = [], positions = [], sync = null, generatedAt = new Date().toISOString()) {
+  // getOpenOrders() failing leaves the list empty while the sync still reports OK, so
+  // without this guard a transient CLOB error would look like every order vanishing at
+  // once and would dispatch a run against a portfolio that never actually changed.
+  const ordersUnavailable = (Array.isArray(sync?.warnings) ? sync.warnings : [])
+    .some((warning) => String(warning || "").startsWith("open-orders"));
+  const previousOrders = Array.isArray(previousState?.openOrders) ? previousState.openOrders : [];
+  if (ordersUnavailable || !previousOrders.length) {
+    return { vanished: [], freedCapitalUsdc: 0, ordersUnavailable, checked: previousOrders.length };
+  }
+
+  const liveKeys = new Set(openOrders.flatMap(openOrderIdentityKeys));
+  const positionKeys = new Set(positions
+    .filter((position) => number(position?.shares ?? position?.size, 0) > 0)
+    .flatMap((position) => [position.tokenId, position.assetId, position.conditionId]
+      .map((key) => String(key || "").trim())
+      .filter(Boolean)));
+
+  const vanished = [];
+  for (const order of previousOrders) {
+    const keys = openOrderIdentityKeys(order);
+    if (!keys.length || keys.some((key) => liveKeys.has(key))) continue;
+    // Filled: the capital moved into a position rather than back to cash.
+    if (keys.some((key) => positionKeys.has(key))) continue;
+    vanished.push({
+      id: order.id || null,
+      tokenId: order.tokenId || order.assetId || null,
+      question: order.question || "",
+      outcome: order.outcome || "",
+      price: number(order.price),
+      remainingSize: number(order.remainingSize ?? order.originalSize),
+      releasedCapitalUsdc: number(order.notionalUsdc),
+      createdAt: order.createdAt || null,
+      detectedAt: generatedAt,
+      reason: "open order left the book without becoming a position; its locked capital is free again",
+    });
+  }
+
+  const freedCapitalUsdc = vanished.reduce((sum, order) => sum + number(order.releasedCapitalUsdc, 0), 0);
+  return {
+    vanished,
+    freedCapitalUsdc: Number(freedCapitalUsdc.toFixed(6)),
+    ordersUnavailable,
+    checked: previousOrders.length,
+  };
+}
+
 function redeemNotifications(positions, previousState, generatedAt) {
   const previousNotifications = previousState?.notifications && typeof previousState.notifications === "object"
     ? previousState.notifications
@@ -1604,6 +1665,13 @@ async function main() {
     ...closedTrades.filter((item) => String(item?.status || "").toUpperCase() === "REDEEM_REQUIRED"),
   ];
   const notifications = redeemNotifications(pendingRedeemPositions, previousLiveState, generatedAt);
+  const releasedOrderCapital = vanishedOpenOrders(
+    previousLiveState,
+    openOrders,
+    reconciledPositions,
+    sync,
+    generatedAt,
+  );
   const cashUsdc = number(balanceAllowance?.collateral?.balanceUsdc);
   const pendingRedeemUsdc = number(portfolioBase.pendingRedeemUsdc, 0);
   const equityUsdc = cashUsdc == null
@@ -1732,6 +1800,7 @@ async function main() {
     },
     balanceAllowance,
     openOrders,
+    releasedOrderCapital,
     positions: reconciledPositions,
     apiPositions: openApiPositions,
     resolvedApiPositions: resolvedPositionRows,
@@ -1752,6 +1821,8 @@ async function main() {
     apiPositions: positions.length,
     reconciliationGaps: reconciliation.orphanedCount,
     openOrders: payload.openOrders.length,
+    vanishedOpenOrders: releasedOrderCapital.vanished.length,
+    freedOrderCapitalUsdc: releasedOrderCapital.freedCapitalUsdc,
     cashUsdc: payload.portfolio.cashUsdc,
     closedTrades: closedTrades.length,
     redeemAlerts: notifications.redeemAlerts.length,
@@ -1762,7 +1833,20 @@ async function main() {
   }));
 }
 
-main().catch((error) => {
-  console.error(error?.stack || error?.message || String(error));
-  process.exit(1);
-});
+// Importing this module must never start an account sync, so the pure helpers below can
+// be tested offline. Only a direct `node tools/live-account-sync.mjs` invocation runs.
+const invokedDirectly = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (invokedDirectly) {
+  main().catch((error) => {
+    console.error(error?.stack || error?.message || String(error));
+    process.exit(1);
+  });
+}
+
+export {
+  openOrderIdentityKeys,
+  vanishedOpenOrders,
+};

@@ -399,6 +399,95 @@ test("live portfolio: the deposited baseline is configured, never inferred from 
   }
 });
 
+test("released capital: an order that leaves the book without filling triggers a run", async () => {
+  const sync = await import("../tools/live-account-sync.mjs");
+  const order = (id, tokenId, notional) => ({
+    id, tokenId, assetId: tokenId, question: `Q-${id}`, outcome: "No",
+    price: 0.9, remainingSize: 5.68, notionalUsdc: notional,
+  });
+  const previousState = { openOrders: [order("a", "111", 5.11), order("b", "222", 4.5)] };
+
+  // "b" is still on the book, "a" is gone and never became a position: its locked
+  // capital is back as cash and would otherwise sit idle until the next cron run.
+  const released = sync.vanishedOpenOrders(previousState, [order("b", "222", 4.5)], [], null, "2026-08-05T14:00:00Z");
+  assert.equal(released.vanished.length, 1);
+  assert.equal(released.vanished[0].id, "a");
+  assert.equal(released.freedCapitalUsdc, 5.11, "the freed capital is reported for the dispatch log");
+  assert.equal(released.ordersUnavailable, false);
+});
+
+test("released capital: a fill is not a disappearance", async () => {
+  const sync = await import("../tools/live-account-sync.mjs");
+  const order = { id: "a", tokenId: "111", assetId: "111", price: 0.9, notionalUsdc: 5.11 };
+  const previousState = { openOrders: [order] };
+
+  // The order left the book because it filled, so the capital moved into a position
+  // rather than back to cash. Nothing was released and no run is warranted.
+  const filled = sync.vanishedOpenOrders(previousState, [], [{ tokenId: "111", shares: 5.68 }], null, "2026-08-05T14:00:00Z");
+  assert.equal(filled.vanished.length, 0, "a filled order must not be reported as released capital");
+
+  // A zero-share row is not a real position, so that same order did vanish.
+  const empty = sync.vanishedOpenOrders(previousState, [], [{ tokenId: "111", shares: 0 }], null, "2026-08-05T14:00:00Z");
+  assert.equal(empty.vanished.length, 1);
+});
+
+test("released capital: a failed open-orders fetch never looks like a mass cancellation", async () => {
+  const sync = await import("../tools/live-account-sync.mjs");
+  const previousState = { openOrders: [{ id: "a", tokenId: "111", notionalUsdc: 5.11 }] };
+
+  // getOpenOrders() throwing leaves the list empty while the sync still reports OK, so
+  // without this guard one transient CLOB error would look like every order vanishing
+  // and would dispatch a live execution run against an unchanged portfolio.
+  const failed = sync.vanishedOpenOrders(
+    previousState,
+    [],
+    [],
+    { warnings: ["open-orders: request timed out"] },
+    "2026-08-05T14:00:00Z",
+  );
+  assert.equal(failed.vanished.length, 0, "an unreadable book must not be treated as an empty one");
+  assert.equal(failed.ordersUnavailable, true, "and the workflow must be able to see why");
+
+  // An unrelated warning must not suppress a genuine detection.
+  const unrelated = sync.vanishedOpenOrders(
+    previousState,
+    [],
+    [],
+    { warnings: ["balance-allowance update 0x1/sig1: boom"] },
+    "2026-08-05T14:00:00Z",
+  );
+  assert.equal(unrelated.vanished.length, 1);
+
+  // A first-ever run has no previous orders and must stay silent.
+  assert.equal(sync.vanishedOpenOrders(null, [], [], null, "2026-08-05T14:00:00Z").vanished.length, 0);
+});
+
+test("released capital: the account sync dispatches the execution workflow", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-live-account.yml", import.meta.url), "utf8");
+
+  // Dispatching needs actions: write, and workflow_dispatch is one of the two events
+  // GITHUB_TOKEN may still start a run with, so no personal access token is needed.
+  assert.match(workflow, /actions: write/);
+  assert.match(workflow, /actions\/workflows\/\{workflow\}\/dispatches/);
+  assert.match(workflow, /"live_execution_trigger": "open_order_released"/);
+  // A scheduled run places real orders, and this stands in for one that would otherwise
+  // happen hours later, so it must not be a dry run.
+  assert.match(workflow, /"live_confirm": True/);
+  // The transient-failure guard has to be honoured by the workflow, not just computed.
+  assert.match(workflow, /if released\.get\("ordersUnavailable"\)/);
+
+  // Order matters: dispatching after the upload means the published state no longer
+  // lists the vanished order, so the next sync cannot fire a duplicate run.
+  const uploadAt = workflow.indexOf("name: Upload live state");
+  const dispatchAt = workflow.indexOf("name: Dispatch execution run when an open order released its capital");
+  assert.ok(uploadAt > 0 && dispatchAt > uploadAt, "the dispatch must come after the state upload");
+
+  // The sync must actually publish what the workflow reads.
+  const syncSource = await readFile(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8");
+  assert.match(syncSource, /releasedOrderCapital,/);
+});
+
 test("live ranking: the horizon is recomputed, not read from the scrape", async () => {
   const executor = await import("../tools/live-order-executor.mjs");
 

@@ -17,7 +17,10 @@ concurrency:
 
 permissions:
   contents: read
-  actions: read
+  # Needed to dispatch Trading Live Execution when an open order releases its capital.
+  # workflow_dispatch is one of the two events GITHUB_TOKEN is still allowed to start a
+  # workflow run with, so no personal access token is required for this.
+  actions: write
 
 jobs:
   live-account:
@@ -127,6 +130,72 @@ jobs:
               enter_dir(ftp, target.split("/"))
               upload_atomic(ftp, execution_file, "live-execution-state.json")
               upload_atomic(ftp, state_file, "live-state.json")
+          PY
+
+      # Runs after the upload on purpose: by now the published state no longer lists the
+      # vanished order, so the next sync cannot detect it a second time and dispatch a
+      # duplicate run. live_confirm is true because this stands in for the scheduled run
+      # that would otherwise redeploy this capital hours later -- and a scheduled run
+      # places real orders too.
+      - name: Dispatch execution run when an open order released its capital
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LIVE_STATE_FILE: trading/data/live-state.json
+          LIVE_EXECUTION_WORKFLOW_FILE: polymarket-live-limit-order-test.yml
+          DISPATCH_REF: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          state = json.loads(Path(os.environ["LIVE_STATE_FILE"]).read_text(encoding="utf-8"))
+          released = state.get("releasedOrderCapital") or {}
+          vanished = released.get("vanished") or []
+
+          if released.get("ordersUnavailable"):
+              print("Open orders could not be read this run, so no disappearance is trustworthy; not dispatching.")
+              raise SystemExit(0)
+          if not vanished:
+              print(f"No open order left the book ({released.get('checked', 0)} checked); nothing to dispatch.")
+              raise SystemExit(0)
+
+          for order in vanished:
+              print(f"released: {order.get('question') or order.get('tokenId')} "
+                    f"({order.get('outcome') or '-'}) ~{order.get('releasedCapitalUsdc')} USDC")
+          print(f"total freed: {released.get('freedCapitalUsdc')} USDC")
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          workflow = os.environ["LIVE_EXECUTION_WORKFLOW_FILE"]
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{repository}/actions/workflows/{workflow}/dispatches",
+              data=json.dumps({
+                  "ref": os.environ["DISPATCH_REF"],
+                  "inputs": {
+                      "live_confirm": True,
+                      "live_run_source": "AUTO",
+                      "live_execution_trigger": "open_order_released",
+                  },
+              }).encode("utf-8"),
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                  "Content-Type": "application/json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  print(f"Dispatched {workflow}: HTTP {response.status}")
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              # A failed dispatch must not fail the sync: the snapshot is already
+              # published and the next scheduled execution run still picks the capital up.
+              print(f"::warning::Could not dispatch {workflow}: HTTP {exc.code} {body}")
           PY
 
       - name: Send redeem alert emails
