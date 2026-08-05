@@ -127,39 +127,68 @@ function sampleLines(events, limit = SAMPLE_ROWS) {
 // used by the existing scan are marked "proven"; the rest are being tested here
 // precisely so they do not have to be guessed in the scan pipeline.
 function probes() {
+  const graceMin = isoIn(-6);
   return [
     {
-      name: "sports, ending within 12h, ordered by endDate (proven params only)",
+      name: "PRODUCTION QUERY: sports, end_date_max only (what the scanner sends today)",
       resource: "events/keyset",
-      params: { limit: 100, tag_id: SPORTS_TAG_ID, order: "endDate", ascending: "true", end_date_max: isoIn(12) },
+      params: { limit: 100, tag_id: SPORTS_TAG_ID, order: "endDate", ascending: "true", end_date_max: isoIn(7 * 24) },
     },
     {
-      name: "esports, ending within 12h, ordered by endDate (proven params only)",
-      resource: "events/keyset",
-      params: { limit: 100, tag_id: ESPORTS_TAG_ID, order: "endDate", ascending: "true", end_date_max: isoIn(12) },
-    },
-    {
-      name: "sports, no end-date bound (baseline for field discovery)",
-      resource: "events/keyset",
-      params: { limit: 100, tag_id: SPORTS_TAG_ID, order: "endDate", ascending: "true" },
-    },
-    {
-      name: "sports with end_date_min=now (does Gamma honour a lower bound?)",
+      name: "CANDIDATE: sports, end_date_min=now-6h + end_date_max=now+7d",
       resource: "events/keyset",
       params: {
         limit: 100, tag_id: SPORTS_TAG_ID, order: "endDate", ascending: "true",
-        end_date_min: new Date().toISOString(), end_date_max: isoIn(12),
+        end_date_min: graceMin, end_date_max: isoIn(7 * 24),
       },
     },
     {
-      name: "sports with start_date_max=now (does Gamma expose a start-date filter?)",
+      name: "CANDIDATE: sports live window, end_date_min=now-6h + end_date_max=now+12h",
       resource: "events/keyset",
       params: {
         limit: 100, tag_id: SPORTS_TAG_ID, order: "endDate", ascending: "true",
-        start_date_max: new Date().toISOString(), end_date_max: isoIn(24),
+        end_date_min: graceMin, end_date_max: isoIn(12),
+      },
+    },
+    {
+      name: "CANDIDATE: esports live window, end_date_min=now-6h + end_date_max=now+12h",
+      resource: "events/keyset",
+      params: {
+        limit: 100, tag_id: ESPORTS_TAG_ID, order: "endDate", ascending: "true",
+        end_date_min: graceMin, end_date_max: isoIn(12),
+      },
+    },
+    {
+      name: "DOES GAMMA FILTER ON live=true? (same window plus live=true)",
+      resource: "events/keyset",
+      params: {
+        limit: 100, tag_id: SPORTS_TAG_ID, order: "endDate", ascending: "true",
+        end_date_min: graceMin, end_date_max: isoIn(12), live: "true",
       },
     },
   ];
+}
+
+// The scanner's page budget is finite, so what matters is not how many events come
+// back but how many are still tradable. A page of long-resolved events is a page the
+// scanner spends and learns nothing from.
+function tradabilityReport(events) {
+  let liveFlag = 0;
+  let tradable = 0;
+  let closed = 0;
+  let settledPrices = 0;
+  for (const event of events) {
+    if (event?.live === true) liveFlag += 1;
+    const markets = parseJsonField(event?.markets);
+    const anyTradable = markets.some((market) => market?.closed === false && market?.acceptingOrders !== false);
+    if (anyTradable) tradable += 1;
+    if (markets.length && markets.every((market) => market?.closed === true)) closed += 1;
+    const prices = markets.flatMap((market) => parseJsonField(market?.outcomePrices).map(Number));
+    if (prices.length && prices.every((price) => price <= 0.0005 || price >= 0.9995)) settledPrices += 1;
+  }
+  console.log(`    live=true: ${liveFlag} | at least one tradable market: ${tradable}`
+    + ` | fully closed: ${closed} | all prices settled at 0/100%: ${settledPrices}`);
+  return { liveFlag, tradable, closed, settledPrices };
 }
 
 async function main() {
@@ -180,9 +209,9 @@ async function main() {
     const events = eventsFrom(result.body);
     const { started, withStart } = startedCount(events);
     console.log(`   HTTP ${result.status}: ${events.length} events`);
-    console.log(`   with a parsable start time: ${withStart}; already started (live): ${started}`);
+    console.log(`   with a parsable start time: ${withStart}; already started: ${started}`);
+    tradabilityReport(events);
     fieldReport(events, "event");
-    fieldReport(events.flatMap((event) => parseJsonField(event?.markets)).slice(0, 200), "market");
     for (const line of sampleLines(events)) console.log(`   sample: ${line}`);
     console.log("");
   }
