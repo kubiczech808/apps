@@ -70,7 +70,17 @@ const MARKET_SCAN_EVENT_BATCH_LIMIT = Math.max(1, Math.min(500, envNumber("PAPER
 // These are retention limits for the local, UI-facing quote cache. They do
 // not limit Gamma intake: keyset cursors keep advancing through every result.
 const MARKET_OBSERVATION_RETAIN_LIMIT = Math.max(500, envNumber("PAPER_MARKET_OBSERVATION_RETAIN_LIMIT", 5000));
-const MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT = Math.max(100, envNumber("PAPER_MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT", 1000));
+// Resolved observations are published in their own segment file, so retaining more
+// of them no longer costs the active catalogue anything and no longer inflates the
+// requests that never read them. The old 1000 cap is why the resolved count stopped
+// growing and started churning.
+//
+// This is bounded by what one scraped response can carry, not by storage: measured on
+// a 5000-row active catalogue, the scraped summary peaks around 35 MB at 1000 resolved
+// rows and 111 MB at 8000, and a shared host will answer 500 well before that. Serving
+// the archive in pages is what removes the ceiling; until then 3000 is the largest
+// value that keeps every endpoint comfortably inside a 128 MB limit.
+const MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT = Math.max(100, envNumber("PAPER_MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT", 3000));
 const MARKET_SCAN_AUDIT_ROW_LIMIT = Math.max(100, envNumber("PAPER_MARKET_SCAN_AUDIT_ROW_LIMIT", 750));
 // The public state keeps a short working cache; the workflow appends every
 // compact scan summary to the separate scan-history journal.
@@ -412,6 +422,22 @@ const STATE_SEGMENT_FIELDS = {
   scanHistory: ["marketScanHistory"],
 };
 
+// Resolved observations are history: they never change again and only the Resolved
+// and All views read them. Splitting them out of the active catalogue means the two
+// stop competing for one retention budget — which is why the counts in the scraped
+// tabs were falling instead of accumulating — and lets the execution view skip them
+// entirely. They travel under their own field name and are merged back into
+// marketObservations on read, so the in-memory schema is unchanged everywhere else.
+const RESOLVED_OBSERVATION_SEGMENT = "resolvedObservations";
+const RESOLVED_OBSERVATION_TRANSPORT_FIELD = "resolvedMarketObservations";
+
+// Every segment name, so a reader can never quietly skip one that a writer produces.
+const STATE_SEGMENT_NAMES = [...Object.keys(STATE_SEGMENT_FIELDS), RESOLVED_OBSERVATION_SEGMENT];
+
+function observationIsResolved(item) {
+  return String(item?.status || item?.selectionStatus || "").toUpperCase() === "RESOLVED";
+}
+
 function stateSegmentFileName(name) {
   const base = basename(OUTPUT_PATH).replace(/\.json$/i, "");
   return `${base}.${name}.json`;
@@ -429,11 +455,17 @@ function splitStateIntoSegments(state) {
   const core = { ...state };
   const segments = {};
   const manifest = {};
+  const allObservations = Array.isArray(state.marketObservations) ? state.marketObservations : [];
+  const activeObservations = allObservations.filter((item) => !observationIsResolved(item));
+  const resolvedObservations = allObservations.filter(observationIsResolved);
+
   for (const [name, fields] of Object.entries(STATE_SEGMENT_FIELDS)) {
     const payload = {};
     const counts = {};
     for (const field of fields) {
-      const value = state[field];
+      // The active catalogue is what the observations segment carries; the resolved
+      // archive is published separately below.
+      const value = field === "marketObservations" ? activeObservations : state[field];
       payload[field] = value === undefined ? null : value;
       if (Array.isArray(value)) counts[field] = value.length;
       core[field] = Array.isArray(value) ? [] : (value && typeof value === "object" ? {} : value);
@@ -441,6 +473,18 @@ function splitStateIntoSegments(state) {
     segments[name] = payload;
     manifest[name] = { file: stateSegmentFileName(name), fields, counts };
   }
+
+  segments[RESOLVED_OBSERVATION_SEGMENT] = {
+    [RESOLVED_OBSERVATION_TRANSPORT_FIELD]: resolvedObservations,
+  };
+  manifest[RESOLVED_OBSERVATION_SEGMENT] = {
+    file: stateSegmentFileName(RESOLVED_OBSERVATION_SEGMENT),
+    fields: [RESOLVED_OBSERVATION_TRANSPORT_FIELD],
+    counts: { [RESOLVED_OBSERVATION_TRANSPORT_FIELD]: resolvedObservations.length },
+    // The tabs count observations, not transport fields, so the totals they need
+    // are stated here rather than left to be recomputed from truncated rows.
+    mergesInto: "marketObservations",
+  };
   core.stateSegments = manifest;
   return { core, segments };
 }
@@ -453,8 +497,24 @@ function mergeStateSegment(state, segment) {
       if (!(field in segment)) continue;
       const value = segment[field];
       if (value === null || value === undefined) continue;
+      // The active catalogue and the resolved archive arrive in different files and
+      // land in the same array. Each replaces only its own half, so segments can be
+      // merged in any order without one discarding the other.
+      if (field === "marketObservations") {
+        const existing = Array.isArray(merged.marketObservations) ? merged.marketObservations : [];
+        merged.marketObservations = [
+          ...(Array.isArray(value) ? value : []),
+          ...existing.filter(observationIsResolved),
+        ];
+        continue;
+      }
       merged[field] = value;
     }
+  }
+  const resolved = segment[RESOLVED_OBSERVATION_TRANSPORT_FIELD];
+  if (Array.isArray(resolved)) {
+    const existing = Array.isArray(merged.marketObservations) ? merged.marketObservations : [];
+    merged.marketObservations = [...existing.filter((item) => !observationIsResolved(item)), ...resolved];
   }
   return merged;
 }
@@ -476,7 +536,7 @@ async function readLocalStateFile(path) {
   const raw = await readFile(path, "utf8");
   let parsed = JSON.parse(raw);
   if (!parsed || typeof parsed !== "object" || !parsed.stateSegments) return parsed;
-  for (const name of Object.keys(STATE_SEGMENT_FIELDS)) {
+  for (const name of STATE_SEGMENT_NAMES) {
     try {
       parsed = mergeStateSegment(parsed, JSON.parse(await readFile(stateSegmentPath(name), "utf8")));
     } catch {
@@ -508,8 +568,25 @@ async function readStateWithSegments(payload) {
 
   let merged = payload;
   for (const url of urls) {
-    const segment = await fetchJson(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`);
-    merged = mergeStateSegment(merged, segment);
+    try {
+      const segment = await fetchJson(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`);
+      merged = mergeStateSegment(merged, segment);
+    } catch (error) {
+      const message = String(error?.message || error);
+      // A genuinely absent segment cannot be recovered by refusing to run, and the
+      // core file still holds every portfolio, trade and P/L figure — only the
+      // rebuildable catalogue is gone. Warn loudly and continue with what exists.
+      if (/HTTP 404\b/.test(message)) {
+        console.warn(
+          `Published state segment is missing: ${url}. Continuing with the core state; `
+          + "the affected catalogue will be rebuilt by the next scans.",
+        );
+        continue;
+      }
+      // Anything else (500, 502, timeout) probably means the data is still there, so
+      // this must not become a rewrite with empty collections.
+      throw new Error(`Published state segment could not be read (${url}): ${message}`);
+    }
   }
   return merged;
 }
@@ -7555,6 +7632,8 @@ if (invokedDirectly) {
 // dashboard shows, plus the guards that keep a stale snapshot out of production.
 export {
   EFFECTIVELY_CERTAIN_MARKET_PROBABILITY,
+  MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT,
+  MARKET_OBSERVATION_RETAIN_LIMIT,
   marketScanRetentionReason,
   annualizationDays,
   annualizeReturn,

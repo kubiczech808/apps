@@ -688,13 +688,18 @@ test("state segments: the core file never carries the heavy collections", async 
   const state = bot.normalizeState(
     JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
   );
-  // The fixture has to actually exercise all three segments, or this proves nothing.
+  // The fixture has to actually exercise every segment, or this proves nothing.
   assert.ok(state.marketObservations.length > 0, "fixture must have market observations");
   assert.ok(state.evaluations.length > 0, "fixture must have evaluations");
   assert.ok(state.marketScanHistory.length > 0, "fixture must have scan history");
+  const isResolved = (item) => String(item?.status || item?.selectionStatus || "").toUpperCase() === "RESOLVED";
+  const resolvedRows = state.marketObservations.filter(isResolved);
+  const activeRows = state.marketObservations.filter((item) => !isResolved(item));
+  assert.ok(resolvedRows.length > 0, "fixture must have resolved observations");
+  assert.ok(activeRows.length > 0, "fixture must have active observations");
 
   const { core, segments } = bot.splitStateIntoSegments(state);
-  assert.deepEqual(Object.keys(segments).sort(), ["evaluations", "observations", "scanHistory"]);
+  assert.deepEqual(Object.keys(segments).sort(), ["evaluations", "observations", "resolvedObservations", "scanHistory"]);
 
   // The whole point is that a reader of the core file decodes none of the catalogue.
   assert.deepEqual(core.marketObservations, []);
@@ -705,11 +710,21 @@ test("state segments: the core file never carries the heavy collections", async 
   assert.equal(core.paperPortfolios.conservative.portfolio.equityUsdc, state.paperPortfolios.conservative.portfolio.equityUsdc);
   assert.ok(Array.isArray(core.trades), "trades stay in the core so the shape check still passes");
 
+  // Resolved history is archived apart from the active catalogue. That separation is
+  // what lets it accumulate instead of competing for one retention budget, and it
+  // keeps the execution view from ever decoding it.
+  assert.deepEqual(segments.observations.marketObservations, activeRows,
+    "the observations segment carries only tradable rows");
+  assert.deepEqual(segments.resolvedObservations.resolvedMarketObservations, resolvedRows,
+    "resolved rows are archived in their own segment");
+
   // The manifest is the signal that empty collections mean "segmented", not "no data".
   assert.equal(core.stateSegments.observations.file, "paper-state.observations.json");
   assert.equal(core.stateSegments.evaluations.file, "paper-state.evaluations.json");
   assert.equal(core.stateSegments.scanHistory.file, "paper-state.scanHistory.json");
-  assert.equal(core.stateSegments.observations.counts.marketObservations, state.marketObservations.length);
+  assert.equal(core.stateSegments.resolvedObservations.file, "paper-state.resolvedObservations.json");
+  assert.equal(core.stateSegments.observations.counts.marketObservations, activeRows.length);
+  assert.equal(core.stateSegments.resolvedObservations.counts.resolvedMarketObservations, resolvedRows.length);
   assert.equal(core.stateSegments.evaluations.counts.evaluations, state.evaluations.length);
   assert.equal(core.stateSegments.scanHistory.counts.marketScanHistory, state.marketScanHistory.length);
 
@@ -717,7 +732,37 @@ test("state segments: the core file never carries the heavy collections", async 
   let rebuilt = { ...core };
   for (const payload of Object.values(segments)) rebuilt = bot.mergeStateSegment(rebuilt, payload);
   delete rebuilt.stateSegments;
-  assert.deepEqual(rebuilt, state, "split then merge must reproduce the state exactly");
+  // The combined list is active-then-resolved; order within each group is preserved.
+  assert.deepEqual(rebuilt.marketObservations, [...activeRows, ...resolvedRows]);
+  assert.deepEqual(
+    { ...rebuilt, marketObservations: state.marketObservations },
+    state,
+    "everything other than observation ordering must round-trip exactly",
+  );
+  assert.equal(rebuilt.marketObservations.length, state.marketObservations.length, "no row may be lost");
+});
+
+test("state segments: resolved history is retained far beyond the old cap", () => {
+  // The reported symptom was the counts in the scraped tabs going down instead of up.
+  // Resolved rows shared the active catalogue's budget and were capped at 1000, so
+  // the archive churned. They now have their own file and a much larger budget.
+  const resolvedLimit = bot.MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT;
+  assert.ok(resolvedLimit >= 3000, `resolved retention must accumulate, got ${resolvedLimit}`);
+  // Bounded by what one scraped response can carry, not by storage: measured on a
+  // 5000-row active catalogue that summary peaks at ~66 MB with 3000 resolved rows and
+  // ~111 MB with 8000, and a 128 MB host answers 500 before that. Raising this further
+  // requires serving the archive in pages first.
+  assert.ok(resolvedLimit <= 5000, `serving ${resolvedLimit} resolved rows at once would risk a 500`);
+
+  // And retention must keep the newest resolved rows rather than an arbitrary slice.
+  const rows = Array.from({ length: 12 }, (_, index) => ({
+    id: `resolved-${index}`,
+    tokenId: String(900000000000 + index),
+    status: "RESOLVED",
+    updatedAt: new Date(Date.UTC(2026, 0, 1 + index)).toISOString(),
+  }));
+  const state = bot.normalizeState({ marketObservations: rows });
+  assert.equal(state.marketObservations.length, 12, "nothing near the cap may be dropped");
 });
 
 test("state segments: writeState publishes siblings that readState reassembles", async () => {
@@ -742,6 +787,7 @@ test("state segments: writeState publishes siblings that readState reassembles",
       "paper-state.evaluations.json",
       "paper-state.json",
       "paper-state.observations.json",
+      "paper-state.resolvedObservations.json",
       "paper-state.scanHistory.json",
     ]);
 
@@ -969,4 +1015,113 @@ test("execution run-once: a missing result state is waited out, not reported as 
   // Polling every 4s must update one line instead of appending an identical entry.
   assert.match(runWaiter, /upsertExecutionStep\(steps, "Workflow status"/);
   assert.ok(!/addExecutionStep\(steps, attempt === 0/.test(runWaiter), "the per-poll append is what spammed the popup");
+});
+
+test("state segments: a missing segment does not read as a missing state", async () => {
+  // The production failure. A scan published core + segments; the site deploy then
+  // deleted every data file it did not recognise, including the segments; the next
+  // run fetched a manifest pointing at 404s, classified that as "published state is
+  // missing (HTTP 404)", fell through to the repository snapshot and aborted with
+  // "obsolete schema". Portfolios and trades live in the core file and were never
+  // lost, so the run must continue with them.
+  const http = await import("node:http");
+  const { mkdtemp, readFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const source = bot.normalizeState(
+    JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
+  );
+  const { core } = bot.splitStateIntoSegments(source);
+
+  let segmentStatus = 404;
+  const server = http.createServer((req, res) => {
+    if (req.url.split("?")[0] === "/paper-state.json") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(core));
+      return;
+    }
+    res.writeHead(segmentStatus, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: false, error: "unavailable" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const previous = {
+    path: process.env.PAPER_STATE_PATH,
+    url: process.env.PAPER_STATE_URL,
+    staticUrl: process.env.PAPER_STATIC_STATE_URL,
+  };
+  try {
+    process.env.PAPER_STATE_PATH = join(await mkdtemp(join(tmpdir(), "paper-missing-segment-")), "paper-state.json");
+    process.env.PAPER_STATE_URL = `${base}/paper-state.json`;
+    process.env.PAPER_STATIC_STATE_URL = `${base}/paper-state.json`;
+    const scoped = await import(`../tools/paper-trading-bot.mjs?missingSegment=${Date.now()}`);
+
+    const restored = await scoped.readState();
+    assert.equal(restored.trades.length, source.trades.length, "trades live in the core and must survive");
+    assert.equal(
+      restored.paperPortfolios.conservative.portfolio.equityUsdc,
+      source.paperPortfolios.conservative.portfolio.equityUsdc,
+      "portfolio aggregates must survive a deleted segment",
+    );
+    // The catalogue is rebuilt by scanning, so an empty one is the correct outcome.
+    assert.deepEqual(restored.marketObservations, []);
+    assert.deepEqual(restored.evaluations, []);
+
+    // A transient failure is the opposite case: the data is probably still there, so
+    // continuing would overwrite it with empty collections.
+    segmentStatus = 500;
+    const failing = await import(`../tools/paper-trading-bot.mjs?failingSegment=${Date.now()}`);
+    await assert.rejects(
+      () => failing.readState(),
+      /segment could not be read|paper state is unavailable/,
+      "a 500 on a segment must fail closed instead of publishing an empty catalogue",
+    );
+  } finally {
+    server.close();
+    for (const [key, value] of [["PAPER_STATE_PATH", previous.path], ["PAPER_STATE_URL", previous.url], ["PAPER_STATIC_STATE_URL", previous.staticUrl]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("state segments: the site deploy never deletes published segments", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const deploy = await readFile(new URL("../../.github/workflows/trading-deploy.yml", import.meta.url), "utf8");
+
+  // The deploy wipes data/ of anything it does not recognise. Listing only the core
+  // state file there is what deleted every segment and broke the next scan.
+  assert.match(deploy, /def is_runtime_data\(name\):/);
+  assert.match(deploy, /name\.startswith\("paper-state\."\) and name\.endswith\("\.json"\)/,
+    "the rule must cover any segment the bot adds later, not a fixed list");
+  assert.match(deploy, /if is_runtime_data\(child\):/);
+  // The old literal set must be gone, or a stale copy could still win.
+  assert.ok(!/keep = \{"paper-state\.json"/.test(deploy), "the old literal keep-set must not remain");
+});
+
+test("state segments: segments can be merged in any order", async () => {
+  // Active rows and the resolved archive land in the same array from two different
+  // files. An assign-based merge let whichever arrived second erase the other, which
+  // silently halved the catalogue depending on read order.
+  const { readFile } = await import("node:fs/promises");
+  const state = bot.normalizeState(
+    JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
+  );
+  const { core, segments } = bot.splitStateIntoSegments(state);
+  const names = Object.keys(segments);
+  const expected = state.marketObservations.length;
+
+  // Every ordering of the segment files must reconstruct the same row count.
+  const permute = (list) => (list.length <= 1 ? [list] : list.flatMap((item, index) =>
+    permute([...list.slice(0, index), ...list.slice(index + 1)]).map((rest) => [item, ...rest])));
+  let checked = 0;
+  for (const order of permute(names)) {
+    let merged = { ...core };
+    for (const name of order) merged = bot.mergeStateSegment(merged, segments[name]);
+    assert.equal(merged.marketObservations.length, expected, `order ${order.join(",")} lost rows`);
+    checked += 1;
+  }
+  assert.equal(checked, 24, "all four segment orderings must be covered");
 });

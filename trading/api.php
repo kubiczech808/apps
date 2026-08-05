@@ -105,6 +105,10 @@ function state_segment_fields(): array
         // audit endpoints read nothing else. Keeping it separate lets them skip
         // the market catalogue entirely.
         'scanHistory' => ['marketScanHistory'],
+        // Resolved observations are history and only the Resolved and All views read
+        // them. They arrive under their own field name and are appended to the active
+        // catalogue below, so the rest of this file still sees one list.
+        'resolvedObservations' => ['resolvedMarketObservations'],
     ];
 }
 
@@ -120,9 +124,11 @@ function state_segments_for_summary(string $summary): array
         case 'candidates':
             return ['evaluations'];
         case 'execution':
+            // Only tradable markets can be executed, so the resolved archive is
+            // never decoded for this view no matter how large it grows.
             return ['observations'];
         case 'scraped':
-            return ['observations', 'scanHistory'];
+            return ['observations', 'resolvedObservations', 'scanHistory'];
         case 'refresh':
             // The worker fetches segments straight from the data directory, so
             // this response only carries the core and the manifest that names
@@ -211,14 +217,60 @@ function state_payload(string $target, array $segments = ['observations', 'evalu
             continue;
         }
         foreach ($known[$name] as $field) {
-            if (array_key_exists($field, $segment) && $segment[$field] !== null) {
-                $data[$field] = $segment[$field];
+            if (!array_key_exists($field, $segment) || $segment[$field] === null) {
+                continue;
             }
+            if ($field === 'resolvedMarketObservations') {
+                // Appended, not assigned: the active catalogue may already be loaded
+                // and the views downstream expect one combined marketObservations list.
+                $active = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
+                $resolved = is_array($segment[$field]) ? $segment[$field] : [];
+                $data['marketObservations'] = array_merge($active, $resolved);
+                continue;
+            }
+            $data[$field] = $segment[$field];
         }
         unset($segment);
     }
 
     return $data;
+}
+
+/**
+ * True retained row counts, taken from the manifest rather than from the rows that
+ * survived response truncation. The scraped tabs show these in parentheses; deriving
+ * them from a truncated payload is what made them look like they were shrinking.
+ */
+function state_observation_totals(array $data): array
+{
+    $manifest = is_array($data['stateSegments'] ?? null) ? $data['stateSegments'] : [];
+    $active = null;
+    $resolved = null;
+    if (isset($manifest['observations']['counts']['marketObservations'])) {
+        $active = (int) $manifest['observations']['counts']['marketObservations'];
+    }
+    if (isset($manifest['resolvedObservations']['counts']['resolvedMarketObservations'])) {
+        $resolved = (int) $manifest['resolvedObservations']['counts']['resolvedMarketObservations'];
+    }
+    if ($active === null && $resolved === null) {
+        // A pre-segmentation state carries everything inline, so count it directly.
+        $observations = is_array($data['marketObservations'] ?? null) ? $data['marketObservations'] : [];
+        $resolved = 0;
+        $active = 0;
+        foreach ($observations as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            if (is_resolved_scraped_market_observation($item) && !is_active_scraped_market_observation($item)) {
+                $resolved += 1;
+            } else {
+                $active += 1;
+            }
+        }
+    }
+    $active = max(0, (int) $active);
+    $resolved = max(0, (int) $resolved);
+    return ['active' => $active, 'resolved' => $resolved, 'all' => $active + $resolved];
 }
 
 function compact_text(mixed $value, int $limit = 700): string
@@ -551,8 +603,7 @@ function compact_state_payload(string $target, array $data, string $summary): ar
         $active = array_values(array_filter($observations, static fn($item): bool => is_array($item) && is_active_scraped_market_observation($item)));
         // Resolved markets belong in this view too: the Resolved tab lists them and
         // shows their count. They are appended rather than merged into $active so the
-        // active catalogue keeps its own ordering, and they are capped because the
-        // retained resolved history is far longer than a browser needs at once.
+        // active catalogue keeps its own ordering.
         $resolved = array_values(array_filter(
             $observations,
             static fn($item): bool => is_array($item)
@@ -564,7 +615,13 @@ function compact_state_payload(string $target, array $data, string $summary): ar
             $right = strtotime((string) ($b['resolvedAt'] ?? $b['endDate'] ?? '')) ?: 0;
             return $right <=> $left;
         });
-        $resolved = array_slice($resolved, 0, 500);
+        // Resolved history is meant to accumulate, so this is a response-size guard
+        // rather than a retention rule, and it is deliberately far above the retained
+        // total. When it does bite, observationTotals still reports the real counts so
+        // the tab labels never understate the archive.
+        $resolvedServeLimit = 20000;
+        $resolvedTruncated = count($resolved) > $resolvedServeLimit;
+        $resolved = array_slice($resolved, 0, $resolvedServeLimit);
         $active = array_merge($active, $resolved);
         $scanHistory = is_array($data['marketScanHistory'] ?? null)
             ? array_values(array_filter($data['marketScanHistory'], 'is_array'))
@@ -580,6 +637,7 @@ function compact_state_payload(string $target, array $data, string $summary): ar
                 static fn($item): array => is_array($item) ? compact_market_observation($item) : [],
                 $active
             ),
+            'observationTotals' => state_observation_totals($data) + ['resolvedTruncated' => $resolvedTruncated],
             'marketScan' => is_array($data['marketScan'] ?? null) ? $data['marketScan'] : [],
             'marketScanHistory' => $scanHistory,
             'marketDetailsMode' => 'compact',

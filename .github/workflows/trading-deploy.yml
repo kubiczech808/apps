@@ -143,15 +143,37 @@ jobs:
               except ftplib.all_errors:
                   pass
 
+          def is_runtime_data(name):
+              """Runtime state the bots own. Deploying the site must never delete it.
+
+              The paper state is published as a core file plus sibling segment files
+              named paper-state.<segment>.json. Listing only the core here deleted
+              every segment on the next deploy, which left the hosting with a manifest
+              pointing at files that no longer existed. The prefix rule covers any
+              segment the bot adds later, so that cannot happen again.
+              """
+              keep = {
+                  "live-state.json",
+                  "live-execution-state.json",
+                  "portfolio-config.json",
+                  "scrape-scan-preferences.json",
+                  "redeem-alert-ledger.json",
+                  "market-scan-history",
+              }
+              if name in keep:
+                  return True
+              return name == "paper-state.json" or (
+                  name.startswith("paper-state.") and name.endswith(".json")
+              )
+
           def clean_data_dir(ftp):
               current = ftp.pwd()
-              keep = {"paper-state.json", "live-state.json", "live-execution-state.json", "portfolio-config.json", "scrape-scan-preferences.json", "redeem-alert-ledger.json", "market-scan-history"}
               try:
                   ftp.cwd("data")
               except ftplib.all_errors:
                   return
               for child in list_names(ftp):
-                  if child in keep:
+                  if is_runtime_data(child):
                       continue
                   remove_tree(ftp, child)
               ftp.cwd(current)

@@ -3817,6 +3817,12 @@ function storeScrapedMarketState(scrapedState = {}, summary = "scraped") {
     return false;
   }
   state.scrapedMarketObservations = scrapedState.marketObservations;
+  // Retained totals, when the backend reports them, so the tab counts describe the
+  // archive rather than the slice that fitted in this response.
+  state.scrapedObservationTotals = scrapedState.observationTotals
+    && typeof scrapedState.observationTotals === "object"
+    ? scrapedState.observationTotals
+    : null;
   state.scrapedMarketScan = scrapedState.marketScan && typeof scrapedState.marketScan === "object"
     ? scrapedState.marketScan
     : {};
@@ -6157,6 +6163,14 @@ function scrapedOpportunityStatusCounts() {
     if (status === "SCRAPED") counts.scraped += 1;
     else if (status === "RESOLVED") counts.resolved += 1;
     else if (status === "ERROR") counts.error += 1;
+  }
+  // The backend reports what it actually retains. Counting only the rows that
+  // survived response truncation made the tab labels drift downwards as the
+  // archive grew, which read as records disappearing.
+  const totals = state.scrapedObservationTotals;
+  if (totals && Number.isFinite(Number(totals.resolved)) && Number(totals.resolved) > counts.resolved) {
+    counts.all += Number(totals.resolved) - counts.resolved;
+    counts.resolved = Number(totals.resolved);
   }
   return counts;
 }
