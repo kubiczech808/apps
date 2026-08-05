@@ -359,7 +359,11 @@ test("live portfolio: the deposited baseline is configured, never inferred from 
   // and would report the entire balance as profit.
   assert.match(sync, /const hasBaseline = number\(originalValueUsdc, 0\) > 0;/);
   assert.match(sync, /: number\(portfolioBase\.totalPnlUsdc\)/);
-  assert.match(sync, /originalValueSource: configuredOriginalValueUsdc > 0/);
+  // A hardcoded baseline outranks the stored one on purpose: the stored value on the
+  // hosting is the corrupted 33.36 from the old inference, and a fix that only applied
+  // to fresh state would never have reached it.
+  assert.match(sync, /const DEFAULT_ORIGINAL_VALUE_USDC = \d+(\.\d+)?;/);
+  assert.match(sync, /originalValueSource: number\(process\.env\.LIVE_ORIGINAL_VALUE_USDC\) > 0/);
 
   // Both workflows that sync the account must pass the baseline through.
   for (const name of ["polymarket-live-limit-order-test", "trading-live-account"]) {

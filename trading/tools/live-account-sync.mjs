@@ -1623,7 +1623,18 @@ async function main() {
   const storedOriginalValueUsdc = number(
     previousLiveState?.portfolio?.originalValueUsdc ?? previousLiveState?.portfolio?.depositedUsdc,
   );
-  const configuredOriginalValueUsdc = number(process.env.LIVE_ORIGINAL_VALUE_USDC);
+  // The amount actually paid into the Polymarket account, stated here rather than
+  // derived. It outranks any stored baseline on purpose: the stored one on the hosting
+  // is the corrupted 33.36 that came from the old inference, and a fix that only applied
+  // to fresh state would never have reached it.
+  //
+  // Change it here (or via LIVE_ORIGINAL_VALUE_USDC) when the deposit really changes.
+  // A later top-up is better recorded with LIVE_ADDITIONAL_DEPOSIT_USDC, which adds to
+  // this baseline once and remembers that it did.
+  const DEFAULT_ORIGINAL_VALUE_USDC = 27;
+  const configuredOriginalValueUsdc = number(process.env.LIVE_ORIGINAL_VALUE_USDC) > 0
+    ? number(process.env.LIVE_ORIGINAL_VALUE_USDC)
+    : DEFAULT_ORIGINAL_VALUE_USDC;
   // A later top-up is added once and recorded, so repeated runs cannot count it twice.
   const appliedDeposits = (Array.isArray(previousLiveState?.portfolio?.appliedDeposits)
     ? previousLiveState.portfolio.appliedDeposits
@@ -1697,9 +1708,9 @@ async function main() {
       originalValueUsdc,
       // Where the baseline came from, so a wrong one is traceable instead of
       // anonymous, and the applied top-ups so none is ever counted twice.
-      originalValueSource: configuredOriginalValueUsdc > 0
-        ? "configured"
-        : (storedOriginalValueUsdc > 0 ? "stored" : "unavailable"),
+      originalValueSource: number(process.env.LIVE_ORIGINAL_VALUE_USDC) > 0
+        ? "configured-env"
+        : "configured-default",
       appliedDeposits,
       pnlPercentageBasis: hasBaseline ? "original-value" : "ledger",
       openPnlPct: pnlPctOfOriginalValue(portfolioBase.openPnlUsdc),
