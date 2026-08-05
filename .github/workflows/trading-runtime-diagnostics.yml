@@ -160,6 +160,21 @@ jobs:
               summary["segmentFiles"] = sorted(
                   str(entry.get("file")) for entry in manifest.values() if isinstance(entry, dict)
               )
+              # Segmenting the three collections that were measured on a repository
+              # fixture left the published core file far larger than that fixture
+              # predicted, so the remaining weight has to be measured rather than
+              # guessed at. Bytes per top-level key says exactly what to segment next.
+              key_bytes = {}
+              for key, value in state.items():
+                  if is_blocked(key):
+                      continue
+                  try:
+                      key_bytes[key] = len(json.dumps(value, separators=(",", ":")))
+                  except (TypeError, ValueError):
+                      continue
+              summary["coreBytesByKey"] = dict(
+                  sorted(key_bytes.items(), key=lambda item: item[1], reverse=True)[:12]
+              )
               for key in ("evaluations", "marketObservations", "marketScanHistory",
                           "evaluationRunLog", "calculationReports", "aiUsageLog"):
                   value = state.get(key)
