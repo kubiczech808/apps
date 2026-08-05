@@ -3310,6 +3310,23 @@ function addExecutionStep(steps, title, detail = "", tone = "") {
   return next;
 }
 
+// Replaces the most recent step with this title instead of appending another copy.
+// Used for progress that is polled repeatedly and only the current value matters.
+function upsertExecutionStep(steps, title, detail = "", tone = "") {
+  let index = -1;
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    if (steps[i]?.title === title) {
+      index = i;
+      break;
+    }
+  }
+  if (index < 0) return addExecutionStep(steps, title, detail, tone);
+  const next = [...steps];
+  next[index] = { title, detail, tone };
+  renderExecutionSteps(next);
+  return next;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -3330,11 +3347,26 @@ function workflowStatusText(run) {
 
 async function waitForWorkflowRun(target, startedAt, steps) {
   let latest = null;
+  let lastError = null;
   for (let attempt = 0; attempt < 32; attempt += 1) {
-    const status = await fetchApiJson(`api.php?action=workflow-status&target=${encodeURIComponent(target)}&since=${encodeURIComponent(startedAt)}`);
-    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || null;
-    const detail = latest?.htmlUrl ? `${workflowStatusText(latest)} / ${latest.htmlUrl}` : workflowStatusText(latest);
-    steps = addExecutionStep(steps, attempt === 0 ? "Workflow status" : "Workflow update", detail, latest?.status === "completed" ? "done" : "active");
+    try {
+      const status = await fetchApiJson(`api.php?action=workflow-status&target=${encodeURIComponent(target)}&since=${encodeURIComponent(startedAt)}`);
+      latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || null;
+      lastError = null;
+    } catch (error) {
+      // A transient status read must not abandon a run that is already executing.
+      lastError = error;
+    }
+    const elapsed = Math.max(0, Math.round((Date.now() - Date.parse(startedAt || "")) / 1000));
+    const detail = [
+      lastError ? `status unavailable (${lastError.message})` : workflowStatusText(latest),
+      `${elapsed}s elapsed`,
+      latest?.htmlUrl || "",
+    ].filter(Boolean).join(" / ");
+    // One line that updates in place. Appending on every 4s poll produced a wall of
+    // identical "Workflow update in_progress / url" entries that buried the steps
+    // that actually said something.
+    steps = upsertExecutionStep(steps, "Workflow status", detail, latest?.status === "completed" ? "done" : "active");
     if (latest?.status === "completed") return { run: latest, steps };
     await sleep(4000);
   }
@@ -3353,22 +3385,105 @@ function paperExecutionDecision(payload, strategyId = "") {
   return strategyId ? null : (payload?.lastDecision || null);
 }
 
+// The ranked shortlist as this browser sees it at dispatch, so the popup can say
+// which candidates are in play and on what numbers before the runner reports back.
+function executionShortlistPreview(target, limit = 5) {
+  const mode = target === "live" ? "live" : (isPaperExecutionTarget(target) ? target : state.mode);
+  let rows = [];
+  try {
+    rows = portfolioCandidateRows(mode) || [];
+  } catch {
+    return "";
+  }
+  if (!rows.length) return "";
+  const lines = rows.slice(0, limit).map((item, index) => {
+    const parts = [
+      Number.isFinite(potentialAnnualizedReturn(item)) ? `potential p.a. ${signedPercent(potentialAnnualizedReturn(item))}` : "",
+      Number.isFinite(netYield(item)) ? `net yield ${percent(netYield(item))}` : "",
+      Number.isFinite(evaluationDaysLeft(item)) ? `${compactDays(evaluationDaysLeft(item))} left` : "",
+    ].filter(Boolean).join(" / ");
+    const label = `${item.question || "Untitled market"} / ${item.outcome || "-"}`;
+    return `${index + 1}. ${label}${parts ? ` — ${parts}` : ""}`;
+  });
+  const remainder = rows.length > limit ? `\n(+${rows.length - limit} more in the shortlist)` : "";
+  const metric = normalizeProbabilitySource(portfolioConfigForMode(mode).probabilitySource) === "polymarket"
+    ? "Potential p.a."
+    : "EV p.a.";
+  // renderExecutionSteps() escapes the detail, so this returns plain text.
+  return `Ranked by ${metric}; the runner revalidates in this order and takes the first `
+    + `that still passes.\n${lines.join("\n")}${remainder}`;
+}
+
+// The economics of one candidate, in the terms the shortlist is ranked by, so the
+// progress popup answers "which candidate, and on what numbers" rather than just
+// naming it.
+function executionCandidateEconomics(candidate = {}) {
+  const parts = [];
+  const potentialPa = Number(candidate.potentialAnnualizedReturn);
+  if (Number.isFinite(potentialPa)) parts.push(`potential p.a. ${percent(potentialPa)}`);
+  const netYield = Number(candidate.netYield);
+  if (Number.isFinite(netYield)) parts.push(`net yield ${percent(netYield)}`);
+  const daysLeft = Number(candidate.daysToResolution);
+  if (Number.isFinite(daysLeft)) parts.push(`${compactDays(daysLeft)} left`);
+  const win = Number(candidate.netGainIfWinUsdc);
+  if (Number.isFinite(win)) parts.push(`win ${money(win)}`);
+  const stake = Number(candidate.orderNotionalUsdc ?? candidate.totalCostUsdc);
+  if (Number.isFinite(stake) && stake > 0) parts.push(`stake ${money(stake)}`);
+  const marketProbability = Number(candidate.marketProbability);
+  if (Number.isFinite(marketProbability)) parts.push(`mkt ${probability(marketProbability)}`);
+  return parts.join(" / ");
+}
+
+// The position a rotation gives up, in the same terms, so the trade-off is legible.
+function executionPositionEconomics(position = {}) {
+  const parts = [];
+  const holdPa = Number(position.holdAnnualizedReturn ?? position.measuredAnnualizedReturn);
+  if (Number.isFinite(holdPa)) parts.push(`potential p.a. ${percent(holdPa)}`);
+  const sellPnl = Number(position.currentSellPnlUsdc ?? position.realizedPnlIfExitUsdc);
+  if (Number.isFinite(sellPnl)) parts.push(`P/L on close ${money(sellPnl)}`);
+  const unrealized = Number(position.unrealizedPnlUsdc);
+  if (Number.isFinite(unrealized)) parts.push(`open P/L ${money(unrealized)}`);
+  const remaining = Number(position.remainingPotentialGainUsdc);
+  if (Number.isFinite(remaining)) parts.push(`${money(remaining)} still to collect`);
+  const potentialWin = Number(position.potentialWinIfHeldUsdc);
+  if (Number.isFinite(potentialWin)) parts.push(`win if held ${money(potentialWin)}`);
+  return parts.join(" / ");
+}
+
 function liveExecutionSummary(execution) {
   if (!execution || typeof execution !== "object") return "Live execution state is not available yet.";
   const selected = execution.selected || {};
   const response = execution.response || {};
   const monitoring = execution.monitoring || {};
+  const batchLog = execution.batchLog || {};
+  const rotationExit = execution.rotationExit || batchLog.rotationExit || null;
   const attempts = Array.isArray(execution.attempts) ? execution.attempts : [];
   const lastAttempt = attempts[attempts.length - 1] || {};
   const idleCashLimit = Number(monitoring.idleCashLimitUsdc);
   const idleCashHours = Number(monitoring.idleCashHours);
+  const selectedEconomics = executionCandidateEconomics(selected);
+  const replacedPosition = rotationExit?.position || null;
+  const counts = batchLog.counts || {};
   const lines = [
     `Action: ${execution.action || "-"}`,
     execution.reason ? `Reason: ${execution.reason}` : "",
+    // The runner already phrases the rotation trade-off in full sentences; that is
+    // the most useful single line the popup can show, so it is not re-derived here.
+    batchLog.humanReason ? `Decision: ${batchLog.humanReason}` : "",
     Number.isFinite(idleCashLimit)
       ? `Idle cash: ${monitoring.idleCashOverdue ? "overdue" : "monitored"} / limit ${money(idleCashLimit)} / ${Number.isFinite(idleCashHours) ? `${idleCashHours.toFixed(1)}h` : "-"}`
       : "",
     selected.question ? `Selected: ${selected.question} / ${selected.outcome || "-"}` : "",
+    selectedEconomics ? `Selected economics: ${selectedEconomics}` : "",
+    replacedPosition?.question
+      ? `Replacing: ${replacedPosition.question} / ${replacedPosition.outcome || "-"}`
+      : "",
+    replacedPosition ? `Replaced economics: ${executionPositionEconomics(replacedPosition)}` : "",
+    // When nothing was selected, the counts explain why far better than the action.
+    !selected.question && Number.isFinite(Number(counts.scannedCandidates))
+      ? `Considered: ${counts.scannedCandidates} scanned / ${counts.revalidatedCandidates ?? "-"} revalidated`
+        + ` / ${counts.eligibleCandidates ?? "-"} eligible / ${counts.positionsReviewedForRotation ?? 0} positions reviewed for rotation`
+      : "",
     selected.orderType ? `Order: ${selected.orderType} ${selected.orderSize || "-"} @ ${probability(Number(selected.orderPrice))}` : "",
     response.orderID ? `Order ID: ${response.orderID}` : "",
     response.status ? `Polymarket status: ${response.status}` : "",
@@ -3377,10 +3492,25 @@ function liveExecutionSummary(execution) {
   return lines.filter(Boolean).join("\n");
 }
 
+// A result state that is not published yet is the normal state of the world while
+// the runner is still working: the live executor writes live-execution-state.json
+// at the end of its run, and the very first poll can land before that upload, or
+// before the file has ever existed. Letting that read throw turned "waiting" into
+// "Execution failed / State file is not available yet" and hid the real outcome,
+// so every attempt tolerates its own failure and only the last one is reported.
 async function waitForExecutionResult(target, startedAt, steps, options = {}) {
   const stateTarget = target === "live" ? "live-execution" : "paper";
+  let lastError = null;
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const payload = await fetchApiJson(`api.php?action=state&target=${stateTarget}`);
+    let payload = null;
+    try {
+      payload = await fetchApiJson(`api.php?action=state&target=${stateTarget}`);
+    } catch (error) {
+      lastError = error;
+      await sleep(3000);
+      continue;
+    }
+    lastError = null;
     const paperDecision = target === "paper" ? paperExecutionDecision(payload, options.paperStrategyId) : null;
     const generated = Date.parse(target === "paper"
       ? (paperDecision?.runAt || payload.generatedAt || payload.lastDecision?.runAt || "")
@@ -3395,7 +3525,14 @@ async function waitForExecutionResult(target, startedAt, steps, options = {}) {
     }
     await sleep(3000);
   }
-  steps = addExecutionStep(steps, "Execution result", "Result state has not updated yet; dashboard will keep refreshing.", "active");
+  // Still nothing after the whole window. That is worth reporting, but it is not
+  // an execution failure: the workflow conclusion reported separately is what says
+  // whether the run itself succeeded.
+  const detail = lastError
+    ? `The result state could not be read while waiting (${lastError.message}). `
+      + "The workflow conclusion above is authoritative; the dashboard keeps refreshing."
+    : "Result state has not updated yet; dashboard will keep refreshing.";
+  steps = addExecutionStep(steps, "Execution result", detail, "active");
   return { payload: null, steps };
 }
 
@@ -4059,6 +4196,14 @@ async function triggerOneTimeExecution(target) {
     }
     steps = addExecutionStep(steps, "Workflow dispatched", payload.workflow || payload.message || "GitHub Actions accepted the request", "done");
     setExecutionStatus(`${target} workflow started`);
+    // The runner publishes its decision only at the end of the run, so until then
+    // the most informative thing available is the shortlist this browser just sent
+    // and the ranking numbers behind it. Without this the popup showed nothing but
+    // a workflow status while the interesting minute passed.
+    const submittedShortlist = executionShortlistPreview(target);
+    if (submittedShortlist) {
+      steps = addExecutionStep(steps, "Candidates submitted for revalidation", submittedShortlist, "done");
+    }
     const liveUsesPolymarketProbability = normalizeProbabilitySource(portfolioConfigForMode("live").probabilitySource) === "polymarket";
     steps = addExecutionStep(steps, "Execution check running", live
       ? (liveUsesPolymarketProbability

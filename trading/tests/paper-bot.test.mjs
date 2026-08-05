@@ -835,3 +835,138 @@ test("state segments: the publisher refuses to write outside the trading tree", 
     assert.ok(!new RegExp(`print\\([^)]*${secret}`).test(publisher), `${secret} must never be printed`);
   }
 });
+
+// Pulls a named top-level function out of the browser bundle so its behaviour can
+// be exercised directly instead of only pattern-matched. Brace counting starts
+// after the parameter list so default values containing braces cannot end it early.
+function extractAppFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `function ${name} was not found in app.js`);
+  let index = source.indexOf("{", source.indexOf(")", start));
+  let depth = 0;
+  for (let i = index; i < source.length; i += 1) {
+    if (source[i] === "{") depth += 1;
+    else if (source[i] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`function ${name} is unbalanced in app.js`);
+}
+
+async function loadExecutionSummary() {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const names = [
+    "money", "probability", "percent", "signedPercent", "compactDays",
+    "executionCandidateEconomics", "executionPositionEconomics", "liveExecutionSummary",
+  ];
+  const source = names.map((name) => extractAppFunction(app, name)).join("\n");
+  return new Function(`${source}\nreturn { liveExecutionSummary, executionCandidateEconomics, executionPositionEconomics };`)();
+}
+
+test("execution popup: the result names the candidate and the numbers behind it", async () => {
+  const { liveExecutionSummary } = await loadExecutionSummary();
+  const summary = liveExecutionSummary({
+    action: "SUBMIT",
+    reason: "candidate passed revalidation",
+    selected: {
+      question: "Will Team A win?",
+      outcome: "Yes",
+      potentialAnnualizedReturn: 4.0559,
+      netYield: 0.0333,
+      daysToResolution: 0.3,
+      netGainIfWinUsdc: 0.1665,
+      orderNotionalUsdc: 5,
+      marketProbability: 0.967,
+      orderType: "GTC",
+      orderSize: 5.17,
+      orderPrice: 0.967,
+    },
+    response: { orderID: "0xabc", status: "matched" },
+  });
+
+  // The point of the change: the popup must state which candidate and on what basis.
+  assert.match(summary, /Selected: Will Team A win\? \/ Yes/);
+  assert.match(summary, /potential p\.a\. 405\.6%/);
+  assert.match(summary, /net yield 3\.3%/);
+  assert.match(summary, /0\.3 d left/);
+  assert.match(summary, /win \$0\.17/);
+  assert.match(summary, /stake \$5\.00/);
+  assert.match(summary, /mkt 96\.7%/);
+  assert.match(summary, /Order ID: 0xabc/);
+});
+
+test("execution popup: a rotation names the position it gives up and its P/L", async () => {
+  const { liveExecutionSummary } = await loadExecutionSummary();
+  const summary = liveExecutionSummary({
+    action: "ROTATION_EXIT_SUBMITTED",
+    reason: "a weaker live position is being replaced",
+    selected: { question: "Will Team B win?", outcome: "No", potentialAnnualizedReturn: 9.5, daysToResolution: 0.2 },
+    batchLog: {
+      humanReason: "Replace X (120.0% p.a., 3.0 d) with Y (950.0% p.a., 0.2 d); expected P/L changes by 0.4000 USDC.",
+      rotationExit: {
+        position: {
+          question: "Will Team X win?",
+          outcome: "Yes",
+          holdAnnualizedReturn: 1.2,
+          currentSellPnlUsdc: 0.21,
+          unrealizedPnlUsdc: 0.25,
+          remainingPotentialGainUsdc: 0.09,
+          potentialWinIfHeldUsdc: 0.3,
+        },
+      },
+    },
+  });
+
+  // Which position is being given up, and what it costs to give it up.
+  assert.match(summary, /Replacing: Will Team X win\? \/ Yes/);
+  assert.match(summary, /potential p\.a\. 120\.0%/);
+  assert.match(summary, /P\/L on close \$0\.21/);
+  assert.match(summary, /open P\/L \$0\.25/);
+  assert.match(summary, /\$0\.09 still to collect/);
+  // The runner's own sentence is surfaced rather than re-derived in the browser.
+  assert.match(summary, /Decision: Replace X .* expected P\/L changes by 0\.4000 USDC\./);
+});
+
+test("execution popup: with no candidate it explains what was considered", async () => {
+  const { liveExecutionSummary } = await loadExecutionSummary();
+  const summary = liveExecutionSummary({
+    action: "SKIP",
+    reason: "no candidate passed revalidation",
+    batchLog: {
+      counts: {
+        scannedCandidates: 42,
+        revalidatedCandidates: 40,
+        eligibleCandidates: 0,
+        positionsReviewedForRotation: 3,
+      },
+    },
+  });
+  assert.match(summary, /Considered: 42 scanned \/ 40 revalidated \/ 0 eligible \/ 3 positions reviewed for rotation/);
+  assert.ok(!summary.includes("Selected:"), "there is no selected candidate to name");
+});
+
+test("execution run-once: a missing result state is waited out, not reported as failure", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const waiter = extractAppFunction(app, "waitForExecutionResult");
+
+  // The reported bug: the first poll can land before the runner has published its
+  // state, and an unguarded read turned that into "Execution failed / State file is
+  // not available yet". Each attempt must absorb its own error and keep polling.
+  assert.match(waiter, /try \{\s*\n\s*payload = await fetchApiJson/);
+  assert.match(waiter, /catch \(error\) \{\s*\n\s*lastError = error;\s*\n\s*await sleep\(3000\);\s*\n\s*continue;/);
+  // And the loop must never rethrow, or the outer catch reports a failed execution.
+  assert.ok(!/throw /.test(waiter), "waitForExecutionResult must not throw");
+  // The final message must not claim the execution failed.
+  assert.match(waiter, /The workflow conclusion above is authoritative/);
+
+  // The status poll has the same hazard and the same fix.
+  const runWaiter = extractAppFunction(app, "waitForWorkflowRun");
+  assert.match(runWaiter, /catch \(error\) \{/);
+  assert.ok(!/throw /.test(runWaiter), "waitForWorkflowRun must not throw");
+  // Polling every 4s must update one line instead of appending an identical entry.
+  assert.match(runWaiter, /upsertExecutionStep\(steps, "Workflow status"/);
+  assert.ok(!/addExecutionStep\(steps, attempt === 0/.test(runWaiter), "the per-poll append is what spammed the popup");
+});
