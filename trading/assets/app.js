@@ -6806,15 +6806,16 @@ function tradeBatchDetail(batch) {
     const name = item.question || item.outcome || item.tokenId || "open order";
     return `${index + 1}. ${item.action || "REVIEWED"}: ${name}${item.reason ? ` — ${item.reason}` : ""}`;
   }).join("\n");
-  const rotationPosition = rotationReview?.best?.position || null;
-  const rotationCandidate = rotationReview?.best?.candidate || null;
-  const rotationSummary = rotationReview ? [
-    rotationPosition && rotationCandidate
-      ? `Replace ${rotationPosition.outcome || "-"} - ${rotationPosition.question || "-"} with ${rotationCandidate.outcome || "-"} - ${rotationCandidate.question || "-"}`
-      : rotationReview.action ? `Decision: ${rotationReview.action}` : "",
-    rotationReview.best?.priorityComparison ? comparisonMetricLine(rotationReview.best.priorityComparison) : "",
-    rotationReview.reason ? `Reason: ${rotationReview.reason}` : "",
-  ].filter(Boolean).join("\n") : (rotationComparison.length ? rotationComparisonLines : "");
+  // rotationReviewLines already carries the per-position breakdown built above --
+  // action, reason, cash-after-exit, EV delta, and the candidate tried for every
+  // reviewed position (rotationReview.reviews), not just the outer summary. It used
+  // to be computed and then never referenced: this section showed only "Decision: X
+  // / Reason: Y" with no way to see which positions were even considered or why
+  // each one's replacement attempt failed, which is exactly what made a working
+  // rotation review indistinguishable from a skipped one.
+  const rotationSummary = rotationReview
+    ? rotationReviewLines
+    : (rotationComparison.length ? rotationComparisonLines : "");
   const capitalText = [
     Number.isFinite(Number(capital.availableUsdc)) ? `${money(Number(capital.availableUsdc))} available` : "",
     Number.isFinite(Number(capital.requiredStakeUsdc)) ? `${money(Number(capital.requiredStakeUsdc))} required` : "",

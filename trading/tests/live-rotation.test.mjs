@@ -545,3 +545,62 @@ test("live run log: the already-stored backlog is compacted on the next run too"
   // previously stored log through the same compaction fixes the backlog immediately.
   assert.match(source, /const previousRunLog = \(Array\.isArray\(previousExecutionState\?\.runLog\)\s*\n?\s*\? previousExecutionState\.runLog\s*\n?\s*: \[\]\)\.map\(compactLiveRunRecord\);/);
 });
+
+test("live run log: the capped execution-shortlist sample is also dropped from history", () => {
+  // Capped at 20, but still 20 candidate summaries repeated across up to 160 stored
+  // runs -- the same duplication as revalidatedCandidates, just with a smaller cap.
+  const batchLog = {
+    id: "b1", action: "SKIP",
+    prevalidationFilter: { reasonCounts: { x: 1 }, executionShortlist: [{ tokenId: "1" }] },
+  };
+  const compacted = executor.compactLiveRunRecord(batchLog);
+  assert.ok(!("executionShortlist" in compacted.prevalidationFilter), "executionShortlist must be dropped from history");
+  assert.deepEqual(compacted.prevalidationFilter.reasonCounts, { x: 1 }, "the rest of prevalidationFilter must survive");
+
+  // A batchLog with no prevalidationFilter at all must not throw.
+  assert.doesNotThrow(() => executor.compactLiveRunRecord({ id: "b2", action: "SKIP" }));
+});
+
+test("live console output: a decision's console dump is a bounded summary, not the full state", () => {
+  // Even with history already compacted, the CURRENT run's own uncompacted
+  // revalidatedCandidates (over 100 candidates once the whole shortlist is
+  // considered, per the earlier all-or-nothing fix) plus 160 stored runs pushed a
+  // single console.log(JSON.stringify(output)) well past what the log-reading tool
+  // can return in one request -- confirmed against a real production run where the
+  // fetched window did not even reach the start of the dumped JSON.
+  const candidate = (i) => ({ tokenId: String(i), question: `Q${i}`, marketProbability: 0.93 });
+  const batchLog = {
+    action: "SKIP", reason: "no eligible candidate", settings: {}, capital: {}, counts: {},
+    selected: null,
+    topCandidates: [candidate(1)],
+    topRejected: [candidate(2)],
+    revalidatedCandidates: Array.from({ length: 109 }, (_, i) => candidate(100 + i)),
+    openOrderReviews: [],
+    rotationReview: { action: "NO_ROTATION_CANDIDATE", reviews: [] },
+    prevalidationFilter: { reasonCounts: {}, executionShortlist: Array.from({ length: 20 }, (_, i) => candidate(300 + i)) },
+  };
+  const output = {
+    generatedAt: "2026-08-05T13:16:00.000Z", action: "SKIP", reason: "no eligible candidate",
+    batchLog,
+    runLog: Array.from({ length: 160 }, () => executor.compactLiveRunRecord(batchLog)),
+  };
+  const summary = executor.consoleDecisionSummary(output);
+
+  assert.ok(!("revalidatedCandidates" in summary), "the unbounded candidate list must not reach the console");
+  assert.ok(!("runLog" in summary), "160 runs of history must not be re-printed on every run");
+  assert.ok(!("executionShortlist" in (summary.prevalidationFilter || {})), "the capped shortlist sample is redundant with topCandidates/topRejected");
+  for (const field of ["action", "reason", "settings", "capital", "counts", "selected", "topCandidates", "topRejected", "openOrderReviews", "rotationReview", "prevalidationFilter"]) {
+    assert.ok(field in summary, `${field} must survive -- it is what a decision is diagnosed from`);
+  }
+  assert.equal(summary.rotationReview.action, "NO_ROTATION_CANDIDATE");
+
+  const full = Buffer.byteLength(JSON.stringify(output));
+  const compact = Buffer.byteLength(JSON.stringify(summary));
+  assert.ok(compact < full / 10, `expected an order-of-magnitude reduction, got ${full} -> ${compact}`);
+
+  // And this must be what actually gets printed, not just an unused helper.
+  return import("node:fs/promises").then(({ readFile }) => readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8")).then((source) => {
+    assert.match(source, /console\.log\(JSON\.stringify\(consoleDecisionSummary\(output\), null, 2\)\);/);
+    assert.match(source, /await writeFile\(EXECUTION_STATE_PATH, `\$\{JSON\.stringify\(output, null, 2\)\}\\n`, "utf8"\);/);
+  });
+});

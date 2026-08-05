@@ -2102,6 +2102,14 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
 // the frontend already falls back to them when revalidatedCandidates is absent).
 function compactLiveRunRecord(batchLog = {}) {
   const { revalidatedCandidates, ...rest } = batchLog;
+  // Capped at 20 per run, but that is still 20 candidate summaries repeated across
+  // every one of 160 stored runs -- the same shape of duplication as
+  // revalidatedCandidates, just with a smaller cap. topCandidates/topRejected already
+  // cover what a past run's shortlist looked like.
+  if (rest.prevalidationFilter && "executionShortlist" in rest.prevalidationFilter) {
+    const { executionShortlist, ...prevalidationRest } = rest.prevalidationFilter;
+    return { ...rest, prevalidationFilter: prevalidationRest };
+  }
   return rest;
 }
 
@@ -2131,10 +2139,47 @@ async function emitDecision(payload) {
     runLog: nextRunLog,
   };
 
-  console.log(JSON.stringify(output, null, 2));
+  console.log(JSON.stringify(consoleDecisionSummary(output), null, 2));
   if (!EXECUTION_STATE_PATH) return;
   await mkdir(dirname(EXECUTION_STATE_PATH), { recursive: true });
   await writeFile(EXECUTION_STATE_PATH, `${JSON.stringify(output, null, 2)}\n`, "utf8");
+}
+
+// The published state (written above, unchanged) keeps full detail for the dashboard.
+// The console dump is a separate, compact summary of the same run, because the runner
+// logs are read back through a tool with a real size ceiling regardless of how much is
+// requested -- a run with 100+ revalidated candidates in "ai" mode, each carrying an AI
+// thesis, comfortably produces a dump too large to fetch in one request even with
+// history already compacted. This carries everything needed to diagnose one run's
+// decision (settings, capital, counts, the capped top candidates/rejects, every open
+// order and rotation review, and the prefilter reason breakdown) without the unbounded
+// revalidatedCandidates list or the 160-entry run-log history.
+function consoleDecisionSummary(output = {}) {
+  const batch = output.batchLog || {};
+  return {
+    generatedAt: output.generatedAt,
+    action: output.action,
+    reason: output.reason,
+    account: output.account,
+    monitoring: output.monitoring,
+    settings: batch.settings || output.settings,
+    capital: batch.capital,
+    counts: batch.counts,
+    selected: batch.selected || null,
+    topCandidates: batch.topCandidates || [],
+    topRejected: batch.topRejected || [],
+    openOrderReviews: batch.openOrderReviews || [],
+    rotationReview: output.rotationReview || batch.rotationReview || null,
+    rotationComparison: batch.rotationComparison || [],
+    // compactLiveRunRecord() already strips this field correctly (by omission, not
+    // by an undefined value that JSON.stringify would hide but that a reader of the
+    // in-memory object would still see).
+    prevalidationFilter: batch.prevalidationFilter
+      ? compactLiveRunRecord({ prevalidationFilter: batch.prevalidationFilter }).prevalidationFilter
+      : null,
+    response: output.response || null,
+    attempts: output.attempts || [],
+  };
 }
 
 function mergeRunLog(rows = [], limit = 160) {
@@ -3499,6 +3544,7 @@ if (invokedDirectly) {
 // Exported for tests only.
 export {
   MIN_ORDER_STAKE_CEILING_USDC,
+  consoleDecisionSummary,
   annualizeReturn,
   localDaysToResolution,
   selectedAnnualizedReturn,
