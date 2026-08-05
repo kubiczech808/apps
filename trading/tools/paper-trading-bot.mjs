@@ -2705,6 +2705,17 @@ function scoreStatus({ probability, annualizedReturn, edge, spreadOk, volumeOk, 
   };
 }
 
+// Rounds for storage without asserting the value exists. A missing number stays
+// missing instead of crashing the caller, so downstream filters can report "no
+// probability" rather than a TypeError.
+function rounded(value, digits) {
+  // Number(null) is 0 and Number("") is 0, both finite, so a missing value would be
+  // stored as a real zero and read as "this is worth nothing" rather than "unknown".
+  if (value == null || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Number(numeric.toFixed(digits)) : null;
+}
+
 function economicsForProbability({ probability, execution, stake, takerFee, totalCost, days, spreadOk, volumeOk, depthOk, endOk }) {
   const executionPrice = execution.avgPrice;
   const expectedValue = probability * execution.shares - stake - takerFee;
@@ -2899,20 +2910,27 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     totalCostUsdc: Number(totalCost.toFixed(5)),
     grossGainIfWinUsdc: Number(grossGainIfWin.toFixed(4)),
     netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
-    daysToResolution: days == null ? null : Number(days.toFixed(2)),
-    aiProbability: Number(probability.toFixed(4)),
-    rawProbability: Number(rawProbability.toFixed(4)),
-    edge: Number(economics.edge.toFixed(4)),
-    expectedRoi: Number(economics.expectedRoi.toFixed(4)),
-    annualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
-    aiExpectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
-    aiAnnualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
-    grossAnnualizedIfWin: Number(grossAnnualizedIfWin.toFixed(4)),
+    daysToResolution: rounded(days, 2),
+    // annualizeReturn() returns null for a non-finite input, so any of these can be
+    // null when the probability estimate is unavailable — which is normal for a
+    // scraped candidate that was never AI-analysed. Calling .toFixed() on that threw
+    // "Cannot read properties of null (reading 'toFixed')" inside execution
+    // revalidation, the candidate was stamped ERROR, and the portfolio filter then
+    // rejected it as "base status ERROR is not executable". A whole shortlist of
+    // perfectly tradable markets was discarded by a crash, not by any rule.
+    aiProbability: rounded(probability, 4),
+    rawProbability: rounded(rawProbability, 4),
+    edge: rounded(economics.edge, 4),
+    expectedRoi: rounded(economics.expectedRoi, 4),
+    annualizedReturn: rounded(economics.annualizedReturn, 4),
+    aiExpectedValueUsdc: rounded(economics.expectedValue, 4),
+    aiAnnualizedReturn: rounded(economics.annualizedReturn, 4),
+    grossAnnualizedIfWin: rounded(grossAnnualizedIfWin, 4),
     stakeUsdc: Number(stake.toFixed(2)),
-    expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
-    marketExpectedValueUsdc: Number(marketEconomics.expectedValue.toFixed(4)),
-    marketExpectedRoi: Number(marketEconomics.expectedRoi.toFixed(4)),
-    marketAnnualizedReturn: Number(marketEconomics.annualizedReturn.toFixed(4)),
+    expectedValueUsdc: rounded(economics.expectedValue, 4),
+    marketExpectedValueUsdc: rounded(marketEconomics.expectedValue, 4),
+    marketExpectedRoi: rounded(marketEconomics.expectedRoi, 4),
+    marketAnnualizedReturn: rounded(marketEconomics.annualizedReturn, 4),
     maxLossUsdc: Number(totalCost.toFixed(5)),
     aiAnalysis,
     probabilityThesis: aiAnalysis.thesis,
@@ -3283,12 +3301,12 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     probability: Number(probability.toFixed(4)),
     probabilityMethod: "independent-public-research",
     marketImpliedProbability: Number(evaluation.marketProbability ?? evaluation.marketPrice),
-    edge: Number(economics.edge.toFixed(4)),
+    edge: rounded(economics.edge, 4),
     probabilityRationale,
     probabilityPointRationale,
     marketComparisonSummary,
-    expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
-    annualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
+    expectedValueUsdc: rounded(economics.expectedValue, 4),
+    annualizedReturn: rounded(economics.annualizedReturn, 4),
     confidenceTier: modelAnalysis?.confidenceTier || confidenceTier(probability),
     provider: modelAnalysis?._provider || modelAnalysis?.provider || null,
   };
@@ -3319,12 +3337,12 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
     thesisType: economics.thesisType,
     rejectReasons,
     aiProbability: Number(probability.toFixed(4)),
-    edge: Number(economics.edge.toFixed(4)),
-    expectedRoi: Number(economics.expectedRoi.toFixed(4)),
-    annualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
-    expectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
-    aiExpectedValueUsdc: Number(economics.expectedValue.toFixed(4)),
-    aiAnnualizedReturn: Number(economics.annualizedReturn.toFixed(4)),
+    edge: rounded(economics.edge, 4),
+    expectedRoi: rounded(economics.expectedRoi, 4),
+    annualizedReturn: rounded(economics.annualizedReturn, 4),
+    expectedValueUsdc: rounded(economics.expectedValue, 4),
+    aiExpectedValueUsdc: rounded(economics.expectedValue, 4),
+    aiAnnualizedReturn: rounded(economics.annualizedReturn, 4),
     marketExpectedValueUsdc: marketEconomics ? Number(marketEconomics.expectedValue.toFixed(4)) : null,
     marketExpectedRoi: marketEconomics ? Number(marketEconomics.expectedRoi.toFixed(4)) : null,
     marketAnnualizedReturn: marketEconomics ? Number(marketEconomics.annualizedReturn.toFixed(4)) : null,
@@ -7788,6 +7806,9 @@ if (invokedDirectly) {
 // dashboard shows, plus the guards that keep a stale snapshot out of production.
 export {
   EFFECTIVELY_CERTAIN_MARKET_PROBABILITY,
+  PAPER_STRATEGIES,
+  portfolioEconomics,
+  rounded,
   MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT,
   MARKET_OBSERVATION_RETAIN_LIMIT,
   marketScanRetentionReason,

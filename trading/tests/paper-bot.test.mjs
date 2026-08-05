@@ -9,6 +9,7 @@ process.env.PAPER_REPORT_CADENCE_MINUTES = "55";
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 const bot = await import("../tools/paper-trading-bot.mjs");
 
@@ -1289,4 +1290,60 @@ test("live events: the probe that justified this stays read-only", async () => {
   }
   assert.match(body, /permissions:\n\s+contents: read/);
   assert.match(body, /on:\n\s+workflow_dispatch:/);
+});
+
+test("execution revalidation: a missing probability estimate must not crash the shortlist", () => {
+  // The reported bug. Conservative revalidated 80 stored candidates and marked every
+  // one ERROR with "execution shortlist revalidation failed: Cannot read properties of
+  // null (reading 'toFixed'); base status ERROR is not executable". annualizeReturn()
+  // returns null for a non-finite input, which is normal for a scraped candidate that
+  // was never AI-analysed, and the storage rounding called .toFixed() on it. The whole
+  // object literal threw, so nothing was returned and a shortlist of tradable markets
+  // (93% market probability, $80k liquidity) was discarded by a crash, not by a rule.
+  assert.equal(bot.rounded(null, 4), null);
+  assert.equal(bot.rounded(undefined, 4), null);
+  assert.equal(bot.rounded(NaN, 4), null);
+  assert.equal(bot.rounded(Infinity, 4), null);
+  assert.equal(bot.rounded(0.12345, 4), 0.1235);
+  assert.equal(bot.rounded(0, 2), 0, "a real zero must survive, not become null");
+  assert.equal(bot.rounded("0.5", 2), 0.5);
+
+  // annualizeReturn genuinely produces null for the input that triggered this.
+  assert.equal(bot.annualizeReturn(NaN, 3), null);
+  assert.equal(bot.rounded(bot.annualizeReturn(NaN, 3), 4), null, "the pair must compose safely");
+
+  // No unguarded rounding may remain on a value annualizeReturn can null out.
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  for (const field of ["annualizedReturn", "expectedRoi", "expectedValue", "edge"]) {
+    assert.ok(
+      !new RegExp(`economics\\.${field}\\.toFixed`).test(source),
+      `economics.${field}.toFixed() can throw and must go through rounded()`,
+    );
+  }
+});
+
+test("execution revalidation: a polymarket-source portfolio is judged on market numbers", () => {
+  // The user's point: paper must decide like live. For probabilitySource "polymarket"
+  // the ranking metric has to come from the market quote, never from an AI estimate
+  // that a scraped candidate does not have.
+  const strategy = { ...bot.PAPER_STRATEGIES.conservative, probabilitySource: "polymarket" };
+  const item = {
+    tokenId: "12345678901234567890",
+    status: "SCRAPED",
+    marketProbability: 0.93,
+    liquidity: 80842.54,
+    daysToResolution: 0.5,
+    netGainIfWinUsdc: 0.32,
+    totalCostUsdc: 5.02,
+    netYield: 0.0637,
+    // Deliberately absent: this candidate was never AI-analysed.
+    aiProbability: null,
+    annualizedReturn: null,
+    expectedValueUsdc: null,
+  };
+  const economics = bot.portfolioEconomics(item, strategy);
+  assert.equal(economics.probabilitySource, "polymarket");
+  assert.ok(Number.isFinite(economics.annualizedReturn), "market p.a. must be computed without an AI probability");
+  assert.equal(economics.expectedValueUsdc, 0.32, "the market path uses the net gain, not the AI expected value");
+  assert.ok(economics.annualizedReturn > 0);
 });
