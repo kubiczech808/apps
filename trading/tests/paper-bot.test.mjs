@@ -489,6 +489,33 @@ test("paper cadence: deployable capital brings the execution pass forward", () =
   assert.deepEqual(bot.portfoliosWithDeployableCapital({}), []);
 });
 
+test("queue janitor: a stuck run cannot head-block a concurrency group forever", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const janitor = await readFile(new URL("../../.github/workflows/trading-queue-janitor.yml", import.meta.url), "utf8");
+
+  // Why this exists: a run that cannot get a runner holds its concurrency group, and every
+  // later dispatch then sits pending with no job created -- nothing executes and nothing
+  // reaches the run log. Clearing it meant cancelling runs by hand in the GitHub UI.
+  assert.match(janitor, /actions: write/, "cancelling runs needs this permission");
+  assert.match(janitor, /schedule:\s*\n\s*- cron: '\*\/15 \* \* \* \*'/, "it has to run unattended");
+
+  // Both states block a group, and a pending run is the one with no job at all, so
+  // checking only "queued" would miss exactly the case this was built for.
+  assert.match(janitor, /for status in \("queued", "pending"\):/);
+
+  // A run that is genuinely executing must never be touched -- only waiting ones, and
+  // only past the grace period.
+  assert.match(janitor, /if age >= stale_minutes:/);
+  assert.match(janitor, /stale_minutes = max\(5, int\(os\.environ\.get\("STALE_MINUTES"\) or 20\)\)/,
+    "the grace period must have a floor so it cannot be set to something destructive");
+
+  // It is itself queued while it runs, so without this it would cancel itself.
+  assert.match(janitor, /if str\(run\.get\("id"\)\) == self_run_id:\s*\n\s*continue/);
+
+  // A run that started in the meantime returns 409; that is success, not an error.
+  assert.match(janitor, /level = "notice" if exc\.code == 409 else "warning"/);
+});
+
 test("live sync: an open dashboard cannot dispatch a workflow every 30 seconds", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");

@@ -1,0 +1,108 @@
+name: Trading Queue Janitor
+
+# A run that cannot get a runner holds its concurrency group, and every later dispatch in
+# that group then sits pending with no job created at all -- so nothing executes and
+# nothing is written to the run log. That happened for real: one live-execution run stuck
+# queued blocked manual execution and every manual market scan behind it, and the only way
+# out was cancelling runs by hand in the GitHub UI.
+#
+# This cancels runs that have been queued far longer than they could legitimately need, so
+# the head of a blocked concurrency group clears itself. A run that is genuinely executing
+# is never touched: only queued/pending ones, and only after the grace period.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      stale_minutes:
+        description: Cancel queued runs older than this many minutes
+        required: false
+        default: "20"
+        type: string
+
+concurrency:
+  group: trading-queue-janitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  janitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Cancel stale queued runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          STALE_MINUTES: ${{ github.event.inputs.stale_minutes || '20' }}
+          # This workflow must never cancel itself: it is queued while it runs.
+          SELF_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+          from datetime import datetime, timezone
+
+          repo = os.environ["REPO"]
+          token = os.environ["GH_TOKEN"]
+          stale_minutes = max(5, int(os.environ.get("STALE_MINUTES") or 20))
+          self_run_id = str(os.environ.get("SELF_RUN_ID") or "")
+          now = datetime.now(timezone.utc)
+
+          def api(path, method="GET"):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}{path}",
+                  method=method,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  body = response.read().decode("utf-8") or "{}"
+                  return json.loads(body) if response.status != 204 else {}
+
+          stale = []
+          # "queued" and "pending" are different states and both block a group: a pending
+          # run has not even had its job created yet, which is exactly the blocked case.
+          for status in ("queued", "pending"):
+              try:
+                  payload = api(f"/actions/runs?status={status}&per_page=100")
+              except urllib.error.HTTPError as exc:
+                  print(f"::warning::could not list {status} runs: HTTP {exc.code}")
+                  continue
+              for run in payload.get("workflow_runs", []):
+                  if str(run.get("id")) == self_run_id:
+                      continue
+                  created = run.get("created_at") or ""
+                  try:
+                      age = (now - datetime.fromisoformat(created.replace("Z", "+00:00"))).total_seconds() / 60
+                  except ValueError:
+                      continue
+                  if age >= stale_minutes:
+                      stale.append((run, age, status))
+
+          if not stale:
+              print(f"No run has been waiting {stale_minutes}+ minutes; nothing to clear.")
+              raise SystemExit(0)
+
+          for run, age, status in stale:
+              name = (run.get("path") or "").split("/")[-1]
+              try:
+                  api(f"/actions/runs/{run['id']}/cancel", method="POST")
+                  print(f"cancelled {name} run {run['id']} ({status} for {age:.0f} min)")
+              except urllib.error.HTTPError as exc:
+                  # 409 means it started or finished in the meantime, which is the good
+                  # outcome. Anything else is reported but must not fail the janitor.
+                  level = "notice" if exc.code == 409 else "warning"
+                  print(f"::{level}::could not cancel {name} run {run['id']}: HTTP {exc.code}")
+
+          print(f"Cleared {len(stale)} stale run(s) so their concurrency groups are not head-blocked.")
+          PY
