@@ -4641,9 +4641,24 @@ function stakeSizingRuleValue(mode, portfolio = {}) {
   const fallbackPortfolio = normalizedMode === "live"
     ? state.liveState?.portfolio
     : state.botState?.paperPortfolios?.[paperStrategyIdFromMode(normalizedMode)]?.portfolio;
-  const equity = Number(portfolio?.equityUsdc ?? fallbackPortfolio?.equityUsdc);
-  const equityLabel = normalizedMode === "live" ? "live equity" : "portfolio equity";
-  const nominalStake = Number.isFinite(equity) ? Math.max(0, equity) * allocation : null;
+  // Equity and open P/L must come from the same snapshot, or the two could be mixed.
+  const source = portfolio?.equityUsdc != null ? portfolio : fallbackPortfolio;
+  const equity = Number(source?.equityUsdc);
+  // The two modes size from different bases, and this row used plain equity for both.
+  //
+  // Live execution sizes from equity with unrealized P/L removed -- livePortfolioValue()
+  // in live-order-executor.mjs is `equity - openPnlUsdc` -- while a paper portfolio sizes
+  // from full equity (updatePaperPortfolio's maxStakeUsdc). With -4.50 unrealized P/L on
+  // the live account that made this row read "12.4% of live equity ($2.48)" while the MAX
+  // PER TRADE control right below it read $3.04, and the executor actually sized $3.04.
+  // The stake shown here now comes from the same base the order will use.
+  const isLive = normalizedMode === "live";
+  const openPnl = Number(source?.openPnlUsdc);
+  const sizingBase = isLive && Number.isFinite(equity)
+    ? Math.max(0, equity - (Number.isFinite(openPnl) ? openPnl : 0))
+    : equity;
+  const equityLabel = isLive ? "live equity excl. unrealized P/L" : "portfolio equity";
+  const nominalStake = Number.isFinite(sizingBase) ? Math.max(0, sizingBase) * allocation : null;
   return `${probability(allocation)} of ${equityLabel}${Number.isFinite(nominalStake) ? ` (${money(nominalStake)})` : ""}`;
 }
 

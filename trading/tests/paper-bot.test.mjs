@@ -447,6 +447,46 @@ test("fixture: normalizing the fixture is a no-op for its aggregates", async () 
   }
 });
 
+test("stake sizing: the summary row, the control and the executor share one base", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // Reported inconsistency: the Live portfolio row said "12.4% of live equity ($2.48)"
+  // while MAX PER TRADE right below it said "Calculated stake $3.04 / base $24.50". Both
+  // numbers were real -- the row used full equity, the control used equity minus
+  // unrealized P/L -- and with -4.50 unrealized they disagreed by 56 cents. The executor
+  // sizes from equity minus unrealized P/L, so the row was the wrong one.
+  assert.match(executor, /if \(equity != null && equity > 0\) return Math\.max\(0, equity - openPnl\);/,
+    "the executor's base is equity minus unrealized P/L");
+
+  // The summary row must use that same base for live, and must not silently fall back to
+  // plain equity the way it used to.
+  const rule = app.slice(app.indexOf("function stakeSizingRuleValue"));
+  const body = rule.slice(0, rule.indexOf("\nfunction "));
+  assert.match(body, /const sizingBase = isLive && Number\.isFinite\(equity\)\s*\n\s*\? Math\.max\(0, equity - \(Number\.isFinite\(openPnl\) \? openPnl : 0\)\)\s*\n\s*: equity;/);
+  assert.match(body, /const nominalStake = Number\.isFinite\(sizingBase\)/,
+    "the displayed stake must come from the sizing base, not from equity");
+  assert.ok(!/const nominalStake = Number\.isFinite\(equity\) \? Math\.max\(0, equity\) \* allocation/.test(body),
+    "the old full-equity computation must be gone");
+  // Equity and open P/L have to be read off one snapshot, or the two could be mixed.
+  assert.match(body, /const source = portfolio\?\.equityUsdc != null \? portfolio : fallbackPortfolio;/);
+  // The label has to say which base it is, so the two places cannot read as contradictory.
+  assert.match(body, /isLive \? "live equity excl\. unrealized P\/L" : "portfolio equity"/);
+
+  // Paper legitimately sizes from full equity, so the fix must not change that.
+  const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(bot, /maxStakeUsdc: Number\(\(equity \* portfolioMaxFraction\)\.toFixed\(2\)\)/);
+
+  // The arithmetic that was reported, pinned: 12.4% on the live account's own numbers.
+  const equity = 20.00;
+  const openPnl = -4.50;
+  const allocation = 0.124;
+  const base = Math.max(0, equity - openPnl);
+  assert.equal(Number((base * allocation).toFixed(2)), 3.04, "both places must show 3.04");
+  assert.notEqual(Number((equity * allocation).toFixed(2)), 3.04, "full equity is what produced the wrong 2.48");
+});
+
 test("market scan: sports and esports get a guaranteed slot every hour", () => {
   const scopes = bot.marketScanScopes();
   const indexOf = (slug) => scopes.findIndex((scope) => scope.tag?.slug === slug);
