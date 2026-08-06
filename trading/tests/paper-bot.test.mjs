@@ -1721,6 +1721,47 @@ test("execution revalidation: a polymarket-source portfolio is judged on market 
   assert.ok(economics.annualizedReturn > 0);
 });
 
+test("market dates: a date recovered from a slug is a whole day, not a kickoff", () => {
+  // Reported: finished fixtures stayed in Execution candidates showing an end date of
+  // 07. 08. 2026 01:59 -- midnight UTC in Prague, i.e. the slug's day stretched to
+  // 23:59:59. val-fpx-jdg-2026-08-06 had already been played.
+  //
+  // sportsScheduledEventDate returns either a real kickoff or a date recovered from the
+  // slug, and the future-kickoff rule could not tell them apart. A whole-day date is "in
+  // the future" for the entire day it names, so it overrode the market's real end date
+  // and kept the fixture listed until the next morning.
+  const played = bot.marketDateContext({
+    question: "Valorant: FunPlus Phoenix vs JD Gaming - Map 2 Winner",
+    slug: "val-fpx-jdg-2026-08-06",
+    eventSlug: "val-fpx-jdg-2026-08-06",
+    endDate: "2026-08-06T18:00:00Z",
+  });
+  assert.equal(Date.parse(played.endDate), Date.parse("2026-08-06T18:00:00Z"),
+    "the market's own end date must win over a whole-day slug bucket");
+  assert.equal(played.endDateSource, "polymarket-resolution-window");
+  // The slug date is still reported, just not used as the end date.
+  assert.ok(played.scheduledEventDate.startsWith("2026-08-06T23:59:59"));
+
+  // A real kickoff still ahead must still override a stale end date -- the case the
+  // future-kickoff rule was added for in the first place.
+  const kickoff = new Date(Date.now() + 2 * 3600000).toISOString();
+  const upcoming = bot.marketDateContext({
+    question: "Exact Score: SSC Napoli 1 - 0 CA Osasuna?",
+    gameStartTime: kickoff,
+    resolutionEndDate: new Date(Date.now() - 3 * 3600000).toISOString(),
+  });
+  assert.equal(upcoming.endDate, kickoff);
+  assert.equal(upcoming.endDateSource, "sports-event-start");
+
+  // With no end date at all the slug remains a usable fallback rather than nothing.
+  const slugOnly = bot.marketDateContext({
+    question: "Valorant: FunPlus Phoenix vs JD Gaming - Map 2 Winner",
+    slug: "val-fpx-jdg-2026-08-06",
+  });
+  assert.ok(slugOnly.endDate.startsWith("2026-08-06T23:59:59"));
+  assert.equal(slugOnly.endDateSource, "sports-event-start");
+});
+
 test("market dates: a kickoff that hasn't happened yet outranks a stale resolution window", () => {
   // Live bug: an exact-score sub-market's own resolutionEndDate said 02:00 (already
   // past), while Polymarket's own event page still showed a ~2h countdown to an 18:30

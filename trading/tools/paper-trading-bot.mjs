@@ -2155,8 +2155,13 @@ function sportsDateFromSlug(value) {
   return parseSportsDate(`${match[1]}-${match[2]}-${match[3]}`);
 }
 
-function sportsScheduledEventDate(market = {}, fallbackDate = null) {
-  if (!isSportsMarket(market)) return null;
+// Two very different things can come back here and callers must be able to tell them
+// apart. A gameStartTime is an actual kickoff. A date recovered from a slug
+// ("val-fpx-jdg-2026-08-06") is only the day the fixture belongs to, and parseSportsDate
+// stretches it to 23:59:59 -- a whole-day bucket, not a time the match starts or ends.
+// Treating the second as a kickoff kept finished matches looking open until end of day.
+function sportsScheduledEventDateDetail(market = {}) {
+  if (!isSportsMarket(market)) return { date: null, precise: false };
   const events = Array.isArray(market.events) ? market.events : [];
   const candidates = [
     market.gameStartTime,
@@ -2165,15 +2170,24 @@ function sportsScheduledEventDate(market = {}, fallbackDate = null) {
   ];
   for (const candidate of candidates) {
     const parsed = parseSportsDate(candidate);
-    if (parsed) return parsed;
+    if (parsed) return { date: parsed, precise: true };
   }
-  return sportsDateFromSlug(market.slug) || sportsDateFromSlug(market.eventSlug) || sportsDateFromSlug(events.find((event) => event?.slug)?.slug) || null;
+  const fromSlug = sportsDateFromSlug(market.slug)
+    || sportsDateFromSlug(market.eventSlug)
+    || sportsDateFromSlug(events.find((event) => event?.slug)?.slug)
+    || null;
+  return { date: fromSlug, precise: false };
+}
+
+function sportsScheduledEventDate(market = {}, fallbackDate = null) {
+  return sportsScheduledEventDateDetail(market).date;
 }
 
 function marketDateContext(market = {}, fallbackDate = null) {
   const rawResolutionEndDate = market.resolutionEndDate || market.endDate || null;
   const resolutionEndDate = correctedEndDate(market.question || "", rawResolutionEndDate, fallbackDate);
-  const scheduledEventDate = sportsScheduledEventDate(market, fallbackDate);
+  const scheduled = sportsScheduledEventDateDetail(market);
+  const scheduledEventDate = scheduled.date;
   const scheduledTime = Date.parse(scheduledEventDate || "");
   const resolutionTime = Date.parse(resolutionEndDate || "");
   // A kickoff that hasn't happened yet must win even when it falls after the market's
@@ -2181,7 +2195,14 @@ function marketDateContext(market = {}, fallbackDate = null) {
   // (seen live on an exact-score market whose resolutionEndDate said 02:00 while
   // Polymarket's own event page still showed a ~2h countdown to an 18:30 kickoff), and
   // a game cannot be past resolution before it has actually been played.
-  const scheduledIsFuture = Number.isFinite(scheduledTime) && scheduledTime > Date.now();
+  //
+  // Only a real kickoff may do that. A slug-derived date is the whole day stretched to
+  // 23:59:59, so it is "in the future" for the entire day it names -- letting it override
+  // a real end date is what kept finished fixtures listed as candidates until 01:59 the
+  // next morning. It stays a fallback for markets that have no usable end date at all.
+  const scheduledIsFuture = scheduled.precise
+    && Number.isFinite(scheduledTime)
+    && scheduledTime > Date.now();
   const useScheduledDate = Boolean(scheduledEventDate)
     && (!Number.isFinite(resolutionTime) || (Number.isFinite(scheduledTime) && scheduledTime < resolutionTime) || scheduledIsFuture);
   const endDate = useScheduledDate ? scheduledEventDate : resolutionEndDate;

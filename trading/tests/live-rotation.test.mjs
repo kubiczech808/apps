@@ -537,7 +537,10 @@ test("live positions: a date-only resolution date means the end of that day", as
 
   // And the same future-kickoff correction as the paper side: an end date earlier than a
   // kickoff that has not happened yet is a stale estimate, not a resolution.
-  assert.match(source, /const scheduledIsFuture = Number\.isFinite\(scheduledTime\) && scheduledTime > Date\.now\(\);/);
+  // Only a real kickoff may override a real end date. A whole-day date is "in the future"
+  // for the entire day it names, so allowing it there kept finished fixtures looking open.
+  assert.match(source, /const scheduledIsFuture = scheduledIsPrecise\s*\n\s*&& Number\.isFinite\(scheduledTime\)\s*\n\s*&& scheduledTime > Date\.now\(\);/);
+  assert.match(source, /scheduledIsPrecise = !dateOnly;/);
   assert.match(source, /\|\| scheduledTime < endTime \|\| scheduledIsFuture\)\)/);
 
   // Verify the arithmetic the fix relies on, so a future refactor cannot silently

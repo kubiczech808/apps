@@ -285,6 +285,10 @@ function correctedEndDate(question, rawEndDate, fallbackDate = null, position = 
   );
   const dateCandidates = [position.gameStartTime, position.eventStartTime, position.startDateIso];
   let scheduledEventDate = null;
+  // Whether the scheduled date is an actual kickoff time or only the day the fixture
+  // belongs to. A date with no time -- from the API or recovered from a slug -- is a
+  // whole-day bucket stretched to 23:59:59, not a moment the match starts.
+  let scheduledIsPrecise = false;
   for (const candidate of dateCandidates) {
     const value = String(candidate || "").trim();
     if (!value) continue;
@@ -294,6 +298,7 @@ function correctedEndDate(question, rawEndDate, fallbackDate = null, position = 
       : new Date(value);
     if (Number.isFinite(parsed.getTime())) {
       scheduledEventDate = parsed.toISOString();
+      scheduledIsPrecise = !dateOnly;
       break;
     }
   }
@@ -313,8 +318,12 @@ function correctedEndDate(question, rawEndDate, fallbackDate = null, position = 
   // A kickoff still in the future wins even when it falls after the market's own end
   // date, because that end date is sometimes a stale pre-reschedule estimate and a
   // fixture cannot be past resolution before it has been played. Same correction as
-  // marketDateContext() in paper-trading-bot.mjs.
-  const scheduledIsFuture = Number.isFinite(scheduledTime) && scheduledTime > Date.now();
+  // marketDateContext() in paper-trading-bot.mjs -- including its limit: only a real
+  // kickoff qualifies. A whole-day date is "in the future" for the entire day it names,
+  // so letting it override a real end date keeps finished fixtures looking open.
+  const scheduledIsFuture = scheduledIsPrecise
+    && Number.isFinite(scheduledTime)
+    && scheduledTime > Date.now();
   if (isSports
     && scheduledEventDate
     && Number.isFinite(scheduledTime)
