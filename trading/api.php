@@ -1711,7 +1711,14 @@ try {
             respond(['ok' => false, 'error' => 'POST is required'], 405);
         }
 
-        $minSeconds = max(30, min(900, (int) ($_GET['minSeconds'] ?? 60)));
+        // Dispatching this is a full Actions run (npm install, Polymarket calls, FTP
+        // upload), and the account's runner capacity is shared with deploy, the market
+        // scan, the paper bot and live execution. A 30s floor let one open dashboard tab
+        // dispatch ~120 runs an hour, which starved all of those: their jobs sat with no
+        // runner assigned and GitHub cancelled each after 15 minutes. The floor is the
+        // only protection that survives a stale cached frontend, so it is enforced here
+        // and not only in app.js. 120s still leaves a deliberate refresh responsive.
+        $minSeconds = max(120, min(900, (int) ($_GET['minSeconds'] ?? 600)));
         $ageSeconds = live_state_age_seconds();
         $lockPath = __DIR__ . '/data/.live-sync-request.json';
         $lastRequest = null;

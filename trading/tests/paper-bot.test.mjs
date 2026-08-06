@@ -447,6 +447,45 @@ test("fixture: normalizing the fixture is a no-op for its aggregates", async () 
   }
 });
 
+test("live sync: an open dashboard cannot dispatch a workflow every 30 seconds", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+
+  // What this prevents: LIVE_SYNC_REQUEST_MS was 30000 and the dispatch poll ran on the
+  // 15s state-refresh interval, so one open tab dispatched a full Actions run every 30
+  // seconds -- 88 of the repo's last 100 runs were this one workflow. That saturated the
+  // account's runner capacity, and deploy / market scan / paper bot / live execution then
+  // sat with runner='' until GitHub cancelled each at 15 minutes. The visible symptoms
+  // were "Scan is still queued in the background", a frontend fix that never reached the
+  // hosting, and manual execution stuck pending.
+  const requestMs = Number(/const LIVE_SYNC_REQUEST_MS = (\d+);/.exec(app)?.[1]);
+  assert.ok(Number.isFinite(requestMs), "the background sync cadence must be declared");
+  assert.ok(requestMs >= 300000, `background dispatch must be minutes apart, got ${requestMs}ms`);
+
+  // The poll must be paced by its own cadence, not by the fast state-refresh interval, so
+  // the client asks no more often than the server would allow anyway.
+  assert.match(app, /requestLiveAccountSync\(\{ quiet: true, minSeconds: LIVE_SYNC_REQUEST_MS \/ 1000 \}\);\s*\n\}, LIVE_SYNC_REQUEST_MS\);/);
+
+  // Re-reading the published state stays fast: that is a static JSON fetch, not a run.
+  const refreshMs = Number(/const LIVE_STATE_REFRESH_MS = (\d+);/.exec(app)?.[1]);
+  assert.ok(refreshMs <= 60000, "reading the state should stay responsive");
+
+  // The server floor is the only guard that survives a cached frontend, so it must be
+  // enforced there too and not left at 30s.
+  const floor = Number(/\$minSeconds = max\((\d+), min\(900,/.exec(api)?.[1]);
+  assert.ok(Number.isFinite(floor), "the server-side throttle floor must exist");
+  assert.ok(floor >= 120, `server floor must bound a stale client, got ${floor}s`);
+  const fallback = Number(/min\(900, \(int\) \(\$_GET\['minSeconds'\] \?\? (\d+)\)\)/.exec(api)?.[1]);
+  assert.ok(fallback >= 300, `the default must not be aggressive either, got ${fallback}s`);
+
+  // A deliberate click may still dispatch sooner than the background cadence.
+  const manual = Number(/const LIVE_SYNC_MANUAL_SECONDS = (\d+);/.exec(app)?.[1]);
+  assert.ok(Number.isFinite(manual), "the manual refresh throttle must be declared");
+  assert.ok(manual >= floor && manual < requestMs / 1000,
+    `a manual refresh must beat the background poll but respect the server floor, got ${manual}s`);
+});
+
 test("stake sizing: the summary row, the control and the executor share one base", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");

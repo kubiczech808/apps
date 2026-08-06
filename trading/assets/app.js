@@ -122,7 +122,19 @@ const DEFAULT_MAX_RESOLUTION_DAYS = 7;
 // live event over one still hours away. Keep the actual horizon visible beside it.
 const MIN_ANNUALIZATION_DAYS = 1 / 24;
 const LIVE_STATE_REFRESH_MS = 15000;
-const LIVE_SYNC_REQUEST_MS = 30000;
+// How often an open dashboard may ask the server to DISPATCH a live account sync, which
+// is a full GitHub Actions run: npm install, Polymarket API calls, FTP upload.
+//
+// This was 30s, polled on the 15s state-refresh interval, so a single open tab dispatched
+// a workflow every 30 seconds -- ~120 runs an hour. That saturated the account's runner
+// capacity: deploy, market scan, paper bot and live execution then sat queued with no
+// runner assigned and GitHub killed each after 15 minutes. Re-reading the published state
+// is what keeps the UI current (LIVE_STATE_REFRESH_MS, a static JSON fetch, unchanged);
+// dispatching a run is only worth it occasionally, on top of the 15-minute cron.
+const LIVE_SYNC_REQUEST_MS = 600000;
+// An explicit "Refresh values" click is a deliberate request, so it may dispatch sooner --
+// but not so often that holding the button down can flood the queue again.
+const LIVE_SYNC_MANUAL_SECONDS = 120;
 const USER_NAV_REFRESH_DEBOUNCE_MS = 250;
 const APP_BASE_PATH = "/trading/";
 
@@ -4053,7 +4065,7 @@ async function refreshOpenedTradesValues() {
       const previousGeneratedAt = state.liveState?.generatedAt || "";
       // Request the account sync first, then wait for the resulting snapshot
       // so Win p.a. is calculated from current marks and current P/L.
-      await requestLiveAccountSync({ quiet: true, minSeconds: LIVE_SYNC_REQUEST_MS / 1000 });
+      await requestLiveAccountSync({ quiet: true, minSeconds: LIVE_SYNC_MANUAL_SECONDS });
       const liveState = await waitForFreshLiveSnapshot(previousGeneratedAt);
       if (liveState) renderLiveState(liveState);
       setExecutionStatus("opened-trade values recalculated");
@@ -8051,7 +8063,10 @@ loadDashboardState().then(() => {
   if (isLiveMode()) requestLiveAccountSync({ quiet: true });
 });
 
+// Paced by LIVE_SYNC_REQUEST_MS, not by the state-refresh interval. Polling the dispatch
+// endpoint every 15s only worked because the server throttled it; asking on the same slow
+// cadence the server allows keeps the two from disagreeing again.
 window.setInterval(() => {
   if (!isLiveMode()) return;
   requestLiveAccountSync({ quiet: true, minSeconds: LIVE_SYNC_REQUEST_MS / 1000 });
-}, LIVE_STATE_REFRESH_MS);
+}, LIVE_SYNC_REQUEST_MS);
