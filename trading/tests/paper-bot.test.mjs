@@ -447,6 +447,52 @@ test("fixture: normalizing the fixture is a no-op for its aggregates", async () 
   }
 });
 
+test("market scan: sports and esports get a guaranteed slot every hour", () => {
+  const scopes = bot.marketScanScopes();
+  const indexOf = (slug) => scopes.findIndex((scope) => scope.tag?.slug === slug);
+  assert.deepEqual(bot.MARKET_SCAN_HOURLY_TAG_SLUGS, ["sports", "esports"]);
+  // The rotation is long enough that these tags' full pass came round only every few
+  // hours, which is what the guaranteed slot exists to fix.
+  assert.ok(scopes.length > 20, `expected the full rotation, got ${scopes.length}`);
+
+  const now = Date.parse("2026-08-06T18:00:00Z");
+  const iso = (minutesAgoValue) => new Date(now - minutesAgoValue * 60000).toISOString();
+
+  // Never scanned counts as overdue, so a fresh state picks these up immediately.
+  assert.equal(bot.overdueHourlyScanScope(scopes, {}, now), indexOf("sports"));
+
+  // Both overdue: the older one wins, so they cannot starve each other.
+  const bothOverdue = { tagScannedAt: { "tag:sports": iso(70), "tag:esports": iso(200) } };
+  assert.equal(bot.overdueHourlyScanScope(scopes, bothOverdue, now), indexOf("esports"));
+
+  // Only one overdue.
+  const onlySports = { tagScannedAt: { "tag:sports": iso(90), "tag:esports": iso(5) } };
+  assert.equal(bot.overdueHourlyScanScope(scopes, onlySports, now), indexOf("sports"));
+
+  // Both fresh: the normal rotation must be left alone, or every other tag starves.
+  const bothFresh = { tagScannedAt: { "tag:sports": iso(10), "tag:esports": iso(20) } };
+  assert.equal(bot.overdueHourlyScanScope(scopes, bothFresh, now), null);
+
+  // Exactly at the boundary counts as due, so drift cannot push a pass past the hour.
+  const atBoundary = { tagScannedAt: { "tag:sports": iso(60), "tag:esports": iso(1) } };
+  assert.equal(bot.overdueHourlyScanScope(scopes, atBoundary, now), indexOf("sports"));
+});
+
+test("market scan: the borrowed slot delays the rotation without skipping a scope", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // Borrowing a run for sports/esports must not advance the rotation cursor, otherwise
+  // every borrowed slot would silently skip whichever scope was next in line.
+  assert.match(source, /scanScopeCursor: usedHourlySlot \? rotationIndex : \(scopeIndex \+ 1\) % scopes\.length/);
+  // And the per-scope timestamp has to be persisted, or the slot reads an empty map every
+  // run, believes both tags are permanently overdue, and the rotation never moves at all.
+  assert.match(source, /tagScannedAt: \{ \.\.\.\(previousScan\.tagScannedAt \|\| \{\}\), \[scope\.key\]: scanRunAt \}/);
+  const normalize = source.slice(source.indexOf("function normalizeMarketScan"));
+  assert.match(normalize.slice(0, normalize.indexOf("\nfunction ")), /tagScannedAt: Object\.fromEntries\(/,
+    "normalizeMarketScan must carry tagScannedAt through");
+});
+
 test("trade table: every header lines up with the cell beneath it", async () => {
   // Headers and cells are two separate lists in one template, so reordering columns can
   // silently shift values under the wrong heading -- a P/L read as a stake is worse than

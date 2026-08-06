@@ -623,6 +623,56 @@ test("live revalidation: a market Gamma no longer lists is closed out, not re-fe
   assert.match(workflow, /item\["acceptingOrders"\] = False/);
 });
 
+test("redeem alerts: a lost position with nothing to claim raises no alert", async () => {
+  const sync = await import("../tools/live-account-sync.mjs");
+
+  // Reported: redeem emails arriving for lost positions whose redeem value is 0.00.
+  // Polymarket marks a loser `resolved` exactly like a winner, so settled-ness alone
+  // qualified the position -- and it was mailed under the title "Winning Polymarket
+  // position may need redeem" with 0.00 to collect. Nothing is owed, so nothing to send.
+  const base = {
+    tokenId: "111", question: "Exact Score: SSC Napoli 1 - 0 CA Osasuna?", outcome: "No",
+    resolved: true, stakeUsdc: 4.5,
+  };
+  const lost = sync.redeemNotifications(
+    [{ ...base, currentValueUsdc: 0, currentPrice: 0 }],
+    null,
+    "2026-08-06T18:00:00Z",
+  );
+  assert.equal(lost.redeemAlerts.length, 0, "a settled loser worth 0.00 must raise no alert");
+  assert.equal(lost.unsentRedeemAlerts.length, 0, "and therefore nothing to email");
+
+  // A genuine winner must still be alerted -- this must not silence the useful case.
+  const won = sync.redeemNotifications(
+    [{ ...base, currentValueUsdc: 5.62, currentPrice: 1 }],
+    null,
+    "2026-08-06T18:00:00Z",
+  );
+  assert.equal(won.redeemAlerts.length, 1, "a winning position still needs its redeem alert");
+  assert.equal(won.unsentRedeemAlerts.length, 1);
+
+  // A winner whose value has not been marked yet is still a winner: a settled outcome
+  // trades at ~1.00, so the price carries the information the value is missing.
+  const valueLate = sync.redeemNotifications(
+    [{ ...base, currentValueUsdc: 0, currentPrice: 0.999 }],
+    null,
+    "2026-08-06T18:00:00Z",
+  );
+  assert.equal(valueLate.redeemAlerts.length, 1, "a late-marked winner must not be dropped");
+
+  // A near-worthless residual is not a redeem worth emailing about, but a real one is.
+  assert.equal(sync.positionHasRedeemableValue({ currentValueUsdc: 0, currentPrice: 0.02 }), false);
+  assert.equal(sync.positionHasRedeemableValue({ currentValueUsdc: 0.5, currentPrice: 0.1 }), true);
+
+  // An explicit REDEEM_REQUIRED row with no value must not slip through either.
+  const mislabelled = sync.redeemNotifications(
+    [{ ...base, resolved: false, status: "REDEEM_REQUIRED", currentValueUsdc: 0, currentPrice: 0 }],
+    null,
+    "2026-08-06T18:00:00Z",
+  );
+  assert.equal(mislabelled.redeemAlerts.length, 0);
+});
+
 test("rotation exit: the sell is posted as a taker order, which createAndPostOrder cannot do", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");

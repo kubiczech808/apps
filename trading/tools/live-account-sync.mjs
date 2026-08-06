@@ -828,6 +828,18 @@ function positionOfficiallyResolved(position) {
   return Boolean(position.redeemable || position.claimable || position.resolved);
 }
 
+// Is there actually anything to claim? Polymarket marks a losing position `resolved`
+// exactly like a winning one, so "resolved" on its own says nothing about whether a
+// redeem is owed. A settled position worth 0.00 has nothing to collect.
+//
+// The price fallback covers a winner whose value has not been marked yet: a settled
+// outcome trades at ~1.00, so that is a win whose value is merely late.
+function positionHasRedeemableValue(position = {}) {
+  const currentValue = number(position.currentValueUsdc ?? position.currentValue, 0);
+  const currentPrice = number(position.currentPrice);
+  return currentValue > 0.000001 || (currentPrice != null && currentPrice >= 0.995);
+}
+
 function positionLooksResolved(position) {
   return positionOfficiallyResolved(position);
 }
@@ -841,7 +853,9 @@ function closedRowsFromResolvedPositions(positions, knownClosedKeys, generatedAt
       const currentValue = number(position.currentValueUsdc, 0);
       const stake = number(position.totalCostUsdc || position.stakeUsdc, 0);
       const currentPrice = number(position.currentPrice);
-      const winningResolved = currentValue > 0.000001 || (currentPrice != null && currentPrice >= 0.995);
+      // Same predicate the redeem alert uses, so a row classified REDEEM_REQUIRED here
+      // and the decision to email about it can never disagree.
+      const winningResolved = positionHasRedeemableValue(position);
       const realizedPnl = currentValue - stake;
       const status = winningResolved ? "REDEEM_REQUIRED" : "LOST";
       const closeTime = resolvedPositionCloseTime(position, closeTimeIndex, previousCloseTimeIndex, generatedAt);
@@ -1008,9 +1022,12 @@ function redeemNotifications(positions, previousState, generatedAt) {
   for (const position of positions) {
     const currentPrice = number(position.currentPrice);
     const currentValue = number(position.currentValueUsdc, 0);
-    const redeemable = positionOfficiallyResolved(position)
+    const settled = positionOfficiallyResolved(position)
       || String(position.status || "").toUpperCase() === "REDEEM_REQUIRED";
-    if (!redeemable) continue;
+    // A lost position is `resolved` too, so settled-ness alone used to raise an alert --
+    // and it was emailed under the title "Winning Polymarket position may need redeem"
+    // with a redeem value of 0.00. Nothing is owed on it, so there is nothing to tell.
+    if (!settled || !positionHasRedeemableValue(position)) continue;
     addAlert({
       key: redeemAlertId("redeem-required", position),
       type: "REDEEM_REQUIRED",
@@ -1911,4 +1928,6 @@ if (invokedDirectly) {
 export {
   openOrderIdentityKeys,
   vanishedOpenOrders,
+  positionHasRedeemableValue,
+  redeemNotifications,
 };

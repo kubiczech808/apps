@@ -1170,6 +1170,15 @@ function normalizeMarketScan(input = {}) {
         .slice(0, MARKET_SCAN_CATEGORY_TAGS.length + 1),
     ),
     scanScopeCursor: Math.max(0, Math.floor(Number(input?.scanScopeCursor) || 0)),
+    // Per-scope timestamp of the last full catalogue pass. Without preserving it here the
+    // guaranteed hourly slot would read an empty map every run, think both tags were
+    // overdue forever, and never let the rotation move.
+    tagScannedAt: Object.fromEntries(
+      Object.entries(input?.tagScannedAt && typeof input.tagScannedAt === "object" ? input.tagScannedAt : {})
+        .map(([scope, at]) => [String(scope || "").trim(), String(at || "").trim()])
+        .filter(([scope, at]) => Boolean(scope) && Boolean(at))
+        .slice(0, MARKET_SCAN_CATEGORY_TAGS.length + 1),
+    ),
     scanQuerySignature: String(input?.scanQuerySignature || "").slice(0, 500),
     lastScope: String(input?.lastScope || "").slice(0, 120),
     lastScopeCursor: String(input?.lastScopeCursor || "").slice(0, 1000) || null,
@@ -6149,6 +6158,38 @@ function marketScanQuerySignature() {
   });
 }
 
+// Sports and esports carry the short-lived fixtures this portfolio actually trades, but
+// the catalogue rotation has 24 scopes, so each tag's full pass came round only every few
+// hours. The live pass covers what resolves within MARKET_SCAN_LIVE_WINDOW_HOURS on every
+// run; anything further out waited for the rotation. These two tags now get a guaranteed
+// slot instead: if one has not had a full pass within the interval, it is scanned next.
+const MARKET_SCAN_HOURLY_TAG_SLUGS = ["sports", "esports"];
+const MARKET_SCAN_HOURLY_INTERVAL_MINUTES = Math.max(
+  0,
+  envNumber("PAPER_MARKET_SCAN_HOURLY_INTERVAL_MINUTES", 60),
+);
+
+// Which of the guaranteed tags is most overdue, or null when none is due. Picking the
+// oldest keeps the two from starving each other when both come due at once.
+function overdueHourlyScanScope(scopes = [], previousScan = {}, now = Date.now()) {
+  if (MARKET_SCAN_HOURLY_INTERVAL_MINUTES <= 0) return null;
+  if (MARKET_SCAN_TAG && MARKET_SCAN_TAG !== "all") return null;
+  const scannedAt = previousScan?.tagScannedAt && typeof previousScan.tagScannedAt === "object"
+    ? previousScan.tagScannedAt
+    : {};
+  const dueBefore = now - MARKET_SCAN_HOURLY_INTERVAL_MINUTES * 60000;
+  let oldest = null;
+  for (const slug of MARKET_SCAN_HOURLY_TAG_SLUGS) {
+    const index = scopes.findIndex((scope) => scope.tag?.slug === slug);
+    if (index < 0) continue;
+    // Never scanned is treated as infinitely overdue, so a fresh state starts with these.
+    const last = Date.parse(scannedAt[scopes[index].key] || "") || 0;
+    if (last > dueBefore) continue;
+    if (!oldest || last < oldest.last) oldest = { index, last };
+  }
+  return oldest ? oldest.index : null;
+}
+
 function marketScanScopes() {
   if (MARKET_SCAN_TAG && MARKET_SCAN_TAG !== "all") {
     const selected = MARKET_SCAN_CATEGORY_TAGS.find((tag) => tag.slug === MARKET_SCAN_TAG);
@@ -6212,7 +6253,12 @@ async function refreshMarketObservations(state) {
   if (!scopes.length) throw new Error(`unknown Polymarket scan tag: ${MARKET_SCAN_TAG}`);
   const querySignature = marketScanQuerySignature();
   const savedCursors = previousScan.scanQuerySignature === querySignature ? { ...previousScan.scanCursors } : {};
-  const scopeIndex = Math.max(0, previousScan.scanScopeCursor % scopes.length);
+  const rotationIndex = Math.max(0, previousScan.scanScopeCursor % scopes.length);
+  // An overdue guaranteed tag takes this run's slot. The rotation cursor is left where it
+  // was, so the borrowed slot delays the rotation by one run rather than skipping a scope.
+  const hourlyIndex = overdueHourlyScanScope(scopes, previousScan);
+  const scopeIndex = hourlyIndex == null ? rotationIndex : hourlyIndex;
+  const usedHourlySlot = hourlyIndex != null && hourlyIndex !== rotationIndex;
   const scope = scopes[scopeIndex];
   const afterCursor = savedCursors[scope.key] || null;
   const apiCallAudit = [];
@@ -6284,7 +6330,13 @@ async function refreshMarketObservations(state) {
     state.marketScan = {
       ...previousScan,
       scanCursors: savedCursors,
-      scanScopeCursor: (scopeIndex + 1) % scopes.length,
+      scanScopeCursor: usedHourlySlot ? rotationIndex : (scopeIndex + 1) % scopes.length,
+      // When each scope last had a full catalogue pass, which is what the guaranteed
+      // hourly slot is measured against.
+      tagScannedAt: { ...(previousScan.tagScannedAt || {}), [scope.key]: scanRunAt },
+      hourlyScanTagSlugs: MARKET_SCAN_HOURLY_TAG_SLUGS,
+      hourlyScanIntervalMinutes: MARKET_SCAN_HOURLY_INTERVAL_MINUTES,
+      usedHourlyScanSlot: usedHourlySlot,
       scanQuerySignature: querySignature,
       lastScope: scope.label,
       lastScopeCursor: afterCursor,
@@ -7869,6 +7921,9 @@ export {
   marketDateContext,
   marketScanRetentionReason,
   marketScanLiveTags,
+  marketScanScopes,
+  overdueHourlyScanScope,
+  MARKET_SCAN_HOURLY_TAG_SLUGS,
   scanEventRequestParams,
   annualizationDays,
   annualizeReturn,
