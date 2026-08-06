@@ -489,6 +489,37 @@ test("paper cadence: deployable capital brings the execution pass forward", () =
   assert.deepEqual(bot.portfoliosWithDeployableCapital({}), []);
 });
 
+test("live execution: the run evaluates the shortlist that is on screen", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: the run log listed completely different markets from the live portfolio's
+  // Execution candidates. The shortlist was honoured end to end -- the run showed
+  // manualShortlistMatched 16 of 16 with no fallback -- so the divergence was on the
+  // browser side: freshLiveWorkflowPayload refetches the scraped state and rebuilds the
+  // shortlist from it, but never re-rendered, so the table kept showing the previous
+  // catalogue while the newly fetched one was submitted. Short-dated sports and esports
+  // markets turn over within minutes, so the two drift apart easily.
+  const fn = app.slice(app.indexOf("async function freshLiveWorkflowPayload"));
+  const body = fn.slice(0, fn.indexOf("\nasync function triggerOneTimeExecution"));
+
+  const storeAt = body.indexOf("storeScrapedMarketState(scrapedState);");
+  const renderAt = body.search(/if \(state\.page === "opportunities"\) renderBotEvaluations\(\);/);
+  const payloadAt = body.indexOf("const payload = liveWorkflowPayload();");
+  assert.ok(storeAt >= 0 && renderAt >= 0 && payloadAt >= 0, "all three steps must be present");
+  assert.ok(renderAt > storeAt, "the re-render must follow the refetch that replaced the rows");
+  assert.ok(renderAt < payloadAt, "and precede building the shortlist, so screen and payload agree");
+  assert.match(body, /else rerenderCurrentDashboard\(\);/);
+
+  // The shortlist is still taken from the same rows the table renders.
+  assert.match(app, /const shortlistTokenIds = portfolioCandidateRows\("live"\)/);
+
+  // And the count actually submitted is reported, so the run log can be checked against
+  // it rather than taken on trust.
+  assert.match(app, /"Shortlist submitted"/);
+  assert.match(app, /live_execution_candidate_token_ids \|\| ""\)\s*\n\s*\.split\(","\)\.filter\(Boolean\)\.length/);
+});
+
 test("queue janitor: a stuck run cannot head-block a concurrency group forever", async () => {
   const { readFile } = await import("node:fs/promises");
   const janitor = await readFile(new URL("../../.github/workflows/trading-queue-janitor.yml", import.meta.url), "utf8");

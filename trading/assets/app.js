@@ -4147,6 +4147,14 @@ async function freshLiveWorkflowPayload() {
   ]);
   storeScrapedMarketState(scrapedState);
   state.liveState = liveState;
+  // The refetch above replaces the rows the shortlist is built from, so without
+  // re-rendering here the table keeps showing the previous catalogue while the run
+  // evaluates the newly fetched one -- and the run log then lists markets the user never
+  // saw. Short-dated sports and esports markets turn over within minutes, so the two
+  // drift apart easily. Re-render first, so what is on screen is what was submitted,
+  // which is the guarantee this function's own comment promises.
+  if (state.page === "opportunities") renderBotEvaluations();
+  else rerenderCurrentDashboard();
   const payload = liveWorkflowPayload();
   if (!payload.live_execution_candidate_token_ids) {
     throw new Error("No current live execution candidates are available. Refresh the shortlist before starting a live order run.");
@@ -4200,6 +4208,18 @@ async function triggerOneTimeExecution(target) {
   try {
     await savePortfolioConfigNow();
     const workflowPayload = live ? await freshLiveWorkflowPayload() : null;
+    if (live) {
+      // Name the shortlist that was actually submitted, so the run log can be checked
+      // against it instead of taken on trust.
+      const submitted = String(workflowPayload.live_execution_candidate_token_ids || "")
+        .split(",").filter(Boolean).length;
+      steps = addExecutionStep(
+        steps,
+        "Shortlist submitted",
+        `${submitted} candidate${submitted === 1 ? "" : "s"} from the refreshed list on screen were sent for live verification.`,
+        "done",
+      );
+    }
     const response = await fetch(appPath("api.php?action=workflow"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
