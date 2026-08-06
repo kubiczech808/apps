@@ -548,6 +548,11 @@ function isAiResearchAdminEmail(string $email): bool
 
 date_default_timezone_set('Europe/Prague');
 
+// Sessiony patri do databaze, ne do /tmp. Tohle musi byt driv, nez se cokoli dotkne
+// session: kdyz je session.auto_start zapnuty, PHP uz soubor /tmp/sess_... zalozilo
+// jeste pred nasim kodem a pak by se DB handler vubec nepouzil.
+discardFileBackedSession();
+
 require __DIR__ . '/src/Database.php';
 require __DIR__ . '/src/SmtpMailer.php';
 
@@ -731,6 +736,12 @@ if (isset($_GET['cron'])) {
     if (isset($_GET['ai_research'])) {
         echo runCronAiResearch($pdo, $config);
         exit;
+    }
+    // Uklid souborovych sessionu bezi pri kazdem cronu v male davce. Startovni udrzba
+    // se spousti zridka, takze /tmp se drive nevyprazdnil vubec.
+    $removedSessions = cleanupLegacySessionFiles(200);
+    if ($removedSessions > 0) {
+        echo 'Session soubory smazane: ' . $removedSessions . "\n";
     }
     echo sendBatch($pdo, $config);
     echo "\n" . syncImapReplies($pdo, $config);
@@ -8588,6 +8599,34 @@ function isTrackingEndpoint(): bool
     return isset($_GET['open']) || (isset($_GET['click']) && isset($_GET['u']));
 }
 
+/**
+ * Session zalozena PHP nad souborovym ukladanim se zahodi. Soubor se smaze, session
+ * zavre a dal uz se pouzije jen DatabaseSessionHandler - v /tmp tak nic nezustava.
+ * Vraci true, kdyz opravdu neco zahodila (pro logovani a testy).
+ */
+function discardFileBackedSession(): bool
+{
+    $discarded = false;
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        // Aktivni session vznikla mimo nas kod (auto_start), takze bezi na souborech.
+        $file = rtrim((string)ini_get('session.save_path'), '/') . '/sess_' . session_id();
+        @session_destroy();
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            @session_write_close();
+        }
+        if (is_file($file)) {
+            @unlink($file);
+        }
+        $discarded = true;
+    }
+    // Az po zavreni session: dokud session bezi, PHP zmenu save_handleru odmitne,
+    // takze poradi tady rozhoduje o tom, jestli se dal budou zakladat soubory.
+    if (strtolower((string)ini_get('session.save_handler')) !== 'user') {
+        @ini_set('session.save_handler', 'user');
+    }
+    return $discarded;
+}
+
 function shouldStartHttpSession(): bool
 {
     return !isset($_GET['cron'])
@@ -8613,6 +8652,8 @@ function startDatabaseBackedSession(PDO $pdo): void
     // vyprsela tyden po prihlaseni bez ohledu na to, jak dlouho se aplikace pouziva.
     ini_set('session.lazy_write', '0');
     session_set_cookie_params(['lifetime' => $lifetime] + appSessionCookieBaseParams());
+    // Zadne soubory: ukladani jde vyhradne pres nas handler do tabulky app_sessions.
+    @ini_set('session.save_handler', 'user');
     session_set_save_handler(new DatabaseSessionHandler($pdo, $lifetime), true);
     session_start();
     // Cookie s pevnou expiraci by po tydnu vyprsela i aktivnimu uzivateli. PHP ji
@@ -10239,24 +10280,40 @@ function cleanupOrphanImportStorageFiles(PDO $pdo, int $limit = 500): int
     return $removed;
 }
 
+/**
+ * Uklid souborovych sessionu. Drive se hledalo jen v adresari aplikace, takze
+ * /tmp/sess_... tam zustavalo navzdy - soubory pritom PHP zaklada prave v save_path.
+ */
 function cleanupLegacySessionFiles(int $limit = 1000): int
 {
-    $directories = [
+    $directories = array_values(array_unique(array_filter([
         __DIR__,
         __DIR__ . '/storage',
         __DIR__ . '/storage/sessions',
-    ];
+        rtrim((string)ini_get('session.save_path'), '/'),
+        sys_get_temp_dir(),
+    ], static fn(string $dir): bool => $dir !== '')));
     $removed = 0;
     $threshold = time() - 600;
     foreach ($directories as $directory) {
         if ($removed >= $limit || !is_dir($directory)) {
             continue;
         }
-        foreach (new DirectoryIterator($directory) as $file) {
+        try {
+            $iterator = new DirectoryIterator($directory);
+        } catch (Throwable $e) {
+            // Sdilene /tmp nemusi byt citelne; to neni duvod shodit request.
+            continue;
+        }
+        foreach ($iterator as $file) {
             if ($removed >= $limit) {
                 break;
             }
-            if (!$file->isFile() || !str_starts_with($file->getFilename(), 'sess_') || $file->getMTime() > $threshold) {
+            try {
+                if (!$file->isFile() || !str_starts_with($file->getFilename(), 'sess_') || $file->getMTime() > $threshold) {
+                    continue;
+                }
+            } catch (Throwable $e) {
                 continue;
             }
             if (@unlink($file->getPathname())) {
