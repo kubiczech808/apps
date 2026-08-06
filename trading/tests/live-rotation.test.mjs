@@ -623,6 +623,46 @@ test("live revalidation: a market Gamma no longer lists is closed out, not re-fe
   assert.match(workflow, /item\["acceptingOrders"\] = False/);
 });
 
+test("rotation exit: the sell is posted as a taker order, which createAndPostOrder cannot do", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // The reported failure -- "rotation's sell of the existing position does not work".
+  // buildRotationExitOrder asks for FAK/forceTaker, but the submit path called
+  // createAndPostOrder(..., OrderType.FAK), and that method accepts only GTC or GTD. The
+  // FAK never took effect, so the exit was posted as a RESTING limit sell: when the book
+  // moved off its price it sat there unfilled, reserving the position's shares, and the
+  // rotation could never complete. That is the 5.5 shares parked at 0.25 on a position
+  // entered at 0.93.
+  // Comment lines are stripped first: this file explains the bug in prose, and the
+  // explanation must not itself trip the check.
+  const code = source.split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
+  assert.ok(!/createAndPostOrder\([^)]*OrderType\.FAK/s.test(code),
+    "createAndPostOrder cannot post FAK; a taker sell must not go through it");
+  const submit = source.slice(source.indexOf("async function submitOrder(order)"));
+  const body = submit.slice(0, submit.indexOf("\nasync function submitOrderWithMakerPrecisionRecovery"));
+  const takerBranch = body.slice(body.indexOf("if (side === Side.SELL && forceTaker)"));
+  assert.match(takerBranch, /await client\.createOrder\(/,
+    "the exit still needs the normal V2 limit-order signature for the POLY_1271 wrapper");
+  assert.match(takerBranch, /client\.postOrder\(signedExit, OrderType\.FAK, false\)/,
+    "postOrder is the call that actually accepts FAK");
+
+  // Pin this against the client's own declared constraint, so the next refactor cannot
+  // quietly reintroduce a resting sell. Skipped when dependencies are not installed.
+  let types = null;
+  try {
+    types = await readFile(new URL("../node_modules/@polymarket/clob-client-v2/dist/client.d.ts", import.meta.url), "utf8");
+  } catch {
+    types = null;
+  }
+  if (types) {
+    assert.match(types, /createAndPostOrder<T extends OrderType\.GTC \| OrderType\.GTD/,
+      "if this widens to allow FAK, the comment in submitOrder should be revisited");
+    assert.match(types, /postOrder<T extends OrderType\b/,
+      "postOrder must remain the unconstrained one");
+  }
+});
+
 test("rotation exit: a sell that never filled is re-closed, not waited on forever", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");

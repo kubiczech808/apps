@@ -2267,12 +2267,21 @@ async function submitOrder(order) {
   };
   const side = String(order.side || "BUY").toUpperCase() === "SELL" ? Side.SELL : Side.BUY;
   const forceTaker = Boolean(order.forceTaker) || String(order.orderType || "").toUpperCase() === "FAK";
-  // A rotation exit must consume the best bid immediately, but it still needs
-  // the normal V2 limit-order signature. `createMarketOrder` has a separate
-  // payload builder; using the standard FAK path keeps the POLY_1271 wrapper
-  // identical to the order shape verified by the CLOB.
+  // A rotation exit must consume the best bid immediately, but it still needs the normal
+  // V2 limit-order signature (`createMarketOrder` has a separate payload builder, and the
+  // POLY_1271 wrapper has to match the order shape the CLOB verified).
+  //
+  // This used to call createAndPostOrder(..., OrderType.FAK). That method only accepts
+  // GTC or GTD -- its own type says `T extends OrderType.GTC | OrderType.GTD` -- so the
+  // FAK never took effect and the exit was posted as a RESTING limit sell. When the book
+  // moved off that price the sell simply sat there unfilled, reserving the position's
+  // shares, and rotation could never complete: exactly the sell of 5.5 shares parked at
+  // 0.25 on a position entered at 0.93.
+  //
+  // createOrder gives the same limit-order signature, and postOrder does accept FAK
+  // (`T extends OrderType`), so signing and taker semantics are both correct here.
   if (side === Side.SELL && forceTaker) {
-    return client.createAndPostOrder(
+    const signedExit = await client.createOrder(
       {
         tokenID: order.tokenId,
         price: order.orderPrice,
@@ -2280,9 +2289,8 @@ async function submitOrder(order) {
         side,
       },
       options,
-      OrderType.FAK,
-      false,
     );
+    return client.postOrder(signedExit, OrderType.FAK, false);
   }
   if (!USE_LIMIT_ORDERS || forceTaker) {
     const marketOrder = await client.createMarketOrder(
