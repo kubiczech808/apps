@@ -447,6 +447,48 @@ test("fixture: normalizing the fixture is a no-op for its aggregates", async () 
   }
 });
 
+test("paper cadence: deployable capital brings the execution pass forward", () => {
+  // Only a full pass executes a portfolio, so capital that became free right after one
+  // sat idle for the rest of the 55-minute cadence even though it had somewhere to go.
+  const at = (minutesAgoValue) => new Date(Date.now() - minutesAgoValue * 60000).toISOString();
+  const withCapital = (free, stake) => ({
+    paperPortfolios: { conservative: { portfolio: { freeCapitalUsdc: free, maxStakeUsdc: stake } } },
+  });
+  const stage = (free, stake, lastFullMinutes) => bot.resolveScheduledCadence({
+    ...withCapital(free, stake),
+    cadence: { lastFullAt: at(lastFullMinutes), lastReportAt: at(1) },
+  });
+
+  // Fundable capital forces the pass on the next scheduled tick.
+  const forced = stage(5, 5, 12);
+  assert.equal(forced.stage, "full");
+  assert.equal(forced.broughtForwardByCapital, true);
+  assert.deepEqual(forced.capitalReadyPortfolios, ["conservative"]);
+
+  // But not immediately after a pass: otherwise a portfolio that stays funded because
+  // nothing is eligible turns every tick into the expensive stage.
+  const tooSoon = stage(5, 5, 4);
+  assert.equal(tooSoon.stage, "scan");
+  assert.ok(!tooSoon.broughtForwardByCapital);
+
+  // Capital short of a whole stake must not force anything: executePortfolio would report
+  // insufficient capital and the pass would buy nothing.
+  assert.equal(stage(2, 5, 12).stage, "scan");
+  assert.equal(stage(4.99, 5, 12).stage, "scan");
+
+  // The normal cadence still fires on its own, and is not mislabelled as capital-driven.
+  const normal = stage(0, 5, 60);
+  assert.equal(normal.stage, "full");
+  assert.ok(!normal.broughtForwardByCapital);
+
+  // The predicate itself, including the degenerate stake.
+  assert.deepEqual(bot.portfoliosWithDeployableCapital(withCapital(5, 5)), ["conservative"]);
+  assert.deepEqual(bot.portfoliosWithDeployableCapital(withCapital(4.99, 5)), []);
+  assert.deepEqual(bot.portfoliosWithDeployableCapital(withCapital(50, 0)), [],
+    "a zero stake is not something to deploy into");
+  assert.deepEqual(bot.portfoliosWithDeployableCapital({}), []);
+});
+
 test("live sync: an open dashboard cannot dispatch a workflow every 30 seconds", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");

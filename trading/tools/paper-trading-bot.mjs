@@ -220,6 +220,13 @@ const COMPACT_ONLY = envBool("PAPER_COMPACT_ONLY", false);
 const ALLOW_SEED_BOOTSTRAP = envBool("PAPER_ALLOW_SEED_BOOTSTRAP", false);
 const SCHEDULED_CADENCE = envBool("PAPER_SCHEDULED_CADENCE", false);
 const FULL_CADENCE_MINUTES = envNumber("PAPER_FULL_CADENCE_MINUTES", 55);
+// How soon after the last full pass a portfolio holding deployable capital may force the
+// next one. Scheduled ticks arrive every ten minutes, so this brings execution forward to
+// the next tick while still preventing every tick from becoming a full pass.
+const IDLE_CAPITAL_FULL_PASS_MIN_MINUTES = Math.max(
+  0,
+  envNumber("PAPER_IDLE_CAPITAL_FULL_PASS_MIN_MINUTES", 10),
+);
 const REPORT_CADENCE_MINUTES = envNumber("PAPER_REPORT_CADENCE_MINUTES", 55);
 // Effective modes. A scheduled run overrides these from the stored cadence; a
 // manual dispatch keeps exactly the mode it asked for.
@@ -1905,17 +1912,57 @@ function markCadenceStage(state, stage) {
 
 // Decide what a scheduled tick should do. Overdue portfolio execution always wins
 // over a report, and a report wins over another catalogue-only scan.
+// Which paper portfolios are holding capital they could actually deploy right now.
+//
+// The numbers are the ones the previous run published, which is exactly the signal
+// wanted: capital that has been sitting idle since then. A whole stake has to be fundable
+// -- below that, executePortfolio reports insufficient capital and a forced pass buys
+// nothing, so it would only cost work.
+function portfoliosWithDeployableCapital(state) {
+  const portfolios = state?.paperPortfolios && typeof state.paperPortfolios === "object"
+    ? state.paperPortfolios
+    : {};
+  const ready = [];
+  for (const strategy of Object.values(PAPER_STRATEGIES)) {
+    const portfolio = portfolios[strategy.id]?.portfolio;
+    if (!portfolio) continue;
+    const free = Number(portfolio.freeCapitalUsdc);
+    const stake = Number(portfolio.maxStakeUsdc);
+    if (Number.isFinite(free) && Number.isFinite(stake) && stake > 0 && free + 0.000001 >= stake) {
+      ready.push(strategy.id);
+    }
+  }
+  return ready;
+}
+
 function resolveScheduledCadence(state) {
   const cadence = normalizeCadence(state.cadence);
   const fullAgeMinutes = minutesSinceIso(cadence.lastFullAt);
   if (fullAgeMinutes >= FULL_CADENCE_MINUTES) {
     return { stage: "full", scanOnly: false, reportOnly: false, fullAgeMinutes };
   }
+  // Only a full pass executes a portfolio, so a portfolio holding a fundable stake was
+  // left idle for the rest of the cadence -- up to FULL_CADENCE_MINUTES of doing nothing
+  // with capital that had somewhere to go. Free capital now brings the pass forward.
+  // The floor keeps consecutive ticks from each running a full pass: without it, a
+  // portfolio that stays funded (no eligible candidate to spend it on) would turn every
+  // scheduled tick into the expensive stage.
+  const capitalReadyPortfolios = portfoliosWithDeployableCapital(state);
+  if (capitalReadyPortfolios.length && fullAgeMinutes >= IDLE_CAPITAL_FULL_PASS_MIN_MINUTES) {
+    return {
+      stage: "full",
+      scanOnly: false,
+      reportOnly: false,
+      fullAgeMinutes,
+      capitalReadyPortfolios,
+      broughtForwardByCapital: true,
+    };
+  }
   const reportAgeMinutes = minutesSinceIso(cadence.lastReportAt);
   if (reportAgeMinutes >= REPORT_CADENCE_MINUTES) {
-    return { stage: "report", scanOnly: false, reportOnly: true, fullAgeMinutes, reportAgeMinutes };
+    return { stage: "report", scanOnly: false, reportOnly: true, fullAgeMinutes, reportAgeMinutes, capitalReadyPortfolios };
   }
-  return { stage: "scan", scanOnly: true, reportOnly: false, fullAgeMinutes, reportAgeMinutes };
+  return { stage: "scan", scanOnly: true, reportOnly: false, fullAgeMinutes, reportAgeMinutes, capitalReadyPortfolios };
 }
 
 function mergeStates(primary, secondary) {
@@ -7568,12 +7615,19 @@ async function run() {
     console.log(JSON.stringify({
       action: "SCHEDULED_CADENCE",
       resolvedStage: cadence.stage,
-      reason: `scheduled tick resolved to ${cadence.stage} from the stored cadence instead of the cron expression`,
+      reason: cadence.broughtForwardByCapital
+        ? `scheduled tick resolved to full because ${cadence.capitalReadyPortfolios.join(", ")} can fund a trade now, ahead of the ${FULL_CADENCE_MINUTES}-minute cadence`
+        : `scheduled tick resolved to ${cadence.stage} from the stored cadence instead of the cron expression`,
       lastFullAt: normalizeCadence(state.cadence).lastFullAt,
       lastReportAt: normalizeCadence(state.cadence).lastReportAt,
       fullAgeMinutes: Number.isFinite(cadence.fullAgeMinutes) ? Number(cadence.fullAgeMinutes.toFixed(1)) : null,
       fullCadenceMinutes: FULL_CADENCE_MINUTES,
       reportCadenceMinutes: REPORT_CADENCE_MINUTES,
+      // Which portfolios are holding a fundable stake, so an idle one is visible even on a
+      // tick that did not bring the pass forward.
+      capitalReadyPortfolios: cadence.capitalReadyPortfolios || [],
+      broughtForwardByCapital: Boolean(cadence.broughtForwardByCapital),
+      idleCapitalFullPassMinMinutes: IDLE_CAPITAL_FULL_PASS_MIN_MINUTES,
     }));
   }
   const priorScanRunIds = new Set((state.marketScanHistory || [])
@@ -7939,6 +7993,7 @@ export {
   pnlPercent,
   readState,
   resolveScheduledCadence,
+  portfoliosWithDeployableCapital,
   riskProfile,
   simulateMarketBuy,
   splitStateIntoSegments,
