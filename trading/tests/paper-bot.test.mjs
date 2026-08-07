@@ -2603,3 +2603,40 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
   // Tick rounding must not lose a bid by a hundredth.
   assert.equal(belongs(true, [])({ tokenId: "T4", price: 0.5099 }), true);
 });
+
+test("market scan: a manual scan finishes on the server, whatever the tab does", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: a manual scan sometimes ends in an error, or seems to break when the
+  // page is left. The scan itself runs on the runner and finishes regardless -- only
+  // the waiting happens in the browser, and the waiting had three faults.
+  const wait = app.slice(app.indexOf("async function waitForScrapedScanWorkflow"));
+  const body = wait.slice(0, wait.indexOf("\n}"));
+
+  // 1. It gave up after 64 polls 3s apart -- about three minutes, shorter than a
+  //    large scan -- and the caller turned that into an error.
+  assert.match(body, /budgetMs = 25 \* 60 \* 1000/);
+  assert.match(body, /while \(Date\.now\(\) < deadline\)/,
+    "the budget must be wall-clock, not a poll count, or a throttled tab spends it on no real time");
+  assert.ok(!/attempt < 64/.test(body));
+
+  // 2. One failed status check threw out of the loop and reported an error for a
+  //    scan that was running fine.
+  assert.match(body, /\} catch \{/);
+  assert.match(body, /consecutiveFailures \+= 1;/);
+  assert.match(body, /still waiting/);
+
+  // 3. A hidden tab throttles timers to about one per minute, so a poll scheduled
+  //    before the switch idles long past the work finishing.
+  assert.match(body, /await sleepUntilVisible\(/);
+  assert.match(app, /function sleepUntilVisible\(ms\)/);
+  assert.match(app, /document\.addEventListener\("visibilitychange", onVisible\);/);
+  assert.match(app, /if \(document\.visibilityState === "visible"\) finish\(\);/);
+  // The listener must be removed, or every wait leaks one.
+  assert.match(app, /document\.removeEventListener\("visibilitychange", onVisible\);/);
+
+  // Running is not failing: the caller waits for publication instead of erroring.
+  assert.match(app, /Scan is still running on the server; its results will appear when it publishes\./);
+  assert.ok(!/throw new Error\("Scan is still queued in the background/.test(app));
+});

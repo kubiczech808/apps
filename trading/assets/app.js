@@ -3480,6 +3480,27 @@ function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+// A hidden tab has its timers throttled to roughly one per minute, so a poll
+// scheduled before the switch can sit idle long after the work finished. Waking on
+// the return to the tab makes the first thing the user sees the current state
+// rather than a stale one.
+function sleepUntilVisible(ms) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      resolve();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") finish();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.setTimeout(finish, ms);
+  });
+}
+
 function runMatchesStart(run, startedAt) {
   const created = Date.parse(run?.createdAt || "");
   const start = Date.parse(startedAt || "");
@@ -4485,15 +4506,33 @@ async function waitForScrapedRefreshWorkflow(startedAt) {
   return latest;
 }
 
-async function waitForScrapedScanWorkflow(startedAt) {
+// The scan runs on the runner, so it finishes whether or not this page is open.
+// Only the waiting happens here, and it used to give up in about three minutes
+// (64 attempts, 3s apart) -- shorter than a large scan -- and abort the whole run on
+// a single failed poll. Both reported an error for a scan that was running fine.
+//
+// The budget is wall-clock rather than a poll count, because a backgrounded tab has
+// its timers throttled to roughly one per minute: counting attempts spent the budget
+// on far less real time exactly when the user had switched away.
+async function waitForScrapedScanWorkflow(startedAt, { budgetMs = 25 * 60 * 1000 } = {}) {
+  const deadline = Date.now() + budgetMs;
   let latest = null;
-  for (let attempt = 0; attempt < 64; attempt += 1) {
-    const status = await fetchApiJson(`api.php?action=workflow-status&target=paper-scan&since=${encodeURIComponent(startedAt)}`);
-    latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || null;
-    if (latest?.status === "completed") return latest;
-    state.scrapedScanStatus = latest ? `Scan ${workflowStatusText(latest)}` : "Scan queued...";
+  let consecutiveFailures = 0;
+  while (Date.now() < deadline) {
+    try {
+      const status = await fetchApiJson(`api.php?action=workflow-status&target=paper-scan&since=${encodeURIComponent(startedAt)}`);
+      latest = (status.runs || []).find((run) => runMatchesStart(run, startedAt)) || latest;
+      consecutiveFailures = 0;
+      if (latest?.status === "completed") return latest;
+      state.scrapedScanStatus = latest ? `Scan ${workflowStatusText(latest)}` : "Scan queued...";
+    } catch {
+      // A poll that fails says nothing about the run. Keep waiting; only give up on
+      // the answer, never on the scan.
+      consecutiveFailures += 1;
+      state.scrapedScanStatus = `Scan running; status check failed ${consecutiveFailures}x, still waiting...`;
+    }
     renderScrapedScanControls();
-    await sleep(3000);
+    await sleepUntilVisible(consecutiveFailures > 3 ? 15000 : 5000);
   }
   return latest;
 }
@@ -4653,7 +4692,16 @@ async function triggerOneTimeMarketScan() {
       workflow = await waitForScrapedScanWorkflow(startedAt);
     }
     if (!workflow || workflow.status !== "completed") {
-      throw new Error("Scan is still queued in the background. Try again in a moment.");
+      // Still running is not a failure. The runner will finish and publish on its
+      // own, so say so and fall through to the publication check rather than
+      // reporting an error for a scan that is working.
+      state.scrapedScanStatus = "Scan is still running on the server; its results will appear when it publishes.";
+      renderScrapedScanControls();
+      const { state: pending, confirmed: pendingConfirmed } = await waitForScrapedScanPublication(baseline);
+      if (pendingConfirmed) storeScrapedMarketState(pending, "scraped");
+      if (state.page === "opportunities") renderBotEvaluations();
+      else rerenderCurrentDashboard();
+      return;
     }
     if (workflow.conclusion !== "success") {
       throw new Error(`Scan workflow finished with ${workflow.conclusion || "an unknown error"}.`);
