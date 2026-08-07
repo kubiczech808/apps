@@ -2144,7 +2144,8 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     minSizeOverride: orderSizing.minSizeOverride,
     sizingNote: orderSizing.sizingNote,
     tickSize: tick,
-    negRisk: Boolean(market.negRisk),
+    // Gamma may omit it; unknown must stay unknown so the CLOB gets asked.
+    negRisk: typeof market.negRisk === "boolean" ? market.negRisk : undefined,
     aiProbability: Number.isFinite(aiProbability) ? Number(aiProbability.toFixed(4)) : null,
     marketProbability: Number(marketProbability.toFixed(4)),
     edge: Number(edge.toFixed(4)),
@@ -2282,10 +2283,18 @@ async function submitOrder(order) {
   const signatureType = number(order.signatureType, SIGNATURE_TYPE);
   if (!privateKey || !funderAddress) throw new Error("POLYMARKET_PRIVATE_KEY and POLYMARKET_FUNDER_ADDRESS are required");
   const { client, Side, OrderType } = await authenticatedClobClient({ privateKey, funderAddress, signatureType });
-  const options = {
-    tickSize: String(order.tickSize || "0.01"),
-    negRisk: Boolean(order.negRisk),
-  };
+  // Only pass what is actually known. The CLOB is authoritative for both of these
+  // and the client resolves them per token when the option is absent
+  // (`options?.negRisk ?? getNegRisk(tokenID)`), so a filled-in guess silently
+  // replaces a correct lookup. negRisk in particular selects the exchange contract
+  // used as the EIP-712 verifying contract: signing a neg-risk market against the
+  // plain exchange makes the CLOB recompute a different order hash and reject the
+  // order with "invalid POLY_1271 signature: signature does not match order hash".
+  // That is why `Boolean(order.negRisk)` -- which turns "unknown" into a confident
+  // false -- deadlocked every rotation exit out of a neg-risk market.
+  const options = {};
+  if (order.tickSize != null && order.tickSize !== "") options.tickSize = String(order.tickSize);
+  if (typeof order.negRisk === "boolean") options.negRisk = order.negRisk;
   const side = String(order.side || "BUY").toUpperCase() === "SELL" ? Side.SELL : Side.BUY;
   const forceTaker = Boolean(order.forceTaker) || String(order.orderType || "").toUpperCase() === "FAK";
   // Exiting a position has to actually execute, so this tries the two taker paths the
@@ -2439,7 +2448,14 @@ async function buildRotationExitOrder(position, evaluationByToken, tradingConfig
     orderSize: Number(orderSize.toFixed(4)),
     orderNotionalUsdc: Number((orderPrice * orderSize).toFixed(5)),
     tickSize,
-    negRisk: Boolean(clobMarket?.negRisk ?? source.negRisk),
+    // `/clob-markets/{conditionId}` answers in compact keys -- `mts` for the tick
+    // size, `nr` for neg risk -- so the camelCase read here was always undefined
+    // and every exit fell back to "not neg risk". Leave it undefined when unknown
+    // so submitOrder can let the client ask the CLOB instead of guessing. The
+    // stored evaluation is deliberately not used as a fallback: records written
+    // before this fix carry exactly the wrong `false` we are trying to stop
+    // trusting, and the client's own lookup is both correct and cached.
+    negRisk: typeof clobMarket?.nr === "boolean" ? clobMarket.nr : undefined,
     funderAddress: tradingConfig.funderAddress,
     signatureType: tradingConfig.signatureType,
   };
@@ -2562,6 +2578,16 @@ function orderAttemptSummary(candidate, response = null, extra = {}) {
     responseStatus: response?.status ?? null,
     responseError: orderResponseError(response) || null,
     responseSummary: compactOrderResponse(response) || null,
+    // A rotation exit tries more than one taker path, and "the sell was
+    // rejected" is not diagnosable without knowing which of them the CLOB
+    // refused and why. Keep one short line per path.
+    exitPaths: Array.isArray(response?.exitAttempts)
+      ? response.exitAttempts.map((attempt) => ({
+        path: attempt.path,
+        error: orderResponseError(attempt.response) || null,
+        status: attempt.response?.status ?? null,
+      }))
+      : undefined,
     ...extra,
   };
 }
@@ -2791,7 +2817,8 @@ function openOrderSummary(order, extra = {}) {
       orderSize: number(order.remainingSize ?? order.size),
       orderType: order.orderType || "GTC",
       tickSize: order.tickSize || "0.01",
-      negRisk: Boolean(order.negRisk),
+      // Unknown stays unknown here too, for the same reason as submitOrder.
+      negRisk: typeof order.negRisk === "boolean" ? order.negRisk : undefined,
       question: order.question || order.market || "",
       outcome: order.outcome || "",
     },

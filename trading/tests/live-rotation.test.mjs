@@ -1164,3 +1164,54 @@ test("run digest: a run can be explained from its timestamp alone", async () => 
   const digestAt = live.indexOf("- name: Run digest");
   assert.ok(uploadAt > 0 && digestAt > uploadAt, "the digest must follow the state it reads");
 });
+
+test("rotation exit: an unknown negRisk must not be signed as 'not neg risk'", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // The reported failure, seen again in production at 05:11 on a 'Will Mark Sanford be
+  // the new republican nominee for Senate' exit:
+  //   SELL 5 @ 0.962 -> ROTATION_EXIT_REJECTED
+  //   invalid POLY_1271 signature: signature does not match order hash
+  //
+  // negRisk picks which exchange contract is the EIP-712 verifying contract, so signing
+  // a neg-risk market against the plain exchange yields an order hash the CLOB does not
+  // reproduce. The client resolves it per token when the option is omitted
+  // (`options?.negRisk ?? await this.getNegRisk(tokenID)`), so the only way to get this
+  // wrong is to hand it a confident answer we never actually had -- which
+  // `Boolean(order.negRisk)` did, turning every unknown into false.
+  assert.ok(!/negRisk: Boolean\(/.test(source),
+    "coercing an unknown negRisk to false overrides the client's own correct lookup");
+  assert.match(source, /if \(typeof order\.negRisk === "boolean"\) options\.negRisk = order\.negRisk;/,
+    "the option may only be set when the value is genuinely known");
+
+  // And the reason it was never known on the exit path: /clob-markets/{conditionId}
+  // answers in compact keys -- `mts`, `mos`, `nr` -- so reading `.negRisk` off it was
+  // always undefined. The tick size already used the compact key; neg risk did not.
+  assert.match(source, /typeof clobMarket\?\.nr === "boolean" \? clobMarket\.nr : undefined/,
+    "the exit must read the compact `nr` key the endpoint actually returns");
+  assert.ok(!/clobMarket\?\.negRisk/.test(source),
+    "no camelCase read of a compact-key response may survive");
+  assert.match(source, /number\(clobMarket\?\.mts/, "the tick size stays on its compact key too");
+
+  // Both exit paths take the same options object, which is why both attempts failed
+  // identically and the position stayed stranded.
+  const submit = source.slice(source.indexOf("async function submitOrder"));
+  const exitBlock = submit.slice(0, submit.indexOf("if (!USE_LIMIT_ORDERS || forceTaker)"));
+  for (const builder of ["createOrder", "createMarketOrder"]) {
+    assert.ok(exitBlock.includes(builder), `the exit must still try ${builder}`);
+  }
+});
+
+test("rotation exit: a refused sell reports which taker path the CLOB refused", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const workflow = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+
+  // The exit tries two taker paths but persisted a single attempt record, so the digest
+  // could only ever show one error and "the sell was rejected" stayed undiagnosable.
+  assert.match(source, /exitPaths: Array\.isArray\(response\?\.exitAttempts\)/);
+  assert.match(source, /path: attempt\.path/);
+  assert.match(workflow, /for path in \(attempt\.get\("exitPaths"\) or \[\]\)/,
+    "the digest must print every path that was tried");
+});

@@ -536,6 +536,8 @@ jobs:
           for attempt in (state.get("attempts") or [])[:4]:
               print(f"attempt     : {attempt.get('side')} {attempt.get('orderSize')} @ {attempt.get('orderPrice')} "
                     f"-> {attempt.get('action')} {attempt.get('responseError') or ''}")
+              for path in (attempt.get("exitPaths") or []):
+                  print(f"      via {path.get('path')}: {path.get('error') or path.get('status') or 'accepted'}")
           print("=== END RUN DIGEST ===")
           PY
 

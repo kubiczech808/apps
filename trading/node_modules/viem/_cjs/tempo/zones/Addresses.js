@@ -1,0 +1,17 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.portal = exports.messenger = void 0;
+const tempoModerato_js_1 = require("../../chains/definitions/tempoModerato.js");
+exports.messenger = {
+    [tempoModerato_js_1.tempoModerato.id]: {
+        1: '0x254356112cCf6f32fAd84F16CC5E0A0cCA17Beb7',
+    },
+};
+exports.portal = {
+    [tempoModerato_js_1.tempoModerato.id]: {
+        1: '0x59831A17340EE14FE136d751EfbeA8b630470fD2',
+        6: '0x7069DeC4E64Fd07334A0933eDe836C17259c9B23',
+        7: '0x3F5296303400B56271b476F5A0B9cBF74350D6Ac',
+    },
+};
+//# sourceMappingURL=Addresses.js.map
