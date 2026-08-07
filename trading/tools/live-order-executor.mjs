@@ -2340,7 +2340,7 @@ function fixedEntryOrder(row, { price = FIXED_ENTRY_PRICE, stakeUsdc = FIXED_ENT
   };
 }
 
-async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash }) {
+async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash, evaluationByToken = new Map() }) {
   const restingTokenIds = new Set((Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
     .filter((order) => !String(order.side || "").toUpperCase().includes("SELL"))
     .map((order) => String(order.tokenId || order.assetId || "")));
@@ -3510,7 +3510,7 @@ async function main() {
   }
 
   if (FIXED_ENTRY_STRATEGY) {
-    await runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash });
+    await runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash, evaluationByToken });
     return;
   }
 

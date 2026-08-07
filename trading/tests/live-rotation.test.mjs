@@ -1509,3 +1509,35 @@ test("5050: at most one bid per event, enforced before the orders exist", () => 
   assert.match(src, /const cancelledSiblings = \[\];/);
   assert.match(src, /withdrew \$\{cancelledSiblings\.length\} resting bid\(s\) on events that already opened/);
 });
+
+test("5050: the batch is called with everything its signature requires", () => {
+  // The run died with "evaluationByToken is not defined": the batch used it for the
+  // risk checks but the call site never passed it, and the parameter had no default.
+  // node --check parses, it does not resolve identifiers, so it compiled clean and
+  // failed on the runner mid-run -- after the scan, before any bid.
+  //
+  // Comparing the destructured signature against the call site catches exactly that:
+  // a parameter that is read but never supplied.
+  const src = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const signature = /async function runFixedEntryBatch\(\{([^}]*)\}\)/.exec(src);
+  assert.ok(signature, "the batch signature must stay destructured for this check to hold");
+  const call = /await runFixedEntryBatch\(\{([^}]*)\}\)/.exec(src);
+  assert.ok(call, "the call site must be found");
+
+  const names = (text) => text.split(",").map((part) => part.split("=")[0].trim()).filter(Boolean);
+  const declared = names(signature[1]);
+  const passed = new Set(names(call[1]));
+  // A parameter with a default is optional; one without must be supplied.
+  const required = signature[1].split(",").filter((part) => !part.includes("=")).map((part) => part.trim()).filter(Boolean);
+
+  for (const name of required) {
+    assert.ok(passed.has(name), `runFixedEntryBatch reads ${name} but the call site does not pass it`);
+  }
+  // And nothing is passed that the batch would silently ignore.
+  for (const name of passed) {
+    assert.ok(declared.includes(name), `the call site passes ${name}, which the signature does not accept`);
+  }
+  // The parameter this actually failed on.
+  assert.ok(declared.includes("evaluationByToken"));
+  assert.ok(passed.has("evaluationByToken"));
+});
