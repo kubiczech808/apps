@@ -2346,6 +2346,19 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
     .map((order) => String(order.tokenId || order.assetId || "")));
   const heldTokenIds = new Set(openPositionsForRotation(liveState)
     .map((position) => String(position.tokenId || position.assetId || "")));
+  const positionTokenIds = heldTokenIds;
+
+  // Diversification has to be enforced before the orders exist, not after they
+  // fill. Resting bids fill asynchronously on Polymarket's book -- several sub-markets
+  // of one match can be matched in the same instant -- and this process only ever
+  // observes fills by polling, minutes apart. Cancelling siblings after the fact is
+  // therefore a cleanup, never a guarantee: by the time a fill is visible, the others
+  // may already have filled too. Resting at most one bid per event is a guarantee,
+  // because an event with a single order cannot open two positions.
+  const held = heldRiskItems(liveState, evaluationByToken);
+  const claimedGroupKeys = new Set();
+  const eventKeysOf = (row) => (Array.isArray(row?.riskGroupKeys) ? row.riskGroupKeys : [])
+    .filter((key) => String(key).startsWith("event:") || String(key).startsWith("match:"));
 
   const skipped = [];
   const pool = [];
@@ -2379,11 +2392,18 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
       note(`already asks ${facts.currentBestAsk.toFixed(3)}, at or below the entry price`);
       continue;
     }
+    // Already open on this event, from either portfolio.
+    const heldCollision = earlyRiskBlockReason({ ...row.candidate, ...row, tokenId: facts.tokenId }, held);
+    if (heldCollision) {
+      note(heldCollision);
+      continue;
+    }
     const order = fixedEntryOrder(facts);
     if (!order) {
       note("entry price is not valid for this market's tick size");
       continue;
     }
+    order.riskGroupKeys = eventKeysOf(row.candidate || row);
     pool.push(order);
   }
 
@@ -2396,7 +2416,23 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
     const bDays = number(b.daysToResolution, Infinity);
     return aDays - bDays;
   });
-  const targets = pool.slice(0, FIXED_ENTRY_MAX_ORDERS);
+  const diversified = [];
+  for (const order of pool) {
+    const keys = order.riskGroupKeys || [];
+    // No event key means nothing to collide on; such a row is its own event.
+    const collides = keys.some((key) => claimedGroupKeys.has(key));
+    if (collides) {
+      skipped.push({
+        tokenId: order.tokenId,
+        question: order.question,
+        reason: `another bid in this batch already covers this event: ${keys.slice(0, 2).join(", ")}`,
+      });
+      continue;
+    }
+    keys.forEach((key) => claimedGroupKeys.add(key));
+    diversified.push(order);
+  }
+  const targets = diversified.slice(0, FIXED_ENTRY_MAX_ORDERS);
   const attempts = [];
   let accepted = 0;
   let rejectedForFunds = 0;
@@ -2419,9 +2455,29 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
     }));
   }
 
+  // Cleanup, layered on top of the guarantee above. A position may already exist on
+  // an event -- from an earlier batch, or from a fill this run has not polled yet --
+  // while sibling bids are still resting on the book. Those can no longer be
+  // prevented, only withdrawn, so withdraw them.
+  const cancelledSiblings = [];
+  if (!DRY_RUN && hasFlag("confirm-live")) {
+    const heldAfter = heldRiskItems(liveState, evaluationByToken)
+      .filter((item) => positionTokenIds.has(item.tokenId));
+    for (const order of (Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])) {
+      if (String(order.side || "").toUpperCase().includes("SELL")) continue;
+      const tokenId = String(order.tokenId || order.assetId || "");
+      if (!tokenId || positionTokenIds.has(tokenId)) continue;
+      const source = evaluationByToken.get(tokenId) || {};
+      const collision = earlyRiskBlockReason({ ...source, tokenId }, heldAfter);
+      if (!collision) continue;
+      const response = await cancelOrder(order, tradingConfig).catch((error) => ({ error: error?.message || String(error) }));
+      cancelledSiblings.push({ tokenId, question: source.question || order.question || "", reason: collision, response });
+    }
+  }
+
   const action = accepted > 0 ? "SUBMITTED" : (targets.length ? "SKIP" : "NO_CANDIDATES");
   const reason = targets.length
-    ? `fixed-entry batch rested ${accepted} of ${targets.length} bids at ${FIXED_ENTRY_PRICE.toFixed(2)}${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}`
+    ? `fixed-entry batch rested ${accepted} of ${targets.length} bids at ${FIXED_ENTRY_PRICE.toFixed(2)}, one per event from ${pool.length} qualifying${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}${cancelledSiblings.length ? `; withdrew ${cancelledSiblings.length} resting bid(s) on events that already opened` : ""}`
     : `no candidate cleared the ${(MIN_PROBABILITY * 100).toFixed(1)}% bar for a resting bid at ${FIXED_ENTRY_PRICE.toFixed(2)}`;
 
   await emitDecision({
@@ -2435,9 +2491,11 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
       stakePerOrderUsdc: FIXED_ENTRY_STAKE_USDC,
       considered: checked.length,
       qualified: pool.length,
+      diversified: diversified.length,
       targeted: targets.length,
       accepted,
       rejectedForFunds,
+      cancelledSiblings: cancelledSiblings.length,
     },
     account: { cashUsdc: cash, availableCashUsdc: availableCash },
     attempts,

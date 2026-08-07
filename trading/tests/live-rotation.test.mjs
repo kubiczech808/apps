@@ -1,5 +1,6 @@
 // Runs offline: no secrets, no network, no hosting access. Importing the executor
 // does not start a run, so no order can be placed from a test.
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -1460,4 +1461,51 @@ test("5050: a candidate the market-price check gave up on is still biddable", ()
   const rich = { ...thin, tokenId: "42", question: "Live question?", marketProbability: 0.91, currentBestAsk: 0.9 };
   assert.equal(executor.fixedEntryRowFacts(rich).question, "Live question?");
   assert.equal(executor.fixedEntryRowFacts(rich).marketProbability, 0.91);
+});
+
+test("5050: at most one bid per event, enforced before the orders exist", () => {
+  // 5050 bids the whole qualifying set, and a match's sub-markets -- Exact Score
+  // 2-1, 3-0, the spread -- are separate candidates. Left alone it would rest five
+  // bids on one fixture and could open five correlated positions.
+  //
+  // This is enforced at submission rather than by cancelling siblings after a fill,
+  // because cancelling cannot guarantee it: resting bids match asynchronously on
+  // Polymarket's book, several sub-markets of one match can fill in the same
+  // instant, and this process only sees fills by polling minutes apart. By the time
+  // a fill is visible the siblings may already have filled too. One order per event
+  // is a guarantee, because an event carrying a single order cannot open two
+  // positions. Cancellation is kept, but as cleanup for what is already on the book.
+  const src = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const block = /const diversified = \[\];[\s\S]*?const targets = diversified\.slice\(0, FIXED_ENTRY_MAX_ORDERS\);/.exec(src)[0];
+  const run = new Function("pool", "FIXED_ENTRY_MAX_ORDERS", `
+    const claimedGroupKeys=new Set(); const skipped=[];
+    ${block}
+    return {targets, skipped};`);
+
+  const pool = [
+    { tokenId: "a1", riskGroupKeys: ["event:matchA", "match:a"] },
+    { tokenId: "a2", riskGroupKeys: ["event:matchA", "match:a"] },
+    { tokenId: "a3", riskGroupKeys: ["event:matchA"] },
+    { tokenId: "b1", riskGroupKeys: ["event:matchB", "match:b"] },
+    { tokenId: "c1", riskGroupKeys: [] },
+  ];
+  const { targets, skipped } = run(pool, 50);
+
+  assert.deepEqual(targets.map((row) => row.tokenId), ["a1", "b1", "c1"],
+    "one bid per event, and the pool is already in priority order so the best one wins");
+  assert.equal(skipped.length, 2);
+  assert.match(skipped[0].reason, /already covers this event/);
+
+  // A row with no event key collides with nothing and is its own event.
+  assert.ok(targets.some((row) => row.tokenId === "c1"));
+
+  // The cap applies after diversification, so it bounds distinct events rather than
+  // being spent on sub-markets of one fixture.
+  assert.deepEqual(run(pool, 2).targets.map((row) => row.tokenId), ["a1", "b1"]);
+
+  // Events already open block a bid outright, from either portfolio's holdings.
+  assert.match(src, /const heldCollision = earlyRiskBlockReason\(\{ \.\.\.row\.candidate, \.\.\.row, tokenId: facts\.tokenId \}, held\);/);
+  // And the cleanup layer withdraws siblings once an event has opened.
+  assert.match(src, /const cancelledSiblings = \[\];/);
+  assert.match(src, /withdrew \$\{cancelledSiblings\.length\} resting bid\(s\) on events that already opened/);
 });
