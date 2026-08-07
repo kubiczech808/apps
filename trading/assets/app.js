@@ -207,8 +207,8 @@ const els = {
   executionCronRow: document.querySelector("[data-execution-cron-row]"),
   executionCronMinutes: document.querySelector("[data-execution-cron-minutes]"),
   executionCronMinutesLabel: document.querySelector("[data-execution-cron-minutes-label]"),
-  automationEnabled: document.querySelector("[data-automation-enabled]"),
-  automationEnabledLabel: document.querySelector("[data-automation-enabled-label]"),
+  automationToggle: document.querySelector("[data-automation-toggle]"),
+  automationToggleLabel: document.querySelector("[data-automation-toggle-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
@@ -364,12 +364,29 @@ function saveRunLogFilter(value, mode = state.mode) {
 }
 
 function normalizeMode(mode) {
-  if (mode === "live" || mode === "paper-highReward" || mode === "paper-moreProbable" || mode === "paper-conservative") return mode;
+  if (mode === "live" || mode === "live-5050" || mode === "paper-highReward" || mode === "paper-moreProbable" || mode === "paper-conservative") return mode;
   return mode === "paper" ? "paper-conservative" : "paper-conservative";
 }
 
+// 5050 is a live portfolio: same wallet, same positions and orders, so it shares
+// every live view. What differs is its config and the run log it writes, because
+// the two portfolios decide separately.
+const LIVE_MODES = new Set(["live", "live-5050"]);
+
 function isLiveMode() {
-  return state.mode === "live";
+  return LIVE_MODES.has(state.mode);
+}
+
+function isFixedEntryMode(mode = state.mode) {
+  return normalizeMode(mode) === "live-5050";
+}
+
+function liveConfigKeyForMode(mode = state.mode) {
+  return isFixedEntryMode(mode) ? "live5050" : "live";
+}
+
+function liveExecutionStateFile(mode = state.mode) {
+  return isFixedEntryMode(mode) ? "data/live-5050-execution-state.json" : "data/live-execution-state.json";
 }
 
 function paperStrategyIdFromMode(mode = state.mode) {
@@ -441,6 +458,28 @@ function defaultPortfolioConfig() {
       executionTrigger: "cron",
       executionCronMinutes: 0,
       automationEnabled: true,
+      useLimitOrders: true,
+      requireMostProbableOutcome: false,
+      probabilitySource: "polymarket",
+      excludedCandidateTokenIds: [],
+    },
+    // 5050 rests a bid at a fixed point on the 0..1 scale across everything that
+    // clears its probability bar, instead of buying the best candidate at the
+    // market. Most bids never fill; the ones that do were bought far below what
+    // the market thought they were worth.
+    live5050: {
+      minProbability: 0.9,
+      fixedEntryPrice: 0.5,
+      maxOpenOrders: 50,
+      stakePerOrderUsdc: null,
+      maxOrderFraction: 0.05,
+      maxResolutionDays: 30,
+      selectionOrder: "highest_ev_pa_first",
+      minLiquidityUsdc: 100,
+      minNetYield: 0,
+      executionTrigger: "cron",
+      executionCronMinutes: 0,
+      automationEnabled: false,
       useLimitOrders: true,
       requireMostProbableOutcome: false,
       probabilitySource: "polymarket",
@@ -555,10 +594,11 @@ function normalizeOptionalMoney(value) {
 function portfolioConfigForMode(mode = state.mode) {
   const defaults = defaultPortfolioConfig();
   const config = state.portfolioConfig || {};
-  if (normalizeMode(mode) === "live") {
+  if (LIVE_MODES.has(normalizeMode(mode))) {
+    const key = liveConfigKeyForMode(mode);
     return {
-      ...defaults.live,
-      ...(config.live || {}),
+      ...defaults[key],
+      ...(config[key] || {}),
     };
   }
   const strategyId = paperStrategyIdFromMode(mode);
@@ -2862,8 +2902,11 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   // batch" has its own cadence.
   els.executionCronRow?.toggleAttribute("hidden", trigger !== "cron");
   const automationOn = automationIsEnabled(config);
-  if (els.automationEnabled) els.automationEnabled.checked = automationOn;
-  if (els.automationEnabledLabel) els.automationEnabledLabel.textContent = automationOn ? "On" : "Off";
+  if (els.automationToggle) {
+    els.automationToggle.setAttribute("aria-pressed", automationOn ? "true" : "false");
+    els.automationToggle.classList.toggle("is-off", !automationOn);
+  }
+  if (els.automationToggleLabel) els.automationToggleLabel.textContent = automationOn ? "Automatic: on" : "Automatic: off";
   if (els.mostProbableOutcome) {
     els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
     els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLive);
@@ -4613,7 +4656,7 @@ async function loadLiveState(options = {}) {
     const [liveResult, botResult, executionResult] = await Promise.allSettled([
       fetchJson("data/live-state.json"),
       fetchJson("data/paper-state.json", { summary: "dashboard" }),
-      fetchJson("data/live-execution-state.json"),
+      fetchJson(liveExecutionStateFile(options.requestedMode || state.mode)),
     ]);
     if (dashboardLoadIsStale(options) || !isLiveMode()) return;
     if (liveResult.status === "rejected") throw liveResult.reason;
@@ -7931,8 +7974,8 @@ els.executionCronMinutes?.addEventListener("change", () => {
   rerenderCurrentDashboard();
 });
 
-els.automationEnabled?.addEventListener("change", () => {
-  const value = Boolean(els.automationEnabled.checked);
+els.automationToggle?.addEventListener("click", () => {
+  const value = !automationIsEnabled(portfolioConfigForMode(state.mode));
   if (updateParameterDraft({ automationEnabled: value })) return;
   updatePortfolioConfigForMode(state.mode, { automationEnabled: value });
   savePortfolioConfigSoon();

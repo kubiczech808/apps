@@ -2061,3 +2061,50 @@ test("market scan: a run evicted from the queue is retaken, not reported as an e
   assert.match(body, /throw new Error\(`Scan workflow finished with \$\{workflow\.conclusion/,
     "a second cancellation is still reported");
 });
+
+test("5050 tab: the portfolio is a live mode with its own config and run log", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+
+  // 5050 trades the same wallet as the main live portfolio, so it shares every live
+  // view -- positions, orders, account. What must not be shared is the config it is
+  // steered by and the run log it writes, because the two decide separately.
+  assert.match(html, /data-mode-toggle="live-5050"/, "it needs its own tab");
+  assert.match(app, /const LIVE_MODES = new Set\(\["live", "live-5050"\]\);/);
+  assert.match(app, /function isLiveMode\(\) \{\n  return LIVE_MODES\.has\(state\.mode\);\n\}/,
+    "every live view must recognise it, or the tab renders as a paper portfolio");
+  assert.match(app, /isFixedEntryMode\(mode\) \? "live5050" : "live"/, "separate config");
+  assert.match(app, /isFixedEntryMode\(mode\) \? "data\/live-5050-execution-state\.json"/, "separate run log");
+  assert.match(app, /fetchJson\(liveExecutionStateFile\(/, "and the load must actually use it");
+
+  // Its defaults are the strategy: a fixed entry price, many bids, and automation
+  // off until it is deliberately switched on -- this one commits past its capital.
+  assert.match(app, /live5050: \{/);
+  assert.match(app, /fixedEntryPrice: 0\.5,/);
+  assert.match(app, /automationEnabled: false,/);
+});
+
+test("automation: the switch is readable and flippable from the top of the box", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const css = await readFile(new URL("../assets/app.css", import.meta.url), "utf8");
+
+  // Whether a portfolio trades on its own is the first thing worth knowing when its
+  // parameters are open, and turning it off should not mean hunting for a checkbox
+  // among the thresholds.
+  const head = html.slice(html.indexOf('id="parameter-modal-title"'), html.indexOf("parameter-modal-body"));
+  assert.match(head, /data-automation-toggle/, "the control belongs in the box header");
+  assert.match(head, /data-automation-toggle-label/);
+  assert.ok(!/data-automation-enabled/.test(html), "the buried checkbox must be gone, not duplicated");
+
+  // One click flips it, and the state is legible without reading the label.
+  assert.match(app, /els\.automationToggle\?\.addEventListener\("click"/);
+  assert.match(app, /const value = !automationIsEnabled\(portfolioConfigForMode\(state\.mode\)\);/);
+  assert.match(app, /els\.automationToggle\.setAttribute\("aria-pressed"/);
+  assert.match(app, /classList\.toggle\("is-off", !automationOn\)/);
+  assert.match(css, /\.automation-toggle\.is-off/);
+  // A stylesheet change nobody sees is a change that did not happen.
+  assert.match(html, /app\.css\?v=20260807-automation-toggle/);
+});

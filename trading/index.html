@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260801-horizontal-portfolio-tabs">
+  <link rel="stylesheet" href="assets/app.css?v=20260807-automation-toggle">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -62,6 +62,7 @@
               <button class="mode-button" type="button" data-mode-toggle="paper-highReward">Paper - High reward</button>
               <button class="mode-button" type="button" data-mode-toggle="paper-moreProbable">Paper - More probable</button>
               <button class="mode-button" type="button" data-mode-toggle="live">Live</button>
+              <button class="mode-button" type="button" data-mode-toggle="live-5050">5050</button>
             </div>
           </div>
         </div>
@@ -308,7 +309,13 @@
           <p class="eyebrow">Portfolio</p>
           <h2 id="parameter-modal-title">Portfolio parameters</h2>
         </div>
-        <button class="analysis-modal-close" type="button" data-parameter-modal-close aria-label="Close portfolio parameters">x</button>
+        <div class="parameter-modal-head-actions">
+          <button class="automation-toggle" type="button" data-automation-toggle aria-pressed="true" title="Turn automatic execution for this portfolio on or off">
+            <span class="automation-dot" aria-hidden="true"></span>
+            <span data-automation-toggle-label>Automatic: on</span>
+          </button>
+          <button class="analysis-modal-close" type="button" data-parameter-modal-close aria-label="Close portfolio parameters">x</button>
+        </div>
       </div>
       <div class="analysis-modal-body parameter-modal-body">
         <label class="parameter-control">
@@ -367,11 +374,6 @@
             <option value="1440">24 hours</option>
           </select>
           <strong data-execution-cron-minutes-label>Every scheduled poll</strong>
-        </label>
-        <label class="parameter-control order-mode-toggle">
-          <input type="checkbox" data-automation-enabled>
-          <span>Run this portfolio automatically</span>
-          <strong data-automation-enabled-label>On</strong>
         </label>
         <label class="parameter-control order-mode-toggle">
           <input type="checkbox" data-most-probable-outcome>
