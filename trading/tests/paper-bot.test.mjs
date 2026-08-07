@@ -2031,3 +2031,33 @@ test("manual live execution: the server no longer demands a parameter that was r
   assert.ok(!/requires a current execution shortlist/.test(api),
     "and must not refuse a run over a shortlist the dashboard refreshes as part of running");
 });
+
+test("market scan: a run evicted from the queue is retaken, not reported as an error", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const scan = await readFile(new URL("../../.github/workflows/trading-market-scan.yml", import.meta.url), "utf8");
+  const bot2 = await readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8");
+
+  // Reported: a manual "esports" scan showed 'Error: Scan workflow finished with
+  // cancelled.' The run was cancelled 22 seconds after dispatch, having never run.
+  //
+  // The scan shares a concurrency group with the paper bot -- correctly, since both
+  // publish paper-state.json and must never overlap -- and in a non-cancelling group
+  // GitHub keeps one run in progress and one pending, evicting the pending one the
+  // moment a third is queued. So the scan lost its place in the queue; nothing failed
+  // and nothing was scanned.
+  for (const [label, workflow] of [["scan", scan], ["paper bot", bot2]]) {
+    assert.match(workflow, /group: trading-paper-bot/, `${label} must stay serialized against the other`);
+    assert.match(workflow, /cancel-in-progress: false/, `${label} must not cancel a run that is mid-write`);
+  }
+
+  const fn = app.slice(app.indexOf("const dispatchScan = async () =>"));
+  const body = fn.slice(0, fn.indexOf("state.scrapedScanStatus = \"Publishing scan results...\""));
+  assert.match(body, /workflow\?\.status === "completed" && workflow\.conclusion === "cancelled"/,
+    "an eviction must be recognised rather than surfaced as a failure");
+  assert.match(body, /re-queuing/, "and the user must see it was retaken, not that it broke");
+  // Exactly one retry: a genuine cancellation must still surface instead of looping.
+  assert.equal((body.match(/await dispatchScan\(\);/g) || []).length, 2);
+  assert.match(body, /throw new Error\(`Scan workflow finished with \$\{workflow\.conclusion/,
+    "a second cancellation is still reported");
+});

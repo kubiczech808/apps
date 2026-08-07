@@ -4515,8 +4515,7 @@ async function triggerOneTimeMarketScan() {
     // With no snapshot every published scan id counts as new, which is the safe
     // direction: the wait can only end early, never hang on a stale comparison.
   }
-  const startedAt = new Date().toISOString();
-  try {
+  const dispatchScan = async () => {
     await fetchApiJson("api.php?action=workflow", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4527,9 +4526,26 @@ async function triggerOneTimeMarketScan() {
         market_scan_max_days: currentEvaluationDaysFilter(),
       }),
     });
+  };
+  let startedAt = new Date().toISOString();
+  try {
+    await dispatchScan();
     state.scrapedScanStatus = "Scan queued...";
     renderScrapedScanControls();
-    const workflow = await waitForScrapedScanWorkflow(startedAt);
+    let workflow = await waitForScrapedScanWorkflow(startedAt);
+    // The scan shares a concurrency group with the paper bot because both publish
+    // paper-state.json and must never overlap. In that group GitHub keeps one run
+    // in progress and one pending, and evicts the pending one as soon as a third
+    // is queued -- so a manual scan can be cancelled seconds after dispatch without
+    // ever running. Nothing failed and nothing was scanned; the run just lost its
+    // place in the queue, so take it again rather than reporting an error.
+    if (workflow?.status === "completed" && workflow.conclusion === "cancelled") {
+      state.scrapedScanStatus = "Scan was queued behind another job; re-queuing...";
+      renderScrapedScanControls();
+      startedAt = new Date().toISOString();
+      await dispatchScan();
+      workflow = await waitForScrapedScanWorkflow(startedAt);
+    }
     if (!workflow || workflow.status !== "completed") {
       throw new Error("Scan is still queued in the background. Try again in a moment.");
     }
