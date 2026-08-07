@@ -243,6 +243,9 @@ jobs:
           POLYMARKET_DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.live_confirm) || github.event_name == 'schedule' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[live-limit-order-test]'))) && 'false' || 'true' }}
           LIVE_STATE_URL: data/live-state.json
           LIVE_EXECUTION_STATE_URL: data/live-execution-state.json
+          # Tells the executor this pass is the second half of a rotation, so the sell
+          # and the replacement buy are recorded as one run instead of two rows.
+          LIVE_ROTATION_COMPLETION: "true"
         run: |
           if node -e 'const fs = require("fs"); const path = "data/live-execution-state.json"; const state = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : {}; process.exit(state.action === "ROTATION_EXIT_SUBMITTED" ? 0 : 1)'; then
             echo "Rotation exit accepted. Revalidating the synced account for an immediate replacement order."

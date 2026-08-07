@@ -1232,3 +1232,54 @@ test("run digest: a run carries the same timestamp label the dashboard shows", a
   // A missing or malformed timestamp must not take the whole digest down with it.
   assert.match(workflow, /except ValueError:\n\s*return "-"/);
 });
+
+test("rotation log: the sell and its replacement are one run, not two rows", () => {
+  // Reported: the rotation worked, "but the log disappeared from the list", and both
+  // legs were expected in a single entry. A rotation is two executor passes in one
+  // workflow run -- pass 1 sells, pass 2 buys the replacement -- and each pass wrote
+  // its own row. The dashboard dedupes rows by batchLog id, so the sell row lost and
+  // vanished, leaving only the buy.
+  const sellAttempt = { side: "SELL", orderPrice: 0.962, orderSize: 5, action: "ROTATION_EXIT_SUBMITTED" };
+  const buyAttempt = { side: "BUY", orderPrice: 0.85, orderSize: 5, action: "SUBMITTED" };
+  const previousState = {
+    action: "ROTATION_EXIT_SUBMITTED",
+    reason: "rotation exit accepted at the current bid",
+    rotationExit: { tokenId: "sold-token" },
+  };
+  const exitEntry = { id: "live-trade-batch-sell", attempts: [sellAttempt] };
+  const runEntry = { id: "live-trade-batch-buy", attempts: [buyAttempt] };
+  const payload = { action: "SUBMITTED", reason: "live order accepted by Polymarket" };
+
+  const merged = executor.rotationLegMerge({
+    completionRun: true, previousState, exitEntry, runEntry, payload,
+  });
+  assert.ok(merged, "the completion pass must fold the sell into its own run");
+  assert.equal(merged.action, "ROTATED");
+  assert.deepEqual(merged.attempts, [sellAttempt, buyAttempt], "sell first, then buy -- the order they happened in");
+  assert.match(merged.reason, /rotation exit accepted at the current bid/, "the close must stay readable");
+  assert.match(merged.reason, /live order accepted by Polymarket/, "and so must the open");
+  assert.deepEqual(merged.rotationExit, { tokenId: "sold-token" });
+  // The merged row keeps the buy's identity on purpose: the dashboard renders the
+  // top-level state as a row too and dedupes against the log by that id, so adopting
+  // the sell's id would recreate the very row that used to disappear.
+  assert.ok(!("id" in merged), "the merge must not override the entry's identity");
+
+  // Every other run is untouched -- this must not collapse unrelated consecutive runs.
+  assert.equal(executor.rotationLegMerge({
+    completionRun: false, previousState, exitEntry, runEntry, payload,
+  }), null, "a normal run keeps writing a single ordinary row");
+  assert.equal(executor.rotationLegMerge({
+    completionRun: true, previousState: { action: "SKIP" }, exitEntry, runEntry, payload,
+  }), null, "only an accepted rotation exit may be folded in");
+  assert.equal(executor.rotationLegMerge({
+    completionRun: true, previousState, exitEntry: undefined, runEntry, payload,
+  }), null, "with no previous row there is nothing to merge");
+});
+
+test("rotation log: the workflow tells the second pass that it is a rotation", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+  const step = workflow.slice(workflow.indexOf("- name: Complete filled rotation immediately"));
+  assert.match(step.slice(0, 900), /LIVE_ROTATION_COMPLETION: "true"/,
+    "without the flag the replacement pass would write its own row again");
+});

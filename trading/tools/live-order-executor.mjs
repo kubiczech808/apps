@@ -114,6 +114,12 @@ const MIN_ORDER_STAKE_CEILING_USDC = Math.max(0, envNumber("LIVE_MIN_ORDER_STAKE
 const ROTATION_TIE_EPSILON = 0.000001;
 const LIVE_AUTO_ROTATE = String(process.env.LIVE_AUTO_ROTATE ?? "true").toLowerCase() !== "false";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "ORDER_STATUS_LIVE", "LIVE"]);
+// A rotation is two executor passes in one workflow run: the first sells, the
+// second buys the replacement. Set on that second pass so both legs are recorded
+// as the single rotation they are, instead of two rows where the sell is the one
+// that gets dropped.
+const ROTATION_COMPLETION_RUN = String(process.env.LIVE_ROTATION_COMPLETION || "").toLowerCase() === "true";
+const ROTATION_EXIT_ACTIONS = new Set(["ROTATION_EXIT_SUBMITTED", "ROTATION_EXIT_REPRICED", "DRY_RUN_ROTATION_EXIT"]);
 let previousExecutionState = null;
 
 function hasFlag(name) {
@@ -2193,6 +2199,27 @@ function compactLiveRunRecord(batchLog = {}) {
   return rest;
 }
 
+// Closing a position and opening its replacement is one decision, so it belongs in
+// one row. Recording it as two left the sell as a separate entry that shared the
+// buy's identity and lost the dedupe, so the sell simply vanished from the run log
+// -- the opposite of what an audit trail is for.
+//
+// The merged row deliberately keeps THIS pass's id and time. The dashboard also
+// renders the top-level state as a row and dedupes it against the run log by
+// batchLog id, so giving the merged row the sell's id would make it a second,
+// losing row and the sell would disappear exactly as before.
+function rotationLegMerge({ completionRun, previousState, exitEntry, runEntry, payload }) {
+  if (!completionRun || !exitEntry) return null;
+  if (!ROTATION_EXIT_ACTIONS.has(String(previousState?.action || "").toUpperCase())) return null;
+  return {
+    action: "ROTATED",
+    reason: `${previousState.reason || "rotation exit accepted"}; ${payload?.reason || payload?.action || "replacement handled"}`,
+    rotationExit: previousState.rotationExit || exitEntry.rotationExit || null,
+    // Sell first, then buy -- the order they happened in.
+    attempts: [...(exitEntry.attempts || []), ...(runEntry?.attempts || [])],
+  };
+}
+
 async function emitDecision(payload) {
   // Compact entries already stored from before this existed too, so the backlog
   // shrinks on the very next run instead of only stopping further growth and
@@ -2213,9 +2240,21 @@ async function emitDecision(payload) {
     response: payload.response || null,
     attempts: Array.isArray(payload.attempts) ? payload.attempts : [],
   };
-  const nextRunLog = mergeRunLog([runEntry, ...previousRunLog], 160);
+  const rotation = rotationLegMerge({
+    completionRun: ROTATION_COMPLETION_RUN,
+    previousState: previousExecutionState,
+    exitEntry: previousRunLog[0],
+    runEntry,
+    payload,
+  });
+  const mergedEntry = rotation ? { ...runEntry, ...rotation } : runEntry;
+  const tail = rotation ? previousRunLog.slice(1) : previousRunLog;
+  const nextRunLog = mergeRunLog([mergedEntry, ...tail], 160);
   const output = {
     ...payload,
+    // Same decision at the top level, so the digest and the dashboard's "latest run"
+    // row tell the same story as the log entry rather than only the buy half.
+    ...(rotation || {}),
     runLog: nextRunLog,
   };
 
@@ -3795,4 +3834,5 @@ export {
   heldRiskItems,
   earlyRiskBlockReason,
   compactLiveRunRecord,
+  rotationLegMerge,
 };
