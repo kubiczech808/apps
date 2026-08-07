@@ -174,9 +174,10 @@ jobs:
       PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_conservative_require_most_probable || '' }}
       PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_high_reward_require_most_probable || '' }}
       PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_more_probable_require_most_probable || '' }}
-      PAPER_CONSERVATIVE_PROBABILITY_SOURCE: "ai"
-      PAPER_HIGH_REWARD_PROBABILITY_SOURCE: "ai"
-      PAPER_MORE_PROBABLE_PROBABILITY_SOURCE: "ai"
+      # The portfolios rank on Polymarket's own quoted probability; no model is consulted.
+      PAPER_CONSERVATIVE_PROBABILITY_SOURCE: "polymarket"
+      PAPER_HIGH_REWARD_PROBABILITY_SOURCE: "polymarket"
+      PAPER_MORE_PROBABLE_PROBABILITY_SOURCE: "polymarket"
       PAPER_MIN_ANNUAL_RETURN: "0.05"
       PAPER_OPPORTUNITY_MIN_PROBABILITY: "0.60"
       PAPER_OPPORTUNITY_MIN_EDGE: "0.04"
@@ -224,7 +225,8 @@ jobs:
       # Hourly result reconciliation: include stale SCRAPED rows whose stored
       # end date has passed, not only rows already labelled RESOLVED.
       PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT: "300"
-      PAPER_REQUIRE_GEMINI: ${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'after_scan' || inputs.mode == 'repair') && 'false' || 'true' }}
+      # Nothing may wait on a model memo that is never produced.
+      PAPER_REQUIRE_GEMINI: "false"
       PAPER_EXECUTION_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'true' || 'false' }}
       PAPER_COMPACT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'repair' && 'true' || 'false' }}
       PAPER_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'after_scrape' || 'cron' }}
@@ -242,12 +244,8 @@ jobs:
       PAPER_REPORT_CADENCE_MINUTES: "55"
       PAPER_REFRESH_MARKET_SLUG: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' && inputs.paper_strategy_id || '' }}
       PAPER_CONTINUOUS_EVALUATION: "true"
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY_POLYMARKET || secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-3.5-flash
-      GEMINI_SEARCH_GROUNDING: "true"
+      # Model credentials are deliberately not passed: the bot consults no model.
       PAPER_PRIMARY_AI_PROVIDER: gemini
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
     steps:
       - uses: actions/checkout@v4
 

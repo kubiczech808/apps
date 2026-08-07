@@ -21,8 +21,15 @@ function envSelectionOrder(name, fallback = "highest_ev_pa_first") {
   return process.env[name] === "highest_reward_risk_first" ? "highest_reward_risk_first" : fallback;
 }
 
-function envProbabilitySource(name, fallback = "ai") {
-  return process.env[name] === "polymarket" ? "polymarket" : fallback;
+function envProbabilitySource(name, fallback = "polymarket") {
+  // With no model consulted there is no AI probability to rank on, so an "ai" setting --
+  // whether from the workflow or the stored portfolio config on the hosting -- would
+  // leave every candidate with a NaN probability and nothing executable.
+  if (!AI_ANALYSIS_ENABLED) return "polymarket";
+  const value = String(process.env[name] || "").trim().toLowerCase();
+  if (value === "polymarket") return "polymarket";
+  if (value === "ai") return "ai";
+  return fallback;
 }
 
 function envTokenIdSet(name) {
@@ -174,16 +181,22 @@ const MARKET_SCAN_CATEGORY_TAGS = [
   { id: "180", slug: "israel" },
   { id: "303", slug: "china" },
 ];
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+// The portfolios run on Polymarket's own quoted probability; no external model is
+// consulted. This is the single switch that keeps it that way, and it is off unless
+// explicitly turned on: it forces every probability source to polymarket, stops any
+// request being sent to a model provider, and drops the requirement for a stored memo --
+// so a candidate can never sit unexecutable "awaiting grounded AI analysis" again.
+const AI_ANALYSIS_ENABLED = envBool("PAPER_AI_ANALYSIS_ENABLED", false);
+const GEMINI_API_KEY = AI_ANALYSIS_ENABLED ? (process.env.GEMINI_API_KEY || "") : "";
 // Gemini 3.5 Flash is the stable API model. Keeping the model name in one
 // constant also lets a stale quota backoff be scoped correctly.
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const GEMINI_SEARCH_GROUNDING = String(process.env.GEMINI_SEARCH_GROUNDING ?? "true").toLowerCase() !== "false";
-const REQUIRE_GEMINI = envBool("PAPER_REQUIRE_GEMINI", false);
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const REQUIRE_GEMINI = AI_ANALYSIS_ENABLED && envBool("PAPER_REQUIRE_GEMINI", false);
+const OPENAI_API_KEY = AI_ANALYSIS_ENABLED ? (process.env.OPENAI_API_KEY || "") : "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const PRIMARY_AI_PROVIDER = (process.env.PAPER_PRIMARY_AI_PROVIDER || "gemini").toLowerCase();
-const AI_ANALYSIS_LIMIT = envNumber("PAPER_AI_ANALYSIS_LIMIT", 2);
+const AI_ANALYSIS_LIMIT = AI_ANALYSIS_ENABLED ? envNumber("PAPER_AI_ANALYSIS_LIMIT", 2) : 0;
 const AI_REQUEST_DELAY_MS = envNumber("PAPER_AI_REQUEST_DELAY_MS", 7000);
 const AI_MIN_INTERVAL_SECONDS = envNumber("PAPER_AI_MIN_INTERVAL_SECONDS", 7);
 const AI_MAX_REQUESTS_PER_MINUTE = envNumber("PAPER_AI_MAX_REQUESTS_PER_MINUTE", 10);

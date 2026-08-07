@@ -1870,3 +1870,41 @@ test("candidates: a finished event stops being listed, an in-play one does not",
   const filter = bot2.slice(bot2.indexOf('reasons.push("event end date is in the past");'));
   assert.match(filter.slice(0, 400), /else if \(days > maxResolutionDays\)/);
 });
+
+test("no model: the bot consults no AI provider and never waits on a memo", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const bot2 = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // Reported: candidates were unexecutable with "Gemini grounded AI analysis is pending"
+  // and "base status ERROR is not executable". The portfolios must not use a model at all.
+  //
+  // One switch, off by default, and everything that could reach a provider or block on a
+  // memo hangs off it -- so a stale env var or the stored portfolio config on the hosting
+  // cannot turn it back on by itself.
+  assert.match(bot2, /const AI_ANALYSIS_ENABLED = envBool\("PAPER_AI_ANALYSIS_ENABLED", false\);/);
+  assert.match(bot2, /const GEMINI_API_KEY = AI_ANALYSIS_ENABLED \? \(process\.env\.GEMINI_API_KEY \|\| ""\) : "";/,
+    "no key means callGeminiJson returns before making a request");
+  assert.match(bot2, /const OPENAI_API_KEY = AI_ANALYSIS_ENABLED \? \(process\.env\.OPENAI_API_KEY \|\| ""\) : "";/,
+    "'not Gemini' must not quietly mean 'some other provider'");
+  assert.match(bot2, /const REQUIRE_GEMINI = AI_ANALYSIS_ENABLED && envBool/,
+    "a memo that is never produced must not be required");
+  assert.match(bot2, /const AI_ANALYSIS_LIMIT = AI_ANALYSIS_ENABLED \? envNumber\("PAPER_AI_ANALYSIS_LIMIT", 2\) : 0;/);
+  // The request site is still guarded by the key it can no longer receive.
+  assert.match(bot2, /async function callGeminiJson\(messages\) \{\s*\n\s*if \(!GEMINI_API_KEY\) return null;/);
+
+  // With no model there is no AI probability, so ranking must fall to the market quote --
+  // otherwise every candidate carries a NaN probability and nothing is executable.
+  assert.match(bot2, /if \(!AI_ANALYSIS_ENABLED\) return "polymarket";/);
+  assert.equal(bot.PAPER_STRATEGIES.conservative.probabilitySource, "polymarket");
+  assert.equal(bot.PAPER_STRATEGIES.highReward.probabilitySource, "polymarket");
+  assert.equal(bot.PAPER_STRATEGIES.moreProbable.probabilitySource, "polymarket");
+
+  // And the workflows must neither ask for the AI source nor ship credentials.
+  for (const name of ["trading-paper-bot", "trading-paper-evaluation"]) {
+    const workflow = await readFile(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), "utf8");
+    assert.ok(!/GEMINI_API_KEY|GEMINI_MODEL|OPENAI_API_KEY/.test(workflow),
+      `${name} must not pass model credentials`);
+    assert.ok(!/PROBABILITY_SOURCE: "ai"/.test(workflow), `${name} must not request the AI source`);
+    assert.match(workflow, /PAPER_REQUIRE_GEMINI: "false"/);
+  }
+});
