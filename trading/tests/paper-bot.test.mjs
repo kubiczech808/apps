@@ -2520,3 +2520,42 @@ test("5050: the progress log describes the run that actually happens", async () 
   assert.match(app, /"Running the 5050 algorithm"/);
   assert.match(app, /scans for them itself rather than taking the list on screen/);
 });
+
+test("5050: a token already working is risk-blocked, not offered again", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: after bidding every candidate, the whole list still showed READY --
+  // so the next run looked like it would bid them all a second time. 5050 bids the
+  // entire qualifying set at once, which makes duplicate suppression the one thing
+  // it cannot get wrong.
+  //
+  // The executor already skips anything resting or held in the wallet, and it does
+  // not care which portfolio placed it: a second order on the same token is a
+  // duplicate however it got there. The list has to mark exactly those rows, or it
+  // disagrees with the run it is supposed to preview.
+  const head = /const walletTokenIds = isFixedEntryMode\(mode\)[\s\S]*?: null;/.exec(app)[0];
+  const row = /\(walletTokenIds && walletTokenIds\.has\(tokenId\)[\s\S]*?candidateRiskBlockReason\(item, activeRows, evaluationByToken\)\)/.exec(app)[0];
+  const run = new Function("state", "mode", "tokenId", "deps", `
+    const {isFixedEntryMode,candidateRiskBlockReason}=deps;
+    const item={},activeRows=[],evaluationByToken=new Map();
+    ${head}
+    return ${row};`);
+  const state = { liveState: { openOrders: [{ tokenId: "resting" }], positions: [{ tokenId: "held" }] } };
+  const deps = { isFixedEntryMode: (m) => m === "live-5050", candidateRiskBlockReason: () => null };
+
+  assert.match(run(state, "live-5050", "resting", deps), /already resting or held/);
+  assert.match(run(state, "live-5050", "held", deps), /already resting or held/);
+  assert.equal(run(state, "live-5050", "fresh", deps), null, "an untouched token stays biddable");
+  // Only 5050 bids the whole set, so this must not change the main live portfolio.
+  assert.equal(run(state, "live", "resting", deps), null);
+
+  // A blocked row is shown as risk-blocked rather than dropped, so it stays visible
+  // with its reason instead of silently disappearing from the shortlist.
+  assert.match(app, /if \(row\.portfolioRiskBlockReason\) riskBlocked\.push\(row\);/);
+
+  // The executor's own guard, which this mirrors.
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  assert.match(executor, /note\("an order is already resting on this token"\)/);
+  assert.match(executor, /note\("this token is already held"\)/);
+});

@@ -5338,6 +5338,17 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
   const evaluationByToken = new Map(evaluations.map((item) => [String(item.tokenId || ""), item]).filter(([token]) => token));
   const activeRows = activeExposureRowsForMode(mode);
   const manuallyExcludedTokenIds = new Set(excludedCandidateTokenIdsForMode(mode));
+  // 5050 bids on every qualifying candidate at once, so the one thing it must never
+  // do is bid a token it already has working. The executor skips anything already
+  // resting or held in the wallet -- not just what this portfolio placed, since a
+  // second order on the same token is a duplicate however it got there -- so the
+  // list has to mark the same rows or it keeps showing them as ready to bid.
+  const walletTokenIds = isFixedEntryMode(mode)
+    ? new Set([
+      ...(Array.isArray(state.liveState?.openOrders) ? state.liveState.openOrders : []),
+      ...(Array.isArray(state.liveState?.positions) ? state.liveState.positions : []),
+    ].map((row) => String(row?.tokenId || row?.assetId || "")).filter(Boolean))
+    : null;
   const ready = [];
   const riskBlocked = [];
   const manuallyExcluded = [];
@@ -5360,7 +5371,9 @@ function portfolioCandidateDiagnostics(mode = state.mode) {
       ...item,
       annualizedReturn: portfolioAnnualizedReturn(item, config),
       expectedValueUsdc: portfolioExpectedValue(item, config),
-      portfolioRiskBlockReason: candidateRiskBlockReason(item, activeRows, evaluationByToken),
+      portfolioRiskBlockReason: (walletTokenIds && walletTokenIds.has(tokenId)
+        ? "an order is already resting or held on this token"
+        : candidateRiskBlockReason(item, activeRows, evaluationByToken)),
     };
     if (row.portfolioRiskBlockReason) riskBlocked.push(row);
     else ready.push(row);
