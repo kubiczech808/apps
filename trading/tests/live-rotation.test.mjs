@@ -1215,3 +1215,20 @@ test("rotation exit: a refused sell reports which taker path the CLOB refused", 
   assert.match(workflow, /for path in \(attempt\.get\("exitPaths"\) or \[\]\)/,
     "the digest must print every path that was tried");
 });
+
+test("run digest: a run carries the same timestamp label the dashboard shows", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+
+  // Reported: every prompt already named the run time, and the run still could not be
+  // located -- because a reported time was matched against when the workflow STARTED.
+  // The dashboard labels a run by its generatedAt in local time, which lands minutes
+  // after the start, so that lookup finds the wrong run or none at all. The digest now
+  // prints the dashboard's own label, making a reported time directly greppable.
+  assert.match(workflow, /from zoneinfo import ZoneInfo/);
+  assert.match(workflow, /ZoneInfo\("Europe\/Prague"\)/, "the label must be in the dashboard's timezone, not UTC");
+  assert.match(workflow, /strftime\("%d\. %m\. %Y %H:%M"\)/, "and in the dashboard's own format");
+  assert.match(workflow, /\(dashboard \{dashboard_time\(state\.get\('generatedAt'\)\)\}\)/);
+  // A missing or malformed timestamp must not take the whole digest down with it.
+  assert.match(workflow, /except ValueError:\n\s*return "-"/);
+});
