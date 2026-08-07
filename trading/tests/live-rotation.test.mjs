@@ -1416,3 +1416,47 @@ test("5050: the strategy is opt-in and does not disturb the main live portfolio"
   assert.match(source, /rejectedForFunds/);
   assert.match(source, /balance\|allowance\|insufficient\|not enough/);
 });
+
+test("5050: a candidate the market-price check gave up on is still biddable", () => {
+  // The first live dry run scanned 300 candidates and bid on none: every row read
+  // 'probability -%' with no question. A revalidation returns a rich row when it
+  // priced the market and a thin {candidate, rejectReasons} one when it gave up --
+  // and it gives up for reasons that only bind at the market price, such as
+  // "current Potential p.a. is non-profitable after fees". That says nothing about a
+  // bid resting at half of it, so the facts must be read through to the evaluation
+  // instead of treating the early return as a candidate with no facts at all.
+  const thin = {
+    candidate: {
+      tokenId: "42",
+      question: "Will X happen?",
+      outcome: "No",
+      marketProbability: 0.94,
+      marketPrice: 0.94,
+      tickSize: 0.01,
+      negRisk: true,
+      daysToResolution: 0.4,
+    },
+    eligible: false,
+    rejectReasons: ["current Potential p.a. is non-profitable after fees"],
+    currentPrice: 0.94,
+    minOrderSize: 5,
+  };
+
+  const facts = executor.fixedEntryRowFacts(thin);
+  assert.equal(facts.tokenId, "42");
+  assert.equal(facts.question, "Will X happen?", "the question must survive an early return");
+  assert.equal(facts.marketProbability, 0.94, "and so must the probability the bar is checked against");
+  assert.equal(facts.minOrderSize, 5, "the exchange minimum the revalidation did learn is kept");
+  assert.equal(facts.negRisk, true, "unknown must stay unknown, but a known value must not be lost");
+  assert.equal(facts.currentBestAsk, 0.94);
+
+  const order = executor.fixedEntryOrder(facts, { price: 0.5, stakeUsdc: 0 });
+  assert.equal(order.orderPrice, 0.5);
+  assert.equal(order.tokenId, "42");
+  assert.equal(order.negRisk, true);
+
+  // A rich row still wins over the stored evaluation where both exist.
+  const rich = { ...thin, tokenId: "42", question: "Live question?", marketProbability: 0.91, currentBestAsk: 0.9 };
+  assert.equal(executor.fixedEntryRowFacts(rich).question, "Live question?");
+  assert.equal(executor.fixedEntryRowFacts(rich).marketProbability, 0.91);
+});

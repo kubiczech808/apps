@@ -2284,10 +2284,37 @@ function rotationLegMerge({ completionRun, previousState, exitEntry, runEntry, p
   };
 }
 
-// Reshape a revalidated row into an order resting at the fixed entry price. The
+// A revalidation returns a rich row when it priced the market, and a thin
+// {candidate, rejectReasons} one when it gave up early -- and it gives up early for
+// reasons that only bind at the market price, such as "non-profitable after fees",
+// which says nothing about a bid resting at half of it. So read through to the
+// stored evaluation rather than treating an early return as a candidate with no
+// facts, which is what left a 300-candidate scan with nothing to bid on.
+function fixedEntryRowFacts(row = {}) {
+  const source = row.candidate || {};
+  const pick = (key) => (row[key] != null ? row[key] : source[key]);
+  const negRisk = pick("negRisk");
+  return {
+    tokenId: String(pick("tokenId") || ""),
+    question: pick("question") || "",
+    outcome: pick("outcome") || "",
+    slug: pick("slug") || "",
+    eventSlug: pick("eventSlug") || "",
+    conditionId: pick("conditionId") || null,
+    endDate: pick("endDate") || null,
+    daysToResolution: number(pick("daysToResolution")),
+    marketProbability: number(pick("marketProbability") ?? pick("marketPrice")),
+    currentBestAsk: number(row.currentBestAsk ?? row.currentPrice ?? pick("marketPrice")),
+    tickSize: number(pick("tickSize"), 0.01),
+    minOrderSize: number(pick("minOrderSize"), 5),
+    negRisk: typeof negRisk === "boolean" ? negRisk : undefined,
+  };
+}
+
+// Reshape those facts into an order resting at the fixed entry price. The
 // revalidation sized it against the current ask and the free cash; neither applies
-// here, so only the market facts it discovered are kept -- tick size, neg risk, the
-// exchange minimum -- and the price and size are rebuilt from the strategy.
+// here, so only the market facts are kept -- tick size, neg risk, the exchange
+// minimum -- and the price and size are rebuilt from the strategy.
 function fixedEntryOrder(row, { price = FIXED_ENTRY_PRICE, stakeUsdc = FIXED_ENTRY_STAKE_USDC } = {}) {
   const tickSize = number(row.tickSize, 0.01);
   const limitPrice = roundToTick(price, tickSize, "down");
@@ -2323,46 +2350,52 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
   const skipped = [];
   const pool = [];
   for (const row of checked) {
-    const tokenId = String(row.tokenId || "");
-    // A revalidation that could not price the market at all says nothing about
-    // whether a resting bid far below it is worth placing, so only the findings
-    // that are still true at any price disqualify a candidate here.
+    const facts = fixedEntryRowFacts(row);
+    const note = (reason) => skipped.push({ tokenId: facts.tokenId, question: facts.question, reason });
+    // Only findings that are still true at any price disqualify a candidate here.
     if (row.marketGone || row.status === "ERROR") {
-      skipped.push({ tokenId, question: row.question, reason: row.rejectReasons?.[0] || "market unavailable" });
+      note(row.rejectReasons?.[0] || "market unavailable");
       continue;
     }
-    if (restingTokenIds.has(tokenId)) {
-      skipped.push({ tokenId, question: row.question, reason: "an order is already resting on this token" });
+    if (!facts.tokenId) {
+      note("no token id");
       continue;
     }
-    if (heldTokenIds.has(tokenId)) {
-      skipped.push({ tokenId, question: row.question, reason: "this token is already held" });
+    if (restingTokenIds.has(facts.tokenId)) {
+      note("an order is already resting on this token");
       continue;
     }
-    const probability = selectedProbability(row);
-    if (!Number.isFinite(probability) || probability < MIN_PROBABILITY) {
-      skipped.push({
-        tokenId,
-        question: row.question,
-        reason: `probability ${Number.isFinite(probability) ? (probability * 100).toFixed(1) : "-"}% below ${(MIN_PROBABILITY * 100).toFixed(1)}%`,
-      });
+    if (heldTokenIds.has(facts.tokenId)) {
+      note("this token is already held");
+      continue;
+    }
+    if (!Number.isFinite(facts.marketProbability) || facts.marketProbability < MIN_PROBABILITY) {
+      note(`probability ${Number.isFinite(facts.marketProbability) ? (facts.marketProbability * 100).toFixed(1) : "-"}% below ${(MIN_PROBABILITY * 100).toFixed(1)}%`);
       continue;
     }
     // Resting below the market is the entire point, so a candidate already trading
     // at or under the entry price offers nothing this strategy is trying to buy.
-    if (Number.isFinite(number(row.currentBestAsk)) && number(row.currentBestAsk) <= FIXED_ENTRY_PRICE) {
-      skipped.push({ tokenId, question: row.question, reason: `already asks ${number(row.currentBestAsk).toFixed(3)}, at or below the entry price` });
+    if (Number.isFinite(facts.currentBestAsk) && facts.currentBestAsk <= FIXED_ENTRY_PRICE) {
+      note(`already asks ${facts.currentBestAsk.toFixed(3)}, at or below the entry price`);
       continue;
     }
-    const order = fixedEntryOrder(row);
+    const order = fixedEntryOrder(facts);
     if (!order) {
-      skipped.push({ tokenId, question: row.question, reason: "entry price is not valid for this market's tick size" });
+      note("entry price is not valid for this market's tick size");
       continue;
     }
     pool.push(order);
   }
 
-  pool.sort(compareLiveCandidatePriority);
+  // At one fixed price the yield is identical for every bid, so what separates them
+  // is how likely each is to pay out and how soon -- not a p.a. that is the same
+  // number across the whole batch.
+  pool.sort((a, b) => {
+    if (b.marketProbability !== a.marketProbability) return b.marketProbability - a.marketProbability;
+    const aDays = number(a.daysToResolution, Infinity);
+    const bDays = number(b.daysToResolution, Infinity);
+    return aDays - bDays;
+  });
   const targets = pool.slice(0, FIXED_ENTRY_MAX_ORDERS);
   const attempts = [];
   let accepted = 0;
@@ -4078,4 +4111,5 @@ export {
   candidatePoolForRotation,
   latestHoldingResolutionMs,
   fixedEntryOrder,
+  fixedEntryRowFacts,
 };
