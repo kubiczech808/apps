@@ -2287,3 +2287,32 @@ test("5050: only equity is shared with Live, never its history", async () => {
   assert.match(app, /function liveClosedTrades\(liveState\) \{[\s\S]*?\.filter\(belongsToActiveLivePortfolio\);/);
   assert.match(app, /function liveActivity\(liveState\) \{[\s\S]*?\.filter\(belongsToActiveLivePortfolio\)/);
 });
+
+test("dashboard: the browser file cannot borrow a Node-only helper", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: "Can't find variable: number" blanked the entire portfolio dashboard
+  // -- parameters, tiles and trades -- on every portfolio. The 5050 P/L split called
+  // number(), which exists in the executor but not here. node --check parses, it
+  // does not resolve identifiers, so the file compiled cleanly and failed only in
+  // the browser at render time.
+  //
+  // These names all exist in tools/*.mjs and none of them exist in app.js, so a call
+  // to one is always this mistake: an executor idiom carried into the browser file.
+  const nodeOnly = ["number", "envNumber", "envBool", "hasFlag", "roundToTick", "successfulOrderResponse", "orderResponseError", "selectedProbability", "selectedExpectedValue", "selectedAnnualizedReturn"];
+  const source = app
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .split("\n")
+    .map((line) => line.replace(/(^|[^:'"`])\/\/.*$/, "$1"))
+    .join("\n");
+  for (const name of nodeOnly) {
+    const called = new RegExp(`(?<![\\w$.])${name}\\s*\\(`).test(source);
+    const defined = new RegExp(`(?:function\\s+${name}\\s*\\(|(?:const|let|var)\\s+${name}\\s*=)`).test(source);
+    assert.ok(!called || defined, `app.js calls ${name}() but never defines it`);
+  }
+
+  // The call site that broke: it must convert with something the browser has.
+  assert.match(app, /const usdc = \(value\) => \{\n\s*const numeric = Number\(value\);/);
+  assert.match(app, /closedTrades\.reduce\(\(sum, trade\) => sum \+ usdc\(/);
+});
