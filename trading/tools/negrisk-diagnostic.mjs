@@ -13,9 +13,20 @@
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "";
 
+// Same request shape the executor uses: the hosting answers 500 without a
+// User-Agent, and the state endpoint is cached without the buster.
 async function getJson(url, label) {
-  const response = await fetch(url, { headers: { accept: "application/json" } });
-  if (!response.ok) throw new Error(`${label} failed: HTTP ${response.status}`);
+  const target = String(url);
+  const busted = target.includes("osobnizkusenosti.cz")
+    ? `${target}${target.includes("?") ? "&" : "?"}t=${Date.now()}`
+    : target;
+  const response = await fetch(busted, {
+    headers: { "User-Agent": "osobnizkusenosti-live-order-executor" },
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`${label} HTTP ${response.status}${body ? `: ${body.slice(0, 180)}` : ""}`);
+  }
   return response.json();
 }
 
