@@ -212,8 +212,6 @@ const els = {
   fixedEntryPriceLabel: document.querySelector("[data-fixed-entry-price-label]"),
   fixedEntryMaxOrders: document.querySelector("[data-fixed-entry-max-orders]"),
   fixedEntryMaxOrdersLabel: document.querySelector("[data-fixed-entry-max-orders-label]"),
-  automationToggle: document.querySelector("[data-automation-toggle]"),
-  automationToggleLabel: document.querySelector("[data-automation-toggle-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
@@ -2942,12 +2940,6 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.fixedEntryMaxOrdersLabel) els.fixedEntryMaxOrdersLabel.textContent = String(fixedEntryMaxOrders);
   // These steer only the fixed-entry strategy, so they are meaningless anywhere else.
   els.fixedEntryRows?.forEach((row) => row.toggleAttribute("hidden", !isFixedEntryMode()));
-  const automationOn = automationIsEnabled(config);
-  if (els.automationToggle) {
-    els.automationToggle.setAttribute("aria-pressed", automationOn ? "true" : "false");
-    els.automationToggle.classList.toggle("is-off", !automationOn);
-  }
-  if (els.automationToggleLabel) els.automationToggleLabel.textContent = automationOn ? "ON" : "OFF";
   if (els.mostProbableOutcome) {
     els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
     els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLive);
@@ -5521,11 +5513,24 @@ function renderPortfolioCandidates() {
   els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode, diagnostics);
 }
 
+// Rendered into each portfolio's own rules card, so the state shown is always the
+// state of the portfolio whose settings are on screen. The card is rebuilt on every
+// render, so the click is handled by delegation rather than a bound listener that
+// would be lost with the element.
+function automationBadgeMarkup() {
+  const on = automationIsEnabled(portfolioConfigForMode(state.mode));
+  return `<button class="automation-toggle${on ? "" : " is-off"}" type="button" data-automation-toggle aria-pressed="${on ? "true" : "false"}" title="Turn automatic execution for this portfolio on or off">
+    <span class="automation-dot" aria-hidden="true"></span>
+    <span data-automation-toggle-label>${on ? "ON" : "OFF"}</span>
+  </button>`;
+}
+
 function renderPortfolioRulesCard(title, rows) {
   return `
     <div class="portfolio-rules-card">
       <div class="portfolio-rules-head">
         <strong>${escapeHtml(title)}</strong>
+        ${automationBadgeMarkup()}
         <button class="portfolio-rules-edit" type="button" data-portfolio-parameters-edit aria-label="Edit portfolio parameters" title="Edit portfolio parameters">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path d="M12 20h9"></path>
@@ -8110,9 +8115,13 @@ els.fixedEntryMaxOrders?.addEventListener("change", () => {
   rerenderCurrentDashboard();
 });
 
-els.automationToggle?.addEventListener("click", () => {
+document.addEventListener("click", (event) => {
+  const toggle = event.target?.closest?.("[data-automation-toggle]");
+  if (!toggle) return;
+  // The badge lives inside the portfolio's rules card, which is rebuilt on every
+  // render, so the handler is delegated rather than bound to an element that would
+  // be replaced out from under it.
   const value = !automationIsEnabled(portfolioConfigForMode(state.mode));
-  if (updateParameterDraft({ automationEnabled: value })) return;
   updatePortfolioConfigForMode(state.mode, { automationEnabled: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();

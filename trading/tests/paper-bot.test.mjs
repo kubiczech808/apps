@@ -2145,29 +2145,6 @@ test("5050: it is its own live portfolio, not a copy of a paper one", async () =
   assert.match(app, /live5050: \{[\s\S]*?automationEnabled: false,/);
 });
 
-test("automation: the ON/OFF badge sits beside the portfolio name", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
-  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
-
-  // It is the portfolio's state, not one setting among its thresholds, so it
-  // belongs where the portfolio is named and must be readable without opening
-  // anything.
-  const titleRow = html.slice(html.indexOf('class="portfolio-title-row"'), html.indexOf("portfolio-actions"));
-  assert.match(titleRow, /data-portfolio-title/);
-  assert.match(titleRow, /data-automation-toggle/, "the badge belongs beside the name");
-  assert.equal((html.match(/data-automation-toggle(?!-)/g) || []).length, 1, "and only there");
-
-  const modal = html.slice(html.indexOf("data-parameter-modal"));
-  assert.ok(!/data-automation-toggle/.test(modal), "it must be gone from the parameter box");
-
-  // Colour carries the state, and one click flips it.
-  assert.match(app, /els\.automationToggleLabel\.textContent = automationOn \? "ON" : "OFF"/);
-  assert.match(app, /classList\.toggle\("is-off", !automationOn\)/);
-  assert.match(app, /els\.automationToggle\?\.addEventListener\("click"/);
-  assert.match(html, /app\.css\?v=20260807-automation-badge/);
-});
-
 test("portfolio config: a setting the server drops can never persist", async () => {
   const { readFile } = await import("node:fs/promises");
   const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
@@ -2351,4 +2328,33 @@ test("dashboard: a renderer cannot read another renderer's local variables", asy
   const paper = lines.slice(paperStart, paperEnd).join("\n");
   assert.match(paper, /els\.portfolioTotalPl\.textContent = signedMoney\(totalPnl\);/,
     "the paper portfolio must report its own total P/L");
+});
+
+test("automation: every portfolio carries its own ON/OFF badge in its settings", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+
+  // It belongs with the portfolio's own settings, next to the card that names it
+  // -- "Live portfolio", "5050 portfolio", the paper label -- so which portfolio it
+  // applies to is never in question.
+  assert.match(app, /function automationBadgeMarkup\(\)/);
+  const card = app.slice(app.indexOf("function renderPortfolioRulesCard"), app.indexOf("portfolio-rule-list"));
+  assert.match(card, /<strong>\$\{escapeHtml\(title\)\}<\/strong>\s*\n\s*\$\{automationBadgeMarkup\(\)\}/,
+    "the badge must render beside the card's own title");
+
+  // One card is rendered per portfolio, so both paths get it.
+  assert.match(app, /renderPortfolioRulesCard\(portfolioState\.label \|\| "Paper portfolio"/);
+  assert.match(app, /renderPortfolioRulesCard\(isFixedEntryMode\(\) \? "5050 portfolio" : "Live portfolio"/);
+
+  // The state shown is the open portfolio's own.
+  assert.match(app, /const on = automationIsEnabled\(portfolioConfigForMode\(state\.mode\)\);/);
+  assert.match(app, /updatePortfolioConfigForMode\(state\.mode, \{ automationEnabled: value \}\)/);
+
+  // The card is rebuilt on every render, so a bound listener would be lost with the
+  // element it was attached to. Delegation is what makes the click keep working.
+  assert.match(app, /document\.addEventListener\("click", \(event\) => \{\n\s*const toggle = event\.target\?\.closest\?\.\("\[data-automation-toggle\]"\);/);
+  assert.ok(!/els\.automationToggle/.test(app), "no stale handle to an element that no longer exists at load");
+  assert.ok(!/data-automation-toggle/.test(html), "and no static copy in the markup to go out of sync");
+  assert.match(html, /app\.css\?v=20260807-automation-in-rules/);
 });

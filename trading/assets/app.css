@@ -2379,13 +2379,6 @@ body.modal-open {
 /* Whether a portfolio trades on its own is the first thing you need to know when
    you open its parameters, and turning it off should not require hunting for a
    checkbox among the thresholds. */
-.portfolio-title-row {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  flex-wrap: wrap;
-}
-
 .automation-toggle {
   display: inline-flex;
   align-items: center;
@@ -2421,4 +2414,10 @@ body.modal-open {
 
 .automation-toggle.is-off .automation-dot {
   background: #94a3b8;
+}
+
+/* The badge belongs to the title, so it sits with it and the edit button keeps
+   the far edge. */
+.portfolio-rules-head > .automation-toggle {
+  margin-right: auto;
 }
