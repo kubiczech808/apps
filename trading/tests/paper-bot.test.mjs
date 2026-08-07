@@ -2392,3 +2392,28 @@ test("live modes: nothing may treat 5050 as a paper portfolio", async () => {
   // Reloading on the 5050 tab must not drop back to a paper portfolio.
   assert.match(app, /if \(normalizeMode\(value\) === value\) return value;/);
 });
+
+test("5050: the run log is its own, even before it has one", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: 5050 displayed another portfolio's execution history. Its state file
+  // does not exist until its first run publishes one, so that fetch legitimately
+  // 404s -- and the load kept the previous value on failure, which was Live's log if
+  // Live had been opened first. "No log of its own yet" was being rendered as
+  // "show the other portfolio's".
+  assert.match(app, /state\.liveExecutionByMode\[executionMode\] = executionResult\.value;/);
+  assert.match(app, /\} else if \(!\(executionMode in state\.liveExecutionByMode\)\) \{\n\s*\/\/[^\n]*\n\s*state\.liveExecutionByMode\[executionMode\] = null;/,
+    "a missing log must resolve to nothing, never to another portfolio's");
+  assert.match(app, /state\.liveExecutionState = state\.liveExecutionByMode\[executionMode\] \|\| null;/);
+  assert.ok(!/executionResult\.status === "fulfilled" \? executionResult\.value : state\.liveExecutionState/.test(app),
+    "the failure branch must not fall back to whatever was loaded last");
+
+  // And the pre-load render must switch the log with the tab, or the other
+  // portfolio's history shows for as long as the fetch takes.
+  assert.match(app, /state\.liveExecutionState = \(state\.liveExecutionByMode \|\| \{\}\)\[normalizeMode\(mode\)\] \|\| null;\n\s*if \(state\.liveState\) renderLiveState/);
+
+  // Each portfolio reads its own file.
+  assert.match(app, /isFixedEntryMode\(mode\) \? "data\/live-5050-execution-state\.json" : "data\/live-execution-state\.json"/);
+  assert.match(app, /fetchJson\(liveExecutionStateFile\(options\.requestedMode \|\| state\.mode\)\)/);
+});

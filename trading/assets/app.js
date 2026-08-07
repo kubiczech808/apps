@@ -3781,6 +3781,10 @@ function dashboardLoadIsStale(options = {}) {
 
 function renderKnownStateForMode(mode = state.mode) {
   if (LIVE_MODES.has(normalizeMode(mode))) {
+    // This paints before the fresh fetch resolves, so point the run log at the
+    // portfolio being opened first. Otherwise it renders the previous portfolio's
+    // execution history for as long as the load takes.
+    state.liveExecutionState = (state.liveExecutionByMode || {})[normalizeMode(mode)] || null;
     if (state.liveState) renderLiveState(state.liveState);
     return;
   }
@@ -4701,7 +4705,19 @@ async function loadLiveState(options = {}) {
       state.botState = botStateWithPreservedEvaluations(botResult.value);
       state.botStateFull = botStateIsFull(state.botState);
     }
-    state.liveExecutionState = executionResult.status === "fulfilled" ? executionResult.value : state.liveExecutionState;
+    // Keyed by portfolio, because the two live portfolios keep separate run logs and
+    // a failed fetch must not leave the other one's on screen. 5050's file does not
+    // exist until its first run publishes one, so that fetch legitimately 404s -- and
+    // keeping the previous value there meant 5050 displayed Live's execution history.
+    const executionMode = normalizeMode(options.requestedMode || state.mode);
+    state.liveExecutionByMode = state.liveExecutionByMode || {};
+    if (executionResult.status === "fulfilled") {
+      state.liveExecutionByMode[executionMode] = executionResult.value;
+    } else if (!(executionMode in state.liveExecutionByMode)) {
+      // No log of its own yet is "nothing to show", never "show the other one".
+      state.liveExecutionByMode[executionMode] = null;
+    }
+    state.liveExecutionState = state.liveExecutionByMode[executionMode] || null;
     // Absent is not empty: a failed fetch must not silently reassign every 5050
     // position to the Live tab, so the last known log is kept.
     if (fixedEntryResult.status === "fulfilled") state.live5050ExecutionState = fixedEntryResult.value;
