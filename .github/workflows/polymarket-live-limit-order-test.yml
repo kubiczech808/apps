@@ -70,7 +70,7 @@ on:
         default: ""
         type: string
       live_execution_probability_source:
-        description: Probability source used to prepare the browser's shortlist
+        description: Deprecated and ignored. Scoring always uses the Polymarket probability.
         required: false
         default: ""
         type: string
@@ -113,14 +113,12 @@ jobs:
       LIVE_RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && (inputs.live_run_source || 'AUTO') || 'AUTO' }}
       LIVE_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.live_execution_trigger || 'cron' }}
       LIVE_EXECUTION_CANDIDATE_TOKEN_IDS: ${{ github.event.inputs.live_execution_candidate_token_ids || '' }}
-      LIVE_EXECUTION_SHORTLIST_PROBABILITY_SOURCE: ${{ github.event.inputs.live_execution_probability_source || '' }}
       LIVE_SKIP_SCHEDULED_EXECUTION: "false"
       USE_LIMIT_ORDERS: ${{ github.event.inputs.live_use_limit_orders || 'true' }}
       LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION: ${{ github.event.inputs.cross_live_portfolio_risk_diversification || 'true' }}
       POLYMARKET_POST_ONLY: "true"
       LIVE_ORDER_SIZE_MODE: stake_fraction
       LIVE_MIN_PROBABILITY: ${{ github.event.inputs.live_min_probability || '0.95' }}
-      LIVE_PROBABILITY_SOURCE: "ai"
       LIVE_MIN_ANNUAL_RETURN: "0.05"
       LIVE_OPPORTUNITY_MIN_PROBABILITY: "0.60"
       LIVE_OPPORTUNITY_MIN_EDGE: "0.04"
@@ -179,7 +177,6 @@ jobs:
           system = (payload.get("config") or {}).get("system") or {}
           mapping = {
               "LIVE_MIN_PROBABILITY": live.get("minProbability"),
-              "LIVE_PROBABILITY_SOURCE": live.get("probabilitySource"),
               "MAX_ORDER_FRACTION": live.get("maxOrderFraction"),
               "LIVE_MAX_RESOLUTION_DAYS": live.get("maxResolutionDays"),
               "LIVE_SELECTION_ORDER": live.get("selectionOrder"),
@@ -203,7 +200,6 @@ jobs:
 
       - name: Show effective live execution settings
         run: |
-          echo "Live probability source: ${LIVE_PROBABILITY_SOURCE}"
           echo "Live execution trigger: ${LIVE_EXECUTION_TRIGGER}"
           echo "Live selection order: ${LIVE_SELECTION_ORDER}"
 

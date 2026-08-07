@@ -205,7 +205,6 @@ const els = {
   executionTrigger: document.querySelector("[data-execution-trigger]"),
   executionTriggerLabel: document.querySelector("[data-execution-trigger-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
-  polymarketProbability: document.querySelector("[data-polymarket-probability]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
   limitOrders: document.querySelector("[data-limit-orders]"),
@@ -393,7 +392,7 @@ function defaultPortfolioConfig() {
         minNetYield: 0,
         executionTrigger: "cron",
         requireMostProbableOutcome: false,
-        probabilitySource: "ai",
+        probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
       },
       highReward: {
@@ -405,7 +404,7 @@ function defaultPortfolioConfig() {
         minNetYield: 0,
         executionTrigger: "cron",
         requireMostProbableOutcome: false,
-        probabilitySource: "ai",
+        probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
       },
       moreProbable: {
@@ -417,7 +416,7 @@ function defaultPortfolioConfig() {
         minNetYield: 0,
         executionTrigger: "cron",
         requireMostProbableOutcome: true,
-        probabilitySource: "ai",
+        probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
       },
     },
@@ -431,7 +430,7 @@ function defaultPortfolioConfig() {
       executionTrigger: "cron",
       useLimitOrders: true,
       requireMostProbableOutcome: false,
-      probabilitySource: "ai",
+      probabilitySource: "polymarket",
       excludedCandidateTokenIds: [],
     },
     system: {
@@ -444,8 +443,10 @@ function normalizeSelectionOrder(value) {
   return value === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
 }
 
-function normalizeProbabilitySource(value) {
-  return value === "polymarket" ? "polymarket" : "ai";
+// The AI probability pipeline was retired, so every portfolio scores on the
+// Polymarket outcome probability regardless of what an older config stored.
+function normalizeProbabilitySource() {
+  return "polymarket";
 }
 
 function normalizeExecutionTrigger(value) {
@@ -2809,7 +2810,6 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = probability(threshold);
   syncDraftRiskAllocationControl(allocation, capitalContext);
   if (els.limitOrders) els.limitOrders.checked = Boolean(limitOrders);
-  if (els.polymarketProbability) els.polymarketProbability.checked = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
   if (els.maxResolutionDays) els.maxResolutionDays.value = String(maxDays);
   if (els.maxResolutionDaysLabel) els.maxResolutionDaysLabel.textContent = `${maxDays} d`;
   if (els.selectionOrder) els.selectionOrder.value = order;
@@ -4124,7 +4124,6 @@ function liveWorkflowPayload() {
     manual_run_once: true,
     live_run_source: "MANUAL",
     live_execution_candidate_token_ids: shortlistTokenIds.join(","),
-    live_execution_probability_source: normalizeProbabilitySource(config.probabilitySource),
     cross_live_portfolio_risk_diversification: systemConfig().crossLivePortfolioRiskDiversification !== false,
   };
 }
@@ -6984,7 +6983,7 @@ function normalizeLiveExecutionRun(execution) {
     generatedAt: runAt,
     strategyId: "live",
     strategyLabel: "Live",
-    selectionMetric: settings.probabilitySource === "polymarket" ? "Potential p.a." : "EV p.a.",
+    selectionMetric: portfolioReturnMetricLabel(settings),
     action: execution.action || "-",
     reason: execution.reason || "-",
     explanation: execution.reason || "Live execution state was recorded before detailed batch logs were introduced.",
@@ -7862,15 +7861,6 @@ els.mostProbableOutcome?.addEventListener("change", () => {
   const value = Boolean(els.mostProbableOutcome.checked);
   if (updateParameterDraft({ requireMostProbableOutcome: value })) return;
   updatePortfolioConfigForMode(state.mode, { requireMostProbableOutcome: value });
-  savePortfolioConfigSoon();
-  syncPortfolioParameterControls();
-  rerenderCurrentDashboard();
-});
-
-els.polymarketProbability?.addEventListener("change", () => {
-  const probabilitySource = els.polymarketProbability.checked ? "polymarket" : "ai";
-  if (updateParameterDraft({ probabilitySource })) return;
-  updatePortfolioConfigForMode(state.mode, { probabilitySource });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

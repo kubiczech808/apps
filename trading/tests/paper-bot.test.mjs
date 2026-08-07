@@ -1908,3 +1908,41 @@ test("no model: the bot consults no AI provider and never waits on a memo", asyn
     assert.match(workflow, /PAPER_REQUIRE_GEMINI: "false"/);
   }
 });
+
+test("no model: the 'use Polymarket probability' switch is gone and cannot be flipped back", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, html, executorSource, liveWorkflow] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8"),
+  ]);
+
+  // With no AI probability left to choose between, the toggle only offered a way to
+  // break scoring. Deleting the control is not enough on its own: the value is stored
+  // per portfolio on the hosting, so a config saved months ago still says "ai" and
+  // would keep every candidate at a NaN probability with no way to fix it from the UI.
+  // Each layer therefore decides the source itself instead of reading it back.
+  assert.ok(!/data-polymarket-probability/.test(html), "the settings control must be gone");
+  assert.ok(!/polymarketProbability/.test(app), "no element binding may survive the control");
+  assert.match(app, /function normalizeProbabilitySource\(\) \{\n  return "polymarket";\n\}/,
+    "a stored 'ai' config must still resolve to the market probability");
+
+  // Run the shipped function over the values a stored config can actually hold.
+  const normalize = new Function(`${/function normalizeProbabilitySource\(\)[\s\S]*?\n\}/.exec(app)[0]}
+    return normalizeProbabilitySource;`)();
+  for (const stored of ["ai", "AI", "gemini", "", null, undefined]) {
+    assert.equal(normalize(stored), "polymarket", `stored ${JSON.stringify(stored)} must score on the market`);
+  }
+
+  // Same on the execution side, where the value used to arrive through the environment.
+  assert.match(executorSource, /^const PROBABILITY_SOURCE = "polymarket";$/m);
+  assert.ok(!/process\.env\.LIVE_PROBABILITY_SOURCE/.test(executorSource),
+    "the executor must not read a source it no longer supports");
+  assert.ok(!/LIVE_PROBABILITY_SOURCE: "ai"/.test(liveWorkflow), "the live workflow must not request the AI source");
+  assert.ok(!/"LIVE_PROBABILITY_SOURCE": live\.get\("probabilitySource"\)/.test(liveWorkflow),
+    "the stored portfolio config must not be able to inject the AI source either");
+
+  // And the reject reason the user kept seeing must now be unreachable.
+  assert.ok(!/grounded Gemini analysis is pending/.test(executorSource));
+});

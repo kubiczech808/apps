@@ -26,7 +26,10 @@ const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymar
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
 const MIN_PROBABILITY = envNumber("LIVE_MIN_PROBABILITY", envNumber("PAPER_MIN_PROBABILITY", 0.95));
-const PROBABILITY_SOURCE = process.env.LIVE_PROBABILITY_SOURCE === "polymarket" ? "polymarket" : "ai";
+// The AI probability pipeline was retired, so scoring always uses the
+// Polymarket outcome probability. LIVE_PROBABILITY_SOURCE is deliberately
+// ignored: an older stored portfolio config must not resurrect "ai".
+const PROBABILITY_SOURCE = "polymarket";
 const MIN_ANNUAL_RETURN = envNumber("LIVE_MIN_ANNUAL_RETURN", envNumber("PAPER_MIN_ANNUAL_RETURN", 0.05));
 // Use a conservative one-day floor for p.a. comparisons. A short-lived
 // market can still be selected, but a few remaining minutes must not dominate
@@ -48,7 +51,6 @@ const MANUAL_SHORTLIST_TOKEN_IDS = [...new Set(String(process.env.LIVE_EXECUTION
   .map((tokenId) => tokenId.trim())
   .filter((tokenId) => /^\d{8,100}$/.test(tokenId)))]
   .slice(0, 120);
-const MANUAL_SHORTLIST_PROBABILITY_SOURCE = String(process.env.LIVE_EXECUTION_SHORTLIST_PROBABILITY_SOURCE || "").trim().toLowerCase();
 const HAS_MANUAL_SHORTLIST = MANUAL_SHORTLIST_TOKEN_IDS.length > 0;
 const EXCLUDED_CANDIDATE_TOKEN_IDS = envTokenIdSet("LIVE_EXCLUDED_CANDIDATE_TOKEN_IDS");
 const MAX_ORDER_FRACTION = envNumber("MAX_ORDER_FRACTION", envNumber("LIVE_MAX_ORDER_FRACTION", 0.05));
@@ -620,7 +622,6 @@ function prefilterLiveCandidate(item) {
   const reasons = [];
   const tokenId = String(item?.tokenId || "");
   const status = String(item?.status || "").toUpperCase();
-  const aiPending = item?.selectionStatus === "AI_PENDING" || item?.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
   const qualificationProbability = selectedProbability(item);
   const endTime = Date.parse(item?.endDate || "");
   const days = localDaysToResolution(item);
@@ -632,10 +633,7 @@ function prefilterLiveCandidate(item) {
     reasons.push("stored status ERROR");
   } else if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
     reasons.push(`stored status ${status}`);
-  } else if (PROBABILITY_SOURCE === "ai" && status && !["ELIGIBLE", "EVALUATED"].includes(status)) {
-    reasons.push(`stored status ${status}`);
   }
-  if (PROBABILITY_SOURCE === "ai" && aiPending) reasons.push("grounded Gemini analysis is pending");
   if (item?.marketClosed === true || item?.closed === true || item?.resolved === true || item?.isResolved === true) {
     reasons.push("stored market is already closed/resolved");
   }
@@ -3078,9 +3076,6 @@ async function main() {
       ? loadJsonResource(PAPER_SCRAPED_STATE_URL, "scraped Polymarket state")
       : Promise.resolve(null),
   ]);
-  if (HAS_MANUAL_SHORTLIST && MANUAL_SHORTLIST_PROBABILITY_SOURCE && MANUAL_SHORTLIST_PROBABILITY_SOURCE !== PROBABILITY_SOURCE) {
-    throw new Error(`manual execution shortlist uses ${MANUAL_SHORTLIST_PROBABILITY_SOURCE} probability, but the live portfolio is configured for ${PROBABILITY_SOURCE} probability`);
-  }
   const cash = liveCashUsdc(liveState);
   const reservedOpenOrderUsdc = activeBuyOrderReservationUsdc(liveState);
   const availableCash = availableLiveCashUsdc(liveState, cash);

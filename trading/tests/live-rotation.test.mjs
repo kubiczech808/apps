@@ -856,10 +856,12 @@ test("live candidates: an obvious risk collision is filtered before revalidation
   // Otherwise-eligible on every threshold the prefilter checks (probability, net
   // yield, liquidity, horizon), so the only thing distinguishing them is the risk
   // collision -- proving the rejection comes from that check and nothing else.
+  // Scored the way the executor now scores every candidate: on the Polymarket
+  // probability, with the potential p.a. derived from net gain over cost.
   const eligibleFields = {
-    aiProbability: 0.97,
-    annualizedReturn: 0.4,
-    expectedValueUsdc: 0.3,
+    marketProbability: 0.97,
+    netGainIfWinUsdc: 0.3,
+    totalCostUsdc: 3,
     netYield: 0.08,
     liquidity: 60000,
     daysToResolution: 0.3,
@@ -925,10 +927,12 @@ test("live candidates: volume and net-profit reject reasons collapse into one bu
   // The floor is measured on traded volume now, so rows below it are reported as
   // "volume ... below live minimum"; the old liquidity wording groups to the same bucket
   // so a state stored before the switch still collapses instead of fragmenting.
+  // Scored the way the executor now scores every candidate: on the Polymarket
+  // probability, with the potential p.a. derived from net gain over cost.
   const eligibleFields = {
-    aiProbability: 0.97,
-    annualizedReturn: 0.4,
-    expectedValueUsdc: 0.3,
+    marketProbability: 0.97,
+    netGainIfWinUsdc: 0.3,
+    totalCostUsdc: 3,
     netYield: 0.08,
     liquidity: 60000,
     daysToResolution: 0.3,
