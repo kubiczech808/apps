@@ -2054,7 +2054,7 @@ function structuredAnalysisDetails(item = {}, options = {}) {
     Number.isFinite(annualizedExpectedReturn(current)) ? detailNumber("AI EV p.a.", annualizedExpectedReturn(current), annualizedExpectedReturn(original), signedPercent) : "",
     current.netGainIfWinUsdc != null ? detailNumber("Win if correct", Number(current.netGainIfWinUsdc), Number(original.netGainIfWinUsdc), (value) => signedMoney(value, 4)) : "",
     current.riskReward != null ? detailNumber("R/R", Number(current.riskReward), Number(original.riskReward), riskReward) : "",
-    current.liquidity != null ? detailNumber("Liquidity", Number(current.liquidity || 0), Number(original.liquidity || 0), money) : "",
+    rowVolumeUsdc(current) > 0 ? detailNumber("Volume", rowVolumeUsdc(current), rowVolumeUsdc(original), money) : "",
     current.volume24hr != null ? detailNumber("24h volume", Number(current.volume24hr || 0), Number(original.volume24hr || 0), money) : "",
     current.endDate ? detailText("End date", formatDate(current.endDate), original.endDate ? formatDate(original.endDate) : "") : "",
     current.daysToResolution != null ? detailNumber("Days to resolution", Number(current.daysToResolution), Number(original.daysToResolution), (value) => value.toFixed(2)) : "",
@@ -3136,7 +3136,7 @@ function renderExecutionCandidatesNotUsedTable(candidates = [], probabilitySourc
             <th>#</th>
             <th>Market</th>
             <th>${probabilityLabel}</th>
-            <th>Liquidity</th>
+            <th>Volume</th>
             <th>Net yield</th>
             <th>Potential p.a.</th>
             <th>Why not</th>
@@ -3148,7 +3148,7 @@ function renderExecutionCandidatesNotUsedTable(candidates = [], probabilitySourc
             const outcome = item.outcome || "-";
             const url = String(item.url || "").trim();
             const selectedProbability = Number(usesPolymarketProbability ? item.marketProbability : item.aiProbability);
-            const liquidity = Number(item.liquidity);
+            const liquidity = rowVolumeUsdc(item);
             const netYield = Number(item.netYield);
             const potentialPa = executionCandidatePotentialPa(item, probabilitySource);
             return `
@@ -3156,7 +3156,7 @@ function renderExecutionCandidatesNotUsedTable(candidates = [], probabilitySourc
                 <td data-label="#">${index + 1}</td>
                 <td data-label="Market"><strong>${escapeHtml(outcome)}</strong><span>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(question)}</a>` : escapeHtml(question)}</span></td>
                 <td data-label="${probabilityLabel}">${Number.isFinite(selectedProbability) ? probability(selectedProbability) : "-"}</td>
-                <td data-label="Liquidity">${Number.isFinite(liquidity) ? money(liquidity) : "-"}</td>
+                <td data-label="Volume">${Number.isFinite(liquidity) ? money(liquidity) : "-"}</td>
                 <td data-label="Net yield" class="${pnlClass(netYield)}">${Number.isFinite(netYield) ? signedPercent(netYield) : "-"}</td>
                 <td data-label="Potential p.a." class="${pnlClass(potentialPa)}">${Number.isFinite(potentialPa) ? signedPercent(potentialPa) : "-"}</td>
                 <td data-label="Why not">${escapeHtml(executionCandidateRejectionReason(item))}</td>
@@ -4713,7 +4713,7 @@ function portfolioRuleRows(portfolio = {}) {
     ["Trade priority", priority],
     ["Execution trigger", executionTriggerLabel(config.executionTrigger)],
   ];
-  if (Number.isFinite(minLiquidityUsdc)) rows.push(["Liquidity filter", `>= ${money(minLiquidityUsdc)}`]);
+  if (Number.isFinite(minLiquidityUsdc)) rows.push(["Volume filter", `>= ${money(minLiquidityUsdc)}`]);
   rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
   if (config.requireMostProbableOutcome) rows.push(["Market type filter", "Only multichoice events"]);
   return rows;
@@ -4734,7 +4734,7 @@ function livePortfolioRuleRows() {
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
     ["Execution trigger", executionTriggerLabel(config.executionTrigger)],
-    ["Liquidity filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
+    ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
     ["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "Block correlated exposure" : "Allow correlated exposure"],
@@ -4884,6 +4884,18 @@ function candidateMarketType(item = {}) {
   return "multi";
 }
 
+// Traded volume, the figure Polymarket shows on a market ("$37.9K Vol."). Gamma's
+// `liquidity` is order-book depth -- a different number, which is why the tables never
+// matched the site. `liquidity` remains the last fallback so rows stored before volume
+// was captured keep showing something until they are refreshed.
+function rowVolumeUsdc(item = {}) {
+  for (const candidate of [item?.volumeUsdc, item?.volume24hr, item?.firstVolume24hr, item?.liquidity]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return 0;
+}
+
 function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const config = portfolioConfigForMode(mode);
   const normalizedMode = normalizeMode(mode);
@@ -4894,7 +4906,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const selectedProbability = portfolioProbability(item, config);
   const maxDays = resolutionDaysForMode(normalizedMode);
   const days = evaluationDaysLeft(item);
-  const liquidity = Number(item.liquidity || 0);
+  const liquidity = rowVolumeUsdc(item);
   const minLiquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(normalizedMode);
@@ -4957,7 +4969,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
     reasons.push(`resolution ${days.toFixed(2)} days exceeds max ${maxDays}`);
   }
   if (minLiquidity != null && liquidity < minLiquidity) {
-    reasons.push(`liquidity ${money(liquidity)} below ${money(minLiquidity)}`);
+    reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);
   }
   if (config.requireMostProbableOutcome && candidateMarketType(item) !== "multi") {
     reasons.push(`market type ${candidateMarketType(item)} is not multichoice`);
@@ -5179,7 +5191,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
             <th>${returnMetric}</th>
             <th>Win</th>
             <th>Net yield %</th>
-            <th>Liquidity</th>
+            <th>Volume</th>
             <th>R/R</th>
             <th>${probabilityLabel}</th>
             <th>End date</th>
@@ -5193,7 +5205,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
             <th>Win</th>
             <th>Net yield %</th>
             <th>R/R</th>
-            <th>Liquidity</th>
+            <th>Volume</th>
           `}
           <th>Analysis</th>
         </tr>
@@ -5239,7 +5251,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
                 <td data-label="${returnMetric}" title="${escapeHtml(annualizationHorizonNote(item))}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
                 <td data-label="Win">${gainCell(item)}</td>
                 <td data-label="Net yield %">${netYieldCell(item)}</td>
-                <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
+                <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
                 <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
                 <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
                 <td data-label="End date">${evaluationEndDateCell(item)}</td>
@@ -5253,7 +5265,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
                 <td data-label="Win">${gainCell(item)}</td>
                 <td data-label="Net yield %">${netYieldCell(item)}</td>
                 <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
-                <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
+                <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
               `}
               <td data-label="Analysis">${analysisBadge(item)}</td>
             </tr>
@@ -6041,7 +6053,7 @@ function scrapedSortValue(item, key) {
   if (key === "riskReward") return evaluationRiskReward(item);
   if (key === "marketAnnualizedReturn") return marketAnnualizedExpectedReturn(item);
   if (key === "marketExpectedValueUsdc") return marketExpectedValueFromQuote(item);
-  if (key === "liquidity") return Number(item.liquidity);
+  if (key === "liquidity") return rowVolumeUsdc(item);
   if (key === "volume24hr") return Number(item.volume24hr);
   if (key === "outcomeCount") return Number(item.outcomeCount);
   return "";
@@ -6140,7 +6152,7 @@ function renderScrapedOpportunities() {
     if (daysFilter != null && days > daysFilter) return false;
     const yieldValue = netYield(item);
     if (minNetYield > 0 && (!Number.isFinite(yieldValue) || yieldValue < minNetYield)) return false;
-    const liquidity = Number(item.liquidity);
+    const liquidity = rowVolumeUsdc(item);
     return minLiquidity <= 0 || (Number.isFinite(liquidity) && liquidity >= minLiquidity);
   });
   const visible = sortedScrapedObservations(filtered).slice(0, 250);
@@ -6201,7 +6213,7 @@ function renderScrapedOpportunities() {
             ${scrapedSortableHeader("netYield", "Net yield %")}
             ${scrapedSortableHeader("potentialAnnualizedReturn", "Potential p.a.")}
             ${scrapedSortableHeader("riskReward", "R/R")}
-            ${scrapedSortableHeader("liquidity", "Liquidity")}
+            ${scrapedSortableHeader("liquidity", "Volume")}
             ${scrapedSortableHeader("observedAt", "Scraped")}
             ${scrapedSortableHeader("status", "Status")}
             ${scrapedSortableHeader("endDate", "End date")}
@@ -6221,7 +6233,7 @@ function renderScrapedOpportunities() {
               <td data-label="Net yield %">${netYieldCell(item)}</td>
               <td data-label="Potential p.a."><span class="${pnlClass(potentialAnnualizedReturn(item))}">${signedPercent(potentialAnnualizedReturn(item))}</span></td>
               <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
-              <td data-label="Liquidity">${money(Number(item.liquidity || 0))}</td>
+              <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
               <td data-label="Scraped">${escapeHtml(formatDate(item.observedAt || item.marketDataUpdatedAt || ""))}</td>
               <td data-label="Status" class="${scrapedObservationStatusClass(item)}"><strong>${scrapedObservationStatus(item)}</strong></td>
               <td data-label="End date">${evaluationEndDateCell(item)}</td>
@@ -6345,7 +6357,7 @@ function renderScanAuditModal(payload = {}) {
         <h3>Markets obtained from returned events</h3>
         <div class="analysis-candidate-table-wrap">
           <table class="analysis-candidate-table scan-audit-market-table">
-            <thead><tr><th>Market</th><th>Outcome</th><th>Probability</th><th>Days left</th><th>Liquidity</th><th>Categories</th><th>Result</th><th>Reason</th></tr></thead>
+            <thead><tr><th>Market</th><th>Outcome</th><th>Probability</th><th>Days left</th><th>Volume</th><th>Categories</th><th>Result</th><th>Reason</th></tr></thead>
             <tbody>${markets.length ? markets.map((market) => {
               const href = /^https:\/\//i.test(String(market?.url || "")) ? String(market.url) : "";
               const action = String(market?.action || "NOT_SAVED").toUpperCase();
@@ -6353,7 +6365,7 @@ function renderScanAuditModal(payload = {}) {
               const daysLeft = Number.isFinite(recordedDays)
                 ? recordedDays
                 : daysUntil(market?.endDate);
-              const liquidity = Number(market?.liquidityUsdc ?? market?.liquidity);
+              const liquidity = rowVolumeUsdc(market);
               return `<tr>
                 <td>${href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(market?.question || "Untitled Polymarket market")}</strong></a>` : `<strong>${escapeHtml(market?.question || "Untitled Polymarket market")}</strong>`}</td>
                 <td>${escapeHtml(market?.outcome || "-")}</td>
@@ -6711,7 +6723,7 @@ function tradeBatchDetail(batch) {
     `${returnMetricLabel} ${signedPercent(candidateSelectedAnnualizedReturn(item))}`,
     `${usesPolymarketProbability ? "Potential" : "EV"} ${signedMoney(candidateSelectedValue(item), 4)}`,
     item.daysToResolution != null ? `resolution ${Number(item.daysToResolution).toFixed(2)}d` : "",
-    item.liquidity != null ? `liquidity ${money(Number(item.liquidity))}` : "",
+    rowVolumeUsdc(item) > 0 ? `volume ${money(rowVolumeUsdc(item))}` : "",
   ].filter(Boolean).join(" / ");
   const comparisonMetricLine = (comparison) => {
     if (!comparison) return "";

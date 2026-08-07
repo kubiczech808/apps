@@ -916,11 +916,15 @@ test("live candidates: with no riskGroupKeys stored, the cheap filter defers to 
   assert.equal(executor.earlyRiskBlockReason(noKeys, []), null, "no held positions means nothing to collide with either");
 });
 
-test("live candidates: liquidity and net-profit reject reasons collapse into one bucket each, not one per value", () => {
+test("live candidates: volume and net-profit reject reasons collapse into one bucket each, not one per value", () => {
   // Both reason strings carry a per-candidate number (a USDC amount, a percentage).
-  // Left ungrouped, every distinct value became its own bucket -- for liquidity
+  // Left ungrouped, every distinct value became its own bucket -- for the volume floor
   // specifically this turned one homogeneous rejection reason into thousands of
   // one-off entries in production, which was most of a run's console/log output.
+  //
+  // The floor is measured on traded volume now, so rows below it are reported as
+  // "volume ... below live minimum"; the old liquidity wording groups to the same bucket
+  // so a state stored before the switch still collapses instead of fragmenting.
   const eligibleFields = {
     aiProbability: 0.97,
     annualizedReturn: 0.4,
@@ -931,7 +935,8 @@ test("live candidates: liquidity and net-profit reject reasons collapse into one
     status: "EVALUATED",
   };
   // Default thresholds with no env override (see MIN_VOLUME_24H/MIN_NET_YIELD in the
-  // source): liquidity must be below 100, net yield below 0.
+  // source): volume must be below 100, net yield below 0. These rows carry no volume
+  // field, so the stored liquidity is the fallback the accessor uses.
   const rows = [
     ...Array.from({ length: 5 }, (_, i) => ({
       ...eligibleFields, tokenId: `low-liquidity-${i}`, question: `Q${i}`, liquidity: 1 + i,
@@ -942,10 +947,12 @@ test("live candidates: liquidity and net-profit reject reasons collapse into one
   ];
   const pool = executor.prepareLiveCandidatePool(rows, null);
   const counts = pool.diagnostics.reasonCounts;
-  const liquidityKeys = Object.keys(counts).filter((key) => /liquidity/i.test(key));
+  const volumeKeys = Object.keys(counts).filter((key) => /volume/i.test(key));
   const yieldKeys = Object.keys(counts).filter((key) => /net profit/i.test(key));
-  assert.equal(liquidityKeys.length, 1, `expected one grouped liquidity bucket, got ${JSON.stringify(liquidityKeys)}`);
-  assert.equal(counts[liquidityKeys[0]], 5);
+  assert.equal(volumeKeys.length, 1, `expected one grouped volume bucket, got ${JSON.stringify(volumeKeys)}`);
+  assert.equal(counts[volumeKeys[0]], 5);
+  assert.ok(!Object.keys(counts).some((key) => /^liquidity/i.test(key)),
+    "the old wording must group into the volume bucket, not sit beside it");
   assert.equal(yieldKeys.length, 1, `expected one grouped net-profit bucket, got ${JSON.stringify(yieldKeys)}`);
   assert.equal(counts[yieldKeys[0]], 4);
 });

@@ -604,6 +604,18 @@ function binaryOutcomeQuotesAreBothZero(item = {}) {
   return yes === 0 && no === 0;
 }
 
+// Traded volume, the figure Polymarket shows on a market ("$37.9K Vol."). Gamma's
+// `liquidity` is order-book depth -- a different number, which is why the dashboard never
+// matched the site. `liquidity` stays the last fallback so rows stored before volume was
+// captured keep working until they are refreshed instead of all reading zero.
+function candidateVolumeUsdc(item = {}) {
+  for (const candidate of [item.volumeUsdc, item.volume24hr, item.firstVolume24hr, item.liquidity]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return 0;
+}
+
 function prefilterLiveCandidate(item) {
   const reasons = [];
   const tokenId = String(item?.tokenId || "");
@@ -650,8 +662,9 @@ function prefilterLiveCandidate(item) {
   if (candidateNetYield == null || candidateNetYield < MIN_NET_YIELD) {
     reasons.push(`net profit ${candidateNetYield == null ? "-" : `${(candidateNetYield * 100).toFixed(1)}%`} below ${(MIN_NET_YIELD * 100).toFixed(1)}% after fees`);
   }
-  if (liquidity < MIN_VOLUME_24H) {
-    reasons.push(`liquidity ${liquidity.toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`);
+  const candidateVolume = candidateVolumeUsdc(item);
+  if (candidateVolume < MIN_VOLUME_24H) {
+    reasons.push(`volume ${candidateVolume.toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`);
   }
   // Gamma's end date can be a scheduled start or an outdated estimate. The
   // live market check is authoritative: retain this row until Gamma/CLOB says
@@ -698,7 +711,8 @@ function prefilterReasonCountKey(reason) {
   // thousands of one-off entries and was the dominant contributor to run-log size.
   if (/annualized return .* is non-profitable after fees/i.test(text)) return "annualized return non-profitable after fees";
   if (/^net profit .* below .* after fees/i.test(text)) return "net profit below live minimum after fees";
-  if (/^liquidity .* below live minimum .* USDC/i.test(text)) return "liquidity below live minimum";
+  if (/^liquidity .* below live minimum .* USDC/i.test(text)) return "volume below live minimum";
+  if (/^volume .* below live minimum .* USDC/i.test(text)) return "volume below live minimum";
   if (/stored resolution .* exceeds live max/i.test(text)) return "stored resolution exceeds live max days";
   if (/outside live revalidation scan limit/i.test(text)) return "outside live revalidation scan limit after short-expiry ranking";
   // Each of these carries its own overlap keys, so grouping strips them back down to one
@@ -1788,7 +1802,7 @@ function rotationHumanComparison(review) {
   return `Replace ${rotationOpportunityLabel(position)} (${formatMetric(comparison.currentMetric)}, ${days(comparison.currentDaysToResolution)}, potential win ${Number(position.potentialWinIfHeldUsdc || 0).toFixed(4)} USDC) with ${rotationOpportunityLabel(candidate)} (${formatMetric(comparison.replacementMetric)}, ${days(comparison.replacementDaysToResolution)}, potential win ${Number(candidate.netGainIfWinUsdc || 0).toFixed(4)} USDC); after fees the ${metric} improvement is ${formatDelta(comparison.metricDelta)} and expected P/L changes by ${Number(review.evDeltaUsdc || 0).toFixed(4)} USDC.`;
 }
 
-function scoreEconomics({ probability, qualificationProbability, annualizedReturn, netYield, edge, spread, volume24hr, liquidity, endOk }) {
+function scoreEconomics({ probability, qualificationProbability, annualizedReturn, netYield, edge, spread, volume24hr, volumeUsdc, liquidity, endOk }) {
   const probabilityOk = qualificationProbability >= MIN_PROBABILITY;
   const opportunityOk = probability >= OPPORTUNITY_MIN_PROBABILITY
     && edge >= OPPORTUNITY_MIN_EDGE
@@ -1799,7 +1813,9 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
   const spreadOk = spread != null && spread <= MAX_SPREAD;
   // `minLiquidityUsdc` is a portfolio liquidity floor.  24h volume is useful
   // context but must not substitute for executable order-book liquidity.
-  const liquidityOk = liquidity >= MIN_VOLUME_24H;
+  // The portfolio floor is a traded-volume floor, matching the figure Polymarket shows.
+  const candidateVolume = candidateVolumeUsdc({ volumeUsdc, volume24hr, liquidity });
+  const liquidityOk = candidateVolume >= MIN_VOLUME_24H;
   return {
     eligible: endOk && probabilityOk && returnOk && netYieldOk && spreadOk && liquidityOk,
     thesisType: probabilityOk ? "HIGH_CONFIDENCE" : (opportunityOk ? "EDGE_OPPORTUNITY_BELOW_LIVE_THRESHOLD" : "REJECTED"),
@@ -1811,7 +1827,7 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
         : (returnOk ? null : `${probabilitySourceLabel()} ${returnMetricLabel()} ${(annualizedReturn * 100).toFixed(1)}% below ${(minimumAnnualizedReturn * 100).toFixed(1)}%`),
       netYieldOk ? null : `net profit ${Number.isFinite(netYield) ? `${(netYield * 100).toFixed(1)}%` : "-"} below ${(MIN_NET_YIELD * 100).toFixed(1)}% after fees`,
       spreadOk ? null : `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`,
-      liquidityOk ? null : `liquidity ${Number(liquidity || 0).toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`,
+      liquidityOk ? null : `volume ${candidateVolume.toFixed(2)} USDC below live minimum ${MIN_VOLUME_24H.toFixed(2)} USDC`,
     ].filter(Boolean),
   };
 }
@@ -2056,6 +2072,9 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   const endOk = true;
   const volume24hr = number(market.volume24hr, number(evaluation.volume24hr, 0));
   const liquidity = number(market.liquidity, number(evaluation.liquidity, 0));
+  // Traded volume as Polymarket reports it, refreshed from the live market so the stored
+  // row stops showing a figure captured whenever it was last scraped.
+  const volumeUsdc = number(market.volumeNum, number(market.volume, volume24hr));
   const notional = Number((price * size).toFixed(5));
   const fee = USE_LIMIT_ORDERS && POST_ONLY ? 0 : takerFee(size, price, estimatedFeeRate);
   const totalCost = notional + fee;
@@ -2081,6 +2100,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     edge: qualificationProbability - price,
     spread: book.spread,
     volume24hr,
+    volumeUsdc,
     liquidity,
     endOk,
   });
@@ -2108,6 +2128,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     scheduledEventDate: dateContext.scheduledEventDate,
     resolutionEndDate: dateContext.resolutionEndDate,
     endDateSource: dateContext.endDateSource,
+    volumeUsdc: Number(volumeUsdc.toFixed(2)),
     currentBestBid: book.bestBid,
     currentBestAsk: book.bestAsk,
     currentSpread: book.spread,
@@ -2632,6 +2653,9 @@ function liveBatchCandidateSummary(item) {
     potentialAnnualizedReturn: potentialAnnualizedReturn == null ? null : number(potentialAnnualizedReturn),
     daysToResolution,
     liquidity: number(item?.liquidity ?? source.liquidity),
+    // What the tables and the run log show: traded volume, the figure Polymarket itself
+    // reports on the market. Liquidity stays alongside it for reference.
+    volumeUsdc: candidateVolumeUsdc(item?.volumeUsdc != null ? item : source),
     netGainIfWinUsdc: gain,
     netYield: netYield == null ? null : number(netYield),
     riskReward: netYield == null ? null : number(netYield),
@@ -2667,6 +2691,7 @@ function liveRevalidationUpdate(item, checkedAt) {
     "marketExpectedValueUsdc",
     "daysToResolution",
     "liquidity",
+    "volumeUsdc",
     "netGainIfWinUsdc",
     "totalCostUsdc",
     "orderPrice",

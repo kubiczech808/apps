@@ -4258,7 +4258,7 @@ function strategyEligibleCandidates(eligible, strategy) {
     if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) return false;
     if (daysValue(item) > maxResolutionDays) return false;
     const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
-    if (Number.isFinite(minLiquidityUsdc) && Number(item.liquidity || 0) < minLiquidityUsdc) return false;
+    if (Number.isFinite(minLiquidityUsdc) && rowVolumeUsdc(item) < minLiquidityUsdc) return false;
     const minimumNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
     const candidateNetYield = netYieldAfterFees(item);
     if (!Number.isFinite(candidateNetYield) || candidateNetYield < minimumNetYield) return false;
@@ -4268,6 +4268,28 @@ function strategyEligibleCandidates(eligible, strategy) {
     rows = rows.filter((item) => item.marketType === "multi" || reportMarketType(item) === "multi");
   }
   return rows;
+}
+
+// Traded volume, which is the figure Polymarket itself shows on a market ("$37.9K Vol.").
+// Gamma's `liquidity` is order-book depth and is a different number entirely -- comparing
+// the two is what made the dashboard look wrong against the site.
+function marketVolumeUsdc(market = {}) {
+  for (const candidate of [market.volumeNum, market.volume, market.volume24hr]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return 0;
+}
+
+// The same figure off an already-stored row. `liquidity` is the last fallback so rows
+// scraped before volume was captured keep working until they are next refreshed, rather
+// than dropping to zero and being filtered out en masse.
+function rowVolumeUsdc(item = {}) {
+  for (const candidate of [item.volumeUsdc, item.volume24hr, item.firstVolume24hr, item.liquidity]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return 0;
 }
 
 function netYieldAfterFees(item = {}) {
@@ -4307,6 +4329,8 @@ function portfolioFilterResult(item, strategy) {
   const selectedProbability = Number(probabilitySource === "polymarket" ? (item.marketProbability ?? item.marketPrice) : item.aiProbability);
   const days = daysValue(item);
   const liquidity = Number(item.liquidity || 0);
+  // The portfolio threshold is a traded-volume floor, which is what Polymarket shows.
+  const candidateVolume = rowVolumeUsdc(item);
   const marketType = item.marketType || reportMarketType(item);
   const economics = portfolioEconomics(item, strategy);
   const annualizedReturn = economics.annualizedReturn;
@@ -4336,8 +4360,8 @@ function portfolioFilterResult(item, strategy) {
   if (days > maxResolutionDays) {
     reasons.push(`resolution ${Number.isFinite(days) ? days.toFixed(2) : "-"} days exceeds max ${maxResolutionDays}`);
   }
-  if (Number.isFinite(minLiquidityUsdc) && liquidity < minLiquidityUsdc) {
-    reasons.push(`liquidity ${liquidity.toFixed(2)} below ${minLiquidityUsdc.toFixed(2)} USDC`);
+  if (Number.isFinite(minLiquidityUsdc) && candidateVolume < minLiquidityUsdc) {
+    reasons.push(`volume ${candidateVolume.toFixed(2)} below ${minLiquidityUsdc.toFixed(2)} USDC`);
   }
   const candidateNetYield = netYieldAfterFees(item);
   if (!Number.isFinite(candidateNetYield) || candidateNetYield < minNetYield) {
@@ -6185,6 +6209,7 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     daysToResolution: days == null ? null : Number(days.toFixed(2)),
     liquidity: Number(market.liquidity || 0),
     volume24hr: Number(market.volume24hr || 0),
+    volumeUsdc: Number(marketVolumeUsdc(market).toFixed(2)),
     stakeUsdc: Number(stake.toFixed(2)),
     executableShares: Number(shares.toFixed(4)),
     takerFeeUsdc: Number(takerFee.toFixed(5)),

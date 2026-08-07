@@ -1799,3 +1799,46 @@ test("market dates: an already-past kickoff still yields to an even-earlier-clos
   assert.equal(context.endDate, resolutionWindow);
   assert.equal(context.endDateSource, "polymarket-resolution-window");
 });
+
+test("market metric: the app filters and shows traded volume, not order-book liquidity", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const bot2 = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+
+  // Reported: the dashboard's number never matched Polymarket's. It was showing Gamma's
+  // `liquidity` (order-book depth) while the site shows traded volume ("$37.9K Vol.") --
+  // two different measurements, so they could never agree. Volume is the metric now.
+  for (const [label, source] of [["bot", bot2], ["executor", executor]]) {
+    assert.match(source, /volumeNum/, `${label} must read Polymarket's own volume field`);
+  }
+  assert.match(bot2, /function marketVolumeUsdc\(market = \{\}\) \{/);
+  assert.match(bot2, /volumeUsdc: Number\(marketVolumeUsdc\(market\)\.toFixed\(2\)\)/,
+    "the scrape has to store volume, or nothing downstream can use it");
+
+  // Every layer resolves the same way, and falls back to the stored liquidity so rows
+  // captured before the switch keep working until they are refreshed.
+  for (const [label, source] of [["bot", bot2], ["executor", executor], ["app", app]]) {
+    assert.match(source, /\[item\??\.volumeUsdc, item\??\.volume24hr, item\??\.firstVolume24hr, item\??\.liquidity\]/,
+      `${label} must resolve volume with the same fallback chain`);
+  }
+
+  // The thresholds are volume thresholds now, in both the paper and the live path.
+  assert.match(bot2, /rowVolumeUsdc\(item\) < minLiquidityUsdc/);
+  assert.match(bot2, /reasons\.push\(`volume \$\{candidateVolume\.toFixed\(2\)\} below/);
+  assert.match(executor, /const candidateVolume = candidateVolumeUsdc\(item\);/);
+  assert.match(executor, /`volume \$\{candidateVolume\.toFixed\(2\)\} USDC below live minimum/);
+  // Live revalidation refreshes it, so an executed check updates the stored figure.
+  assert.match(executor, /const volumeUsdc = number\(market\.volumeNum, number\(market\.volume, volume24hr\)\)/);
+  assert.match(executor, /"volumeUsdc",/, "the persisted field list must carry it back to the row");
+
+  // The tables and the filter control say volume, and read it.
+  assert.ok(!/<th>Liquidity<\/th>/.test(app), "no table may still head a column Liquidity");
+  assert.ok(!/data-label="Liquidity"/.test(app), "no cell may still be labelled Liquidity");
+  assert.match(app, /data-label="Volume">\$\{money\(rowVolumeUsdc\(item\)\)\}/);
+  assert.match(app, /scrapedSortableHeader\("liquidity", "Volume"\)/);
+  assert.match(app, /\["Volume filter",/);
+  assert.match(html, /<span>Volume min<\/span>/);
+  assert.match(html, /<span>Min traded volume<\/span>/);
+});
