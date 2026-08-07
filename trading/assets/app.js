@@ -5595,8 +5595,8 @@ function renderBotState(botState) {
   els.portfolioEquity.textContent = money(Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100));
   els.portfolioEquity.className = pnlClass(totalPnl);
   els.portfolioLastRun.textContent = `Last run ${botState.generatedAt ? formatDate(botState.generatedAt) : "-"}`;
-  els.portfolioTotalPl.textContent = signedMoney(totalPnlValue);
-  els.portfolioTotalPl.className = pnlClass(totalPnlValue);
+  els.portfolioTotalPl.textContent = signedMoney(totalPnl);
+  els.portfolioTotalPl.className = pnlClass(totalPnl);
   els.portfolioTotalPlPct.textContent = signedPercent(totalPnlPct);
   if (els.portfolioAnnualized) {
     els.portfolioAnnualized.textContent = signedPercent(annualized);

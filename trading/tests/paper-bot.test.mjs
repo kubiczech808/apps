@@ -2316,3 +2316,39 @@ test("dashboard: the browser file cannot borrow a Node-only helper", async () =>
   assert.match(app, /const usdc = \(value\) => \{\n\s*const numeric = Number\(value\);/);
   assert.match(app, /closedTrades\.reduce\(\(sum, trade\) => sum \+ usdc\(/);
 });
+
+test("dashboard: a renderer cannot read another renderer's local variables", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: "all statistics are shared". renderBotState was rewritten to read
+  // totalPnlValue, which is a local of renderLiveState -- a first-occurrence replace
+  // that landed in the wrong function. Every paper portfolio then threw at that line,
+  // so its tiles kept whatever the previous render had left on screen, which reads
+  // exactly as one portfolio's numbers showing under all of them.
+  //
+  // These are locals of the live renderer's per-portfolio P/L split. Each must appear
+  // only inside the function that declares it.
+  const lines = app.split("\n");
+  const bounds = (name) => {
+    const start = lines.findIndex((line) => line.startsWith(`function ${name}(`));
+    assert.ok(start >= 0, `${name} not found`);
+    const end = lines.findIndex((line, i) => i > start && line === "}");
+    return [start, end];
+  };
+  const [liveStart, liveEnd] = bounds("renderLiveState");
+
+  for (const local of ["totalPnlValue", "openPnlValue", "ownBasePct", "ownRealized", "ownOpen", "ownStake", "fixedEntry", "usdc"]) {
+    lines.forEach((line, i) => {
+      if (!new RegExp(`(?<![\\w$])${local}(?![\\w$])`).test(line)) return;
+      assert.ok(i >= liveStart && i <= liveEnd,
+        `${local} is a local of renderLiveState but is read at app.js:${i + 1} — ${line.trim()}`);
+    });
+  }
+
+  // And the paper renderer keeps its own figure.
+  const [paperStart, paperEnd] = bounds("renderBotState");
+  const paper = lines.slice(paperStart, paperEnd).join("\n");
+  assert.match(paper, /els\.portfolioTotalPl\.textContent = signedMoney\(totalPnl\);/,
+    "the paper portfolio must report its own total P/L");
+});
