@@ -2521,41 +2521,39 @@ test("5050: the progress log describes the run that actually happens", async () 
   assert.match(app, /scans for them itself rather than taking the list on screen/);
 });
 
-test("5050: a token already working is risk-blocked, not offered again", async () => {
+test("5050: candidates on an event already working are risk-blocked", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  // Reported: after bidding every candidate, the whole list still showed READY --
-  // so the next run looked like it would bid them all a second time. 5050 bids the
-  // entire qualifying set at once, which makes duplicate suppression the one thing
-  // it cannot get wrong.
+  // Reported twice: every candidate stayed READY however many bids were resting.
   //
-  // The executor already skips anything resting or held in the wallet, and it does
-  // not care which portfolio placed it: a second order on the same token is a
-  // duplicate however it got there. The list has to mark exactly those rows, or it
-  // disagrees with the run it is supposed to preview.
-  const head = /const walletTokenIds = isFixedEntryMode\(mode\)[\s\S]*?: null;/.exec(app)[0];
-  const row = /\(walletTokenIds && walletTokenIds\.has\(tokenId\)[\s\S]*?candidateRiskBlockReason\(item, activeRows, evaluationByToken\)\)/.exec(app)[0];
-  const run = new Function("state", "mode", "tokenId", "deps", `
-    const {isFixedEntryMode,candidateRiskBlockReason}=deps;
-    const item={},activeRows=[],evaluationByToken=new Map();
-    ${head}
-    return ${row};`);
-  const state = { liveState: { openOrders: [{ tokenId: "resting" }], positions: [{ tokenId: "held" }] } };
-  const deps = { isFixedEntryMode: (m) => m === "live-5050", candidateRiskBlockReason: () => null };
+  // The rule was never wrong -- it was fed an empty set. The exposure passed to it
+  // came from activeExposureRowsForMode, which filters the wallet down to what this
+  // portfolio placed, and that attribution is derived from 5050's run log. The log
+  // does not exist until its first run publishes one, so 5050 saw no exposure at all
+  // and blocked nothing. Checking the token alone was also too narrow: one bid per
+  // event means the other sub-markets of that event are different tokens and collide
+  // only on the event key.
+  assert.match(app, /const activeRows = isFixedEntryMode\(mode\)\n\s*\? \[\n\s*\.\.\.\(Array\.isArray\(state\.liveState\?\.positions\)/,
+    "5050 must see the whole wallet, not its attributed subset");
+  assert.ok(!/walletTokenIds/.test(app), "the narrower token-only check is superseded");
 
-  assert.match(run(state, "live-5050", "resting", deps), /already resting or held/);
-  assert.match(run(state, "live-5050", "held", deps), /already resting or held/);
-  assert.equal(run(state, "live-5050", "fresh", deps), null, "an untouched token stays biddable");
-  // Only 5050 bids the whole set, so this must not change the main live portfolio.
-  assert.equal(run(state, "live", "resting", deps), null);
+  const pick = (re) => re.exec(app)[0];
+  const body = [
+    "const inferredRiskKeysForRow = () => [];",
+    pick(/function riskKeysForRow\([\s\S]*?\n\}/),
+    pick(/function candidateRiskBlockReason\([\s\S]*?\n\}/),
+  ].join("\n");
+  const reason = new Function("item", "activeRows", `${body}
+    return candidateRiskBlockReason(item, activeRows, new Map());`);
+  const wallet = [{ tokenId: "A1", riskGroupKeys: ["event:matchA", "match:a"] }];
 
-  // A blocked row is shown as risk-blocked rather than dropped, so it stays visible
-  // with its reason instead of silently disappearing from the shortlist.
-  assert.match(app, /if \(row\.portfolioRiskBlockReason\) riskBlocked\.push\(row\);/);
+  assert.match(reason({ tokenId: "A1", riskGroupKeys: ["event:matchA"] }, wallet), /duplicate token already open/);
+  assert.match(reason({ tokenId: "A2", riskGroupKeys: ["event:matchA", "match:a"] }, wallet),
+    /same event or match already open/, "a sibling sub-market must block on the event key");
+  assert.equal(reason({ tokenId: "B1", riskGroupKeys: ["event:matchB"] }, wallet), "",
+    "an unrelated event stays biddable");
 
-  // The executor's own guard, which this mirrors.
-  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
-  assert.match(executor, /note\("an order is already resting on this token"\)/);
-  assert.match(executor, /note\("this token is already held"\)/);
+  // The failure being fixed: an empty exposure set makes everything look ready.
+  assert.equal(reason({ tokenId: "A2", riskGroupKeys: ["event:matchA"] }, []), "");
 });
