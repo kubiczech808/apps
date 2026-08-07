@@ -1180,7 +1180,11 @@ function syncModeUi() {
       button.textContent = live ? button.dataset.liveLabel : button.dataset.paperLabel;
     }
   });
-  if (els.portfolioTitle) els.portfolioTitle.textContent = live ? "Live Polymarket account" : `Paper - ${paperModeLabel()}`;
+  if (els.portfolioTitle) {
+    els.portfolioTitle.textContent = isFixedEntryMode()
+      ? "5050 - fixed-entry bids"
+      : (live ? "Live Polymarket account" : `Paper - ${paperModeLabel()}`);
+  }
   if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = live ? "Opened live trades" : `Opened ${paperModeLabel()} trades`;
   if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = live ? "Closed live trades" : `Closed ${paperModeLabel()} trades`;
   if (els.evaluationControls) els.evaluationControls.style.display = "";
@@ -2912,7 +2916,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
     els.automationToggle.setAttribute("aria-pressed", automationOn ? "true" : "false");
     els.automationToggle.classList.toggle("is-off", !automationOn);
   }
-  if (els.automationToggleLabel) els.automationToggleLabel.textContent = automationOn ? "Automatic: on" : "Automatic: off";
+  if (els.automationToggleLabel) els.automationToggleLabel.textContent = automationOn ? "ON" : "OFF";
   if (els.mostProbableOutcome) {
     els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
     els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLive);
@@ -4659,10 +4663,14 @@ async function triggerScrapedOpportunityRefresh(item) {
 
 async function loadLiveState(options = {}) {
   try {
-    const [liveResult, botResult, executionResult] = await Promise.allSettled([
+    // Both live execution logs are loaded regardless of which tab is open: the split
+    // between the two portfolios is decided by what 5050 placed, so the Live tab
+    // needs 5050's log to know what is not its own.
+    const [liveResult, botResult, executionResult, fixedEntryResult] = await Promise.allSettled([
       fetchJson("data/live-state.json"),
       fetchJson("data/paper-state.json", { summary: "dashboard" }),
       fetchJson(liveExecutionStateFile(options.requestedMode || state.mode)),
+      fetchJson("data/live-5050-execution-state.json"),
     ]);
     if (dashboardLoadIsStale(options) || !isLiveMode()) return;
     if (liveResult.status === "rejected") throw liveResult.reason;
@@ -4671,6 +4679,9 @@ async function loadLiveState(options = {}) {
       state.botStateFull = botStateIsFull(state.botState);
     }
     state.liveExecutionState = executionResult.status === "fulfilled" ? executionResult.value : state.liveExecutionState;
+    // Absent is not empty: a failed fetch must not silently reassign every 5050
+    // position to the Live tab, so the last known log is kept.
+    if (fixedEntryResult.status === "fulfilled") state.live5050ExecutionState = fixedEntryResult.value;
     const liveState = liveResult.value;
     renderLiveState(liveState);
     // CLOB open orders expose only token/condition IDs. Load the shared scraped
@@ -4737,7 +4748,7 @@ async function loadDashboardState(options = {}) {
     await loadPortfolioConfig();
     if (dashboardLoadIsStale({ requestId, requestedMode })) return;
   }
-  return requestedMode === "live"
+  return LIVE_MODES.has(requestedMode)
     ? loadLiveState({ ...options, requestId, requestedMode })
     : loadBotState({ ...options, requestId, requestedMode });
 }
@@ -5100,10 +5111,10 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
 }
 
 function activeExposureRowsForMode(mode = state.mode) {
-  if (normalizeMode(mode) === "live") {
+  if (LIVE_MODES.has(normalizeMode(mode))) {
     return [
-      ...(Array.isArray(state.liveState?.positions) ? state.liveState.positions : []),
-      ...(Array.isArray(state.liveState?.openOrders) ? state.liveState.openOrders : []),
+      ...livePositions(state.liveState),
+      ...liveOpenOrders(state.liveState),
     ].map((row) => {
       const metadata = liveMarketMetadataForTrade(row);
       if (!metadata) return row;
@@ -5607,12 +5618,49 @@ function renderBotState(botState) {
   openOpportunityFromCurrentUrl();
 }
 
+// The two live portfolios trade one Polymarket account, so the wallet cannot tell
+// them apart -- but each records what it placed. A token is 5050's if 5050 submitted
+// an order for it; everything else belongs to the main live portfolio. Without this
+// each portfolio would show the other's rows, and 5050 rests dozens of bids at once.
+function submittedTokenIds(executionState) {
+  const tokens = new Set();
+  const rows = [
+    executionState || {},
+    ...(Array.isArray(executionState?.runLog) ? executionState.runLog : []),
+  ];
+  for (const row of rows) {
+    for (const attempt of (Array.isArray(row?.attempts) ? row.attempts : [])) {
+      const action = String(attempt?.action || "").toUpperCase();
+      if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
+      const tokenId = String(attempt?.tokenId || "");
+      if (tokenId) tokens.add(tokenId);
+    }
+  }
+  return tokens;
+}
+
+function fixedEntryTokenIds() {
+  return submittedTokenIds(state.live5050ExecutionState);
+}
+
+// Attribution must never hide a row from both portfolios: anything 5050 did not
+// place shows under Live, which is also the safe direction for a token whose
+// origin is unknown.
+function belongsToActiveLivePortfolio(row) {
+  const tokenId = String(row?.tokenId || row?.assetId || "");
+  if (!tokenId) return !isFixedEntryMode();
+  const owned = fixedEntryTokenIds().has(tokenId);
+  return isFixedEntryMode() ? owned : !owned;
+}
+
 function livePositions(liveState) {
-  return Array.isArray(liveState?.positions) ? liveState.positions.filter((trade) => !isClosedTrade(trade)) : [];
+  return Array.isArray(liveState?.positions)
+    ? liveState.positions.filter((trade) => !isClosedTrade(trade)).filter(belongsToActiveLivePortfolio)
+    : [];
 }
 
 function liveOpenOrders(liveState) {
-  return Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
+  return Array.isArray(liveState?.openOrders) ? liveState.openOrders.filter(belongsToActiveLivePortfolio) : [];
 }
 
 function liveActivity(liveState) {
@@ -5978,7 +6026,7 @@ function renderLiveState(liveState) {
   if (els.portfolioRules) {
     els.portfolioRules.innerHTML = `
     <div class="bot-summary">
-      ${renderPortfolioRulesCard("Live portfolio", livePortfolioRuleRows())}
+      ${renderPortfolioRulesCard(isFixedEntryMode() ? "5050 portfolio" : "Live portfolio", livePortfolioRuleRows())}
     </div>
   `;
   }
@@ -7151,7 +7199,9 @@ function liveBatchCandidateSummaryFromExecution(item = {}) {
 
 function liveRunLogRows() {
   const rows = [];
-  const fromLiveState = Array.isArray(state.liveState?.runLog) ? state.liveState.runLog : [];
+  // live-state.json carries the main live portfolio's own runs. 5050 decides
+  // separately, so its tab shows only what its own executor recorded.
+  const fromLiveState = !isFixedEntryMode() && Array.isArray(state.liveState?.runLog) ? state.liveState.runLog : [];
   const fromExecutionState = Array.isArray(state.liveExecutionState?.runLog) ? state.liveExecutionState.runLog : [];
   rows.push(...fromLiveState);
   rows.push(...fromExecutionState);

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260807-automation-toggle">
+  <link rel="stylesheet" href="assets/app.css?v=20260807-automation-badge">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -54,7 +54,13 @@
         <div class="panel-head">
           <div>
             <p class="eyebrow">Portfolio</p>
-            <h2 data-portfolio-title>Autonomous paper portfolio</h2>
+            <div class="portfolio-title-row">
+              <h2 data-portfolio-title>Autonomous paper portfolio</h2>
+              <button class="automation-toggle" type="button" data-automation-toggle aria-pressed="true" title="Turn automatic execution for this portfolio on or off">
+                <span class="automation-dot" aria-hidden="true"></span>
+                <span data-automation-toggle-label>ON</span>
+              </button>
+            </div>
           </div>
           <div class="portfolio-actions">
             <div class="mode-switch" role="group" aria-label="Portfolio mode">
@@ -309,13 +315,7 @@
           <p class="eyebrow">Portfolio</p>
           <h2 id="parameter-modal-title">Portfolio parameters</h2>
         </div>
-        <div class="parameter-modal-head-actions">
-          <button class="automation-toggle" type="button" data-automation-toggle aria-pressed="true" title="Turn automatic execution for this portfolio on or off">
-            <span class="automation-dot" aria-hidden="true"></span>
-            <span data-automation-toggle-label>Automatic: on</span>
-          </button>
-          <button class="analysis-modal-close" type="button" data-parameter-modal-close aria-label="Close portfolio parameters">x</button>
-        </div>
+        <button class="analysis-modal-close" type="button" data-parameter-modal-close aria-label="Close portfolio parameters">x</button>
       </div>
       <div class="analysis-modal-body parameter-modal-body">
         <label class="parameter-control">

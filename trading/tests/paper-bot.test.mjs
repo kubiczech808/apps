@@ -2086,30 +2086,6 @@ test("5050 tab: the portfolio is a live mode with its own config and run log", a
   assert.match(app, /automationEnabled: false,/);
 });
 
-test("automation: the switch is readable and flippable from the top of the box", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
-  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
-  const css = await readFile(new URL("../assets/app.css", import.meta.url), "utf8");
-
-  // Whether a portfolio trades on its own is the first thing worth knowing when its
-  // parameters are open, and turning it off should not mean hunting for a checkbox
-  // among the thresholds.
-  const head = html.slice(html.indexOf('id="parameter-modal-title"'), html.indexOf("parameter-modal-body"));
-  assert.match(head, /data-automation-toggle/, "the control belongs in the box header");
-  assert.match(head, /data-automation-toggle-label/);
-  assert.ok(!/data-automation-enabled/.test(html), "the buried checkbox must be gone, not duplicated");
-
-  // One click flips it, and the state is legible without reading the label.
-  assert.match(app, /els\.automationToggle\?\.addEventListener\("click"/);
-  assert.match(app, /const value = !automationIsEnabled\(portfolioConfigForMode\(state\.mode\)\);/);
-  assert.match(app, /els\.automationToggle\.setAttribute\("aria-pressed"/);
-  assert.match(app, /classList\.toggle\("is-off", !automationOn\)/);
-  assert.match(css, /\.automation-toggle\.is-off/);
-  // A stylesheet change nobody sees is a change that did not happen.
-  assert.match(html, /app\.css\?v=20260807-automation-toggle/);
-});
-
 test("days left: under a day reads in hours, not tenths of a day", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
@@ -2136,4 +2112,58 @@ test("days left: under a day reads in hours, not tenths of a day", async () => {
   assert.equal(compactDays(-1), "due now");
   assert.equal(compactDays(Number.NaN), "-");
   assert.equal(compactDays(0.0005), "1 min");
+});
+
+test("5050: it is its own live portfolio, not a copy of a paper one", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: the 5050 tab showed the conservative paper portfolio. The mode was
+  // recognised as live everywhere except the one place that decides which loader
+  // runs, so it fell through to the paper bot's state.
+  assert.match(app, /return LIVE_MODES\.has\(requestedMode\)\n\s*\? loadLiveState\(/,
+    "a live portfolio must load live data");
+  assert.ok(!/return requestedMode === "live"\n\s*\? loadLiveState/.test(app));
+
+  // Overview finances come from the shared Polymarket account, as they must --
+  // there is one wallet -- but orders, positions and the run log are attributed.
+  assert.match(app, /function submittedTokenIds\(executionState\)/);
+  assert.match(app, /return isFixedEntryMode\(\) \? owned : !owned;/,
+    "each token shows under exactly one of the two live portfolios");
+  assert.match(app, /\.filter\(belongsToActiveLivePortfolio\)/);
+  assert.match(app, /!isFixedEntryMode\(\) && Array\.isArray\(state\.liveState\?\.runLog\)/,
+    "and 5050's run log is its own");
+
+  // A token nobody claims belongs to Live: attribution must never hide a row from
+  // both tabs, and a failed fetch must not reassign 5050's positions wholesale.
+  assert.match(app, /if \(!tokenId\) return !isFixedEntryMode\(\);/);
+  assert.match(app, /if \(fixedEntryResult\.status === "fulfilled"\) state\.live5050ExecutionState/);
+
+  // Its own identity, and automation off by default: this is the portfolio that
+  // deliberately commits past its capital.
+  assert.match(app, /"5050 - fixed-entry bids"/);
+  assert.match(app, /live5050: \{[\s\S]*?automationEnabled: false,/);
+});
+
+test("automation: the ON/OFF badge sits beside the portfolio name", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+
+  // It is the portfolio's state, not one setting among its thresholds, so it
+  // belongs where the portfolio is named and must be readable without opening
+  // anything.
+  const titleRow = html.slice(html.indexOf('class="portfolio-title-row"'), html.indexOf("portfolio-actions"));
+  assert.match(titleRow, /data-portfolio-title/);
+  assert.match(titleRow, /data-automation-toggle/, "the badge belongs beside the name");
+  assert.equal((html.match(/data-automation-toggle(?!-)/g) || []).length, 1, "and only there");
+
+  const modal = html.slice(html.indexOf("data-parameter-modal"));
+  assert.ok(!/data-automation-toggle/.test(modal), "it must be gone from the parameter box");
+
+  // Colour carries the state, and one click flips it.
+  assert.match(app, /els\.automationToggleLabel\.textContent = automationOn \? "ON" : "OFF"/);
+  assert.match(app, /classList\.toggle\("is-off", !automationOn\)/);
+  assert.match(app, /els\.automationToggle\?\.addEventListener\("click"/);
+  assert.match(html, /app\.css\?v=20260807-automation-badge/);
 });
