@@ -288,12 +288,18 @@ function signedPercent(value) {
   return `${value >= 0 ? "+" : ""}${percent(value)}`;
 }
 
+// Under a day, tenths of a day are a unit nobody reads in their head: "0.2 d" has
+// to be converted before it means anything, and "< 0.1 d" covered everything from
+// two hours down to two minutes. Below one day this switches to hours, and below
+// one hour to minutes, so the number arrives in the unit it is thought about in.
 function compactDays(value) {
   if (!Number.isFinite(value)) return "-";
   if (value <= 0) return "due now";
-  if (value > 0 && value < 0.1) return "< 0.1 d";
-  if (value < 1) return `${Math.max(0, value).toFixed(1)} d`;
-  return `${value.toFixed(1)} d`;
+  if (value >= 1) return `${value.toFixed(1)} d`;
+  const hours = value * 24;
+  if (hours >= 1) return `${hours.toFixed(1)} h`;
+  const minutes = Math.round(hours * 60);
+  return minutes >= 1 ? `${minutes} min` : "< 1 min";
 }
 
 function shortAddress(value) {

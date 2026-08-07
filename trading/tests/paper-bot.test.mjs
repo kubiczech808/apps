@@ -1200,7 +1200,8 @@ test("execution popup: the result names the candidate and the numbers behind it"
   assert.match(summary, /Selected: Will Team A win\? \/ Yes/);
   assert.match(summary, /potential p\.a\. 405\.6%/);
   assert.match(summary, /net yield 3\.3%/);
-  assert.match(summary, /0\.3 d left/);
+  // 0.3 days is 7.2 hours, and hours are the unit a short-dated market is read in.
+  assert.match(summary, /7\.2 h left/);
   assert.match(summary, /win \$0\.17/);
   assert.match(summary, /stake \$5\.00/);
   assert.match(summary, /mkt 96\.7%/);
@@ -2107,4 +2108,32 @@ test("automation: the switch is readable and flippable from the top of the box",
   assert.match(css, /\.automation-toggle\.is-off/);
   // A stylesheet change nobody sees is a change that did not happen.
   assert.match(html, /app\.css\?v=20260807-automation-toggle/);
+});
+
+test("days left: under a day reads in hours, not tenths of a day", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const compactDays = new Function(`${/function compactDays\(value\)[\s\S]*?\n\}/.exec(app)[0]}
+    return compactDays;`)();
+
+  // "0.2 d" has to be converted before it means anything, and the old "< 0.1 d"
+  // bucket covered everything from two hours down to two minutes -- which is the
+  // range that matters most for the short-dated sports markets this trades.
+  assert.equal(compactDays(0.2), "4.8 h");
+  assert.equal(compactDays(0.75), "18.0 h");
+  assert.equal(compactDays(0.05), "1.2 h");
+  assert.ok(!/</.test(compactDays(0.02)), "the catch-all bucket must be gone");
+  assert.equal(compactDays(0.02), "29 min", "below an hour, minutes");
+
+  // A day and over is unchanged.
+  assert.equal(compactDays(1), "1.0 d");
+  assert.equal(compactDays(3.4), "3.4 d");
+  // The boundary belongs to hours, so nothing renders as "1.0 d" twice.
+  assert.equal(compactDays(0.99), "23.8 h");
+
+  // Edges keep their existing meaning rather than rendering as a number.
+  assert.equal(compactDays(0), "due now");
+  assert.equal(compactDays(-1), "due now");
+  assert.equal(compactDays(Number.NaN), "-");
+  assert.equal(compactDays(0.0005), "1 min");
 });
