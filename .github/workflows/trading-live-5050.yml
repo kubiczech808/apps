@@ -36,6 +36,11 @@ on:
         required: false
         default: ""
         type: string
+  schedule:
+    # The portfolio decides whether a scheduled run does anything: the executor
+    # skips it when automation is off, and honours its own cadence when set. Away
+    # from the top of the hour so it does not queue behind every other job.
+    - cron: '7,37 * * * *'
 
 # Serialized against itself only. It shares the wallet with the main live portfolio
 # but not the state file, and the exchange is the authority on collateral.
@@ -74,7 +79,8 @@ jobs:
       USE_LIMIT_ORDERS: "true"
       POLYMARKET_POST_ONLY: "true"
       LIVE_AUTO_ROTATE: "false"
-      LIVE_RUN_SOURCE: MANUAL
+      # A scheduled run must be able to be switched off; only a dispatch is manual.
+      LIVE_RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && 'MANUAL' || 'AUTO' }}
       # A wide scan is the point: many candidates, one bid each.
       LIVE_CANDIDATE_SCAN_LIMIT: "300"
       LIVE_MAX_RESOLUTION_DAYS: "30"
@@ -123,6 +129,9 @@ jobs:
               "LIVE_MIN_PROBABILITY": cfg.get("minProbability"),
               "LIVE_MAX_RESOLUTION_DAYS": cfg.get("maxResolutionDays"),
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": cfg.get("minLiquidityUsdc"),
+              # The portfolio's own cadence, so a scheduled run honours the interval
+              # set in its parameters rather than firing on every poll.
+              "LIVE_EXECUTION_CRON_MINUTES": cfg.get("executionCronMinutes"),
           }
           # An explicit dispatch input wins over the saved value for this run only.
           for key, dispatched in [
@@ -168,7 +177,7 @@ jobs:
       - name: Rest the fixed-entry bids
         working-directory: trading
         env:
-          POLYMARKET_DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.live_confirm) && 'false' || 'true' }}
+          POLYMARKET_DRY_RUN: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.live_confirm)) && 'false' || 'true' }}
           LIVE_STATE_URL: data/live-state.json
           LIVE_EXECUTION_STATE_URL: data/live-5050-execution-state.json
         run: npm run live:execute -- --confirm-live

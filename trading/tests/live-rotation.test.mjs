@@ -1408,8 +1408,9 @@ test("5050: the strategy is opt-in and does not disturb the main live portfolio"
   // the whole premise of accumulating cheap fills.
   assert.match(workflow, /POLYMARKET_POST_ONLY: "true"/);
   assert.match(workflow, /LIVE_AUTO_ROTATE: "false"/);
-  // Real orders only when explicitly confirmed.
-  assert.match(workflow, /inputs\.live_confirm\) && 'false' \|\| 'true'/);
+  // A scheduled run trades; a dispatch only when explicitly confirmed, so an
+  // unconfirmed manual run stays a dry run.
+  assert.match(workflow, /github\.event_name == 'schedule' \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.live_confirm\)/);
 
   // Running past the capital on hand is intended, so a collateral refusal is counted
   // rather than treated as a fault.

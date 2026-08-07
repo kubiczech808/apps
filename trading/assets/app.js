@@ -819,9 +819,17 @@ function stateWarningHtml(target, label) {
   `;
 }
 
+// The button on a portfolio's dashboard runs THAT portfolio. 5050 is a live mode,
+// so answering "live" for it started the main live portfolio's workflow instead --
+// a different algorithm, against real money.
+function currentExecutionTarget() {
+  if (isFixedEntryMode()) return "live-5050";
+  return isLiveMode() ? "live" : state.mode;
+}
+
 function oneTimeExecutionTarget(button) {
-  if (!button) return isLiveMode() ? "live" : state.mode;
-  if (button.dataset.oneTimeExecution === "current") return isLiveMode() ? "live" : state.mode;
+  if (!button) return currentExecutionTarget();
+  if (button.dataset.oneTimeExecution === "current") return currentExecutionTarget();
   return button.dataset.oneTimeExecution === "live" ? "live" : "paper";
 }
 
@@ -830,6 +838,7 @@ function isPaperExecutionTarget(target) {
 }
 
 function executionTargetLabel(target) {
+  if (target === "live-5050") return "5050";
   if (target === "live") return "live";
   if (isPaperExecutionTarget(target)) return paperModeLabel(target === "paper" ? state.mode : target);
   return "paper";
@@ -843,6 +852,8 @@ function syncExecutionButtons() {
     button.classList.toggle("live", isLiveMode());
     const labels = target === "live"
       ? ["Run live once", "Starting live..."]
+      : target === "live-5050"
+      ? ["Run 5050 once", "Starting 5050..."]
       : [`Run ${executionTargetLabel(target)} once`, `Starting ${executionTargetLabel(target)}...`];
     const [idleLabel, busyLabel] = labels;
     button.textContent = busy ? busyLabel : idleLabel;
@@ -3526,7 +3537,7 @@ function paperExecutionDecision(payload, strategyId = "") {
 // The ranked shortlist as this browser sees it at dispatch, so the popup can say
 // which candidates are in play and on what numbers before the runner reports back.
 function executionShortlistPreview(target, limit = 5) {
-  const mode = target === "live" ? "live" : (isPaperExecutionTarget(target) ? target : state.mode);
+  const mode = target === "live-5050" ? "live-5050" : (target === "live" ? "live" : (isPaperExecutionTarget(target) ? target : state.mode));
   let rows = [];
   try {
     rows = portfolioCandidateRows(mode) || [];
@@ -3637,7 +3648,9 @@ function liveExecutionSummary(execution) {
 // "Execution failed / State file is not available yet" and hid the real outcome,
 // so every attempt tolerates its own failure and only the last one is reported.
 async function waitForExecutionResult(target, startedAt, steps, options = {}) {
-  const stateTarget = target === "live" ? "live-execution" : "paper";
+  // Each live portfolio publishes its own execution state; watching the wrong one
+  // would report another portfolio's run as this one's result.
+  const stateTarget = target === "live-5050" ? "live-5050-execution" : (target === "live" ? "live-execution" : "paper");
   let lastError = null;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     let payload = null;
@@ -4285,8 +4298,10 @@ async function freshLiveWorkflowPayload() {
 }
 
 async function triggerOneTimeExecution(target) {
-  target = target === "live" ? "live" : (isPaperExecutionTarget(target) ? target : "paper");
-  const live = target === "live";
+  target = (target === "live" || target === "live-5050")
+    ? target
+    : (isPaperExecutionTarget(target) ? target : "paper");
+  const live = target === "live" || target === "live-5050";
   const paperStrategyId = live ? "" : paperStrategyIdFromMode(target === "paper" ? state.mode : target);
   const startedAt = new Date().toISOString();
   openExecutionModal(target);

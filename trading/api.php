@@ -1882,6 +1882,17 @@ try {
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
             ],
+            // 5050 runs a different algorithm from the main live portfolio, so the
+            // button on its dashboard must dispatch its own workflow. Its parameters
+            // are read from the saved config by the run itself; nothing is passed
+            // here, so a manual run and a scheduled one use identical settings.
+            'live-5050' => [
+                'workflow' => 'trading-live-5050.yml',
+                'inputs' => [
+                    'live_confirm' => true,
+                ],
+                'message' => '5050 execution workflow dispatched.',
+            ],
             'paper-scan' => [
                 'workflow' => 'trading-market-scan.yml',
                 'inputs' => array_filter([

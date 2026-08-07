@@ -2417,3 +2417,36 @@ test("5050: the run log is its own, even before it has one", async () => {
   assert.match(app, /isFixedEntryMode\(mode\) \? "data\/live-5050-execution-state\.json" : "data\/live-execution-state\.json"/);
   assert.match(app, /fetchJson\(liveExecutionStateFile\(options\.requestedMode \|\| state\.mode\)\)/);
 });
+
+test("5050: its own button and its own schedule run its own algorithm", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8");
+
+  // Reported: pressing Run once on the 5050 dashboard started the main live
+  // portfolio. 5050 is a live mode, so the target resolved to "live" -- a different
+  // algorithm, against real money.
+  assert.match(app, /function currentExecutionTarget\(\) \{\n\s*if \(isFixedEntryMode\(\)\) return "live-5050";/);
+  assert.match(app, /if \(button\.dataset\.oneTimeExecution === "current"\) return currentExecutionTarget\(\);/);
+  assert.match(api, /'live-5050' => \[\n\s*'workflow' => 'trading-live-5050\.yml',/);
+
+  // The result watcher must read the portfolio's own execution state, or it would
+  // report another portfolio's run as this one's outcome.
+  assert.match(app, /target === "live-5050" \? "live-5050-execution"/);
+
+  // The auto trigger: a schedule exists, and the run is gated by the portfolio's own
+  // switch and cadence rather than firing regardless.
+  assert.match(workflow, /schedule:\s*\n(?:\s*#[^\n]*\n)*\s*- cron: '7,37 \* \* \* \*'/);
+  assert.match(workflow, /LIVE_RUN_SOURCE: \$\{\{ github\.event_name == 'workflow_dispatch' && 'MANUAL' \|\| 'AUTO' \}\}/,
+    "a hard-coded MANUAL would bypass both the switch and the cadence");
+  assert.match(workflow, /"LIVE_EXECUTION_CRON_MINUTES": cfg\.get\("executionCronMinutes"\)/);
+  assert.match(workflow, /if cfg\.get\("automationEnabled"\) is False and os\.environ\.get\("GITHUB_EVENT_NAME"\) == "schedule"/);
+
+  // A scheduled run must place orders; only an unconfirmed dispatch is a dry run.
+  assert.match(workflow, /POLYMARKET_DRY_RUN: \$\{\{ \(github\.event_name == 'schedule' \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.live_confirm\)\) && 'false' \|\| 'true' \}\}/);
+
+  // The algorithm runs over the whole candidate set, not a browser shortlist.
+  assert.match(workflow, /LIVE_CANDIDATE_SCAN_LIMIT: "300"/);
+  assert.ok(!/live_execution_candidate_token_ids/.test(workflow));
+});
