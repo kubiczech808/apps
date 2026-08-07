@@ -2358,3 +2358,37 @@ test("automation: every portfolio carries its own ON/OFF badge in its settings",
   assert.ok(!/data-automation-toggle/.test(html), "and no static copy in the markup to go out of sync");
   assert.match(html, /app\.css\?v=20260807-automation-in-rules/);
 });
+
+test("live modes: nothing may treat 5050 as a paper portfolio", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: switching to 5050 flashed several closed trades before they vanished.
+  // renderKnownStateForMode tested normalizeMode(mode) === "live", so 5050 fell to
+  // renderBotState and painted the paper portfolio's closed trades until the live
+  // load replaced them. That single comparison had already caused the tab showing
+  // conservative data, the settings writing into the conservative portfolio, and the
+  // stats appearing shared -- it is one bug shape, not four.
+  //
+  // Every place that asks "is this a live portfolio?" must ask it of the set, so
+  // adding a live portfolio can never again mean auditing the file by hand.
+  const lines = app.split("\n");
+  const offenders = [];
+  lines.forEach((line, i) => {
+    if (/^\s*(\/\/|\*)/.test(line)) return;
+    if (/normalizeMode\([^)]*\)\s*===\s*"live"/.test(line)
+      || /\bnormalizedMode\s*===\s*"live"(?!-)/.test(line)) {
+      offenders.push(`app.js:${i + 1} — ${line.trim()}`);
+    }
+  });
+  assert.deepEqual(offenders, [],
+    `these compare against "live" alone and so exclude 5050:\n${offenders.join("\n")}`);
+
+  // The two that matter most, pinned by name.
+  assert.match(app, /function renderKnownStateForMode\(mode = state\.mode\) \{\n\s*if \(LIVE_MODES\.has\(normalizeMode\(mode\)\)\) \{/,
+    "the pre-load render must not fall through to the paper renderer");
+  assert.match(app, /function portfolioForMode\(mode = state\.mode\) \{\n\s*if \(LIVE_MODES\.has\(normalizeMode\(mode\)\)\)/);
+
+  // Reloading on the 5050 tab must not drop back to a paper portfolio.
+  assert.match(app, /if \(normalizeMode\(value\) === value\) return value;/);
+});

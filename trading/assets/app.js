@@ -317,7 +317,7 @@ function pnlClass(value) {
 function storedMode() {
   try {
     const value = localStorage.getItem(MODE_STORAGE_KEY);
-    if (value === "live" || value === "paper-highReward" || value === "paper-moreProbable" || value === "paper-conservative") return value;
+    if (normalizeMode(value) === value) return value;
     return "paper-conservative";
   } catch {
     return "paper-conservative";
@@ -2584,7 +2584,7 @@ function syncEvaluationProbabilityFilterControl() {
 function eligibilityThresholdStorageKey(mode = state.mode) {
   const normalizedMode = normalizeMode(mode);
   const parts = [ELIGIBILITY_THRESHOLD_STORAGE_KEY, normalizedMode];
-  if (normalizedMode === "live") {
+  if (LIVE_MODES.has(normalizedMode)) {
     const address = state.liveState?.account?.address || state.liveState?.account?.proxyWallet || "";
     if (address) parts.push(String(address).toLowerCase());
   }
@@ -2852,7 +2852,7 @@ function syncLimitOrdersControl() {
 }
 
 function parameterCapitalContextForMode(mode = state.mode) {
-  if (normalizeMode(mode) === "live") {
+  if (LIVE_MODES.has(normalizeMode(mode))) {
     const portfolio = state.liveState?.portfolio || {};
     const openOrderRisk = Array.isArray(state.liveState?.openOrders)
       ? state.liveState.openOrders.reduce((sum, order) => sum + Number(order.notionalUsdc || 0), 0)
@@ -2906,7 +2906,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const liquidity = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const order = normalizeSelectionOrder(config.selectionOrder);
-  const isLive = normalizeMode(mode) === "live";
+  const isLive = LIVE_MODES.has(normalizeMode(mode));
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(mode);
   const allocation = normalizeRiskAllocation(config.maxOrderFraction) ?? DEFAULT_RISK_ALLOCATION;
   const limitOrders = config.useLimitOrders ?? isLive;
@@ -3695,7 +3695,7 @@ function paperModeFromStrategyId(strategyId) {
 }
 
 function portfolioForMode(mode = state.mode) {
-  if (normalizeMode(mode) === "live") return state.liveState?.portfolio || {};
+  if (LIVE_MODES.has(normalizeMode(mode))) return state.liveState?.portfolio || {};
   const portfolios = paperPortfolioList(state.botState || {});
   const strategyId = paperStrategyIdFromMode(mode);
   const selected = portfolios.find((item) => item.id === strategyId) || selectedPaperPortfolio(state.botState || {});
@@ -3780,7 +3780,7 @@ function dashboardLoadIsStale(options = {}) {
 }
 
 function renderKnownStateForMode(mode = state.mode) {
-  if (normalizeMode(mode) === "live") {
+  if (LIVE_MODES.has(normalizeMode(mode))) {
     if (state.liveState) renderLiveState(state.liveState);
     return;
   }
@@ -3914,7 +3914,7 @@ async function ensureFullBotState(options = {}) {
     const botState = await fetchJson("data/paper-state.json");
     if (dashboardLoadIsStale(options)) return;
     state.botStateFull = botStateIsFull(botState);
-    if (normalizeMode(state.mode) === "live") {
+    if (LIVE_MODES.has(normalizeMode(state.mode))) {
       state.botState = botStateWithPreservedEvaluations(botState);
       if (state.liveState) renderLiveState(state.liveState);
       return;
@@ -4811,7 +4811,7 @@ function stakeSizingRuleValue(mode, portfolio = {}) {
   const normalizedMode = normalizeMode(mode);
   const config = portfolioConfigForMode(normalizedMode);
   const allocation = normalizeRiskAllocation(config.maxOrderFraction) ?? DEFAULT_RISK_ALLOCATION;
-  const fallbackPortfolio = normalizedMode === "live"
+  const fallbackPortfolio = LIVE_MODES.has(normalizedMode)
     ? state.liveState?.portfolio
     : state.botState?.paperPortfolios?.[paperStrategyIdFromMode(normalizedMode)]?.portfolio;
   // Equity and open P/L must come from the same snapshot, or the two could be mixed.
@@ -4825,7 +4825,7 @@ function stakeSizingRuleValue(mode, portfolio = {}) {
   // the live account that made this row read "12.4% of live equity ($2.48)" while the MAX
   // PER TRADE control right below it read $3.04, and the executor actually sized $3.04.
   // The stake shown here now comes from the same base the order will use.
-  const isLive = normalizedMode === "live";
+  const isLive = LIVE_MODES.has(normalizedMode);
   const openPnl = Number(source?.openPnlUsdc);
   const sizingBase = isLive && Number.isFinite(equity)
     ? Math.max(0, equity - (Number.isFinite(openPnl) ? openPnl : 0))
@@ -5335,7 +5335,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
     ].filter(Boolean).join(" ");
     return `<div class="empty">No opportunities currently pass this portfolio shortlist.${details ? ` ${escapeHtml(details)}` : " The next scan will refresh market data and newly analyzed opportunities."}</div>`;
   }
-  const live = normalizeMode(mode) === "live";
+  const live = LIVE_MODES.has(normalizeMode(mode));
   const config = portfolioConfigForMode(mode);
   const usesPolymarketPotential = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
   const useLiveMarketColumnOrder = live && usesPolymarketPotential;
@@ -5503,7 +5503,7 @@ function renderPortfolioCandidates() {
   }
   const diagnostics = portfolioCandidateDiagnostics(mode);
   const rows = diagnostics.ready;
-  const label = normalizeMode(mode) === "live" ? "Live" : `Paper - ${paperModeLabel(mode)}`;
+  const label = isFixedEntryMode(mode) ? "5050" : (LIVE_MODES.has(normalizeMode(mode)) ? "Live" : `Paper - ${paperModeLabel(mode)}`);
   if (els.portfolioCandidatesTitle) els.portfolioCandidatesTitle.textContent = `${label} execution candidates`;
   if (els.portfolioCandidatesSummary) {
     const blocked = diagnostics.riskBlocked.length;
