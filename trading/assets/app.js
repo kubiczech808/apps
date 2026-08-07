@@ -636,11 +636,15 @@ function portfolioConfigForMode(mode = state.mode) {
 function updatePortfolioConfigForMode(mode, updates) {
   const normalizedMode = normalizeMode(mode);
   const base = state.portfolioConfig || defaultPortfolioConfig();
-  if (normalizedMode === "live") {
+  // Each live portfolio writes to its own slot. Matching only "live" here sent every
+  // 5050 setting -- the automation switch and the order price alike -- into the
+  // conservative paper portfolio, so changing one portfolio changed another.
+  if (LIVE_MODES.has(normalizedMode)) {
+    const key = liveConfigKeyForMode(normalizedMode);
     state.portfolioConfig = {
       ...base,
-      live: {
-        ...portfolioConfigForMode("live"),
+      [key]: {
+        ...portfolioConfigForMode(normalizedMode),
         ...updates,
       },
     };

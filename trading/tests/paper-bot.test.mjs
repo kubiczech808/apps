@@ -2216,3 +2216,48 @@ test("5050: the order price is a portfolio setting, not only a dispatch input", 
   const inputs = workflow.slice(workflow.indexOf("entry_price:"), workflow.indexOf("concurrency:"));
   assert.ok(!/default: "0\.50"/.test(inputs), "a defaulted input would always win over the saved setting");
 });
+
+test("portfolio settings: each portfolio owns its own, and cannot change another's", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: the ON/OFF switch behaved as if it applied to everything at once.
+  // updatePortfolioConfigForMode special-cased only "live", so "live-5050" fell
+  // through to the paper branch -- where paperStrategyIdFromMode answers
+  // "conservative" for any mode it does not recognise. Every 5050 setting, the
+  // automation switch and the order price alike, was written into the conservative
+  // paper portfolio.
+  const pick = (re) => re.exec(src)[0];
+  const run = new Function("state", `${[
+    pick(/function normalizeMode\(mode\)[\s\S]*?\n\}/),
+    pick(/const LIVE_MODES = new Set\(\[[^\]]*\]\);/),
+    pick(/function isFixedEntryMode\(mode = state\.mode\)[\s\S]*?\n\}/),
+    pick(/function liveConfigKeyForMode\(mode = state\.mode\)[\s\S]*?\n\}/),
+    pick(/function paperStrategyIdFromMode\(mode = state\.mode\)[\s\S]*?\n\}/),
+    pick(/function defaultPortfolioConfig\(\)[\s\S]*?\n\}/),
+    pick(/function portfolioConfigForMode\(mode = state\.mode\)[\s\S]*?\n\}/),
+    pick(/function updatePortfolioConfigForMode\(mode, updates\)[\s\S]*?\n\}/),
+  ].join("\n")}
+    const DEFAULT_MAX_RESOLUTION_DAYS = 7;
+    return { portfolioConfigForMode, updatePortfolioConfigForMode };`);
+
+  const MODES = ["live", "live-5050", "paper-conservative", "paper-highReward", "paper-moreProbable"];
+  for (const changed of MODES) {
+    const api = run({ mode: changed, portfolioConfig: null });
+    api.updatePortfolioConfigForMode(changed, { automationEnabled: false });
+    assert.equal(api.portfolioConfigForMode(changed).automationEnabled, false, `${changed} must keep its own change`);
+    for (const other of MODES.filter((m) => m !== changed)) {
+      const stillOn = api.portfolioConfigForMode(other).automationEnabled;
+      // 5050 is the one that ships off; everything else defaults on.
+      const expected = other === "live-5050" ? false : true;
+      assert.equal(stillOn, expected, `changing ${changed} must not touch ${other}`);
+    }
+  }
+
+  // The 5050-only settings land in the 5050 slot, not in a paper strategy.
+  const api = run({ mode: "live-5050", portfolioConfig: null });
+  api.updatePortfolioConfigForMode("live-5050", { fixedEntryPrice: 0.35 });
+  assert.equal(api.portfolioConfigForMode("live-5050").fixedEntryPrice, 0.35);
+  assert.equal(api.portfolioConfigForMode("paper-conservative").fixedEntryPrice, undefined,
+    "a paper portfolio must never acquire a setting it does not have");
+});
