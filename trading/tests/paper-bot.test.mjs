@@ -2496,3 +2496,27 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
   assert.match(after.slice(0, 200), /if \(!Number\.isFinite\(annualizedReturn\)\)/,
     "the fixed-entry branch has to short-circuit the generic yield checks");
 });
+
+test("5050: the progress log describes the run that actually happens", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: pressing Run 5050 once looked like it started the live portfolio. The
+  // right workflow was dispatched, but every line of the progress log said "Live
+  // execution" and one of them claimed "34 candidates from the refreshed list on
+  // screen were sent for live verification" -- which never happened: the 5050
+  // workflow has no shortlist input and the API forwards none, so the run scans for
+  // candidates itself. The log described a different run from the one taking place.
+  assert.match(app, /target === "live-5050" \? "5050 execution requested"/);
+  assert.match(app, /target === "live-5050" \? "5050 execution confirmed"/);
+  assert.match(app, /target === "live-5050" \? "starting 5050 workflow"/);
+
+  // The shortlist is built and announced only for the portfolio that sends one.
+  assert.match(app, /const sendsShortlist = target === "live";/);
+  assert.match(app, /const workflowPayload = sendsShortlist \? await freshLiveWorkflowPayload\(\) : null;/);
+  assert.match(app, /if \(sendsShortlist\) \{\n\s*\/\/ Name the shortlist that was actually submitted/);
+
+  // And 5050 says what it will really do, naming its own entry price.
+  assert.match(app, /"Running the 5050 algorithm"/);
+  assert.match(app, /scans for them itself rather than taking the list on screen/);
+});

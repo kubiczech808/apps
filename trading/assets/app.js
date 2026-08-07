@@ -4307,7 +4307,7 @@ async function triggerOneTimeExecution(target) {
   openExecutionModal(target);
   let steps = [
     {
-      title: live ? "Live execution requested" : "Paper execution requested",
+      title: target === "live-5050" ? "5050 execution requested" : (live ? "Live execution requested" : "Paper execution requested"),
       detail: live ? `Started ${formatDate(startedAt)}` : `${executionTargetLabel(target)} / started ${formatDate(startedAt)}`,
       tone: "active",
     },
@@ -4335,17 +4335,28 @@ async function triggerOneTimeExecution(target) {
     // The armed gate is an explicit, durable confirmation. Native confirm()
     // dialogs are inconsistently suppressed on mobile and can falsely look as
     // though GitHub cancelled a workflow before it was even dispatched.
-    steps = addExecutionStep(steps, "Live execution confirmed", "The live execution gate is active on this browser. Dispatching GitHub workflow with the current portfolio parameters.", "done");
+    steps = addExecutionStep(steps, target === "live-5050" ? "5050 execution confirmed" : "Live execution confirmed", `The live execution gate is active on this browser. Dispatching ${target === "live-5050" ? "the 5050 workflow, which runs over its own candidate scan" : "GitHub workflow with the current portfolio parameters"}.`, "done");
   }
 
   state.executionBusy = target;
   syncExecutionButtons();
-  setExecutionStatus(live ? "starting live workflow" : "starting paper workflow");
+  setExecutionStatus(target === "live-5050" ? "starting 5050 workflow" : (live ? "starting live workflow" : "starting paper workflow"));
 
   try {
     await savePortfolioConfigNow();
-    const workflowPayload = live ? await freshLiveWorkflowPayload() : null;
-    if (live) {
+    // 5050 takes no shortlist: its workflow has no such input and it scans for
+    // candidates itself, so building and announcing one would be a fiction.
+    const sendsShortlist = target === "live";
+    const workflowPayload = sendsShortlist ? await freshLiveWorkflowPayload() : null;
+    if (target === "live-5050") {
+      steps = addExecutionStep(
+        steps,
+        "Running the 5050 algorithm",
+        `Every candidate that clears this portfolio\u2019s bar will be bid at ${percent(normalizeFixedEntryPrice(portfolioConfigForMode("live-5050").fixedEntryPrice))}. The run scans for them itself rather than taking the list on screen.`,
+        "done",
+      );
+    }
+    if (sendsShortlist) {
       // Name the shortlist that was actually submitted, so the run log can be checked
       // against it instead of taken on trust.
       const submitted = String(workflowPayload.live_execution_candidate_token_ids || "")
