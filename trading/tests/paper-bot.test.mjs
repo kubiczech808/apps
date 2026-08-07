@@ -2450,3 +2450,49 @@ test("5050: its own button and its own schedule run its own algorithm", async ()
   assert.match(workflow, /LIVE_CANDIDATE_SCAN_LIMIT: "300"/);
   assert.ok(!/live_execution_candidate_token_ids/.test(workflow));
 });
+
+test("5050: the candidate list is judged by its own rule, not market-price economics", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // 5050 does not buy at the market, it rests a bid at a fixed price. Judging its
+  // shortlist on market-price yield asks the wrong question: a candidate trading at
+  // 95c has a poor return if bought there and an excellent one if filled at 50c, so
+  // the generic economics filter was hiding exactly the candidates it bids on -- and
+  // the visible list disagreed with what the run would do.
+  const branch = /if \(isFixedEntryMode\(mode\)\) \{[\s\S]*?return reasons;\n  \}/.exec(app)[0];
+  const run = new Function("item", "config", "mode", "deps", `
+    const {isFixedEntryMode,normalizeFixedEntryPrice,probability,money,compactDays}=deps;
+    const reasons=[];
+    const liquidity=Number(item.volumeUsdc||0), minLiquidity=Number(config.minLiquidityUsdc);
+    const days=Number(item.daysToResolution), maxDays=Number(config.maxResolutionDays);
+    ${branch}
+    return reasons;`);
+  const deps = {
+    isFixedEntryMode: () => true,
+    normalizeFixedEntryPrice: (v) => v ?? 0.5,
+    probability: (v) => `${(v * 100).toFixed(1)}%`,
+    money: (v) => `$${Number(v).toFixed(0)}`,
+    compactDays: (d) => `${d} d`,
+  };
+  const config = { fixedEntryPrice: 0.5, minLiquidityUsdc: 100, maxResolutionDays: 30 };
+  const reasons = (item) => run(item, config, "live-5050", deps);
+
+  // The case the old filter wrongly hid: expensive now, which is the whole point.
+  assert.deepEqual(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: 0.4 }), []);
+
+  // Resting below the market is the strategy, so at or under the entry price there is
+  // nothing to buy -- the same reason the executor gives.
+  assert.match(reasons({ bestAsk: 0.5, volumeUsdc: 60000, daysToResolution: 0.4 })[0], /at or below the 50\.0% entry price/);
+  assert.match(reasons({ bestAsk: 0.3, volumeUsdc: 60000, daysToResolution: 0.4 })[0], /at or below/);
+
+  // The portfolio's own volume floor and horizon still apply.
+  assert.match(reasons({ bestAsk: 0.95, volumeUsdc: 50, daysToResolution: 0.4 })[0], /volume/);
+  assert.match(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: -1 })[0], /end date is in the past/);
+  assert.match(reasons({ bestAsk: 0.95, volumeUsdc: 60000, daysToResolution: 45 })[0], /beyond 30 days/);
+
+  // It must return before the market-price economics, or those would re-reject it.
+  const after = app.slice(app.indexOf(branch) + branch.length);
+  assert.match(after.slice(0, 200), /if \(!Number\.isFinite\(annualizedReturn\)\)/,
+    "the fixed-entry branch has to short-circuit the generic yield checks");
+});

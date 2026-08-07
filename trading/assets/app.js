@@ -5125,6 +5125,26 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   } else if (selectedProbability < threshold) {
     reasons.push(`${probabilitySourceLabel(probabilitySource)} ${probability(selectedProbability)} below ${probability(threshold)}`);
   }
+  // 5050 does not buy at the market, it rests a bid at a fixed price, so the
+  // market-price economics below are the wrong test: a candidate trading at 95c has
+  // a poor yield if bought there and an excellent one if filled at 50c. What decides
+  // it is whether the market is still above the entry price -- the same rule the
+  // executor applies -- so the shortlist and the run agree on who qualifies.
+  if (isFixedEntryMode(mode)) {
+    const entryPrice = normalizeFixedEntryPrice(config.fixedEntryPrice);
+    const ask = Number(item.bestAsk ?? item.marketPrice ?? item.marketProbability);
+    if (Number.isFinite(ask) && ask <= entryPrice) {
+      reasons.push(`already asks ${probability(ask)}, at or below the ${probability(entryPrice)} entry price`);
+    }
+    if (Number.isFinite(minLiquidity) && liquidity < minLiquidity) {
+      reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);
+    }
+    if (Number.isFinite(days) && Number.isFinite(maxDays) && days > maxDays) {
+      reasons.push(`resolves in ${compactDays(days)}, beyond ${maxDays} days`);
+    }
+    if (Number.isFinite(days) && days <= 0) reasons.push("event end date is in the past");
+    return reasons;
+  }
   if (!Number.isFinite(annualizedReturn)) {
     reasons.push(`missing usable ${returnMetric}`);
   } else if (annualizedReturn <= 0) {
