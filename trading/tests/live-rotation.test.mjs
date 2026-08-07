@@ -1059,3 +1059,46 @@ test("live console output: a decision's console dump is a bounded summary, not t
     assert.match(source, /await writeFile\(EXECUTION_STATE_PATH, `\$\{JSON\.stringify\(output, null, 2\)\}\\n`, "utf8"\);/);
   });
 });
+
+test("rotation exit: a refused sell falls back to a real market order", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // Both taker paths have failed in production, in sequence:
+  //   createAndPostOrder(..., FAK) ignored the FAK (that method takes only GTC/GTD), so
+  //     the exit rested on the book, reserved the shares and deadlocked rotation;
+  //   createOrder + postOrder(FAK) fixed the semantics but the CLOB refused it with
+  //     "invalid POLY_1271 signature: signature does not match order hash" (SELL 5 @
+  //     0.962), so the sell never reached the book either and the position was stranded.
+  // Exiting has to actually execute, so a refused attempt now falls through to the
+  // client's own market-order builder instead of giving up.
+  const submit = source.slice(source.indexOf("async function submitOrder(order)"));
+  const body = submit.slice(0, submit.indexOf("\nasync function submitOrderWithMakerPrecisionRecovery"));
+  const branch = body.slice(body.indexOf("if (side === Side.SELL && forceTaker)"));
+
+  assert.match(branch, /await client\.createOrder\(/, "the limit-signed attempt is still first");
+  assert.match(branch, /client\.postOrder\(signedExit, OrderType\.FAK, false\)/);
+  assert.match(branch, /if \(successfulOrderResponse\(limitSigned\)\) return/,
+    "an accepted first attempt must not be followed by a second sell of the same shares");
+  assert.match(branch, /await client\.createMarketOrder\(/, "the fallback is a real market order");
+  assert.match(branch, /client\.postOrder\(marketOrder, OrderType\.FAK\)/);
+
+  // A SELL market order is sized in shares, not USDC -- passing a notional would sell the
+  // wrong quantity.
+  assert.match(branch, /amount: order\.orderSize,/);
+
+  // Ordering: the fallback must come after the check that the first attempt failed.
+  const guardAt = branch.indexOf("if (successfulOrderResponse(limitSigned)) return");
+  const fallbackAt = branch.indexOf("await client.createMarketOrder(");
+  assert.ok(guardAt > 0 && fallbackAt > guardAt, "the market order must only run after a refusal");
+
+  // A throw from either path must not abort the exit; it is recorded and the next path
+  // still gets its turn.
+  assert.match(branch, /limitSigned = \{ error: error\?\.message \|\| String\(error\), status: "exception" \}/);
+  assert.match(branch, /marketSigned = \{ error: error\?\.message \|\| String\(error\), status: "exception" \}/);
+
+  // Both attempts are reported, so a run log shows which path the exit took.
+  assert.match(branch, /exitAttempts: attempts/);
+  assert.match(branch, /path: "limit-signed-fak"/);
+  assert.match(branch, /path: "market-order-fak"/);
+});

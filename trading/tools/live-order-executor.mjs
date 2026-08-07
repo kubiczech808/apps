@@ -2288,30 +2288,57 @@ async function submitOrder(order) {
   };
   const side = String(order.side || "BUY").toUpperCase() === "SELL" ? Side.SELL : Side.BUY;
   const forceTaker = Boolean(order.forceTaker) || String(order.orderType || "").toUpperCase() === "FAK";
-  // A rotation exit must consume the best bid immediately, but it still needs the normal
-  // V2 limit-order signature (`createMarketOrder` has a separate payload builder, and the
-  // POLY_1271 wrapper has to match the order shape the CLOB verified).
+  // Exiting a position has to actually execute, so this tries the two taker paths the
+  // client offers and keeps whichever the CLOB accepts.
   //
-  // This used to call createAndPostOrder(..., OrderType.FAK). That method only accepts
-  // GTC or GTD -- its own type says `T extends OrderType.GTC | OrderType.GTD` -- so the
-  // FAK never took effect and the exit was posted as a RESTING limit sell. When the book
-  // moved off that price the sell simply sat there unfilled, reserving the position's
-  // shares, and rotation could never complete: exactly the sell of 5.5 shares parked at
-  // 0.25 on a position entered at 0.93.
+  // History, because both failure modes were live: createAndPostOrder(..., OrderType.FAK)
+  // silently ignored the FAK -- that method only takes GTC or GTD -- so the exit rested
+  // on the book as a limit sell, reserved the position's shares and deadlocked rotation.
+  // Signing it with createOrder and posting FAK fixed the semantics but the CLOB rejected
+  // it with "invalid POLY_1271 signature: signature does not match order hash", so the
+  // sell never reached the book either.
   //
-  // createOrder gives the same limit-order signature, and postOrder does accept FAK
-  // (`T extends OrderType`), so signing and taker semantics are both correct here.
+  // createMarketOrder is the client's own market-order builder and computes its own
+  // payload, so it is the fallback when the limit-signed attempt is refused: a rejected
+  // exit must not leave the position stranded. Both attempts are reported.
   if (side === Side.SELL && forceTaker) {
-    const signedExit = await client.createOrder(
-      {
-        tokenID: order.tokenId,
-        price: order.orderPrice,
-        size: order.orderSize,
-        side,
-      },
-      options,
-    );
-    return client.postOrder(signedExit, OrderType.FAK, false);
+    const attempts = [];
+    let limitSigned = null;
+    try {
+      const signedExit = await client.createOrder(
+        {
+          tokenID: order.tokenId,
+          price: order.orderPrice,
+          size: order.orderSize,
+          side,
+        },
+        options,
+      );
+      limitSigned = await client.postOrder(signedExit, OrderType.FAK, false);
+    } catch (error) {
+      limitSigned = { error: error?.message || String(error), status: "exception" };
+    }
+    attempts.push({ path: "limit-signed-fak", response: limitSigned });
+    if (successfulOrderResponse(limitSigned)) return { ...limitSigned, exitAttempts: attempts };
+
+    let marketSigned = null;
+    try {
+      const marketOrder = await client.createMarketOrder(
+        {
+          tokenID: order.tokenId,
+          price: order.orderPrice,
+          amount: order.orderSize,
+          side,
+        },
+        options,
+      );
+      marketSigned = await client.postOrder(marketOrder, OrderType.FAK);
+    } catch (error) {
+      marketSigned = { error: error?.message || String(error), status: "exception" };
+    }
+    attempts.push({ path: "market-order-fak", response: marketSigned });
+    // Whichever ran last is the outcome; the attempt list explains how it got there.
+    return { ...(marketSigned || {}), exitAttempts: attempts };
   }
   if (!USE_LIMIT_ORDERS || forceTaker) {
     const marketOrder = await client.createMarketOrder(
