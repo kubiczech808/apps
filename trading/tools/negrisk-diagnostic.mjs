@@ -76,8 +76,13 @@ async function main() {
     const [market, token] = await Promise.all([clobMarketNegRisk(conditionId), tokenNegRisk(tokenId)]);
     const stored = storedNegRisk(item);
     const truth = typeof token.negRisk === "boolean" ? token.negRisk : market.nr;
-    // The failure mode is specifically "the CLOB says neg risk, we said it is not".
+    // Two distinct failures, and calling the second one "consistent" is what made
+    // this bug survive: a stored false actively contradicts the CLOB, but a stored
+    // null was just as fatal for as long as the caller coerced it to a boolean.
+    // Only a value the CLOB agrees with, or an absent one the client is allowed to
+    // resolve itself, is actually safe.
     const wrong = truth === true && stored === false;
+    const coercible = truth === true && stored === null;
     if (wrong) mismatches += 1;
     const label = String(item.question || "").slice(0, 52) || tokenId;
     console.log(`${kind.padEnd(10)} ${label}`);
@@ -85,7 +90,12 @@ async function main() {
     console.log(`  clob /neg-risk        : ${token.negRisk} ${token.note}`);
     console.log(`  clob /clob-markets nr : ${market.nr} ${market.note}`);
     console.log(`  our stored negRisk    : ${stored}`);
-    console.log(`  verdict     : ${wrong ? "MISMATCH - an order signed from the stored value would be refused" : "consistent"}`);
+    const verdict = wrong
+      ? "MISMATCH - an order signed from the stored value would be refused"
+      : coercible
+        ? "unknown, resolved by the client at signing (coercing this to false is what broke rotation exits)"
+        : "consistent";
+    console.log(`  verdict     : ${verdict}`);
   }
   console.log(`mismatches  : ${mismatches}`);
   console.log("=== END NEG RISK DIAGNOSTIC ===");
