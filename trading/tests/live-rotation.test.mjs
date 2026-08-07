@@ -1102,3 +1102,29 @@ test("rotation exit: a refused sell falls back to a real market order", async ()
   assert.match(branch, /path: "limit-signed-fak"/);
   assert.match(branch, /path: "market-order-fak"/);
 });
+
+test("capital: the reported requirement is what an order actually costs", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // Reported: "$3.42 available / $3.40 required / capital insufficient", which reads as a
+  // contradiction. With no sized candidate, requiredStakeUsdc was
+  // min(maxNotional, availableCash) -- what the portfolio would like to spend, capped by
+  // its own cash -- not what an order actually costs. The real figure is the exchange
+  // minimum (shares x price + fees), which each cash-blocked candidate already records.
+  assert.match(source, /const blockedMinimumOrderCosts = cashSizingBlocked\s*\n\s*\.map\(\(item\) => number\(item\.minOrderNotionalUsdc, 0\)\)/);
+  assert.match(source, /const cheapestBlockedMinimumCost = blockedMinimumOrderCosts\.length\s*\n\s*\? Math\.min\(\.\.\.blockedMinimumOrderCosts\)\s*\n\s*: null;/);
+  assert.match(source, /\? cheapestBlockedMinimumCost\s*\n\s*: Math\.min\(maxNotional, Math\.max\(0, availableCashAfterOrderManagement\)\)/,
+    "the capped stake stays only as the fallback when nothing was cash-blocked");
+
+  // The same number has to appear in the reason and the note, not just the capital block,
+  // so every place the run explains itself agrees.
+  assert.match(source, /cheapest needs \$\{cheapestBlockedMinimumCost\.toFixed\(4\)\} USDC including fees/);
+  assert.match(source, /The cheapest of them needs \$\{cheapestBlockedMinimumCost\.toFixed\(4\)\} USDC including fees/);
+
+  // And the per-candidate reason must state the shortfall rather than claim there is no
+  // cash at all, which was false: there was 3.42 USDC, just below the exchange minimum.
+  assert.ok(!source.includes('"no available cash for a new order; rotation may release capital"'),
+    "the old wording denied cash that was actually present");
+  assert.match(source, /"Polymarket minimum order " \+ minOrderSize\.toFixed\(4\) \+ " shares costs " \+ minimumCost\.toFixed\(4\)\s*\n\s*\+ " USDC including fees, above the " \+ availableCash\.toFixed\(4\)/);
+});

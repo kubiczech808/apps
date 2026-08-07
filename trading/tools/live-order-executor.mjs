@@ -1993,7 +1993,9 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
         ? "STAKE_CAP"
         : (orderSizing.makerPrecisionBlocked ? "MAKER_PRECISION" : "ORDER_SIZE"));
     const reason = orderSizing.cashBelowExchangeMinimum
-      ? "no available cash for a new order; rotation may release capital"
+      ? "Polymarket minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4)
+        + " USDC including fees, above the " + availableCash.toFixed(4)
+        + " USDC available; rotation may release capital"
       : (orderSizing.stakeCapBelowExchangeMinimum
         ? "Polymarket minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above this portfolio's max per trade " + targetStake.toFixed(4) + " USDC and above the " + Number(orderSizing.stakeFloorCeilingUsdc || 0).toFixed(2) + " USDC stake-floor ceiling, so the stake was not raised to meet it; " + availableCash.toFixed(4) + " USDC remains free, so rotation is not needed"
         : (orderSizing.makerPrecisionBlocked
@@ -3200,9 +3202,22 @@ async function main() {
     )
     : 0;
   const availableCashAfterOrderManagement = availableCash + releasedOrderNotional;
+  // What the next order would actually cost. With no sized candidate this used to be
+  // min(maxNotional, availableCash), i.e. what the portfolio would like to spend capped by
+  // its own cash -- so a run could report "$3.42 available / $3.40 required / capital
+  // insufficient", which reads as a contradiction. The real requirement is the cheapest
+  // exchange minimum among the candidates that could not be funded, fees included.
+  const blockedMinimumOrderCosts = cashSizingBlocked
+    .map((item) => number(item.minOrderNotionalUsdc, 0))
+    .filter((cost) => cost > 0);
+  const cheapestBlockedMinimumCost = blockedMinimumOrderCosts.length
+    ? Math.min(...blockedMinimumOrderCosts)
+    : null;
   const appliedDirectStake = best?.totalCostUsdc != null
     ? number(best.totalCostUsdc, 0)
-    : Math.min(maxNotional, Math.max(0, availableCashAfterOrderManagement));
+    : (cheapestBlockedMinimumCost != null
+      ? cheapestBlockedMinimumCost
+      : Math.min(maxNotional, Math.max(0, availableCashAfterOrderManagement)));
   // Replacing an order that this run just cancelled is order management, not an
   // additional portfolio allocation. Continue with its released capital in
   // this same batch.
@@ -3224,7 +3239,7 @@ async function main() {
         : (rotationAvailable
             ? "cash is insufficient for a new direct order; a sell-and-replace rotation candidate was identified"
             : (cashSizingBlocked.length
-                ? `live candidates blocked by available USDC: ${cashSizingBlocked.length} cannot meet the current Polymarket minimum order size`
+                ? `live candidates blocked by available USDC: ${cashSizingBlocked.length} cannot meet the current Polymarket minimum order size${cheapestBlockedMinimumCost != null ? ` (cheapest needs ${cheapestBlockedMinimumCost.toFixed(4)} USDC including fees, ${number(availableCashAfterOrderManagement, 0).toFixed(4)} USDC available)` : ""}`
                 : (stakeCapBlockedCandidates.length
                   ? `free cash is sufficient, but ${stakeCapBlockedCandidates.length} live candidate${stakeCapBlockedCandidates.length === 1 ? " is" : "s are"} below Polymarket's minimum order size at the configured max per trade`
                   : "no currently executable candidate after live revalidation")))));
@@ -3243,7 +3258,7 @@ async function main() {
       : (rotationAvailable
             ? "No live order was submitted because opening the better candidate would first require selling an existing live position; this run records the rotation review but does not perform the sell/rebuy sequence automatically."
             : (cashSizingBlocked.length
-                ? "No live order was submitted because available USDC cannot cover the exchange minimum size for the revalidated candidate(s)."
+                ? `No live order was submitted because available USDC cannot cover the exchange minimum size for the revalidated candidate(s).${cheapestBlockedMinimumCost != null ? ` The cheapest of them needs ${cheapestBlockedMinimumCost.toFixed(4)} USDC including fees against ${number(availableCashAfterOrderManagement, 0).toFixed(4)} USDC available.` : ""}`
                 : (stakeCapBlockedCandidates.length
                   ? "No live order was submitted because the configured max per trade is below Polymarket's exchange minimum. Free cash was sufficient, so no order or position was rotated."
                   : "No live order was submitted because all revalidated candidates failed current execution criteria.")))));
