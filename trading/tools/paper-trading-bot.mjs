@@ -3028,6 +3028,14 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     totalCostUsdc: Number(totalCost.toFixed(5)),
     grossGainIfWinUsdc: Number(grossGainIfWin.toFixed(4)),
     netGainIfWinUsdc: Number(netGainIfWin.toFixed(4)),
+    // Persisted, not derived on read: these are what the portfolios now rank and
+    // filter on, and every consumer that had to rebuild them from the gain and the
+    // cost was one missing field away from scoring the row at a flat zero.
+    netYield: rounded(totalCost > 0 ? netGainIfWin / totalCost : null, 4),
+    potentialAnnualizedReturn: rounded(
+      annualizedPotentialReturn(totalCost > 0 ? netGainIfWin / totalCost : null, days),
+      4,
+    ),
     daysToResolution: rounded(days, 2),
     // annualizeReturn() returns null for a non-finite input, so any of these can be
     // null when the probability estimate is unavailable — which is normal for a
@@ -4305,6 +4313,13 @@ function rowVolumeUsdc(item = {}) {
   return 0;
 }
 
+// Number(null) and Number("") are 0, so the usual Number(x) turns an absent value
+// into a real, confident zero. Anywhere that zero is itself a meaningful verdict,
+// use this instead.
+function numericOrNaN(value) {
+  return value == null || value === "" ? NaN : Number(value);
+}
+
 function netYieldAfterFees(item = {}) {
   const stored = Number(item.netYield);
   if (Number.isFinite(stored)) return stored;
@@ -4316,13 +4331,21 @@ function netYieldAfterFees(item = {}) {
 
 function portfolioEconomics(item, strategy = PAPER_STRATEGIES.conservative) {
   const probabilitySource = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
-  const netYield = Number(item.netYield);
+  // A scraped evaluation does not persist netYield, so reading item.netYield
+  // directly left every candidate with nothing to annualize. netYieldAfterFees
+  // derives it from the net gain and the real cost, both of which the record does
+  // carry.
+  const netYield = netYieldAfterFees(item);
   // Recalculate instead of trusting an older persisted p.a. value. This keeps
   // stored rows made before the one-day annualization floor from dominating a
   // current portfolio shortlist.
   const potentialAnnualized = annualizedPotentialReturn(netYield, daysValue(item));
-  const annualizedValue = Number(probabilitySource === "polymarket" ? potentialAnnualized : item.annualizedReturn);
-  const expectedValue = Number(probabilitySource === "polymarket" ? item.netGainIfWinUsdc : item.expectedValueUsdc);
+  // Number(null) is 0, not NaN. That turned "no p.a. could be computed" into an
+  // exact break-even, which the filter then rejected as "Potential p.a. 0.0% is
+  // non-profitable after fees" -- so missing data read as a hard, and wrong,
+  // verdict, and no paper candidate could ever pass.
+  const annualizedValue = numericOrNaN(probabilitySource === "polymarket" ? potentialAnnualized : item.annualizedReturn);
+  const expectedValue = numericOrNaN(probabilitySource === "polymarket" ? item.netGainIfWinUsdc : item.expectedValueUsdc);
   return {
     probabilitySource,
     annualizedReturn: Number.isFinite(annualizedValue) ? annualizedValue : null,

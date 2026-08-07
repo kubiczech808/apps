@@ -1946,3 +1946,42 @@ test("no model: the 'use Polymarket probability' switch is gone and cannot be fl
   // And the reject reason the user kept seeing must now be unreachable.
   assert.ok(!/grounded Gemini analysis is pending/.test(executorSource));
 });
+
+test("paper economics: a candidate with no stored netYield is not scored as break-even", () => {
+  // Reported: no paper trade could pass, every candidate showing net yield 0.0% and
+  // potential p.a. 0.0% while the market probability read 93-95%.
+  //
+  // Two defects compounded. A scraped evaluation never persisted netYield, so the
+  // annualization had nothing to work from and returned null -- and Number(null) is
+  // 0, not NaN, so "no p.a. could be computed" became an exact break-even that the
+  // filter then rejected as "non-profitable after fees". Missing data read as a hard
+  // and wrong verdict.
+  const strategy = { ...bot.PAPER_STRATEGIES.conservative, probabilitySource: "polymarket" };
+  const scraped = { marketProbability: 0.93, marketPrice: 0.93, netGainIfWinUsdc: 0.0723, totalCostUsdc: 1, daysToResolution: 0.5 };
+
+  const economics = bot.portfolioEconomics(scraped, strategy);
+  assert.equal(economics.expectedValueUsdc, 0.0723);
+  // 7.23% over half a day is a large annualized number; the point is that it is the
+  // real one and strictly positive, not zero.
+  assert.ok(economics.annualizedReturn > 1, `expected a real p.a., got ${economics.annualizedReturn}`);
+  assert.equal(Number(economics.annualizedReturn.toFixed(3)), 52.779);
+
+  // A stored value still wins, so the one-day annualization floor keeps applying.
+  assert.ok(bot.netYieldAfterFees({ netYield: 0.04, netGainIfWinUsdc: 99, totalCostUsdc: 1 }) === 0.04);
+
+  // And genuinely absent economics must stay absent -- "unknown", never "worthless".
+  const unknown = bot.portfolioEconomics({ marketProbability: 0.93, daysToResolution: 0.5 }, strategy);
+  assert.equal(unknown.annualizedReturn, null, "an unknown p.a. must not become 0");
+  assert.equal(unknown.expectedValueUsdc, null);
+});
+
+test("paper economics: the scraped evaluation persists what the portfolios rank on", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  // Deriving these on read is what left a missing field scoring the row at a flat
+  // zero, so the record itself must carry them.
+  assert.match(source, /netYield: rounded\(totalCost > 0 \? netGainIfWin \/ totalCost : null, 4\)/);
+  assert.match(source, /potentialAnnualizedReturn: rounded\(/);
+  // The shared guard against the Number(null) trap.
+  assert.match(source, /function numericOrNaN\(value\) \{\n  return value == null \|\| value === "" \? NaN : Number\(value\);\n\}/);
+});

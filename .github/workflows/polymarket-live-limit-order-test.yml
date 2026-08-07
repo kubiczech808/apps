@@ -537,10 +537,25 @@ jobs:
           review = state.get("rotationReview") or batch.get("rotationReview") or {}
           if review:
               print(f"rotation    : {review.get('action')} - {review.get('reason')}")
-              for entry in (review.get("reviews") or [])[:8]:
+              for entry in (review.get("reviews") or [])[:12]:
                   position = entry.get("position") or {}
                   candidate = entry.get("candidate") or {}
                   print(f"  - {str(position.get('question'))[:58]!r} [{position.get('outcome')}]")
+                  print(f"      {entry.get('action')}: {str(entry.get('reason'))[:200]}")
+                  if candidate:
+                      print(f"      tried: {str(candidate.get('question'))[:58]!r} [{candidate.get('outcome')}]")
+
+          # Resting orders are reviewed for rotation too -- cancelling one frees its
+          # whole notional with no exit fee. Only a count of them was reported, so a
+          # run looked like it had considered a single holding when it had considered
+          # several, and there was no way to see why each order was kept.
+          order_reviews = state.get("openOrderReviews") or batch.get("openOrderReviews") or []
+          if order_reviews:
+              print(f"open orders : {len(order_reviews)} reviewed for rotation")
+              for entry in order_reviews[:12]:
+                  order = entry.get("order") or entry
+                  candidate = entry.get("betterCandidate") or entry.get("candidate") or {}
+                  print(f"  - {str(order.get('question'))[:58]!r} [{order.get('outcome')}]")
                   print(f"      {entry.get('action')}: {str(entry.get('reason'))[:200]}")
                   if candidate:
                       print(f"      tried: {str(candidate.get('question'))[:58]!r} [{candidate.get('outcome')}]")

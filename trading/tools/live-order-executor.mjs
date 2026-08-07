@@ -81,7 +81,9 @@ const OPEN_ORDER_BETTER_CANDIDATE_EV_USDC = envNumber("LIVE_OPEN_ORDER_BETTER_CA
 // than waited on. Deliberately short -- there is nothing to wait for.
 const ROTATION_EXIT_STALE_MINUTES = envNumber("LIVE_ROTATION_EXIT_STALE_MINUTES", 2);
 const ROTATION_CANDIDATE_SCAN_LIMIT = envNumber("LIVE_ROTATION_CANDIDATE_SCAN_LIMIT", 10);
-const ROTATION_POSITION_SCAN_LIMIT = envNumber("LIVE_ROTATION_POSITION_SCAN_LIMIT", 6);
+// A runaway guard, not a selection rule. The real bound is "worth rotating out
+// of at all"; a low cap here silently decided how many holdings got looked at.
+const ROTATION_POSITION_SCAN_LIMIT = envNumber("LIVE_ROTATION_POSITION_SCAN_LIMIT", 25);
 // A rotation must improve the configured portfolio metric by at least the
 // portfolio's minimum net profit. This keeps the exit fee and required return
 // threshold in one place instead of using an unrelated dollar EV margin.
@@ -1438,11 +1440,41 @@ function rotationPositionSummary(position, evaluationByToken = new Map(), extra 
   };
 }
 
-function candidatePoolForRotation(baseCandidates = []) {
+function holdingResolutionMs(item, evaluationByToken = new Map()) {
+  const source = positionSourceEvaluation(item, evaluationByToken) || {};
+  const time = Date.parse(item?.endDate || source.endDate || "");
+  return Number.isFinite(time) ? time : null;
+}
+
+// The latest resolution among everything currently held or resting. A rotation
+// candidate settling after it pushes the portfolio's payout further out than
+// anything it could replace, so it is not a rotation at all -- and the
+// per-position horizon check would refuse it anyway, after paying for a live
+// revalidation. Filtering here keeps that work off candidates that cannot win.
+function latestHoldingResolutionMs(liveState, evaluationByToken = new Map()) {
+  const holdings = [
+    ...openPositionsForRotation(liveState),
+    ...(Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+      .filter((order) => !String(order.side || "").toUpperCase().includes("SELL")),
+  ];
+  const times = holdings
+    .map((item) => holdingResolutionMs(item, evaluationByToken))
+    .filter((time) => time != null);
+  return times.length ? Math.max(...times) : null;
+}
+
+function candidatePoolForRotation(baseCandidates = [], { latestResolutionMs = null } = {}) {
   return [...baseCandidates]
     .filter((item) => Number.isFinite(selectedProbability(item)))
     .filter((item) => Number.isFinite(selectedAnnualizedReturn(item)) && selectedAnnualizedReturn(item) > 0)
     .filter((item) => Number.isFinite(selectedExpectedValue(item)) && selectedExpectedValue(item) > 0)
+    .filter((item) => {
+      if (latestResolutionMs == null) return true;
+      const end = Date.parse(item?.endDate || "");
+      // An unknown end date is not a late one. Dropping it here would repeat the
+      // mistake of treating missing data as a confident verdict.
+      return !Number.isFinite(end) || end <= latestResolutionMs;
+    })
     // Rotation must use exactly the portfolio's configured ordering. In
     // particular, high-reward portfolios must not silently fall back to EV p.a.
     .sort(compareLiveCandidatePriority)
@@ -1457,6 +1489,21 @@ function candidateRequiresSpecificPositionExit(candidate, position, liveState, e
 }
 
 async function reviewPositionRotation({ liveState, evaluationByToken, baseCandidates, cash, maxNotional, restrictToRiskReplacement = false }) {
+  const candidates = candidatePoolForRotation(baseCandidates, {
+    latestResolutionMs: latestHoldingResolutionMs(liveState, evaluationByToken),
+  });
+  // A holding already earning more than the best available replacement cannot be
+  // improved by rotating out of it, so reviewing it is wasted work. Everything
+  // below that bar is fair game -- previously a fixed top-N slice decided how
+  // much got looked at, which is why a single position was reviewed while other
+  // holdings worth less than the candidate were never considered at all.
+  const bestCandidateReturn = candidates.length ? selectedAnnualizedReturn(candidates[0]) : null;
+  const worthRotatingOutOf = (entry) => {
+    if (bestCandidateReturn == null) return true;
+    const held = number(entry?.holdAnnualizedReturn);
+    // Unknown stays reviewable; only a holding measurably above the candidate is skipped.
+    return held == null || held < bestCandidateReturn;
+  };
   const positions = rotationPositionEntries(liveState, evaluationByToken)
     // Review the weakest held position first according to this portfolio's own
     // selection rule. Settlement-pending positions share the conservative
@@ -1476,8 +1523,8 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
       if (a.holdEv !== b.holdEv) return a.holdEv - b.holdEv;
       return a.tieBreak - b.tieBreak;
     })
+    .filter(worthRotatingOutOf)
     .slice(0, ROTATION_POSITION_SCAN_LIMIT);
-  const candidates = candidatePoolForRotation(baseCandidates);
   const reviews = [];
   let best = null;
 
@@ -3217,7 +3264,9 @@ async function main() {
         restrictToRiskReplacement: needsRiskReplacement,
       })
     : null;
-  const rotationCandidatePool = candidatePoolForRotation(baseCandidates);
+  const rotationCandidatePool = candidatePoolForRotation(baseCandidates, {
+    latestResolutionMs: latestHoldingResolutionMs(liveState, evaluationByToken),
+  });
   const activeSellOrders = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
     .filter((order) => String(order.side || "").toUpperCase().includes("SELL"));
   const directBest = eligible[0] || null;
@@ -3835,4 +3884,6 @@ export {
   earlyRiskBlockReason,
   compactLiveRunRecord,
   rotationLegMerge,
+  candidatePoolForRotation,
+  latestHoldingResolutionMs,
 };

@@ -1155,7 +1155,7 @@ test("run digest: a run can be explained from its timestamp alone", async () => 
   // Live: the parts that were previously invisible must be in it -- the real capital
   // requirement and the per-position rotation reasons, not just the outer verdict.
   assert.match(live, /required \{money\(capital\.get\('requiredStakeUsdc'\)\)\}/);
-  assert.match(live, /for entry in \(review\.get\("reviews"\) or \[\]\)\[:8\]:/);
+  assert.match(live, /for entry in \(review\.get\("reviews"\) or \[\]\)\[:12\]:/);
   assert.match(live, /entry\.get\('action'\)\}: \{str\(entry\.get\('reason'\)\)\[:200\]/);
   assert.match(live, /attempt\.get\('responseError'\)/, "a refused order must show why");
 
@@ -1282,4 +1282,65 @@ test("rotation log: the workflow tells the second pass that it is a rotation", a
   const step = workflow.slice(workflow.indexOf("- name: Complete filled rotation immediately"));
   assert.match(step.slice(0, 900), /LIVE_ROTATION_COMPLETION: "true"/,
     "without the flag the replacement pass would write its own row again");
+});
+
+test("rotation scope: a candidate may not settle later than everything it could replace", () => {
+  // Reported from the 07:53 SKIP run: the rotation tried 'Exact Score: FC Zbrojovka
+  // Brno 1 - 2 FC Slovan Liberec' and then held anyway, because "this position
+  // resolves in 0.75 days and the replacement not until 1.00 days". A candidate that
+  // settles after everything it could replace can never win that comparison, so
+  // revalidating it live is work spent to reach a foregone conclusion.
+  const day = 24 * 60 * 60 * 1000;
+  const base = Date.parse("2026-08-07T06:00:00Z");
+  const candidate = (name, endOffsetDays, pa) => ({
+    tokenId: `token-${name}`,
+    question: name,
+    endDate: new Date(base + endOffsetDays * day).toISOString(),
+    marketProbability: 0.9,
+    netGainIfWinUsdc: pa,
+    totalCostUsdc: 1,
+    daysToResolution: endOffsetDays,
+  });
+  const soon = candidate("resolves-first", 0.2, 0.05);
+  const late = candidate("resolves-after-everything", 3, 0.9);
+
+  const liveState = {
+    positions: [{ tokenId: "held", status: "OPEN", shares: 5, endDate: new Date(base + 0.75 * day).toISOString() }],
+    openOrders: [{ tokenId: "resting", side: "BUY", endDate: new Date(base + 0.5 * day).toISOString() }],
+  };
+  const latest = executor.latestHoldingResolutionMs(liveState, new Map());
+  assert.equal(latest, Date.parse(new Date(base + 0.75 * day).toISOString()),
+    "the bar is the latest holding, positions and resting orders alike");
+
+  const pool = executor.candidatePoolForRotation([late, soon], { latestResolutionMs: latest });
+  const ids = pool.map((item) => item.tokenId);
+  assert.ok(ids.includes("token-resolves-first"), "a candidate settling inside the window stays");
+  assert.ok(!ids.includes("token-resolves-after-everything"),
+    "a candidate settling after every holding cannot be a rotation and must not be revalidated");
+
+  // Unfiltered without a bar, and an unknown end date is not treated as a late one.
+  assert.equal(executor.candidatePoolForRotation([late, soon], {}).length, 2);
+  const undated = { ...soon, tokenId: "token-undated", endDate: null };
+  assert.ok(executor.candidatePoolForRotation([undated], { latestResolutionMs: latest })
+    .some((item) => item.tokenId === "token-undated"), "unknown must stay reviewable, not be dropped");
+});
+
+test("rotation scope: how many holdings get reviewed is a rule, not a fixed slice", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const workflow = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+
+  // Only one position was reviewed while other holdings worth less than the candidate
+  // were never considered, because a fixed top-N slice decided how much got looked at.
+  assert.match(source, /const worthRotatingOutOf = \(entry\) => \{/);
+  assert.match(source, /return held == null \|\| held < bestCandidateReturn;/,
+    "unknown stays reviewable; only a holding measurably above the candidate is skipped");
+  assert.match(source, /\.filter\(worthRotatingOutOf\)/);
+  // The cap remains, as a runaway guard rather than the selection rule.
+  assert.match(source, /LIVE_ROTATION_POSITION_SCAN_LIMIT", 25\)/);
+
+  // Resting orders were reviewed all along but only ever reported as a count, which
+  // is why a run looked like it had considered a single holding.
+  assert.match(workflow, /order_reviews = state\.get\("openOrderReviews"\)/);
+  assert.match(workflow, /reviewed for rotation/);
 });
