@@ -5595,8 +5595,8 @@ function renderBotState(botState) {
   els.portfolioEquity.textContent = money(Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100));
   els.portfolioEquity.className = pnlClass(totalPnl);
   els.portfolioLastRun.textContent = `Last run ${botState.generatedAt ? formatDate(botState.generatedAt) : "-"}`;
-  els.portfolioTotalPl.textContent = signedMoney(totalPnl);
-  els.portfolioTotalPl.className = pnlClass(totalPnl);
+  els.portfolioTotalPl.textContent = signedMoney(totalPnlValue);
+  els.portfolioTotalPl.className = pnlClass(totalPnlValue);
   els.portfolioTotalPlPct.textContent = signedPercent(totalPnlPct);
   if (els.portfolioAnnualized) {
     els.portfolioAnnualized.textContent = signedPercent(annualized);
@@ -5701,14 +5701,18 @@ function liveOpenOrders(liveState) {
   return Array.isArray(liveState?.openOrders) ? liveState.openOrders.filter(belongsToActiveLivePortfolio) : [];
 }
 
+// History belongs to whichever portfolio placed the trade. Only the account itself
+// -- the equity, the cash, the balance -- is genuinely shared, because there is one
+// wallet. Everything a portfolio did is its own.
 function liveActivity(liveState) {
-  return Array.isArray(liveState?.activity) ? liveState.activity : [];
+  return (Array.isArray(liveState?.activity) ? liveState.activity : []).filter(belongsToActiveLivePortfolio);
 }
 
 function liveClosedTrades(liveState) {
-  if (Array.isArray(liveState?.closedTrades)) return liveState.closedTrades;
-  if (Array.isArray(liveState?.trades?.closed)) return liveState.trades.closed;
-  return [];
+  const rows = Array.isArray(liveState?.closedTrades)
+    ? liveState.closedTrades
+    : (Array.isArray(liveState?.trades?.closed) ? liveState.trades.closed : []);
+  return rows.filter(belongsToActiveLivePortfolio);
 }
 
 function evaluationByTokenId(tokenId) {
@@ -6008,8 +6012,24 @@ function renderLiveState(liveState) {
   const totalPnlPct = hasOriginalValue ? totalPnl / deposited : rawTotalPnlPct;
   const openPnl = Number.isFinite(rawOpenPnl) ? rawOpenPnl : 0;
   const openPnlPct = hasOriginalValue ? openPnl / deposited : rawOpenPnlPct;
-  const realizedPnl = hasOriginalValue ? totalPnl - openPnl : rawRealizedPnl;
-  const realizedPnlPct = hasOriginalValue ? realizedPnl / deposited : rawRealizedPnlPct;
+  const rawRealized = hasOriginalValue ? totalPnl - openPnl : rawRealizedPnl;
+  const rawRealizedPct = hasOriginalValue ? rawRealized / deposited : rawRealizedPnlPct;
+  // Equity is the one figure the two live portfolios genuinely share, because there
+  // is one wallet. Every P/L number above is account-level, which is the main
+  // portfolio's whole history -- so 5050 derives its own from the trades it made.
+  // With no trades yet that is zero, which is the truth rather than a borrowed one.
+  const fixedEntry = isFixedEntryMode();
+  const ownRealized = closedTrades.reduce((sum, trade) => sum + number(trade.realizedPnlUsdc ?? trade.pnlUsdc, 0), 0);
+  const ownOpen = positions.reduce((sum, trade) => sum + number(trade.openPnlUsdc ?? trade.unrealizedPnlUsdc, 0), 0);
+  const ownStake = [...positions, ...closedTrades]
+    .reduce((sum, trade) => sum + number(trade.totalCostUsdc ?? trade.stakeUsdc, 0), 0);
+  const realizedPnl = fixedEntry ? ownRealized : rawRealized;
+  const openPnlValue = fixedEntry ? ownOpen : openPnl;
+  const totalPnlValue = fixedEntry ? ownRealized + ownOpen : totalPnl;
+  // Against what this portfolio actually put at risk, not against a deposit it
+  // does not have of its own.
+  const ownBasePct = (value) => (ownStake > 0 ? value / ownStake : null);
+  const realizedPnlPct = fixedEntry ? ownBasePct(ownRealized) : rawRealizedPct;
   const depositedLine = Number.isFinite(deposited)
     ? `Original value ${money(deposited)}`
     : "Original value not available";
@@ -6025,14 +6045,14 @@ function renderLiveState(liveState) {
   if (els.botAction) els.botAction.textContent = "live";
   if (els.botInlineAction) els.botInlineAction.textContent = `${positions.length} positions / ${openOrders.length} orders`;
   els.portfolioEquity.textContent = money(equity);
-  els.portfolioEquity.className = pnlClass(totalPnl);
+  els.portfolioEquity.className = pnlClass(totalPnlValue);
   els.portfolioLastRun.innerHTML = `
     <small class="metric-note">${escapeHtml(depositedLine)}</small>
     ${redeemLine ? `<small class="metric-note">${escapeHtml(redeemLine)}</small>` : ""}
   `;
-  els.portfolioTotalPl.textContent = signedMoney(totalPnl);
-  els.portfolioTotalPl.className = pnlClass(totalPnl);
-  els.portfolioTotalPlPct.textContent = signedPercent(totalPnlPct);
+  els.portfolioTotalPl.textContent = signedMoney(totalPnlValue);
+  els.portfolioTotalPl.className = pnlClass(totalPnlValue);
+  els.portfolioTotalPlPct.textContent = signedPercent(fixedEntry ? ownBasePct(ownRealized + ownOpen) : totalPnlPct);
   if (els.portfolioAnnualized) {
     els.portfolioAnnualized.textContent = "-";
     els.portfolioAnnualized.className = "";
@@ -6042,9 +6062,9 @@ function renderLiveState(liveState) {
   els.portfolioRealized.className = pnlClass(realizedPnl);
   els.portfolioRealizedPct.textContent = signedPercent(realizedPnlPct);
   renderClosedAccuracy(closedTrades);
-  els.portfolioOpenPl.textContent = signedMoney(openPnl);
-  els.portfolioOpenPl.className = pnlClass(openPnl);
-  els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
+  els.portfolioOpenPl.textContent = signedMoney(openPnlValue);
+  els.portfolioOpenPl.className = pnlClass(openPnlValue);
+  els.portfolioOpenPlPct.textContent = signedPercent(fixedEntry ? ownBasePct(ownOpen) : openPnlPct);
   els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0) + openOrderRisk);
   els.portfolioFree.textContent = freeCash == null ? "cash not available" : `${money(freeCash)} free cash`;
   if (els.portfolioRr) {

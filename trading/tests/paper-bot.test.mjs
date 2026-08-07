@@ -2261,3 +2261,29 @@ test("portfolio settings: each portfolio owns its own, and cannot change another
   assert.equal(api.portfolioConfigForMode("paper-conservative").fixedEntryPrice, undefined,
     "a paper portfolio must never acquire a setting it does not have");
 });
+
+test("5050: only equity is shared with Live, never its history", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // One wallet means one equity, and that figure is genuinely shared. Everything
+  // else on the overview is account-level -- the main portfolio's entire history --
+  // so showing it under 5050 would credit it with trades it never made.
+  assert.match(app, /els\.portfolioEquity\.textContent = money\(equity\);/,
+    "equity stays the shared account figure");
+
+  const live = app.slice(app.indexOf("const fixedEntry = isFixedEntryMode();"));
+  const block = live.slice(0, live.indexOf("data-account-summary") + 1 || 4000);
+  assert.match(block, /const realizedPnl = fixedEntry \? ownRealized : rawRealized;/);
+  assert.match(block, /const totalPnlValue = fixedEntry \? ownRealized \+ ownOpen : totalPnl;/);
+  assert.match(block, /els\.portfolioTotalPl\.textContent = signedMoney\(totalPnlValue\);/);
+  assert.match(block, /els\.portfolioOpenPl\.textContent = signedMoney\(openPnlValue\);/);
+  // Percentages measure what this portfolio put at risk, not a deposit it does not
+  // have of its own.
+  assert.match(block, /ownStake > 0 \? value \/ ownStake : null/);
+
+  // Closed trades and the activity feed are attributed too, so the accuracy card
+  // and the closed-trades tab cannot show Live's history either.
+  assert.match(app, /function liveClosedTrades\(liveState\) \{[\s\S]*?\.filter\(belongsToActiveLivePortfolio\);/);
+  assert.match(app, /function liveActivity\(liveState\) \{[\s\S]*?\.filter\(belongsToActiveLivePortfolio\)/);
+});
