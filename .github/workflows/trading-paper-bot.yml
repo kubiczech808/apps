@@ -410,6 +410,47 @@ jobs:
           print(f"Appended compact scan history entry to {month}.ndjson")
           PY
 
+      # Same reason as the live workflow: the run summary is printed early and falls out
+      # of the window a log reader can fetch, which makes a run unexplainable from its
+      # timestamp alone. This digest is the last thing the job prints.
+      - name: Run digest
+        if: always()
+        continue-on-error: true
+        env:
+          PAPER_STATE_FILE: trading/data/paper-state.json
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["PAPER_STATE_FILE"])
+          if not path.exists():
+              print("RUN DIGEST: no paper state was produced by this run.")
+              raise SystemExit(0)
+          state = json.loads(path.read_text(encoding="utf-8"))
+
+          print("=== RUN DIGEST ===")
+          print(f"generatedAt : {state.get('generatedAt')}")
+          scan = state.get("marketScan") or {}
+          print(f"scan        : scope={scan.get('lastScope')} at={scan.get('lastScanAt')} "
+                f"batch={scan.get('lastBatchCount')} hourlySlot={scan.get('usedHourlyScanSlot')}")
+
+          for strategy_id, portfolio in (state.get("paperPortfolios") or {}).items():
+              decision = portfolio.get("lastDecision") or {}
+              summary = portfolio.get("portfolio") or {}
+              print(f"portfolio   : {strategy_id} action={decision.get('action')} "
+                    f"free={summary.get('freeCapitalUsdc')} stake={summary.get('maxStakeUsdc')}")
+              if decision.get("reason"):
+                  print(f"  reason    : {str(decision.get('reason'))[:200]}")
+              batch = decision.get("batchLog") or {}
+              for entry in (batch.get("topRejected") or [])[:5]:
+                  reasons = entry.get("rejectReasons") or []
+                  print(f"  rejected  : {str(entry.get('question'))[:52]!r} -> "
+                        f"{'; '.join(str(r) for r in reasons)[:150]}")
+          print("=== END RUN DIGEST ===")
+          PY
+
       - name: Dispatch post-scrape execution
         # Every scheduled tick refreshes the scraped catalogue now, so the trigger
         # is "a scheduled scrape finished" rather than one specific cron entry.

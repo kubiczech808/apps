@@ -476,6 +476,73 @@ jobs:
           upload_atomic(state_file, "live-state.json")
           PY
 
+      # The decision is printed at the START of the execution step, so on a long run it
+      # falls outside the window a log reader can fetch and the run becomes unexplainable
+      # from the outside. Reprinting a compact digest as the LAST thing the job does means
+      # a run can always be explained from its timestamp alone, without opening the UI.
+      - name: Run digest
+        if: always()
+        continue-on-error: true
+        env:
+          LIVE_EXECUTION_STATE_FILE: trading/data/live-execution-state.json
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["LIVE_EXECUTION_STATE_FILE"])
+          if not path.exists():
+              print("RUN DIGEST: no live execution state was produced by this run.")
+              raise SystemExit(0)
+          state = json.loads(path.read_text(encoding="utf-8"))
+          batch = state.get("batchLog") or {}
+
+          def money(value):
+              try:
+                  return f"{float(value):.4f}"
+              except (TypeError, ValueError):
+                  return "-"
+
+          print("=== RUN DIGEST ===")
+          print(f"generatedAt : {state.get('generatedAt')}")
+          print(f"action      : {state.get('action')}")
+          print(f"reason      : {state.get('reason')}")
+
+          capital = batch.get("capital") or {}
+          if capital:
+              print("capital     : "
+                    f"available {money(capital.get('availableUsdc'))} / "
+                    f"required {money(capital.get('requiredStakeUsdc'))} / "
+                    f"insufficient={capital.get('insufficientCapital')}")
+
+          counts = batch.get("counts") or {}
+          if counts:
+              print("counts      : " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+
+          # The per-position rotation reasons are the part that is otherwise invisible:
+          # the outer verdict alone never says why each position was kept.
+          review = state.get("rotationReview") or batch.get("rotationReview") or {}
+          if review:
+              print(f"rotation    : {review.get('action')} - {review.get('reason')}")
+              for entry in (review.get("reviews") or [])[:8]:
+                  position = entry.get("position") or {}
+                  candidate = entry.get("candidate") or {}
+                  print(f"  - {str(position.get('question'))[:58]!r} [{position.get('outcome')}]")
+                  print(f"      {entry.get('action')}: {str(entry.get('reason'))[:200]}")
+                  if candidate:
+                      print(f"      tried: {str(candidate.get('question'))[:58]!r} [{candidate.get('outcome')}]")
+
+          for entry in (batch.get("topRejected") or [])[:8]:
+              reasons = entry.get("rejectReasons") or []
+              print(f"rejected    : {str(entry.get('question'))[:58]!r} -> {'; '.join(str(r) for r in reasons)[:160]}")
+
+          for attempt in (state.get("attempts") or [])[:4]:
+              print(f"attempt     : {attempt.get('side')} {attempt.get('orderSize')} @ {attempt.get('orderPrice')} "
+                    f"-> {attempt.get('action')} {attempt.get('responseError') or ''}")
+          print("=== END RUN DIGEST ===")
+          PY
+
       - name: Send redeem alert emails
         id: redeem_alerts
         if: always()

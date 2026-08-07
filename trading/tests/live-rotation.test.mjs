@@ -1128,3 +1128,35 @@ test("capital: the reported requirement is what an order actually costs", async 
     "the old wording denied cash that was actually present");
   assert.match(source, /"Polymarket minimum order " \+ minOrderSize\.toFixed\(4\) \+ " shares costs " \+ minimumCost\.toFixed\(4\)\s*\n\s*\+ " USDC including fees, above the " \+ availableCash\.toFixed\(4\)/);
 });
+
+test("run digest: a run can be explained from its timestamp alone", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const live = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+  const paper = await readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8");
+
+  // The decision is printed at the START of the execution step, so on a long run it falls
+  // outside the window a log reader can fetch and the run cannot be explained from
+  // outside the UI -- which is how a rotation verdict ended up unanswerable. A compact
+  // digest printed LAST is always inside any tail.
+  for (const [label, workflow] of [["live", live], ["paper", paper]]) {
+    assert.match(workflow, /- name: Run digest/, `${label} must emit a digest`);
+    assert.match(workflow, /=== RUN DIGEST ===/);
+    assert.match(workflow, /=== END RUN DIGEST ===/, "a delimiter makes it greppable");
+    // It must not be able to fail the run or be skipped when the run failed.
+    const step = workflow.slice(workflow.indexOf("- name: Run digest"));
+    assert.match(step.slice(0, 300), /if: always\(\)/, `${label} digest must run even after a failure`);
+    assert.match(step.slice(0, 300), /continue-on-error: true/, `${label} digest must never fail the run`);
+  }
+
+  // Live: the parts that were previously invisible must be in it -- the real capital
+  // requirement and the per-position rotation reasons, not just the outer verdict.
+  assert.match(live, /required \{money\(capital\.get\('requiredStakeUsdc'\)\)\}/);
+  assert.match(live, /for entry in \(review\.get\("reviews"\) or \[\]\)\[:8\]:/);
+  assert.match(live, /entry\.get\('action'\)\}: \{str\(entry\.get\('reason'\)\)\[:200\]/);
+  assert.match(live, /attempt\.get\('responseError'\)/, "a refused order must show why");
+
+  // It has to be positioned after the state is written, or it would digest nothing.
+  const uploadAt = live.indexOf("- name: Upload live state");
+  const digestAt = live.indexOf("- name: Run digest");
+  assert.ok(uploadAt > 0 && digestAt > uploadAt, "the digest must follow the state it reads");
+});
