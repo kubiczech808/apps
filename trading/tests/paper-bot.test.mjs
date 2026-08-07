@@ -2411,7 +2411,7 @@ test("5050: the run log is its own, even before it has one", async () => {
 
   // And the pre-load render must switch the log with the tab, or the other
   // portfolio's history shows for as long as the fetch takes.
-  assert.match(app, /state\.liveExecutionState = \(state\.liveExecutionByMode \|\| \{\}\)\[normalizeMode\(mode\)\] \|\| null;\n\s*if \(state\.liveState\) renderLiveState/);
+  assert.match(app, /state\.liveExecutionState = state\.liveExecutionByMode\[normalizeMode\(mode\)\] \|\| null;\n\s*if \(state\.liveState\) renderLiveState/);
 
   // Each portfolio reads its own file.
   assert.match(app, /isFixedEntryMode\(mode\) \? "data\/live-5050-execution-state\.json" : "data\/live-execution-state\.json"/);
@@ -2678,4 +2678,49 @@ test("5050: risk is its own, free cash is the wallet's", async () => {
   assert.equal(Math.max(0, cash - walletOrderRisk).toFixed(2), "11.90");
   // What the card used to show, overstated by the other portfolio's reservations.
   assert.equal((cash - 5.1).toFixed(2), "14.90");
+});
+
+test("run log: history survives a reload and a failed fetch", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: the run log empties itself -- "No Live trading decision runs recorded
+  // yet" on a list that had entries. The per-portfolio execution state was cached in
+  // memory only, so every reload began with nothing and the log read empty until the
+  // fetch landed; if that fetch failed, it stayed empty for the whole session.
+  // History that disappears on a refresh is worse than history a minute stale.
+  const pick = (re) => re.exec(app)[0];
+  const body = [
+    pick(/function cachedLiveExecutionByMode\(\)[\s\S]*?\n\}/),
+    pick(/function rememberLiveExecutionState\(mode, value\)[\s\S]*?\n\}/),
+  ].join("\n");
+  const store = new Map();
+  const localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+  const api = new Function("localStorage", `const LIVE_EXECUTION_CACHE_KEY="k";
+    ${body}
+    return {cachedLiveExecutionByMode, rememberLiveExecutionState};`)(localStorage);
+
+  assert.deepEqual(api.cachedLiveExecutionByMode(), {}, "a first visit has no history to show");
+  api.rememberLiveExecutionState("live", { generatedAt: "t1", action: "SUBMITTED", runLog: [{ id: "r1" }, { id: "r2" }] });
+  api.rememberLiveExecutionState("live-5050", { generatedAt: "t2", action: "SKIP", runLog: [{ id: "f1" }] });
+
+  // Each portfolio keeps its own, so a reload cannot show one portfolio's log
+  // under the other.
+  const reloaded = api.cachedLiveExecutionByMode();
+  assert.equal(reloaded.live.runLog.length, 2);
+  assert.equal(reloaded["live-5050"].runLog.length, 1);
+  assert.equal(reloaded.live.action, "SUBMITTED");
+
+  // The failure that was blanking it.
+  api.rememberLiveExecutionState("live", null);
+  assert.equal(api.cachedLiveExecutionByMode().live.runLog.length, 2, "a failed fetch must not wipe the log");
+
+  // A full or unavailable store must never break a render.
+  assert.doesNotThrow(() => api.rememberLiveExecutionState("live", { runLog: [], get generatedAt() { throw new Error("boom"); } }));
+
+  // The cache is seeded before the first render, not only after a load.
+  assert.match(app, /state\.liveExecutionByMode = state\.liveExecutionByMode \|\| cachedLiveExecutionByMode\(\);\n\s*state\.liveExecutionState = state\.liveExecutionByMode\[normalizeMode\(mode\)\] \|\| null;/);
+  assert.match(app, /rememberLiveExecutionState\(executionMode, executionResult\.value\);/);
+  // Bounded, so a large batch cannot overflow the quota and lose everything.
+  assert.match(app, /runLog: Array\.isArray\(value\.runLog\) \? value\.runLog\.slice\(0, 60\) : \[\]/);
 });

@@ -3476,6 +3476,40 @@ function upsertExecutionStep(steps, title, detail = "", tone = "") {
   return next;
 }
 
+// The per-portfolio execution state was cached in memory only, so every reload
+// started with nothing and the run log read "no runs recorded yet" until the fetch
+// landed -- and stayed that way for the whole session if it failed. History that
+// vanishes on a refresh is worse than history that is a minute stale, so the last
+// known log is kept on the device and used until a successful fetch replaces it.
+const LIVE_EXECUTION_CACHE_KEY = "trading:liveExecutionByMode";
+
+function cachedLiveExecutionByMode() {
+  try {
+    const raw = localStorage.getItem(LIVE_EXECUTION_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberLiveExecutionState(mode, value) {
+  if (!value || typeof value !== "object") return;
+  try {
+    const cache = cachedLiveExecutionByMode();
+    // Store only what the run log renders, so a large batch cannot overflow the quota.
+    cache[mode] = {
+      generatedAt: value.generatedAt || null,
+      action: value.action || null,
+      reason: value.reason || null,
+      runLog: Array.isArray(value.runLog) ? value.runLog.slice(0, 60) : [],
+    };
+    localStorage.setItem(LIVE_EXECUTION_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // A full or unavailable store must never break a render.
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -3818,7 +3852,8 @@ function renderKnownStateForMode(mode = state.mode) {
     // This paints before the fresh fetch resolves, so point the run log at the
     // portfolio being opened first. Otherwise it renders the previous portfolio's
     // execution history for as long as the load takes.
-    state.liveExecutionState = (state.liveExecutionByMode || {})[normalizeMode(mode)] || null;
+    state.liveExecutionByMode = state.liveExecutionByMode || cachedLiveExecutionByMode();
+    state.liveExecutionState = state.liveExecutionByMode[normalizeMode(mode)] || null;
     if (state.liveState) renderLiveState(state.liveState);
     return;
   }
@@ -4784,9 +4819,10 @@ async function loadLiveState(options = {}) {
     // exist until its first run publishes one, so that fetch legitimately 404s -- and
     // keeping the previous value there meant 5050 displayed Live's execution history.
     const executionMode = normalizeMode(options.requestedMode || state.mode);
-    state.liveExecutionByMode = state.liveExecutionByMode || {};
+    state.liveExecutionByMode = state.liveExecutionByMode || cachedLiveExecutionByMode();
     if (executionResult.status === "fulfilled") {
       state.liveExecutionByMode[executionMode] = executionResult.value;
+      rememberLiveExecutionState(executionMode, executionResult.value);
     } else if (!(executionMode in state.liveExecutionByMode)) {
       // No log of its own yet is "nothing to show", never "show the other one".
       state.liveExecutionByMode[executionMode] = null;
