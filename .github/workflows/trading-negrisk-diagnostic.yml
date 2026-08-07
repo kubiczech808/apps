@@ -1,0 +1,30 @@
+name: Trading - neg risk diagnostic
+
+# Read-only. Prints what the CLOB says about neg risk for every token the live
+# portfolio holds, next to what our own records say. Places no orders and needs
+# no credentials. Run it whenever an order is refused with
+# "invalid POLY_1271 signature: signature does not match order hash".
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: trading-negrisk-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  negrisk-diagnostic:
+    runs-on: [self-hosted, Linux, ARM64]
+    env:
+      POLYMARKET_HOST: https://clob.polymarket.com
+      LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check neg risk against the CLOB
+        working-directory: trading
+        run: node tools/negrisk-diagnostic.mjs
