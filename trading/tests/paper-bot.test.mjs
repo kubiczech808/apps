@@ -2557,3 +2557,49 @@ test("5050: candidates on an event already working are risk-blocked", async () =
   // The failure being fixed: an empty exposure set makes everything look ready.
   assert.equal(reason({ tokenId: "A2", riskGroupKeys: ["event:matchA"] }, []), "");
 });
+
+test("5050: its own resting orders appear on its tab straight away", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: orders placed by 5050 did not show in its Opened trades. Attribution
+  // read only 5050's run log, and that log is written at the END of a run -- after
+  // the orders are already resting on the book. So its own orders were invisible on
+  // its own tab, and counted as Live's, for the whole window in between.
+  //
+  // The price is a second, independent signal: 5050 rests every bid at exactly its
+  // configured entry price, far from the market by construction.
+  const pick = (re) => re.exec(app)[0];
+  const body = [
+    pick(/function restsAtFixedEntryPrice\([\s\S]*?\n\}/),
+    pick(/function belongsToActiveLivePortfolio\([\s\S]*?\n\}/),
+  ].join("\n");
+  const belongs = (fixed, owned) => new Function("row", `
+    const isFixedEntryMode=()=>${fixed};
+    const normalizeFixedEntryPrice=(v)=>v??0.5;
+    const portfolioConfigForMode=()=>({fixedEntryPrice:0.51});
+    const fixedEntryTokenIds=()=>new Set(${JSON.stringify(owned)});
+    ${body}
+    return belongsToActiveLivePortfolio(row);`);
+
+  const notYetLogged = { tokenId: "T1", price: 0.51 };
+  const logged = { tokenId: "T2", price: 0.51 };
+  const liveOrder = { tokenId: "T3", price: 0.96 };
+
+  // The case that was broken: on the book, not yet in the log.
+  assert.equal(belongs(true, ["T2"])(notYetLogged), true);
+  assert.equal(belongs(false, ["T2"])(notYetLogged), false, "and it must not count as Live's");
+  assert.equal(belongs(true, ["T2"])(logged), true);
+  // Live's orders rest near the market and stay Live's.
+  assert.equal(belongs(true, ["T2"])(liveOrder), false);
+  assert.equal(belongs(false, ["T2"])(liveOrder), true);
+
+  // Every row lands on exactly one tab -- attribution must not hide or duplicate.
+  for (const row of [notYetLogged, logged, liveOrder]) {
+    assert.equal(belongs(true, ["T2"])(row) === belongs(false, ["T2"])(row), false,
+      `${row.tokenId} must belong to exactly one live portfolio`);
+  }
+
+  // Tick rounding must not lose a bid by a hundredth.
+  assert.equal(belongs(true, [])({ tokenId: "T4", price: 0.5099 }), true);
+});

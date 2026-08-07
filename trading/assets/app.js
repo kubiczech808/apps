@@ -5767,10 +5767,23 @@ function fixedEntryTokenIds() {
 // Attribution must never hide a row from both portfolios: anything 5050 did not
 // place shows under Live, which is also the safe direction for a token whose
 // origin is unknown.
+// 5050's own orders were invisible on its tab until its run log published, because
+// attribution read only that log -- and the log is written at the end of a run,
+// after the orders are already on the book. The price is the second, independent
+// signal: 5050 rests every bid at exactly its configured entry price, which is far
+// from the market by construction, so a resting order at that price is its own.
+function restsAtFixedEntryPrice(row) {
+  const entryPrice = normalizeFixedEntryPrice(portfolioConfigForMode("live-5050").fixedEntryPrice);
+  const price = Number(row?.price ?? row?.orderPrice ?? row?.limitPrice);
+  if (!Number.isFinite(price)) return false;
+  // Tick-size rounding means the stored price can differ in the last place.
+  return Math.abs(price - entryPrice) < 0.005;
+}
+
 function belongsToActiveLivePortfolio(row) {
   const tokenId = String(row?.tokenId || row?.assetId || "");
   if (!tokenId) return !isFixedEntryMode();
-  const owned = fixedEntryTokenIds().has(tokenId);
+  const owned = fixedEntryTokenIds().has(tokenId) || restsAtFixedEntryPrice(row);
   return isFixedEntryMode() ? owned : !owned;
 }
 
