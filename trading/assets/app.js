@@ -6019,10 +6019,14 @@ function renderLiveState(liveState) {
   // portfolio's whole history -- so 5050 derives its own from the trades it made.
   // With no trades yet that is zero, which is the truth rather than a borrowed one.
   const fixedEntry = isFixedEntryMode();
-  const ownRealized = closedTrades.reduce((sum, trade) => sum + number(trade.realizedPnlUsdc ?? trade.pnlUsdc, 0), 0);
-  const ownOpen = positions.reduce((sum, trade) => sum + number(trade.openPnlUsdc ?? trade.unrealizedPnlUsdc, 0), 0);
+  const usdc = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+  const ownRealized = closedTrades.reduce((sum, trade) => sum + usdc(trade.realizedPnlUsdc ?? trade.pnlUsdc), 0);
+  const ownOpen = positions.reduce((sum, trade) => sum + usdc(trade.openPnlUsdc ?? trade.unrealizedPnlUsdc), 0);
   const ownStake = [...positions, ...closedTrades]
-    .reduce((sum, trade) => sum + number(trade.totalCostUsdc ?? trade.stakeUsdc, 0), 0);
+    .reduce((sum, trade) => sum + usdc(trade.totalCostUsdc ?? trade.stakeUsdc), 0);
   const realizedPnl = fixedEntry ? ownRealized : rawRealized;
   const openPnlValue = fixedEntry ? ownOpen : openPnl;
   const totalPnlValue = fixedEntry ? ownRealized + ownOpen : totalPnl;
