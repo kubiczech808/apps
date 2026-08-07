@@ -1842,3 +1842,31 @@ test("market metric: the app filters and shows traded volume, not order-book liq
   assert.match(html, /<span>Volume min<\/span>/);
   assert.match(html, /<span>Min traded volume<\/span>/);
 });
+
+test("candidates: a finished event stops being listed, an in-play one does not", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const bot2 = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // Reported: a Conservative run could only SKIP while several candidates were listed,
+  // and their evaluation already said "event end date is in the past". Evaluation knew;
+  // the list filter did not, so finished events kept occupying the shortlist.
+  for (const [label, source] of [["app", app], ["bot", bot2]]) {
+    assert.match(source, /reasons\.push\("event end date is in the past"\);/,
+      `${label} must drop a candidate whose resolution window has passed`);
+    // Not for a sports row dated by kickoff: past kickoff means in play, not finished,
+    // and those are still tradable. Hiding them would be worse than listing a stale one.
+    assert.match(source, /String\(item\.endDateSource \|\| ""\) !== "sports-event-start"/,
+      `${label} must not hide an in-play fixture`);
+  }
+
+  // The evaluator already retires such rows in the stored state, which is what makes the
+  // list agree with it rather than merely hiding the row on screen.
+  assert.match(bot2, /rejectReasons\.unshift\("event end date is in the past; awaiting resolution sync"\)/);
+  assert.match(bot2, /status: "RESOLVED",\s*\n\s*thesisType: "RESOLVED",/);
+
+  // Ordering: the past-date check must precede the max-horizon check, or a finished event
+  // would be reported as merely exceeding the horizon.
+  const filter = bot2.slice(bot2.indexOf('reasons.push("event end date is in the past");'));
+  assert.match(filter.slice(0, 400), /else if \(days > maxResolutionDays\)/);
+});

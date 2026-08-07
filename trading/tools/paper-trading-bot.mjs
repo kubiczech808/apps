@@ -4357,7 +4357,14 @@ function portfolioFilterResult(item, strategy) {
     const label = probabilitySource === "polymarket" ? "Polymarket probability" : "AI probability";
     reasons.push(`${label} ${returnMetric} ${(annualizedReturn * 100).toFixed(1)}% below ${(MIN_ANNUAL_RETURN * 100).toFixed(1)}%`);
   }
-  if (days > maxResolutionDays) {
+  if (Number.isFinite(days) && days <= 0 && String(item.endDateSource || "") !== "sports-event-start") {
+    // Already past its own resolution window, so it cannot be opened. scoreEconomics
+    // rejects it with the same finding; keeping it listed only produced shortlists of
+    // finished fixtures and runs that could do nothing but skip.
+    //
+    // A sports row dated by kickoff is excluded: past kickoff means in play, not over.
+    reasons.push("event end date is in the past");
+  } else if (days > maxResolutionDays) {
     reasons.push(`resolution ${Number.isFinite(days) ? days.toFixed(2) : "-"} days exceeds max ${maxResolutionDays}`);
   }
   if (Number.isFinite(minLiquidityUsdc) && candidateVolume < minLiquidityUsdc) {

@@ -4965,6 +4965,15 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   }
   if (!Number.isFinite(days)) {
     reasons.push("missing resolution date");
+  } else if (days <= 0 && String(item.endDateSource || "") !== "sports-event-start") {
+    // Its own resolution window has passed, so it cannot be opened: evaluation already
+    // reports "event end date is in the past" and rejects it. Listing it anyway meant a
+    // shortlist of finished fixtures and a run that could only skip.
+    //
+    // A sports row whose date is the kickoff is deliberately excluded from this: past
+    // kickoff means the match is in play, not over, and those stay tradable. The live
+    // market check is what retires them.
+    reasons.push("event end date is in the past");
   } else if (days > maxDays) {
     reasons.push(`resolution ${days.toFixed(2)} days exceeds max ${maxDays}`);
   }
