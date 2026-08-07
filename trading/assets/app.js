@@ -204,6 +204,11 @@ const els = {
   minNetYieldLabel: document.querySelector("[data-min-net-yield-label]"),
   executionTrigger: document.querySelector("[data-execution-trigger]"),
   executionTriggerLabel: document.querySelector("[data-execution-trigger-label]"),
+  executionCronRow: document.querySelector("[data-execution-cron-row]"),
+  executionCronMinutes: document.querySelector("[data-execution-cron-minutes]"),
+  executionCronMinutesLabel: document.querySelector("[data-execution-cron-minutes-label]"),
+  automationEnabled: document.querySelector("[data-automation-enabled]"),
+  automationEnabledLabel: document.querySelector("[data-automation-enabled-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
@@ -391,6 +396,8 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: null,
         minNetYield: 0,
         executionTrigger: "cron",
+        executionCronMinutes: 0,
+        automationEnabled: true,
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -403,6 +410,8 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: null,
         minNetYield: 0,
         executionTrigger: "cron",
+        executionCronMinutes: 0,
+        automationEnabled: true,
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -415,6 +424,8 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: 500000,
         minNetYield: 0,
         executionTrigger: "cron",
+        executionCronMinutes: 0,
+        automationEnabled: true,
         requireMostProbableOutcome: true,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -428,6 +439,8 @@ function defaultPortfolioConfig() {
       minLiquidityUsdc: 100,
       minNetYield: 0,
       executionTrigger: "cron",
+      executionCronMinutes: 0,
+      automationEnabled: true,
       useLimitOrders: true,
       requireMostProbableOutcome: false,
       probabilitySource: "polymarket",
@@ -457,6 +470,27 @@ function executionTriggerLabel(value) {
   return normalizeExecutionTrigger(value) === "after_scrape"
     ? "After each scraping batch"
     : "Scheduled cron";
+}
+
+const EXECUTION_CRON_CHOICES = [0, 30, 60, 120, 240, 480, 720, 1440];
+
+function normalizeExecutionCronMinutes(value) {
+  const minutes = Number(value);
+  return EXECUTION_CRON_CHOICES.includes(minutes) ? minutes : 0;
+}
+
+function executionCronMinutesLabel(value) {
+  const minutes = normalizeExecutionCronMinutes(value);
+  if (minutes === 0) return "Every scheduled poll";
+  if (minutes < 60) return `${minutes} minutes`;
+  const hours = minutes / 60;
+  return hours === 1 ? "1 hour" : `${hours} hours`;
+}
+
+// Absent means on. A portfolio saved before this switch existed must keep trading
+// rather than silently stop because a field it never had reads as false.
+function automationIsEnabled(config = {}) {
+  return config.automationEnabled !== false;
 }
 
 function probabilitySourceLabel(value) {
@@ -2821,6 +2855,15 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const trigger = normalizeExecutionTrigger(config.executionTrigger);
   if (els.executionTrigger) els.executionTrigger.value = trigger;
   if (els.executionTriggerLabel) els.executionTriggerLabel.textContent = executionTriggerLabel(trigger);
+  const cronMinutes = normalizeExecutionCronMinutes(config.executionCronMinutes);
+  if (els.executionCronMinutes) els.executionCronMinutes.value = String(cronMinutes);
+  if (els.executionCronMinutesLabel) els.executionCronMinutesLabel.textContent = executionCronMinutesLabel(cronMinutes);
+  // The interval only means anything for the cron trigger; "after each scraping
+  // batch" has its own cadence.
+  els.executionCronRow?.toggleAttribute("hidden", trigger !== "cron");
+  const automationOn = automationIsEnabled(config);
+  if (els.automationEnabled) els.automationEnabled.checked = automationOn;
+  if (els.automationEnabledLabel) els.automationEnabledLabel.textContent = automationOn ? "On" : "Off";
   if (els.mostProbableOutcome) {
     els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
     els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLive);
@@ -4154,11 +4197,11 @@ async function freshLiveWorkflowPayload() {
   // which is the guarantee this function's own comment promises.
   if (state.page === "opportunities") renderBotEvaluations();
   else rerenderCurrentDashboard();
-  const payload = liveWorkflowPayload();
-  if (!payload.live_execution_candidate_token_ids) {
-    throw new Error("No current live execution candidates are available. Refresh the shortlist before starting a live order run.");
-  }
-  return payload;
+  // Refreshing the shortlist is part of running, not a precondition the user has to
+  // satisfy first: the refetch and re-render above already did it. If it comes back
+  // empty there is still nothing to refuse -- with no shortlist supplied the executor
+  // scans for candidates itself, exactly as a scheduled run does.
+  return liveWorkflowPayload();
 }
 
 async function triggerOneTimeExecution(target) {
@@ -4710,7 +4753,10 @@ function portfolioRuleRows(portfolio = {}) {
     ["Stake sizing", stakeSizingRuleValue(mode, portfolio)],
     ["Resolution filter", resolution],
     ["Trade priority", priority],
-    ["Execution trigger", executionTriggerLabel(config.executionTrigger)],
+    ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
+      ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
+      : executionTriggerLabel(config.executionTrigger)],
+    ["Automatic execution", automationIsEnabled(config) ? "On" : "Off"],
   ];
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Volume filter", `>= ${money(minLiquidityUsdc)}`]);
   rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
@@ -4732,7 +4778,10 @@ function livePortfolioRuleRows() {
     ["Stake sizing", stakeSizingRuleValue("live", state.liveState?.portfolio)],
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
-    ["Execution trigger", executionTriggerLabel(config.executionTrigger)],
+    ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
+      ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
+      : executionTriggerLabel(config.executionTrigger)],
+    ["Automatic execution", automationIsEnabled(config) ? "On" : "Off"],
     ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
@@ -7852,6 +7901,24 @@ els.executionTrigger?.addEventListener("change", () => {
   const value = normalizeExecutionTrigger(els.executionTrigger.value);
   if (updateParameterDraft({ executionTrigger: value })) return;
   updatePortfolioConfigForMode(state.mode, { executionTrigger: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.executionCronMinutes?.addEventListener("change", () => {
+  const value = normalizeExecutionCronMinutes(els.executionCronMinutes.value);
+  if (updateParameterDraft({ executionCronMinutes: value })) return;
+  updatePortfolioConfigForMode(state.mode, { executionCronMinutes: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.automationEnabled?.addEventListener("change", () => {
+  const value = Boolean(els.automationEnabled.checked);
+  if (updateParameterDraft({ automationEnabled: value })) return;
+  updatePortfolioConfigForMode(state.mode, { automationEnabled: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

@@ -298,6 +298,9 @@ jobs:
               emit(f"{prefix}_MIN_LIQUIDITY_USDC", row.get("minLiquidityUsdc"))
               emit(f"{prefix}_MIN_NET_YIELD", row.get("minNetYield"))
               emit(f"{prefix}_EXECUTION_TRIGGER", row.get("executionTrigger"))
+              emit(f"{prefix}_EXECUTION_CRON_MINUTES", row.get("executionCronMinutes"))
+              # Default on: a portfolio saved before this switch existed must keep trading.
+              emit(f"{prefix}_AUTOMATION_ENABLED", str(bool(row.get("automationEnabled", True))).lower())
               emit(f"{prefix}_REQUIRE_MOST_PROBABLE", str(bool(row.get("requireMostProbableOutcome"))).lower())
               emit(f"{prefix}_PROBABILITY_SOURCE", row.get("probabilitySource"))
               excluded_tokens = [str(token) for token in (row.get("excludedCandidateTokenIds") or []) if str(token).isdigit()]

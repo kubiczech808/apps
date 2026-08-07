@@ -281,6 +281,8 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_CONSERVATIVE_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_CONSERVATIVE_EXECUTION_TRIGGER),
+    executionCronMinutes: Math.max(0, envNumber("PAPER_CONSERVATIVE_EXECUTION_CRON_MINUTES", 0) || 0),
+    automationEnabled: envBool("PAPER_CONSERVATIVE_AUTOMATION_ENABLED", true),
     requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_CONSERVATIVE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -297,6 +299,8 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_HIGH_REWARD_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_HIGH_REWARD_EXECUTION_TRIGGER),
+    executionCronMinutes: Math.max(0, envNumber("PAPER_HIGH_REWARD_EXECUTION_CRON_MINUTES", 0) || 0),
+    automationEnabled: envBool("PAPER_HIGH_REWARD_AUTOMATION_ENABLED", true),
     requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_HIGH_REWARD_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -313,6 +317,8 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
     minNetYield: envNumber("PAPER_MORE_PROBABLE_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_MORE_PROBABLE_EXECUTION_TRIGGER),
+    executionCronMinutes: Math.max(0, envNumber("PAPER_MORE_PROBABLE_EXECUTION_CRON_MINUTES", 0) || 0),
+    automationEnabled: envBool("PAPER_MORE_PROBABLE_AUTOMATION_ENABLED", true),
     requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_MORE_PROBABLE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
@@ -328,11 +334,30 @@ function executionStrategies() {
   return Object.values(PAPER_STRATEGIES);
 }
 
-function strategyMatchesExecutionTrigger(strategy) {
-  if (MANUAL_RUN_ONCE || EVALUATION_ONLY) return true;
+// A manual run always overrides the portfolio's own automation settings: switching
+// automatic execution off must not also take away the ability to run it by hand.
+// The flag is a parameter rather than a module read so the rule can be exercised for
+// both answers, not just whichever one the test process happens to import with.
+function strategyMatchesExecutionTrigger(strategy, { manual = MANUAL_RUN_ONCE || EVALUATION_ONLY } = {}) {
+  if (manual) return true;
+  // Absent means on: a portfolio saved before this switch existed must keep trading
+  // rather than silently stop because a field it never had reads as false.
+  if (strategy?.automationEnabled === false) return false;
   if (EXECUTION_TRIGGER === "after_scrape") return strategy.executionTrigger === "after_scrape";
   if (EXECUTION_TRIGGER === "cron") return strategy.executionTrigger !== "after_scrape";
   return true;
+}
+
+// 0 means "every scheduled run". Anything higher makes a portfolio's cadence
+// independent of how often the workflow itself happens to be scheduled.
+function strategyCadenceIsDue(strategy, lastRunAt, now = Date.now(), { manual = MANUAL_RUN_ONCE || EVALUATION_ONLY } = {}) {
+  if (manual) return true;
+  const minutes = Math.max(0, Number(strategy?.executionCronMinutes) || 0);
+  if (minutes <= 0) return true;
+  const previous = Date.parse(lastRunAt || "");
+  // No previous run is not a reason to wait.
+  if (!Number.isFinite(previous)) return true;
+  return (now - previous) / 60000 >= minutes;
 }
 
 const LEDGER_RECOVERY_ANCHORS = [
@@ -4265,8 +4290,22 @@ function normalizeExecutionTrigger(value) {
   return String(value || "").trim().toLowerCase() === "after_scrape" ? "after_scrape" : "cron";
 }
 
+function lastRunAtForStrategy(state, strategy) {
+  const rows = Array.isArray(state?.runLog) ? state.runLog : [];
+  let latest = null;
+  for (const row of rows) {
+    if (String(row?.strategyId || "") !== String(strategy?.id || "")) continue;
+    const time = Date.parse(row?.runAt || row?.generatedAt || "");
+    if (!Number.isFinite(time)) continue;
+    if (latest == null || time > latest) latest = time;
+  }
+  return latest == null ? null : new Date(latest).toISOString();
+}
+
 function dueExecutionStrategies(state) {
-  return executionStrategies().filter((strategy) => strategyMatchesExecutionTrigger(strategy));
+  return executionStrategies()
+    .filter((strategy) => strategyMatchesExecutionTrigger(strategy))
+    .filter((strategy) => strategyCadenceIsDue(strategy, lastRunAtForStrategy(state, strategy)));
 }
 
 function strategyEligibleCandidates(eligible, strategy) {
@@ -8076,6 +8115,8 @@ export {
   mergeCadence,
   minutesSinceIso,
   netYieldAfterFees,
+  strategyCadenceIsDue,
+  strategyMatchesExecutionTrigger,
   normalizeCadence,
   normalizeState,
   openRisk,

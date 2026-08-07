@@ -505,11 +505,18 @@ test("live execution: the run evaluates the shortlist that is on screen", async 
 
   const storeAt = body.indexOf("storeScrapedMarketState(scrapedState);");
   const renderAt = body.search(/if \(state\.page === "opportunities"\) renderBotEvaluations\(\);/);
-  const payloadAt = body.indexOf("const payload = liveWorkflowPayload();");
+  const payloadAt = body.indexOf("liveWorkflowPayload();");
   assert.ok(storeAt >= 0 && renderAt >= 0 && payloadAt >= 0, "all three steps must be present");
   assert.ok(renderAt > storeAt, "the re-render must follow the refetch that replaced the rows");
   assert.ok(renderAt < payloadAt, "and precede building the shortlist, so screen and payload agree");
   assert.match(body, /else rerenderCurrentDashboard\(\);/);
+
+  // Refreshing the shortlist is part of running, not a precondition the user has to
+  // satisfy first -- the refetch above already did it. An empty result is not a reason
+  // to refuse either: with no shortlist supplied the executor scans for candidates
+  // itself, exactly as a scheduled run does.
+  assert.ok(!/Refresh the shortlist before starting a live order run/.test(app),
+    "a manual run must not be blocked on a shortlist it refreshes itself");
 
   // The shortlist is still taken from the same rows the table renders.
   assert.match(app, /const shortlistTokenIds = portfolioCandidateRows\("live"\)/);
@@ -1984,4 +1991,43 @@ test("paper economics: the scraped evaluation persists what the portfolios rank 
   assert.match(source, /potentialAnnualizedReturn: rounded\(/);
   // The shared guard against the Number(null) trap.
   assert.match(source, /function numericOrNaN\(value\) \{\n  return value == null \|\| value === "" \? NaN : Number\(value\);\n\}/);
+});
+
+test("automation: a portfolio can be switched off and paced, and a manual run overrides both", () => {
+  const base = bot.PAPER_STRATEGIES.conservative;
+  const now = Date.parse("2026-08-07T12:00:00Z");
+  const minutesAgoIso = (minutes) => new Date(now - minutes * 60000).toISOString();
+
+  // Off means off for automatic runs.
+  assert.equal(bot.strategyMatchesExecutionTrigger({ ...base, automationEnabled: false }, { manual: false }), false);
+  // Absent means on: a portfolio saved before the switch existed must keep trading
+  // rather than silently stop because a field it never had reads as false.
+  assert.equal(bot.strategyMatchesExecutionTrigger({ ...base, automationEnabled: undefined }, { manual: false }), true);
+  assert.equal(bot.strategyMatchesExecutionTrigger({ ...base, automationEnabled: true }, { manual: false }), true);
+  // ...but a manual run still trades a switched-off portfolio.
+  assert.equal(bot.strategyMatchesExecutionTrigger({ ...base, automationEnabled: false }, { manual: true }), true);
+
+  // The interval is the portfolio's own cadence, independent of how often the
+  // workflow happens to be scheduled.
+  const hourly = { ...base, executionCronMinutes: 60 };
+  assert.equal(bot.strategyCadenceIsDue(hourly, minutesAgoIso(59), now, { manual: false }), false, "not due yet");
+  assert.equal(bot.strategyCadenceIsDue(hourly, minutesAgoIso(59), now, { manual: true }), true, "a manual run ignores the cadence");
+  assert.equal(bot.strategyCadenceIsDue(hourly, minutesAgoIso(61), now, { manual: false }), true, "due");
+  assert.equal(bot.strategyCadenceIsDue(hourly, null, now, { manual: false }), true, "no previous run is not a reason to wait");
+  // 0 keeps the old behaviour: every scheduled run.
+  assert.equal(bot.strategyCadenceIsDue({ ...base, executionCronMinutes: 0 }, minutesAgoIso(1), now, { manual: false }), true);
+});
+
+test("manual live execution: the server no longer demands a parameter that was removed", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+
+  // Reported: "Manual live execution requires a current execution shortlist and its
+  // probability source. Refresh the shortlist before running." That guard outlived the
+  // parameter -- the probability source was removed with the AI pipeline, so the check
+  // could never be satisfied again and every manual live run was rejected with 400.
+  assert.ok(!/live_execution_probability_source/.test(api),
+    "the server must not read a request field that no longer exists");
+  assert.ok(!/requires a current execution shortlist/.test(api),
+    "and must not refuse a run over a shortlist the dashboard refreshes as part of running");
 });

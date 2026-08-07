@@ -1784,14 +1784,10 @@ try {
         $liveUseLimitOrders = normalized_bool_input($payload['useLimitOrders'] ?? $payload['use_limit_orders'] ?? null);
         $crossLiveRiskDiversification = normalized_bool_input($payload['cross_live_portfolio_risk_diversification'] ?? $payload['crossLivePortfolioRiskDiversification'] ?? null);
         $liveShortlistTokenIds = normalized_live_shortlist_token_ids_input($payload['live_execution_candidate_token_ids'] ?? null);
-        $liveShortlistProbabilitySource = normalized_probability_source_input($payload['live_execution_probability_source'] ?? null);
         $manualRunOnce = normalized_bool_input($payload['manual_run_once'] ?? $payload['manualRunOnce'] ?? null);
         $requestedLiveRunSource = strtoupper(trim((string) ($payload['live_run_source'] ?? $payload['liveRunSource'] ?? '')));
         if ($targetKey === 'live' && $requestedLiveRunSource === 'MANUAL') {
             $manualRunOnce = true;
-        }
-        if ($targetKey === 'live' && $manualRunOnce === true && ($liveShortlistTokenIds === null || $liveShortlistProbabilitySource === null)) {
-            respond(['ok' => false, 'error' => 'Manual live execution requires a current execution shortlist and its probability source. Refresh the shortlist before running.'], 400);
         }
         $evaluationTokenId = preg_replace('/[^0-9]/', '', (string) ($payload['evaluation_token_id'] ?? $payload['evaluationTokenId'] ?? ''));
         $evaluationMarketSlug = preg_replace('/[^A-Za-z0-9_-]/', '', (string) ($payload['evaluation_market_slug'] ?? $payload['evaluationMarketSlug'] ?? ''));
@@ -1837,7 +1833,6 @@ try {
                     'cross_live_portfolio_risk_diversification' => $crossLiveRiskDiversification,
                     'live_run_source' => $manualRunOnce === true ? 'MANUAL' : 'AUTO',
                     'live_execution_candidate_token_ids' => $liveShortlistTokenIds,
-                    'live_execution_probability_source' => $liveShortlistProbabilitySource,
                 ], static fn ($value): bool => $value !== null),
                 'message' => 'Live one-time execution workflow dispatched.',
             ],

@@ -183,6 +183,9 @@ jobs:
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": live.get("minLiquidityUsdc"),
               "LIVE_MIN_NET_YIELD": live.get("minNetYield"),
               "LIVE_EXECUTION_TRIGGER": live.get("executionTrigger"),
+              "LIVE_EXECUTION_CRON_MINUTES": live.get("executionCronMinutes"),
+              # Default on: a portfolio that never stored the field must keep trading.
+              "LIVE_AUTOMATION_ENABLED": str(bool(live.get("automationEnabled", True))).lower(),
               "LIVE_EXCLUDED_CANDIDATE_TOKEN_IDS": ",".join(str(token) for token in (live.get("excludedCandidateTokenIds") or []) if str(token).isdigit()),
               "USE_LIMIT_ORDERS": str(bool(live.get("useLimitOrders", True))).lower(),
               "LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION": str(bool(system.get("crossLivePortfolioRiskDiversification", True))).lower(),

@@ -71,6 +71,13 @@ const EXECUTION_STATE_PATH = process.env.LIVE_EXECUTION_STATE_PATH || "";
 const IDLE_CASH_MAX_USDC = Number(process.env.LIVE_IDLE_CASH_MAX_USDC || 5);
 const IDLE_CASH_GRACE_HOURS = Number(process.env.LIVE_IDLE_CASH_GRACE_HOURS || 24);
 const SKIP_SCHEDULED_EXECUTION = String(process.env.LIVE_SKIP_SCHEDULED_EXECUTION || "").toLowerCase() === "true";
+// Automation is a portfolio switch, not a workflow one: the schedule keeps firing so
+// a manual run is always available, but an automatic run does nothing while it is off.
+const AUTOMATION_ENABLED = String(process.env.LIVE_AUTOMATION_ENABLED ?? "true").toLowerCase() !== "false";
+// 0 means "every scheduled run". Anything higher makes the portfolio's own cadence
+// independent of how often the workflow happens to be scheduled.
+const EXECUTION_CRON_MINUTES = Math.max(0, envNumber("LIVE_EXECUTION_CRON_MINUTES", 0) || 0);
+const IS_MANUAL_RUN = String(process.env.LIVE_RUN_SOURCE || "").toUpperCase() === "MANUAL";
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
 const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
@@ -3180,6 +3187,30 @@ async function main() {
       action: "TRIGGER_WAIT",
       reason: "Live portfolio is configured to execute after each scraping batch; scheduled cron execution was skipped.",
       executionTrigger: "after_scrape",
+    }, null, 2));
+    return;
+  }
+  // Both of these are portfolio settings, so a manual run always overrides them --
+  // turning automation off must not also take away the ability to run it by hand.
+  if (!IS_MANUAL_RUN && !AUTOMATION_ENABLED) {
+    console.log(JSON.stringify({
+      action: "AUTOMATION_DISABLED",
+      reason: "Automatic execution is switched off for this portfolio; only a manual run will trade.",
+      automationEnabled: false,
+    }, null, 2));
+    return;
+  }
+  const minutesSincePreviousRun = previousExecution?.generatedAt
+    ? (Date.now() - Date.parse(previousExecution.generatedAt)) / 60000
+    : null;
+  if (!IS_MANUAL_RUN
+    && EXECUTION_CRON_MINUTES > 0
+    && Number.isFinite(minutesSincePreviousRun)
+    && minutesSincePreviousRun < EXECUTION_CRON_MINUTES) {
+    console.log(JSON.stringify({
+      action: "CADENCE_WAIT",
+      reason: `Portfolio cadence is every ${EXECUTION_CRON_MINUTES} minutes and the last run was ${minutesSincePreviousRun.toFixed(1)} minutes ago; polling skipped: no live execution review is due.`,
+      cadenceMinutes: EXECUTION_CRON_MINUTES,
     }, null, 2));
     return;
   }
