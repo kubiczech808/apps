@@ -2640,3 +2640,42 @@ test("market scan: a manual scan finishes on the server, whatever the tab does",
   assert.match(app, /Scan is still running on the server; its results will appear when it publishes\./);
   assert.ok(!/throw new Error\("Scan is still queued in the background/.test(app));
 });
+
+test("5050: risk is its own, free cash is the wallet's", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Reported: 5050 showed a wrong Risk / free. Two different mistakes met in one card.
+  //
+  // Free cash was the shared balance minus only THIS portfolio's resting orders.
+  // There is one wallet, so every resting buy reserves collateral against the same
+  // balance -- including the other portfolio's -- and the card reported cash as free
+  // that could not actually be spent. That is the dangerous direction: it invites a
+  // run that the exchange then refuses for collateral.
+  assert.match(app, /const walletOrderRisk = \(Array\.isArray\(liveState\?\.openOrders\)/);
+  assert.match(app, /\.filter\(\(order\) => !String\(order\.side \|\| ""\)\.toUpperCase\(\)\.includes\("SELL"\)\)/,
+    "a resting sell releases collateral rather than reserving it");
+  assert.match(app, /const freeCash = Number\.isFinite\(cash\) \? Math\.max\(0, cash - walletOrderRisk\) : null;/);
+
+  // Risk is the opposite: it is what THIS portfolio has committed. The account
+  // snapshot's openRiskUsdc is wallet-wide, so using it showed 5050 the other
+  // portfolio's positions.
+  assert.match(app, /const ownPositionRisk = positions\.reduce\(/);
+  assert.match(app, /els\.portfolioRisk\.textContent = money\(isFixedEntryMode\(\)\n\s*\? ownPositionRisk \+ openOrderRisk/);
+
+  // The arithmetic, on one wallet holding both portfolios' orders.
+  const cash = 20;
+  const wallet = [
+    { side: "BUY", totalCostUsdc: 3 },      // the live portfolio's
+    { side: "BUY", totalCostUsdc: 2.55 },   // 5050
+    { side: "BUY", totalCostUsdc: 2.55 },   // 5050
+    { side: "SELL", totalCostUsdc: 9 },     // an exit, which reserves nothing
+  ];
+  const walletOrderRisk = wallet
+    .filter((order) => !order.side.includes("SELL"))
+    .reduce((sum, order) => sum + order.totalCostUsdc, 0);
+  assert.equal(walletOrderRisk, 8.1);
+  assert.equal(Math.max(0, cash - walletOrderRisk).toFixed(2), "11.90");
+  // What the card used to show, overstated by the other portfolio's reservations.
+  assert.equal((cash - 5.1).toFixed(2), "14.90");
+});

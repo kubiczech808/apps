@@ -6127,7 +6127,17 @@ function renderLiveState(liveState) {
   const marketValue = Number(portfolio.marketValueUsdc);
   const cash = Number(portfolio.cashUsdc);
   const openOrderRisk = openOrderRows.reduce((sum, order) => sum + Number(order.totalCostUsdc || order.stakeUsdc || 0), 0);
-  const freeCash = Number.isFinite(cash) ? Math.max(0, cash - openOrderRisk) : null;
+  // Risk is this portfolio's own: what it has committed. Free cash is not -- there is
+  // one wallet, so every resting buy reserves collateral against the same balance,
+  // including the other portfolio's. Subtracting only this portfolio's orders
+  // reported cash as free that could not actually be spent.
+  const walletOrderRisk = (Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+    .filter((order) => !String(order.side || "").toUpperCase().includes("SELL"))
+    .reduce((sum, order) => sum + Number(order.totalCostUsdc ?? order.notionalUsdc ?? order.stakeUsdc ?? 0), 0);
+  const freeCash = Number.isFinite(cash) ? Math.max(0, cash - walletOrderRisk) : null;
+  // Positions carry wallet-wide risk in the account snapshot, so a per-portfolio view
+  // has to add up its own rather than borrow that total.
+  const ownPositionRisk = positions.reduce((sum, row) => sum + Number(row.totalCostUsdc ?? row.stakeUsdc ?? 0), 0);
   const pendingRedeem = Number(portfolio.pendingRedeemUsdc);
   const executionState = state.liveExecutionState || {};
   const monitoring = executionState.monitoring || {};
@@ -6213,7 +6223,9 @@ function renderLiveState(liveState) {
   els.portfolioOpenPl.textContent = signedMoney(openPnlValue);
   els.portfolioOpenPl.className = pnlClass(openPnlValue);
   els.portfolioOpenPlPct.textContent = signedPercent(fixedEntry ? ownBasePct(ownOpen) : openPnlPct);
-  els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0) + openOrderRisk);
+  els.portfolioRisk.textContent = money(isFixedEntryMode()
+    ? ownPositionRisk + openOrderRisk
+    : Number(portfolio.openRiskUsdc || 0) + openOrderRisk);
   els.portfolioFree.textContent = freeCash == null ? "cash not available" : `${money(freeCash)} free cash`;
   if (els.portfolioRr) {
     els.portfolioRr.textContent = riskReward(portfolioRiskReward);
