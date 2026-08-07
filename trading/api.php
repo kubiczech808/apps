@@ -181,6 +181,9 @@ function state_payload(string $target, array $segments = ['observations', 'evalu
         'paper' => __DIR__ . '/data/paper-state.json',
         'live' => __DIR__ . '/data/live-state.json',
         'live-execution' => __DIR__ . '/data/live-execution-state.json',
+        // The 5050 portfolio shares the wallet with the main live portfolio but not
+        // its decisions, so its run log lives in its own file.
+        'live-5050-execution' => __DIR__ . '/data/live-5050-execution-state.json',
     ];
     if (!isset($files[$target])) {
         respond(['ok' => false, 'error' => 'Unknown state target'], 400);

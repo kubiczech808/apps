@@ -78,6 +78,16 @@ const AUTOMATION_ENABLED = String(process.env.LIVE_AUTOMATION_ENABLED ?? "true")
 // independent of how often the workflow happens to be scheduled.
 const EXECUTION_CRON_MINUTES = Math.max(0, envNumber("LIVE_EXECUTION_CRON_MINUTES", 0) || 0);
 const IS_MANUAL_RUN = String(process.env.LIVE_RUN_SOURCE || "").toUpperCase() === "MANUAL";
+// The "5050" portfolio. Instead of buying the single best candidate at the current
+// market price, it rests a bid at a fixed point on the 0..1 scale across every
+// candidate that clears its probability bar. Most never fill, and that is the
+// design: the ones that do were bought far below what the market thought they were
+// worth. It deliberately does not rotate and deliberately does not stop at the
+// capital it has -- see FIXED_ENTRY_MAX_ORDERS for what actually bounds it.
+const FIXED_ENTRY_STRATEGY = String(process.env.LIVE_STRATEGY || "").trim().toLowerCase() === "fixed_entry";
+const FIXED_ENTRY_PRICE = envNumber("LIVE_FIXED_ENTRY_PRICE", 0.5);
+const FIXED_ENTRY_MAX_ORDERS = Math.max(1, envNumber("LIVE_FIXED_ENTRY_MAX_ORDERS", 50) || 50);
+const FIXED_ENTRY_STAKE_USDC = Math.max(0, envNumber("LIVE_FIXED_ENTRY_STAKE_USDC", 0) || 0);
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
 const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
@@ -2274,6 +2284,151 @@ function rotationLegMerge({ completionRun, previousState, exitEntry, runEntry, p
   };
 }
 
+// Reshape a revalidated row into an order resting at the fixed entry price. The
+// revalidation sized it against the current ask and the free cash; neither applies
+// here, so only the market facts it discovered are kept -- tick size, neg risk, the
+// exchange minimum -- and the price and size are rebuilt from the strategy.
+function fixedEntryOrder(row, { price = FIXED_ENTRY_PRICE, stakeUsdc = FIXED_ENTRY_STAKE_USDC } = {}) {
+  const tickSize = number(row.tickSize, 0.01);
+  const limitPrice = roundToTick(price, tickSize, "down");
+  if (!Number.isFinite(limitPrice) || limitPrice <= 0 || limitPrice >= 1) return null;
+  const minOrderSize = number(row.minOrderSize, 5) ?? 5;
+  const wanted = stakeUsdc > 0 ? Math.floor(stakeUsdc / limitPrice) : 0;
+  let size = Math.max(minOrderSize, wanted);
+  // Polymarket rejects a maker amount with more than two decimals, and price * size
+  // is that amount. Round the size up until it lands on a clean cent.
+  if (!hasTwoDecimalMakerAmount(limitPrice, size)) {
+    const cents = Math.ceil(limitPrice * size * 100) / 100;
+    size = Number((cents / limitPrice).toFixed(4));
+  }
+  const notional = Number((limitPrice * size).toFixed(5));
+  return {
+    ...row,
+    orderPrice: limitPrice,
+    orderSize: Number(size.toFixed(4)),
+    orderNotionalUsdc: notional,
+    totalCostUsdc: notional,
+    orderType: "GTC",
+    fixedEntryPrice: limitPrice,
+  };
+}
+
+async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash }) {
+  const restingTokenIds = new Set((Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+    .filter((order) => !String(order.side || "").toUpperCase().includes("SELL"))
+    .map((order) => String(order.tokenId || order.assetId || "")));
+  const heldTokenIds = new Set(openPositionsForRotation(liveState)
+    .map((position) => String(position.tokenId || position.assetId || "")));
+
+  const skipped = [];
+  const pool = [];
+  for (const row of checked) {
+    const tokenId = String(row.tokenId || "");
+    // A revalidation that could not price the market at all says nothing about
+    // whether a resting bid far below it is worth placing, so only the findings
+    // that are still true at any price disqualify a candidate here.
+    if (row.marketGone || row.status === "ERROR") {
+      skipped.push({ tokenId, question: row.question, reason: row.rejectReasons?.[0] || "market unavailable" });
+      continue;
+    }
+    if (restingTokenIds.has(tokenId)) {
+      skipped.push({ tokenId, question: row.question, reason: "an order is already resting on this token" });
+      continue;
+    }
+    if (heldTokenIds.has(tokenId)) {
+      skipped.push({ tokenId, question: row.question, reason: "this token is already held" });
+      continue;
+    }
+    const probability = selectedProbability(row);
+    if (!Number.isFinite(probability) || probability < MIN_PROBABILITY) {
+      skipped.push({
+        tokenId,
+        question: row.question,
+        reason: `probability ${Number.isFinite(probability) ? (probability * 100).toFixed(1) : "-"}% below ${(MIN_PROBABILITY * 100).toFixed(1)}%`,
+      });
+      continue;
+    }
+    // Resting below the market is the entire point, so a candidate already trading
+    // at or under the entry price offers nothing this strategy is trying to buy.
+    if (Number.isFinite(number(row.currentBestAsk)) && number(row.currentBestAsk) <= FIXED_ENTRY_PRICE) {
+      skipped.push({ tokenId, question: row.question, reason: `already asks ${number(row.currentBestAsk).toFixed(3)}, at or below the entry price` });
+      continue;
+    }
+    const order = fixedEntryOrder(row);
+    if (!order) {
+      skipped.push({ tokenId, question: row.question, reason: "entry price is not valid for this market's tick size" });
+      continue;
+    }
+    pool.push(order);
+  }
+
+  pool.sort(compareLiveCandidatePriority);
+  const targets = pool.slice(0, FIXED_ENTRY_MAX_ORDERS);
+  const attempts = [];
+  let accepted = 0;
+  let rejectedForFunds = 0;
+
+  for (const order of targets) {
+    if (DRY_RUN || !hasFlag("confirm-live")) {
+      attempts.push(orderAttemptSummary(order, null, { action: "DRY_RUN_READY" }));
+      continue;
+    }
+    const submission = await submitOrderWithMakerPrecisionRecovery({ ...order, funderAddress: tradingConfig.funderAddress, signatureType: tradingConfig.signatureType });
+    const ok = successfulOrderResponse(submission.response);
+    if (ok) accepted += 1;
+    // Running past the capital on hand is intended, so the exchange refusing an
+    // order for want of collateral is an expected outcome and not a run failure.
+    // It is counted separately so the log distinguishes "we ran out" from a fault.
+    const error = String(orderResponseError(submission.response) || "");
+    if (!ok && /balance|allowance|insufficient|not enough/i.test(error)) rejectedForFunds += 1;
+    attempts.push(orderAttemptSummary(submission.order, submission.response, {
+      action: ok ? "SUBMITTED" : "REJECTED",
+    }));
+  }
+
+  const action = accepted > 0 ? "SUBMITTED" : (targets.length ? "SKIP" : "NO_CANDIDATES");
+  const reason = targets.length
+    ? `fixed-entry batch rested ${accepted} of ${targets.length} bids at ${FIXED_ENTRY_PRICE.toFixed(2)}${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}`
+    : `no candidate cleared the ${(MIN_PROBABILITY * 100).toFixed(1)}% bar for a resting bid at ${FIXED_ENTRY_PRICE.toFixed(2)}`;
+
+  await emitDecision({
+    generatedAt: new Date().toISOString(),
+    action,
+    reason,
+    strategy: "fixed_entry",
+    fixedEntry: {
+      entryPrice: FIXED_ENTRY_PRICE,
+      maxOrders: FIXED_ENTRY_MAX_ORDERS,
+      stakePerOrderUsdc: FIXED_ENTRY_STAKE_USDC,
+      considered: checked.length,
+      qualified: pool.length,
+      targeted: targets.length,
+      accepted,
+      rejectedForFunds,
+    },
+    account: { cashUsdc: cash, availableCashUsdc: availableCash },
+    attempts,
+    batchLog: {
+      action,
+      reason,
+      strategyId: "live-5050",
+      strategyLabel: "5050",
+      runAt: new Date().toISOString(),
+      counts: {
+        consideredCandidates: checked.length,
+        qualifiedCandidates: pool.length,
+        targetedOrders: targets.length,
+        acceptedOrders: accepted,
+        rejectedForCollateral: rejectedForFunds,
+      },
+      topRejected: skipped.slice(0, 12).map((item) => ({
+        question: item.question,
+        rejectReasons: [item.reason],
+      })),
+    },
+  });
+}
+
 async function emitDecision(payload) {
   // Compact entries already stored from before this existed too, so the backlog
   // shrinks on the very next run instead of only stopping further growth and
@@ -3263,6 +3418,11 @@ async function main() {
     }
   }
 
+  if (FIXED_ENTRY_STRATEGY) {
+    await runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash });
+    return;
+  }
+
   const allEligible = checked
     .filter((item) => item.status === "ELIGIBLE")
     .filter((item) => Number.isFinite(Number(item.annualizedReturn)) && Number(item.annualizedReturn) > 0)
@@ -3917,4 +4077,5 @@ export {
   rotationLegMerge,
   candidatePoolForRotation,
   latestHoldingResolutionMs,
+  fixedEntryOrder,
 };

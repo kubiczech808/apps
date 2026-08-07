@@ -1344,3 +1344,75 @@ test("rotation scope: how many holdings get reviewed is a rule, not a fixed slic
   assert.match(workflow, /order_reviews = state\.get\("openOrderReviews"\)/);
   assert.match(workflow, /reviewed for rotation/);
 });
+
+test("5050: every bid rests at the configured price, sized to a valid maker amount", () => {
+  // The 5050 portfolio does not buy the best candidate at the market price. It rests
+  // a bid at a fixed point on the 0..1 scale across everything that clears its
+  // probability bar, accepting that most never fill. So the revalidation's own price
+  // and size -- which were derived from the current ask and the free cash -- must be
+  // replaced, while the market facts it discovered are kept.
+  const row = {
+    tokenId: "t1",
+    question: "Some market?",
+    tickSize: 0.01,
+    minOrderSize: 5,
+    orderPrice: 0.96,
+    orderSize: 5,
+    orderNotionalUsdc: 4.8,
+    negRisk: true,
+  };
+
+  const order = executor.fixedEntryOrder(row, { price: 0.5, stakeUsdc: 0 });
+  assert.equal(order.orderPrice, 0.5, "the bid rests where the strategy says, not at the market");
+  assert.equal(order.orderSize, 5, "with no stake configured it uses the exchange minimum");
+  assert.equal(order.orderNotionalUsdc, 2.5);
+  assert.equal(order.orderType, "GTC", "it has to rest on the book, not take");
+  assert.equal(order.negRisk, true, "market facts from the revalidation are kept");
+
+  // A stake buys as many shares as it covers, never fewer than the exchange minimum.
+  assert.equal(executor.fixedEntryOrder(row, { price: 0.5, stakeUsdc: 10 }).orderSize, 20);
+  assert.equal(executor.fixedEntryOrder(row, { price: 0.5, stakeUsdc: 1 }).orderSize, 5);
+
+  // Polymarket rejects a maker amount with more than two decimals, and price * size
+  // is that amount -- the same class of rejection that has bitten real orders.
+  for (const price of [0.5, 0.33, 0.07, 0.99]) {
+    for (const stake of [0, 1, 3.33, 10]) {
+      const built = executor.fixedEntryOrder({ ...row, tickSize: 0.01 }, { price, stakeUsdc: stake });
+      const makerAmount = built.orderPrice * built.orderSize;
+      assert.ok(Math.abs(makerAmount * 100 - Math.round(makerAmount * 100)) < 1e-6,
+        `price ${price} stake ${stake} produced maker amount ${makerAmount}`);
+      assert.ok(built.orderSize >= 5, "and never below the exchange minimum");
+    }
+  }
+
+  // A price outside the tradable band is refused rather than sent to be rejected.
+  assert.equal(executor.fixedEntryOrder(row, { price: 0 }), null);
+  assert.equal(executor.fixedEntryOrder(row, { price: 1 }), null);
+});
+
+test("5050: the strategy is opt-in and does not disturb the main live portfolio", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+
+  // Off unless explicitly asked for, so the existing live portfolio is untouched.
+  assert.match(source, /const FIXED_ENTRY_STRATEGY = String\(process\.env\.LIVE_STRATEGY \|\| ""\)\.trim\(\)\.toLowerCase\(\) === "fixed_entry";/);
+  assert.match(source, /if \(FIXED_ENTRY_STRATEGY\) \{\n\s*await runFixedEntryBatch\(/);
+
+  // It writes its own run log: same wallet, separate decisions.
+  assert.match(workflow, /LIVE_EXECUTION_STATE_PATH: data\/live-5050-execution-state\.json/);
+  assert.match(api, /'live-5050-execution' => __DIR__ \. '\/data\/live-5050-execution-state\.json'/);
+
+  // Resting below the market only works as a maker order, and rotation would fight
+  // the whole premise of accumulating cheap fills.
+  assert.match(workflow, /POLYMARKET_POST_ONLY: "true"/);
+  assert.match(workflow, /LIVE_AUTO_ROTATE: "false"/);
+  // Real orders only when explicitly confirmed.
+  assert.match(workflow, /inputs\.live_confirm\) && 'false' \|\| 'true'/);
+
+  // Running past the capital on hand is intended, so a collateral refusal is counted
+  // rather than treated as a fault.
+  assert.match(source, /rejectedForFunds/);
+  assert.match(source, /balance\|allowance\|insufficient\|not enough/);
+});

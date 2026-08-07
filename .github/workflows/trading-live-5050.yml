@@ -1,0 +1,218 @@
+name: Trading Live 5050
+
+# The "5050" live portfolio. Where the main live portfolio buys the single best
+# candidate at the current market price, this one rests a bid at a fixed point on
+# the 0..1 scale across every candidate that clears its probability bar. Most never
+# fill -- that is the design. The ones that do were bought far below what the market
+# thought they were worth.
+#
+# It shares the Polymarket wallet with the main live portfolio, so its own decisions
+# are kept in a separate execution state file and attributed by the orders it placed.
+on:
+  workflow_dispatch:
+    inputs:
+      live_confirm:
+        description: Place real orders (unchecked is a dry run)
+        required: false
+        default: false
+        type: boolean
+      entry_price:
+        description: Limit price to rest every bid at, on the 0..1 scale
+        required: false
+        default: "0.50"
+        type: string
+      min_probability:
+        description: Minimum market probability a candidate must clear
+        required: false
+        default: "0.90"
+        type: string
+      max_orders:
+        description: Most bids to rest in one run
+        required: false
+        default: "50"
+        type: string
+      stake_per_order_usdc:
+        description: Target stake per bid; blank uses the exchange minimum
+        required: false
+        default: ""
+        type: string
+
+# Serialized against itself only. It shares the wallet with the main live portfolio
+# but not the state file, and the exchange is the authority on collateral.
+concurrency:
+  group: trading-live-5050-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  live-5050:
+    runs-on: [self-hosted, Linux, ARM64]
+    env:
+      POLYMARKET_HOST: https://clob.polymarket.com
+      POLYMARKET_CHAIN_ID: "137"
+      POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
+      POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
+      POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '3' }}
+      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
+      PAPER_SCRAPED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=scraped
+      LIVE_STATE_PATH: data/live-state.json
+      LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
+      LIVE_EXECUTION_STATE_PATH: data/live-5050-execution-state.json
+      LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-5050-execution
+
+      LIVE_STRATEGY: fixed_entry
+      LIVE_FIXED_ENTRY_PRICE: ${{ github.event.inputs.entry_price || '0.50' }}
+      LIVE_FIXED_ENTRY_MAX_ORDERS: ${{ github.event.inputs.max_orders || '50' }}
+      LIVE_FIXED_ENTRY_STAKE_USDC: ${{ github.event.inputs.stake_per_order_usdc || '' }}
+      LIVE_MIN_PROBABILITY: ${{ github.event.inputs.min_probability || '0.90' }}
+
+      # Resting far below the market is the whole strategy, so a post-only bid is
+      # correct and can never cross. Rotation is off: this portfolio does not
+      # replace holdings, it accumulates cheap fills.
+      USE_LIMIT_ORDERS: "true"
+      POLYMARKET_POST_ONLY: "true"
+      LIVE_AUTO_ROTATE: "false"
+      LIVE_RUN_SOURCE: MANUAL
+      # A wide scan is the point: many candidates, one bid each.
+      LIVE_CANDIDATE_SCAN_LIMIT: "300"
+      LIVE_MAX_RESOLUTION_DAYS: "30"
+      LIVE_MIN_ANNUAL_RETURN: "0"
+      LIVE_MIN_NET_YIELD: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install trading dependencies
+        working-directory: trading
+        run: npm install
+
+      - name: Verify live order target
+        run: |
+          if grep -R -n -E "server-dir:.*email[-]campaign|local-dir:.*email[-]campaign|/www/email[-]campaign/" .github/workflows/trading-live-5050.yml trading; then
+            echo "Trading live 5050 must not target email-campaign."
+            exit 1
+          fi
+
+      - name: Show effective settings
+        run: |
+          echo "Entry price:      ${LIVE_FIXED_ENTRY_PRICE}"
+          echo "Min probability:  ${LIVE_MIN_PROBABILITY}"
+          echo "Max orders:       ${LIVE_FIXED_ENTRY_MAX_ORDERS}"
+          echo "Stake per order:  ${LIVE_FIXED_ENTRY_STAKE_USDC:-exchange minimum}"
+
+      - name: Generate fresh live account snapshot
+        working-directory: trading
+        run: npm run live:account
+
+      - name: Restore 5050 run history
+        working-directory: trading
+        env:
+          LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-5050-execution
+          LIVE_EXECUTION_STATE_PATH: data/live-5050-execution-state.json
+          LIVE_RUN_LOG_RECOVER: "false"
+        run: node tools/restore-live-execution-history.mjs || echo "No published 5050 history yet; starting a fresh log."
+
+      - name: Rest the fixed-entry bids
+        working-directory: trading
+        env:
+          POLYMARKET_DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.live_confirm) && 'false' || 'true' }}
+          LIVE_STATE_URL: data/live-state.json
+          LIVE_EXECUTION_STATE_URL: data/live-5050-execution-state.json
+        run: npm run live:execute -- --confirm-live
+
+      - name: Refresh live account snapshot
+        if: always()
+        working-directory: trading
+        run: npm run live:account
+
+      - name: Upload 5050 state
+        if: always()
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+          EXECUTION_STATE_FILE: trading/data/live-5050-execution-state.json
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["EXECUTION_STATE_FILE"])
+          if not path.exists():
+              print("No 5050 execution state was produced; nothing to upload.")
+              raise SystemExit(0)
+          server = os.environ["HOSTING_FTP_SERVER"]
+          with ftplib.FTP(server, os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"]) as ftp:
+              for part in os.environ["TRADING_FTP_DIR"].strip("/").split("/"):
+                  if not part:
+                      continue
+                  try:
+                      ftp.cwd(part)
+                  except ftplib.error_perm:
+                      ftp.mkd(part)
+                      ftp.cwd(part)
+              tmp = path.name + ".tmp"
+              with path.open("rb") as handle:
+                  ftp.storbinary(f"STOR {tmp}", handle)
+              # Move the existing file aside before the swap so a failure at any point
+              # still leaves a recoverable copy rather than nothing at all.
+              try:
+                  ftp.rename(path.name, path.name + ".bak")
+              except ftplib.all_errors:
+                  pass
+              ftp.rename(tmp, path.name)
+              try:
+                  ftp.delete(path.name + ".bak")
+              except ftplib.all_errors:
+                  pass
+          print(f"Uploaded {path.name}")
+          PY
+
+      - name: Run digest
+        if: always()
+        continue-on-error: true
+        env:
+          EXECUTION_STATE_FILE: trading/data/live-5050-execution-state.json
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          path = Path(os.environ["EXECUTION_STATE_FILE"])
+          if not path.exists():
+              print("RUN DIGEST: no 5050 execution state was produced by this run.")
+              raise SystemExit(0)
+          state = json.loads(path.read_text(encoding="utf-8"))
+
+          def dashboard_time(value):
+              try:
+                  parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+              except ValueError:
+                  return "-"
+              return parsed.astimezone(ZoneInfo("Europe/Prague")).strftime("%d. %m. %Y %H:%M")
+
+          print("=== RUN DIGEST ===")
+          print(f"generatedAt : {state.get('generatedAt')} (dashboard {dashboard_time(state.get('generatedAt'))})")
+          print(f"action      : {state.get('action')}")
+          print(f"reason      : {state.get('reason')}")
+          fixed = state.get("fixedEntry") or {}
+          if fixed:
+              print("fixed entry : " + ", ".join(f"{k}={v}" for k, v in fixed.items()))
+          for attempt in (state.get("attempts") or [])[:60]:
+              print(f"  {attempt.get('action')}: {str(attempt.get('question'))[:52]!r} "
+                    f"{attempt.get('orderSize')} @ {attempt.get('orderPrice')} "
+                    f"{attempt.get('responseError') or ''}")
+          for entry in ((state.get("batchLog") or {}).get("topRejected") or [])[:12]:
+              print(f"  skipped: {str(entry.get('question'))[:52]!r} -> {'; '.join(entry.get('rejectReasons') or [])[:120]}")
+          print("=== END RUN DIGEST ===")
+          PY
