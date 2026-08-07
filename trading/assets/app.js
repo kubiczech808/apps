@@ -207,6 +207,11 @@ const els = {
   executionCronRow: document.querySelector("[data-execution-cron-row]"),
   executionCronMinutes: document.querySelector("[data-execution-cron-minutes]"),
   executionCronMinutesLabel: document.querySelector("[data-execution-cron-minutes-label]"),
+  fixedEntryRows: document.querySelectorAll("[data-fixed-entry-row]"),
+  fixedEntryPrice: document.querySelector("[data-fixed-entry-price]"),
+  fixedEntryPriceLabel: document.querySelector("[data-fixed-entry-price-label]"),
+  fixedEntryMaxOrders: document.querySelector("[data-fixed-entry-max-orders]"),
+  fixedEntryMaxOrdersLabel: document.querySelector("[data-fixed-entry-max-orders-label]"),
   automationToggle: document.querySelector("[data-automation-toggle]"),
   automationToggleLabel: document.querySelector("[data-automation-toggle-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
@@ -534,6 +539,20 @@ function executionCronMinutesLabel(value) {
 
 // Absent means on. A portfolio saved before this switch existed must keep trading
 // rather than silently stop because a field it never had reads as false.
+// The price every 5050 bid rests at, as a fraction of the 0..1 scale. Clamped
+// inside the tradable band: 0 and 1 are not prices a limit order can hold.
+function normalizeFixedEntryPrice(value) {
+  const price = Number(value);
+  if (!Number.isFinite(price) || price <= 0 || price >= 1) return 0.5;
+  return Number(price.toFixed(2));
+}
+
+function normalizeFixedEntryMaxOrders(value) {
+  const count = Math.round(Number(value));
+  if (!Number.isFinite(count) || count < 1) return 50;
+  return Math.min(500, count);
+}
+
 function automationIsEnabled(config = {}) {
   return config.automationEnabled !== false;
 }
@@ -2911,6 +2930,14 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   // The interval only means anything for the cron trigger; "after each scraping
   // batch" has its own cadence.
   els.executionCronRow?.toggleAttribute("hidden", trigger !== "cron");
+  const fixedEntryPrice = normalizeFixedEntryPrice(config.fixedEntryPrice);
+  if (els.fixedEntryPrice) els.fixedEntryPrice.value = String(Math.round(fixedEntryPrice * 100));
+  if (els.fixedEntryPriceLabel) els.fixedEntryPriceLabel.textContent = percent(fixedEntryPrice);
+  const fixedEntryMaxOrders = normalizeFixedEntryMaxOrders(config.maxOpenOrders);
+  if (els.fixedEntryMaxOrders) els.fixedEntryMaxOrders.value = String(fixedEntryMaxOrders);
+  if (els.fixedEntryMaxOrdersLabel) els.fixedEntryMaxOrdersLabel.textContent = String(fixedEntryMaxOrders);
+  // These steer only the fixed-entry strategy, so they are meaningless anywhere else.
+  els.fixedEntryRows?.forEach((row) => row.toggleAttribute("hidden", !isFixedEntryMode()));
   const automationOn = automationIsEnabled(config);
   if (els.automationToggle) {
     els.automationToggle.setAttribute("aria-pressed", automationOn ? "true" : "false");
@@ -4841,8 +4868,11 @@ function portfolioRuleRows(portfolio = {}) {
 }
 
 function livePortfolioRuleRows() {
-  const config = portfolioConfigForMode("live");
-  const maxResolutionDays = resolutionDaysForMode("live");
+  // Both live portfolios render through here, so the rules shown must be the ones
+  // the open tab is actually steered by.
+  const mode = isFixedEntryMode() ? "live-5050" : "live";
+  const config = portfolioConfigForMode(mode);
+  const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
   const returnMetric = portfolioReturnMetricLabel(config);
@@ -4858,6 +4888,10 @@ function livePortfolioRuleRows() {
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
     ["Automatic execution", automationIsEnabled(config) ? "On" : "Off"],
+    ...(isFixedEntryMode() ? [
+      ["Order price", `every qualifying candidate is bid at ${percent(normalizeFixedEntryPrice(config.fixedEntryPrice))}`],
+      ["Max resting orders", String(normalizeFixedEntryMaxOrders(config.maxOpenOrders))],
+    ] : []),
     ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
@@ -8025,6 +8059,24 @@ els.executionCronMinutes?.addEventListener("change", () => {
   const value = normalizeExecutionCronMinutes(els.executionCronMinutes.value);
   if (updateParameterDraft({ executionCronMinutes: value })) return;
   updatePortfolioConfigForMode(state.mode, { executionCronMinutes: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.fixedEntryPrice?.addEventListener("change", () => {
+  const value = normalizeFixedEntryPrice(Number(els.fixedEntryPrice.value) / 100);
+  if (updateParameterDraft({ fixedEntryPrice: value })) return;
+  updatePortfolioConfigForMode(state.mode, { fixedEntryPrice: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.fixedEntryMaxOrders?.addEventListener("change", () => {
+  const value = normalizeFixedEntryMaxOrders(els.fixedEntryMaxOrders.value);
+  if (updateParameterDraft({ maxOpenOrders: value })) return;
+  updatePortfolioConfigForMode(state.mode, { maxOpenOrders: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

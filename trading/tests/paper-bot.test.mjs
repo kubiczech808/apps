@@ -2167,3 +2167,52 @@ test("automation: the ON/OFF badge sits beside the portfolio name", async () => 
   assert.match(app, /els\.automationToggle\?\.addEventListener\("click"/);
   assert.match(html, /app\.css\?v=20260807-automation-badge/);
 });
+
+test("portfolio config: a setting the server drops can never persist", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+
+  // normalize_strategy_config rebuilds the config from a fixed key list, so any key
+  // it does not return is discarded on every save no matter what the dashboard
+  // sends. The automation switch and the cron interval were both missing, which
+  // would have made them look like they saved and silently reset.
+  const strategy = api.slice(api.indexOf("function normalize_strategy_config"));
+  const body = strategy.slice(0, strategy.indexOf("\n}"));
+  assert.match(body, /'executionCronMinutes' =>/);
+  assert.match(body, /'automationEnabled' =>/);
+  assert.match(body, /\$defaults\['automationEnabled'\] \?\? true/, "absent must mean on");
+
+  // 5050 is a whole portfolio the normalizer never copied, so its settings -- the
+  // order price above all -- would have vanished on the first save.
+  assert.match(api, /\$config\['live5050'\] = normalize_strategy_config\(\$fixedInput, \$defaults\['live5050'\]\);/);
+  assert.match(api, /'fixedEntryPrice' => 0\.50,/);
+  assert.match(api, /'automationEnabled' => false,/, "5050 ships with automation off");
+  // A limit order cannot rest at 0 or 1, so a bad price must not reach the executor
+  // and be rejected by the exchange one bid at a time.
+  assert.match(api, /\(\$entryPrice > 0 && \$entryPrice < 1\)/);
+  assert.match(api, /max\(1, min\(500, \$maxOrders\)\)/);
+});
+
+test("5050: the order price is a portfolio setting, not only a dispatch input", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8");
+
+  // It has to be visible and editable where the portfolio is configured.
+  assert.match(html, /data-fixed-entry-price/);
+  assert.match(html, /data-fixed-entry-max-orders/);
+  assert.match(app, /function normalizeFixedEntryPrice\(value\)/);
+  assert.match(app, /els\.fixedEntryPrice\?\.addEventListener\("change"/);
+  // And meaningless for every other portfolio, so it only shows for 5050.
+  assert.match(app, /els\.fixedEntryRows\?\.forEach\(\(row\) => row\.toggleAttribute\("hidden", !isFixedEntryMode\(\)\)\)/);
+  assert.match(app, /every qualifying candidate is bid at/, "the rules card must state it");
+
+  // The saved value has to actually govern the run, or the dashboard and the bids
+  // would disagree. A dispatch input overrides it for one run and is blank by
+  // default, so it cannot silently shadow the portfolio setting.
+  assert.match(workflow, /- name: Load 5050 portfolio config/);
+  assert.match(workflow, /"LIVE_FIXED_ENTRY_PRICE": cfg\.get\("fixedEntryPrice"\)/);
+  const inputs = workflow.slice(workflow.indexOf("entry_price:"), workflow.indexOf("concurrency:"));
+  assert.ok(!/default: "0\.50"/.test(inputs), "a defaulted input would always win over the saved setting");
+});

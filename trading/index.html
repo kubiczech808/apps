@@ -361,6 +361,16 @@
           </select>
           <strong data-execution-trigger-label>Scheduled cron</strong>
         </label>
+        <label class="parameter-control" data-fixed-entry-row>
+          <span>Order price (5050)</span>
+          <input type="number" min="1" max="99" step="1" value="50" data-fixed-entry-price>
+          <strong data-fixed-entry-price-label>50%</strong>
+        </label>
+        <label class="parameter-control" data-fixed-entry-row>
+          <span>Max resting orders (5050)</span>
+          <input type="number" min="1" max="500" step="1" value="50" data-fixed-entry-max-orders>
+          <strong data-fixed-entry-max-orders-label>50</strong>
+        </label>
         <label class="parameter-control" data-execution-cron-row>
           <span>Run the cron every</span>
           <select data-execution-cron-minutes>

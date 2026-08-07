@@ -17,19 +17,19 @@ on:
         default: false
         type: boolean
       entry_price:
-        description: Limit price to rest every bid at, on the 0..1 scale
+        description: Override the saved order price for this run only (0..1); blank uses the portfolio setting
         required: false
-        default: "0.50"
+        default: ""
         type: string
       min_probability:
-        description: Minimum market probability a candidate must clear
+        description: Override the saved probability bar for this run only; blank uses the portfolio setting
         required: false
-        default: "0.90"
+        default: ""
         type: string
       max_orders:
-        description: Most bids to rest in one run
+        description: Override the saved maximum for this run only; blank uses the portfolio setting
         required: false
-        default: "50"
+        default: ""
         type: string
       stake_per_order_usdc:
         description: Target stake per bid; blank uses the exchange minimum
@@ -97,6 +97,54 @@ jobs:
             echo "Trading live 5050 must not target email-campaign."
             exit 1
           fi
+
+      - name: Load 5050 portfolio config
+        # The saved portfolio settings are the authority; a dispatch input only
+        # overrides them for a one-off run. Without this the entry price shown in
+        # the dashboard and the one actually bid could differ.
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          url = "https://osobnizkusenosti.cz/trading/api.php?action=portfolio-config"
+          try:
+              payload = json.loads(urllib.request.urlopen(url, timeout=30).read().decode("utf-8"))
+          except Exception as exc:
+              print(f"portfolio config unavailable, keeping workflow defaults: {exc}")
+              raise SystemExit(0)
+          cfg = (payload.get("config") or {}).get("live5050") or {}
+
+          overrides = {
+              "LIVE_FIXED_ENTRY_PRICE": cfg.get("fixedEntryPrice"),
+              "LIVE_FIXED_ENTRY_MAX_ORDERS": cfg.get("maxOpenOrders"),
+              "LIVE_FIXED_ENTRY_STAKE_USDC": cfg.get("stakePerOrderUsdc"),
+              "LIVE_MIN_PROBABILITY": cfg.get("minProbability"),
+              "LIVE_MAX_RESOLUTION_DAYS": cfg.get("maxResolutionDays"),
+              "LIVE_CONFIG_MIN_LIQUIDITY_USDC": cfg.get("minLiquidityUsdc"),
+          }
+          # An explicit dispatch input wins over the saved value for this run only.
+          for key, dispatched in [
+              ("LIVE_FIXED_ENTRY_PRICE", "${{ github.event.inputs.entry_price }}"),
+              ("LIVE_FIXED_ENTRY_MAX_ORDERS", "${{ github.event.inputs.max_orders }}"),
+              ("LIVE_FIXED_ENTRY_STAKE_USDC", "${{ github.event.inputs.stake_per_order_usdc }}"),
+              ("LIVE_MIN_PROBABILITY", "${{ github.event.inputs.min_probability }}"),
+          ]:
+              if str(dispatched).strip():
+                  overrides[key] = dispatched
+
+          # Automation off means scheduled runs do nothing; a manual dispatch still runs.
+          if cfg.get("automationEnabled") is False and os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+              overrides["LIVE_AUTOMATION_ENABLED"] = "false"
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              for key, value in overrides.items():
+                  if value is None or value == "":
+                      continue
+                  print(f"{key}={value}")
+                  handle.write(f"{key}={value}\n")
+          PY
 
       - name: Show effective settings
         run: |

@@ -715,6 +715,26 @@ function default_portfolio_config(): array
             'probabilitySource' => 'ai',
             'excludedCandidateTokenIds' => [],
         ],
+        // 5050 rests a bid at a fixed point on the 0..1 scale across every candidate
+        // that clears its probability bar, rather than buying the best one at the
+        // market. Automation ships off: it deliberately commits past its capital.
+        'live5050' => [
+            'minProbability' => 0.90,
+            'fixedEntryPrice' => 0.50,
+            'maxOpenOrders' => 50,
+            'stakePerOrderUsdc' => null,
+            'maxOrderFraction' => 0.05,
+            'maxResolutionDays' => 30,
+            'selectionOrder' => 'highest_ev_pa_first',
+            'minLiquidityUsdc' => 100,
+            'minNetYield' => 0.0,
+            'executionTrigger' => 'cron',
+            'useLimitOrders' => true,
+            'requireMostProbableOutcome' => false,
+            'probabilitySource' => 'polymarket',
+            'automationEnabled' => false,
+            'excludedCandidateTokenIds' => [],
+        ],
         'system' => [
             'crossLivePortfolioRiskDiversification' => true,
         ],
@@ -889,6 +909,12 @@ function normalize_strategy_config(array $input, array $defaults): array
         'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
         'minNetYield' => normalize_net_yield_value($input['minNetYield'] ?? null, (float) $defaults['minNetYield']),
         'executionTrigger' => normalize_execution_trigger_value($input['executionTrigger'] ?? $defaults['executionTrigger']),
+        // A key this function does not return is dropped on every save, so a setting
+        // absent here can never persist no matter what the dashboard sends.
+        'executionCronMinutes' => max(0, (int) ($input['executionCronMinutes'] ?? $defaults['executionCronMinutes'] ?? 0)),
+        // Absent means on, so a portfolio saved before this existed keeps trading
+        // rather than silently stopping.
+        'automationEnabled' => (bool) ($input['automationEnabled'] ?? $defaults['automationEnabled'] ?? true),
         'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
         'probabilitySource' => normalize_probability_source_value($input['probabilitySource'] ?? $defaults['probabilitySource']),
         'excludedCandidateTokenIds' => normalize_excluded_candidate_token_ids($input['excludedCandidateTokenIds'] ?? $defaults['excludedCandidateTokenIds'] ?? []),
@@ -908,6 +934,23 @@ function normalize_portfolio_config(array $input): array
     }
     $config['live'] = normalize_strategy_config($liveInput, $defaults['live']);
     $config['live']['useLimitOrders'] = (bool) ($liveInput['useLimitOrders'] ?? $defaults['live']['useLimitOrders']);
+    // 5050 carries three settings no other portfolio has. They are normalized here
+    // rather than passed through, so a bad value cannot reach the executor and be
+    // rejected by the exchange one bid at a time.
+    $fixedInput = is_array($input['live5050'] ?? null) ? $input['live5050'] : [];
+    $config['live5050'] = normalize_strategy_config($fixedInput, $defaults['live5050']);
+    $config['live5050']['useLimitOrders'] = true;
+    $entryPrice = is_numeric($fixedInput['fixedEntryPrice'] ?? null)
+        ? (float) $fixedInput['fixedEntryPrice']
+        : (float) $defaults['live5050']['fixedEntryPrice'];
+    // A limit order cannot rest at 0 or 1, so the band is exclusive at both ends.
+    $config['live5050']['fixedEntryPrice'] = ($entryPrice > 0 && $entryPrice < 1)
+        ? round($entryPrice, 2)
+        : (float) $defaults['live5050']['fixedEntryPrice'];
+    $maxOrders = (int) ($fixedInput['maxOpenOrders'] ?? $defaults['live5050']['maxOpenOrders']);
+    $config['live5050']['maxOpenOrders'] = max(1, min(500, $maxOrders));
+    $stake = $fixedInput['stakePerOrderUsdc'] ?? null;
+    $config['live5050']['stakePerOrderUsdc'] = is_numeric($stake) && (float) $stake > 0 ? round((float) $stake, 2) : null;
     $config['system'] = [
         'crossLivePortfolioRiskDiversification' => (bool) ($systemInput['crossLivePortfolioRiskDiversification'] ?? $defaults['system']['crossLivePortfolioRiskDiversification']),
     ];
