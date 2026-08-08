@@ -6167,13 +6167,22 @@ function renderLiveState(liveState) {
   // one wallet, so every resting buy reserves collateral against the same balance,
   // including the other portfolio's. Subtracting only this portfolio's orders
   // reported cash as free that could not actually be spent.
+  const TERMINAL_ORDER_STATUSES = new Set(["CANCELED", "CANCELLED", "FILLED", "MATCHED", "EXPIRED"]);
   const walletOrderRisk = (Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
     .filter((order) => !String(order.side || "").toUpperCase().includes("SELL"))
-    .reduce((sum, order) => sum + Number(order.totalCostUsdc ?? order.notionalUsdc ?? order.stakeUsdc ?? 0), 0);
+    // A cancelled or filled row still present in the snapshot reserves nothing.
+    .filter((order) => !TERMINAL_ORDER_STATUSES.has(String(order.rawStatus || order.status || "").toUpperCase()))
+    .reduce((sum, order) => {
+      const reserved = Number(order.notionalUsdc ?? order.totalCostUsdc ?? order.stakeUsdc);
+      return sum + (Number.isFinite(reserved) ? reserved : 0);
+    }, 0);
   const freeCash = Number.isFinite(cash) ? Math.max(0, cash - walletOrderRisk) : null;
   // Positions carry wallet-wide risk in the account snapshot, so a per-portfolio view
   // has to add up its own rather than borrow that total.
-  const ownPositionRisk = positions.reduce((sum, row) => sum + Number(row.totalCostUsdc ?? row.stakeUsdc ?? 0), 0);
+  const ownPositionRisk = positions.reduce((sum, row) => {
+    const committed = Number(row.totalCostUsdc ?? row.stakeUsdc ?? row.maxLossUsdc);
+    return sum + (Number.isFinite(committed) ? committed : 0);
+  }, 0);
   const pendingRedeem = Number(portfolio.pendingRedeemUsdc);
   const executionState = state.liveExecutionState || {};
   const monitoring = executionState.monitoring || {};
@@ -6259,9 +6268,11 @@ function renderLiveState(liveState) {
   els.portfolioOpenPl.textContent = signedMoney(openPnlValue);
   els.portfolioOpenPl.className = pnlClass(openPnlValue);
   els.portfolioOpenPlPct.textContent = signedPercent(fixedEntry ? ownBasePct(ownOpen) : openPnlPct);
-  els.portfolioRisk.textContent = money(isFixedEntryMode()
-    ? ownPositionRisk + openOrderRisk
-    : Number(portfolio.openRiskUsdc || 0) + openOrderRisk);
+  // Risk is what the open portfolio has committed, so both halves must come from
+  // its own rows. openRiskUsdc totals every position in the wallet, so pairing it
+  // with this portfolio's orders reported the other portfolio's positions as this
+  // one's -- wrong on the Live tab and the 5050 tab alike, in opposite directions.
+  els.portfolioRisk.textContent = money(ownPositionRisk + openOrderRisk);
   els.portfolioFree.textContent = freeCash == null ? "cash not available" : `${money(freeCash)} free cash`;
   if (els.portfolioRr) {
     els.portfolioRr.textContent = riskReward(portfolioRiskReward);

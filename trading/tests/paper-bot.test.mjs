@@ -2661,7 +2661,15 @@ test("5050: risk is its own, free cash is the wallet's", async () => {
   // snapshot's openRiskUsdc is wallet-wide, so using it showed 5050 the other
   // portfolio's positions.
   assert.match(app, /const ownPositionRisk = positions\.reduce\(/);
-  assert.match(app, /els\.portfolioRisk\.textContent = money\(isFixedEntryMode\(\)\n\s*\? ownPositionRisk \+ openOrderRisk/);
+  // Both tabs, not just 5050: openRiskUsdc is wallet-wide, so pairing it with one
+  // portfolio's orders was wrong on the Live tab too, in the opposite direction.
+  assert.match(app, /els\.portfolioRisk\.textContent = money\(ownPositionRisk \+ openOrderRisk\);/);
+  assert.ok(!/portfolio\.openRiskUsdc \|\| 0\) \+ openOrderRisk/.test(app),
+    "the wallet-wide position total must not stand in for a portfolio's own");
+  // A cancelled or filled order still in the snapshot reserves no collateral.
+  assert.match(app, /TERMINAL_ORDER_STATUSES\.has\(String\(order\.rawStatus \|\| order\.status \|\| ""\)\.toUpperCase\(\)\)/);
+  // Orders carry notionalUsdc from the sync; the others are fallbacks.
+  assert.match(app, /Number\(order\.notionalUsdc \?\? order\.totalCostUsdc \?\? order\.stakeUsdc\)/);
 
   // The arithmetic, on one wallet holding both portfolios' orders.
   const cash = 20;
