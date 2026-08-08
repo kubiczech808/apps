@@ -36,6 +36,7 @@ jobs:
     env:
       PAPER_STATE_PATH: data/paper-state.json
       PAPER_SCAN_HISTORY_ENTRY_PATH: data/market-scan-history-entry.ndjson
+      PAPER_SCAN_ERROR_PATH: data/market-scan-error.txt
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=refresh
       PAPER_STATIC_STATE_URL: https://osobnizkusenosti.cz/trading/data/paper-state.json
       NODE_OPTIONS: --max-old-space-size=6144
@@ -142,6 +143,19 @@ jobs:
                   ftp.storbinary(f"APPE {month}.ndjson", handle)
           print(f"Appended compact scan history entry to {month}.ndjson")
           PY
+
+      # Runs after the state and the history row are published, so the failed run is
+      # already visible in the dashboard's scraping log, and before the downstream
+      # dispatch, so a scan that fetched nothing does not kick off an evaluation pass.
+      # This step is why the run goes red: the bot itself must exit 0 to get this far.
+      - name: Fail when the scan did not complete
+        if: success()
+        run: |
+          if [ -s trading/data/market-scan-error.txt ]; then
+            echo "::error::Market scan failed: $(cat trading/data/market-scan-error.txt)"
+            exit 1
+          fi
+          echo "Market scan completed without errors."
 
       - name: Dispatch post-scrape execution
         if: success()

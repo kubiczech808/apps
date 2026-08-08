@@ -41,6 +41,10 @@ function envTokenIdSet(name) {
 
 const OUTPUT_PATH = process.env.PAPER_STATE_PATH || "data/paper-state.json";
 const SCAN_HISTORY_ENTRY_PATH = process.env.PAPER_SCAN_HISTORY_ENTRY_PATH || "data/market-scan-history-entry.ndjson";
+// Written only when a scan attempt failed. The scan workflow publishes the state first and
+// then reads this file, so a failed scan still lands in the dashboard's log and the run
+// itself turns red instead of reporting success over a scan that fetched nothing.
+const SCAN_ERROR_MARKER_PATH = process.env.PAPER_SCAN_ERROR_PATH || "data/market-scan-error.txt";
 const REMOTE_STATE_URL = process.env.PAPER_STATE_URL || "";
 // The PHP summary endpoint is preferred because it is small and validated by
 // the app. The static file is a recovery path for a state that is temporarily
@@ -1212,6 +1216,14 @@ function normalizeMarketScan(input = {}) {
         .map(([scope, cursor]) => [String(scope || "").trim().toLowerCase(), String(cursor || "").trim()])
         .filter(([scope, cursor]) => Boolean(scope) && Boolean(cursor))
         .slice(0, MARKET_SCAN_CATEGORY_TAGS.length + 1),
+    ),
+    // Numeric Gamma tag ids for slugs outside MARKET_SCAN_CATEGORY_TAGS, keyed by slug.
+    // Persisting them means a tag the dashboard offers is looked up once, not once a scan.
+    resolvedTagIds: Object.fromEntries(
+      Object.entries(input?.resolvedTagIds && typeof input.resolvedTagIds === "object" ? input.resolvedTagIds : {})
+        .map(([slug, id]) => [String(slug || "").trim().toLowerCase(), String(id ?? "").trim()])
+        .filter(([slug, id]) => Boolean(slug) && Boolean(id))
+        .slice(0, 200),
     ),
     scanScopeCursor: Math.max(0, Math.floor(Number(input?.scanScopeCursor) || 0)),
     // Per-scope timestamp of the last full catalogue pass. Without preserving it here the
@@ -6370,10 +6382,66 @@ function overdueHourlyScanScope(scopes = [], previousScan = {}, now = Date.now()
   return oldest ? oldest.index : null;
 }
 
-function marketScanScopes() {
+// Gamma answers a tag lookup either as the tag object itself or as a one-element list,
+// depending on the route, so both shapes are accepted and the slug is re-checked before
+// the id is trusted.
+function gammaTagRecord(payload, slug) {
+  const candidates = Array.isArray(payload) ? payload : [payload];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const candidateSlug = String(candidate.slug || "").trim().toLowerCase();
+    const id = String(candidate.id ?? "").trim();
+    if (!id || (candidateSlug && candidateSlug !== slug)) continue;
+    return { id, slug: candidateSlug || slug };
+  }
+  return null;
+}
+
+// The catalogue below carries Polymarket's broad navigation tags, but the dashboard's tag
+// picker is built from the tags observed on stored markets — a far wider set. Asking for
+// one of those (say `clf`) used to abort the scan before it could record anything, so the
+// run published nothing and still exited 0. Look the slug up on Gamma instead; the scan
+// itself needs the numeric tag_id, which only this endpoint can supply.
+async function fetchGammaTagBySlug(slug, auditCalls = null) {
+  const routes = [`tags/slug/${encodeURIComponent(slug)}`, `tags?slug=${encodeURIComponent(slug)}`];
+  let lastError = null;
+  for (const route of routes) {
+    const url = new URL(`https://gamma-api.polymarket.com/${route}`);
+    try {
+      const payload = await fetchGammaResource(url, {
+        calls: auditCalls,
+        scope: "tag_lookup",
+        label: `Tag lookup: ${slug}`,
+        category: slug,
+      });
+      const tag = gammaTagRecord(payload, slug);
+      if (tag) return tag;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  return null;
+}
+
+// A resolved id is written back into the caller's map so it can be persisted with the
+// scan state: repeat scans of the same tag then cost no extra request, and a Gamma outage
+// cannot take away a tag that already scanned once.
+async function resolveMarketScanTag(slug, resolvedTagIds = {}, auditCalls = null) {
+  const known = MARKET_SCAN_CATEGORY_TAGS.find((tag) => tag.slug === slug);
+  if (known) return known;
+  const cached = String(resolvedTagIds?.[slug] || "").trim();
+  if (cached) return { id: cached, slug };
+  const resolved = await fetchGammaTagBySlug(slug, auditCalls);
+  if (!resolved) throw new Error(`Polymarket has no tag with slug "${slug}"`);
+  if (resolvedTagIds && typeof resolvedTagIds === "object") resolvedTagIds[slug] = resolved.id;
+  return resolved;
+}
+
+async function marketScanScopes(resolvedTagIds = {}, auditCalls = null) {
   if (MARKET_SCAN_TAG && MARKET_SCAN_TAG !== "all") {
-    const selected = MARKET_SCAN_CATEGORY_TAGS.find((tag) => tag.slug === MARKET_SCAN_TAG);
-    return selected ? [{ key: `tag:${selected.slug}`, label: `Category: ${selected.slug}`, tag: selected }] : [];
+    const selected = await resolveMarketScanTag(MARKET_SCAN_TAG, resolvedTagIds, auditCalls);
+    return [{ key: `tag:${selected.slug}`, label: `Category: ${selected.slug}`, tag: selected }];
   }
   return [
     { key: "all", label: "All active events", tag: null },
@@ -6429,21 +6497,29 @@ async function refreshMarketObservations(state) {
 
   const scanRunAt = nowIso();
   const scanTrigger = String(process.env.PAPER_MARKET_SCAN_TRIGGER || (MANUAL_RUN_ONCE ? "MANUAL" : "AUTO")).toUpperCase();
-  const scopes = marketScanScopes();
-  if (!scopes.length) throw new Error(`unknown Polymarket scan tag: ${MARKET_SCAN_TAG}`);
   const querySignature = marketScanQuerySignature();
   const savedCursors = previousScan.scanQuerySignature === querySignature ? { ...previousScan.scanCursors } : {};
-  const rotationIndex = Math.max(0, previousScan.scanScopeCursor % scopes.length);
-  // An overdue guaranteed tag takes this run's slot. The rotation cursor is left where it
-  // was, so the borrowed slot delays the rotation by one run rather than skipping a scope.
-  const hourlyIndex = overdueHourlyScanScope(scopes, previousScan);
-  const scopeIndex = hourlyIndex == null ? rotationIndex : hourlyIndex;
-  const usedHourlySlot = hourlyIndex != null && hourlyIndex !== rotationIndex;
-  const scope = scopes[scopeIndex];
-  const afterCursor = savedCursors[scope.key] || null;
+  const resolvedTagIds = { ...previousScan.resolvedTagIds };
   const apiCallAudit = [];
+  // The scope is picked inside the try so that a scan which cannot even choose one still
+  // records a run. Resolving it beforehand meant an unknown tag threw past the catch: no
+  // history row was written, nothing was published, and the workflow still reported
+  // success -- a manual scan that looked like it had worked and left no log behind.
+  let scope = null;
+  let afterCursor = null;
+  let usedHourlySlot = false;
 
   try {
+    const scopes = await marketScanScopes(resolvedTagIds, apiCallAudit);
+    if (!scopes.length) throw new Error(`unknown Polymarket scan tag: ${MARKET_SCAN_TAG}`);
+    const rotationIndex = Math.max(0, previousScan.scanScopeCursor % scopes.length);
+    // An overdue guaranteed tag takes this run's slot. The rotation cursor is left where it
+    // was, so the borrowed slot delays the rotation by one run rather than skipping a scope.
+    const hourlyIndex = overdueHourlyScanScope(scopes, previousScan);
+    const scopeIndex = hourlyIndex == null ? rotationIndex : hourlyIndex;
+    usedHourlySlot = hourlyIndex != null && hourlyIndex !== rotationIndex;
+    scope = scopes[scopeIndex];
+    afterCursor = savedCursors[scope.key] || null;
     const batch = scope.tag
       ? await loadCategoryMarketScanBatch(scope.tag, { afterCursor, auditCalls: apiCallAudit })
       : await loadPreferredMarketScanBatch({ afterCursor, auditCalls: apiCallAudit });
@@ -6510,6 +6586,7 @@ async function refreshMarketObservations(state) {
     state.marketScan = {
       ...previousScan,
       scanCursors: savedCursors,
+      resolvedTagIds,
       scanScopeCursor: usedHourlySlot ? rotationIndex : (scopeIndex + 1) % scopes.length,
       // When each scope last had a full catalogue pass, which is what the guaranteed
       // hourly slot is measured against.
@@ -6601,10 +6678,16 @@ async function refreshMarketObservations(state) {
     return observations;
   } catch (error) {
     const message = error?.message || String(error);
+    // `scope` is null when the run failed before one could be chosen -- an unknown tag, or
+    // a tag lookup Gamma refused. The requested tag still names the attempt, so the run is
+    // reported under it rather than being dropped for want of a scope.
+    const scopeLabel = scope?.label || (MARKET_SCAN_TAG ? `Category: ${MARKET_SCAN_TAG}` : "All active events");
+    const scopeTagSlug = scope ? scope.tag?.slug || "all" : MARKET_SCAN_TAG || "all";
     state.marketScan = {
       ...previousScan,
+      resolvedTagIds,
       lastScanAt: scanRunAt,
-      lastScope: scope.label,
+      lastScope: scopeLabel,
       lastScopeCursor: afterCursor,
       lastScanError: message,
       liquidityMin: MARKET_SCAN_LIQUIDITY_MIN,
@@ -6621,10 +6704,10 @@ async function refreshMarketObservations(state) {
         requestedBatches: 1,
         preferredMarketCount: 0,
         categoryMarketCount: 0,
-        categoryApiCalls: scope.tag ? 1 : 0,
-        categoryErrors: scope.tag ? [{ tag: scope.tag.slug, error: message }] : [{ tag: "all", error: message }],
-        requestedCategories: [scope.tag?.slug || "all"],
-        scanScope: scope.label,
+        categoryApiCalls: scopeTagSlug === "all" ? 0 : 1,
+        categoryErrors: [{ tag: scopeTagSlug, error: message }],
+        requestedCategories: [scopeTagSlug],
+        scanScope: scopeLabel,
         scanScopeCursor: afterCursor,
         rawMarketCount: 0,
         loadedMarketCount: 0,
@@ -7728,6 +7811,13 @@ async function writeScanHistoryEntry(run) {
   await writeFile(SCAN_HISTORY_ENTRY_PATH, `${JSON.stringify(entry)}\n`, "utf8");
 }
 
+async function writeScanErrorMarker(message) {
+  const text = String(message || "").trim();
+  if (!text) return;
+  await mkdir(dirname(SCAN_ERROR_MARKER_PATH), { recursive: true });
+  await writeFile(SCAN_ERROR_MARKER_PATH, `${text}\n`, "utf8");
+}
+
 async function run() {
   if (REQUIRE_GEMINI && !GEMINI_API_KEY && !EXECUTION_ONLY) {
     throw new Error("PAPER_REQUIRE_GEMINI is true, but GEMINI_API_KEY is not available. Check GitHub secret GEMINI_API_KEY_POLYMARKET and workflow secret access.");
@@ -7740,6 +7830,7 @@ async function run() {
     aiAnalysisLimit: AI_ANALYSIS_LIMIT,
   }));
   await rm(SCAN_HISTORY_ENTRY_PATH, { force: true }).catch(() => {});
+  await rm(SCAN_ERROR_MARKER_PATH, { force: true }).catch(() => {});
   const state = await readState();
   if (SCHEDULED_CADENCE && !COMPACT_ONLY && !REFRESH_ONLY && !EXECUTION_ONLY && !EVALUATION_ONLY) {
     const cadence = resolveScheduledCadence(state);
@@ -7790,20 +7881,25 @@ async function run() {
   // Repair records created before binary outcome flips rebuilt the full quote.
   // This runs even if the current market scan does not include that contract.
   state.evaluations = repairStaleBinarySideQuotes(state.evaluations);
+  let scanFailure = "";
   if (!EXECUTION_ONLY) {
     try {
       const observations = await refreshMarketObservations(state);
       state.evaluations = applyMarketObservationsToEvaluations(state.evaluations, observations);
-      const latestScanRun = state.marketScanHistory?.[0];
-      if (latestScanRun && !priorScanRunIds.has(String(latestScanRun.id || latestScanRun.runAt || ""))) {
-        await writeScanHistoryEntry(latestScanRun);
-      }
     } catch (error) {
       state.marketScan = {
         ...normalizeMarketScan(state.marketScan),
         lastScanError: error?.message || String(error),
       };
     }
+    // Published whatever happened above. A scan that failed is still a run the dashboard
+    // has to list, and for a manual scan this row is the only place its error can surface.
+    const latestScanRun = state.marketScanHistory?.[0];
+    if (latestScanRun && !priorScanRunIds.has(String(latestScanRun.id || latestScanRun.runAt || ""))) {
+      await writeScanHistoryEntry(latestScanRun);
+    }
+    scanFailure = String(normalizeMarketScan(state.marketScan).lastScanError || "");
+    if (scanFailure) await writeScanErrorMarker(scanFailure);
   }
   if (!scanOnly) {
     state.marketObservations = await refreshStoredMarketObservationResolutionStatuses(state.marketObservations || []);
@@ -7816,8 +7912,16 @@ async function run() {
     markCadenceStage(state, "scan");
     await writeState(state);
     console.log(JSON.stringify({
-      action: "MARKET_SCAN",
-      reason: "10-minute scraped market scan completed; AI evaluation and trade execution were intentionally skipped",
+      // A scan that fetched nothing must not print the success summary. Reporting
+      // MARKET_SCAN over a stale lastScanAt is what made a failed manual scan look like it
+      // had worked, leaving the user hunting for a log that was never written.
+      action: scanFailure ? "MARKET_SCAN_FAILED" : "MARKET_SCAN",
+      reason: scanFailure
+        ? `scraped market scan did not complete: ${scanFailure}`
+        : "10-minute scraped market scan completed; AI evaluation and trade execution were intentionally skipped",
+      scanTag: MARKET_SCAN_TAG || null,
+      scanTrigger: String(process.env.PAPER_MARKET_SCAN_TRIGGER || (MANUAL_RUN_ONCE ? "MANUAL" : "AUTO")).toUpperCase(),
+      scanError: scanFailure || null,
       marketScanAt: state.marketScan?.lastScanAt || null,
       marketBatchCount: state.marketScan?.lastBatchCount || 0,
       retainedObservationCount: state.marketScanHistory?.[0]?.retainedObservationCount || 0,
@@ -8108,6 +8212,10 @@ export {
   marketScanRetentionReason,
   marketScanLiveTags,
   marketScanScopes,
+  resolveMarketScanTag,
+  gammaTagRecord,
+  normalizeMarketScan,
+  refreshMarketObservations,
   overdueHourlyScanScope,
   MARKET_SCAN_HOURLY_TAG_SLUGS,
   scanEventRequestParams,

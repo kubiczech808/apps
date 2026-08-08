@@ -633,8 +633,8 @@ test("stake sizing: the summary row, the control and the executor share one base
   assert.notEqual(Number((equity * allocation).toFixed(2)), 3.04, "full equity is what produced the wrong 2.48");
 });
 
-test("market scan: sports and esports get a guaranteed slot every hour", () => {
-  const scopes = bot.marketScanScopes();
+test("market scan: sports and esports get a guaranteed slot every hour", async () => {
+  const scopes = await bot.marketScanScopes();
   const indexOf = (slug) => scopes.findIndex((scope) => scope.tag?.slug === slug);
   assert.deepEqual(bot.MARKET_SCAN_HOURLY_TAG_SLUGS, ["sports", "esports"]);
   // The rotation is long enough that these tags' full pass came round only every few
@@ -2069,7 +2069,9 @@ test("market scan: a run evicted from the queue is retaken, not reported as an e
   assert.match(body, /re-queuing/, "and the user must see it was retaken, not that it broke");
   // Exactly one retry: a genuine cancellation must still surface instead of looping.
   assert.equal((body.match(/await dispatchScan\(\);/g) || []).length, 2);
-  assert.match(body, /throw new Error\(`Scan workflow finished with \$\{workflow\.conclusion/,
+  // A failed scan now publishes its reason before the workflow goes red, so that reason is
+  // preferred -- but an eviction has no reason to report, and must still surface as before.
+  assert.match(body, /throw new Error\(reason \|\| `Scan workflow finished with \$\{workflow\.conclusion/,
     "a second cancellation is still reported");
 });
 
@@ -2777,4 +2779,160 @@ test("scraped counts: the UI reports the archive, not the page it was served", a
   assert.match(app, /const totals = state\.scrapedObservationTotals;/);
   assert.match(app, /if \(totals && Number\.isFinite\(Number\(totals\.resolved\)\) && Number\(totals\.resolved\) > counts\.resolved\)/);
   assert.match(app, /counts\.resolved = Number\(totals\.resolved\);/);
+});
+
+// A manual scan of the `clf` tag on 2026-08-08 exited 0, published nothing and left no log.
+// The tag picker is built from tags observed on stored markets, which is a far wider set
+// than MARKET_SCAN_CATEGORY_TAGS, so the scan threw "unknown Polymarket scan tag" before
+// the try that records a run -- and the caller swallowed it. These tests pin both halves:
+// an unknown slug is now looked up rather than rejected, and a scan that fails anyway
+// still leaves a row behind.
+// The tag is read at import time and the trigger at call time, so the environment has to
+// stay applied for the whole test, not just for the import. The query suffix gives each
+// case its own module instance.
+async function scopedBot(suffix, env = {}) {
+  const previous = {};
+  for (const [key, value] of Object.entries(env)) {
+    previous[key] = process.env[key];
+    if (value == null) delete process.env[key];
+    else process.env[key] = String(value);
+  }
+  const restore = () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+  try {
+    return { bot: await import(`../tools/paper-trading-bot.mjs?${suffix}`), restore };
+  } catch (error) {
+    restore();
+    throw error;
+  }
+}
+
+function stubFetch(handler) {
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    calls.push(url);
+    const result = handler(url);
+    if (!result) return { ok: false, status: 404, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => result };
+  };
+  return { calls, restore: () => { globalThis.fetch = original; } };
+}
+
+test("market scan: a tag outside the catalogue is resolved instead of aborting the scan", async () => {
+  const { bot: scoped, restore } = await scopedBot("scan-tag-resolve", {
+    PAPER_MARKET_SCAN_TAG: "clf",
+    PAPER_MARKET_SCAN_TRIGGER: "MANUAL",
+    PAPER_MARKET_SCAN_LIVE: "false",
+  });
+  const stub = stubFetch((url) => {
+    if (url.includes("/tags/slug/clf")) return { id: 102345, slug: "clf", label: "CLF" };
+    if (url.includes("events/keyset")) return { events: [], next_cursor: "" };
+    return null;
+  });
+  try {
+    const state = { marketObservations: [], marketScanHistory: [], evaluations: [] };
+    await scoped.refreshMarketObservations(state);
+
+    const run = state.marketScanHistory[0];
+    assert.equal(run.status, "SUCCESS", `expected a completed scan, got ${run.status}: ${run.error}`);
+    assert.equal(run.trigger, "MANUAL", "the manual flag the user was looking for");
+    assert.equal(run.scanTag, "clf");
+
+    // The scan needs Gamma's numeric id; the slug alone cannot be queried.
+    const eventsCall = stub.calls.find((url) => url.includes("events/keyset"));
+    assert.ok(eventsCall, "the resolved tag must actually be scanned");
+    assert.match(eventsCall, /tag_id=102345/);
+
+    // And the id is kept, so the next scan of this tag costs no extra request.
+    assert.equal(state.marketScan.resolvedTagIds.clf, "102345");
+    assert.equal(scoped.normalizeMarketScan(state.marketScan).resolvedTagIds.clf, "102345",
+      "the whitelist must carry it into the published state");
+  } finally {
+    stub.restore();
+    restore();
+  }
+});
+
+test("market scan: a cached tag id is reused without a second lookup", async () => {
+  const { bot: scoped, restore } = await scopedBot("scan-tag-cache", {
+    PAPER_MARKET_SCAN_TAG: "clf",
+    PAPER_MARKET_SCAN_LIVE: "false",
+  });
+  const stub = stubFetch((url) => (url.includes("events/keyset") ? { events: [], next_cursor: "" } : null));
+  try {
+    const state = {
+      marketObservations: [],
+      marketScanHistory: [],
+      evaluations: [],
+      marketScan: { resolvedTagIds: { clf: "102345" } },
+    };
+    await scoped.refreshMarketObservations(state);
+    assert.equal(state.marketScanHistory[0].status, "SUCCESS");
+    assert.ok(!stub.calls.some((url) => url.includes("/tags")), "a cached id must not be looked up again");
+    assert.match(stub.calls.find((url) => url.includes("events/keyset")), /tag_id=102345/);
+  } finally {
+    stub.restore();
+    restore();
+  }
+});
+
+test("market scan: a scan that cannot run still records a run with its trigger and reason", async () => {
+  const { bot: scoped, restore } = await scopedBot("scan-tag-missing", {
+    PAPER_MARKET_SCAN_TAG: "clf",
+    PAPER_MARKET_SCAN_TRIGGER: "MANUAL",
+    PAPER_MARKET_SCAN_LIVE: "false",
+  });
+  // Gamma knows no such tag: every lookup route 404s.
+  const stub = stubFetch(() => null);
+  try {
+    const state = { marketObservations: [], marketScanHistory: [], evaluations: [] };
+    const observations = await scoped.refreshMarketObservations(state);
+    assert.deepEqual(observations, [], "a failed scan returns nothing rather than throwing past the caller");
+
+    const run = state.marketScanHistory[0];
+    assert.ok(run, "the run the user went looking for and could not find");
+    assert.equal(run.status, "ERROR");
+    assert.equal(run.trigger, "MANUAL");
+    assert.equal(run.scanTag, "clf");
+    assert.equal(run.scanScope, "Category: clf", "the attempt is named even though no scope was chosen");
+    assert.ok(String(run.error || "").length > 0, "the row has to carry the reason");
+    assert.equal(state.marketScan.lastScanError, run.error);
+  } finally {
+    stub.restore();
+    restore();
+  }
+});
+
+test("market scan: a failed scan is published, then fails the workflow", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [source, workflow, app] = await Promise.all([
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-market-scan.yml", import.meta.url), "utf8"),
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+  ]);
+
+  // The history row is written whatever happened, so a failed scan is still listed.
+  assert.match(source, /scanFailure = String\(normalizeMarketScan\(state\.marketScan\)\.lastScanError \|\| ""\);/);
+  assert.match(source, /if \(scanFailure\) await writeScanErrorMarker\(scanFailure\);/);
+  // And the summary must not claim success over a scan that fetched nothing.
+  assert.match(source, /action: scanFailure \? "MARKET_SCAN_FAILED" : "MARKET_SCAN"/);
+
+  // Publish first, fail second, dispatch downstream work only if the scan actually ran.
+  const order = ["Upload paper state", "Append compact scraping history entry",
+    "Fail when the scan did not complete", "Dispatch post-scrape execution"]
+    .map((name) => workflow.indexOf(`- name: ${name}`));
+  assert.ok(order.every((index) => index > 0), "every step must be present");
+  assert.deepEqual([...order].sort((a, b) => a - b), order, `steps are out of order: ${order}`);
+  assert.match(workflow, /PAPER_SCAN_ERROR_PATH: data\/market-scan-error\.txt/);
+  assert.match(workflow, /if \[ -s trading\/data\/market-scan-error\.txt \]; then/);
+
+  // The dashboard names the cause instead of only reporting that the workflow failed.
+  assert.match(app, /const reason = await publishedScanFailureReason\(baseline\);/);
+  assert.match(app, /return `\$\{label\}: scan failed - \$\{runError \|\| "no markets were scanned"\}`;/);
 });

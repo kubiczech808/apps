@@ -4640,6 +4640,12 @@ function publishedScanSummary(scrapedState, startedAt, selectedTag = "", previou
   });
   const label = scrapedScanTagLabel(run?.scanTag || selectedTag || "all tags");
   if (!run) return `Updated ${formatDate(scrapedState?.marketScan?.lastScanAt || "")}`;
+  // A failed scan now publishes a run of its own, so name what went wrong rather than
+  // reporting the zero counts it recorded as though they were a result.
+  const runError = String(run.error || "").trim();
+  if (runError || String(run.status || "").toUpperCase() === "ERROR") {
+    return `${label}: scan failed - ${runError || "no markets were scanned"}`;
+  }
   const added = Number(run.newObservationCount || 0);
   const updated = Number(run.updatedObservationCount || 0);
   const retained = Number(run.retainedObservationCount || 0);
@@ -4668,6 +4674,24 @@ async function waitForScrapedScanPublication(baseline = {}) {
   // wait rather than an error, which is what this used to get wrong.
   if (lastState) return { state: lastState, confirmed: false };
   throw new Error("The scan workflow finished, but no scraped state could be read afterwards.");
+}
+
+// A scan that fetches nothing now fails its workflow, but it publishes its history row
+// first. Reading that row back turns "the workflow failed" into the actual reason.
+async function publishedScanFailureReason(baseline = {}) {
+  const previousScanIds = baseline.scanIds instanceof Set ? baseline.scanIds : new Set();
+  try {
+    const scrapedState = await fetchJson("data/paper-state.json", { summary: "scraped" });
+    const runs = Array.isArray(scrapedState?.marketScanHistory) ? scrapedState.marketScanHistory : [];
+    const run = runs.find((item) => {
+      const id = String(item?.id || item?.runAt || "");
+      return id && !previousScanIds.has(id);
+    });
+    const reason = String(run?.error || "").trim();
+    return reason ? `Scan failed: ${reason}` : "";
+  } catch {
+    return "";
+  }
 }
 
 async function triggerOneTimeMarketScan() {
@@ -4727,7 +4751,8 @@ async function triggerOneTimeMarketScan() {
       return;
     }
     if (workflow.conclusion !== "success") {
-      throw new Error(`Scan workflow finished with ${workflow.conclusion || "an unknown error"}.`);
+      const reason = await publishedScanFailureReason(baseline);
+      throw new Error(reason || `Scan workflow finished with ${workflow.conclusion || "an unknown error"}.`);
     }
     state.scrapedScanStatus = "Publishing scan results...";
     renderScrapedScanControls();
