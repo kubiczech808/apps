@@ -2556,6 +2556,12 @@ async function emitDecision(payload) {
     // Same decision at the top level, so the digest and the dashboard's "latest run"
     // row tell the same story as the log entry rather than only the buy half.
     ...(rotation || {}),
+    // The dashboard renders this top-level state as a row and dedupes it against the run
+    // log by batchLog id -- but only one of the emit sites ever set one. Every other run,
+    // and every 5050 run because that is its only path, published a batchLog its own log
+    // entry could not be matched to, so the newest run rendered twice. The identity is
+    // stamped here rather than at each call site, which is what let it be forgotten.
+    ...(payload.batchLog ? { batchLog: { ...payload.batchLog, id: mergedEntry.id, runAt: mergedEntry.runAt } } : {}),
     runLog: nextRunLog,
   };
 

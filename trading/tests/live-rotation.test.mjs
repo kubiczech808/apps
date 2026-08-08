@@ -1545,3 +1545,149 @@ test("5050: the batch is called with everything its signature requires", () => {
   assert.ok(passed.has("evaluationByToken"));
 });
 
+
+// Reported: the newest entry in the 5050 run log appeared twice. The dashboard renders
+// the top-level execution state as a row and dedupes it against the run log by batchLog
+// id -- but only one of the executor's nine emit sites set an id. Every other run, and
+// every 5050 run because that is its only path, published a batchLog its own stored log
+// entry could not be matched to, so the same decision rendered as two rows.
+function functionSource(source, name) {
+  let start = source.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`missing ${name}`);
+  // Keep the `async` keyword, or an awaiting body is extracted as a sync function.
+  if (source.slice(start - 6, start) === "async ") start -= 6;
+  // Count from the body brace, not a `row = {}` default parameter.
+  const bodyStart = source.indexOf(") {\n", start);
+  let depth = 0;
+  for (let i = bodyStart + 2; i < source.length; i += 1) {
+    if (source[i] === "{") depth += 1;
+    else if (source[i] === "}") {
+      depth -= 1;
+      if (!depth) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`unbalanced ${name}`);
+}
+
+function dashboardRunLog(executionState) {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const body = ["normalizeLiveExecutionRun", "mergeUniqueByRun", "isCadenceWaitRun", "isHistoryRecoveryRun", "liveRunLogRows"]
+    .map((name) => functionSource(app, name)).join("\n\n");
+  const build = new Function("state", "isFixedEntryMode", "liveBatchCandidateSummaryFromExecution", "portfolioReturnMetricLabel", `
+    ${body}
+    return liveRunLogRows;
+  `);
+  return build(
+    { liveState: null, liveExecutionState: executionState },
+    () => true,
+    (item) => item,
+    () => "",
+  )();
+}
+
+test("5050 run log: one decision is one row, not two", () => {
+  // A real 5050 emit: generatedAt and batchLog.runAt are separate new Date() calls, so
+  // they do not even agree to the millisecond, and the batchLog carried no id at all.
+  const generatedAt = "2026-08-08T14:20:00.100Z";
+  const batchLog = {
+    action: "SKIP",
+    reason: "no candidate cleared the bar for a resting bid at 0.50",
+    strategyId: "live-5050",
+    strategyLabel: "5050",
+    runAt: "2026-08-08T14:20:00.104Z",
+    counts: {},
+  };
+  // The entry emitDecision stores for that same run.
+  const storedEntry = {
+    ...batchLog,
+    id: `live-trade-batch-${generatedAt}`,
+    generatedAt,
+    explanation: batchLog.reason,
+  };
+  const older = {
+    id: "live-trade-batch-2026-08-08T13:50:00.000Z",
+    runAt: "2026-08-08T13:50:00.000Z",
+    strategyId: "live-5050",
+    action: "SUBMITTED",
+    reason: "older run",
+  };
+
+  const rows = dashboardRunLog({
+    generatedAt,
+    action: batchLog.action,
+    reason: batchLog.reason,
+    batchLog,
+    runLog: [storedEntry, older],
+  });
+
+  assert.equal(rows.length, 2, `the newest run must appear once: ${rows.map((row) => `${row.action}@${row.runAt}`).join(", ")}`);
+  assert.equal(rows[0].runAt, batchLog.runAt, "and it must still be the newest row");
+  assert.equal(rows[1].id, older.id, "the older run is untouched");
+  // Matching on id is what collapses them; the run times deliberately differ.
+  assert.equal(rows[0].id, storedEntry.id);
+});
+
+test("5050 run log: the executor publishes the batchLog its own log entry is keyed by", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const emit = functionSource(source, "emitDecision");
+
+  let written = null;
+  const build = new Function(
+    "previousExecutionState", "compactLiveRunRecord", "rotationLegMerge", "ROTATION_COMPLETION_RUN",
+    "mergeRunLog", "consoleDecisionSummary", "EXECUTION_STATE_PATH", "mkdir", "writeFile", "dirname", "console",
+    `${emit}\nreturn emitDecision;`,
+  );
+  const emitDecision = build(
+    { runLog: [] },
+    (batchLog) => batchLog,
+    () => null,
+    false,
+    (rows) => rows,
+    (output) => output,
+    "state.json",
+    async () => {},
+    async (_path, body) => { written = JSON.parse(body); },
+    () => ".",
+    { log() {} },
+  );
+
+  // The 5050 payload, exactly as it is built: a batchLog with no id of its own.
+  await emitDecision({
+    generatedAt: "2026-08-08T14:20:00.100Z",
+    action: "SKIP",
+    reason: "no candidate cleared the bar",
+    batchLog: { action: "SKIP", reason: "no candidate cleared the bar", strategyId: "live-5050", runAt: "2026-08-08T14:20:00.104Z" },
+  });
+
+  assert.ok(written, "the state must be written");
+  assert.ok(written.batchLog.id, "the published batchLog needs an identity of its own");
+  assert.equal(written.batchLog.id, written.runLog[0].id,
+    "the top-level row and its log entry must be the same run to the dashboard's dedupe");
+  assert.equal(written.batchLog.runAt, written.runLog[0].runAt);
+  // Everything the row renders from must survive the stamping.
+  assert.equal(written.batchLog.strategyId, "live-5050");
+  assert.equal(written.batchLog.action, "SKIP");
+});
+
+test("5050 run log: a state with no batchLog is left as one", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const emit = functionSource(source, "emitDecision");
+
+  let written = null;
+  const build = new Function(
+    "previousExecutionState", "compactLiveRunRecord", "rotationLegMerge", "ROTATION_COMPLETION_RUN",
+    "mergeRunLog", "consoleDecisionSummary", "EXECUTION_STATE_PATH", "mkdir", "writeFile", "dirname", "console",
+    `${emit}\nreturn emitDecision;`,
+  );
+  const emitDecision = build(
+    { runLog: [] }, (batchLog) => batchLog, () => null, false, (rows) => rows, (output) => output,
+    "state.json", async () => {}, async (_path, body) => { written = JSON.parse(body); }, () => ".", { log() {} },
+  );
+
+  // Some emits carry no batchLog, and the dashboard builds a richer row from settings
+  // and account for those. Inventing one here would send them down the wrong branch.
+  await emitDecision({ generatedAt: "2026-08-08T14:20:00.100Z", action: "AUTOMATION_DISABLED", reason: "off" });
+  assert.equal(written.batchLog, undefined, "no batchLog must be conjured for a state that has none");
+});

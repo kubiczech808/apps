@@ -7402,9 +7402,15 @@ function tradeBatchDetail(batch) {
 function normalizeLiveExecutionRun(execution) {
   if (!execution || typeof execution !== "object") return null;
   if (execution.batchLog) {
+    const generatedAt = execution.generatedAt || execution.batchLog.generatedAt;
     return {
       ...execution.batchLog,
-      generatedAt: execution.generatedAt || execution.batchLog.generatedAt,
+      // The executor stamps this id now, but states published before it did carry a
+      // batchLog with none. This is the same fallback the executor applies when it
+      // stores the run's own log entry, so the two are one run to the dedupe rather
+      // than two rows for the same decision.
+      id: execution.batchLog.id || `live-trade-batch-${generatedAt || execution.batchLog.runAt || ""}`,
+      generatedAt,
       response: execution.response || execution.batchLog.response,
       attempts: Array.isArray(execution.attempts) ? execution.attempts : execution.batchLog.attempts,
     };
