@@ -2936,3 +2936,115 @@ test("market scan: a failed scan is published, then fails the workflow", async (
   assert.match(app, /const reason = await publishedScanFailureReason\(baseline\);/);
   assert.match(app, /return `\$\{label\}: scan failed - \$\{runError \|\| "no markets were scanned"\}`;/);
 });
+
+// Reported: the execution candidates list did not show every candidate. It rendered a
+// fixed first 80 rows and said nothing about the rest, so a portfolio with more than
+// that simply hid them. The list now pages through the whole set.
+function candidateRenderer(state) {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const pick = (name) => {
+    let start = app.indexOf(`function ${name}(`);
+    if (start < 0) throw new Error(`missing ${name}`);
+    const bodyStart = app.indexOf(") {\n", start);
+    let depth = 0;
+    for (let i = bodyStart + 2; i < app.length; i += 1) {
+      if (app[i] === "{") depth += 1;
+      else if (app[i] === "}") {
+        depth -= 1;
+        if (!depth) return app.slice(start, i + 1);
+      }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const body = [pick("candidateVisibleCount"), pick("renderPortfolioCandidateRows")].join("\n\n");
+  const pageSize = Number(/const CANDIDATE_PAGE_SIZE = (\d+);/.exec(app)[1]);
+  const stub = () => "";
+  const deps = {
+    state,
+    CANDIDATE_PAGE_SIZE: pageSize,
+    normalizeMode: (mode) => mode,
+    portfolioConfigForMode: () => ({ probabilitySource: "polymarket" }),
+    normalizeProbabilitySource: (value) => value,
+    LIVE_MODES: new Set(["live", "live-5050"]),
+    portfolioReturnMetricLabel: () => "p.a.",
+    escapeHtml: (value) => String(value ?? ""),
+    formatInteger: (value) => String(value),
+  };
+  // Cell formatting is not what is under test, so whatever the renderer reaches for
+  // next gets a neutral stub.
+  const compile = () => {
+    const names = Object.keys(deps);
+    return new Function(...names, `${body}\nreturn { renderPortfolioCandidateRows, candidateVisibleCount };`)(
+      ...names.map((name) => deps[name]),
+    );
+  };
+  let api = compile();
+  return {
+    pageSize,
+    candidateVisibleCount: (mode) => api.candidateVisibleCount(mode),
+    render(rows, mode, diagnostics) {
+      for (let guard = 0; guard < 80; guard += 1) {
+        try {
+          return api.renderPortfolioCandidateRows(rows, mode, diagnostics);
+        } catch (error) {
+          const missing = /(\w+) is not defined/.exec(error.message);
+          if (!missing) throw error;
+          deps[missing[1]] = stub;
+          api = compile();
+        }
+      }
+      throw new Error("renderer could not be satisfied");
+    },
+  };
+}
+
+test("execution candidates: every candidate is reachable, a page at a time", () => {
+  const state = { mode: "live-5050", candidateVisibleCount: 0, candidateVisibleMode: "", candidateTotalCount: 0 };
+  const renderer = candidateRenderer(state);
+  const size = renderer.pageSize;
+  const total = size * 3 + 10;
+  const rows = Array.from({ length: total }, (_, index) => ({ tokenId: String(index), question: `Market ${index}` }));
+  const diagnostics = { ready: rows, riskBlocked: [], manuallyExcluded: [], filteredReasonCounts: new Map() };
+  const countRows = (html) => (html.match(/<tr\b/g) || []).length - 1;
+
+  const first = renderer.render(rows, "live-5050", diagnostics);
+  assert.equal(countRows(first), size, "the first page is one screenful");
+  assert.match(first, /data-candidates-load-more/, "and it must say the rest exists");
+  assert.match(first, new RegExp(`${total - size} of ${total} still hidden`),
+    "the control has to name how many are not on screen");
+
+  // Scrolling (or the button) raises the count; the renderer must follow it all the way.
+  state.candidateVisibleCount = size * 2;
+  assert.equal(countRows(renderer.render(rows, "live-5050", diagnostics)), size * 2);
+
+  state.candidateVisibleCount = total;
+  const last = renderer.render(rows, "live-5050", diagnostics);
+  assert.equal(countRows(last), total, "with the count at the total, every candidate renders");
+  assert.ok(!/data-candidates-load-more/.test(last), "and nothing claims there is more");
+
+  // Past the end is not an error, and still shows exactly the whole set.
+  state.candidateVisibleCount = total + size;
+  assert.equal(countRows(renderer.render(rows, "live-5050", diagnostics)), total);
+
+  // A different portfolio starts again at one page rather than inheriting the scroll.
+  assert.equal(renderer.candidateVisibleCount("live"), size);
+  assert.equal(state.candidateVisibleMode, "live");
+});
+
+test("execution candidates: the list extends itself on scroll and by button", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Endless scrolling, as asked for -- plus the button, because a scroll listener is
+  // no use to anyone driving the table from the keyboard.
+  assert.match(app, /els\.portfolioCandidates\?\.addEventListener\("click", \(event\) => \{\n  if \(!event\.target\.closest\("\[data-candidates-load-more\]"\)\) return;/);
+  // `scroll` does not bubble, so a panel-level listener has to capture.
+  assert.match(app, /els\.portfolioCandidates\?\.addEventListener\("scroll", \(event\) => \{[\s\S]*?\}, true\);/);
+  assert.match(app, /showMoreCandidates\(\);/);
+  // Re-rendering replaces the table, so the position has to survive the extension or
+  // the list snaps back to the top and the end can never be reached.
+  assert.match(app, /const offset = scroller \? scroller\.scrollTop : 0;/);
+  assert.match(app, /if \(nextScroller\) nextScroller\.scrollTop = offset;/);
+  // The summary must not imply the totals are all on screen.
+  assert.match(app, /const paged = shown < total \? ` - showing \$\{formatInteger\(shown\)\} of \$\{formatInteger\(total\)\}` : "";/);
+});

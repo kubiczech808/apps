@@ -92,6 +92,12 @@ const state = {
   categoryKind: "all",
   displayedRunLog: [],
   runLogFilters: [],
+  // How many candidate rows the table is currently showing. The list used to stop at
+  // 80 with nothing to say it had, so a portfolio with more candidates than that
+  // simply hid the rest. It grows as the table is scrolled, and resets only when the
+  // portfolio changes -- a poll refresh must not pull back what has been opened up.
+  candidateVisibleCount: 0,
+  candidateVisibleMode: "",
   userNavRefreshTimer: null,
   openedOpportunityKey: "",
 };
@@ -5488,6 +5494,34 @@ function portfolioCandidateRows(mode = state.mode) {
   return portfolioCandidateDiagnostics(mode).ready;
 }
 
+// One screenful at a time. Every candidate is reachable -- the table extends itself as
+// it is scrolled, and the button below it does the same for anyone not using a mouse.
+const CANDIDATE_PAGE_SIZE = 80;
+
+function candidateVisibleCount(mode = state.mode) {
+  if (state.candidateVisibleMode !== normalizeMode(mode)) {
+    state.candidateVisibleMode = normalizeMode(mode);
+    state.candidateVisibleCount = CANDIDATE_PAGE_SIZE;
+  }
+  return Math.max(CANDIDATE_PAGE_SIZE, Number(state.candidateVisibleCount) || CANDIDATE_PAGE_SIZE);
+}
+
+// Re-rendering replaces the table, so the scroll position has to be carried across or
+// the list jumps back to the top on every extension -- which would make scrolling to
+// the end impossible.
+function showMoreCandidates() {
+  // The total is read from the last render rather than recomputed: this runs on scroll,
+  // and rebuilding the diagnostics filters the whole catalogue.
+  if (candidateVisibleCount() >= Number(state.candidateTotalCount || 0)) return false;
+  const scroller = els.portfolioCandidates?.querySelector(".ledger-scroll");
+  const offset = scroller ? scroller.scrollTop : 0;
+  state.candidateVisibleCount = candidateVisibleCount() + CANDIDATE_PAGE_SIZE;
+  renderPortfolioCandidates();
+  const nextScroller = els.portfolioCandidates?.querySelector(".ledger-scroll");
+  if (nextScroller) nextScroller.scrollTop = offset;
+  return true;
+}
+
 function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics = null) {
   const manuallyExcluded = diagnostics?.manuallyExcluded || [];
   const riskBlocked = diagnostics?.riskBlocked || [];
@@ -5507,6 +5541,8 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
     ].filter(Boolean).join(" ");
     return `<div class="empty">No opportunities currently pass this portfolio shortlist.${details ? ` ${escapeHtml(details)}` : " The next scan will refresh market data and newly analyzed opportunities."}</div>`;
   }
+  const shown = Math.min(visibleRows.length, candidateVisibleCount(mode));
+  const remaining = visibleRows.length - shown;
   const live = LIVE_MODES.has(normalizeMode(mode));
   const config = portfolioConfigForMode(mode);
   const usesPolymarketPotential = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
@@ -5546,7 +5582,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
         </tr>
       </thead>
       <tbody>
-        ${visibleRows.slice(0, 80).map((item, index) => {
+        ${visibleRows.slice(0, shown).map((item, index) => {
           const excluded = Boolean(item.manuallyExcluded);
           const riskBlockedRow = Boolean(item.portfolioRiskBlockReason);
           // A retryable verdict from the previous run is not a precheck state of
@@ -5609,6 +5645,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
       </tbody>
     </table>
     </div>
+    ${remaining ? `<div class="table-load-more"><button class="execution-button" type="button" data-candidates-load-more>Show ${formatInteger(Math.min(remaining, CANDIDATE_PAGE_SIZE))} more (${formatInteger(remaining)} of ${formatInteger(visibleRows.length)} still hidden)</button></div>` : ""}
   `;
 }
 
@@ -5677,10 +5714,16 @@ function renderPortfolioCandidates() {
   const rows = diagnostics.ready;
   const label = isFixedEntryMode(mode) ? "5050" : (LIVE_MODES.has(normalizeMode(mode)) ? "Live" : `Paper - ${paperModeLabel(mode)}`);
   if (els.portfolioCandidatesTitle) els.portfolioCandidatesTitle.textContent = `${label} execution candidates`;
+  const blocked = diagnostics.riskBlocked.length;
+  const excluded = diagnostics.manuallyExcluded.length;
+  state.candidateTotalCount = rows.length + blocked + excluded;
   if (els.portfolioCandidatesSummary) {
-    const blocked = diagnostics.riskBlocked.length;
-    const excluded = diagnostics.manuallyExcluded.length;
-    els.portfolioCandidatesSummary.textContent = `${rows.length} ready${blocked ? ` / ${blocked} risk-blocked` : ""}${excluded ? ` / ${excluded} excluded` : ""}`;
+    // The counts are the whole set. The table pages through it, so say how much of it
+    // is on screen rather than letting the totals imply everything is listed.
+    const total = state.candidateTotalCount;
+    const shown = Math.min(total, candidateVisibleCount(mode));
+    const paged = shown < total ? ` - showing ${formatInteger(shown)} of ${formatInteger(total)}` : "";
+    els.portfolioCandidatesSummary.textContent = `${rows.length} ready${blocked ? ` / ${blocked} risk-blocked` : ""}${excluded ? ` / ${excluded} excluded` : ""}${paged}`;
   }
   els.portfolioCandidates.innerHTML = renderPortfolioCandidateRows(rows, mode, diagnostics);
 }
@@ -8146,6 +8189,24 @@ els.runLogFilterMenu?.addEventListener("change", (event) => {
 document.addEventListener("click", (event) => {
   if (!els.runLogFilterControl?.contains(event.target)) setRunLogFilterMenuOpen(false);
 });
+
+els.portfolioCandidates?.addEventListener("click", (event) => {
+  if (!event.target.closest("[data-candidates-load-more]")) return;
+  event.preventDefault();
+  showMoreCandidates();
+});
+
+// `scroll` does not bubble, so it is caught in the capture phase on the panel. That
+// keeps one listener alive across the re-renders that replace the table, instead of
+// binding a new one to each freshly built scroll container.
+els.portfolioCandidates?.addEventListener("scroll", (event) => {
+  const scroller = event.target;
+  if (!scroller?.classList?.contains("ledger-scroll")) return;
+  // Extend one screenful before the end, so the next rows are already there by the
+  // time the user reaches the bottom.
+  if (scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - scroller.clientHeight) return;
+  showMoreCandidates();
+}, true);
 
 els.opportunityViewButtons.forEach((button) => {
   button.addEventListener("click", () => {
