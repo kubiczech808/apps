@@ -6008,11 +6008,41 @@ function isFilledPortfolioRow(row) {
     || isClosedTrade(row || {});
 }
 
+// What 5050 actually ordered, per token, from its own run log. The current configured
+// price is not enough on its own: it changes, and a fill from when it was 0.50 stops
+// matching the moment it is set to 0.51 -- which handed 5050's own filled positions to
+// Live. The log remembers the price each bid was rested at, whatever the setting is now.
+function fixedEntryOrderPricesByToken() {
+  const prices = new Map();
+  const execution = state.live5050ExecutionState || {};
+  const rows = [execution, ...(Array.isArray(execution.runLog) ? execution.runLog : [])];
+  for (const row of rows) {
+    for (const attempt of (Array.isArray(row?.attempts) ? row.attempts : [])) {
+      const action = String(attempt?.action || "").toUpperCase();
+      if (action.includes("REJECT") || action.startsWith("DRY_RUN")) continue;
+      const tokenId = String(attempt?.tokenId || "");
+      const price = Number(attempt?.orderPrice);
+      if (!tokenId || !Number.isFinite(price)) continue;
+      if (!prices.has(tokenId)) prices.set(tokenId, new Set());
+      prices.get(tokenId).add(Number(price.toFixed(4)));
+    }
+  }
+  return prices;
+}
+
 function boughtAtFixedEntryPrice(row) {
-  const entryPrice = normalizeFixedEntryPrice(portfolioConfigForMode("live-5050").fixedEntryPrice);
   const paid = Number(row?.entryPrice ?? row?.avgPrice ?? row?.averagePrice);
   if (!Number.isFinite(paid)) return false;
-  return Math.abs(paid - entryPrice) < 0.005;
+  // Tick-size rounding means the stored price can differ in the last place.
+  const matches = (price) => Math.abs(paid - price) < 0.005;
+  // A price 5050 is on record as having bid for this very token settles it, whether or
+  // not the portfolio is still configured that way.
+  const ordered = fixedEntryOrderPricesByToken().get(String(row?.tokenId || row?.assetId || ""));
+  if (ordered && [...ordered].some(matches)) return true;
+  // Failing that, the price it is set to now -- for a fill whose bid has aged out of the
+  // log. Live buys at the market with a high probability bar, so a Live fill landing on
+  // 5050's exact price is not a case that occurs in practice.
+  return matches(normalizeFixedEntryPrice(portfolioConfigForMode("live-5050").fixedEntryPrice));
 }
 
 function belongsToActiveLivePortfolio(row) {

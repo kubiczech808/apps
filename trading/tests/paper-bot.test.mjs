@@ -3236,7 +3236,8 @@ function liveTradeAttribution(app, { mode, fixedEntryPrice = 0.51, execution5050
     throw new Error(`unbalanced ${name}`);
   };
   const body = ["submittedTokenIds", "fixedEntryTokenIds", "restsAtFixedEntryPrice", "isFilledPortfolioRow",
-    "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio", "isClosedTrade", "liveClosedTrades", "liveOpenOrders"]
+    "fixedEntryOrderPricesByToken", "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio", "isClosedTrade",
+    "liveClosedTrades", "liveOpenOrders"]
     .map(pick).join("\n\n");
   return new Function("state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
     `${body}\nreturn { liveClosedTrades, liveOpenOrders };`)(
@@ -3455,4 +3456,84 @@ test("5050 tags: the shortlist and the run agree on which markets qualify", asyn
     assert.equal(dashboard.marketMatchesAllowedTags(row, []), true);
     assert.equal(unrestricted.marketTagIsAllowed(row), true);
   }
+});
+
+// Reported: a position bought at 50.0% with a 1.00:1 reward/risk -- 5050's signature --
+// was showing under Live, which never buys at 50c because its probability bar is 80%.
+// The earlier fix attributed a fill by comparing its buy price with 5050's CONFIGURED
+// entry price, and that setting had since moved from 0.50 to 0.51. So every position
+// 5050 had filled at the old price stopped matching and was handed to Live.
+test("5050 fills: a changed entry price does not hand old fills to Live", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const pick = (name) => {
+    const start = app.indexOf(`function ${name}(`);
+    if (start < 0) throw new Error(`missing ${name}`);
+    const bodyStart = app.indexOf(") {\n", start);
+    let depth = 0;
+    for (let i = bodyStart + 2; i < app.length; i += 1) {
+      if (app[i] === "{") depth += 1;
+      else if (app[i] === "}") {
+        depth -= 1;
+        if (!depth) return app.slice(start, i + 1);
+      }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const body = ["submittedTokenIds", "fixedEntryTokenIds", "restsAtFixedEntryPrice",
+    "fixedEntryOrderPricesByToken", "isFilledPortfolioRow", "boughtAtFixedEntryPrice",
+    "belongsToActiveLivePortfolio", "isClosedTrade"].map(pick).join("\n\n");
+  const belongs = (mode, execution5050, configuredPrice) => new Function(
+    "state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
+    `${body}\nreturn belongsToActiveLivePortfolio;`,
+  )(
+    { mode, live5050ExecutionState: execution5050 },
+    () => mode === "live-5050",
+    (value) => Number(value),
+    () => ({ fixedEntryPrice: configuredPrice }),
+  );
+
+  const token = "88888888888888888888888888888888";
+  // The reported row: rested and filled at 0.50, back when that was the setting.
+  const position = {
+    tokenId: token,
+    question: "LoL: Movistar KOI vs GIANTX - Game 2 Winner",
+    outcome: "Movistar KOI",
+    status: "OPEN",
+    shares: 7.18,
+    entryPrice: 0.5,
+    totalCostUsdc: 3.59,
+  };
+  const log = {
+    runLog: [
+      { attempts: [{ tokenId: token, orderPrice: 0.5, orderSize: 7.18, action: "SUBMITTED" }] },
+      { attempts: [{ tokenId: "77777", orderPrice: 0.51, action: "SUBMITTED" }] },
+    ],
+  };
+
+  // The setting has moved on; the run log has not. Attribution follows the log.
+  for (const configured of [0.51, 0.5, 0.62]) {
+    assert.equal(belongs("live", log, configured)(position), false,
+      `configured ${configured}: a 5050 fill must not appear under Live`);
+    assert.equal(belongs("live-5050", log, configured)(position), true,
+      `configured ${configured}: it belongs to 5050`);
+  }
+
+  // What the earlier fix was for must still hold: a Live fill at the market price on a
+  // token 5050 merely has an unfilled bid resting on stays with Live.
+  const liveFill = { tokenId: "77777", status: "OPEN", shares: 4, entryPrice: 0.94, totalCostUsdc: 3.76 };
+  assert.equal(belongs("live", log, 0.51)(liveFill), true);
+  assert.equal(belongs("live-5050", log, 0.51)(liveFill), false);
+
+  // And a 5050 fill whose bid has aged out of the capped run log still matches on the
+  // price the portfolio is set to now, so history does not leak to Live as the log rolls.
+  const aged = { tokenId: "999", status: "OPEN", shares: 5, entryPrice: 0.51 };
+  assert.equal(belongs("live-5050", { runLog: [] }, 0.51)(aged), true);
+  assert.equal(belongs("live", { runLog: [] }, 0.51)(aged), false);
+
+  // A rejected attempt is not an order 5050 ever placed, so it claims nothing.
+  const refused = { runLog: [{ attempts: [{ tokenId: "555", orderPrice: 0.5, action: "REJECTED" }] }] };
+  const refusedFill = { tokenId: "555", status: "OPEN", shares: 5, entryPrice: 0.5 };
+  assert.equal(belongs("live-5050", refused, 0.62)(refusedFill), false);
+  assert.equal(belongs("live", refused, 0.62)(refusedFill), true);
 });
