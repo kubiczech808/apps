@@ -5940,10 +5940,32 @@ function restsAtFixedEntryPrice(row) {
   return Math.abs(price - entryPrice) < 0.005;
 }
 
+// A row that filled is not an order, and must not be attributed like one. 5050 buys at
+// exactly one price, so what a position or a closed trade was actually bought at says
+// which portfolio bought it. The token cannot: both portfolios draw from one candidate
+// pool, and 5050 rests a bid on nearly everything that clears its bar -- so claiming a
+// fill by token handed Live's positions and closed history to 5050 whenever 5050 had an
+// unfilled bid resting on the same market, which is the ordinary case rather than a rare
+// one. An unknown buy price stays with Live, the same safe direction as an unknown token.
+function isFilledPortfolioRow(row) {
+  return Number.isFinite(Number(row?.entryPrice ?? row?.avgPrice ?? row?.averagePrice))
+    || Number(row?.shares ?? row?.sharesBought) > 0
+    || isClosedTrade(row || {});
+}
+
+function boughtAtFixedEntryPrice(row) {
+  const entryPrice = normalizeFixedEntryPrice(portfolioConfigForMode("live-5050").fixedEntryPrice);
+  const paid = Number(row?.entryPrice ?? row?.avgPrice ?? row?.averagePrice);
+  if (!Number.isFinite(paid)) return false;
+  return Math.abs(paid - entryPrice) < 0.005;
+}
+
 function belongsToActiveLivePortfolio(row) {
   const tokenId = String(row?.tokenId || row?.assetId || "");
   if (!tokenId) return !isFixedEntryMode();
-  const owned = fixedEntryTokenIds().has(tokenId) || restsAtFixedEntryPrice(row);
+  const owned = isFilledPortfolioRow(row)
+    ? boughtAtFixedEntryPrice(row)
+    : (fixedEntryTokenIds().has(tokenId) || restsAtFixedEntryPrice(row));
   return isFixedEntryMode() ? owned : !owned;
 }
 

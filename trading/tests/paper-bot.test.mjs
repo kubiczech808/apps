@@ -2588,6 +2588,11 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
   const pick = (re) => re.exec(app)[0];
   const body = [
     pick(/function restsAtFixedEntryPrice\([\s\S]*?\n\}/),
+    // Attribution now separates a filled row from a resting one. These orders are
+    // unfilled, so they still go through the price and run-log signals this pins.
+    pick(/function isFilledPortfolioRow\([\s\S]*?\n\}/),
+    pick(/function boughtAtFixedEntryPrice\([\s\S]*?\n\}/),
+    pick(/function isClosedTrade\([\s\S]*?\n\}/),
     pick(/function belongsToActiveLivePortfolio\([\s\S]*?\n\}/),
   ].join("\n");
   const belongs = (fixed, owned) => new Function("row", `
@@ -3203,4 +3208,100 @@ test("days left: a market past its end date reads as overdue, and p.a. is untouc
     assert.equal(api.annualizeReturn(0.1, signed), api.annualizeReturn(0.1, Math.max(0, signed)),
       `p.a. must be unchanged at ${days} days`);
   }
+});
+
+// Asked to check that the Live portfolio's closed trades show up. They do render -- the
+// account snapshot carries 28 of them and nothing trims the list -- but attribution had a
+// hole that could take them away. A row that FILLED was claimed the same way a resting
+// order is: by token. Both live portfolios draw from one candidate pool and 5050 rests a
+// bid on nearly everything that clears its bar, so any market Live actually bought and
+// closed was handed to 5050 as soon as 5050 had an unfilled bid on the same token.
+function liveTradeAttribution(app, { mode, fixedEntryPrice = 0.51, execution5050 = null }) {
+  const pick = (name) => {
+    const start = app.indexOf(`function ${name}(`);
+    if (start < 0) throw new Error(`missing ${name}`);
+    const bodyStart = app.indexOf(") {\n", start);
+    let depth = 0;
+    for (let i = bodyStart + 2; i < app.length; i += 1) {
+      if (app[i] === "{") depth += 1;
+      else if (app[i] === "}") {
+        depth -= 1;
+        if (!depth) return app.slice(start, i + 1);
+      }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const body = ["submittedTokenIds", "fixedEntryTokenIds", "restsAtFixedEntryPrice", "isFilledPortfolioRow",
+    "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio", "isClosedTrade", "liveClosedTrades", "liveOpenOrders"]
+    .map(pick).join("\n\n");
+  return new Function("state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
+    `${body}\nreturn { liveClosedTrades, liveOpenOrders };`)(
+    { mode, live5050ExecutionState: execution5050 },
+    () => mode === "live-5050",
+    (value) => Number(value),
+    () => ({ fixedEntryPrice }),
+  );
+}
+
+test("live closed trades: a resting 5050 bid does not take a trade Live actually closed", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // The shape live-account-sync builds: an average fill price, and no `price` field.
+  const closed = (tokenId, entryPrice, status = "WON") => ({
+    id: `t-${tokenId}`, status, tokenId, question: `Market ${tokenId}`,
+    entryPrice, currentPrice: null, latestPrice: entryPrice, realizedPnlUsdc: 1.2,
+  });
+  const liveState = {
+    closedTrades: [
+      closed("100", 0.95),
+      closed("101", 0.88, "LOST"),
+      closed("102", 0.51),                       // 5050's own fill, at its one price
+      closed("103", 0.97, "REDEEMED"),
+      { ...closed("104", 0.9), tokenId: "" },     // no token at all
+    ],
+  };
+  // 5050 has a bid resting on 100 -- the market Live bought and closed.
+  const execution5050 = { runLog: [{ attempts: [{ tokenId: "100", action: "SUBMITTED" }] }] };
+
+  const onLive = liveTradeAttribution(app, { mode: "live", execution5050 }).liveClosedTrades(liveState);
+  const on5050 = liveTradeAttribution(app, { mode: "live-5050", execution5050 }).liveClosedTrades(liveState);
+
+  assert.deepEqual(onLive.map((row) => row.tokenId), ["100", "101", "103", ""],
+    "every trade Live bought stays on the Live tab, including the one 5050 has a bid on");
+  assert.deepEqual(on5050.map((row) => row.tokenId), ["102"],
+    "and 5050 keeps only what it actually bought, at its own price");
+
+  // A row with no recorded buy price cannot be claimed, so it stays with Live.
+  const unknown = { closedTrades: [{ id: "x", status: "WON", tokenId: "100", entryPrice: null }] };
+  assert.equal(liveTradeAttribution(app, { mode: "live", execution5050 }).liveClosedTrades(unknown).length, 1);
+  assert.equal(liveTradeAttribution(app, { mode: "live-5050", execution5050 }).liveClosedTrades(unknown).length, 0);
+
+  // With no 5050 state at all -- its file 404s until its first run publishes -- nothing
+  // may be taken from Live.
+  assert.equal(liveTradeAttribution(app, { mode: "live", execution5050: null }).liveClosedTrades(liveState).length, 4);
+});
+
+test("live closed trades: resting orders are still attributed by price and run log", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Unfilled orders have no buy price, so the original signals still decide them --
+  // 5050 rests every bid at its entry price, which is far from the market by design.
+  const liveState = {
+    openOrders: [
+      { id: "a", tokenId: "300", price: 0.51, remainingSize: 5 },   // 5050 by price
+      { id: "b", tokenId: "301", price: 0.94, remainingSize: 3 },   // Live
+      { id: "c", tokenId: "302", price: 0.88, remainingSize: 2 },   // 5050 by its run log
+    ],
+  };
+  const execution5050 = { runLog: [{ attempts: [{ tokenId: "302", action: "SUBMITTED" }] }] };
+  assert.deepEqual(
+    liveTradeAttribution(app, { mode: "live", execution5050 }).liveOpenOrders(liveState).map((row) => row.id),
+    ["b"],
+  );
+  assert.deepEqual(
+    liveTradeAttribution(app, { mode: "live-5050", execution5050 }).liveOpenOrders(liveState).map((row) => row.id),
+    ["a", "c"],
+  );
 });
