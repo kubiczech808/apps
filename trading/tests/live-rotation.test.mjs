@@ -1479,11 +1479,10 @@ test("5050: at most one bid per event, enforced before the orders exist", () => 
   // The cap now bounds resting bids rather than one run's placements, so this
   // exercises the diversification pass alone with the allowance passed in.
   const block = /const diversified = \[\];[\s\S]*?\n  \}\n/.exec(src)[0];
-  const run = new Function("pool", "remainingSlots", `
+  const run = new Function("pool", `
     const claimedGroupKeys=new Set(); const skipped=[];
     ${block}
-    const targets = diversified.slice(0, remainingSlots);
-    return {targets, skipped};`);
+    return {targets: diversified, skipped};`);
 
   const pool = [
     { tokenId: "a1", riskGroupKeys: ["event:matchA", "match:a"] },
@@ -1492,7 +1491,7 @@ test("5050: at most one bid per event, enforced before the orders exist", () => 
     { tokenId: "b1", riskGroupKeys: ["event:matchB", "match:b"] },
     { tokenId: "c1", riskGroupKeys: [] },
   ];
-  const { targets, skipped } = run(pool, 50);
+  const { targets, skipped } = run(pool);
 
   assert.deepEqual(targets.map((row) => row.tokenId), ["a1", "b1", "c1"],
     "one bid per event, and the pool is already in priority order so the best one wins");
@@ -1502,9 +1501,10 @@ test("5050: at most one bid per event, enforced before the orders exist", () => 
   // A row with no event key collides with nothing and is its own event.
   assert.ok(targets.some((row) => row.tokenId === "c1"));
 
-  // The cap applies after diversification, so it bounds distinct events rather than
-  // being spent on sub-markets of one fixture.
-  assert.deepEqual(run(pool, 2).targets.map((row) => row.tokenId), ["a1", "b1"]);
+  // Nothing caps the count: the exchange's collateral is what bounds it, so every
+  // distinct event that qualifies gets a bid.
+  assert.match(src, /const targets = diversified;/);
+  assert.ok(!/FIXED_ENTRY_MAX_ORDERS/.test(src), "the configured ceiling is gone");
 
   // Events already open block a bid outright, from either portfolio's holdings.
   assert.match(src, /const heldCollision = earlyRiskBlockReason\(\{ \.\.\.row\.candidate, \.\.\.row, tokenId: facts\.tokenId \}, held\);/);
@@ -1545,31 +1545,3 @@ test("5050: the batch is called with everything its signature requires", () => {
   assert.ok(passed.has("evaluationByToken"));
 });
 
-test("5050: the maximum bounds resting bids, not one run's placements", () => {
-  // Asked because the order count sat at 50. It was a per-run slice, while the
-  // setting is labelled Max resting orders -- two different meanings. Per-run,
-  // repeated runs could stack past the ceiling; and once duplicate suppression left
-  // nothing new to add, the count looked frozen with no explanation.
-  const src = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
-  const block = /const alreadyResting = \(Array\.isArray\(liveState\?\.openOrders\)[\s\S]*?const targets = diversified\.slice\(0, remainingSlots\);/.exec(src)[0];
-  const run = new Function("liveState", "diversified", "FIXED_ENTRY_MAX_ORDERS", "FIXED_ENTRY_PRICE", "number", `
-    ${block}
-    return {alreadyResting, remainingSlots, placed: targets.length};`);
-  const number = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
-  const orders = (n, price) => Array.from({ length: n }, (_, i) => ({ side: "BUY", price, tokenId: `t${i}` }));
-  const pool = Array.from({ length: 40 }, (_, i) => ({ tokenId: `c${i}` }));
-  const go = (wallet, cap) => run({ openOrders: wallet }, pool, cap, 0.51, number);
-
-  assert.deepEqual(go([], 50), { alreadyResting: 0, remainingSlots: 50, placed: 40 });
-  // At the ceiling, nothing more is placed -- this is the state that looked stuck.
-  assert.deepEqual(go(orders(50, 0.51), 50), { alreadyResting: 50, remainingSlots: 0, placed: 0 });
-  // Raising the setting frees the allowance immediately.
-  assert.deepEqual(go(orders(50, 0.51), 500), { alreadyResting: 50, remainingSlots: 450, placed: 40 });
-  // The live portfolio's orders rest near the market and must not consume 5050's
-  // allowance -- the wallet is shared, the ceiling is not.
-  assert.deepEqual(go(orders(50, 0.96), 50), { alreadyResting: 0, remainingSlots: 50, placed: 40 });
-
-  // And the run says so, rather than reporting a silent skip.
-  assert.match(src, /already holding \$\{alreadyResting\} resting bids, at the configured maximum of \$\{FIXED_ENTRY_MAX_ORDERS\}; raise it to place more/);
-  assert.match(src, /alreadyResting,\n\s*remainingSlots,/, "both must appear in the digest");
-});

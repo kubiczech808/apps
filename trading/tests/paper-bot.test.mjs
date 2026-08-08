@@ -2167,7 +2167,6 @@ test("portfolio config: a setting the server drops can never persist", async () 
   // A limit order cannot rest at 0 or 1, so a bad price must not reach the executor
   // and be rejected by the exchange one bid at a time.
   assert.match(api, /\(\$entryPrice > 0 && \$entryPrice < 1\)/);
-  assert.match(api, /max\(1, min\(500, \$maxOrders\)\)/);
 });
 
 test("5050: the order price is a portfolio setting, not only a dispatch input", async () => {
@@ -2178,9 +2177,13 @@ test("5050: the order price is a portfolio setting, not only a dispatch input", 
 
   // It has to be visible and editable where the portfolio is configured.
   assert.match(html, /data-fixed-entry-price/);
-  assert.match(html, /data-fixed-entry-max-orders/);
   assert.match(app, /function normalizeFixedEntryPrice\(value\)/);
   assert.match(app, /els\.fixedEntryPrice\?\.addEventListener\("change"/);
+  // The order count is not capped: the exchange reserves collateral per resting bid,
+  // so the balance bounds it and a configured ceiling only stopped the strategy
+  // short of what it could fund.
+  assert.ok(!/maxOpenOrders/.test(app), "no order ceiling remains in the dashboard");
+  assert.ok(!/data-fixed-entry-max-orders/.test(html));
   // And meaningless for every other portfolio, so it only shows for 5050.
   assert.match(app, /els\.fixedEntryRows\?\.forEach\(\(row\) => row\.toggleAttribute\("hidden", !isFixedEntryMode\(\)\)\)/);
   assert.match(app, /every qualifying candidate is bid at/, "the rules card must state it");
@@ -2731,4 +2734,16 @@ test("run log: history survives a reload and a failed fetch", async () => {
   assert.match(app, /rememberLiveExecutionState\(executionMode, executionResult\.value\);/);
   // Bounded, so a large batch cannot overflow the quota and lose everything.
   assert.match(app, /runLog: Array\.isArray\(value\.runLog\) \? value\.runLog\.slice\(0, 60\) : \[\]/);
+});
+
+test("rules card: automation is the badge, not a row", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // The ON/OFF badge sits in the card header and is clickable, so repeating the same
+  // state as a read-only row below it said the same thing twice -- and the row could
+  // not be acted on.
+  assert.ok(!/\["Automatic execution", automationIsEnabled/.test(app));
+  assert.match(app, /function automationBadgeMarkup\(\)/, "the badge stays the single place it is shown");
+  assert.match(app, /\$\{automationBadgeMarkup\(\)\}/);
 });

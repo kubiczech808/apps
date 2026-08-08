@@ -721,7 +721,6 @@ function default_portfolio_config(): array
         'live5050' => [
             'minProbability' => 0.90,
             'fixedEntryPrice' => 0.50,
-            'maxOpenOrders' => 50,
             'stakePerOrderUsdc' => null,
             'maxOrderFraction' => 0.05,
             'maxResolutionDays' => 30,
@@ -947,8 +946,6 @@ function normalize_portfolio_config(array $input): array
     $config['live5050']['fixedEntryPrice'] = ($entryPrice > 0 && $entryPrice < 1)
         ? round($entryPrice, 2)
         : (float) $defaults['live5050']['fixedEntryPrice'];
-    $maxOrders = (int) ($fixedInput['maxOpenOrders'] ?? $defaults['live5050']['maxOpenOrders']);
-    $config['live5050']['maxOpenOrders'] = max(1, min(500, $maxOrders));
     $stake = $fixedInput['stakePerOrderUsdc'] ?? null;
     $config['live5050']['stakePerOrderUsdc'] = is_numeric($stake) && (float) $stake > 0 ? round((float) $stake, 2) : null;
     $config['system'] = [

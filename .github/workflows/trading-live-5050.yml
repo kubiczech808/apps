@@ -26,11 +26,6 @@ on:
         required: false
         default: ""
         type: string
-      max_orders:
-        description: Override the saved maximum for this run only; blank uses the portfolio setting
-        required: false
-        default: ""
-        type: string
       stake_per_order_usdc:
         description: Target stake per bid; blank uses the exchange minimum
         required: false
@@ -69,7 +64,6 @@ jobs:
 
       LIVE_STRATEGY: fixed_entry
       LIVE_FIXED_ENTRY_PRICE: ${{ github.event.inputs.entry_price || '0.50' }}
-      LIVE_FIXED_ENTRY_MAX_ORDERS: ${{ github.event.inputs.max_orders || '50' }}
       LIVE_FIXED_ENTRY_STAKE_USDC: ${{ github.event.inputs.stake_per_order_usdc || '' }}
       LIVE_MIN_PROBABILITY: ${{ github.event.inputs.min_probability || '0.90' }}
 
@@ -124,7 +118,6 @@ jobs:
 
           overrides = {
               "LIVE_FIXED_ENTRY_PRICE": cfg.get("fixedEntryPrice"),
-              "LIVE_FIXED_ENTRY_MAX_ORDERS": cfg.get("maxOpenOrders"),
               "LIVE_FIXED_ENTRY_STAKE_USDC": cfg.get("stakePerOrderUsdc"),
               "LIVE_MIN_PROBABILITY": cfg.get("minProbability"),
               "LIVE_MAX_RESOLUTION_DAYS": cfg.get("maxResolutionDays"),
@@ -136,7 +129,6 @@ jobs:
           # An explicit dispatch input wins over the saved value for this run only.
           for key, dispatched in [
               ("LIVE_FIXED_ENTRY_PRICE", "${{ github.event.inputs.entry_price }}"),
-              ("LIVE_FIXED_ENTRY_MAX_ORDERS", "${{ github.event.inputs.max_orders }}"),
               ("LIVE_FIXED_ENTRY_STAKE_USDC", "${{ github.event.inputs.stake_per_order_usdc }}"),
               ("LIVE_MIN_PROBABILITY", "${{ github.event.inputs.min_probability }}"),
           ]:
@@ -159,7 +151,6 @@ jobs:
         run: |
           echo "Entry price:      ${LIVE_FIXED_ENTRY_PRICE}"
           echo "Min probability:  ${LIVE_MIN_PROBABILITY}"
-          echo "Max orders:       ${LIVE_FIXED_ENTRY_MAX_ORDERS}"
           echo "Stake per order:  ${LIVE_FIXED_ENTRY_STAKE_USDC:-exchange minimum}"
 
       - name: Generate fresh live account snapshot

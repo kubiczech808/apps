@@ -210,8 +210,6 @@ const els = {
   fixedEntryRows: document.querySelectorAll("[data-fixed-entry-row]"),
   fixedEntryPrice: document.querySelector("[data-fixed-entry-price]"),
   fixedEntryPriceLabel: document.querySelector("[data-fixed-entry-price-label]"),
-  fixedEntryMaxOrders: document.querySelector("[data-fixed-entry-max-orders]"),
-  fixedEntryMaxOrdersLabel: document.querySelector("[data-fixed-entry-max-orders-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
@@ -479,7 +477,6 @@ function defaultPortfolioConfig() {
     live5050: {
       minProbability: 0.9,
       fixedEntryPrice: 0.5,
-      maxOpenOrders: 50,
       stakePerOrderUsdc: null,
       maxOrderFraction: 0.05,
       maxResolutionDays: 30,
@@ -543,12 +540,6 @@ function normalizeFixedEntryPrice(value) {
   const price = Number(value);
   if (!Number.isFinite(price) || price <= 0 || price >= 1) return 0.5;
   return Number(price.toFixed(2));
-}
-
-function normalizeFixedEntryMaxOrders(value) {
-  const count = Math.round(Number(value));
-  if (!Number.isFinite(count) || count < 1) return 50;
-  return Math.min(500, count);
 }
 
 function automationIsEnabled(config = {}) {
@@ -2946,9 +2937,6 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const fixedEntryPrice = normalizeFixedEntryPrice(config.fixedEntryPrice);
   if (els.fixedEntryPrice) els.fixedEntryPrice.value = String(Math.round(fixedEntryPrice * 100));
   if (els.fixedEntryPriceLabel) els.fixedEntryPriceLabel.textContent = percent(fixedEntryPrice);
-  const fixedEntryMaxOrders = normalizeFixedEntryMaxOrders(config.maxOpenOrders);
-  if (els.fixedEntryMaxOrders) els.fixedEntryMaxOrders.value = String(fixedEntryMaxOrders);
-  if (els.fixedEntryMaxOrdersLabel) els.fixedEntryMaxOrdersLabel.textContent = String(fixedEntryMaxOrders);
   // These steer only the fixed-entry strategy, so they are meaningless anywhere else.
   els.fixedEntryRows?.forEach((row) => row.toggleAttribute("hidden", !isFixedEntryMode()));
   if (els.mostProbableOutcome) {
@@ -4981,7 +4969,6 @@ function portfolioRuleRows(portfolio = {}) {
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
-    ["Automatic execution", automationIsEnabled(config) ? "On" : "Off"],
   ];
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Volume filter", `>= ${money(minLiquidityUsdc)}`]);
   rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
@@ -5009,10 +4996,8 @@ function livePortfolioRuleRows() {
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
-    ["Automatic execution", automationIsEnabled(config) ? "On" : "Off"],
     ...(isFixedEntryMode() ? [
       ["Order price", `every qualifying candidate is bid at ${percent(normalizeFixedEntryPrice(config.fixedEntryPrice))}`],
-      ["Max resting orders", String(normalizeFixedEntryMaxOrders(config.maxOpenOrders))],
     ] : []),
     ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
@@ -8299,15 +8284,6 @@ els.fixedEntryPrice?.addEventListener("change", () => {
   const value = normalizeFixedEntryPrice(Number(els.fixedEntryPrice.value) / 100);
   if (updateParameterDraft({ fixedEntryPrice: value })) return;
   updatePortfolioConfigForMode(state.mode, { fixedEntryPrice: value });
-  savePortfolioConfigSoon();
-  syncPortfolioParameterControls();
-  rerenderCurrentDashboard();
-});
-
-els.fixedEntryMaxOrders?.addEventListener("change", () => {
-  const value = normalizeFixedEntryMaxOrders(els.fixedEntryMaxOrders.value);
-  if (updateParameterDraft({ maxOpenOrders: value })) return;
-  updatePortfolioConfigForMode(state.mode, { maxOpenOrders: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();
