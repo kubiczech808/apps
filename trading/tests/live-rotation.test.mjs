@@ -1696,16 +1696,18 @@ test("5050 run log: a state with no batchLog is left as one", async () => {
 // step ran 5s when there was little to do and 200s when it rested a full batch -- about
 // four seconds per bid, sequential, so the cost is the number of events. The pass is now
 // bounded: bids go best-first until the budget is spent, the rest wait for the next run.
-async function runPlacementLoop({ budgetMs, targetCount, perOrderMs }) {
+async function runPlacementLoop({ budgetMs, targetCount, perOrderMs, progressEvery = 5 }) {
   const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
   const start = source.indexOf("  const placementStartedAt = Date.now();");
   const end = source.indexOf("  // Cleanup, layered on top of the guarantee above.");
   assert.ok(start > 0 && end > start, "the placement loop must still be identifiable");
   const loop = source.slice(start, end);
 
+  const progress = [];
   const build = new Function(
     "targets", "DRY_RUN", "hasFlag", "orderAttemptSummary", "submitOrderWithMakerPrecisionRecovery",
     "successfulOrderResponse", "orderResponseError", "tradingConfig", "FIXED_ENTRY_BUDGET_MS",
+    "FIXED_ENTRY_PROGRESS_EVERY", "console",
     `return (async () => {
       const attempts = [];
       let accepted = 0;
@@ -1714,7 +1716,7 @@ async function runPlacementLoop({ budgetMs, targetCount, perOrderMs }) {
       return { placed, deferredForBudget, accepted, elapsed: Date.now() - placementStartedAt };
     })();`,
   );
-  return build(
+  const result = await build(
     Array.from({ length: targetCount }, (_, index) => ({ tokenId: String(index) })),
     false,
     (flag) => flag === "confirm-live",
@@ -1727,7 +1729,10 @@ async function runPlacementLoop({ budgetMs, targetCount, perOrderMs }) {
     () => "",
     {},
     budgetMs,
+    progressEvery,
+    { log: (line) => progress.push(line) },
   );
+  return { ...result, progress };
 }
 
 test("5050 placement: the batch stops at its time budget and defers the rest", async () => {
@@ -1764,14 +1769,65 @@ test("5050 placement: a deferral is reported, not silent", async () => {
     readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
   ]);
 
-  // A run that quietly placed a third of the batch would read as a batch of that size.
-  assert.match(source, /\$\{deferredForBudget \? `; \$\{deferredForBudget\} left for the next run after the/);
-  assert.match(source, /deferredForBudget,\n\s+placementBudgetMs: FIXED_ENTRY_BUDGET_MS,/);
-  // The measured cost travels with the run, so the budget can be tuned against it.
-  assert.match(source, /placementPerOrderMs: placed \? Math\.round\(placementMs \/ placed\) : 0,/);
-  assert.match(source, /rejectedForCollateral: rejectedForFunds,\n\s+deferredForBudget,/);
+  // A run that quietly placed a third of the batch would read as a batch of that size,
+  // so the run log row leads with how far the pass got rather than what it rested.
+  assert.match(source, /`processed \$\{processedEvents\} of \$\{targets\.length\} events in \$\{elapsedSeconds\}s;/);
+  assert.match(source, /\$\{deferredForBudget\} event\(s\) wait for the next run after the/);
+  // A dry run touches every target, so its fraction is the whole batch, not zero.
+  assert.match(source, /const processedEvents = DRY_RUN \|\| !hasFlag\("confirm-live"\) \? targets\.length : placed;/);
+  // The dashboard reads the run's counts, so the progress and its cost live there too.
+  assert.match(source, /processedEvents,\n\s+acceptedOrders: accepted,/);
+  assert.match(source, /deferredForBudget,\n\s+placementBudgetMs: FIXED_ENTRY_BUDGET_MS,\n\s+placementElapsedMs: Date\.now\(\) - placementStartedAt,\n\s+placementPerOrderMs: placed \? Math\.round\(placementMs \/ placed\) : 0,/);
 
   // Best-first ordering is what makes deferral acceptable: the tail is the weakest.
   assert.match(source, /if \(b\.marketProbability !== a\.marketProbability\) return b\.marketProbability - a\.marketProbability;/);
   assert.match(workflow, /LIVE_FIXED_ENTRY_BUDGET_MS: "40000"/);
+});
+
+test("5050 placement: the pass reports its position in the batch as it goes", async () => {
+  // Asked for: rather than a run whose time simply grows, it should be visible that
+  // e.g. 20 of 300 events are being worked through. The runner log carries it live.
+  const result = await runPlacementLoop({ budgetMs: 0, targetCount: 12, perOrderMs: 5, progressEvery: 5 });
+  assert.deepEqual(result.progress, [
+    "5050 placement: 5/12 events, 5 rested, 0s elapsed",
+    "5050 placement: 10/12 events, 10 rested, 0s elapsed",
+    "5050 placement: 12/12 events, 12 rested, 0s elapsed",
+  ], "every fifth bid and the last one, so a 300-bid pass is sixty lines and not three hundred");
+
+  // A pass cut short by the budget still says where it stopped.
+  const partial = await runPlacementLoop({ budgetMs: 120, targetCount: 40, perOrderMs: 20, progressEvery: 2 });
+  assert.ok(partial.progress.length, "a partial pass must report too");
+  const last = partial.progress[partial.progress.length - 1];
+  assert.match(last, new RegExp(`^5050 placement: \\d+/40 events,`));
+  assert.ok(partial.placed < 40, "and it really did stop short");
+});
+
+test("5050 run detail: a partial pass reads as a fraction, not as a small batch", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const start = app.indexOf("  const batchProgressText = ");
+  const end = app.indexOf("  const riskText = ");
+  assert.ok(start > 0 && end > start, "the batch progress block must still be identifiable");
+  const build = new Function("counts", "batch", "formatInteger",
+    `${app.slice(start, end)}\nreturn batchProgressText;`);
+  const render = (counts) => build(counts, {}, (value) => String(value));
+
+  const partial = render({
+    processedEvents: 20, targetedOrders: 300, deferredForBudget: 280,
+    placementElapsedMs: 38400, placementBudgetMs: 40000, placementPerOrderMs: 1920,
+  });
+  assert.match(partial, /^20 of 300 events processed in 38\.4s$/m);
+  assert.match(partial, /280 left for the next run: the 40s placement budget was spent at 1\.9s per bid/);
+
+  const whole = render({
+    processedEvents: 12, targetedOrders: 12, deferredForBudget: 0,
+    placementElapsedMs: 4100, placementBudgetMs: 40000, placementPerOrderMs: 341,
+  });
+  assert.match(whole, /^12 of 12 events processed in 4\.1s$/m);
+  assert.match(whole, /the whole batch was worked through/);
+
+  // Runs that do not work a batch -- the single-order live portfolio, and anything
+  // published before this existed -- must render nothing rather than "0 of 0".
+  assert.equal(render({ scannedCandidates: 40, eligibleCandidates: 3 }), "");
+  assert.equal(render({ processedEvents: 0, targetedOrders: 0 }), "");
 });

@@ -7412,6 +7412,20 @@ function tradeBatchDetail(batch) {
     || /cash|capital|stake|fund|minimum order/i.test(`${batch.reason || ""} ${batch.explanation || ""}`)
     || action.includes("ROTATION")
   );
+  // A batch pass works through many events, and a time budget can stop it part way. How
+  // far it got is the first thing to know about such a run -- otherwise a pass that
+  // handled a fifth of the batch is indistinguishable from one where a fifth was all
+  // there was. Only shown for runs that report it, so single-order runs are unchanged.
+  const batchProgressText = Number.isFinite(Number(counts.processedEvents)) && Number(counts.targetedOrders) > 0
+    ? [
+      `${formatInteger(Number(counts.processedEvents))} of ${formatInteger(Number(counts.targetedOrders))} events processed`
+        + `${Number.isFinite(Number(counts.placementElapsedMs)) ? ` in ${(Number(counts.placementElapsedMs) / 1000).toFixed(1)}s` : ""}`,
+      Number(counts.deferredForBudget) > 0
+        ? `${formatInteger(Number(counts.deferredForBudget))} left for the next run: the ${(Number(counts.placementBudgetMs || 0) / 1000).toFixed(0)}s placement budget was spent`
+          + `${Number(counts.placementPerOrderMs) > 0 ? ` at ${(Number(counts.placementPerOrderMs) / 1000).toFixed(1)}s per bid` : ""}`
+        : "the whole batch was worked through",
+    ].filter(Boolean).join("\n")
+    : "";
   const riskText = Number(counts.skippedForRisk || 0) > 0 || blocked.length
     ? `${Number(counts.skippedForRisk || blocked.length || 0)} candidate(s) blocked by risk diversification`
     : "";
@@ -7434,6 +7448,7 @@ function tradeBatchDetail(batch) {
       selected.url ? `Market: ${selected.url}` : "",
     );
   }
+  if (batchProgressText) lines.push("", "Batch progress", batchProgressText);
   if (reviewedCandidateLines) lines.push("", "Candidates not used", reviewedCandidateLines);
   if (orderReviewSummary) lines.push("", "Open orders", orderReviewSummary);
   if (rotationSummary) lines.push("", "Position rotation", rotationSummary);

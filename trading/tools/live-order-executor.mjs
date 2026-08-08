@@ -95,6 +95,7 @@ const FIXED_ENTRY_STAKE_USDC = Math.max(0, envNumber("LIVE_FIXED_ENTRY_STAKE_USD
 // Timed from the start of the placement loop, which is the only part that grows with the
 // number of events; the setup around it is fixed cost.
 const FIXED_ENTRY_BUDGET_MS = Math.max(0, envNumber("LIVE_FIXED_ENTRY_BUDGET_MS", 40000) || 0);
+const FIXED_ENTRY_PROGRESS_EVERY = Math.max(1, envNumber("LIVE_FIXED_ENTRY_PROGRESS_EVERY", 5) || 5);
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
 const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
@@ -2480,6 +2481,12 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
     attempts.push(orderAttemptSummary(submission.order, submission.response, {
       action: ok ? "SUBMITTED" : "REJECTED",
     }));
+    // Progress on the runner's own log, so a pass in flight shows how far through the
+    // batch it is instead of going quiet for however long the placements take. Every
+    // fifth keeps a 300-bid pass to sixty lines rather than three hundred.
+    if (placed % FIXED_ENTRY_PROGRESS_EVERY === 0 || placed === targets.length) {
+      console.log(`5050 placement: ${placed}/${targets.length} events, ${accepted} rested, ${Math.round((Date.now() - placementStartedAt) / 1000)}s elapsed`);
+    }
   }
 
   // Cleanup, layered on top of the guarantee above. A position may already exist on
@@ -2502,10 +2509,16 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
     }
   }
 
+  // A dry run touches every target without placing anything, so it has worked through
+  // the whole batch; a live run has worked through as many as it placed.
+  const processedEvents = DRY_RUN || !hasFlag("confirm-live") ? targets.length : placed;
+  const elapsedSeconds = Math.round((Date.now() - placementStartedAt) / 1000);
   const action = accepted > 0 ? "SUBMITTED" : (targets.length ? "SKIP" : "NO_CANDIDATES");
+  // The fraction leads, because this string is what the run log row shows: how far the
+  // pass got through the batch is the first thing to know, ahead of what it rested.
   const reason = targets.length
-    ? `fixed-entry batch rested ${accepted} of ${targets.length} bids at ${FIXED_ENTRY_PRICE.toFixed(2)}, one per event from ${pool.length} qualifying${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}${deferredForBudget ? `; ${deferredForBudget} left for the next run after the ${(FIXED_ENTRY_BUDGET_MS / 1000).toFixed(0)}s placement budget` : ""}${cancelledSiblings.length ? `; withdrew ${cancelledSiblings.length} resting bid(s) on events that already opened` : ""}`
-    : `no candidate cleared the ${(MIN_PROBABILITY * 100).toFixed(1)}% bar for a resting bid at ${FIXED_ENTRY_PRICE.toFixed(2)}`;
+    ? `processed ${processedEvents} of ${targets.length} events in ${elapsedSeconds}s; rested ${accepted} bid(s) at ${FIXED_ENTRY_PRICE.toFixed(2)}, one per event from ${pool.length} qualifying of ${checked.length} scanned${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}${deferredForBudget ? `; ${deferredForBudget} event(s) wait for the next run after the ${(FIXED_ENTRY_BUDGET_MS / 1000).toFixed(0)}s placement budget` : ""}${cancelledSiblings.length ? `; withdrew ${cancelledSiblings.length} resting bid(s) on events that already opened` : ""}`
+    : `no candidate cleared the ${(MIN_PROBABILITY * 100).toFixed(1)}% bar for a resting bid at ${FIXED_ENTRY_PRICE.toFixed(2)}, from ${checked.length} scanned`;
 
   await emitDecision({
     generatedAt: new Date().toISOString(),
@@ -2522,8 +2535,10 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
       accepted,
       rejectedForFunds,
       cancelledSiblings: cancelledSiblings.length,
-      // What the pass actually cost, so the budget can be tuned against measurements
-      // rather than guesses, and a deferral is never silent.
+      // How far through the batch the pass got, and what it cost to get there -- so a
+      // partial pass reads as "20 of 300" rather than as a run that simply took longer,
+      // and the budget can be tuned against measurements rather than guesses.
+      processedEvents,
       deferredForBudget,
       placementBudgetMs: FIXED_ENTRY_BUDGET_MS,
       placementElapsedMs: Date.now() - placementStartedAt,
@@ -2541,9 +2556,16 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
         consideredCandidates: checked.length,
         qualifiedCandidates: pool.length,
         targetedOrders: targets.length,
+        // How far through the batch this pass got, and what it cost. The dashboard
+        // reads the run's counts, so the timings belong here as well as in the digest
+        // block, or a partial pass renders as a small one with no way to tell.
+        processedEvents,
         acceptedOrders: accepted,
         rejectedForCollateral: rejectedForFunds,
         deferredForBudget,
+        placementBudgetMs: FIXED_ENTRY_BUDGET_MS,
+        placementElapsedMs: Date.now() - placementStartedAt,
+        placementPerOrderMs: placed ? Math.round(placementMs / placed) : 0,
       },
       topRejected: skipped.slice(0, 12).map((item) => ({
         question: item.question,
