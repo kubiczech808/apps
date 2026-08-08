@@ -618,11 +618,14 @@ function compact_state_payload(string $target, array $data, string $summary): ar
             $right = strtotime((string) ($b['resolvedAt'] ?? $b['endDate'] ?? '')) ?: 0;
             return $right <=> $left;
         });
-        // Resolved history is meant to accumulate, so this is a response-size guard
-        // rather than a retention rule, and it is deliberately far above the retained
-        // total. When it does bite, observationTotals still reports the real counts so
-        // the tab labels never understate the archive.
-        $resolvedServeLimit = 20000;
+        // Nothing is discarded on disk any more: the archive keeps every resolved
+        // market so the counts reflect what was really mined. This is purely a
+        // response-size guard, and it has to be a real one -- measured on a 5000-row
+        // active catalogue, this summary peaks near 111 MB at 8000 resolved rows and a
+        // 128 MB host answers 500 before that. observationTotals reports the true
+        // total regardless, so the tab labels keep growing while the list serves the
+        // most recent page of it.
+        $resolvedServeLimit = 3000;
         $resolvedTruncated = count($resolved) > $resolvedServeLimit;
         $resolved = array_slice($resolved, 0, $resolvedServeLimit);
         $active = array_merge($active, $resolved);

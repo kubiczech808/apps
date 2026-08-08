@@ -87,7 +87,6 @@ const MARKET_OBSERVATION_RETAIN_LIMIT = Math.max(500, envNumber("PAPER_MARKET_OB
 // rows and 111 MB at 8000, and a shared host will answer 500 well before that. Serving
 // the archive in pages is what removes the ceiling; until then 3000 is the largest
 // value that keeps every endpoint comfortably inside a 128 MB limit.
-const MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT = Math.max(100, envNumber("PAPER_MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT", 3000));
 const MARKET_SCAN_AUDIT_ROW_LIMIT = Math.max(100, envNumber("PAPER_MARKET_SCAN_AUDIT_ROW_LIMIT", 750));
 // The public state keeps a short working cache; the workflow appends every
 // compact scan summary to the separate scan-history journal.
@@ -1360,9 +1359,15 @@ function retainMarketObservations(items = []) {
     if (Number.isFinite(aDays) && Number.isFinite(bDays) && aDays !== bDays) return aDays - bDays;
     return marketObservationUpdateTime(b) - marketObservationUpdateTime(a);
   };
+  // Resolved markets are the record of what was actually scraped and how it ended:
+  // the settled history every report and every parameter comparison is measured
+  // against. Trimming it to a limit meant the archive silently stopped growing once
+  // it filled, and the counts stopped matching what had really been mined. Active
+  // rows are a working set and are still bounded -- an unresolved market that falls
+  // out is re-scraped -- but a resolved one, once dropped, is gone for good.
   return [
     ...active.sort(compareActive).slice(0, MARKET_OBSERVATION_RETAIN_LIMIT),
-    ...resolved.sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a)).slice(0, MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT),
+    ...resolved.sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a)),
   ].sort((a, b) => marketObservationUpdateTime(b) - marketObservationUpdateTime(a));
 }
 
@@ -8098,7 +8103,6 @@ export {
   PAPER_STRATEGIES,
   portfolioEconomics,
   rounded,
-  MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT,
   MARKET_OBSERVATION_RETAIN_LIMIT,
   marketDateContext,
   marketScanRetentionReason,

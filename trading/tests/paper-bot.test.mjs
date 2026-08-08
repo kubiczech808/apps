@@ -1006,19 +1006,25 @@ test("state segments: the core file never carries the heavy collections", async 
   assert.equal(rebuilt.marketObservations.length, state.marketObservations.length, "no row may be lost");
 });
 
-test("state segments: resolved history is retained far beyond the old cap", () => {
-  // The reported symptom was the counts in the scraped tabs going down instead of up.
-  // Resolved rows shared the active catalogue's budget and were capped at 1000, so
-  // the archive churned. They now have their own file and a much larger budget.
-  const resolvedLimit = bot.MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT;
-  assert.ok(resolvedLimit >= 3000, `resolved retention must accumulate, got ${resolvedLimit}`);
-  // Bounded by what one scraped response can carry, not by storage: measured on a
-  // 5000-row active catalogue that summary peaks at ~66 MB with 3000 resolved rows and
-  // ~111 MB with 8000, and a 128 MB host answers 500 before that. Raising this further
-  // requires serving the archive in pages first.
-  assert.ok(resolvedLimit <= 5000, `serving ${resolvedLimit} resolved rows at once would risk a 500`);
+test("state segments: resolved history is never discarded", () => {
+  // Reported: the counts in the scraped and resolved tabs did not match what had
+  // actually been mined, and stopped growing. Resolved rows were trimmed to a limit
+  // on every write, so once the archive filled it churned -- older settled markets
+  // were deleted to make room for newer ones, and no count could exceed the cap.
+  //
+  // A resolved market is the record of what was scraped and how it ended, which is
+  // what every report and parameter comparison is measured against. Once dropped it
+  // is gone: unlike an active row, it will never be re-scraped.
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.ok(!/MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT/.test(source),
+    "no cap may stand between a resolved market and the archive");
+  assert.match(source, /\.\.\.resolved\.sort\(\(a, b\) => marketObservationUpdateTime\(b\) - marketObservationUpdateTime\(a\)\),/,
+    "resolved rows are sorted and kept, not sliced");
 
-  // And retention must keep the newest resolved rows rather than an arbitrary slice.
+  // Active rows stay bounded: they are a working set, and one that falls out is
+  // simply re-scraped.
+  assert.match(source, /\.\.\.active\.sort\(compareActive\)\.slice\(0, MARKET_OBSERVATION_RETAIN_LIMIT\),/);
+
   const rows = Array.from({ length: 12 }, (_, index) => ({
     id: `resolved-${index}`,
     tokenId: String(900000000000 + index),
@@ -1026,7 +1032,7 @@ test("state segments: resolved history is retained far beyond the old cap", () =
     updatedAt: new Date(Date.UTC(2026, 0, 1 + index)).toISOString(),
   }));
   const state = bot.normalizeState({ marketObservations: rows });
-  assert.equal(state.marketObservations.length, 12, "nothing near the cap may be dropped");
+  assert.equal(state.marketObservations.length, 12, "nothing may be dropped");
 });
 
 test("state segments: writeState publishes siblings that readState reassembles", async () => {
@@ -1399,7 +1405,11 @@ test("state segments: retention is not silently throttled by workflow env", asyn
   for (const name of ["trading-paper-bot", "trading-market-scan"]) {
     const workflow = await readFile(new URL(`../../.github/workflows/${name}.yml`, import.meta.url), "utf8");
     const active = Number(workflow.match(/PAPER_MARKET_OBSERVATION_RETAIN_LIMIT: "(\d+)"/)?.[1]);
-    const resolved = Number(workflow.match(/PAPER_MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT: "(\d+)"/)?.[1]);
+    // Pinning a resolved cap in the workflow is what made raising the default in the
+    // bot change nothing in production. There must not be one at all now.
+    assert.ok(!/PAPER_MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT/.test(workflow),
+      `${name} must not cap resolved history`);
+    const resolved = Number.NaN;
     if (Number.isFinite(active)) {
       assert.ok(active >= 5000, `${name} throttles the active catalogue to ${active}`);
     }
@@ -2746,4 +2756,25 @@ test("rules card: automation is the badge, not a row", async () => {
   assert.ok(!/\["Automatic execution", automationIsEnabled/.test(app));
   assert.match(app, /function automationBadgeMarkup\(\)/, "the badge stays the single place it is shown");
   assert.match(app, /\$\{automationBadgeMarkup\(\)\}/);
+});
+
+test("scraped counts: the UI reports the archive, not the page it was served", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+
+  // Nothing is discarded on disk now, but one response still cannot carry the whole
+  // archive: measured on a 5000-row active catalogue, this summary peaks near 111 MB
+  // at 8000 resolved rows and a 128 MB host answers 500 first. So the list is a page
+  // and the count is the total -- otherwise the labels shrink as the archive grows,
+  // which reads as records disappearing.
+  assert.match(api, /\$resolvedServeLimit = 3000;/);
+  assert.match(api, /'observationTotals' => state_observation_totals\(\$data\)/,
+    "the true totals must be served alongside the page");
+  assert.match(api, /'resolvedTruncated' => \$resolvedTruncated/);
+
+  // And the browser must prefer the reported total over what it received.
+  assert.match(app, /const totals = state\.scrapedObservationTotals;/);
+  assert.match(app, /if \(totals && Number\.isFinite\(Number\(totals\.resolved\)\) && Number\(totals\.resolved\) > counts\.resolved\)/);
+  assert.match(app, /counts\.resolved = Number\(totals\.resolved\);/);
 });
