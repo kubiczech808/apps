@@ -2119,9 +2119,10 @@ test("days left: under a day reads in hours, not tenths of a day", async () => {
   // The boundary belongs to hours, so nothing renders as "1.0 d" twice.
   assert.equal(compactDays(0.99), "23.8 h");
 
-  // Edges keep their existing meaning rather than rendering as a number.
-  assert.equal(compactDays(0), "due now");
-  assert.equal(compactDays(-1), "due now");
+  // Superseded: "due now" used to cover everything at or past the end date, which hid
+  // how long a market had been overdue. A passed date now reads as a negative horizon.
+  assert.equal(compactDays(0), "< 1 min");
+  assert.equal(compactDays(-1), "-1.0 d");
   assert.equal(compactDays(Number.NaN), "-");
   assert.equal(compactDays(0.0005), "1 min");
 });
@@ -3047,4 +3048,157 @@ test("execution candidates: the list extends itself on scroll and by button", as
   assert.match(app, /if \(nextScroller\) nextScroller\.scrollTop = offset;/);
   // The summary must not imply the totals are all on screen.
   assert.match(app, /const paged = shown < total \? ` - showing \$\{formatInteger\(shown\)\} of \$\{formatInteger\(total\)\}` : "";/);
+});
+
+// Reported with a screenshot: the newest 5050 run was still listed twice, the first of
+// the pair labelled "Live", and the newest runs were missing. The earlier fix matched the
+// two rows by batchLog id -- but the device cache keeps a reduced copy of the state, and
+// the first paint after a reload renders from it. That copy carried no batchLog, so the
+// top-level row was rebuilt as a run of its own with a synthesized id and a hard-coded
+// Live label, and the pair no longer matched.
+function runLogRenderer(app, executionState, { fixedEntry = true } = {}) {
+  const pick = (name) => {
+    const start = app.indexOf(`function ${name}(`);
+    if (start < 0) throw new Error(`missing ${name}`);
+    const bodyStart = app.indexOf(") {\n", start);
+    let depth = 0;
+    for (let i = bodyStart + 2; i < app.length; i += 1) {
+      if (app[i] === "{") depth += 1;
+      else if (app[i] === "}") {
+        depth -= 1;
+        if (!depth) return app.slice(start, i + 1);
+      }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const body = ["normalizeLiveExecutionRun", "isSameLiveRun", "mergeUniqueByRun",
+    "isCadenceWaitRun", "isHistoryRecoveryRun", "liveRunLogRows"].map(pick).join("\n\n");
+  return new Function("state", "isFixedEntryMode", "liveBatchCandidateSummaryFromExecution", "portfolioReturnMetricLabel",
+    `${body}\nreturn liveRunLogRows;`)(
+    { liveState: null, liveExecutionState: executionState },
+    () => fixedEntry,
+    (item) => item,
+    () => "",
+  )();
+}
+
+test("5050 run log: one row per run whatever shape the state was stored in", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  const generatedAt = "2026-08-08T13:09:11.000Z";
+  const batchLog = {
+    action: "SKIP",
+    reason: "fixed-entry batch rested 0 of 1 bids at 0.51",
+    strategyId: "live-5050",
+    strategyLabel: "5050",
+    runAt: generatedAt,
+    counts: {},
+  };
+  const newest = { ...batchLog, id: `live-trade-batch-${generatedAt}`, generatedAt };
+  const older = {
+    id: "live-trade-batch-2026-08-08T11:55:40.000Z",
+    runAt: "2026-08-08T11:55:40.000Z",
+    strategyId: "live-5050",
+    action: "SUBMITTED",
+    reason: "older run",
+  };
+  const runLog = [newest, older];
+
+  const shapes = {
+    // Straight from the published state.
+    fresh: { generatedAt, action: batchLog.action, reason: batchLog.reason, batchLog, runLog },
+    // What the device cache used to hold: no batchLog at all. This is the screenshot.
+    legacyCache: { generatedAt, action: batchLog.action, reason: batchLog.reason, runLog },
+    // And with a batchLog whose clock read drifted from generatedAt by a few ms, which
+    // is how the executor used to stamp them.
+    driftedClock: {
+      generatedAt,
+      action: batchLog.action,
+      reason: batchLog.reason,
+      batchLog: { ...batchLog, id: null, runAt: "2026-08-08T13:09:11.004Z" },
+      runLog,
+    },
+  };
+
+  for (const [label, executionState] of Object.entries(shapes)) {
+    const rows = runLogRenderer(app, executionState);
+    assert.equal(rows.length, 2, `${label}: expected one row per run, got ${rows.map((row) => row.action).join(", ")}`);
+    assert.equal(rows[1].id, older.id, `${label}: the older run must be untouched`);
+    assert.ok(!/^Live$/.test(String(rows[0].strategyLabel || "")),
+      `${label}: a 5050 run must not be labelled as the Live portfolio`);
+  }
+});
+
+test("5050 run log: the cache keeps enough to identify the run it stored", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // A cache that drops the identity is what forced the row to be rebuilt as a new run.
+  assert.match(app, /batchLog: value\.batchLog\n\s+\? \{\n\s+id: value\.batchLog\.id \|\| null,/);
+  assert.match(app, /strategyId: value\.batchLog\.strategyId \|\| null,/);
+  // Unequal ids must not be read as proof of different runs, because one of them may be
+  // synthesized here rather than by the executor.
+  assert.match(app, /if \(leftId && rightId && leftId === rightId\) return true;/);
+  // And the title must name the portfolio whose log it is.
+  assert.match(app, /const label = isFixedEntryMode\(\) \? "5050" : \(isLiveMode\(\) \? "Live" : paperModeLabel\(\)\);/);
+
+  // The browser caches the script URL, so a dashboard fix that does not bump this is
+  // published and never served -- which is why the earlier fix appeared not to work.
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const version = /assets\/app\.js\?v=([^"]+)/.exec(html);
+  assert.ok(version, "app.js must stay cache-busted");
+  assert.notEqual(version[1], "20260804-resolved-scraped", "the version has to move when app.js does");
+});
+
+test("days left: a market past its end date reads as overdue, and p.a. is untouched", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const pick = (src, name) => {
+    const start = src.indexOf(`function ${name}(`);
+    const bodyStart = src.indexOf(") {\n", start);
+    let depth = 0;
+    for (let i = bodyStart + 2; i < src.length; i += 1) {
+      if (src[i] === "{") depth += 1;
+      else if (src[i] === "}") {
+        depth -= 1;
+        if (!depth) return src.slice(start, i + 1);
+      }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const minDays = 1 / 24;
+  const api = new Function("MIN_ANNUALIZATION_DAYS", `
+    ${pick(app, "compactDays")}
+    ${pick(app, "daysUntil")}
+    ${pick(app, "annualizationDays")}
+    ${pick(app, "annualizeReturn")}
+    return { compactDays, daysUntil, annualizeReturn };
+  `)(minDays);
+  const at = (days) => new Date(Date.now() + days * 86400000).toISOString();
+
+  // Reported: "1.0 day left" on a market whose date had passed. Negative is wanted.
+  assert.match(api.compactDays(api.daysUntil(at(-2.3))), /^-2\.3 d$/);
+  assert.match(api.compactDays(api.daysUntil(at(-0.5))), /^-12\.0 h$/);
+  assert.match(api.compactDays(api.daysUntil(at(-0.02))), /^-\d+ min$/);
+  // Future horizons are unchanged.
+  assert.match(api.compactDays(api.daysUntil(at(5))), /^5\.0 d$/);
+  assert.match(api.compactDays(api.daysUntil(at(0.5))), /^12\.0 h$/);
+  assert.equal(api.compactDays(api.daysUntil("not a date")), "-");
+
+  // The executor stored a one-day floor as the row's days-left, which is what produced
+  // "1.0 day". It is gone; the annualization floor that guards the maths is not.
+  assert.ok(!/return Math\.max\(1, \(end - Date\.now\(\)\) \/ 86400000\);/.test(executor),
+    "the display floor must be gone");
+  assert.match(executor, /return Math\.max\(MIN_ANNUALIZATION_DAYS, days\);/,
+    "the annualization floor must stay");
+
+  // Asked for explicitly: leave the potential p.a. as it is. A signed horizon must not
+  // move it, because every annualization already floors a non-positive one.
+  for (const days of [-40, -2.3, -0.5, 0]) {
+    const signed = api.daysUntil(at(days));
+    assert.equal(api.annualizeReturn(0.1, signed), api.annualizeReturn(0.1, Math.max(0, signed)),
+      `p.a. must be unchanged at ${days} days`);
+  }
 });

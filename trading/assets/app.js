@@ -299,14 +299,18 @@ function signedPercent(value) {
 // to be converted before it means anything, and "< 0.1 d" covered everything from
 // two hours down to two minutes. Below one day this switches to hours, and below
 // one hour to minutes, so the number arrives in the unit it is thought about in.
+// Past the end date reads as a negative horizon -- how long the market is overdue by --
+// rather than as "due now" or, worse, the one-day floor the executor used to store. The
+// same units apply either way, so an hour overdue is "-1.0 h", not "-0.0 d".
 function compactDays(value) {
   if (!Number.isFinite(value)) return "-";
-  if (value <= 0) return "due now";
-  if (value >= 1) return `${value.toFixed(1)} d`;
-  const hours = value * 24;
-  if (hours >= 1) return `${hours.toFixed(1)} h`;
+  const sign = value < 0 ? "-" : "";
+  const size = Math.abs(value);
+  if (size >= 1) return `${sign}${size.toFixed(1)} d`;
+  const hours = size * 24;
+  if (hours >= 1) return `${sign}${hours.toFixed(1)} h`;
   const minutes = Math.round(hours * 60);
-  return minutes >= 1 ? `${minutes} min` : "< 1 min";
+  return minutes >= 1 ? `${sign}${minutes} min` : "< 1 min";
 }
 
 function shortAddress(value) {
@@ -1681,10 +1685,13 @@ function daysBetween(startValue, endValue) {
   return Math.max(0, (end - start) / 86400000);
 }
 
+// Signed, for the same reason as the executor's daysToEnd: clamping at zero made every
+// overdue market look like it was resolving right now. Each annualization below guards
+// non-positive horizons with MIN_ANNUALIZATION_DAYS already, so the returns are unchanged.
 function daysUntil(value) {
   const end = Date.parse(value || "");
   if (!Number.isFinite(end)) return null;
-  return Math.max(0, (end - Date.now()) / 86400000);
+  return (end - Date.now()) / 86400000;
 }
 
 function tradeHoldingDays(trade) {
@@ -3496,6 +3503,22 @@ function rememberLiveExecutionState(mode, value) {
       generatedAt: value.generatedAt || null,
       action: value.action || null,
       reason: value.reason || null,
+      // The run's identity has to survive too. Without it a render from this cache --
+      // which is what the first paint after a reload uses -- rebuilt the top-level row
+      // as a run of its own, so the newest entry appeared twice and was labelled Live
+      // even on the 5050 tab. Only the fields the row needs, not the whole batch.
+      batchLog: value.batchLog
+        ? {
+          id: value.batchLog.id || null,
+          runAt: value.batchLog.runAt || null,
+          action: value.batchLog.action || null,
+          reason: value.batchLog.reason || null,
+          strategyId: value.batchLog.strategyId || null,
+          strategyLabel: value.batchLog.strategyLabel || null,
+          counts: value.batchLog.counts || null,
+          placementBudgetMs: value.batchLog.placementBudgetMs ?? null,
+        }
+        : null,
       runLog: Array.isArray(value.runLog) ? value.runLog.slice(0, 60) : [],
     };
     localStorage.setItem(LIVE_EXECUTION_CACHE_KEY, JSON.stringify(cache));
@@ -7482,8 +7505,10 @@ function normalizeLiveExecutionRun(execution) {
     id: `live-execution-${runAt || execution.action || "latest"}`,
     runAt,
     generatedAt: runAt,
-    strategyId: "live",
-    strategyLabel: "Live",
+    // Whichever live portfolio is on screen owns this row. Hard-coding Live labelled
+    // 5050's own runs as the other portfolio's.
+    strategyId: isFixedEntryMode() ? "live-5050" : "live",
+    strategyLabel: isFixedEntryMode() ? "5050" : "Live",
     selectionMetric: portfolioReturnMetricLabel(settings),
     action: execution.action || "-",
     reason: execution.reason || "-",
@@ -7545,7 +7570,11 @@ function liveRunLogRows() {
   rows.push(...fromLiveState);
   rows.push(...fromExecutionState);
   const executionRun = normalizeLiveExecutionRun(state.liveExecutionState);
-  if (executionRun) rows.unshift(executionRun);
+  // The top-level state is the same decision as the newest run-log entry, so it is only
+  // added when the log does not already carry it. Matching on id alone was not enough:
+  // the device cache keeps a reduced shape, and a render from it rebuilt the row as a
+  // different run -- which is how the newest entry came to be listed twice.
+  if (executionRun && !rows.some((row) => isSameLiveRun(row, executionRun))) rows.unshift(executionRun);
   return mergeUniqueByRun(rows)
     .filter((row) => !isCadenceWaitRun(row))
     // Recovery rows only prove that an old GitHub workflow existed. They do
@@ -7570,6 +7599,24 @@ function isHistoryRecoveryRun(row = {}) {
     || row.historicalRecovery === true
     || batch.historicalRecovery === true
     || id.startsWith("github-live-history-");
+}
+
+// Two rows are the same decision when they share an id, or -- for the stored shapes that
+// carry none -- when they are within a couple of seconds of each other. The timestamps
+// differ by milliseconds because they came from separate clock reads of one run, and no
+// portfolio decides twice inside two seconds, so the tolerance cannot merge real runs.
+function isSameLiveRun(left, right) {
+  if (!left || !right) return false;
+  const leftId = String(left.id || "");
+  const rightId = String(right.id || "");
+  // Equal ids settle it. Unequal ones do not: one of the two may be an id this file
+  // synthesized for a stored shape that carried none, which is not evidence of a
+  // different run -- believing it is what kept the duplicate on screen.
+  if (leftId && rightId && leftId === rightId) return true;
+  const leftAt = Date.parse(left.runAt || left.generatedAt || "");
+  const rightAt = Date.parse(right.runAt || right.generatedAt || "");
+  if (!Number.isFinite(leftAt) || !Number.isFinite(rightAt)) return false;
+  return Math.abs(leftAt - rightAt) <= 2000;
 }
 
 function mergeUniqueByRun(rows = []) {
@@ -7756,7 +7803,9 @@ function renderRunLog() {
     ? allRuns
     : allRuns.filter((run) => filters.includes(runActionValue(run)));
   state.displayedRunLog = runs;
-  const label = isLiveMode() ? "Live" : paperModeLabel();
+  // 5050 is a live mode but not the Live portfolio, and its log is its own -- titling it
+  // "Live run log" said it belonged to the other one.
+  const label = isFixedEntryMode() ? "5050" : (isLiveMode() ? "Live" : paperModeLabel());
   if (els.runLogTitle) {
     els.runLogTitle.textContent = `${label} run log`;
   }

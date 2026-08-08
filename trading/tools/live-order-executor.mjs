@@ -505,10 +505,14 @@ function marketDateContext(market = {}, fallbackDate = null) {
   };
 }
 
+// Signed: a market whose end date has passed is overdue, not a day from resolving. The
+// one-day floor that used to live here was reported as the row's days-left, so an expired
+// market presented a full day of runway. Every annualization downstream applies its own
+// MIN_ANNUALIZATION_DAYS floor, so the returns this feeds are unchanged.
 function daysToEnd(endDate) {
   const end = Date.parse(endDate || "");
   if (!Number.isFinite(end)) return null;
-  return Math.max(1, (end - Date.now()) / 86400000);
+  return (end - Date.now()) / 86400000;
 }
 
 function endDateIsFuture(endDate) {
@@ -2585,7 +2589,10 @@ async function emitDecision(payload) {
   const runEntry = {
     ...compactLiveRunRecord(payload.batchLog || {}),
     id: payload.batchLog?.id || `live-trade-batch-${payload.generatedAt || new Date().toISOString()}`,
-    runAt: payload.batchLog?.runAt || payload.generatedAt || new Date().toISOString(),
+    // One decision, one instant. generatedAt and batchLog.runAt were separate clock
+    // reads milliseconds apart, so the same run carried two different times and
+    // anything matching them up had to allow for the drift.
+    runAt: payload.generatedAt || payload.batchLog?.runAt || new Date().toISOString(),
     generatedAt: payload.generatedAt || payload.batchLog?.runAt || new Date().toISOString(),
     strategyId: payload.batchLog?.strategyId || "live",
     strategyLabel: payload.batchLog?.strategyLabel || "Live",
