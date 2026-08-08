@@ -182,7 +182,11 @@ jobs:
           LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-5050-execution
           LIVE_EXECUTION_STATE_PATH: data/live-5050-execution-state.json
           LIVE_RUN_LOG_RECOVER: "false"
-        run: node tools/restore-live-execution-history.mjs || echo "No published 5050 history yet; starting a fresh log."
+        # No `|| echo` here. The tool already treats a genuine first-run 404 as an empty
+        # log and exits 0; every other failure it raises means the history exists but
+        # could not be read, and swallowing that let the run continue with nothing and
+        # publish a single row over the whole log. A red run is the cheaper outcome.
+        run: node tools/restore-live-execution-history.mjs
 
       - name: Rest the fixed-entry bids
         working-directory: trading
@@ -196,6 +200,20 @@ jobs:
         if: always()
         working-directory: trading
         run: npm run live:account
+
+      # The upload replaces the hosted file outright, so a run that started from a
+      # partial local log would publish that shorter log over the real history -- which
+      # is what left this portfolio with a single row. This makes the file about to be
+      # uploaded a superset of the one it replaces. The main live portfolio has had this
+      # since its own log emptied; 5050 was created without it.
+      - name: Merge published run-log history before upload
+        if: always()
+        working-directory: trading
+        env:
+          # Read the hosted state, not the local copy the executor just wrote.
+          LIVE_EXECUTION_PUBLISHED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-5050-execution
+          LIVE_EXECUTION_STATE_PATH: data/live-5050-execution-state.json
+        run: node tools/merge-live-execution-history.mjs
 
       - name: Upload 5050 state
         if: always()

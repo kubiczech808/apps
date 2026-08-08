@@ -3537,3 +3537,72 @@ test("5050 fills: a changed entry price does not hand old fills to Live", async 
   assert.equal(belongs("live-5050", refused, 0.62)(refusedFill), false);
   assert.equal(belongs("live", refused, 0.62)(refusedFill), true);
 });
+
+// Reported: the 5050 run log held a single entry, which is not what happened -- the
+// portfolio had run dozens of times. The Live portfolio's log emptied the same way once
+// and gained two guards for it; 5050 was created with neither.
+test("5050 run log: history cannot be replaced by a single row", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [fixed, live] = await Promise.all([
+    readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8"),
+  ]);
+
+  // Guard one: the restore must not be allowed to fail quietly. The tool already treats
+  // a genuine first-run 404 as an empty log and exits 0, so `|| echo` only ever masked
+  // the failures it raises on purpose -- and the run then carried on with nothing.
+  assert.match(fixed, /run: node tools\/restore-live-execution-history\.mjs\n/);
+  assert.ok(!/restore-live-execution-history\.mjs \|\| echo/.test(fixed),
+    "a failed restore must fail the run, not start a fresh log over real history");
+
+  // Guard two: merge the published log into the local one immediately before the upload,
+  // because the upload replaces the hosted file outright.
+  assert.match(fixed, /- name: Merge published run-log history before upload/);
+  assert.match(fixed, /LIVE_EXECUTION_PUBLISHED_STATE_URL: https:\/\/osobnizkusenosti\.cz\/trading\/api\.php\?action=state&target=live-5050-execution/);
+  assert.match(fixed, /LIVE_EXECUTION_STATE_PATH: data\/live-5050-execution-state\.json/);
+  assert.match(fixed, /run: node tools\/merge-live-execution-history\.mjs/);
+
+  // It has to sit between the executor and the upload, or it guards nothing.
+  const order = ["Rest the fixed-entry bids", "Merge published run-log history before upload", "Upload 5050 state"]
+    .map((name) => fixed.indexOf(`- name: ${name}`));
+  assert.ok(order.every((index) => index > 0), "every step must be present");
+  assert.deepEqual([...order].sort((a, b) => a - b), order, `steps are out of order: ${order}`);
+
+  // Both live portfolios now carry the same protection; neither should lose it.
+  for (const [label, workflow] of [["live", live], ["5050", fixed]]) {
+    assert.match(workflow, /node tools\/merge-live-execution-history\.mjs/, `${label} needs the merge guard`);
+    assert.match(workflow, /node tools\/restore-live-execution-history\.mjs/, `${label} needs the restore`);
+  }
+});
+
+test("5050 run log: the merge publishes a superset, never less", async () => {
+  // The tool guards its own entry point, so importing it runs nothing.
+  const { mergeRunLogs } = await import("../tools/merge-live-execution-history.mjs");
+
+  // What a run that started from an empty restore writes locally: this decision alone.
+  const local = [{ id: "live-trade-batch-2026-08-08T19:39:57.055Z", runAt: "2026-08-08T19:39:57.055Z", strategyId: "live-5050", action: "SUBMITTED", reason: "this run" }];
+  const published = Array.from({ length: 13 }, (_, index) => {
+    const hour = String(index + 6).padStart(2, "0");
+    return { id: `live-trade-batch-2026-08-08T${hour}:00:00.000Z`, runAt: `2026-08-08T${hour}:00:00.000Z`, strategyId: "live-5050", action: "SUBMITTED", reason: `run ${hour}` };
+  });
+
+  const merged = mergeRunLogs(local, published);
+  assert.equal(merged.length, 14, "one local row plus the thirteen already published");
+  assert.equal(merged[0].reason, "this run", "newest first");
+  assert.equal(merged[merged.length - 1].reason, "run 06", "and the whole history behind it");
+  // The published log can only grow: the merge drops no row that was already there.
+  for (const row of published) {
+    assert.ok(merged.some((item) => item.id === row.id), `${row.id} must survive the merge`);
+  }
+  // A local row wins its key, so this run's fresh decision is not shadowed by a stale copy.
+  const collided = mergeRunLogs(local, [{ ...local[0], reason: "stale published copy" }, ...published]);
+  assert.equal(collided.length, 14);
+  assert.equal(collided[0].reason, "this run");
+
+  // And if the published state cannot be read at all the tool refuses outright, rather
+  // than letting the upload replace rows it could not see.
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/merge-live-execution-history.mjs", import.meta.url), "utf8");
+  assert.match(source, /Live execution history merge failed/);
+  assert.match(source, /process\.exit\(1\);/);
+});
