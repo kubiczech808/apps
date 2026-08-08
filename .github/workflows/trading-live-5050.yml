@@ -80,6 +80,12 @@ jobs:
       LIVE_MAX_RESOLUTION_DAYS: "30"
       LIVE_MIN_ANNUAL_RETURN: "0"
       LIVE_MIN_NET_YIELD: "0"
+      # How long the pass may spend resting bids. Measured on this runner the steps
+      # around the executor cost about 20s (checkout, install, two account snapshots,
+      # upload), so 40s here keeps the job inside a minute. Bids go best-first, so a
+      # pass that runs out defers the weakest of the batch and the next run, half an
+      # hour later, opens with them.
+      LIVE_FIXED_ENTRY_BUDGET_MS: "40000"
     steps:
       - uses: actions/checkout@v4
 

@@ -87,6 +87,14 @@ const IS_MANUAL_RUN = String(process.env.LIVE_RUN_SOURCE || "").toUpperCase() ==
 const FIXED_ENTRY_STRATEGY = String(process.env.LIVE_STRATEGY || "").trim().toLowerCase() === "fixed_entry";
 const FIXED_ENTRY_PRICE = envNumber("LIVE_FIXED_ENTRY_PRICE", 0.5);
 const FIXED_ENTRY_STAKE_USDC = Math.max(0, envNumber("LIVE_FIXED_ENTRY_STAKE_USDC", 0) || 0);
+// Resting a bid is one sequential round trip to the exchange, measured at roughly four
+// seconds each on the runner, so a batch of fifty spent over three minutes in that loop
+// alone. The pass is bounded instead: bids are placed best-first until the budget is
+// spent, and the remainder waits for the next run rather than stretching this one -- it
+// is the same candidate set, so nothing is lost, only deferred. Zero disables the bound.
+// Timed from the start of the placement loop, which is the only part that grows with the
+// number of events; the setup around it is fixed cost.
+const FIXED_ENTRY_BUDGET_MS = Math.max(0, envNumber("LIVE_FIXED_ENTRY_BUDGET_MS", 40000) || 0);
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
 const OPEN_ORDER_REPRICE_THRESHOLD = envNumber("LIVE_OPEN_ORDER_REPRICE_THRESHOLD", 0.015);
@@ -2438,13 +2446,30 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
   const attempts = [];
   let accepted = 0;
   let rejectedForFunds = 0;
+  // `targets` is already ordered best-first -- highest probability, soonest to resolve --
+  // so a pass that runs out of budget defers the weakest bids, not an arbitrary tail.
+  const placementStartedAt = Date.now();
+  let placed = 0;
+  let placementMs = 0;
+  let deferredForBudget = 0;
 
   for (const order of targets) {
     if (DRY_RUN || !hasFlag("confirm-live")) {
       attempts.push(orderAttemptSummary(order, null, { action: "DRY_RUN_READY" }));
       continue;
     }
+    // Stop before starting a bid the budget cannot pay for, priced from what this run
+    // has actually measured rather than an assumed per-order cost. The first bid always
+    // goes, so a budget can never produce a pass that places nothing.
+    const averageMs = placed ? placementMs / placed : 0;
+    if (FIXED_ENTRY_BUDGET_MS && placed && Date.now() - placementStartedAt + averageMs > FIXED_ENTRY_BUDGET_MS) {
+      deferredForBudget = targets.length - placed;
+      break;
+    }
+    const orderStartedAt = Date.now();
     const submission = await submitOrderWithMakerPrecisionRecovery({ ...order, funderAddress: tradingConfig.funderAddress, signatureType: tradingConfig.signatureType });
+    placementMs += Date.now() - orderStartedAt;
+    placed += 1;
     const ok = successfulOrderResponse(submission.response);
     if (ok) accepted += 1;
     // Running past the capital on hand is intended, so the exchange refusing an
@@ -2479,7 +2504,7 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
 
   const action = accepted > 0 ? "SUBMITTED" : (targets.length ? "SKIP" : "NO_CANDIDATES");
   const reason = targets.length
-    ? `fixed-entry batch rested ${accepted} of ${targets.length} bids at ${FIXED_ENTRY_PRICE.toFixed(2)}, one per event from ${pool.length} qualifying${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}${cancelledSiblings.length ? `; withdrew ${cancelledSiblings.length} resting bid(s) on events that already opened` : ""}`
+    ? `fixed-entry batch rested ${accepted} of ${targets.length} bids at ${FIXED_ENTRY_PRICE.toFixed(2)}, one per event from ${pool.length} qualifying${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}${deferredForBudget ? `; ${deferredForBudget} left for the next run after the ${(FIXED_ENTRY_BUDGET_MS / 1000).toFixed(0)}s placement budget` : ""}${cancelledSiblings.length ? `; withdrew ${cancelledSiblings.length} resting bid(s) on events that already opened` : ""}`
     : `no candidate cleared the ${(MIN_PROBABILITY * 100).toFixed(1)}% bar for a resting bid at ${FIXED_ENTRY_PRICE.toFixed(2)}`;
 
   await emitDecision({
@@ -2497,6 +2522,12 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
       accepted,
       rejectedForFunds,
       cancelledSiblings: cancelledSiblings.length,
+      // What the pass actually cost, so the budget can be tuned against measurements
+      // rather than guesses, and a deferral is never silent.
+      deferredForBudget,
+      placementBudgetMs: FIXED_ENTRY_BUDGET_MS,
+      placementElapsedMs: Date.now() - placementStartedAt,
+      placementPerOrderMs: placed ? Math.round(placementMs / placed) : 0,
     },
     account: { cashUsdc: cash, availableCashUsdc: availableCash },
     attempts,
@@ -2512,6 +2543,7 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
         targetedOrders: targets.length,
         acceptedOrders: accepted,
         rejectedForCollateral: rejectedForFunds,
+        deferredForBudget,
       },
       topRejected: skipped.slice(0, 12).map((item) => ({
         question: item.question,

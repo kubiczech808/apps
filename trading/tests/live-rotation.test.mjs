@@ -1691,3 +1691,87 @@ test("5050 run log: a state with no batchLog is left as one", async () => {
   await emitDecision({ generatedAt: "2026-08-08T14:20:00.100Z", action: "AUTOMATION_DISABLED", reason: "off" });
   assert.equal(written.batchLog, undefined, "no batchLog must be conjured for a state that has none");
 });
+
+// Reported: the 5050 workflow took far too long. Measured on the runner, the executor
+// step ran 5s when there was little to do and 200s when it rested a full batch -- about
+// four seconds per bid, sequential, so the cost is the number of events. The pass is now
+// bounded: bids go best-first until the budget is spent, the rest wait for the next run.
+async function runPlacementLoop({ budgetMs, targetCount, perOrderMs }) {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("  const placementStartedAt = Date.now();");
+  const end = source.indexOf("  // Cleanup, layered on top of the guarantee above.");
+  assert.ok(start > 0 && end > start, "the placement loop must still be identifiable");
+  const loop = source.slice(start, end);
+
+  const build = new Function(
+    "targets", "DRY_RUN", "hasFlag", "orderAttemptSummary", "submitOrderWithMakerPrecisionRecovery",
+    "successfulOrderResponse", "orderResponseError", "tradingConfig", "FIXED_ENTRY_BUDGET_MS",
+    `return (async () => {
+      const attempts = [];
+      let accepted = 0;
+      let rejectedForFunds = 0;
+      ${loop}
+      return { placed, deferredForBudget, accepted, elapsed: Date.now() - placementStartedAt };
+    })();`,
+  );
+  return build(
+    Array.from({ length: targetCount }, (_, index) => ({ tokenId: String(index) })),
+    false,
+    (flag) => flag === "confirm-live",
+    () => ({}),
+    async (order) => {
+      await new Promise((resolve) => setTimeout(resolve, perOrderMs));
+      return { order, response: { success: true } };
+    },
+    () => true,
+    () => "",
+    {},
+    budgetMs,
+  );
+}
+
+test("5050 placement: the batch stops at its time budget and defers the rest", async () => {
+  // Ten bids' worth of budget against fifty candidates.
+  const result = await runPlacementLoop({ budgetMs: 400, targetCount: 50, perOrderMs: 40 });
+  assert.ok(result.placed > 1 && result.placed < 50, `expected a partial batch, placed ${result.placed}`);
+  assert.equal(result.placed + result.deferredForBudget, 50, "every candidate is either placed or deferred");
+  assert.ok(result.elapsed <= 400, `the budget is a ceiling, not a target: took ${result.elapsed}ms`);
+});
+
+test("5050 placement: a budget never produces a pass that places nothing", async () => {
+  // The per-order cost is unknown until one has been placed, so the first always goes.
+  // Otherwise an unlucky budget would leave the portfolio unable to trade at all.
+  const result = await runPlacementLoop({ budgetMs: 1, targetCount: 8, perOrderMs: 30 });
+  assert.equal(result.placed, 1);
+  assert.equal(result.deferredForBudget, 7);
+});
+
+test("5050 placement: no budget means the whole batch, as before", async () => {
+  const result = await runPlacementLoop({ budgetMs: 0, targetCount: 12, perOrderMs: 20 });
+  assert.equal(result.placed, 12);
+  assert.equal(result.deferredForBudget, 0);
+
+  // And a budget the batch fits inside changes nothing either.
+  const roomy = await runPlacementLoop({ budgetMs: 5000, targetCount: 6, perOrderMs: 20 });
+  assert.equal(roomy.placed, 6);
+  assert.equal(roomy.deferredForBudget, 0);
+});
+
+test("5050 placement: a deferral is reported, not silent", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [source, workflow] = await Promise.all([
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
+  ]);
+
+  // A run that quietly placed a third of the batch would read as a batch of that size.
+  assert.match(source, /\$\{deferredForBudget \? `; \$\{deferredForBudget\} left for the next run after the/);
+  assert.match(source, /deferredForBudget,\n\s+placementBudgetMs: FIXED_ENTRY_BUDGET_MS,/);
+  // The measured cost travels with the run, so the budget can be tuned against it.
+  assert.match(source, /placementPerOrderMs: placed \? Math\.round\(placementMs \/ placed\) : 0,/);
+  assert.match(source, /rejectedForCollateral: rejectedForFunds,\n\s+deferredForBudget,/);
+
+  // Best-first ordering is what makes deferral acceptable: the tail is the weakest.
+  assert.match(source, /if \(b\.marketProbability !== a\.marketProbability\) return b\.marketProbability - a\.marketProbability;/);
+  assert.match(workflow, /LIVE_FIXED_ENTRY_BUDGET_MS: "40000"/);
+});
