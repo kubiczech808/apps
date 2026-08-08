@@ -2432,7 +2432,19 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
     keys.forEach((key) => claimedGroupKeys.add(key));
     diversified.push(order);
   }
-  const targets = diversified.slice(0, FIXED_ENTRY_MAX_ORDERS);
+  // The setting is a ceiling on how many bids may be RESTING, not how many a single
+  // run may place. Slicing the batch alone let repeated runs stack past it, and made
+  // the count look stuck once duplicate suppression left nothing new to add. Bids
+  // this portfolio already has on the book consume the allowance.
+  const alreadyResting = (Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+    .filter((order) => !String(order.side || "").toUpperCase().includes("SELL"))
+    .filter((order) => {
+      const price = number(order.price ?? order.orderPrice);
+      // Its bids sit at the configured price by construction; the live portfolio's do not.
+      return price != null && Math.abs(price - FIXED_ENTRY_PRICE) < 0.005;
+    }).length;
+  const remainingSlots = Math.max(0, FIXED_ENTRY_MAX_ORDERS - alreadyResting);
+  const targets = diversified.slice(0, remainingSlots);
   const attempts = [];
   let accepted = 0;
   let rejectedForFunds = 0;
@@ -2476,7 +2488,10 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
   }
 
   const action = accepted > 0 ? "SUBMITTED" : (targets.length ? "SKIP" : "NO_CANDIDATES");
-  const reason = targets.length
+  const capReached = remainingSlots === 0 && diversified.length > 0;
+  const reason = capReached
+    ? `already holding ${alreadyResting} resting bids, at the configured maximum of ${FIXED_ENTRY_MAX_ORDERS}; raise it to place more`
+    : targets.length
     ? `fixed-entry batch rested ${accepted} of ${targets.length} bids at ${FIXED_ENTRY_PRICE.toFixed(2)}, one per event from ${pool.length} qualifying${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}${cancelledSiblings.length ? `; withdrew ${cancelledSiblings.length} resting bid(s) on events that already opened` : ""}`
     : `no candidate cleared the ${(MIN_PROBABILITY * 100).toFixed(1)}% bar for a resting bid at ${FIXED_ENTRY_PRICE.toFixed(2)}`;
 
@@ -2488,6 +2503,8 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
     fixedEntry: {
       entryPrice: FIXED_ENTRY_PRICE,
       maxOrders: FIXED_ENTRY_MAX_ORDERS,
+      alreadyResting,
+      remainingSlots,
       stakePerOrderUsdc: FIXED_ENTRY_STAKE_USDC,
       considered: checked.length,
       qualified: pool.length,
