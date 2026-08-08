@@ -347,8 +347,12 @@ function normalizePosition(position, generatedAt) {
   const endDateCorrection = correctedEndDate(question, rawEndDate, position.createdAt ?? position.timestamp ?? generatedAt, position);
   const endDate = endDateCorrection.endDate;
   const endTime = Date.parse(endDate || "");
+  // Signed. This is reported as the row's days-left, so a market whose resolution date
+  // has passed must read as overdue rather than as a day of runway. Nothing here
+  // computes with it -- every annualization downstream applies its own
+  // MIN_ANNUALIZATION_DAYS floor, so no other figure moves.
   const daysToResolution = Number.isFinite(endTime)
-    ? Math.max(1, (endTime - Date.now()) / OPEN_ORDER_FALLBACK_HORIZON_MS)
+    ? (endTime - Date.now()) / OPEN_ORDER_FALLBACK_HORIZON_MS
     : null;
   const redeemable = Boolean(position.redeemable ?? position.claimable ?? position.canRedeem ?? position.conditionRedeemable ?? false);
   const resolved = Boolean(position.resolved ?? position.isResolved ?? position.closed ?? false);
@@ -1340,9 +1344,11 @@ function openOrderMarketDates(market = {}, order = {}, generatedAt = new Date().
     endDateSource,
     scheduledEventDate: dateContext.scheduledEventDate || scheduledEventDate || null,
     resolutionEndDate: dateContext.resolutionEndDate || resolutionEndDate || null,
-    // Annualized returns intentionally use the same conservative one-day
-    // minimum as portfolio candidate selection.
-    daysToResolution: Math.max(1, Number.isFinite(remainingDays) ? remainingDays : 1),
+    // Signed, for the same reason as the position row above: this is the value the
+    // order's days-left is rendered from. The one-day minimum the annualized returns
+    // want is applied where those are calculated, not baked into the reported horizon --
+    // clamping it here made every expired order read "1.0 d left".
+    daysToResolution: Number.isFinite(remainingDays) ? remainingDays : null,
   };
 }
 

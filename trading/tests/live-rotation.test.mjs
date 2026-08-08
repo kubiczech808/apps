@@ -1906,3 +1906,88 @@ test("live cash: an accepted order with no id falls back to its token", () => {
   const history = { runLog: [{ attempts: [{ tokenId: "999", response: { success: true } }] }] };
   assert.equal(api.availableLiveCashUsdc(liveState, 20, history), 8);
 });
+
+// Asked for: a resolution date in the past must report the real negative horizon, not the
+// default 1.0 d -- and without moving any figure computed from it. The clamp lived in the
+// account sync, which stamps the horizon onto every position and open order, so an
+// expired order read "1.0 d left" however long ago it had ended.
+test("days left: an expired horizon is reported signed, and moves nothing else", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [sync, app] = await Promise.all([
+    readFile(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+  ]);
+
+  // Both places the sync stamps a horizon: the position row and the open-order row.
+  assert.ok(!/Math\.max\(1, \(endTime - Date\.now\(\)\) \/ OPEN_ORDER_FALLBACK_HORIZON_MS\)/.test(sync),
+    "the position horizon must not be floored at a day");
+  assert.ok(!/daysToResolution: Math\.max\(1, Number\.isFinite\(remainingDays\)/.test(sync),
+    "nor the open-order horizon");
+  assert.match(sync, /\? \(endTime - Date\.now\(\)\) \/ OPEN_ORDER_FALLBACK_HORIZON_MS/);
+  assert.match(sync, /daysToResolution: Number\.isFinite\(remainingDays\) \? remainingDays : null,/);
+  // Nothing in the sync computes with it, so there is nothing there to move.
+  assert.ok(!/365 \//.test(sync), "the account sync must not annualize");
+
+  const horizon = 24 * 60 * 60 * 1000;
+  const pick = (src, name) => {
+    const start = src.indexOf(`function ${name}(`);
+    const bodyStart = src.indexOf(") {\n", start);
+    let depth = 0;
+    for (let i = bodyStart + 2; i < src.length; i += 1) {
+      if (src[i] === "{") depth += 1;
+      else if (src[i] === "}") {
+        depth -= 1;
+        if (!depth) return src.slice(start, i + 1);
+      }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const view = new Function("MIN_ANNUALIZATION_DAYS", `
+    ${pick(app, "compactDays")}
+    ${pick(app, "annualizationDays")}
+    ${pick(app, "annualizeReturn")}
+    return { compactDays, annualizeReturn };
+  `)(1 / 24);
+  const stored = (hoursPast) => -hoursPast / 24;
+
+  // What the row reports now, against what it used to.
+  assert.equal(view.compactDays(stored(2)), "-2.0 h");
+  assert.equal(view.compactDays(stored(26)), "-1.1 d");
+  assert.equal(view.compactDays(stored(96)), "-4.0 d");
+  // A future horizon is untouched.
+  assert.equal(view.compactDays(stored(-24)), "1.0 d");
+  assert.equal(view.compactDays(stored(-1)), "1.0 h");
+
+  // And the returns computed from it do not move: every annualization floors a
+  // non-positive horizon itself, so the signed value and the old clamped one agree.
+  for (const hoursPast of [2, 26, 96]) {
+    const signed = stored(hoursPast);
+    assert.equal(view.annualizeReturn(0.1, signed), view.annualizeReturn(0.1, Math.max(0, signed)),
+      `p.a. must not move at ${hoursPast}h past the end date`);
+  }
+  assert.match(app, /return Math\.max\(MIN_ANNUALIZATION_DAYS, days\);/, "the floor stays where the maths is");
+});
+
+test("days left: an unparseable end date is unknown, not the most urgent row", async () => {
+  const executor = await import("../tools/live-order-executor.mjs");
+
+  // The sync now stores null where it used to store a floored 1, and `Number(null)` is 0.
+  // Read straight, that would make a row whose end date could not be parsed the most
+  // urgent thing on the book. It reads as unknown instead.
+  assert.equal(executor.daysValue({ daysToResolution: null }), Infinity);
+  assert.equal(executor.daysValue({ daysToResolution: undefined }), Infinity);
+  assert.equal(executor.daysValue({}), Infinity);
+  // A real horizon, including an overdue one, is still itself.
+  assert.equal(executor.daysValue({ daysToResolution: 0.5 }), 0.5);
+  assert.equal(executor.daysValue({ daysToResolution: -1.1 }), -1.1);
+
+  // The comparator treats an unknown horizon as a tie rather than ordering against it --
+  // its guard against Infinity - Infinity returns 0 whenever either side is unknown. That
+  // is pre-existing and deliberately left alone; what matters here is that an unknown row
+  // no longer claims to be the most urgent, which a stored 0 did.
+  const shorter = executor.compareShorterHorizon;
+  assert.equal(shorter({ daysToResolution: 0.5 }, { daysToResolution: null }), 0);
+  assert.ok(shorter({ daysToResolution: -1.1 }, { daysToResolution: 0.5 }) < 0,
+    "an overdue market really is the most urgent, and still sorts that way");
+  assert.ok(shorter({ daysToResolution: 0.5 }, { daysToResolution: 3 }) < 0);
+});

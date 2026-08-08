@@ -922,7 +922,10 @@ async function hydrateLiveOpenOrderMetadata(liveState) {
         endDateSource: dates.endDateSource || order.endDateSource || null,
         scheduledEventDate: dates.scheduledEventDate || order.scheduledEventDate || null,
         resolutionEndDate: dates.resolutionEndDate || order.resolutionEndDate || null,
-        daysToResolution: daysToEnd(dates.endDate || order.endDate) ?? Math.max(1, number(order.daysToResolution, 1)),
+        // The fallback is for a date that cannot be parsed at all. It must not clamp a
+        // stored horizon that is legitimately negative, or an expired order would come
+        // back as a day of runway the moment its date went missing.
+        daysToResolution: daysToEnd(dates.endDate || order.endDate) ?? number(order.daysToResolution, null),
         marketMetadataSource: "gamma-clob-token",
       };
     } catch {
@@ -1033,6 +1036,10 @@ function availableLiveCashUsdc(liveState, grossCash = liveCashUsdc(liveState), e
 }
 
 function daysValue(item) {
+  // An absent horizon is unknown, not zero. `Number(null)` is 0, so reading it straight
+  // would sort a row whose end date could not be parsed ahead of everything as the most
+  // urgent thing on the book -- the opposite of what the Infinity fallback intends.
+  if (item?.daysToResolution == null) return Infinity;
   const days = Number(item.daysToResolution);
   return Number.isFinite(days) ? days : Infinity;
 }
@@ -4322,6 +4329,8 @@ if (invokedDirectly) {
 
 // Exported for tests only.
 export {
+  compareShorterHorizon,
+  daysValue,
   MIN_ORDER_STAKE_CEILING_USDC,
   consoleDecisionSummary,
   annualizeReturn,
