@@ -3606,3 +3606,70 @@ test("5050 run log: the merge publishes a superset, never less", async () => {
   assert.match(source, /Live execution history merge failed/);
   assert.match(source, /process\.exit\(1\);/);
 });
+
+// Asked for: scrape sports and esports automatically, as often as the schedule allows.
+// Five minutes is the floor -- GitHub does not run a scheduled workflow more often --
+// and measured over seven hours of this repo's own scheduled runs it does not reliably
+// manage even the ten minutes it was asked for: median gap 10 min, mean 14, worst 47.
+// So two entries offset by five, each naming one tag, and no assumption that every tick
+// arrives.
+test("scheduled scan: sports and esports alternate on the tightest cadence available", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const scan = await readFile(new URL("../../.github/workflows/trading-market-scan.yml", import.meta.url), "utf8");
+
+  const crons = [...scan.matchAll(/^ {4}- cron: '([^']+)'$/gm)].map((match) => match[1]);
+  assert.equal(crons.length, 2, `expected two schedule entries, got ${JSON.stringify(crons)}`);
+  const minutesOf = (cron) => cron.split(" ")[0].split(",").map(Number);
+  const [first, second] = crons.map(minutesOf);
+  assert.equal(first.length, 6, "one entry every ten minutes");
+  assert.equal(second.length, 6);
+  // Together they fire every five minutes, and never at the same minute.
+  const all = [...first, ...second].sort((a, b) => a - b);
+  assert.deepEqual(all, [2, 7, 12, 17, 22, 27, 32, 37, 42, 47, 52, 57]);
+  assert.equal(new Set(all).size, all.length, "the two entries must not collide");
+  for (let i = 1; i < all.length; i += 1) {
+    assert.equal(all[i] - all[i - 1], 5, "five minutes apart is the floor GitHub allows");
+  }
+
+  // The tag is chosen from which entry fired, so the expression has to name the very
+  // string one of the cron entries carries -- edit one without the other and every
+  // scheduled run would silently scan the same tag.
+  const chooser = /PAPER_MARKET_SCAN_TAG: \$\{\{ inputs\.market_scan_tag \|\| \(github\.event\.schedule == '([^']+)' && 'esports' \|\| \(github\.event\.schedule && 'sports' \|\| ''\)\) \}\}/.exec(scan);
+  assert.ok(chooser, "the scheduled tag chooser must be present");
+  assert.ok(crons.includes(chooser[1]), `the chooser names ${chooser[1]}, which is not one of ${JSON.stringify(crons)}`);
+});
+
+test("scheduled scan: a scheduled pass stays small and does not fan out", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [scan, bot] = await Promise.all([
+    readFile(new URL("../../.github/workflows/trading-market-scan.yml", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8"),
+  ]);
+
+  // The filters the opportunities page was already scanning with, applied only to
+  // scheduled runs so a dispatch still scans exactly what the page asked for.
+  assert.match(scan, /PAPER_MARKET_SCAN_LIQUIDITY_MIN: \$\{\{ inputs\.market_scan_liquidity_min \|\| \(github\.event\.schedule && '40000' \|\| '0'\) \}\}/);
+  assert.match(scan, /PAPER_MARKET_SCAN_MAX_DAYS: \$\{\{ inputs\.market_scan_max_days \|\| \(github\.event\.schedule && '2' \|\| '-1'\) \}\}/);
+
+  // Only a dispatch is manual; the scraping log flags them and a scheduled pass must not
+  // claim to be one.
+  assert.match(scan, /PAPER_MARKET_SCAN_TRIGGER: \$\{\{ github\.event_name == 'workflow_dispatch' && 'MANUAL' \|\| 'AUTO' \}\}/);
+
+  // The post-scrape dispatch fires an execution at every portfolio set to run after a
+  // scrape. On a five-minute schedule that would queue the live executor against one
+  // self-hosted runner every five minutes -- a backlog already measured at 17 minutes.
+  assert.match(scan, /- name: Dispatch post-scrape execution\n\s+if: success\(\) && github\.event_name == 'workflow_dispatch'/);
+
+  // And the paper bot must stop taking its rotation slot for these two tags, or they are
+  // scanned twice and the other 22 scopes only advance on the ticks left over.
+  assert.match(bot, /PAPER_MARKET_SCAN_HOURLY_INTERVAL_MINUTES: "0"/);
+  assert.equal(bot.match(/PAPER_MARKET_SCAN_HOURLY_INTERVAL_MINUTES/g).length, 1);
+
+  // Zero is what disables it; the executor must still read it that way.
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(source, /if \(MARKET_SCAN_HOURLY_INTERVAL_MINUTES <= 0\) return null;/);
+
+  // Both scanners still write one paper-state.json, so they must stay serialized.
+  assert.match(scan, /group: trading-paper-bot/);
+  assert.match(bot, /group: trading-paper-bot/);
+});

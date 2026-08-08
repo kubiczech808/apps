@@ -239,6 +239,11 @@ jobs:
       # drops most scheduled ticks, and `7 * * * *` is one tick out of eight per
       # hour, so the portfolios stood still while the `*/10` scans kept running.
       PAPER_SCHEDULED_CADENCE: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
+      # Sports and esports have their own five-minute schedule in trading-market-scan.yml
+      # now, so the guaranteed slot they used to take here is off. It would scan them a
+      # second time and, worse, spend this rotation's slot doing it -- the other 22 scopes
+      # only advance when a tick is not borrowed.
+      PAPER_MARKET_SCAN_HOURLY_INTERVAL_MINUTES: "0"
       PAPER_FULL_CADENCE_MINUTES: "55"
       PAPER_REPORT_CADENCE_MINUTES: "55"
       PAPER_REFRESH_MARKET_SLUG: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'refresh' && inputs.paper_strategy_id || '' }}

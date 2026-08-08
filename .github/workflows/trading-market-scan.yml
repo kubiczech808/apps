@@ -1,6 +1,17 @@
 name: Trading Market Scan
 
 on:
+  # Sports and esports carry the short-dated fixtures both live portfolios trade, so they
+  # are scanned on their own schedule rather than waiting for the 24-scope rotation to
+  # come round. Five minutes apart is the floor: GitHub does not run a scheduled workflow
+  # more often than every five minutes, and measured over seven hours it does not reliably
+  # manage even that -- a */10 schedule delivered with a median gap of 10 minutes, a mean
+  # of 14 and a worst case of 47. Two entries offset by five give each tag a pass roughly
+  # every ten minutes and, more to the point, more chances that an overdue one is picked
+  # up. The tag is chosen from which entry fired.
+  schedule:
+    - cron: '2,12,22,32,42,52 * * * *'
+    - cron: '7,17,27,37,47,57 * * * *'
   workflow_dispatch:
     inputs:
       market_scan_tag:
@@ -58,10 +69,17 @@ jobs:
       PAPER_MARKET_SCAN_HISTORY_LIMIT: "20"
       PAPER_MARKET_SCAN_AUDIT_HISTORY_LIMIT: "3"
       PAPER_MARKET_SCAN_DIVERSITY_LIQUIDITY_USDC: "40000"
-      PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || '' }}
-      PAPER_MARKET_SCAN_LIQUIDITY_MIN: ${{ inputs.market_scan_liquidity_min || '0' }}
-      PAPER_MARKET_SCAN_MAX_DAYS: ${{ inputs.market_scan_max_days || '-1' }}
-      PAPER_MARKET_SCAN_TRIGGER: "MANUAL"
+      # A dispatch says which tag it wants; a scheduled run alternates the two by which
+      # cron entry fired.
+      PAPER_MARKET_SCAN_TAG: ${{ inputs.market_scan_tag || (github.event.schedule == '7,17,27,37,47,57 * * * *' && 'esports' || (github.event.schedule && 'sports' || '')) }}
+      # The filters the opportunities page was already being scanned with. They keep a
+      # scheduled pass small enough to finish inside its own cadence: short-dated fixtures
+      # with real liquidity are what these two tags are scanned for.
+      PAPER_MARKET_SCAN_LIQUIDITY_MIN: ${{ inputs.market_scan_liquidity_min || (github.event.schedule && '40000' || '0') }}
+      PAPER_MARKET_SCAN_MAX_DAYS: ${{ inputs.market_scan_max_days || (github.event.schedule && '2' || '-1') }}
+      # Only a dispatch is manual. The scraping log flags them, so a scheduled pass must
+      # not claim to be one.
+      PAPER_MARKET_SCAN_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && 'MANUAL' || 'AUTO' }}
       PAPER_MAX_RESOLUTION_DAYS: "7"
       PAPER_SCAN_ONLY: "true"
       PAPER_REQUIRE_GEMINI: "false"
@@ -157,8 +175,13 @@ jobs:
           fi
           echo "Market scan completed without errors."
 
+      # Only after a scan someone asked for. On the schedule this would fire an execution
+      # every five minutes at the portfolios set to run after each scrape, and the live
+      # executor shares one self-hosted runner -- a queue that was measured backing up by
+      # seventeen minutes. The scheduled scan feeds the catalogue; the portfolios keep
+      # their own cadences.
       - name: Dispatch post-scrape execution
-        if: success()
+        if: success() && github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
