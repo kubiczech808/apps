@@ -2478,7 +2478,8 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
   // the visible list disagreed with what the run would do.
   const branch = /if \(isFixedEntryMode\(mode\)\) \{[\s\S]*?return reasons;\n  \}/.exec(app)[0];
   const run = new Function("item", "config", "mode", "deps", `
-    const {isFixedEntryMode,normalizeFixedEntryPrice,probability,money,compactDays}=deps;
+    const {isFixedEntryMode,normalizeFixedEntryPrice,probability,money,compactDays,
+      normalizeAllowedMarketTags,marketMatchesAllowedTags}=deps;
     const reasons=[];
     const liquidity=Number(item.volumeUsdc||0), minLiquidity=Number(config.minLiquidityUsdc);
     const days=Number(item.daysToResolution), maxDays=Number(config.maxResolutionDays);
@@ -2490,6 +2491,9 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
     probability: (v) => `${(v * 100).toFixed(1)}%`,
     money: (v) => `$${Number(v).toFixed(0)}`,
     compactDays: (d) => `${d} d`,
+    // The tag restriction is covered by its own test; here it must not interfere.
+    normalizeAllowedMarketTags: (value) => (Array.isArray(value) ? value : []),
+    marketMatchesAllowedTags: () => true,
   };
   const config = { fixedEntryPrice: 0.5, minLiquidityUsdc: 100, maxResolutionDays: 30 };
   const reasons = (item) => run(item, config, "live-5050", deps);
@@ -3353,4 +3357,102 @@ test("live revalidation: the verdicts are written where the rows actually live",
   assert.match(workflow, /item\["status"\] = "CLOSED"/);
   const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
   assert.match(api, /in_array\(\$status, \['RESOLVED', 'CLOSED', 'EXPIRED', 'FINALIZED', 'SETTLED'\], true\)/);
+});
+
+// Asked for: restrict which tags the 5050 logic may be applied to, defaulting to sports
+// and esports. The shortlist and the run have to agree on it, or the tab would list
+// candidates the executor then refuses -- which is the failure mode this desk keeps
+// running into whenever the two sides filter differently.
+test("5050 tags: the setting defaults to sports and esports and reaches the executor", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [api, workflow, executor, html] = await Promise.all([
+    readFile(new URL("../api.php", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(api, /'allowedMarketTags' => \['sports', 'esports'\],/, "the requested default");
+  // Absent keeps the default; an explicitly empty list must clear the restriction, or it
+  // could only ever be narrowed once set.
+  assert.match(api, /array_key_exists\('allowedMarketTags', \$fixedInput\)/);
+  assert.match(api, /\? normalize_allowed_market_tags\(\$fixedInput\['allowedMarketTags'\]\)/);
+
+  // The saved value has to survive the trip: an empty list is a real setting and must be
+  // written to the environment rather than skipped as "unset".
+  assert.match(workflow, /"LIVE_FIXED_ENTRY_ALLOWED_TAGS": ",".join\(/);
+  assert.match(workflow, /always_write = \{"LIVE_FIXED_ENTRY_ALLOWED_TAGS"\}/);
+  assert.match(workflow, /if value is None or \(value == "" and key not in always_write\):/);
+  assert.match(workflow, /LIVE_FIXED_ENTRY_ALLOWED_TAGS: "sports,esports"/, "and a fallback if the config cannot be read");
+
+  // The executor rejects an off-tag market before anything that costs a request.
+  assert.match(executor, /const FIXED_ENTRY_ALLOWED_TAGS = new Set\(/);
+  assert.match(executor, /if \(!marketTagIsAllowed\(row\)\) \{\n\s+note\(`outside this portfolio's tags/);
+  // And it is editable, with the tag row shown only on the 5050 tab.
+  assert.match(html, /<input type="text" placeholder="sports, esports" data-fixed-entry-tags>/);
+  assert.match(html, /data-fixed-entry-row title="Comma separated Polymarket tags/);
+});
+
+test("5050 tags: the shortlist and the run agree on which markets qualify", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const pick = (src, name) => {
+    const start = src.indexOf(`function ${name}(`);
+    if (start < 0) throw new Error(`missing ${name}`);
+    const bodyStart = src.indexOf(") {\n", start);
+    let depth = 0;
+    for (let i = bodyStart + 2; i < src.length; i += 1) {
+      if (src[i] === "{") depth += 1;
+      else if (src[i] === "}") {
+        depth -= 1;
+        if (!depth) return src.slice(start, i + 1);
+      }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+
+  const dashboard = new Function(`
+    ${pick(app, "normalizedScrapedScanTag")}
+    ${pick(app, "normalizeAllowedMarketTags")}
+    ${pick(app, "marketTagSlugsOf")}
+    ${pick(app, "marketMatchesAllowedTags")}
+    return { normalizeAllowedMarketTags, marketMatchesAllowedTags };
+  `)();
+  const executorFor = (envValue) => {
+    const declaration = /const FIXED_ENTRY_ALLOWED_TAGS = new Set\([\s\S]*?\n\);/.exec(executor)[0];
+    return new Function("process", `
+      ${declaration}
+      ${pick(executor, "marketTagSlugs")}
+      ${pick(executor, "marketTagIsAllowed")}
+      return { marketTagIsAllowed, tags: [...FIXED_ENTRY_ALLOWED_TAGS] };
+    `)({ env: { LIVE_FIXED_ENTRY_ALLOWED_TAGS: envValue } });
+  };
+
+  const allowed = dashboard.normalizeAllowedMarketTags(["Sports", "esports", "esports", " "]);
+  assert.deepEqual(allowed, ["sports", "esports"], "typed input is slugged and de-duplicated");
+  const run = executorFor(allowed.join(","));
+  assert.deepEqual(run.tags, ["sports", "esports"], "and the executor reads the same set");
+
+  // Gamma hands tags back as plain strings and as {label,slug} objects, and a market
+  // carries them under different fields depending on which pass recorded it.
+  const cases = [
+    [{ polymarketTags: ["esports", "counter-strike"] }, true],
+    [{ tags: [{ slug: "sports" }, { label: "EPL" }] }, true],
+    [{ firstTags: ["sports"] }, true],
+    [{ riskCategory: "Sports" }, true],
+    [{ polymarketTags: ["politics", "elections"] }, false],
+    [{}, false],
+  ];
+  for (const [row, expected] of cases) {
+    assert.equal(dashboard.marketMatchesAllowedTags(row, allowed), expected, `shortlist: ${JSON.stringify(row)}`);
+    assert.equal(run.marketTagIsAllowed(row), expected, `run: ${JSON.stringify(row)}`);
+  }
+
+  // Cleared means every tag, on both sides -- including a market carrying no tags.
+  const unrestricted = executorFor("");
+  for (const [row] of cases) {
+    assert.equal(dashboard.marketMatchesAllowedTags(row, []), true);
+    assert.equal(unrestricted.marketTagIsAllowed(row), true);
+  }
 });

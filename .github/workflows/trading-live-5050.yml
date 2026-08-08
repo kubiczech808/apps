@@ -75,7 +75,10 @@ jobs:
       LIVE_AUTO_ROTATE: "false"
       # A scheduled run must be able to be switched off; only a dispatch is manual.
       LIVE_RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && 'MANUAL' || 'AUTO' }}
-      # A wide scan is the point: many candidates, one bid each.
+      # A wide scan is the point: many candidates, one bid each -- but only across the
+      # tags the portfolio is allowed to trade. Overwritten by the saved setting below;
+      # this is the fallback when the config cannot be read.
+      LIVE_FIXED_ENTRY_ALLOWED_TAGS: "sports,esports"
       LIVE_CANDIDATE_SCAN_LIMIT: "300"
       LIVE_MAX_RESOLUTION_DAYS: "30"
       LIVE_MIN_ANNUAL_RETURN: "0"
@@ -128,6 +131,13 @@ jobs:
               "LIVE_MIN_PROBABILITY": cfg.get("minProbability"),
               "LIVE_MAX_RESOLUTION_DAYS": cfg.get("maxResolutionDays"),
               "LIVE_CONFIG_MIN_LIQUIDITY_USDC": cfg.get("minLiquidityUsdc"),
+              # Which Polymarket tags this portfolio may bid on. A saved empty list means
+              # every tag, and has to reach the executor as an empty string rather than
+              # being dropped as "unset" -- otherwise the restriction could never be
+              # lifted once it had been set.
+              "LIVE_FIXED_ENTRY_ALLOWED_TAGS": ",".join(
+                  str(tag) for tag in (cfg.get("allowedMarketTags") or []) if str(tag).strip()
+              ) if isinstance(cfg.get("allowedMarketTags"), list) else None,
               # The portfolio's own cadence, so a scheduled run honours the interval
               # set in its parameters rather than firing on every poll.
               "LIVE_EXECUTION_CRON_MINUTES": cfg.get("executionCronMinutes"),
@@ -145,9 +155,12 @@ jobs:
           if cfg.get("automationEnabled") is False and os.environ.get("GITHUB_EVENT_NAME") == "schedule":
               overrides["LIVE_AUTOMATION_ENABLED"] = "false"
 
+          # An empty allow-list is a real setting -- every tag -- so it is written even
+          # though it is empty, unlike a value the config simply did not carry.
+          always_write = {"LIVE_FIXED_ENTRY_ALLOWED_TAGS"}
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
               for key, value in overrides.items():
-                  if value is None or value == "":
+                  if value is None or (value == "" and key not in always_write):
                       continue
                   print(f"{key}={value}")
                   handle.write(f"{key}={value}\n")

@@ -735,6 +735,9 @@ function default_portfolio_config(): array
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'polymarket',
             'automationEnabled' => false,
+            // Sports and esports are where the short-dated, high-probability fixtures
+            // this strategy rests bids against actually live. Empty means every tag.
+            'allowedMarketTags' => ['sports', 'esports'],
             'excludedCandidateTokenIds' => [],
         ],
         'system' => [
@@ -882,6 +885,33 @@ function normalize_execution_trigger_value(mixed $value): string
     return $value === 'after_scrape' ? 'after_scrape' : 'cron';
 }
 
+// Which Polymarket tags 5050 may bid on. An empty list means every tag, so the setting can
+// be cleared rather than only narrowed. Slugs are normalized the way the dashboard's tag
+// picker normalizes them, or a tag typed with a capital or a space would never match the
+// tags stored on a market.
+function normalize_allowed_market_tags(mixed $value): array
+{
+    if (is_string($value)) {
+        $value = preg_split('/[,\s]+/', $value) ?: [];
+    }
+    if (!is_array($value)) {
+        return [];
+    }
+    $tags = [];
+    foreach ($value as $candidate) {
+        $tag = strtolower(trim((string) $candidate));
+        $tag = trim((string) preg_replace('/[^a-z0-9_-]+/', '-', $tag), '-');
+        if ($tag === '' || isset($tags[$tag])) {
+            continue;
+        }
+        $tags[$tag] = true;
+        if (count($tags) >= 40) {
+            break;
+        }
+    }
+    return array_keys($tags);
+}
+
 function normalize_excluded_candidate_token_ids(mixed $value): array
 {
     if (!is_array($value)) {
@@ -951,6 +981,11 @@ function normalize_portfolio_config(array $input): array
         : (float) $defaults['live5050']['fixedEntryPrice'];
     $stake = $fixedInput['stakePerOrderUsdc'] ?? null;
     $config['live5050']['stakePerOrderUsdc'] = is_numeric($stake) && (float) $stake > 0 ? round((float) $stake, 2) : null;
+    // Absent keeps the default; an explicitly empty list means every tag, so the
+    // restriction can be lifted and not only narrowed.
+    $config['live5050']['allowedMarketTags'] = array_key_exists('allowedMarketTags', $fixedInput)
+        ? normalize_allowed_market_tags($fixedInput['allowedMarketTags'])
+        : $defaults['live5050']['allowedMarketTags'];
     $config['system'] = [
         'crossLivePortfolioRiskDiversification' => (bool) ($systemInput['crossLivePortfolioRiskDiversification'] ?? $defaults['system']['crossLivePortfolioRiskDiversification']),
     ];

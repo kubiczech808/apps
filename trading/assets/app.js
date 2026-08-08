@@ -216,6 +216,8 @@ const els = {
   fixedEntryRows: document.querySelectorAll("[data-fixed-entry-row]"),
   fixedEntryPrice: document.querySelector("[data-fixed-entry-price]"),
   fixedEntryPriceLabel: document.querySelector("[data-fixed-entry-price-label]"),
+  fixedEntryTags: document.querySelector("[data-fixed-entry-tags]"),
+  fixedEntryTagsLabel: document.querySelector("[data-fixed-entry-tags-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
@@ -550,6 +552,48 @@ function normalizeFixedEntryPrice(value) {
   const price = Number(value);
   if (!Number.isFinite(price) || price <= 0 || price >= 1) return 0.5;
   return Number(price.toFixed(2));
+}
+
+// Which Polymarket tags 5050 may bid on. Empty means every tag, so the restriction can be
+// cleared and not only narrowed. Accepts a saved list or a typed comma/space separated
+// string, and normalizes to slugs the same way the tag picker does -- a tag entered as
+// "E-Sports" has to match the `esports` a market actually carries.
+function normalizeAllowedMarketTags(value) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value ?? "").split(/[,\s]+/);
+  const tags = [];
+  for (const raw of source) {
+    const tag = normalizedScrapedScanTag(raw);
+    if (tag && !tags.includes(tag)) tags.push(tag);
+    if (tags.length >= 40) break;
+  }
+  return tags;
+}
+
+// Gamma returns tags both as plain strings and as {label,slug} objects, and a market
+// carries them under more than one field depending on which pass recorded it.
+function marketTagSlugsOf(item = {}) {
+  const slugs = new Set();
+  for (const list of [item.polymarketTags, item.tags, item.firstTags]) {
+    for (const raw of (Array.isArray(list) ? list : [])) {
+      const tag = normalizedScrapedScanTag(
+        raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : raw,
+      );
+      if (tag) slugs.add(tag);
+    }
+  }
+  for (const key of [item.riskCategory, item.category]) {
+    const tag = normalizedScrapedScanTag(key);
+    if (tag) slugs.add(tag);
+  }
+  return slugs;
+}
+
+function marketMatchesAllowedTags(item, allowedTags = []) {
+  if (!allowedTags.length) return true;
+  const slugs = marketTagSlugsOf(item);
+  return allowedTags.some((tag) => slugs.has(tag));
 }
 
 function automationIsEnabled(config = {}) {
@@ -2950,6 +2994,12 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const fixedEntryPrice = normalizeFixedEntryPrice(config.fixedEntryPrice);
   if (els.fixedEntryPrice) els.fixedEntryPrice.value = String(Math.round(fixedEntryPrice * 100));
   if (els.fixedEntryPriceLabel) els.fixedEntryPriceLabel.textContent = percent(fixedEntryPrice);
+  const allowedTags = normalizeAllowedMarketTags(config.allowedMarketTags);
+  // Not overwritten while it has focus, or normalizing would fight the typing.
+  if (els.fixedEntryTags && document.activeElement !== els.fixedEntryTags) {
+    els.fixedEntryTags.value = allowedTags.join(", ");
+  }
+  if (els.fixedEntryTagsLabel) els.fixedEntryTagsLabel.textContent = allowedTags.length ? allowedTags.join(", ") : "every tag";
   // These steer only the fixed-entry strategy, so they are meaningless anywhere else.
   els.fixedEntryRows?.forEach((row) => row.toggleAttribute("hidden", !isFixedEntryMode()));
   if (els.mostProbableOutcome) {
@@ -5052,6 +5102,7 @@ function livePortfolioRuleRows() {
       : executionTriggerLabel(config.executionTrigger)],
     ...(isFixedEntryMode() ? [
       ["Order price", `every qualifying candidate is bid at ${percent(normalizeFixedEntryPrice(config.fixedEntryPrice))}`],
+      ["Tag filter", normalizeAllowedMarketTags(config.allowedMarketTags).join(", ") || "every tag"],
     ] : []),
     ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
@@ -5266,6 +5317,10 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   // executor applies -- so the shortlist and the run agree on who qualifies.
   if (isFixedEntryMode(mode)) {
     const entryPrice = normalizeFixedEntryPrice(config.fixedEntryPrice);
+    const allowedTags = normalizeAllowedMarketTags(config.allowedMarketTags);
+    if (allowedTags.length && !marketMatchesAllowedTags(item, allowedTags)) {
+      reasons.push(`outside this portfolio's tags (${allowedTags.join(", ")})`);
+    }
     const ask = Number(item.bestAsk ?? item.marketPrice ?? item.marketProbability);
     if (Number.isFinite(ask) && ask <= entryPrice) {
       reasons.push(`already asks ${probability(ask)}, at or below the ${probability(entryPrice)} entry price`);
@@ -8464,6 +8519,15 @@ els.executionCronMinutes?.addEventListener("change", () => {
   const value = normalizeExecutionCronMinutes(els.executionCronMinutes.value);
   if (updateParameterDraft({ executionCronMinutes: value })) return;
   updatePortfolioConfigForMode(state.mode, { executionCronMinutes: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.fixedEntryTags?.addEventListener("change", () => {
+  const value = normalizeAllowedMarketTags(els.fixedEntryTags.value);
+  if (updateParameterDraft({ allowedMarketTags: value })) return;
+  updatePortfolioConfigForMode(state.mode, { allowedMarketTags: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

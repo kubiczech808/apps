@@ -360,6 +360,11 @@
           <input type="number" min="1" max="99" step="1" value="50" data-fixed-entry-price>
           <strong data-fixed-entry-price-label>50%</strong>
         </label>
+        <label class="parameter-control" data-fixed-entry-row title="Comma separated Polymarket tags this portfolio may bid on. Leave empty for every tag.">
+          <span>Tags (5050)</span>
+          <input type="text" placeholder="sports, esports" data-fixed-entry-tags>
+          <strong data-fixed-entry-tags-label>sports, esports</strong>
+        </label>
         <label class="parameter-control" data-execution-cron-row>
           <span>Run the cron every</span>
           <select data-execution-cron-minutes>
@@ -391,6 +396,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260808-fill-attribution"></script>
+  <script src="assets/app.js?v=20260808-5050-tag-filter"></script>
 </body>
 </html>

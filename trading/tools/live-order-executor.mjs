@@ -95,6 +95,14 @@ const FIXED_ENTRY_STAKE_USDC = Math.max(0, envNumber("LIVE_FIXED_ENTRY_STAKE_USD
 // Timed from the start of the placement loop, which is the only part that grows with the
 // number of events; the setup around it is fixed cost.
 const FIXED_ENTRY_BUDGET_MS = Math.max(0, envNumber("LIVE_FIXED_ENTRY_BUDGET_MS", 40000) || 0);
+// Which Polymarket tags this strategy may bid on. Empty means every tag, so the setting
+// can be cleared and not only narrowed.
+const FIXED_ENTRY_ALLOWED_TAGS = new Set(
+  String(process.env.LIVE_FIXED_ENTRY_ALLOWED_TAGS || "")
+    .split(/[,\s]+/)
+    .map((tag) => tag.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter(Boolean),
+);
 const FIXED_ENTRY_PROGRESS_EVERY = Math.max(1, envNumber("LIVE_FIXED_ENTRY_PROGRESS_EVERY", 5) || 5);
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
@@ -2351,6 +2359,35 @@ function rotationLegMerge({ completionRun, previousState, exitEntry, runEntry, p
 // which says nothing about a bid resting at half of it. So read through to the
 // stored evaluation rather than treating an early return as a candidate with no
 // facts, which is what left a 300-candidate scan with nothing to bid on.
+// Gamma returns tags both as plain strings and as {label,slug} objects, and a market
+// carries them under more than one field depending on which pass recorded it.
+function marketTagSlugs(row = {}) {
+  const source = row.candidate || {};
+  const lists = [row.polymarketTags, row.tags, row.firstTags, source.polymarketTags, source.tags, source.firstTags];
+  const slugs = new Set();
+  for (const list of lists) {
+    for (const raw of (Array.isArray(list) ? list : [])) {
+      const text = String(raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : (raw ?? ""))
+        .trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+      if (text) slugs.add(text);
+    }
+  }
+  for (const key of [row.riskCategory, source.riskCategory, row.category, source.category]) {
+    const text = String(key || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+    if (text) slugs.add(text);
+  }
+  return slugs;
+}
+
+function marketTagIsAllowed(row = {}) {
+  if (!FIXED_ENTRY_ALLOWED_TAGS.size) return true;
+  const slugs = marketTagSlugs(row);
+  for (const tag of FIXED_ENTRY_ALLOWED_TAGS) {
+    if (slugs.has(tag)) return true;
+  }
+  return false;
+}
+
 function fixedEntryRowFacts(row = {}) {
   const source = row.candidate || {};
   const pick = (key) => (row[key] != null ? row[key] : source[key]);
@@ -2433,6 +2470,12 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
     }
     if (!facts.tokenId) {
       note("no token id");
+      continue;
+    }
+    // Checked before anything that costs a request: the portfolio is restricted to the
+    // tags it was told to trade, so a market outside them is not a candidate at all.
+    if (!marketTagIsAllowed(row)) {
+      note(`outside this portfolio's tags (${[...FIXED_ENTRY_ALLOWED_TAGS].join(", ")})`);
       continue;
     }
     if (restingTokenIds.has(facts.tokenId)) {
