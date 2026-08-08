@@ -6239,12 +6239,13 @@ function renderLiveState(liveState) {
   const marketValue = Number(portfolio.marketValueUsdc);
   const cash = Number(portfolio.cashUsdc);
   const openOrderRisk = openOrderRows.reduce((sum, order) => sum + Number(order.totalCostUsdc || order.stakeUsdc || 0), 0);
-  // Risk is this portfolio's own: what it has committed. Free cash is not -- there is
-  // one wallet, so every resting buy reserves collateral against the same balance,
-  // including the other portfolio's. Subtracting only this portfolio's orders
-  // reported cash as free that could not actually be spent.
+  // Both risk and free cash are this portfolio's own. There is one wallet, so the
+  // exchange does reserve collateral for the other portfolio's resting bids too -- but
+  // 5050 rests many at once, and counting those here reported the Live portfolio as
+  // having nothing to trade with while the account was otherwise idle. Each portfolio is
+  // now shown what its own commitments leave it, which is what its executor sizes from.
   const TERMINAL_ORDER_STATUSES = new Set(["CANCELED", "CANCELLED", "FILLED", "MATCHED", "EXPIRED"]);
-  const walletOrderRisk = (Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+  const reservedByOrders = (rows) => rows
     .filter((order) => !String(order.side || "").toUpperCase().includes("SELL"))
     // A cancelled or filled row still present in the snapshot reserves nothing.
     .filter((order) => !TERMINAL_ORDER_STATUSES.has(String(order.rawStatus || order.status || "").toUpperCase()))
@@ -6252,7 +6253,12 @@ function renderLiveState(liveState) {
       const reserved = Number(order.notionalUsdc ?? order.totalCostUsdc ?? order.stakeUsdc);
       return sum + (Number.isFinite(reserved) ? reserved : 0);
     }, 0);
-  const freeCash = Number.isFinite(cash) ? Math.max(0, cash - walletOrderRisk) : null;
+  const walletOrderRisk = reservedByOrders(Array.isArray(liveState?.openOrders) ? liveState.openOrders : []);
+  const ownOrderReservation = reservedByOrders(openOrderRows);
+  const freeCash = Number.isFinite(cash) ? Math.max(0, cash - ownOrderReservation) : null;
+  // What the rest of the wallet has locked, so the tile can say why the exchange may
+  // still refuse an order this figure says is affordable.
+  const otherPortfolioReservation = Math.max(0, walletOrderRisk - ownOrderReservation);
   // Positions carry wallet-wide risk in the account snapshot, so a per-portfolio view
   // has to add up its own rather than borrow that total.
   const ownPositionRisk = positions.reduce((sum, row) => {
@@ -6349,7 +6355,12 @@ function renderLiveState(liveState) {
   // with this portfolio's orders reported the other portfolio's positions as this
   // one's -- wrong on the Live tab and the 5050 tab alike, in opposite directions.
   els.portfolioRisk.textContent = money(ownPositionRisk + openOrderRisk);
-  els.portfolioFree.textContent = freeCash == null ? "cash not available" : `${money(freeCash)} free cash`;
+  // Naming the other portfolio's share keeps the figure honest: the exchange reserves
+  // for the whole wallet, so this much of it is spoken for even though this portfolio
+  // does not count it against itself.
+  els.portfolioFree.textContent = freeCash == null
+    ? "cash not available"
+    : `${money(freeCash)} free cash${otherPortfolioReservation > 0.01 ? ` (${money(otherPortfolioReservation)} locked by the other portfolio)` : ""}`;
   if (els.portfolioRr) {
     els.portfolioRr.textContent = riskReward(portfolioRiskReward);
     els.portfolioRr.className = riskRewardClass(portfolioRiskReward);

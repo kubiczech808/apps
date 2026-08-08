@@ -939,7 +939,9 @@ function liveCashUsdc(liveState) {
   return number(liveState?.portfolio?.equityUsdc, 0);
 }
 
-function activeBuyOrderReservationUsdc(liveState) {
+// `identity` narrows the sum to the orders this portfolio placed. Passing null keeps the
+// whole-wallet total, which is what the shared-account views want.
+function activeBuyOrderReservationUsdc(liveState, identity = null) {
   const terminalStatuses = new Set([
     "CANCELED",
     "CANCELLED",
@@ -958,6 +960,7 @@ function activeBuyOrderReservationUsdc(liveState) {
       if (side.includes("SELL")) return false;
       const status = String(order?.status || order?.rawStatus || "").toUpperCase();
       if (terminalStatuses.has(status)) return false;
+      if (identity && !orderWasSubmittedByThisPortfolio(order, identity)) return false;
       return number(order?.remainingSize ?? order?.originalSize ?? order?.size, 0) > 0.000001;
     })
     .reduce((sum, order) => {
@@ -969,10 +972,56 @@ function activeBuyOrderReservationUsdc(liveState) {
     }, 0);
 }
 
-function availableLiveCashUsdc(liveState, grossCash = liveCashUsdc(liveState)) {
-  // CLOB collateral is the account balance before the notional locked in
-  // pending BUY orders. A new order may only consume the remainder.
-  return Math.max(0, number(grossCash, 0) - activeBuyOrderReservationUsdc(liveState));
+// Which resting orders this portfolio put on the shared wallet. Every accepted
+// submission is in its own run log, so the exchange's order id is the exact key; the
+// token is the fallback for an accepted attempt whose response carried no id. Token
+// matching is deliberately not the primary key -- both live portfolios draw from one
+// candidate pool, so a token this portfolio once tried and had refused can be the very
+// token the other one is now resting a bid on.
+function ownSubmittedOrderIdentity(executionState) {
+  const orderIds = new Set();
+  const tokenIds = new Set();
+  const runs = [executionState, ...(Array.isArray(executionState?.runLog) ? executionState.runLog : [])];
+  for (const run of runs) {
+    for (const attempt of (Array.isArray(run?.attempts) ? run.attempts : [])) {
+      if (!successfulOrderResponse(attempt?.response)) continue;
+      const orderId = String(attempt?.response?.orderID || attempt?.response?.orderId || "").trim();
+      if (orderId) orderIds.add(orderId);
+      else {
+        const tokenId = String(attempt?.tokenId || "").trim();
+        if (tokenId) tokenIds.add(tokenId);
+      }
+    }
+  }
+  return { orderIds, tokenIds };
+}
+
+function orderWasSubmittedByThisPortfolio(order, identity) {
+  for (const key of [order?.id, order?.orderId, order?.orderID]) {
+    const value = String(key || "").trim();
+    if (value && identity.orderIds.has(value)) return true;
+  }
+  if (!identity.tokenIds.size) return false;
+  for (const key of [order?.tokenId, order?.assetId, order?.asset]) {
+    const value = String(key || "").trim();
+    if (value && identity.tokenIds.has(value)) return true;
+  }
+  return false;
+}
+
+function availableLiveCashUsdc(liveState, grossCash = liveCashUsdc(liveState), executionState = null) {
+  // CLOB collateral is the account balance before the notional locked in pending BUY
+  // orders -- but the two live portfolios share one wallet, and 5050 rests many bids at
+  // once. Counting those against this portfolio left it reading zero free cash and
+  // skipping every candidate while the account was otherwise idle. It now reserves
+  // against its own submissions only.
+  //
+  // The exchange still reserves for all of them: if the other portfolio really has the
+  // balance committed, a submission here comes back refused for collateral. That is an
+  // outcome this run already handles and counts, and it is the exchange's call to make
+  // rather than a reason to decline to ask.
+  const identity = executionState ? ownSubmittedOrderIdentity(executionState) : null;
+  return Math.max(0, number(grossCash, 0) - activeBuyOrderReservationUsdc(liveState, identity));
 }
 
 function daysValue(item) {
@@ -3535,8 +3584,14 @@ async function main() {
       : Promise.resolve(null),
   ]);
   const cash = liveCashUsdc(liveState);
+  // The wallet total is still reported, so the gap between what the account has locked
+  // and what this portfolio locked stays visible in the run.
   const reservedOpenOrderUsdc = activeBuyOrderReservationUsdc(liveState);
-  const availableCash = availableLiveCashUsdc(liveState, cash);
+  const ownReservedOpenOrderUsdc = activeBuyOrderReservationUsdc(
+    liveState,
+    ownSubmittedOrderIdentity(previousExecution),
+  );
+  const availableCash = availableLiveCashUsdc(liveState, cash, previousExecution);
   const tradingConfig = liveTradingConfig(liveState);
   const portfolioValue = livePortfolioValue(liveState, cash);
   const fractionNotional = portfolioValue * MAX_ORDER_FRACTION;
@@ -3732,7 +3787,10 @@ async function main() {
       funderAddress: tradingConfig.funderAddress,
       signatureType: tradingConfig.signatureType,
       cashUsdc: cash,
+      // Both, so a run makes plain that the wallet has more locked than this portfolio
+      // did -- the difference is the other live portfolio's resting bids.
       reservedOpenOrderUsdc: Number(reservedOpenOrderUsdc.toFixed(5)),
+      ownReservedOpenOrderUsdc: Number(ownReservedOpenOrderUsdc.toFixed(5)),
       availableCashUsdc: Number(availableCash.toFixed(5)),
       portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
       maxOrderFraction: MAX_ORDER_FRACTION,
@@ -3830,6 +3888,7 @@ async function main() {
         availableUsdc: availableCash,
         grossCashUsdc: cash,
         reservedOpenOrderUsdc: Number(reservedOpenOrderUsdc.toFixed(5)),
+        ownReservedOpenOrderUsdc: Number(ownReservedOpenOrderUsdc.toFixed(5)),
         portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
         targetStakeUsdc: maxNotional,
         requiredStakeUsdc: Number(appliedDirectStake.toFixed(5)),

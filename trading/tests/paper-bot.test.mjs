@@ -2657,31 +2657,33 @@ test("market scan: a manual scan finishes on the server, whatever the tab does",
   assert.ok(!/throw new Error\("Scan is still queued in the background/.test(app));
 });
 
-test("5050: risk is its own, free cash is the wallet's", async () => {
+test("live portfolios: each sizes from its own commitments, not the shared wallet's", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  // Reported: 5050 showed a wrong Risk / free. Two different mistakes met in one card.
-  //
-  // Free cash was the shared balance minus only THIS portfolio's resting orders.
-  // There is one wallet, so every resting buy reserves collateral against the same
-  // balance -- including the other portfolio's -- and the card reported cash as free
-  // that could not actually be spent. That is the dangerous direction: it invites a
-  // run that the exchange then refuses for collateral.
-  assert.match(app, /const walletOrderRisk = \(Array\.isArray\(liveState\?\.openOrders\)/);
-  assert.match(app, /\.filter\(\(order\) => !String\(order\.side \|\| ""\)\.toUpperCase\(\)\.includes\("SELL"\)\)/,
-    "a resting sell releases collateral rather than reserving it");
-  assert.match(app, /const freeCash = Number\.isFinite\(cash\) \? Math\.max\(0, cash - walletOrderRisk\) : null;/);
+  // Superseded by a later report and an explicit decision. Free cash was the shared
+  // balance minus EVERY resting buy, because one wallet backs both portfolios and the
+  // exchange really does reserve for all of them. In practice 5050 rests many bids at
+  // once, which left the Live portfolio reading zero free cash and skipping every
+  // candidate while the account was otherwise idle. Each portfolio is now shown, and
+  // sizes from, what its own commitments leave -- and the exchange, not the dashboard,
+  // decides whether a submission fits. That refusal is already handled and counted.
+  assert.match(app, /const ownOrderReservation = reservedByOrders\(openOrderRows\);/);
+  assert.match(app, /const freeCash = Number\.isFinite\(cash\) \? Math\.max\(0, cash - ownOrderReservation\) : null;/);
+  // The wallet total is still computed, so the tile can say how much of the balance the
+  // other portfolio has spoken for rather than quietly overstating what is spendable.
+  assert.match(app, /const walletOrderRisk = reservedByOrders\(Array\.isArray\(liveState\?\.openOrders\)/);
+  assert.match(app, /const otherPortfolioReservation = Math\.max\(0, walletOrderRisk - ownOrderReservation\);/);
+  assert.match(app, /locked by the other portfolio/);
 
-  // Risk is the opposite: it is what THIS portfolio has committed. The account
-  // snapshot's openRiskUsdc is wallet-wide, so using it showed 5050 the other
-  // portfolio's positions.
+  // Unchanged: risk is what THIS portfolio has committed, and the wallet-wide position
+  // total must not stand in for it.
   assert.match(app, /const ownPositionRisk = positions\.reduce\(/);
-  // Both tabs, not just 5050: openRiskUsdc is wallet-wide, so pairing it with one
-  // portfolio's orders was wrong on the Live tab too, in the opposite direction.
   assert.match(app, /els\.portfolioRisk\.textContent = money\(ownPositionRisk \+ openOrderRisk\);/);
   assert.ok(!/portfolio\.openRiskUsdc \|\| 0\) \+ openOrderRisk/.test(app),
     "the wallet-wide position total must not stand in for a portfolio's own");
+  // A resting sell releases collateral rather than reserving it.
+  assert.match(app, /\.filter\(\(order\) => !String\(order\.side \|\| ""\)\.toUpperCase\(\)\.includes\("SELL"\)\)/);
   // A cancelled or filled order still in the snapshot reserves no collateral.
   assert.match(app, /TERMINAL_ORDER_STATUSES\.has\(String\(order\.rawStatus \|\| order\.status \|\| ""\)\.toUpperCase\(\)\)/);
   // Orders carry notionalUsdc from the sync; the others are fallbacks.
@@ -2689,19 +2691,19 @@ test("5050: risk is its own, free cash is the wallet's", async () => {
 
   // The arithmetic, on one wallet holding both portfolios' orders.
   const cash = 20;
-  const wallet = [
-    { side: "BUY", totalCostUsdc: 3 },      // the live portfolio's
-    { side: "BUY", totalCostUsdc: 2.55 },   // 5050
-    { side: "BUY", totalCostUsdc: 2.55 },   // 5050
-    { side: "SELL", totalCostUsdc: 9 },     // an exit, which reserves nothing
-  ];
-  const walletOrderRisk = wallet
+  const live = [{ side: "BUY", notionalUsdc: 3 }];
+  const other = [{ side: "BUY", notionalUsdc: 2.55 }, { side: "BUY", notionalUsdc: 2.55 }];
+  const sell = [{ side: "SELL", notionalUsdc: 9 }];
+  const reserved = (rows) => rows
     .filter((order) => !order.side.includes("SELL"))
-    .reduce((sum, order) => sum + order.totalCostUsdc, 0);
-  assert.equal(walletOrderRisk, 8.1);
-  assert.equal(Math.max(0, cash - walletOrderRisk).toFixed(2), "11.90");
-  // What the card used to show, overstated by the other portfolio's reservations.
-  assert.equal((cash - 5.1).toFixed(2), "14.90");
+    .reduce((sum, order) => sum + order.notionalUsdc, 0);
+  const own = reserved(live);
+  const wallet = reserved([...live, ...other, ...sell]);
+  assert.equal(own, 3);
+  assert.equal(wallet, 8.1);
+  // What the Live tab shows now, and what it has to disclose alongside it.
+  assert.equal(Math.max(0, cash - own).toFixed(2), "17.00");
+  assert.equal(Math.max(0, wallet - own).toFixed(2), "5.10");
 });
 
 test("run log: history survives a reload and a failed fetch", async () => {

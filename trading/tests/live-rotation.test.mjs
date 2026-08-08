@@ -1832,3 +1832,77 @@ test("5050 run detail: a partial pass reads as a fraction, not as a small batch"
   assert.equal(render({ scannedCandidates: 40, eligibleCandidates: 3 }), "");
   assert.equal(render({ processedEvents: 0, targetedOrders: 0 }), "");
 });
+
+// Reported: the Live portfolio saw zero available cash for new orders because 5050 was
+// resting a far larger book, and the two share one Polymarket account. Live must reserve
+// against its own submissions only, so with nothing of its own placed the whole account
+// cash is available to it.
+function liveCashApi() {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const body = ["activeBuyOrderReservationUsdc", "ownSubmittedOrderIdentity", "orderWasSubmittedByThisPortfolio",
+    "successfulOrderResponse", "availableLiveCashUsdc"].map((name) => functionSource(source, name)).join("\n\n");
+  return new Function("number", "liveCashUsdc", `${body}
+    return { availableLiveCashUsdc, activeBuyOrderReservationUsdc, ownSubmittedOrderIdentity };`)(
+    (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback),
+    (liveState) => Number(liveState?.account?.cashUsdc || 0),
+  );
+}
+
+const restingBid = (id, tokenId, notional) => ({
+  id, tokenId, side: "BUY", status: "LIVE", price: 0.5, remainingSize: notional / 0.5, notionalUsdc: notional,
+});
+
+test("live cash: the other portfolio's resting bids no longer spend this one's balance", () => {
+  const api = liveCashApi();
+  const liveState = {
+    account: { cashUsdc: 42.5 },
+    openOrders: Array.from({ length: 8 }, (_, index) => restingBid(`o-5050-${index}`, `10${index}`, 5)),
+  };
+
+  // The whole-wallet total is unchanged and still reported.
+  assert.equal(api.activeBuyOrderReservationUsdc(liveState), 40);
+  // Which is what used to leave Live with nothing to trade.
+  assert.equal(api.availableLiveCashUsdc(liveState, 42.5), 2.5);
+
+  // Nothing placed by Live: the whole account cash is available to it.
+  const noHistory = { runLog: [{ attempts: [] }] };
+  assert.equal(api.availableLiveCashUsdc(liveState, 42.5, noHistory), 42.5);
+});
+
+test("live cash: this portfolio's own resting bid is still reserved", () => {
+  const api = liveCashApi();
+  const liveState = {
+    account: { cashUsdc: 42.5 },
+    openOrders: [
+      ...Array.from({ length: 8 }, (_, index) => restingBid(`o-5050-${index}`, `10${index}`, 5)),
+      restingBid("o-live-1", "999", 12),
+    ],
+  };
+  const history = {
+    runLog: [{
+      attempts: [
+        { tokenId: "999", response: { orderID: "o-live-1", status: "live" } },
+        // Live wanted this token, the exchange refused it, and the other portfolio is
+        // resting a bid on it now. A refused attempt must not claim that order.
+        { tokenId: "100", response: { error: "not enough balance" } },
+      ],
+    }],
+  };
+  assert.equal(api.availableLiveCashUsdc(liveState, 42.5, history), 30.5);
+
+  const identity = api.ownSubmittedOrderIdentity(history);
+  assert.deepEqual([...identity.orderIds], ["o-live-1"]);
+  assert.deepEqual([...identity.tokenIds], [], "a refused attempt contributes no token to fall back on");
+});
+
+test("live cash: an accepted order with no id falls back to its token", () => {
+  const api = liveCashApi();
+  const liveState = {
+    account: { cashUsdc: 20 },
+    openOrders: [restingBid("o-live-1", "999", 12), restingBid("o-5050-1", "111", 5)],
+  };
+  // Some accepted responses carry no order id. The token is the only key left, and here
+  // it is safe: the attempt succeeded, so the resting order on it is this portfolio's.
+  const history = { runLog: [{ attempts: [{ tokenId: "999", response: { success: true } }] }] };
+  assert.equal(api.availableLiveCashUsdc(liveState, 20, history), 8);
+});
