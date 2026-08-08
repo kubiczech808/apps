@@ -5987,12 +5987,47 @@ function fixedEntryTokenIds() {
 // after the orders are already on the book. The price is the second, independent
 // signal: 5050 rests every bid at exactly its configured entry price, which is far
 // from the market by construction, so a resting order at that price is its own.
-function restsAtFixedEntryPrice(row) {
-  const entryPrice = normalizeFixedEntryPrice(portfolioConfigForMode("live-5050").fixedEntryPrice);
-  const price = Number(row?.price ?? row?.orderPrice ?? row?.limitPrice);
+// Every price 5050 is known to rest bids at: what it is configured at now, what its last
+// run actually used, and every price its run log records it ordering. One value is not
+// enough. The setting moves -- 0.50 to 0.51 to 0.52 -- and a bid rested at the old one
+// stops matching the moment it does, which is how a 52c order came to be filed under
+// Live. Rejected attempts count here: a refused bid still says what price this portfolio
+// bids at, even though it claims no token.
+function fixedEntryPriceSignatures() {
+  const prices = new Set();
+  const add = (value) => {
+    const price = Number(value);
+    if (Number.isFinite(price) && price > 0 && price < 1) prices.add(Number(price.toFixed(4)));
+  };
+  add(normalizeFixedEntryPrice(portfolioConfigForMode("live-5050").fixedEntryPrice));
+  const execution = state.live5050ExecutionState || {};
+  for (const row of [execution, ...(Array.isArray(execution.runLog) ? execution.runLog : [])]) {
+    add(row?.fixedEntry?.entryPrice);
+    for (const attempt of (Array.isArray(row?.attempts) ? row.attempts : [])) {
+      if (String(attempt?.action || "").toUpperCase().startsWith("DRY_RUN")) continue;
+      add(attempt?.orderPrice);
+    }
+  }
+  return prices;
+}
+
+// Tick-size rounding means a stored price can differ in the last place.
+function matchesFixedEntryPrice(value) {
+  const price = Number(value);
   if (!Number.isFinite(price)) return false;
-  // Tick-size rounding means the stored price can differ in the last place.
-  return Math.abs(price - entryPrice) < 0.005;
+  for (const entry of fixedEntryPriceSignatures()) {
+    if (Math.abs(price - entry) < 0.005) return true;
+  }
+  return false;
+}
+
+// 5050's own orders were invisible on its tab until its run log published, because
+// attribution read only that log -- and the log is written at the end of a run, after the
+// orders are already on the book. The price is the second, independent signal: 5050 rests
+// every bid at one price, far from the market by construction, so a resting order at any
+// price it bids at is its own.
+function restsAtFixedEntryPrice(row) {
+  return matchesFixedEntryPrice(row?.price ?? row?.orderPrice ?? row?.limitPrice);
 }
 
 // A row that filled is not an order, and must not be attributed like one. 5050 buys at
@@ -6039,10 +6074,10 @@ function boughtAtFixedEntryPrice(row) {
   // not the portfolio is still configured that way.
   const ordered = fixedEntryOrderPricesByToken().get(String(row?.tokenId || row?.assetId || ""));
   if (ordered && [...ordered].some(matches)) return true;
-  // Failing that, the price it is set to now -- for a fill whose bid has aged out of the
-  // log. Live buys at the market with a high probability bar, so a Live fill landing on
-  // 5050's exact price is not a case that occurs in practice.
-  return matches(normalizeFixedEntryPrice(portfolioConfigForMode("live-5050").fixedEntryPrice));
+  // Failing that, any price this portfolio is known to bid at -- for a fill whose own bid
+  // has aged out of the log. Live buys at the market with a high probability bar, so a
+  // Live fill landing on one of 5050's prices is not a case that occurs in practice.
+  return matchesFixedEntryPrice(paid);
 }
 
 function belongsToActiveLivePortfolio(row) {

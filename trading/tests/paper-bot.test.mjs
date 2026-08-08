@@ -2333,7 +2333,10 @@ test("dashboard: a renderer cannot read another renderer's local variables", asy
 
   for (const local of ["totalPnlValue", "openPnlValue", "ownBasePct", "ownRealized", "ownOpen", "ownStake", "fixedEntry", "usdc"]) {
     lines.forEach((line, i) => {
-      if (!new RegExp(`(?<![\\w$])${local}(?![\\w$])`).test(line)) return;
+      // A property of the same name is not a read of the variable. `row.fixedEntry` is a
+      // field the executor publishes and says nothing about renderLiveState's local, so
+      // matching it would make this guard fire on data rather than on scope.
+      if (!new RegExp(`(?<![\\w$.?])${local}(?![\\w$])`).test(line.replace(/\?\.\s*/g, "."))) return;
       assert.ok(i >= liveStart && i <= liveEnd,
         `${local} is a local of renderLiveState but is read at app.js:${i + 1} — ${line.trim()}`);
     });
@@ -2591,6 +2594,8 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
   // configured entry price, far from the market by construction.
   const pick = (re) => re.exec(app)[0];
   const body = [
+    pick(/function fixedEntryPriceSignatures\([\s\S]*?\n\}/),
+    pick(/function matchesFixedEntryPrice\([\s\S]*?\n\}/),
     pick(/function restsAtFixedEntryPrice\([\s\S]*?\n\}/),
     // Attribution now separates a filled row from a resting one. These orders are
     // unfilled, so they still go through the price and run-log signals this pins.
@@ -2603,6 +2608,9 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
     const isFixedEntryMode=()=>${fixed};
     const normalizeFixedEntryPrice=(v)=>v??0.5;
     const portfolioConfigForMode=()=>({fixedEntryPrice:0.51});
+    // No published run log in this case -- the point is that a bid is recognised before
+    // one exists, from the configured price alone.
+    const state={live5050ExecutionState:null};
     const fixedEntryTokenIds=()=>new Set(${JSON.stringify(owned)});
     ${body}
     return belongsToActiveLivePortfolio(row);`);
@@ -3235,9 +3243,9 @@ function liveTradeAttribution(app, { mode, fixedEntryPrice = 0.51, execution5050
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["submittedTokenIds", "fixedEntryTokenIds", "restsAtFixedEntryPrice", "isFilledPortfolioRow",
-    "fixedEntryOrderPricesByToken", "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio", "isClosedTrade",
-    "liveClosedTrades", "liveOpenOrders"]
+  const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures", "matchesFixedEntryPrice",
+    "restsAtFixedEntryPrice", "isFilledPortfolioRow", "fixedEntryOrderPricesByToken", "boughtAtFixedEntryPrice",
+    "belongsToActiveLivePortfolio", "isClosedTrade", "liveClosedTrades", "liveOpenOrders"]
     .map(pick).join("\n\n");
   return new Function("state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
     `${body}\nreturn { liveClosedTrades, liveOpenOrders };`)(
@@ -3480,9 +3488,10 @@ test("5050 fills: a changed entry price does not hand old fills to Live", async 
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["submittedTokenIds", "fixedEntryTokenIds", "restsAtFixedEntryPrice",
-    "fixedEntryOrderPricesByToken", "isFilledPortfolioRow", "boughtAtFixedEntryPrice",
-    "belongsToActiveLivePortfolio", "isClosedTrade"].map(pick).join("\n\n");
+  const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures",
+    "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
+    "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio",
+    "isClosedTrade"].map(pick).join("\n\n");
   const belongs = (mode, execution5050, configuredPrice) => new Function(
     "state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
     `${body}\nreturn belongsToActiveLivePortfolio;`,
@@ -3531,11 +3540,21 @@ test("5050 fills: a changed entry price does not hand old fills to Live", async 
   assert.equal(belongs("live-5050", { runLog: [] }, 0.51)(aged), true);
   assert.equal(belongs("live", { runLog: [] }, 0.51)(aged), false);
 
-  // A rejected attempt is not an order 5050 ever placed, so it claims nothing.
+  // A rejected attempt claims no token. A market 5050 asked for and was refused, which
+  // Live then bought at the market, stays with Live -- that is the guard that stops a
+  // merely-attempted bid taking Live's history.
   const refused = { runLog: [{ attempts: [{ tokenId: "555", orderPrice: 0.5, action: "REJECTED" }] }] };
-  const refusedFill = { tokenId: "555", status: "OPEN", shares: 5, entryPrice: 0.5 };
-  assert.equal(belongs("live-5050", refused, 0.62)(refusedFill), false);
-  assert.equal(belongs("live", refused, 0.62)(refusedFill), true);
+  const liveFillOnRefusedToken = { tokenId: "555", status: "OPEN", shares: 4, entryPrice: 0.94 };
+  assert.equal(belongs("live-5050", refused, 0.62)(liveFillOnRefusedToken), false);
+  assert.equal(belongs("live", refused, 0.62)(liveFillOnRefusedToken), true);
+
+  // Its price is a different matter: a refused bid is still a bid, and says what price
+  // this portfolio rests at. So a fill at 0.50 is 5050's whatever the setting has since
+  // become. The two signals cannot collide in practice -- Live's 80% probability bar
+  // means it does not buy at 50c.
+  const fillAtARefusedPrice = { tokenId: "666", status: "OPEN", shares: 5, entryPrice: 0.5 };
+  assert.equal(belongs("live-5050", refused, 0.62)(fillAtARefusedPrice), true);
+  assert.equal(belongs("live", refused, 0.62)(fillAtARefusedPrice), false);
 });
 
 // Reported: the 5050 run log held a single entry, which is not what happened -- the
@@ -3672,4 +3691,78 @@ test("scheduled scan: a scheduled pass stays small and does not fan out", async 
   // Both scanners still write one paper-state.json, so they must stay serialized.
   assert.match(scan, /group: trading-paper-bot/);
   assert.match(bot, /group: trading-paper-bot/);
+});
+
+// Reported: a resting limit order at 52% -- the price 5050 was set to -- was listed under
+// Live. Attribution compared the order against a single value, the entry price the
+// portfolio is configured at right now, and that setting moves: 0.50, then 0.51, then
+// 0.52. Every bid rested at the previous one stopped matching the moment it changed. The
+// token could not stand in for it either, because the run log had just been truncated to
+// a single row, so there was nothing left to match a token against.
+test("5050 orders: a bid is recognised at every price the portfolio bids at", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const pick = (name) => {
+    const start = app.indexOf(`function ${name}(`);
+    if (start < 0) throw new Error(`missing ${name}`);
+    const bodyStart = app.indexOf(") {\n", start);
+    let depth = 0;
+    for (let i = bodyStart + 2; i < app.length; i += 1) {
+      if (app[i] === "{") depth += 1;
+      else if (app[i] === "}") {
+        depth -= 1;
+        if (!depth) return app.slice(start, i + 1);
+      }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures",
+    "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
+    "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio",
+    "isClosedTrade", "liveOpenOrders"].map(pick).join("\n\n");
+  const openOrdersFor = (mode, execution5050, configuredPrice) => new Function(
+    "state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
+    `${body}\nreturn liveOpenOrders;`,
+  )(
+    { mode, live5050ExecutionState: execution5050 },
+    () => mode === "live-5050",
+    (value) => Number(value),
+    () => ({ fixedEntryPrice: configuredPrice }),
+  );
+
+  // The reported row, plus one the Live portfolio really did place at the market.
+  const fixedBid = {
+    id: "o-1", tokenId: "444", side: "BUY", status: "ORDER_STATUS_LIVE", price: 0.52,
+    originalSize: 6.88, remainingSize: 6.88, notionalUsdc: 3.58,
+    question: "Valorant: Eternal Fire vs Joblife - Map 2 Winner", outcome: "Eternal Fire",
+  };
+  const liveBid = { id: "o-2", tokenId: "555", side: "BUY", status: "ORDER_STATUS_LIVE", price: 0.93, originalSize: 4, remainingSize: 4 };
+  const liveState = { openOrders: [fixedBid, liveBid] };
+  const ids = (mode, execution, configured) => openOrdersFor(mode, execution, configured)(liveState).map((row) => row.id);
+
+  // A run log holding some other token, but recording the price this portfolio bids at.
+  const log = { runLog: [{ attempts: [{ tokenId: "999", orderPrice: 0.52, action: "SUBMITTED" }] }] };
+  // A log truncated to nothing, where the published state still says what the last run did.
+  const wipedButRecent = { fixedEntry: { entryPrice: 0.52 }, attempts: [{ tokenId: "999", orderPrice: 0.52, action: "SUBMITTED" }], runLog: [] };
+
+  for (const [label, execution, configured] of [
+    ["configured price current", log, 0.52],
+    ["configured price stale", log, 0.5],
+    ["log wiped, last run known", wipedButRecent, 0.5],
+    ["log wiped, configured current", { runLog: [] }, 0.52],
+  ]) {
+    assert.deepEqual(ids("live", execution, configured), ["o-2"], `${label}: Live keeps only its own bid`);
+    assert.deepEqual(ids("live-5050", execution, configured), ["o-1"], `${label}: the fixed-entry bid is 5050's`);
+  }
+
+  // A rejected attempt still says what price this portfolio bids at, even though it
+  // claims no token -- that distinction is what lets a refused bid help here without
+  // letting it steal a market Live actually traded.
+  const refusedOnly = { runLog: [{ attempts: [{ tokenId: "999", orderPrice: 0.52, action: "REJECTED" }] }] };
+  assert.deepEqual(ids("live-5050", refusedOnly, 0.5), ["o-1"]);
+  assert.deepEqual(ids("live", refusedOnly, 0.5), ["o-2"]);
+
+  // A dry run placed nothing, so its price is not evidence of anything.
+  const dryOnly = { runLog: [{ attempts: [{ tokenId: "999", orderPrice: 0.52, action: "DRY_RUN_READY" }] }] };
+  assert.deepEqual(ids("live", dryOnly, 0.5).sort(), ["o-1", "o-2"]);
 });
