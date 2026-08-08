@@ -276,6 +276,7 @@ jobs:
           import io
           import json
           import os
+          import re
           from datetime import datetime, timezone
           from pathlib import Path
 
@@ -304,9 +305,44 @@ jobs:
           with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=30) as ftp:
               ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
               enter_dir(ftp, target.split("/"))
-              remote = io.BytesIO()
-              ftp.retrbinary("RETR paper-state.json", remote.write)
-              state = json.loads(remote.getvalue().decode("utf-8"))
+
+              def read_json(name):
+                  buffer = io.BytesIO()
+                  ftp.retrbinary(f"RETR {name}", buffer.write)
+                  return json.loads(buffer.getvalue().decode("utf-8"))
+
+              def write_json(name, payload):
+                  body = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+                  temporary = name + ".live-revalidation-uploading"
+                  ftp.storbinary(f"STOR {temporary}", io.BytesIO(body))
+                  try:
+                      ftp.rename(temporary, name)
+                  except ftplib.all_errors:
+                      ftp.delete(name)
+                      ftp.rename(temporary, name)
+
+              # The catalogue moved out of paper-state.json into sibling segment files,
+              # and the core keeps those fields as empty arrays. Merging into the core
+              # was therefore merging into nothing on every run: no verdict was ever
+              # persisted, so a market Gamma had already dropped kept being shortlisted,
+              # re-fetched and re-rejected, and never left the candidate list. Follow the
+              # manifest to the files that actually hold the rows.
+              core = read_json("paper-state.json")
+              manifest = core.get("stateSegments") if isinstance(core.get("stateSegments"), dict) else {}
+              documents = {"paper-state.json": core}
+              plan = []
+              for segment, field in (("evaluations", "evaluations"), ("observations", "marketObservations")):
+                  entry = manifest.get(segment) if isinstance(manifest.get(segment), dict) else None
+                  name = str(entry.get("file") or "") if entry else ""
+                  # The manifest is generated data that still arrives as file content, so
+                  # the name is constrained to a plain sibling file. A state written
+                  # before segmentation carries the rows in the core itself.
+                  if not re.fullmatch(r"[A-Za-z0-9._-]+\.json", name):
+                      name = "paper-state.json"
+                  if name not in documents:
+                      documents[name] = read_json(name)
+                  plan.append((name, field))
+
               closed_out = []
               def merge_revalidation(rows, label):
                   if not isinstance(rows, list):
@@ -342,24 +378,24 @@ jobs:
                   print(f"Merged {merged} live revalidation updates into {label}.")
                   return merged
 
-              merged_evaluations = merge_revalidation(state.get("evaluations"), "evaluations")
-              merged_observations = merge_revalidation(state.get("marketObservations"), "market observations")
-              merged = merged_evaluations + merged_observations
+              merged = 0
+              changed = set()
+              for name, field in plan:
+                  count = merge_revalidation(documents[name].get(field), f"{name} -> {field}")
+                  merged += count
+                  if count:
+                      changed.add(name)
               if closed_out:
                   print(f"Closed out {len(set(closed_out))} rows whose market no longer exists: {sorted(set(closed_out))}")
               if not merged:
                   print("Revalidated tokens were no longer present in remote evaluation or scraped market state.")
                   raise SystemExit(0)
 
-              payload = (json.dumps(state, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-              temporary = "paper-state.json.live-revalidation-uploading"
-              ftp.storbinary(f"STOR {temporary}", io.BytesIO(payload))
-              try:
-                  ftp.rename(temporary, "paper-state.json")
-              except ftplib.all_errors:
-                  ftp.delete("paper-state.json")
-                  ftp.rename(temporary, "paper-state.json")
-              print(f"Persisted {merged} live revalidation updates into paper-state.json at {datetime.now(timezone.utc).isoformat()}")
+              # Written compactly, the way the bot writes them: the observations segment
+              # is measured in megabytes and indenting it would inflate it for nothing.
+              for name in sorted(changed):
+                  write_json(name, documents[name])
+              print(f"Persisted {merged} live revalidation updates into {', '.join(sorted(changed))} at {datetime.now(timezone.utc).isoformat()}")
           PY
 
       - name: Merge published run-log history before upload

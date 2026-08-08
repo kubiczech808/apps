@@ -3305,3 +3305,52 @@ test("live closed trades: resting orders are still attributed by price and run l
     ["a", "c"],
   );
 });
+
+// Reported: a Live run ended SKIP with "no currently executable candidate after live
+// revalidation", and the rejected candidates stayed in the list instead of updating and
+// disappearing. Two of the three were markets Gamma no longer lists at all.
+//
+// The workflow step that writes those verdicts back downloads paper-state.json and merges
+// into state["evaluations"] and state["marketObservations"]. Since the catalogue was split
+// into sibling segment files, the core keeps exactly those fields as empty arrays -- so
+// every run merged into nothing, wrote nothing, and the dead markets were shortlisted,
+// re-fetched and re-rejected again on the next pass.
+test("live revalidation: the verdicts are written where the rows actually live", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+
+  // The fact that makes merging into the core wrong, checked against the real splitter
+  // rather than assumed: the fields the step needs are emptied out of paper-state.json.
+  const future = new Date(Date.now() + 86400000).toISOString();
+  const { core, segments } = bot.splitStateIntoSegments(bot.normalizeState({
+    evaluations: [{ tokenId: "555", question: "Dead", status: "EVALUATED", marketProbability: 0.9, endDate: future }],
+    marketObservations: [{ tokenId: "555", question: "Dead", status: "SCRAPED", marketProbability: 0.9, endDate: future }],
+  }));
+  assert.deepEqual(core.evaluations, [], "the core carries no evaluations to merge into");
+  assert.deepEqual(core.marketObservations, [], "nor any observations");
+  assert.equal(segments.evaluations.evaluations.length, 1, "the rows are in the segment file");
+  assert.equal(segments.observations.marketObservations.length, 1);
+  assert.equal(core.stateSegments.evaluations.file, "paper-state.evaluations.json");
+  assert.equal(core.stateSegments.observations.file, "paper-state.observations.json");
+
+  // So the step has to follow the manifest to those files, and write them back.
+  assert.match(workflow, /core = read_json\("paper-state\.json"\)/);
+  assert.match(workflow, /manifest = core\.get\("stateSegments"\)/);
+  assert.match(workflow, /for segment, field in \(\("evaluations", "evaluations"\), \("observations", "marketObservations"\)\):/);
+  assert.match(workflow, /documents\[name\] = read_json\(name\)/);
+  assert.match(workflow, /count = merge_revalidation\(documents\[name\]\.get\(field\), /);
+  assert.match(workflow, /for name in sorted\(changed\):\n\s+write_json\(name, documents\[name\]\)/);
+  // A state written before segmentation still has its rows inline; that path must remain.
+  assert.match(workflow, /if not re\.fullmatch\(r"\[A-Za-z0-9\._-\]\+\\\.json", name\):\n\s+name = "paper-state\.json"/);
+  // And the old whole-core rewrite must be gone, or it would clobber the manifest shell.
+  assert.ok(!/merged_evaluations = merge_revalidation\(state\.get\("evaluations"\)/.test(workflow));
+  assert.ok(!/json\.dumps\(state, ensure_ascii=False, indent=2\)/.test(workflow),
+    "the observations segment is megabytes; it must not be written indented");
+
+  // A market Gamma dropped is closed out, which is what removes it from the candidates:
+  // api.php's active-observation test rejects exactly this status.
+  assert.match(workflow, /if update\.get\("marketGone"\):/);
+  assert.match(workflow, /item\["status"\] = "CLOSED"/);
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+  assert.match(api, /in_array\(\$status, \['RESOLVED', 'CLOSED', 'EXPIRED', 'FINALIZED', 'SETTLED'\], true\)/);
+});
