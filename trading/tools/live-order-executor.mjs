@@ -2648,6 +2648,14 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
       placementPerOrderMs: placed ? Math.round(placementMs / placed) : 0,
     },
     account: { cashUsdc: cash, availableCashUsdc: availableCash },
+    // This pass revalidates every candidate against the exchange, and what it learns is
+    // exactly what the shortlist needs: a market Gamma no longer lists is closed, a price
+    // that moved is the new price. Without publishing them the verdicts died with the
+    // run, so a market this pass found gone stayed READY in the candidate list and was
+    // re-fetched and re-rejected by every pass after it.
+    revalidationUpdates: checked
+      .map((item) => liveRevalidationUpdate(item, new Date().toISOString()))
+      .filter((item) => item.tokenId),
     attempts,
     batchLog: {
       action,

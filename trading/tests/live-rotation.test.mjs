@@ -619,12 +619,19 @@ test("live revalidation: a market Gamma no longer lists is closed out, not re-fe
   }], null);
   assert.equal(pool.candidates.length, 0, "a closed-out row must never reach revalidation again");
 
-  // And the workflow must actually write that status back, or the loop never closes.
+  // And something must actually write that status back, or the loop never closes. That
+  // merge is a shared script now: it was a heredoc in the live workflow and absent from
+  // 5050 entirely, so a market 5050 found gone stayed READY in its candidate list.
   const { readFile } = await import("node:fs/promises");
-  const workflow = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
-  assert.match(workflow, /if update\.get\("marketGone"\):/);
-  assert.match(workflow, /item\["status"\] = "CLOSED"/);
-  assert.match(workflow, /item\["acceptingOrders"\] = False/);
+  const persist = await readFile(new URL("../tools/persist-live-revalidation.py", import.meta.url), "utf8");
+  assert.match(persist, /if update\.get\("marketGone"\):/);
+  assert.match(persist, /item\["status"\] = "CLOSED"/);
+  assert.match(persist, /item\["acceptingOrders"\] = False/);
+  // And both live portfolios must run it, or one of them keeps re-fetching dead markets.
+  for (const file of ["polymarket-live-limit-order-test", "trading-live-5050"]) {
+    const workflow = await readFile(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8");
+    assert.match(workflow, /run: python3 trading\/tools\/persist-live-revalidation\.py/, `${file} must persist its verdicts`);
+  }
 });
 
 test("redeem alerts: a lost position with nothing to claim raises no alert", async () => {
@@ -1990,4 +1997,52 @@ test("days left: an unparseable end date is unknown, not the most urgent row", a
   assert.ok(shorter({ daysToResolution: -1.1 }, { daysToResolution: 0.5 }) < 0,
     "an overdue market really is the most urgent, and still sorts that way");
   assert.ok(shorter({ daysToResolution: 0.5 }, { daysToResolution: 3 }) < 0);
+});
+
+// Reported: a 5050 run turned three candidates into one order and left the other two
+// sitting in the READY list. The digest says why -- both were "market no longer listed in
+// Gamma by token id or slug; treated as closed" -- so they should have been closed out of
+// the catalogue. 5050 revalidated them exactly as the live portfolio does, but published
+// nothing about it: its emit carried no revalidationUpdates, and its workflow had no step
+// to write them back. The verdicts died with the run and the two markets came round again
+// on the next pass, and the one after that.
+test("5050: what a pass learns about a candidate is published, not discarded", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // The fixed-entry emit must carry the verdicts, built the same way the live one builds
+  // them so the shared persist script can read either.
+  const batch = executor.slice(executor.indexOf("async function runFixedEntryBatch"));
+  const emit = batch.slice(0, batch.indexOf("\n}\n"));
+  assert.match(emit, /revalidationUpdates: checked\n\s+\.map\(\(item\) => liveRevalidationUpdate\(item, new Date\(\)\.toISOString\(\)\)\)\n\s+\.filter\(\(item\) => item\.tokenId\),/,
+    "the 5050 pass must publish what it revalidated");
+  // Both emits build them identically; a divergence would make one portfolio's verdicts
+  // unreadable to the shared script.
+  assert.equal((executor.match(/revalidationUpdates: checked/g) || []).length, 2,
+    "both live portfolios publish their verdicts");
+
+  // A market this pass found gone is what the persist script keys its close-out off.
+  const persist = await readFile(new URL("../tools/persist-live-revalidation.py", import.meta.url), "utf8");
+  assert.match(persist, /updates = \[item for item in execution\.get\("revalidationUpdates", \[\]\) if item\.get\("tokenId"\)\]/);
+  assert.match(persist, /if update\.get\("marketGone"\):/);
+
+  // Each portfolio persists its own state file, not the other's.
+  const pairs = [
+    ["polymarket-live-limit-order-test", "trading/data/live-execution-state.json"],
+    ["trading-live-5050", "trading/data/live-5050-execution-state.json"],
+  ];
+  for (const [file, statePath] of pairs) {
+    const workflow = await readFile(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8");
+    const step = workflow.slice(workflow.indexOf("market verification into evaluation state"));
+    const body = step.slice(0, step.indexOf("persist-live-revalidation.py") + 40);
+    assert.match(body, new RegExp(`LIVE_EXECUTION_STATE_FILE: ${statePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+      `${file} must persist its own execution state`);
+  }
+
+  // And it has to run before the upload, or it reads a state the run has not written.
+  const fixed = await readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8");
+  const order = ["Rest the fixed-entry bids", "Persist current 5050 market verification into evaluation state", "Upload 5050 state"]
+    .map((name) => fixed.indexOf(`- name: ${name}`));
+  assert.ok(order.every((index) => index > 0), "every step must be present");
+  assert.deepEqual([...order].sort((a, b) => a - b), order, `steps are out of order: ${order}`);
 });

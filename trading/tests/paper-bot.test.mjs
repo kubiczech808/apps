@@ -3330,7 +3330,10 @@ test("live closed trades: resting orders are still attributed by price and run l
 // re-fetched and re-rejected again on the next pass.
 test("live revalidation: the verdicts are written where the rows actually live", async () => {
   const { readFile } = await import("node:fs/promises");
-  const workflow = await readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+  // The merge is a shared script now: it was a heredoc in the live workflow and absent
+  // from 5050, so a market that portfolio found gone stayed READY in its candidate list
+  // and was re-fetched and re-rejected by every pass after it.
+  const persist = await readFile(new URL("../tools/persist-live-revalidation.py", import.meta.url), "utf8");
 
   // The fact that makes merging into the core wrong, checked against the real splitter
   // rather than assumed: the fields the step needs are emptied out of paper-state.json.
@@ -3347,23 +3350,29 @@ test("live revalidation: the verdicts are written where the rows actually live",
   assert.equal(core.stateSegments.observations.file, "paper-state.observations.json");
 
   // So the step has to follow the manifest to those files, and write them back.
-  assert.match(workflow, /core = read_json\("paper-state\.json"\)/);
-  assert.match(workflow, /manifest = core\.get\("stateSegments"\)/);
-  assert.match(workflow, /for segment, field in \(\("evaluations", "evaluations"\), \("observations", "marketObservations"\)\):/);
-  assert.match(workflow, /documents\[name\] = read_json\(name\)/);
-  assert.match(workflow, /count = merge_revalidation\(documents\[name\]\.get\(field\), /);
-  assert.match(workflow, /for name in sorted\(changed\):\n\s+write_json\(name, documents\[name\]\)/);
+  assert.match(persist, /core = read_json\("paper-state\.json"\)/);
+  assert.match(persist, /manifest = core\.get\("stateSegments"\)/);
+  assert.match(persist, /for segment, field in \(\("evaluations", "evaluations"\), \("observations", "marketObservations"\)\):/);
+  assert.match(persist, /documents\[name\] = read_json\(name\)/);
+  assert.match(persist, /count = merge_revalidation\(documents\[name\]\.get\(field\), /);
+  assert.match(persist, /for name in sorted\(changed\):\n\s+write_json\(name, documents\[name\]\)/);
   // A state written before segmentation still has its rows inline; that path must remain.
-  assert.match(workflow, /if not re\.fullmatch\(r"\[A-Za-z0-9\._-\]\+\\\.json", name\):\n\s+name = "paper-state\.json"/);
+  assert.match(persist, /if not re\.fullmatch\(r"\[A-Za-z0-9\._-\]\+\\\.json", name\):\n\s+name = "paper-state\.json"/);
   // And the old whole-core rewrite must be gone, or it would clobber the manifest shell.
-  assert.ok(!/merged_evaluations = merge_revalidation\(state\.get\("evaluations"\)/.test(workflow));
-  assert.ok(!/json\.dumps\(state, ensure_ascii=False, indent=2\)/.test(workflow),
+  assert.ok(!/merged_evaluations = merge_revalidation\(state\.get\("evaluations"\)/.test(persist));
+  assert.ok(!/json\.dumps\(state, ensure_ascii=False, indent=2\)/.test(persist),
     "the observations segment is megabytes; it must not be written indented");
 
   // A market Gamma dropped is closed out, which is what removes it from the candidates:
   // api.php's active-observation test rejects exactly this status.
-  assert.match(workflow, /if update\.get\("marketGone"\):/);
-  assert.match(workflow, /item\["status"\] = "CLOSED"/);
+  assert.match(persist, /if update\.get\("marketGone"\):/);
+  assert.match(persist, /item\["status"\] = "CLOSED"/);
+  // Both live portfolios must run it; one of them not doing so is the reported bug.
+  for (const file of ["polymarket-live-limit-order-test", "trading-live-5050"]) {
+    const workflow = await readFile(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8");
+    assert.match(workflow, /run: python3 trading\/tools\/persist-live-revalidation\.py/, `${file} must persist its verdicts`);
+  }
+
   const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
   assert.match(api, /in_array\(\$status, \['RESOLVED', 'CLOSED', 'EXPIRED', 'FINALIZED', 'SETTLED'\], true\)/);
 });

@@ -201,6 +201,20 @@ jobs:
         working-directory: trading
         run: npm run live:account
 
+      # What this pass learned about each candidate goes back into the catalogue: a
+      # market Gamma no longer lists is closed out, a moved price is updated. Without it
+      # a candidate this run rejected stays READY and is re-fetched and re-rejected by
+      # every pass after it -- three candidates, one order, two still waiting.
+      - name: Persist current 5050 market verification into evaluation state
+        if: always()
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+          LIVE_EXECUTION_STATE_FILE: trading/data/live-5050-execution-state.json
+        run: python3 trading/tools/persist-live-revalidation.py
+
       # The upload replaces the hosted file outright, so a run that started from a
       # partial local log would publish that shorter log over the real history -- which
       # is what left this portfolio with a single row. This makes the file about to be
