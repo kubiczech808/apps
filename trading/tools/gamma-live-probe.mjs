@@ -191,9 +191,117 @@ function tradabilityReport(events) {
   return { liveFlag, tradable, closed, settledPrices };
 }
 
+// A scraped row can only carry a tag Gamma put on the event: the scanner adds the slug it
+// queried (`sports`) and infers a handful of coarse buckets from the question text, and
+// everything else has to come off the event itself. So "why is there no tennis tag" is two
+// questions -- does an event under the sports scope carry its own tags, and are tennis and
+// MLB queryable scopes in their own right -- and this answers both from a runner that can
+// actually reach Gamma.
+const TAG_SLUGS_IN_QUESTION = ["tennis", "mlb", "baseball", "nba", "nfl"];
+
+function eventTagSlugs(event = {}) {
+  const slugs = [];
+  for (const raw of parseJsonField(event.tags)) {
+    const slug = String(raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : raw)
+      .trim().toLowerCase();
+    if (slug) slugs.push(slug);
+  }
+  return slugs;
+}
+
+async function tagCoverageReport(scope, tagId) {
+  const url = gammaUrl("events/keyset", {
+    limit: 100,
+    tag_id: tagId,
+    order: "endDate",
+    ascending: "true",
+    end_date_min: isoIn(-6),
+    end_date_max: isoIn(7 * 24),
+  });
+  console.log(`== TAGS: what the ${scope} scope actually carries`);
+  console.log(`   ${url.toString()}`);
+  const result = await fetchGamma(url);
+  if (!result.ok) {
+    console.log(`   HTTP ${result.status} -> ${result.error}\n`);
+    return;
+  }
+  const events = eventsFrom(result.body);
+  const withTagField = events.filter((event) => event && "tags" in event).length;
+  const counts = new Map();
+  let withAnyTag = 0;
+  for (const event of events) {
+    const slugs = eventTagSlugs(event);
+    if (slugs.length) withAnyTag += 1;
+    for (const slug of new Set(slugs)) counts.set(slug, (counts.get(slug) || 0) + 1);
+  }
+  console.log(`   HTTP ${result.status}: ${events.length} events`);
+  console.log(`   events carrying a "tags" field at all: ${withTagField}; with at least one tag: ${withAnyTag}`);
+  if (!withAnyTag) {
+    // If this is what comes back, it is the whole answer: the scanner cannot record a tag
+    // Gamma never sent, so a scraped row could only ever carry the scope slug and the
+    // inferred buckets -- which is exactly "I do not see them there as tags".
+    console.log("   >>> Gamma returned no per-event tags here. Nothing downstream can show tennis or mlb.");
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  console.log(`   distinct tag slugs: ${ranked.length}`);
+  console.log(`   top 25: ${ranked.slice(0, 25).map(([slug, n]) => `${slug}=${n}`).join(", ") || "(none)"}`);
+  for (const slug of TAG_SLUGS_IN_QUESTION) {
+    console.log(`   asked about "${slug}": ${counts.get(slug) || 0} of ${events.length} events carry it`);
+  }
+  // Titles are the fallback evidence: if tennis fixtures are plainly in this scope but
+  // untagged, the gap is Gamma's payload rather than the scope being wrong.
+  const looksLike = events.filter((event) => /tennis|atp|wta|mlb|baseball/i.test(String(event?.title || event?.slug || "")));
+  console.log(`   events whose title or slug reads as tennis/MLB: ${looksLike.length}`);
+  for (const event of looksLike.slice(0, 5)) {
+    console.log(`     ${String(event.slug || "").slice(0, 70)} tags=[${eventTagSlugs(event).join(", ") || "-"}]`);
+  }
+  console.log("");
+}
+
+async function tagScopeReport(slug) {
+  console.log(`== SCOPE: is "${slug}" a tag the scanner could query on its own?`);
+  const tagUrl = new URL(`${GAMMA}/tags/slug/${encodeURIComponent(slug)}`);
+  const tag = await fetchGamma(tagUrl);
+  if (!tag.ok) {
+    console.log(`   ${tagUrl} -> HTTP ${tag.status}: ${tag.error}\n`);
+    return;
+  }
+  const record = Array.isArray(tag.body) ? tag.body[0] : tag.body;
+  const id = record?.id;
+  console.log(`   ${tagUrl} -> id=${id ?? "(none)"} label=${record?.label ?? "-"} slug=${record?.slug ?? "-"}`);
+  if (id == null) {
+    console.log("");
+    return;
+  }
+  const url = gammaUrl("events/keyset", {
+    limit: 100,
+    tag_id: String(id),
+    order: "endDate",
+    ascending: "true",
+    end_date_min: isoIn(-6),
+    end_date_max: isoIn(7 * 24),
+  });
+  const result = await fetchGamma(url);
+  if (!result.ok) {
+    console.log(`   ${url} -> HTTP ${result.status}: ${result.error}\n`);
+    return;
+  }
+  const events = eventsFrom(result.body);
+  console.log(`   events in the next 7 days under tag_id=${id}: ${events.length}`);
+  for (const line of sampleLines(events, 3)) console.log(`   sample: ${line}`);
+  console.log("");
+}
+
 async function main() {
   console.log(`Gamma live-event probe at ${new Date().toISOString()}`);
   console.log("Read-only: no state is written and no credentials are used.\n");
+
+  // Asked: are tennis and MLB in the scraping? They are not scopes of their own, so they
+  // are only in it if the sports scope carries them -- and they are only *visible* as tags
+  // if Gamma sends per-event tags. Both are checked before the live-event probes below.
+  await tagCoverageReport("sports", SPORTS_TAG_ID);
+  await tagCoverageReport("esports", ESPORTS_TAG_ID);
+  for (const slug of ["tennis", "mlb"]) await tagScopeReport(slug);
 
   let failures = 0;
   for (const probe of probes()) {
