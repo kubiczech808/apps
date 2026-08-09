@@ -255,6 +255,33 @@ async function tagCoverageReport(scope, tagId) {
   for (const event of looksLike.slice(0, 5)) {
     console.log(`     ${String(event.slug || "").slice(0, 70)} tags=[${eventTagSlugs(event).join(", ") || "-"}]`);
   }
+
+  // The scan does not read the event: it flattens each event's markets and keeps
+  // `market.tags || event.tags` per market. An absent market.tags falls through to the
+  // event's, but an EMPTY ARRAY is truthy in JS and would win -- silently dropping every
+  // tag Gamma sent, on every row. Which of the two Gamma returns decides whether the tags
+  // measured above ever reach a stored row, so it is measured rather than assumed.
+  let marketCount = 0;
+  let marketsWithTagsKey = 0;
+  let marketsWithEmptyTags = 0;
+  let marketsWithNonEmptyTags = 0;
+  for (const event of events) {
+    for (const market of parseJsonField(event?.markets)) {
+      if (!market || typeof market !== "object") continue;
+      marketCount += 1;
+      if (!("tags" in market)) continue;
+      marketsWithTagsKey += 1;
+      const own = parseJsonField(market.tags);
+      if (own.length) marketsWithNonEmptyTags += 1;
+      else marketsWithEmptyTags += 1;
+    }
+  }
+  console.log(`   nested markets: ${marketCount}; carrying their own "tags" key: ${marketsWithTagsKey}`
+    + ` (non-empty ${marketsWithNonEmptyTags}, EMPTY ${marketsWithEmptyTags})`);
+  if (marketsWithEmptyTags) {
+    console.log("   >>> market.tags is an empty array on some markets. `market.tags || event.tags`"
+      + " keeps the empty one, so those rows would store no tags at all.");
+  }
   console.log("");
 }
 
