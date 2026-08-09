@@ -5228,8 +5228,23 @@ function liveExecutionVerdictByToken() {
   return byToken;
 }
 
-function latestLiveExecutionVerdict(item) {
+// Whose verdict this is. Both live portfolios persist their revalidation onto the same
+// evaluation rows, so a verdict has to say which one made it or they read each other's --
+// and what one portfolio cannot execute the other often can, because they price
+// differently, size differently, and hold different cash.
+//
+// An unstamped verdict is from before the field existed. It is ignored rather than
+// guessed at: honouring it keeps a possibly foreign rejection sticky forever, while
+// ignoring it costs at most one run, after which the portfolio has stamped its own.
+function executionVerdictIsOwn(verdict, mode) {
+  if (!verdict) return false;
+  const owner = String(verdict.portfolio || "");
+  return owner === (isFixedEntryMode(mode) ? "live-5050" : "live");
+}
+
+function latestLiveExecutionVerdict(item, mode = state.mode) {
   const merged = item?.executionRevalidation && typeof item.executionRevalidation === "object"
+    && executionVerdictIsOwn(item.executionRevalidation, mode)
     ? item.executionRevalidation
     : null;
   const token = String(item?.tokenId || item?.clobTokenId || item?.assetId || "").trim();
@@ -5366,7 +5381,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const annualizedReturn = portfolioAnnualizedReturn(item, config);
   const returnMetric = portfolioReturnMetricLabel(config);
   const aiPending = item.selectionStatus === "AI_PENDING" || item.aiAnalysis?.aiModelStatus === "QUOTA_LIMITED";
-  const executionCheck = latestLiveExecutionVerdict(item);
+  const executionCheck = latestLiveExecutionVerdict(item, mode);
   // A re-scrape used to invalidate the execution verdict, because a newer `evaluatedAt`
   // made it look stale. But a scrape only refreshes Gamma's listing: it cannot know that
   // the market is gone from Gamma, that the book has no usable ask, or that live

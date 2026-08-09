@@ -783,8 +783,11 @@ test("live candidates: an execution rejection survives the next scrape", async (
   // and uploads itself, rather than depending on the FTP merge into paper-state.json.
   assert.match(app, /function liveExecutionVerdictByToken\(\)/);
   assert.match(app, /state\.liveExecutionState\?\.revalidationUpdates/);
-  assert.match(app, /function latestLiveExecutionVerdict\(item\)/);
-  assert.match(app, /const executionCheck = latestLiveExecutionVerdict\(item\);/);
+  // Both take the mode now: the verdicts are persisted onto shared evaluation rows, so
+  // reading one means first establishing whose it is. The rule this test is about --
+  // that a re-scrape does not reinstate the row -- is unchanged by that.
+  assert.match(app, /function latestLiveExecutionVerdict\(item, mode = state\.mode\)/);
+  assert.match(app, /const executionCheck = latestLiveExecutionVerdict\(item, mode\);/);
 
   // Retryable verdicts (capital, diversification) must still return to the shortlist:
   // those block one run, not the market itself.
@@ -2313,4 +2316,87 @@ test("running execution: the live row is not a decision to open", async () => {
   // Both paper and live logs carry it: the request was about the run log, not one tab.
   const currentLog = functionSource(app, "currentPortfolioRunLog");
   assert.equal((currentLog.match(/withRunningExecutionRow\(/g) || []).length, 2);
+});
+
+// Reported: the live portfolio has no candidates at all, which looks like a bug. It was.
+// Both live portfolios persist their revalidation verdicts onto the same evaluation rows,
+// and the dashboard read whichever was there without asking whose it was -- so a market
+// 5050 could not execute vanished from the main live portfolio's shortlist as well.
+//
+// 5050 never noticed, because its branch of the filter returns before the verdict rule is
+// reached; and since it began running after every scrape it swept the whole pool every few
+// minutes, so the contamination was one-way and total.
+
+function verdictHarness() {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const body = ["executionVerdictIsOwn", "latestLiveExecutionVerdict"]
+    .map((name) => functionSource(app, name)).join("\n\n");
+  return (mode, item, ownUpdates = []) => new Function("state", "isFixedEntryMode", "liveExecutionVerdictByToken", `
+    ${body}
+    return latestLiveExecutionVerdict;
+  `)(
+    { mode },
+    (value) => value === "live-5050",
+    () => new Map(ownUpdates.map((update) => [String(update.tokenId), update])),
+  )(item, mode);
+}
+
+test("live candidates: one portfolio's rejection is not the other's", () => {
+  const verdictFor = verdictHarness();
+  const token = "1000000000000000001";
+  // A real 5050 verdict, as persisted onto the shared evaluation row.
+  const fromFixedEntry = {
+    tokenId: token,
+    portfolio: "live-5050",
+    status: "REJECTED",
+    retryable: false,
+    checkedAt: "2026-08-09T12:00:00Z",
+    rejectReasons: ["post-only limit would cross current ask"],
+  };
+  const row = { tokenId: token, executionRevalidation: fromFixedEntry };
+
+  // The bug: the main live portfolio adopted it and dropped the row for good.
+  assert.equal(verdictFor("live", row), null,
+    "the live portfolio must not inherit what 5050 could not execute");
+  // 5050 still honours its own.
+  assert.deepEqual(verdictFor("live-5050", row), fromFixedEntry);
+
+  // And the mirror case, so the fix is not one-directional.
+  const fromLive = { ...fromFixedEntry, portfolio: "live", rejectReasons: ["no valid current entry price"] };
+  assert.deepEqual(verdictFor("live", { tokenId: token, executionRevalidation: fromLive }), fromLive);
+  assert.equal(verdictFor("live-5050", { tokenId: token, executionRevalidation: fromLive }), null);
+
+  // A verdict stored before the field existed is ignored rather than guessed at: keeping
+  // it costs a possibly foreign rejection forever, dropping it costs one run.
+  const unstamped = { ...fromFixedEntry };
+  delete unstamped.portfolio;
+  assert.equal(verdictFor("live", { tokenId: token, executionRevalidation: unstamped }), null);
+
+  // The portfolio's own execution state is loaded per mode, so it needs no stamp to be
+  // its own -- and it is what lets a portfolio recover its verdicts on its very next run.
+  const own = { tokenId: token, status: "REJECTED", retryable: false, checkedAt: "2026-08-09T12:30:00Z" };
+  assert.deepEqual(verdictFor("live", { tokenId: token }, [own]), own);
+});
+
+test("live candidates: the verdict says which portfolio made it", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [executor, persist] = await Promise.all([
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../tools/persist-live-revalidation.py", import.meta.url), "utf8"),
+  ]);
+
+  // Stamped where the verdict is built, so both live workflows carry it without either
+  // needing to know it is sharing rows with the other.
+  assert.match(executor, /portfolio: FIXED_ENTRY_STRATEGY \? "live-5050" : "live",/);
+  // The persist step copies the verdict wholesale, so the stamp reaches the stored row.
+  assert.match(persist, /item\["executionRevalidation"\] = update/);
+
+  // Why only the live portfolio emptied out: 5050's branch returns before the rule that
+  // acts on a verdict, so it never saw the contamination it was causing.
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const reasons = functionSource(app, "portfolioCandidateFilterReasons");
+  const fixedEntryReturn = reasons.indexOf("    return reasons;\n  }");
+  const verdictRule = reasons.indexOf("if (executionCheckIsCurrent");
+  assert.ok(fixedEntryReturn > 0 && verdictRule > fixedEntryReturn,
+    "the 5050 branch still returns before the verdict rule; only live reaches it");
 });

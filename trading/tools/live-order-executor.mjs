@@ -3315,6 +3315,11 @@ function liveRevalidationUpdate(item, checkedAt) {
   return {
     tokenId: String(item?.tokenId || source.tokenId || ""),
     checkedAt,
+    // Which portfolio checked. The verdicts are persisted onto the shared evaluation
+    // rows, so without this the two live portfolios read each other's: whatever 5050
+    // rejected disappeared from the main live portfolio's candidates too, and since
+    // 5050 sweeps the whole pool after every scrape it emptied that list completely.
+    portfolio: FIXED_ENTRY_STRATEGY ? "live-5050" : "live",
     status: status === "ELIGIBLE"
       ? "READY"
       : (status === "ERROR"
