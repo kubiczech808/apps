@@ -1146,12 +1146,39 @@ function normalizedScrapedScanTag(value) {
     .slice(0, 80);
 }
 
-function scrapedScanTagOptions() {
+// The categories this picker offers, in Polymarket's own top-level sense. Every slug here
+// is one the scanner already knows a Gamma tag id for, so a scan of it resolves without a
+// lookup.
+//
+// This list used to be derived from the tags found on already-scraped rows, which was
+// circular: only sports and esports are scraped on the schedule, so the box filled up with
+// per-league slugs off those events -- uslc, bra3, uru1, chl2, setkamemd -- while politics
+// and geopolitics could never appear, because you cannot scan a category until you have
+// already scanned it. A fixed list breaks the loop and is what makes the box a category
+// picker rather than a report of what happens to be stored.
+const MARKET_SCAN_CATEGORIES = [
+  "politics",
+  "geopolitics",
+  "sports",
+  "esports",
+  "crypto",
+  "finance",
+  "business",
+  "technology",
+  "science",
+  "news",
+  "weather",
+  "video-games",
+  "music",
+  "movies",
+];
+
+function scrapedScanStoredTagCounts() {
   const counts = new Map();
-  const addCount = (rawTag, count = 1) => {
+  const addCount = (rawTag) => {
     const tag = normalizedScrapedScanTag(rawTag);
     if (!tag || tag === "clear-resolution") return;
-    counts.set(tag, Number(counts.get(tag) || 0) + Math.max(1, Number(count) || 1));
+    counts.set(tag, Number(counts.get(tag) || 0) + 1);
   };
   for (const item of scrapedMarketObservations()) {
     const tags = [
@@ -1161,7 +1188,14 @@ function scrapedScanTagOptions() {
     ];
     tags.forEach((rawTag) => addCount(rawTag));
   }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return counts;
+}
+
+// Categories in their listed order, not by how much of each is stored: a picker that
+// reorders itself as scraping progresses is one you have to re-read every time.
+function scrapedScanTagOptions() {
+  const counts = scrapedScanStoredTagCounts();
+  return MARKET_SCAN_CATEGORIES.map((tag) => [tag, Number(counts.get(tag) || 0)]);
 }
 
 function scrapedScanTagLabel(tag) {
@@ -1180,7 +1214,13 @@ function renderScrapedScanControls() {
   if (state.scrapedScanTag && !availableTags.has(state.scrapedScanTag)) state.scrapedScanTag = "";
   els.scrapedScanTag.innerHTML = [
     '<option value="">All tags</option>',
-    ...options.map(([tag, count]) => `<option value="${escapeHtml(tag)}">${escapeHtml(scrapedScanTagLabel(tag))} (${formatInteger(count) || count} stored)</option>`),
+    // A category with nothing stored is the normal state for one never scanned, and the
+    // whole point of offering it -- so it reads as "nothing yet" rather than "(0 stored)",
+    // which looks like an empty category rather than an unvisited one.
+    ...options.map(([tag, count]) => {
+      const stored = count > 0 ? `${formatInteger(count) || count} stored` : "nothing stored yet";
+      return `<option value="${escapeHtml(tag)}">${escapeHtml(scrapedScanTagLabel(tag))} (${stored})</option>`;
+    }),
   ].join("");
   els.scrapedScanTag.value = state.scrapedScanTag;
   if (els.scrapedScanButton) {

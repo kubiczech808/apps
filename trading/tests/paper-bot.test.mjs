@@ -3964,3 +3964,80 @@ test("excluded tags: the saved value reaches all three runtimes", async () => {
     assert.match(bot, new RegExp(`excludedMarketTags: envTagSet\\("PAPER_${prefix}_EXCLUDED_MARKET_TAGS"\\)`));
   }
 });
+
+// Asked for: the Polymarket tag box holds minor tags; it should offer only a few main
+// ones, category-style, and politics and geopolitics are missing from it.
+
+test("scan categories: the picker offers categories, not whatever was scraped", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  const build = (observations) => new Function("scrapedMarketObservations", `
+    ${/const MARKET_SCAN_CATEGORIES = \[[\s\S]*?\n\];/.exec(app)[0]}
+    ${functionSource(app, "normalizedScrapedScanTag")}
+    ${functionSource(app, "scrapedScanStoredTagCounts")}
+    ${functionSource(app, "scrapedScanTagOptions")}
+    return scrapedScanTagOptions;
+  `)(() => observations)();
+
+  // The rows the sports and esports scopes actually produce, measured off Gamma: the
+  // per-league slugs are what filled the box, and they are exactly what must not.
+  const scraped = [
+    { polymarketTags: ["sports", "games", "soccer", "uslc"] },
+    { polymarketTags: ["sports", "games", "soccer", "usl1"] },
+    { polymarketTags: ["sports", "games", "soccer", "bra3", "brazil-serie-a"] },
+    { polymarketTags: ["esports", "games", "sports", "counter-strike-2"] },
+    { polymarketTags: ["sports", "games", "setka", "setkamemd", "table-tennis"] },
+  ];
+  const options = build(scraped);
+  const offered = options.map(([tag]) => tag);
+
+  for (const minor of ["uslc", "usl1", "bra3", "brazil-serie-a", "setkamemd", "setka", "chl2", "ecu1", "games"]) {
+    assert.ok(!offered.includes(minor), `${minor} is a league, not a category, and must not be offered`);
+  }
+  // The two the box was missing. It could not have shown them while the list came from
+  // scraped rows: only sports and esports are scraped, so a category could never appear
+  // until it had already been scanned -- which needed it in the box first.
+  assert.ok(offered.includes("politics"), "politics must be offerable");
+  assert.ok(offered.includes("geopolitics"), "geopolitics must be offerable");
+  assert.ok(offered.length <= 16, `a category picker, not a tag dump: ${offered.length} entries`);
+
+  // Fixed order, so the box does not rearrange itself as scraping progresses.
+  assert.deepEqual(offered, build([]).map(([tag]) => tag), "the list is the same whatever is stored");
+  assert.equal(offered[0], "politics");
+
+  // Counts still come from the stored rows: 4 of the 5 fixtures carry `sports`.
+  assert.equal(options.find(([tag]) => tag === "sports")[1], 5);
+  assert.equal(options.find(([tag]) => tag === "esports")[1], 1);
+  assert.equal(options.find(([tag]) => tag === "politics")[1], 0, "never scanned reads as zero, not missing");
+});
+
+test("scan categories: every offered category is one the scanner can resolve", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, bot] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+  ]);
+
+  const categories = new Function(`
+    ${/const MARKET_SCAN_CATEGORIES = \[[\s\S]*?\n\];/.exec(app)[0]}
+    return MARKET_SCAN_CATEGORIES;
+  `)();
+  const known = new Set(
+    [...(/const MARKET_SCAN_CATEGORY_TAGS = \[[\s\S]*?\n\];/.exec(bot)[0]).matchAll(/slug: "([^"]+)"/g)]
+      .map((match) => match[1]),
+  );
+
+  // Offering a category the scanner has no tag id for would make the box able to ask for
+  // a scan that cannot run. Every entry has to be one it already knows.
+  for (const tag of categories) {
+    assert.ok(known.has(tag), `${tag} is offered but the scanner has no tag id for it`);
+  }
+
+  // A stored preference for a tag no longer offered has to fall back rather than sit
+  // selected and invisible -- the per-league slugs people picked before are all gone now.
+  const render = functionSource(app, "renderScrapedScanControls");
+  assert.match(render, /if \(state\.scrapedScanTag && !availableTags\.has\(state\.scrapedScanTag\)\) state\.scrapedScanTag = "";/);
+  // And a category with nothing stored must not read as an empty one.
+  assert.match(render, /count > 0 \? `\$\{formatInteger\(count\) \|\| count\} stored` : "nothing stored yet"/);
+});
