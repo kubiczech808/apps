@@ -288,6 +288,27 @@ async function tagScopeReport(slug) {
   }
   const events = eventsFrom(result.body);
   console.log(`   events in the next 7 days under tag_id=${id}: ${events.length}`);
+  // The decisive one. Polymarket attaches parent tags to child events -- esports events
+  // all carry `sports` too -- so if these carry it, they are inside the scope the scan
+  // already queries and the question is only how deep in the ordering they sit. If they
+  // do not, the scope genuinely cannot reach them however far it pages.
+  const underSports = events.filter((event) => eventTagSlugs(event).includes("sports")).length;
+  console.log(`   of those, carrying the "sports" tag as well: ${underSports} / ${events.length}`);
+  for (const event of events.slice(0, 3)) {
+    console.log(`     ${String(event.slug || "").slice(0, 60)} tags=[${eventTagSlugs(event).join(", ")}]`);
+  }
+
+  // What the scheduled scan would actually keep. It runs with a liquidity floor and a
+  // two-day horizon, so being in the scope is not the same as surviving the filter.
+  const liquidity = events.map((event) => Number(event?.liquidity || 0)).filter(Number.isFinite);
+  const twoDays = Date.now() + 2 * 86400000;
+  const withinTwoDays = events.filter((event) => {
+    const end = Date.parse(String(event?.endDate || event?.end_date || ""));
+    return Number.isFinite(end) && end <= twoDays;
+  }).length;
+  const overFloor = liquidity.filter((value) => value >= 40000).length;
+  console.log(`   scheduled-scan filters: ending within 2 days: ${withinTwoDays};`
+    + ` liquidity >= 40000: ${overFloor}; max liquidity seen: ${Math.max(0, ...liquidity).toFixed(0)}`);
   for (const line of sampleLines(events, 3)) console.log(`   sample: ${line}`);
   console.log("");
 }
