@@ -2375,7 +2375,15 @@ test("automation: every portfolio carries its own ON/OFF badge in its settings",
   assert.match(app, /document\.addEventListener\("click", \(event\) => \{\n\s*const toggle = event\.target\?\.closest\?\.\("\[data-automation-toggle\]"\);/);
   assert.ok(!/els\.automationToggle/.test(app), "no stale handle to an element that no longer exists at load");
   assert.ok(!/data-automation-toggle/.test(html), "and no static copy in the markup to go out of sync");
-  assert.match(html, /app\.css\?v=20260807-automation-in-rules/);
+
+  // This pinned the exact cache-buster the badge shipped with, which froze the
+  // stylesheet's version: every later CSS change failed this test for a reason that had
+  // nothing to do with the badge. What has to hold is that the badge is styled and that
+  // the stylesheet is versioned at all, so a browser holding an old copy re-fetches it.
+  const css = await readFile(new URL("../assets/app.css", import.meta.url), "utf8");
+  assert.match(css, /^\.automation-toggle \{/m, "the badge must be styled");
+  assert.match(css, /^\.automation-toggle\.is-off \{/m, "and off must look different from on");
+  assert.match(html, /app\.css\?v=[\w.-]+/, "and the stylesheet must be cache-busted");
 });
 
 test("live modes: nothing may treat 5050 as a paper portfolio", async () => {

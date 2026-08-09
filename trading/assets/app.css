@@ -1844,6 +1844,18 @@ body.modal-open {
   letter-spacing: 0.02em;
 }
 
+/* The run going on right now, so it reads as live rather than as one more finished
+   decision in the list. It links to its GitHub run; it is not a detail button. */
+.portfolio-run-live {
+  background: rgba(37, 99, 235, 0.06);
+  box-shadow: inset 3px 0 0 var(--accent-dark);
+  text-decoration: none;
+}
+
+.portfolio-run-live:hover {
+  background: rgba(37, 99, 235, 0.12);
+}
+
 .run-event {
   display: grid;
   grid-template-columns: minmax(80px, 0.7fr) minmax(48px, 0.35fr) minmax(0, 2fr) minmax(140px, 0.9fr);

@@ -2180,3 +2180,137 @@ test("after a scrape: the cron interval does not also throttle an after-scrape r
   // And the run log reports the same trigger the gate was decided on, not its own copy.
   assert.match(source, /executionTrigger: EXECUTION_TRIGGER,/);
 });
+
+// Asked for: a record of an execution that is running should appear in the run log while
+// it runs, and update when the run completes -- during it if possible.
+
+// Builds the in-flight row machinery against a stubbed dashboard state, so the real
+// functions decide rather than a restatement of them.
+function runningRowHarness({ target = "live-5050", run = null, now = Date.parse("2026-08-09T12:00:30Z") } = {}) {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const body = ["runningExecutionRun", "runningExecutionRow", "formatDuration", "newestRunAt",
+    "runningRowIsSuperseded", "withRunningExecutionRow"]
+    .map((name) => functionSource(app, name)).join("\n\n");
+  const state = { runningExecutions: { [target]: run }, runningExecutionWatermark: null };
+  const build = new Function("state", "currentExecutionTarget", "Date", `
+    ${body}
+    return { withRunningExecutionRow, runningExecutionRow };
+  `);
+  const clock = { ...Date, now: () => now, parse: Date.parse };
+  const api = build(state, () => target, clock);
+  return { ...api, state };
+}
+
+const IN_PROGRESS_RUN = {
+  id: 42,
+  status: "in_progress",
+  event: "schedule",
+  createdAt: "2026-08-09T12:00:00Z",
+  htmlUrl: "https://github.com/owner/repo/actions/runs/42",
+  progress: { job: "live-5050", step: "Rest the fixed-entry bids", stepNumber: 7, stepCount: 11 },
+};
+
+test("running execution: a run in flight is a row before it has published anything", () => {
+  const { withRunningExecutionRow } = runningRowHarness({ run: IN_PROGRESS_RUN });
+  const rows = withRunningExecutionRow([{ id: "older", action: "SKIP", runAt: "2026-08-09T11:30:00Z" }]);
+
+  assert.equal(rows.length, 2);
+  const [live] = rows;
+  assert.equal(live.action, "RUNNING");
+  assert.equal(live.runAt, "2026-08-09T12:00:00Z", "dated from when GitHub created the run");
+  assert.equal(live.runningExecution, true, "flagged, so the renderer does not offer a decision detail");
+  assert.equal(live.htmlUrl, IN_PROGRESS_RUN.htmlUrl);
+  // Not "MANUAL": that means a person asked, and the run log's own rows use it that way.
+  assert.equal(live.runSource, "AUTO");
+
+  // The point of the row is that it says something a spinner would not: where the run has
+  // got to, and for how long it has been there.
+  assert.equal(live.humanReason,
+    "Execution in progress: Rest the fixed-entry bids (step 7 of 11) · 30s elapsed.");
+
+  // A queued run is honest about being queued -- on the shared self-hosted runner that is
+  // itself the answer to why nothing has happened yet.
+  const queued = runningRowHarness({
+    run: { ...IN_PROGRESS_RUN, status: "queued", event: "workflow_dispatch", progress: null },
+  });
+  const [pending] = queued.withRunningExecutionRow([]);
+  assert.equal(pending.action, "QUEUED");
+  assert.equal(pending.runSource, "MANUAL", "a dispatch is a person");
+  assert.match(pending.humanReason, /^Execution in progress: waiting for a runner/);
+
+  // Nothing running, nothing added.
+  const idle = runningRowHarness({ run: null });
+  assert.deepEqual(idle.withRunningExecutionRow([{ id: "older" }]), [{ id: "older" }]);
+});
+
+test("running execution: the row gives way to the run's own entry, and not before", () => {
+  const existing = [{ id: "previous", action: "SKIP", runAt: "2026-08-09T11:30:00Z" }];
+  const harness = runningRowHarness({ run: IN_PROGRESS_RUN });
+
+  // First render sets the watermark from what the log already carried.
+  assert.equal(harness.withRunningExecutionRow(existing).length, 2, "the row appears");
+  assert.equal(harness.withRunningExecutionRow(existing).length, 2, "and stays while nothing new lands");
+
+  // The trap this is built to avoid: a *previous* run can stamp its decision after this
+  // run was created -- it is queued the moment it is dispatched but waits for the shared
+  // runner -- so comparing against the run's own start time would hide the live row
+  // before it had done anything.
+  const laggingPrevious = [{ id: "previous", action: "SKIP", runAt: "2026-08-09T12:00:20Z" }];
+  const lagging = runningRowHarness({ run: IN_PROGRESS_RUN });
+  assert.equal(lagging.withRunningExecutionRow(laggingPrevious).length, 2,
+    "a row stamped after the run was created is not evidence the run published it");
+
+  // What does supersede it: an entry newer than anything the log held when it appeared.
+  const published = [{ id: "this-run", action: "SUBMITTED", runAt: "2026-08-09T12:01:00Z" }, ...existing];
+  assert.deepEqual(harness.withRunningExecutionRow(published), published,
+    "once the run has published, its own row is the record and the placeholder goes");
+});
+
+test("running execution: status is read from GitHub, and only for a run still going", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, api] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../api.php", import.meta.url), "utf8"),
+  ]);
+
+  // Read rather than published by the run at its start: a run that dies, is cancelled or
+  // never gets a runner would leave a RUNNING row on the hosting with nothing to clear it.
+  const poll = functionSource(app, "pollRunningExecution");
+  assert.match(poll, /run\.status === "queued" \|\| run\.status === "in_progress"/);
+  assert.match(poll, /event=all/, "a cron or post-scrape run is exactly the one not to miss");
+  // A failed status read must not flicker the row away.
+  assert.match(poll, /\} catch \{\n(?:\s*\/\/[^\n]*\n)*\s+return;\n\s+\}/);
+  // And when the run ends, the state is re-read once so the real row can take over.
+  assert.match(poll, /if \(finished\) await loadDashboardState\(\{ skipAutoLiveSync: true \}\);/);
+
+  // 5050 had no entry in the workflow map, so every status read for it answered 400.
+  assert.match(api, /'live-5050' => 'trading-live-5050\.yml',/);
+  // The default stays dispatch-only: the watcher that waits on a button press must not
+  // adopt a cron run that started meanwhile.
+  assert.match(api, /\$eventFilter = strtolower\(trim\(\(string\) \(\$_GET\['event'\] \?\? 'workflow_dispatch'\)\)\);/);
+  assert.match(api, /if \(\$eventFilter !== '' && \$eventFilter !== 'all'\) \{\n\s+\$query\['event'\] = \$eventFilter;/);
+
+  // The progress read is what lets the row say more than "in progress", and it is skipped
+  // for a completed run -- so an idle dashboard pays for no extra GitHub request.
+  assert.match(api, /if \(\$runId <= 0 \|\| \$status === 'completed'\) \{\n\s+return null;/);
+  assert.match(api, /\$runs\[0\]\['progress'\] = workflow_progress_detail\(\$raw, \$config\);/);
+});
+
+test("running execution: the live row is not a decision to open", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const render = functionSource(app, "renderRunLog");
+
+  // A run still going has no decision behind it, so it must not be a detail button that
+  // opens an empty panel. It links to its GitHub run, where there is more to see.
+  assert.match(render, /if \(run\.runningExecution\) \{/);
+  assert.match(render, /class="trade-batch portfolio-run-row portfolio-run-live" href=/);
+  // The remaining rows keep their index into the same array the click handler reads, so
+  // adding a row at the top must not shift what a click opens.
+  assert.match(render, /data-portfolio-run="\$\{index\}"/);
+  assert.match(app, /state\.displayedRunLog = runs;/);
+
+  // Both paper and live logs carry it: the request was about the run log, not one tab.
+  const currentLog = functionSource(app, "currentPortfolioRunLog");
+  assert.equal((currentLog.match(/withRunningExecutionRow\(/g) || []).length, 2);
+});

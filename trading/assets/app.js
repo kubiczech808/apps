@@ -92,6 +92,12 @@ const state = {
   categoryKind: "all",
   displayedRunLog: [],
   runLogFilters: [],
+  // The execution GitHub says is running right now, per workflow target, so the run log
+  // can show it before the run has published anything of its own.
+  runningExecutions: {},
+  // What the log already carried when that run appeared, so a row published later is
+  // recognisable as this run's own.
+  runningExecutionWatermark: null,
   // How many candidate rows the table is currently showing. The list used to stop at
   // 80 with nothing to say it had, so a portfolio with more candidates than that
   // simply hid the rest. It grows as the table is scrolled, and resets only when the
@@ -142,6 +148,10 @@ const LIVE_SYNC_REQUEST_MS = 600000;
 // but not so often that holding the button down can flood the queue again.
 const LIVE_SYNC_MANUAL_SECONDS = 120;
 const USER_NAV_REFRESH_DEBOUNCE_MS = 250;
+// How often the dashboard asks GitHub whether an execution is running. This reads run
+// status only -- it dispatches nothing -- so unlike the sync request above it costs the
+// runners nothing, and 15s is close enough to live for a run that takes about a minute.
+const EXECUTION_WATCH_MS = 15000;
 const APP_BASE_PATH = "/trading/";
 
 const els = {
@@ -1052,6 +1062,9 @@ function refreshDashboardAfterUserNavigation() {
   window.clearTimeout(state.userNavRefreshTimer);
   state.userNavRefreshTimer = window.setTimeout(() => {
     loadDashboardState({ skipAutoLiveSync: true });
+    // Each portfolio watches its own workflow, so a freshly opened tab must ask rather
+    // than wait out the interval and show nothing while a run of its own is going.
+    pollRunningExecution(currentExecutionTarget());
   }, USER_NAV_REFRESH_DEBOUNCE_MS);
 }
 
@@ -7823,9 +7836,119 @@ function mergeUniqueByRun(rows = []) {
 }
 
 function currentPortfolioRunLog() {
-  if (isLiveMode()) return liveRunLogRows();
+  if (isLiveMode()) return withRunningExecutionRow(liveRunLogRows());
   const portfolio = selectedPaperPortfolio(state.botState || {});
-  return Array.isArray(portfolio.runLog) ? portfolio.runLog.filter((row) => !isCadenceWaitRun(row)) : [];
+  const rows = Array.isArray(portfolio.runLog) ? portfolio.runLog.filter((row) => !isCadenceWaitRun(row)) : [];
+  return withRunningExecutionRow(rows);
+}
+
+// A run that has started but not yet published anything of its own. Read from GitHub
+// rather than published by the run at its start: a run that dies, is cancelled, or never
+// gets a runner would leave a "RUNNING" row on the hosting forever, and this way the row
+// disappears exactly when GitHub says the run is over. It also covers runs nobody
+// dispatched from here -- cron and post-scrape -- which are now most of them.
+async function pollRunningExecution(target) {
+  if (!target) return;
+  let running = null;
+  try {
+    const status = await fetchApiJson(
+      `api.php?action=workflow-status&target=${encodeURIComponent(target)}&event=all`,
+    );
+    running = (status.runs || []).find((run) => run.status === "queued" || run.status === "in_progress") || null;
+  } catch {
+    // A failed status read says nothing about whether a run is going. Keeping the last
+    // answer is better than flickering the row away on one bad response.
+    return;
+  }
+  const previous = state.runningExecutions[target] || null;
+  state.runningExecutions = { ...state.runningExecutions, [target]: running };
+  const finished = previous && (!running || String(running.id) !== String(previous.id));
+  // Only when the log's contents actually change. Re-rendering on every poll would throw
+  // a reader who has scrolled back through the log to the top every fifteen seconds, and
+  // an idle desk -- the usual case -- has nothing to redraw at all.
+  if (running || finished) rerenderRunLogInPlace();
+  // The run has ended, so its own row exists now -- but only in state we have not
+  // re-read. One reload replaces the synthetic row with what the run actually decided.
+  if (finished) await loadDashboardState({ skipAutoLiveSync: true });
+}
+
+// The run log is a scrollable list someone may be reading back through, and this redraws
+// it while they are. Keeping the offset means the live row updates under them rather than
+// yanking them to the top.
+function rerenderRunLogInPlace() {
+  const offset = els.runLog?.querySelector(".ledger-scroll")?.scrollTop || 0;
+  renderRunLog();
+  const scroller = els.runLog?.querySelector(".ledger-scroll");
+  if (scroller) scroller.scrollTop = offset;
+}
+
+function runningExecutionRun() {
+  return state.runningExecutions[currentExecutionTarget()] || null;
+}
+
+// The synthetic row. Shaped like a real run-log entry so the list, the filter and the
+// source column need no special case; `humanReason` is what the message column renders.
+function runningExecutionRow() {
+  const run = runningExecutionRun();
+  if (!run) return null;
+  const startedAt = run.createdAt || null;
+  const elapsedMs = Date.parse(startedAt || "");
+  const elapsed = Number.isFinite(elapsedMs) ? Math.max(0, Math.round((Date.now() - elapsedMs) / 1000)) : null;
+  const progress = run.progress || null;
+  const where = progress?.step
+    ? `${progress.step}${progress.stepCount ? ` (step ${progress.stepNumber} of ${progress.stepCount})` : ""}`
+    : (run.status === "queued" ? "waiting for a runner" : "starting");
+  return {
+    id: `running-workflow-${run.id}`,
+    action: run.status === "queued" ? "QUEUED" : "RUNNING",
+    runAt: startedAt,
+    // A dispatch is a person only when the dashboard asked; everything else is the
+    // schedule. The run log's own rows are labelled the same way.
+    runSource: run.event === "workflow_dispatch" ? "MANUAL" : "AUTO",
+    runningExecution: true,
+    htmlUrl: run.htmlUrl || null,
+    humanReason: `Execution in progress: ${where}${elapsed == null ? "" : ` · ${formatDuration(elapsed)} elapsed`}.`,
+  };
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds)) return "-";
+  if (seconds < 90) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function newestRunAt(rows = []) {
+  let newest = 0;
+  for (const row of rows) {
+    const at = Date.parse(row?.runAt || row?.generatedAt || "");
+    if (Number.isFinite(at) && at > newest) newest = at;
+  }
+  return newest;
+}
+
+// The run has published its own row once the log carries an entry newer than anything it
+// carried when this run first appeared. Comparing against the run's own start time instead
+// looks simpler and is wrong: a previous run can stamp its decision after this one was
+// created -- it is queued the moment it is dispatched but waits for the shared runner --
+// and that row would hide the running one before it had done anything.
+//
+// The watermark is taken from the rows themselves on the first render after the run
+// appears, which is by definition before the run could have published.
+function runningRowIsSuperseded(run, rows = []) {
+  const key = String(run?.id || "");
+  if (!key) return false;
+  if (state.runningExecutionWatermark?.key !== key) {
+    state.runningExecutionWatermark = { key, at: newestRunAt(rows) };
+    return false;
+  }
+  return newestRunAt(rows) > state.runningExecutionWatermark.at;
+}
+
+function withRunningExecutionRow(rows = []) {
+  const running = runningExecutionRow();
+  if (!running || runningRowIsSuperseded(running, rows)) return rows;
+  return [running, ...rows];
 }
 
 function runActionValue(run = {}) {
@@ -8016,13 +8139,21 @@ function renderRunLog() {
     <div class="trade-batches portfolio-run-list">
       ${runs.slice(0, 120).map((run, index) => {
         const batch = run.batchLog || run;
-        return `
-          <button class="trade-batch portfolio-run-row" type="button" data-portfolio-run="${index}">
+        const cells = `
             <span class="${runActionClass(run.action || batch.action)}">${escapeHtml(run.action || batch.action || "-")}</span>
             <strong>${escapeHtml(run.runAt || run.generatedAt ? formatDate(run.runAt || run.generatedAt) : "-")}</strong>
             <span>${runLogMessageMarkup(run)}</span>
             <span class="portfolio-run-source">${portfolioRunSource(run)}</span>
-          </button>
+        `;
+        // A run still going has no decision to open, so it is not a detail button. It
+        // links to its GitHub run instead, which is the only place with more to say.
+        if (run.runningExecution) {
+          return run.htmlUrl
+            ? `<a class="trade-batch portfolio-run-row portfolio-run-live" href="${escapeHtml(run.htmlUrl)}" target="_blank" rel="noopener noreferrer">${cells}</a>`
+            : `<div class="trade-batch portfolio-run-row portfolio-run-live">${cells}</div>`;
+        }
+        return `
+          <button class="trade-batch portfolio-run-row" type="button" data-portfolio-run="${index}">${cells}</button>
         `;
       }).join("")}
     </div>
@@ -8902,7 +9033,16 @@ updateSchedulePanel();
 window.setInterval(updateSchedulePanel, 60000);
 loadDashboardState().then(() => {
   if (isLiveMode()) requestLiveAccountSync({ quiet: true });
+  pollRunningExecution(currentExecutionTarget());
 });
+
+// Reads run status only; it dispatches nothing, so unlike the sync request below it costs
+// the runners nothing. The row it drives also re-renders on every poll, which is what
+// keeps the elapsed time and the current step moving while the run is still going.
+window.setInterval(() => {
+  if (document.hidden) return;
+  pollRunningExecution(currentExecutionTarget());
+}, EXECUTION_WATCH_MS);
 
 // Paced by LIVE_SYNC_REQUEST_MS, not by the state-refresh interval. Polling the dispatch
 // endpoint every 15s only worked because the server throttled it; asking on the same slow

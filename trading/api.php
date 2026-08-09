@@ -1488,6 +1488,67 @@ function github_json_request(string $url): array
     return $decoded;
 }
 
+// Where a run that is still going has got to: the step it is executing, and when that step
+// started. Without it an in-flight run can only say "in progress", which after two minutes
+// tells the reader nothing about whether it is working or wedged.
+function workflow_progress_detail(array $run, array $config): ?array
+{
+    $runId = (int) ($run['id'] ?? 0);
+    $status = strtolower((string) ($run['status'] ?? ''));
+    if ($runId <= 0 || $status === 'completed') {
+        return null;
+    }
+
+    $url = sprintf(
+        'https://api.github.com/repos/%s/actions/runs/%d/jobs?per_page=100',
+        rawurlencode($config['repo']),
+        $runId
+    );
+    $url = str_replace('%2F', '/', $url);
+    try {
+        $payload = github_json_request($url);
+    } catch (Throwable $e) {
+        // A progress read is decoration; failing it must not fail the status call that
+        // tells the dashboard a run exists at all.
+        return null;
+    }
+
+    foreach (($payload['jobs'] ?? []) as $job) {
+        if (!is_array($job) || strtolower((string) ($job['status'] ?? '')) === 'completed') {
+            continue;
+        }
+        $completedSteps = 0;
+        $steps = is_array($job['steps'] ?? null) ? $job['steps'] : [];
+        foreach ($steps as $step) {
+            if (is_array($step) && strtolower((string) ($step['status'] ?? '')) === 'completed') {
+                $completedSteps += 1;
+            }
+        }
+        foreach ($steps as $step) {
+            if (!is_array($step) || strtolower((string) ($step['status'] ?? '')) !== 'in_progress') {
+                continue;
+            }
+            return [
+                'job' => trim((string) ($job['name'] ?? '')),
+                'step' => trim((string) ($step['name'] ?? '')),
+                'stepStartedAt' => $step['started_at'] ?? null,
+                'stepNumber' => $completedSteps + 1,
+                'stepCount' => count($steps),
+            ];
+        }
+        // Between steps, or the job is still waiting for a runner -- which on the shared
+        // self-hosted runner is itself the answer to "why has nothing happened yet".
+        return [
+            'job' => trim((string) ($job['name'] ?? '')),
+            'step' => strtolower((string) ($job['status'] ?? '')) === 'queued' ? 'waiting for a runner' : '',
+            'stepStartedAt' => $job['started_at'] ?? null,
+            'stepNumber' => $completedSteps,
+            'stepCount' => count($steps),
+        ];
+    }
+    return null;
+}
+
 function workflow_failure_detail(array $run, array $config): ?string
 {
     $runId = (int) ($run['id'] ?? 0);
@@ -1536,10 +1597,27 @@ function workflow_status_payload(string $target): array
         'paper-evaluation' => 'trading-paper-evaluation.yml',
         'paper-refresh' => 'trading-paper-bot.yml',
         'live' => 'polymarket-live-limit-order-test.yml',
+        // 5050 dispatches its own workflow but had no entry here, so every status read for
+        // it answered 400: its run watcher spent all 32 polls on "status unavailable", and
+        // nothing about a 5050 run in flight could be shown anywhere.
+        'live-5050' => 'trading-live-5050.yml',
         'live-sync' => 'trading-live-account.yml',
     ];
     if (!isset($workflows[$targetKey])) {
         respond(['ok' => false, 'error' => 'Unknown workflow target'], 400);
+    }
+
+    // Which runs count. The default stays dispatches only, because the caller that waits
+    // on a button press must not mistake a cron run that started meanwhile for its own.
+    // `event=all` is for the opposite question -- is anything running right now -- where
+    // a scheduled or post-scrape run is exactly what must not be missed.
+    $eventFilter = strtolower(trim((string) ($_GET['event'] ?? 'workflow_dispatch')));
+    $query = [
+        'branch' => $config['ref'],
+        'per_page' => 5,
+    ];
+    if ($eventFilter !== '' && $eventFilter !== 'all') {
+        $query['event'] = $eventFilter;
     }
 
     $workflow = $workflows[$targetKey];
@@ -1547,11 +1625,7 @@ function workflow_status_payload(string $target): array
         'https://api.github.com/repos/%s/actions/workflows/%s/runs?%s',
         rawurlencode($config['repo']),
         rawurlencode($workflow),
-        http_build_query([
-            'branch' => $config['ref'],
-            'event' => 'workflow_dispatch',
-            'per_page' => 5,
-        ])
+        http_build_query($query)
     );
     $url = str_replace('%2F', '/', $url);
     $payload = github_json_request($url);
@@ -1580,8 +1654,13 @@ function workflow_status_payload(string $target): array
         ];
     }
 
+    // Both details cost an extra jobs request, so only the newest run gets them -- and
+    // each returns null for a run in the state the other one is about, so a completed run
+    // never pays for a progress read nor a running one for a failure read.
     if (isset($runs[0]) && is_array($runs[0])) {
-        $runs[0]['failureDetail'] = workflow_failure_detail($rawRunsById[(string) ($runs[0]['id'] ?? '')] ?? [], $config);
+        $raw = $rawRunsById[(string) ($runs[0]['id'] ?? '')] ?? [];
+        $runs[0]['failureDetail'] = workflow_failure_detail($raw, $config);
+        $runs[0]['progress'] = workflow_progress_detail($raw, $config);
     }
 
     return [
