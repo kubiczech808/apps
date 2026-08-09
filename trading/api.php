@@ -679,6 +679,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
+                'excludedMarketTags' => [],
             ],
             'highReward' => [
                 'minProbability' => 0.6,
@@ -691,6 +692,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
+                'excludedMarketTags' => [],
             ],
             'moreProbable' => [
                 'minProbability' => 0.6,
@@ -703,6 +705,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
+                'excludedMarketTags' => [],
             ],
         ],
         'live' => [
@@ -717,6 +720,7 @@ function default_portfolio_config(): array
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'ai',
             'excludedCandidateTokenIds' => [],
+            'excludedMarketTags' => [],
         ],
         // 5050 rests a bid at a fixed point on the 0..1 scale across every candidate
         // that clears its probability bar, rather than buying the best one at the
@@ -739,6 +743,7 @@ function default_portfolio_config(): array
             // this strategy rests bids against actually live. Empty means every tag.
             'allowedMarketTags' => ['sports', 'esports'],
             'excludedCandidateTokenIds' => [],
+            'excludedMarketTags' => [],
         ],
         'system' => [
             'crossLivePortfolioRiskDiversification' => true,
@@ -885,11 +890,12 @@ function normalize_execution_trigger_value(mixed $value): string
     return $value === 'after_scrape' ? 'after_scrape' : 'cron';
 }
 
-// Which Polymarket tags 5050 may bid on. An empty list means every tag, so the setting can
-// be cleared rather than only narrowed. Slugs are normalized the way the dashboard's tag
+// A list of Polymarket tags saved on a portfolio: the tags 5050 may bid on, or the tags any
+// portfolio refuses outright. Both are the same shape, and both accept a saved list or a
+// typed comma/space separated string. Slugs are normalized the way the dashboard's tag
 // picker normalizes them, or a tag typed with a capital or a space would never match the
 // tags stored on a market.
-function normalize_allowed_market_tags(mixed $value): array
+function normalize_market_tag_list(mixed $value): array
 {
     if (is_string($value)) {
         $value = preg_split('/[,\s]+/', $value) ?: [];
@@ -950,6 +956,11 @@ function normalize_strategy_config(array $input, array $defaults): array
         'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
         'probabilitySource' => normalize_probability_source_value($input['probabilitySource'] ?? $defaults['probabilitySource']),
         'excludedCandidateTokenIds' => normalize_excluded_candidate_token_ids($input['excludedCandidateTokenIds'] ?? $defaults['excludedCandidateTokenIds'] ?? []),
+        // Whole tags this portfolio refuses, dropped before a candidate is ever ranked.
+        // Every portfolio carries it, unlike 5050's allow-list. Empty is the default and
+        // means nothing is excluded, so unlike the allow-list an absent value and an
+        // explicitly cleared one mean the same thing and need no special case here.
+        'excludedMarketTags' => normalize_market_tag_list($input['excludedMarketTags'] ?? $defaults['excludedMarketTags'] ?? []),
     ];
 }
 
@@ -984,7 +995,7 @@ function normalize_portfolio_config(array $input): array
     // Absent keeps the default; an explicitly empty list means every tag, so the
     // restriction can be lifted and not only narrowed.
     $config['live5050']['allowedMarketTags'] = array_key_exists('allowedMarketTags', $fixedInput)
-        ? normalize_allowed_market_tags($fixedInput['allowedMarketTags'])
+        ? normalize_market_tag_list($fixedInput['allowedMarketTags'])
         : $defaults['live5050']['allowedMarketTags'];
     $config['system'] = [
         'crossLivePortfolioRiskDiversification' => (bool) ($systemInput['crossLivePortfolioRiskDiversification'] ?? $defaults['system']['crossLivePortfolioRiskDiversification']),

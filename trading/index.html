@@ -365,6 +365,11 @@
           <input type="text" placeholder="sports, esports" data-fixed-entry-tags>
           <strong data-fixed-entry-tags-label>sports, esports</strong>
         </label>
+        <label class="parameter-control" title="Comma separated Polymarket tags this portfolio refuses. A market carrying any of them is dropped before it can become a candidate. Leave empty to exclude nothing.">
+          <span>Excluded tags</span>
+          <input type="text" placeholder="politics, elections" data-excluded-tags>
+          <strong data-excluded-tags-label>none</strong>
+        </label>
         <label class="parameter-control" data-execution-cron-row>
           <span>Run the cron every</span>
           <select data-execution-cron-minutes>
@@ -396,6 +401,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260808-price-signatures"></script>
+  <script src="assets/app.js?v=20260809-excluded-tags"></script>
 </body>
 </html>

@@ -105,14 +105,23 @@ const FIXED_ENTRY_STAKE_USDC = Math.max(0, envNumber("LIVE_FIXED_ENTRY_STAKE_USD
 // Timed from the start of the placement loop, which is the only part that grows with the
 // number of events; the setup around it is fixed cost.
 const FIXED_ENTRY_BUDGET_MS = Math.max(0, envNumber("LIVE_FIXED_ENTRY_BUDGET_MS", 40000) || 0);
+function envTagSet(name) {
+  return new Set(
+    String(process.env[name] || "")
+      .split(/[,\s]+/)
+      .map((tag) => tag.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""))
+      .filter(Boolean),
+  );
+}
+
 // Which Polymarket tags this strategy may bid on. Empty means every tag, so the setting
 // can be cleared and not only narrowed.
-const FIXED_ENTRY_ALLOWED_TAGS = new Set(
-  String(process.env.LIVE_FIXED_ENTRY_ALLOWED_TAGS || "")
-    .split(/[,\s]+/)
-    .map((tag) => tag.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""))
-    .filter(Boolean),
-);
+const FIXED_ENTRY_ALLOWED_TAGS = envTagSet("LIVE_FIXED_ENTRY_ALLOWED_TAGS");
+// Whole tags this portfolio refuses, whatever else a market carrying one has going for
+// it. Unlike the allow-list above this is a setting of every portfolio, so it is applied
+// in the shared prefilter and both live strategies inherit it. Empty excludes nothing,
+// which is also what an unset variable means -- so no special case is needed to clear it.
+const EXCLUDED_MARKET_TAGS = envTagSet("LIVE_EXCLUDED_MARKET_TAGS");
 const FIXED_ENTRY_PROGRESS_EVERY = Math.max(1, envNumber("LIVE_FIXED_ENTRY_PROGRESS_EVERY", 5) || 5);
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
@@ -684,6 +693,13 @@ function prefilterLiveCandidate(item) {
 
   if (!tokenId) reasons.push("missing token id");
   if (EXCLUDED_CANDIDATE_TOKEN_IDS.has(tokenId)) reasons.push("manually excluded from this live portfolio");
+  // The tag exclusion is the same idea one level up: not this market, but any market
+  // carrying these tags. Applied here rather than in either strategy, so both live
+  // portfolios honour it and neither can be given a candidate it has refused.
+  const excludedTags = excludedMarketTagsOn(item);
+  if (excludedTags.length) {
+    reasons.push(`excluded tag${excludedTags.length > 1 ? "s" : ""} ${excludedTags.join(", ")}`);
+  }
   if (status === "ERROR") {
     reasons.push("stored status ERROR");
   } else if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
@@ -2403,6 +2419,14 @@ function marketTagIsAllowed(row = {}) {
     if (slugs.has(tag)) return true;
   }
   return false;
+}
+
+// Which of the portfolio's excluded tags this market carries, so a rejection can name
+// the tag that caused it rather than only that one did.
+function excludedMarketTagsOn(row = {}) {
+  if (!EXCLUDED_MARKET_TAGS.size) return [];
+  const slugs = marketTagSlugs(row);
+  return [...EXCLUDED_MARKET_TAGS].filter((tag) => slugs.has(tag));
 }
 
 function fixedEntryRowFacts(row = {}) {

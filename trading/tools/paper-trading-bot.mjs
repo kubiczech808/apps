@@ -39,6 +39,16 @@ function envTokenIdSet(name) {
     .filter((tokenId) => /^\d{8,100}$/.test(tokenId)));
 }
 
+// Whole Polymarket tags a portfolio refuses. Slugged the way the dashboard and the live
+// executor slug them, or a tag saved as "E-Sports" would never match the `esports` a
+// market carries. Empty excludes nothing, which is what an unset variable means too.
+function envTagSet(name) {
+  return new Set(String(process.env[name] || "")
+    .split(/[,\s]+/)
+    .map((tag) => tag.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter(Boolean));
+}
+
 const OUTPUT_PATH = process.env.PAPER_STATE_PATH || "data/paper-state.json";
 const SCAN_HISTORY_ENTRY_PATH = process.env.PAPER_SCAN_HISTORY_ENTRY_PATH || "data/market-scan-history-entry.ndjson";
 // Written only when a scan attempt failed. The scan workflow publishes the state first and
@@ -289,6 +299,7 @@ const PAPER_STRATEGIES = {
     requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_CONSERVATIVE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
+    excludedMarketTags: envTagSet("PAPER_CONSERVATIVE_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_CONSERVATIVE_SELECTION_ORDER", "highest_ev_pa_first"),
     description: `Requires the configured probability source to meet ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then selects the highest EV p.a.`,
   },
@@ -307,6 +318,7 @@ const PAPER_STRATEGIES = {
     requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_HIGH_REWARD_EXCLUDED_CANDIDATE_TOKEN_IDS"),
+    excludedMarketTags: envTagSet("PAPER_HIGH_REWARD_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_HIGH_REWARD_SELECTION_ORDER", "highest_reward_risk_first"),
     description: `Requires the configured probability source to meet ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then prioritizes eligible opportunities by highest reward against risk.`,
   },
@@ -325,6 +337,7 @@ const PAPER_STRATEGIES = {
     requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_MORE_PROBABLE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
+    excludedMarketTags: envTagSet("PAPER_MORE_PROBABLE_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_MORE_PROBABLE_SELECTION_ORDER", "highest_reward_risk_first"),
     description: `Requires the configured probability source to meet ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, deep liquidity, and multichoice-style event markets.`,
   },
@@ -4330,6 +4343,8 @@ function strategyEligibleCandidates(eligible, strategy) {
   let rows = [...eligible].filter((item) => {
     const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
     if (strategy.excludedCandidateTokenIds?.has(tokenId)) return false;
+    // A tag the portfolio refuses drops the row before anything is measured on it.
+    if (excludedTagsOnRow(item, strategy).length) return false;
     const minProbability = Number(strategy.minProbability);
     const selectedProbability = Number(strategy.probabilitySource === "polymarket" ? (item.marketProbability ?? item.marketPrice) : item.aiProbability);
     if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) return false;
@@ -4367,6 +4382,35 @@ function rowVolumeUsdc(item = {}) {
     if (Number.isFinite(numeric) && numeric > 0) return numeric;
   }
   return 0;
+}
+
+// Gamma returns tags both as plain strings and as {label,slug} objects, and a row carries
+// them under more than one field depending on which pass recorded it. Category counts as a
+// tag here: it is the field a row scraped before tags were captured has to be judged on.
+function rowTagSlugs(item = {}) {
+  const slugs = new Set();
+  const slugify = (value) => String(value ?? "")
+    .trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  for (const list of [item.polymarketTags, item.tags, item.firstTags]) {
+    for (const raw of (Array.isArray(list) ? list : [])) {
+      const tag = slugify(raw && typeof raw === "object" ? (raw.slug || raw.label || raw.name || "") : raw);
+      if (tag) slugs.add(tag);
+    }
+  }
+  for (const key of [item.riskCategory, item.category, item.firstCategory]) {
+    const tag = slugify(key);
+    if (tag) slugs.add(tag);
+  }
+  return slugs;
+}
+
+// Which of the strategy's excluded tags this row carries, so a rejection can name the tag
+// that caused it. An empty setting excludes nothing and never reads the row's tags.
+function excludedTagsOnRow(item, strategy) {
+  const excluded = strategy?.excludedMarketTags;
+  if (!excluded?.size) return [];
+  const slugs = rowTagSlugs(item);
+  return [...excluded].filter((tag) => slugs.has(tag));
 }
 
 // Number(null) and Number("") are 0, so the usual Number(x) turns an absent value
@@ -4430,6 +4474,10 @@ function portfolioFilterResult(item, strategy) {
 
   if (binaryOutcomeQuotesAreBothZero(item)) reasons.push("binary YES/NO quotes are both 0%; market appears resolved");
   if (strategy.excludedCandidateTokenIds?.has(tokenId)) reasons.push("manually excluded from this paper portfolio");
+  const excludedTags = excludedTagsOnRow(item, strategy);
+  if (excludedTags.length) {
+    reasons.push(`excluded tag${excludedTags.length > 1 ? "s" : ""} ${excludedTags.join(", ")}`);
+  }
   if (probabilitySource === "ai" && status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
   if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
     reasons.push(`base status ${status || "UNKNOWN"} is not executable`);

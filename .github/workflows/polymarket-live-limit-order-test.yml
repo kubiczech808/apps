@@ -187,6 +187,10 @@ jobs:
               # Default on: a portfolio that never stored the field must keep trading.
               "LIVE_AUTOMATION_ENABLED": str(bool(live.get("automationEnabled", True))).lower(),
               "LIVE_EXCLUDED_CANDIDATE_TOKEN_IDS": ",".join(str(token) for token in (live.get("excludedCandidateTokenIds") or []) if str(token).isdigit()),
+              # Whole tags this portfolio refuses. Empty excludes nothing, which is what an
+              # unset variable means too, so the loop skipping it clears the setting rather
+              # than stranding it.
+              "LIVE_EXCLUDED_MARKET_TAGS": ",".join(str(tag).strip() for tag in (live.get("excludedMarketTags") or []) if str(tag).strip()),
               "USE_LIMIT_ORDERS": str(bool(live.get("useLimitOrders", True))).lower(),
               "LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION": str(bool(system.get("crossLivePortfolioRiskDiversification", True))).lower(),
           }

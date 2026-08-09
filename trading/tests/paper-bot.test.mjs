@@ -2493,7 +2493,7 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
   const branch = /if \(isFixedEntryMode\(mode\)\) \{[\s\S]*?return reasons;\n  \}/.exec(app)[0];
   const run = new Function("item", "config", "mode", "deps", `
     const {isFixedEntryMode,normalizeFixedEntryPrice,probability,money,compactDays,
-      normalizeAllowedMarketTags,marketMatchesAllowedTags}=deps;
+      normalizeMarketTagList,marketMatchesAllowedTags}=deps;
     const reasons=[];
     const liquidity=Number(item.volumeUsdc||0), minLiquidity=Number(config.minLiquidityUsdc);
     const days=Number(item.daysToResolution), maxDays=Number(config.maxResolutionDays);
@@ -2506,7 +2506,7 @@ test("5050: the candidate list is judged by its own rule, not market-price econo
     money: (v) => `$${Number(v).toFixed(0)}`,
     compactDays: (d) => `${d} d`,
     // The tag restriction is covered by its own test; here it must not interfere.
-    normalizeAllowedMarketTags: (value) => (Array.isArray(value) ? value : []),
+    normalizeMarketTagList: (value) => (Array.isArray(value) ? value : []),
     marketMatchesAllowedTags: () => true,
   };
   const config = { fixedEntryPrice: 0.5, minLiquidityUsdc: 100, maxResolutionDays: 30 };
@@ -3405,7 +3405,7 @@ test("5050 tags: the setting defaults to sports and esports and reaches the exec
   // Absent keeps the default; an explicitly empty list must clear the restriction, or it
   // could only ever be narrowed once set.
   assert.match(api, /array_key_exists\('allowedMarketTags', \$fixedInput\)/);
-  assert.match(api, /\? normalize_allowed_market_tags\(\$fixedInput\['allowedMarketTags'\]\)/);
+  assert.match(api, /\? normalize_market_tag_list\(\$fixedInput\['allowedMarketTags'\]\)/);
 
   // The saved value has to survive the trip: an empty list is a real setting and must be
   // written to the environment rather than skipped as "unset".
@@ -3414,8 +3414,10 @@ test("5050 tags: the setting defaults to sports and esports and reaches the exec
   assert.match(workflow, /if value is None or \(value == "" and key not in always_write\):/);
   assert.match(workflow, /LIVE_FIXED_ENTRY_ALLOWED_TAGS: "sports,esports"/, "and a fallback if the config cannot be read");
 
-  // The executor rejects an off-tag market before anything that costs a request.
-  assert.match(executor, /const FIXED_ENTRY_ALLOWED_TAGS = new Set\(/);
+  // The executor rejects an off-tag market before anything that costs a request. The set
+  // is built by the shared envTagSet now that the per-portfolio exclusion list needs the
+  // same slugging; this used to be an inline `new Set(...)`.
+  assert.match(executor, /const FIXED_ENTRY_ALLOWED_TAGS = envTagSet\("LIVE_FIXED_ENTRY_ALLOWED_TAGS"\);/);
   assert.match(executor, /if \(!marketTagIsAllowed\(row\)\) \{\n\s+note\(`outside this portfolio's tags/);
   // And it is editable, with the tag row shown only on the 5050 tab.
   assert.match(html, /<input type="text" placeholder="sports, esports" data-fixed-entry-tags>/);
@@ -3443,22 +3445,21 @@ test("5050 tags: the shortlist and the run agree on which markets qualify", asyn
 
   const dashboard = new Function(`
     ${pick(app, "normalizedScrapedScanTag")}
-    ${pick(app, "normalizeAllowedMarketTags")}
+    ${pick(app, "normalizeMarketTagList")}
     ${pick(app, "marketTagSlugsOf")}
+    ${pick(app, "marketCarriesAnyTag")}
     ${pick(app, "marketMatchesAllowedTags")}
-    return { normalizeAllowedMarketTags, marketMatchesAllowedTags };
+    return { normalizeMarketTagList, marketMatchesAllowedTags };
   `)();
-  const executorFor = (envValue) => {
-    const declaration = /const FIXED_ENTRY_ALLOWED_TAGS = new Set\([\s\S]*?\n\);/.exec(executor)[0];
-    return new Function("process", `
-      ${declaration}
+  const executorFor = (envValue) => new Function("process", `
+      ${pick(executor, "envTagSet")}
+      const FIXED_ENTRY_ALLOWED_TAGS = envTagSet("LIVE_FIXED_ENTRY_ALLOWED_TAGS");
       ${pick(executor, "marketTagSlugs")}
       ${pick(executor, "marketTagIsAllowed")}
       return { marketTagIsAllowed, tags: [...FIXED_ENTRY_ALLOWED_TAGS] };
     `)({ env: { LIVE_FIXED_ENTRY_ALLOWED_TAGS: envValue } });
-  };
 
-  const allowed = dashboard.normalizeAllowedMarketTags(["Sports", "esports", "esports", " "]);
+  const allowed = dashboard.normalizeMarketTagList(["Sports", "esports", "esports", " "]);
   assert.deepEqual(allowed, ["sports", "esports"], "typed input is slugged and de-duplicated");
   const run = executorFor(allowed.join(","));
   assert.deepEqual(run.tags, ["sports", "esports"], "and the executor reads the same set");
@@ -3789,4 +3790,169 @@ test("5050 orders: a bid is recognised at every price the portfolio bids at", as
   // A dry run placed nothing, so its price is not evidence of anything.
   const dryOnly = { runLog: [{ attempts: [{ tokenId: "999", orderPrice: 0.52, action: "DRY_RUN_READY" }] }] };
   assert.deepEqual(ids("live", dryOnly, 0.5).sort(), ["o-1", "o-2"]);
+});
+
+// Asked for: the ability to exclude whole event tags from a portfolio's candidates, as a
+// portfolio parameter in the same shape as 5050's tag filter -- but on every portfolio,
+// and the opposite way round: a block-list rather than an allow-list.
+
+// Extracts a named function's source so the real implementation can be driven directly.
+function functionSource(src, name) {
+  const start = src.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`missing ${name}`);
+  // Counted from the end of the parameter list, or a `= {}` default parameter would
+  // close the brace count before the body has opened.
+  const bodyStart = src.indexOf(") {\n", start);
+  let depth = 0;
+  for (let i = bodyStart + 2; i < src.length; i += 1) {
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}") {
+      depth -= 1;
+      if (!depth) return src.slice(start, i + 1);
+    }
+  }
+  throw new Error(`unbalanced ${name}`);
+}
+
+test("excluded tags: every portfolio carries the setting, and it starts empty", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [api, html] = await Promise.all([
+    readFile(new URL("../api.php", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+  ]);
+
+  // In the shared strategy normalizer, so all five portfolios have it rather than 5050
+  // alone. A key this function does not return is dropped on every save, so being here
+  // is what makes it persist at all.
+  const normalizer = functionSource(api.replace(/mixed \$/g, "$"), "normalize_strategy_config");
+  assert.match(normalizer, /'excludedMarketTags' => normalize_market_tag_list\(\$input\['excludedMarketTags'\] \?\? \$defaults\['excludedMarketTags'\] \?\? \[\]\)/);
+
+  // Five defaults: three paper strategies, live, and 5050 -- each excluding nothing, so
+  // adding the setting changes no portfolio's behaviour until someone fills it in.
+  assert.equal((api.match(/^\s+'excludedMarketTags' => \[\],$/gm) || []).length, 5);
+
+  // Unlike the allow-list, empty and absent mean the same thing here, so the setting
+  // needs no array_key_exists special case to be clearable.
+  assert.doesNotMatch(api, /array_key_exists\('excludedMarketTags'/);
+
+  // Editable on every tab: the row carries no data-fixed-entry-row, which is what hides
+  // the 5050-only controls everywhere else.
+  const row = html.slice(html.indexOf('data-excluded-tags-label') - 400, html.indexOf('data-excluded-tags-label') + 60);
+  assert.match(row, /<input type="text" placeholder="politics, elections" data-excluded-tags>/);
+  assert.doesNotMatch(row, /data-fixed-entry-row/);
+});
+
+test("excluded tags: dashboard, live executor and paper bot agree on what a tag is", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, executor, bot] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+  ]);
+
+  // Three separate slug implementations decide this, so they are driven against the same
+  // markets: a shortlist that disagrees with the run is the whole class of bug here.
+  const dashboard = new Function(`
+    ${functionSource(app, "normalizedScrapedScanTag")}
+    ${functionSource(app, "normalizeMarketTagList")}
+    ${functionSource(app, "marketTagSlugsOf")}
+    ${functionSource(app, "marketExcludedByTags")}
+    return (item, tags) => marketExcludedByTags(item, normalizeMarketTagList(tags));
+  `)();
+  const live = (tags) => new Function("process", `
+    ${functionSource(executor, "envTagSet")}
+    const EXCLUDED_MARKET_TAGS = envTagSet("LIVE_EXCLUDED_MARKET_TAGS");
+    ${functionSource(executor, "marketTagSlugs")}
+    ${functionSource(executor, "excludedMarketTagsOn")}
+    return excludedMarketTagsOn;
+  `)({ env: { LIVE_EXCLUDED_MARKET_TAGS: tags } });
+  const paper = (tags) => {
+    const strategy = new Function("process", `
+      ${functionSource(bot, "envTagSet")}
+      return { excludedMarketTags: envTagSet("PAPER_X_EXCLUDED_MARKET_TAGS") };
+    `)({ env: { PAPER_X_EXCLUDED_MARKET_TAGS: tags } });
+    const check = new Function(`
+      ${functionSource(bot, "rowTagSlugs")}
+      ${functionSource(bot, "excludedTagsOnRow")}
+      return excludedTagsOnRow;
+    `)();
+    return (item) => check(item, strategy);
+  };
+
+  // Typed the way a person types it, matched against the slugs a market actually carries.
+  const typed = "Politics, elections";
+  const cases = [
+    [{ polymarketTags: ["politics", "us-news"] }, ["politics"]],
+    [{ tags: [{ slug: "elections", label: "Elections" }] }, ["elections"]],
+    [{ firstTags: ["Politics"] }, ["politics"]],
+    [{ riskCategory: "politics" }, ["politics"]],
+    [{ polymarketTags: ["politics"], tags: ["elections"] }, ["politics", "elections"]],
+    [{ polymarketTags: ["esports", "counter-strike"] }, []],
+    [{}, []],
+  ];
+  for (const [row, expected] of cases) {
+    const label = JSON.stringify(row);
+    assert.deepEqual(dashboard(row, typed).sort(), [...expected].sort(), `dashboard: ${label}`);
+    assert.deepEqual(live(typed)(row).sort(), [...expected].sort(), `live executor: ${label}`);
+    assert.deepEqual(paper(typed)(row).sort(), [...expected].sort(), `paper bot: ${label}`);
+  }
+
+  // Nothing excluded is the default, and it must never reject anything.
+  for (const empty of ["", "   ", ",,"]) {
+    assert.deepEqual(dashboard({ polymarketTags: ["politics"] }, empty), [], "dashboard excludes nothing");
+    assert.deepEqual(live(empty)({ polymarketTags: ["politics"] }), [], "live excludes nothing");
+    assert.deepEqual(paper(empty)({ polymarketTags: ["politics"] }), [], "paper excludes nothing");
+  }
+});
+
+test("excluded tags: the rule sits above every mode-specific test", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, executor, bot] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+  ]);
+
+  // The 5050 branch returns early, so a rule placed after it would silently not apply to
+  // the portfolio most likely to want one. The exclusion goes above the whole ladder.
+  const reasons = functionSource(app, "portfolioCandidateFilterReasons");
+  const exclusion = reasons.indexOf("const hitExclusions = marketExcludedByTags(item, excludedTags);");
+  const fixedEntryBranch = reasons.indexOf("if (isFixedEntryMode(mode)) {");
+  assert.ok(exclusion > 0 && fixedEntryBranch > exclusion,
+    "the exclusion must be checked before the 5050 branch returns");
+
+  // In the live executor it goes in the shared prefilter, which feeds both live
+  // strategies -- not into either strategy, where the other would not inherit it.
+  const prefilter = functionSource(executor, "prefilterLiveCandidate");
+  assert.match(prefilter, /const excludedTags = excludedMarketTagsOn\(item\);/);
+  assert.match(prefilter, /reasons\.push\(`excluded tag\$\{excludedTags\.length > 1 \? "s" : ""\} \$\{excludedTags\.join\(", "\)\}`\)/);
+  assert.match(executor, /const candidatePool = prepareLiveCandidatePool\(rawCandidateRows, liveState\);/,
+    "and that prefilter is what builds the pool both strategies read");
+
+  // The paper bot filters and explains in two separate places; a row dropped by one and
+  // not the other is a candidate list that disagrees with its own rejection reasons.
+  assert.match(functionSource(bot, "strategyEligibleCandidates"),
+    /if \(excludedTagsOnRow\(item, strategy\)\.length\) return false;/);
+  assert.match(functionSource(bot, "portfolioFilterResult"),
+    /const excludedTags = excludedTagsOnRow\(item, strategy\);/);
+});
+
+test("excluded tags: the saved value reaches all three runtimes", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [paperWorkflow, liveWorkflow, fixedWorkflow, bot] = await Promise.all([
+    readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(paperWorkflow, /emit\(f"\{prefix\}_EXCLUDED_MARKET_TAGS", ",".join\(excluded_tags\)\)/);
+  assert.match(liveWorkflow, /"LIVE_EXCLUDED_MARKET_TAGS": ",".join\(/);
+  assert.match(fixedWorkflow, /"LIVE_EXCLUDED_MARKET_TAGS": ",".join\(/);
+
+  // The paper workflow writes one variable per strategy, so each strategy has to read
+  // its own -- a shared name would give all three portfolios one setting.
+  for (const prefix of ["CONSERVATIVE", "HIGH_REWARD", "MORE_PROBABLE"]) {
+    assert.match(bot, new RegExp(`excludedMarketTags: envTagSet\\("PAPER_${prefix}_EXCLUDED_MARKET_TAGS"\\)`));
+  }
 });

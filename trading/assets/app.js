@@ -218,6 +218,8 @@ const els = {
   fixedEntryPriceLabel: document.querySelector("[data-fixed-entry-price-label]"),
   fixedEntryTags: document.querySelector("[data-fixed-entry-tags]"),
   fixedEntryTagsLabel: document.querySelector("[data-fixed-entry-tags-label]"),
+  excludedTags: document.querySelector("[data-excluded-tags]"),
+  excludedTagsLabel: document.querySelector("[data-excluded-tags-label]"),
   mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
@@ -554,11 +556,12 @@ function normalizeFixedEntryPrice(value) {
   return Number(price.toFixed(2));
 }
 
-// Which Polymarket tags 5050 may bid on. Empty means every tag, so the restriction can be
-// cleared and not only narrowed. Accepts a saved list or a typed comma/space separated
-// string, and normalizes to slugs the same way the tag picker does -- a tag entered as
-// "E-Sports" has to match the `esports` a market actually carries.
-function normalizeAllowedMarketTags(value) {
+// A list of Polymarket tags saved on a portfolio: the tags 5050 may bid on, or the tags a
+// portfolio refuses outright. Both are the same shape and are typed into the same kind of
+// box. Accepts a saved list or a comma/space separated string, and normalizes to slugs the
+// same way the tag picker does -- a tag entered as "E-Sports" has to match the `esports` a
+// market actually carries.
+function normalizeMarketTagList(value) {
   const source = Array.isArray(value)
     ? value
     : String(value ?? "").split(/[,\s]+/);
@@ -590,10 +593,24 @@ function marketTagSlugsOf(item = {}) {
   return slugs;
 }
 
-function marketMatchesAllowedTags(item, allowedTags = []) {
-  if (!allowedTags.length) return true;
+function marketCarriesAnyTag(item, tags = []) {
+  if (!tags.length) return false;
   const slugs = marketTagSlugsOf(item);
-  return allowedTags.some((tag) => slugs.has(tag));
+  return tags.some((tag) => slugs.has(tag));
+}
+
+// An empty allow-list means every tag is allowed; an empty exclusion list excludes
+// nothing. Same question underneath, opposite default -- hence the two wrappers.
+function marketMatchesAllowedTags(item, allowedTags = []) {
+  return !allowedTags.length || marketCarriesAnyTag(item, allowedTags);
+}
+
+// Which of a portfolio's excluded tags this market carries, so the shortlist can say
+// which one rejected it rather than just that something did.
+function marketExcludedByTags(item, excludedTags = []) {
+  if (!excludedTags.length) return [];
+  const slugs = marketTagSlugsOf(item);
+  return excludedTags.filter((tag) => slugs.has(tag));
 }
 
 function automationIsEnabled(config = {}) {
@@ -2994,7 +3011,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const fixedEntryPrice = normalizeFixedEntryPrice(config.fixedEntryPrice);
   if (els.fixedEntryPrice) els.fixedEntryPrice.value = String(Math.round(fixedEntryPrice * 100));
   if (els.fixedEntryPriceLabel) els.fixedEntryPriceLabel.textContent = percent(fixedEntryPrice);
-  const allowedTags = normalizeAllowedMarketTags(config.allowedMarketTags);
+  const allowedTags = normalizeMarketTagList(config.allowedMarketTags);
   // Not overwritten while it has focus, or normalizing would fight the typing.
   if (els.fixedEntryTags && document.activeElement !== els.fixedEntryTags) {
     els.fixedEntryTags.value = allowedTags.join(", ");
@@ -3002,6 +3019,12 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.fixedEntryTagsLabel) els.fixedEntryTagsLabel.textContent = allowedTags.length ? allowedTags.join(", ") : "every tag";
   // These steer only the fixed-entry strategy, so they are meaningless anywhere else.
   els.fixedEntryRows?.forEach((row) => row.toggleAttribute("hidden", !isFixedEntryMode()));
+  // The exclusion, by contrast, is a parameter of every portfolio, so its row stays.
+  const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
+  if (els.excludedTags && document.activeElement !== els.excludedTags) {
+    els.excludedTags.value = excludedTags.join(", ");
+  }
+  if (els.excludedTagsLabel) els.excludedTagsLabel.textContent = excludedTags.length ? excludedTags.join(", ") : "none";
   if (els.mostProbableOutcome) {
     els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
     els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLive);
@@ -5076,6 +5099,10 @@ function portfolioRuleRows(portfolio = {}) {
   ];
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Volume filter", `>= ${money(minLiquidityUsdc)}`]);
   rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
+  // Only when something is actually excluded: a row reading "none" on every portfolio
+  // that never touched the setting is noise in a list meant to be read at a glance.
+  const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
+  if (excludedTags.length) rows.push(["Excluded tags", excludedTags.join(", ")]);
   if (config.requireMostProbableOutcome) rows.push(["Market type filter", "Only multichoice events"]);
   return rows;
 }
@@ -5088,6 +5115,7 @@ function livePortfolioRuleRows() {
   const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
+  const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
   const returnMetric = portfolioReturnMetricLabel(config);
   const priority = config.selectionOrder === "highest_reward_risk_first"
     ? `Highest reward/risk, then shorter resolution and ${returnMetric}`
@@ -5102,8 +5130,10 @@ function livePortfolioRuleRows() {
       : executionTriggerLabel(config.executionTrigger)],
     ...(isFixedEntryMode() ? [
       ["Order price", `every qualifying candidate is bid at ${percent(normalizeFixedEntryPrice(config.fixedEntryPrice))}`],
-      ["Tag filter", normalizeAllowedMarketTags(config.allowedMarketTags).join(", ") || "every tag"],
+      ["Tag filter", normalizeMarketTagList(config.allowedMarketTags).join(", ") || "every tag"],
     ] : []),
+    // Shown only when set, for the same reason as on the paper dashboards.
+    ...(excludedTags.length ? [["Excluded tags", excludedTags.join(", ")]] : []),
     ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
@@ -5292,6 +5322,14 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   // retryable one (capital, diversification) lets the row back into the shortlist.
   const executionCheckIsCurrent = Boolean(executionCheck);
 
+  // Above every mode-specific rule, and above 5050's early return, because a tag the
+  // portfolio refuses disqualifies the market whatever else is true of it.
+  const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
+  const hitExclusions = marketExcludedByTags(item, excludedTags);
+  if (hitExclusions.length) {
+    reasons.push(`excluded tag${hitExclusions.length > 1 ? "s" : ""} ${hitExclusions.join(", ")}`);
+  }
+
   if (displayStatus !== "EVALUATED") reasons.push(`status ${displayStatus}`);
   if (probabilitySource === "ai" && normalizedMode !== "live" && storedStatus !== "ELIGIBLE") {
     reasons.push(`base status ${storedStatus || "UNKNOWN"} is not ELIGIBLE`);
@@ -5317,7 +5355,7 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   // executor applies -- so the shortlist and the run agree on who qualifies.
   if (isFixedEntryMode(mode)) {
     const entryPrice = normalizeFixedEntryPrice(config.fixedEntryPrice);
-    const allowedTags = normalizeAllowedMarketTags(config.allowedMarketTags);
+    const allowedTags = normalizeMarketTagList(config.allowedMarketTags);
     if (allowedTags.length && !marketMatchesAllowedTags(item, allowedTags)) {
       reasons.push(`outside this portfolio's tags (${allowedTags.join(", ")})`);
     }
@@ -8590,9 +8628,18 @@ els.executionCronMinutes?.addEventListener("change", () => {
 });
 
 els.fixedEntryTags?.addEventListener("change", () => {
-  const value = normalizeAllowedMarketTags(els.fixedEntryTags.value);
+  const value = normalizeMarketTagList(els.fixedEntryTags.value);
   if (updateParameterDraft({ allowedMarketTags: value })) return;
   updatePortfolioConfigForMode(state.mode, { allowedMarketTags: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.excludedTags?.addEventListener("change", () => {
+  const value = normalizeMarketTagList(els.excludedTags.value);
+  if (updateParameterDraft({ excludedMarketTags: value })) return;
+  updatePortfolioConfigForMode(state.mode, { excludedMarketTags: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

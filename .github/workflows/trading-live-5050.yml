@@ -152,6 +152,13 @@ jobs:
               # The portfolio's own cadence, so a scheduled run honours the interval
               # set in its parameters rather than firing on every poll.
               "LIVE_EXECUTION_CRON_MINUTES": cfg.get("executionCronMinutes"),
+              # Whole tags this portfolio refuses, the mirror image of the allow-list above
+              # and a setting every portfolio has. Empty excludes nothing, which is what an
+              # unset variable means too, so the loop skipping it clears the setting -- no
+              # always-write case, unlike the allow-list where empty means every tag.
+              "LIVE_EXCLUDED_MARKET_TAGS": ",".join(
+                  str(tag).strip() for tag in (cfg.get("excludedMarketTags") or []) if str(tag).strip()
+              ),
               # What starts a run: the cron below, or the scan finishing. Recorded in the
               # run log, and read one line down to decide whether this run is due.
               "LIVE_EXECUTION_TRIGGER": cfg.get("executionTrigger"),
