@@ -175,13 +175,19 @@ jobs:
           fi
           echo "Market scan completed without errors."
 
-      # Only after a scan someone asked for. On the schedule this would fire an execution
-      # every five minutes at the portfolios set to run after each scrape, and the live
-      # executor shares one self-hosted runner -- a queue that was measured backing up by
-      # seventeen minutes. The scheduled scan feeds the catalogue; the portfolios keep
-      # their own cadences.
+      # After every scan, scheduled ones included -- "execute after each scraping" is a
+      # portfolio setting, and a scan someone happened to press is not the only scraping
+      # there is. This was briefly restricted to dispatches out of a worry about the one
+      # self-hosted runner the live executors share; the worry does not hold. Each live
+      # workflow has its own concurrency group, so a dispatch arriving while one runs and
+      # one is queued replaces the queued one rather than stacking behind it: the rate is
+      # bounded by how long a run takes (about a minute each), not by how often we ask.
+      # This scan itself runs on a GitHub runner and never touches the Pi.
+      #
+      # A portfolio not set to after_scrape is not dispatched at all -- the dispatcher
+      # reads the saved config and only wakes the ones that asked for it.
       - name: Dispatch post-scrape execution
-        if: success() && github.event_name == 'workflow_dispatch'
+        if: success()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}

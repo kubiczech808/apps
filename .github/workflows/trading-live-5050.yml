@@ -31,6 +31,11 @@ on:
         required: false
         default: ""
         type: string
+      live_run_source:
+        description: Who asked for this run. MANUAL overrides the portfolio's own switches; the post-scrape dispatcher sends AUTO so it does not.
+        required: false
+        default: "MANUAL"
+        type: string
   schedule:
     # The portfolio decides whether a scheduled run does anything: the executor
     # skips it when automation is off, and honours its own cadence when set. Away
@@ -73,8 +78,14 @@ jobs:
       USE_LIMIT_ORDERS: "true"
       POLYMARKET_POST_ONLY: "true"
       LIVE_AUTO_ROTATE: "false"
-      # A scheduled run must be able to be switched off; only a dispatch is manual.
-      LIVE_RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && 'MANUAL' || 'AUTO' }}
+      # A scheduled run must be able to be switched off. A dispatch is a person unless
+      # it says otherwise, and the post-scrape dispatcher says otherwise -- that run is
+      # the portfolio's own schedule doing its job, not someone pressing a button, so it
+      # must obey the automation switch and be logged as automatic.
+      LIVE_RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && (inputs.live_run_source || 'MANUAL') || 'AUTO' }}
+      # Set from the saved trigger below. A cron tick for a portfolio that trades after
+      # each scrape is not its turn, and the executor stops on this rather than trading.
+      LIVE_SKIP_SCHEDULED_EXECUTION: "false"
       # A wide scan is the point: many candidates, one bid each -- but only across the
       # tags the portfolio is allowed to trade. Overwritten by the saved setting below;
       # this is the fallback when the config cannot be read.
@@ -141,6 +152,17 @@ jobs:
               # The portfolio's own cadence, so a scheduled run honours the interval
               # set in its parameters rather than firing on every poll.
               "LIVE_EXECUTION_CRON_MINUTES": cfg.get("executionCronMinutes"),
+              # What starts a run: the cron below, or the scan finishing. Recorded in the
+              # run log, and read one line down to decide whether this run is due.
+              "LIVE_EXECUTION_TRIGGER": cfg.get("executionTrigger"),
+              # Automation off means automatic runs do nothing; a manual dispatch still
+              # runs, and the executor makes that exception itself off LIVE_RUN_SOURCE.
+              # So the switch is written as saved whatever the event: keying it on the
+              # event name, as it used to be, would let a post-scrape dispatch trade for
+              # a portfolio whose automation is off. Absent means on, matching the saved
+              # default, so a portfolio that never stored the field keeps trading rather
+              # than silently stopping.
+              "LIVE_AUTOMATION_ENABLED": str(bool(cfg.get("automationEnabled", True))).lower(),
           }
           # An explicit dispatch input wins over the saved value for this run only.
           for key, dispatched in [
@@ -151,9 +173,10 @@ jobs:
               if str(dispatched).strip():
                   overrides[key] = dispatched
 
-          # Automation off means scheduled runs do nothing; a manual dispatch still runs.
-          if cfg.get("automationEnabled") is False and os.environ.get("GITHUB_EVENT_NAME") == "schedule":
-              overrides["LIVE_AUTOMATION_ENABLED"] = "false"
+          # A portfolio that trades after each scrape is dispatched by the scan; its cron
+          # ticks are just polling and must not trade, or it would run on both.
+          if cfg.get("executionTrigger") == "after_scrape" and os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+              overrides["LIVE_SKIP_SCHEDULED_EXECUTION"] = "true"
 
           # An empty allow-list is a real setting -- every tag -- so it is written even
           # though it is empty, unlike a value the config simply did not carry.
@@ -171,6 +194,8 @@ jobs:
           echo "Entry price:      ${LIVE_FIXED_ENTRY_PRICE}"
           echo "Min probability:  ${LIVE_MIN_PROBABILITY}"
           echo "Stake per order:  ${LIVE_FIXED_ENTRY_STAKE_USDC:-exchange minimum}"
+          echo "Trigger:          ${LIVE_EXECUTION_TRIGGER:-cron} (this run: ${LIVE_RUN_SOURCE}, skip=${LIVE_SKIP_SCHEDULED_EXECUTION})"
+          echo "Automation:       ${LIVE_AUTOMATION_ENABLED}"
 
       - name: Generate fresh live account snapshot
         working-directory: trading

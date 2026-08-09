@@ -2046,3 +2046,137 @@ test("5050: what a pass learns about a candidate is published, not discarded", a
   assert.ok(order.every((index) => index > 0), "every step must be present");
   assert.deepEqual([...order].sort((a, b) => a - b), order, `steps are out of order: ${order}`);
 });
+
+// Asked for: "verify why 5050 execution does not run more often -- by its settings it
+// should run after every scraping, and that is not happening". Three separate links in
+// the chain were missing, so the tests below check each one on its own.
+
+test("after a scrape: the dispatcher wakes the portfolio whose trigger says so", async () => {
+  const { plannedDispatches } = await import("../tools/dispatch-after-scan.mjs");
+
+  // The bug. 5050's trigger was saved, shown in the dashboard, and read by nothing:
+  // the dispatcher looked at `paper` and `live` only, so the portfolio's sole trigger
+  // was its own half-hourly cron however the setting was left.
+  const planned = plannedDispatches({ live5050: { executionTrigger: "after_scrape" } });
+  assert.deepEqual(planned.map((entry) => entry.workflow), ["trading-live-5050.yml"]);
+
+  // A dispatch without live_confirm is a dry run: it would wake, decide, and rest
+  // nothing, which reads exactly like the failure being fixed.
+  assert.equal(planned[0].inputs.live_confirm, "true");
+  // AUTO, because MANUAL means both "a person asked for this" in the run log and
+  // "ignore the automation switch" in the executor. Neither is true of a scan.
+  assert.equal(planned[0].inputs.live_run_source, "AUTO");
+
+  // The other portfolios are unchanged, and each is woken only on its own setting.
+  assert.deepEqual(
+    plannedDispatches({
+      paper: { balanced: { executionTrigger: "after_scrape" } },
+      live: { executionTrigger: "after_scrape" },
+      live5050: { executionTrigger: "after_scrape" },
+    }).map((entry) => entry.workflow),
+    ["trading-paper-bot.yml", "polymarket-live-limit-order-test.yml", "trading-live-5050.yml"],
+  );
+  assert.deepEqual(plannedDispatches({
+    paper: { balanced: { executionTrigger: "cron" } },
+    live: { executionTrigger: "cron" },
+    live5050: { executionTrigger: "cron" },
+  }), [], "a portfolio on cron keeps its own cadence and is not woken by a scrape");
+  assert.deepEqual(plannedDispatches({}), [], "an unreadable or empty config dispatches nothing");
+});
+
+test("after a scrape: a scheduled scan dispatches too, not only one someone pressed", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const scan = await readFile(new URL("../../.github/workflows/trading-market-scan.yml", import.meta.url), "utf8");
+  const step = scan.slice(scan.indexOf("- name: Dispatch post-scrape execution"));
+  const condition = step.slice(0, step.indexOf("\n        env:"));
+
+  // The scan runs every five minutes on the schedule and only rarely by hand, so
+  // gating this on workflow_dispatch made "after each scraping" mean "almost never".
+  assert.doesNotMatch(condition, /event_name/,
+    "the dispatch must not be restricted to manual scans; scheduled scraping is still scraping");
+  assert.match(condition, /if: success\(\)/, "but a failed scan must not wake an executor");
+
+  // What makes the five-minute rate safe on the single self-hosted runner: a third
+  // dispatch replaces the queued one instead of stacking behind it.
+  for (const file of ["polymarket-live-limit-order-test", "trading-live-5050"]) {
+    const workflow = await readFile(new URL(`../../.github/workflows/${file}.yml`, import.meta.url), "utf8");
+    assert.match(workflow, /concurrency:\n  group: [^\n]+\n  cancel-in-progress: false/,
+      `${file} must serialize its own runs`);
+  }
+  assert.match(scan, /runs-on: ubuntu-latest/, "and the scan itself must not compete for that runner");
+});
+
+test("after a scrape: the 5050 run knows it was automatic, and its cron stands down", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8");
+
+  // Without the input the dispatcher's AUTO is dropped and every dispatch reads as
+  // MANUAL -- flagged as a person's run in the log, and exempt from the automation
+  // switch. The default stays MANUAL so the dashboard button keeps behaving as it did.
+  assert.match(workflow, /live_run_source:\n\s+description: [^\n]+\n\s+required: false\n\s+default: "MANUAL"/);
+  assert.match(
+    workflow,
+    /LIVE_RUN_SOURCE: \$\{\{ github\.event_name == 'workflow_dispatch' && \(inputs\.live_run_source \|\| 'MANUAL'\) \|\| 'AUTO' \}\}/,
+  );
+
+  // With the scan dispatching it, the workflow's own cron would run it a second time.
+  const loader = workflow.slice(workflow.indexOf("- name: Load 5050 portfolio config"));
+  assert.match(loader, /if cfg\.get\("executionTrigger"\) == "after_scrape" and os\.environ\.get\("GITHUB_EVENT_NAME"\) == "schedule":\n\s+overrides\["LIVE_SKIP_SCHEDULED_EXECUTION"\] = "true"/);
+  assert.match(workflow, /LIVE_SKIP_SCHEDULED_EXECUTION: "false"/, "and it defaults to running");
+
+  // The executor is what acts on both, so the names have to line up with what it reads.
+  const executorSource = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  assert.match(executorSource, /const SKIP_SCHEDULED_EXECUTION = String\(process\.env\.LIVE_SKIP_SCHEDULED_EXECUTION/);
+  assert.match(executorSource, /const IS_MANUAL_RUN = String\(process\.env\.LIVE_RUN_SOURCE \|\| ""\)\.toUpperCase\(\) === "MANUAL"/);
+});
+
+test("after a scrape: an automatic 5050 run still obeys the automation switch", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8");
+  const loader = workflow.slice(workflow.indexOf("- name: Load 5050 portfolio config"));
+
+  // This used to be written only when the event was a schedule. Once the scan started
+  // dispatching, that would have let a portfolio with automation off trade every five
+  // minutes -- the switch would have looked broken instead. The saved value is written
+  // whatever the event, and the executor makes the manual exception itself.
+  assert.match(loader, /"LIVE_AUTOMATION_ENABLED": str\(bool\(cfg\.get\("automationEnabled", True\)\)\)\.lower\(\)/);
+  assert.doesNotMatch(loader, /automationEnabled"\) is False and os\.environ\.get\("GITHUB_EVENT_NAME"\) == "schedule"/);
+  assert.match(loader, /"LIVE_EXECUTION_TRIGGER": cfg\.get\("executionTrigger"\)/,
+    "and the run log has to record what started the run");
+
+  const executorSource = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  assert.match(executorSource, /if \(!IS_MANUAL_RUN && !AUTOMATION_ENABLED\)/);
+  assert.match(executorSource, /const AUTOMATION_ENABLED = String\(process\.env\.LIVE_AUTOMATION_ENABLED \?\? "true"\)\.toLowerCase\(\) !== "false"/,
+    "an unwritten switch must mean on, or a config read failure would stop the portfolio");
+});
+
+test("after a scrape: the cron interval does not also throttle an after-scrape run", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // The cadence setting is the gap between cron runs -- the dashboard shows it only in
+  // cron mode. Left over from an earlier setting it would have gated the after-scrape
+  // dispatches too, and the portfolio would again have looked like it ignored its
+  // trigger: woken by every scrape, and declining to look at all but one of them.
+  const start = source.indexOf('const EXECUTION_TRIGGER = ');
+  const end = source.indexOf('const IS_MANUAL_RUN = ');
+  assert.ok(start > 0 && end > start, "the trigger and cadence constants must stay identifiable");
+  const build = (env) => {
+    const read = new Function("process", "envNumber", `${source.slice(start, end)}
+      return { EXECUTION_TRIGGER, EXECUTION_CRON_MINUTES };`);
+    return read({ env }, (name, fallback) => Number(env[name] ?? fallback));
+  };
+
+  assert.deepEqual(build({ LIVE_EXECUTION_TRIGGER: "after_scrape", LIVE_EXECUTION_CRON_MINUTES: "30" }),
+    { EXECUTION_TRIGGER: "after_scrape", EXECUTION_CRON_MINUTES: 0 });
+  // A portfolio on cron keeps its interval exactly as before.
+  assert.deepEqual(build({ LIVE_EXECUTION_TRIGGER: "cron", LIVE_EXECUTION_CRON_MINUTES: "30" }),
+    { EXECUTION_TRIGGER: "cron", EXECUTION_CRON_MINUTES: 30 });
+  assert.deepEqual(build({}), { EXECUTION_TRIGGER: "cron", EXECUTION_CRON_MINUTES: 0 },
+    "an unset trigger is cron, and an unset interval is every run");
+
+  // Zero is what switches the gate off, so the value above has to reach it that way.
+  assert.match(source, /&& EXECUTION_CRON_MINUTES > 0\n/);
+  // And the run log reports the same trigger the gate was decided on, not its own copy.
+  assert.match(source, /executionTrigger: EXECUTION_TRIGGER,/);
+});

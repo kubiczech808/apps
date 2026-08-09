@@ -74,9 +74,19 @@ const SKIP_SCHEDULED_EXECUTION = String(process.env.LIVE_SKIP_SCHEDULED_EXECUTIO
 // Automation is a portfolio switch, not a workflow one: the schedule keeps firing so
 // a manual run is always available, but an automatic run does nothing while it is off.
 const AUTOMATION_ENABLED = String(process.env.LIVE_AUTOMATION_ENABLED ?? "true").toLowerCase() !== "false";
+// What starts an automatic run: this workflow's own cron, or the scan finishing.
+const EXECUTION_TRIGGER = String(process.env.LIVE_EXECUTION_TRIGGER || "cron").toLowerCase() === "after_scrape"
+  ? "after_scrape"
+  : "cron";
 // 0 means "every scheduled run". Anything higher makes the portfolio's own cadence
-// independent of how often the workflow happens to be scheduled.
-const EXECUTION_CRON_MINUTES = Math.max(0, envNumber("LIVE_EXECUTION_CRON_MINUTES", 0) || 0);
+// independent of how often the workflow happens to be scheduled. It is the interval
+// between cron runs and nothing else -- the dashboard only offers it in cron mode --
+// so a portfolio set to execute after each scrape is not also held to it. Enforcing
+// both would mean a scrape woke the executor and the executor declined to look, which
+// is the "it does not run after every scraping" complaint arriving by another route.
+const EXECUTION_CRON_MINUTES = EXECUTION_TRIGGER === "after_scrape"
+  ? 0
+  : Math.max(0, envNumber("LIVE_EXECUTION_CRON_MINUTES", 0) || 0);
 const IS_MANUAL_RUN = String(process.env.LIVE_RUN_SOURCE || "").toUpperCase() === "MANUAL";
 // The "5050" portfolio. Instead of buying the single best candidate at the current
 // market price, it rests a bid at a fixed point on the 0..1 scale across every
@@ -3928,7 +3938,7 @@ async function main() {
         minVolume24hr: MIN_VOLUME_24H,
         minNetYield: MIN_NET_YIELD,
         maxResolutionDays: MAX_RESOLUTION_DAYS,
-        executionTrigger: String(process.env.LIVE_EXECUTION_TRIGGER || "cron").toLowerCase() === "after_scrape" ? "after_scrape" : "cron",
+        executionTrigger: EXECUTION_TRIGGER,
         freeCapitalPriority: true,
         hasUsableFreeCash,
         directCandidateCanUseFreeCapital,

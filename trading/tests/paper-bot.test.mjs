@@ -2457,10 +2457,21 @@ test("5050: its own button and its own schedule run its own algorithm", async ()
   // The auto trigger: a schedule exists, and the run is gated by the portfolio's own
   // switch and cadence rather than firing regardless.
   assert.match(workflow, /schedule:\s*\n(?:\s*#[^\n]*\n)*\s*- cron: '7,37 \* \* \* \*'/);
-  assert.match(workflow, /LIVE_RUN_SOURCE: \$\{\{ github\.event_name == 'workflow_dispatch' && 'MANUAL' \|\| 'AUTO' \}\}/,
-    "a hard-coded MANUAL would bypass both the switch and the cadence");
+  // This asserted a hard-coded MANUAL for every dispatch, which was right while the cron
+  // was the only automatic trigger. The scan now dispatches this workflow as well, for a
+  // portfolio set to execute after each scrape, and that run is not a person's -- so the
+  // source is an input the dispatcher sets, still defaulting to MANUAL so that pressing
+  // the dashboard button means what it always did.
+  assert.match(
+    workflow,
+    /LIVE_RUN_SOURCE: \$\{\{ github\.event_name == 'workflow_dispatch' && \(inputs\.live_run_source \|\| 'MANUAL'\) \|\| 'AUTO' \}\}/,
+    "a hard-coded MANUAL would bypass both the switch and the cadence",
+  );
   assert.match(workflow, /"LIVE_EXECUTION_CRON_MINUTES": cfg\.get\("executionCronMinutes"\)/);
-  assert.match(workflow, /if cfg\.get\("automationEnabled"\) is False and os\.environ\.get\("GITHUB_EVENT_NAME"\) == "schedule"/);
+  // The switch moved for the same reason: applied only to scheduled events, it would now
+  // leave a dispatched after-scrape run trading while automation is off. It is written as
+  // saved whatever the event, and the executor is what exempts a manual run from it.
+  assert.match(workflow, /"LIVE_AUTOMATION_ENABLED": str\(bool\(cfg\.get\("automationEnabled", True\)\)\)\.lower\(\)/);
 
   // A scheduled run must place orders; only an unconfirmed dispatch is a dry run.
   assert.match(workflow, /POLYMARKET_DRY_RUN: \$\{\{ \(github\.event_name == 'schedule' \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.live_confirm\)\) && 'false' \|\| 'true' \}\}/);
@@ -3683,10 +3694,14 @@ test("scheduled scan: a scheduled pass stays small and does not fan out", async 
   // claim to be one.
   assert.match(scan, /PAPER_MARKET_SCAN_TRIGGER: \$\{\{ github\.event_name == 'workflow_dispatch' && 'MANUAL' \|\| 'AUTO' \}\}/);
 
-  // The post-scrape dispatch fires an execution at every portfolio set to run after a
-  // scrape. On a five-minute schedule that would queue the live executor against one
-  // self-hosted runner every five minutes -- a backlog already measured at 17 minutes.
-  assert.match(scan, /- name: Dispatch post-scrape execution\n\s+if: success\(\) && github\.event_name == 'workflow_dispatch'/);
+  // This restricted the post-scrape dispatch to manual scans, on the worry that firing
+  // it every five minutes would back up the one self-hosted runner the live executors
+  // share. The effect was that "execute after each scraping" almost never happened, and
+  // the worry was wrong: each live workflow serializes on its own concurrency group, so
+  // a dispatch arriving while one runs and one waits replaces the waiting one. The rate
+  // is bounded by run length, about a minute, not by how often the scan asks.
+  assert.match(scan, /- name: Dispatch post-scrape execution\n\s+if: success\(\)\n/);
+  assert.doesNotMatch(scan, /- name: Dispatch post-scrape execution\n\s+if: [^\n]*event_name/);
 
   // And the paper bot must stop taking its rotation slot for these two tags, or they are
   // scanned twice and the other 22 scopes only advance on the ticks left over.
