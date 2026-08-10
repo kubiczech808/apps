@@ -245,6 +245,15 @@ async function main() {
     const generatedAt = result.ok ? (result.body?.generatedAt || "(no generatedAt)") : "";
     console.log(`   ${name}: HTTP ${result.status}`
       + (result.ok ? ` generatedAt=${generatedAt} runLog=${(result.body?.runLog || []).length}` : ` ${String(result.error).slice(0, 120)}`));
+    if (result.ok) continue;
+    // The publisher uploads to `<name>.uploading-N` and renames it into place, moving any
+    // existing file to `<name>.previous` first. Those names are the difference between
+    // "the transfer never happened" and "it happened and the rename did not" -- and both
+    // read as a plain 404 on the final name, which is all this has said for days.
+    for (const suffix of [".uploading-1", ".uploading-2", ".uploading-3", ".previous"]) {
+      const probe = await fetchJson(`${url}${suffix}`);
+      if (probe.ok) console.log(`     found leftover ${suffix}: the transfer landed and the rename into place did not`);
+    }
   }
 }
 

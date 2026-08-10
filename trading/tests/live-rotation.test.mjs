@@ -2696,9 +2696,12 @@ test("run log history: a publish is read back, so a silent non-landing fails the
   assert.match(publisher, /raise RuntimeError\(f"\{remote_name\} uploaded, but \{url\} answers HTTP \{error\.code\}"\)/,
     "a hosted 404 after upload must fail the run");
   // A network blip reaching the hosting is not evidence the upload failed, and failing
-  // on it would turn an unreachable host into a red trading job.
+  // on it would turn an unreachable host into a red trading job. But it must say plainly
+  // that no verification happened: a runner that can never reach the hosting over HTTP
+  // turns this check into a no-op reporting nothing, which is indistinguishable in a log
+  // from a verification that passed -- and the 5050 run log is still missing.
   assert.match(publisher, /except urllib\.error\.URLError as error:/);
-  assert.match(publisher, /print\(f"could not verify \{url\}: \{error\.reason\}"\)\n\s+return/);
+  assert.match(publisher, /print\(f"VERIFICATION SKIPPED: could not reach \{url\}: \{error\.reason\}"\)\n\s+return/);
   // Only after a successful upload, and only when a base URL is configured.
   assert.match(publisher, /upload_atomic\(config, local_path, remote_name\)\n\s+if verify_base:\n\s+verify_published\(verify_base, remote_name\)/);
 

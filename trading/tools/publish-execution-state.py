@@ -51,8 +51,10 @@ def verify_published(base_url, remote_name):
         raise RuntimeError(f"{remote_name} uploaded, but {url} answers HTTP {error.code}") from error
     except urllib.error.URLError as error:
         # A network problem reaching the hosting is not evidence the upload failed, and
-        # failing the run on it would turn a blip into a red trading job.
-        print(f"could not verify {url}: {error.reason}")
+        # failing the run on it would turn a blip into a red trading job. But a runner
+        # that can never reach the hosting over HTTP turns this whole check into a no-op
+        # that reports nothing forever, so say so in words that can be searched for.
+        print(f"VERIFICATION SKIPPED: could not reach {url}: {error.reason}")
         return
     print(f"Verified {url}")
 
