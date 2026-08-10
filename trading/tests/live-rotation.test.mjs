@@ -2900,3 +2900,20 @@ test("expired orders: the dashboard marks the row by the same rule that withdraw
   assert.match(functionSource(app, "tradeTypeBadge"), /trade\.marketEnded/);
   assert.match(app, /marketEnded: orderMarketHasEnded\(order\),/);
 });
+
+test("run log history: a 5050 run that produced no state fails instead of publishing nothing", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [publisher, workflow] = await Promise.all([
+    readFile(new URL("../tools/publish-execution-state.py", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
+  ]);
+
+  // Measured: the hosted path answers 404 and no .uploading-N or .previous sits beside
+  // it, so nothing was ever transferred -- while the step reported success. A local file
+  // the publisher cannot find is skipped, and with nothing declared required the step
+  // then exits clean, which is the only remaining way for that combination to happen.
+  assert.match(workflow, /PUBLISH_REQUIRED: live-5050-execution-state\.json/,
+    "producing this state is what a 5050 run is for; its absence must fail the run");
+  assert.match(publisher, /unmet = required\.intersection\(missing\)/);
+  assert.match(publisher, /raise SystemExit\(f"required file\(s\) not generated: /);
+});

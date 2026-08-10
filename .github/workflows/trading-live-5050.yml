@@ -277,6 +277,12 @@ jobs:
           # portfolio's run log stayed missing for days with every step passing.
           PUBLISH_VERIFY_BASE_URL: https://osobnizkusenosti.cz/trading/data
           PUBLISH_FILES: trading/data/live-5050-execution-state.json>live-5050-execution-state.json
+          # A file the publisher cannot find locally is skipped, and without this the step
+          # then exits clean. That is the last way left for this upload to do nothing and
+          # still report success -- and the hosted path answers 404 with no temp or backup
+          # file beside it, which is what "nothing was ever transferred" looks like.
+          # Producing this state is what a 5050 run is for, so its absence is a failed run.
+          PUBLISH_REQUIRED: live-5050-execution-state.json
         run: python3 trading/tools/publish-execution-state.py
 
       - name: Run digest
