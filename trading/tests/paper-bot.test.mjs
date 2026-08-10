@@ -4074,7 +4074,10 @@ test("paper rotation: free capital is spent before a position is given up", asyn
     "openTrades", "heldHours", "ROTATION_MIN_HOLD_HOURS", "findFirstOpenCandidate",
     "tradeContinuationEconomics", "candidateRotationScore", "portfolioEconomics",
     "ROTATION_MIN_SCORE_IMPROVEMENT", "ROTATION_MIN_EV_USDC_IMPROVEMENT",
-    `${functionSource(bot, "rotationReview")}\nreturn rotationReview;`,
+    // The review now summarises each position it weighed, so its two summary helpers
+    // come with it.
+    `${functionSource(bot, "rotationPositionSummary")}\n${functionSource(bot, "rotationCandidateSummary")}\n`
+    + `${functionSource(bot, "rotationReview")}\nreturn rotationReview;`,
   )(
     (trades) => trades, () => 48, 6, () => ({ best: candidate }),
     // A candidate far better than the holding, so nothing but the capital rule can
@@ -4096,4 +4099,84 @@ test("paper rotation: free capital is spent before a position is given up", asyn
   // recorded so a ROTATED_OPENED row can be read without guessing at the cash position.
   assert.match(bot, /if \(available >= stake\) return null;/);
   assert.match(bot, /freeCapitalCoversStake: Number\(available\) >= Number\(stake\),/);
+});
+
+test("paper rotation log: it names the position sold and what lost to it", async () => {
+  // Reported from a ROTATED_OPENED row: nothing said which open position was being
+  // rotated out, nor why that one rather than the others. The run-log detail has a rich
+  // rotation renderer, but it was written for the live executor's shape -- action,
+  // reason, best.position, best.candidate, reviews -- and the paper side emitted none of
+  // those, so the section rendered "Action: -", "Reason: -" and stopped.
+  const { readFile } = await import("node:fs/promises");
+  const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  const holding = (id, hours, tokenId) => ({
+    id, status: "OPEN", tokenId, maxLossUsdc: 5, stakeUsdc: 5, totalCostUsdc: 5,
+    currentValueUsdc: 4.6, unrealizedPnlUsdc: -0.4, question: `Held ${id}`, outcome: "Yes",
+    openedAt: new Date(Date.now() - hours * 3600000).toISOString(),
+  });
+  const candidate = {
+    tokenId: "2", question: "Better market", outcome: "No",
+    marketProbability: 0.94, netYield: 0.06, daysToResolution: 1,
+  };
+  const review = new Function(
+    "openTrades", "heldHours", "ROTATION_MIN_HOLD_HOURS", "findFirstOpenCandidate",
+    "tradeContinuationEconomics", "candidateRotationScore", "portfolioEconomics",
+    "ROTATION_MIN_SCORE_IMPROVEMENT", "ROTATION_MIN_EV_USDC_IMPROVEMENT",
+    `${functionSource(bot, "rotationPositionSummary")}\n${functionSource(bot, "rotationCandidateSummary")}\n`
+    + `${functionSource(bot, "rotationReview")}\nreturn rotationReview;`,
+  )(
+    (trades) => trades, (trade) => (Date.now() - Date.parse(trade.openedAt)) / 3600000, 6,
+    () => ({ best: candidate }), () => ({ score: 1, expectedValue: 0.10 }), () => 2,
+    () => ({ expectedValueUsdc: 0.50 }), 0.15, 0.02,
+  )(
+    { trades: [holding("A", 48, "1"), holding("B", 2, "3")] },
+    [candidate], { selectionMetric: "EV p.a." }, 1, 5,
+  );
+
+  assert.equal(review.trade.id, "A", "the eligible holding is the one rotated");
+  // Every holding that was weighed is on the record, including the ones that were not
+  // chosen -- that is the half the log was missing.
+  const byQuestion = new Map(review.reviews.map((row) => [row.position.question, row]));
+  assert.deepEqual([...byQuestion.keys()].sort(), ["Held A", "Held B"]);
+  assert.equal(byQuestion.get("Held A").action, "ROTATE_CANDIDATE");
+  assert.match(byQuestion.get("Held A").reason, /clears both bars/);
+  // And a holding excluded before the comparison says why it never got there.
+  assert.equal(byQuestion.get("Held B").action, "HOLD");
+  assert.match(byQuestion.get("Held B").reason, /below the 6h minimum/);
+
+  // The position summary carries what the detail renders about the row being sold.
+  const sold = byQuestion.get("Held A").position;
+  assert.equal(sold.outcome, "Yes");
+  assert.equal(sold.estimatedExitValueUsdc, 4.6);
+  assert.equal(sold.realizedPnlIfExitUsdc, -0.4, "what exiting now actually realises");
+
+  // The emitted review uses the field names the run-log detail already reads.
+  const emitted = bot.slice(bot.indexOf("    rotationReview: {"));
+  for (const field of ["action:", "reason:", "best: {", "position: rotationPositionSummary(trade)",
+    "candidate: rotationCandidateSummary(review.candidate", "evDeltaUsdc:", "reviews:"]) {
+    assert.ok(emitted.includes(field), `the rotation review must emit ${field}`);
+  }
+});
+
+test("paper candidates: a retired scorer's zeros are not the reason a candidate was skipped", async () => {
+  // Reported from the same log: every row under "Candidates not used" showed +0.0% net
+  // yield, +0.0% potential p.a. and "probability 0.0% below high-confidence threshold and
+  // edge-opportunity threshold; annualized EV 0.0% is non-profitable after fees" -- for
+  // markets priced nowhere near zero.
+  //
+  // The row's verdict came from the AI-scored economics. With no model consulted there is
+  // no AI probability, so that verdict is a row of zeros. Every portfolio scores on the
+  // Polymarket probability, so that is the verdict the row now carries.
+  const { readFile } = await import("node:fs/promises");
+  const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  assert.match(bot, /const scoringEconomics = AI_ANALYSIS_ENABLED \? economics : marketEconomics;/);
+  assert.match(bot, /const rejectReasons = scoringEconomics\.rejectReasons\.map/);
+  // Both stored rows take their status from it, or one shape keeps the zeros.
+  assert.equal((bot.match(/status: scoringEconomics\.status,/g) || []).length, 2);
+  assert.ok(!/status: economics\.status,/.test(bot), "no row may still carry the AI verdict");
+
+  // The switch is the existing single one, so nothing new can turn the model back on.
+  assert.match(bot, /const AI_ANALYSIS_ENABLED = envBool\("PAPER_AI_ANALYSIS_ENABLED", false\);/);
 });

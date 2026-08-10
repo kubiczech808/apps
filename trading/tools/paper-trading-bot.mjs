@@ -3021,7 +3021,14 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
     depthOk,
     endOk,
   });
-  const rejectReasons = economics.rejectReasons.map((reason) => {
+  // Which verdict the row carries. With no model consulted there is no AI probability, so
+  // the AI-scored economics are a row of zeros -- and those zeros were what the run log
+  // showed as the reason a candidate went unused: "probability 0.0% below high-confidence
+  // threshold and edge-opportunity threshold; annualized EV 0.0% is non-profitable after
+  // fees", against a market priced nowhere near zero. Every portfolio scores on the
+  // Polymarket probability, so that is the verdict stored when the model is not running.
+  const scoringEconomics = AI_ANALYSIS_ENABLED ? economics : marketEconomics;
+  const rejectReasons = scoringEconomics.rejectReasons.map((reason) => {
     if (reason === "spread too wide") return `spread ${spread == null ? "n/a" : (spread * 100).toFixed(1) + " pts"} too wide`;
     if (reason === "insufficient ask depth for market buy") return `insufficient ask depth for ${stake.toFixed(2)} USDC market buy`;
     return reason;
@@ -3043,8 +3050,8 @@ function evaluateCandidate({ market, outcomeIndex, tokenId, book, learningProfil
   return {
     id: `token:${tokenId}`,
     evaluatedAt: nowIso(),
-    status: economics.status,
-    thesisType: economics.thesisType,
+    status: scoringEconomics.status,
+    thesisType: scoringEconomics.thesisType,
     rejectReasons,
     question,
     slug: market.slug || "",
@@ -3514,8 +3521,8 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
 
   return {
     ...evaluation,
-    status: economics.status,
-    thesisType: economics.thesisType,
+    status: scoringEconomics.status,
+    thesisType: scoringEconomics.thesisType,
     rejectReasons,
     aiProbability: Number(probability.toFixed(4)),
     edge: rounded(economics.edge, 4),
@@ -4991,30 +4998,74 @@ function rotationReview(portfolioState, eligible, strategy, available, stake) {
   // candidate before touching existing orders or positions"); the paper side had not.
   if (available >= stake) return null;
 
-  const openRows = openTrades(portfolioState.trades)
-    .filter((trade) => trade.status === "OPEN")
-    .filter((trade) => heldHours(trade) >= ROTATION_MIN_HOLD_HOURS);
+  const allOpen = openTrades(portfolioState.trades).filter((trade) => trade.status === "OPEN");
+  const openRows = allOpen.filter((trade) => heldHours(trade) >= ROTATION_MIN_HOLD_HOURS);
   if (!openRows.length) return null;
+
+  // Every holding that was looked at, and what happened to it. Without this the run log
+  // named the replacement candidate and nothing else -- not which position was being sold,
+  // and nothing at all about why that one rather than any other.
+  const reviews = [];
+  const note = (trade, action, reason, extra = {}) => {
+    reviews.push({ position: rotationPositionSummary(trade), action, reason, ...extra });
+  };
+  for (const trade of allOpen) {
+    if (heldHours(trade) < ROTATION_MIN_HOLD_HOURS) {
+      note(trade, "HOLD", `held ${heldHours(trade).toFixed(1)}h, below the ${ROTATION_MIN_HOLD_HOURS}h minimum`);
+    }
+  }
 
   let bestReview = null;
   for (const trade of openRows) {
     const candidate = findFirstOpenCandidate(portfolioState, eligible, trade.id).best;
-    if (!candidate) continue;
-    if (String(candidate.tokenId || "") === String(trade.tokenId || "")) continue;
+    if (!candidate) {
+      note(trade, "HOLD", "no eligible candidate could replace it");
+      continue;
+    }
+    if (String(candidate.tokenId || "") === String(trade.tokenId || "")) {
+      note(trade, "HOLD", "the best candidate is this same market");
+      continue;
+    }
     const capitalAfterExit = available + Number(trade.maxLossUsdc || trade.stakeUsdc || 0);
-    if (capitalAfterExit < stake) continue;
+    if (capitalAfterExit < stake) {
+      note(trade, "HOLD", `exiting frees ${capitalAfterExit.toFixed(2)} USDC, still under the ${stake.toFixed(2)} USDC stake`,
+        { cashAfterExitUsdc: Number(capitalAfterExit.toFixed(4)) });
+      continue;
+    }
 
     const hold = tradeContinuationEconomics(trade, strategy);
     const candidateScore = candidateRotationScore(candidate, strategy);
     const candidateEv = Number(portfolioEconomics(candidate, strategy).expectedValueUsdc);
     const holdEv = Number(hold.expectedValue);
-    if (!Number.isFinite(candidateScore) || !Number.isFinite(hold.score)) continue;
-    if (!Number.isFinite(candidateEv) || !Number.isFinite(holdEv)) continue;
+    if (!Number.isFinite(candidateScore) || !Number.isFinite(hold.score)) {
+      note(trade, "HOLD", "the hold or the candidate has no usable score");
+      continue;
+    }
+    if (!Number.isFinite(candidateEv) || !Number.isFinite(holdEv)) {
+      note(trade, "HOLD", "the hold or the candidate has no usable expected value");
+      continue;
+    }
 
     const scoreDelta = candidateScore - hold.score;
     const evDelta = candidateEv - holdEv;
-    if (scoreDelta < ROTATION_MIN_SCORE_IMPROVEMENT || evDelta < ROTATION_MIN_EV_USDC_IMPROVEMENT) continue;
+    const shared = {
+      candidate: rotationCandidateSummary(candidate, candidateEv),
+      cashAfterExitUsdc: Number(capitalAfterExit.toFixed(4)),
+      evDeltaUsdc: Number(evDelta.toFixed(4)),
+      scoreDeltaValue: Number(scoreDelta.toFixed(6)),
+      holdExpectedPnlUsdc: Number(holdEv.toFixed(4)),
+      rotatedExpectedPnlUsdc: Number(candidateEv.toFixed(4)),
+    };
+    if (scoreDelta < ROTATION_MIN_SCORE_IMPROVEMENT || evDelta < ROTATION_MIN_EV_USDC_IMPROVEMENT) {
+      note(trade, "HOLD",
+        `improvement too small: ${strategy.selectionMetric} ${scoreDelta >= 0 ? "+" : ""}${scoreDelta.toFixed(4)}`
+        + ` (needs ${ROTATION_MIN_SCORE_IMPROVEMENT}), EV ${evDelta >= 0 ? "+" : ""}${evDelta.toFixed(4)} USDC`
+        + ` (needs ${ROTATION_MIN_EV_USDC_IMPROVEMENT})`, shared);
+      continue;
+    }
 
+    note(trade, "ROTATE_CANDIDATE",
+      `clears both bars: ${strategy.selectionMetric} +${scoreDelta.toFixed(4)}, EV +${evDelta.toFixed(4)} USDC`, shared);
     const review = {
       trade,
       candidate,
@@ -5029,7 +5080,37 @@ function rotationReview(portfolioState, eligible, strategy, available, stake) {
       bestReview = review;
     }
   }
-  return bestReview;
+  return bestReview ? { ...bestReview, reviews } : null;
+}
+
+// The shapes the run-log detail already knows how to render. It was written for the live
+// executor's rotation review, and the paper side emitted a different shape entirely -- so
+// the section rendered "Action: -", "Reason: -" and stopped.
+function rotationPositionSummary(trade = {}) {
+  const exitValue = Number(trade.currentValueUsdc ?? trade.stakeUsdc ?? 0);
+  return {
+    tokenId: trade.tokenId || null,
+    outcome: trade.outcome || "-",
+    question: trade.question || "-",
+    url: trade.url || `https://polymarket.com/event/${trade.eventSlug || trade.slug || ""}`,
+    estimatedExitValueUsdc: Number(exitValue.toFixed(4)),
+    unrealizedPnlUsdc: Number(Number(trade.unrealizedPnlUsdc || 0).toFixed(4)),
+    realizedPnlIfExitUsdc: Number((exitValue - Number(trade.totalCostUsdc || trade.stakeUsdc || 0)).toFixed(4)),
+    heldHours: Number(heldHours(trade).toFixed(1)),
+  };
+}
+
+function rotationCandidateSummary(candidate = {}, expectedValueUsdc = null) {
+  return {
+    tokenId: candidate.tokenId || null,
+    outcome: candidate.outcome || "-",
+    question: candidate.question || "-",
+    url: candidate.url || `https://polymarket.com/event/${candidate.eventSlug || candidate.slug || ""}`,
+    expectedValueUsdc: Number.isFinite(Number(expectedValueUsdc)) ? Number(Number(expectedValueUsdc).toFixed(4)) : null,
+    marketProbability: Number.isFinite(Number(candidate.marketProbability)) ? Number(Number(candidate.marketProbability).toFixed(4)) : null,
+    netYield: Number.isFinite(Number(candidate.netYield)) ? Number(Number(candidate.netYield).toFixed(4)) : null,
+    daysToResolution: Number.isFinite(Number(candidate.daysToResolution)) ? Number(Number(candidate.daysToResolution).toFixed(2)) : null,
+  };
 }
 
 function closeTradeForRotation(trade, review, strategy) {
@@ -5061,6 +5142,17 @@ function closeTradeForRotation(trade, review, strategy) {
     rotationReview: {
       strategyId: strategy.id,
       strategyMetric: strategy.selectionMetric,
+      // The shape the run-log detail renders: which holding is being sold, which
+      // candidate replaces it, and every other holding that was weighed against it.
+      // Without these the section could only say "Action: -" and "Reason: -".
+      action: "ROTATE",
+      reason: `sold the holding whose ${strategy.selectionMetric} trailed the best candidate by the widest margin`,
+      best: {
+        position: rotationPositionSummary(trade),
+        candidate: rotationCandidateSummary(review.candidate, review.candidateEv),
+        evDeltaUsdc: Number(review.evDelta.toFixed(4)),
+      },
+      reviews: Array.isArray(review.reviews) ? review.reviews : [],
       closedForQuestion: review.candidate.question,
       closedForOutcome: review.candidate.outcome,
       closedForTokenId: review.candidate.tokenId,
