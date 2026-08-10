@@ -220,9 +220,14 @@ async function main() {
       market = result.ok && Array.isArray(result.body) ? result.body[0] : null;
     }
     const hoursPast = stored ? (Date.now() - Date.parse(stored)) / 3600000 : null;
+    // Spelled out either way round. Printing a signed "13.0h ago" for a date thirteen
+    // hours in the future read as an expired order at a glance, which is the opposite
+    // of what it says and exactly the misreading this section exists to prevent.
+    const when = hoursPast == null || !Number.isFinite(hoursPast)
+      ? ""
+      : (hoursPast >= 0 ? ` (${hoursPast.toFixed(1)}h ago)` : ` (in ${Math.abs(hoursPast).toFixed(1)}h)`);
     console.log(`   ${side} price=${priceOf(order)} status=${order?.status || "-"}  ${rowLabel(order)}`);
-    console.log(`     stored endDate=${stored || "(none)"}`
-      + (hoursPast == null || !Number.isFinite(hoursPast) ? "" : ` (${hoursPast.toFixed(1)}h ago)`)
+    console.log(`     stored endDate=${stored || "(none)"}${when}`
       + ` daysToResolution=${order?.daysToResolution ?? "-"}`);
     console.log(market
       ? `     gamma: closed=${market.closed} active=${market.active} acceptingOrders=${market.acceptingOrders}`
