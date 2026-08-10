@@ -206,6 +206,31 @@ async function main() {
     }
   }
 
+  // Reported: a resting bid on a LoL match that has already been played still shows as
+  // LIMIT ORDER WAITING and holds its collateral. Whether that order can be withdrawn
+  // automatically depends entirely on what Gamma still says about its market, so ask.
+  console.log(`\n== Open orders against what Gamma says about their markets`);
+  for (const order of (liveState.openOrders || [])) {
+    const tokenId = String(order?.tokenId || order?.assetId || "");
+    const side = String(order?.side || "BUY").toUpperCase();
+    const stored = order?.endDate || order?.resolutionEndDate || null;
+    let market = null;
+    if (tokenId) {
+      const result = await fetchJson(`https://gamma-api.polymarket.com/markets?clob_token_ids=${encodeURIComponent(tokenId)}`);
+      market = result.ok && Array.isArray(result.body) ? result.body[0] : null;
+    }
+    const hoursPast = stored ? (Date.now() - Date.parse(stored)) / 3600000 : null;
+    console.log(`   ${side} price=${priceOf(order)} status=${order?.status || "-"}  ${rowLabel(order)}`);
+    console.log(`     stored endDate=${stored || "(none)"}`
+      + (hoursPast == null || !Number.isFinite(hoursPast) ? "" : ` (${hoursPast.toFixed(1)}h ago)`)
+      + ` daysToResolution=${order?.daysToResolution ?? "-"}`);
+    console.log(market
+      ? `     gamma: closed=${market.closed} active=${market.active} acceptingOrders=${market.acceptingOrders}`
+        + ` archived=${market.archived} umaResolutionStatus=${market.umaResolutionStatus ?? "-"}`
+        + ` endDate=${market.endDate ?? "-"} closedTime=${market.closedTime ?? "-"}`
+      : `     gamma: no market answered for this token`);
+  }
+
   // Whether the two execution state files are on the hosting at all. A 404 here and a 404
   // from the API mean the upload never landed; a 200 here with a 404 from the API would
   // mean the file is present and something else is wrong.
