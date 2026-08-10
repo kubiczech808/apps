@@ -119,9 +119,42 @@ function reportSet(label, rows, api, mode) {
   if (rows.length > 12) console.log(`    ... and ${rows.length - 12} more`);
 }
 
+// Reported: every category in the tag picker reads "nothing stored yet", when there are
+// certainly stored markets. The picker counts tags across the rows the scraped summary
+// returns, so the question is what that response actually contains -- how many rows, what
+// the manifest says the totals are, and whether the rows still carry the tags the counting
+// reads. Those three answers separate "the catalogue is gone" from "the response is fine
+// and the counting looks at the wrong field".
+async function reportScrapedCatalogue() {
+  console.log(`\n== What the opportunities page is served`);
+  const result = await fetchJson(`${HOST}/api.php?action=state&target=paper&summary=scraped`);
+  if (!result.ok) {
+    console.log(`   HTTP ${result.status}: ${String(result.error).slice(0, 200)}`);
+    return;
+  }
+  const body = result.body || {};
+  const rows = Array.isArray(body.marketObservations) ? body.marketObservations : [];
+  console.log(`   generatedAt=${body.generatedAt || "(none)"} rows=${rows.length}`
+    + ` totals=${JSON.stringify(body.observationTotals || {})}`);
+  const tagged = rows.filter((row) => Array.isArray(row?.tags) ? row.tags.length : Array.isArray(row?.firstTags) ? row.firstTags.length : false);
+  console.log(`   rows carrying a tag list: ${tagged.length} of ${rows.length}`);
+  if (rows.length) console.log(`   first row keys: ${Object.keys(rows[0]).sort().join(", ")}`);
+  const counts = new Map();
+  for (const row of rows) {
+    for (const tag of [...(row?.tags || []), ...(row?.firstTags || []), row?.firstCategory].filter(Boolean)) {
+      const key = String(tag).toLowerCase();
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+  console.log(`   distinct tags seen: ${counts.size}`
+    + (top.length ? ` | top: ${top.map(([tag, n]) => `${tag}=${n}`).join(", ")}` : ""));
+}
+
 async function main() {
   console.log(`Live portfolio attribution diagnosis at ${new Date().toISOString()}`);
   console.log("Read-only: nothing is written, no credentials are used.\n");
+  await reportScrapedCatalogue();
 
   const [live, fixedEntryExecution, config] = await Promise.all(
     [SOURCES.live, SOURCES.fixedEntryExecution, SOURCES.config].map(fetchJson),
