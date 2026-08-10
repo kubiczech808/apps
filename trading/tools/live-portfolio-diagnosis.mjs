@@ -28,8 +28,19 @@ const STATIC_SOURCES = {
 };
 
 async function fetchJson(url) {
-  const response = await fetch(url, { headers: { "User-Agent": "LivePortfolioDiagnosis/1.0" } });
-  const text = await response.text();
+  // A read-only diagnostic must never die on the thing it was sent to look at. The
+  // scraped summary cut the connection instead of answering -- which is what a PHP fatal
+  // looks like from out here, and is itself a result worth printing -- and the unhandled
+  // rejection took the whole report down before it could say so.
+  let response;
+  let text;
+  try {
+    response = await fetch(url, { headers: { "User-Agent": "LivePortfolioDiagnosis/1.0" } });
+    text = await response.text();
+  } catch (error) {
+    const cause = error?.cause?.code || error?.cause?.message || "";
+    return { ok: false, status: "network", error: `${error?.message || error}${cause ? ` (${cause})` : ""}` };
+  }
   if (!response.ok) return { ok: false, status: response.status, error: text.slice(0, 300) };
   try {
     return { ok: true, status: response.status, body: JSON.parse(text) };
