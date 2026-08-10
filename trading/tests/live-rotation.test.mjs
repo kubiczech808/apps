@@ -3055,3 +3055,43 @@ test("opportunities page: the active choice is obvious and the filters belong to
   // And the page must not still explain a filter in terms of the view that is gone.
   assert.doesNotMatch(html, /It uses AI probability in Evaluated/);
 });
+
+// Reported from the 5050 run log, twice within the hour: ERROR "scraped Polymarket state
+// HTTP 500". Reproduced against the real api.php with a state built to production's own
+// row counts -- 3,157 active observations and 23,561 resolved -- where summary=scraped
+// dies with "Allowed memory size of 134217728 bytes exhausted" before it filters anything.
+// Decoding the resolved archive alone costs 138 MB, so no downstream cap can rescue it.
+//
+// The executor never reads a resolved market: it takes marketObservations and nothing
+// else. api.php already carries a summary for exactly this, whose own comment says the
+// resolved archive is never decoded for it "no matter how large it grows" -- the trading
+// runs were simply pointed at the wrong one.
+test("live executor: the trading runs read the summary that skips the resolved archive", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [executorSource, fixedWorkflow, liveWorkflow, api] = await Promise.all([
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8"),
+    readFile(new URL("../api.php", import.meta.url), "utf8"),
+  ]);
+
+  for (const [name, source] of [["executor", executorSource], ["5050", fixedWorkflow], ["live", liveWorkflow]]) {
+    assert.match(source, /PAPER_SCRAPED_STATE_URL[^\n]*summary=execution/,
+      `${name} must not ask for the resolved archive it never reads`);
+    assert.doesNotMatch(source, /PAPER_SCRAPED_STATE_URL[^\n]*summary=scraped/);
+  }
+
+  // Safe only because that is genuinely the one field taken from this response.
+  const uses = executorSource.match(/scrapedState[?.]*\.\w+/g) || [];
+  assert.deepEqual([...new Set(uses)], ["scrapedState?.marketObservations", "scrapedState.marketObservations"],
+    "switching summaries is only safe while marketObservations is all the executor reads");
+
+  // And the summary it now asks for really does serve that field, from active markets.
+  const execution = /if \(\$summary === 'execution'\) \{[\s\S]*?\n    \}/.exec(api);
+  assert.ok(execution);
+  assert.match(execution[0], /'marketObservations' => array_map\(/);
+  assert.match(execution[0], /is_active_scraped_market_observation\(\$item\)/);
+  // The segment list is what actually keeps the archive off the heap.
+  assert.match(api, /case 'execution':\n[\s\S]*?return \['observations'\];/);
+  assert.match(api, /case 'scraped':\n\s+return \['observations', 'resolvedObservations', 'scanHistory'\];/);
+});

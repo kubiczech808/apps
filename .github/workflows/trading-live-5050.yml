@@ -61,7 +61,7 @@ jobs:
       POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
       POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '3' }}
       PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
-      PAPER_SCRAPED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=scraped
+      PAPER_SCRAPED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=execution
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live
       LIVE_EXECUTION_STATE_PATH: data/live-5050-execution-state.json
