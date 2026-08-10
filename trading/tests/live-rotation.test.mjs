@@ -3169,3 +3169,42 @@ test("rotation log: the wording is driven by the real function, not by the log's
   assert.equal(empty.action, declined.action);
   assert.notEqual(empty.reason, declined.reason);
 });
+
+// Reported from the live run log: every automatic run since the previous change threw
+// "Cannot access 'capitalLocationNote' before initialization". Mine. The note is read by
+// the actionExplanation expression and I declared it below that expression, which is a
+// temporal dead zone error -- and unlike a plain typo it only fires when the line runs.
+//
+// The previous test asserted the text of both parts and passed, because text says nothing
+// about order. This one runs the statements in the order the file declares them, which is
+// the only thing that catches it.
+test("run log note: the capital note is declared before the explanation that reads it", () => {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const main = functionSource(source, "main");
+
+  const noteAt = main.indexOf("const capitalLocationNote =");
+  const usedAt = main.indexOf("${capitalLocationNote}");
+  assert.ok(noteAt > 0 && usedAt > 0, "both the declaration and its use must be findable");
+  assert.ok(noteAt < usedAt,
+    "a const read above its own declaration throws at runtime, not at parse time");
+
+  // Driven rather than matched: the three statements are lifted in file order and run, so
+  // a future reordering fails here the way production failed.
+  const block = main.slice(noteAt - 400 < 0 ? 0 : main.lastIndexOf("const restingBuyOrderCount", noteAt), main.indexOf("\n", usedAt));
+  const build = new Function("liveState", "orderManagement", "openPositionsForRotation", `
+    ${block.slice(0, block.indexOf("const actionExplanation"))}
+    return capitalLocationNote;
+  `);
+
+  // Production's shape: nothing held, eleven bids resting, every one kept.
+  const note = build(
+    { openOrders: Array.from({ length: 11 }, () => ({ side: "BUY" })) },
+    { action: "NONE", reviews: Array.from({ length: 11 }, () => ({})) },
+    () => [],
+  );
+  assert.match(note, /0 position\(s\) and 11 resting order\(s\)/);
+  assert.match(note, /looked at 11 of them and chose to keep every one/);
+
+  // And nothing committed anywhere adds nothing to the note.
+  assert.equal(build({ openOrders: [] }, { action: "NONE", reviews: [] }, () => []), "");
+});

@@ -4024,6 +4024,19 @@ async function main() {
                 : (stakeCapBlockedCandidates.length
                   ? `free cash is sufficient, but ${stakeCapBlockedCandidates.length} live candidate${stakeCapBlockedCandidates.length === 1 ? " is" : "s are"} below Polymarket's minimum order size at the configured max per trade`
                   : "no currently executable candidate after live revalidation")))));
+  // The rest of the capital is either in positions, which position rotation decides on,
+  // or in resting orders, which the open-order review decides on. Saying which, and what
+  // that review concluded, is the difference between "the rules declined" and "something
+  // is broken" -- the two this log could not tell apart.
+  const restingBuyOrderCount = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
+    .filter((order) => !String(order.side || "").toUpperCase().includes("SELL")).length;
+  const heldPositionCount = openPositionsForRotation(liveState).length;
+  const orderReviewOutcome = orderManagement?.reviews?.length
+    ? `the open-order review looked at ${orderManagement.reviews.length} of them and chose ${orderManagement.action === "NONE" ? "to keep every one" : orderManagement.action}`
+    : (restingBuyOrderCount ? "the open-order review did not run this pass" : "");
+  const capitalLocationNote = restingBuyOrderCount || heldPositionCount
+    ? ` The rest of this portfolio's capital is in ${heldPositionCount} position(s) and ${restingBuyOrderCount} resting order(s)${orderReviewOutcome ? `; ${orderReviewOutcome}` : ""}.`
+    : "";
   const actionExplanation = canceledForBetterCandidate
     ? "The waiting order released its own locked capital only after a better candidate passed the portfolio comparison. The replacement is submitted in this same batch; if submission fails, the original order is restored."
     : directCapitalPriority
@@ -4047,19 +4060,6 @@ async function main() {
                 : (stakeCapBlockedCandidates.length
                   ? "No live order was submitted because the configured max per trade is below Polymarket's exchange minimum. Free cash was sufficient, so no order or position was rotated."
                   : "No live order was submitted because all revalidated candidates failed current execution criteria.")))));
-  // The rest of the capital is either in positions, which position rotation decides on,
-  // or in resting orders, which the open-order review decides on. Saying which, and what
-  // that review concluded, is the difference between "the rules declined" and "something
-  // is broken" -- the two this log could not tell apart.
-  const restingBuyOrderCount = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
-    .filter((order) => !String(order.side || "").toUpperCase().includes("SELL")).length;
-  const heldPositionCount = openPositionsForRotation(liveState).length;
-  const orderReviewOutcome = orderManagement?.reviews?.length
-    ? `the open-order review looked at ${orderManagement.reviews.length} of them and chose ${orderManagement.action === "NONE" ? "to keep every one" : orderManagement.action}`
-    : (restingBuyOrderCount ? "the open-order review did not run this pass" : "");
-  const capitalLocationNote = restingBuyOrderCount || heldPositionCount
-    ? ` The rest of this portfolio's capital is in ${heldPositionCount} position(s) and ${restingBuyOrderCount} resting order(s)${orderReviewOutcome ? `; ${orderReviewOutcome}` : ""}.`
-    : "";
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
     action: best ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
