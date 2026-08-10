@@ -4202,3 +4202,39 @@ test("scraping log: the asked-for columns lead, and every header keeps its own c
   assert.deepEqual(cells, headers, "each column's cell must sit under its own header");
   assert.ok(headers.length >= 13, `expected the full column set, found ${headers.length}`);
 });
+
+test("execution candidates: Win and Days left lead, precheck follows the market", async () => {
+  // Asked for: drop the row-number column, put Win first and Days left second, and move
+  // precheck behind Market. The table scrolls sideways, so the leading columns are what
+  // is read without dragging -- and a row's number in the list is not one of them.
+  const renderer = candidateRenderer({ candidateVisibleCount: 80, candidateVisibleMode: "live" });
+  const rows = [{ tokenId: "1", question: "A market", outcome: "Yes" }];
+
+  for (const mode of ["live", "paper-conservative"]) {
+    const html = renderer.render(rows, mode, null);
+    const headers = [...html.matchAll(/<th>([^<]*)<\/th>/g)].map((match) => match[1].trim());
+    const cells = [...html.matchAll(/<td data-label="([^"]*)"/g)].map((match) => match[1].trim());
+
+    assert.deepEqual(headers.slice(0, 4), ["Win", "Days left", "Market", "Precheck"], `${mode} order`);
+    // Headers and cells are two lists in one template, so a moved column has to move in
+    // both or every value below it lands under the wrong heading.
+    assert.deepEqual(cells, headers, `${mode}: each cell must sit under its own header`);
+    assert.ok(!headers.includes("#"), `${mode}: the row-number column is gone`);
+    assert.ok(!/data-label="#"/.test(html), `${mode}: and its cell with it`);
+  }
+
+  // READY on a live portfolio said "will verify live quote, fees and ranking" -- what
+  // every live execution does to every candidate, so it said nothing about the row while
+  // taking the space of something that would.
+  const app = await import("node:fs/promises").then((fs) => fs.readFile(new URL("../assets/app.js", import.meta.url), "utf8"));
+  // Checked against the code, or the comment recording why it went would count as the
+  // string it warns about.
+  const appCode = app.split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
+  assert.ok(!/will verify live quote/.test(appCode), "the blanket precheck note is gone");
+  // A paper portfolio keeps its own note, and an excluded or blocked row keeps its reason.
+  assert.match(app, /\(!live \? "ready for next paper execution" : ""\)/);
+  assert.match(app, /"excluded manually for this portfolio"/);
+  assert.match(app, /"excluded by diversification rules"/);
+  // With no note there must be no empty element left behind under the badge.
+  assert.match(app, /\$\{status \? `<span>\$\{escapeHtml\(status\)\}<\/span>` : ""\}/);
+});

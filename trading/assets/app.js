@@ -5752,13 +5752,12 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
     <table class="ledger-wide-table">
       <thead>
         <tr>
-          <th>#</th>
-          <th>Precheck</th>
+          <th>Win</th>
+          <th>Days left</th>
           <th>Market</th>
+          <th>Precheck</th>
           ${useLiveMarketColumnOrder ? `
-            <th>Days left</th>
             <th>${returnMetric}</th>
-            <th>Win</th>
             <th>Net yield %</th>
             <th>Volume</th>
             <th>R/R</th>
@@ -5766,12 +5765,10 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
             <th>End date</th>
           ` : `
             <th>End date</th>
-            <th>Days left</th>
             <th>${probabilityLabel}</th>
             ${usesPolymarketPotential ? "" : "<th>Mkt entry</th>"}
             <th>${returnMetric}</th>
             ${usesPolymarketPotential ? "" : "<th>EV</th>"}
-            <th>Win</th>
             <th>Net yield %</th>
             <th>R/R</th>
             <th>Volume</th>
@@ -5780,7 +5777,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
         </tr>
       </thead>
       <tbody>
-        ${visibleRows.slice(0, shown).map((item, index) => {
+        ${visibleRows.slice(0, shown).map((item) => {
           const excluded = Boolean(item.manuallyExcluded);
           const riskBlockedRow = Boolean(item.portfolioRiskBlockReason);
           // A retryable verdict from the previous run is not a precheck state of
@@ -5790,35 +5787,34 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
           // nothing about whether the row can trade now. It used to render as
           // WAITING, which read like a gate that does not exist. The reason the
           // previous run did not take it stays visible in the run log.
+          // Only a state that is not already the badge. READY on a live portfolio used to
+          // carry "will verify live quote, fees and ranking", which is what every live
+          // execution does to every candidate -- it said nothing about this row, on every
+          // row, and the column is narrow enough that it crowded out what does.
           const status = excluded
             ? "excluded manually for this portfolio"
             : (riskBlockedRow
-            ? "excluded by diversification rules"
-            : (!live
-              ? "ready for next paper execution"
-              : (usesPolymarketPotential
-                ? "will verify live quote, fees and ranking"
-                : "will verify live quote against stored AI assessment")));
+              ? "excluded by diversification rules"
+              : (!live ? "ready for next paper execution" : ""));
           const precheck = excluded ? "EXCLUDED" : (riskBlockedRow ? "RISK-BLOCKED" : "READY");
           const selectedProbability = portfolioProbability(item, config);
           const selectedAnnualizedReturn = portfolioAnnualizedReturn(item, config);
           const selectedExpectedValue = portfolioExpectedValue(item, config);
           return `
             <tr>
-              <td data-label="#">${index + 1}</td>
+              <td data-label="Win">${gainCell(item)}</td>
+              <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
+              <td data-label="Market">${marketAnchor(item)}</td>
               <td data-label="Precheck" class="${excluded ? "negative" : (riskBlockedRow ? "warning" : "positive")}">
                 <strong>${precheck}</strong>
-                <span>${escapeHtml(status)}</span>
+                ${status ? `<span>${escapeHtml(status)}</span>` : ""}
                 <label class="candidate-exclusion-control" title="Exclude this candidate from this portfolio's future executions">
                   <input type="checkbox" data-portfolio-candidate-exclude data-portfolio-mode="${escapeHtml(mode)}" data-candidate-token-id="${escapeHtml(String(item.tokenId || item.clobTokenId || item.assetId || ""))}" ${excluded ? "checked" : ""}>
                   <span>Exclude</span>
                 </label>
               </td>
-              <td data-label="Market">${marketAnchor(item)}</td>
               ${useLiveMarketColumnOrder ? `
-                <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
                 <td data-label="${returnMetric}" title="${escapeHtml(annualizationHorizonNote(item))}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
-                <td data-label="Win">${gainCell(item)}</td>
                 <td data-label="Net yield %">${netYieldCell(item)}</td>
                 <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
                 <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
@@ -5826,12 +5822,10 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
                 <td data-label="End date">${evaluationEndDateCell(item)}</td>
               ` : `
                 <td data-label="End date">${evaluationEndDateCell(item)}</td>
-                <td data-label="Days left">${evaluationDaysLeftCell(item)}</td>
                 <td data-label="${probabilityLabel}">${probability(selectedProbability)}</td>
                 ${usesPolymarketPotential ? "" : `<td data-label="Mkt entry">${probability(evaluationEntryPrice(item))}</td>`}
                 <td data-label="${returnMetric}" title="${escapeHtml(annualizationHorizonNote(item))}"><span class="${pnlClass(selectedAnnualizedReturn)}">${signedPercent(selectedAnnualizedReturn)}</span></td>
                 ${usesPolymarketPotential ? "" : `<td data-label="EV">${signedMoney(selectedExpectedValue, 4)}</td>`}
-                <td data-label="Win">${gainCell(item)}</td>
                 <td data-label="Net yield %">${netYieldCell(item)}</td>
                 <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
                 <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
