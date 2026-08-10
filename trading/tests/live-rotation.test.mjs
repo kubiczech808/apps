@@ -2411,6 +2411,7 @@ test("live candidates: the verdict says which portfolio made it", async () => {
 test("5050 attribution: a changed entry price does not orphan what was traded at the old one", () => {
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
   const build = (config, execution = {}) => new Function("state", "portfolioConfigForMode", `
+    ${/const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0]}
     ${functionSource(app, "normalizeFixedEntryPrice")}
     ${functionSource(app, "fixedEntryPriceSignatures")}
     ${functionSource(app, "matchesFixedEntryPrice")}
@@ -2458,4 +2459,65 @@ test("5050 attribution: the price history is kept by the server, not the browser
 
   // And it is a saved portfolio setting, so a fresh install recognises its own fills too.
   assert.match(api, /'fixedEntryPriceHistory' => \[0\.50\],/);
+});
+
+// Reported: the live portfolio's closed trades hold rows reading 50-51%, and one open
+// order reads 50%. Measured against production: those are entry prices, not probabilities
+// -- no row on the account carries an AI probability at all -- and all three are 5050's,
+// resting or filled at the 0.50 it used before the setting moved to 0.65.
+//
+// Every price below is the real figure from the account, so this fixes the boundary the
+// live portfolio's own fills actually sit at rather than an invented one.
+const PRODUCTION_FIXED_ENTRY_ROWS = [0.5, 0.51];
+const PRODUCTION_LIVE_ENTRY_PRICES = [0.75, 0.78, 0.78, 0.81, 0.82, 0.91, 0.945, 0.95, 0.95, 0.961, 0.975, 0.978];
+
+test("5050 attribution: an averaged fill price a cent off the bid is still 5050's", () => {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const build = (config) => new Function("state", "portfolioConfigForMode", `
+    ${/const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0]}
+    ${functionSource(app, "normalizeFixedEntryPrice")}
+    ${functionSource(app, "fixedEntryPriceSignatures")}
+    ${functionSource(app, "matchesFixedEntryPrice")}
+    return matchesFixedEntryPrice;
+  `)({ live5050ExecutionState: {} }, () => config);
+
+  const matches = build({ fixedEntryPrice: 0.65, fixedEntryPriceHistory: [0.65, 0.5] });
+
+  // A resting maker bid fills at its own price, but the stored figure is the cost-weighted
+  // average of every fill, so partials either side of a settings change average between
+  // them. 0.5100 against a 0.50 bid is the real case a half-cent window missed.
+  for (const price of PRODUCTION_FIXED_ENTRY_ROWS) {
+    assert.equal(matches(price), true, `${price} was 5050's and must be recognised`);
+  }
+
+  // And the widened window must not start claiming the live portfolio's fills. It buys at
+  // the market against a probability bar in the nineties; these are its real entry prices.
+  for (const price of PRODUCTION_LIVE_ENTRY_PRICES) {
+    assert.equal(matches(price), false, `${price} is a live market buy, not a 5050 bid`);
+  }
+
+  // The gap that makes this safe, stated as a rule rather than left to the fixtures: the
+  // window has to stay well inside the distance between the two portfolios' price bands.
+  const tolerance = build({ fixedEntryPrice: 0.65 });
+  assert.equal(tolerance(0.66), true);
+  assert.equal(tolerance(0.70), false, "still far short of the lowest live entry price");
+  assert.ok(Math.min(...PRODUCTION_LIVE_ENTRY_PRICES) - 0.65 > 0.02 * 2,
+    "the live band must stay more than two windows clear of 5050's highest price");
+});
+
+test("closed trades: the retired AI probability column is gone, not merely hidden", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // The scoring pipeline is retired -- every portfolio scores on the Polymarket
+  // probability whatever an older config stored -- so the column could only ever show a
+  // figure from a system no longer running. It was suppressed on the open tables and left
+  // on the closed ones, which is where it was still being read as current.
+  assert.match(app, /function normalizeProbabilitySource\(\) \{\n\s+return "polymarket";/);
+  assert.ok(!/AI prob\./.test(app), "no AI probability column anywhere in the tables");
+  assert.ok(!/showAiProbability/.test(app), "and no switch left to bring it back");
+
+  // Production carries no AI probability on any row -- positions, orders or closed trades
+  // -- so nothing of substance is lost with the column.
+  assert.ok(!/sortableHeader\("aiProbability"/.test(app));
 });

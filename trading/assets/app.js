@@ -2487,7 +2487,6 @@ function tradeWinCell(trade) {
 function renderTradeRows(trades, emptyText, options = {}) {
   const tableKey = options.tableKey || "open";
   const showStatus = options.showStatus !== false;
-  const showAiProbability = options.showAiProbability !== false;
   if (!trades.length) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
   const rows = sortedTrades(trades, tableKey);
   return `
@@ -2503,7 +2502,6 @@ function renderTradeRows(trades, emptyText, options = {}) {
           ${tradeHeader(tableKey, "resolution", "Resolution")}
           ${tradeHeader(tableKey, showStatus ? "resolvedAt" : "openedAt", showStatus ? "Closed" : "Opened")}
           ${tradeHeader(tableKey, "currentPrice", showStatus ? "Entry / final" : "Entry / mark")}
-          ${showAiProbability ? tradeHeader(tableKey, "aiProbability", "AI prob.") : ""}
           ${tradeHeader(tableKey, "stake", "Stake")}
           ${tradeHeader(tableKey, "riskReward", "R/R")}
         </tr>
@@ -2526,13 +2524,6 @@ function renderTradeRows(trades, emptyText, options = {}) {
             <td data-label="Resolution">${resolutionCell(trade)}</td>
             <td data-label="${showStatus ? "Closed" : "Opened"}">${escapeHtml(formatDate(showStatus ? (trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "") : (trade.openedAt || trade.date || "")))}</td>
             <td data-label="${showStatus ? "Entry / final" : "Entry / mark"}">${tradePriceCell(trade, showStatus)}</td>
-            ${showAiProbability ? `<td data-label="AI prob.">
-              <strong>${probability(tradeAiProbability(trade))}</strong>
-              <span class="analysis-popover">
-                <button class="info-button" type="button" aria-label="Show original AI analysis">i</button>
-                <span class="analysis-tooltip" role="tooltip">${escapeHtml(tradeAnalysisDetails(trade))}</span>
-              </span>
-            </td>` : ""}
             <td data-label="Stake">${money(Number(trade.stakeUsdc || 0))}</td>
             <td data-label="R/R"><span class="${riskRewardClass(tradeRiskReward(trade))}">${riskReward(tradeRiskReward(trade))}</span></td>
           </tr>
@@ -3384,7 +3375,9 @@ function executionCandidatePotentialPa(item = {}, probabilitySource = "ai") {
 function renderExecutionCandidatesNotUsedTable(candidates = [], probabilitySource = "ai") {
   if (!candidates.length) return "";
   const usesPolymarketProbability = normalizeProbabilitySource(probabilitySource) === "polymarket";
-  const probabilityLabel = usesPolymarketProbability ? "Mkt prob." : "AI prob.";
+  // Scoring is always the Polymarket probability now, so the column has one name. The
+  // flag above still gates which columns appear, but it can no longer be false.
+  const probabilityLabel = "Mkt prob.";
   return `
     <div class="analysis-candidate-table-wrap" tabindex="0" aria-label="Rejected execution candidates table">
       <table class="analysis-candidate-table">
@@ -5731,7 +5724,9 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
   const config = portfolioConfigForMode(mode);
   const usesPolymarketPotential = normalizeProbabilitySource(config.probabilitySource) === "polymarket";
   const useLiveMarketColumnOrder = live && usesPolymarketPotential;
-  const probabilityLabel = usesPolymarketPotential ? "Mkt prob." : "AI prob.";
+  // Scoring is always the Polymarket probability now, so the column has one name. The
+  // flag above still gates which columns appear, but it can no longer be false.
+  const probabilityLabel = "Mkt prob.";
   const returnMetric = portfolioReturnMetricLabel(config);
   return `
     <div class="ledger-scroll" tabindex="0" aria-label="Scrollable execution candidates table">
@@ -6040,7 +6035,6 @@ function renderBotState(botState) {
   els.botTrades.innerHTML = renderTradeRows(openTrades.slice(0, 12), "Zatim zadne otevrene autonomni paper obchody.", {
     tableKey: "open",
     showStatus: false,
-    showAiProbability: false,
   });
   if (els.closedSummary) {
     const closedPnl = closedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
@@ -6129,12 +6123,22 @@ function fixedEntryPriceSignatures() {
   return prices;
 }
 
-// Tick-size rounding means a stored price can differ in the last place.
+// How far a recorded price may sit from one 5050 rested a bid at and still be its own.
+//
+// A cent, not half of one. A resting maker bid fills at its own price, but what is stored
+// is the cost-weighted average of every fill, so two partials either side of a settings
+// change average out to something between them: production carries a closed 5050 trade at
+// 0.5100 against a 0.50 bid, which a half-cent window missed and handed to the live
+// portfolio. The window stays far from anything live can produce -- it buys at the market
+// against a probability bar in the nineties, and the lowest entry price among the
+// account's 43 closed trades is 0.75, more than ten cents clear of 5050's highest.
+const FIXED_ENTRY_PRICE_TOLERANCE = 0.02;
+
 function matchesFixedEntryPrice(value) {
   const price = Number(value);
   if (!Number.isFinite(price)) return false;
   for (const entry of fixedEntryPriceSignatures()) {
-    if (Math.abs(price - entry) < 0.005) return true;
+    if (Math.abs(price - entry) < FIXED_ENTRY_PRICE_TOLERANCE) return true;
   }
   return false;
 }
@@ -6186,8 +6190,9 @@ function fixedEntryOrderPricesByToken() {
 function boughtAtFixedEntryPrice(row) {
   const paid = Number(row?.entryPrice ?? row?.avgPrice ?? row?.averagePrice);
   if (!Number.isFinite(paid)) return false;
-  // Tick-size rounding means the stored price can differ in the last place.
-  const matches = (price) => Math.abs(paid - price) < 0.005;
+  // Same window as the signature match above, and for the same reason: an averaged fill
+  // price drifts by cents, not by half-cents.
+  const matches = (price) => Math.abs(paid - price) < FIXED_ENTRY_PRICE_TOLERANCE;
   // A price 5050 is on record as having bid for this very token settles it, whether or
   // not the portfolio is still configured that way.
   const ordered = fixedEntryOrderPricesByToken().get(String(row?.tokenId || row?.assetId || ""));
@@ -6653,7 +6658,6 @@ function renderLiveState(liveState) {
   els.botTrades.innerHTML = renderTradeRows(openedRows, "Zatim zadne otevrene live pozice ani limit objednavky na napojenem Polymarket uctu.", {
     tableKey: "live",
     showStatus: false,
-    showAiProbability: false,
   });
   if (els.closedSummary) {
     const closedPnl = closedTrades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
@@ -7375,7 +7379,6 @@ function renderBotEvaluations() {
           ${sortableHeader("gainIfWin", "Win @ $5")}
           ${sortableHeader("netYield", "Net yield %")}
           ${sortableHeader("riskReward", "R/R")}
-          ${sortableHeader("aiProbability", "AI prob.")}
           ${sortableHeader("potentialAnnualizedReturn", "Potential p.a.")}
           ${sortableHeader("updates", "Updates")}
           ${sortableHeader("analysis", "Analysis")}
@@ -7398,7 +7401,6 @@ function renderBotEvaluations() {
             <td data-label="Win @ $5">${gainCell(item)}</td>
             <td data-label="Net yield %">${netYieldCell(item)}</td>
             <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
-            <td data-label="AI prob.">${probability(Number(item.aiProbability))}</td>
             <td data-label="Potential p.a.">${evaluatedPotentialAnnualizedCell(item)}</td>
             <td data-label="Updates">${updateHistoryCell(item)}</td>
             <td data-label="Analysis">

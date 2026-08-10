@@ -703,11 +703,19 @@ test("trade table: every header lines up with the cell beneath it", async () => 
   assert.ok(headers.length >= 10, `expected the full column set, found ${headers.length}`);
   assert.deepEqual(cells, headers, "each column's cell must sit under its own header");
 
-  // The two columns that only exist in one of the two views must stay conditional, or
-  // the closed table gains an empty column and the open one loses a value.
+  // The Result column only exists in one of the two views and must stay conditional, or
+  // the open table gains an empty column and the closed one loses a value.
   assert.ok(thead.includes('showStatus ? tradeHeader(tableKey, "status", "Result")'));
   assert.ok(tbody.includes('showStatus ? `<td data-label="Result"'));
-  assert.ok(thead.includes('showAiProbability ? tradeHeader(tableKey, "aiProbability", "AI prob.")'));
+
+  // The AI probability column used to be the other conditional one, suppressed on the
+  // open tables and left on the closed ones. The scoring pipeline it came from is
+  // retired -- every portfolio scores on the Polymarket probability -- so the column
+  // could only ever show a figure from a system no longer running, on rows old enough
+  // to have one. A stale number reads as a current one, so it is gone rather than
+  // hidden in one more place.
+  assert.ok(!/AI prob\./.test(body), "no AI probability column in the trade tables");
+  assert.ok(!/showAiProbability/.test(app), "and no leftover switch for it");
 });
 
 test("candidates: the precheck column has no WAITING state", async () => {
@@ -2631,6 +2639,7 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
     // one exists, from the configured price alone.
     const state={live5050ExecutionState:null};
     const fixedEntryTokenIds=()=>new Set(${JSON.stringify(owned)});
+    ${/const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0]}
     ${body}
     return belongsToActiveLivePortfolio(row);`);
 
@@ -3266,8 +3275,9 @@ function liveTradeAttribution(app, { mode, fixedEntryPrice = 0.51, execution5050
     "restsAtFixedEntryPrice", "isFilledPortfolioRow", "fixedEntryOrderPricesByToken", "boughtAtFixedEntryPrice",
     "belongsToActiveLivePortfolio", "isClosedTrade", "liveClosedTrades", "liveOpenOrders"]
     .map(pick).join("\n\n");
+  const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
   return new Function("state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
-    `${body}\nreturn { liveClosedTrades, liveOpenOrders };`)(
+    `${tolerance}\n${body}\nreturn { liveClosedTrades, liveOpenOrders };`)(
     { mode, live5050ExecutionState: execution5050 },
     () => mode === "live-5050",
     (value) => Number(value),
@@ -3521,9 +3531,10 @@ test("5050 fills: a changed entry price does not hand old fills to Live", async 
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
     "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio",
     "isClosedTrade"].map(pick).join("\n\n");
+  const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
   const belongs = (mode, execution5050, configuredPrice) => new Function(
     "state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
-    `${body}\nreturn belongsToActiveLivePortfolio;`,
+    `${tolerance}\n${body}\nreturn belongsToActiveLivePortfolio;`,
   )(
     { mode, live5050ExecutionState: execution5050 },
     () => mode === "live-5050",
@@ -3753,9 +3764,10 @@ test("5050 orders: a bid is recognised at every price the portfolio bids at", as
     "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
     "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio",
     "isClosedTrade", "liveOpenOrders"].map(pick).join("\n\n");
+  const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
   const openOrdersFor = (mode, execution5050, configuredPrice) => new Function(
     "state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
-    `${body}\nreturn liveOpenOrders;`,
+    `${tolerance}\n${body}\nreturn liveOpenOrders;`,
   )(
     { mode, live5050ExecutionState: execution5050 },
     () => mode === "live-5050",
