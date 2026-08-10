@@ -3208,3 +3208,67 @@ test("run log note: the capital note is declared before the explanation that rea
   // And nothing committed anywhere adds nothing to the note.
   assert.equal(build({ openOrders: [] }, { action: "NONE", reviews: [] }, () => []), "");
 });
+
+// Reported with the run log and the closed trade beside it: a position with 0.2174 USDC of
+// remaining upside was sold to buy a market resolving in 0.01d, and the closed row shows
+// +0.01 USDC banked against a +0.25 USDC potential win. The replacement never appeared.
+//
+// Both legs are visible in the code and they were not symmetrical. The exit is built with
+// forceTaker/FAK and fills unconditionally. The entry went through the normal buy path,
+// which prices a limit at the *bid* and posts it post-only -- so it fills only if someone
+// crosses to us, and on a fourteen-minute market nobody was going to. The swap was certain
+// on the selling side and optional on the buying side, which is strictly worse than not
+// rotating: it banks the exit and keeps neither opportunity.
+test("rotation entry: completing a rotation crosses the spread instead of resting at the bid", () => {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const priceFor = (crossing) => new Function("book", "tick", `
+    const USE_LIMIT_ORDERS = true;
+    const ROTATION_ENTRY_CROSSES_SPREAD = ${crossing};
+    ${functionSource(source, "roundToTick")}
+    ${functionSource(source, "orderPriceForBook")}
+    return orderPriceForBook(book, tick);
+  `);
+
+  const book = { bestBid: 0.92, bestAsk: 0.94 };
+  // What the reported run did: rested at 0.92 while the market asked 0.94.
+  assert.equal(priceFor(false)(book, 0.01), 0.92);
+  // What completing a rotation does now: takes the ask, so the swap actually happens.
+  assert.equal(priceFor(true)(book, 0.01), 0.94);
+
+  // The exit was always a taker. The entry is one too now, so neither leg is optional.
+  const exit = functionSource(source, "buildRotationExitOrder");
+  assert.match(exit, /orderType: "FAK",/);
+  assert.match(exit, /forceTaker: true,/);
+  assert.match(source, /orderType: USE_LIMIT_ORDERS && !ROTATION_ENTRY_CROSSES_SPREAD \? "GTC" : "FAK",/,
+    "the entry must be marked FAK so submitOrder routes it as a taker");
+  assert.match(functionSource(source, "submitOrder"), /const forceTaker = Boolean\(order\.forceTaker\) \|\| String\(order\.orderType \|\| ""\)\.toUpperCase\(\) === "FAK";/);
+
+  // Crossing is the intent here, so the post-only guard must not veto it.
+  assert.match(source, /if \(USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD && book\.bestAsk != null && price >= book\.bestAsk\) \{/);
+
+  // Only on a completion run: an ordinary buy still rests below the market, which is what
+  // the maker strategy is for.
+  assert.match(source, /const ROTATION_ENTRY_CROSSES_SPREAD = ROTATION_COMPLETION_RUN && ROTATION_TAKER_ENTRY;/);
+});
+
+test("rotation entry: crossing the spread is charged, not assumed away", () => {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // A post-only maker pays no fee, and every economics site said so unconditionally. A
+  // taker entry does pay one, so a rotation approved on free-maker numbers and executed
+  // at taker prices would report a gain it never made.
+  const zeroFeeSites = source.match(/USE_LIMIT_ORDERS && POST_ONLY[^?\n]*\?/g) || [];
+  for (const site of zeroFeeSites) {
+    assert.match(site, /!ROTATION_ENTRY_CROSSES_SPREAD/,
+      `every maker-fee assumption must exclude the crossing entry, found: ${site}`);
+  }
+  // Including the resize path, whose row would otherwise disagree with its own order.
+  assert.match(functionSource(source, "resizeCandidateForMakerPrecision"),
+    /const fee = USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD \? 0 : takerFee\(/);
+  // And the run log says which of the two it was.
+  assert.match(source, /feeMode: USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD \? "post-only maker fee assumed 0" : "taker fee estimate",/);
+
+  // The workflow step that completes a rotation is the one that turns this on.
+  const workflow = readFileSync(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+  assert.match(workflow, /LIVE_ROTATION_COMPLETION: "true"/);
+});

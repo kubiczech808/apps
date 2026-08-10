@@ -174,6 +174,21 @@ const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND",
 // that gets dropped.
 const ROTATION_COMPLETION_RUN = String(process.env.LIVE_ROTATION_COMPLETION || "").toLowerCase() === "true";
 const ROTATION_EXIT_ACTIONS = new Set(["ROTATION_EXIT_SUBMITTED", "ROTATION_EXIT_REPRICED", "DRY_RUN_ROTATION_EXIT"]);
+
+// A rotation's sell leg is submitted FAK and fills unconditionally. Its buy leg was a
+// post-only limit resting at the bid, which made the swap certain on one side and
+// optional on the other: the position was sold for sure, and the replacement bought only
+// if someone happened to cross to us.
+//
+// Reported case: a holding with 0.2174 USDC of remaining upside was sold to buy a market
+// resolving in fourteen minutes. The bid never filled, the market resolved, and the run
+// banked 0.01 USDC instead of either outcome it was choosing between. A rotation that
+// completes only one leg is strictly worse than not rotating at all, so the entry crosses
+// the spread on a completion run -- paying the spread and the taker fee is the price of
+// the swap actually happening, and it is charged in the economics below rather than
+// assumed away.
+const ROTATION_TAKER_ENTRY = String(process.env.LIVE_ROTATION_TAKER_ENTRY ?? "true").toLowerCase() !== "false";
+const ROTATION_ENTRY_CROSSES_SPREAD = ROTATION_COMPLETION_RUN && ROTATION_TAKER_ENTRY;
 let previousExecutionState = null;
 
 function hasFlag(name) {
@@ -2142,7 +2157,9 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
 }
 
 function orderPriceForBook(book, tick) {
-  if (!USE_LIMIT_ORDERS) return book.bestAsk;
+  // Completing a rotation buys what the sell leg already paid for, so it takes the ask
+  // instead of resting under it. Resting here is what left the swap half-done.
+  if (!USE_LIMIT_ORDERS || ROTATION_ENTRY_CROSSES_SPREAD) return book.bestAsk;
   if (book.bestBid != null && book.bestAsk != null && book.bestBid < book.bestAsk) return roundToTick(book.bestBid, tick, "down");
   if (book.bestAsk != null) return roundToTick(book.bestAsk - tick, tick, "down");
   return null;
@@ -2151,7 +2168,7 @@ function orderPriceForBook(book, tick) {
 function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 }) {
   const targetStake = Math.max(0, number(maxNotional, 0));
   const availableCash = Math.max(0, number(cash, 0));
-  const appliedFeeRate = USE_LIMIT_ORDERS && POST_ONLY ? 0 : Math.max(0, number(feeRate, 0));
+  const appliedFeeRate = USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD ? 0 : Math.max(0, number(feeRate, 0));
   const costPerShare = price * (1 + appliedFeeRate * (1 - price));
   const minNotional = price * minOrderSize;
   const minimumOrderFee = appliedFeeRate > 0 ? takerFee(minOrderSize, price, appliedFeeRate) : 0;
@@ -2187,7 +2204,7 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 })
   }
   const belowExchangeMinimum = size > 0 && size + 0.000001 < minOrderSize;
   const orderNotional = size > 0 ? price * size : 0;
-  const makerPrecisionBlocked = USE_LIMIT_ORDERS && POST_ONLY && size > 0 && orderNotional < 0.01 - 0.000001;
+  const makerPrecisionBlocked = USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD && size > 0 && orderNotional < 0.01 - 0.000001;
 
   return {
     size: size > 0 ? Number(size.toFixed(4)) : null,
@@ -2285,7 +2302,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   if (!Number.isFinite(price) || price <= 0 || price >= 1) {
     return { candidate: evaluation, eligible: false, rejectReasons: ["no valid current entry price"] };
   }
-  if (USE_LIMIT_ORDERS && POST_ONLY && book.bestAsk != null && price >= book.bestAsk) {
+  if (USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD && book.bestAsk != null && price >= book.bestAsk) {
     return { candidate: evaluation, eligible: false, rejectReasons: ["post-only limit would cross current ask"] };
   }
 
@@ -2387,7 +2404,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   // row stops showing a figure captured whenever it was last scraped.
   const volumeUsdc = number(market.volumeNum, number(market.volume, volume24hr));
   const notional = Number((price * size).toFixed(5));
-  const fee = USE_LIMIT_ORDERS && POST_ONLY ? 0 : takerFee(size, price, estimatedFeeRate);
+  const fee = USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD ? 0 : takerFee(size, price, estimatedFeeRate);
   const totalCost = notional + fee;
   const expectedValue = Number.isFinite(aiProbability) ? aiProbability * size - notional - fee : null;
   const expectedRoi = Number.isFinite(expectedValue) && totalCost > 0 ? expectedValue / totalCost : null;
@@ -2474,8 +2491,8 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     riskReward: Number.isFinite(potentialRoi) ? Number(potentialRoi.toFixed(6)) : null,
     totalCostUsdc: Number(totalCost.toFixed(5)),
     tradingFeeUsdc: Number(fee.toFixed(5)),
-    feeMode: USE_LIMIT_ORDERS && POST_ONLY ? "post-only maker fee assumed 0" : "taker fee estimate",
-    orderType: USE_LIMIT_ORDERS ? "GTC" : "FAK",
+    feeMode: USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD ? "post-only maker fee assumed 0" : "taker fee estimate",
+    orderType: USE_LIMIT_ORDERS && !ROTATION_ENTRY_CROSSES_SPREAD ? "GTC" : "FAK",
     riskGroupKeys: risk.keys,
     riskGroupLabels: risk.labels,
     score: Number((selectedAnnualizedReturn + (PROBABILITY_SOURCE === "polymarket" ? qualificationProbability - price : edge)).toFixed(6)),
@@ -3321,7 +3338,9 @@ function resizeCandidateForMakerPrecision(candidate, size) {
   if (price == null || !Number.isFinite(size) || size <= 0) return candidate;
 
   const feeRate = feeRateForEvaluation(candidate);
-  const fee = USE_LIMIT_ORDERS && POST_ONLY ? 0 : takerFee(size, price, feeRate);
+  // Same rule as the sizing above: a rotation entry crosses the spread, so its resized
+  // economics have to carry the taker fee too, or the row would disagree with the order.
+  const fee = USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD ? 0 : takerFee(size, price, feeRate);
   const notional = Number((price * size).toFixed(5));
   const totalCost = notional + fee;
   const aiProbability = number(candidate.aiProbability);
