@@ -2792,6 +2792,13 @@ test("expired orders: the sweep runs before the run measures its own capital", a
   assert.ok(body.indexOf("const cash = liveCashUsdc(liveState);") > sweep);
   assert.ok(body.indexOf("const availableCash = availableLiveCashUsdc(") > sweep);
 
+  // But after every guard that ends the run early. Cancelling is a trading action, so a
+  // portfolio whose automation has been switched off must not do it unasked.
+  for (const guard of ["if (SKIP_SCHEDULED_EXECUTION) {", "if (!IS_MANUAL_RUN && !AUTOMATION_ENABLED) {", '"CADENCE_WAIT"']) {
+    assert.ok(body.indexOf(guard) > 0 && body.indexOf(guard) < sweep,
+      `the sweep must not run before the ${guard} guard has had its say`);
+  }
+
   // A dry run must not pretend the collateral came back: cancelOrder reports a dry run as
   // a success, and acting on that would let a preview run spend money the exchange holds.
   const withdraw = functionSource(source, "withdrawExpiredOpenOrders");
