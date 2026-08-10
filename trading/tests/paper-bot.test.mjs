@@ -4238,3 +4238,56 @@ test("execution candidates: Win and Days left lead, precheck follows the market"
   // With no note there must be no empty element left behind under the badge.
   assert.match(app, /\$\{status \? `<span>\$\{escapeHtml\(status\)\}<\/span>` : ""\}/);
 });
+
+// Reported from the conservative portfolio's run log: every candidate came back as
+// "execution shortlist revalidation failed: scoringEconomics is not defined; base status
+// ERROR is not executable", and the portfolio stopped opening orders altogether.
+//
+// The cause was mine. Routing the verdict through market economics instead of the retired
+// AI probability introduced `scoringEconomics` in the main evaluation path, and the same
+// rename landed on two lines inside refreshEvaluationAfterProbability, which has no such
+// local. node --check parses, it does not resolve identifiers, so it compiled clean and
+// threw on the first call -- and that call is what revalidates a stored candidate, so one
+// ReferenceError took out the whole shortlist.
+//
+// Calling the real function is the only thing that catches this class of bug.
+test("revalidation: refreshing a stored candidate does not throw on an undefined name", () => {
+  const evaluation = {
+    id: "market-1",
+    tokenId: "77",
+    question: "Will this resolve yes?",
+    outcome: "No",
+    marketPrice: 0.96,
+    marketProbability: 0.96,
+    stakeUsdc: 5,
+    takerFeeUsdc: 0,
+    totalCostUsdc: 5,
+    executableShares: 5.2,
+    filledStakeUsdc: 5,
+    spread: 0.01,
+    liquidity: 90000,
+    volume24hr: 90000,
+    daysToResolution: 0.5,
+    endDate: new Date(Date.now() + 12 * 3600000).toISOString(),
+  };
+
+  const refreshed = bot.refreshEvaluationAfterProbability(evaluation, 0.96, "market", null);
+  assert.ok(refreshed, "the refreshed evaluation must come back");
+  assert.equal(typeof refreshed.status, "string");
+  assert.notEqual(refreshed.status, "", "a candidate with no verdict is not executable");
+  // The verdict comes from the market's economics now, so a market this strong is not
+  // rejected for want of an AI probability that nothing produces any more.
+  assert.ok(Array.isArray(refreshed.rejectReasons));
+  assert.ok(!refreshed.rejectReasons.some((reason) => /is not defined/.test(String(reason))));
+
+  // And a market whose own probability cannot be read still gets judged rather than
+  // crashing the shortlist -- that is the null-marketEconomics path.
+  const unreadable = bot.refreshEvaluationAfterProbability(
+    { ...evaluation, marketProbability: null, marketPrice: Number.NaN },
+    0.96,
+    "market",
+    null,
+  );
+  assert.ok(unreadable);
+  assert.equal(typeof unreadable.status, "string");
+});

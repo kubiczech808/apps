@@ -3460,6 +3460,16 @@ function refreshEvaluationAfterProbability(evaluation, probability, modelName, m
       })
     : null;
 
+  // The same rule the main evaluation path uses: with the AI pipeline retired, the verdict
+  // has to come from the market's own economics rather than from an AI probability nothing
+  // produces any more. It was referenced below without ever being declared here, so every
+  // call threw ReferenceError -- and this function is what revalidates a stored execution
+  // candidate, so the throw came back as "revalidation failed ... base status ERROR is not
+  // executable" on every conservative candidate at once and the portfolio stopped opening
+  // orders. The fallback covers a market whose own probability cannot be read: judged by
+  // something is right, and crashing the whole shortlist is not.
+  const scoringEconomics = (AI_ANALYSIS_ENABLED ? economics : marketEconomics) || economics;
+
   const rejectReasons = economics.rejectReasons.map((reason) => {
     if (reason === "spread too wide") return `spread ${Number.isFinite(spread) ? (spread * 100).toFixed(1) + " pts" : "n/a"} too wide`;
     if (reason === "insufficient ask depth for market buy") return `insufficient ask depth for ${stake.toFixed(2)} USDC market buy`;
@@ -8357,6 +8367,7 @@ if (invokedDirectly) {
 // dashboard shows, plus the guards that keep a stale snapshot out of production.
 export {
   EFFECTIVELY_CERTAIN_MARKET_PROBABILITY,
+  refreshEvaluationAfterProbability,
   PAPER_STRATEGIES,
   portfolioEconomics,
   rounded,
