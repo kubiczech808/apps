@@ -165,7 +165,6 @@ async function reportScrapedCatalogue() {
 async function main() {
   console.log(`Live portfolio attribution diagnosis at ${new Date().toISOString()}`);
   console.log("Read-only: nothing is written, no credentials are used.\n");
-  await reportScrapedCatalogue();
 
   const [live, fixedEntryExecution, config] = await Promise.all(
     [SOURCES.live, SOURCES.fixedEntryExecution, SOURCES.config].map(fetchJson),
@@ -299,6 +298,10 @@ async function main() {
       if (probe.ok) console.log(`     found leftover ${suffix}: the transfer landed and the rename into place did not`);
     }
   }
+
+  // Last on purpose: only the tail of a runner log can be read back through the API, so
+  // the section being investigated has to be the one that lands there.
+  await reportScrapedCatalogue();
 }
 
 const invokedDirectly = process.argv[1]
