@@ -347,8 +347,10 @@ test("live run log: a missing published state does not block order submission", 
 
 test("live run log: an upload never leaves the hosted path empty", async () => {
   const { readFile } = await import("node:fs/promises");
-  const workflow = await readFile(
-    new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+  // This read the live workflow, where the swap was an inline heredoc. It is a shared
+  // tool now, because 5050 was created with a weaker copy of the same upload and lost its
+  // whole run-log history to it. The rule below is unchanged; only its file moved.
+  const workflow = await readFile(new URL("../tools/publish-execution-state.py", import.meta.url), "utf8");
   const publisher = await readFile(new URL("../tools/publish-paper-state.py", import.meta.url), "utf8");
 
   // delete-then-rename loses the file outright if the rename fails, and for
@@ -2593,4 +2595,48 @@ test("portfolio switch: the open portfolio is unmistakable", async () => {
   const syncCode = sync.split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
   assert.ok(!/textContent = "Opened live trades"/.test(syncCode),
     "no fixed live heading left to blur the two");
+});
+
+test("run log history: both live portfolios publish through the same hardened upload", async () => {
+  // Reported: 5050's run log holds a single entry; the history is meant to accumulate
+  // there. Its execution state answers 404 on the hosting, so every run restored an empty
+  // history, wrote one row, and published that -- one entry, forever.
+  //
+  // The main live portfolio's upload had already been hardened after its own log emptied:
+  // retries, a timeout, a swap that restores the original if it fails, and a loud error
+  // when it cannot finish. 5050 was created later with a simpler copy -- one attempt, no
+  // timeout, no retry, no restore -- so a publish that did not land said nothing at all.
+  const { readFile } = await import("node:fs/promises");
+  const [publisher, fixedWorkflow, liveWorkflow] = await Promise.all([
+    readFile(new URL("../tools/publish-execution-state.py", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8"),
+  ]);
+
+  // One implementation, used by both, so neither can drift into the weaker shape again.
+  for (const [name, workflow] of [["5050", fixedWorkflow], ["live", liveWorkflow]]) {
+    assert.match(workflow, /run: python3 trading\/tools\/publish-execution-state\.py/,
+      `${name} must publish through the shared tool`);
+    // And no inline copy left behind to be edited instead.
+    assert.ok(!/ftp\.storbinary/.test(workflow), `${name} must have no inline FTP upload`);
+  }
+  assert.match(fixedWorkflow, /PUBLISH_FILES: trading\/data\/live-5050-execution-state\.json>live-5050-execution-state\.json/);
+  assert.match(liveWorkflow, /PUBLISH_FILES: [^\n]*live-execution-state\.json>live-execution-state\.json,[^\n]*live-state\.json>live-state\.json/,
+    "the execution state goes first, so the run log survives a failed account upload");
+  assert.match(liveWorkflow, /PUBLISH_REQUIRED: live-state\.json/);
+
+  // What makes it hardened, asserted rather than assumed.
+  assert.match(publisher, /for attempt in range\(1, ATTEMPTS \+ 1\):/);
+  assert.match(publisher, /ftplib\.FTP\(config\["server"\], timeout=TIMEOUT_SECONDS\)/);
+  assert.match(publisher, /raise RuntimeError\(f"Could not upload \{remote_name\} after/,
+    "a publish that cannot finish must fail the run, not pass quietly");
+  assert.match(publisher, /ftp\.rename\(backup_name, remote_name\)/,
+    "a failed swap must put the original back rather than leave the path empty");
+
+  // The merge is what makes the upload safe to do at all: it replaces the hosted file
+  // outright, so the local copy has to be a superset of it first.
+  for (const [name, workflow] of [["5050", fixedWorkflow], ["live", liveWorkflow]]) {
+    assert.match(workflow, /run: node tools\/merge-live-execution-history\.mjs/,
+      `${name} must merge the published history before replacing it`);
+  }
 });

@@ -297,102 +297,12 @@ jobs:
           HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
           TRADING_FTP_DIR: /www/trading/data
-          LIVE_STATE_FILE: trading/data/live-state.json
-          LIVE_EXECUTION_STATE_FILE: trading/data/live-execution-state.json
-        run: |
-          python3 - <<'PY'
-          import ftplib
-          import os
-          import time
-          from pathlib import Path
-
-          server = os.environ["HOSTING_FTP_SERVER"]
-          username = os.environ["HOSTING_FTP_USERNAME"]
-          password = os.environ["HOSTING_FTP_PASSWORD"]
-          target = os.environ["TRADING_FTP_DIR"].strip("/")
-          state_file = Path(os.environ["LIVE_STATE_FILE"])
-          execution_file = Path(os.environ["LIVE_EXECUTION_STATE_FILE"])
-
-          def enter_dir(ftp, parts):
-              try:
-                  ftp.cwd("/")
-              except ftplib.all_errors:
-                  pass
-              for part in parts:
-                  if not part:
-                      continue
-                  try:
-                      ftp.cwd(part)
-                  except ftplib.error_perm:
-                      ftp.mkd(part)
-                      ftp.cwd(part)
-
-          def swap_into_place(ftp, tmp_name, remote_name):
-              """Replace remote_name with tmp_name without ever leaving nothing behind.
-
-              The previous version deleted remote_name and then renamed. If that rename
-              failed, the hosted file was simply gone -- and for live-execution-state.json
-              that is the entire run-log history. The existing file is now moved aside to
-              a backup first, so a failure at any point still leaves a recoverable copy,
-              and the backup is only removed once the new file is confirmed in place.
-              """
-              try:
-                  ftp.rename(tmp_name, remote_name)
-                  return
-              except ftplib.all_errors:
-                  pass
-              backup_name = f"{remote_name}.previous"
-              try:
-                  ftp.delete(backup_name)
-              except ftplib.all_errors:
-                  pass
-              moved_aside = False
-              try:
-                  ftp.rename(remote_name, backup_name)
-                  moved_aside = True
-              except ftplib.all_errors:
-                  pass
-              try:
-                  ftp.rename(tmp_name, remote_name)
-              except ftplib.all_errors:
-                  if moved_aside:
-                      # Put the original back rather than leaving the path empty.
-                      try:
-                          ftp.rename(backup_name, remote_name)
-                      except ftplib.all_errors:
-                          pass
-                  raise
-              if moved_aside:
-                  try:
-                      ftp.delete(backup_name)
-                  except ftplib.all_errors:
-                      pass
-
-          def upload_atomic(local_path, remote_name):
-              failures = []
-              for attempt in range(1, 4):
-                  tmp_name = f"{remote_name}.uploading-{attempt}"
-                  try:
-                      with ftplib.FTP(server, timeout=30) as ftp:
-                          ftp.login(username, password)
-                          enter_dir(ftp, target.split("/"))
-                          with local_path.open("rb") as handle:
-                              ftp.storbinary(f"STOR {tmp_name}", handle)
-                          swap_into_place(ftp, tmp_name, remote_name)
-                      print(f"Uploaded {remote_name} on attempt {attempt}")
-                      return
-                  except ftplib.all_errors as error:
-                      failures.append(str(error))
-                      time.sleep(attempt)
-              raise RuntimeError(f"Could not upload {remote_name} after 3 attempts: {' | '.join(failures)}")
-
-          # Preserve the execution log even if the larger account-state upload fails.
-          if execution_file.exists():
-              upload_atomic(execution_file, "live-execution-state.json")
-          if not state_file.exists():
-              raise SystemExit("live-state.json was not generated")
-          upload_atomic(state_file, "live-state.json")
-          PY
+          # live-state.json is what the run exists to publish, so a run that did not
+          # generate it fails; the execution state is published first so the run log
+          # survives even if the larger account snapshot cannot be uploaded.
+          PUBLISH_FILES: trading/data/live-execution-state.json>live-execution-state.json,trading/data/live-state.json>live-state.json
+          PUBLISH_REQUIRED: live-state.json
+        run: python3 trading/tools/publish-execution-state.py
 
       # The decision is printed at the START of the execution step, so on a long run it
       # falls outside the window a log reader can fetch and the run becomes unexplainable

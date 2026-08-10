@@ -160,17 +160,6 @@ async function main() {
   console.log(`   configured entry price: ${fixedEntryConfig.fixedEntryPrice ?? "(config unavailable)"}`);
   console.log(`   price history: [${(fixedEntryConfig.fixedEntryPriceHistory || []).join(", ") || "none recorded"}]`);
 
-  // Whether the two execution state files are on the hosting at all. A 404 here and a 404
-  // from the API mean the upload never landed; a 200 here with a 404 from the API would
-  // mean the file is present and something else is wrong.
-  console.log(`\n== Execution state files, read directly`);
-  for (const [name, url] of Object.entries(STATIC_SOURCES)) {
-    const result = await fetchJson(url);
-    const generatedAt = result.ok ? (result.body?.generatedAt || "(no generatedAt)") : "";
-    console.log(`   ${name}: HTTP ${result.status}`
-      + (result.ok ? ` generatedAt=${generatedAt} runLog=${(result.body?.runLog || []).length}` : ` ${String(result.error).slice(0, 120)}`));
-  }
-
   for (const mode of ["live-5050", "live"]) {
     const api = await attributionFor(mode, { fixedEntryExecution: execution, config: portfolioConfig });
     console.log(`\n== As the ${mode} tab sees it`);
@@ -205,6 +194,17 @@ async function main() {
       console.log(`     AI-carrying: ai=${row?.aiProbability ?? row?.aiAnalysis?.probability ?? row?.sourceEvaluation?.aiProbability}`
         + ` entry=${priceOf(row)}  ${rowLabel(row)}`);
     }
+  }
+
+  // Whether the two execution state files are on the hosting at all. A 404 here and a 404
+  // from the API mean the upload never landed; a 200 here with a 404 from the API would
+  // mean the file is present and something else is wrong.
+  console.log(`\n== Execution state files, read directly`);
+  for (const [name, url] of Object.entries(STATIC_SOURCES)) {
+    const result = await fetchJson(url);
+    const generatedAt = result.ok ? (result.body?.generatedAt || "(no generatedAt)") : "";
+    console.log(`   ${name}: HTTP ${result.status}`
+      + (result.ok ? ` generatedAt=${generatedAt} runLog=${(result.body?.runLog || []).length}` : ` ${String(result.error).slice(0, 120)}`));
   }
 }
 

@@ -261,6 +261,10 @@ jobs:
           LIVE_EXECUTION_STATE_PATH: data/live-5050-execution-state.json
         run: node tools/merge-live-execution-history.mjs
 
+      # The same hardened publisher the main live portfolio uses. 5050 was created with a
+      # simpler copy -- one attempt, no timeout, no retry, no restore on a failed swap --
+      # and this file is its entire run-log history, so a publish that quietly did not
+      # land read downstream as "this portfolio has run once".
       - name: Upload 5050 state
         if: always()
         env:
@@ -268,43 +272,8 @@ jobs:
           HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
           TRADING_FTP_DIR: /www/trading/data
-          EXECUTION_STATE_FILE: trading/data/live-5050-execution-state.json
-        run: |
-          python3 - <<'PY'
-          import ftplib
-          import os
-          from pathlib import Path
-
-          path = Path(os.environ["EXECUTION_STATE_FILE"])
-          if not path.exists():
-              print("No 5050 execution state was produced; nothing to upload.")
-              raise SystemExit(0)
-          server = os.environ["HOSTING_FTP_SERVER"]
-          with ftplib.FTP(server, os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"]) as ftp:
-              for part in os.environ["TRADING_FTP_DIR"].strip("/").split("/"):
-                  if not part:
-                      continue
-                  try:
-                      ftp.cwd(part)
-                  except ftplib.error_perm:
-                      ftp.mkd(part)
-                      ftp.cwd(part)
-              tmp = path.name + ".tmp"
-              with path.open("rb") as handle:
-                  ftp.storbinary(f"STOR {tmp}", handle)
-              # Move the existing file aside before the swap so a failure at any point
-              # still leaves a recoverable copy rather than nothing at all.
-              try:
-                  ftp.rename(path.name, path.name + ".bak")
-              except ftplib.all_errors:
-                  pass
-              ftp.rename(tmp, path.name)
-              try:
-                  ftp.delete(path.name + ".bak")
-              except ftplib.all_errors:
-                  pass
-          print(f"Uploaded {path.name}")
-          PY
+          PUBLISH_FILES: trading/data/live-5050-execution-state.json>live-5050-execution-state.json
+        run: python3 trading/tools/publish-execution-state.py
 
       - name: Run digest
         if: always()
