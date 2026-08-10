@@ -543,6 +543,9 @@ const RESOLVED_RECENT_LIMIT = Math.max(0, envNumber("PAPER_RESOLVED_RECENT_LIMIT
 // readers that only display recent history; the state is rebuilt from the archive.
 const STATE_SEGMENT_NAMES = [...Object.keys(STATE_SEGMENT_FIELDS), RESOLVED_OBSERVATION_SEGMENT];
 const PUBLISHED_STATE_SEGMENT_NAMES = [...STATE_SEGMENT_NAMES, RESOLVED_RECENT_SEGMENT];
+// Published, never merged back. Named once here so every reader -- the local one that
+// walks names and the hosted one that walks the manifest -- excludes the same set.
+const DERIVED_STATE_SEGMENTS = new Set([RESOLVED_RECENT_SEGMENT]);
 
 // Newest first, by whichever date the row actually carries.
 function resolvedObservationTime(item) {
@@ -659,8 +662,15 @@ function stateSegmentUrls(manifest) {
   const base = STATE_SEGMENT_BASE_URL;
   if (!base) return [];
   const prefix = base.endsWith("/") ? base : `${base}/`;
-  return Object.values(manifest)
-    .map((entry) => String(entry?.file || "").trim())
+  return Object.entries(manifest)
+    // A derived segment is a view of another one, published for readers that show only
+    // part of it. Rebuilding the state from it replaces what it was derived from: the
+    // recent page carries the archive's own transport field, the merge replaces the
+    // resolved half rather than appending, and the page is listed last -- so the next
+    // write would put a 3,000-row page back as the whole archive. The local reader was
+    // already restricted by name; this one walks the manifest, and was not.
+    .filter(([name]) => !DERIVED_STATE_SEGMENTS.has(name))
+    .map(([, entry]) => String(entry?.file || "").trim())
     .filter((file) => /^[A-Za-z0-9._-]+\.json$/.test(file))
     .map((file) => `${prefix}${file}`);
 }
@@ -686,7 +696,12 @@ async function readLocalStateFile(path) {
 // purpose: bypassing json_decode is the whole point of splitting them out.
 async function readStateWithSegments(payload) {
   const manifest = payload?.stateSegments;
-  const declared = manifest && typeof manifest === "object" ? Object.keys(manifest) : [];
+  // Only the segments this reader has to reassemble. A derived segment is published for
+  // readers that display part of another one and is deliberately not fetched here, so
+  // counting it as missing below would refuse to run on a perfectly complete state.
+  const declared = manifest && typeof manifest === "object"
+    ? Object.keys(manifest).filter((name) => !DERIVED_STATE_SEGMENTS.has(name))
+    : [];
   if (declared.length === 0) return payload;
 
   const urls = stateSegmentUrls(manifest);

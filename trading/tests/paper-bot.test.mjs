@@ -4369,3 +4369,42 @@ test("state segments: the opportunities page reads the capped page, not the arch
     "reassembling the state from the capped page would truncate the archive on the next write");
   assert.match(published[0], /RESOLVED_RECENT_SEGMENT/);
 });
+
+// The capped page was kept out of the local reader by name, and the hosted reader walks
+// the manifest instead -- so it fetched the page too, merged it last, and the archive in
+// memory became its own first 3,000 rows. The next write would have published that back
+// as the whole archive, losing every older resolved market permanently.
+test("state segments: reading the hosted state never rebuilds it from the capped page", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // Both readers exclude the same set, named once so they cannot drift apart.
+  assert.match(source, /const DERIVED_STATE_SEGMENTS = new Set\(\[RESOLVED_RECENT_SEGMENT\]\);/);
+  assert.match(source, /\.filter\(\(\[name\]\) => !DERIVED_STATE_SEGMENTS\.has\(name\)\)/,
+    "the manifest-driven reader must skip derived segments");
+  assert.match(source, /Object\.keys\(manifest\)\.filter\(\(name\) => !DERIVED_STATE_SEGMENTS\.has\(name\)\)/,
+    "and must not then count them as segments it failed to address");
+
+  // What the merge would have done, driven by the real function in manifest order.
+  const resolvedAt = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString();
+  const observations = [];
+  for (let i = 0; i < 5; i += 1) observations.push({ id: `a${i}`, status: "SCRAPED" });
+  for (let i = 0; i < 50; i += 1) observations.push({ id: `r${i}`, status: "RESOLVED", resolvedAt: resolvedAt(50 - i) });
+  const { core, segments } = bot.splitStateIntoSegments({ marketObservations: observations });
+
+  // Manifest order, which is the order the hosted reader fetches in.
+  let asHosted = { ...core };
+  for (const name of Object.keys(core.stateSegments)) {
+    if (name === "resolvedRecent") continue;
+    asHosted = bot.mergeStateSegment(asHosted, segments[name]);
+  }
+  assert.equal(asHosted.marketObservations.length, 55, "the archive is rebuilt whole");
+
+  // And the failure it replaces: merging the page last leaves only the page.
+  const truncated = bot.mergeStateSegment(asHosted, segments.resolvedRecent);
+  assert.equal(
+    truncated.marketObservations.filter((item) => item.status === "RESOLVED").length,
+    segments.resolvedRecent.resolvedMarketObservations.length,
+    "merging the page replaces the archive rather than adding to it -- which is why it is skipped",
+  );
+});
