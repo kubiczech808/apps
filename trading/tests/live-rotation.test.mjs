@@ -2966,3 +2966,55 @@ test("open order review: an order above the current max stake is still evaluated
       "a reason that keeps the order must say the order is oversized");
   }
 });
+
+// "The application still does not keep the 5050 portfolio's run logs." Measured, finally,
+// by listing the hosting's data directory over FTP: the path is right and the login is not
+// chrooted, live-execution-state.json and every paper-state segment are present -- and
+// live-5050-execution-state.json is not there, with no .uploading or .previous beside it.
+//
+// It was never a publishing failure. Every 5050 run uploaded it successfully; the next
+// deploy of the site deleted it, because deploy cleans the data directory against a
+// hard-coded keep list written when only one live portfolio existed. The run after that
+// restored an empty history over the resulting 404 and published a single row, which is
+// exactly the one-row log that kept coming back.
+test("run log history: deploying the site does not delete a portfolio's run log", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/trading-deploy.yml", import.meta.url), "utf8");
+  // Cut at the next definition, not at the next blank line: the docstring explaining why
+  // this list exists contains blank lines, so stopping at one truncated the function
+  // mid-string and every case failed on a syntax error rather than on its merits.
+  const source = /def is_runtime_data\(name\):\n[\s\S]*?(?=\n {10}def )/.exec(workflow);
+  assert.ok(source, "is_runtime_data must be findable in the deploy workflow");
+
+  // The workflow's own function, run as it is written, against the directory listing the
+  // hosting actually returned.
+  const script = source[0].split("\n").map((line) => line.replace(/^ {10}/, "")).join("\n");
+  const keeps = (name) => execFileSync("python3", ["-c", `${script}\nprint("1" if is_runtime_data(${JSON.stringify(name)}) else "0")`], { encoding: "utf8" }).trim() === "1";
+
+  // The file whose loss was reported, and the one that survived because it was listed.
+  assert.equal(keeps("live-5050-execution-state.json"), true,
+    "a portfolio's entire run-log history must survive a deploy of the site");
+  assert.equal(keeps("live-execution-state.json"), true);
+
+  // Matched by shape, so the next live portfolio cannot be forgotten the way 5050 was.
+  assert.equal(keeps("live-conservative-execution-state.json"), true);
+
+  // The rest of the directory as the hosting listed it, unchanged.
+  for (const name of [
+    "live-state.json",
+    "market-scan-history",
+    "paper-state.json",
+    "paper-state.evaluations.json",
+    "paper-state.observations.json",
+    "paper-state.resolvedObservations.json",
+    "paper-state.scanHistory.json",
+    "portfolio-config.json",
+    "redeem-alert-ledger.json",
+    "scrape-scan-preferences.json",
+  ]) {
+    assert.equal(keeps(name), true, `${name} is runtime state and must survive a deploy`);
+  }
+
+  // And the cleaning still cleans: a stale artefact is not runtime state.
+  assert.equal(keeps("index.html"), false);
+  assert.equal(keeps("live-5050-execution-state.json.uploading-1"), false);
+});

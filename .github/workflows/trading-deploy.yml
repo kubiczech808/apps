@@ -151,16 +151,29 @@ jobs:
               every segment on the next deploy, which left the hosting with a manifest
               pointing at files that no longer existed. The prefix rule covers any
               segment the bot adds later, so that cannot happen again.
+
+              An execution state file is a portfolio's entire run-log history, and the
+              same naming mistake cost the 5050 portfolio all of its. Every run
+              published live-5050-execution-state.json successfully, and the next
+              deploy deleted it, because this list was written when only one live
+              portfolio existed and nobody added the second. Every symptom followed:
+              the hosted path answered 404 with no temp file beside it, the run after
+              restored an empty history over that 404 and published a single row, and
+              the dashboard showed one run however many had happened.
+
+              So this matches the shape rather than the name, and a portfolio added
+              later cannot be forgotten the way 5050 was.
               """
               keep = {
                   "live-state.json",
-                  "live-execution-state.json",
                   "portfolio-config.json",
                   "scrape-scan-preferences.json",
                   "redeem-alert-ledger.json",
                   "market-scan-history",
               }
               if name in keep:
+                  return True
+              if name.startswith("live-") and name.endswith("execution-state.json"):
                   return True
               return name == "paper-state.json" or (
                   name.startswith("paper-state.") and name.endswith(".json")
