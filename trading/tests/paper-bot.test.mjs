@@ -4180,3 +4180,25 @@ test("paper candidates: a retired scorer's zeros are not the reason a candidate 
   // The switch is the existing single one, so nothing new can turn the model back on.
   assert.match(bot, /const AI_ANALYSIS_ENABLED = envBool\("PAPER_AI_ANALYSIS_ENABLED", false\);/);
 });
+
+test("scraping log: the asked-for columns lead, and every header keeps its own cell", async () => {
+  // Asked for: new/updated third, categories fourth. The table scrolls horizontally, so
+  // the first columns are what is read without dragging -- and those two are what a
+  // scraping run is judged on.
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  const fn = app.slice(app.indexOf("function renderScrapeRunLog"));
+  const body = fn.slice(0, fn.indexOf("\nfunction ", 1));
+  const headers = [...body.matchAll(/<th>([^<]+)<\/th>/g)].map((match) => match[1]);
+  const cells = [...body.matchAll(/<td data-label="([^"]+)"/g)].map((match) => match[1]);
+
+  assert.deepEqual(headers.slice(0, 4), ["Run time", "Trigger", "New / updated", "Categories"]);
+
+  // Headers and cells are two separate lists in one template, so moving a column means
+  // moving both -- otherwise every value below it shifts under the wrong heading, which
+  // reads as wrong data rather than a layout slip. The trade table has had this pinned
+  // since a reorder did exactly that; this table had nothing.
+  assert.deepEqual(cells, headers, "each column's cell must sit under its own header");
+  assert.ok(headers.length >= 13, `expected the full column set, found ${headers.length}`);
+});

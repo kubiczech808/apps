@@ -7266,15 +7266,15 @@ function renderScrapeRunLog() {
           <tr>
             <th>Run time</th>
             <th>Trigger</th>
+            <th>New / updated</th>
+            <th>Categories</th>
             <th>Status</th>
             <th>API calls</th>
             <th>Markets pulled</th>
             <th>Rows retained</th>
-            <th>New / updated</th>
             <th>Resolved</th>
             <th>Not retained</th>
             <th>Why not retained</th>
-            <th>Categories</th>
             <th>Tags</th>
             <th>Error</th>
           </tr>
@@ -7288,15 +7288,15 @@ function renderScrapeRunLog() {
               <tr class="${auditAvailable ? "scrape-run-row" : ""}" ${auditAvailable ? `data-scrape-run-audit="${escapeHtml(run.id || "")}" tabindex="0" role="button" aria-label="Open scraping audit for ${escapeHtml(formatDate(run.runAt || ""))}"` : ""}>
                 <td data-label="Run time"><strong>${escapeHtml(formatDate(run.runAt || ""))}</strong><small class="table-secondary">${auditAvailable ? "Open audit" : "Summary retained"}</small></td>
                 <td data-label="Trigger"><strong>${escapeHtml(run.trigger || "AUTO")}</strong></td>
+                <td data-label="New / updated">${formatInteger(run.newObservationCount) || "0"} / ${formatInteger(run.updatedObservationCount) || "0"}</td>
+                <td data-label="Categories"><strong>${escapeHtml(scanLogCounts(run.categoryCounts))}</strong>${Array.isArray(run.requestedCategories) && run.requestedCategories.length ? `<small class="table-secondary">API sweep: ${escapeHtml(run.requestedCategories.join(", "))}</small>` : ""}</td>
                 <td data-label="Status" class="${statusClass}"><strong>${escapeHtml(status)}</strong></td>
                 <td data-label="API calls">${formatInteger(run.apiCalls) || "0"}</td>
                 <td data-label="Markets pulled"><strong>${formatInteger(run.rawMarketCount ?? run.loadedMarketCount) || "0"}</strong><small class="table-secondary">${formatInteger(run.loadedMarketCount) || "0"} unique / all returned pages / ${formatInteger((run.requestedCategories || []).length) || "0"} category scopes</small></td>
                 <td data-label="Rows retained"><strong>${formatInteger(run.retainedObservationCount) || "0"}</strong><small class="table-secondary">${formatInteger(run.shortHorizonCount) || "0"} within preferred horizon</small></td>
-                <td data-label="New / updated">${formatInteger(run.newObservationCount) || "0"} / ${formatInteger(run.updatedObservationCount) || "0"}</td>
                 <td data-label="Resolved">${formatInteger(run.resolvedObservationCount) || "0"}</td>
                 <td data-label="Not retained">${formatInteger(run.notRetainedCount) || "0"}</td>
                 <td data-label="Why not retained"><small>${escapeHtml(scanLogReasonCounts(run.notRetainedReasonCounts, run.minResolutionMinutes))}</small></td>
-                <td data-label="Categories"><strong>${escapeHtml(scanLogCounts(run.categoryCounts))}</strong>${Array.isArray(run.requestedCategories) && run.requestedCategories.length ? `<small class="table-secondary">API sweep: ${escapeHtml(run.requestedCategories.join(", "))}</small>` : ""}</td>
                 <td data-label="Tags">${escapeHtml(scanLogCounts(run.tagCounts))}</td>
                 <td data-label="Error" class="${run.error ? "negative" : ""}">${escapeHtml(run.error || "-")}</td>
               </tr>
