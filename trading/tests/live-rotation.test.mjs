@@ -2464,10 +2464,11 @@ test("5050 attribution: the price history is kept by the server, not the browser
   assert.match(api, /'fixedEntryPriceHistory' => \[0\.50\],/);
 });
 
-// The seeded default only helps if a config stored before the field existed can still
-// reach it. Reading an absent field as an empty list instead of as the default meant it
-// never did: production's config kept the history [0.65] alone, so the bid resting at
-// 0.50 stayed on the live portfolio's tab exactly as reported.
+// Measured against production: its stored config already carried the history field,
+// holding [0.65] alone -- the history began being recorded only after the price had been
+// changed away from 0.50 -- so a default that applies merely when the field is absent
+// would never have fired, and the 0.50 rows would have stayed on the live portfolio's
+// tab exactly as reported. The shipped price has to be merged in, not defaulted to.
 test("5050 attribution: a config saved before the history existed still recovers 0.50", () => {
   const api = readFileSync(new URL("../api.php", import.meta.url), "utf8");
   const normalizer = /function normalize_fixed_entry_price_history\(mixed \$value, float \$current\): array\n\{\n[\s\S]*?\n\}/.exec(api);
@@ -2485,11 +2486,15 @@ ${assignment[0]}
 echo json_encode($config['live5050']['fixedEntryPriceHistory']);
 `], { encoding: "utf8" }));
 
-  // Production's config: written before the field existed, so it carries no history key.
-  assert.deepEqual(run("[]"), [0.65, 0.5],
-    "an absent history falls back to the default, which is what makes the 0.50 bid 5050's");
-  // A stored history still wins over the default, so nothing already recorded is lost.
-  assert.deepEqual(run("['fixedEntryPriceHistory' => [0.42]]"), [0.65, 0.42]);
+  // Production's stored config, exactly: the field is there and holds only 0.65. This is
+  // the case a fallback-when-absent could not reach, and the reported bid resting at 0.50
+  // is on this config.
+  assert.deepEqual(run("['fixedEntryPriceHistory' => [0.65]]"), [0.65, 0.5],
+    "the shipped 0.50 is merged in, which is what makes the bid resting at 0.50 5050's");
+  // A config written before the field existed at all reaches it too.
+  assert.deepEqual(run("[]"), [0.65, 0.5]);
+  // And nothing already recorded is lost to the merge.
+  assert.deepEqual(run("['fixedEntryPriceHistory' => [0.42]]"), [0.65, 0.5, 0.42]);
 });
 
 // Reported: the live portfolio's closed trades hold rows reading 50-51%, and one open
