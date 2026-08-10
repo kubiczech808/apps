@@ -3098,3 +3098,74 @@ test("live executor: the trading runs read the summary that skips the resolved a
   assert.match(api, /case 'scraped':\n[\s\S]*?return \['observations', 'resolvedRecent', 'scanHistory'\];/);
   assert.doesNotMatch(api, /return \['observations', 'resolvedObservations', 'scanHistory'\];/);
 });
+
+// Reported while reading a live run log: "Position rotation / NO_ROTATION_CANDIDATE / no
+// open live position can be evaluated for rotation", next to a SKIP saying the cheapest
+// candidate needs 4.6900 USDC against 0.4671 available. From that pairing it is not
+// possible to tell whether the portfolio's own rule declined to rotate or whether the
+// rotation logic is broken -- which is exactly what was asked of the log.
+//
+// One sentence was carrying three different situations: no positions at all, positions
+// that all out-earn the best candidate, and positions that could not be priced. The
+// account behind that log holds no position and eleven resting orders, so it was the
+// first -- and the sentence gave no way to know that.
+test("rotation log: no rotation says which of the three reasons applied", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const review = functionSource(source, "reviewPositionRotation");
+
+  // Nothing held is a different statement from nothing worth rotating.
+  assert.match(review, /const reason = !heldPositions\.length/);
+  assert.match(review, /holds no open position, so there is nothing to rotate out of/);
+  assert.match(review, /already earn at least as much as the best candidate/,
+    "the rule declining to sell a better holding must read as a decision, not an absence");
+
+  // With the figure the decision was made on, so it can be checked rather than trusted.
+  assert.match(review, /bestCandidateReturn \* 100/);
+  assert.match(review, /positionsAboveBestCandidate: rejectedByReturnBar\.length,/);
+  assert.match(review, /positionsBelowBestCandidate: heldPositions\.length - rejectedByReturnBar\.length,/);
+
+  // And when there is nothing held, where the capital actually is -- otherwise the reader
+  // is told the portfolio has nothing to rotate while plainly having money committed.
+  assert.match(review, /its committed capital is in \$\{restingBuyOrders\} resting order\(s\)/);
+  assert.match(review, /the open-order review decides on separately/);
+
+  // The same gap on the other side: the SKIP note said only that cash was short.
+  const main = functionSource(source, "main");
+  assert.match(main, /const capitalLocationNote = restingBuyOrderCount \|\| heldPositionCount/);
+  assert.match(main, /the open-order review looked at \$\{orderManagement\.reviews\.length\} of them/);
+  assert.match(main, /USDC available\.` : ""\}\$\{capitalLocationNote\}`/);
+});
+
+test("rotation log: the wording is driven by the real function, not by the log's shape", () => {
+  const app = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const review = functionSource(app, "reviewPositionRotation");
+  // The early return, lifted out and driven directly. Everything it needs is either a
+  // parameter or computed just above it, so the branch runs exactly as it does in a run.
+  const branch = /if \(!positions\.length\) \{[\s\S]*?\n  \}/.exec(review);
+  assert.ok(branch, "the early return must stay findable");
+  const run = new Function("heldPositions", "rejectedByReturnBar", "bestCandidateReturn", "liveState", "reviews", `
+    const positions = [];
+    ${branch[0].replace(/^\s*return \{/m, "return {")}
+    return null;
+  `);
+
+  // Production's case: nothing held, eleven bids resting.
+  const empty = run([], [], 0.9, { openOrders: Array.from({ length: 11 }, () => ({ side: "BUY" })) }, []);
+  assert.match(empty.reason, /holds no open position/);
+  assert.match(empty.reason, /11 resting order\(s\)/);
+  assert.equal(empty.positionsHeld, 0);
+  assert.equal(empty.restingBuyOrders, 11);
+
+  // The rule declining: two holdings, both already earning more than anything on offer.
+  const held = [{ holdAnnualizedReturn: 5 }, { holdAnnualizedReturn: 4 }];
+  const declined = run(held, held, 3.2, { openOrders: [] }, []);
+  assert.match(declined.reason, /all 2 open position\(s\) already earn at least as much/);
+  assert.match(declined.reason, /320\.0% p\.a\./, "the bar it was measured against is stated");
+  assert.equal(declined.positionsAboveBestCandidate, 2);
+  assert.equal(declined.positionsBelowBestCandidate, 0);
+  // Both are NO_ROTATION_CANDIDATE, and that is the point: the action never distinguished
+  // them, so the reason has to.
+  assert.equal(empty.action, declined.action);
+  assert.notEqual(empty.reason, declined.reason);
+});

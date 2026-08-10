@@ -1737,6 +1737,13 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
     // Unknown stays reviewable; only a holding measurably above the candidate is skipped.
     return held == null || held < bestCandidateReturn;
   };
+  // Kept so the log can say which of these actually stopped the rotation. All three
+  // used to arrive as the same sentence, and "no open live position can be evaluated"
+  // reads like a bug when the portfolio plainly has capital committed -- it cannot be
+  // told apart from the rule below doing its job, which is the question actually asked
+  // of this log.
+  const heldPositions = rotationPositionEntries(liveState, evaluationByToken);
+  const rejectedByReturnBar = heldPositions.filter((entry) => !worthRotatingOutOf(entry));
   const positions = rotationPositionEntries(liveState, evaluationByToken)
     // Review the weakest held position first according to this portfolio's own
     // selection rule. Settlement-pending positions share the conservative
@@ -1762,9 +1769,27 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
   let best = null;
 
   if (!positions.length) {
+    const restingBuyOrders = (Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
+      .filter((order) => !String(order.side || "").toUpperCase().includes("SELL")).length;
+    // Named separately because they mean different things to whoever reads this. The
+    // first is "there is nothing here to rotate"; the second is this portfolio's own
+    // rule declining to sell something that is already earning more than anything on
+    // offer -- a decision, not an absence.
+    const reason = !heldPositions.length
+      ? `this portfolio holds no open position, so there is nothing to rotate out of${restingBuyOrders
+        ? `; its committed capital is in ${restingBuyOrders} resting order(s), which the open-order review decides on separately`
+        : ""}`
+      : `all ${heldPositions.length} open position(s) already earn at least as much as the best candidate`
+        + `${Number.isFinite(bestCandidateReturn) ? ` (${(bestCandidateReturn * 100).toFixed(1)}% p.a.)` : ""}`
+        + `, so rotating out of any of them would lower the portfolio's return`;
     return {
       action: "NO_ROTATION_CANDIDATE",
-      reason: "no open live position can be evaluated for rotation",
+      reason,
+      positionsHeld: heldPositions.length,
+      positionsBelowBestCandidate: heldPositions.length - rejectedByReturnBar.length,
+      positionsAboveBestCandidate: rejectedByReturnBar.length,
+      bestCandidateAnnualizedReturn: Number.isFinite(bestCandidateReturn) ? bestCandidateReturn : null,
+      restingBuyOrders,
       reviews,
       best: null,
     };
@@ -4014,10 +4039,27 @@ async function main() {
       : (rotationAvailable
             ? "No live order was submitted because opening the better candidate would first require selling an existing live position; this run records the rotation review but does not perform the sell/rebuy sequence automatically."
             : (cashSizingBlocked.length
-                ? `No live order was submitted because available USDC cannot cover the exchange minimum size for the revalidated candidate(s).${cheapestBlockedMinimumCost != null ? ` The cheapest of them needs ${cheapestBlockedMinimumCost.toFixed(4)} USDC including fees against ${number(availableCashAfterOrderManagement, 0).toFixed(4)} USDC available.` : ""}`
+                // Where the missing capital actually is, and what decided not to free it.
+                // Without this the note says only that cash is short, while the rotation
+                // block says there was no position to rotate -- and a reader is left
+                // unable to tell a working rule from a broken one.
+                ? `No live order was submitted because available USDC cannot cover the exchange minimum size for the revalidated candidate(s).${cheapestBlockedMinimumCost != null ? ` The cheapest of them needs ${cheapestBlockedMinimumCost.toFixed(4)} USDC including fees against ${number(availableCashAfterOrderManagement, 0).toFixed(4)} USDC available.` : ""}${capitalLocationNote}`
                 : (stakeCapBlockedCandidates.length
                   ? "No live order was submitted because the configured max per trade is below Polymarket's exchange minimum. Free cash was sufficient, so no order or position was rotated."
                   : "No live order was submitted because all revalidated candidates failed current execution criteria.")))));
+  // The rest of the capital is either in positions, which position rotation decides on,
+  // or in resting orders, which the open-order review decides on. Saying which, and what
+  // that review concluded, is the difference between "the rules declined" and "something
+  // is broken" -- the two this log could not tell apart.
+  const restingBuyOrderCount = (Array.isArray(liveState.openOrders) ? liveState.openOrders : [])
+    .filter((order) => !String(order.side || "").toUpperCase().includes("SELL")).length;
+  const heldPositionCount = openPositionsForRotation(liveState).length;
+  const orderReviewOutcome = orderManagement?.reviews?.length
+    ? `the open-order review looked at ${orderManagement.reviews.length} of them and chose ${orderManagement.action === "NONE" ? "to keep every one" : orderManagement.action}`
+    : (restingBuyOrderCount ? "the open-order review did not run this pass" : "");
+  const capitalLocationNote = restingBuyOrderCount || heldPositionCount
+    ? ` The rest of this portfolio's capital is in ${heldPositionCount} position(s) and ${restingBuyOrderCount} resting order(s)${orderReviewOutcome ? `; ${orderReviewOutcome}` : ""}.`
+    : "";
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
     action: best ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_READY" : "SUBMIT") : "SKIP",
