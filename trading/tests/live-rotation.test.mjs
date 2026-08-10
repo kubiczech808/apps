@@ -1,6 +1,7 @@
 // Runs offline: no secrets, no network, no hosting access. Importing the executor
 // does not start a run, so no order can be placed from a test.
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -2461,6 +2462,34 @@ test("5050 attribution: the price history is kept by the server, not the browser
 
   // And it is a saved portfolio setting, so a fresh install recognises its own fills too.
   assert.match(api, /'fixedEntryPriceHistory' => \[0\.50\],/);
+});
+
+// The seeded default only helps if a config stored before the field existed can still
+// reach it. Reading an absent field as an empty list instead of as the default meant it
+// never did: production's config kept the history [0.65] alone, so the bid resting at
+// 0.50 stayed on the live portfolio's tab exactly as reported.
+test("5050 attribution: a config saved before the history existed still recovers 0.50", () => {
+  const api = readFileSync(new URL("../api.php", import.meta.url), "utf8");
+  const normalizer = /function normalize_fixed_entry_price_history\(mixed \$value, float \$current\): array\n\{\n[\s\S]*?\n\}/.exec(api);
+  assert.ok(normalizer, "normalize_fixed_entry_price_history is defined in api.php");
+  const assignment = /\$config\['live5050'\]\['fixedEntryPriceHistory'\] = normalize_fixed_entry_price_history\([\s\S]*?\n    \);/.exec(api);
+  assert.ok(assignment, "the assignment that fills the history is defined in api.php");
+
+  // Both blocks below are the file's own source, so this fails if either changes shape.
+  const run = (storedInput) => JSON.parse(execFileSync("php", ["-r", `
+${normalizer[0]}
+$defaults = ['live5050' => ['fixedEntryPriceHistory' => [0.50]]];
+$fixedInput = ${storedInput};
+$config = ['live5050' => ['fixedEntryPrice' => 0.65]];
+${assignment[0]}
+echo json_encode($config['live5050']['fixedEntryPriceHistory']);
+`], { encoding: "utf8" }));
+
+  // Production's config: written before the field existed, so it carries no history key.
+  assert.deepEqual(run("[]"), [0.65, 0.5],
+    "an absent history falls back to the default, which is what makes the 0.50 bid 5050's");
+  // A stored history still wins over the default, so nothing already recorded is lost.
+  assert.deepEqual(run("['fixedEntryPriceHistory' => [0.42]]"), [0.65, 0.42]);
 });
 
 // Reported: the live portfolio's closed trades hold rows reading 50-51%, and one open

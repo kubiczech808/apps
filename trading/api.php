@@ -1028,8 +1028,12 @@ function normalize_portfolio_config(array $input): array
     // is -- and with only the current price to go on, changing this setting handed every
     // position, order and closed trade made at the old one straight to the live
     // portfolio. Its own tab then showed no trades and no P/L at all.
+    // Absent falls back to the default, like every other setting here. Reading it as an
+    // empty list instead meant a config stored before this field existed recovered
+    // nothing: the seeded 0.50 never applied, and the bid resting at 0.50 stayed on the
+    // main live portfolio's tab exactly as before.
     $config['live5050']['fixedEntryPriceHistory'] = normalize_fixed_entry_price_history(
-        $fixedInput['fixedEntryPriceHistory'] ?? [],
+        $fixedInput['fixedEntryPriceHistory'] ?? $defaults['live5050']['fixedEntryPriceHistory'],
         (float) $config['live5050']['fixedEntryPrice']
     );
     $stake = $fixedInput['stakePerOrderUsdc'] ?? null;
