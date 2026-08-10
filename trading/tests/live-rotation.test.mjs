@@ -3018,3 +3018,40 @@ test("run log history: deploying the site does not delete a portfolio's run log"
   assert.equal(keeps("index.html"), false);
   assert.equal(keeps("live-5050-execution-state.json.uploading-1"), false);
 });
+
+// Three reports about the opportunities page, one cause between two of them: the chosen
+// tab was not obvious, and the scraped view's filters were showing on the scraping log
+// even though the script hides them there.
+test("opportunities page: the active choice is obvious and the filters belong to the list", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [css, html, app] = await Promise.all([
+    readFile(new URL("../assets/app.css", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+  ]);
+
+  // Hover and active shared one rule, so the chosen tab was a white pill among grey ones
+  // -- and a touch screen has no hover to compare it against at all.
+  assert.match(css, /\.segment-button:hover:not\(\.active\) \{/);
+  assert.match(css, /\.segment-button\.active \{\n  background: var\(--accent-dark\);\n  color: #ffffff;/);
+
+  // The script hid the filters on the scraping log all along. It could not take effect:
+  // the browser hides [hidden] with a user-agent rule and any author display beats it,
+  // and both .threshold-control and .segmented set their own inline-flex.
+  assert.match(css, /\[hidden\] \{\n  display: none !important;\n\}/);
+  for (const selector of [".threshold-control", ".segmented"]) {
+    const rule = new RegExp(`\\${selector} \\{\\n  display: inline-flex;`);
+    assert.match(css, rule, `${selector} sets its own display, which is why the global rule is needed`);
+  }
+  assert.match(app, /els\.opportunityFilterControls\.forEach\(\(element\) => \{\n\s+element\.hidden = scanLog;/);
+
+  // The evaluated view is retired -- nothing produces AI verdicts any more -- so the tab
+  // is gone and any stored route or old link resolves to the scraped list, not a blank.
+  assert.doesNotMatch(html, /data-opportunity-view="evaluated"/);
+  assert.match(app, /function normalizeOpportunityView\(view\) \{\n  return view === "scan-log" \? view : "scraped";/);
+  assert.doesNotMatch(app, /opportunityRoutePath\("evaluated"\)/);
+  assert.doesNotMatch(app, /routePath\("opportunities", "evaluated"\)/);
+
+  // And the page must not still explain a filter in terms of the view that is gone.
+  assert.doesNotMatch(html, /It uses AI probability in Evaluated/);
+});

@@ -1086,8 +1086,11 @@ function setEvaluationStatus(status) {
   renderBotEvaluations();
 }
 
+// The evaluated view is retired: it showed the AI pipeline's own verdicts, and nothing
+// produces those any more. Old links and stored routes still say "evaluated", so they are
+// answered with the scraped list rather than a blank page.
 function normalizeOpportunityView(view) {
-  return view === "evaluated" || view === "scan-log" ? view : "scraped";
+  return view === "scan-log" ? view : "scraped";
 }
 
 function syncOpportunityPageHeading() {
@@ -1666,7 +1669,7 @@ function opportunityKey(item) {
 
 function opportunityDetailUrl(itemOrKey) {
   const key = typeof itemOrKey === "string" ? itemOrKey : opportunityKey(itemOrKey);
-  const url = new URL(opportunityRoutePath("evaluated"), window.location.origin);
+  const url = new URL(opportunityRoutePath("scraped"), window.location.origin);
   if (key) url.searchParams.set("event", key);
   return url.pathname + url.search;
 }
@@ -3529,7 +3532,7 @@ function closeAnalysisModal() {
   modal.dataset.opportunityKey = "";
   document.body.classList.remove("modal-open");
   if (opportunityKey && currentOpportunityKeyFromUrl() === opportunityKey) {
-    window.history.replaceState({ page: "opportunities", opportunityView: "evaluated" }, "", routePath("opportunities", "evaluated"));
+    window.history.replaceState({ page: "opportunities", opportunityView: "scraped" }, "", routePath("opportunities", "scraped"));
     state.openedOpportunityKey = "";
   }
   if (analysisModal.lastTrigger instanceof HTMLElement) {

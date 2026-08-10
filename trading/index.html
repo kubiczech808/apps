@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260810-portfolio-switch">
+  <link rel="stylesheet" href="assets/app.css?v=20260810-active-choices">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -219,11 +219,10 @@
             <div class="settings-panel-body">
               <div class="evaluation-head" data-evaluation-controls>
                   <div class="segmented opportunity-view-toggle" data-opportunity-view-toggle>
-                    <button class="segment-button" type="button" data-opportunity-view="evaluated">Evaluated</button>
                     <button class="segment-button active" type="button" data-opportunity-view="scraped">Scraped</button>
                     <button class="segment-button" type="button" data-opportunity-view="scan-log">Scraping log</button>
                   </div>
-                  <label class="threshold-control evaluation-probability-control" data-opportunity-filter title="Display-only filter. It uses AI probability in Evaluated and the current Polymarket probability in Scraped. Portfolio rules are not changed.">
+                  <label class="threshold-control evaluation-probability-control" data-opportunity-filter title="Display-only filter on the current Polymarket probability. Portfolio rules are not changed.">
                     <span>Probability filter</span>
                     <input type="number" min="0" max="99" step="1" value="0" data-evaluation-probability-filter>
                     <strong data-evaluation-probability-filter-label>&gt;= 0.0%</strong>
@@ -401,6 +400,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260810-expired-orders"></script>
+  <script src="assets/app.js?v=20260810-active-choices"></script>
 </body>
 </html>

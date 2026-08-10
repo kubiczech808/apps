@@ -18,6 +18,16 @@
   box-sizing: border-box;
 }
 
+/* The browser hides [hidden] with a user-agent rule, and any author `display` beats it.
+   Every control here that sets its own display -- .threshold-control and .segmented are
+   inline-flex -- therefore stayed visible after the script set element.hidden = true, so
+   the scraped view's filters were still on the scraping log and the status tabs were on
+   both. The stylesheet had been answering this one selector at a time; this answers it
+   once, and the specific rules further down are now only belt and braces. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -443,10 +453,21 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.segment-button:hover,
-.segment-button.active {
+/* Hover and active shared one rule, so the chosen tab was a white pill among grey ones --
+   the same faintness the portfolio switch had, and on a touch screen there is no hover to
+   compare it against at all. The choice is filled, hover is only a lift, and a button that
+   is already chosen does not change under the finger. */
+.segment-button:hover:not(.active) {
   background: #ffffff;
   color: var(--accent-dark);
+}
+.segment-button.active {
+  background: var(--accent-dark);
+  color: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 118, 110, 0.45);
+}
+.segment-button.active:hover {
+  background: var(--accent);
 }
 
 .panel {
