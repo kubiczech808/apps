@@ -1,0 +1,69 @@
+name: Trading FTP Listing
+
+# Read-only. Lists what is actually in the published data directory over FTP, and
+# nothing else -- no upload, no delete, no rename, no state file touched.
+#
+# It exists because the 5050 run log answers 404 over the web while its upload step
+# reports success, and no temp or backup file sits beside it either. Every explanation
+# left is about where the bytes went, and the only thing that can answer that is the
+# server's own directory listing. Reading the runner's step output has not been
+# possible through the API, so the answer has to come back as the job's own summary.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  listing:
+    runs-on: [self-hosted, Linux, ARM64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: List the published data directory
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import os
+          from pathlib import Path
+
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          lines = []
+
+          def say(text):
+              print(text)
+              lines.append(text)
+
+          with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=30) as ftp:
+              ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
+              say(f"login lands in: {ftp.pwd()}")
+
+              # Walk the same way the publisher does, reporting each hop. If the login is
+              # chrooted, the first cwd fails here -- and the publisher would have created
+              # the missing directory instead, putting the file somewhere nothing serves.
+              for part in os.environ["TRADING_FTP_DIR"].strip("/").split("/"):
+                  try:
+                      ftp.cwd(part)
+                      say(f"cwd {part} -> {ftp.pwd()}")
+                  except ftplib.all_errors as error:
+                      say(f"cwd {part} FAILED: {error} (publisher would mkd here)")
+                      break
+
+              say(f"listing {ftp.pwd()}:")
+              try:
+                  for name in sorted(ftp.nlst()):
+                      try:
+                          size = ftp.size(name)
+                      except ftplib.all_errors:
+                          size = None
+                      say(f"  {name}" + ("" if size is None else f"  ({size} bytes)"))
+              except ftplib.all_errors as error:
+                  say(f"  listing failed: {error}")
+
+          summary.write_text("```\n" + "\n".join(lines) + "\n```\n", encoding="utf-8")
+          PY
