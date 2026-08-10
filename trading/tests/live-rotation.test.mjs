@@ -2558,3 +2558,39 @@ test("portfolio parameters: both live portfolios state their order price", () =>
   assert.ok(rowsFor(true, true).some(([label]) => label === "Tag filter"));
   assert.ok(!rowsFor(false, true).some(([label]) => label === "Tag filter"));
 });
+
+test("portfolio switch: the open portfolio is unmistakable", async () => {
+  // Reported after a run was judged against the wrong portfolio: one order from twenty
+  // ready candidates looks like a bug on 5050, which bids on everything that qualifies,
+  // and is correct on Live, which buys the single best candidate. The tab was Live; the
+  // UI did not make that obvious enough to notice.
+  const { readFile } = await import("node:fs/promises");
+  const [app, css] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../assets/app.css", import.meta.url), "utf8"),
+  ]);
+
+  // Hover and active used to be one rule, so the open portfolio looked exactly like
+  // whichever tab the pointer was over -- two reading as selected, neither emphatically.
+  assert.doesNotMatch(css, /\.mode-button:hover,\n\.mode-button\.active \{/,
+    "hover must not be styled as the selected tab");
+  assert.match(css, /\.mode-button:hover:not\(\.active\) \{/);
+  const active = css.slice(css.indexOf(".mode-button.active {"));
+  assert.match(active.slice(0, active.indexOf("}")), /background: var\(--accent-dark\);[\s\S]*color: #ffffff;/,
+    "the open tab must be a filled pill, not a shade of the others");
+
+  // And stated, not only coloured.
+  assert.match(app, /button\.setAttribute\("aria-current", "true"\)/);
+
+  // 5050 is a live portfolio but not the Live one. Both tabs headed their tables
+  // "Opened live trades", so the two read identically while showing different rows.
+  const sync = functionSource(app, "syncModeUi");
+  assert.match(sync, /const portfolioLabel = isFixedEntryMode\(\) \? "5050" : \(live \? "live" : paperModeLabel\(\)\);/);
+  assert.match(sync, /`Opened \$\{portfolioLabel\} trades`/);
+  assert.match(sync, /`Closed \$\{portfolioLabel\} trades`/);
+  // Checked against the code rather than the whole file, or the comment above explaining
+  // the fix would itself count as the thing it warns about.
+  const syncCode = sync.split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
+  assert.ok(!/textContent = "Opened live trades"/.test(syncCode),
+    "no fixed live heading left to blur the two");
+});

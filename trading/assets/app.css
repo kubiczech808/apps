@@ -561,10 +561,24 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.mode-button:hover,
-.mode-button.active {
+/* Hover is a hint that a tab is clickable. It must not look like the tab you are on:
+   these two rules used to be identical, so the open portfolio was a white pill and so was
+   whichever one the pointer happened to be over -- two tabs reading as selected at once,
+   and neither of them emphatically. Which portfolio you are looking at decides whether
+   one order a run is correct or a bug, so it is worth being unmistakable about. */
+.mode-button:hover:not(.active) {
   background: #ffffff;
   color: var(--accent-dark);
+}
+
+.mode-button.active {
+  background: var(--accent-dark);
+  color: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 118, 110, 0.45);
+}
+
+.mode-button.active:hover {
+  background: var(--accent);
 }
 
 .execution-button {

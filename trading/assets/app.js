@@ -1320,7 +1320,12 @@ function toggleLiveExecutionGate() {
 function syncModeUi() {
   const live = isLiveMode();
   els.modeButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.modeToggle === state.mode);
+    const isCurrent = button.dataset.modeToggle === state.mode;
+    button.classList.toggle("active", isCurrent);
+    // Not only a class: which portfolio is open decides whether what the tables show is
+    // correct or a bug, so it is stated to assistive tech rather than left to colour.
+    if (isCurrent) button.setAttribute("aria-current", "true");
+    else button.removeAttribute("aria-current");
   });
   els.tabButtons.forEach((button) => {
     if (button.dataset.paperLabel || button.dataset.liveLabel) {
@@ -1332,8 +1337,12 @@ function syncModeUi() {
       ? "5050 - fixed-entry bids"
       : (live ? "Live Polymarket account" : `Paper - ${paperModeLabel()}`);
   }
-  if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = live ? "Opened live trades" : `Opened ${paperModeLabel()} trades`;
-  if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = live ? "Closed live trades" : `Closed ${paperModeLabel()} trades`;
+  // 5050 is a live portfolio but not the Live one, and both tabs used to head their
+  // tables "Opened live trades" -- so the two read identically while showing different
+  // portfolios' rows. The same fix the run-log title already carries: name the portfolio.
+  const portfolioLabel = isFixedEntryMode() ? "5050" : (live ? "live" : paperModeLabel());
+  if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = `Opened ${portfolioLabel} trades`;
+  if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = `Closed ${portfolioLabel} trades`;
   if (els.evaluationControls) els.evaluationControls.style.display = "";
   if (els.accountSummary) els.accountSummary.hidden = !live;
   if (els.botStatus) els.botStatus.hidden = live;
