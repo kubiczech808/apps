@@ -521,8 +521,34 @@ const STATE_SEGMENT_FIELDS = {
 const RESOLVED_OBSERVATION_SEGMENT = "resolvedObservations";
 const RESOLVED_OBSERVATION_TRANSPORT_FIELD = "resolvedMarketObservations";
 
-// Every segment name, so a reader can never quietly skip one that a writer produces.
+// The newest slice of the archive, published beside it as its own file.
+//
+// The archive is kept whole and grows without limit, which is right -- it is the record
+// of everything ever mined. What is not right is having to decode all of it to show the
+// most recent page. Measured at the 23,561 rows production had reached, decoding it alone
+// peaks at 138 MB, and the host answers 500 above 128 MB: the opportunities page and every
+// trading run reading that summary failed together, with nothing between the growing
+// archive and the failure. A capped file changes the cost of reading from "however much
+// history exists" to a constant.
+const RESOLVED_RECENT_SEGMENT = "resolvedRecent";
+const RESOLVED_RECENT_LIMIT = Math.max(0, envNumber("PAPER_RESOLVED_RECENT_LIMIT", 3000));
+
+// Every segment a reader must reassemble to rebuild the state, so it can never quietly
+// skip one that a writer produces.
+//
+// The recent page is deliberately not here. It carries the same transport field as the
+// archive, and mergeStateSegment replaces the resolved half rather than appending to it,
+// so reading both would leave whichever landed last -- and if that were the page, the
+// bot would write its own archive back truncated to 3,000 rows. It is published for
+// readers that only display recent history; the state is rebuilt from the archive.
 const STATE_SEGMENT_NAMES = [...Object.keys(STATE_SEGMENT_FIELDS), RESOLVED_OBSERVATION_SEGMENT];
+const PUBLISHED_STATE_SEGMENT_NAMES = [...STATE_SEGMENT_NAMES, RESOLVED_RECENT_SEGMENT];
+
+// Newest first, by whichever date the row actually carries.
+function resolvedObservationTime(item) {
+  const value = Date.parse(item?.resolvedAt || item?.endDate || item?.resolutionEndDate || "");
+  return Number.isFinite(value) ? value : 0;
+}
 
 function observationIsResolved(item) {
   return String(item?.status || item?.selectionStatus || "").toUpperCase() === "RESOLVED";
@@ -574,6 +600,25 @@ function splitStateIntoSegments(state) {
     // The tabs count observations, not transport fields, so the totals they need
     // are stated here rather than left to be recomputed from truncated rows.
     mergesInto: "marketObservations",
+  };
+
+  // The same rows, newest first and capped, so a reader that only shows the recent page
+  // never has to decode the whole archive to find it. The count above stays the true one,
+  // so the tab labels keep reporting everything that was mined.
+  const recentResolved = [...resolvedObservations]
+    .sort((a, b) => resolvedObservationTime(b) - resolvedObservationTime(a))
+    .slice(0, RESOLVED_RECENT_LIMIT);
+  segments[RESOLVED_RECENT_SEGMENT] = {
+    [RESOLVED_OBSERVATION_TRANSPORT_FIELD]: recentResolved,
+  };
+  manifest[RESOLVED_RECENT_SEGMENT] = {
+    file: stateSegmentFileName(RESOLVED_RECENT_SEGMENT),
+    fields: [RESOLVED_OBSERVATION_TRANSPORT_FIELD],
+    counts: { [RESOLVED_OBSERVATION_TRANSPORT_FIELD]: recentResolved.length },
+    mergesInto: "marketObservations",
+    // Stated so a reader can tell a capped page from the whole archive without
+    // comparing counts against another segment's manifest entry.
+    truncatedFrom: resolvedObservations.length,
   };
   core.stateSegments = manifest;
   return { core, segments };
@@ -8403,6 +8448,8 @@ export {
   riskProfile,
   simulateMarketBuy,
   splitStateIntoSegments,
+  PUBLISHED_STATE_SEGMENT_NAMES,
+  STATE_SEGMENT_NAMES,
   stateHasCurrentSchema,
   stateSegmentFileName,
   mergeStateSegment,

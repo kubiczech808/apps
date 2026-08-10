@@ -109,6 +109,12 @@ function state_segment_fields(): array
         // them. They arrive under their own field name and are appended to the active
         // catalogue below, so the rest of this file still sees one list.
         'resolvedObservations' => ['resolvedMarketObservations'],
+        // The newest page of that archive, capped by the writer and carrying the same
+        // transport field, so it merges identically. Reading this instead of the whole
+        // archive is what keeps the cost of the scraped view constant: the archive had
+        // reached 23,561 rows, which costs 138 MB to decode on a 128 MB host, and the
+        // page answered 500 rather than showing anything at all.
+        'resolvedRecent' => ['resolvedMarketObservations'],
     ];
 }
 
@@ -128,7 +134,9 @@ function state_segments_for_summary(string $summary): array
             // never decoded for this view no matter how large it grows.
             return ['observations'];
         case 'scraped':
-            return ['observations', 'resolvedObservations', 'scanHistory'];
+            // The recent page, never the whole archive. observationTotals still reports
+            // the true totals from the manifest, so the tab labels keep growing.
+            return ['observations', 'resolvedRecent', 'scanHistory'];
         case 'refresh':
             // The worker fetches segments straight from the data directory, so
             // this response only carries the core and the manifest that names

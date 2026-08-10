@@ -3093,5 +3093,8 @@ test("live executor: the trading runs read the summary that skips the resolved a
   assert.match(execution[0], /is_active_scraped_market_observation\(\$item\)/);
   // The segment list is what actually keeps the archive off the heap.
   assert.match(api, /case 'execution':\n[\s\S]*?return \['observations'\];/);
-  assert.match(api, /case 'scraped':\n\s+return \['observations', 'resolvedObservations', 'scanHistory'\];/);
+  // And the heavy summary is no longer heavy either: the opportunities page reads the
+  // writer's capped page of the archive rather than all of it.
+  assert.match(api, /case 'scraped':\n[\s\S]*?return \['observations', 'resolvedRecent', 'scanHistory'\];/);
+  assert.doesNotMatch(api, /return \['observations', 'resolvedObservations', 'scanHistory'\];/);
 });

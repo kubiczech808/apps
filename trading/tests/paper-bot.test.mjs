@@ -971,7 +971,11 @@ test("state segments: the core file never carries the heavy collections", async 
   assert.ok(activeRows.length > 0, "fixture must have active observations");
 
   const { core, segments } = bot.splitStateIntoSegments(state);
-  assert.deepEqual(Object.keys(segments).sort(), ["evaluations", "observations", "resolvedObservations", "scanHistory"]);
+  // resolvedRecent joined these: the archive is kept whole and the newest page of it is
+  // published beside it, so the opportunities page never decodes all of history to show
+  // its most recent rows.
+  assert.deepEqual(Object.keys(segments).sort(),
+    ["evaluations", "observations", "resolvedObservations", "resolvedRecent", "scanHistory"]);
 
   // The whole point is that a reader of the core file decodes none of the catalogue.
   assert.deepEqual(core.marketObservations, []);
@@ -1066,6 +1070,9 @@ test("state segments: writeState publishes siblings that readState reassembles",
       "paper-state.json",
       "paper-state.observations.json",
       "paper-state.resolvedObservations.json",
+      // The newest page of the archive, so the opportunities page can show recent
+      // resolved markets without decoding all of history to find them.
+      "paper-state.resolvedRecent.json",
       "paper-state.scanHistory.json",
     ]);
 
@@ -1389,7 +1396,13 @@ test("state segments: segments can be merged in any order", async () => {
     JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
   );
   const { core, segments } = bot.splitStateIntoSegments(state);
-  const names = Object.keys(segments);
+  // Only the segments a reader reassembles. The recent page is published beside the
+  // archive and carries the same transport field, and this merge replaces the resolved
+  // half rather than appending -- so reading both would leave whichever landed last, and
+  // the state would be rebuilt from a 3,000-row page instead of the whole archive.
+  const names = bot.STATE_SEGMENT_NAMES.filter((name) => name in segments);
+  assert.ok(!names.includes("resolvedRecent"), "the capped page is published, never read back");
+  assert.ok(bot.PUBLISHED_STATE_SEGMENT_NAMES.includes("resolvedRecent"));
   const expected = state.marketObservations.length;
 
   // Every ordering of the segment files must reconstruct the same row count.
@@ -4290,4 +4303,69 @@ test("revalidation: refreshing a stored candidate does not throw on an undefined
   );
   assert.ok(unreadable);
   assert.equal(typeof unreadable.status, "string");
+});
+
+// The same 500 that killed the trading runs also kills the opportunities page, and the
+// page cannot simply skip the resolved archive -- the Resolved tab is what it is for.
+// Measured on a state at production's counts, decoding 23,561 resolved rows peaks at
+// 138 MB, and the host answers 500 above 128 MB. Nothing downstream can rescue that: the
+// cost is paid at json_decode, before a single row has been filtered or capped.
+//
+// So the archive is still kept whole -- it is the record of everything ever mined -- and
+// the newest page of it is published beside it as its own capped file. Reading that
+// instead changes the cost from "however much history exists" to a constant.
+test("state segments: the newest resolved page is published beside the full archive", () => {
+  const resolvedAt = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString();
+  const observations = [];
+  for (let i = 0; i < 40; i += 1) {
+    observations.push({ id: `active-${i}`, tokenId: `${i}`, status: "SCRAPED", marketProbability: 0.9 });
+  }
+  // Deliberately oldest-first, so an implementation that just takes the head of the list
+  // instead of sorting serves the wrong page and fails here.
+  for (let i = 0; i < 200; i += 1) {
+    observations.push({ id: `resolved-${i}`, tokenId: `r${i}`, status: "RESOLVED", resolvedAt: resolvedAt(200 - i) });
+  }
+
+  const { core, segments } = bot.splitStateIntoSegments({ marketObservations: observations });
+  const archive = segments.resolvedObservations.resolvedMarketObservations;
+  const recent = segments.resolvedRecent.resolvedMarketObservations;
+
+  // The archive keeps everything, and the active catalogue never carries resolved rows.
+  assert.equal(archive.length, 200);
+  assert.equal(segments.observations.marketObservations.length, 40);
+
+  // The page is bounded and newest first. With the default cap above the row count it is
+  // the whole archive re-ordered, which is what makes the ordering testable at this size.
+  assert.equal(recent.length, 200);
+  assert.equal(recent[0].id, "resolved-199", "the newest resolved market leads the page");
+  assert.equal(recent[recent.length - 1].id, "resolved-0");
+
+  // The tab labels read the manifest, not the served rows, so capping the page must not
+  // change what the counts say was mined.
+  assert.equal(core.stateSegments.resolvedObservations.counts.resolvedMarketObservations, 200);
+  assert.equal(core.stateSegments.resolvedRecent.truncatedFrom, 200);
+  assert.equal(core.stateSegments.resolvedRecent.file, "paper-state.resolvedRecent.json");
+  assert.equal(core.stateSegments.resolvedRecent.mergesInto, "marketObservations");
+});
+
+test("state segments: the opportunities page reads the capped page, not the archive", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+
+  // The one line that decides whether this page costs a constant or grows with history.
+  assert.match(api, /case 'scraped':\n[\s\S]*?return \['observations', 'resolvedRecent', 'scanHistory'\];/);
+  // It merges through the same transport field, so nothing downstream changes shape.
+  assert.match(api, /'resolvedRecent' => \['resolvedMarketObservations'\],/);
+  // And the totals still come from the archive's own manifest entry, untouched.
+  assert.match(api, /\$manifest\['resolvedObservations'\]\['counts'\]\['resolvedMarketObservations'\]/);
+
+  // The page is published but never reassembled into state: it carries the archive's own
+  // transport field, and the merge replaces the resolved half rather than appending, so a
+  // reader that loaded both would rebuild the state from whichever landed last.
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const readBack = /const STATE_SEGMENT_NAMES = \[[^\]]*\];/.exec(source);
+  const published = /const PUBLISHED_STATE_SEGMENT_NAMES = \[[^\]]*\];/.exec(source);
+  assert.doesNotMatch(readBack[0], /RESOLVED_RECENT_SEGMENT/,
+    "reassembling the state from the capped page would truncate the archive on the next write");
+  assert.match(published[0], /RESOLVED_RECENT_SEGMENT/);
 });
