@@ -72,7 +72,11 @@ async function attributionFor(mode, { fixedEntryExecution, config }) {
     "belongsToActiveLivePortfolio",
   ];
   const body = names.map((name) => functionSource(app, name)).join("\n\n");
+  // The price matcher reads a module constant, so it has to come across too. Without it
+  // the whole report died inside the first attribution call.
+  const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)?.[0] || "";
   return new Function("state", "isFixedEntryMode", "portfolioConfigForMode", `
+    ${tolerance}
     ${body}
     return { belongsToActiveLivePortfolio, boughtAtFixedEntryPrice, isFilledPortfolioRow,
       restsAtFixedEntryPrice, fixedEntryPriceSignatures, fixedEntryOrderPricesByToken };
@@ -161,7 +165,13 @@ async function main() {
   console.log(`   price history: [${(fixedEntryConfig.fixedEntryPriceHistory || []).join(", ") || "none recorded"}]`);
 
   for (const mode of ["live-5050", "live"]) {
-    const api = await attributionFor(mode, { fixedEntryExecution: execution, config: portfolioConfig });
+    let api = null;
+    try {
+      api = await attributionFor(mode, { fixedEntryExecution: execution, config: portfolioConfig });
+    } catch (error) {
+      console.log(`\n== As the ${mode} tab sees it\n   attribution could not be evaluated: ${error?.message || error}`);
+      continue;
+    }
     console.log(`\n== As the ${mode} tab sees it`);
     if (mode === "live-5050") {
       console.log(`   prices it treats as its own: [${[...api.fixedEntryPriceSignatures()].join(", ") || "none"}]`);
