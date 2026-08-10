@@ -1,0 +1,30 @@
+name: Trading Live Portfolio Diagnosis
+
+# Read-only diagnostic, manual only. It reads the published account snapshot and asks the
+# dashboard's own attribution functions which live portfolio owns each position, open order
+# and closed trade -- and how old the snapshot is, which is the first thing "the portfolio
+# has no updated data" is actually about.
+#
+# Like the Gamma probe it deliberately has no access to anything: no secrets, no FTP, no
+# deploy, no state file, contents: read only. The URLs it reads are the same public ones
+# the dashboard reads from a browser. It exists because the authoring environment's egress
+# policy blocks the hosting, so this is the only way to see the real data.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose live portfolio attribution
+        working-directory: trading
+        run: node tools/live-portfolio-diagnosis.mjs
