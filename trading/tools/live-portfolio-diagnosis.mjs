@@ -183,6 +183,29 @@ async function main() {
     reportSet("open orders", liveState.openOrders || [], api, mode);
     reportSet("closed trades", liveState.closedTrades || [], api, mode);
   }
+
+  // Reported: rows showing 50-51% turn up on the live portfolio, which trades against a
+  // high probability bar and should never hold one. Two different columns can read as a
+  // percentage -- the entry price and a leftover AI probability -- so both are counted
+  // here, because which one it is decides whether this is misattribution or a stale
+  // column from the retired scoring pipeline.
+  console.log(`\n== Rows reading near 50%, and which field says so`);
+  const near = (value) => Number.isFinite(Number(value)) && Number(value) >= 0.48 && Number(value) <= 0.53;
+  for (const [label, rows] of [["closed trades", liveState.closedTrades || []], ["open orders", liveState.openOrders || []], ["positions", liveState.positions || []]]) {
+    const byEntry = rows.filter((row) => near(row?.entryPrice ?? row?.avgPrice ?? row?.price ?? row?.orderPrice));
+    const byAi = rows.filter((row) => near(row?.aiProbability ?? row?.aiAnalysis?.probability ?? row?.sourceEvaluation?.aiProbability));
+    const withAnyAi = rows.filter((row) => Number.isFinite(Number(row?.aiProbability ?? row?.aiAnalysis?.probability ?? row?.sourceEvaluation?.aiProbability)));
+    console.log(`   ${label}: ${rows.length} rows | entry price near 50%: ${byEntry.length}`
+      + ` | AI probability near 50%: ${byAi.length} | carrying any AI probability at all: ${withAnyAi.length}`);
+    for (const row of byEntry.slice(0, 8)) {
+      console.log(`     entry=${priceOf(row)} marketProb=${row?.marketProbability ?? "-"} ai=${row?.aiProbability ?? "-"}`
+        + ` status=${row?.status || "-"}  ${rowLabel(row)}`);
+    }
+    for (const row of withAnyAi.slice(0, 5)) {
+      console.log(`     AI-carrying: ai=${row?.aiProbability ?? row?.aiAnalysis?.probability ?? row?.sourceEvaluation?.aiProbability}`
+        + ` entry=${priceOf(row)}  ${rowLabel(row)}`);
+    }
+  }
 }
 
 const invokedDirectly = process.argv[1]
