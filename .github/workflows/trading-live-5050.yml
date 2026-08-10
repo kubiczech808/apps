@@ -272,6 +272,10 @@ jobs:
           HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
           TRADING_FTP_DIR: /www/trading/data
+          # Read back over the web what was just uploaded. An FTP upload can report
+          # success while the file lands where nothing serves it, which is how this
+          # portfolio's run log stayed missing for days with every step passing.
+          PUBLISH_VERIFY_BASE_URL: https://osobnizkusenosti.cz/trading/data
           PUBLISH_FILES: trading/data/live-5050-execution-state.json>live-5050-execution-state.json
         run: python3 trading/tools/publish-execution-state.py
 

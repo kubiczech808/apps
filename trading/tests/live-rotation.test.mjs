@@ -2640,3 +2640,36 @@ test("run log history: both live portfolios publish through the same hardened up
       `${name} must merge the published history before replacing it`);
   }
 });
+
+test("run log history: a publish is read back, so a silent non-landing fails the run", async () => {
+  // 5050's run log still held one entry after the shared publisher went in. Measured:
+  // live-execution-state.json answers 200 with 73 run-log entries, the 5050 file answers
+  // 404 -- while every 5050 run reports success, the local file exists (the digest step
+  // reads it), and the upload step raises nothing.
+  //
+  // An FTP STOR and rename can both succeed while the file lands where the web server
+  // does not serve it. Nothing in the chain checked the one thing that matters: whether
+  // the file can be read back afterwards. So now it is, and a publish that did not land
+  // fails the run instead of passing quietly for days.
+  const { readFile } = await import("node:fs/promises");
+  const [publisher, fixedWorkflow, liveWorkflow] = await Promise.all([
+    readFile(new URL("../tools/publish-execution-state.py", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(publisher, /def verify_published\(base_url, remote_name\):/);
+  assert.match(publisher, /raise RuntimeError\(f"\{remote_name\} uploaded, but \{url\} answers HTTP \{error\.code\}"\)/,
+    "a hosted 404 after upload must fail the run");
+  // A network blip reaching the hosting is not evidence the upload failed, and failing
+  // on it would turn an unreachable host into a red trading job.
+  assert.match(publisher, /except urllib\.error\.URLError as error:/);
+  assert.match(publisher, /print\(f"could not verify \{url\}: \{error\.reason\}"\)\n\s+return/);
+  // Only after a successful upload, and only when a base URL is configured.
+  assert.match(publisher, /upload_atomic\(config, local_path, remote_name\)\n\s+if verify_base:\n\s+verify_published\(verify_base, remote_name\)/);
+
+  for (const [name, workflow] of [["5050", fixedWorkflow], ["live", liveWorkflow]]) {
+    assert.match(workflow, /PUBLISH_VERIFY_BASE_URL: https:\/\/osobnizkusenosti\.cz\/trading\/data/,
+      `${name} must verify what it publishes`);
+  }
+});

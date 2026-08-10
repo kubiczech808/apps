@@ -297,6 +297,10 @@ jobs:
           HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
           HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
           TRADING_FTP_DIR: /www/trading/data
+          # Read back over the web what was just uploaded. An FTP upload can report
+          # success while the file lands where nothing serves it, which is how the 5050
+          # portfolio's run log stayed missing for days with every step passing.
+          PUBLISH_VERIFY_BASE_URL: https://osobnizkusenosti.cz/trading/data
           # live-state.json is what the run exists to publish, so a run that did not
           # generate it fails; the execution state is published first so the run log
           # survives even if the larger account snapshot cannot be uploaded.
