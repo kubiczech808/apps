@@ -929,7 +929,10 @@ async function hydrateLiveOpenOrderMetadata(liveState) {
     if (!tokenId) return order;
     try {
       const market = await fetchMarketByToken(tokenId);
-      if (!market) return order;
+      // Gamma answered and listed nothing for this token. That is a delisted market, not
+      // a lookup that failed, and the two have to stay distinguishable: only the former
+      // is grounds for withdrawing the bid resting on it.
+      if (!market) return { ...order, marketListed: false };
       const tokenIds = parseJsonField(market.clobTokenIds).map(String);
       const outcomes = parseJsonField(market.outcomes).map(String);
       const tokenIndex = tokenIds.indexOf(tokenId);
@@ -952,6 +955,13 @@ async function hydrateLiveOpenOrderMetadata(liveState) {
         // stored horizon that is legitimately negative, or an expired order would come
         // back as a day of runway the moment its date went missing.
         daysToResolution: daysToEnd(dates.endDate || order.endDate) ?? number(order.daysToResolution, null),
+        // What the exchange still thinks of this market, recorded on the order itself. A
+        // resting buy holds its collateral until it is cancelled, so an order on a market
+        // that has stopped trading is money the portfolio cannot see it has.
+        marketListed: true,
+        marketClosed: market.closed === true,
+        marketArchived: market.archived === true,
+        marketAcceptingOrders: market.acceptingOrders !== false,
         marketMetadataSource: "gamma-clob-token",
       };
     } catch {
@@ -961,6 +971,110 @@ async function hydrateLiveOpenOrderMetadata(liveState) {
     }
   }));
   return { ...liveState, openOrders: enrichedOrders };
+}
+
+// How long after a market's own resolution window closes a bid may still rest on it. The
+// window is when Polymarket expects the outcome to be known, not when it finishes
+// settling, so a little slack keeps a bid alive across an ordinary settlement delay while
+// still withdrawing one that is plainly stranded.
+const EXPIRED_ORDER_GRACE_HOURS = Math.max(0, number(process.env.LIVE_EXPIRED_ORDER_GRACE_HOURS, 2));
+
+// Why a resting bid should be withdrawn, or "" to leave it alone.
+//
+// Reported: a bid sat as LIMIT ORDER WAITING on a LoL match that had already been played.
+// Nothing withdraws such an order today -- 5050 only cancels siblings of events it has
+// already opened, and the main portfolio only reviews open orders when it wants their
+// capital -- so it holds its collateral until the exchange gets round to settling, which
+// for esports can be days. Worse than the locked cash: a bid left in the book after the
+// result is known is the one bid a counterparty is certain to want to hit.
+//
+// Every branch below needs positive evidence that the market is over. An unknown is not
+// evidence: a Gamma lookup that failed, an order the account snapshot could not hydrate
+// and a date that will not parse all leave the order exactly where it is.
+function expiredOrderWithdrawalReason(order, now = Date.now()) {
+  if (String(order?.side || "BUY").toUpperCase().includes("SELL")) return "";
+  // Flags Polymarket sets itself. Each one means the book this order sits in is shut,
+  // and none of them is ever set back, so acting on them cannot be premature.
+  if (order?.marketClosed === true) return "the market is closed on Polymarket";
+  if (order?.marketArchived === true) return "the market is archived on Polymarket";
+  if (order?.marketAcceptingOrders === false) return "the market has stopped accepting orders";
+
+  // The scheduled kickoff is deliberately not used here. It is what `endDate` holds for
+  // sports, and a match being under way is not a reason to withdraw -- the live portfolio
+  // buys long-odds outcomes that only get safer once play starts. The resolution window
+  // is the date that means the event itself is over.
+  const resolutionEnd = Date.parse(order?.resolutionEndDate || "");
+  if (!Number.isFinite(resolutionEnd)) return "";
+  const hoursPast = (now - resolutionEnd) / 3600000;
+
+  // Gamma listing nothing for the token is good evidence the market is gone, but it
+  // comes from a single unretried request, and an empty response during a Gamma blip
+  // would read the same. It only counts alongside a window that has already closed --
+  // which a market still trading cannot have, so a blip on a live market withdraws
+  // nothing. Together they are conclusive enough to skip the settlement grace.
+  if (order?.marketListed === false && hoursPast > 0) {
+    return `Polymarket no longer lists this market and its resolution window closed ${hoursPast.toFixed(1)}h ago`;
+  }
+  if (hoursPast <= EXPIRED_ORDER_GRACE_HOURS) return "";
+  return `its market's resolution window closed ${hoursPast.toFixed(1)}h ago`;
+}
+
+// Cancels those orders and hands back a state without them, so the capital they were
+// holding is spendable in this same run rather than at the next one.
+async function withdrawExpiredOpenOrders({ liveState, tradingConfig }) {
+  const openOrders = Array.isArray(liveState?.openOrders) ? liveState.openOrders : [];
+  // `cancelOrder` reports a dry run as a success, which is right for the log and wrong
+  // for the state: nothing was actually withdrawn, so the collateral is still held and
+  // this run must not go on to spend it.
+  const previewOnly = DRY_RUN || !hasFlag("confirm-live");
+  const withdrawn = [];
+  const failed = [];
+  const remaining = [];
+  for (const order of openOrders) {
+    const reason = expiredOrderWithdrawalReason(order);
+    if (!reason) {
+      remaining.push(order);
+      continue;
+    }
+    const response = await cancelOrder(order, tradingConfig).catch((error) => ({ error: error?.message || String(error) }));
+    const summary = {
+      tokenId: String(order.tokenId || order.assetId || ""),
+      orderId: order.id || order.orderID || order.orderId || null,
+      question: order.question || "",
+      outcome: order.outcome || "",
+      price: number(order.price, null),
+      notionalUsdc: number(order.notionalUsdc, number(order.price, 0) * number(order.remainingSize, 0)),
+      resolutionEndDate: order.resolutionEndDate || null,
+      reason,
+      response: compactOrderResponse(response),
+    };
+    if (successfulCancelResponse(response, summary.orderId)) {
+      withdrawn.push({ ...summary, previewOnly });
+      if (previewOnly) remaining.push(order);
+      continue;
+    }
+    // A cancel that did not take leaves the order where it is, collateral and all. It
+    // must stay in the state, or this run would spend capital the exchange still holds.
+    failed.push(summary);
+    remaining.push(order);
+  }
+  const releasedUsdc = previewOnly
+    ? 0
+    : withdrawn.reduce((total, item) => total + number(item.notionalUsdc, 0), 0);
+  for (const item of withdrawn) {
+    console.log(`${previewOnly ? "would withdraw" : "withdrew"} resting bid at ${number(item.price, 0).toFixed(4)}`
+      + ` on "${item.question}": ${item.reason}`);
+  }
+  for (const item of failed) {
+    console.log(`could not withdraw resting bid on "${item.question}" (${item.reason}): ${item.response}`);
+  }
+  return {
+    liveState: remaining.length === openOrders.length ? liveState : { ...liveState, openOrders: remaining },
+    withdrawn,
+    failed,
+    previewOnly,
+    releasedUsdc: Number(releasedUsdc.toFixed(5)),
+  };
 }
 
 async function fetchClobMarket(conditionId) {
@@ -2479,7 +2593,7 @@ function fixedEntryOrder(row, { price = FIXED_ENTRY_PRICE, stakeUsdc = FIXED_ENT
   };
 }
 
-async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash, evaluationByToken = new Map() }) {
+async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash, evaluationByToken = new Map(), expiredOrderSweep }) {
   const restingTokenIds = new Set((Array.isArray(liveState?.openOrders) ? liveState.openOrders : [])
     .filter((order) => !String(order.side || "").toUpperCase().includes("SELL"))
     .map((order) => String(order.tokenId || order.assetId || "")));
@@ -2651,11 +2765,17 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
   const processedEvents = DRY_RUN || !hasFlag("confirm-live") ? targets.length : placed;
   const elapsedSeconds = Math.round((Date.now() - placementStartedAt) / 1000);
   const action = accepted > 0 ? "SUBMITTED" : (targets.length ? "SKIP" : "NO_CANDIDATES");
+  // Said on both branches below, because a pass that rests nothing but recovers capital
+  // from bids on finished events did something worth reporting, and the branch that
+  // reports nothing resting is exactly the one where that capital had gone missing.
+  const expiredNote = expiredOrderSweep.withdrawn.length
+    ? `; withdrew ${expiredOrderSweep.withdrawn.length} resting bid(s) on markets that were already over, releasing ${expiredOrderSweep.releasedUsdc.toFixed(2)} USDC`
+    : "";
   // The fraction leads, because this string is what the run log row shows: how far the
   // pass got through the batch is the first thing to know, ahead of what it rested.
   const reason = targets.length
-    ? `processed ${processedEvents} of ${targets.length} events in ${elapsedSeconds}s; rested ${accepted} bid(s) at ${FIXED_ENTRY_PRICE.toFixed(2)}, one per event from ${pool.length} qualifying of ${checked.length} scanned${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}${deferredForBudget ? `; ${deferredForBudget} event(s) wait for the next run after the ${(FIXED_ENTRY_BUDGET_MS / 1000).toFixed(0)}s placement budget` : ""}${cancelledSiblings.length ? `; withdrew ${cancelledSiblings.length} resting bid(s) on events that already opened` : ""}`
-    : `no candidate cleared the ${(MIN_PROBABILITY * 100).toFixed(1)}% bar for a resting bid at ${FIXED_ENTRY_PRICE.toFixed(2)}, from ${checked.length} scanned`;
+    ? `processed ${processedEvents} of ${targets.length} events in ${elapsedSeconds}s; rested ${accepted} bid(s) at ${FIXED_ENTRY_PRICE.toFixed(2)}, one per event from ${pool.length} qualifying of ${checked.length} scanned${rejectedForFunds ? `; ${rejectedForFunds} refused for available collateral, which is expected once the capital is committed` : ""}${deferredForBudget ? `; ${deferredForBudget} event(s) wait for the next run after the ${(FIXED_ENTRY_BUDGET_MS / 1000).toFixed(0)}s placement budget` : ""}${cancelledSiblings.length ? `; withdrew ${cancelledSiblings.length} resting bid(s) on events that already opened` : ""}${expiredNote}`
+    : `no candidate cleared the ${(MIN_PROBABILITY * 100).toFixed(1)}% bar for a resting bid at ${FIXED_ENTRY_PRICE.toFixed(2)}, from ${checked.length} scanned${expiredNote}`;
 
   await emitDecision({
     generatedAt: new Date().toISOString(),
@@ -2672,6 +2792,8 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
       accepted,
       rejectedForFunds,
       cancelledSiblings: cancelledSiblings.length,
+      expiredOrdersWithdrawn: expiredOrderSweep.withdrawn.length,
+      expiredOrderCashReleasedUsdc: expiredOrderSweep.releasedUsdc,
       // How far through the batch the pass got, and what it cost to get there -- so a
       // partial pass reads as "20 of 300" rather than as a run that simply took longer,
       // and the budget can be tuned against measurements rather than guesses.
@@ -2707,6 +2829,8 @@ async function runFixedEntryBatch({ checked, liveState, tradingConfig, cash, ava
         processedEvents,
         acceptedOrders: accepted,
         rejectedForCollateral: rejectedForFunds,
+        expiredOrdersWithdrawn: expiredOrderSweep.withdrawn.length,
+        expiredOrderCashReleasedUsdc: expiredOrderSweep.releasedUsdc,
         deferredForBudget,
         placementBudgetMs: FIXED_ENTRY_BUDGET_MS,
         placementElapsedMs: Date.now() - placementStartedAt,
@@ -3640,7 +3764,7 @@ async function main() {
     loadJsonResource(LIVE_STATE_URL, "live state"),
     loadOptionalJsonResource(LIVE_EXECUTION_STATE_URL, "previous live execution state"),
   ]);
-  const liveState = await hydrateLiveOpenOrderMetadata(loadedLiveState);
+  let liveState = await hydrateLiveOpenOrderMetadata(loadedLiveState);
   previousExecutionState = previousExecution;
   if (SKIP_SCHEDULED_EXECUTION) {
     console.log(JSON.stringify({
@@ -3680,6 +3804,14 @@ async function main() {
       ? loadJsonResource(PAPER_SCRAPED_STATE_URL, "scraped Polymarket state")
       : Promise.resolve(null),
   ]);
+  // Before anything is measured against the book: a bid on a market that is over can
+  // never fill for a reason worth having, and until it is withdrawn its collateral is
+  // counted as committed. Sweeping first means the cash it was holding is spendable in
+  // this run, and every figure below is taken after the sweep rather than before it.
+  const tradingConfig = liveTradingConfig(liveState);
+  const expiredOrderSweep = await withdrawExpiredOpenOrders({ liveState, tradingConfig });
+  liveState = expiredOrderSweep.liveState;
+
   const cash = liveCashUsdc(liveState);
   // The wallet total is still reported, so the gap between what the account has locked
   // and what this portfolio locked stays visible in the run.
@@ -3689,7 +3821,6 @@ async function main() {
     ownSubmittedOrderIdentity(previousExecution),
   );
   const availableCash = availableLiveCashUsdc(liveState, cash, previousExecution);
-  const tradingConfig = liveTradingConfig(liveState);
   const portfolioValue = livePortfolioValue(liveState, cash);
   const fractionNotional = portfolioValue * MAX_ORDER_FRACTION;
   const monitoring = liveCashMonitoring(previousExecution, availableCash);
@@ -3730,7 +3861,7 @@ async function main() {
   }
 
   if (FIXED_ENTRY_STRATEGY) {
-    await runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash, evaluationByToken });
+    await runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash, evaluationByToken, expiredOrderSweep });
     return;
   }
 
@@ -3941,6 +4072,7 @@ async function main() {
       rotationProtectRemainingGainUsdc: ROTATION_PROTECT_REMAINING_GAIN_USDC,
     },
     orderManagement,
+    expiredOrderSweep,
     rotationReview,
     rotationExit: null,
     revalidationUpdates: checked
@@ -3992,6 +4124,12 @@ async function main() {
         insufficientCapital: !best && (!Number.isFinite(maxNotional) || maxNotional <= 0 || cashSizingBlocked.length > 0),
         capitalSizingBlockedCandidates: cashSizingBlocked.length,
         stakeCapBlockedCandidates: stakeCapBlockedCandidates.length,
+        // Capital this run recovered from bids on markets that were already over. It is
+        // part of availableUsdc above, and it is reported separately because a portfolio
+        // whose cash keeps disappearing into stranded orders is a thing to notice.
+        expiredOrdersWithdrawn: expiredOrderSweep.withdrawn.length,
+        expiredOrdersUnwithdrawable: expiredOrderSweep.failed.length,
+        expiredOrderCashReleasedUsdc: expiredOrderSweep.releasedUsdc,
       },
       counts: {
         storedEvaluations: rawEvaluations.length,
@@ -4396,4 +4534,6 @@ export {
   latestHoldingResolutionMs,
   fixedEntryOrder,
   fixedEntryRowFacts,
+  expiredOrderWithdrawalReason,
+  EXPIRED_ORDER_GRACE_HOURS,
 };

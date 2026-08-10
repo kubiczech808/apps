@@ -1381,6 +1381,14 @@ async function enrichOpenOrdersWithMarketMetadata(openOrders = [], sync, previou
         market: order.market || market.conditionId || null,
         url: eventSlug ? `https://polymarket.com/event/${eventSlug}` : order.url,
         ...dates,
+        // What Polymarket still says about the market this order rests on. A bid on a
+        // market that has stopped trading cannot fill for a reason worth having, and it
+        // holds its collateral until it is cancelled -- so both the dashboard and the
+        // executor need to tell one apart from an order that is simply still waiting.
+        marketListed: true,
+        marketClosed: market.closed === true,
+        marketArchived: market.archived === true,
+        marketAcceptingOrders: market.acceptingOrders !== false,
         marketMetadataSource: "gamma-clob-token",
       };
     } catch (error) {

@@ -2702,3 +2702,186 @@ test("run log history: a publish is read back, so a silent non-landing fails the
       `${name} must verify what it publishes`);
   }
 });
+
+// Reported: a bid showed as LIMIT ORDER WAITING on a LoL match that had already been
+// played -- blocking cash in the live portfolio, and at an entry level that made it look
+// like one of 5050's. Nothing in either portfolio withdraws such an order: 5050 cancels
+// only siblings of events it has already opened, and the live portfolio reviews open
+// orders only when it wants their capital for something else. So it rests until the
+// exchange settles the market, which for esports can take days -- and a bid left in the
+// book after the result is known is the one bid a counterparty is certain to hit.
+
+const RESTING_BID = {
+  side: "BUY",
+  price: 0.5,
+  remainingSize: 10,
+  marketListed: true,
+  marketClosed: false,
+  marketArchived: false,
+  marketAcceptingOrders: true,
+};
+const HOURS = (count) => new Date(Date.now() - count * 3600000).toISOString();
+
+test("expired orders: a bid on a market that is over is withdrawn, not left resting", () => {
+  const { expiredOrderWithdrawalReason: reasonFor, EXPIRED_ORDER_GRACE_HOURS: grace } = executor;
+
+  // Polymarket's own flags. Each means the book is shut, and none is ever set back.
+  assert.match(reasonFor({ ...RESTING_BID, marketClosed: true }), /closed on Polymarket/);
+  assert.match(reasonFor({ ...RESTING_BID, marketArchived: true }), /archived on Polymarket/);
+  assert.match(reasonFor({ ...RESTING_BID, marketAcceptingOrders: false }), /stopped accepting orders/);
+
+  // The reported case with no flag set yet: the match is long over, the market has not
+  // been settled, and the bid is still in the book.
+  assert.match(
+    reasonFor({ ...RESTING_BID, resolutionEndDate: HOURS(grace + 12) }),
+    /resolution window closed/,
+  );
+});
+
+test("expired orders: nothing is withdrawn without positive evidence the market is over", () => {
+  const { expiredOrderWithdrawalReason: reasonFor, EXPIRED_ORDER_GRACE_HOURS: grace } = executor;
+
+  // A sell order is reducing a position, not holding collateral for a fill that will
+  // never come, and cancelling one would strand the position it is exiting.
+  assert.equal(reasonFor({ ...RESTING_BID, side: "SELL", marketClosed: true }), "");
+
+  // Production's six resting bids, measured: every market answered closed=false,
+  // active=true, acceptingOrders=true with a resolution window still hours away. Not one
+  // of them may be touched, or this sweep would cancel the portfolio's live work.
+  for (const hoursAhead of [0.6, 7.3, 10.3, 10.5, 11.8, 13.3]) {
+    const order = { ...RESTING_BID, resolutionEndDate: new Date(Date.now() + hoursAhead * 3600000).toISOString() };
+    assert.equal(reasonFor(order), "", `a bid ${hoursAhead}h before its market resolves must stay`);
+  }
+
+  // An unknown is not evidence. A Gamma lookup that failed leaves the flags absent and
+  // the date whatever the snapshot last knew; neither may withdraw anything.
+  assert.equal(reasonFor({ side: "BUY", price: 0.65 }), "");
+  assert.equal(reasonFor({ ...RESTING_BID, resolutionEndDate: "not a date" }), "");
+
+  // Inside the settlement grace the market is over but the exchange may still be
+  // settling normally, and a bid that is about to be cancelled for us can be left alone.
+  assert.equal(reasonFor({ ...RESTING_BID, resolutionEndDate: HOURS(Math.max(0, grace - 0.5)) }), "");
+
+  // Gamma listing nothing is one unretried request, so on its own it could be a blip.
+  // It counts only alongside a window that has already closed -- which a market still
+  // trading cannot have, so a blip on a live market withdraws nothing.
+  const unlisted = { ...RESTING_BID, marketListed: false };
+  assert.equal(reasonFor({ ...unlisted, resolutionEndDate: new Date(Date.now() + 3600000).toISOString() }), "");
+  assert.match(reasonFor({ ...unlisted, resolutionEndDate: HOURS(1) }), /no longer lists this market/);
+});
+
+test("expired orders: the sweep runs before the run measures its own capital", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const body = functionSource(source, "main");
+
+  // Both portfolios reach this: it is in main(), above the branch that hands 5050 off to
+  // its own batch. Putting it after would have left 5050 -- the portfolio that rests the
+  // most bids, and the one the reported order belonged to -- sweeping nothing.
+  const sweep = body.indexOf("withdrawExpiredOpenOrders({ liveState, tradingConfig })");
+  const fixedEntryBranch = body.indexOf("if (FIXED_ENTRY_STRATEGY) {");
+  assert.ok(sweep > 0 && fixedEntryBranch > sweep, "the sweep must run before either strategy branches off");
+
+  // And before the cash is read, so the capital it recovers is spendable in the same run
+  // rather than sitting idle until the next one.
+  assert.ok(body.indexOf("const cash = liveCashUsdc(liveState);") > sweep);
+  assert.ok(body.indexOf("const availableCash = availableLiveCashUsdc(") > sweep);
+
+  // A dry run must not pretend the collateral came back: cancelOrder reports a dry run as
+  // a success, and acting on that would let a preview run spend money the exchange holds.
+  const withdraw = functionSource(source, "withdrawExpiredOpenOrders");
+  assert.match(withdraw, /const previewOnly = DRY_RUN \|\| !hasFlag\("confirm-live"\);/);
+  assert.match(withdraw, /if \(previewOnly\) remaining\.push\(order\);/);
+  // A cancel the exchange refused leaves the order exactly where it was, collateral
+  // included -- otherwise the run would go on to spend capital that is still committed.
+  assert.match(withdraw, /failed\.push\(summary\);\n\s+remaining\.push\(order\);/);
+});
+
+test("expired orders: the market's trading state is recorded where both readers can see it", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [sync, executorSource] = await Promise.all([
+    readFile(new URL("../tools/live-account-sync.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+  ]);
+
+  // The sweep can only act on flags something put on the order. The sync writes them for
+  // the dashboard, the executor re-reads them fresh for its own decision.
+  for (const [name, source] of [["account sync", sync], ["executor", executorSource]]) {
+    assert.match(source, /marketClosed: market\.closed === true,/, `${name} records the closed flag`);
+    assert.match(source, /marketArchived: market\.archived === true,/, `${name} records the archived flag`);
+    assert.match(source, /marketAcceptingOrders: market\.acceptingOrders !== false,/,
+      `${name} records whether the book still takes orders`);
+  }
+
+  // Gamma answering with no market is a delisted market; a lookup that threw is an
+  // unknown. Collapsing the two would let a network failure cancel live orders.
+  assert.match(executorSource, /if \(!market\) return \{ \.\.\.order, marketListed: false \};/);
+});
+
+test("expired orders: what the sweep recovered is on both portfolios' run logs", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+
+  // A portfolio whose cash keeps vanishing into stranded bids is a thing to notice, and
+  // the run log is where it would be noticed.
+  //
+  // Counted, not matched: 5050 reports twice -- in the decision payload and in the
+  // batchLog counts the run-log row is rendered from -- and one `assert.match` is
+  // satisfied by either, so deleting the payload's copy passed this test unchanged.
+  const occurrences = (haystack, needle) => haystack.match(new RegExp(needle, "g"))?.length || 0;
+  const fixedEntry = functionSource(source, "runFixedEntryBatch");
+  assert.equal(occurrences(fixedEntry, "expiredOrdersWithdrawn: expiredOrderSweep\\.withdrawn\\.length,"), 2,
+    "5050 reports the sweep in its decision payload and in the counts its run-log row reads");
+  assert.equal(occurrences(fixedEntry, "expiredOrderCashReleasedUsdc: expiredOrderSweep\\.releasedUsdc,"), 2);
+  // Said on the branch that rests nothing too -- that is the branch where the missing
+  // capital would otherwise have gone unexplained.
+  assert.match(fixedEntry, /from \$\{checked\.length\} scanned\$\{expiredNote\}`;/);
+
+  const main = functionSource(source, "main");
+  assert.match(main, /expiredOrdersWithdrawn: expiredOrderSweep\.withdrawn\.length,/);
+  assert.match(main, /expiredOrderCashReleasedUsdc: expiredOrderSweep\.releasedUsdc,/);
+});
+
+test("expired orders: the dashboard marks the row by the same rule that withdraws it", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const hasEnded = new Function(`
+    ${/const EXPIRED_ORDER_GRACE_HOURS = \d+;/.exec(app)[0]}
+    ${functionSource(app, "orderMarketHasEnded")}
+    return orderMarketHasEnded;
+  `)();
+
+  // The dashboard cannot import the executor -- it is a static page -- so the rule is
+  // written twice. Agreeing on every case is the whole point of testing them together:
+  // a row marked as ended that the sweep will not withdraw, or the reverse, is worse
+  // than no marker at all.
+  const cases = [
+    { ...RESTING_BID, marketClosed: true },
+    { ...RESTING_BID, marketArchived: true },
+    { ...RESTING_BID, marketAcceptingOrders: false },
+    { ...RESTING_BID, resolutionEndDate: HOURS(14) },
+    { ...RESTING_BID, resolutionEndDate: HOURS(1) },
+    { ...RESTING_BID, resolutionEndDate: new Date(Date.now() + 13.3 * 3600000).toISOString() },
+    { ...RESTING_BID, resolutionEndDate: "not a date" },
+    { ...RESTING_BID, marketListed: false, resolutionEndDate: HOURS(1) },
+    { ...RESTING_BID, marketListed: false, resolutionEndDate: new Date(Date.now() + 3600000).toISOString() },
+    { side: "BUY", price: 0.65 },
+  ];
+  for (const order of cases) {
+    assert.equal(
+      hasEnded(order),
+      Boolean(executor.expiredOrderWithdrawalReason(order)),
+      `the dashboard and the sweep disagree about ${JSON.stringify(order)}`,
+    );
+  }
+
+  // Same grace, stated as a number in both places rather than inferred from behaviour.
+  assert.equal(
+    Number(/const EXPIRED_ORDER_GRACE_HOURS = (\d+);/.exec(app)[1]),
+    executor.EXPIRED_ORDER_GRACE_HOURS,
+  );
+
+  // And the row says so instead of reading as an order that is still in play.
+  assert.match(functionSource(app, "tradeTypeBadge"), /trade\.marketEnded/);
+  assert.match(app, /marketEnded: orderMarketHasEnded\(order\),/);
+});

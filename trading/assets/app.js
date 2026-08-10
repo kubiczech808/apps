@@ -2458,7 +2458,14 @@ function tradeHeader(tableKey, key, label) {
 }
 
 function tradeTypeBadge(trade) {
-  if (trade.mode === "LIVE_ORDER") return '<span class="order-chip">Limit order waiting</span>';
+  // "Waiting" is only true while the market can still fill it. Once the event is over the
+  // bid is holding collateral for nothing, and the next execution pass withdraws it --
+  // so say that, rather than showing it as an ordinary order still in play.
+  if (trade.mode === "LIVE_ORDER") {
+    return trade.marketEnded
+      ? '<span class="order-chip warning">Market ended &middot; withdrawing</span>'
+      : '<span class="order-chip">Limit order waiting</span>';
+  }
   if (trade.mode === "LIVE_RECONCILIATION") return '<span class="order-chip warning">Sync gap</span>';
   if (String(trade.status || "").toUpperCase() === "REDEEM_REQUIRED") return '<span class="order-chip warning">Redeem needed</span>';
   if (String(trade.status || "").toUpperCase() === "PENDING_RESOLUTION") return '<span class="order-chip warning">Pending resolution</span>';
@@ -6362,6 +6369,29 @@ function decorateLiveTradeForTable(trade) {
   };
 }
 
+// Mirrors expiredOrderWithdrawalReason() in tools/live-order-executor.mjs, which is what
+// actually withdraws these bids. It is repeated here rather than shared because the
+// dashboard is a static page with no access to the executor -- so a test asserts the two
+// read the same fields and use the same grace, which is the only way they can drift.
+//
+// A row this returns true for is not a bet that is still running. It is money reserved
+// against a fill that can no longer happen for a reason worth having, and it is why a bid
+// on a LoL match played hours earlier read as LIMIT ORDER WAITING with nothing to say
+// that the match was over.
+const EXPIRED_ORDER_GRACE_HOURS = 2;
+
+function orderMarketHasEnded(order) {
+  if (order?.marketClosed === true || order?.marketArchived === true) return true;
+  if (order?.marketAcceptingOrders === false) return true;
+  const resolutionEnd = Date.parse(order?.resolutionEndDate || "");
+  if (!Number.isFinite(resolutionEnd)) return false;
+  const hoursPast = (Date.now() - resolutionEnd) / 3600000;
+  // The scheduled kickoff is deliberately not used: a match under way is not over, and
+  // that is what `endDate` holds for sports.
+  if (order?.marketListed === false && hoursPast > 0) return true;
+  return hoursPast > EXPIRED_ORDER_GRACE_HOURS;
+}
+
 function normalizeLiveOpenOrderForTable(order) {
   const source = liveMarketMetadataForTrade(order) || evaluationByTrade(order);
   const price = Number(order.price);
@@ -6374,6 +6404,7 @@ function normalizeLiveOpenOrderForTable(order) {
     orderId: order.id || order.orderID || order.orderId || null,
     mode: "LIVE_ORDER",
     status: "LIMIT ORDER",
+    marketEnded: orderMarketHasEnded(order),
     question: source?.question || order.question || order.title || "Market title is synchronizing",
     outcome: source?.outcome || order.outcome || order.side || "-",
     slug: source?.slug || source?.eventSlug || order.slug || order.eventSlug || "",
