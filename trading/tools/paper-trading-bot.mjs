@@ -4952,6 +4952,10 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
     topRejected: compactCandidateLogRows(prevalidationFilter?.revalidatedRejectedSample, 8),
     riskBlocked: blocked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
     rotationReview: rotationReview || null,
+    // Recorded so the log says which rule decided, rather than leaving a reader to work
+    // out from a ROTATED_OPENED row whether the portfolio had the cash to just buy.
+    freeCapitalPriority: true,
+    freeCapitalCoversStake: Number(available) >= Number(stake),
     diversificationDiagnostics: diversificationDiagnostics || null,
     prevalidationFilter: compactPrevalidationFilter(prevalidationFilter),
   };
@@ -4978,6 +4982,15 @@ function findFirstOpenCandidate(portfolioState, eligible, excludedTradeId = null
 }
 
 function rotationReview(portfolioState, eligible, strategy, available, stake) {
+  // Free capital first. Rotation is what a portfolio does when it cannot fund the better
+  // candidate any other way -- selling a position to buy one it could have bought outright
+  // gives up a holding for nothing. This was missing entirely: rotation was evaluated
+  // before the capital check below it, and its only capital test was whether the stake
+  // would fit *after* an exit, which is trivially true when it already fits without one.
+  // The live executor has had the rule from the start ("use free cash for a direct
+  // candidate before touching existing orders or positions"); the paper side had not.
+  if (available >= stake) return null;
+
   const openRows = openTrades(portfolioState.trades)
     .filter((trade) => trade.status === "OPEN")
     .filter((trade) => heldHours(trade) >= ROTATION_MIN_HOLD_HOURS);

@@ -4056,3 +4056,44 @@ test("scan categories: every offered category is one the scanner can resolve", a
   // And a category with nothing stored must not read as an empty one.
   assert.match(render, /count > 0 \? `\$\{formatInteger\(count\) \|\| count\} stored` : "nothing stored yet"/);
 });
+
+test("paper rotation: free capital is spent before a position is given up", async () => {
+  // Reported on the Conservative portfolio, and it applied to all three: the log showed
+  // free cash available to open a trade, yet the run rotated -- it sold a holding to fund
+  // a candidate it could have bought outright, giving up the position for nothing.
+  //
+  // Two things made it certain rather than occasional. Rotation was evaluated before the
+  // capital check that follows it, and its only capital test was whether the stake would
+  // fit *after* an exit -- trivially true when it already fits without one.
+  const { readFile } = await import("node:fs/promises");
+  const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  const held = { id: "T1", status: "OPEN", tokenId: "1", maxLossUsdc: 5, stakeUsdc: 5 };
+  const candidate = { tokenId: "2" };
+  const review = (available, stake) => new Function(
+    "openTrades", "heldHours", "ROTATION_MIN_HOLD_HOURS", "findFirstOpenCandidate",
+    "tradeContinuationEconomics", "candidateRotationScore", "portfolioEconomics",
+    "ROTATION_MIN_SCORE_IMPROVEMENT", "ROTATION_MIN_EV_USDC_IMPROVEMENT",
+    `${functionSource(bot, "rotationReview")}\nreturn rotationReview;`,
+  )(
+    (trades) => trades, () => 48, 6, () => ({ best: candidate }),
+    // A candidate far better than the holding, so nothing but the capital rule can
+    // decide this: score 2 vs 1 and EV 0.50 vs 0.10 clear both improvement bars.
+    () => ({ score: 1, expectedValue: 0.10 }), () => 2, () => ({ expectedValueUsdc: 0.50 }),
+    0.15, 0.02,
+  )({ trades: [held] }, [candidate], {}, available, stake);
+
+  assert.equal(review(9, 5), null, "with free cash to spare the portfolio buys, it does not rotate");
+  assert.equal(review(5, 5), null, "and exactly enough is enough -- the same bar the capital check uses");
+
+  // Rotation still does its job when the candidate genuinely cannot be funded otherwise.
+  const short = review(1, 5);
+  assert.ok(short, "short of the stake, rotation is the only way to take the better candidate");
+  assert.equal(short.trade.id, "T1");
+  assert.equal(short.candidate.tokenId, "2");
+
+  // The rule the live executor has always had, now stated on the paper side too, and
+  // recorded so a ROTATED_OPENED row can be read without guessing at the cash position.
+  assert.match(bot, /if \(available >= stake\) return null;/);
+  assert.match(bot, /freeCapitalCoversStake: Number\(available\) >= Number\(stake\),/);
+});
