@@ -3062,7 +3062,10 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   }
   if (els.fixedEntryTagsLabel) els.fixedEntryTagsLabel.textContent = allowedTags.length ? allowedTags.join(", ") : "every tag";
   // These steer only the fixed-entry strategy, so they are meaningless anywhere else.
-  els.fixedEntryRows?.forEach((row) => row.toggleAttribute("hidden", !isFixedEntryMode()));
+  // Keyed on the mode this call is for, like every other line in this function. Reading
+  // state.mode instead made the 5050 rows follow the open tab rather than the portfolio
+  // being edited, so the order price could be hidden on the panel that owns it.
+  els.fixedEntryRows?.forEach((row) => row.toggleAttribute("hidden", !isFixedEntryMode(mode)));
   // The exclusion, by contrast, is a parameter of every portfolio, so its row stays.
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
   if (els.excludedTags && document.activeElement !== els.excludedTags) {
@@ -5174,8 +5177,15 @@ function livePortfolioRuleRows() {
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
+    // Both portfolios state their order price. 5050's is a setting; the live portfolio's
+    // is taken from the book, and saying so is what stops the row's absence reading as a
+    // parameter that failed to display -- which is how it was reported.
+    ["Order price", isFixedEntryMode()
+      ? `every qualifying candidate is bid at ${percent(normalizeFixedEntryPrice(config.fixedEntryPrice))}`
+      : (currentLimitOrders()
+        ? "taken from the book: rested at the best bid, not a configured price"
+        : "taken from the book: bought at the market ask, not a configured price")],
     ...(isFixedEntryMode() ? [
-      ["Order price", `every qualifying candidate is bid at ${percent(normalizeFixedEntryPrice(config.fixedEntryPrice))}`],
       ["Tag filter", normalizeMarketTagList(config.allowedMarketTags).join(", ") || "every tag"],
     ] : []),
     // Shown only when set, for the same reason as on the paper dashboards.

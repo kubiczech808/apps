@@ -2205,8 +2205,11 @@ test("5050: the order price is a portfolio setting, not only a dispatch input", 
   // short of what it could fund.
   assert.ok(!/maxOpenOrders/.test(app), "no order ceiling remains in the dashboard");
   assert.ok(!/data-fixed-entry-max-orders/.test(html));
-  // And meaningless for every other portfolio, so it only shows for 5050.
-  assert.match(app, /els\.fixedEntryRows\?\.forEach\(\(row\) => row\.toggleAttribute\("hidden", !isFixedEntryMode\(\)\)\)/);
+  // And meaningless for every other portfolio, so its control only shows for 5050. Keyed
+  // on the mode the sync call is for, not on state.mode as it was: the two differ whenever
+  // the panel is synced for a portfolio other than the open tab, and the row then followed
+  // the tab rather than the portfolio being edited.
+  assert.match(app, /els\.fixedEntryRows\?\.forEach\(\(row\) => row\.toggleAttribute\("hidden", !isFixedEntryMode\(mode\)\)\)/);
   assert.match(app, /every qualifying candidate is bid at/, "the rules card must state it");
 
   // The saved value has to actually govern the run, or the dashboard and the bids

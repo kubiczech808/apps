@@ -2521,3 +2521,40 @@ test("closed trades: the retired AI probability column is gone, not merely hidde
   // -- so nothing of substance is lost with the column.
   assert.ok(!/sortableHeader\("aiProbability"/.test(app));
 });
+
+test("portfolio parameters: both live portfolios state their order price", () => {
+  // Reported: the order price parameter is not shown in the portfolio parameters
+  // overview. On 5050 it always was -- verified by running the real row builder -- but
+  // the live portfolio's card simply had no such row, because its price is not a setting.
+  // An absent row is indistinguishable from one that failed to render, so it now says
+  // where the price comes from instead of saying nothing.
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const rowsFor = (fixedEntry, limitOrders) => new Function(
+    "state", "isFixedEntryMode", "portfolioConfigForMode", "resolutionDaysForMode",
+    "normalizeOptionalMoney", "normalizeMinimumNetYield", "normalizeMarketTagList",
+    "portfolioReturnMetricLabel", "probabilitySourceLabel", "currentEligibilityThreshold",
+    "stakeSizingRuleValue", "normalizeExecutionTrigger", "executionTriggerLabel",
+    "executionCronMinutesLabel", "normalizeFixedEntryPrice", "percent", "money",
+    "currentLimitOrders", "systemConfig",
+    `${functionSource(app, "livePortfolioRuleRows")}\nreturn livePortfolioRuleRows;`,
+  )(
+    { liveState: { portfolio: {} } },
+    () => fixedEntry,
+    () => ({ fixedEntryPrice: 0.65, allowedMarketTags: ["sports"], excludedMarketTags: [] }),
+    () => 30, (value) => value, (value) => value || 0, (value) => (Array.isArray(value) ? value : []),
+    () => "Potential p.a.", () => "Polymarket probability", () => 0.93, () => "stake",
+    (value) => value, () => "After each scraping batch", () => "x", (value) => Number(value),
+    (value) => `${(value * 100).toFixed(1)}%`, (value) => `$${value}`, () => limitOrders, () => ({}),
+  )();
+  const orderPrice = (fixedEntry, limitOrders) => (rowsFor(fixedEntry, limitOrders)
+    .find(([label]) => label === "Order price") || [])[1];
+
+  assert.equal(orderPrice(true, true), "every qualifying candidate is bid at 65.0%");
+  // The live portfolio prices off the book, and which side depends on the order mode.
+  assert.match(orderPrice(false, true), /^taken from the book: rested at the best bid/);
+  assert.match(orderPrice(false, false), /^taken from the book: bought at the market ask/);
+
+  // The tag filter stays 5050's alone -- only the order price row became universal.
+  assert.ok(rowsFor(true, true).some(([label]) => label === "Tag filter"));
+  assert.ok(!rowsFor(false, true).some(([label]) => label === "Tag filter"));
+});
