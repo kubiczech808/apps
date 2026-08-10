@@ -2400,3 +2400,62 @@ test("live candidates: the verdict says which portfolio made it", async () => {
   assert.ok(fixedEntryReturn > 0 && verdictRule > fixedEntryReturn,
     "the 5050 branch still returns before the verdict rule; only live reaches it");
 });
+
+// Reported: 5050 had a couple of positions, they are not in its closed trades, and its
+// dashboard shows no data. Measured against production: its execution state is not
+// published (404), so attribution had only the currently configured entry price to go on
+// -- and that price had been changed from 0.50 to 0.65. Every order and fill made at 0.50
+// stopped being recognised as 5050's. Its tab then showed no positions, no closed trades
+// and zero P/L, while a bid plainly resting at 0.50 sat on the live portfolio's tab.
+
+test("5050 attribution: a changed entry price does not orphan what was traded at the old one", () => {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const build = (config, execution = {}) => new Function("state", "portfolioConfigForMode", `
+    ${functionSource(app, "normalizeFixedEntryPrice")}
+    ${functionSource(app, "fixedEntryPriceSignatures")}
+    ${functionSource(app, "matchesFixedEntryPrice")}
+    return { fixedEntryPriceSignatures, matchesFixedEntryPrice };
+  `)({ live5050ExecutionState: execution }, () => config);
+
+  // Production's exact state: price moved to 0.65, nothing in the run log to fall back on.
+  const moved = build({ fixedEntryPrice: 0.65, fixedEntryPriceHistory: [0.65, 0.5] });
+  assert.deepEqual([...moved.fixedEntryPriceSignatures()].sort(), [0.5, 0.65]);
+  assert.equal(moved.matchesFixedEntryPrice(0.5), true, "a bid rested at the old price is still 5050's");
+  assert.equal(moved.matchesFixedEntryPrice(0.65), true, "and so is one at the current price");
+  // Live buys at the market against a high probability bar, so its fills stay its own.
+  assert.equal(moved.matchesFixedEntryPrice(0.95), false);
+  assert.equal(moved.matchesFixedEntryPrice(0.78), false);
+
+  // Without the history -- what production had -- the 0.50 rows are orphaned. This is the
+  // bug, kept as a fixture so the fix cannot quietly regress to it.
+  const before = build({ fixedEntryPrice: 0.65 });
+  assert.equal(before.matchesFixedEntryPrice(0.5), false);
+
+  // The run log stays the finer record where it exists, and adds to the history.
+  const withLog = build(
+    { fixedEntryPrice: 0.65, fixedEntryPriceHistory: [0.65] },
+    { runLog: [{ attempts: [{ action: "SUBMITTED", orderPrice: 0.42 }] }] },
+  );
+  assert.equal(withLog.matchesFixedEntryPrice(0.42), true);
+});
+
+test("5050 attribution: the price history is kept by the server, not the browser", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+
+  // Carried across on save from the stored config. A save replaces the whole config with
+  // whatever the dashboard holds, so a tab opened before this field existed would POST
+  // without it and drop the record of every price 5050 had traded at.
+  assert.match(api, /\$stored = load_portfolio_config\(\);/);
+  assert.match(api, /\$config\['live5050'\]\['fixedEntryPriceHistory'\] = array_merge\(/);
+  assert.match(api, /\[\$stored\['live5050'\]\['fixedEntryPrice'\] \?\? null\],/,
+    "the price being replaced is what most needs remembering");
+
+  // Normalized like a price, not like free text: a limit order cannot rest at 0 or 1.
+  assert.match(api, /function normalize_fixed_entry_price_history\(mixed \$value, float \$current\): array/);
+  assert.match(api, /if \(\$price <= 0 \|\| \$price >= 1\) \{/);
+  assert.match(api, /if \(count\(\$prices\) >= 12\) \{/, "bounded, or it grows with every tweak");
+
+  // And it is a saved portfolio setting, so a fresh install recognises its own fills too.
+  assert.match(api, /'fixedEntryPriceHistory' => \[0\.50\],/);
+});

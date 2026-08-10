@@ -742,6 +742,8 @@ function default_portfolio_config(): array
             // Sports and esports are where the short-dated, high-probability fixtures
             // this strategy rests bids against actually live. Empty means every tag.
             'allowedMarketTags' => ['sports', 'esports'],
+            // Seeded with the default so a fresh install still recognises its own fills.
+            'fixedEntryPriceHistory' => [0.50],
             'excludedCandidateTokenIds' => [],
             'excludedMarketTags' => [],
         ],
@@ -937,6 +939,37 @@ function normalize_excluded_candidate_token_ids(mixed $value): array
     return array_keys($tokens);
 }
 
+// The prices 5050 has bid at, current one first. Capped, because this only has to cover
+// rows still on the account -- a price nothing was ever bought at costs nothing to keep,
+// but an unbounded list would grow with every tweak of the setting.
+function normalize_fixed_entry_price_history(mixed $value, float $current): array
+{
+    $prices = [];
+    $add = static function ($candidate) use (&$prices): void {
+        if (!is_numeric($candidate)) {
+            return;
+        }
+        $price = round((float) $candidate, 4);
+        // A limit order cannot rest at 0 or 1, so anything outside the band is not a
+        // price this portfolio ever used.
+        if ($price <= 0 || $price >= 1) {
+            return;
+        }
+        $key = (string) $price;
+        if (!isset($prices[$key])) {
+            $prices[$key] = $price;
+        }
+    };
+    $add($current);
+    foreach (is_array($value) ? $value : [] as $candidate) {
+        $add($candidate);
+        if (count($prices) >= 12) {
+            break;
+        }
+    }
+    return array_values($prices);
+}
+
 function normalize_strategy_config(array $input, array $defaults): array
 {
     return [
@@ -990,6 +1023,15 @@ function normalize_portfolio_config(array $input): array
     $config['live5050']['fixedEntryPrice'] = ($entryPrice > 0 && $entryPrice < 1)
         ? round($entryPrice, 2)
         : (float) $defaults['live5050']['fixedEntryPrice'];
+    // Every price 5050 has rested bids at, newest first. Both live portfolios share one
+    // Polymarket wallet, so what a row was bought at is how the dashboard tells whose it
+    // is -- and with only the current price to go on, changing this setting handed every
+    // position, order and closed trade made at the old one straight to the live
+    // portfolio. Its own tab then showed no trades and no P/L at all.
+    $config['live5050']['fixedEntryPriceHistory'] = normalize_fixed_entry_price_history(
+        $fixedInput['fixedEntryPriceHistory'] ?? [],
+        (float) $config['live5050']['fixedEntryPrice']
+    );
     $stake = $fixedInput['stakePerOrderUsdc'] ?? null;
     $config['live5050']['stakePerOrderUsdc'] = is_numeric($stake) && (float) $stake > 0 ? round((float) $stake, 2) : null;
     // Absent keeps the default; an explicitly empty list means every tag, so the
@@ -1016,6 +1058,20 @@ function load_portfolio_config(): array
 
 function save_portfolio_config(array $config): array
 {
+    // A save replaces the stored config with whatever the dashboard is holding, so the
+    // price history is carried across here rather than trusted to the client: a tab
+    // opened before the field existed would POST a config without it and drop the record
+    // of every price 5050 had traded at -- which is exactly the loss this guards against.
+    $stored = load_portfolio_config();
+    if (!is_array($config['live5050'] ?? null)) {
+        $config['live5050'] = [];
+    }
+    $config['live5050']['fixedEntryPriceHistory'] = array_merge(
+        is_array($config['live5050']['fixedEntryPriceHistory'] ?? null) ? $config['live5050']['fixedEntryPriceHistory'] : [],
+        [$stored['live5050']['fixedEntryPrice'] ?? null],
+        is_array($stored['live5050']['fixedEntryPriceHistory'] ?? null) ? $stored['live5050']['fixedEntryPriceHistory'] : [],
+    );
+
     $normalized = normalize_portfolio_config($config);
     $path = portfolio_config_path();
     $dir = dirname($path);

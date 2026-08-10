@@ -19,6 +19,13 @@ const SOURCES = {
   fixedEntryExecution: `${HOST}/api.php?action=state&target=live-5050-execution`,
   config: `${HOST}/api.php?action=portfolio-config`,
 };
+// The same two files read directly rather than through api.php. When the API reports a
+// state as missing, this says whether the file is genuinely not on the hosting -- the
+// upload never landed -- or is there and something between it and the API is at fault.
+const STATIC_SOURCES = {
+  liveExecutionFile: `${HOST}/data/live-execution-state.json`,
+  fixedEntryExecutionFile: `${HOST}/data/live-5050-execution-state.json`,
+};
 
 async function fetchJson(url) {
   const response = await fetch(url, { headers: { "User-Agent": "LivePortfolioDiagnosis/1.0" } });
@@ -151,6 +158,18 @@ async function main() {
   }
   const fixedEntryConfig = portfolioConfig.live5050 || {};
   console.log(`   configured entry price: ${fixedEntryConfig.fixedEntryPrice ?? "(config unavailable)"}`);
+  console.log(`   price history: [${(fixedEntryConfig.fixedEntryPriceHistory || []).join(", ") || "none recorded"}]`);
+
+  // Whether the two execution state files are on the hosting at all. A 404 here and a 404
+  // from the API mean the upload never landed; a 200 here with a 404 from the API would
+  // mean the file is present and something else is wrong.
+  console.log(`\n== Execution state files, read directly`);
+  for (const [name, url] of Object.entries(STATIC_SOURCES)) {
+    const result = await fetchJson(url);
+    const generatedAt = result.ok ? (result.body?.generatedAt || "(no generatedAt)") : "";
+    console.log(`   ${name}: HTTP ${result.status}`
+      + (result.ok ? ` generatedAt=${generatedAt} runLog=${(result.body?.runLog || []).length}` : ` ${String(result.error).slice(0, 120)}`));
+  }
 
   for (const mode of ["live-5050", "live"]) {
     const api = await attributionFor(mode, { fixedEntryExecution: execution, config: portfolioConfig });

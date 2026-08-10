@@ -6105,7 +6105,19 @@ function fixedEntryPriceSignatures() {
     const price = Number(value);
     if (Number.isFinite(price) && price > 0 && price < 1) prices.add(Number(price.toFixed(4)));
   };
-  add(normalizeFixedEntryPrice(portfolioConfigForMode("live-5050").fixedEntryPrice));
+  const fixedEntryConfig = portfolioConfigForMode("live-5050");
+  add(normalizeFixedEntryPrice(fixedEntryConfig.fixedEntryPrice));
+  // Every price this portfolio has rested bids at, not only the one set right now.
+  // Without it, changing the setting orphaned everything bought at the old price: the
+  // rows stayed on the account but stopped being recognised as 5050's, so its positions
+  // and closed trades moved to the live portfolio's tab and its own read empty. The run
+  // log below is the finer record, but it is trimmed and -- as production showed -- may
+  // not be published at all, so this is what has to hold on its own.
+  for (const price of (Array.isArray(fixedEntryConfig.fixedEntryPriceHistory)
+    ? fixedEntryConfig.fixedEntryPriceHistory
+    : [])) {
+    add(price);
+  }
   const execution = state.live5050ExecutionState || {};
   for (const row of [execution, ...(Array.isArray(execution.runLog) ? execution.runLog : [])]) {
     add(row?.fixedEntry?.entryPrice);
