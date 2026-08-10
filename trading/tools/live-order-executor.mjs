@@ -3593,12 +3593,25 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
       replaceResponse: null,
     });
 
-    if (maxStakeBreached) {
-      review.reason = `open order notional ${lockedNotional.toFixed(4)} USDC exceeds max stake ${maxNotional.toFixed(4)} USDC; kept because no replacement can be submitted atomically in this review`;
-    } else if (!sourceEvaluation) {
-      review.reason = ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS
+    // An order larger than the portfolio would now stake is the one that most needs
+    // reviewing, not the one to exempt from it. The breach used to end the review right
+    // here, so a portfolio whose value had fallen since the order was placed could never
+    // compare it against anything: every order read "exceeds max stake; kept because no
+    // replacement can be submitted atomically", no evaluation was attempted at all, and
+    // the capital stayed locked while better-ranked candidates sat in the shortlist.
+    //
+    // Nothing about the breach actually blocks a replacement. Cancelling releases the
+    // whole oversized notional, and the replacement is revalidated against the current
+    // max stake, so it comes back correctly sized by construction. The breach is carried
+    // on the review instead of ending it, so it still shows in the run log.
+    review.maxStakeBreached = maxStakeBreached;
+    const breachNote = maxStakeBreached
+      ? ` (this order's ${lockedNotional.toFixed(4)} USDC is above the current max stake of ${maxNotional.toFixed(4)} USDC)`
+      : "";
+    if (!sourceEvaluation) {
+      review.reason = (ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS
         ? "no current evaluation links to this open order and the order is stale; kept because no replacement can be submitted atomically in this review"
-        : "no current evaluation links to this open order yet; kept waiting for a replacement decision";
+        : "no current evaluation links to this open order yet; kept waiting for a replacement decision") + breachNote;
     } else {
       try {
         const revalidated = await revalidateEvaluation(
@@ -3663,7 +3676,7 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
         review.priceDelta = Number(priceDelta.toFixed(4));
 
         if (revalidated.status !== "ELIGIBLE") {
-          review.reason = `current revalidation no longer satisfies live rules: ${(revalidated.rejectReasons || []).join("; ") || "not eligible"}; existing order kept because no replacement can be submitted atomically in this review`;
+          review.reason = `current revalidation no longer satisfies live rules: ${(revalidated.rejectReasons || []).join("; ") || "not eligible"}; existing order kept because no replacement can be submitted atomically in this review${breachNote}`;
         } else if (betterCandidate && betterCandidateNeedsReleasedCapital) {
           review.action = "CANCEL_FOR_BETTER_CANDIDATE";
           // Keep the freshly validated order payload. After the cancellation
@@ -3673,10 +3686,10 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
           review.reason = `${comparison.metricLabel} priority supports replacement (${comparison.metricLabel} ${selectionMetricDisplay(comparison, comparison.currentMetric)} -> ${selectionMetricDisplay(comparison, comparison.replacementMetric)}, ${comparison.metricDelta >= 0 ? "+" : ""}${selectionMetricDisplay(comparison, comparison.metricDelta)}); expected value ${Number(comparison.currentExpectedValue).toFixed(4)} -> ${Number(comparison.replacementExpectedValue).toFixed(4)} USDC, so the replacement needs this order's locked capital`;
         } else if (betterCandidate) {
           review.reason = betterCandidateCost != null
-            ? `${comparison.metricLabel} priority supports replacement, but ${number(cash, 0).toFixed(4)} USDC free cash already covers its ${betterCandidateCost.toFixed(4)} USDC cost; keep this independent order open (${comparison.metricLabel} ${selectionMetricDisplay(comparison, comparison.currentMetric)} -> ${selectionMetricDisplay(comparison, comparison.replacementMetric)})`
-            : `${comparison.metricLabel} priority supports replacement, but the candidate has no current executable order cost; keep this independent order open`;
+            ? `${comparison.metricLabel} priority supports replacement, but ${number(cash, 0).toFixed(4)} USDC free cash already covers its ${betterCandidateCost.toFixed(4)} USDC cost; keep this independent order open (${comparison.metricLabel} ${selectionMetricDisplay(comparison, comparison.currentMetric)} -> ${selectionMetricDisplay(comparison, comparison.replacementMetric)})${breachNote}`
+            : `${comparison.metricLabel} priority supports replacement, but the candidate has no current executable order cost; keep this independent order open${breachNote}`;
         } else if (comparison && !comparison.replacementRanksAhead && comparison.expectedValueDelta > OPEN_ORDER_BETTER_CANDIDATE_EV_USDC) {
-          review.reason = `a candidate has higher absolute expected value (${Number(comparison.currentExpectedValue).toFixed(4)} -> ${Number(comparison.replacementExpectedValue).toFixed(4)} USDC) but ranks lower by ${comparison.metricLabel} (${selectionMetricDisplay(comparison, comparison.currentMetric)} vs ${selectionMetricDisplay(comparison, comparison.replacementMetric)}); keep the current order`;
+          review.reason = `a candidate has higher absolute expected value (${Number(comparison.currentExpectedValue).toFixed(4)} -> ${Number(comparison.replacementExpectedValue).toFixed(4)} USDC) but ranks lower by ${comparison.metricLabel} (${selectionMetricDisplay(comparison, comparison.currentMetric)} vs ${selectionMetricDisplay(comparison, comparison.replacementMetric)}); keep the current order${breachNote}`;
         } else if (ageHours >= OPEN_ORDER_REVIEW_AFTER_HOURS && Math.abs(priceDelta) >= OPEN_ORDER_REPRICE_THRESHOLD) {
           review.action = "REPLACE";
           review.reason = priceDelta > 0
@@ -3684,13 +3697,13 @@ async function reviewOpenOrders({ liveState, evaluationByToken, eligible, rotati
             : `current post-only level is lower by ${(Math.abs(priceDelta) * 100).toFixed(1)} pts; repost at updated economics`;
           review.replacementCandidate = revalidated;
         } else if (ageHours >= OPEN_ORDER_CANCEL_AFTER_HOURS) {
-          review.reason = `order has waited ${ageHours.toFixed(1)}h without fill; kept because cancelling without an immediate replacement is not allowed`;
+          review.reason = `order has waited ${ageHours.toFixed(1)}h without fill; kept because cancelling without an immediate replacement is not allowed${breachNote}`;
         } else {
           review.action = "KEEP_WAITING";
-          review.reason = `still eligible and price gap ${Math.abs(priceDelta * 100).toFixed(1)} pts is below reprice threshold`;
+          review.reason = `still eligible and price gap ${Math.abs(priceDelta * 100).toFixed(1)} pts is below reprice threshold${breachNote}`;
         }
       } catch (error) {
-        review.reason = `open order revalidation failed: ${error?.message || String(error)}; existing order kept because no replacement can be submitted atomically in this review`;
+        review.reason = `open order revalidation failed: ${error?.message || String(error)}; existing order kept because no replacement can be submitted atomically in this review${breachNote}`;
       }
     }
 

@@ -2917,3 +2917,52 @@ test("run log history: a 5050 run that produced no state fails instead of publis
   assert.match(publisher, /unmet = required\.intersection\(missing\)/);
   assert.match(publisher, /raise SystemExit\(f"required file\(s\) not generated: /);
 });
+
+// Reported with screenshots of the live portfolio: three orders resting at +3,389.6%,
+// +5,835.6% and +7,440.2% win p.a., a shortlist whose best candidates read +4,982.0% and
+// +4,976.9% potential p.a., $0.41 free against $4.60 required -- and no rotation. The run
+// log said why: every open order read "open order notional 3.2500 USDC exceeds max stake
+// 2.1881 USDC; kept because no replacement can be submitted atomically in this review".
+//
+// Those are the real figures. The portfolio's value had fallen since the orders were
+// placed, so its max stake had shrunk below the size of orders already on the book, and
+// the breach ended the review before any comparison ran. That is a trap with no way out:
+// the capital can only be released by a review, and the review refused to look.
+test("open order review: an order above the current max stake is still evaluated", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const review = functionSource(source, "reviewOpenOrders");
+  const code = review.split("\n").filter((line) => !line.trim().startsWith("//")).join("\n");
+
+  // The branch that ended the review is gone: the breach no longer decides anything.
+  assert.doesNotMatch(code, /if \(maxStakeBreached\) \{/,
+    "a breach must not short-circuit the review before any candidate is compared");
+
+  // The evaluation now runs for these orders like any other, so a better-ranked
+  // candidate can take the capital.
+  assert.match(code, /if \(!sourceEvaluation\) \{/);
+  assert.match(code, /const revalidated = await revalidateEvaluation\(/);
+  assert.match(code, /review\.action = "CANCEL_FOR_BETTER_CANDIDATE";/);
+
+  // Cancelling releases the whole oversized notional, and the replacement is revalidated
+  // against the current max stake -- so it comes back correctly sized by construction.
+  assert.match(code, /const effectiveCash = number\(cash, 0\) \+ number\(lockedNotional, 0\);/);
+
+  // And the breach still reaches the run log, on the review and in every reason that
+  // ends with the order kept -- it is why the order is oversized, just not a verdict.
+  assert.match(code, /review\.maxStakeBreached = maxStakeBreached;/);
+  assert.match(code, /const breachNote = maxStakeBreached/);
+  // Checked one assignment at a time, so a new keep-branch that forgets the note fails
+  // here instead of quietly dropping it. Counting occurrences could not do this: one
+  // assignment is a ternary carrying the note twice, which made the totals disagree.
+  // The only two reasons allowed to omit it are the ones that do not keep the order.
+  const statements = code.split("review.reason = ").slice(1)
+    .map((chunk) => chunk.slice(0, chunk.indexOf(";\n")));
+  const withoutNote = statements.filter((statement) => !statement.includes("breachNote"));
+  assert.equal(withoutNote.length, 2,
+    `only the two reasons that replace the order may omit the breach, found ${withoutNote.length}`);
+  for (const statement of withoutNote) {
+    assert.match(statement, /priority supports replacement \(|market moved away|current post-only level is lower/,
+      "a reason that keeps the order must say the order is oversized");
+  }
+});
