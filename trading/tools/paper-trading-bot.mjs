@@ -7671,6 +7671,14 @@ function summarizeScrapedSimulationRows(rows) {
   const annualizedRoi = roi == null || !Number.isFinite(avgDays)
     ? null
     : annualizeReturn(roi, avgDays);
+  // A total P/L grows with the number of observations, so it cannot compare two
+  // parameter rules fairly. This is the annualized net dollar result of one fixed
+  // simulation slot (5 USDC stake), based on the rule's average realized P/L and
+  // average time between entry and resolution.
+  const pnlPerTradeUsdc = resolved.length ? pnl / resolved.length : null;
+  const annualizedPnlPerTradeUsdc = pnlPerTradeUsdc == null || !Number.isFinite(avgDays)
+    ? null
+    : annualizeReturn(pnlPerTradeUsdc, avgDays);
   const resolutionTimes = resolved
     .map((row) => Date.parse(row.item?.resolvedAt || row.item?.endDate || ""))
     .filter(Number.isFinite);
@@ -7685,7 +7693,10 @@ function summarizeScrapedSimulationRows(rows) {
     pnlUsdc: Number(pnl.toFixed(4)),
     roi: roi == null ? null : Number(roi.toFixed(4)),
     annualizedRoi: annualizedRoi == null ? null : Number(annualizedRoi.toFixed(4)),
-    pnlPerTradeUsdc: resolved.length ? Number((pnl / resolved.length).toFixed(4)) : null,
+    pnlPerTradeUsdc: pnlPerTradeUsdc == null ? null : Number(pnlPerTradeUsdc.toFixed(4)),
+    annualizedPnlPerTradeUsdc: annualizedPnlPerTradeUsdc == null
+      ? null
+      : Number(annualizedPnlPerTradeUsdc.toFixed(4)),
     winRate: resolved.length ? Number((wins / resolved.length).toFixed(4)) : null,
     avgProbability: avgProbability == null ? null : Number(avgProbability.toFixed(4)),
     avgVolumeUsdc: avgVolumeUsdc == null ? null : Number(avgVolumeUsdc.toFixed(2)),

@@ -1480,13 +1480,18 @@ test("taxonomy performance: real Polymarket categories and tags stay separate", 
   const resolvedGroup = [...report.categorySummaries, ...report.tagSummaries]
     .find((row) => row.resolved > 0);
   assert.ok(resolvedGroup, "the fixture must resolve at least one trade");
-  for (const field of ["pnlPerTradeUsdc", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "lastResolvedAt"]) {
+  for (const field of ["pnlPerTradeUsdc", "annualizedPnlPerTradeUsdc", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "lastResolvedAt"]) {
     assert.ok(resolvedGroup[field] != null, `${field} must be reported`);
   }
   // ROI p.a. must be ROI over the group's own horizon, not over a default.
   assert.ok(
     Math.abs(resolvedGroup.annualizedRoi - resolvedGroup.roi * (365 / resolvedGroup.avgDaysToResolution)) < 0.01,
     "ROI p.a. must annualize over the measured horizon",
+  );
+  assert.ok(
+    Math.abs(resolvedGroup.annualizedPnlPerTradeUsdc
+      - resolvedGroup.pnlPerTradeUsdc * (365 / resolvedGroup.avgDaysToResolution)) < 0.01,
+    "P/L p.a. must annualize the average realized P/L per fixed simulation trade",
   );
 });
 
@@ -1587,6 +1592,8 @@ test("parameter combinations: every distinct rule uses the full resolved sample 
   state.marketObservations = state.marketObservations.map((row, index) => ({
     ...row,
     firstVolumeUsdc: 1000 + index * 100,
+    firstDaysToResolution: 4,
+    daysToResolution: 4,
   }));
   const pendingSource = state.marketObservations.find((row) => {
     const price = Number(row.firstMarketProbability ?? row.lastLiveMarketProbability ?? row.marketProbability);
@@ -1620,9 +1627,13 @@ test("parameter combinations: every distinct rule uses the full resolved sample 
   assert.equal(widest.pending, 0, "a parameter combination must never include pending opportunities");
   assert.ok(Number.isFinite(widest.avgVolumeUsdc) && widest.avgVolumeUsdc > 0,
     "the rule must expose the average first-scraped traded volume");
+  const annualizedRule = report.parameterSummaries.find((row) => Number.isFinite(row.annualizedPnlPerTradeUsdc));
+  assert.ok(annualizedRule,
+    "a rule with a measured resolution horizon must expose comparable annualized P/L per fixed simulation trade");
 
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
-  assert.match(app, /key: "trades",\s*direction: "desc"/);
+  assert.match(app, /key: "annualizedPnlPerTradeUsdc",\s*direction: "desc"/);
+  assert.match(app, /calculationHeader\("annualizedPnlPerTradeUsdc", "P\/L p\.a\."\)/);
   assert.match(app, /calculationHeader\("avgVolumeUsdc", "Avg volume"\)/);
   assert.doesNotMatch(app, /calculationHeader\("resolved", "Resolved"\)/);
   assert.doesNotMatch(app, /calculationHeader\("minLiquidityUsdc", "Min liquidity"\)/);
