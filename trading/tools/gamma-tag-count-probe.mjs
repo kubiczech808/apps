@@ -87,6 +87,27 @@ async function main() {
       + (total == null ? ` (no total in ${shapeOf(result.parsed)})` : ` total=${total}`));
   }
   console.log(`   wall clock for the whole picker: ${wall}ms -- the budget is 2000ms`);
+
+  // The raw total counts every open event in the category, and the scheduled scan only
+  // takes those above its liquidity floor and inside its window. A picker that showed the
+  // raw number would report thousands of "missing" sports events the scan will never
+  // fetch by design. So measure the total the scan's own filters would see -- that is the
+  // only number a "not scraped yet" label can honestly be built from.
+  const liquidityMin = 40000;
+  const endDateMin = new Date(Date.now() - 6 * 3600000).toISOString();
+  const endDateMax = new Date(Date.now() + 2 * 86400000).toISOString();
+  const filter = `&liquidity_min=${liquidityMin}&end_date_min=${encodeURIComponent(endDateMin)}&end_date_max=${encodeURIComponent(endDateMax)}`;
+  console.log(`\n== Same categories under the scheduled scan's own filters`);
+  console.log(`   liquidity_min=${liquidityMin}, end_date within -6h..+2d`);
+  const filteredStarted = Date.now();
+  const filtered = await Promise.all(CATEGORIES.map((category) =>
+    timed(category.slug, `${GAMMA}/events/pagination?tag_id=${category.id}&closed=false&limit=1${filter}`)));
+  const filteredWall = Date.now() - filteredStarted;
+  for (const result of filtered) {
+    const total = result.parsed?.pagination?.totalResults ?? null;
+    console.log(`   ${result.label}: ${total == null ? `no total (${shapeOf(result.parsed)})` : total} in ${result.elapsed}ms`);
+  }
+  console.log(`   wall clock: ${filteredWall}ms`);
 }
 
 const invokedDirectly = process.argv[1]
