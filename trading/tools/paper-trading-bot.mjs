@@ -274,7 +274,6 @@ const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
 const REPORT_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
 const SCRAPED_SIMULATION_MAX_DAYS = [1, 3, 7, 14, 30];
-const SCRAPED_SIMULATION_LIQUIDITY_FLOORS = [0, 10000, 40000, 100000];
 // Each scraped market contributes to every real Polymarket category and tag it
 // carries. The two taxonomies stay separate; risk groups and inferred question tags
 // are execution metadata, not Polymarket categories. Both bounds keep the calculation
@@ -1195,7 +1194,10 @@ function firstObservationMetadata(item = {}) {
     item.marketPrice,
   ) ?? Number(item.firstMarketProbability ?? item.marketProbability ?? item.marketPrice);
   const firstLiquidity = Number(item.firstLiquidity ?? item.liquidity);
-  const firstVolume = Number(item.firstVolume24hr ?? item.volume24hr);
+  const firstVolumeUsdc = Number(
+    item.firstVolumeUsdc ?? item.volumeUsdc ?? item.firstVolume24hr ?? item.volume24hr,
+  );
+  const firstVolume24hr = Number(item.firstVolume24hr ?? item.volume24hr);
   const firstDays = Number(item.firstDaysToResolution ?? item.daysToResolution);
   const firstFeeRate = Number(item.firstFeeRate ?? item.feeRate);
   const currentTags = Array.isArray(item.tags) ? item.tags.filter(Boolean).map(String) : [];
@@ -1209,7 +1211,8 @@ function firstObservationMetadata(item = {}) {
     firstObservedAt,
     firstMarketProbability: Number.isFinite(firstProbability) ? Number(firstProbability.toFixed(4)) : null,
     firstLiquidity: Number.isFinite(firstLiquidity) ? Number(firstLiquidity.toFixed(2)) : null,
-    firstVolume24hr: Number.isFinite(firstVolume) ? Number(firstVolume.toFixed(2)) : null,
+    firstVolumeUsdc: Number.isFinite(firstVolumeUsdc) ? Number(firstVolumeUsdc.toFixed(2)) : null,
+    firstVolume24hr: Number.isFinite(firstVolume24hr) ? Number(firstVolume24hr.toFixed(2)) : null,
     firstDaysToResolution: Number.isFinite(firstDays) ? Number(firstDays.toFixed(2)) : null,
     firstFeeRate: Number.isFinite(firstFeeRate) ? Number(firstFeeRate.toFixed(8)) : null,
     firstOutcome: item.firstOutcome || item.outcome || null,
@@ -6609,6 +6612,7 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     firstObservedAt: observedAt,
     firstMarketProbability: Number(probability.toFixed(4)),
     firstLiquidity: Number(Number(market.liquidity || 0).toFixed(2)),
+    firstVolumeUsdc: Number(marketVolumeUsdc(market).toFixed(2)),
     firstVolume24hr: Number(Number(market.volume24hr || 0).toFixed(2)),
     firstDaysToResolution: days == null ? null : Number(days.toFixed(2)),
     firstFeeRate: fees.feeRate,
@@ -7590,6 +7594,25 @@ function scrapedSimulationTags(item) {
   return scrapedSimulationTaxonomy(item, "firstPolymarketTags", "polymarketTags");
 }
 
+// The parameter report measures the traded volume that was available when the
+// opportunity was first scraped. It deliberately falls back for older rows that
+// predate firstVolumeUsdc, but never treats order-book liquidity as a volume value
+// unless that is the only historical figure retained.
+function scrapedSimulationVolumeUsdc(item = {}) {
+  for (const candidate of [
+    item.firstVolumeUsdc,
+    item.volumeUsdc,
+    item.firstVolume24hr,
+    item.volume24hr,
+    item.firstLiquidity,
+    item.liquidity,
+  ]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric >= 0) return numeric;
+  }
+  return null;
+}
+
 function scrapedSimulationOutcome(item) {
   const value = finalOutcomePriceValue(item?.finalOutcomePrice);
   return value == null ? null : (value >= 0.5 ? 1 : 0);
@@ -7618,7 +7641,7 @@ function scrapedSimulationTrade(item) {
     tags: scrapedSimulationTags(item),
     marketType: reportMarketType(item),
     days: scrapedSimulationDays(item),
-    liquidity: Number(item.firstLiquidity ?? item.liquidity),
+    volumeUsdc: scrapedSimulationVolumeUsdc(item),
     firstObservedAt: item.firstObservedAt || item.observedAt || null,
   };
 }
@@ -7630,7 +7653,7 @@ function summarizeScrapedSimulationRows(rows) {
   const deployedCost = rows.reduce((sum, row) => sum + row.total, 0);
   const pnl = resolved.reduce((sum, row) => sum + Number(row.pnl || 0), 0);
   const avgProbability = average(rows.map((row) => row.entry));
-  const avgLiquidity = average(rows.map((row) => row.liquidity).filter(Number.isFinite));
+  const avgVolumeUsdc = average(rows.map((row) => row.volumeUsdc).filter(Number.isFinite));
   const avgDays = average(rows.map((row) => row.days).filter(Number.isFinite));
   // Net yield per trade at the simulated stake: what one win pays on what it cost.
   const avgNetYield = average(rows
@@ -7665,7 +7688,7 @@ function summarizeScrapedSimulationRows(rows) {
     pnlPerTradeUsdc: resolved.length ? Number((pnl / resolved.length).toFixed(4)) : null,
     winRate: resolved.length ? Number((wins / resolved.length).toFixed(4)) : null,
     avgProbability: avgProbability == null ? null : Number(avgProbability.toFixed(4)),
-    avgLiquidity: avgLiquidity == null ? null : Number(avgLiquidity.toFixed(2)),
+    avgVolumeUsdc: avgVolumeUsdc == null ? null : Number(avgVolumeUsdc.toFixed(2)),
     avgDaysToResolution: avgDays == null ? null : Number(avgDays.toFixed(3)),
     avgNetYield: avgNetYield == null ? null : Number(avgNetYield.toFixed(4)),
     // A category that has not resolved anything for weeks should be visibly stale
@@ -7679,30 +7702,18 @@ function scrapedSimulationParameterRows(trades) {
   for (const marketType of ["all", "binary", "multi"]) {
     for (const threshold of REPORT_THRESHOLDS) {
       for (const maxResolutionDays of SCRAPED_SIMULATION_MAX_DAYS) {
-        for (const minLiquidityUsdc of SCRAPED_SIMULATION_LIQUIDITY_FLOORS) {
-          const selected = trades.filter((trade) => (
-            (marketType === "all" || trade.marketType === marketType)
-            && trade.entry >= threshold
-            && (trade.days == null || trade.days <= maxResolutionDays)
-            // An unrecorded liquidity cannot satisfy a real floor, but the no-floor row
-            // is labelled "All" and must mean it. Requiring a finite value there dropped
-            // every opportunity whose liquidity was never stored out of all 360
-            // combinations at once, which is why this table reported far fewer resolved
-            // opportunities than the resolved list itself. Unknown horizons are already
-            // treated this way on the line above.
-            && (minLiquidityUsdc <= 0
-              ? true
-              : Number.isFinite(trade.liquidity) && trade.liquidity >= minLiquidityUsdc)
-          ));
-          rows.push({
-            probabilitySource: "polymarket",
-            marketType,
-            threshold,
-            maxResolutionDays,
-            minLiquidityUsdc,
-            ...summarizeScrapedSimulationRows(selected),
-          });
-        }
+        const selected = trades.filter((trade) => (
+          (marketType === "all" || trade.marketType === marketType)
+          && trade.entry >= threshold
+          && (trade.days == null || trade.days <= maxResolutionDays)
+        ));
+        rows.push({
+          probabilitySource: "polymarket",
+          marketType,
+          threshold,
+          maxResolutionDays,
+          ...summarizeScrapedSimulationRows(selected),
+        });
       }
     }
   }

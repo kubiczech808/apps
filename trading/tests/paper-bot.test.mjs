@@ -1575,36 +1575,35 @@ test("parameter combinations: a resolved row keeps its scrape-time entry price",
   assert.equal(bot.buildCalculationReport(neverLive).sampleSize, 0);
 });
 
-test("parameter combinations: the no-floor liquidity row really means all", async () => {
-  // The dominant reason this table reported far fewer resolved opportunities than the
-  // resolved list: every combination required a finite liquidity, including the row the
-  // UI labels "All" (floor 0). An opportunity whose liquidity was never stored was
-  // therefore dropped from all 360 combinations at once. Unknown horizons were already
-  // tolerated, so the two filters disagreed on how to treat missing data.
+test("parameter combinations: every distinct rule uses the full resolved sample and reports average volume", async () => {
+  // A liquidity-floor loop made four copies of each probability/horizon rule. It did
+  // not make the report more informative, and its ROI-first UI slice hid most of the
+  // high-evidence rows. Volume is now a descriptive aggregate, not a synthetic fourth
+  // dimension of every parameter combination.
   const { readFile } = await import("node:fs/promises");
   const state = bot.normalizeState(
     JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
   );
+  state.marketObservations = state.marketObservations.map((row, index) => ({
+    ...row,
+    firstVolumeUsdc: 1000 + index * 100,
+  }));
   const report = bot.buildCalculationReport(state);
-  const noFloor = report.parameterSummaries.filter((row) => row.marketType === "all"
-    && row.minLiquidityUsdc === 0
-    && row.threshold === 0.5);
-  assert.ok(noFloor.length, "the fixture must produce a no-floor row");
-  assert.ok(
-    noFloor.some((row) => row.trades === report.sampleSize),
-    `the widest no-floor row must hold every simulated opportunity (${report.sampleSize}), got ${JSON.stringify(noFloor.map((r) => r.trades))}`,
-  );
-  assert.ok(
-    noFloor.some((row) => row.resolved === report.resolvedSampleSize),
-    `and every resolved one (${report.resolvedSampleSize}), got ${JSON.stringify(noFloor.map((r) => r.resolved))}`,
-  );
-
-  // A real floor still excludes an unknown liquidity: it cannot be shown to clear it.
-  const withFloor = report.parameterSummaries.find((row) => row.marketType === "all"
-    && row.minLiquidityUsdc === 100000
+  assert.equal(report.parameterSummaries.length, 90, "3 market types x 6 thresholds x 5 horizons");
+  assert.ok(report.parameterSummaries.every((row) => !Object.hasOwn(row, "minLiquidityUsdc")));
+  const widest = report.parameterSummaries.find((row) => row.marketType === "all"
     && row.threshold === 0.5
     && row.maxResolutionDays === 30);
-  assert.equal(withFloor.trades, 0, "an unrecorded liquidity must not pass a real floor");
+  assert.equal(widest.trades, report.sampleSize, "the broadest rule must retain every simulated trade");
+  assert.equal(widest.resolved, report.resolvedSampleSize, "and every resolved observation");
+  assert.ok(Number.isFinite(widest.avgVolumeUsdc) && widest.avgVolumeUsdc > 0,
+    "the rule must expose the average first-scraped traded volume");
+
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  assert.match(app, /key: "resolved",\s*direction: "desc"/);
+  assert.match(app, /calculationHeader\("avgVolumeUsdc", "Avg volume"\)/);
+  assert.doesNotMatch(app, /calculationHeader\("minLiquidityUsdc", "Min liquidity"\)/);
+  assert.doesNotMatch(app, /rows\.slice\(0, 80\)/);
 });
 
 test("taxonomy performance: an unknown horizon reports no p.a. at all", async () => {
@@ -1659,7 +1658,7 @@ test("taxonomy performance: categories and tags render as separately sorted tabl
   // Every column in both tables is sortable.
   const sorted = [...app.matchAll(/taxonomyHeader\(kind, "([a-zA-Z]+)"/g)].map((match) => match[1]);
   for (const key of ["label", "trades", "resolved", "accuracy", "pnl", "pnlPerTradeUsdc",
-    "roi", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "avgProbability", "avgLiquidity", "lastResolvedAt"]) {
+    "roi", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "avgProbability", "avgVolumeUsdc", "lastResolvedAt"]) {
     assert.ok(sorted.includes(key), `${key} column must be sortable`);
   }
   // The header count must match the colspan on the empty row, or the layout breaks.

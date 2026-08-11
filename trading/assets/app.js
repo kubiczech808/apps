@@ -85,7 +85,7 @@ const state = {
   calculationSource: "all",
   calculationMarket: "all",
   calculationSort: {
-    key: "roi",
+    key: "resolved",
     direction: "desc",
   },
   // Categories and tags are separate Gamma taxonomies and each table keeps its own
@@ -8381,19 +8381,18 @@ function calculationSortValue(row, key) {
   if (key === "marketType") return calculationMarketLabel(row.marketType).toLowerCase();
   if (key === "threshold") return numeric(row.threshold);
   if (key === "maxResolutionDays") return numeric(row.maxResolutionDays);
-  if (key === "minLiquidityUsdc") return numeric(row.minLiquidityUsdc);
   if (key === "trades") return numeric(row.trades ?? 0);
   if (key === "resolved") return numeric(row.resolved ?? 0);
   if (key === "accuracy") return numeric(row.winRate);
   if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
   if (key === "roi") return numeric(row.roi);
   if (key === "avgProbability") return numeric(row.avgProbability);
-  if (key === "avgLiquidity") return numeric(row.avgLiquidity);
+  if (key === "avgVolumeUsdc") return numeric(row.avgVolumeUsdc ?? row.avgLiquidity);
   return "";
 }
 
 function sortedCalculationRows(rows) {
-  const sort = state.calculationSort || { key: "roi", direction: "desc" };
+  const sort = state.calculationSort || { key: "resolved", direction: "desc" };
   const direction = sort.direction === "asc" ? 1 : -1;
   return [...rows].sort((a, b) => {
     const aValue = calculationSortValue(a, sort.key);
@@ -8497,7 +8496,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
               ${taxonomyHeader(kind, "avgNetYield", "Avg net yield", "Average payout of a winning trade measured against what it cost, after fees.")}
               ${taxonomyHeader(kind, "avgDaysToResolution", "Avg days", "Average time to resolution across the group.")}
               ${taxonomyHeader(kind, "avgProbability", "Avg entry")}
-              ${taxonomyHeader(kind, "avgLiquidity", "Avg liquidity")}
+              ${taxonomyHeader(kind, "avgVolumeUsdc", "Avg volume")}
               ${taxonomyHeader(kind, "lastResolvedAt", "Last resolved", "Most recent resolution in this group.")}
             </tr>
           </thead>
@@ -8515,7 +8514,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
                 <td data-label="Avg net yield">${row.avgNetYield == null ? "-" : percent(Number(row.avgNetYield))}</td>
                 <td data-label="Avg days">${row.avgDaysToResolution == null ? "-" : compactDays(Number(row.avgDaysToResolution))}</td>
                 <td data-label="Avg entry">${probability(Number(row.avgProbability))}</td>
-                <td data-label="Avg liquidity">${Number.isFinite(Number(row.avgLiquidity)) ? money(Number(row.avgLiquidity)) : "-"}</td>
+                <td data-label="Avg volume">${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
                 <td data-label="Last resolved">${escapeHtml(row.lastResolvedAt ? formatDate(row.lastResolvedAt) : "-")}</td>
               </tr>
             `).join("") : `<tr><td colspan="13">No ${kind} statistics are available yet.</td></tr>`}
@@ -8555,12 +8554,12 @@ function renderCalculationReport() {
       <div>
         <span class="label">Simulation scope</span>
         <strong>${money(Number(report.stakeUsdc || 0))} fixed stake</strong>
-        <span>first Polymarket probability and liquidity / ${binary} resolved Yes/No / ${multi} multi-outcome / market entry with fees</span>
+        <span>first Polymarket probability and traded volume / ${binary} resolved Yes/No / ${multi} multi-outcome / market entry with fees</span>
       </div>
     </div>
     <div class="calculation-section">
       <h3>Best parameter combinations</h3>
-      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests threshold, resolution horizon and minimum liquidity directly on every scraped opportunity.</p>
+      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon on every scraped opportunity. The table opens with the largest resolved samples first; click ROI to inspect return ranking.</p>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
@@ -8568,32 +8567,30 @@ function renderCalculationReport() {
               ${calculationHeader("threshold", "Threshold")}
               ${calculationHeader("marketType", "Market type")}
               ${calculationHeader("maxResolutionDays", "Max days")}
-              ${calculationHeader("minLiquidityUsdc", "Min liquidity")}
               ${calculationHeader("trades", "Trades")}
               ${calculationHeader("resolved", "Resolved")}
               ${calculationHeader("accuracy", "Accuracy")}
               ${calculationHeader("pnl", "P/L")}
               ${calculationHeader("roi", "ROI")}
               ${calculationHeader("avgProbability", "Avg entry")}
-              ${calculationHeader("avgLiquidity", "Avg liquidity")}
+              ${calculationHeader("avgVolumeUsdc", "Avg volume")}
             </tr>
           </thead>
           <tbody>
-            ${rows.length ? rows.slice(0, 80).map((row) => `
+            ${rows.length ? rows.map((row) => `
               <tr>
                 <td>${probability(Number(row.threshold))}</td>
                 <td>${escapeHtml(calculationMarketLabel(row.marketType))}</td>
                 <td>${Number(row.maxResolutionDays || 0)} d</td>
-                <td>${row.minLiquidityUsdc > 0 ? money(Number(row.minLiquidityUsdc)) : "All"}</td>
                 <td>${Number(row.trades || 0)}</td>
                 <td>${Number(row.resolved || 0)} / ${Number(row.pending || 0)} pending</td>
                 <td>${Number(row.resolved || 0) ? `${Number(row.wins || 0)} / ${Number(row.resolved || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
                 <td>${probability(Number(row.avgProbability))}</td>
-                <td>${Number.isFinite(Number(row.avgLiquidity)) ? money(Number(row.avgLiquidity)) : "-"}</td>
+                <td>${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
               </tr>
-            `).join("") : '<tr><td colspan="11">No scraped opportunity simulation is available yet.</td></tr>'}
+            `).join("") : '<tr><td colspan="10">No scraped opportunity simulation is available yet.</td></tr>'}
           </tbody>
         </table>
       </div>
