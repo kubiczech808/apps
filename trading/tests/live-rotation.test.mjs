@@ -3272,3 +3272,52 @@ test("rotation entry: crossing the spread is charged, not assumed away", () => {
   const workflow = readFileSync(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
   assert.match(workflow, /LIVE_ROTATION_COMPLETION: "true"/);
 });
+
+// "The counts of our own events in brackets I do not need. Rather the counts of what is
+// not scraped on Polymarket, if the load is under 2 seconds in the UI. Otherwise nothing."
+//
+// Measured against Gamma before building anything: /events/pagination reports
+// pagination.totalResults without returning the rows, and all fourteen categories in
+// parallel cost 561ms raw and 303ms under the scan's own filters -- inside the budget.
+// The filters matter: sports has 12,312 open events and 191 that clear the scan's
+// liquidity floor inside its window, so a raw total would advertise twelve thousand
+// markets the scan will never fetch.
+test("tag picker: the bracket is a live Polymarket count, on a budget, or nothing", () => {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // The stored count is gone -- label and the function that computed it.
+  assert.doesNotMatch(app, /nothing stored yet/);
+  assert.doesNotMatch(app, /stored`/);
+  assert.doesNotMatch(app, /function scrapedScanStoredTagCounts/,
+    "the stored counter has no other caller; leaving it would rot");
+
+  // Counted the way the scan counts, not the way the category advertises itself.
+  assert.match(app, /const SCAN_CATEGORY_LIQUIDITY_MIN = 40000;/);
+  assert.match(app, /liquidity_min=\$\{SCAN_CATEGORY_LIQUIDITY_MIN\}/);
+  assert.match(app, /end_date_min=\$\{encodeURIComponent\(endDateMin\)\}/);
+  assert.match(app, /end_date_max=\$\{encodeURIComponent\(endDateMax\)\}/);
+  assert.match(app, /pagination\?\.totalResults/);
+
+  // The budget is enforced, not assumed, and it covers the row arriving together.
+  assert.match(app, /const SCAN_CATEGORY_COUNT_BUDGET_MS = 2000;/);
+  assert.match(app, /const controller = new AbortController\(\);/);
+  assert.match(app, /setTimeout\(\(\) => controller\.abort\(\), SCAN_CATEGORY_COUNT_BUDGET_MS\)/);
+  assert.match(app, /signal: controller\.signal/);
+
+  // "Otherwise nothing": no number means no bracket, never a stale or invented one.
+  const options = functionSource(app, "renderScrapedScanControls");
+  assert.match(options, /const suffix = count == null \? "" :/);
+  assert.match(functionSource(app, "scrapedScanTagOptions"),
+    /counts\?\.has\(tag\) \? Number\(counts\.get\(tag\)\) : null/);
+  // A failed refresh keeps the last good row rather than blanking every bracket.
+  assert.match(functionSource(app, "loadScanCategoryCounts"), /if \(counts\.size\) \{/);
+
+  // Every category the picker offers must have a tag id, or its bracket can never fill.
+  const listed = /const MARKET_SCAN_CATEGORIES = \[([\s\S]*?)\];/.exec(app)[1]
+    .match(/"([^"]+)"/g).map((entry) => entry.replace(/"/g, ""));
+  const ids = /const MARKET_SCAN_CATEGORY_TAG_IDS = \{([\s\S]*?)\n\};/.exec(app)[1];
+  for (const category of listed) {
+    assert.match(ids, new RegExp(`(^|\\s|")${category.replace(/[-]/g, "[-]")}"?:`),
+      `${category} is offered in the picker but has no Gamma tag id`);
+  }
+});

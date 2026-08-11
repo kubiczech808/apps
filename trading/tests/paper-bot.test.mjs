@@ -4000,24 +4000,19 @@ test("scan categories: the picker offers categories, not whatever was scraped", 
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  const build = (observations) => new Function("scrapedMarketObservations", `
+  // The counting moved out of here: the bracket used to report how many of our own rows
+  // carried the tag, and now reports how many events Polymarket lists that match what the
+  // scan takes. What this test still owns is *which* categories are offered and in what
+  // order, so it drives the option builder against a supplied count map instead.
+  const build = (counts) => new Function("state", `
     ${/const MARKET_SCAN_CATEGORIES = \[[\s\S]*?\n\];/.exec(app)[0]}
-    ${functionSource(app, "normalizedScrapedScanTag")}
-    ${functionSource(app, "scrapedScanStoredTagCounts")}
     ${functionSource(app, "scrapedScanTagOptions")}
     return scrapedScanTagOptions;
-  `)(() => observations)();
+  `)({ scanCategoryCounts: counts })();
 
-  // The rows the sports and esports scopes actually produce, measured off Gamma: the
-  // per-league slugs are what filled the box, and they are exactly what must not.
-  const scraped = [
-    { polymarketTags: ["sports", "games", "soccer", "uslc"] },
-    { polymarketTags: ["sports", "games", "soccer", "usl1"] },
-    { polymarketTags: ["sports", "games", "soccer", "bra3", "brazil-serie-a"] },
-    { polymarketTags: ["esports", "games", "sports", "counter-strike-2"] },
-    { polymarketTags: ["sports", "games", "setka", "setkamemd", "table-tennis"] },
-  ];
-  const options = build(scraped);
+  // Measured off Gamma, these are the per-league slugs the sports and esports scopes
+  // produce. They are what used to fill the box, and exactly what must not.
+  const options = build(new Map([["sports", 191], ["esports", 32]]));
   const offered = options.map(([tag]) => tag);
 
   for (const minor of ["uslc", "usl1", "bra3", "brazil-serie-a", "setkamemd", "setka", "chl2", "ecu1", "games"]) {
@@ -4030,14 +4025,17 @@ test("scan categories: the picker offers categories, not whatever was scraped", 
   assert.ok(offered.includes("geopolitics"), "geopolitics must be offerable");
   assert.ok(offered.length <= 16, `a category picker, not a tag dump: ${offered.length} entries`);
 
-  // Fixed order, so the box does not rearrange itself as scraping progresses.
-  assert.deepEqual(offered, build([]).map(([tag]) => tag), "the list is the same whatever is stored");
+  // Fixed order, so the box does not rearrange itself as counts arrive.
+  assert.deepEqual(offered, build(null).map(([tag]) => tag), "the list is the same whatever is counted");
   assert.equal(offered[0], "politics");
 
-  // Counts still come from the stored rows: 4 of the 5 fixtures carry `sports`.
-  assert.equal(options.find(([tag]) => tag === "sports")[1], 5);
-  assert.equal(options.find(([tag]) => tag === "esports")[1], 1);
-  assert.equal(options.find(([tag]) => tag === "politics")[1], 0, "never scanned reads as zero, not missing");
+  // The count is whatever Polymarket reported for that category, and a category with no
+  // answer carries null rather than a zero -- "no number yet" and "none there" are
+  // different facts, and only the second is worth putting in a bracket.
+  assert.equal(options.find(([tag]) => tag === "sports")[1], 191);
+  assert.equal(options.find(([tag]) => tag === "esports")[1], 32);
+  assert.equal(options.find(([tag]) => tag === "politics")[1], null, "no answer is not a zero");
+  assert.equal(build(new Map([["politics", 0]])).find(([tag]) => tag === "politics")[1], 0);
 });
 
 test("scan categories: every offered category is one the scanner can resolve", async () => {
@@ -4066,8 +4064,9 @@ test("scan categories: every offered category is one the scanner can resolve", a
   // selected and invisible -- the per-league slugs people picked before are all gone now.
   const render = functionSource(app, "renderScrapedScanControls");
   assert.match(render, /if \(state\.scrapedScanTag && !availableTags\.has\(state\.scrapedScanTag\)\) state\.scrapedScanTag = "";/);
-  // And a category with nothing stored must not read as an empty one.
-  assert.match(render, /count > 0 \? `\$\{formatInteger\(count\) \|\| count\} stored` : "nothing stored yet"/);
+  // And a category whose count did not arrive inside the budget gets no bracket at all,
+  // rather than a zero that would read as "nothing there".
+  assert.match(render, /const suffix = count == null \? "" :/);
 });
 
 test("paper rotation: free capital is spent before a position is given up", async () => {

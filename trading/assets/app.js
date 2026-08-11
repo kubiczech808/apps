@@ -45,6 +45,11 @@ const state = {
   scrapeHistoryError: "",
   scrapedScanTag: "",
   scrapedScanBusy: false,
+  // Live per-category counts from Polymarket, and when they were fetched. Absent until
+  // the first successful round, which is what makes the picker render plain names.
+  scanCategoryCounts: null,
+  scanCategoryCountsAt: 0,
+  scanCategoryCountsPending: false,
   scrapedScanStatus: "",
   scrapedScanPreferenceSaveTimer: null,
   scrapedRefreshKeys: new Set(),
@@ -1138,6 +1143,7 @@ function syncOpportunityViewControls() {
     }
   });
   renderScrapedScanControls();
+  if (scraped) loadScanCategoryCounts();
 }
 
 function normalizedScrapedScanTag(value) {
@@ -1176,29 +1182,93 @@ const MARKET_SCAN_CATEGORIES = [
   "movies",
 ];
 
-function scrapedScanStoredTagCounts() {
+// Gamma's own tag ids for those categories, so the count below costs one request each
+// rather than a lookup first.
+const MARKET_SCAN_CATEGORY_TAG_IDS = {
+  politics: "2",
+  geopolitics: "100265",
+  sports: "1",
+  esports: "64",
+  crypto: "21",
+  finance: "120",
+  business: "107",
+  technology: "22",
+  science: "74",
+  news: "38",
+  weather: "84",
+  "video-games": "3",
+  music: "100",
+  movies: "53",
+};
+
+// What the picker's number means: how many events Polymarket lists right now that match
+// what the scheduled scan actually takes. The stored count was replaced by it because
+// "how many we already have" answers a question nobody was asking -- the useful one is
+// whether there is anything there worth scanning.
+//
+// The scan's filters are applied deliberately. Measured against Gamma, sports has 12,312
+// open events and 191 that clear the scan's liquidity floor inside its window; a raw total
+// would report twelve thousand markets the scan will never fetch by design.
+//
+// Measured cost for all fourteen categories in parallel: 303ms. The budget given was two
+// seconds for the whole picker, and it is enforced rather than assumed -- a number that
+// arrives late is worse than no number, so on timeout, failure, or a browser that refuses
+// the cross-origin read, the label stays a plain category name.
+const SCAN_CATEGORY_COUNT_BUDGET_MS = 2000;
+const SCAN_CATEGORY_COUNT_TTL_MS = 5 * 60 * 1000;
+const SCAN_CATEGORY_LIQUIDITY_MIN = 40000;
+const SCAN_CATEGORY_WINDOW_DAYS = 2;
+
+async function loadScanCategoryCounts() {
+  const now = Date.now();
+  if (state.scanCategoryCountsAt && now - state.scanCategoryCountsAt < SCAN_CATEGORY_COUNT_TTL_MS) return;
+  if (state.scanCategoryCountsPending) return;
+  state.scanCategoryCountsPending = true;
+
+  // One controller for the whole picker: the budget is on the row of numbers arriving
+  // together, not on each request separately.
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), SCAN_CATEGORY_COUNT_BUDGET_MS);
+  const endDateMin = new Date(now - 6 * 3600000).toISOString();
+  const endDateMax = new Date(now + SCAN_CATEGORY_WINDOW_DAYS * 86400000).toISOString();
   const counts = new Map();
-  const addCount = (rawTag) => {
-    const tag = normalizedScrapedScanTag(rawTag);
-    if (!tag || tag === "clear-resolution") return;
-    counts.set(tag, Number(counts.get(tag) || 0) + 1);
-  };
-  for (const item of scrapedMarketObservations()) {
-    const tags = [
-      ...(Array.isArray(item?.polymarketTags) ? item.polymarketTags : []),
-      ...(Array.isArray(item?.tags) ? item.tags : []),
-      item?.riskCategory,
-    ];
-    tags.forEach((rawTag) => addCount(rawTag));
+  try {
+    await Promise.all(MARKET_SCAN_CATEGORIES.map(async (category) => {
+      const tagId = MARKET_SCAN_CATEGORY_TAG_IDS[category];
+      if (!tagId) return;
+      const url = "https://gamma-api.polymarket.com/events/pagination"
+        + `?tag_id=${encodeURIComponent(tagId)}&closed=false&limit=1`
+        + `&liquidity_min=${SCAN_CATEGORY_LIQUIDITY_MIN}`
+        + `&end_date_min=${encodeURIComponent(endDateMin)}`
+        + `&end_date_max=${encodeURIComponent(endDateMax)}`;
+      try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) return;
+        const body = await response.json();
+        const total = Number(body?.pagination?.totalResults);
+        if (Number.isFinite(total)) counts.set(category, total);
+      } catch {
+        // One category failing leaves the others their numbers; it just gets no bracket.
+      }
+    }));
+  } finally {
+    clearTimeout(deadline);
+    state.scanCategoryCountsPending = false;
   }
-  return counts;
+  // Only overwrite when something came back, so a failed refresh keeps the last good row
+  // rather than blanking every bracket.
+  if (counts.size) {
+    state.scanCategoryCounts = counts;
+    state.scanCategoryCountsAt = Date.now();
+    renderScrapedScanControls();
+  }
 }
 
 // Categories in their listed order, not by how much of each is stored: a picker that
 // reorders itself as scraping progresses is one you have to re-read every time.
 function scrapedScanTagOptions() {
-  const counts = scrapedScanStoredTagCounts();
-  return MARKET_SCAN_CATEGORIES.map((tag) => [tag, Number(counts.get(tag) || 0)]);
+  const counts = state.scanCategoryCounts;
+  return MARKET_SCAN_CATEGORIES.map((tag) => [tag, counts?.has(tag) ? Number(counts.get(tag)) : null]);
 }
 
 function scrapedScanTagLabel(tag) {
@@ -1220,9 +1290,12 @@ function renderScrapedScanControls() {
     // A category with nothing stored is the normal state for one never scanned, and the
     // whole point of offering it -- so it reads as "nothing yet" rather than "(0 stored)",
     // which looks like an empty category rather than an unvisited one.
+    // No bracket at all when the count did not arrive inside the budget. That is the
+    // stated fallback: a plain category name rather than a stale or invented number.
     ...options.map(([tag, count]) => {
-      const stored = count > 0 ? `${formatInteger(count) || count} stored` : "nothing stored yet";
-      return `<option value="${escapeHtml(tag)}">${escapeHtml(scrapedScanTagLabel(tag))} (${stored})</option>`;
+      const label = escapeHtml(scrapedScanTagLabel(tag));
+      const suffix = count == null ? "" : ` (${formatInteger(count) || count} on Polymarket)`;
+      return `<option value="${escapeHtml(tag)}">${label}${suffix}</option>`;
     }),
   ].join("");
   els.scrapedScanTag.value = state.scrapedScanTag;
@@ -1231,9 +1304,10 @@ function renderScrapedScanControls() {
     els.scrapedScanButton.textContent = state.scrapedScanBusy ? "Scanning..." : "Scan Polymarket";
   }
   if (els.scrapedScanStatus) {
-    const storedNote = selectedOption
-      ? `${formatInteger(selectedOption[1]) || selectedOption[1]} currently stored; scan result may differ.`
-      : "Choose a tag; counts show currently stored outcomes.";
+    const selectedCount = selectedOption?.[1];
+    const storedNote = selectedCount == null
+      ? "Choose a category to scan."
+      : `${formatInteger(selectedCount) || selectedCount} event(s) on Polymarket match this scan's liquidity and horizon right now.`;
     els.scrapedScanStatus.textContent = state.scrapedScanStatus || storedNote;
     els.scrapedScanStatus.className = `scraped-scan-status${state.scrapedScanStatus?.startsWith("Error") ? " error" : ""}`;
   }
