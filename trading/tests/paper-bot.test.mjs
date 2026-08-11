@@ -1441,33 +1441,44 @@ test("state segments: retention is not silently throttled by workflow env", asyn
   }
 });
 
-test("category performance: the report carries the decision-relevant columns", async () => {
+test("taxonomy performance: real Polymarket categories and tags stay separate", async () => {
   const { readFile } = await import("node:fs/promises");
   const state = bot.normalizeState(
     JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
   );
-  // Tags arrive from four places and in two shapes; the report used to read one.
+  // Gamma categories and tags are separate relations and can contain both strings and
+  // objects. The old report inferred category from the first tag, producing identical
+  // `category general` and `tag general` rows.
   state.marketObservations = state.marketObservations.map((row, index) => ({
     ...row,
     firstDaysToResolution: 4,
     daysToResolution: 4,
     firstLiquidity: 52000,
+    polymarketCategories: index % 2 ? [{ slug: "sports" }] : [{ label: "Politics" }],
     polymarketTags: index % 2 ? [{ slug: "nba" }, { label: "Sports" }] : ["crypto"],
+    firstPolymarketCategories: index % 2 ? [{ slug: "sports" }] : [{ label: "Politics" }],
+    firstPolymarketTags: index % 2 ? [{ slug: "nba" }, { label: "Sports" }] : ["crypto"],
     riskGroupLabels: ["entity:acme"],
   }));
 
-  const rows = bot.buildCalculationReport(state).categorySummaries;
-  const labels = rows.map((row) => row.label);
+  const report = bot.buildCalculationReport(state);
+  assert.equal(report.taxonomyVersion, 2);
+  const categoryLabels = report.categorySummaries.map((row) => row.label);
+  const tagLabels = report.tagSummaries.map((row) => row.label);
+  assert.deepEqual(new Set(categoryLabels), new Set(["sports", "politics"]));
   for (const expected of ["nba", "sports", "crypto"]) {
-    assert.ok(labels.includes(expected), `${expected} must appear as a tag row`);
+    assert.ok(tagLabels.includes(expected), `${expected} must appear as a tag row`);
   }
-  assert.ok(rows.some((row) => row.kind === "category"), "categories are still grouped");
+  assert.ok(report.categorySummaries.every((row) => row.kind === "category"));
+  assert.ok(report.tagSummaries.every((row) => row.kind === "tag"));
   // Risk labels are per-fixture dedup identifiers, not taxonomy: each groups exactly
   // one opportunity, so it can never carry a comparable sample and only crowds out the
   // real categories. They used to be fed straight into this table.
-  assert.ok(!labels.includes("entity:acme"), "a risk label must not become a tag row");
+  assert.ok(!tagLabels.includes("entity:acme"), "a risk label must not become a tag row");
+  assert.ok(!categoryLabels.includes("general"), "missing categories must not be invented as general");
 
-  const resolvedGroup = rows.find((row) => row.resolved > 0);
+  const resolvedGroup = [...report.categorySummaries, ...report.tagSummaries]
+    .find((row) => row.resolved > 0);
   assert.ok(resolvedGroup, "the fixture must resolve at least one trade");
   for (const field of ["pnlPerTradeUsdc", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "lastResolvedAt"]) {
     assert.ok(resolvedGroup[field] != null, `${field} must be reported`);
@@ -1479,7 +1490,7 @@ test("category performance: the report carries the decision-relevant columns", a
   );
 });
 
-test("category performance: per-fixture slugs never become their own rows", async () => {
+test("taxonomy performance: per-fixture slugs never become their own rows", async () => {
   const { readFile } = await import("node:fs/promises");
   const state = bot.normalizeState(
     JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
@@ -1494,7 +1505,10 @@ test("category performance: per-fixture slugs never become their own rows", asyn
     firstLiquidity: 52000,
     firstCategory: "Market: uwcl-faw-haj-2026-08-05-corners-team-home-4pt5",
     tags: ["Match: FC Bayern vs Hajduk", "esports"],
+    polymarketCategories: [{ slug: "sports" }],
+    firstPolymarketCategories: [{ slug: "sports" }],
     polymarketTags: [{ slug: "sports" }, { slug: "ucl-fen-stu1-2026-08-05-exact-score" }],
+    firstPolymarketTags: [{ slug: "esports" }, { slug: "ucl-fen-stu1-2026-08-05-exact-score" }],
     riskGroupLabels: [
       "Market: uwcl-faw-haj-2026-08-05-corners-team-home-4pt5",
       "Event: uwcl-faw-haj-2026-08-05",
@@ -1503,7 +1517,8 @@ test("category performance: per-fixture slugs never become their own rows", asyn
     ],
   }));
 
-  const rows = bot.buildCalculationReport(state).categorySummaries;
+  const report = bot.buildCalculationReport(state);
+  const rows = [...report.categorySummaries, ...report.tagSummaries];
   const labels = rows.map((row) => row.label);
   for (const noise of [
     "market: uwcl-faw-haj-2026-08-05-corners-team-home-4pt5",
@@ -1592,7 +1607,7 @@ test("parameter combinations: the no-floor liquidity row really means all", asyn
   assert.equal(withFloor.trades, 0, "an unrecorded liquidity must not pass a real floor");
 });
 
-test("category performance: an unknown horizon reports no p.a. at all", async () => {
+test("taxonomy performance: an unknown horizon reports no p.a. at all", async () => {
   const { readFile } = await import("node:fs/promises");
   const state = bot.normalizeState(
     JSON.parse(await readFile(new URL("../data/paper-state.fixture.json", import.meta.url), "utf8")),
@@ -1609,7 +1624,15 @@ test("category performance: an unknown horizon reports no p.a. at all", async ()
     return stripped;
   });
 
-  const rows = bot.buildCalculationReport(state).categorySummaries;
+  state.marketObservations = state.marketObservations.map((row) => ({
+    ...row,
+    polymarketCategories: ["sports"],
+    firstPolymarketCategories: ["sports"],
+    polymarketTags: ["football"],
+    firstPolymarketTags: ["football"],
+  }));
+  const report = bot.buildCalculationReport(state);
+  const rows = [...report.categorySummaries, ...report.tagSummaries];
   for (const row of rows) {
     if (row.avgDaysToResolution == null) {
       assert.equal(row.annualizedRoi, null,
@@ -1618,33 +1641,37 @@ test("category performance: an unknown horizon reports no p.a. at all", async ()
   }
 });
 
-test("category performance: the table sorts independently and is bounded", async () => {
+test("taxonomy performance: categories and tags render as separately sorted tables", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
-  // Both tables share one container, so each needs its own sort state and attribute;
-  // one shared state made clicking either scramble the other.
-  assert.match(app, /categorySort: \{/);
-  assert.match(app, /data-category-sort="\$\{key\}"/);
-  assert.match(app, /const categoryButton = event\.target\.closest\("\[data-category-sort\]"\);/);
+  assert.match(app, /taxonomySort: \{/);
+  assert.match(app, /category: \{ key: "resolved", direction: "desc" \}/);
+  assert.match(app, /tag: \{ key: "resolved", direction: "desc" \}/);
+  assert.match(app, /data-taxonomy-sort="\$\{kind\}" data-taxonomy-sort-key="\$\{key\}"/);
+  assert.match(app, /const taxonomyButton = event\.target\.closest\("\[data-taxonomy-sort\]"\);/);
   assert.match(app, /const button = event\.target\.closest\("\[data-calculation-sort\]"\);/);
-  // Every column must be sortable, which is what was asked for.
-  const sorted = [...app.matchAll(/categoryHeader\("([a-zA-Z]+)"/g)].map((match) => match[1]);
-  for (const key of ["kind", "label", "trades", "resolved", "accuracy", "pnl", "pnlPerTradeUsdc",
+  assert.match(app, /"Category performance"/);
+  assert.match(app, /"Tag performance"/);
+  assert.doesNotMatch(app, /Category and tag performance/);
+  assert.match(app, /kind === "category" && !hasSplitTaxonomy/,
+    "legacy inferred categories must stay hidden until a split report is generated");
+  // Every column in both tables is sortable.
+  const sorted = [...app.matchAll(/taxonomyHeader\(kind, "([a-zA-Z]+)"/g)].map((match) => match[1]);
+  for (const key of ["label", "trades", "resolved", "accuracy", "pnl", "pnlPerTradeUsdc",
     "roi", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "avgProbability", "avgLiquidity", "lastResolvedAt"]) {
     assert.ok(sorted.includes(key), `${key} column must be sortable`);
   }
   // The header count must match the colspan on the empty row, or the layout breaks.
-  assert.match(app, /colspan="14"/);
-  assert.equal(sorted.length, 14);
-  // The filter must use the segmented control this panel already uses.
-  assert.match(app, /class="segment-button\$\{state\.categoryKind === value \? " active" : ""\}"/);
+  assert.match(app, /colspan="13"/);
+  assert.equal(sorted.length, 13);
+  assert.doesNotMatch(app, /data-category-kind/);
 
   // The report is stored in the core state file, so its row count must be bounded.
   const botSource = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
   assert.match(botSource, /SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT/);
   assert.match(botSource, /return rows\.slice\(0, SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT\);/);
-  assert.match(botSource, /if \(tags\.length >= SCRAPED_SIMULATION_TAGS_PER_TRADE\) return tags;/);
+  assert.match(botSource, /if \(labels\.length >= SCRAPED_SIMULATION_TAGS_PER_TRADE\) return labels;/);
 });
 
 test("live events: the scan asks Gamma only for what was measured to work", async () => {

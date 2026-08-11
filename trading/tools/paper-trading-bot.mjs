@@ -275,9 +275,10 @@ const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]
 const REPORT_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
 const SCRAPED_SIMULATION_MAX_DAYS = [1, 3, 7, 14, 30];
 const SCRAPED_SIMULATION_LIQUIDITY_FLOORS = [0, 10000, 40000, 100000];
-// Each scraped market contributes to its category and to every tag it carries. Both
-// bounds keep the calculation report proportionate: it is stored in the core state
-// file, which every dashboard read decodes.
+// Each scraped market contributes to every real Polymarket category and tag it
+// carries. The two taxonomies stay separate; risk groups and inferred question tags
+// are execution metadata, not Polymarket categories. Both bounds keep the calculation
+// report proportionate because it is stored in the core state file.
 const SCRAPED_SIMULATION_TAGS_PER_TRADE = Math.max(1, envNumber("PAPER_SCRAPED_SIMULATION_TAGS_PER_TRADE", 8));
 const SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT = Math.max(
   20,
@@ -1198,6 +1199,12 @@ function firstObservationMetadata(item = {}) {
   const firstDays = Number(item.firstDaysToResolution ?? item.daysToResolution);
   const firstFeeRate = Number(item.firstFeeRate ?? item.feeRate);
   const currentTags = Array.isArray(item.tags) ? item.tags.filter(Boolean).map(String) : [];
+  const currentPolymarketCategories = Array.isArray(item.polymarketCategories)
+    ? item.polymarketCategories.filter(Boolean)
+    : [];
+  const currentPolymarketTags = Array.isArray(item.polymarketTags)
+    ? item.polymarketTags.filter(Boolean)
+    : [];
   return {
     firstObservedAt,
     firstMarketProbability: Number.isFinite(firstProbability) ? Number(firstProbability.toFixed(4)) : null,
@@ -1209,6 +1216,13 @@ function firstObservationMetadata(item = {}) {
     firstTokenId: item.firstTokenId || item.tokenId || null,
     firstCategory: item.firstCategory || item.riskCategory || currentTags[0] || "general",
     firstTags: Array.isArray(item.firstTags) && item.firstTags.length ? item.firstTags : currentTags,
+    firstPolymarketCategories: Array.isArray(item.firstPolymarketCategories)
+      && item.firstPolymarketCategories.length
+      ? item.firstPolymarketCategories
+      : currentPolymarketCategories,
+    firstPolymarketTags: Array.isArray(item.firstPolymarketTags) && item.firstPolymarketTags.length
+      ? item.firstPolymarketTags
+      : currentPolymarketTags,
   };
 }
 
@@ -5941,6 +5955,7 @@ function flattenEventMarkets(events = [], auditCalls = null) {
       title: event.title,
       category: event.category,
       categorySlug: event.categorySlug,
+      categories: event.categories,
       tags: event.tags,
       endDate: event.endDate || event.end_date,
     };
@@ -5956,7 +5971,14 @@ function flattenEventMarkets(events = [], auditCalls = null) {
         endDate: market.endDate || market.end_date || eventContext.endDate,
         category: market.category || eventContext.category,
         categorySlug: market.categorySlug || eventContext.categorySlug,
-        tags: market.tags || eventContext.tags,
+        categories: [
+          ...(Array.isArray(eventContext.categories) ? eventContext.categories : []),
+          ...(Array.isArray(market.categories) ? market.categories : []),
+        ],
+        tags: [
+          ...(Array.isArray(eventContext.tags) ? eventContext.tags : []),
+          ...(Array.isArray(market.tags) ? market.tags : []),
+        ],
         events: hasSameEvent ? nestedEvents : [eventContext, ...nestedEvents],
       });
     }
@@ -6124,6 +6146,45 @@ function normalizedMarketCategory(value) {
     .slice(0, 64);
 }
 
+function normalizedPolymarketTaxonomy(...sources) {
+  const values = new Set();
+  const add = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(add);
+      return;
+    }
+    if (typeof value === "string" && /[,|]/.test(value)) {
+      value.split(/[,|]/).forEach(add);
+      return;
+    }
+    const normalized = normalizedMarketCategory(value);
+    if (normalized && !/^\d+$/.test(normalized)) values.add(normalized);
+  };
+  sources.forEach(add);
+  return [...values];
+}
+
+// Gamma exposes categories and tags as distinct relations. Keep only explicit API
+// category fields here; never substitute an inferred risk group or the first tag.
+function marketPolymarketCategories(market = {}) {
+  return normalizedPolymarketTaxonomy(
+    market.category,
+    market.categorySlug,
+    market.categories,
+    ...(Array.isArray(market.events)
+      ? market.events.flatMap((event) => [event?.category, event?.categorySlug, event?.categories])
+      : []),
+  );
+}
+
+function marketPolymarketTags(market = {}) {
+  return normalizedPolymarketTaxonomy(
+    market.__scanCategoryTags,
+    market.tags,
+    ...(Array.isArray(market.events) ? market.events.map((event) => event?.tags) : []),
+  );
+}
+
 function marketCategoryKeys(market = {}) {
   const categories = new Set();
   const add = (value) => {
@@ -6139,15 +6200,8 @@ function marketCategoryKeys(market = {}) {
     if (normalized && !/^\d+$/.test(normalized)) categories.add(normalized);
   };
 
-  add(market.category);
-  add(market.categorySlug);
-  add(market.__scanCategoryTags);
-  add(market.tags);
-  for (const event of Array.isArray(market.events) ? market.events : []) {
-    add(event?.category);
-    add(event?.categorySlug);
-    add(event?.tags);
-  }
+  add(marketPolymarketCategories(market));
+  add(marketPolymarketTags(market));
 
   const inferred = tagQuestion(market.question || "").filter((tag) => tag !== "clear-resolution");
   inferred.forEach(add);
@@ -6491,7 +6545,8 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     : marketExpectedRoi;
   const potentialAnnualizedReturn = annualizedPotentialReturn(netYield, days);
   const tags = tagQuestion(market.question || "");
-  const polymarketTags = marketCategoryKeys(market);
+  const polymarketCategories = marketPolymarketCategories(market);
+  const polymarketTags = marketPolymarketTags(market);
   const risk = riskProfile({
     question: market.question || "",
     slug: market.slug,
@@ -6512,6 +6567,7 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     selectionStatus: market.closed || market.acceptingOrders === false ? "RESOLVED" : "SCRAPED",
     marketType: outcomes.length > 2 ? "multi" : reportMarketType({ question: market.question || "", slug: market.slug, eventSlug: marketEventSlug(market), outcome: outcomes[outcomeIndex] }),
     tags,
+    polymarketCategories,
     polymarketTags,
     riskCategory: risk.category,
     riskPrimaryEntity: risk.primaryEntity,
@@ -6560,6 +6616,8 @@ function preferredMarketObservation(market, observedAt = nowIso()) {
     firstTokenId: tokenId,
     firstCategory: risk.category,
     firstTags: tags,
+    firstPolymarketCategories: polymarketCategories,
+    firstPolymarketTags: polymarketTags,
     source: "polymarket-gamma",
   };
 }
@@ -7496,25 +7554,15 @@ function isPerFixtureLabel(value) {
   return RISK_NAMESPACE_TAG.test(text) || DATED_FIXTURE_SLUG_TAG.test(text);
 }
 
-function scrapedSimulationCategory(item) {
-  const tags = Array.isArray(item?.tags) ? item.tags.filter(Boolean).map(String) : [];
-  const category = String(item?.firstCategory || item?.riskCategory || tags[0] || "general");
-  // Same reasoning as the tag filter: a per-fixture identifier is not a category, and
-  // `firstCategory` was seeded from `tags[0]`, which legacy rows filled with risk labels.
-  return isPerFixtureLabel(category) ? "general" : category;
-}
-
-// Tags come from several places and the report only used one of them, so most of
-// Polymarket's own taxonomy never reached the table. The scrape-time tags stay
-// first because they describe the market as it was when the entry price was taken.
-function scrapedSimulationTags(item) {
-  const sources = [
-    Array.isArray(item?.firstTags) ? item.firstTags : [],
-    Array.isArray(item?.tags) ? item.tags : [],
-    Array.isArray(item?.polymarketTags) ? item.polymarketTags : [],
-  ];
+function scrapedSimulationTaxonomy(item, firstField, currentField) {
+  const first = Array.isArray(item?.[firstField]) ? item[firstField] : [];
+  const current = Array.isArray(item?.[currentField]) ? item[currentField] : [];
+  // Scrape-time taxonomy wins because this simulation evaluates the opportunity as it
+  // first appeared. Older rows do not have the immutable field, so the current explicit
+  // Gamma relation remains a compatible fallback.
+  const sources = first.length ? [first] : [current];
   const seen = new Set();
-  const tags = [];
+  const labels = [];
   for (const source of sources) {
     for (const raw of source) {
       // Gamma returns tags both as plain strings and as {label,slug} objects.
@@ -7527,11 +7575,19 @@ function scrapedSimulationTags(item) {
       if (isPerFixtureLabel(text)) continue;
       if (seen.has(text)) continue;
       seen.add(text);
-      tags.push(text);
-      if (tags.length >= SCRAPED_SIMULATION_TAGS_PER_TRADE) return tags;
+      labels.push(text);
+      if (labels.length >= SCRAPED_SIMULATION_TAGS_PER_TRADE) return labels;
     }
   }
-  return tags.length ? tags : [scrapedSimulationCategory(item)];
+  return labels;
+}
+
+function scrapedSimulationCategories(item) {
+  return scrapedSimulationTaxonomy(item, "firstPolymarketCategories", "polymarketCategories");
+}
+
+function scrapedSimulationTags(item) {
+  return scrapedSimulationTaxonomy(item, "firstPolymarketTags", "polymarketTags");
 }
 
 function scrapedSimulationOutcome(item) {
@@ -7558,7 +7614,7 @@ function scrapedSimulationTrade(item) {
     total,
     outcome,
     pnl: Number.isFinite(pnl) ? Number(pnl.toFixed(4)) : null,
-    category: scrapedSimulationCategory(item),
+    categories: scrapedSimulationCategories(item),
     tags: scrapedSimulationTags(item),
     marketType: reportMarketType(item),
     days: scrapedSimulationDays(item),
@@ -7653,16 +7709,16 @@ function scrapedSimulationParameterRows(trades) {
   return rows;
 }
 
-function scrapedSimulationCategoryRows(trades) {
+function scrapedSimulationTaxonomyRows(trades, field, kind) {
   const groups = new Map();
-  const add = (kind, label, trade) => {
-    const key = `${kind}:${label}`;
-    if (!groups.has(key)) groups.set(key, { kind, label, trades: [] });
+  const add = (label, trade) => {
+    const key = String(label || "").trim().toLowerCase();
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, { kind, label: key, trades: [] });
     groups.get(key).trades.push(trade);
   };
   for (const trade of trades) {
-    add("category", trade.category, trade);
-    for (const tag of trade.tags) add("tag", tag, trade);
+    for (const label of Array.isArray(trade[field]) ? trade[field] : []) add(label, trade);
   }
   const rows = [...groups.values()]
     .map(({ trades: groupTrades, ...group }) => ({
@@ -7687,6 +7743,7 @@ function buildCalculationReport(state) {
   return {
     id: `calculation-report-${generatedAt}`,
     generatedAt,
+    taxonomyVersion: 2,
     simulationType: "fresh_scraped_opportunities",
     sampleSize: trades.length,
     resolvedSampleSize: resolved.length,
@@ -7700,11 +7757,12 @@ function buildCalculationReport(state) {
       resolution: "P/L and accuracy are counted only after the selected outcome has a final Polymarket resolution price.",
     },
     parameterSummaries: scrapedSimulationParameterRows(trades),
-    categorySummaries: scrapedSimulationCategoryRows(trades),
+    categorySummaries: scrapedSimulationTaxonomyRows(trades, "categories", "category"),
+    tagSummaries: scrapedSimulationTaxonomyRows(trades, "tags", "tag"),
     examples: trades.slice(0, 80).map((trade) => ({
       id: trade.item.id,
       marketType: trade.marketType,
-      category: trade.category,
+      categories: trade.categories,
       tags: trade.tags,
       question: trade.item.question,
       selectedOutcome: trade.item.firstOutcome || trade.item.outcome,
