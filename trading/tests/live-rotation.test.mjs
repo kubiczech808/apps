@@ -181,28 +181,102 @@ test("rotation: a replacement that resolves later is refused", async () => {
   assert.ok(source.includes("selling now would forfeit a nearer payout for a more distant one"));
 });
 
-test("rotation: ranking decides on its own, not gated by a separate absolute-USD requirement", async () => {
-  // The user's point: a shorter-horizon candidate can legitimately rank higher on p.a.
-  // while paying fewer raw dollars than the position/order it would replace. Requiring
-  // the absolute USD result to ALSO improve meant the portfolio kept a worse-ranked
-  // position purely because it happened to be a bigger single payout -- ranking alone
-  // must decide, once the position clears the veto and the minimum-improvement floor.
+test("rotation: potential p.a. cannot bank a larger dollar loss", async () => {
+  // Live regression: the old position would lose 0.155 USDC at the executable bid and
+  // the replacement could win only 0.2524 USDC. Its spectacular short-horizon p.a. did
+  // not make up for giving up the current 0.135 USDC maximum win.
+  const blocked = executor.rotationNetProfitGuard({
+    economics: {
+      realizedPnlIfExit: -0.155,
+      maximumWinPnl: 0.135,
+      cost: 4.865,
+    },
+    candidate: {
+      netGainIfWinUsdc: 0.2524,
+      totalCostUsdc: 4.75,
+    },
+  });
+  assert.equal(blocked.allowed, false);
+  assert.ok(blocked.maximumPnlDeltaUsdc < 0);
+  assert.equal(blocked.requiredImprovementUsdc, executor.ROTATION_MIN_NET_PNL_IMPROVEMENT_USDC);
+
+  const profitable = executor.rotationNetProfitGuard({
+    economics: {
+      realizedPnlIfExit: -0.05,
+      maximumWinPnl: 0.25,
+      cost: 5,
+    },
+    candidate: {
+      netGainIfWinUsdc: 0.4,
+      totalCostUsdc: 5,
+    },
+  });
+  assert.equal(profitable.allowed, true);
+  assert.ok(profitable.maximumPnlDeltaUsdc >= profitable.requiredImprovementUsdc);
+
+  // The guard telescopes across repeated swaps. Previously banked exit losses are
+  // common to holding or replacing the current position, while each new exit loss is
+  // charged before the next maximum win is compared. Two accepted rotations therefore
+  // cannot end with a lower maximum portfolio result than the starting position.
+  const firstSwap = executor.rotationNetProfitGuard({
+    economics: { realizedPnlIfExit: -0.05, maximumWinPnl: 0.3, cost: 5 },
+    candidate: { netGainIfWinUsdc: 0.4, totalCostUsdc: 5 },
+  });
+  const secondSwap = executor.rotationNetProfitGuard({
+    economics: { realizedPnlIfExit: -0.08, maximumWinPnl: 0.4, cost: 5 },
+    candidate: { netGainIfWinUsdc: 0.55, totalCostUsdc: 5 },
+  });
+  assert.equal(firstSwap.allowed, true);
+  assert.equal(secondSwap.allowed, true);
+  assert.ok((-0.05 - 0.08 + 0.55) > 0.3);
+
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
 
   assert.match(
     source,
-    /\(!candidateResolvesLater\s*\n\s*&& priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT\)\)/,
-    "position rotation must not also require evDelta > 0",
+    /const rotationPreferred = !settlementLocked\s*\n\s*&& netProfitGuard\.allowed/,
+    "the absolute after-loss profit guard must precede the p.a. decision",
   );
-  assert.ok(!/&& evDelta > 0\s*\n\s*&& priorityDelta/.test(source), "the old absolute-USD gate must be gone, not just reordered");
+  assert.match(
+    source,
+    /\{ forceTakerEntry: ROTATION_TAKER_ENTRY \}/,
+    "rotation economics must use the replacement ask and taker fee, not maker economics",
+  );
 
   // Open orders must use the same ranking-metric threshold as positions, not a
-  // dollar EV margin -- the two paths were inconsistent before this fix.
+  // dollar EV margin: cancelling an unfilled buy does not realize a position loss.
   assert.match(
     source,
     /comparison\?\.replacementRanksAhead\s*\n\s*&& Number\(comparison\.metricDelta \|\| 0\) >= ROTATION_MIN_PRIORITY_IMPROVEMENT/,
     "open-order replacement must gate on the ranking metric, not an unrelated dollar EV margin",
+  );
+});
+
+test("rotation: the completion pass can buy only the approved replacement", () => {
+  const planned = { tokenId: "2222222222222222222", question: "Approved replacement" };
+  const other = { tokenId: "3333333333333333333", question: "General shortlist leader" };
+  const previousState = {
+    rotationExit: {
+      position: { tokenId: "1111111111111111111" },
+      candidateTokenId: planned.tokenId,
+      candidate: planned,
+    },
+  };
+  assert.deepEqual(
+    executor.restrictCandidatesToRotationPlan([other, planned], previousState, true),
+    [planned],
+    "the second pass must not buy a new shortlist leader or the token it just sold",
+  );
+  assert.deepEqual(
+    executor.restrictCandidatesToRotationPlan([other], previousState, true),
+    [planned],
+    "the approved candidate stays available as a fallback when the refreshed catalogue page omits it",
+  );
+  assert.deepEqual(
+    executor.restrictCandidatesToRotationPlan([other], null, true),
+    [],
+    "a completion run without a durable rotation plan must not place an arbitrary order",
   );
 });
 
@@ -3221,30 +3295,24 @@ test("run log note: the capital note is declared before the explanation that rea
 // rotating: it banks the exit and keeps neither opportunity.
 test("rotation entry: completing a rotation crosses the spread instead of resting at the bid", () => {
   const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
-  const priceFor = (crossing) => new Function("book", "tick", `
-    const USE_LIMIT_ORDERS = true;
-    const ROTATION_ENTRY_CROSSES_SPREAD = ${crossing};
-    ${functionSource(source, "roundToTick")}
-    ${functionSource(source, "orderPriceForBook")}
-    return orderPriceForBook(book, tick);
-  `);
 
   const book = { bestBid: 0.92, bestAsk: 0.94 };
-  // What the reported run did: rested at 0.92 while the market asked 0.94.
-  assert.equal(priceFor(false)(book, 0.01), 0.92);
-  // What completing a rotation does now: takes the ask, so the swap actually happens.
-  assert.equal(priceFor(true)(book, 0.01), 0.94);
+  // An ordinary maker buy still rests at the bid.
+  assert.equal(executor.orderPriceForBook(book, 0.01), 0.92);
+  // A rotation review and completion both force the executable ask, so the approved
+  // economics and the eventual buy use the same price.
+  assert.equal(executor.orderPriceForBook(book, 0.01, { forceTakerEntry: true }), 0.94);
 
   // The exit was always a taker. The entry is one too now, so neither leg is optional.
   const exit = functionSource(source, "buildRotationExitOrder");
   assert.match(exit, /orderType: "FAK",/);
   assert.match(exit, /forceTaker: true,/);
-  assert.match(source, /orderType: USE_LIMIT_ORDERS && !ROTATION_ENTRY_CROSSES_SPREAD \? "GTC" : "FAK",/,
+  assert.match(source, /orderType: USE_LIMIT_ORDERS && !takerEntry \? "GTC" : "FAK",/,
     "the entry must be marked FAK so submitOrder routes it as a taker");
   assert.match(functionSource(source, "submitOrder"), /const forceTaker = Boolean\(order\.forceTaker\) \|\| String\(order\.orderType \|\| ""\)\.toUpperCase\(\) === "FAK";/);
 
   // Crossing is the intent here, so the post-only guard must not veto it.
-  assert.match(source, /if \(USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD && book\.bestAsk != null && price >= book\.bestAsk\) \{/);
+  assert.match(source, /if \(USE_LIMIT_ORDERS && POST_ONLY && !takerEntry && book\.bestAsk != null && price >= book\.bestAsk\) \{/);
 
   // Only on a completion run: an ordinary buy still rests below the market, which is what
   // the maker strategy is for.
@@ -3259,14 +3327,14 @@ test("rotation entry: crossing the spread is charged, not assumed away", () => {
   // at taker prices would report a gain it never made.
   const zeroFeeSites = source.match(/USE_LIMIT_ORDERS && POST_ONLY[^?\n]*\?/g) || [];
   for (const site of zeroFeeSites) {
-    assert.match(site, /!ROTATION_ENTRY_CROSSES_SPREAD/,
+    assert.match(site, /!ROTATION_ENTRY_CROSSES_SPREAD|!takerEntry/,
       `every maker-fee assumption must exclude the crossing entry, found: ${site}`);
   }
   // Including the resize path, whose row would otherwise disagree with its own order.
   assert.match(functionSource(source, "resizeCandidateForMakerPrecision"),
     /const fee = USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD \? 0 : takerFee\(/);
   // And the run log says which of the two it was.
-  assert.match(source, /feeMode: USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD \? "post-only maker fee assumed 0" : "taker fee estimate",/);
+  assert.match(source, /feeMode: USE_LIMIT_ORDERS && POST_ONLY && !takerEntry \? "post-only maker fee assumed 0" : "taker fee estimate",/);
 
   // The workflow step that completes a rotation is the one that turns this on.
   const workflow = readFileSync(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");

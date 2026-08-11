@@ -143,6 +143,17 @@ const ROTATION_MIN_PRIORITY_IMPROVEMENT = Math.max(
   MIN_NET_YIELD,
   envNumber("LIVE_ROTATION_MIN_PRIORITY_IMPROVEMENT", MIN_NET_YIELD),
 );
+// Potential p.a. can become enormous close to resolution while representing only a
+// few cents. It must never justify realizing a larger dollar loss. Every rotation
+// therefore has to improve the best possible net P/L as well: the replacement's
+// after-fee win must cover the exit loss, preserve the current position's maximum
+// win, and add this minimum dollar margin. The configured minimum net yield is also
+// applied to the capital at risk, so larger positions require a proportionally
+// larger improvement.
+const ROTATION_MIN_NET_PNL_IMPROVEMENT_USDC = Math.max(
+  0,
+  envNumber("LIVE_ROTATION_MIN_NET_PNL_IMPROVEMENT_USDC", 0.05),
+);
 // Once a position is past its end date it is waiting on settlement, and its ranking
 // metric is meaningless there: the horizon is gone while the upside is not. If it
 // still has more than this much left to collect, it is protected from rotation and
@@ -1400,6 +1411,33 @@ function positionExitValue(position) {
   return explicit ?? derived;
 }
 
+function positionAtExitPrice(position, exitPrice) {
+  const price = number(exitPrice);
+  const shares = number(position?.shares ?? position?.size);
+  if (price == null || price <= 0 || shares == null || shares <= 0) return position;
+  return {
+    ...position,
+    currentPrice: price,
+    markPrice: price,
+    currentValueUsdc: price * shares,
+    rotationExitQuotePrice: price,
+    rotationExitQuoteAt: new Date().toISOString(),
+  };
+}
+
+async function positionWithFreshExitQuote(position) {
+  const tokenId = String(position?.tokenId || position?.assetId || "");
+  if (!tokenId) throw new Error("position has no token id for a fresh exit quote");
+  const book = bestBook(await fetchJson(
+    new URL(`/book?token_id=${tokenId}`, CLOB_HOST),
+    `CLOB rotation quote ${tokenId}`,
+  ));
+  if (book.bestBid == null || book.bestBid <= 0) {
+    throw new Error("fresh Polymarket best bid is not available");
+  }
+  return positionAtExitPrice(position, book.bestBid);
+}
+
 function positionCost(position) {
   const direct = number(position.totalCostUsdc ?? position.stakeUsdc ?? position.maxLossUsdc ?? position.initialValue);
   if (direct != null) return direct;
@@ -1529,6 +1567,46 @@ function positionRotationEconomics(position, evaluationByToken = new Map()) {
     nearMaximumWin,
     upsideExhausted,
     settlementLocked,
+  };
+}
+
+function rotationNetProfitGuard({ economics = {}, candidate = {}, capitalBaseUsdc = null } = {}) {
+  const realizedPnlIfExit = number(economics.realizedPnlIfExit);
+  const currentMaximumPnl = number(economics.maximumWinPnl ?? economics.holdExpectedPnl);
+  const replacementMaximumPnl = number(candidate.netGainIfWinUsdc);
+  const capitalBase = Math.max(
+    0,
+    number(capitalBaseUsdc, 0),
+    number(economics.cost, 0),
+    number(candidate.totalCostUsdc ?? candidate.orderNotionalUsdc, 0),
+  );
+  const requiredImprovementUsdc = Math.max(
+    ROTATION_MIN_NET_PNL_IMPROVEMENT_USDC,
+    capitalBase * ROTATION_MIN_PRIORITY_IMPROVEMENT,
+  );
+  const rotatedMaximumPnl = realizedPnlIfExit != null && replacementMaximumPnl != null
+    ? realizedPnlIfExit + replacementMaximumPnl
+    : null;
+  const maximumPnlDelta = rotatedMaximumPnl != null && currentMaximumPnl != null
+    ? rotatedMaximumPnl - currentMaximumPnl
+    : null;
+  const exitLossUsdc = realizedPnlIfExit == null ? null : Math.max(0, -realizedPnlIfExit);
+  const replacementProfitAfterExitLossUsdc = replacementMaximumPnl != null && exitLossUsdc != null
+    ? replacementMaximumPnl - exitLossUsdc
+    : null;
+  const allowed = maximumPnlDelta != null
+    && maximumPnlDelta + ROTATION_TIE_EPSILON >= requiredImprovementUsdc;
+  return {
+    allowed,
+    realizedPnlIfExitUsdc: realizedPnlIfExit,
+    exitLossUsdc,
+    currentMaximumPnlUsdc: currentMaximumPnl,
+    replacementMaximumPnlUsdc: replacementMaximumPnl,
+    replacementProfitAfterExitLossUsdc,
+    rotatedMaximumPnlUsdc: rotatedMaximumPnl,
+    maximumPnlDeltaUsdc: maximumPnlDelta,
+    requiredImprovementUsdc,
+    capitalBaseUsdc: capitalBase,
   };
 }
 
@@ -1729,6 +1807,27 @@ function candidatePoolForRotation(baseCandidates = [], { latestResolutionMs = nu
     .slice(0, ROTATION_CANDIDATE_SCAN_LIMIT);
 }
 
+function restrictCandidatesToRotationPlan(candidates = [], previousState = null, completionRun = false) {
+  if (!completionRun) return [...candidates];
+  const rotationExit = previousState?.rotationExit || previousState?.batchLog?.rotationExit || null;
+  const plannedTokenId = String(
+    rotationExit?.candidateTokenId
+      || rotationExit?.candidate?.tokenId
+      || "",
+  );
+  const exitedTokenId = String(
+    rotationExit?.position?.tokenId
+      || rotationExit?.position?.assetId
+      || rotationExit?.order?.tokenId
+      || "",
+  );
+  if (!plannedTokenId || plannedTokenId === exitedTokenId) return [];
+  const current = candidates.find((candidate) => String(candidate?.tokenId || "") === plannedTokenId);
+  if (current) return [current];
+  const fallback = rotationExit?.candidate;
+  return fallback && String(fallback.tokenId || "") === plannedTokenId ? [fallback] : [];
+}
+
 function candidateRequiresSpecificPositionExit(candidate, position, liveState, evaluationByToken = new Map()) {
   const beforeExit = riskBlock(candidate, liveState, evaluationByToken);
   if (!beforeExit) return false;
@@ -1811,16 +1910,36 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
   }
 
   for (const [positionRank, item] of positions.entries()) {
-    const {
-      position,
-      exitValue,
-      holdEv,
-      holdAnnualizedReturn,
-      priority,
-      economics,
-      pendingResolutionReferenceAnnualizedReturn,
-      usesPendingResolutionReference,
-    } = item;
+    const storedPosition = item.position;
+    let position = storedPosition;
+    try {
+      // The account snapshot carries a mark, but a rotation realizes the bid. A stale
+      // mark understated several live losses, so every position is repriced against
+      // the executable book before it is allowed into the comparison.
+      position = await positionWithFreshExitQuote(storedPosition);
+    } catch (error) {
+      reviews.push({
+        ...rotationPositionSummary(storedPosition, evaluationByToken, {
+          holdAnnualizedReturn: item.holdAnnualizedReturn,
+          priority: item.priority,
+          pendingResolutionReferenceAnnualizedReturn: item.pendingResolutionReferenceAnnualizedReturn,
+          usesPendingResolutionReference: item.usesPendingResolutionReference,
+        }),
+        action: "NOT_SELLABLE_FOR_ROTATION",
+        reason: `fresh executable exit quote unavailable: ${error?.message || String(error)}`,
+      });
+      continue;
+    }
+    const economics = positionRotationEconomics(position, evaluationByToken);
+    const exitValue = economics.netExitValue;
+    const holdEv = positionHoldExpectedValue(position, evaluationByToken);
+    const measuredAnnualizedReturn = positionHoldAnnualizedReturn(position, evaluationByToken);
+    const usesPendingResolutionReference = Boolean(item.usesPendingResolutionReference);
+    const pendingResolutionReferenceAnnualizedReturn = item.pendingResolutionReferenceAnnualizedReturn;
+    const holdAnnualizedReturn = usesPendingResolutionReference
+      ? number(pendingResolutionReferenceAnnualizedReturn, measuredAnnualizedReturn)
+      : measuredAnnualizedReturn;
+    const priority = rotationPriority(position, evaluationByToken, { holdAnnualizedReturn });
     const baseReview = rotationPositionSummary(position, evaluationByToken, {
       holdAnnualizedReturn,
       priority,
@@ -1851,6 +1970,7 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           cashAfterExit,
           maxNotional,
           evaluationByToken,
+          { forceTakerEntry: ROTATION_TAKER_ENTRY },
         );
         if (revalidated.status !== "ELIGIBLE") {
           rejectedCandidates.push(liveBatchCandidateSummary(revalidated));
@@ -1873,6 +1993,11 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
         const currentPriority = priority.value;
         const replacementPriority = candidatePriority.metric === "R/R" ? candidatePriority.value : rotatedAnnualizedReturn;
         const priorityDelta = replacementPriority - currentPriority;
+        const netProfitGuard = rotationNetProfitGuard({
+          economics,
+          candidate: revalidated,
+          capitalBaseUsdc: rotationCapitalBase,
+        });
         // Past its end date with real upside still outstanding: hold it. This is a hard
         // veto checked before the ranking metric, because the metric is exactly what
         // misleads here. The horizon is gone, so the remaining return looks poor while
@@ -1895,14 +2020,13 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
         const candidateResolvesLater = positionRemainingDays != null
           && candidateDays != null
           && candidateDays >= positionRemainingDays;
-        // Otherwise the replacement must improve the portfolio's ranking metric by at
-        // least the configured minimum net profit. A separate requirement that the
-        // absolute USD result also improve was removed: the ranking metric (p.a.) is
-        // exactly what the portfolio is optimised for, and a shorter-horizon candidate
-        // can legitimately rank higher while paying fewer raw dollars -- gating on
-        // evDelta as well meant the portfolio kept a worse-ranked position/order simply
-        // because it happened to be a bigger single payout.
+        // Potential p.a. is still the portfolio's ranking metric, but it is not money.
+        // Close-to-resolution percentages can be huge for only a few cents, so the
+        // replacement must also cover the actual exit loss and improve the maximum
+        // after-fee dollar result. This prevents repeated small rotations from banking
+        // losses that none of the replacement wins can recover.
         const rotationPreferred = !settlementLocked
+          && netProfitGuard.allowed
           && (upsideExhausted
             || (!candidateResolvesLater
               && priorityDelta >= ROTATION_MIN_PRIORITY_IMPROVEMENT));
@@ -1935,6 +2059,7 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
           replacementExpectedValueUsdc: candidateEv,
           replacementCapitalBaseUsdc: rotationCapitalBase,
           replacementNetYield: number(revalidated.netYield),
+          netProfitGuard,
         };
         const review = {
           position: baseReview,
@@ -1961,7 +2086,9 @@ async function reviewPositionRotation({ liveState, evaluationByToken, baseCandid
             ? (upsideExhausted
               ? `this position is only $${Number(economics.remainingPotentialGainUsdc ?? 0).toFixed(4)} short of its maximum win, within the $${ROTATION_PROTECT_REMAINING_GAIN_USDC.toFixed(2)} threshold, so there is nothing left worth waiting for; release the capital instead of holding until settlement`
               : `after estimated exit fees and current P/L, ${candidatePriority.metric} improves by ${(priorityDelta * 100).toFixed(1)} pts; expected result changes by ${evDelta >= 0 ? "+" : ""}${evDelta.toFixed(4)} USDC`)
-            : (candidateResolvesLater && !settlementLocked
+            : (!netProfitGuard.allowed
+              ? `after the executable sell loss, the replacement would improve maximum net P/L by ${Number(netProfitGuard.maximumPnlDeltaUsdc ?? 0).toFixed(4)} USDC, below the required ${Number(netProfitGuard.requiredImprovementUsdc ?? 0).toFixed(4)} USDC`
+              : candidateResolvesLater && !settlementLocked
               ? `this position resolves in ${Number(positionRemainingDays ?? 0).toFixed(2)} days and the replacement not until ${Number(candidateDays ?? 0).toFixed(2)} days, so selling now would forfeit a nearer payout for a more distant one; the candidate should still be available once this settles`
               : settlementLocked
               ? `resolution is already past and this position still has $${Number(economics.remainingPotentialGainUsdc ?? 0).toFixed(4)} to collect, above the $${ROTATION_PROTECT_REMAINING_GAIN_USDC.toFixed(2)} threshold, so it is held until it settles even though ${candidatePriority.metric} would look ${(priorityDelta * 100).toFixed(1)} pts better elsewhere`
@@ -2156,19 +2283,20 @@ function scoreEconomics({ probability, qualificationProbability, annualizedRetur
   };
 }
 
-function orderPriceForBook(book, tick) {
+function orderPriceForBook(book, tick, { forceTakerEntry = false } = {}) {
   // Completing a rotation buys what the sell leg already paid for, so it takes the ask
   // instead of resting under it. Resting here is what left the swap half-done.
-  if (!USE_LIMIT_ORDERS || ROTATION_ENTRY_CROSSES_SPREAD) return book.bestAsk;
+  if (!USE_LIMIT_ORDERS || ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry) return book.bestAsk;
   if (book.bestBid != null && book.bestAsk != null && book.bestBid < book.bestAsk) return roundToTick(book.bestBid, tick, "down");
   if (book.bestAsk != null) return roundToTick(book.bestAsk - tick, tick, "down");
   return null;
 }
 
-function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 }) {
+function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0, forceTakerEntry = false }) {
   const targetStake = Math.max(0, number(maxNotional, 0));
   const availableCash = Math.max(0, number(cash, 0));
-  const appliedFeeRate = USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD ? 0 : Math.max(0, number(feeRate, 0));
+  const takerEntry = ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry;
+  const appliedFeeRate = USE_LIMIT_ORDERS && POST_ONLY && !takerEntry ? 0 : Math.max(0, number(feeRate, 0));
   const costPerShare = price * (1 + appliedFeeRate * (1 - price));
   const minNotional = price * minOrderSize;
   const minimumOrderFee = appliedFeeRate > 0 ? takerFee(minOrderSize, price, appliedFeeRate) : 0;
@@ -2204,7 +2332,7 @@ function sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate = 0 })
   }
   const belowExchangeMinimum = size > 0 && size + 0.000001 < minOrderSize;
   const orderNotional = size > 0 ? price * size : 0;
-  const makerPrecisionBlocked = USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD && size > 0 && orderNotional < 0.01 - 0.000001;
+  const makerPrecisionBlocked = USE_LIMIT_ORDERS && POST_ONLY && !takerEntry && size > 0 && orderNotional < 0.01 - 0.000001;
 
   return {
     size: size > 0 ? Number(size.toFixed(4)) : null,
@@ -2249,7 +2377,14 @@ function livePortfolioValue(liveState, cash) {
   return marketValue;
 }
 
-async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, evaluationByToken = new Map()) {
+async function revalidateEvaluation(
+  evaluation,
+  liveState,
+  cash,
+  maxNotional,
+  evaluationByToken = new Map(),
+  { forceTakerEntry = false } = {},
+) {
   const market = await fetchMarket(evaluation);
   // Gamma knows this token neither by its id nor by its slug. Short-dated markets --
   // esports "Game 2 Winner"/"Map 2 Winner" legs especially -- are delisted once they
@@ -2298,16 +2433,24 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   const book = bestBook(await fetchJson(new URL(`/book?token_id=${evaluation.tokenId}`, CLOB_HOST), `CLOB book ${evaluation.tokenId}`));
   const tick = number(clobMarket?.mts ?? market.orderPriceMinTickSize ?? evaluation.tickSize, 0.01);
   const minOrderSize = number(clobMarket?.mos, 5);
-  const price = orderPriceForBook(book, tick);
+  const takerEntry = ROTATION_ENTRY_CROSSES_SPREAD || forceTakerEntry;
+  const price = orderPriceForBook(book, tick, { forceTakerEntry });
   if (!Number.isFinite(price) || price <= 0 || price >= 1) {
     return { candidate: evaluation, eligible: false, rejectReasons: ["no valid current entry price"] };
   }
-  if (USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD && book.bestAsk != null && price >= book.bestAsk) {
+  if (USE_LIMIT_ORDERS && POST_ONLY && !takerEntry && book.bestAsk != null && price >= book.bestAsk) {
     return { candidate: evaluation, eligible: false, rejectReasons: ["post-only limit would cross current ask"] };
   }
 
   const estimatedFeeRate = feeRateForEvaluation(evaluation);
-  const orderSizing = sharesForOrder({ price, minOrderSize, maxNotional, cash, feeRate: estimatedFeeRate });
+  const orderSizing = sharesForOrder({
+    price,
+    minOrderSize,
+    maxNotional,
+    cash,
+    feeRate: estimatedFeeRate,
+    forceTakerEntry,
+  });
   const size = orderSizing.size;
   if (!Number.isFinite(size) || orderSizing.minimumFundingBlocked) {
     const minimumCost = Number(orderSizing.minimumOrderCost || orderSizing.minNotional || 0);
@@ -2404,7 +2547,7 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
   // row stops showing a figure captured whenever it was last scraped.
   const volumeUsdc = number(market.volumeNum, number(market.volume, volume24hr));
   const notional = Number((price * size).toFixed(5));
-  const fee = USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD ? 0 : takerFee(size, price, estimatedFeeRate);
+  const fee = USE_LIMIT_ORDERS && POST_ONLY && !takerEntry ? 0 : takerFee(size, price, estimatedFeeRate);
   const totalCost = notional + fee;
   const expectedValue = Number.isFinite(aiProbability) ? aiProbability * size - notional - fee : null;
   const expectedRoi = Number.isFinite(expectedValue) && totalCost > 0 ? expectedValue / totalCost : null;
@@ -2491,8 +2634,8 @@ async function revalidateEvaluation(evaluation, liveState, cash, maxNotional, ev
     riskReward: Number.isFinite(potentialRoi) ? Number(potentialRoi.toFixed(6)) : null,
     totalCostUsdc: Number(totalCost.toFixed(5)),
     tradingFeeUsdc: Number(fee.toFixed(5)),
-    feeMode: USE_LIMIT_ORDERS && POST_ONLY && !ROTATION_ENTRY_CROSSES_SPREAD ? "post-only maker fee assumed 0" : "taker fee estimate",
-    orderType: USE_LIMIT_ORDERS && !ROTATION_ENTRY_CROSSES_SPREAD ? "GTC" : "FAK",
+    feeMode: USE_LIMIT_ORDERS && POST_ONLY && !takerEntry ? "post-only maker fee assumed 0" : "taker fee estimate",
+    orderType: USE_LIMIT_ORDERS && !takerEntry ? "GTC" : "FAK",
     riskGroupKeys: risk.keys,
     riskGroupLabels: risk.labels,
     score: Number((selectedAnnualizedReturn + (PROBABILITY_SOURCE === "polymarket" ? qualificationProbability - price : edge)).toFixed(6)),
@@ -3896,7 +4039,15 @@ async function main() {
   const latestEvaluations = candidatePool.uniqueEvaluations;
   const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
   const manualShortlistFallback = candidatePool.diagnostics.manualShortlistFallback === true;
-  const baseCandidates = candidatePool.candidates;
+  // A rotation is a single approved swap. After its sell leg, the completion pass
+  // must revalidate and buy exactly that approved replacement. Re-running the general
+  // shortlist here previously sold a position and then sometimes bought the same token
+  // back minutes later, banking the loss with no economic benefit.
+  const baseCandidates = restrictCandidatesToRotationPlan(
+    candidatePool.candidates,
+    previousExecution,
+    ROTATION_COMPLETION_RUN,
+  );
 
   const checked = [];
   for (const evaluation of baseCandidates) {
@@ -3944,7 +4095,9 @@ async function main() {
   const hasUsableFreeCash = availableCash > 0.01;
   const needsCapitalRotation = !eligible.length && cashSizingBlocked.length > 0;
   const needsRiskReplacement = !eligible.length && !needsCapitalRotation && riskBlockedCandidates.length > 0;
-  const rotationReview = !eligible.length && (needsCapitalRotation || needsRiskReplacement)
+  const rotationReview = !ROTATION_COMPLETION_RUN
+    && !eligible.length
+    && (needsCapitalRotation || needsRiskReplacement)
     ? await reviewPositionRotation({
         liveState,
         evaluationByToken,
@@ -3972,7 +4125,7 @@ async function main() {
   // A directly fundable candidate must also protect unrelated open orders from
   // cancellation. A funded buy must never trigger a needless cancellation just
   // to make room for a trade that is already funded.
-  const orderManagement = activeSellOrders.length || directCandidateCanUseFreeCapital
+  const orderManagement = ROTATION_COMPLETION_RUN || activeSellOrders.length || directCandidateCanUseFreeCapital
     ? { action: "NONE", reviews: [] }
     : await reviewOpenOrders({
       liveState,
@@ -4143,6 +4296,7 @@ async function main() {
       openOrderRepriceThreshold: OPEN_ORDER_REPRICE_THRESHOLD,
       rotationTrigger: needsRiskReplacement ? "risk-overlap" : (needsCapitalRotation ? "capital" : null),
       rotationMinimumPriorityImprovement: ROTATION_MIN_PRIORITY_IMPROVEMENT,
+      rotationMinimumNetPnlImprovementUsdc: ROTATION_MIN_NET_PNL_IMPROVEMENT_USDC,
       rotationProtectRemainingGainUsdc: ROTATION_PROTECT_REMAINING_GAIN_USDC,
     },
     orderManagement,
@@ -4185,6 +4339,7 @@ async function main() {
         liveAutoRotate: LIVE_AUTO_ROTATE,
         maxOrderFraction: MAX_ORDER_FRACTION,
         rotationMinimumPriorityImprovement: ROTATION_MIN_PRIORITY_IMPROVEMENT,
+        rotationMinimumNetPnlImprovementUsdc: ROTATION_MIN_NET_PNL_IMPROVEMENT_USDC,
         rotationProtectRemainingGainUsdc: ROTATION_PROTECT_REMAINING_GAIN_USDC,
       },
       capital: {
@@ -4366,28 +4521,77 @@ async function main() {
     const rotation = rotationReview.best;
     let exitOrder = null;
     let response = null;
+    let rotationBlockedReason = "";
+    let finalProfitGuard = rotation.priorityComparison?.netProfitGuard || null;
     try {
       exitOrder = await buildRotationExitOrder(
         rotation.positionOrder || rotation.position,
         evaluationByToken,
         tradingConfig,
       );
-      response = DRY_RUN || !hasFlag("confirm-live")
-        ? { status: "dry_run_rotation_exit", success: true }
-        : await submitOrder(exitOrder);
+      const quotedPosition = positionAtExitPrice(
+        rotation.positionOrder || rotation.position,
+        exitOrder.orderPrice,
+      );
+      const freshEconomics = positionRotationEconomics(quotedPosition, evaluationByToken);
+      const candidateTokenId = String(rotation.candidateTokenId || rotation.candidate?.tokenId || "");
+      const candidateSource = evaluationByToken.get(candidateTokenId) || rotation.candidate;
+      const cashAfterFreshExit = availableCash + Math.max(0, number(freshEconomics.netExitValue, 0));
+      const freshCandidate = await revalidateEvaluation(
+        candidateSource,
+        liveStateWithoutPosition(liveState, quotedPosition),
+        cashAfterFreshExit,
+        maxNotional,
+        evaluationByToken,
+        { forceTakerEntry: ROTATION_TAKER_ENTRY },
+      );
+      if (freshCandidate.status !== "ELIGIBLE") {
+        rotationBlockedReason = `approved replacement failed the final live check: ${(freshCandidate.rejectReasons || ["not eligible"]).join("; ")}`;
+      } else {
+        finalProfitGuard = rotationNetProfitGuard({
+          economics: freshEconomics,
+          candidate: freshCandidate,
+          capitalBaseUsdc: Math.max(
+            number(freshEconomics.cost, 0),
+            number(freshCandidate.totalCostUsdc, 0),
+          ),
+        });
+        if (!finalProfitGuard.allowed) {
+          rotationBlockedReason = `fresh bid/ask check rejected the rotation: maximum net P/L would improve by ${Number(finalProfitGuard.maximumPnlDeltaUsdc ?? 0).toFixed(4)} USDC, below the required ${Number(finalProfitGuard.requiredImprovementUsdc ?? 0).toFixed(4)} USDC`;
+        } else {
+          rotation.candidate = liveBatchCandidateSummary(freshCandidate);
+          rotation.candidateTokenId = freshCandidate.tokenId || candidateTokenId;
+          rotation.priorityComparison = {
+            ...(rotation.priorityComparison || {}),
+            netProfitGuard: finalProfitGuard,
+            currentRealizedPnlIfExitUsdc: freshEconomics.realizedPnlIfExit,
+            currentExitFeeUsdc: freshEconomics.exitFee,
+            replacementExpectedValueUsdc: freshCandidate.netGainIfWinUsdc,
+          };
+        }
+      }
+      response = rotationBlockedReason
+        ? { status: "rotation_guard_rejected", error: rotationBlockedReason }
+        : (DRY_RUN || !hasFlag("confirm-live")
+          ? { status: "dry_run_rotation_exit", success: true }
+          : await submitOrder(exitOrder));
     } catch (error) {
       response = { status: "exception", error: error?.message || String(error) };
     }
     const accepted = successfulOrderResponse(response);
     const action = accepted
       ? (DRY_RUN || !hasFlag("confirm-live") ? "DRY_RUN_ROTATION_EXIT" : "ROTATION_EXIT_SUBMITTED")
-      : "ROTATION_EXIT_REJECTED";
+      : (rotationBlockedReason ? "ROTATION_REVALIDATION_REJECTED" : "ROTATION_EXIT_REJECTED");
     const reason = accepted
       ? `${rotationHumanReason || "A weaker live position is being replaced by a better candidate."} Sell order submitted; the replacement buy will follow the next confirmed account sync.`
-      : `Rotation sell order was not accepted: ${orderResponseError(response) || "unknown Polymarket response"}; the existing position was preserved`;
+      : (rotationBlockedReason
+        ? `${rotationBlockedReason}; the existing position was preserved`
+        : `Rotation sell order was not accepted: ${orderResponseError(response) || "unknown Polymarket response"}; the existing position was preserved`);
     const explanation = accepted
-      ? "The selected position passed the portfolio-metric comparison after estimated sell fees and current P/L. The sell was submitted first; the next run will sync released cash and revalidate the selected replacement before buying it."
-      : "The selected replacement was not executed because its sell order was not accepted. No position or unrelated order was cancelled.";
+      ? `The current best bid and replacement ask were refreshed immediately before the sell. After the exit loss, the replacement improves maximum net P/L by ${Number(finalProfitGuard?.maximumPnlDeltaUsdc ?? 0).toFixed(4)} USDC against a required ${Number(finalProfitGuard?.requiredImprovementUsdc ?? 0).toFixed(4)} USDC. The sell was submitted first; only this approved replacement may be bought by the completion pass.`
+      : (rotationBlockedReason
+        ? "The final executable bid/ask economics no longer covered the exit loss and required profit margin. No sell was submitted and the existing position was preserved."
+        : "The selected replacement was not executed because its sell order was not accepted. No position or unrelated order was cancelled.");
     await emitDecision({
       ...decision,
       action,
@@ -4596,7 +4800,10 @@ export {
   localDaysToResolution,
   selectedAnnualizedReturn,
   ROTATION_PROTECT_REMAINING_GAIN_USDC,
+  ROTATION_MIN_NET_PNL_IMPROVEMENT_USDC,
   positionRotationEconomics,
+  rotationNetProfitGuard,
+  orderPriceForBook,
   sharesForOrder,
   prepareLiveCandidatePool,
   liveRevalidationUpdate,
@@ -4605,6 +4812,7 @@ export {
   compactLiveRunRecord,
   rotationLegMerge,
   candidatePoolForRotation,
+  restrictCandidatesToRotationPlan,
   latestHoldingResolutionMs,
   fixedEntryOrder,
   fixedEntryRowFacts,
