@@ -11,11 +11,15 @@ from agent_m.gemini.imager import generate_header_image
 from agent_m.gemini.researcher import Topic, TopicResearcher
 from agent_m.gemini.writer import Article, write_article_from_plan
 from agent_m.history import History
-from agent_m.medium_publish_settings import is_medium_publish_enabled
+from agent_m.medium_publish_settings import is_article_pipeline_enabled
 from agent_m.publishers.github_pages import GitHubPagesPublisher
 from agent_m.publishers.rss_feed import generate_feed
 
 log = logging.getLogger(__name__)
+
+
+class ArticlePipelineDisabledError(RuntimeError):
+    """Raised when article generation/publishing is disabled by Telegram settings."""
 
 
 @dataclass
@@ -38,6 +42,15 @@ _lock = asyncio.Lock()
 
 async def run_pipeline(mode: str = "public", slug: str | None = None) -> PipelineResult:
     async with _lock:
+        if not is_article_pipeline_enabled():
+            log.info(
+                "[pipeline] Article pipeline disabled by Telegram setting; skipping mode=%s slug=%s",
+                mode,
+                slug,
+            )
+            raise ArticlePipelineDisabledError(
+                "Article generation and publishing is disabled by /medium_publish off."
+            )
         return await _run(mode, slug)
 
 
@@ -160,7 +173,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
         else:
             platform_errors.append("Dev.to: DEVTO_API_KEY missing")
 
-        if is_medium_publish_enabled():
+        if is_article_pipeline_enabled():
             # 3. Medium (Playwright)
             if config.medium_playwright:
                 medium_url, medium_error = await _publish_medium_playwright(
@@ -181,7 +194,7 @@ async def _run(mode: str, slug: str | None = None) -> PipelineResult:
                     platform_urls["Medium"] = medium_url
                     post_url = medium_url
         else:
-            log.info("[pipeline] Medium publishing disabled by Telegram setting")
+            log.info("[pipeline] Article pipeline disabled by Telegram setting before Medium step")
 
     log.info("[pipeline] Step 7/7: Saving to history (published_to=%s, errors=%s)",
              published_to, platform_errors)

@@ -20,7 +20,7 @@ from agent_m.gemini.client import get_tracker
 from agent_m.gemini.imager import generate_header_image
 from agent_m.gemini.researcher import Topic
 from agent_m.history import History
-from agent_m.pipeline import run_pipeline
+from agent_m.pipeline import ArticlePipelineDisabledError, run_pipeline
 from agent_m.publishers.medium_playwright import MediumPlaywrightPublisher
 from agent_m.topic_suggestions import (
     confirm_suggestion,
@@ -52,18 +52,18 @@ def admin_only(func):
 
 @admin_only
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from agent_m.medium_publish_settings import is_medium_publish_enabled
+    from agent_m.medium_publish_settings import is_article_pipeline_enabled
 
-    platforms = []
-    if config.devto_api_key:
-        platforms.append("Dev.to")
-    if config.medium_playwright:
-        label = "Medium (Playwright)"
-        if not is_medium_publish_enabled():
-            label += " disabled"
-        platforms.append(label)
-    platforms.append("GitHub Pages (RSS)")
-    platforms_str = ", ".join(platforms)
+    if is_article_pipeline_enabled():
+        platforms = []
+        if config.devto_api_key:
+            platforms.append("Dev.to")
+        if config.medium_playwright:
+            platforms.append("Medium (Playwright)")
+        platforms.append("GitHub Pages (RSS)")
+        platforms_str = ", ".join(platforms)
+    else:
+        platforms_str = "Article pipeline disabled (/medium_publish off)"
 
     await update.message.reply_text(  # type: ignore[union-attr]
         f"Agent M ready.\n"
@@ -76,7 +76,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/feedback — show all active feedback\n"
         "/feedback_clear — remove all feedback\n"
         "/medium_login — jak nastavit Medium session (+ přijímám JSON soubor z Cookie-Editor)\n"
-        "/medium_publish on|off|status — zapnout/vypnout publikování článků na Medium\n"
+        "/medium_publish on|off|status - zapnout/vypnout generovani a publikovani clanku na vsechny platformy\n"
         "/history — recent publications\n"
         "/topics — content plan status\n"
         "/engage [query] — find related Medium articles and draft comments\n"
@@ -236,6 +236,16 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
     msg = update.message
     if not msg:
         return
+    from agent_m.medium_publish_settings import is_article_pipeline_enabled
+
+    if not is_article_pipeline_enabled():
+        await msg.reply_text(
+            "Article pipeline is OFF.\n"
+            "No article was generated or published.\n"
+            "Use /medium_publish on to re-enable GitHub Pages, Dev.to and Medium."
+        )
+        return
+
     await msg.reply_chat_action(ChatAction.TYPING)
 
     label = f"({mode})"
@@ -251,6 +261,14 @@ async def _publish(update: Update, mode: str, slug: str | None = None) -> None:
     except asyncio.TimeoutError:
         log.error("Pipeline timed out after 600s")
         await msg.reply_text("Pipeline timed out after 10 minutes. Check logs for details.")
+        return
+    except ArticlePipelineDisabledError:
+        log.info("Manual article command skipped because article pipeline is disabled")
+        await msg.reply_text(
+            "Article pipeline is OFF.\n"
+            "No article was generated or published.\n"
+            "Use /medium_publish on to re-enable GitHub Pages, Dev.to and Medium."
+        )
         return
     except Exception as e:
         log.exception("Pipeline failed")
@@ -760,26 +778,26 @@ async def medium_publish_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     from agent_m.medium_publish_settings import (
-        medium_publish_status,
-        set_medium_publish_enabled,
+        article_pipeline_status,
+        set_article_pipeline_enabled,
     )
 
     action = (context.args[0].lower() if context.args else "status").strip()
     if action in {"on", "enable", "enabled", "zapnout"}:
-        result = set_medium_publish_enabled(True)
+        result = set_article_pipeline_enabled(True)
     elif action in {"off", "disable", "disabled", "vypnout"}:
-        result = set_medium_publish_enabled(False)
+        result = set_article_pipeline_enabled(False)
     elif action in {"status", "stav"}:
-        result = medium_publish_status()
+        result = article_pipeline_status()
     else:
         await msg.reply_text("Usage: /medium_publish on|off|status")
         return
 
     enabled = bool(result["enabled"])
     await msg.reply_text(
-        "Medium article publishing\n"
-        f"Status: {'ON - new articles will publish to Medium' if enabled else 'OFF - new articles will skip Medium'}\n"
-        "This affects /post, /draft and the daily article pipeline. "
+        "Article generation and publishing\n"
+        f"Status: {'ON - new articles can publish to GitHub Pages, Dev.to and Medium' if enabled else 'OFF - article generation and publishing do nothing'}\n"
+        "This affects /post, /draft, /preview and the daily article pipeline. "
         "Medium engagement and Medium login/cookies stay available."
     )
 
@@ -907,13 +925,13 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     used_slugs = await history.get_used_slugs()
     remaining = len(get_plan()) - len(used_slugs)
-    from agent_m.medium_publish_settings import is_medium_publish_enabled
+    from agent_m.medium_publish_settings import is_article_pipeline_enabled
 
     text = (
         f"Last publish: {last}\n"
         f"Schedule: daily at {config.publish_hour:02d}:{config.publish_minute:02d} UTC\n"
         f"Content plan: {remaining} articles remaining\n\n"
-        f"Medium publish: {'ON' if is_medium_publish_enabled() else 'OFF'}\n"
+        f"Article pipeline: {'ON' if is_article_pipeline_enabled() else 'OFF'}\n"
         f"Today: {today['total']} tokens, {today['calls']} calls\n"
         f"This month: {month['total']} tokens, {month['calls']} calls"
     )

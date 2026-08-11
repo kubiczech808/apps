@@ -9,7 +9,8 @@ from telegram import BotCommand
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from agent_m.config import config
-from agent_m.pipeline import run_pipeline
+from agent_m.medium_publish_settings import is_article_pipeline_enabled
+from agent_m.pipeline import ArticlePipelineDisabledError, run_pipeline
 from agent_m.telegram import handlers
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,9 @@ def _is_quota_error(err: Exception) -> bool:
 async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
     attempt = context.job.data or 0
     try:
+        if not is_article_pipeline_enabled():
+            log.info("Scheduled publish skipped: article pipeline disabled by /medium_publish off")
+            return
         log.info("Scheduled publish started (attempt %d)", attempt + 1)
         result = await run_pipeline(mode="public")
 
@@ -55,6 +59,8 @@ async def _scheduled_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
                 chat_id=config.telegram_admin_chat_id,
                 text=caption,
             )
+    except ArticlePipelineDisabledError:
+        log.info("Scheduled publish skipped: article pipeline disabled by /medium_publish off")
     except Exception as e:
         log.exception("Scheduled publish failed (attempt %d)", attempt + 1)
         if _is_quota_error(e) and attempt < _MAX_RETRIES:
@@ -198,7 +204,7 @@ _BOT_COMMANDS = [
     BotCommand("feedback", "Param: [text] - pridat/zobrazit trvale instrukce"),
     BotCommand("feedback_clear", "Smazat všechny instrukce"),
     BotCommand("medium_login", "Nastavit Medium session (cookies)"),
-    BotCommand("medium_publish", "Param: on|off|status - publikovani clanku na Medium"),
+    BotCommand("medium_publish", "Param: on|off|status - generovani/publikovani clanku"),
     BotCommand("history", "Poslední publikace"),
     BotCommand("topics", "Stav obsahového plánu"),
     BotCommand("engage", "Param: [query] - najit clanky a navrhnout komentare"),

@@ -9,6 +9,18 @@ from agent_m.config import config
 _SETTINGS_FILE = config.data_dir / "medium_publish_settings.json"
 
 
+def is_article_pipeline_enabled() -> bool:
+    return is_medium_publish_enabled()
+
+
+def set_article_pipeline_enabled(enabled: bool) -> dict:
+    return set_medium_publish_enabled(enabled)
+
+
+def article_pipeline_status() -> dict:
+    return medium_publish_status()
+
+
 def is_medium_publish_enabled() -> bool:
     data = _read_settings(_SETTINGS_FILE)
     return bool(data.get("enabled", True))

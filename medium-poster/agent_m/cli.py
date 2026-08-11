@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 
 from agent_m.config import config
-from agent_m.pipeline import run_pipeline
+from agent_m.pipeline import ArticlePipelineDisabledError, run_pipeline
 
 
 async def send_telegram(text: str, image_bytes: bytes | None = None) -> None:
@@ -43,6 +43,13 @@ async def send_telegram(text: str, image_bytes: bytes | None = None) -> None:
 async def run(mode: str, slug: str | None) -> None:
     try:
         result = await run_pipeline(mode=mode, slug=slug)
+    except ArticlePipelineDisabledError as e:
+        logging.getLogger(__name__).info("Pipeline skipped: %s", e)
+        print("AGENT_M_RESULT_START")
+        print("Status: skipped")
+        print(str(e))
+        print("AGENT_M_RESULT_END")
+        return
     except Exception as e:
         logging.getLogger(__name__).error("Pipeline failed: %s", e, exc_info=True)
         await send_telegram(f"Agent M pipeline failed:\n{e}")
