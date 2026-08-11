@@ -7746,26 +7746,29 @@ function scrapedSimulationTaxonomyRows(trades, field, kind) {
 
 function buildCalculationReport(state) {
   const generatedAt = state.generatedAt || nowIso();
-  const trades = (Array.isArray(state.marketObservations) ? state.marketObservations : [])
+  const observedTrades = (Array.isArray(state.marketObservations) ? state.marketObservations : [])
     .map(withFirstObservationMetadata)
     .map(scrapedSimulationTrade)
     .filter(Boolean);
-  const resolved = trades.filter((trade) => trade.outcome != null);
+  // This is a performance report, not an inventory of live opportunities. Pending
+  // markets have no outcome, so including them in trade counts or averages dilutes
+  // every parameter combination with data that cannot validate the strategy yet.
+  const trades = observedTrades.filter((trade) => trade.outcome != null);
   return {
     id: `calculation-report-${generatedAt}`,
     generatedAt,
     taxonomyVersion: 2,
     simulationType: "fresh_scraped_opportunities",
+    observedSampleSize: observedTrades.length,
     sampleSize: trades.length,
-    resolvedSampleSize: resolved.length,
-    pendingSampleSize: trades.length - resolved.length,
+    resolvedSampleSize: trades.length,
     stakeUsdc: Number(SCRAPED_SIMULATION_STAKE_USDC.toFixed(4)),
-    resolvedBinaryCount: resolved.filter((trade) => trade.marketType === "binary").length,
-    resolvedMultiCount: resolved.filter((trade) => trade.marketType === "multi").length,
+    resolvedBinaryCount: trades.filter((trade) => trade.marketType === "binary").length,
+    resolvedMultiCount: trades.filter((trade) => trade.marketType === "multi").length,
     sourceNotes: {
       probability: "Polymarket probability captured on the first scraped observation; no AI analysis or portfolio filter is used.",
       execution: `Each fresh scraped opportunity is simulated as an immediate market position with a fixed ${SCRAPED_SIMULATION_STAKE_USDC.toFixed(2)} USDC stake and the stored taker fee schedule.`,
-      resolution: "P/L and accuracy are counted only after the selected outcome has a final Polymarket resolution price.",
+      resolution: "Only opportunities with a final Polymarket resolution price are included in performance statistics.",
     },
     parameterSummaries: scrapedSimulationParameterRows(trades),
     categorySummaries: scrapedSimulationTaxonomyRows(trades, "categories", "category"),
@@ -7780,7 +7783,7 @@ function buildCalculationReport(state) {
       url: `https://polymarket.com/event/${trade.item.eventSlug || trade.item.slug || ""}`,
       firstObservedAt: trade.firstObservedAt,
       firstProbability: trade.entry,
-      firstLiquidity: trade.liquidity,
+      firstVolumeUsdc: trade.volumeUsdc,
       daysToResolution: trade.days,
       finalOutcomePrice: trade.item.finalOutcomePrice ?? null,
       resolvedOutcome: trade.outcome,

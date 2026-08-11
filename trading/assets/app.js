@@ -85,7 +85,7 @@ const state = {
   calculationSource: "all",
   calculationMarket: "all",
   calculationSort: {
-    key: "resolved",
+    key: "trades",
     direction: "desc",
   },
   // Categories and tags are separate Gamma taxonomies and each table keeps its own
@@ -8382,7 +8382,6 @@ function calculationSortValue(row, key) {
   if (key === "threshold") return numeric(row.threshold);
   if (key === "maxResolutionDays") return numeric(row.maxResolutionDays);
   if (key === "trades") return numeric(row.trades ?? 0);
-  if (key === "resolved") return numeric(row.resolved ?? 0);
   if (key === "accuracy") return numeric(row.winRate);
   if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
   if (key === "roi") return numeric(row.roi);
@@ -8392,7 +8391,7 @@ function calculationSortValue(row, key) {
 }
 
 function sortedCalculationRows(rows) {
-  const sort = state.calculationSort || { key: "resolved", direction: "desc" };
+  const sort = state.calculationSort || { key: "trades", direction: "desc" };
   const direction = sort.direction === "asc" ? 1 : -1;
   return [...rows].sort((a, b) => {
     const aValue = calculationSortValue(a, sort.key);
@@ -8539,8 +8538,6 @@ function renderCalculationReport() {
 
   const rows = calculationRows(report);
   const sample = Number(report.sampleSize || 0);
-  const resolvedSample = Number(report.resolvedSampleSize || 0);
-  const pendingSample = Number(report.pendingSampleSize || Math.max(0, sample - resolvedSample));
   const binary = Number(report.resolvedBinaryCount || 0);
   const multi = Number(report.resolvedMultiCount || 0);
 
@@ -8549,7 +8546,7 @@ function renderCalculationReport() {
       <div>
         <span class="label">Last calculation</span>
         <strong>${escapeHtml(report.generatedAt ? formatDate(report.generatedAt) : "-")}</strong>
-        <span>${sample} fresh scraped opportunities / ${resolvedSample} resolved / ${pendingSample} pending</span>
+        <span>${sample} resolved scraped opportunities</span>
       </div>
       <div>
         <span class="label">Simulation scope</span>
@@ -8559,7 +8556,7 @@ function renderCalculationReport() {
     </div>
     <div class="calculation-section">
       <h3>Best parameter combinations</h3>
-      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon on every scraped opportunity. The table opens with the largest resolved samples first; click ROI to inspect return ranking.</p>
+      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon only on opportunities with a known final Polymarket outcome. The table opens with the largest samples first; click ROI to inspect return ranking.</p>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
@@ -8568,7 +8565,6 @@ function renderCalculationReport() {
               ${calculationHeader("marketType", "Market type")}
               ${calculationHeader("maxResolutionDays", "Max days")}
               ${calculationHeader("trades", "Trades")}
-              ${calculationHeader("resolved", "Resolved")}
               ${calculationHeader("accuracy", "Accuracy")}
               ${calculationHeader("pnl", "P/L")}
               ${calculationHeader("roi", "ROI")}
@@ -8583,14 +8579,13 @@ function renderCalculationReport() {
                 <td>${escapeHtml(calculationMarketLabel(row.marketType))}</td>
                 <td>${Number(row.maxResolutionDays || 0)} d</td>
                 <td>${Number(row.trades || 0)}</td>
-                <td>${Number(row.resolved || 0)} / ${Number(row.pending || 0)} pending</td>
-                <td>${Number(row.resolved || 0) ? `${Number(row.wins || 0)} / ${Number(row.resolved || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
                 <td>${probability(Number(row.avgProbability))}</td>
                 <td>${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
               </tr>
-            `).join("") : '<tr><td colspan="10">No scraped opportunity simulation is available yet.</td></tr>'}
+            `).join("") : '<tr><td colspan="9">No resolved scraped opportunity simulation is available yet.</td></tr>'}
           </tbody>
         </table>
       </div>

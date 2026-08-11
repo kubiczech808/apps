@@ -1588,20 +1588,43 @@ test("parameter combinations: every distinct rule uses the full resolved sample 
     ...row,
     firstVolumeUsdc: 1000 + index * 100,
   }));
+  const pendingSource = state.marketObservations.find((row) => {
+    const price = Number(row.firstMarketProbability ?? row.lastLiveMarketProbability ?? row.marketProbability);
+    return price > 0 && price < 1;
+  });
+  assert.ok(pendingSource, "the fixture must contain a tradable price for the pending regression case");
+  state.marketObservations.push({
+    ...pendingSource,
+    id: "pending-statistics-regression",
+    status: "SCRAPED",
+    marketClosed: false,
+    finalOutcomePrice: null,
+  });
   const report = bot.buildCalculationReport(state);
+  const withoutPending = bot.buildCalculationReport({
+    ...state,
+    marketObservations: state.marketObservations.filter((row) => row.id !== "pending-statistics-regression"),
+  });
   assert.equal(report.parameterSummaries.length, 90, "3 market types x 6 thresholds x 5 horizons");
   assert.ok(report.parameterSummaries.every((row) => !Object.hasOwn(row, "minLiquidityUsdc")));
   const widest = report.parameterSummaries.find((row) => row.marketType === "all"
     && row.threshold === 0.5
     && row.maxResolutionDays === 30);
-  assert.equal(widest.trades, report.sampleSize, "the broadest rule must retain every simulated trade");
-  assert.equal(widest.resolved, report.resolvedSampleSize, "and every resolved observation");
+  assert.equal(report.sampleSize, report.resolvedSampleSize,
+    "performance statistics must exclude unresolved opportunities from the sample");
+  assert.equal(report.observedSampleSize, withoutPending.observedSampleSize + 1,
+    "the report retains the inventory count for the pending observation");
+  assert.equal(report.sampleSize, withoutPending.sampleSize,
+    "but the pending observation must stay outside performance statistics");
+  assert.equal(widest.trades, report.sampleSize, "the broadest rule must retain every resolved trade");
+  assert.equal(widest.pending, 0, "a parameter combination must never include pending opportunities");
   assert.ok(Number.isFinite(widest.avgVolumeUsdc) && widest.avgVolumeUsdc > 0,
     "the rule must expose the average first-scraped traded volume");
 
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
-  assert.match(app, /key: "resolved",\s*direction: "desc"/);
+  assert.match(app, /key: "trades",\s*direction: "desc"/);
   assert.match(app, /calculationHeader\("avgVolumeUsdc", "Avg volume"\)/);
+  assert.doesNotMatch(app, /calculationHeader\("resolved", "Resolved"\)/);
   assert.doesNotMatch(app, /calculationHeader\("minLiquidityUsdc", "Min liquidity"\)/);
   assert.doesNotMatch(app, /rows\.slice\(0, 80\)/);
 });
