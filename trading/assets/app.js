@@ -91,8 +91,8 @@ const state = {
   // Categories and tags are separate Gamma taxonomies and each table keeps its own
   // sort order.
   taxonomySort: {
-    category: { key: "resolved", direction: "desc" },
-    tag: { key: "resolved", direction: "desc" },
+    category: { key: "annualizedPnlPerTradeUsdc", direction: "desc" },
+    tag: { key: "annualizedPnlPerTradeUsdc", direction: "desc" },
   },
   displayedRunLog: [],
   runLogFilters: [],
@@ -8413,7 +8413,7 @@ function calculationHeader(key, label) {
 }
 
 function taxonomySortState(kind) {
-  return state.taxonomySort?.[kind] || { key: "resolved", direction: "desc" };
+  return state.taxonomySort?.[kind] || { key: "annualizedPnlPerTradeUsdc", direction: "desc" };
 }
 
 function taxonomySortArrow(kind, key) {
@@ -8477,19 +8477,26 @@ function taxonomyRows(report, kind) {
 function renderTaxonomyPerformanceTable(report, kind, title, note) {
   const rows = taxonomyRows(report, kind);
   const label = kind === "category" ? "Category" : "Tag";
+  const coverage = report?.taxonomyCoverage?.[kind] || {};
+  const total = Number(coverage.totalTrades || report?.resolvedSampleSize || report?.sampleSize || 0);
+  const classified = Number(coverage.classifiedTrades || 0);
+  const unclassified = Number(coverage.unclassifiedTrades || 0);
+  const coverageNote = total
+    ? ` All ${total} resolved opportunities are included; ${classified} carry at least one explicit Polymarket ${kind}, and ${unclassified} are shown as ${kind === "category" ? "Uncategorized" : "Untagged"}.`
+    : "";
   return `
     <div class="calculation-section">
       <h3>${escapeHtml(title)}</h3>
-      <p class="calculation-note">${escapeHtml(note)}</p>
+      <p class="calculation-note">${escapeHtml(`${note}${coverageNote}`)}</p>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
             <tr>
               ${taxonomyHeader(kind, "label", label)}
               ${taxonomyHeader(kind, "trades", "Trades")}
-              ${taxonomyHeader(kind, "resolved", "Resolved")}
               ${taxonomyHeader(kind, "accuracy", "Accuracy")}
               ${taxonomyHeader(kind, "pnl", "P/L")}
+              ${taxonomyHeader(kind, "annualizedPnlPerTradeUsdc", "P/L p.a.", "Annualized average net dollar P/L per fixed $5 simulation trade, using each group's measured time to resolution.")}
               ${taxonomyHeader(kind, "pnlPerTradeUsdc", "P/L per trade", "Realized P/L divided by the number of resolved trades, so groups of different sizes compare directly.")}
               ${taxonomyHeader(kind, "roi", "ROI")}
               ${taxonomyHeader(kind, "annualizedRoi", "ROI p.a.", "Realized ROI annualized over the group's average time to resolution.")}
@@ -8505,9 +8512,9 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
               <tr>
                 <td data-label="${label}"><strong>${escapeHtml(row.label || "-")}</strong></td>
                 <td data-label="Trades">${Number(row.trades || 0)}</td>
-                <td data-label="Resolved">${Number(row.resolved || 0)} / ${Number(row.pending || 0)} pending</td>
-                <td data-label="Accuracy">${Number(row.resolved || 0) ? `${Number(row.wins || 0)} / ${Number(row.resolved || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td data-label="Accuracy">${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
+                <td data-label="P/L p.a." class="${pnlClass(Number(row.annualizedPnlPerTradeUsdc || 0))}">${row.annualizedPnlPerTradeUsdc == null ? "-" : signedMoney(Number(row.annualizedPnlPerTradeUsdc))}</td>
                 <td data-label="P/L per trade" class="${pnlClass(Number(row.pnlPerTradeUsdc || 0))}">${row.pnlPerTradeUsdc == null ? "-" : signedMoney(Number(row.pnlPerTradeUsdc), 4)}</td>
                 <td data-label="ROI" class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
                 <td data-label="ROI p.a." class="${pnlClass(Number(row.annualizedRoi || 0))}">${row.annualizedRoi == null ? "-" : signedPercent(Number(row.annualizedRoi))}</td>

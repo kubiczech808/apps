@@ -1462,7 +1462,7 @@ test("taxonomy performance: real Polymarket categories and tags stay separate", 
   }));
 
   const report = bot.buildCalculationReport(state);
-  assert.equal(report.taxonomyVersion, 2);
+  assert.equal(report.taxonomyVersion, 3);
   const categoryLabels = report.categorySummaries.map((row) => row.label);
   const tagLabels = report.tagSummaries.map((row) => row.label);
   assert.deepEqual(new Set(categoryLabels), new Set(["sports", "politics"]));
@@ -1674,13 +1674,41 @@ test("taxonomy performance: an unknown horizon reports no p.a. at all", async ()
   }
 });
 
+test("taxonomy performance: every resolved trade is represented by a real label or an explicit fallback", () => {
+  const resolvedRow = {
+    tokenId: "taxonomy-unclassified-token",
+    question: "Will the category fallback be visible?",
+    status: "RESOLVED",
+    marketClosed: true,
+    marketProbability: 1,
+    firstMarketProbability: 0.8,
+    lastLiveMarketProbability: 0.8,
+    finalOutcomePrice: 1,
+    firstLiquidity: 60000,
+    firstDaysToResolution: 2,
+  };
+  const report = bot.buildCalculationReport(bot.normalizeState({ marketObservations: [resolvedRow] }));
+  assert.deepEqual(report.taxonomyCoverage.category, {
+    totalTrades: 1,
+    classifiedTrades: 0,
+    unclassifiedTrades: 1,
+  });
+  assert.deepEqual(report.taxonomyCoverage.tag, {
+    totalTrades: 1,
+    classifiedTrades: 0,
+    unclassifiedTrades: 1,
+  });
+  assert.equal(report.categorySummaries.find((row) => row.label === "uncategorized")?.trades, 1);
+  assert.equal(report.tagSummaries.find((row) => row.label === "untagged")?.trades, 1);
+});
+
 test("taxonomy performance: categories and tags render as separately sorted tables", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
   assert.match(app, /taxonomySort: \{/);
-  assert.match(app, /category: \{ key: "resolved", direction: "desc" \}/);
-  assert.match(app, /tag: \{ key: "resolved", direction: "desc" \}/);
+  assert.match(app, /category: \{ key: "annualizedPnlPerTradeUsdc", direction: "desc" \}/);
+  assert.match(app, /tag: \{ key: "annualizedPnlPerTradeUsdc", direction: "desc" \}/);
   assert.match(app, /data-taxonomy-sort="\$\{kind\}" data-taxonomy-sort-key="\$\{key\}"/);
   assert.match(app, /const taxonomyButton = event\.target\.closest\("\[data-taxonomy-sort\]"\);/);
   assert.match(app, /const button = event\.target\.closest\("\[data-calculation-sort\]"\);/);
@@ -1691,7 +1719,7 @@ test("taxonomy performance: categories and tags render as separately sorted tabl
     "legacy inferred categories must stay hidden until a split report is generated");
   // Every column in both tables is sortable.
   const sorted = [...app.matchAll(/taxonomyHeader\(kind, "([a-zA-Z]+)"/g)].map((match) => match[1]);
-  for (const key of ["label", "trades", "resolved", "accuracy", "pnl", "pnlPerTradeUsdc",
+  for (const key of ["label", "trades", "accuracy", "pnl", "annualizedPnlPerTradeUsdc", "pnlPerTradeUsdc",
     "roi", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "avgProbability", "avgVolumeUsdc", "lastResolvedAt"]) {
     assert.ok(sorted.includes(key), `${key} column must be sortable`);
   }

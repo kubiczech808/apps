@@ -7740,7 +7740,15 @@ function scrapedSimulationTaxonomyRows(trades, field, kind) {
     groups.get(key).trades.push(trade);
   };
   for (const trade of trades) {
-    for (const label of Array.isArray(trade[field]) ? trade[field] : []) add(label, trade);
+    const labels = Array.isArray(trade[field]) ? trade[field] : [];
+    // A missing Gamma relation must not silently remove a settled market from the
+    // taxonomy report. Keep it distinct from an actual Polymarket category or tag
+    // instead of guessing from an unrelated risk label.
+    if (!labels.length) {
+      add(kind === "category" ? "uncategorized" : "untagged", trade);
+      continue;
+    }
+    for (const label of labels) add(label, trade);
   }
   const rows = [...groups.values()]
     .map(({ trades: groupTrades, ...group }) => ({
@@ -7753,6 +7761,17 @@ function scrapedSimulationTaxonomyRows(trades, field, kind) {
   // This report lives in the core state file, which every dashboard read decodes, so
   // the row count cannot be left to however many tags Polymarket happens to publish.
   return rows.slice(0, SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT);
+}
+
+function scrapedSimulationTaxonomyCoverage(trades, field) {
+  const classifiedTrades = trades.filter((trade) => (
+    Array.isArray(trade[field]) && trade[field].length > 0
+  )).length;
+  return {
+    totalTrades: trades.length,
+    classifiedTrades,
+    unclassifiedTrades: trades.length - classifiedTrades,
+  };
 }
 
 function buildCalculationReport(state) {
@@ -7768,7 +7787,7 @@ function buildCalculationReport(state) {
   return {
     id: `calculation-report-${generatedAt}`,
     generatedAt,
-    taxonomyVersion: 2,
+    taxonomyVersion: 3,
     simulationType: "fresh_scraped_opportunities",
     observedSampleSize: observedTrades.length,
     sampleSize: trades.length,
@@ -7784,6 +7803,10 @@ function buildCalculationReport(state) {
     parameterSummaries: scrapedSimulationParameterRows(trades),
     categorySummaries: scrapedSimulationTaxonomyRows(trades, "categories", "category"),
     tagSummaries: scrapedSimulationTaxonomyRows(trades, "tags", "tag"),
+    taxonomyCoverage: {
+      category: scrapedSimulationTaxonomyCoverage(trades, "categories"),
+      tag: scrapedSimulationTaxonomyCoverage(trades, "tags"),
+    },
     examples: trades.slice(0, 80).map((trade) => ({
       id: trade.item.id,
       marketType: trade.marketType,
