@@ -1018,15 +1018,16 @@ test("state segments: the core file never carries the heavy collections", async 
   assert.equal(rebuilt.marketObservations.length, state.marketObservations.length, "no row may be lost");
 });
 
-test("state segments: resolved history is never discarded", () => {
+test("state segments: resolved history retains every measurable trade and purges settlement-only rows", () => {
   // Reported: the counts in the scraped and resolved tabs did not match what had
   // actually been mined, and stopped growing. Resolved rows were trimmed to a limit
   // on every write, so once the archive filled it churned -- older settled markets
   // were deleted to make room for newer ones, and no count could exceed the cap.
   //
   // A resolved market is the record of what was scraped and how it ended, which is
-  // what every report and parameter comparison is measured against. Once dropped it
-  // is gone: unlike an active row, it will never be re-scraped.
+  // what every report and parameter comparison is measured against. It stays forever
+  // if it has an original live quote; settlement-only 0/1 rows have no usable entry
+  // and must not pollute the evidence set.
   const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
   assert.ok(!/MARKET_OBSERVATION_RESOLVED_RETAIN_LIMIT/.test(source),
     "no cap may stand between a resolved market and the archive");
@@ -1041,10 +1042,23 @@ test("state segments: resolved history is never discarded", () => {
     id: `resolved-${index}`,
     tokenId: String(900000000000 + index),
     status: "RESOLVED",
+    firstMarketProbability: 0.9,
     updatedAt: new Date(Date.UTC(2026, 0, 1 + index)).toISOString(),
   }));
+  rows.push({
+    id: "settlement-only",
+    tokenId: "900000000099",
+    status: "RESOLVED",
+    firstMarketProbability: 1,
+    marketProbability: 1,
+    finalOutcomePrice: 1,
+    updatedAt: "2026-02-01T00:00:00.000Z",
+  });
   const state = bot.normalizeState({ marketObservations: rows });
-  assert.equal(state.marketObservations.length, 12, "nothing may be dropped");
+  assert.equal(state.marketObservations.length, 12,
+    "only settlement-only resolved rows may be removed from the archive");
+  assert.ok(!state.marketObservations.some((row) => row.id === "settlement-only"),
+    "a final 0/1 print is not an original market probability");
 });
 
 test("state segments: writeState publishes siblings that readState reassembles", async () => {

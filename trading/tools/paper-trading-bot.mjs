@@ -1168,6 +1168,14 @@ function marketObservationUpdateTime(item) {
   return Date.parse(item?.marketDataUpdatedAt || item?.observedAt || item?.updatedAt || "") || 0;
 }
 
+function hasOriginalMarketProbability(item) {
+  // `withFirstObservationMetadata` has already made the one safe migration for old
+  // rows: a recorded live quote becomes the first stored quote when the original
+  // field was absent. A settlement-only 0%/100% print is not an original market
+  // probability and must never be used as evidence in the historical simulation.
+  return validMarketProbability(item?.firstMarketProbability) != null;
+}
+
 // A settled book prints 0 or 1, and `firstMarketProbability` used to be seeded from
 // `marketProbability` before `lastLiveMarketProbability` existed. Rows that resolved
 // back then carry a stuck 0/1 entry price, and scrapedSimulationTrade() discards any
@@ -1450,7 +1458,16 @@ function retainMarketObservations(items = []) {
   const resolved = [];
   for (const item of Array.isArray(items) ? items : []) {
     const status = String(item?.status || item?.selectionStatus || "").toUpperCase();
-    (status === "RESOLVED" ? resolved : active).push(item);
+    if (status !== "RESOLVED") {
+      active.push(item);
+      continue;
+    }
+    // Resolved entries without the quote that was available when we first saw them
+    // cannot contribute a valid simulated trade: their only price is a final 0/1
+    // settlement print. Purge them rather than retaining data that makes the
+    // statistics look more complete than they are.
+    if (!hasOriginalMarketProbability(item)) continue;
+    resolved.push(item);
   }
   const compareActive = (a, b) => {
     const aDays = daysToEnd(a?.endDate);
