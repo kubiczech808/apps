@@ -406,7 +406,8 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.threshold-control input {
+.threshold-control input,
+.threshold-control select {
   width: 64px;
   min-height: 30px;
   padding: 0 8px;
@@ -415,6 +416,10 @@ button:disabled {
   background: #ffffff;
   color: var(--ink);
   font-weight: 800;
+}
+
+.scraped-taxonomy-control select {
+  width: min(260px, 30vw);
 }
 
 .threshold-control strong {
@@ -2266,8 +2271,13 @@ body.modal-open {
     justify-content: space-between;
   }
 
-  .threshold-control input {
+  .threshold-control input,
+  .threshold-control select {
     width: 76px;
+  }
+
+  .scraped-taxonomy-control select {
+    width: min(100%, 260px);
   }
 
   .execution-actions > *,

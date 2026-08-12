@@ -58,6 +58,7 @@ const state = {
   evaluationDaysFilter: null,
   evaluationNetYieldFilter: 0,
   evaluationLiquidityFilter: 0,
+  scrapedTaxonomyFilter: null,
   eligibilityThreshold: null,
   eligibilityThresholdKey: "",
   riskAllocation: null,
@@ -117,6 +118,8 @@ const EVALUATION_PROBABILITY_FILTER_STORAGE_KEY = "tradingEvaluationProbabilityF
 const EVALUATION_DAYS_FILTER_STORAGE_KEY = "tradingEvaluationDaysFilter";
 const EVALUATION_NET_YIELD_FILTER_STORAGE_KEY = "tradingEvaluationNetYieldFilter";
 const EVALUATION_LIQUIDITY_FILTER_STORAGE_KEY = "tradingEvaluationLiquidityFilter";
+const SCRAPED_TAXONOMY_KIND_QUERY_PARAM = "taxonomy";
+const SCRAPED_TAXONOMY_VALUE_QUERY_PARAM = "taxonomyValue";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
@@ -208,6 +211,7 @@ const els = {
   evaluationNetYieldFilterLabel: document.querySelector("[data-evaluation-net-yield-filter-label]"),
   evaluationLiquidityFilter: document.querySelector("[data-evaluation-liquidity-filter]"),
   evaluationLiquidityFilterLabel: document.querySelector("[data-evaluation-liquidity-filter-label]"),
+  scrapedTaxonomyFilter: document.querySelector("[data-scraped-taxonomy-filter]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   riskAllocation: document.querySelector("[data-risk-allocation]"),
@@ -961,6 +965,43 @@ function opportunityRoutePath(view = "scraped") {
     : `/trading/opportunities/${normalized}/`;
 }
 
+function normalizeScrapedTaxonomyKind(value) {
+  const kind = String(value || "").trim().toLowerCase();
+  return kind === "category" || kind === "tag" ? kind : "";
+}
+
+function normalizeScrapedTaxonomyLabel(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .slice(0, 160);
+}
+
+function normalizedScrapedTaxonomyFilter(value = null) {
+  const kind = normalizeScrapedTaxonomyKind(value?.kind);
+  const label = normalizeScrapedTaxonomyLabel(value?.label);
+  return kind && label ? { kind, label } : null;
+}
+
+function scrapedTaxonomyRouteFilter(search = window.location.search) {
+  const params = new URLSearchParams(search || "");
+  return normalizedScrapedTaxonomyFilter({
+    kind: params.get(SCRAPED_TAXONOMY_KIND_QUERY_PARAM),
+    label: params.get(SCRAPED_TAXONOMY_VALUE_QUERY_PARAM),
+  });
+}
+
+function scrapedTaxonomyOpportunityPath(filter = state.scrapedTaxonomyFilter) {
+  const normalized = normalizedScrapedTaxonomyFilter(filter);
+  if (!normalized) return opportunityRoutePath("scraped");
+  const query = new URLSearchParams({
+    [SCRAPED_TAXONOMY_KIND_QUERY_PARAM]: normalized.kind,
+    [SCRAPED_TAXONOMY_VALUE_QUERY_PARAM]: normalized.label,
+  });
+  return `${opportunityRoutePath("scraped")}?${query.toString()}`;
+}
+
 function currentRouteState() {
   const path = window.location.pathname.replace(/\/+$/, "/");
   if (/(?:^|\/)opportunities\/scraped\/scan-log\/$/.test(path)) {
@@ -974,12 +1015,14 @@ function currentRouteState() {
   }
   const opportunityRoute = path.match(/(?:^|\/)opportunities(?:\/([^/]+))?\/$/);
   if (opportunityRoute) {
+    const opportunityView = normalizeOpportunityView(opportunityRoute[1]);
     return {
       page: "opportunities",
       tab: "settings-runs",
       settingsSection: "evaluation-log",
       evaluationStatus: "EVALUATED",
-      opportunityView: normalizeOpportunityView(opportunityRoute[1]),
+      opportunityView,
+      scrapedTaxonomyFilter: opportunityView === "scraped" ? scrapedTaxonomyRouteFilter() : null,
     };
   }
   if (path.endsWith("/trading/settings/") || path.endsWith("/settings/")) {
@@ -1142,6 +1185,7 @@ function syncOpportunityViewControls() {
     }
   });
   renderScrapedScanControls();
+  syncScrapedTaxonomyFilterControl();
   if (scraped) loadScanCategoryCounts();
 }
 
@@ -1152,6 +1196,116 @@ function normalizedScrapedScanTag(value) {
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
+}
+
+function taxonomyValuesFromRecord(item, kind) {
+  const fields = kind === "category"
+    ? ["firstPolymarketCategories", "polymarketCategories", "categories", "firstCategories"]
+    : ["firstPolymarketTags", "polymarketTags", "tags", "firstTags"];
+  const values = new Set();
+  for (const field of fields) {
+    const source = item?.[field];
+    const entries = Array.isArray(source) ? source : source == null ? [] : [source];
+    for (const entry of entries) {
+      const raw = entry && typeof entry === "object"
+        ? (entry.slug || entry.label || entry.name || "")
+        : entry;
+      const label = normalizeScrapedTaxonomyLabel(raw);
+      if (label) values.add(label);
+    }
+  }
+  return values;
+}
+
+function scrapedTaxonomyFilterMatches(item, filter = state.scrapedTaxonomyFilter) {
+  const normalized = normalizedScrapedTaxonomyFilter(filter);
+  if (!normalized) return true;
+  const values = taxonomyValuesFromRecord(item, normalized.kind);
+  if (normalized.kind === "category" && normalized.label === "uncategorized") return values.size === 0;
+  if (normalized.kind === "tag" && normalized.label === "untagged") return values.size === 0;
+  return values.has(normalized.label);
+}
+
+function scrapedTaxonomyFilterValue(filter = state.scrapedTaxonomyFilter) {
+  const normalized = normalizedScrapedTaxonomyFilter(filter);
+  return normalized ? `${normalized.kind}:${normalized.label}` : "";
+}
+
+function scrapedTaxonomyFilterFromValue(value) {
+  const [kind, ...labelParts] = String(value || "").split(":");
+  return normalizedScrapedTaxonomyFilter({ kind, label: labelParts.join(":") });
+}
+
+function scrapedTaxonomyFilterOptions() {
+  const options = { category: new Set(), tag: new Set() };
+  const report = state.botState?.latestCalculationReport
+    || (Array.isArray(state.botState?.calculationReports) ? state.botState.calculationReports[0] : null);
+  for (const kind of ["category", "tag"]) {
+    for (const row of taxonomyRows(report, kind)) {
+      const label = normalizeScrapedTaxonomyLabel(row?.label);
+      if (label) options[kind].add(label);
+    }
+  }
+  for (const item of scrapedMarketObservations()) {
+    for (const kind of ["category", "tag"]) {
+      for (const label of taxonomyValuesFromRecord(item, kind)) options[kind].add(label);
+    }
+  }
+  const selected = normalizedScrapedTaxonomyFilter();
+  if (selected) options[selected.kind].add(selected.label);
+  return Object.fromEntries(Object.entries(options).map(([kind, values]) => [
+    kind,
+    [...values].sort((left, right) => left.localeCompare(right)),
+  ]));
+}
+
+function taxonomyFilterDisplayLabel(kind, label) {
+  if (kind === "category" && label === "uncategorized") return "Uncategorized";
+  if (kind === "tag" && label === "untagged") return "Untagged";
+  return scrapedScanTagLabel(label);
+}
+
+function syncScrapedTaxonomyFilterControl() {
+  if (!els.scrapedTaxonomyFilter) return;
+  const options = scrapedTaxonomyFilterOptions();
+  const selected = scrapedTaxonomyFilterValue();
+  const group = (kind, label) => options[kind].length ? `
+    <optgroup label="${label}">
+      ${options[kind].map((value) => `<option value="${escapeHtml(`${kind}:${value}`)}">${escapeHtml(taxonomyFilterDisplayLabel(kind, value))}</option>`).join("")}
+    </optgroup>` : "";
+  els.scrapedTaxonomyFilter.innerHTML = [
+    '<option value="">All categories and tags</option>',
+    group("category", "Categories"),
+    group("tag", "Tags"),
+  ].join("");
+  els.scrapedTaxonomyFilter.value = selected;
+}
+
+function resetScrapedOpportunityFilters() {
+  state.evaluationProbabilityFilter = 0;
+  state.evaluationDaysFilter = null;
+  state.evaluationNetYieldFilter = 0;
+  state.evaluationLiquidityFilter = 0;
+  saveEvaluationProbabilityFilter(0);
+  saveEvaluationDaysFilter(null);
+  saveEvaluationNetYieldFilter(0);
+  saveEvaluationLiquidityFilter(0);
+  persistScrapedScanPreferences();
+  syncEvaluationProbabilityFilterControl();
+  syncEvaluationDaysFilterControl();
+  syncEvaluationNetYieldFilterControl();
+  syncEvaluationLiquidityFilterControl();
+}
+
+function applyScrapedTaxonomyRouteFilter(filter) {
+  state.scrapedTaxonomyFilter = normalizedScrapedTaxonomyFilter(filter);
+  if (state.scrapedTaxonomyFilter) {
+    // A taxonomy link is an exploration of all currently open markets in that group,
+    // not a continuation of the previous screen's personal scan constraints.
+    resetScrapedOpportunityFilters();
+    state.evaluationStatus = "EVALUATED";
+  }
+  syncScrapedTaxonomyFilterControl();
 }
 
 // The categories this picker offers, in Polymarket's own top-level sense. Every slug here
@@ -1326,7 +1480,9 @@ function setOpportunityView(view, { syncRoute = false, replace = false } = {}) {
   if (state.opportunityView === "scraped" || state.opportunityView === "scan-log") ensureScrapedMarketState();
   if (state.opportunityView === "scan-log") loadScrapeRunHistory({ reset: true });
   if (syncRoute && state.page === "opportunities") {
-    const targetPath = `${opportunityRoutePath(state.opportunityView)}${window.location.search}`;
+    const targetPath = state.opportunityView === "scraped"
+      ? scrapedTaxonomyOpportunityPath()
+      : opportunityRoutePath(state.opportunityView);
     const currentPath = `${window.location.pathname}${window.location.search}`;
     if (currentPath !== targetPath) {
       window.history[replace ? "replaceState" : "pushState"]({ page: "opportunities", opportunityView: state.opportunityView }, "", targetPath);
@@ -1336,6 +1492,11 @@ function setOpportunityView(view, { syncRoute = false, replace = false } = {}) {
 
 function activatePage(page, { replace = false, preserveSearch = false } = {}) {
   const nextPage = ["settings", "opportunities", "portfolios"].includes(page) ? page : "portfolios";
+  if (nextPage === "opportunities" && !preserveSearch) {
+    // The main navigation opens the neutral catalogue. Taxonomy links carry their
+    // own query string and use a full navigation, so they keep their explicit scope.
+    state.scrapedTaxonomyFilter = null;
+  }
   setPage(nextPage);
   if (nextPage === "opportunities") {
     setSettingsSection("evaluation-log");
@@ -1365,6 +1526,9 @@ function activatePage(page, { replace = false, preserveSearch = false } = {}) {
 function applyInitialRoute() {
   const route = currentRouteState();
   setPage(route.page);
+  if (route.opportunityView === "scraped") {
+    applyScrapedTaxonomyRouteFilter(route.scrapedTaxonomyFilter);
+  }
   if (route?.opportunityView) setOpportunityView(route.opportunityView);
   if (route?.settingsSection) setSettingsSection(route.settingsSection);
   if (route?.evaluationStatus) setEvaluationStatus(route.evaluationStatus);
@@ -7038,15 +7202,18 @@ function binaryMarketProbabilityCell(item) {
 }
 
 function renderScrapedOpportunities() {
+  syncScrapedTaxonomyFilterControl();
   const observations = scrapedMarketObservations();
   const probabilityFilter = currentEvaluationProbabilityFilter();
   const daysFilter = currentEvaluationDaysFilter();
   const minNetYield = currentEvaluationNetYieldFilter();
   const minLiquidity = currentEvaluationLiquidityFilter();
+  const taxonomyFilter = normalizedScrapedTaxonomyFilter();
   const statusFiltered = state.evaluationStatus === "ALL"
     ? observations
     : observations.filter((item) => scrapedObservationFilterStatus(item) === state.evaluationStatus);
   const filtered = statusFiltered.filter((item) => {
+    if (!scrapedTaxonomyFilterMatches(item, taxonomyFilter)) return false;
     const marketProbability = Number(scrapedDisplayProbability(item));
     if (probabilityFilter > 0 && (!Number.isFinite(marketProbability) || marketProbability < probabilityFilter)) return false;
     // A resolved market no longer trades, so the tradability filters must not apply
@@ -7072,6 +7239,7 @@ function renderScrapedOpportunities() {
       daysFilter != null ? `days <= ${daysFilter}` : "",
       minNetYield > 0 ? `net yield >= ${(minNetYield * 100).toFixed(1)}%` : "",
       minLiquidity > 0 ? `liquidity >= ${money(minLiquidity)}` : "",
+      taxonomyFilter ? `${taxonomyFilter.kind} = ${taxonomyFilterDisplayLabel(taxonomyFilter.kind, taxonomyFilter.label)}` : "",
     ].filter(Boolean);
     els.evaluationFilterCount.textContent = filters.length
       ? `${formatInteger(filtered.length) || filtered.length} scraped / ${filters.join(" / ")}`
@@ -7103,7 +7271,7 @@ function renderScrapedOpportunities() {
     return;
   }
   if (!visible.length) {
-    els.botEvaluations.innerHTML = '<div class="empty">No scraped opportunities match the selected probability, days-left, or net-yield filters.</div>';
+    els.botEvaluations.innerHTML = '<div class="empty">No scraped opportunities match the selected category, tag, probability, days-left, net-yield, or volume filters.</div>';
     return;
   }
 
@@ -8507,7 +8675,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
           <tbody>
             ${rows.length ? rows.map((row) => `
               <tr>
-                <td data-label="${label}"><strong>${escapeHtml(row.label || "-")}</strong></td>
+                <td data-label="${label}"><strong><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpportunityPath({ kind, label: row.label }))}" title="Show all current scraped opportunities in this ${kind}">${escapeHtml(row.label || "-")}</a></strong></td>
                 <td data-label="Trades">${Number(row.trades || 0)}</td>
                 <td data-label="Accuracy">${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
@@ -8842,6 +9010,19 @@ els.evaluationLiquidityFilter?.addEventListener("input", () => {
   persistScrapedScanPreferences();
   syncEvaluationLiquidityFilterControl();
   renderBotEvaluations();
+});
+
+els.scrapedTaxonomyFilter?.addEventListener("change", () => {
+  state.scrapedTaxonomyFilter = scrapedTaxonomyFilterFromValue(els.scrapedTaxonomyFilter.value);
+  syncScrapedTaxonomyFilterControl();
+  renderBotEvaluations();
+  if (state.page === "opportunities" && state.opportunityView === "scraped") {
+    const targetPath = scrapedTaxonomyOpportunityPath();
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (currentPath !== targetPath) {
+      window.history.pushState({ page: "opportunities", opportunityView: "scraped" }, "", targetPath);
+    }
+  }
 });
 
 els.eligibilityThreshold?.addEventListener("input", () => {

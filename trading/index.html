@@ -242,6 +242,12 @@
                     <input type="number" min="0" max="1000000000" step="1000" placeholder="All" data-evaluation-liquidity-filter>
                     <strong data-evaluation-liquidity-filter-label>All</strong>
                   </label>
+                  <label class="threshold-control scraped-taxonomy-control" data-scraped-only data-opportunity-filter title="Filter current scraped opportunities by the explicit Polymarket category or tag recorded for the market.">
+                    <span>Category / tag</span>
+                    <select data-scraped-taxonomy-filter aria-label="Filter scraped opportunities by Polymarket category or tag">
+                      <option value="">All categories and tags</option>
+                    </select>
+                  </label>
                   <div class="segmented" data-evaluation-filter data-evaluation-only data-opportunity-filter>
                     <button class="segment-button active" type="button" data-evaluation-status="EVALUATED">Evaluated</button>
                     <button class="segment-button" type="button" data-evaluation-status="RESOLVED">Resolved</button>
