@@ -403,7 +403,7 @@ function saveRunLogFilter(value, mode = state.mode) {
 }
 
 function normalizeMode(mode) {
-  if (mode === "live" || mode === "live-5050" || mode === "paper-highReward" || mode === "paper-moreProbable" || mode === "paper-conservative") return mode;
+  if (mode === "live" || mode === "live-5050" || mode === "paper-highReward" || mode === "paper-moreProbable" || mode === "paper-equal" || mode === "paper-conservative") return mode;
   return mode === "paper" ? "paper-conservative" : "paper-conservative";
 }
 
@@ -431,6 +431,7 @@ function liveExecutionStateFile(mode = state.mode) {
 function paperStrategyIdFromMode(mode = state.mode) {
   if (mode === "paper-highReward") return "highReward";
   if (mode === "paper-moreProbable") return "moreProbable";
+  if (mode === "paper-equal") return "equal";
   return "conservative";
 }
 
@@ -438,6 +439,7 @@ function paperModeLabel(mode = state.mode) {
   const strategyId = paperStrategyIdFromMode(mode);
   if (strategyId === "highReward") return "High reward";
   if (strategyId === "moreProbable") return "More probable";
+  if (strategyId === "equal") return "Equal";
   return "Conservative";
 }
 
@@ -483,6 +485,20 @@ function defaultPortfolioConfig() {
         executionCronMinutes: 0,
         automationEnabled: true,
         requireMostProbableOutcome: true,
+        probabilitySource: "polymarket",
+        excludedCandidateTokenIds: [],
+      },
+      equal: {
+        minProbability: 0.75,
+        maxOrderFraction: 0.05,
+        maxResolutionDays: 7,
+        selectionOrder: "highest_ev_pa_first",
+        minLiquidityUsdc: null,
+        minNetYield: 0,
+        executionTrigger: "cron",
+        executionCronMinutes: 0,
+        automationEnabled: true,
+        requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
       },
@@ -1957,7 +1973,7 @@ function tradePnlPct(trade) {
 }
 
 function isClosedTrade(trade) {
-  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED"].includes(String(trade.status || "").toUpperCase());
+  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED", "STOP_LOSS"].includes(String(trade.status || "").toUpperCase());
 }
 
 function closedTradeWasCorrect(trade) {
@@ -2709,6 +2725,7 @@ function tradeTypeBadge(trade) {
   if (trade.mode === "LIVE_RECONCILIATION") return '<span class="order-chip warning">Sync gap</span>';
   if (String(trade.status || "").toUpperCase() === "REDEEM_REQUIRED") return '<span class="order-chip warning">Redeem needed</span>';
   if (String(trade.status || "").toUpperCase() === "PENDING_RESOLUTION") return '<span class="order-chip warning">Pending resolution</span>';
+  if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return '<span class="order-chip warning">Protective exit</span>';
   if (isClosedTrade(trade) && trade.mode === "LIVE") return '<span class="order-chip filled">Settled position</span>';
   if (trade.mode === "LIVE") return '<span class="order-chip filled">Open position</span>';
   if (trade.strategyLabel) return `<span class="order-chip paper">${escapeHtml(trade.strategyLabel)}</span>`;
@@ -4154,6 +4171,7 @@ function normalizeEligibilityThreshold(value) {
 function paperModeFromStrategyId(strategyId) {
   if (strategyId === "highReward") return "paper-highReward";
   if (strategyId === "moreProbable") return "paper-moreProbable";
+  if (strategyId === "equal") return "paper-equal";
   return "paper-conservative";
 }
 
@@ -4173,6 +4191,8 @@ function thresholdDefaultForMode(mode = state.mode) {
   const portfolioThreshold = Number(portfolioForMode(normalizedMode)?.minProbability);
   const fallback = normalizedMode === "paper-highReward" || normalizedMode === "paper-moreProbable"
     ? 0.6
+    : normalizedMode === "paper-equal"
+      ? 0.75
     : DEFAULT_ELIGIBILITY_THRESHOLD;
   return normalizeEligibilityThreshold(portfolioThreshold) ?? fallback;
 }
@@ -5404,6 +5424,10 @@ function portfolioRuleRows(portfolio = {}) {
   ];
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Volume filter", `>= ${money(minLiquidityUsdc)}`]);
   rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
+  if (portfolio.id === "equal") {
+    rows.push(["Risk protection", "Paper synthetic stop: planned maximum loss equals net potential win"]);
+    rows.push(["Rotation", "Disabled for this proof of concept"]);
+  }
   // Only when something is actually excluded: a row reading "none" on every portfolio
   // that never touched the setting is noise in a list meant to be read at a glance.
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);

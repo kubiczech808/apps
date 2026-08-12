@@ -715,6 +715,19 @@ function default_portfolio_config(): array
                 'excludedCandidateTokenIds' => [],
                 'excludedMarketTags' => [],
             ],
+            'equal' => [
+                'minProbability' => 0.75,
+                'maxOrderFraction' => 0.05,
+                'maxResolutionDays' => 7,
+                'selectionOrder' => 'highest_ev_pa_first',
+                'minLiquidityUsdc' => null,
+                'minNetYield' => 0.0,
+                'executionTrigger' => 'cron',
+                'requireMostProbableOutcome' => false,
+                'probabilitySource' => 'polymarket',
+                'excludedCandidateTokenIds' => [],
+                'excludedMarketTags' => [],
+            ],
         ],
         'live' => [
             'minProbability' => 0.95,
@@ -1934,7 +1947,7 @@ function normalized_paper_strategy_input($value): ?string
         return null;
     }
     $text = (string) $value;
-    return in_array($text, ['conservative', 'highReward', 'moreProbable'], true) ? $text : null;
+    return in_array($text, ['conservative', 'highReward', 'moreProbable', 'equal'], true) ? $text : null;
 }
 
 function paper_strategy_from_target(string $target): ?string
@@ -1943,6 +1956,7 @@ function paper_strategy_from_target(string $target): ?string
         'paper-conservative' => 'conservative',
         'paper-highReward' => 'highReward',
         'paper-moreProbable' => 'moreProbable',
+        'paper-equal' => 'equal',
         default => null,
     };
 }
@@ -2045,6 +2059,8 @@ try {
             respond(['ok' => false, 'error' => 'A scraped market slug is required for refresh.'], 400);
         }
         $paperStrategyId = paper_strategy_from_target($target) ?? normalized_paper_strategy_input($payload['paper_strategy_id'] ?? $payload['paperStrategyId'] ?? null);
+        // Equal reads its complete configuration from portfolio-config.json in the
+        // paper bot. Do not add unsupported workflow_dispatch inputs here.
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
         $paperExtraInputs = [];
         foreach ($paperStrategies as $strategy) {

@@ -159,6 +159,7 @@ jobs:
       PAPER_CONSERVATIVE_MIN_PROBABILITY: ${{ github.event.inputs.paper_conservative_min_probability || '0.95' }}
       PAPER_HIGH_REWARD_MIN_PROBABILITY: ${{ github.event.inputs.paper_high_reward_min_probability || '0.60' }}
       PAPER_MORE_PROBABLE_MIN_PROBABILITY: ${{ github.event.inputs.paper_more_probable_min_probability || '0.60' }}
+      PAPER_EQUAL_MIN_PROBABILITY: "0.75"
       PAPER_CONSERVATIVE_MAX_FRACTION: ${{ github.event.inputs.paper_conservative_max_order_fraction || '' }}
       PAPER_HIGH_REWARD_MAX_FRACTION: ${{ github.event.inputs.paper_high_reward_max_order_fraction || '' }}
       PAPER_MORE_PROBABLE_MAX_FRACTION: ${{ github.event.inputs.paper_more_probable_max_order_fraction || '' }}
@@ -178,6 +179,7 @@ jobs:
       PAPER_CONSERVATIVE_PROBABILITY_SOURCE: "polymarket"
       PAPER_HIGH_REWARD_PROBABILITY_SOURCE: "polymarket"
       PAPER_MORE_PROBABLE_PROBABILITY_SOURCE: "polymarket"
+      PAPER_EQUAL_PROBABILITY_SOURCE: "polymarket"
       PAPER_MIN_ANNUAL_RETURN: "0.05"
       PAPER_OPPORTUNITY_MIN_PROBABILITY: "0.60"
       PAPER_OPPORTUNITY_MIN_EDGE: "0.04"
@@ -285,6 +287,7 @@ jobs:
               "conservative": "PAPER_CONSERVATIVE",
               "highReward": "PAPER_HIGH_REWARD",
               "moreProbable": "PAPER_MORE_PROBABLE",
+              "equal": "PAPER_EQUAL",
           }
           def emit(key, value):
               if value is None or value == "":

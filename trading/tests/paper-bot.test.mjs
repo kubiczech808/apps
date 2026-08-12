@@ -23,6 +23,45 @@ test("economics: taker fee follows shares * rate * price * (1 - price)", () => {
   assert.equal(bot.takerFeeForFills([{ size: 10, price: 0.9 }], -1), 0, "a negative rate must never credit the trade");
 });
 
+test("equal paper portfolio: its independent $100 account is registered with a synthetic risk cap", () => {
+  assert.equal(bot.PAPER_STRATEGIES.equal.label, "Equal");
+  assert.equal(bot.PAPER_STRATEGIES.equal.equalRiskProtection, true);
+  assert.equal(bot.PAPER_STRATEGIES.equal.allowRotation, false);
+  assert.equal(bot.PAPER_STRATEGIES.equal.maxFraction, 0.05);
+
+  const state = bot.normalizeState({ paperPortfolios: {} });
+  const equal = state.paperPortfolios.equal;
+  assert.ok(equal, "the new portfolio must be created for existing saved states");
+  assert.equal(equal.portfolio.initialUsdc, 100);
+  assert.equal(equal.portfolio.freeCapitalUsdc, 100);
+});
+
+test("equal risk: the planned exit leaves no more loss than the net winning gain", () => {
+  const plan = bot.equalRiskStopPlan({
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 0.5,
+    shares: 5.5,
+    entryPrice: 0.9,
+    feeRate: 0,
+    feesEnabled: false,
+  });
+  assert.equal(plan.protectable, true);
+  assert.equal(plan.requiresStop, true);
+  assert.equal(plan.riskTargetUsdc, 0.5);
+  assert.ok(plan.stopPrice > 0 && plan.stopPrice < 0.9);
+  const exitValue = bot.netExitValueAtPrice({ shares: 5.5, price: plan.stopPrice, feesEnabled: false });
+  assert.ok(Math.abs(exitValue - 4.5) < 0.0001, `expected $4.50 exit value, got ${exitValue}`);
+
+  const natural = bot.equalRiskStopPlan({
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 6,
+    shares: 11,
+    entryPrice: 0.45,
+  });
+  assert.equal(natural.protectable, true);
+  assert.equal(natural.requiresStop, false, "a whole-stake loss is already below the possible reward");
+});
+
 test("economics: net yield is measured against the real stake, not the target win", () => {
   // $0.30 net gain on a $5 stake is a 6% yield, not a 300% one.
   assert.equal(bot.netYieldAfterFees({ netGainIfWinUsdc: 0.3, stakeUsdc: 5 }), 0.06);
@@ -256,7 +295,7 @@ test("bootstrap: only the multi-portfolio schema may ever restore production", (
   assert.equal(bot.stateHasCurrentSchema(undefined), false);
 });
 
-test("bootstrap: normalizing a legacy snapshot still yields all three portfolios", () => {
+test("bootstrap: normalizing a legacy snapshot yields every current paper portfolio", () => {
   const migrated = bot.normalizeState({
     portfolio: { initialUsdc: 100 },
     trades: [{ id: "t1", status: "WON", realizedPnlUsdc: 0.2, stakeUsdc: 5 }],
@@ -264,7 +303,7 @@ test("bootstrap: normalizing a legacy snapshot still yields all three portfolios
   });
   assert.deepEqual(
     Object.keys(migrated.paperPortfolios).sort(),
-    ["conservative", "highReward", "moreProbable"],
+    ["conservative", "equal", "highReward", "moreProbable"],
   );
   assert.equal(migrated.paperPortfolios.conservative.trades.length, 1);
   // Migration is for reading, and does not license republishing the seed.

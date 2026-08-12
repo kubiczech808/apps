@@ -341,6 +341,29 @@ const PAPER_STRATEGIES = {
     selectionOrder: envSelectionOrder("PAPER_MORE_PROBABLE_SELECTION_ORDER", "highest_reward_risk_first"),
     description: `Requires the configured probability source to meet ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, deep liquidity, and multichoice-style event markets.`,
   },
+  equal: {
+    id: "equal",
+    label: "Equal",
+    selectionMetric: "Potential p.a.",
+    minProbability: envNumber("PAPER_EQUAL_MIN_PROBABILITY", 0.75),
+    maxFraction: envNumber("PAPER_EQUAL_MAX_FRACTION", MAX_FRACTION),
+    maxResolutionDays: envNumber("PAPER_EQUAL_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
+    minLiquidityUsdc: envNumber("PAPER_EQUAL_MIN_LIQUIDITY_USDC", null),
+    minNetYield: envNumber("PAPER_EQUAL_MIN_NET_YIELD", 0),
+    executionTrigger: normalizeExecutionTrigger(process.env.PAPER_EQUAL_EXECUTION_TRIGGER),
+    executionCronMinutes: Math.max(0, envNumber("PAPER_EQUAL_EXECUTION_CRON_MINUTES", 0) || 0),
+    automationEnabled: envBool("PAPER_EQUAL_AUTOMATION_ENABLED", true),
+    requireMostProbableOutcome: envBool("PAPER_EQUAL_REQUIRE_MOST_PROBABLE", false),
+    probabilitySource: envProbabilitySource("PAPER_EQUAL_PROBABILITY_SOURCE"),
+    excludedCandidateTokenIds: envTokenIdSet("PAPER_EQUAL_EXCLUDED_CANDIDATE_TOKEN_IDS"),
+    excludedMarketTags: envTagSet("PAPER_EQUAL_EXCLUDED_MARKET_TAGS"),
+    selectionOrder: envSelectionOrder("PAPER_EQUAL_SELECTION_ORDER", "highest_ev_pa_first"),
+    // Paper-only proof of concept. Polymarket's current API offers no conditional
+    // stop order, so this portfolio records a synthetic exit from a refreshed book.
+    equalRiskProtection: true,
+    allowRotation: false,
+    description: "Paper-only equal-risk strategy: planned maximum loss equals the net potential win. A synthetic protective exit is checked whenever the paper portfolio refreshes; positions are not rotated.",
+  },
 };
 
 function executionStrategies() {
@@ -868,10 +891,12 @@ function normalizeState(input) {
   };
   const highRewardInput = input.paperPortfolios?.highReward || {};
   const moreProbableInput = input.paperPortfolios?.moreProbable || {};
+  const equalInput = input.paperPortfolios?.equal || {};
   const paperPortfolios = {
     conservative: normalizePaperPortfolio(PAPER_STRATEGIES.conservative, conservativeInput),
     highReward: normalizePaperPortfolio(PAPER_STRATEGIES.highReward, highRewardInput),
     moreProbable: normalizePaperPortfolio(PAPER_STRATEGIES.moreProbable, moreProbableInput),
+    equal: normalizePaperPortfolio(PAPER_STRATEGIES.equal, equalInput),
   };
   return {
     schemaVersion: 2,
@@ -917,6 +942,8 @@ function normalizePaperPortfolio(strategy, input = {}) {
     executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     probabilitySource: strategy.probabilitySource,
+    equalRiskProtection: Boolean(strategy.equalRiskProtection),
+    allowRotation: strategy.allowRotation !== false,
     description: strategy.description,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
@@ -932,6 +959,8 @@ function normalizePaperPortfolio(strategy, input = {}) {
       executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
+      equalRiskProtection: Boolean(strategy.equalRiskProtection),
+      allowRotation: strategy.allowRotation !== false,
     },
     trades: retainPaperTrades(Array.isArray(input.trades)
       ? input.trades.map((trade) => normalizeTrade({ ...trade, strategyId: trade.strategyId || strategy.id, strategyLabel: trade.strategyLabel || strategy.label }))
@@ -1998,8 +2027,9 @@ async function refreshStoredMarketObservationResolutionStatuses(observations = [
 function mergeTrade(existing, incoming) {
   if (!existing) return incoming;
   if (!incoming) return existing;
-  const existingClosed = ["WON", "LOST"].includes(String(existing.status || "").toUpperCase());
-  const incomingClosed = ["WON", "LOST"].includes(String(incoming.status || "").toUpperCase());
+  const closedStatuses = new Set(["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS"]);
+  const existingClosed = closedStatuses.has(String(existing.status || "").toUpperCase());
+  const incomingClosed = closedStatuses.has(String(incoming.status || "").toUpperCase());
   if (incomingClosed && !existingClosed) return incoming;
   if (existingClosed && !incomingClosed) return existing;
   return tradeUpdateTime(incoming) >= tradeUpdateTime(existing) ? incoming : existing;
@@ -2010,7 +2040,7 @@ function retainPaperTrades(trades = []) {
   const closed = [];
   for (const trade of Array.isArray(trades) ? trades : []) {
     const status = String(trade?.status || "OPEN").toUpperCase();
-    (["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED"].includes(status) ? closed : active).push(trade);
+    (["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS"].includes(status) ? closed : active).push(trade);
   }
   return [
     ...active,
@@ -2173,6 +2203,7 @@ function syncLegacyPaperAliases(state) {
   state.paperPortfolios.conservative = conservative;
   state.paperPortfolios.highReward ||= normalizePaperPortfolio(PAPER_STRATEGIES.highReward, {});
   state.paperPortfolios.moreProbable ||= normalizePaperPortfolio(PAPER_STRATEGIES.moreProbable, {});
+  state.paperPortfolios.equal ||= normalizePaperPortfolio(PAPER_STRATEGIES.equal, {});
   state.portfolio = conservative.portfolio;
   state.trades = conservative.trades;
   state.lastTradeDate = conservative.lastTradeDate;
@@ -2622,6 +2653,59 @@ function takerFeeForFills(fills, feeRate) {
   return Number(fee.toFixed(5));
 }
 
+function netExitValueAtPrice({ shares, price, feeRate = 0, feesEnabled = true } = {}) {
+  const size = Number(shares);
+  const exitPrice = Number(price);
+  if (!Number.isFinite(size) || size <= 0 || !Number.isFinite(exitPrice) || exitPrice < 0 || exitPrice > 1) return null;
+  const gross = size * exitPrice;
+  const fee = feesEnabled ? takerFeeForFills([{ size, price: exitPrice }], Number(feeRate) || 0) : 0;
+  return Number((gross - fee).toFixed(5));
+}
+
+// Equal caps the planned loss at the net gain on a winning resolution. The exit
+// fee is price dependent, therefore a bounded search is safer than duplicating a
+// hand-derived fee equation elsewhere in the trading logic.
+function equalRiskStopPlan({ totalCostUsdc, netGainIfWinUsdc, shares, entryPrice, feeRate = 0, feesEnabled = true } = {}) {
+  const cost = Number(totalCostUsdc);
+  const reward = Number(netGainIfWinUsdc);
+  const size = Number(shares);
+  const entry = Number(entryPrice);
+  if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(reward) || reward <= 0 || !Number.isFinite(size) || size <= 0 || !Number.isFinite(entry) || entry <= 0 || entry >= 1) {
+    return { protectable: false, reason: "missing valid entry economics" };
+  }
+  if (reward >= cost) {
+    return {
+      protectable: true,
+      requiresStop: false,
+      riskTargetUsdc: Number(cost.toFixed(5)),
+      minimumExitValueUsdc: 0,
+      stopPrice: null,
+    };
+  }
+
+  const minimumExitValueUsdc = Number((cost - reward).toFixed(5));
+  const entryExitValue = netExitValueAtPrice({ shares: size, price: entry, feeRate, feesEnabled });
+  if (!Number.isFinite(entryExitValue) || entryExitValue < minimumExitValueUsdc) {
+    return { protectable: false, reason: "entry cannot support the required net-loss boundary" };
+  }
+
+  let low = 0;
+  let high = entry;
+  for (let index = 0; index < 48; index += 1) {
+    const mid = (low + high) / 2;
+    const exitValue = netExitValueAtPrice({ shares: size, price: mid, feeRate, feesEnabled });
+    if (exitValue != null && exitValue >= minimumExitValueUsdc) high = mid;
+    else low = mid;
+  }
+  return {
+    protectable: true,
+    requiresStop: true,
+    riskTargetUsdc: Number(reward.toFixed(5)),
+    minimumExitValueUsdc,
+    stopPrice: Number(high.toFixed(5)),
+  };
+}
+
 function totalCost(trade) {
   return Number(trade.totalCostUsdc || trade.maxLossUsdc || trade.stakeUsdc || 0);
 }
@@ -2759,8 +2843,42 @@ async function markOpenTrade(trade) {
     const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(trade.tokenId)}`);
     const { bestBid } = bestBook(book);
     if (Number.isFinite(bestBid)) {
-      const currentValue = Number((Number(trade.shares || 0) * bestBid).toFixed(4));
+      const equalRiskPlan = trade.equalRiskProtection
+        ? equalRiskStopPlan({
+          totalCostUsdc: cost,
+          netGainIfWinUsdc: trade.riskTargetUsdc ?? trade.netGainIfWinUsdc,
+          shares: trade.shares,
+          entryPrice: trade.entryPrice,
+          feeRate: trade.feeRate,
+          feesEnabled: trade.feesEnabled,
+        })
+        : null;
+      const grossCurrentValue = Number((Number(trade.shares || 0) * bestBid).toFixed(4));
+      const currentValue = equalRiskPlan
+        ? netExitValueAtPrice({ shares: trade.shares, price: bestBid, feeRate: trade.feeRate, feesEnabled: trade.feesEnabled })
+        : grossCurrentValue;
       const unrealizedPnl = Number((currentValue - cost).toFixed(4));
+      if (equalRiskPlan?.protectable && equalRiskPlan.requiresStop && currentValue <= equalRiskPlan.minimumExitValueUsdc) {
+        const realizedLoss = Math.max(0, -unrealizedPnl);
+        return {
+          ...base,
+          status: "STOP_LOSS",
+          closedAt: checkedAt,
+          resolvedAt: checkedAt,
+          currentPrice: Number(bestBid.toFixed(4)),
+          currentValueUsdc: currentValue,
+          unrealizedPnlUsdc: 0,
+          unrealizedPnlPct: 0,
+          realizedPnlUsdc: unrealizedPnl,
+          realizedPnlPct: pnlPercent(unrealizedPnl, cost),
+          stopLossStatus: realizedLoss <= equalRiskPlan.riskTargetUsdc + 0.00001 ? "FILLED_WITHIN_TARGET" : "GAP_BEYOND_TARGET",
+          stopLossTriggeredAt: checkedAt,
+          stopLossPrice: equalRiskPlan.stopPrice,
+          riskTargetUsdc: equalRiskPlan.riskTargetUsdc,
+          stopLossCapBreachUsdc: Number(Math.max(0, realizedLoss - equalRiskPlan.riskTargetUsdc).toFixed(5)),
+          statusNote: "Synthetic Equal paper stop triggered from the refreshed best bid.",
+        };
+      }
       return {
         ...base,
         status: "OPEN",
@@ -2768,7 +2886,11 @@ async function markOpenTrade(trade) {
         currentValueUsdc: currentValue,
         unrealizedPnlUsdc: unrealizedPnl,
         unrealizedPnlPct: pnlPercent(unrealizedPnl, cost),
-        statusNote: "Marked to current best bid.",
+        equalRiskProtection: Boolean(trade.equalRiskProtection),
+        riskTargetUsdc: equalRiskPlan?.riskTargetUsdc ?? trade.riskTargetUsdc ?? null,
+        stopLossPrice: equalRiskPlan?.stopPrice ?? trade.stopLossPrice ?? null,
+        stopLossStatus: equalRiskPlan?.requiresStop ? "ARMED" : (trade.equalRiskProtection ? "NOT_REQUIRED" : null),
+        statusNote: trade.equalRiskProtection ? "Marked to current best bid; Equal paper stop is armed." : "Marked to current best bid.",
       };
     }
   } catch (error) {
@@ -4465,6 +4587,17 @@ function strategyEligibleCandidates(eligible, strategy) {
     const minimumNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
     const candidateNetYield = netYieldAfterFees(item);
     if (!Number.isFinite(candidateNetYield) || candidateNetYield < minimumNetYield) return false;
+    if (strategy.equalRiskProtection) {
+      const plan = equalRiskStopPlan({
+        totalCostUsdc: item.totalCostUsdc ?? item.stakeUsdc,
+        netGainIfWinUsdc: item.netGainIfWinUsdc,
+        shares: item.executableShares ?? item.shares,
+        entryPrice: item.marketPrice,
+        feeRate: item.feeRate,
+        feesEnabled: item.feesEnabled,
+      });
+      if (!plan.protectable) return false;
+    }
     return true;
   });
   if (strategy.requireMostProbableOutcome) {
@@ -4628,6 +4761,17 @@ function portfolioFilterResult(item, strategy) {
   if (strategy.requireMostProbableOutcome && marketType !== "multi") {
     reasons.push(`market type ${marketType || "-"} is not multichoice`);
   }
+  if (strategy.equalRiskProtection) {
+    const plan = equalRiskStopPlan({
+      totalCostUsdc: item.totalCostUsdc ?? item.stakeUsdc,
+      netGainIfWinUsdc: item.netGainIfWinUsdc,
+      shares: item.executableShares ?? item.shares,
+      entryPrice: item.marketPrice,
+      feeRate: item.feeRate,
+      feesEnabled: item.feesEnabled,
+    });
+    if (!plan.protectable) reasons.push(`equal-risk protection unavailable: ${plan.reason}`);
+  }
 
   return {
     eligible: reasons.length === 0,
@@ -4705,6 +4849,14 @@ function scaledPaperEconomics(best, stake) {
 
 function paperTradeFromCandidate(best, strategy, today, stake) {
   const economics = scaledPaperEconomics(best, stake);
+  const equalRiskPlan = strategy.equalRiskProtection
+    ? equalRiskStopPlan({
+      ...economics,
+      entryPrice: best.marketPrice,
+      feeRate: best.feeRate,
+      feesEnabled: best.feesEnabled,
+    })
+    : null;
   const selectionEconomics = portfolioEconomics(best, strategy);
   const selectedExpectedValue = Number.isFinite(selectionEconomics.expectedValueUsdc)
     ? Number((selectionEconomics.expectedValueUsdc * economics.scale).toFixed(4))
@@ -4782,9 +4934,14 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     netGainIfWinUsdc: economics.netGainIfWinUsdc,
     maxLossUsdc: economics.maxLossUsdc,
     currentPrice: best.marketPrice,
-    currentValueUsdc: Number(stake.toFixed(2)),
+    currentValueUsdc: strategy.equalRiskProtection ? economics.totalCostUsdc : Number(stake.toFixed(2)),
     unrealizedPnlUsdc: 0,
     unrealizedPnlPct: 0,
+    equalRiskProtection: Boolean(strategy.equalRiskProtection),
+    riskTargetUsdc: equalRiskPlan?.riskTargetUsdc ?? null,
+    stopLossPrice: equalRiskPlan?.stopPrice ?? null,
+    stopLossStatus: equalRiskPlan?.requiresStop ? "ARMED" : (strategy.equalRiskProtection ? "NOT_REQUIRED" : null),
+    stopLossMinimumExitUsdc: equalRiskPlan?.minimumExitValueUsdc ?? null,
     marketFills: economics.marketFills,
     aiAnalysis: best.aiAnalysis,
     probabilityThesis: best.probabilityThesis,
@@ -5281,7 +5438,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   const maxFraction = Number(strategy.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION);
   const stake = sizingCapital * maxFraction;
 
-  const rotation = rotationReview(portfolioState, eligible, strategy, available, stake);
+  const rotation = strategy.allowRotation === false ? null : rotationReview(portfolioState, eligible, strategy, available, stake);
   if (rotation) {
     const closedTrade = closeTradeForRotation(rotation.trade, rotation, strategy);
     portfolioState.trades = portfolioState.trades.map((trade) => trade.id === closedTrade.id ? closedTrade : trade);
@@ -8592,6 +8749,8 @@ export {
   stateSegmentFileName,
   mergeStateSegment,
   takerFeeForFills,
+  netExitValueAtPrice,
+  equalRiskStopPlan,
   totalCost,
   updatePaperPortfolio,
   withLastLiveMarketProbability,
