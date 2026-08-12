@@ -1733,13 +1733,13 @@ test("taxonomy performance: categories and tags render as separately sorted tabl
     "legacy inferred categories must stay hidden until a split report is generated");
   // Every column in both tables is sortable.
   const sorted = [...app.matchAll(/taxonomyHeader\(kind, "([a-zA-Z]+)"/g)].map((match) => match[1]);
-  for (const key of ["label", "trades", "accuracy", "pnl", "annualizedPnlPerTradeUsdc", "pnlPerTradeUsdc",
-    "roi", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "avgProbability", "avgVolumeUsdc", "lastResolvedAt"]) {
+  for (const key of ["label", "trades", "accuracy", "pnl", "annualizedPnlPerTradeUsdc",
+    "roi", "annualizedRoi", "avgProbability", "avgVolumeUsdc", "lastResolvedAt"]) {
     assert.ok(sorted.includes(key), `${key} column must be sortable`);
   }
   // The header count must match the colspan on the empty row, or the layout breaks.
-  assert.match(app, /colspan="13"/);
-  assert.equal(sorted.length, 13);
+  assert.match(app, /colspan="10"/);
+  assert.equal(sorted.length, 10);
   assert.doesNotMatch(app, /data-category-kind/);
 
   // The report is stored in the core state file, so its row count must be bounded.

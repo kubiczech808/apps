@@ -8497,11 +8497,8 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
               ${taxonomyHeader(kind, "accuracy", "Accuracy")}
               ${taxonomyHeader(kind, "pnl", "P/L")}
               ${taxonomyHeader(kind, "annualizedPnlPerTradeUsdc", "P/L p.a.", "Annualized average net dollar P/L per fixed $5 simulation trade, using each group's measured time to resolution.")}
-              ${taxonomyHeader(kind, "pnlPerTradeUsdc", "P/L per trade", "Realized P/L divided by the number of resolved trades, so groups of different sizes compare directly.")}
               ${taxonomyHeader(kind, "roi", "ROI")}
               ${taxonomyHeader(kind, "annualizedRoi", "ROI p.a.", "Realized ROI annualized over the group's average time to resolution.")}
-              ${taxonomyHeader(kind, "avgNetYield", "Avg net yield", "Average payout of a winning trade measured against what it cost, after fees.")}
-              ${taxonomyHeader(kind, "avgDaysToResolution", "Avg days", "Average time to resolution across the group.")}
               ${taxonomyHeader(kind, "avgProbability", "Avg entry")}
               ${taxonomyHeader(kind, "avgVolumeUsdc", "Avg volume")}
               ${taxonomyHeader(kind, "lastResolvedAt", "Last resolved", "Most recent resolution in this group.")}
@@ -8515,16 +8512,13 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
                 <td data-label="Accuracy">${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td data-label="P/L p.a." class="${pnlClass(Number(row.annualizedPnlPerTradeUsdc || 0))}">${row.annualizedPnlPerTradeUsdc == null ? "-" : signedMoney(Number(row.annualizedPnlPerTradeUsdc))}</td>
-                <td data-label="P/L per trade" class="${pnlClass(Number(row.pnlPerTradeUsdc || 0))}">${row.pnlPerTradeUsdc == null ? "-" : signedMoney(Number(row.pnlPerTradeUsdc), 4)}</td>
                 <td data-label="ROI" class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
                 <td data-label="ROI p.a." class="${pnlClass(Number(row.annualizedRoi || 0))}">${row.annualizedRoi == null ? "-" : signedPercent(Number(row.annualizedRoi))}</td>
-                <td data-label="Avg net yield">${row.avgNetYield == null ? "-" : percent(Number(row.avgNetYield))}</td>
-                <td data-label="Avg days">${row.avgDaysToResolution == null ? "-" : compactDays(Number(row.avgDaysToResolution))}</td>
                 <td data-label="Avg entry">${probability(Number(row.avgProbability))}</td>
                 <td data-label="Avg volume">${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
                 <td data-label="Last resolved">${escapeHtml(row.lastResolvedAt ? formatDate(row.lastResolvedAt) : "-")}</td>
               </tr>
-            `).join("") : `<tr><td colspan="13">No ${kind} statistics are available yet.</td></tr>`}
+            `).join("") : `<tr><td colspan="10">No ${kind} statistics are available yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -8683,7 +8677,7 @@ els.calculationReport?.addEventListener("click", (event) => {
       state.taxonomySort[kind].key = key;
       // Text and horizon columns read naturally ascending; every performance
       // column is most useful with the best value first.
-      state.taxonomySort[kind].direction = ["label", "avgDaysToResolution"].includes(key) ? "asc" : "desc";
+      state.taxonomySort[kind].direction = key === "label" ? "asc" : "desc";
     }
     renderCalculationReport();
     return;
