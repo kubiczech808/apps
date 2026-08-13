@@ -1885,8 +1885,12 @@ test("taxonomy performance: rows open the current scraped markets for that categ
     "parameter-combination links must expose their market type in the scraped catalogue");
   assert.match(app, /function scrapedRuleOpportunityPath/,
     "the current-open parameter count must carry its filters to the scraped catalogue");
+  assert.match(app, /function scrapedResolvedRuleOpportunityPath/,
+    "the resolved trade count must carry the same parameter filters to the scraped catalogue");
   assert.match(app, /scrapedTaxonomyOpenOpportunityPath\(kind, row\.label\)/,
     "taxonomy open counts must link to current rows for the exact taxonomy label");
+  assert.match(app, /scrapedTaxonomyResolvedOpportunityPath\(kind, row\.label\)/,
+    "taxonomy trade counts must link to resolved rows for the exact taxonomy label");
 });
 
 test("calculation report: open counts mirror parameter rules and taxonomy", () => {

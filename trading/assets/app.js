@@ -1153,8 +1153,23 @@ function scrapedRuleOpportunityPath(row, taxonomyFilter = null) {
   });
 }
 
+function scrapedResolvedRuleOpportunityPath(row, taxonomyFilter = null) {
+  return scrapedTaxonomyOpportunityPath(taxonomyFilter, {
+    statuses: ["RESOLVED"],
+    rule: {
+      probabilityFilter: Number(row?.threshold || 0),
+      daysFilter: row?.maxResolutionDays,
+      marketType: row?.marketType,
+    },
+  });
+}
+
 function scrapedTaxonomyOpenOpportunityPath(kind, label) {
   return scrapedTaxonomyOpportunityPath({ kind, label }, { statuses: ["SCRAPED"] });
+}
+
+function scrapedTaxonomyResolvedOpportunityPath(kind, label) {
+  return scrapedTaxonomyOpportunityPath({ kind, label }, { statuses: ["RESOLVED"] });
 }
 
 function currentRouteState() {
@@ -8914,7 +8929,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
               <tr>
                 <td data-label="${label}"><strong><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpportunityPath({ kind, label: row.label }))}" title="Show current and resolved scraped opportunities in this ${kind}">${escapeHtml(row.label || "-")}</a></strong></td>
                 <td data-label="Open now"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpenOpportunityPath(kind, row.label))}" title="Show current open scraped opportunities in this ${kind}">${formatInteger(Number(row.openCount || 0))}</a></td>
-                <td data-label="Trades">${Number(row.trades || 0)}</td>
+                <td data-label="Trades"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyResolvedOpportunityPath(kind, row.label))}" title="Show resolved scraped opportunities in this ${kind}">${formatInteger(Number(row.trades || 0))}</a></td>
                 <td data-label="Accuracy">${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td data-label="Invested">${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
                 <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
@@ -8990,7 +9005,7 @@ function renderCalculationReport() {
                 <td>${escapeHtml(calculationMarketLabel(row.marketType))}</td>
                 <td>${Number(row.maxResolutionDays || 0)} d</td>
                 <td><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedRuleOpportunityPath(row))}" title="Show current open scraped opportunities matching this parameter combination">${formatInteger(Number(row.openCount || 0))}</a></td>
-                <td>${Number(row.trades || 0)}</td>
+                <td><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedResolvedRuleOpportunityPath(row))}" title="Show resolved scraped opportunities matching this parameter combination">${formatInteger(Number(row.trades || 0))}</a></td>
                 <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td>${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
