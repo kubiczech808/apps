@@ -8445,7 +8445,10 @@ function submittedOrderSummaryMarkup(run = {}) {
   const batch = run.batchLog || run;
   const action = String(run.action || batch.action || "").toUpperCase();
   const selected = batch.selected || run.selected || null;
-  if (!selected || !["SUBMITTED", "CANCELED_AND_SUBMITTED"].includes(action)) return "";
+  // Paper portfolios record a successful new position as OPENED, while live uses
+  // SUBMITTED. Both have the same selected-candidate detail and must read the same
+  // way in the compact run-log list.
+  if (!selected || !["SUBMITTED", "CANCELED_AND_SUBMITTED", "OPENED", "ROTATED_OPENED"].includes(action)) return "";
   const settings = batch.settings || {};
   const probabilitySource = normalizeProbabilitySource(settings.probabilitySource);
   const selectedProbability = probabilitySource === "polymarket"

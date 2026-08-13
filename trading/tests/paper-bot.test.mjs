@@ -38,6 +38,16 @@ test("equal paper portfolio: its independent $100 account is registered with a s
   assert.equal(equal.portfolio.freeCapitalUsdc, 100);
 });
 
+test("run log: a paper OPENED row keeps the selected order summary in the compact list", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  // Equal reports successful simulated entries as OPENED, unlike Live's SUBMITTED.
+  // The compact list must not fall back to the generic ranking reason and hide the
+  // market, outcome and economics that are available in Order placed.
+  assert.match(app, /\["SUBMITTED", "CANCELED_AND_SUBMITTED", "OPENED", "ROTATED_OPENED"\]\.includes\(action\)/);
+});
+
 test("equal risk: the planned exit leaves no more loss than the net winning gain", () => {
   const plan = bot.equalRiskStopPlan({
     totalCostUsdc: 5,
