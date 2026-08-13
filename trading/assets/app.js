@@ -2168,7 +2168,7 @@ function tradePnlPct(trade) {
 }
 
 function isClosedTrade(trade) {
-  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED", "STOP_LOSS"].includes(String(trade.status || "").toUpperCase());
+  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED", "STOP_LOSS", "STOP_GAP"].includes(String(trade.status || "").toUpperCase());
 }
 
 function closedTradeWasCorrect(trade) {
@@ -2921,6 +2921,8 @@ function tradeTypeBadge(trade) {
   if (String(trade.status || "").toUpperCase() === "REDEEM_REQUIRED") return '<span class="order-chip warning">Redeem needed</span>';
   if (String(trade.status || "").toUpperCase() === "PENDING_RESOLUTION") return '<span class="order-chip warning">Pending resolution</span>';
   if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return '<span class="order-chip warning">Protective exit</span>';
+  if (String(trade.status || "").toUpperCase() === "STOP_BREACH") return '<span class="order-chip warning">Stop breached · no floor exit</span>';
+  if (String(trade.status || "").toUpperCase() === "STOP_GAP") return '<span class="order-chip warning">Stop gap · cap missed</span>';
   if (isClosedTrade(trade) && trade.mode === "LIVE") return '<span class="order-chip filled">Settled position</span>';
   if (trade.mode === "LIVE") return '<span class="order-chip filled">Open position</span>';
   if (trade.strategyLabel) return `<span class="order-chip paper">${escapeHtml(trade.strategyLabel)}</span>`;

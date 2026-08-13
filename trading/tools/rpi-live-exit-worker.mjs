@@ -42,6 +42,12 @@ function clampInteger(value, fallback, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, parsed));
 }
 
+// Submit the strict FOK sell shortly before the floor is crossed. Waiting for a
+// poll that is already below the floor guarantees a rejection in a fast book.
+// The sell order itself still uses stopPrice, so this never authorizes a loss
+// larger than the Equal target.
+const STOP_PRETRIGGER_BUFFER = Math.min(0.02, Math.max(0, number(process.env.LIVE_EXIT_PRETRIGGER_BUFFER, 0.002)));
+
 function round(value, digits = 6) {
   const parsed = number(value);
   return parsed == null ? null : Number(parsed.toFixed(digits));
@@ -126,10 +132,11 @@ export function bestBid(book = {}) {
   return prices.length ? Math.max(...prices) : null;
 }
 
-export function exitTrigger({ bestBidPrice, stopPrice } = {}) {
+export function exitTrigger({ bestBidPrice, stopPrice, triggerPrice = stopPrice } = {}) {
   const bid = number(bestBidPrice);
-  const stop = number(stopPrice);
-  return bid != null && stop != null && bid <= stop;
+  const floor = number(stopPrice);
+  const trigger = number(triggerPrice);
+  return bid != null && floor != null && trigger != null && bid <= trigger;
 }
 
 function livePositions(state = {}) {
@@ -161,6 +168,7 @@ function watchPlan(position, entry = null) {
     question: entry?.question || position.question || position.market || "Unknown market",
     outcome: entry?.outcome || position.outcome || "",
     stopPrice,
+    triggerPrice: round(Math.min(0.999999, stopPrice + STOP_PRETRIGGER_BUFFER), 6),
     source: configuredStop != null ? "watchlist" : "equal-risk-derived",
   };
 }
@@ -235,7 +243,7 @@ async function checkOnce(context) {
   context.state.generatedAt = now;
   context.state.mode = MODE;
   context.state.protectAll = PROTECT_ALL;
-  context.state.watchedPositions = plans.map((plan) => ({ tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, riskTargetUsdc: plan.riskTargetUsdc, source: plan.source }));
+  context.state.watchedPositions = plans.map((plan) => ({ tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice, riskTargetUsdc: plan.riskTargetUsdc, source: plan.source }));
 
   for (const plan of plans) {
     const pending = context.state.exits?.[plan.tokenId];
@@ -249,8 +257,8 @@ async function checkOnce(context) {
       continue;
     }
     const currentBestBid = bestBid(book);
-    const event = { at: now, tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, bestBid: currentBestBid, riskTargetUsdc: plan.riskTargetUsdc };
-    if (!exitTrigger({ bestBidPrice: currentBestBid, stopPrice: plan.stopPrice })) continue;
+    const event = { at: now, tokenId: plan.tokenId, question: plan.question, outcome: plan.outcome, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice, bestBid: currentBestBid, riskTargetUsdc: plan.riskTargetUsdc };
+    if (!exitTrigger({ bestBidPrice: currentBestBid, stopPrice: plan.stopPrice, triggerPrice: plan.triggerPrice })) continue;
     if (MODE !== "live" || !CONFIRM_LIVE) {
       recordEvent(context.state, { ...event, type: "SHADOW_STOP_TRIGGERED", reason: "price reached the stop; no SELL is allowed in shadow mode" });
       continue;

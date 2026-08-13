@@ -113,6 +113,23 @@ test("equal risk: the planned exit leaves no more loss than the net winning gain
   assert.equal(natural.requiresStop, false, "a whole-stake loss is already below the possible reward");
 });
 
+test("equal risk: a bid below the sell floor is a gap, not a filled stop", () => {
+  const plan = bot.equalRiskStopPlan({
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 0.5,
+    shares: 5.5,
+    entryPrice: 0.9,
+    feesEnabled: false,
+  });
+  const filled = bot.equalRiskStopExitDecision({ plan, bestBid: plan.stopPrice, shares: 5.5, feesEnabled: false });
+  assert.equal(filled.executableAtFloor, true);
+  assert.ok(Math.abs(filled.realizedLossUsdc - 0.5) < 0.0001);
+
+  const gap = bot.equalRiskStopExitDecision({ plan, bestBid: plan.stopPrice - 0.1, shares: 5.5, feesEnabled: false });
+  assert.equal(gap.executableAtFloor, false);
+  assert.ok(gap.realizedLossUsdc > plan.riskTargetUsdc);
+});
+
 test("equal risk: a past estimated end date does not bypass a still-live synthetic stop check", () => {
   // Sports start times and Gamma resolution estimates can be stale while CLOB still
   // has executable bids. Equal must inspect that book before it becomes pending.

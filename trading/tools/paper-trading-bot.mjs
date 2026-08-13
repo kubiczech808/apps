@@ -281,7 +281,10 @@ const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable", "equal"
   : "";
 const PAPER_RESET_PORTFOLIO = envBool("PAPER_RESET_PORTFOLIO", false);
 const TZ = "Europe/Prague";
-const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
+// STOP_BREACH means that the best bid has already crossed the Equal sell floor.
+// It remains open: a price below that floor cannot honestly be recorded as a
+// protective exit because a strict FOK sell would not fill there.
+const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "STOP_BREACH"]);
 // Keep the original broad thresholds and add the intermediate 5-point steps so
 // the parameter report can distinguish, for example, a 75% rule from 70%/80%.
 const REPORT_THRESHOLDS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
@@ -2101,7 +2104,7 @@ async function refreshStoredMarketObservationResolutionStatuses(observations = [
 function mergeTrade(existing, incoming) {
   if (!existing) return incoming;
   if (!incoming) return existing;
-  const closedStatuses = new Set(["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS"]);
+  const closedStatuses = new Set(["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS", "STOP_GAP"]);
   const existingClosed = closedStatuses.has(String(existing.status || "").toUpperCase());
   const incomingClosed = closedStatuses.has(String(incoming.status || "").toUpperCase());
   if (incomingClosed && !existingClosed) return incoming;
@@ -2114,7 +2117,7 @@ function retainPaperTrades(trades = []) {
   const closed = [];
   for (const trade of Array.isArray(trades) ? trades : []) {
     const status = String(trade?.status || "OPEN").toUpperCase();
-    (["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS"].includes(status) ? closed : active).push(trade);
+    (["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS", "STOP_GAP"].includes(status) ? closed : active).push(trade);
   }
   return [
     ...active,
@@ -2326,9 +2329,22 @@ function normalizeTrade(trade) {
   });
   const existingRiskKeys = Array.isArray(trade.riskGroupKeys) ? trade.riskGroupKeys : [];
   const existingRiskLabels = Array.isArray(trade.riskGroupLabels) ? trade.riskGroupLabels : [];
+  const riskTargetUsdc = Number(trade.riskTargetUsdc ?? trade.netGainIfWinUsdc);
+  const realizedPnlUsdc = Number(trade.realizedPnlUsdc);
+  // Older Equal paper rows used the first bid below the sell floor as an exit
+  // price. Reclassify them so the historical dashboard does not claim a stop
+  // loss was successfully executed when its loss cap was missed.
+  const historicalStopGap = Boolean(
+    trade.equalRiskProtection
+    && String(trade.status || "").toUpperCase() === "STOP_LOSS"
+    && Number.isFinite(riskTargetUsdc)
+    && riskTargetUsdc > 0
+    && Number.isFinite(realizedPnlUsdc)
+    && -realizedPnlUsdc > riskTargetUsdc + 0.00001
+  );
   return {
     ...trade,
-    status: trade.status || "OPEN",
+    status: historicalStopGap ? "STOP_GAP" : (trade.status || "OPEN"),
     totalCostUsdc: Number(trade.totalCostUsdc || trade.maxLossUsdc || trade.stakeUsdc || 0),
     aiAnalysis: trade.aiAnalysis || {
       model: trade.analysisModel || "legacy-paper-trade",
@@ -2341,6 +2357,11 @@ function normalizeTrade(trade) {
     analysisSummary: trade.analysisSummary || trade.aiAnalysis?.thesis || "",
     riskGroupKeys: [...new Set([...existingRiskKeys, ...risk.keys])],
     riskGroupLabels: [...new Set([...existingRiskLabels, ...risk.labels])],
+    ...(historicalStopGap ? {
+      stopLossStatus: "GAP_BEYOND_TARGET",
+      stopLossCapBreachUsdc: Number(((-realizedPnlUsdc) - riskTargetUsdc).toFixed(5)),
+      statusNote: "Historical Equal paper stop was observed below its sell floor. This was a price gap, not a protected fill.",
+    } : {}),
   };
 }
 
@@ -2763,6 +2784,7 @@ function equalRiskStopPlan({ totalCostUsdc, netGainIfWinUsdc, shares, entryPrice
     return {
       protectable: true,
       requiresStop: false,
+      costUsdc: Number(cost.toFixed(5)),
       riskTargetUsdc: Number(cost.toFixed(5)),
       minimumExitValueUsdc: 0,
       stopPrice: null,
@@ -2786,9 +2808,33 @@ function equalRiskStopPlan({ totalCostUsdc, netGainIfWinUsdc, shares, entryPrice
   return {
     protectable: true,
     requiresStop: true,
+    costUsdc: Number(cost.toFixed(5)),
     riskTargetUsdc: Number(reward.toFixed(5)),
     minimumExitValueUsdc,
     stopPrice: Number(high.toFixed(5)),
+  };
+}
+
+// A synthetic paper stop may only claim a protected fill when the observed bid
+// can actually meet the precomputed sell floor. A lower bid is a gap: keep the
+// position open and visible instead of quietly booking a loss beyond the cap.
+function equalRiskStopExitDecision({ plan, bestBid, shares, feeRate = 0, feesEnabled = true } = {}) {
+  if (!plan?.protectable || !plan.requiresStop) return null;
+  const bid = Number(bestBid);
+  const size = Number(shares);
+  if (!Number.isFinite(bid) || !(bid >= 0) || !Number.isFinite(size) || !(size > 0)) return null;
+  const currentValue = netExitValueAtPrice({ shares: size, price: bid, feeRate, feesEnabled });
+  if (!Number.isFinite(currentValue) || currentValue > Number(plan.minimumExitValueUsdc) + 0.00001) return null;
+  const executableAtFloor = bid + 0.000001 >= Number(plan.stopPrice);
+  const exitValueUsdc = executableAtFloor ? Number(plan.minimumExitValueUsdc) : currentValue;
+  const realizedPnlUsdc = Number((exitValueUsdc - Number(plan.costUsdc || 0)).toFixed(5));
+  return {
+    triggered: true,
+    executableAtFloor,
+    currentValueUsdc: Number(currentValue.toFixed(5)),
+    exitValueUsdc: Number(exitValueUsdc.toFixed(5)),
+    realizedPnlUsdc,
+    realizedLossUsdc: Number(Math.max(0, -realizedPnlUsdc).toFixed(5)),
   };
 }
 
@@ -2958,25 +3004,47 @@ async function markOpenTrade(trade) {
         ? netExitValueAtPrice({ shares: trade.shares, price: bestBid, feeRate: trade.feeRate, feesEnabled: trade.feesEnabled })
         : grossCurrentValue;
       const unrealizedPnl = Number((currentValue - cost).toFixed(4));
-      if (equalRiskPlan?.protectable && equalRiskPlan.requiresStop && currentValue <= equalRiskPlan.minimumExitValueUsdc) {
-        const realizedLoss = Math.max(0, -unrealizedPnl);
+      const equalStopDecision = equalRiskStopExitDecision({
+        plan: equalRiskPlan,
+        bestBid,
+        shares: trade.shares,
+        feeRate: trade.feeRate,
+        feesEnabled: trade.feesEnabled,
+      });
+      if (equalStopDecision?.triggered) {
+        if (equalStopDecision.executableAtFloor) {
+          return {
+            ...base,
+            status: "STOP_LOSS",
+            closedAt: checkedAt,
+            resolvedAt: checkedAt,
+            currentPrice: Number(equalRiskPlan.stopPrice.toFixed(4)),
+            currentValueUsdc: equalStopDecision.exitValueUsdc,
+            unrealizedPnlUsdc: 0,
+            unrealizedPnlPct: 0,
+            realizedPnlUsdc: equalStopDecision.realizedPnlUsdc,
+            realizedPnlPct: pnlPercent(equalStopDecision.realizedPnlUsdc, cost),
+            stopLossStatus: "FILLED_WITHIN_TARGET",
+            stopLossTriggeredAt: checkedAt,
+            stopLossPrice: equalRiskPlan.stopPrice,
+            riskTargetUsdc: equalRiskPlan.riskTargetUsdc,
+            stopLossCapBreachUsdc: 0,
+            statusNote: "Synthetic Equal paper stop filled at its protected sell floor.",
+          };
+        }
         return {
           ...base,
-          status: "STOP_LOSS",
-          closedAt: checkedAt,
-          resolvedAt: checkedAt,
+          status: "STOP_BREACH",
           currentPrice: Number(bestBid.toFixed(4)),
-          currentValueUsdc: currentValue,
-          unrealizedPnlUsdc: 0,
-          unrealizedPnlPct: 0,
-          realizedPnlUsdc: unrealizedPnl,
-          realizedPnlPct: pnlPercent(unrealizedPnl, cost),
-          stopLossStatus: realizedLoss <= equalRiskPlan.riskTargetUsdc + 0.00001 ? "FILLED_WITHIN_TARGET" : "GAP_BEYOND_TARGET",
+          currentValueUsdc: equalStopDecision.currentValueUsdc,
+          unrealizedPnlUsdc: unrealizedPnl,
+          unrealizedPnlPct: pnlPercent(unrealizedPnl, cost),
+          stopLossStatus: "GAP_UNFILLED",
           stopLossTriggeredAt: checkedAt,
           stopLossPrice: equalRiskPlan.stopPrice,
           riskTargetUsdc: equalRiskPlan.riskTargetUsdc,
-          stopLossCapBreachUsdc: Number(Math.max(0, realizedLoss - equalRiskPlan.riskTargetUsdc).toFixed(5)),
-          statusNote: "Synthetic Equal paper stop triggered from the refreshed best bid.",
+          stopLossCapBreachUsdc: Number(Math.max(0, equalStopDecision.realizedLossUsdc - equalRiskPlan.riskTargetUsdc).toFixed(5)),
+          statusNote: `Equal stop floor ${equalRiskPlan.stopPrice.toFixed(4)} was breached; best bid ${bestBid.toFixed(4)} cannot fill a protected sell. Position remains open for resolution or a later executable exit.`,
         };
       }
       if (awaitingResolution) {
@@ -8197,7 +8265,7 @@ function updateCalculationReport(state) {
 function updatePaperPortfolio(portfolioState) {
   const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
   const openPnl = portfolioState.trades
-    .filter((trade) => trade.status === "OPEN")
+    .filter((trade) => OPEN_STATUSES.has(String(trade.status || "").toUpperCase()))
     .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
   const openRiskValue = openRisk(portfolioState.trades);
   const equity = PORTFOLIO_USDC + realizedPnl + openPnl;
@@ -8962,6 +9030,7 @@ export {
   takerFeeForFills,
   netExitValueAtPrice,
   equalRiskStopPlan,
+  equalRiskStopExitDecision,
   shouldCheckEqualStopBeforePending,
   totalCost,
   updatePaperPortfolio,
