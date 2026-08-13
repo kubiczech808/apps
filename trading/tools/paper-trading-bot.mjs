@@ -294,7 +294,7 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_CONSERVATIVE_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_CONSERVATIVE_EXECUTION_TRIGGER),
-    executionCronMinutes: Math.max(0, envNumber("PAPER_CONSERVATIVE_EXECUTION_CRON_MINUTES", 0) || 0),
+    executionCronMinutes: Math.max(30, envNumber("PAPER_CONSERVATIVE_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_CONSERVATIVE_AUTOMATION_ENABLED", true),
     requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
@@ -313,7 +313,7 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_HIGH_REWARD_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_HIGH_REWARD_EXECUTION_TRIGGER),
-    executionCronMinutes: Math.max(0, envNumber("PAPER_HIGH_REWARD_EXECUTION_CRON_MINUTES", 0) || 0),
+    executionCronMinutes: Math.max(30, envNumber("PAPER_HIGH_REWARD_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_HIGH_REWARD_AUTOMATION_ENABLED", true),
     requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
@@ -332,7 +332,7 @@ const PAPER_STRATEGIES = {
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
     minNetYield: envNumber("PAPER_MORE_PROBABLE_MIN_NET_YIELD", 0),
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_MORE_PROBABLE_EXECUTION_TRIGGER),
-    executionCronMinutes: Math.max(0, envNumber("PAPER_MORE_PROBABLE_EXECUTION_CRON_MINUTES", 0) || 0),
+    executionCronMinutes: Math.max(30, envNumber("PAPER_MORE_PROBABLE_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_MORE_PROBABLE_AUTOMATION_ENABLED", true),
     requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
@@ -390,12 +390,12 @@ function strategyMatchesExecutionTrigger(strategy, { manual = MANUAL_RUN_ONCE ||
   return true;
 }
 
-// 0 means "every scheduled run". Anything higher makes a portfolio's cadence
-// independent of how often the workflow itself happens to be scheduled.
+// A cron-triggered portfolio always has an explicit cadence. After-scrape
+// portfolios intentionally run after every completed scrape instead.
 function strategyCadenceIsDue(strategy, lastRunAt, now = Date.now(), { manual = MANUAL_RUN_ONCE || EVALUATION_ONLY } = {}) {
   if (manual) return true;
-  const minutes = Math.max(0, Number(strategy?.executionCronMinutes) || 0);
-  if (minutes <= 0) return true;
+  if (normalizeExecutionTrigger(strategy?.executionTrigger) === "after_scrape") return true;
+  const minutes = Math.max(30, Number(strategy?.executionCronMinutes) || 60);
   const previous = Date.parse(lastRunAt || "");
   // No previous run is not a reason to wait.
   if (!Number.isFinite(previous)) return true;

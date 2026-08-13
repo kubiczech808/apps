@@ -915,6 +915,13 @@ function normalize_execution_trigger_value(mixed $value): string
     return $value === 'after_scrape' ? 'after_scrape' : 'cron';
 }
 
+function normalize_execution_cron_minutes_value(mixed $value, mixed $fallback = 60): int
+{
+    $choices = [30, 60, 120, 240, 480, 720, 1440];
+    $minutes = is_numeric($value) ? (int) $value : (is_numeric($fallback) ? (int) $fallback : 60);
+    return in_array($minutes, $choices, true) ? $minutes : 60;
+}
+
 // A list of Polymarket tags saved on a portfolio: the tags 5050 may bid on, or the tags any
 // portfolio refuses outright. Both are the same shape, and both accept a saved list or a
 // typed comma/space separated string. Slugs are normalized the way the dashboard's tag
@@ -995,6 +1002,10 @@ function normalize_fixed_entry_price_history(mixed $value, float $current): arra
 
 function normalize_strategy_config(array $input, array $defaults): array
 {
+    $executionTrigger = normalize_execution_trigger_value($input['executionTrigger'] ?? $defaults['executionTrigger']);
+    $executionCronMinutes = $executionTrigger === 'after_scrape'
+        ? 0
+        : normalize_execution_cron_minutes_value($input['executionCronMinutes'] ?? $defaults['executionCronMinutes'] ?? 60);
     return [
         'minProbability' => normalize_probability_value($input['minProbability'] ?? null, (float) $defaults['minProbability']),
         'maxOrderFraction' => normalize_fraction_value($input['maxOrderFraction'] ?? null, (float) $defaults['maxOrderFraction']),
@@ -1002,10 +1013,10 @@ function normalize_strategy_config(array $input, array $defaults): array
         'selectionOrder' => normalize_selection_order_value($input['selectionOrder'] ?? $defaults['selectionOrder']),
         'minLiquidityUsdc' => normalize_optional_money_value($input['minLiquidityUsdc'] ?? $defaults['minLiquidityUsdc']),
         'minNetYield' => normalize_net_yield_value($input['minNetYield'] ?? null, (float) $defaults['minNetYield']),
-        'executionTrigger' => normalize_execution_trigger_value($input['executionTrigger'] ?? $defaults['executionTrigger']),
-        // A key this function does not return is dropped on every save, so a setting
-        // absent here can never persist no matter what the dashboard sends.
-        'executionCronMinutes' => max(0, (int) ($input['executionCronMinutes'] ?? $defaults['executionCronMinutes'] ?? 0)),
+        'executionTrigger' => $executionTrigger,
+        // A scheduled trigger always has a concrete cadence. Legacy zero values
+        // are migrated to an explicit interval so trading frequency stays clear.
+        'executionCronMinutes' => $executionCronMinutes,
         // Absent means on, so a portfolio saved before this existed keeps trading
         // rather than silently stopping.
         'automationEnabled' => (bool) ($input['automationEnabled'] ?? $defaults['automationEnabled'] ?? true),

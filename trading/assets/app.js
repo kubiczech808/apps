@@ -454,7 +454,7 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: null,
         minNetYield: 0,
         executionTrigger: "cron",
-        executionCronMinutes: 0,
+        executionCronMinutes: 60,
         automationEnabled: true,
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -468,7 +468,7 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: null,
         minNetYield: 0,
         executionTrigger: "cron",
-        executionCronMinutes: 0,
+        executionCronMinutes: 60,
         automationEnabled: true,
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -482,7 +482,7 @@ function defaultPortfolioConfig() {
         minLiquidityUsdc: 500000,
         minNetYield: 0,
         executionTrigger: "cron",
-        executionCronMinutes: 0,
+        executionCronMinutes: 60,
         automationEnabled: true,
         requireMostProbableOutcome: true,
         probabilitySource: "polymarket",
@@ -511,7 +511,7 @@ function defaultPortfolioConfig() {
       minLiquidityUsdc: 100,
       minNetYield: 0,
       executionTrigger: "cron",
-      executionCronMinutes: 0,
+      executionCronMinutes: 60,
       automationEnabled: true,
       useLimitOrders: true,
       requireMostProbableOutcome: false,
@@ -532,7 +532,7 @@ function defaultPortfolioConfig() {
       minLiquidityUsdc: 100,
       minNetYield: 0,
       executionTrigger: "cron",
-      executionCronMinutes: 0,
+      executionCronMinutes: 60,
       automationEnabled: false,
       useLimitOrders: true,
       requireMostProbableOutcome: false,
@@ -565,16 +565,15 @@ function executionTriggerLabel(value) {
     : "Scheduled cron";
 }
 
-const EXECUTION_CRON_CHOICES = [0, 30, 60, 120, 240, 480, 720, 1440];
+const EXECUTION_CRON_CHOICES = [30, 60, 120, 240, 480, 720, 1440];
 
 function normalizeExecutionCronMinutes(value) {
   const minutes = Number(value);
-  return EXECUTION_CRON_CHOICES.includes(minutes) ? minutes : 0;
+  return EXECUTION_CRON_CHOICES.includes(minutes) ? minutes : 60;
 }
 
 function executionCronMinutesLabel(value) {
   const minutes = normalizeExecutionCronMinutes(value);
-  if (minutes === 0) return "Every scheduled poll";
   if (minutes < 60) return `${minutes} minutes`;
   const hours = minutes / 60;
   return hours === 1 ? "1 hour" : `${hours} hours`;
