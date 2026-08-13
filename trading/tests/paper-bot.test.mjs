@@ -1724,7 +1724,10 @@ test("parameter combinations: every distinct rule uses the full resolved sample 
     ...state,
     marketObservations: state.marketObservations.filter((row) => row.id !== "pending-statistics-regression"),
   });
-  assert.equal(report.parameterSummaries.length, 90, "3 market types x 6 thresholds x 5 horizons");
+  assert.equal(report.parameterSummaries.length, 150, "3 market types x 10 thresholds x 5 horizons");
+  for (const threshold of [0.55, 0.65, 0.75, 0.85, 0.95]) {
+    assert.ok(report.parameterSummaries.some((row) => row.threshold === threshold), `${threshold * 100}% must be included`);
+  }
   assert.ok(report.parameterSummaries.every((row) => !Object.hasOwn(row, "minLiquidityUsdc")));
   const widest = report.parameterSummaries.find((row) => row.marketType === "all"
     && row.threshold === 0.5

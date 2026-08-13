@@ -282,7 +282,9 @@ const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable", "equal"
 const PAPER_RESET_PORTFOLIO = envBool("PAPER_RESET_PORTFOLIO", false);
 const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
-const REPORT_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
+// Keep the original broad thresholds and add the intermediate 5-point steps so
+// the parameter report can distinguish, for example, a 75% rule from 70%/80%.
+const REPORT_THRESHOLDS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
 const SCRAPED_SIMULATION_MAX_DAYS = [1, 3, 7, 14, 30];
 // Each scraped market contributes to every real Polymarket category and tag it
 // carries. The two taxonomies stay separate; risk groups and inferred question tags
