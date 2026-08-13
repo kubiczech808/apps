@@ -1744,6 +1744,8 @@ test("parameter combinations: every distinct rule uses the full resolved sample 
     "but the pending observation must stay outside performance statistics");
   assert.equal(widest.trades, report.sampleSize, "the broadest rule must retain every resolved trade");
   assert.equal(widest.pending, 0, "a parameter combination must never include pending opportunities");
+  assert.ok(widest.openCount >= 1,
+    "the broadest rule must separately expose the current open inventory without diluting historical results");
   assert.ok(Number.isFinite(widest.avgVolumeUsdc) && widest.avgVolumeUsdc > 0,
     "the rule must expose the average first-scraped traded volume");
   const annualizedRule = report.parameterSummaries.find((row) => Number.isFinite(row.annualizedPnlPerTradeUsdc));
@@ -1839,14 +1841,14 @@ test("taxonomy performance: categories and tags render as separately sorted tabl
     "legacy inferred categories must stay hidden until a split report is generated");
   // Every column in both tables is sortable.
   const sorted = [...app.matchAll(/taxonomyHeader\(kind, "([a-zA-Z]+)"/g)].map((match) => match[1]);
-  for (const key of ["label", "trades", "accuracy", "pnl", "annualizedRoi",
+  for (const key of ["label", "openCount", "trades", "accuracy", "pnl", "annualizedRoi",
     "roi", "avgProbability", "avgVolumeUsdc", "lastResolvedAt"]) {
     assert.ok(sorted.includes(key), `${key} column must be sortable`);
   }
   assert.doesNotMatch(app, /taxonomyHeader\(kind, "annualizedPnlPerTradeUsdc", "P\/L p\.a\."/);
   // The header count must match the colspan on the empty row, or the layout breaks.
-  assert.match(app, /colspan="9"/);
-  assert.equal(sorted.length, 9);
+  assert.match(app, /colspan="11"/);
+  assert.equal(sorted.length, 11);
   assert.doesNotMatch(app, /data-category-kind/);
 
   // The report is stored in the core state file, so its row count must be bounded.
@@ -1879,6 +1881,50 @@ test("taxonomy performance: rows open the current scraped markets for that categ
     "the scraped list must respect multiple selected statuses");
   assert.match(app, /scrapedTaxonomyOpportunityPath\(\{ kind, label: row\.label \}\)/,
     "both category and tag performance rows must link to their respective scraped markets");
+  assert.match(html, /data-scraped-market-type-filter/,
+    "parameter-combination links must expose their market type in the scraped catalogue");
+  assert.match(app, /function scrapedRuleOpportunityPath/,
+    "the current-open parameter count must carry its filters to the scraped catalogue");
+  assert.match(app, /scrapedTaxonomyOpenOpportunityPath\(kind, row\.label\)/,
+    "taxonomy open counts must link to current rows for the exact taxonomy label");
+});
+
+test("calculation report: open counts mirror parameter rules and taxonomy", () => {
+  const resolved = {
+    tokenId: "12345678901234567890",
+    question: "Will the resolved market be true?",
+    outcome: "Yes",
+    status: "RESOLVED",
+    marketClosed: true,
+    firstMarketProbability: 0.8,
+    lastLiveMarketProbability: 0.8,
+    finalOutcomePrice: 1,
+    firstDaysToResolution: 3,
+    firstPolymarketCategories: ["sports"],
+    firstPolymarketTags: ["football"],
+  };
+  const open = {
+    ...resolved,
+    id: "open-sports-market",
+    tokenId: "09876543210987654321",
+    question: "Will the open market be true?",
+    status: "SCRAPED",
+    marketClosed: false,
+    acceptingOrders: true,
+    finalOutcomePrice: null,
+    firstMarketProbability: 0.9,
+    lastLiveMarketProbability: 0.9,
+    firstDaysToResolution: 2,
+  };
+  const report = bot.buildCalculationReport(bot.normalizeState({ marketObservations: [resolved, open] }));
+  const matching = report.parameterSummaries.find((row) => row.marketType === "binary"
+    && row.threshold === 0.85 && row.maxResolutionDays === 3);
+  assert.equal(matching?.openCount, 1, "the matching open market must be counted exactly once");
+  const blockedByThreshold = report.parameterSummaries.find((row) => row.marketType === "binary"
+    && row.threshold === 0.95 && row.maxResolutionDays === 3);
+  assert.equal(blockedByThreshold?.openCount, 0, "a lower-probability open market must not leak into stricter rules");
+  assert.equal(report.categorySummaries.find((row) => row.label === "sports")?.openCount, 1);
+  assert.equal(report.tagSummaries.find((row) => row.label === "football")?.openCount, 1);
 });
 
 test("live events: the scan asks Gamma only for what was measured to work", async () => {

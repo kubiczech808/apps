@@ -59,6 +59,7 @@ const state = {
   evaluationNetYieldFilter: 0,
   evaluationLiquidityFilter: 0,
   scrapedTaxonomyFilter: null,
+  scrapedMarketTypeFilter: "all",
   // The scraped catalogue has its own multi-select status filter. `evaluationStatus`
   // belongs to the retired AI evaluation view and must not make a taxonomy deep-link
   // silently discard resolved observations.
@@ -125,6 +126,9 @@ const EVALUATION_LIQUIDITY_FILTER_STORAGE_KEY = "tradingEvaluationLiquidityFilte
 const SCRAPED_TAXONOMY_KIND_QUERY_PARAM = "taxonomy";
 const SCRAPED_TAXONOMY_VALUE_QUERY_PARAM = "taxonomyValue";
 const SCRAPED_STATUS_QUERY_PARAM = "statuses";
+const SCRAPED_PROBABILITY_QUERY_PARAM = "probability";
+const SCRAPED_MAX_DAYS_QUERY_PARAM = "maxDays";
+const SCRAPED_MARKET_TYPE_QUERY_PARAM = "marketType";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
@@ -217,6 +221,7 @@ const els = {
   evaluationLiquidityFilter: document.querySelector("[data-evaluation-liquidity-filter]"),
   evaluationLiquidityFilterLabel: document.querySelector("[data-evaluation-liquidity-filter-label]"),
   scrapedTaxonomyFilter: document.querySelector("[data-scraped-taxonomy-filter]"),
+  scrapedMarketTypeFilter: document.querySelector("[data-scraped-market-type-filter]"),
   scrapedStatusOptions: document.querySelectorAll("[data-scraped-status]"),
   portfolioName: document.querySelector("[data-portfolio-name]"),
   portfolioNameLabel: document.querySelector("[data-portfolio-name-label]"),
@@ -1078,6 +1083,31 @@ function scrapedStatusesFromRoute(search = window.location.search) {
   return normalizeScrapedStatuses(params.get(SCRAPED_STATUS_QUERY_PARAM));
 }
 
+function scrapedStatusesAreExplicitInRoute(search = window.location.search) {
+  return new URLSearchParams(search || "").has(SCRAPED_STATUS_QUERY_PARAM);
+}
+
+function normalizeScrapedMarketType(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["all", "binary", "multi"].includes(normalized) ? normalized : "all";
+}
+
+function scrapedRuleFiltersFromRoute(search = window.location.search) {
+  const params = new URLSearchParams(search || "");
+  const probabilityRaw = Number(params.get(SCRAPED_PROBABILITY_QUERY_PARAM));
+  const daysRaw = params.get(SCRAPED_MAX_DAYS_QUERY_PARAM);
+  return {
+    probabilityFilter: Number.isFinite(probabilityRaw)
+      ? normalizeEvaluationProbabilityFilter(probabilityRaw / 100)
+      : null,
+    daysFilter: daysRaw == null ? null : normalizeEvaluationDaysFilter(daysRaw),
+    marketType: normalizeScrapedMarketType(params.get(SCRAPED_MARKET_TYPE_QUERY_PARAM)),
+    hasRuleFilters: params.has(SCRAPED_PROBABILITY_QUERY_PARAM)
+      || params.has(SCRAPED_MAX_DAYS_QUERY_PARAM)
+      || params.has(SCRAPED_MARKET_TYPE_QUERY_PARAM),
+  };
+}
+
 function setScrapedStatuses(statuses, { render = true } = {}) {
   state.scrapedStatuses = normalizeScrapedStatuses(statuses);
   els.scrapedStatusOptions.forEach((input) => {
@@ -1086,21 +1116,45 @@ function setScrapedStatuses(statuses, { render = true } = {}) {
   if (render) renderBotEvaluations();
 }
 
-function scrapedTaxonomyOpportunityPath(filter = state.scrapedTaxonomyFilter) {
+function scrapedTaxonomyOpportunityPath(filter = state.scrapedTaxonomyFilter, options = {}) {
   const normalized = normalizedScrapedTaxonomyFilter(filter);
-  const statuses = normalized
+  const statuses = normalizeScrapedStatuses(options.statuses || (normalized
     ? ["SCRAPED", "RESOLVED"]
-    : state.scrapedStatuses;
+    : state.scrapedStatuses));
+  const rule = options.rule || null;
   const query = new URLSearchParams();
   if (normalized) {
     query.set(SCRAPED_TAXONOMY_KIND_QUERY_PARAM, normalized.kind);
     query.set(SCRAPED_TAXONOMY_VALUE_QUERY_PARAM, normalized.label);
   }
-  if (statuses.length !== 1 || statuses[0] !== "SCRAPED") {
+  if (Object.hasOwn(options, "statuses") || statuses.length !== 1 || statuses[0] !== "SCRAPED") {
     query.set(SCRAPED_STATUS_QUERY_PARAM, statuses.join(","));
+  }
+  if (rule) {
+    const probabilityFilter = normalizeEvaluationProbabilityFilter(rule.probabilityFilter);
+    const daysFilter = normalizeEvaluationDaysFilter(rule.daysFilter);
+    const marketType = normalizeScrapedMarketType(rule.marketType);
+    if (probabilityFilter > 0) query.set(SCRAPED_PROBABILITY_QUERY_PARAM, String(Math.round(probabilityFilter * 100)));
+    if (daysFilter != null) query.set(SCRAPED_MAX_DAYS_QUERY_PARAM, String(daysFilter));
+    if (marketType !== "all") query.set(SCRAPED_MARKET_TYPE_QUERY_PARAM, marketType);
   }
   if (![...query.keys()].length) return opportunityRoutePath("scraped");
   return `${opportunityRoutePath("scraped")}?${query.toString()}`;
+}
+
+function scrapedRuleOpportunityPath(row, taxonomyFilter = null) {
+  return scrapedTaxonomyOpportunityPath(taxonomyFilter, {
+    statuses: ["SCRAPED"],
+    rule: {
+      probabilityFilter: Number(row?.threshold || 0),
+      daysFilter: row?.maxResolutionDays,
+      marketType: row?.marketType,
+    },
+  });
+}
+
+function scrapedTaxonomyOpenOpportunityPath(kind, label) {
+  return scrapedTaxonomyOpportunityPath({ kind, label }, { statuses: ["SCRAPED"] });
 }
 
 function currentRouteState() {
@@ -1125,6 +1179,8 @@ function currentRouteState() {
       opportunityView,
       scrapedTaxonomyFilter: opportunityView === "scraped" ? scrapedTaxonomyRouteFilter() : null,
       scrapedStatuses: opportunityView === "scraped" ? scrapedStatusesFromRoute() : ["SCRAPED"],
+      scrapedStatusesExplicit: opportunityView === "scraped" ? scrapedStatusesAreExplicitInRoute() : false,
+      scrapedRuleFilters: opportunityView === "scraped" ? scrapedRuleFiltersFromRoute() : null,
     };
   }
   if (path.endsWith("/trading/settings/") || path.endsWith("/settings/")) {
@@ -1291,6 +1347,7 @@ function syncOpportunityViewControls() {
   });
   renderScrapedScanControls();
   syncScrapedTaxonomyFilterControl();
+  syncScrapedMarketTypeFilterControl();
   if (scraped) loadScanCategoryCounts();
 }
 
@@ -1388,11 +1445,19 @@ function syncScrapedTaxonomyFilterControl() {
   els.scrapedTaxonomyFilter.value = selected;
 }
 
+function syncScrapedMarketTypeFilterControl() {
+  state.scrapedMarketTypeFilter = normalizeScrapedMarketType(state.scrapedMarketTypeFilter);
+  if (els.scrapedMarketTypeFilter) {
+    els.scrapedMarketTypeFilter.value = state.scrapedMarketTypeFilter;
+  }
+}
+
 function resetScrapedOpportunityFilters() {
   state.evaluationProbabilityFilter = 0;
   state.evaluationDaysFilter = null;
   state.evaluationNetYieldFilter = 0;
   state.evaluationLiquidityFilter = 0;
+  state.scrapedMarketTypeFilter = "all";
   saveEvaluationProbabilityFilter(0);
   saveEvaluationDaysFilter(null);
   saveEvaluationNetYieldFilter(0);
@@ -1402,18 +1467,32 @@ function resetScrapedOpportunityFilters() {
   syncEvaluationDaysFilterControl();
   syncEvaluationNetYieldFilterControl();
   syncEvaluationLiquidityFilterControl();
+  syncScrapedMarketTypeFilterControl();
 }
 
-function applyScrapedTaxonomyRouteFilter(filter, statuses = ["SCRAPED"]) {
+function applyScrapedTaxonomyRouteFilter(filter, statuses = ["SCRAPED"], ruleFilters = null, statusesExplicit = false) {
   state.scrapedTaxonomyFilter = normalizedScrapedTaxonomyFilter(filter);
   setScrapedStatuses(statuses, { render: false });
-  if (state.scrapedTaxonomyFilter) {
+  if (ruleFilters?.hasRuleFilters) {
+    state.evaluationProbabilityFilter = ruleFilters.probabilityFilter ?? 0;
+    state.evaluationDaysFilter = ruleFilters.daysFilter;
+    state.evaluationNetYieldFilter = 0;
+    state.evaluationLiquidityFilter = 0;
+    state.scrapedMarketTypeFilter = normalizeScrapedMarketType(ruleFilters.marketType);
+    syncEvaluationProbabilityFilterControl();
+    syncEvaluationDaysFilterControl();
+    syncEvaluationNetYieldFilterControl();
+    syncEvaluationLiquidityFilterControl();
+  } else if (state.scrapedTaxonomyFilter) {
     // A taxonomy link is an exploration of all recorded markets in that group, not a
     // continuation of the previous screen's personal scan constraints.
     resetScrapedOpportunityFilters();
-    setScrapedStatuses(["SCRAPED", "RESOLVED"], { render: false });
+    const openOnly = statusesExplicit && state.scrapedStatuses.length === 1 && state.scrapedStatuses[0] === "SCRAPED";
+    if (!openOnly) setScrapedStatuses(["SCRAPED", "RESOLVED"], { render: false });
+    state.scrapedMarketTypeFilter = "all";
   }
   syncScrapedTaxonomyFilterControl();
+  syncScrapedMarketTypeFilterControl();
 }
 
 // The categories this picker offers, in Polymarket's own top-level sense. Every slug here
@@ -1635,7 +1714,12 @@ function applyInitialRoute() {
   const route = currentRouteState();
   setPage(route.page);
   if (route.opportunityView === "scraped") {
-    applyScrapedTaxonomyRouteFilter(route.scrapedTaxonomyFilter, route.scrapedStatuses);
+    applyScrapedTaxonomyRouteFilter(
+      route.scrapedTaxonomyFilter,
+      route.scrapedStatuses,
+      route.scrapedRuleFilters,
+      route.scrapedStatusesExplicit,
+    );
   }
   if (route?.opportunityView) setOpportunityView(route.opportunityView);
   if (route?.settingsSection) setSettingsSection(route.settingsSection);
@@ -5747,6 +5831,12 @@ function candidateMarketType(item = {}) {
   return "multi";
 }
 
+function scrapedMarketType(item = {}) {
+  return normalizeScrapedMarketType(item?.marketType) === "all"
+    ? candidateMarketType(item)
+    : normalizeScrapedMarketType(item.marketType);
+}
+
 // Traded volume, the figure Polymarket shows on a market ("$37.9K Vol."). Gamma's
 // `liquidity` is order-book depth -- a different number, which is why the tables never
 // matched the site. `liquidity` remains the last fallback so rows stored before volume
@@ -7344,10 +7434,12 @@ function renderScrapedOpportunities() {
   const minNetYield = currentEvaluationNetYieldFilter();
   const minLiquidity = currentEvaluationLiquidityFilter();
   const taxonomyFilter = normalizedScrapedTaxonomyFilter();
+  const marketTypeFilter = normalizeScrapedMarketType(state.scrapedMarketTypeFilter);
   const selectedStatuses = normalizeScrapedStatuses(state.scrapedStatuses);
   const statusFiltered = observations.filter((item) => selectedStatuses.includes(scrapedObservationFilterStatus(item)));
   const filtered = statusFiltered.filter((item) => {
     if (!scrapedTaxonomyFilterMatches(item, taxonomyFilter)) return false;
+    if (marketTypeFilter !== "all" && scrapedMarketType(item) !== marketTypeFilter) return false;
     const marketProbability = Number(scrapedDisplayProbability(item));
     if (probabilityFilter > 0 && (!Number.isFinite(marketProbability) || marketProbability < probabilityFilter)) return false;
     // A resolved market no longer trades, so the tradability filters must not apply
@@ -7374,6 +7466,7 @@ function renderScrapedOpportunities() {
       daysFilter != null ? `days <= ${daysFilter}` : "",
       minNetYield > 0 ? `net yield >= ${(minNetYield * 100).toFixed(1)}%` : "",
       minLiquidity > 0 ? `liquidity >= ${money(minLiquidity)}` : "",
+      marketTypeFilter !== "all" ? `market type = ${calculationMarketLabel(marketTypeFilter)}` : "",
       taxonomyFilter ? `${taxonomyFilter.kind} = ${taxonomyFilterDisplayLabel(taxonomyFilter.kind, taxonomyFilter.label)}` : "",
       selectedStatuses.length < 3 ? `status = ${selectedStatuses.map((status) => status.toLowerCase()).join(" + ")}` : "",
     ].filter(Boolean);
@@ -8689,6 +8782,7 @@ function calculationSortValue(row, key) {
   if (key === "marketType") return calculationMarketLabel(row.marketType).toLowerCase();
   if (key === "threshold") return numeric(row.threshold);
   if (key === "maxResolutionDays") return numeric(row.maxResolutionDays);
+  if (key === "openCount") return numeric(row.openCount ?? 0);
   if (key === "trades") return numeric(row.trades ?? 0);
   if (key === "accuracy") return numeric(row.winRate);
   if (key === "stake") return numeric(row.resolvedStakeUsdc ?? row.stakeUsdc ?? 0);
@@ -8803,6 +8897,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
           <thead>
             <tr>
               ${taxonomyHeader(kind, "label", label)}
+              ${taxonomyHeader(kind, "openCount", "Open now", `Current scraped opportunities with this Polymarket ${kind}.`)}
               ${taxonomyHeader(kind, "trades", "Trades")}
               ${taxonomyHeader(kind, "accuracy", "Accuracy")}
               ${taxonomyHeader(kind, "stake", "Invested")}
@@ -8817,7 +8912,8 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
           <tbody>
             ${rows.length ? rows.map((row) => `
               <tr>
-                <td data-label="${label}"><strong><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpportunityPath({ kind, label: row.label }))}" title="Show all current scraped opportunities in this ${kind}">${escapeHtml(row.label || "-")}</a></strong></td>
+                <td data-label="${label}"><strong><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpportunityPath({ kind, label: row.label }))}" title="Show current and resolved scraped opportunities in this ${kind}">${escapeHtml(row.label || "-")}</a></strong></td>
+                <td data-label="Open now"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpenOpportunityPath(kind, row.label))}" title="Show current open scraped opportunities in this ${kind}">${formatInteger(Number(row.openCount || 0))}</a></td>
                 <td data-label="Trades">${Number(row.trades || 0)}</td>
                 <td data-label="Accuracy">${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td data-label="Invested">${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
@@ -8828,7 +8924,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
                 <td data-label="Avg volume">${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
                 <td data-label="Last resolved">${escapeHtml(row.lastResolvedAt ? formatDate(row.lastResolvedAt) : "-")}</td>
               </tr>
-            `).join("") : `<tr><td colspan="10">No ${kind} statistics are available yet.</td></tr>`}
+            `).join("") : `<tr><td colspan="11">No ${kind} statistics are available yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -8876,6 +8972,7 @@ function renderCalculationReport() {
               ${calculationHeader("threshold", "Threshold")}
               ${calculationHeader("marketType", "Market type")}
               ${calculationHeader("maxResolutionDays", "Max days")}
+              ${calculationHeader("openCount", "Open now")}
               ${calculationHeader("trades", "Trades")}
               ${calculationHeader("accuracy", "Accuracy")}
               ${calculationHeader("stake", "Invested")}
@@ -8892,6 +8989,7 @@ function renderCalculationReport() {
                 <td>${probability(Number(row.threshold))}</td>
                 <td>${escapeHtml(calculationMarketLabel(row.marketType))}</td>
                 <td>${Number(row.maxResolutionDays || 0)} d</td>
+                <td><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedRuleOpportunityPath(row))}" title="Show current open scraped opportunities matching this parameter combination">${formatInteger(Number(row.openCount || 0))}</a></td>
                 <td>${Number(row.trades || 0)}</td>
                 <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td>${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
@@ -8901,7 +8999,7 @@ function renderCalculationReport() {
                 <td>${probability(Number(row.avgProbability))}</td>
                 <td>${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
               </tr>
-            `).join("") : '<tr><td colspan="11">No resolved scraped opportunity simulation is available yet.</td></tr>'}
+            `).join("") : '<tr><td colspan="12">No resolved scraped opportunity simulation is available yet.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -9183,6 +9281,12 @@ els.scrapedTaxonomyFilter?.addEventListener("change", () => {
       window.history.pushState({ page: "opportunities", opportunityView: "scraped" }, "", targetPath);
     }
   }
+});
+
+els.scrapedMarketTypeFilter?.addEventListener("change", () => {
+  state.scrapedMarketTypeFilter = normalizeScrapedMarketType(els.scrapedMarketTypeFilter.value);
+  syncScrapedMarketTypeFilterControl();
+  renderBotEvaluations();
 });
 
 els.portfolioName?.addEventListener("input", () => {

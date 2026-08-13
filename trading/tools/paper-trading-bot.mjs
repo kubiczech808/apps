@@ -8047,21 +8047,25 @@ function summarizeScrapedSimulationRows(rows) {
   };
 }
 
-function scrapedSimulationParameterRows(trades) {
+function scrapedSimulationMatchesRule(trade, { marketType = "all", threshold = 0, maxResolutionDays = null } = {}) {
+  return (marketType === "all" || trade.marketType === marketType)
+    && trade.entry >= threshold
+    && (maxResolutionDays == null || trade.days == null || trade.days <= maxResolutionDays);
+}
+
+function scrapedSimulationParameterRows(trades, openTrades = []) {
   const rows = [];
   for (const marketType of ["all", "binary", "multi"]) {
     for (const threshold of REPORT_THRESHOLDS) {
       for (const maxResolutionDays of SCRAPED_SIMULATION_MAX_DAYS) {
-        const selected = trades.filter((trade) => (
-          (marketType === "all" || trade.marketType === marketType)
-          && trade.entry >= threshold
-          && (trade.days == null || trade.days <= maxResolutionDays)
-        ));
+        const criteria = { marketType, threshold, maxResolutionDays };
+        const selected = trades.filter((trade) => scrapedSimulationMatchesRule(trade, criteria));
         rows.push({
           probabilitySource: "polymarket",
           marketType,
           threshold,
           maxResolutionDays,
+          openCount: openTrades.filter((trade) => scrapedSimulationMatchesRule(trade, criteria)).length,
           ...summarizeScrapedSimulationRows(selected),
         });
       }
@@ -8070,33 +8074,40 @@ function scrapedSimulationParameterRows(trades) {
   return rows;
 }
 
-function scrapedSimulationTaxonomyRows(trades, field, kind) {
+function scrapedSimulationTaxonomyRows(trades, openTrades, field, kind) {
   const groups = new Map();
-  const add = (label, trade) => {
+  const add = (label, trade, { open = false } = {}) => {
     const key = String(label || "").trim().toLowerCase();
     if (!key) return;
-    if (!groups.has(key)) groups.set(key, { kind, label: key, trades: [] });
-    groups.get(key).trades.push(trade);
+    if (!groups.has(key)) groups.set(key, { kind, label: key, trades: [], openCount: 0 });
+    if (open) groups.get(key).openCount += 1;
+    else groups.get(key).trades.push(trade);
   };
-  for (const trade of trades) {
+  const addTradeToGroups = (trade, options = {}) => {
     const labels = Array.isArray(trade[field]) ? trade[field] : [];
     // A missing Gamma relation must not silently remove a settled market from the
     // taxonomy report. Keep it distinct from an actual Polymarket category or tag
     // instead of guessing from an unrelated risk label.
     if (!labels.length) {
-      add(kind === "category" ? "uncategorized" : "untagged", trade);
-      continue;
+      add(kind === "category" ? "uncategorized" : "untagged", trade, options);
+      return;
     }
-    for (const label of labels) add(label, trade);
-  }
+    for (const label of labels) add(label, trade, options);
+  };
+  for (const trade of trades) addTradeToGroups(trade);
+  for (const trade of openTrades) addTradeToGroups(trade, { open: true });
   const rows = [...groups.values()]
-    .map(({ trades: groupTrades, ...group }) => ({
+    .map(({ trades: groupTrades, openCount = 0, ...group }) => ({
       ...group,
+      openCount,
       ...summarizeScrapedSimulationRows(groupTrades),
     }))
     // Rank by evidence first: a group with one resolved trade is noise next to one
     // with fifty, whatever its ROI looks like.
-    .sort((a, b) => (b.resolved - a.resolved) || (b.trades - a.trades) || a.label.localeCompare(b.label));
+    .sort((a, b) => (b.resolved - a.resolved)
+      || (b.trades - a.trades)
+      || (b.openCount - a.openCount)
+      || a.label.localeCompare(b.label));
   // This report lives in the core state file, which every dashboard read decodes, so
   // the row count cannot be left to however many tags Polymarket happens to publish.
   return rows.slice(0, SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT);
@@ -8123,6 +8134,15 @@ function buildCalculationReport(state) {
   // markets have no outcome, so including them in trade counts or averages dilutes
   // every parameter combination with data that cannot validate the strategy yet.
   const trades = observedTrades.filter((trade) => trade.outcome != null);
+  // The new count columns are an inventory of genuinely tradable opportunities, not
+  // merely unresolved records waiting for settlement. Pending/closed observations
+  // cannot be opened and must therefore stay outside the deep links.
+  const openTrades = observedTrades.filter((trade) => (
+    trade.outcome == null
+    && !observationIsResolved(trade.item)
+    && trade.item?.marketClosed !== true
+    && trade.item?.acceptingOrders !== false
+  ));
   return {
     id: `calculation-report-${generatedAt}`,
     generatedAt,
@@ -8139,9 +8159,10 @@ function buildCalculationReport(state) {
       execution: `Each fresh scraped opportunity is simulated as an immediate market position with a fixed ${SCRAPED_SIMULATION_STAKE_USDC.toFixed(2)} USDC stake and the stored taker fee schedule.`,
       resolution: "Only opportunities with a final Polymarket resolution price are included in performance statistics.",
     },
-    parameterSummaries: scrapedSimulationParameterRows(trades),
-    categorySummaries: scrapedSimulationTaxonomyRows(trades, "categories", "category"),
-    tagSummaries: scrapedSimulationTaxonomyRows(trades, "tags", "tag"),
+    openSampleSize: openTrades.length,
+    parameterSummaries: scrapedSimulationParameterRows(trades, openTrades),
+    categorySummaries: scrapedSimulationTaxonomyRows(trades, openTrades, "categories", "category"),
+    tagSummaries: scrapedSimulationTaxonomyRows(trades, openTrades, "tags", "tag"),
     taxonomyCoverage: {
       category: scrapedSimulationTaxonomyCoverage(trades, "categories"),
       tag: scrapedSimulationTaxonomyCoverage(trades, "tags"),
