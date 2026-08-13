@@ -495,7 +495,7 @@ function defaultPortfolioConfig() {
         selectionOrder: "highest_ev_pa_first",
         minLiquidityUsdc: null,
         minNetYield: 0,
-        executionTrigger: "cron",
+        executionTrigger: "after_scrape",
         executionCronMinutes: 0,
         automationEnabled: true,
         requireMostProbableOutcome: false,
@@ -3317,14 +3317,26 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.minNetYield) els.minNetYield.value = (minNetYield * 100).toFixed(1);
   if (els.minNetYieldLabel) els.minNetYieldLabel.textContent = percent(minNetYield);
   const trigger = normalizeExecutionTrigger(config.executionTrigger);
-  if (els.executionTrigger) els.executionTrigger.value = trigger;
-  if (els.executionTriggerLabel) els.executionTriggerLabel.textContent = executionTriggerLabel(trigger);
+  const equalRiskMode = normalizeMode(mode) === "paper-equal";
+  const effectiveTrigger = equalRiskMode ? "after_scrape" : trigger;
+  if (els.executionTrigger) {
+    els.executionTrigger.value = effectiveTrigger;
+    els.executionTrigger.disabled = equalRiskMode;
+    els.executionTrigger.title = equalRiskMode
+      ? "Equal checks its synthetic stop after every scraping batch."
+      : "";
+  }
+  if (els.executionTriggerLabel) {
+    els.executionTriggerLabel.textContent = equalRiskMode
+      ? "After each scraping batch (Equal stop checks)"
+      : executionTriggerLabel(effectiveTrigger);
+  }
   const cronMinutes = normalizeExecutionCronMinutes(config.executionCronMinutes);
   if (els.executionCronMinutes) els.executionCronMinutes.value = String(cronMinutes);
   if (els.executionCronMinutesLabel) els.executionCronMinutesLabel.textContent = executionCronMinutesLabel(cronMinutes);
   // The interval only means anything for the cron trigger; "after each scraping
   // batch" has its own cadence.
-  els.executionCronRow?.toggleAttribute("hidden", trigger !== "cron");
+  els.executionCronRow?.toggleAttribute("hidden", equalRiskMode || effectiveTrigger !== "cron");
   const fixedEntryPrice = normalizeFixedEntryPrice(config.fixedEntryPrice);
   if (els.fixedEntryPrice) els.fixedEntryPrice.value = String(Math.round(fixedEntryPrice * 100));
   if (els.fixedEntryPriceLabel) els.fixedEntryPriceLabel.textContent = percent(fixedEntryPrice);

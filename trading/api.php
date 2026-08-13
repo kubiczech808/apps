@@ -722,7 +722,9 @@ function default_portfolio_config(): array
                 'selectionOrder' => 'highest_ev_pa_first',
                 'minLiquidityUsdc' => null,
                 'minNetYield' => 0.0,
-                'executionTrigger' => 'cron',
+                // Equal's stop is synthetic, so it must inspect the book after every
+                // scraped batch instead of waiting for a slower scheduled full pass.
+                'executionTrigger' => 'after_scrape',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'polymarket',
                 'excludedCandidateTokenIds' => [],
@@ -1028,6 +1030,13 @@ function normalize_portfolio_config(array $input): array
     foreach ($defaults['paper'] as $id => $strategyDefaults) {
         $strategyInput = is_array($paperInput[$id] ?? null) ? $paperInput[$id] : [];
         $config['paper'][$id] = normalize_strategy_config($strategyInput, $strategyDefaults);
+        if ($id === 'equal') {
+            // This is deliberately not a user-selectable cadence. Equal's risk promise
+            // depends on checking a fresh book after each scrape; accepting a legacy
+            // `cron` value would silently downgrade that protection to an hourly pass.
+            $config['paper'][$id]['executionTrigger'] = 'after_scrape';
+            $config['paper'][$id]['executionCronMinutes'] = 0;
+        }
     }
     $config['live'] = normalize_strategy_config($liveInput, $defaults['live']);
     $config['live']['useLimitOrders'] = (bool) ($liveInput['useLimitOrders'] ?? $defaults['live']['useLimitOrders']);

@@ -350,8 +350,11 @@ const PAPER_STRATEGIES = {
     maxResolutionDays: envNumber("PAPER_EQUAL_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_EQUAL_MIN_LIQUIDITY_USDC", null),
     minNetYield: envNumber("PAPER_EQUAL_MIN_NET_YIELD", 0),
-    executionTrigger: normalizeExecutionTrigger(process.env.PAPER_EQUAL_EXECUTION_TRIGGER),
-    executionCronMinutes: Math.max(0, envNumber("PAPER_EQUAL_EXECUTION_CRON_MINUTES", 0) || 0),
+    // Equal's paper stop is synthetic: it can only react when a fresh CLOB book is
+    // read. Run it after each completed scrape, rather than leaving protection to the
+    // roughly-hourly full portfolio pass used by the other paper strategies.
+    executionTrigger: "after_scrape",
+    executionCronMinutes: 0,
     automationEnabled: envBool("PAPER_EQUAL_AUTOMATION_ENABLED", true),
     requireMostProbableOutcome: envBool("PAPER_EQUAL_REQUIRE_MOST_PROBABLE", false),
     probabilitySource: envProbabilitySource("PAPER_EQUAL_PROBABILITY_SOURCE"),
@@ -362,7 +365,7 @@ const PAPER_STRATEGIES = {
     // stop order, so this portfolio records a synthetic exit from a refreshed book.
     equalRiskProtection: true,
     allowRotation: false,
-    description: "Paper-only equal-risk strategy: planned maximum loss equals the net potential win. A synthetic protective exit is checked whenever the paper portfolio refreshes; positions are not rotated.",
+    description: "Paper-only equal-risk strategy: planned maximum loss equals the net potential win. A synthetic protective exit is checked after every completed scraping batch; positions are not rotated.",
   },
 };
 
