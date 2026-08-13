@@ -2496,6 +2496,19 @@ test("portfolio config: a setting the server drops can never persist", async () 
   assert.match(api, /\(\$entryPrice > 0 && \$entryPrice < 1\)/);
 });
 
+test("portfolio name: only the saved name 75 is migrated to Paper 75", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+
+  const normalizer = api.slice(api.indexOf("function normalize_portfolio_display_name"));
+  const body = normalizer.slice(0, normalizer.indexOf("\n}"));
+  assert.match(body, /if \(\$name === '75'\) \{\s*return 'Paper 75';\s*\}/);
+  assert.match(api, /'equal' => \[\s*'displayName' => 'Equal',/,
+    "the Equal strategy must keep its own default name");
+  assert.doesNotMatch(api, /\$id === 'equal'.*displayName/s,
+    "the rename must follow the saved name, not an unrelated strategy id");
+});
+
 test("5050: the order price is a portfolio setting, not only a dispatch input", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");

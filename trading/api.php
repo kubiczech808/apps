@@ -936,6 +936,9 @@ function normalize_portfolio_display_name(mixed $value, string $fallback): strin
     if ($name === '') {
         return $fallback;
     }
+    if ($name === '75') {
+        return 'Paper 75';
+    }
     return function_exists('mb_substr')
         ? mb_substr($name, 0, 80, 'UTF-8')
         : substr($name, 0, 80);
