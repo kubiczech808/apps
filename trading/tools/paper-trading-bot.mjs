@@ -267,7 +267,7 @@ const CONTINUOUS_EVALUATION = envBool("PAPER_CONTINUOUS_EVALUATION", false);
 const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
 const SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT", 300);
 const SCRAPED_SIMULATION_STAKE_USDC = envNumber("PAPER_SCRAPED_SIMULATION_STAKE_USDC", 5);
-const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable"].includes(process.env.PAPER_STRATEGY_ID)
+const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable", "equal"].includes(process.env.PAPER_STRATEGY_ID)
   ? process.env.PAPER_STRATEGY_ID
   : "";
 const TZ = "Europe/Prague";
@@ -2744,6 +2744,10 @@ async function fetchMarketBySlug(slug) {
   return null;
 }
 
+function shouldCheckEqualStopBeforePending({ equalRiskProtection = false, awaitingResolution = false, marketClosed = false } = {}) {
+  return Boolean(equalRiskProtection && awaitingResolution && !marketClosed);
+}
+
 async function markOpenTrade(trade) {
   if (!OPEN_STATUSES.has(trade.status)) return trade;
 
@@ -2778,6 +2782,7 @@ async function markOpenTrade(trade) {
   const dateContext = marketDateContext({ ...market, resolutionEndDate: market.endDate || trade.resolutionEndDate || trade.endDate || null }, trade.openedAt || trade.date);
   const endDate = dateContext.endDate;
   const remainingDays = endDate ? daysToEnd(endDate) : null;
+  const awaitingResolution = dateContext.sportsEventStarted || (remainingDays != null && remainingDays <= 0);
   const base = {
     ...trade,
     question: market.question || trade.question,
@@ -2826,17 +2831,26 @@ async function markOpenTrade(trade) {
     };
   }
 
-  if (dateContext.sportsEventStarted || (remainingDays != null && remainingDays <= 0)) {
-    return {
+  const pendingResolutionResult = (current = {}) => ({
       ...base,
       status: "PENDING_RESOLUTION",
       finalOutcomePrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : null,
-      currentPrice: Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : trade.currentPrice ?? null,
-      currentValueUsdc: trade.currentValueUsdc ?? null,
-      unrealizedPnlUsdc: trade.unrealizedPnlUsdc ?? 0,
-      unrealizedPnlPct: trade.unrealizedPnlPct ?? 0,
-      statusNote: "Event end date has passed; waiting for Polymarket resolution.",
-    };
+      currentPrice: current.currentPrice ?? (Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : trade.currentPrice ?? null),
+      currentValueUsdc: current.currentValueUsdc ?? trade.currentValueUsdc ?? null,
+      unrealizedPnlUsdc: current.unrealizedPnlUsdc ?? trade.unrealizedPnlUsdc ?? 0,
+      unrealizedPnlPct: current.unrealizedPnlPct ?? trade.unrealizedPnlPct ?? 0,
+      statusNote: current.statusNote || "Event end date has passed; waiting for Polymarket resolution.",
+    });
+
+  // A sports kickoff and Gamma's estimated end date are not an exchange close.
+  // Equal must still inspect a live book at that point: it is the only chance to
+  // observe and record its synthetic protective exit before final resolution.
+  if (awaitingResolution && !shouldCheckEqualStopBeforePending({
+    equalRiskProtection: trade.equalRiskProtection,
+    awaitingResolution,
+    marketClosed: market.closed,
+  })) {
+    return pendingResolutionResult();
   }
 
   try {
@@ -2879,6 +2893,17 @@ async function markOpenTrade(trade) {
           statusNote: "Synthetic Equal paper stop triggered from the refreshed best bid.",
         };
       }
+      if (awaitingResolution) {
+        return pendingResolutionResult({
+          currentPrice: Number(bestBid.toFixed(4)),
+          currentValueUsdc: currentValue,
+          unrealizedPnlUsdc: unrealizedPnl,
+          unrealizedPnlPct: pnlPercent(unrealizedPnl, cost),
+          statusNote: trade.equalRiskProtection
+            ? "Equal stop was checked against the current best bid; waiting for Polymarket resolution."
+            : "Event end date has passed; waiting for Polymarket resolution.",
+        });
+      }
       return {
         ...base,
         status: "OPEN",
@@ -2894,13 +2919,20 @@ async function markOpenTrade(trade) {
       };
     }
   } catch (error) {
+    if (awaitingResolution) {
+      return pendingResolutionResult({
+        statusNote: trade.equalRiskProtection
+          ? `Equal stop could not be checked before resolution: ${error.message}`
+          : "Event end date has passed; waiting for Polymarket resolution.",
+      });
+    }
     return {
       ...base,
       statusNote: `Orderbook refresh failed: ${error.message}`,
     };
   }
 
-  return base;
+  return awaitingResolution ? pendingResolutionResult() : base;
 }
 
 async function refreshTrades(trades) {
@@ -8751,6 +8783,7 @@ export {
   takerFeeForFills,
   netExitValueAtPrice,
   equalRiskStopPlan,
+  shouldCheckEqualStopBeforePending,
   totalCost,
   updatePaperPortfolio,
   withLastLiveMarketProbability,

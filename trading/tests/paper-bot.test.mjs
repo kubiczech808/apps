@@ -62,6 +62,14 @@ test("equal risk: the planned exit leaves no more loss than the net winning gain
   assert.equal(natural.requiresStop, false, "a whole-stake loss is already below the possible reward");
 });
 
+test("equal risk: a past estimated end date does not bypass a still-live synthetic stop check", () => {
+  // Sports start times and Gamma resolution estimates can be stale while CLOB still
+  // has executable bids. Equal must inspect that book before it becomes pending.
+  assert.equal(bot.shouldCheckEqualStopBeforePending({ equalRiskProtection: true, awaitingResolution: true, marketClosed: false }), true);
+  assert.equal(bot.shouldCheckEqualStopBeforePending({ equalRiskProtection: false, awaitingResolution: true, marketClosed: false }), false);
+  assert.equal(bot.shouldCheckEqualStopBeforePending({ equalRiskProtection: true, awaitingResolution: true, marketClosed: true }), false);
+});
+
 test("economics: net yield is measured against the real stake, not the target win", () => {
   // $0.30 net gain on a $5 stake is a 6% yield, not a 300% one.
   assert.equal(bot.netYieldAfterFees({ netGainIfWinUsdc: 0.3, stakeUsdc: 5 }), 0.06);
