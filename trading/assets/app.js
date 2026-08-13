@@ -1379,11 +1379,11 @@ function normalizedScrapedScanTag(value) {
 
 function taxonomyValuesFromRecord(item, kind) {
   const fields = kind === "category"
-    ? ["firstPolymarketCategories", "polymarketCategories", "categories", "firstCategories"]
-    : ["firstPolymarketTags", "polymarketTags", "tags", "firstTags"];
-  // Taxonomy performance is calculated against the taxonomy captured when the market
-  // first appeared. Use that same source for navigation; merging every historical
-  // field let a tag link match unrelated labels introduced by later refreshes.
+    ? ["polymarketCategories", "firstPolymarketCategories", "categories", "firstCategories"]
+    : ["polymarketTags", "firstPolymarketTags", "tags", "firstTags"];
+  // A catalogue link must describe the market as Polymarket classifies it now.
+  // First-seen taxonomy is retained only as a fallback for legacy rows, otherwise a
+  // historical label can leak unrelated current markets into a tag/category view.
   const source = fields.map((field) => item?.[field]).find((value) => Array.isArray(value) && value.length)
     || fields.map((field) => item?.[field]).find((value) => value != null);
   const entries = Array.isArray(source) ? source : source == null ? [] : [source];

@@ -930,7 +930,15 @@ test("resolved observations: the scraped view surfaces them without a days filte
   assert.match(api, /function is_resolved_scraped_market_observation/);
   assert.match(api, /\$active = array_merge\(\$active, \$resolved\);/);
   // And the fields the tab needs must survive compaction.
-  for (const field of ["'lastLiveMarketProbability'", "'finalOutcomePrice'", "'marketClosed'", "'acceptingOrders'"]) {
+  for (const field of [
+    "'lastLiveMarketProbability'",
+    "'finalOutcomePrice'",
+    "'marketClosed'",
+    "'acceptingOrders'",
+    "'polymarketCategories'",
+    "'firstPolymarketTags'",
+    "'firstPolymarketCategories'",
+  ]) {
     assert.ok(api.includes(field), `compact_market_observation must keep ${field}`);
   }
 
@@ -1877,6 +1885,8 @@ test("taxonomy performance: rows open the current scraped markets for that categ
     "a taxonomy deep-link must include both current and resolved markets");
   assert.match(app, /scrapedTaxonomyFilterMatches\(item, taxonomyFilter\)/,
     "the selected taxonomy must be applied to the scraped list itself");
+  assert.match(app, /\["polymarketTags", "firstPolymarketTags", "tags", "firstTags"\]/,
+    "tag deep-links must prefer the market's current Polymarket tag over an old snapshot");
   assert.match(app, /selectedStatuses\.includes\(scrapedObservationFilterStatus\(item\)\)/,
     "the scraped list must respect multiple selected statuses");
   assert.match(app, /scrapedTaxonomyOpportunityPath\(\{ kind, label: row\.label \}\)/,
