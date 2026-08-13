@@ -1968,6 +1968,39 @@ test("Polymarket probability threshold uses the executable CLOB entry, not a sta
   assert.ok(result.reasons.some((reason) => reason.includes("Polymarket probability 59.0% below 75.0%")));
 });
 
+test("execution revalidation: an unavailable CLOB quote cannot remain an Equal candidate", () => {
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.equal,
+    probabilitySource: "polymarket",
+    minProbability: 0.75,
+  };
+  const item = {
+    tokenId: "12345678901234567890",
+    status: "REJECTED",
+    selectionStatus: "REVALIDATION_FAILED",
+    executionQuoteVerified: false,
+    marketPrice: 0.9,
+    marketProbability: 0.9,
+    volumeUsdc: 100000,
+    daysToResolution: 0.5,
+    netGainIfWinUsdc: 0.5,
+    totalCostUsdc: 5,
+    executableShares: 5.55,
+  };
+  const result = bot.portfolioFilterResult(item, strategy);
+
+  assert.equal(result.eligible, false);
+  assert.ok(result.reasons.includes("current CLOB quote is unavailable after revalidation"));
+});
+
+test("execution revalidation: the log renders an unavailable quote as unavailable, never 0%", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+
+  assert.match(functionSource(app, "executionCandidatePotentialPa"), /executionQuoteVerified === false/);
+  assert.match(functionSource(app, "renderExecutionCandidatesNotUsedTable"), /item\.netYield == null \|\| item\.netYield === "" \? NaN/);
+});
+
 test("market dates: a date recovered from a slug is a whole day, not a kickoff", () => {
   // Reported: finished fixtures stayed in Execution candidates showing an end date of
   // 07. 08. 2026 01:59 -- midnight UTC in Prague, i.e. the slug's day stretched to

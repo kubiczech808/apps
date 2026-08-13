@@ -4746,6 +4746,7 @@ function portfolioFilterResult(item, strategy) {
   const reasons = [];
   const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
   const status = String(item.status || "").toUpperCase();
+  const selectionStatus = String(item.selectionStatus || "").toUpperCase();
   const minProbability = Number(strategy.minProbability);
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
   const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
@@ -4770,6 +4771,12 @@ function portfolioFilterResult(item, strategy) {
   if (probabilitySource === "ai" && status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
   if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {
     reasons.push(`base status ${status || "UNKNOWN"} is not executable`);
+  }
+  // Retain a failed CLOB lookup for the audit trail, but never let an old
+  // Gamma quote make it eligible again. This safeguard applies to both
+  // Polymarket- and AI-probability portfolios.
+  if (selectionStatus === "REVALIDATION_FAILED" || item.executionQuoteVerified === false) {
+    reasons.push("current CLOB quote is unavailable after revalidation");
   }
   if (probabilitySource === "ai" && REQUIRE_GEMINI && !hasGroundedPublicMemo(item)) reasons.push("grounded Gemini analysis is pending");
   if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) {
@@ -4997,6 +5004,12 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
 
 function tradeBatchCandidateSummary(item) {
   if (!item) return null;
+  const executionQuoteUnavailable = item.executionQuoteVerified === false
+    || String(item.selectionStatus || "").toUpperCase() === "REVALIDATION_FAILED";
+  const calculatedNetYield = netYieldAfterFees(item);
+  const calculatedPotentialPa = executionQuoteUnavailable
+    ? null
+    : annualizedPotentialReturn(calculatedNetYield, item.daysToResolution);
   return {
     id: item.id || null,
     question: item.question || "",
@@ -5005,6 +5018,10 @@ function tradeBatchCandidateSummary(item) {
     evaluatedAt: item.evaluatedAt || null,
     status: item.status || null,
     selectionStatus: item.selectionStatus || null,
+    executionQuoteVerified: item.executionQuoteVerified === true
+      ? true
+      : (executionQuoteUnavailable ? false : null),
+    executionQuoteStatus: item.executionQuoteStatus || (executionQuoteUnavailable ? "UNAVAILABLE" : null),
     aiProbability: Number.isFinite(Number(item.aiProbability)) ? Number(Number(item.aiProbability).toFixed(4)) : null,
     marketPrice: Number.isFinite(Number(item.marketPrice)) ? Number(Number(item.marketPrice).toFixed(4)) : null,
     marketProbability: Number.isFinite(Number(item.marketProbability)) ? Number(Number(item.marketProbability).toFixed(4)) : null,
@@ -5015,8 +5032,11 @@ function tradeBatchCandidateSummary(item) {
     marketAnnualizedReturn: Number.isFinite(Number(item.marketAnnualizedReturn)) ? Number(Number(item.marketAnnualizedReturn).toFixed(4)) : null,
     marketExpectedValueUsdc: Number.isFinite(Number(item.marketExpectedValueUsdc)) ? Number(Number(item.marketExpectedValueUsdc).toFixed(4)) : null,
     netGainIfWinUsdc: Number.isFinite(Number(item.netGainIfWinUsdc)) ? Number(Number(item.netGainIfWinUsdc).toFixed(4)) : null,
-    netYield: Number.isFinite(Number(item.netGainIfWinUsdc)) && Number(item.totalCostUsdc || item.stakeUsdc || 0) > 0
-      ? Number((Number(item.netGainIfWinUsdc) / Number(item.totalCostUsdc || item.stakeUsdc || 0)).toFixed(4))
+    netYield: !executionQuoteUnavailable && Number.isFinite(calculatedNetYield)
+      ? Number(calculatedNetYield.toFixed(4))
+      : null,
+    potentialAnnualizedReturn: Number.isFinite(calculatedPotentialPa)
+      ? Number(calculatedPotentialPa.toFixed(4))
       : null,
     riskReward: Number.isFinite(Number(rewardRiskRatio(item))) ? Number(Number(rewardRiskRatio(item)).toFixed(4)) : null,
     daysToResolution: Number.isFinite(Number(item.daysToResolution)) ? Number(Number(item.daysToResolution).toFixed(2)) : null,
@@ -5156,6 +5176,8 @@ function revalidationFailureEvaluation(item, message, status = "REJECTED") {
     status,
     thesisType: status === "ERROR" ? "ERROR" : "REJECTED",
     selectionStatus: "REVALIDATION_FAILED",
+    executionQuoteVerified: false,
+    executionQuoteStatus: "UNAVAILABLE",
     rejectReasons: [reason, ...(Array.isArray(item.rejectReasons) ? item.rejectReasons : [])],
     analysisSummary: `${reason}. Candidate was removed from the current execution shortlist until a later evaluation makes it executable again.`,
   });
@@ -5185,6 +5207,8 @@ async function revalidateStoredExecutionCandidate(item, learningProfile) {
     const refreshed = normalizeEvaluationRisk({
       ...evaluation,
       revalidationSource: "stored_execution_candidates",
+      executionQuoteVerified: true,
+      executionQuoteStatus: "VERIFIED",
       previousEvaluatedAt: item.evaluatedAt || item.lastSeenAt || null,
       firstEvaluatedAt: item.firstEvaluatedAt || item.evaluatedAt || null,
     });

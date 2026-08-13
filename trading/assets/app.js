@@ -3648,8 +3648,13 @@ function executionCandidatesNotUsed(batch = {}) {
 }
 
 function executionCandidatePotentialPa(item = {}, probabilitySource = "ai") {
+  if (item.executionQuoteVerified === false || String(item.selectionStatus || "").toUpperCase() === "REVALIDATION_FAILED") {
+    return NaN;
+  }
+  const suppliedPotential = item.potentialAnnualizedReturn == null ? NaN : Number(item.potentialAnnualizedReturn);
+  if (Number.isFinite(suppliedPotential)) return suppliedPotential;
   if (normalizeProbabilitySource(probabilitySource) !== "polymarket") return Number(item.annualizedReturn);
-  const netYield = Number(item.netYield);
+  const netYield = item.netYield == null || item.netYield === "" ? NaN : Number(item.netYield);
   const days = Number(item.daysToResolution);
   return Number.isFinite(netYield) && Number.isFinite(days)
     ? annualizeReturn(netYield, days)
@@ -3683,7 +3688,9 @@ function renderExecutionCandidatesNotUsedTable(candidates = [], probabilitySourc
             const url = String(item.url || "").trim();
             const selectedProbability = Number(usesPolymarketProbability ? item.marketPrice : item.aiProbability);
             const liquidity = rowVolumeUsdc(item);
-            const netYield = Number(item.netYield);
+            // Number(null) is 0. An unavailable CLOB quote must not be shown as
+            // an exact break-even, because it cannot be selected for an order.
+            const netYield = item.netYield == null || item.netYield === "" ? NaN : Number(item.netYield);
             const potentialPa = executionCandidatePotentialPa(item, probabilitySource);
             return `
               <tr>
