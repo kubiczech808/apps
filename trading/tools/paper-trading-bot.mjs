@@ -7982,33 +7982,42 @@ function summarizeScrapedSimulationRows(rows) {
   const avgProbability = average(rows.map((row) => row.entry));
   const avgVolumeUsdc = average(rows.map((row) => row.volumeUsdc).filter(Number.isFinite));
   const avgDays = average(rows.map((row) => row.days).filter(Number.isFinite));
+  const observationTimes = resolved
+    .map((row) => Date.parse(row.firstObservedAt || row.item?.firstObservedAt || row.item?.observedAt || ""))
+    .filter(Number.isFinite);
+  const resolutionTimes = resolved
+    .map((row) => Date.parse(row.item?.resolvedAt || row.item?.endDate || ""))
+    .filter(Number.isFinite);
+  // P/L p.a. describes the result the historical sample produced over calendar time,
+  // not a fictional sequence where every trade is reinvested after its own average
+  // hold. The former is comparable across a 1,300-row tag and a small category;
+  // the latter is what caused the misleading multi-thousand-percent values.
+  const sampleStartedAt = observationTimes.length ? Math.min(...observationTimes) : null;
+  const sampleResolvedAt = resolutionTimes.length ? Math.max(...resolutionTimes) : null;
+  const sampleDays = sampleStartedAt != null && sampleResolvedAt != null && sampleResolvedAt >= sampleStartedAt
+    ? Math.max(MIN_ANNUALIZATION_DAYS, (sampleResolvedAt - sampleStartedAt) / (24 * 60 * 60 * 1000))
+    : null;
+  // A few older retained observations predate `firstObservedAt`. Their p.a. column
+  // remains useful, but is explicitly a fallback based on the measured holding time;
+  // every newly scraped row uses the true calendar sample window above.
+  const performanceWindowDays = sampleDays ?? (Number.isFinite(avgDays) ? annualizationDays(avgDays) : null);
   // Net yield per trade at the simulated stake: what one win pays on what it cost.
   const avgNetYield = average(rows
     .map((row) => (row.total > 0 ? (row.shares - row.total) / row.total : null))
     .filter(Number.isFinite));
   const roi = resolvedCost > 0 ? pnl / resolvedCost : null;
-  // Capital cycles faster in some categories than others, so ROI alone ranks a slow
-  // category above a fast one with the same return. Annualizing over the observed
-  // horizon is the comparison the strategy actually cares about, and it uses the same
-  // one-hour floor as every other p.a. figure in the system.
-  //
-  // The finite check is not redundant: annualizationDays(null) coerces to 0 and is
-  // then floored to one hour, which turned an unknown horizon into a confident
-  // four-figure p.a. A group with no measured horizon has no p.a. at all.
-  const annualizedRoi = roi == null || !Number.isFinite(avgDays)
+  // A group with no start/end window cannot report an annualized result at all.
+  const annualizedRoi = roi == null || !Number.isFinite(performanceWindowDays)
     ? null
-    : annualizeReturn(roi, avgDays);
+    : annualizeReturn(roi, performanceWindowDays);
   // A total P/L grows with the number of observations, so it cannot compare two
   // parameter rules fairly. This is the annualized net dollar result of one fixed
   // simulation slot (5 USDC stake), based on the rule's average realized P/L and
   // average time between entry and resolution.
   const pnlPerTradeUsdc = resolved.length ? pnl / resolved.length : null;
-  const annualizedPnlPerTradeUsdc = pnlPerTradeUsdc == null || !Number.isFinite(avgDays)
+  const annualizedPnlPerTradeUsdc = pnlPerTradeUsdc == null || !Number.isFinite(performanceWindowDays)
     ? null
-    : annualizeReturn(pnlPerTradeUsdc, avgDays);
-  const resolutionTimes = resolved
-    .map((row) => Date.parse(row.item?.resolvedAt || row.item?.endDate || ""))
-    .filter(Number.isFinite);
+    : annualizeReturn(pnlPerTradeUsdc, performanceWindowDays);
   return {
     trades: rows.length,
     resolved: resolved.length,
@@ -8028,6 +8037,9 @@ function summarizeScrapedSimulationRows(rows) {
     avgProbability: avgProbability == null ? null : Number(avgProbability.toFixed(4)),
     avgVolumeUsdc: avgVolumeUsdc == null ? null : Number(avgVolumeUsdc.toFixed(2)),
     avgDaysToResolution: avgDays == null ? null : Number(avgDays.toFixed(3)),
+    sampleDays: sampleDays == null ? null : Number(sampleDays.toFixed(3)),
+    performanceWindowDays: performanceWindowDays == null ? null : Number(performanceWindowDays.toFixed(3)),
+    sampleStartedAt: sampleStartedAt == null ? null : new Date(sampleStartedAt).toISOString(),
     avgNetYield: avgNetYield == null ? null : Number(avgNetYield.toFixed(4)),
     // A category that has not resolved anything for weeks should be visibly stale
     // rather than quietly ranked next to a current one.

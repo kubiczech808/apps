@@ -1595,15 +1595,19 @@ test("taxonomy performance: real Polymarket categories and tags stay separate", 
   for (const field of ["pnlPerTradeUsdc", "annualizedPnlPerTradeUsdc", "annualizedRoi", "avgNetYield", "avgDaysToResolution", "lastResolvedAt"]) {
     assert.ok(resolvedGroup[field] != null, `${field} must be reported`);
   }
-  // ROI p.a. must be ROI over the group's own horizon, not over a default.
+  // ROI p.a. must use the calendar span of the actual historical sample. Using the
+  // average holding period instead treated every historical row as immediately
+  // reinvested and inflated a broad tag's p.a. result into the thousands of percent.
+  assert.ok(Number.isFinite(resolvedGroup.performanceWindowDays) && resolvedGroup.performanceWindowDays > 0,
+    "a resolved taxonomy group must report an annualization window");
   assert.ok(
-    Math.abs(resolvedGroup.annualizedRoi - resolvedGroup.roi * (365 / resolvedGroup.avgDaysToResolution)) < 0.01,
-    "ROI p.a. must annualize over the measured horizon",
+    Math.abs(resolvedGroup.annualizedRoi - resolvedGroup.roi * (365 / resolvedGroup.performanceWindowDays)) < 0.01,
+    "ROI p.a. must annualize over the historical sample span",
   );
   assert.ok(
     Math.abs(resolvedGroup.annualizedPnlPerTradeUsdc
-      - resolvedGroup.pnlPerTradeUsdc * (365 / resolvedGroup.avgDaysToResolution)) < 0.01,
-    "P/L p.a. must annualize the average realized P/L per fixed simulation trade",
+      - resolvedGroup.pnlPerTradeUsdc * (365 / resolvedGroup.performanceWindowDays)) < 0.01,
+    "P/L p.a. must annualize per-trade P/L over the historical sample span",
   );
 });
 

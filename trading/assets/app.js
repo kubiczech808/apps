@@ -8691,6 +8691,7 @@ function calculationSortValue(row, key) {
   if (key === "maxResolutionDays") return numeric(row.maxResolutionDays);
   if (key === "trades") return numeric(row.trades ?? 0);
   if (key === "accuracy") return numeric(row.winRate);
+  if (key === "stake") return numeric(row.resolvedStakeUsdc ?? row.stakeUsdc ?? 0);
   if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
   if (key === "annualizedRoi") return numeric(row.annualizedRoi);
   if (key === "roi") return numeric(row.roi);
@@ -8746,6 +8747,7 @@ function taxonomySortValue(row, key) {
   };
   if (key === "label") return String(row.label || "").toLowerCase();
   if (key === "accuracy") return numeric(row.winRate);
+  if (key === "stake") return numeric(row.resolvedStakeUsdc ?? row.stakeUsdc ?? 0);
   if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
   if (key === "lastResolvedAt") return Date.parse(row.lastResolvedAt || "") || null;
   return numeric(row[key]);
@@ -8803,9 +8805,10 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
               ${taxonomyHeader(kind, "label", label)}
               ${taxonomyHeader(kind, "trades", "Trades")}
               ${taxonomyHeader(kind, "accuracy", "Accuracy")}
+              ${taxonomyHeader(kind, "stake", "Invested")}
               ${taxonomyHeader(kind, "pnl", "P/L")}
-              ${taxonomyHeader(kind, "annualizedRoi", "P/L p.a.", "Net percentage P/L, including stored fees and annualized to 365 days using this group's measured time to resolution.")}
-              ${taxonomyHeader(kind, "roi", "ROI")}
+              ${taxonomyHeader(kind, "annualizedRoi", "P/L p.a.", "Net ROI annualized to 365 days across this group's first observation through final resolution window.")}
+              ${taxonomyHeader(kind, "roi", "ROI", "Net P/L divided by all simulated capital invested in this group, including stored fees.")}
               ${taxonomyHeader(kind, "avgProbability", "Avg entry")}
               ${taxonomyHeader(kind, "avgVolumeUsdc", "Avg volume")}
               ${taxonomyHeader(kind, "lastResolvedAt", "Last resolved", "Most recent resolution in this group.")}
@@ -8817,6 +8820,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
                 <td data-label="${label}"><strong><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpportunityPath({ kind, label: row.label }))}" title="Show all current scraped opportunities in this ${kind}">${escapeHtml(row.label || "-")}</a></strong></td>
                 <td data-label="Trades">${Number(row.trades || 0)}</td>
                 <td data-label="Accuracy">${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td data-label="Invested">${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
                 <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td data-label="P/L p.a." class="${pnlClass(Number(row.annualizedRoi || 0))}">${row.annualizedRoi == null ? "-" : signedPercent(Number(row.annualizedRoi))}</td>
                 <td data-label="ROI" class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
@@ -8824,7 +8828,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
                 <td data-label="Avg volume">${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
                 <td data-label="Last resolved">${escapeHtml(row.lastResolvedAt ? formatDate(row.lastResolvedAt) : "-")}</td>
               </tr>
-            `).join("") : `<tr><td colspan="9">No ${kind} statistics are available yet.</td></tr>`}
+            `).join("") : `<tr><td colspan="10">No ${kind} statistics are available yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -8864,7 +8868,7 @@ function renderCalculationReport() {
     </div>
     <div class="calculation-section">
       <h3>Best parameter combinations</h3>
-      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon only on opportunities with a known final Polymarket outcome. P/L p.a. is the net percentage result per simulated trade, including stored fees and annualized to 365 days; it is the default ranking because total P/L grows with sample size.</p>
+      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon only on opportunities with a known final Polymarket outcome. Every trade uses a fixed $5 stake plus stored fees. ROI is total net P/L divided by the total invested capital; P/L p.a. annualizes that ROI across the historical sample window.</p>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
@@ -8874,6 +8878,7 @@ function renderCalculationReport() {
               ${calculationHeader("maxResolutionDays", "Max days")}
               ${calculationHeader("trades", "Trades")}
               ${calculationHeader("accuracy", "Accuracy")}
+              ${calculationHeader("stake", "Invested")}
               ${calculationHeader("pnl", "P/L")}
               ${calculationHeader("annualizedRoi", "P/L p.a.")}
               ${calculationHeader("roi", "ROI")}
@@ -8889,13 +8894,14 @@ function renderCalculationReport() {
                 <td>${Number(row.maxResolutionDays || 0)} d</td>
                 <td>${Number(row.trades || 0)}</td>
                 <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
+                <td>${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
                 <td class="${pnlClass(Number(row.annualizedRoi || 0))}">${row.annualizedRoi == null ? "-" : signedPercent(Number(row.annualizedRoi))}</td>
                 <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
                 <td>${probability(Number(row.avgProbability))}</td>
                 <td>${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
               </tr>
-            `).join("") : '<tr><td colspan="10">No resolved scraped opportunity simulation is available yet.</td></tr>'}
+            `).join("") : '<tr><td colspan="11">No resolved scraped opportunity simulation is available yet.</td></tr>'}
           </tbody>
         </table>
       </div>
