@@ -86,7 +86,7 @@ const state = {
   calculationSource: "all",
   calculationMarket: "all",
   calculationSort: {
-    key: "annualizedPnlPerTradeUsdc",
+    key: "annualizedRoi",
     direction: "desc",
   },
   // Categories and tags are separate Gamma taxonomies and each table keeps its own
@@ -8651,7 +8651,7 @@ function calculationSortValue(row, key) {
   if (key === "trades") return numeric(row.trades ?? 0);
   if (key === "accuracy") return numeric(row.winRate);
   if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
-  if (key === "annualizedPnlPerTradeUsdc") return numeric(row.annualizedPnlPerTradeUsdc);
+  if (key === "annualizedRoi") return numeric(row.annualizedRoi);
   if (key === "roi") return numeric(row.roi);
   if (key === "avgProbability") return numeric(row.avgProbability);
   if (key === "avgVolumeUsdc") return numeric(row.avgVolumeUsdc ?? row.avgLiquidity);
@@ -8659,7 +8659,7 @@ function calculationSortValue(row, key) {
 }
 
 function sortedCalculationRows(rows) {
-  const sort = state.calculationSort || { key: "annualizedPnlPerTradeUsdc", direction: "desc" };
+  const sort = state.calculationSort || { key: "annualizedRoi", direction: "desc" };
   const direction = sort.direction === "asc" ? 1 : -1;
   return [...rows].sort((a, b) => {
     const aValue = calculationSortValue(a, sort.key);
@@ -8825,7 +8825,7 @@ function renderCalculationReport() {
     </div>
     <div class="calculation-section">
       <h3>Best parameter combinations</h3>
-      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon only on opportunities with a known final Polymarket outcome. P/L p.a. is the annualized average net result of one ${money(Number(report.stakeUsdc || 0))} simulation trade, including stored fees; it is the default ranking because total P/L grows with sample size.</p>
+      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon only on opportunities with a known final Polymarket outcome. P/L p.a. is the net percentage result per simulated trade, including stored fees and annualized to 365 days; it is the default ranking because total P/L grows with sample size.</p>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
@@ -8836,7 +8836,7 @@ function renderCalculationReport() {
               ${calculationHeader("trades", "Trades")}
               ${calculationHeader("accuracy", "Accuracy")}
               ${calculationHeader("pnl", "P/L")}
-              ${calculationHeader("annualizedPnlPerTradeUsdc", "P/L p.a.")}
+              ${calculationHeader("annualizedRoi", "P/L p.a.")}
               ${calculationHeader("roi", "ROI")}
               ${calculationHeader("avgProbability", "Avg entry")}
               ${calculationHeader("avgVolumeUsdc", "Avg volume")}
@@ -8851,7 +8851,7 @@ function renderCalculationReport() {
                 <td>${Number(row.trades || 0)}</td>
                 <td>${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
-                <td class="${pnlClass(Number(row.annualizedPnlPerTradeUsdc || 0))}">${row.annualizedPnlPerTradeUsdc == null ? "-" : signedMoney(Number(row.annualizedPnlPerTradeUsdc))}</td>
+                <td class="${pnlClass(Number(row.annualizedRoi || 0))}">${row.annualizedRoi == null ? "-" : signedPercent(Number(row.annualizedRoi))}</td>
                 <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
                 <td>${probability(Number(row.avgProbability))}</td>
                 <td>${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>

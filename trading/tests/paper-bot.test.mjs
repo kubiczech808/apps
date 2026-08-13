@@ -1744,8 +1744,9 @@ test("parameter combinations: every distinct rule uses the full resolved sample 
     "a rule with a measured resolution horizon must expose comparable annualized P/L per fixed simulation trade");
 
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
-  assert.match(app, /key: "annualizedPnlPerTradeUsdc",\s*direction: "desc"/);
-  assert.match(app, /calculationHeader\("annualizedPnlPerTradeUsdc", "P\/L p\.a\."\)/);
+  assert.match(app, /key: "annualizedRoi",\s*direction: "desc"/);
+  assert.match(app, /calculationHeader\("annualizedRoi", "P\/L p\.a\."\)/);
+  assert.match(app, /signedPercent\(Number\(row\.annualizedRoi\)\)/);
   assert.match(app, /calculationHeader\("avgVolumeUsdc", "Avg volume"\)/);
   assert.doesNotMatch(app, /calculationHeader\("resolved", "Resolved"\)/);
   assert.doesNotMatch(app, /calculationHeader\("minLiquidityUsdc", "Min liquidity"\)/);
