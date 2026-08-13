@@ -1,0 +1,20 @@
+[Unit]
+Description=Polymarket live protective-exit worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/trading-live-exit-worker.env
+WorkingDirectory=%h/.local/lib/trading-live-exit-worker
+ExecStart=/usr/bin/env node tools/rpi-live-exit-worker.mjs
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/trading %h/.config/trading-live-exit-watchlist.json
+
+[Install]
+WantedBy=default.target

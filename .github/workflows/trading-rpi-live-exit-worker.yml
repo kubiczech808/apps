@@ -1,0 +1,104 @@
+name: Configure Trading RPi Live Exit Worker
+
+on:
+  push:
+    paths:
+      - '.github/workflows/trading-rpi-live-exit-worker.yml'
+      - 'trading/tools/rpi-live-exit-worker.mjs'
+      - 'trading/systemd/**'
+      - 'trading/package.json'
+      - 'trading/package-lock.json'
+  workflow_dispatch:
+    inputs:
+      live_exit_mode:
+        description: Shadow logs only; live permits explicitly configured protective sells.
+        required: true
+        default: shadow
+        type: choice
+        options: [shadow, live]
+      protect_all:
+        description: Protect all recognized open positions. false only watches local allowlisted tokens.
+        required: true
+        default: false
+        type: boolean
+      confirm_live:
+        description: Required alongside live mode before a SELL may be submitted.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    runs-on: [self-hosted, Linux, ARM64]
+    env:
+      POLYMARKET_PRIVATE_KEY: ${{ secrets.POLYMARKET_PRIVATE_KEY }}
+      POLYMARKET_FUNDER_ADDRESS: ${{ secrets.POLYMARKET_FUNDER_ADDRESS || secrets.POLYMARKET_ADDRESS || '0x3252de913d9323667f21f4d88fa1f996fc282293' }}
+      POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '3' }}
+      LIVE_EXIT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.live_exit_mode || 'shadow' }}
+      LIVE_EXIT_PROTECT_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.protect_all || 'false' }}
+      LIVE_EXIT_CONFIRM_LIVE: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm_live || 'false' }}
+      LIVE_EXIT_REF: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify trading-only worker target
+        run: |
+          if grep -R -n -E '/www/email[-]campaign|email[-]campaign' .github/workflows/trading-rpi-live-exit-worker.yml trading/systemd trading/tools/rpi-live-exit-worker.mjs; then
+            echo "Trading RPi exit worker must not target email-campaign."
+            exit 1
+          fi
+
+      - name: Install isolated RPi worker
+        working-directory: trading
+        run: |
+          set -euo pipefail
+          target="$HOME/.local/lib/trading-live-exit-worker"
+          stage="${target}.next"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          cp package.json package-lock.json "$stage/"
+          cp -R tools "$stage/"
+          npm ci --omit=dev --prefix "$stage"
+          rm -rf "$target"
+          mv "$stage" "$target"
+
+      - name: Install protected worker configuration
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.config" "$HOME/.local/state/trading"
+          cat > "$HOME/.config/trading-live-exit-worker.env" <<EOF
+          POLYMARKET_PRIVATE_KEY=${POLYMARKET_PRIVATE_KEY}
+          POLYMARKET_FUNDER_ADDRESS=${POLYMARKET_FUNDER_ADDRESS}
+          POLYMARKET_SIGNATURE_TYPE=${POLYMARKET_SIGNATURE_TYPE}
+          LIVE_EXIT_MODE=${LIVE_EXIT_MODE}
+          LIVE_EXIT_CONFIRM_LIVE=${LIVE_EXIT_CONFIRM_LIVE}
+          LIVE_EXIT_PROTECT_ALL=${LIVE_EXIT_PROTECT_ALL}
+          LIVE_EXIT_POLL_INTERVAL_MS=5000
+          LIVE_EXIT_RETRY_INTERVAL_MS=20000
+          LIVE_EXIT_STATE_REFRESH_MS=30000
+          LIVE_EXIT_STATE_PATH=$HOME/.local/state/trading/live-exit-worker-state.json
+          LIVE_EXIT_WATCHLIST_PATH=$HOME/.config/trading-live-exit-watchlist.json
+          LIVE_EXIT_POST_FILL_SYNC_COMMAND=gh workflow run trading-live-account.yml --repo kubiczech808/apps --ref ${LIVE_EXIT_REF}
+          EOF
+          chmod 600 "$HOME/.config/trading-live-exit-worker.env"
+          if [ ! -f "$HOME/.config/trading-live-exit-watchlist.json" ]; then
+            printf '{\n  "positions": []\n}\n' > "$HOME/.config/trading-live-exit-watchlist.json"
+            chmod 600 "$HOME/.config/trading-live-exit-watchlist.json"
+          fi
+
+      - name: Enable persistent exit worker
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/systemd/user"
+          install -m 644 trading/systemd/trading-live-exit-worker.service "$HOME/.config/systemd/user/trading-live-exit-worker.service"
+          systemctl --user daemon-reload
+          systemctl --user enable --now trading-live-exit-worker.service
+          systemctl --user --no-pager --full status trading-live-exit-worker.service

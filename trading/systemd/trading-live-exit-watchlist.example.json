@@ -1,0 +1,11 @@
+{
+  "positions": [
+    {
+      "tokenId": "POLYMARKET_TOKEN_ID",
+      "enabled": false,
+      "stopPrice": 0.85,
+      "question": "Optional human-readable market label",
+      "outcome": "Yes"
+    }
+  ]
+}

@@ -7,6 +7,7 @@
     "order:poc": "node tools/polymarket-order-poc.mjs",
     "live:execute": "node tools/live-order-executor.mjs",
     "live:account": "node tools/live-account-sync.mjs",
+    "live:exit-worker": "node tools/rpi-live-exit-worker.mjs",
     "paper:bot": "node tools/paper-trading-bot.mjs"
   },
   "dependencies": {

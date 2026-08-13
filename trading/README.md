@@ -112,6 +112,29 @@ npm run order:poc -- --token-id TOKEN_ID --side BUY --price 0.50 --size 10 --tic
 
 Do not paste private keys into chat, GitHub issues, or committed files.
 
+## Persistent RPi protective exits
+
+`trading-rpi-live-exit-worker.yml` installs a separate systemd user service on
+the self-hosted ARM RPi runner. It watches already-open live positions every five
+seconds and is deliberately isolated from entry selection and portfolio rotation.
+
+- It sells the held outcome token, never buys the opposite outcome as a pretend exit.
+- The stop is synthetic: the worker derives a fee-aware minimum sell price where the
+  planned loss is no more than the position's potential gain.
+- A protective sell is submitted as `FOK` at that price. It fills completely at the
+  floor or better, or does not fill. `FAK` partial exits require explicit opt-in.
+- The default deployment is `shadow`; it logs a reached stop but cannot sell. `live`
+  additionally requires `LIVE_EXIT_CONFIRM_LIVE=true` and either a local token
+  watchlist or the explicit `LIVE_EXIT_PROTECT_ALL=true` setting.
+- The private key is installed only into an RPi local `0600` EnvironmentFile by the
+  self-hosted setup workflow. It is never shipped to the browser or public state.
+
+The local `~/.config/trading-live-exit-watchlist.json` uses the shape in
+`trading/systemd/trading-live-exit-watchlist.example.json`. A configured
+`stopPrice` overrides the derived equal-risk floor for that one token. After an
+accepted exit the service dispatches the existing live account sync workflow, so the
+dashboard reconciles the position without waiting for a manual refresh.
+
 ## Required GitHub Secrets for API trading smoke test
 
 Create these repository secrets before running `Polymarket Order Smoke`:
