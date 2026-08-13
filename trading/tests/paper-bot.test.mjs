@@ -1883,6 +1883,8 @@ test("taxonomy performance: rows open the current scraped markets for that categ
     "both category and tag performance rows must link to their respective scraped markets");
   assert.match(html, /data-scraped-market-type-filter/,
     "parameter-combination links must expose their market type in the scraped catalogue");
+  assert.match(html, /data-calculation-open-filter/,
+    "the calculation report must offer a shared filter for rows with current opportunities");
   assert.match(app, /function scrapedRuleOpportunityPath/,
     "the current-open parameter count must carry its filters to the scraped catalogue");
   assert.match(app, /function scrapedResolvedRuleOpportunityPath/,

@@ -90,6 +90,7 @@ const state = {
   settingsSection: "evaluation-log",
   calculationSource: "all",
   calculationMarket: "all",
+  calculationOpenFilter: "all",
   calculationSort: {
     key: "annualizedRoi",
     direction: "desc",
@@ -209,6 +210,7 @@ const els = {
   settingsPanels: document.querySelectorAll("[data-settings-panel]"),
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
   calculationMarketButtons: document.querySelectorAll("[data-calculation-market]"),
+  calculationOpenButtons: document.querySelectorAll("[data-calculation-open]"),
   calculationReport: document.querySelector("[data-calculation-report]"),
   systemStatus: document.querySelector("[data-system-status]"),
   evaluationProbabilityFilter: document.querySelector("[data-evaluation-probability-filter]"),
@@ -8782,8 +8784,8 @@ function calculationMarketLabel(type) {
 function calculationRows(report) {
   const rows = Array.isArray(report?.parameterSummaries) ? report.parameterSummaries : [];
   const filtered = rows.filter((row) => {
-    if (state.calculationMarket === "all") return true;
-    return row.marketType === state.calculationMarket;
+    if (state.calculationMarket !== "all" && row.marketType !== state.calculationMarket) return false;
+    return state.calculationOpenFilter !== "open" || Number(row.openCount || 0) > 0;
   });
   return sortedCalculationRows(filtered);
 }
@@ -8875,7 +8877,10 @@ function taxonomyRows(report, kind) {
       : legacyRows;
   // Reports written before the taxonomy split stored both kinds in categorySummaries.
   // Rows written after it may omit kind because the parent collection is authoritative.
-  const rows = directRows.filter((row) => !row?.kind || String(row.kind) === kind);
+  const rows = directRows.filter((row) => (
+    (!row?.kind || String(row.kind) === kind)
+    && (state.calculationOpenFilter !== "open" || Number(row?.openCount || 0) > 0)
+  ));
   const sort = taxonomySortState(kind);
   const direction = sort.direction === "asc" ? 1 : -1;
   return [...rows].sort((a, b) => {
@@ -9085,6 +9090,16 @@ els.calculationMarketButtons.forEach((button) => {
     state.calculationMarket = button.dataset.calculationMarket || "all";
     els.calculationMarketButtons.forEach((item) => {
       item.classList.toggle("active", item === button);
+    });
+    renderCalculationReport();
+  });
+});
+
+els.calculationOpenButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.calculationOpenFilter = button.dataset.calculationOpen === "open" ? "open" : "all";
+    els.calculationOpenButtons.forEach((item) => {
+      item.classList.toggle("active", item.dataset.calculationOpen === state.calculationOpenFilter);
     });
     renderCalculationReport();
   });
