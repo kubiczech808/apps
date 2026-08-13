@@ -4614,7 +4614,7 @@ function strategyEligibleCandidates(eligible, strategy) {
     // A tag the portfolio refuses drops the row before anything is measured on it.
     if (excludedTagsOnRow(item, strategy).length) return false;
     const minProbability = Number(strategy.minProbability);
-    const selectedProbability = Number(strategy.probabilitySource === "polymarket" ? (item.marketProbability ?? item.marketPrice) : item.aiProbability);
+    const selectedProbability = portfolioProbabilityForStrategy(item, strategy);
     if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) return false;
     if (daysValue(item) > maxResolutionDays) return false;
     const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
@@ -4699,6 +4699,17 @@ function numericOrNaN(value) {
   return value == null || value === "" ? NaN : Number(value);
 }
 
+// Gamma's outcome price is a useful reference quote, but it can be stale by the
+// time an order is placed. A Polymarket-threshold portfolio must be judged by
+// the executable CLOB price that is also used as the order entry, otherwise a
+// 59% order can incorrectly pass a 75% threshold from an older 81% quote.
+function portfolioProbabilityForStrategy(item = {}, strategy = {}) {
+  if (strategy.probabilitySource === "polymarket") {
+    return numericOrNaN(item.marketPrice);
+  }
+  return numericOrNaN(item.aiProbability);
+}
+
 function netYieldAfterFees(item = {}) {
   const stored = Number(item.netYield);
   if (Number.isFinite(stored)) return stored;
@@ -4741,7 +4752,7 @@ function portfolioFilterResult(item, strategy) {
   const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
   const minNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
   const probabilitySource = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
-  const selectedProbability = Number(probabilitySource === "polymarket" ? (item.marketProbability ?? item.marketPrice) : item.aiProbability);
+  const selectedProbability = portfolioProbabilityForStrategy(item, strategy);
   const days = daysValue(item);
   const liquidity = Number(item.liquidity || 0);
   // The portfolio threshold is a traded-volume floor, which is what Polymarket shows.
@@ -8745,6 +8756,8 @@ export {
   refreshEvaluationAfterProbability,
   PAPER_STRATEGIES,
   portfolioEconomics,
+  portfolioFilterResult,
+  portfolioProbabilityForStrategy,
   rounded,
   MARKET_OBSERVATION_RETAIN_LIMIT,
   marketDateContext,
@@ -8767,6 +8780,7 @@ export {
   minutesSinceIso,
   netYieldAfterFees,
   strategyCadenceIsDue,
+  strategyEligibleCandidates,
   strategyMatchesExecutionTrigger,
   normalizeCadence,
   normalizeState,

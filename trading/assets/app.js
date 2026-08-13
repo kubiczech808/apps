@@ -657,7 +657,9 @@ function probabilitySourceLabel(value) {
 
 function portfolioProbability(item, config = {}) {
   return normalizeProbabilitySource(config.probabilitySource) === "polymarket"
-    ? Number(item.marketProbability ?? item.marketPrice)
+    // Match the executor: Gamma's listing quote can be stale, while marketPrice
+    // is the executable CLOB entry shown in the candidate and trade tables.
+    ? Number(item.marketPrice)
     : Number(item.aiProbability);
 }
 
@@ -3685,7 +3687,7 @@ function renderExecutionCandidatesNotUsedTable(candidates = [], probabilitySourc
             const question = item.question || "-";
             const outcome = item.outcome || "-";
             const url = String(item.url || "").trim();
-            const selectedProbability = Number(usesPolymarketProbability ? item.marketProbability : item.aiProbability);
+            const selectedProbability = Number(usesPolymarketProbability ? item.marketPrice : item.aiProbability);
             const liquidity = rowVolumeUsdc(item);
             const netYield = Number(item.netYield);
             const potentialPa = executionCandidatePotentialPa(item, probabilitySource);

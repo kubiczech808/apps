@@ -1930,6 +1930,34 @@ test("execution revalidation: a polymarket-source portfolio is judged on market 
   assert.ok(economics.annualizedReturn > 0);
 });
 
+test("Polymarket probability threshold uses the executable CLOB entry, not a stale Gamma quote", () => {
+  // A real Equal-paper defect: Gamma reported 81%, while the orderbook entry
+  // used to open the trade was 59%. A 75% portfolio threshold must reject it.
+  const strategy = {
+    ...bot.PAPER_STRATEGIES.equal,
+    probabilitySource: "polymarket",
+    minProbability: 0.75,
+  };
+  const item = {
+    tokenId: "12345678901234567890",
+    status: "SCRAPED",
+    marketProbability: 0.81,
+    marketPrice: 0.59,
+    volumeUsdc: 100000,
+    daysToResolution: 0.5,
+    netGainIfWinUsdc: 0.32,
+    totalCostUsdc: 5.02,
+    netYield: 0.0637,
+    executableShares: 8.5,
+    feeRate: 0,
+  };
+  const result = bot.portfolioFilterResult(item, strategy);
+
+  assert.equal(bot.portfolioProbabilityForStrategy(item, strategy), 0.59);
+  assert.equal(result.eligible, false);
+  assert.ok(result.reasons.some((reason) => reason.includes("Polymarket probability 59.0% below 75.0%")));
+});
+
 test("market dates: a date recovered from a slug is a whole day, not a kickoff", () => {
   // Reported: finished fixtures stayed in Execution candidates showing an end date of
   // 07. 08. 2026 01:59 -- midnight UTC in Prague, i.e. the slug's day stretched to
