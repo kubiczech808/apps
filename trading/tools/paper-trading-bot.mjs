@@ -279,6 +279,7 @@ const SCRAPED_SIMULATION_STAKE_USDC = envNumber("PAPER_SCRAPED_SIMULATION_STAKE_
 const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable", "equal"].includes(process.env.PAPER_STRATEGY_ID)
   ? process.env.PAPER_STRATEGY_ID
   : "";
+const PAPER_RESET_PORTFOLIO = envBool("PAPER_RESET_PORTFOLIO", false);
 const TZ = "Europe/Prague";
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND"]);
 const REPORT_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9, 0.95];
@@ -914,6 +915,7 @@ function normalizeState(input) {
     generatedAt: input.generatedAt || null,
     cadence: normalizeCadence(input.cadence),
     paperPortfolios,
+    paperPortfolioArchives: normalizePaperPortfolioArchives(input.paperPortfolioArchives),
     portfolio: paperPortfolios.conservative.portfolio,
     trades: paperPortfolios.conservative.trades,
     evaluations: mergeEvaluationLists(Array.isArray(input.evaluations) ? input.evaluations : []),
@@ -956,6 +958,8 @@ function normalizePaperPortfolio(strategy, input = {}) {
     equalRiskProtection: Boolean(strategy.equalRiskProtection),
     allowRotation: strategy.allowRotation !== false,
     description: strategy.description,
+    resetAt: input.resetAt || null,
+    resetArchiveId: input.resetArchiveId || null,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
       maxFraction: Number(strategy.maxFraction ?? input.portfolio?.maxFraction ?? MAX_FRACTION),
@@ -992,6 +996,63 @@ function normalizePaperPortfolio(strategy, input = {}) {
   // internally consistent and impossible to strip.
   updatePaperPortfolio(normalized);
   return normalized;
+}
+
+function normalizePaperPortfolioArchives(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((item) => item && typeof item === "object" && item.id && item.strategyId && item.archivedAt)
+    .map((item) => ({
+      id: String(item.id),
+      strategyId: String(item.strategyId),
+      label: String(item.label || item.strategyId),
+      archivedAt: String(item.archivedAt),
+      reason: String(item.reason || "manual paper portfolio reset"),
+      snapshot: item.snapshot && typeof item.snapshot === "object" ? item.snapshot : {},
+    }))
+    .sort((a, b) => (Date.parse(b.archivedAt) || 0) - (Date.parse(a.archivedAt) || 0))
+    .slice(0, 20);
+}
+
+function cloneForArchive(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function archiveAndResetPaperPortfolio(state, strategyId, reason = "manual paper portfolio reset") {
+  const strategy = PAPER_STRATEGIES[strategyId];
+  if (!strategy) throw new Error(`Unknown paper portfolio strategy: ${strategyId}`);
+
+  state.paperPortfolios ||= {};
+  const current = normalizePaperPortfolio(strategy, state.paperPortfolios[strategyId] || {});
+  const archivedAt = nowIso();
+  const archive = {
+    id: `paper-archive-${strategyId}-${archivedAt.replace(/[^0-9]/g, "")}`,
+    strategyId,
+    label: current.label || strategy.label,
+    archivedAt,
+    reason,
+    snapshot: cloneForArchive({
+      portfolio: current.portfolio,
+      trades: current.trades,
+      lastTradeDate: current.lastTradeDate,
+      lastTradeHour: current.lastTradeHour,
+      lastDecision: current.lastDecision,
+      runLog: current.runLog,
+    }),
+  };
+  state.paperPortfolioArchives = normalizePaperPortfolioArchives([
+    archive,
+    ...(state.paperPortfolioArchives || []),
+  ]);
+
+  // Keep saved strategy parameters: the workflow has already loaded them from
+  // portfolio-config.json. Only the account history and capital baseline reset.
+  state.paperPortfolios[strategyId] = normalizePaperPortfolio(strategy, {
+    resetAt: archivedAt,
+    resetArchiveId: archive.id,
+  });
+  syncLegacyPaperAliases(state);
+  return archive;
 }
 
 function compactReasonCounts(reasonCounts) {
@@ -2187,6 +2248,10 @@ function mergeStates(primary, secondary) {
       .slice(0, CALCULATION_REPORT_HISTORY_LIMIT),
   };
   merged.latestCalculationReport = merged.calculationReports?.[0] || base.latestCalculationReport || other.latestCalculationReport || null;
+  merged.paperPortfolioArchives = normalizePaperPortfolioArchives([
+    ...(base.paperPortfolioArchives || []),
+    ...(other.paperPortfolioArchives || []),
+  ]);
   // Keep the furthest-advanced cadence from either side. A stale repository
   // snapshot must never move a cadence clock backwards and re-trigger a pass.
   merged.cadence = mergeCadence(base.cadence, other.cadence);
@@ -2194,14 +2259,22 @@ function mergeStates(primary, secondary) {
   for (const strategy of Object.values(PAPER_STRATEGIES)) {
     const basePortfolio = base.paperPortfolios?.[strategy.id] || normalizePaperPortfolio(strategy, {});
     const otherPortfolio = other.paperPortfolios?.[strategy.id] || normalizePaperPortfolio(strategy, {});
+    const baseResetAt = Date.parse(basePortfolio.resetAt || "") || 0;
+    const otherResetAt = Date.parse(otherPortfolio.resetAt || "") || 0;
+    // A reset starts a new account generation. Do not merge pre-reset trades
+    // from a stale repository snapshot back into a freshly reset live state.
+    const resetSource = baseResetAt !== otherResetAt
+      ? (baseResetAt > otherResetAt ? basePortfolio : otherPortfolio)
+      : null;
+    const portfolioSources = resetSource ? [resetSource] : [otherPortfolio, basePortfolio];
     const tradesById = new Map();
-    for (const trade of [...(otherPortfolio.trades || []), ...(basePortfolio.trades || [])]) {
+    for (const source of portfolioSources) for (const trade of source.trades || []) {
       tradesById.set(trade.id, mergeTrade(tradesById.get(trade.id), trade));
     }
     merged.paperPortfolios[strategy.id] = {
-      ...basePortfolio,
+      ...(resetSource || basePortfolio),
       trades: retainPaperTrades([...tradesById.values()]),
-      runLog: mergeUniqueById([...(basePortfolio.runLog || []), ...(otherPortfolio.runLog || [])], (item) => `${item.runAt || ""}:${item.strategyId || strategy.id}`, PORTFOLIO_RUN_LOG_LIMIT),
+      runLog: mergeUniqueById(portfolioSources.flatMap((source) => source.runLog || []), (item) => `${item.runAt || ""}:${item.strategyId || strategy.id}`, PORTFOLIO_RUN_LOG_LIMIT),
     };
   }
   syncLegacyPaperAliases(merged);
@@ -8413,6 +8486,25 @@ async function run() {
   await rm(SCAN_HISTORY_ENTRY_PATH, { force: true }).catch(() => {});
   await rm(SCAN_ERROR_MARKER_PATH, { force: true }).catch(() => {});
   const state = await readState();
+  if (PAPER_RESET_PORTFOLIO) {
+    if (!PAPER_STRATEGY_ID) {
+      throw new Error("PAPER_RESET_PORTFOLIO requires a valid PAPER_STRATEGY_ID.");
+    }
+    const archive = archiveAndResetPaperPortfolio(state, PAPER_STRATEGY_ID);
+    state.generatedAt = nowIso();
+    state.aiUsage = aiUsageSnapshot(state);
+    await writeState(state);
+    console.log(JSON.stringify({
+      action: "PAPER_PORTFOLIO_RESET",
+      strategyId: PAPER_STRATEGY_ID,
+      archiveId: archive.id,
+      archivedAt: archive.archivedAt,
+      initialUsdc: state.paperPortfolios[PAPER_STRATEGY_ID].portfolio.initialUsdc,
+      trades: state.paperPortfolios[PAPER_STRATEGY_ID].trades.length,
+      runLog: state.paperPortfolios[PAPER_STRATEGY_ID].runLog.length,
+    }, null, 2));
+    return;
+  }
   if (SCHEDULED_CADENCE && !COMPACT_ONLY && !REFRESH_ONLY && !EXECUTION_ONLY && !EVALUATION_ONLY) {
     const cadence = resolveScheduledCadence(state);
     scanOnly = cadence.scanOnly;
@@ -8816,6 +8908,9 @@ export {
   strategyMatchesExecutionTrigger,
   normalizeCadence,
   normalizeState,
+  normalizePaperPortfolioArchives,
+  archiveAndResetPaperPortfolio,
+  mergeStates,
   openRisk,
   pnlPercent,
   readState,

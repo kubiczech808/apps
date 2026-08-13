@@ -38,6 +38,45 @@ test("equal paper portfolio: its independent $100 account is registered with a s
   assert.equal(equal.portfolio.freeCapitalUsdc, 100);
 });
 
+test("paper reset: archives only More probable and prevents stale trades from returning", () => {
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-13T09:00:00.000Z",
+    paperPortfolios: {
+      moreProbable: {
+        trades: [{
+          id: "more-probable-old-trade",
+          status: "OPEN",
+          totalCostUsdc: 5,
+          stakeUsdc: 5,
+          openedAt: "2026-08-12T09:00:00.000Z",
+        }],
+        runLog: [{ id: "old-run", runAt: "2026-08-12T09:00:00.000Z", strategyId: "moreProbable" }],
+      },
+      conservative: {
+        trades: [{ id: "conservative-kept", status: "OPEN", totalCostUsdc: 5, stakeUsdc: 5 }],
+      },
+    },
+  });
+  const archive = bot.archiveAndResetPaperPortfolio(state, "moreProbable");
+  const reset = state.paperPortfolios.moreProbable;
+
+  assert.equal(archive.strategyId, "moreProbable");
+  assert.equal(archive.snapshot.trades.length, 1);
+  assert.equal(reset.trades.length, 0);
+  assert.equal(reset.runLog.length, 0);
+  assert.equal(reset.portfolio.initialUsdc, 100);
+  assert.ok(reset.resetAt);
+  assert.equal(state.paperPortfolios.conservative.trades.length, 1, "other paper portfolios are untouched");
+
+  const stale = bot.normalizeState({
+    generatedAt: "2026-08-12T10:00:00.000Z",
+    paperPortfolios: { moreProbable: archive.snapshot },
+  });
+  const merged = bot.mergeStates(state, stale);
+  assert.equal(merged.paperPortfolios.moreProbable.trades.length, 0, "pre-reset trades must not return from stale state");
+  assert.equal(merged.paperPortfolioArchives.length, 1);
+});
+
 test("run log: a paper OPENED row keeps the selected order summary in the compact list", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
