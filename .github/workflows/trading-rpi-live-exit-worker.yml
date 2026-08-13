@@ -51,7 +51,7 @@ jobs:
       - name: Verify trading-only worker target
         run: |
           if grep -R -n -E '/www/email[-]campaign|email[-]campaign' .github/workflows/trading-rpi-live-exit-worker.yml trading/systemd trading/tools/rpi-live-exit-worker.mjs; then
-            echo "Trading RPi exit worker must not target email-campaign."
+            echo "Legacy deployment path detected."
             exit 1
           fi
 
