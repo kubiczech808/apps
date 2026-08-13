@@ -561,7 +561,7 @@ function normalizeExecutionTrigger(value) {
 
 function executionTriggerLabel(value) {
   return normalizeExecutionTrigger(value) === "after_scrape"
-    ? "After each scraping batch"
+    ? "After each completed market scan"
     : "Scheduled cron";
 }
 
@@ -3318,26 +3318,21 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.minNetYield) els.minNetYield.value = (minNetYield * 100).toFixed(1);
   if (els.minNetYieldLabel) els.minNetYieldLabel.textContent = percent(minNetYield);
   const trigger = normalizeExecutionTrigger(config.executionTrigger);
-  const equalRiskMode = normalizeMode(mode) === "paper-equal";
-  const effectiveTrigger = equalRiskMode ? "after_scrape" : trigger;
+  const effectiveTrigger = trigger;
   if (els.executionTrigger) {
     els.executionTrigger.value = effectiveTrigger;
-    els.executionTrigger.disabled = equalRiskMode;
-    els.executionTrigger.title = equalRiskMode
-      ? "Equal checks its synthetic stop after every scraping batch."
-      : "";
+    els.executionTrigger.disabled = false;
+    els.executionTrigger.title = "After-scan runs once after a completed market scan; it is not a continuous worker.";
   }
   if (els.executionTriggerLabel) {
-    els.executionTriggerLabel.textContent = equalRiskMode
-      ? "After each scraping batch (Equal stop checks)"
-      : executionTriggerLabel(effectiveTrigger);
+    els.executionTriggerLabel.textContent = executionTriggerLabel(effectiveTrigger);
   }
   const cronMinutes = normalizeExecutionCronMinutes(config.executionCronMinutes);
   if (els.executionCronMinutes) els.executionCronMinutes.value = String(cronMinutes);
   if (els.executionCronMinutesLabel) els.executionCronMinutesLabel.textContent = executionCronMinutesLabel(cronMinutes);
   // The interval only means anything for the cron trigger; "after each scraping
   // batch" has its own cadence.
-  els.executionCronRow?.toggleAttribute("hidden", equalRiskMode || effectiveTrigger !== "cron");
+  els.executionCronRow?.toggleAttribute("hidden", effectiveTrigger !== "cron");
   const fixedEntryPrice = normalizeFixedEntryPrice(config.fixedEntryPrice);
   if (els.fixedEntryPrice) els.fixedEntryPrice.value = String(Math.round(fixedEntryPrice * 100));
   if (els.fixedEntryPriceLabel) els.fixedEntryPriceLabel.textContent = percent(fixedEntryPrice);

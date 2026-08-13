@@ -28,8 +28,8 @@ test("equal paper portfolio: its independent $100 account is registered with a s
   assert.equal(bot.PAPER_STRATEGIES.equal.equalRiskProtection, true);
   assert.equal(bot.PAPER_STRATEGIES.equal.allowRotation, false);
   assert.equal(bot.PAPER_STRATEGIES.equal.maxFraction, 0.05);
-  assert.equal(bot.PAPER_STRATEGIES.equal.executionTrigger, "after_scrape", "Equal must inspect its synthetic stop after every completed scrape");
-  assert.equal(bot.PAPER_STRATEGIES.equal.executionCronMinutes, 0, "a legacy cron interval must not delay Equal's stop checks");
+  assert.equal(bot.PAPER_STRATEGIES.equal.executionTrigger, "after_scrape", "Equal defaults to inspecting its synthetic stop after every completed scan");
+  assert.equal(bot.PAPER_STRATEGIES.equal.executionCronMinutes, 60, "the saved cron interval only applies after the user selects the cron trigger");
 
   const state = bot.normalizeState({ paperPortfolios: {} });
   const equal = state.paperPortfolios.equal;
