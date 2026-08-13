@@ -59,6 +59,10 @@ const state = {
   evaluationNetYieldFilter: 0,
   evaluationLiquidityFilter: 0,
   scrapedTaxonomyFilter: null,
+  // The scraped catalogue has its own multi-select status filter. `evaluationStatus`
+  // belongs to the retired AI evaluation view and must not make a taxonomy deep-link
+  // silently discard resolved observations.
+  scrapedStatuses: ["SCRAPED"],
   eligibilityThreshold: null,
   eligibilityThresholdKey: "",
   riskAllocation: null,
@@ -120,6 +124,7 @@ const EVALUATION_NET_YIELD_FILTER_STORAGE_KEY = "tradingEvaluationNetYieldFilter
 const EVALUATION_LIQUIDITY_FILTER_STORAGE_KEY = "tradingEvaluationLiquidityFilter";
 const SCRAPED_TAXONOMY_KIND_QUERY_PARAM = "taxonomy";
 const SCRAPED_TAXONOMY_VALUE_QUERY_PARAM = "taxonomyValue";
+const SCRAPED_STATUS_QUERY_PARAM = "statuses";
 const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
@@ -212,6 +217,7 @@ const els = {
   evaluationLiquidityFilter: document.querySelector("[data-evaluation-liquidity-filter]"),
   evaluationLiquidityFilterLabel: document.querySelector("[data-evaluation-liquidity-filter-label]"),
   scrapedTaxonomyFilter: document.querySelector("[data-scraped-taxonomy-filter]"),
+  scrapedStatusOptions: document.querySelectorAll("[data-scraped-status]"),
   portfolioName: document.querySelector("[data-portfolio-name]"),
   portfolioNameLabel: document.querySelector("[data-portfolio-name-label]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
@@ -1060,13 +1066,40 @@ function scrapedTaxonomyRouteFilter(search = window.location.search) {
   });
 }
 
+function normalizeScrapedStatuses(values, fallback = ["SCRAPED"]) {
+  const allowed = new Set(["SCRAPED", "RESOLVED", "ERROR"]);
+  const source = Array.isArray(values) ? values : String(values || "").split(",");
+  const normalized = [...new Set(source.map((value) => String(value || "").trim().toUpperCase()).filter((value) => allowed.has(value)))];
+  return normalized.length ? normalized : [...fallback];
+}
+
+function scrapedStatusesFromRoute(search = window.location.search) {
+  const params = new URLSearchParams(search || "");
+  return normalizeScrapedStatuses(params.get(SCRAPED_STATUS_QUERY_PARAM));
+}
+
+function setScrapedStatuses(statuses, { render = true } = {}) {
+  state.scrapedStatuses = normalizeScrapedStatuses(statuses);
+  els.scrapedStatusOptions.forEach((input) => {
+    input.checked = state.scrapedStatuses.includes(input.value);
+  });
+  if (render) renderBotEvaluations();
+}
+
 function scrapedTaxonomyOpportunityPath(filter = state.scrapedTaxonomyFilter) {
   const normalized = normalizedScrapedTaxonomyFilter(filter);
-  if (!normalized) return opportunityRoutePath("scraped");
-  const query = new URLSearchParams({
-    [SCRAPED_TAXONOMY_KIND_QUERY_PARAM]: normalized.kind,
-    [SCRAPED_TAXONOMY_VALUE_QUERY_PARAM]: normalized.label,
-  });
+  const statuses = normalized
+    ? ["SCRAPED", "RESOLVED"]
+    : state.scrapedStatuses;
+  const query = new URLSearchParams();
+  if (normalized) {
+    query.set(SCRAPED_TAXONOMY_KIND_QUERY_PARAM, normalized.kind);
+    query.set(SCRAPED_TAXONOMY_VALUE_QUERY_PARAM, normalized.label);
+  }
+  if (statuses.length !== 1 || statuses[0] !== "SCRAPED") {
+    query.set(SCRAPED_STATUS_QUERY_PARAM, statuses.join(","));
+  }
+  if (![...query.keys()].length) return opportunityRoutePath("scraped");
   return `${opportunityRoutePath("scraped")}?${query.toString()}`;
 }
 
@@ -1091,6 +1124,7 @@ function currentRouteState() {
       evaluationStatus: "EVALUATED",
       opportunityView,
       scrapedTaxonomyFilter: opportunityView === "scraped" ? scrapedTaxonomyRouteFilter() : null,
+      scrapedStatuses: opportunityView === "scraped" ? scrapedStatusesFromRoute() : ["SCRAPED"],
     };
   }
   if (path.endsWith("/trading/settings/") || path.endsWith("/settings/")) {
@@ -1232,8 +1266,8 @@ function syncOpportunityViewControls() {
     element.hidden = scanLog;
   });
   // Days left, net yield and liquidity all describe whether a market can be traded
-  // now. On the Resolved tab they can only ever empty the list, so hide them there
-  // instead of letting a leftover value silently blank the whole tab.
+  // now. When the multi-select contains only settled/error rows, they can only ever
+  // empty the list, so hide them instead of letting a leftover value silently do so.
   els.tradabilityFilterControls.forEach((element) => {
     element.hidden = scanLog || tradabilityFiltersAreIrrelevant();
   });
@@ -1251,6 +1285,9 @@ function syncOpportunityViewControls() {
     } else {
       button.textContent = status === "EVALUATED" ? "Evaluated" : status === "ALL" ? "All evaluated" : button.textContent;
     }
+  });
+  els.scrapedStatusOptions.forEach((input) => {
+    input.checked = state.scrapedStatuses.includes(input.value);
   });
   renderScrapedScanControls();
   syncScrapedTaxonomyFilterControl();
@@ -1270,17 +1307,19 @@ function taxonomyValuesFromRecord(item, kind) {
   const fields = kind === "category"
     ? ["firstPolymarketCategories", "polymarketCategories", "categories", "firstCategories"]
     : ["firstPolymarketTags", "polymarketTags", "tags", "firstTags"];
+  // Taxonomy performance is calculated against the taxonomy captured when the market
+  // first appeared. Use that same source for navigation; merging every historical
+  // field let a tag link match unrelated labels introduced by later refreshes.
+  const source = fields.map((field) => item?.[field]).find((value) => Array.isArray(value) && value.length)
+    || fields.map((field) => item?.[field]).find((value) => value != null);
+  const entries = Array.isArray(source) ? source : source == null ? [] : [source];
   const values = new Set();
-  for (const field of fields) {
-    const source = item?.[field];
-    const entries = Array.isArray(source) ? source : source == null ? [] : [source];
-    for (const entry of entries) {
-      const raw = entry && typeof entry === "object"
-        ? (entry.slug || entry.label || entry.name || "")
-        : entry;
-      const label = normalizeScrapedTaxonomyLabel(raw);
-      if (label) values.add(label);
-    }
+  for (const entry of entries) {
+    const raw = entry && typeof entry === "object"
+      ? (entry.slug || entry.label || entry.name || "")
+      : entry;
+    const label = normalizeScrapedTaxonomyLabel(raw);
+    if (label) values.add(label);
   }
   return values;
 }
@@ -1365,13 +1404,14 @@ function resetScrapedOpportunityFilters() {
   syncEvaluationLiquidityFilterControl();
 }
 
-function applyScrapedTaxonomyRouteFilter(filter) {
+function applyScrapedTaxonomyRouteFilter(filter, statuses = ["SCRAPED"]) {
   state.scrapedTaxonomyFilter = normalizedScrapedTaxonomyFilter(filter);
+  setScrapedStatuses(statuses, { render: false });
   if (state.scrapedTaxonomyFilter) {
-    // A taxonomy link is an exploration of all currently open markets in that group,
-    // not a continuation of the previous screen's personal scan constraints.
+    // A taxonomy link is an exploration of all recorded markets in that group, not a
+    // continuation of the previous screen's personal scan constraints.
     resetScrapedOpportunityFilters();
-    state.evaluationStatus = "EVALUATED";
+    setScrapedStatuses(["SCRAPED", "RESOLVED"], { render: false });
   }
   syncScrapedTaxonomyFilterControl();
 }
@@ -1595,7 +1635,7 @@ function applyInitialRoute() {
   const route = currentRouteState();
   setPage(route.page);
   if (route.opportunityView === "scraped") {
-    applyScrapedTaxonomyRouteFilter(route.scrapedTaxonomyFilter);
+    applyScrapedTaxonomyRouteFilter(route.scrapedTaxonomyFilter, route.scrapedStatuses);
   }
   if (route?.opportunityView) setOpportunityView(route.opportunityView);
   if (route?.settingsSection) setSettingsSection(route.settingsSection);
@@ -7185,7 +7225,7 @@ function scrapedDisplayProbability(item) {
 // The Resolved tab lists markets that no longer trade, so every tradability filter
 // has nothing left to select on there.
 function tradabilityFiltersAreIrrelevant() {
-  return state.opportunityView === "scraped" && state.evaluationStatus === "RESOLVED";
+  return state.opportunityView === "scraped" && !state.scrapedStatuses.includes("SCRAPED");
 }
 
 function scrapedObservationStatus(item) {
@@ -7196,8 +7236,7 @@ function scrapedObservationStatus(item) {
 }
 
 function scrapedObservationFilterStatus(item) {
-  const status = scrapedObservationStatus(item);
-  return status === "SCRAPED" ? "EVALUATED" : status;
+  return scrapedObservationStatus(item);
 }
 
 function scrapedObservationStatusClass(item) {
@@ -7305,9 +7344,8 @@ function renderScrapedOpportunities() {
   const minNetYield = currentEvaluationNetYieldFilter();
   const minLiquidity = currentEvaluationLiquidityFilter();
   const taxonomyFilter = normalizedScrapedTaxonomyFilter();
-  const statusFiltered = state.evaluationStatus === "ALL"
-    ? observations
-    : observations.filter((item) => scrapedObservationFilterStatus(item) === state.evaluationStatus);
+  const selectedStatuses = normalizeScrapedStatuses(state.scrapedStatuses);
+  const statusFiltered = observations.filter((item) => selectedStatuses.includes(scrapedObservationFilterStatus(item)));
   const filtered = statusFiltered.filter((item) => {
     if (!scrapedTaxonomyFilterMatches(item, taxonomyFilter)) return false;
     const marketProbability = Number(scrapedDisplayProbability(item));
@@ -7326,7 +7364,8 @@ function renderScrapedOpportunities() {
   });
   const visible = sortedScrapedObservations(filtered).slice(0, 250);
   const scan = scrapedMarketScan();
-  const scrapedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "EVALUATED").length;
+  const scrapedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "SCRAPED").length;
+  const resolvedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "RESOLVED").length;
   const errorCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "ERROR").length;
 
   if (els.evaluationFilterCount) {
@@ -7336,6 +7375,7 @@ function renderScrapedOpportunities() {
       minNetYield > 0 ? `net yield >= ${(minNetYield * 100).toFixed(1)}%` : "",
       minLiquidity > 0 ? `liquidity >= ${money(minLiquidity)}` : "",
       taxonomyFilter ? `${taxonomyFilter.kind} = ${taxonomyFilterDisplayLabel(taxonomyFilter.kind, taxonomyFilter.label)}` : "",
+      selectedStatuses.length < 3 ? `status = ${selectedStatuses.map((status) => status.toLowerCase()).join(" + ")}` : "",
     ].filter(Boolean);
     els.evaluationFilterCount.textContent = filters.length
       ? `${formatInteger(filtered.length) || filtered.length} scraped / ${filters.join(" / ")}`
@@ -7347,6 +7387,7 @@ function renderScrapedOpportunities() {
       `${formatInteger(filtered.length) || filtered.length} shown`,
       `${formatInteger(observations.length) || observations.length} retained`,
       `${formatInteger(scrapedCount) || scrapedCount} scraped`,
+      `${formatInteger(resolvedCount) || resolvedCount} resolved`,
       errorCount ? `${formatInteger(errorCount) || errorCount} error` : null,
       scan.lastBatchCount != null ? `${formatInteger(scan.lastBatchCount)} in last batch` : null,
       scan.lastPreferredCount != null ? `${formatInteger(scan.lastPreferredCount)} preferred outcomes` : null,
@@ -9107,6 +9148,22 @@ els.evaluationLiquidityFilter?.addEventListener("input", () => {
   persistScrapedScanPreferences();
   syncEvaluationLiquidityFilterControl();
   renderBotEvaluations();
+});
+
+els.scrapedStatusOptions.forEach((input) => {
+  input.addEventListener("change", () => {
+    const selected = [...els.scrapedStatusOptions]
+      .filter((option) => option.checked)
+      .map((option) => option.value);
+    setScrapedStatuses(selected);
+    if (state.page === "opportunities" && state.opportunityView === "scraped") {
+      const targetPath = scrapedTaxonomyOpportunityPath();
+      const currentPath = `${window.location.pathname}${window.location.search}`;
+      if (currentPath !== targetPath) {
+        window.history.pushState({ page: "opportunities", opportunityView: "scraped" }, "", targetPath);
+      }
+    }
+  });
 });
 
 els.scrapedTaxonomyFilter?.addEventListener("change", () => {

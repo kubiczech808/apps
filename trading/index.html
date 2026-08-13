@@ -249,6 +249,12 @@
                       <option value="">All categories and tags</option>
                     </select>
                   </label>
+                  <fieldset class="scraped-status-control" data-scraped-only data-opportunity-filter>
+                    <legend>Status</legend>
+                    <label><input type="checkbox" value="SCRAPED" data-scraped-status checked> Scraped</label>
+                    <label><input type="checkbox" value="RESOLVED" data-scraped-status> Resolved</label>
+                    <label><input type="checkbox" value="ERROR" data-scraped-status> Error</label>
+                  </fieldset>
                   <div class="segmented" data-evaluation-filter data-evaluation-only data-opportunity-filter>
                     <button class="segment-button active" type="button" data-evaluation-status="EVALUATED">Evaluated</button>
                     <button class="segment-button" type="button" data-evaluation-status="RESOLVED">Resolved</button>

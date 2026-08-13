@@ -1858,15 +1858,21 @@ test("taxonomy performance: rows open the current scraped markets for that categ
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
 
   assert.match(html, /data-scraped-taxonomy-filter/);
+  assert.match(html, /data-scraped-status/,
+    "scraped and resolved observations must be selectable together");
   assert.match(app, /function scrapedTaxonomyOpportunityPath/);
   assert.match(app, /taxonomy=|SCRAPED_TAXONOMY_KIND_QUERY_PARAM/);
+  assert.match(app, /SCRAPED_STATUS_QUERY_PARAM/,
+    "taxonomy links must carry their explicit scraped/resolved status scope");
   assert.match(app, /function applyScrapedTaxonomyRouteFilter/);
   assert.match(app, /resetScrapedOpportunityFilters\(\)/,
     "a settings deep-link must clear the previous exploration filters");
-  assert.match(app, /state\.evaluationStatus = "EVALUATED"/,
-    "a taxonomy deep-link must show only currently open scraped markets");
+  assert.match(app, /setScrapedStatuses\(\["SCRAPED", "RESOLVED"\]/,
+    "a taxonomy deep-link must include both current and resolved markets");
   assert.match(app, /scrapedTaxonomyFilterMatches\(item, taxonomyFilter\)/,
     "the selected taxonomy must be applied to the scraped list itself");
+  assert.match(app, /selectedStatuses\.includes\(scrapedObservationFilterStatus\(item\)\)/,
+    "the scraped list must respect multiple selected statuses");
   assert.match(app, /scrapedTaxonomyOpportunityPath\(\{ kind, label: row\.label \}\)/,
     "both category and tag performance rows must link to their respective scraped markets");
 });

@@ -422,6 +422,43 @@ button:disabled {
   width: min(260px, 30vw);
 }
 
+.scraped-status-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.scraped-status-control legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.scraped-status-control label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.scraped-status-control input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent-dark);
+}
+
 .threshold-control strong {
   min-width: 48px;
   color: var(--accent-dark);
@@ -2278,6 +2315,12 @@ body.modal-open {
 
   .scraped-taxonomy-control select {
     width: min(100%, 260px);
+  }
+
+  .scraped-status-control {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .execution-actions > *,
