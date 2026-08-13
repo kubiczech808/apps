@@ -298,6 +298,7 @@ jobs:
 
           for strategy, prefix in mapping.items():
               row = paper.get(strategy) or {}
+              emit(f"{prefix}_DISPLAY_NAME", row.get("displayName"))
               emit(f"{prefix}_MIN_PROBABILITY", row.get("minProbability"))
               emit(f"{prefix}_MAX_FRACTION", row.get("maxOrderFraction"))
               emit(f"{prefix}_MAX_RESOLUTION_DAYS", row.get("maxResolutionDays"))

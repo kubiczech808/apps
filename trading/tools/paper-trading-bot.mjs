@@ -17,6 +17,15 @@ function envBool(name, fallback = false) {
   return String(value).toLowerCase() === "true";
 }
 
+function envText(name, fallback = "") {
+  const value = String(process.env[name] || "")
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return value || fallback;
+}
+
 function envSelectionOrder(name, fallback = "highest_ev_pa_first") {
   return process.env[name] === "highest_reward_risk_first" ? "highest_reward_risk_first" : fallback;
 }
@@ -286,7 +295,7 @@ const SCRAPED_SIMULATION_CATEGORY_ROW_LIMIT = Math.max(
 const PAPER_STRATEGIES = {
   conservative: {
     id: "conservative",
-    label: "Conservative",
+    label: envText("PAPER_CONSERVATIVE_DISPLAY_NAME", "Conservative"),
     selectionMetric: "EV p.a.",
     minProbability: CONSERVATIVE_MIN_PROBABILITY,
     maxFraction: envNumber("PAPER_CONSERVATIVE_MAX_FRACTION", MAX_FRACTION),
@@ -305,7 +314,7 @@ const PAPER_STRATEGIES = {
   },
   highReward: {
     id: "highReward",
-    label: "High reward",
+    label: envText("PAPER_HIGH_REWARD_DISPLAY_NAME", "High reward"),
     selectionMetric: "Reward / risk",
     minProbability: HIGH_REWARD_MIN_PROBABILITY,
     maxFraction: envNumber("PAPER_HIGH_REWARD_MAX_FRACTION", MAX_FRACTION),
@@ -324,7 +333,7 @@ const PAPER_STRATEGIES = {
   },
   moreProbable: {
     id: "moreProbable",
-    label: "More probable",
+    label: envText("PAPER_MORE_PROBABLE_DISPLAY_NAME", "More probable"),
     selectionMetric: "Reward / risk",
     minProbability: MORE_PROBABLE_STRATEGY_MIN_PROBABILITY,
     maxFraction: envNumber("PAPER_MORE_PROBABLE_MAX_FRACTION", MAX_FRACTION),
@@ -343,7 +352,7 @@ const PAPER_STRATEGIES = {
   },
   equal: {
     id: "equal",
-    label: "Equal",
+    label: envText("PAPER_EQUAL_DISPLAY_NAME", "Equal"),
     selectionMetric: "Potential p.a.",
     minProbability: envNumber("PAPER_EQUAL_MIN_PROBABILITY", 0.75),
     maxFraction: envNumber("PAPER_EQUAL_MAX_FRACTION", MAX_FRACTION),

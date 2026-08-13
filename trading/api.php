@@ -677,6 +677,7 @@ function default_portfolio_config(): array
     return [
         'paper' => [
             'conservative' => [
+                'displayName' => 'Conservative',
                 'minProbability' => 0.95,
                 'maxOrderFraction' => 0.05,
                 'maxResolutionDays' => 7,
@@ -690,6 +691,7 @@ function default_portfolio_config(): array
                 'excludedMarketTags' => [],
             ],
             'highReward' => [
+                'displayName' => 'High reward',
                 'minProbability' => 0.6,
                 'maxOrderFraction' => 0.05,
                 'maxResolutionDays' => 7,
@@ -703,6 +705,7 @@ function default_portfolio_config(): array
                 'excludedMarketTags' => [],
             ],
             'moreProbable' => [
+                'displayName' => 'More probable',
                 'minProbability' => 0.6,
                 'maxOrderFraction' => 0.05,
                 'maxResolutionDays' => 7,
@@ -716,6 +719,7 @@ function default_portfolio_config(): array
                 'excludedMarketTags' => [],
             ],
             'equal' => [
+                'displayName' => 'Equal',
                 'minProbability' => 0.75,
                 'maxOrderFraction' => 0.05,
                 'maxResolutionDays' => 7,
@@ -732,6 +736,7 @@ function default_portfolio_config(): array
             ],
         ],
         'live' => [
+            'displayName' => 'Live',
             'minProbability' => 0.95,
             'maxOrderFraction' => 0.05,
             'maxResolutionDays' => 7,
@@ -749,6 +754,7 @@ function default_portfolio_config(): array
         // that clears its probability bar, rather than buying the best one at the
         // market. Automation ships off: it deliberately commits past its capital.
         'live5050' => [
+            'displayName' => '5050',
             'minProbability' => 0.90,
             'fixedEntryPrice' => 0.50,
             'stakePerOrderUsdc' => null,
@@ -922,6 +928,19 @@ function normalize_execution_cron_minutes_value(mixed $value, mixed $fallback = 
     return in_array($minutes, $choices, true) ? $minutes : 60;
 }
 
+function normalize_portfolio_display_name(mixed $value, string $fallback): string
+{
+    $name = preg_replace('/[\x00-\x1F\x7F]+/', ' ', (string) $value);
+    $name = preg_replace('/\s+/', ' ', is_string($name) ? $name : '');
+    $name = trim(is_string($name) ? $name : '');
+    if ($name === '') {
+        return $fallback;
+    }
+    return function_exists('mb_substr')
+        ? mb_substr($name, 0, 80, 'UTF-8')
+        : substr($name, 0, 80);
+}
+
 // A list of Polymarket tags saved on a portfolio: the tags 5050 may bid on, or the tags any
 // portfolio refuses outright. Both are the same shape, and both accept a saved list or a
 // typed comma/space separated string. Slugs are normalized the way the dashboard's tag
@@ -1007,6 +1026,10 @@ function normalize_strategy_config(array $input, array $defaults): array
         ? 0
         : normalize_execution_cron_minutes_value($input['executionCronMinutes'] ?? $defaults['executionCronMinutes'] ?? 60);
     return [
+        'displayName' => normalize_portfolio_display_name(
+            $input['displayName'] ?? $defaults['displayName'],
+            (string) $defaults['displayName']
+        ),
         'minProbability' => normalize_probability_value($input['minProbability'] ?? null, (float) $defaults['minProbability']),
         'maxOrderFraction' => normalize_fraction_value($input['maxOrderFraction'] ?? null, (float) $defaults['maxOrderFraction']),
         'maxResolutionDays' => normalize_days_value($input['maxResolutionDays'] ?? null, (int) $defaults['maxResolutionDays']),

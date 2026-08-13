@@ -212,6 +212,8 @@ const els = {
   evaluationLiquidityFilter: document.querySelector("[data-evaluation-liquidity-filter]"),
   evaluationLiquidityFilterLabel: document.querySelector("[data-evaluation-liquidity-filter-label]"),
   scrapedTaxonomyFilter: document.querySelector("[data-scraped-taxonomy-filter]"),
+  portfolioName: document.querySelector("[data-portfolio-name]"),
+  portfolioNameLabel: document.querySelector("[data-portfolio-name-label]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   riskAllocation: document.querySelector("[data-risk-allocation]"),
@@ -443,10 +445,54 @@ function paperModeLabel(mode = state.mode) {
   return "Conservative";
 }
 
+function defaultPortfolioNameForMode(mode = state.mode) {
+  const normalizedMode = normalizeMode(mode);
+  if (LIVE_MODES.has(normalizedMode)) return isFixedEntryMode(normalizedMode) ? "5050" : "Live";
+  return paperModeLabel(normalizedMode);
+}
+
+function normalizePortfolioName(value, fallback = "") {
+  const normalized = String(value ?? "")
+    .replace(/[\u0000-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return normalized || fallback;
+}
+
+function portfolioNameForMode(mode = state.mode, configOverride = null) {
+  const fallback = defaultPortfolioNameForMode(mode);
+  const config = configOverride || portfolioConfigForMode(mode);
+  return normalizePortfolioName(config?.displayName, fallback);
+}
+
+function portfolioUsesCustomName(mode = state.mode, configOverride = null) {
+  const configured = normalizePortfolioName((configOverride || portfolioConfigForMode(mode))?.displayName, "");
+  return configured !== "" && configured !== defaultPortfolioNameForMode(mode);
+}
+
+function portfolioNavigationLabelForMode(mode = state.mode, configOverride = null) {
+  const name = portfolioNameForMode(mode, configOverride);
+  if (portfolioUsesCustomName(mode, configOverride)) return name;
+  return LIVE_MODES.has(normalizeMode(mode)) ? name : `Paper - ${name}`;
+}
+
+function portfolioTitleForMode(mode = state.mode, configOverride = null) {
+  const normalizedMode = normalizeMode(mode);
+  if (portfolioUsesCustomName(normalizedMode, configOverride)) {
+    return portfolioNameForMode(normalizedMode, configOverride);
+  }
+  if (LIVE_MODES.has(normalizedMode)) {
+    return isFixedEntryMode(normalizedMode) ? "5050 - fixed-entry bids" : "Live Polymarket account";
+  }
+  return `Paper - ${portfolioNameForMode(normalizedMode, configOverride)}`;
+}
+
 function defaultPortfolioConfig() {
   return {
     paper: {
       conservative: {
+        displayName: "Conservative",
         minProbability: 0.95,
         maxOrderFraction: 0.05,
         maxResolutionDays: 7,
@@ -461,6 +507,7 @@ function defaultPortfolioConfig() {
         excludedCandidateTokenIds: [],
       },
       highReward: {
+        displayName: "High reward",
         minProbability: 0.6,
         maxOrderFraction: 0.05,
         maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
@@ -475,6 +522,7 @@ function defaultPortfolioConfig() {
         excludedCandidateTokenIds: [],
       },
       moreProbable: {
+        displayName: "More probable",
         minProbability: 0.6,
         maxOrderFraction: 0.05,
         maxResolutionDays: 7,
@@ -489,6 +537,7 @@ function defaultPortfolioConfig() {
         excludedCandidateTokenIds: [],
       },
       equal: {
+        displayName: "Equal",
         minProbability: 0.75,
         maxOrderFraction: 0.05,
         maxResolutionDays: 7,
@@ -504,6 +553,7 @@ function defaultPortfolioConfig() {
       },
     },
     live: {
+      displayName: "Live",
       minProbability: 0.95,
       maxOrderFraction: 0.05,
       maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
@@ -523,6 +573,7 @@ function defaultPortfolioConfig() {
     // market. Most bids never fill; the ones that do were bought far below what
     // the market thought they were worth.
     live5050: {
+      displayName: "5050",
       minProbability: 0.9,
       fixedEntryPrice: 0.5,
       stakePerOrderUsdc: null,
@@ -1577,8 +1628,10 @@ function toggleLiveExecutionGate() {
 function syncModeUi() {
   const live = isLiveMode();
   els.modeButtons.forEach((button) => {
+    const buttonMode = normalizeMode(button.dataset.modeToggle);
     const isCurrent = button.dataset.modeToggle === state.mode;
     button.classList.toggle("active", isCurrent);
+    button.textContent = portfolioNavigationLabelForMode(buttonMode);
     // Not only a class: which portfolio is open decides whether what the tables show is
     // correct or a bug, so it is stated to assistive tech rather than left to colour.
     if (isCurrent) button.setAttribute("aria-current", "true");
@@ -1590,14 +1643,14 @@ function syncModeUi() {
     }
   });
   if (els.portfolioTitle) {
-    els.portfolioTitle.textContent = isFixedEntryMode()
-      ? "5050 - fixed-entry bids"
-      : (live ? "Live Polymarket account" : `Paper - ${paperModeLabel()}`);
+    els.portfolioTitle.textContent = portfolioTitleForMode();
   }
   // 5050 is a live portfolio but not the Live one, and both tabs used to head their
   // tables "Opened live trades" -- so the two read identically while showing different
   // portfolios' rows. The same fix the run-log title already carries: name the portfolio.
-  const portfolioLabel = isFixedEntryMode() ? "5050" : (live ? "live" : paperModeLabel());
+  const portfolioLabel = portfolioUsesCustomName()
+    ? portfolioNameForMode()
+    : (isFixedEntryMode() ? "5050" : (live ? "live" : paperModeLabel()));
   if (els.primaryPanelTitle) els.primaryPanelTitle.textContent = `Opened ${portfolioLabel} trades`;
   if (els.secondaryPanelTitle) els.secondaryPanelTitle.textContent = `Closed ${portfolioLabel} trades`;
   if (els.evaluationControls) els.evaluationControls.style.display = "";
@@ -3305,6 +3358,10 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const allocation = normalizeRiskAllocation(config.maxOrderFraction) ?? DEFAULT_RISK_ALLOCATION;
   const limitOrders = config.useLimitOrders ?? isLive;
   const capitalContext = options.capitalContext || parameterCapitalContextForMode(mode);
+  if (els.portfolioName && document.activeElement !== els.portfolioName) {
+    els.portfolioName.value = portfolioNameForMode(mode, config);
+  }
+  if (els.portfolioNameLabel) els.portfolioNameLabel.textContent = portfolioNameForMode(mode, config);
   if (els.eligibilityThreshold) els.eligibilityThreshold.value = String(Math.round(threshold * 100));
   if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = probability(threshold);
   syncDraftRiskAllocationControl(allocation, capitalContext);
@@ -6190,7 +6247,7 @@ function renderPortfolioCandidates() {
   }
   const diagnostics = portfolioCandidateDiagnostics(mode);
   const rows = diagnostics.ready;
-  const label = isFixedEntryMode(mode) ? "5050" : (LIVE_MODES.has(normalizeMode(mode)) ? "Live" : `Paper - ${paperModeLabel(mode)}`);
+  const label = portfolioNavigationLabelForMode(mode);
   if (els.portfolioCandidatesTitle) els.portfolioCandidatesTitle.textContent = `${label} execution candidates`;
   const blocked = diagnostics.riskBlocked.length;
   const excluded = diagnostics.manuallyExcluded.length;
@@ -8518,7 +8575,7 @@ function renderRunLog() {
   state.displayedRunLog = runs;
   // 5050 is a live mode but not the Live portfolio, and its log is its own -- titling it
   // "Live run log" said it belonged to the other one.
-  const label = isFixedEntryMode() ? "5050" : (isLiveMode() ? "Live" : paperModeLabel());
+  const label = portfolioUsesCustomName() ? portfolioNameForMode() : (isFixedEntryMode() ? "5050" : (isLiveMode() ? "Live" : paperModeLabel()));
   if (els.runLogTitle) {
     els.runLogTitle.textContent = `${label} run log`;
   }
@@ -9065,6 +9122,17 @@ els.scrapedTaxonomyFilter?.addEventListener("change", () => {
       window.history.pushState({ page: "opportunities", opportunityView: "scraped" }, "", targetPath);
     }
   }
+});
+
+els.portfolioName?.addEventListener("input", () => {
+  const value = String(els.portfolioName.value || "").slice(0, 80);
+  if (updateParameterDraft({ displayName: value })) {
+    if (els.portfolioNameLabel) els.portfolioNameLabel.textContent = value || "default name";
+    return;
+  }
+  updatePortfolioConfigForMode(state.mode, { displayName: value });
+  savePortfolioConfigSoon();
+  syncModeUi();
 });
 
 els.eligibilityThreshold?.addEventListener("input", () => {
