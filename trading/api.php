@@ -699,6 +699,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
+                'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
             ],
             'highReward' => [
@@ -714,6 +715,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
+                'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
             ],
             'moreProbable' => [
@@ -729,6 +731,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
+                'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
             ],
             'equal' => [
@@ -749,6 +752,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'polymarket',
                 'excludedCandidateTokenIds' => [],
+                'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
             ],
         ],
@@ -766,6 +770,7 @@ function default_portfolio_config(): array
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'ai',
             'excludedCandidateTokenIds' => [],
+            'includeOnlyMarketTags' => [],
             'excludedMarketTags' => [],
         ],
         // 5050 rests a bid at a fixed point on the 0..1 scale across every candidate
@@ -793,6 +798,7 @@ function default_portfolio_config(): array
             // Seeded with the default so a fresh install still recognises its own fills.
             'fixedEntryPriceHistory' => [0.50],
             'excludedCandidateTokenIds' => [],
+            'includeOnlyMarketTags' => [],
             'excludedMarketTags' => [],
         ],
         'system' => [
@@ -1085,6 +1091,9 @@ function normalize_strategy_config(array $input, array $defaults): array
         'requireMostProbableOutcome' => $marketType === 'multi',
         'probabilitySource' => normalize_probability_source_value($input['probabilitySource'] ?? $defaults['probabilitySource']),
         'excludedCandidateTokenIds' => normalize_excluded_candidate_token_ids($input['excludedCandidateTokenIds'] ?? $defaults['excludedCandidateTokenIds'] ?? []),
+        // The allow-list takes precedence at shortlist and execution time. The block-list
+        // stays stored so clearing this field restores the prior exclusions.
+        'includeOnlyMarketTags' => normalize_market_tag_list($input['includeOnlyMarketTags'] ?? $defaults['includeOnlyMarketTags'] ?? []),
         // Whole tags this portfolio refuses, dropped before a candidate is ever ranked.
         // Every portfolio carries it, unlike 5050's allow-list. Empty is the default and
         // means nothing is excluded, so unlike the allow-list an absent value and an

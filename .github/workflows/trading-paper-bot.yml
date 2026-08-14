@@ -322,6 +322,8 @@ jobs:
               # 5050's allow-list where empty means the opposite of unset.
               excluded_tags = [str(tag).strip() for tag in (row.get("excludedMarketTags") or []) if str(tag).strip()]
               emit(f"{prefix}_EXCLUDED_MARKET_TAGS", ",".join(excluded_tags))
+              include_only_tags = [str(tag).strip() for tag in (row.get("includeOnlyMarketTags") or []) if str(tag).strip()]
+              emit(f"{prefix}_INCLUDE_ONLY_MARKET_TAGS", ",".join(include_only_tags))
           emit("PAPER_MARKET_SCAN_PREFERRED_MAX_RESOLUTION_DAYS", live.get("maxResolutionDays"))
 
           try:

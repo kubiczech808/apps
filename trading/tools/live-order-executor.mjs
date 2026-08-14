@@ -128,6 +128,9 @@ const FIXED_ENTRY_ALLOWED_TAGS = envTagSet("LIVE_FIXED_ENTRY_ALLOWED_TAGS");
 // in the shared prefilter and both live strategies inherit it. Empty excludes nothing,
 // which is also what an unset variable means -- so no special case is needed to clear it.
 const EXCLUDED_MARKET_TAGS = envTagSet("LIVE_EXCLUDED_MARKET_TAGS");
+// A populated whitelist overrides exclusions. Its entries remain in the saved config
+// when inactive so clearing this list restores the prior exclusion policy.
+const INCLUDE_ONLY_MARKET_TAGS = envTagSet("LIVE_INCLUDE_ONLY_MARKET_TAGS");
 const FIXED_ENTRY_PROGRESS_EVERY = Math.max(1, envNumber("LIVE_FIXED_ENTRY_PROGRESS_EVERY", 5) || 5);
 const OPEN_ORDER_REVIEW_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_REVIEW_AFTER_HOURS", 2);
 const OPEN_ORDER_CANCEL_AFTER_HOURS = envNumber("LIVE_OPEN_ORDER_CANCEL_AFTER_HOURS", 8);
@@ -747,12 +750,14 @@ function prefilterLiveCandidate(item) {
     reasons.push(`market type ${marketType} does not match live portfolio market type ${PORTFOLIO_MARKET_TYPE}`);
   }
   if (EXCLUDED_CANDIDATE_TOKEN_IDS.has(tokenId)) reasons.push("manually excluded from this live portfolio");
-  // The tag exclusion is the same idea one level up: not this market, but any market
-  // carrying these tags. Applied here rather than in either strategy, so both live
-  // portfolios honour it and neither can be given a candidate it has refused.
-  const excludedTags = excludedMarketTagsOn(item);
-  if (excludedTags.length) {
-    reasons.push(`excluded tag${excludedTags.length > 1 ? "s" : ""} ${excludedTags.join(", ")}`);
+  // Applied in the shared prefilter so both live strategies share the same shortlist.
+  if (INCLUDE_ONLY_MARKET_TAGS.size && !marketMatchesIncludeOnlyTags(item)) {
+    reasons.push(`outside included tags (${[...INCLUDE_ONLY_MARKET_TAGS].join(", ")})`);
+  } else {
+    const excludedTags = excludedMarketTagsOn(item);
+    if (excludedTags.length) {
+      reasons.push(`excluded tag${excludedTags.length > 1 ? "s" : ""} ${excludedTags.join(", ")}`);
+    }
   }
   if (status === "ERROR") {
     reasons.push("stored status ERROR");
@@ -2764,6 +2769,12 @@ function marketTagIsAllowed(row = {}) {
     if (slugs.has(tag)) return true;
   }
   return false;
+}
+
+function marketMatchesIncludeOnlyTags(row = {}) {
+  if (!INCLUDE_ONLY_MARKET_TAGS.size) return true;
+  const slugs = marketTagSlugs(row);
+  return [...INCLUDE_ONLY_MARKET_TAGS].some((tag) => slugs.has(tag));
 }
 
 // Which of the portfolio's excluded tags this market carries, so a rejection can name

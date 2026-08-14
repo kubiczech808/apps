@@ -160,6 +160,9 @@ jobs:
               "LIVE_EXCLUDED_MARKET_TAGS": ",".join(
                   str(tag).strip() for tag in (cfg.get("excludedMarketTags") or []) if str(tag).strip()
               ),
+              "LIVE_INCLUDE_ONLY_MARKET_TAGS": ",".join(
+                  str(tag).strip() for tag in (cfg.get("includeOnlyMarketTags") or []) if str(tag).strip()
+              ),
               # What starts a run: the cron below, or the scan finishing. Recorded in the
               # run log, and read one line down to decide whether this run is due.
               "LIVE_EXECUTION_TRIGGER": cfg.get("executionTrigger"),

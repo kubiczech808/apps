@@ -192,6 +192,7 @@ jobs:
               # unset variable means too, so the loop skipping it clears the setting rather
               # than stranding it.
               "LIVE_EXCLUDED_MARKET_TAGS": ",".join(str(tag).strip() for tag in (live.get("excludedMarketTags") or []) if str(tag).strip()),
+              "LIVE_INCLUDE_ONLY_MARKET_TAGS": ",".join(str(tag).strip() for tag in (live.get("includeOnlyMarketTags") or []) if str(tag).strip()),
               "USE_LIMIT_ORDERS": str(bool(live.get("useLimitOrders", True))).lower(),
               "LIVE_CROSS_PORTFOLIO_RISK_DIVERSIFICATION": str(bool(system.get("crossLivePortfolioRiskDiversification", True))).lower(),
           }

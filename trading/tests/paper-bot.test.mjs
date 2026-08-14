@@ -4585,14 +4585,32 @@ test("excluded tags: the saved value reaches all three runtimes", async () => {
   ]);
 
   assert.match(paperWorkflow, /emit\(f"\{prefix\}_EXCLUDED_MARKET_TAGS", ",".join\(excluded_tags\)\)/);
+  assert.match(paperWorkflow, /emit\(f"\{prefix\}_INCLUDE_ONLY_MARKET_TAGS", ",".join\(include_only_tags\)\)/);
   assert.match(liveWorkflow, /"LIVE_EXCLUDED_MARKET_TAGS": ",".join\(/);
+  assert.match(liveWorkflow, /"LIVE_INCLUDE_ONLY_MARKET_TAGS": ",".join\(/);
   assert.match(fixedWorkflow, /"LIVE_EXCLUDED_MARKET_TAGS": ",".join\(/);
+  assert.match(fixedWorkflow, /"LIVE_INCLUDE_ONLY_MARKET_TAGS": ",".join\(/);
 
   // The paper workflow writes one variable per strategy, so each strategy has to read
   // its own -- a shared name would give all three portfolios one setting.
   for (const prefix of ["CONSERVATIVE", "HIGH_REWARD", "MORE_PROBABLE"]) {
     assert.match(bot, new RegExp(`excludedMarketTags: envTagSet\\("PAPER_${prefix}_EXCLUDED_MARKET_TAGS"\\)`));
+    assert.match(bot, new RegExp(`includeOnlyMarketTags: envTagSet\\("PAPER_${prefix}_INCLUDE_ONLY_MARKET_TAGS"\\)`));
   }
+});
+
+test("include-only tags: whitelist reaches every shortlist and execution path", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, bot, executor] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /outside included tags \(\$\{includeOnlyTags\.join\(", "\)\}\)/);
+  assert.match(bot, /function strategyAllowsTags\(item, strategy\)/);
+  assert.match(bot, /includeOnlyMarketTags: envTagSet\("PAPER_EQUAL_INCLUDE_ONLY_MARKET_TAGS"\)/);
+  assert.match(executor, /const INCLUDE_ONLY_MARKET_TAGS = envTagSet\("LIVE_INCLUDE_ONLY_MARKET_TAGS"\)/);
+  assert.match(executor, /function marketMatchesIncludeOnlyTags\(row = \{\}\)/);
 });
 
 // Asked for: the Polymarket tag box holds minor tags; it should offer only a few main

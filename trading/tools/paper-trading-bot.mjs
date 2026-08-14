@@ -331,6 +331,7 @@ const PAPER_STRATEGIES = {
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_CONSERVATIVE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
+    includeOnlyMarketTags: envTagSet("PAPER_CONSERVATIVE_INCLUDE_ONLY_MARKET_TAGS"),
     excludedMarketTags: envTagSet("PAPER_CONSERVATIVE_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_CONSERVATIVE_SELECTION_ORDER", "highest_ev_pa_first"),
     description: `Requires the configured probability source to meet ${(CONSERVATIVE_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then selects the highest EV p.a.`,
@@ -351,6 +352,7 @@ const PAPER_STRATEGIES = {
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_HIGH_REWARD_EXCLUDED_CANDIDATE_TOKEN_IDS"),
+    includeOnlyMarketTags: envTagSet("PAPER_HIGH_REWARD_INCLUDE_ONLY_MARKET_TAGS"),
     excludedMarketTags: envTagSet("PAPER_HIGH_REWARD_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_HIGH_REWARD_SELECTION_ORDER", "highest_reward_risk_first"),
     description: `Requires the configured probability source to meet ${(HIGH_REWARD_MIN_PROBABILITY * 100).toFixed(0)}% and resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, then prioritizes eligible opportunities by highest reward against risk.`,
@@ -371,6 +373,7 @@ const PAPER_STRATEGIES = {
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi") === "multi",
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_MORE_PROBABLE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
+    includeOnlyMarketTags: envTagSet("PAPER_MORE_PROBABLE_INCLUDE_ONLY_MARKET_TAGS"),
     excludedMarketTags: envTagSet("PAPER_MORE_PROBABLE_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_MORE_PROBABLE_SELECTION_ORDER", "highest_reward_risk_first"),
     description: `Requires the configured probability source to meet ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, and deep liquidity.`,
@@ -395,6 +398,7 @@ const PAPER_STRATEGIES = {
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_EQUAL_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_EQUAL_EXCLUDED_CANDIDATE_TOKEN_IDS"),
+    includeOnlyMarketTags: envTagSet("PAPER_EQUAL_INCLUDE_ONLY_MARKET_TAGS"),
     excludedMarketTags: envTagSet("PAPER_EQUAL_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_EQUAL_SELECTION_ORDER", "highest_ev_pa_first"),
     // Paper-only proof of concept. Polymarket's current API offers no conditional
@@ -4800,8 +4804,7 @@ function strategyEligibleCandidates(eligible, strategy) {
   let rows = [...eligible].filter((item) => {
     const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
     if (strategy.excludedCandidateTokenIds?.has(tokenId)) return false;
-    // A tag the portfolio refuses drops the row before anything is measured on it.
-    if (excludedTagsOnRow(item, strategy).length) return false;
+    if (!strategyAllowsTags(item, strategy)) return false;
     const minProbability = Number(strategy.minProbability);
     const selectedProbability = portfolioProbabilityForStrategy(item, strategy);
     if (Number.isFinite(minProbability) && (!Number.isFinite(selectedProbability) || selectedProbability < minProbability)) return false;
@@ -4893,6 +4896,20 @@ function excludedTagsOnRow(item, strategy) {
   return [...excluded].filter((tag) => slugs.has(tag));
 }
 
+function includedTagsOnRow(item, strategy) {
+  const included = strategy?.includeOnlyMarketTags;
+  if (!included?.size) return [];
+  const slugs = rowTagSlugs(item);
+  return [...included].filter((tag) => slugs.has(tag));
+}
+
+// A populated whitelist is the portfolio's tag policy. The exclusion list is retained
+// for when the whitelist is cleared, but must not influence selection meanwhile.
+function strategyAllowsTags(item, strategy) {
+  if (strategy?.includeOnlyMarketTags?.size) return includedTagsOnRow(item, strategy).length > 0;
+  return excludedTagsOnRow(item, strategy).length === 0;
+}
+
 // Number(null) and Number("") are 0, so the usual Number(x) turns an absent value
 // into a real, confident zero. Anywhere that zero is itself a meaningful verdict,
 // use this instead.
@@ -4968,9 +4985,14 @@ function portfolioFilterResult(item, strategy) {
 
   if (binaryOutcomeQuotesAreBothZero(item)) reasons.push("binary YES/NO quotes are both 0%; market appears resolved");
   if (strategy.excludedCandidateTokenIds?.has(tokenId)) reasons.push("manually excluded from this paper portfolio");
-  const excludedTags = excludedTagsOnRow(item, strategy);
-  if (excludedTags.length) {
-    reasons.push(`excluded tag${excludedTags.length > 1 ? "s" : ""} ${excludedTags.join(", ")}`);
+  const includedTags = includedTagsOnRow(item, strategy);
+  if (strategy?.includeOnlyMarketTags?.size && !includedTags.length) {
+    reasons.push(`outside included tags (${[...strategy.includeOnlyMarketTags].join(", ")})`);
+  } else {
+    const excludedTags = excludedTagsOnRow(item, strategy);
+    if (excludedTags.length) {
+      reasons.push(`excluded tag${excludedTags.length > 1 ? "s" : ""} ${excludedTags.join(", ")}`);
+    }
   }
   if (probabilitySource === "ai" && status !== "ELIGIBLE") reasons.push(`base status ${status || "UNKNOWN"} is not ELIGIBLE`);
   if (probabilitySource === "polymarket" && ["ERROR", "RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status)) {

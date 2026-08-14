@@ -265,8 +265,11 @@ const els = {
   fixedEntryPriceLabel: document.querySelector("[data-fixed-entry-price-label]"),
   fixedEntryTags: document.querySelector("[data-fixed-entry-tags]"),
   fixedEntryTagsLabel: document.querySelector("[data-fixed-entry-tags-label]"),
+  includeOnlyTags: document.querySelector("[data-include-only-tags]"),
+  includeOnlyTagsLabel: document.querySelector("[data-include-only-tags-label]"),
   excludedTags: document.querySelector("[data-excluded-tags]"),
   excludedTagsLabel: document.querySelector("[data-excluded-tags-label]"),
+  excludedTagsRow: document.querySelector("[data-excluded-tags-row]"),
   portfolioMarketType: document.querySelector("[data-portfolio-market-type]"),
   portfolioMarketTypeLabel: document.querySelector("[data-portfolio-market-type-label]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
@@ -3615,7 +3618,14 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   // state.mode instead made the 5050 rows follow the open tab rather than the portfolio
   // being edited, so the order price could be hidden on the panel that owns it.
   els.fixedEntryRows?.forEach((row) => row.toggleAttribute("hidden", !isFixedEntryMode(mode)));
-  // The exclusion, by contrast, is a parameter of every portfolio, so its row stays.
+  // A nonempty allow-list is the active tag policy. The stored exclusions are preserved
+  // but inactive until the allow-list is cleared.
+  const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
+  if (els.includeOnlyTags && document.activeElement !== els.includeOnlyTags) {
+    els.includeOnlyTags.value = includeOnlyTags.join(", ");
+  }
+  if (els.includeOnlyTagsLabel) els.includeOnlyTagsLabel.textContent = includeOnlyTags.length ? includeOnlyTags.join(", ") : "every tag";
+  els.excludedTagsRow?.toggleAttribute("hidden", includeOnlyTags.length > 0);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
   if (els.excludedTags && document.activeElement !== els.excludedTags) {
     els.excludedTags.value = excludedTags.join(", ");
@@ -5719,8 +5729,10 @@ function portfolioRuleRows(portfolio = {}) {
   }
   // Only when something is actually excluded: a row reading "none" on every portfolio
   // that never touched the setting is noise in a list meant to be read at a glance.
+  const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
-  if (excludedTags.length) rows.push(["Excluded tags", excludedTags.join(", ")]);
+  if (includeOnlyTags.length) rows.push(["Included tags", includeOnlyTags.join(", ")]);
+  else if (excludedTags.length) rows.push(["Excluded tags", excludedTags.join(", ")]);
   return rows;
 }
 
@@ -5732,6 +5744,7 @@ function livePortfolioRuleRows() {
   const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
+  const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
   const returnMetric = portfolioReturnMetricLabel(config);
   const priority = config.selectionOrder === "highest_reward_risk_first"
@@ -5758,7 +5771,7 @@ function livePortfolioRuleRows() {
       ["Tag filter", normalizeMarketTagList(config.allowedMarketTags).join(", ") || "every tag"],
     ] : []),
     // Shown only when set, for the same reason as on the paper dashboards.
-    ...(excludedTags.length ? [["Excluded tags", excludedTags.join(", ")]] : []),
+    ...(includeOnlyTags.length ? [["Included tags", includeOnlyTags.join(", ")]] : (excludedTags.length ? [["Excluded tags", excludedTags.join(", ")]] : [])),
     ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
@@ -5993,12 +6006,17 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   // retryable one (capital, diversification) lets the row back into the shortlist.
   const executionCheckIsCurrent = Boolean(executionCheck);
 
-  // Above every mode-specific rule, and above 5050's early return, because a tag the
-  // portfolio refuses disqualifies the market whatever else is true of it.
+  // Above every mode-specific rule, and above 5050's early return, because a tag policy
+  // disqualifies the market whatever else is true of it. A whitelist wins over exclusion.
+  const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
-  const hitExclusions = marketExcludedByTags(item, excludedTags);
-  if (hitExclusions.length) {
-    reasons.push(`excluded tag${hitExclusions.length > 1 ? "s" : ""} ${hitExclusions.join(", ")}`);
+  if (includeOnlyTags.length && !marketMatchesAllowedTags(item, includeOnlyTags)) {
+    reasons.push(`outside included tags (${includeOnlyTags.join(", ")})`);
+  } else {
+    const hitExclusions = marketExcludedByTags(item, excludedTags);
+    if (hitExclusions.length) {
+      reasons.push(`excluded tag${hitExclusions.length > 1 ? "s" : ""} ${hitExclusions.join(", ")}`);
+    }
   }
 
   if (displayStatus !== "EVALUATED") reasons.push(`status ${displayStatus}`);
@@ -9795,6 +9813,15 @@ els.portfolioMarketType?.addEventListener("change", () => {
   const updates = { marketType, requireMostProbableOutcome: marketType === "multi" };
   if (updateParameterDraft(updates)) return;
   updatePortfolioConfigForMode(state.mode, updates);
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.includeOnlyTags?.addEventListener("change", () => {
+  const value = normalizeMarketTagList(els.includeOnlyTags.value);
+  if (updateParameterDraft({ includeOnlyMarketTags: value })) return;
+  updatePortfolioConfigForMode(state.mode, { includeOnlyMarketTags: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();
