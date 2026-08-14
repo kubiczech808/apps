@@ -94,14 +94,14 @@ const state = {
   calculationMarket: "all",
   calculationOpenFilter: "all",
   calculationSort: {
-    key: "pnl",
+    key: "roi",
     direction: "desc",
   },
   // Categories and tags are separate Gamma taxonomies and each table keeps its own
   // sort order.
   taxonomySort: {
-    category: { key: "pnl", direction: "desc" },
-    tag: { key: "pnl", direction: "desc" },
+    category: { key: "roi", direction: "desc" },
+    tag: { key: "roi", direction: "desc" },
   },
   displayedRunLog: [],
   runLogFilters: [],
@@ -8856,7 +8856,7 @@ function calculationSortValue(row, key) {
 }
 
 function sortedCalculationRows(rows) {
-  const sort = state.calculationSort || { key: "pnl", direction: "desc" };
+  const sort = state.calculationSort || { key: "roi", direction: "desc" };
   const direction = sort.direction === "asc" ? 1 : -1;
   return [...rows].sort((a, b) => {
     const aValue = calculationSortValue(a, sort.key);
@@ -8866,7 +8866,18 @@ function sortedCalculationRows(rows) {
     if (aMissing && bMissing) return 0;
     if (aMissing) return 1;
     if (bMissing) return -1;
-    if (typeof aValue === "number" && typeof bValue === "number") return (aValue - bValue) * direction;
+    if (typeof aValue === "number" && typeof bValue === "number") {
+      const primary = (aValue - bValue) * direction;
+      if (primary !== 0) return primary;
+      if (sort.key === "roi") {
+        const aPnl = calculationSortValue(a, "pnl");
+        const bPnl = calculationSortValue(b, "pnl");
+        if (typeof aPnl === "number" && typeof bPnl === "number" && aPnl !== bPnl) {
+          return (aPnl - bPnl) * direction;
+        }
+      }
+      return 0;
+    }
     return String(aValue).localeCompare(String(bValue)) * direction;
   });
 }
@@ -8877,7 +8888,7 @@ function calculationHeader(key, label) {
 }
 
 function taxonomySortState(kind) {
-  return state.taxonomySort?.[kind] || { key: "pnl", direction: "desc" };
+  return state.taxonomySort?.[kind] || { key: "roi", direction: "desc" };
 }
 
 function taxonomySortArrow(kind, key) {
@@ -8937,7 +8948,18 @@ function taxonomyRows(report, kind) {
     if (aMissing && bMissing) return 0;
     if (aMissing) return 1;
     if (bMissing) return -1;
-    if (typeof aValue === "number" && typeof bValue === "number") return (aValue - bValue) * direction;
+    if (typeof aValue === "number" && typeof bValue === "number") {
+      const primary = (aValue - bValue) * direction;
+      if (primary !== 0) return primary;
+      if (sort.key === "roi") {
+        const aPnl = taxonomySortValue(a, "pnl");
+        const bPnl = taxonomySortValue(b, "pnl");
+        if (typeof aPnl === "number" && typeof bPnl === "number" && aPnl !== bPnl) {
+          return (aPnl - bPnl) * direction;
+        }
+      }
+      return 0;
+    }
     return String(aValue).localeCompare(String(bValue)) * direction;
   });
 }
@@ -9026,7 +9048,7 @@ function renderCalculationReport() {
     </div>
     <div class="calculation-section">
       <h3>Best parameter combinations</h3>
-      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon only on opportunities with a known final Polymarket outcome. Every trade uses a fixed $5 stake plus stored fees. ROI is total net P/L divided by the total invested capital.</p>
+      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon only on opportunities with a known final Polymarket outcome. Every trade uses a fixed $5 stake plus stored fees. ROI is total net P/L divided by the total invested capital; the default order is highest ROI, then P/L.</p>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
