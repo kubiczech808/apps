@@ -113,7 +113,7 @@ test("equal risk: the planned exit leaves no more loss than the net winning gain
   assert.equal(natural.requiresStop, false, "a whole-stake loss is already below the possible reward");
 });
 
-test("equal risk: a bid below the sell floor is a gap, not a filled stop", () => {
+test("equal risk: a bid below the sell floor exits immediately and records the gap", () => {
   const plan = bot.equalRiskStopPlan({
     totalCostUsdc: 5,
     netGainIfWinUsdc: 0.5,
@@ -128,6 +128,45 @@ test("equal risk: a bid below the sell floor is a gap, not a filled stop", () =>
   const gap = bot.equalRiskStopExitDecision({ plan, bestBid: plan.stopPrice - 0.1, shares: 5.5, feesEnabled: false });
   assert.equal(gap.executableAtFloor, false);
   assert.ok(gap.realizedLossUsdc > plan.riskTargetUsdc);
+  assert.ok(gap.exitValueUsdc < plan.minimumExitValueUsdc);
+});
+
+test("equal risk: entry is rejected when the current bid is already below the stop floor", () => {
+  const plan = bot.equalRiskStopPlan({
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 0.5,
+    shares: 5.5,
+    entryPrice: 0.9,
+    feesEnabled: false,
+  });
+  assert.equal(bot.equalRiskEntryProtection({ plan, bestBid: plan.stopPrice, shares: 5.5, feesEnabled: false }).eligible, true);
+  const wideSpread = bot.equalRiskEntryProtection({ plan, bestBid: plan.stopPrice - 0.1, shares: 5.5, feesEnabled: false });
+  assert.equal(wideSpread.eligible, false);
+  assert.match(wideSpread.reason, /below Equal stop floor/);
+});
+
+test("equal risk: the default portfolio requires meaningful traded volume", () => {
+  assert.equal(bot.PAPER_STRATEGIES.equal.minLiquidityUsdc, 20000);
+});
+
+test("equal risk: portfolio shortlist rejects a wide spread before opening", () => {
+  const strategy = { ...bot.PAPER_STRATEGIES.equal, minLiquidityUsdc: 0 };
+  const candidate = {
+    status: "ELIGIBLE",
+    marketProbability: 0.94,
+    marketPrice: 0.94,
+    bestBid: 0.56,
+    executableShares: 6.2921,
+    totalCostUsdc: 5.91461,
+    netGainIfWinUsdc: 0.3775,
+    daysToResolution: 1,
+    volume24hr: 25000,
+    feesEnabled: false,
+  };
+  const result = bot.portfolioFilterResult(candidate, strategy);
+  assert.equal(result.eligible, false);
+  assert.ok(result.reasons.some((reason) => /below Equal stop floor/.test(reason)));
+  assert.deepEqual(bot.strategyEligibleCandidates([candidate], strategy), []);
 });
 
 test("equal risk: a past estimated end date does not bypass a still-live synthetic stop check", () => {

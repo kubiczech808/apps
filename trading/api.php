@@ -727,7 +727,10 @@ function default_portfolio_config(): array
                 'maxOrderFraction' => 0.05,
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_ev_pa_first',
-                'minLiquidityUsdc' => null,
+                // Equal needs a real secondary market for its synthetic stop.
+                // The field is historically named liquidity, but is compared with
+                // Polymarket's traded-volume figure throughout the application.
+                'minLiquidityUsdc' => 20000,
                 'minNetYield' => 0.0,
                 // Equal defaults to a check after a completed market scan. Users may
                 // choose a scheduled cadence when they prefer a defined interval.

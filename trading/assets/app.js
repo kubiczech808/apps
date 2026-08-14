@@ -557,7 +557,7 @@ function defaultPortfolioConfig() {
         maxOrderFraction: 0.05,
         maxResolutionDays: 7,
         selectionOrder: "highest_ev_pa_first",
-        minLiquidityUsdc: null,
+        minLiquidityUsdc: 20000,
         minNetYield: 0,
         executionTrigger: "after_scrape",
         executionCronMinutes: 0,
