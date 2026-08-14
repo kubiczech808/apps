@@ -255,7 +255,8 @@ const els = {
   fixedEntryTagsLabel: document.querySelector("[data-fixed-entry-tags-label]"),
   excludedTags: document.querySelector("[data-excluded-tags]"),
   excludedTagsLabel: document.querySelector("[data-excluded-tags-label]"),
-  mostProbableOutcome: document.querySelector("[data-most-probable-outcome]"),
+  portfolioMarketType: document.querySelector("[data-portfolio-market-type]"),
+  portfolioMarketTypeLabel: document.querySelector("[data-portfolio-market-type-label]"),
   crossLiveRisk: document.querySelector("[data-cross-live-risk]"),
   capitalStatus: document.querySelector("[data-capital-status]"),
   limitOrders: document.querySelector("[data-limit-orders]"),
@@ -517,6 +518,7 @@ function defaultPortfolioConfig() {
         executionTrigger: "cron",
         executionCronMinutes: 60,
         automationEnabled: true,
+        marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -532,6 +534,7 @@ function defaultPortfolioConfig() {
         executionTrigger: "cron",
         executionCronMinutes: 60,
         automationEnabled: true,
+        marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -547,6 +550,7 @@ function defaultPortfolioConfig() {
         executionTrigger: "cron",
         executionCronMinutes: 60,
         automationEnabled: true,
+        marketType: "multi",
         requireMostProbableOutcome: true,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -562,6 +566,7 @@ function defaultPortfolioConfig() {
         executionTrigger: "after_scrape",
         executionCronMinutes: 0,
         automationEnabled: true,
+        marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
         excludedCandidateTokenIds: [],
@@ -579,6 +584,7 @@ function defaultPortfolioConfig() {
       executionCronMinutes: 60,
       automationEnabled: true,
       useLimitOrders: true,
+      marketType: "all",
       requireMostProbableOutcome: false,
       probabilitySource: "polymarket",
       excludedCandidateTokenIds: [],
@@ -601,6 +607,7 @@ function defaultPortfolioConfig() {
       executionCronMinutes: 60,
       automationEnabled: false,
       useLimitOrders: true,
+      marketType: "all",
       requireMostProbableOutcome: false,
       probabilitySource: "polymarket",
       excludedCandidateTokenIds: [],
@@ -613,6 +620,19 @@ function defaultPortfolioConfig() {
 
 function normalizeSelectionOrder(value) {
   return value === "highest_reward_risk_first" ? "highest_reward_risk_first" : "highest_ev_pa_first";
+}
+
+function normalizePortfolioMarketType(value, legacyMultichoice = false) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["all", "binary", "multi"].includes(normalized)) return normalized;
+  return legacyMultichoice ? "multi" : "all";
+}
+
+function portfolioMarketTypeLabel(value) {
+  const normalized = normalizePortfolioMarketType(value);
+  if (normalized === "binary") return "Yes/No";
+  if (normalized === "multi") return "Multi-outcome";
+  return "All markets";
 }
 
 // The AI probability pipeline was retired, so every portfolio scores on the
@@ -782,16 +802,28 @@ function portfolioConfigForMode(mode = state.mode) {
   const config = state.portfolioConfig || {};
   if (LIVE_MODES.has(normalizeMode(mode))) {
     const key = liveConfigKeyForMode(mode);
-    return {
+    const saved = config[key] || {};
+    const merged = {
       ...defaults[key],
-      ...(config[key] || {}),
+      ...saved,
     };
+    const marketType = normalizePortfolioMarketType(
+      saved.marketType,
+      saved.requireMostProbableOutcome ?? defaults[key].requireMostProbableOutcome,
+    );
+    return { ...merged, marketType, requireMostProbableOutcome: marketType === "multi" };
   }
   const strategyId = paperStrategyIdFromMode(mode);
-  return {
+  const saved = (config.paper || {})[strategyId] || {};
+  const merged = {
     ...defaults.paper[strategyId],
-    ...((config.paper || {})[strategyId] || {}),
+    ...saved,
   };
+  const marketType = normalizePortfolioMarketType(
+    saved.marketType,
+    saved.requireMostProbableOutcome ?? defaults.paper[strategyId].requireMostProbableOutcome,
+  );
+  return { ...merged, marketType, requireMostProbableOutcome: marketType === "multi" };
 }
 
 function updatePortfolioConfigForMode(mode, updates) {
@@ -3549,10 +3581,9 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
     els.excludedTags.value = excludedTags.join(", ");
   }
   if (els.excludedTagsLabel) els.excludedTagsLabel.textContent = excludedTags.length ? excludedTags.join(", ") : "none";
-  if (els.mostProbableOutcome) {
-    els.mostProbableOutcome.checked = Boolean(config.requireMostProbableOutcome);
-    els.mostProbableOutcome.closest(".parameter-control")?.toggleAttribute("hidden", isLive);
-  }
+  const marketType = normalizePortfolioMarketType(config.marketType, config.requireMostProbableOutcome);
+  if (els.portfolioMarketType) els.portfolioMarketType.value = marketType;
+  if (els.portfolioMarketTypeLabel) els.portfolioMarketTypeLabel.textContent = portfolioMarketTypeLabel(marketType);
   if (els.crossLiveRisk) {
     els.crossLiveRisk.checked = (options.systemConfig || systemConfig()).crossLivePortfolioRiskDiversification !== false;
   }
@@ -5635,6 +5666,7 @@ function portfolioRuleRows(portfolio = {}) {
     ["Stake sizing", stakeSizingRuleValue(mode, portfolio)],
     ["Resolution filter", resolution],
     ["Trade priority", priority],
+    ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
@@ -5649,7 +5681,6 @@ function portfolioRuleRows(portfolio = {}) {
   // that never touched the setting is noise in a list meant to be read at a glance.
   const excludedTags = normalizeMarketTagList(config.excludedMarketTags);
   if (excludedTags.length) rows.push(["Excluded tags", excludedTags.join(", ")]);
-  if (config.requireMostProbableOutcome) rows.push(["Market type filter", "Only multichoice events"]);
   return rows;
 }
 
@@ -5671,6 +5702,7 @@ function livePortfolioRuleRows() {
     ["Stake sizing", stakeSizingRuleValue("live", state.liveState?.portfolio)],
     ["Resolution filter", `Max ${maxResolutionDays} days`],
     ["Trade priority", priority],
+    ["Market type", portfolioMarketTypeLabel(config.marketType)],
     ["Execution trigger", normalizeExecutionTrigger(config.executionTrigger) === "cron"
       ? `${executionTriggerLabel(config.executionTrigger)} · ${executionCronMinutesLabel(config.executionCronMinutes)}`
       : executionTriggerLabel(config.executionTrigger)],
@@ -5985,8 +6017,9 @@ function portfolioCandidateFilterReasons(item, mode = state.mode) {
   if (minLiquidity != null && liquidity < minLiquidity) {
     reasons.push(`volume ${money(liquidity)} below ${money(minLiquidity)}`);
   }
-  if (config.requireMostProbableOutcome && candidateMarketType(item) !== "multi") {
-    reasons.push(`market type ${candidateMarketType(item)} is not multichoice`);
+  const requiredMarketType = normalizePortfolioMarketType(config.marketType, config.requireMostProbableOutcome);
+  if (requiredMarketType !== "all" && candidateMarketType(item) !== requiredMarketType) {
+    reasons.push(`market type ${portfolioMarketTypeLabel(candidateMarketType(item))} does not match ${portfolioMarketTypeLabel(requiredMarketType)}`);
   }
   return reasons;
 }
@@ -9486,10 +9519,11 @@ document.addEventListener("click", (event) => {
   rerenderCurrentDashboard();
 });
 
-els.mostProbableOutcome?.addEventListener("change", () => {
-  const value = Boolean(els.mostProbableOutcome.checked);
-  if (updateParameterDraft({ requireMostProbableOutcome: value })) return;
-  updatePortfolioConfigForMode(state.mode, { requireMostProbableOutcome: value });
+els.portfolioMarketType?.addEventListener("change", () => {
+  const marketType = normalizePortfolioMarketType(els.portfolioMarketType.value);
+  const updates = { marketType, requireMostProbableOutcome: marketType === "multi" };
+  if (updateParameterDraft(updates)) return;
+  updatePortfolioConfigForMode(state.mode, updates);
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

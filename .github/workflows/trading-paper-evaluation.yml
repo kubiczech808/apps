@@ -107,6 +107,7 @@ jobs:
               emit(f"{prefix}_MAX_RESOLUTION_DAYS", row.get("maxResolutionDays"))
               emit(f"{prefix}_SELECTION_ORDER", row.get("selectionOrder"))
               emit(f"{prefix}_MIN_LIQUIDITY_USDC", row.get("minLiquidityUsdc"))
+              emit(f"{prefix}_MARKET_TYPE", row.get("marketType"))
               emit(f"{prefix}_REQUIRE_MOST_PROBABLE", str(bool(row.get("requireMostProbableOutcome"))).lower())
           PY
 

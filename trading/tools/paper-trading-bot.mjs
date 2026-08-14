@@ -30,6 +30,19 @@ function envSelectionOrder(name, fallback = "highest_ev_pa_first") {
   return process.env[name] === "highest_reward_risk_first" ? "highest_reward_risk_first" : fallback;
 }
 
+function normalizePortfolioMarketType(value, legacyMultichoice = false) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["all", "binary", "multi"].includes(normalized)) return normalized;
+  return legacyMultichoice ? "multi" : "all";
+}
+
+function envPortfolioMarketType(name, legacyName, fallback = "all") {
+  return normalizePortfolioMarketType(
+    process.env[name],
+    envBool(legacyName, fallback === "multi"),
+  );
+}
+
 function envProbabilitySource(name, fallback = "polymarket") {
   // With no model consulted there is no AI probability to rank on, so an "ai" setting --
   // whether from the workflow or the stored portfolio config on the hosting -- would
@@ -311,7 +324,8 @@ const PAPER_STRATEGIES = {
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_CONSERVATIVE_EXECUTION_TRIGGER),
     executionCronMinutes: Math.max(30, envNumber("PAPER_CONSERVATIVE_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_CONSERVATIVE_AUTOMATION_ENABLED", true),
-    requireMostProbableOutcome: envBool("PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", false),
+    marketType: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all"),
+    requireMostProbableOutcome: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_CONSERVATIVE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
     excludedMarketTags: envTagSet("PAPER_CONSERVATIVE_EXCLUDED_MARKET_TAGS"),
@@ -330,7 +344,8 @@ const PAPER_STRATEGIES = {
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_HIGH_REWARD_EXECUTION_TRIGGER),
     executionCronMinutes: Math.max(30, envNumber("PAPER_HIGH_REWARD_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_HIGH_REWARD_AUTOMATION_ENABLED", true),
-    requireMostProbableOutcome: envBool("PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", false),
+    marketType: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all"),
+    requireMostProbableOutcome: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_HIGH_REWARD_EXCLUDED_CANDIDATE_TOKEN_IDS"),
     excludedMarketTags: envTagSet("PAPER_HIGH_REWARD_EXCLUDED_MARKET_TAGS"),
@@ -349,12 +364,13 @@ const PAPER_STRATEGIES = {
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_MORE_PROBABLE_EXECUTION_TRIGGER),
     executionCronMinutes: Math.max(30, envNumber("PAPER_MORE_PROBABLE_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_MORE_PROBABLE_AUTOMATION_ENABLED", true),
-    requireMostProbableOutcome: envBool("PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", true),
+    marketType: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi"),
+    requireMostProbableOutcome: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi") === "multi",
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_MORE_PROBABLE_EXCLUDED_CANDIDATE_TOKEN_IDS"),
     excludedMarketTags: envTagSet("PAPER_MORE_PROBABLE_EXCLUDED_MARKET_TAGS"),
     selectionOrder: envSelectionOrder("PAPER_MORE_PROBABLE_SELECTION_ORDER", "highest_reward_risk_first"),
-    description: `Requires the configured probability source to meet ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, deep liquidity, and multichoice-style event markets.`,
+    description: `Requires the configured probability source to meet ${(MORE_PROBABLE_STRATEGY_MIN_PROBABILITY * 100).toFixed(0)}%, resolution within ${DEFAULT_MAX_RESOLUTION_DAYS} days, and deep liquidity.`,
   },
   equal: {
     id: "equal",
@@ -372,7 +388,8 @@ const PAPER_STRATEGIES = {
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_EQUAL_EXECUTION_TRIGGER || "after_scrape"),
     executionCronMinutes: Math.max(30, envNumber("PAPER_EQUAL_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_EQUAL_AUTOMATION_ENABLED", true),
-    requireMostProbableOutcome: envBool("PAPER_EQUAL_REQUIRE_MOST_PROBABLE", false),
+    marketType: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all"),
+    requireMostProbableOutcome: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_EQUAL_PROBABILITY_SOURCE"),
     excludedCandidateTokenIds: envTokenIdSet("PAPER_EQUAL_EXCLUDED_CANDIDATE_TOKEN_IDS"),
     excludedMarketTags: envTagSet("PAPER_EQUAL_EXCLUDED_MARKET_TAGS"),
@@ -960,6 +977,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     minLiquidityUsdc: strategy.minLiquidityUsdc,
     minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
     executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
+    marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     probabilitySource: strategy.probabilitySource,
     equalRiskProtection: Boolean(strategy.equalRiskProtection),
@@ -979,6 +997,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       minLiquidityUsdc: strategy.minLiquidityUsdc == null ? null : Number(strategy.minLiquidityUsdc),
       minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
+      marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
       equalRiskProtection: Boolean(strategy.equalRiskProtection),
@@ -4766,6 +4785,7 @@ function dueExecutionStrategies(state) {
 
 function strategyEligibleCandidates(eligible, strategy) {
   const maxResolutionDays = strategyMaxResolutionDays(strategy);
+  const requiredMarketType = normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome);
   let rows = [...eligible].filter((item) => {
     const tokenId = String(item?.tokenId || item?.clobTokenId || item?.assetId || "");
     if (strategy.excludedCandidateTokenIds?.has(tokenId)) return false;
@@ -4780,6 +4800,9 @@ function strategyEligibleCandidates(eligible, strategy) {
     const minimumNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
     const candidateNetYield = netYieldAfterFees(item);
     if (!Number.isFinite(candidateNetYield) || candidateNetYield < minimumNetYield) return false;
+    const storedMarketType = normalizePortfolioMarketType(item.marketType);
+    const marketType = storedMarketType === "all" ? reportMarketType(item) : storedMarketType;
+    if (requiredMarketType !== "all" && marketType !== requiredMarketType) return false;
     if (strategy.equalRiskProtection) {
       const plan = equalRiskStopPlan({
         totalCostUsdc: item.totalCostUsdc ?? item.stakeUsdc,
@@ -4801,9 +4824,6 @@ function strategyEligibleCandidates(eligible, strategy) {
     }
     return true;
   });
-  if (strategy.requireMostProbableOutcome) {
-    rows = rows.filter((item) => item.marketType === "multi" || reportMarketType(item) === "multi");
-  }
   return rows;
 }
 
@@ -4924,7 +4944,9 @@ function portfolioFilterResult(item, strategy) {
   const liquidity = Number(item.liquidity || 0);
   // The portfolio threshold is a traded-volume floor, which is what Polymarket shows.
   const candidateVolume = rowVolumeUsdc(item);
-  const marketType = item.marketType || reportMarketType(item);
+  const storedMarketType = normalizePortfolioMarketType(item.marketType);
+  const marketType = storedMarketType === "all" ? reportMarketType(item) : storedMarketType;
+  const requiredMarketType = normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome);
   const economics = portfolioEconomics(item, strategy);
   const annualizedReturn = economics.annualizedReturn;
   const returnMetric = probabilitySource === "polymarket" ? "Potential p.a." : "EV p.a.";
@@ -4977,8 +4999,8 @@ function portfolioFilterResult(item, strategy) {
   if (!Number.isFinite(candidateNetYield) || candidateNetYield < minNetYield) {
     reasons.push(`net profit ${Number.isFinite(candidateNetYield) ? `${(candidateNetYield * 100).toFixed(1)}%` : "-"} below ${(minNetYield * 100).toFixed(1)}% after fees`);
   }
-  if (strategy.requireMostProbableOutcome && marketType !== "multi") {
-    reasons.push(`market type ${marketType || "-"} is not multichoice`);
+  if (requiredMarketType !== "all" && marketType !== requiredMarketType) {
+    reasons.push(`market type ${marketType || "-"} does not match portfolio market type ${requiredMarketType}`);
   }
   if (strategy.equalRiskProtection) {
     const plan = equalRiskStopPlan({
@@ -5440,6 +5462,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
       minNetYield: Math.max(0, Number(strategy.minNetYield) || 0),
       selectionOrder: strategy.selectionOrder,
+      marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
       executionTrigger: normalizeExecutionTrigger(strategy.executionTrigger),
@@ -8318,6 +8341,7 @@ function updatePaperPortfolio(portfolioState) {
     opportunityMinAnnualReturn: OPPORTUNITY_MIN_ANNUAL_RETURN,
     maxResolutionDays: strategyMaxResolutionDays(portfolioState),
     minLiquidityUsdc: portfolioState.minLiquidityUsdc == null ? null : Number(portfolioState.minLiquidityUsdc),
+    marketType: normalizePortfolioMarketType(portfolioState.marketType, portfolioState.requireMostProbableOutcome),
     requireMostProbableOutcome: Boolean(portfolioState.requireMostProbableOutcome),
     realizedPnlUsdc: Number(realizedPnl.toFixed(4)),
     realizedPnlPct: pnlPercent(realizedPnl, PORTFOLIO_USDC),

@@ -18,6 +18,12 @@ function envTokenIdSet(name) {
     .filter((tokenId) => /^\d{8,100}$/.test(tokenId)));
 }
 
+function normalizePortfolioMarketType(value, legacyMultichoice = false) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["all", "binary", "multi"].includes(normalized)) return normalized;
+  return legacyMultichoice ? "multi" : "all";
+}
+
 const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper";
 const PAPER_SCRAPED_STATE_URL = process.env.PAPER_SCRAPED_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=execution";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
@@ -26,6 +32,10 @@ const GAMMA_API = process.env.POLYMARKET_GAMMA_API || "https://gamma-api.polymar
 const CLOB_HOST = process.env.POLYMARKET_HOST || "https://clob.polymarket.com";
 const CHAIN_ID = Number(process.env.POLYMARKET_CHAIN_ID || 137);
 const MIN_PROBABILITY = envNumber("LIVE_MIN_PROBABILITY", envNumber("PAPER_MIN_PROBABILITY", 0.95));
+const PORTFOLIO_MARKET_TYPE = normalizePortfolioMarketType(
+  process.env.LIVE_MARKET_TYPE,
+  String(process.env.LIVE_REQUIRE_MOST_PROBABLE || "").toLowerCase() === "true",
+);
 // The AI probability pipeline was retired, so scoring always uses the
 // Polymarket outcome probability. LIVE_PROBABILITY_SOURCE is deliberately
 // ignored: an older stored portfolio config must not resurrect "ai".
@@ -704,6 +714,24 @@ function candidateVolumeUsdc(item = {}) {
   return 0;
 }
 
+function candidateMarketType(item = {}) {
+  const source = item?.candidate || {};
+  for (const value of [item?.marketType, source?.marketType]) {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (["binary", "multi"].includes(normalized)) return normalized;
+  }
+  const question = String(item?.question || source?.question || "");
+  const slug = String(item?.eventSlug || source?.eventSlug || item?.slug || source?.slug || "");
+  if (/(^|[-\s])(exact-score|correct-score|winner|group-winner|nominee|award|primary|election)([-\s]|$)/i.test(`${slug} ${question}`)) {
+    return "multi";
+  }
+  if (/^(which|who|what|how many)\b/i.test(question)) return "multi";
+  const outcome = String(item?.outcome || source?.outcome || "").trim().toLowerCase();
+  if (["yes", "no", "up", "down", "over", "under"].includes(outcome)) return "binary";
+  if (/^(will|is|are|can|does|do|did|has|have|was|were)\b/i.test(question)) return "binary";
+  return "multi";
+}
+
 function prefilterLiveCandidate(item) {
   const reasons = [];
   const tokenId = String(item?.tokenId || "");
@@ -714,6 +742,10 @@ function prefilterLiveCandidate(item) {
   const liquidity = number(item?.liquidity, 0);
 
   if (!tokenId) reasons.push("missing token id");
+  const marketType = candidateMarketType(item);
+  if (PORTFOLIO_MARKET_TYPE !== "all" && marketType !== PORTFOLIO_MARKET_TYPE) {
+    reasons.push(`market type ${marketType} does not match live portfolio market type ${PORTFOLIO_MARKET_TYPE}`);
+  }
   if (EXCLUDED_CANDIDATE_TOKEN_IDS.has(tokenId)) reasons.push("manually excluded from this live portfolio");
   // The tag exclusion is the same idea one level up: not this market, but any market
   // carrying these tags. Applied here rather than in either strategy, so both live
@@ -2522,6 +2554,23 @@ async function revalidateEvaluation(
     };
   }
   const qualificationProbability = probability;
+  const marketType = candidateMarketType({
+    ...evaluation,
+    question: market.question || evaluation.question,
+    eventSlug: marketEventSlug(market) || evaluation.eventSlug,
+    outcome: outcomes[tokenIndex] || evaluation.outcome,
+  });
+  if (PORTFOLIO_MARKET_TYPE !== "all" && marketType !== PORTFOLIO_MARKET_TYPE) {
+    return {
+      candidate: evaluation,
+      eligible: false,
+      status: "REJECTED",
+      rejectReasons: [`current market type ${marketType} does not match live portfolio market type ${PORTFOLIO_MARKET_TYPE}`],
+      currentPrice: price,
+      marketProbability,
+      minOrderSize,
+    };
+  }
   const endDate = dateContext.endDate;
   const days = daysToEnd(endDate);
   const resolvedDays = daysValue({ daysToResolution: days });
@@ -2591,6 +2640,7 @@ async function revalidateEvaluation(
     slug: market.slug || evaluation.slug,
     eventSlug: marketEventSlug(market),
     outcome: outcomes[tokenIndex] || evaluation.outcome,
+    marketType,
     endDate,
     scheduledEventDate: dateContext.scheduledEventDate,
     resolutionEndDate: dateContext.resolutionEndDate,
@@ -4260,6 +4310,7 @@ async function main() {
       postOnly: POST_ONLY,
       orderSizeMode: ORDER_SIZE_MODE,
       minProbability: MIN_PROBABILITY,
+      marketType: PORTFOLIO_MARKET_TYPE,
       probabilitySource: PROBABILITY_SOURCE,
       minAnnualReturn: MIN_ANNUAL_RETURN,
       maxSpread: MAX_SPREAD,
@@ -4317,6 +4368,7 @@ async function main() {
       humanReason: rotationHumanReason || null,
       settings: {
         minProbability: MIN_PROBABILITY,
+        marketType: PORTFOLIO_MARKET_TYPE,
         probabilitySource: PROBABILITY_SOURCE,
         minAnnualReturn: MIN_ANNUAL_RETURN,
         maxSpread: MAX_SPREAD,

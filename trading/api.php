@@ -688,6 +688,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => null,
                 'minNetYield' => 0.0,
                 'executionTrigger' => 'cron',
+                'marketType' => 'all',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
@@ -702,6 +703,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => null,
                 'minNetYield' => 0.0,
                 'executionTrigger' => 'cron',
+                'marketType' => 'all',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
@@ -716,6 +718,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => 500000,
                 'minNetYield' => 0.0,
                 'executionTrigger' => 'cron',
+                'marketType' => 'multi',
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
                 'excludedCandidateTokenIds' => [],
@@ -735,6 +738,7 @@ function default_portfolio_config(): array
                 // Equal defaults to a check after a completed market scan. Users may
                 // choose a scheduled cadence when they prefer a defined interval.
                 'executionTrigger' => 'after_scrape',
+                'marketType' => 'all',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'polymarket',
                 'excludedCandidateTokenIds' => [],
@@ -751,6 +755,7 @@ function default_portfolio_config(): array
             'minNetYield' => 0.0,
             'executionTrigger' => 'cron',
             'useLimitOrders' => true,
+            'marketType' => 'all',
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'ai',
             'excludedCandidateTokenIds' => [],
@@ -771,6 +776,7 @@ function default_portfolio_config(): array
             'minNetYield' => 0.0,
             'executionTrigger' => 'cron',
             'useLimitOrders' => true,
+            'marketType' => 'all',
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'polymarket',
             'automationEnabled' => false,
@@ -917,6 +923,15 @@ function normalize_selection_order_value(mixed $value): string
     return $value === 'highest_reward_risk_first' ? 'highest_reward_risk_first' : 'highest_ev_pa_first';
 }
 
+function normalize_portfolio_market_type_value(mixed $value, bool $legacyMultichoice = false): string
+{
+    $normalized = strtolower(trim((string) ($value ?? '')));
+    if (in_array($normalized, ['all', 'binary', 'multi'], true)) {
+        return $normalized;
+    }
+    return $legacyMultichoice ? 'multi' : 'all';
+}
+
 function normalize_probability_source_value(mixed $value): string
 {
     return $value === 'polymarket' ? 'polymarket' : 'ai';
@@ -1034,6 +1049,11 @@ function normalize_strategy_config(array $input, array $defaults): array
     $executionCronMinutes = $executionTrigger === 'after_scrape'
         ? 0
         : normalize_execution_cron_minutes_value($input['executionCronMinutes'] ?? $defaults['executionCronMinutes'] ?? 60);
+    $legacyMultichoice = (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome'] ?? false);
+    $marketType = normalize_portfolio_market_type_value(
+        $input['marketType'] ?? $defaults['marketType'] ?? null,
+        $legacyMultichoice
+    );
     return [
         'displayName' => normalize_portfolio_display_name(
             $input['displayName'] ?? $defaults['displayName'],
@@ -1052,7 +1072,10 @@ function normalize_strategy_config(array $input, array $defaults): array
         // Absent means on, so a portfolio saved before this existed keeps trading
         // rather than silently stopping.
         'automationEnabled' => (bool) ($input['automationEnabled'] ?? $defaults['automationEnabled'] ?? true),
-        'requireMostProbableOutcome' => (bool) ($input['requireMostProbableOutcome'] ?? $defaults['requireMostProbableOutcome']),
+        'marketType' => $marketType,
+        // Kept while older workflows are still in circulation. The three-value
+        // marketType field above is the source of truth.
+        'requireMostProbableOutcome' => $marketType === 'multi',
         'probabilitySource' => normalize_probability_source_value($input['probabilitySource'] ?? $defaults['probabilitySource']),
         'excludedCandidateTokenIds' => normalize_excluded_candidate_token_ids($input['excludedCandidateTokenIds'] ?? $defaults['excludedCandidateTokenIds'] ?? []),
         // Whole tags this portfolio refuses, dropped before a candidate is ever ranked.

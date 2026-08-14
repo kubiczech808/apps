@@ -2158,6 +2158,56 @@ test("Polymarket probability threshold uses the executable CLOB entry, not a sta
   assert.ok(result.reasons.some((reason) => reason.includes("Polymarket probability 59.0% below 75.0%")));
 });
 
+test("portfolio market type: Yes/No and multichoice use the same three-value filter as statistics", async () => {
+  const binaryStrategy = {
+    ...bot.PAPER_STRATEGIES.conservative,
+    probabilitySource: "polymarket",
+    minProbability: 0.9,
+    minLiquidityUsdc: 0,
+    marketType: "binary",
+    requireMostProbableOutcome: false,
+  };
+  const candidate = {
+    tokenId: "12345678901234567890",
+    status: "SCRAPED",
+    question: "Will the event happen?",
+    outcome: "Yes",
+    marketType: "binary",
+    marketProbability: 0.95,
+    marketPrice: 0.95,
+    volumeUsdc: 100000,
+    daysToResolution: 1,
+    netGainIfWinUsdc: 0.25,
+    totalCostUsdc: 5,
+  };
+
+  assert.equal(bot.portfolioFilterResult(candidate, binaryStrategy).eligible, true);
+  assert.equal(bot.strategyEligibleCandidates([candidate], binaryStrategy).length, 1);
+
+  const multichoiceStrategy = { ...binaryStrategy, marketType: "multi", requireMostProbableOutcome: true };
+  const mismatch = bot.portfolioFilterResult(candidate, multichoiceStrategy);
+  assert.equal(mismatch.eligible, false);
+  assert.ok(mismatch.reasons.some((reason) => reason.includes("does not match portfolio market type multi")));
+  assert.deepEqual(bot.strategyEligibleCandidates([candidate], multichoiceStrategy), []);
+
+  const [html, app, paperWorkflow, liveWorkflow, fixedWorkflow, executor] = await Promise.all([
+    import("node:fs/promises").then(({ readFile }) => readFile(new URL("../index.html", import.meta.url), "utf8")),
+    import("node:fs/promises").then(({ readFile }) => readFile(new URL("../assets/app.js", import.meta.url), "utf8")),
+    import("node:fs/promises").then(({ readFile }) => readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8")),
+    import("node:fs/promises").then(({ readFile }) => readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8")),
+    import("node:fs/promises").then(({ readFile }) => readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8")),
+    import("node:fs/promises").then(({ readFile }) => readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8")),
+  ]);
+  assert.match(html, /data-portfolio-market-type/);
+  assert.match(html, /<option value="binary">Yes\/No<\/option>/);
+  assert.ok(!html.includes("Only multichoice events"));
+  assert.match(app, /market type .* does not match/i);
+  assert.match(paperWorkflow, /_MARKET_TYPE/);
+  assert.match(liveWorkflow, /"LIVE_MARKET_TYPE": live\.get\("marketType"\)/);
+  assert.match(fixedWorkflow, /"LIVE_MARKET_TYPE": cfg\.get\("marketType"\)/);
+  assert.match(functionSource(executor, "prefilterLiveCandidate"), /PORTFOLIO_MARKET_TYPE !== "all"/);
+});
+
 test("execution revalidation: an unavailable CLOB quote cannot remain an Equal candidate", () => {
   const strategy = {
     ...bot.PAPER_STRATEGIES.equal,
