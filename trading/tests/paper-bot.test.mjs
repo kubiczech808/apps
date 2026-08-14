@@ -1854,8 +1854,8 @@ test("taxonomy performance: categories and tags render as separately sorted tabl
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
   assert.match(app, /taxonomySort: \{/);
-  assert.match(app, /category: \{ key: "annualizedRoi", direction: "desc" \}/);
-  assert.match(app, /tag: \{ key: "annualizedRoi", direction: "desc" \}/);
+  assert.match(app, /category: \{ key: "pnl", direction: "desc" \}/);
+  assert.match(app, /tag: \{ key: "pnl", direction: "desc" \}/);
   assert.match(app, /data-taxonomy-sort="\$\{kind\}" data-taxonomy-sort-key="\$\{key\}"/);
   assert.match(app, /const taxonomyButton = event\.target\.closest\("\[data-taxonomy-sort\]"\);/);
   assert.match(app, /const button = event\.target\.closest\("\[data-calculation-sort\]"\);/);
@@ -1866,14 +1866,14 @@ test("taxonomy performance: categories and tags render as separately sorted tabl
     "legacy inferred categories must stay hidden until a split report is generated");
   // Every column in both tables is sortable.
   const sorted = [...app.matchAll(/taxonomyHeader\(kind, "([a-zA-Z]+)"/g)].map((match) => match[1]);
-  for (const key of ["label", "openCount", "trades", "accuracy", "pnl", "annualizedRoi",
+  for (const key of ["label", "openCount", "trades", "accuracy", "pnl",
     "roi", "avgProbability", "avgVolumeUsdc", "lastResolvedAt"]) {
     assert.ok(sorted.includes(key), `${key} column must be sortable`);
   }
   assert.doesNotMatch(app, /taxonomyHeader\(kind, "annualizedPnlPerTradeUsdc", "P\/L p\.a\."/);
   // The header count must match the colspan on the empty row, or the layout breaks.
-  assert.match(app, /colspan="11"/);
-  assert.equal(sorted.length, 11);
+  assert.match(app, /colspan="10"/);
+  assert.equal(sorted.length, 10);
   assert.doesNotMatch(app, /data-category-kind/);
 
   // The report is stored in the core state file, so its row count must be bounded.
