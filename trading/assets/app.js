@@ -3001,9 +3001,10 @@ function renderTradeRows(trades, emptyText, options = {}) {
   const showStatus = options.showStatus !== false;
   if (!trades.length) return `<div class="empty">${escapeHtml(emptyText)}</div>`;
   const rows = sortedTrades(trades, tableKey);
+  const tableClass = showStatus ? "closed-trades-table" : "opened-trades-table";
   return `
     <div class="ledger-scroll" tabindex="0" aria-label="Scrollable trade table">
-    <table class="ledger-wide-table">
+    <table class="ledger-wide-table ${tableClass}">
       <thead>
         <tr>
           ${tradeHeader(tableKey, "potentialGain", "Win")}
@@ -3028,7 +3029,7 @@ function renderTradeRows(trades, emptyText, options = {}) {
             <td data-label="P/L" class="${pnlClass(tradePnlValue(trade))}">
               ${signedMoney(tradePnlValue(trade))}
             </td>
-            <td data-label="Market">
+            <td class="trade-market-cell" data-label="Market">
               ${tradeTypeBadge(trade)}
               ${marketAnchor(trade)}
             </td>

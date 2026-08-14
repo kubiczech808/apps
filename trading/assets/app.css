@@ -2400,6 +2400,27 @@ body.modal-open {
     border-collapse: collapse;
   }
 
+  /* Keep the open-trade table scannable on phones: Market is still wide
+     enough for the outcome and question, but does not consume the whole row. */
+  .ledger .opened-trades-table .trade-market-cell {
+    width: 210px;
+    min-width: 210px;
+    max-width: 210px;
+  }
+
+  .ledger .opened-trades-table .trade-market-cell .market-link {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .ledger .opened-trades-table .trade-market-cell .market-link span,
+  .ledger .opened-trades-table .trade-market-cell .market-link strong {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
   .ledger thead {
     display: table-header-group;
   }
