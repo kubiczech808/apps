@@ -217,12 +217,9 @@ const els = {
   systemStatus: document.querySelector("[data-system-status]"),
   evaluationProbabilityFilter: document.querySelector("[data-evaluation-probability-filter]"),
   evaluationDaysFilter: document.querySelector("[data-evaluation-days-filter]"),
-  evaluationDaysFilterLabel: document.querySelector("[data-evaluation-days-filter-label]"),
   tradabilityFilterControls: document.querySelectorAll("[data-tradability-filter]"),
   evaluationNetYieldFilter: document.querySelector("[data-evaluation-net-yield-filter]"),
-  evaluationNetYieldFilterLabel: document.querySelector("[data-evaluation-net-yield-filter-label]"),
   evaluationLiquidityFilter: document.querySelector("[data-evaluation-liquidity-filter]"),
-  evaluationLiquidityFilterLabel: document.querySelector("[data-evaluation-liquidity-filter-label]"),
   scrapedTaxonomyFilter: document.querySelector("[data-scraped-taxonomy-filter]"),
   scrapedMarketTypeFilter: document.querySelector("[data-scraped-market-type-filter]"),
   scrapedStatusOptions: document.querySelectorAll("[data-scraped-status]"),
@@ -3375,7 +3372,6 @@ function syncEvaluationDaysFilterControl() {
   const value = currentEvaluationDaysFilter();
   state.evaluationDaysFilter = value;
   if (els.evaluationDaysFilter) els.evaluationDaysFilter.value = value == null ? "" : String(value);
-  if (els.evaluationDaysFilterLabel) els.evaluationDaysFilterLabel.textContent = value == null ? "All" : `<= ${value} d`;
 }
 
 function storedEvaluationNetYieldFilter() {
@@ -3402,7 +3398,6 @@ function syncEvaluationNetYieldFilterControl() {
   const value = currentEvaluationNetYieldFilter();
   state.evaluationNetYieldFilter = value;
   if (els.evaluationNetYieldFilter) els.evaluationNetYieldFilter.value = (value * 100).toFixed(1);
-  if (els.evaluationNetYieldFilterLabel) els.evaluationNetYieldFilterLabel.textContent = `>= ${percent(value)}`;
 }
 
 function syncRiskAllocationControl(availableCapital = null, sourceLabel = "available capital", options = {}) {
@@ -6408,7 +6403,6 @@ function syncEvaluationLiquidityFilterControl() {
   const value = currentEvaluationLiquidityFilter();
   state.evaluationLiquidityFilter = value;
   if (els.evaluationLiquidityFilter) els.evaluationLiquidityFilter.value = value > 0 ? String(value) : "";
-  if (els.evaluationLiquidityFilterLabel) els.evaluationLiquidityFilterLabel.textContent = value > 0 ? `>= ${money(value)}` : "All";
 }
 
 function renderPortfolioCandidates() {
@@ -9310,7 +9304,6 @@ els.evaluationNetYieldFilter?.addEventListener("input", () => {
   const value = normalizeMinimumNetYield(Number.isFinite(raw) ? raw / 100 : 0);
   state.evaluationNetYieldFilter = value;
   saveEvaluationNetYieldFilter(value);
-  if (els.evaluationNetYieldFilterLabel) els.evaluationNetYieldFilterLabel.textContent = `>= ${percent(value)}`;
   renderBotEvaluations();
 });
 

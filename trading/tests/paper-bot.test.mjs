@@ -2359,7 +2359,13 @@ test("market metric: the app filters and shows traded volume, not order-book liq
   assert.match(app, /data-label="Volume">\$\{money\(rowVolumeUsdc\(item\)\)\}/);
   assert.match(app, /scrapedSortableHeader\("liquidity", "Volume"\)/);
   assert.match(app, /\["Volume filter",/);
-  assert.match(html, /<span>Volume min<\/span>/);
+  assert.match(html, /<span>Probability &gt;=<\/span>/);
+  assert.match(html, /<span>Days left max &lt;=<\/span>/);
+  assert.match(html, /<span>Net yield min &gt;=<\/span>/);
+  assert.match(html, /<span>Volume min &gt;=<\/span>/);
+  assert.match(html, /<span>Type<\/span>/);
+  assert.doesNotMatch(html, /data-evaluation-(?:days|net-yield|liquidity)-filter-label/,
+    "filter values belong in their input, not in a duplicated suffix");
   assert.match(html, /<span>Min traded volume<\/span>/);
 });
 

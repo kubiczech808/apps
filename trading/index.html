@@ -229,19 +229,16 @@
                     <input type="number" min="0" max="99" step="1" value="0" data-evaluation-probability-filter>
                   </label>
                   <label class="threshold-control evaluation-days-control" data-opportunity-filter data-tradability-filter title="Maximum end-date horizon for the scraped view and future Events API scans. Portfolio rules are not changed. A resolved market no longer trades, so this filter is hidden and ignored on the Resolved tab.">
-                    <span>Days left max</span>
-                    <input type="number" min="0" max="3650" step="0.5" placeholder="All" data-evaluation-days-filter>
-                    <strong data-evaluation-days-filter-label>All</strong>
+                    <span>Days left max &lt;=</span>
+                    <input type="number" min="0" max="3650" step="0.5" placeholder="All" aria-label="Maximum days left" data-evaluation-days-filter>
                   </label>
                   <label class="threshold-control evaluation-net-yield-control" data-opportunity-filter data-tradability-filter title="Display-only minimum Net yield % filter after estimated trading fees. Portfolio rules are not changed. A resolved market no longer trades, so this filter is hidden and ignored on the Resolved tab.">
-                    <span>Net yield min</span>
-                    <input type="number" min="0" max="1000" step="0.1" value="0.0" data-evaluation-net-yield-filter>
-                    <strong data-evaluation-net-yield-filter-label>&gt;= 0.0%</strong>
+                    <span>Net yield min &gt;=</span>
+                    <input type="number" min="0" max="1000" step="0.1" value="0.0" aria-label="Minimum net yield percent" data-evaluation-net-yield-filter>
                   </label>
                   <label class="threshold-control evaluation-liquidity-control" data-scraped-only data-opportunity-filter data-tradability-filter title="Minimum liquidity for the scraped view and future Events API scans. Portfolio rules are not changed. A resolved market no longer trades, so this filter is hidden and ignored on the Resolved tab.">
-                    <span>Volume min</span>
-                    <input type="number" min="0" max="1000000000" step="1000" placeholder="All" data-evaluation-liquidity-filter>
-                    <strong data-evaluation-liquidity-filter-label>All</strong>
+                    <span>Volume min &gt;=</span>
+                    <input type="number" min="0" max="1000000000" step="1000" placeholder="All" aria-label="Minimum traded volume" data-evaluation-liquidity-filter>
                   </label>
                   <label class="threshold-control scraped-taxonomy-control" data-scraped-only data-opportunity-filter title="Filter current scraped opportunities by the explicit Polymarket category or tag recorded for the market.">
                     <span>Tag</span>
@@ -250,7 +247,7 @@
                     </select>
                   </label>
                   <label class="threshold-control scraped-market-type-control" data-scraped-only data-opportunity-filter title="Filter scraped opportunities by the market structure used in the parameter simulation.">
-                    <span>Market type</span>
+                    <span>Type</span>
                     <select data-scraped-market-type-filter aria-label="Filter scraped opportunities by market type">
                       <option value="all">All markets</option>
                       <option value="binary">Yes / No</option>
@@ -427,6 +424,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260814-resolved-accuracy"></script>
+  <script src="assets/app.js?v=20260814-opportunity-filter-labels"></script>
 </body>
 </html>
