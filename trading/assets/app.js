@@ -2480,7 +2480,7 @@ function resolutionCell(trade) {
     <span>${isClosedTrade(trade)
       ? (resolutionDate ? "Polymarket resolution" : "no Polymarket date")
       : (awaitingSettlement
-        ? `awaiting settlement, ${compactDays(days)} calc horizon`
+        ? `awaiting settlement, ${compactDays(days)}`
         : `${compactDays(days)} left${inferredNote ? `, ${inferredNote}` : ""}`)}</span>
   `;
 }
