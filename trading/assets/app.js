@@ -2202,24 +2202,35 @@ function isClosedTrade(trade) {
   return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED", "STOP_LOSS", "STOP_GAP"].includes(String(trade.status || "").toUpperCase());
 }
 
-function closedTradeWasCorrect(trade) {
+function closedTradePredictionResult(trade) {
   const status = String(trade.status || "").toUpperCase();
-  if (["WON", "REDEEMED"].includes(status)) return true;
+  if (["WON", "REDEEMED", "REDEEM_REQUIRED"].includes(status)) return true;
   if (status === "LOST") return false;
-  const realized = Number(trade.realizedPnlUsdc);
-  if (Number.isFinite(realized)) return realized > 0;
-  const finalPrice = Number(trade.finalPrice ?? trade.currentPrice);
-  if (Number.isFinite(finalPrice)) return finalPrice >= 0.995;
-  return false;
+
+  // A sale, rotation or protective exit measures execution performance, not
+  // prediction accuracy. Count it only after Polymarket publishes the selected
+  // outcome's final settlement price.
+  const finalOutcomePrice = trade.finalOutcomePrice == null || trade.finalOutcomePrice === ""
+    ? null
+    : Number(trade.finalOutcomePrice);
+  if (Number.isFinite(finalOutcomePrice)) {
+    if (finalOutcomePrice >= 0.995) return true;
+    if (finalOutcomePrice <= 0.005) return false;
+  }
+  return null;
 }
 
 function closedAccuracyStats(closedTrades) {
   const rows = Array.isArray(closedTrades) ? closedTrades.filter(isClosedTrade) : [];
-  const correct = rows.filter(closedTradeWasCorrect).length;
-  const total = rows.length;
+  const resolvedResults = rows
+    .map(closedTradePredictionResult)
+    .filter((result) => result != null);
+  const correct = resolvedResults.filter(Boolean).length;
+  const total = resolvedResults.length;
   return {
     correct,
     total,
+    excluded: Math.max(0, rows.length - total),
     rate: total ? correct / total : null,
   };
 }
@@ -2231,7 +2242,7 @@ function renderClosedAccuracy(closedTrades) {
     els.portfolioAccuracy.className = stats.rate == null ? "" : (stats.rate >= 0.5 ? "positive" : "negative");
   }
   if (els.portfolioAccuracyNote) {
-    els.portfolioAccuracyNote.textContent = `${stats.correct} / ${stats.total} closed`;
+    els.portfolioAccuracyNote.textContent = `${stats.correct} / ${stats.total} resolved${stats.excluded ? ` · ${stats.excluded} early exits excluded` : ""}`;
   }
 }
 

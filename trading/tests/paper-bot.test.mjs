@@ -3177,6 +3177,35 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
   assert.equal(belongs(true, [])({ tokenId: "T4", price: 0.5099 }), true);
 });
 
+test("dashboard accuracy excludes rotations and protective exits until final resolution", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const pick = (re) => re.exec(app)[0];
+  const calculate = new Function("trades", `
+    ${pick(/function isClosedTrade\([\s\S]*?\n\}/)}
+    ${pick(/function closedTradePredictionResult\([\s\S]*?\n\}/)}
+    ${pick(/function closedAccuracyStats\([\s\S]*?\n\}/)}
+    return closedAccuracyStats(trades);
+  `);
+
+  const stats = calculate([
+    { status: "WON" },
+    { status: "LOST" },
+    { status: "SOLD", realizedPnlUsdc: -0.15 },
+    { status: "STOP_LOSS", realizedPnlUsdc: -1.2 },
+    { status: "SOLD", realizedPnlUsdc: -0.1, finalOutcomePrice: 1 },
+    { status: "CLOSED", realizedPnlUsdc: 0.1, finalOutcomePrice: 0 },
+    { status: "OPEN" },
+  ]);
+
+  assert.deepEqual(stats, {
+    correct: 2,
+    total: 4,
+    excluded: 2,
+    rate: 0.5,
+  });
+});
+
 test("market scan: a manual scan finishes on the server, whatever the tab does", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
