@@ -60,6 +60,8 @@ const state = {
   evaluationLiquidityFilter: 0,
   scrapedTaxonomyFilter: null,
   scrapedMarketTypeFilter: "all",
+  // Keep explicit deep-link filters authoritative during asynchronous catalogue loads.
+  scrapedRouteFilter: null,
   // The scraped catalogue has its own multi-select status filter. `evaluationStatus`
   // belongs to the retired AI evaluation view and must not make a taxonomy deep-link
   // silently discard resolved observations.
@@ -1481,7 +1483,14 @@ function resetScrapedOpportunityFilters() {
 
 function applyScrapedTaxonomyRouteFilter(filter, statuses = ["SCRAPED"], ruleFilters = null, statusesExplicit = false) {
   state.scrapedTaxonomyFilter = normalizedScrapedTaxonomyFilter(filter);
-  setScrapedStatuses(statuses, { render: false });
+  const normalizedStatuses = normalizeScrapedStatuses(statuses);
+  state.scrapedRouteFilter = {
+    statuses: normalizedStatuses,
+    probabilityFilter: ruleFilters?.hasRuleFilters ? (ruleFilters.probabilityFilter ?? 0) : 0,
+    daysFilter: ruleFilters?.hasRuleFilters ? ruleFilters.daysFilter : null,
+    marketType: ruleFilters?.hasRuleFilters ? normalizeScrapedMarketType(ruleFilters.marketType) : "all",
+  };
+  setScrapedStatuses(normalizedStatuses, { render: false });
   if (ruleFilters?.hasRuleFilters) {
     state.evaluationProbabilityFilter = ruleFilters.probabilityFilter ?? 0;
     state.evaluationDaysFilter = ruleFilters.daysFilter;
@@ -1666,6 +1675,7 @@ function normalizeMinimumNetYield(value) {
 }
 
 function setOpportunityView(view, { syncRoute = false, replace = false } = {}) {
+  if (syncRoute) state.scrapedRouteFilter = null;
   state.opportunityView = normalizeOpportunityView(view);
   syncOpportunityPageHeading();
   syncOpportunityViewControls();
@@ -5829,7 +5839,8 @@ function mergeCurrentMarketEconomics(evaluations = [], observations = []) {
 }
 
 function candidateMarketType(item = {}) {
-  if (item.marketType) return item.marketType;
+  const storedType = normalizeScrapedMarketType(item.marketType);
+  if (storedType !== "all") return storedType;
   const question = String(item.question || "");
   const slug = String(item.eventSlug || item.slug || "");
   if (/(^|[-\s])(exact-score|correct-score|winner|group-winner|nominee|award|primary|election)([-\s]|$)/i.test(`${slug} ${question}`)) {
@@ -5843,9 +5854,7 @@ function candidateMarketType(item = {}) {
 }
 
 function scrapedMarketType(item = {}) {
-  return normalizeScrapedMarketType(item?.marketType) === "all"
-    ? candidateMarketType(item)
-    : normalizeScrapedMarketType(item.marketType);
+  return candidateMarketType(item);
 }
 
 // Traded volume, the figure Polymarket shows on a market ("$37.9K Vol."). Gamma's
@@ -7438,13 +7447,14 @@ function binaryMarketProbabilityCell(item) {
 function renderScrapedOpportunities() {
   syncScrapedTaxonomyFilterControl();
   const observations = scrapedMarketObservations();
-  const probabilityFilter = currentEvaluationProbabilityFilter();
-  const daysFilter = currentEvaluationDaysFilter();
+  const routeFilter = state.scrapedRouteFilter;
+  const probabilityFilter = routeFilter ? routeFilter.probabilityFilter : currentEvaluationProbabilityFilter();
+  const daysFilter = routeFilter ? routeFilter.daysFilter : currentEvaluationDaysFilter();
   const minNetYield = currentEvaluationNetYieldFilter();
   const minLiquidity = currentEvaluationLiquidityFilter();
   const taxonomyFilter = normalizedScrapedTaxonomyFilter();
-  const marketTypeFilter = normalizeScrapedMarketType(state.scrapedMarketTypeFilter);
-  const selectedStatuses = normalizeScrapedStatuses(state.scrapedStatuses);
+  const marketTypeFilter = routeFilter ? routeFilter.marketType : normalizeScrapedMarketType(state.scrapedMarketTypeFilter);
+  const selectedStatuses = routeFilter ? routeFilter.statuses : normalizeScrapedStatuses(state.scrapedStatuses);
   const statusFiltered = observations.filter((item) => selectedStatuses.includes(scrapedObservationFilterStatus(item)));
   const filtered = statusFiltered.filter((item) => {
     if (!scrapedTaxonomyFilterMatches(item, taxonomyFilter)) return false;
@@ -9231,6 +9241,7 @@ els.scrapedScanButton?.addEventListener("click", () => {
 });
 
 els.evaluationProbabilityFilter?.addEventListener("input", () => {
+  state.scrapedRouteFilter = null;
   const raw = Number(els.evaluationProbabilityFilter.value);
   const value = normalizeEvaluationProbabilityFilter(Number.isFinite(raw) ? raw / 100 : 0);
   state.evaluationProbabilityFilter = value;
@@ -9240,6 +9251,7 @@ els.evaluationProbabilityFilter?.addEventListener("input", () => {
 });
 
 els.evaluationDaysFilter?.addEventListener("input", () => {
+  state.scrapedRouteFilter = null;
   const value = normalizeEvaluationDaysFilter(els.evaluationDaysFilter.value);
   state.evaluationDaysFilter = value;
   saveEvaluationDaysFilter(value);
@@ -9249,6 +9261,7 @@ els.evaluationDaysFilter?.addEventListener("input", () => {
 });
 
 els.evaluationNetYieldFilter?.addEventListener("input", () => {
+  state.scrapedRouteFilter = null;
   const raw = Number(els.evaluationNetYieldFilter.value);
   const value = normalizeMinimumNetYield(Number.isFinite(raw) ? raw / 100 : 0);
   state.evaluationNetYieldFilter = value;
@@ -9258,6 +9271,7 @@ els.evaluationNetYieldFilter?.addEventListener("input", () => {
 });
 
 els.evaluationLiquidityFilter?.addEventListener("input", () => {
+  state.scrapedRouteFilter = null;
   const raw = Number(els.evaluationLiquidityFilter.value);
   const value = Number.isFinite(raw) && raw >= 0 ? Math.round(raw * 100) / 100 : 0;
   state.evaluationLiquidityFilter = value;
@@ -9269,6 +9283,7 @@ els.evaluationLiquidityFilter?.addEventListener("input", () => {
 
 els.scrapedStatusOptions.forEach((input) => {
   input.addEventListener("change", () => {
+    state.scrapedRouteFilter = null;
     const selected = [...els.scrapedStatusOptions]
       .filter((option) => option.checked)
       .map((option) => option.value);
@@ -9284,6 +9299,7 @@ els.scrapedStatusOptions.forEach((input) => {
 });
 
 els.scrapedTaxonomyFilter?.addEventListener("change", async () => {
+  state.scrapedRouteFilter = null;
   state.scrapedTaxonomyFilter = scrapedTaxonomyFilterFromValue(els.scrapedTaxonomyFilter.value);
   syncScrapedTaxonomyFilterControl();
   // Keep the filter interaction asynchronous: use the already loaded catalogue when
@@ -9302,6 +9318,7 @@ els.scrapedTaxonomyFilter?.addEventListener("change", async () => {
 });
 
 els.scrapedMarketTypeFilter?.addEventListener("change", () => {
+  state.scrapedRouteFilter = null;
   state.scrapedMarketTypeFilter = normalizeScrapedMarketType(els.scrapedMarketTypeFilter.value);
   syncScrapedMarketTypeFilterControl();
   renderBotEvaluations();

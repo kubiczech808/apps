@@ -1908,6 +1908,12 @@ test("taxonomy performance: rows open the current scraped markets for that categ
   assert.match(app, /SCRAPED_STATUS_QUERY_PARAM/,
     "taxonomy links must carry their explicit scraped/resolved status scope");
   assert.match(app, /function applyScrapedTaxonomyRouteFilter/);
+  assert.match(app, /scrapedRouteFilter/,
+    "deep-linked scraped filters must survive the asynchronous catalogue load");
+  assert.match(app, /const routeFilter = state\.scrapedRouteFilter/,
+    "the rendered rows must use the route filter, not only the visible inputs");
+  assert.match(app, /routeFilter \? routeFilter\.marketType/,
+    "a marketType URL filter must be applied to the rows");
   assert.match(app, /resetScrapedOpportunityFilters\(\)/,
     "a settings deep-link must clear the previous exploration filters");
   assert.match(app, /setScrapedStatuses\(\["SCRAPED", "RESOLVED"\]/,
