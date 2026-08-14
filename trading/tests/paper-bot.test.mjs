@@ -1638,7 +1638,7 @@ test("taxonomy performance: real Polymarket categories and tags stay separate", 
   }));
 
   const report = bot.buildCalculationReport(state);
-  assert.equal(report.taxonomyVersion, 4);
+  assert.equal(report.taxonomyVersion, 5);
   const categoryLabels = report.categorySummaries.map((row) => row.label);
   const tagLabels = report.tagSummaries.map((row) => row.label);
   assert.deepEqual(new Set(categoryLabels), new Set(["sports", "politics"]));
@@ -2026,8 +2026,8 @@ test("calculation report: open counts mirror parameter rules and taxonomy", () =
   const football = report.tagSummaries.find((row) => row.label === "football");
   assert.deepEqual(
     football?.minimumProbabilitySummaries?.map((row) => row.minimumProbability),
-    [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
-    "every tag needs the complete 0%-90% minimum probability ladder",
+    [0.5, 0.6, 0.7, 0.8, 0.9],
+    "every tag needs the normalized 50%-90% minimum probability ladder",
   );
   const footballAtNinety = football?.minimumProbabilitySummaries?.find((row) => row.minimumProbability === 0.9);
   assert.equal(footballAtNinety?.openCount, 1, "the matching open market belongs to its 90% tag band");

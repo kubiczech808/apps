@@ -301,9 +301,9 @@ const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND",
 // Keep the original broad thresholds and add the intermediate 5-point steps so
 // the parameter report can distinguish, for example, a 75% rule from 70%/80%.
 const REPORT_THRESHOLDS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
-// Tag performance needs a complete, stable probability ladder rather than the
-// strategy presets above: every retained tag is reported at 0%, 10%, ... 90%.
-const TAG_PERFORMANCE_THRESHOLDS = Array.from({ length: 10 }, (_unused, index) => index / 10);
+// Every selected outcome is normalized to at least 50% before it reaches the
+// report, so 0-40% would only duplicate the corresponding inverted outcomes.
+const TAG_PERFORMANCE_THRESHOLDS = [0.5, 0.6, 0.7, 0.8, 0.9];
 const SCRAPED_SIMULATION_MAX_DAYS = [1, 3, 7, 14, 30];
 // Each scraped market contributes to every real Polymarket category and tag it
 // carries. The two taxonomies stay separate; risk groups and inferred question tags
@@ -8277,7 +8277,7 @@ function buildCalculationReport(state) {
   return {
     id: `calculation-report-${generatedAt}`,
     generatedAt,
-    taxonomyVersion: 4,
+    taxonomyVersion: 5,
     simulationType: "fresh_scraped_opportunities",
     observedSampleSize: observedTrades.length,
     sampleSize: trades.length,

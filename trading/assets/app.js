@@ -9040,14 +9040,18 @@ function taxonomyRows(report, kind) {
       const summaries = Array.isArray(row?.minimumProbabilitySummaries)
         ? row.minimumProbabilitySummaries
         // Older reports remain useful until the next hourly calculation completes.
-        : [{ minimumProbability: 0, ...row }];
-      return summaries.map((summary) => ({
+        : [{ minimumProbability: 0.5, ...row }];
+      return summaries
+        // Chosen outcomes below 50% are normalized to their inverse, so those
+        // rows duplicate the 50%+ ladder and must not be rendered from old data.
+        .filter((summary) => Number(summary?.minimumProbability) >= 0.5)
+        .map((summary) => ({
         ...row,
         ...summary,
         minimumProbability: Number.isFinite(Number(summary?.minimumProbability))
           ? Number(summary.minimumProbability)
-          : 0,
-      }));
+          : 0.5,
+        }));
     })
     : directRows;
   const rows = expandedRows.filter((row) => (
@@ -9228,7 +9232,7 @@ function renderCalculationReport() {
         report,
         "tag",
         "Tag performance",
-        "Each tag is broken down by the minimum Polymarket probability captured when the opportunity was first scraped (0%, 10%, ... 90%).",
+        "Each tag is broken down by the minimum Polymarket probability captured when the opportunity was first scraped (50%, 60%, ... 90%).",
       )}
     </div>
   `;
