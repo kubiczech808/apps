@@ -5934,6 +5934,32 @@ function rowVolumeUsdc(item = {}) {
   return 0;
 }
 
+function firstScrapedVolumeUsdc(item = {}) {
+  for (const candidate of [item?.firstVolumeUsdc, item?.firstVolume24hr, item?.volumeUsdc, item?.volume24hr, item?.firstLiquidity, item?.liquidity]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric >= 0) return numeric;
+  }
+  return null;
+}
+
+function resolvedScrapedVolumeUsdc(item = {}) {
+  for (const candidate of [item?.resolvedVolumeUsdc, item?.resolvedVolume24hr]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric >= 0) return numeric;
+  }
+  return null;
+}
+
+function scrapedVolumeCell(item = {}) {
+  const first = firstScrapedVolumeUsdc(item);
+  if (scrapedObservationStatus(item) !== "RESOLVED") return money(first ?? rowVolumeUsdc(item));
+  const resolved = resolvedScrapedVolumeUsdc(item);
+  if (!Number.isFinite(resolved)) {
+    return `<strong>${money(first ?? rowVolumeUsdc(item))}</strong><span>scraped; resolution snapshot unavailable</span>`;
+  }
+  return `<strong>${money(resolved)}</strong><span>resolved; scraped ${money(first ?? 0)}</span>`;
+}
+
 function portfolioCandidateFilterReasons(item, mode = state.mode) {
   const config = portfolioConfigForMode(mode);
   const normalizedMode = normalizeMode(mode);
@@ -7616,7 +7642,7 @@ function renderScrapedOpportunities() {
               <td data-label="Net yield %">${netYieldCell(item)}</td>
               <td data-label="Potential p.a."><span class="${pnlClass(potentialAnnualizedReturn(item))}">${signedPercent(potentialAnnualizedReturn(item))}</span></td>
               <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
-              <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
+              <td data-label="Volume">${scrapedVolumeCell(item)}</td>
               <td data-label="Scraped">${escapeHtml(formatDate(item.observedAt || item.marketDataUpdatedAt || ""))}</td>
               <td data-label="Status" class="${scrapedObservationStatusClass(item)}"><strong>${scrapedObservationStatus(item)}</strong></td>
               <td data-label="End date">${evaluationEndDateCell(item)}</td>

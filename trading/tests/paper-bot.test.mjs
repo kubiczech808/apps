@@ -988,6 +988,9 @@ test("resolved observations: the scraped view surfaces them without a days filte
   // And the fields the tab needs must survive compaction.
   for (const field of [
     "'lastLiveMarketProbability'",
+    "'firstVolumeUsdc'",
+    "'resolvedVolumeUsdc'",
+    "'resolvedVolume24hr'",
     "'finalOutcomePrice'",
     "'marketClosed'",
     "'acceptingOrders'",
@@ -1760,7 +1763,7 @@ test("parameter combinations: a resolved row keeps its scrape-time entry price",
   assert.equal(bot.buildCalculationReport(neverLive).sampleSize, 0);
 });
 
-test("parameter combinations: every distinct rule uses the full resolved sample and reports average volume", async () => {
+test("parameter combinations: every distinct rule uses the full resolved sample and reports average resolution volume", async () => {
   // A liquidity-floor loop made four copies of each probability/horizon rule. It did
   // not make the report more informative, and its ROI-first UI slice hid most of the
   // high-evidence rows. Volume is now a descriptive aggregate, not a synthetic fourth
@@ -1772,6 +1775,7 @@ test("parameter combinations: every distinct rule uses the full resolved sample 
   state.marketObservations = state.marketObservations.map((row, index) => ({
     ...row,
     firstVolumeUsdc: 1000 + index * 100,
+    resolvedVolumeUsdc: 9000 + index * 100,
     firstDaysToResolution: 4,
     daysToResolution: 4,
   }));
@@ -1811,15 +1815,17 @@ test("parameter combinations: every distinct rule uses the full resolved sample 
   assert.ok(widest.openCount >= 1,
     "the broadest rule must separately expose the current open inventory without diluting historical results");
   assert.ok(Number.isFinite(widest.avgVolumeUsdc) && widest.avgVolumeUsdc > 0,
-    "the rule must expose the average first-scraped traded volume");
+    "the rule must expose the average volume captured at resolution");
+  assert.ok(widest.avgVolumeUsdc >= 9000,
+    "resolved rows must prefer their resolution-time volume over the first scraped quote");
   const annualizedRule = report.parameterSummaries.find((row) => Number.isFinite(row.annualizedPnlPerTradeUsdc));
   assert.ok(annualizedRule,
     "a rule with a measured resolution horizon must expose comparable annualized P/L per fixed simulation trade");
 
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
-  assert.match(app, /key: "annualizedRoi",\s*direction: "desc"/);
-  assert.match(app, /calculationHeader\("annualizedRoi", "P\/L p\.a\."\)/);
-  assert.match(app, /signedPercent\(Number\(row\.annualizedRoi\)\)/);
+  assert.match(app, /key: "roi",\s*direction: "desc"/);
+  assert.match(app, /calculationHeader\("roi", "ROI"\)/);
+  assert.match(app, /signedPercent\(Number\(row\.roi\)\)/);
   assert.match(app, /calculationHeader\("avgVolumeUsdc", "Avg volume"\)/);
   assert.doesNotMatch(app, /calculationHeader\("resolved", "Resolved"\)/);
   assert.doesNotMatch(app, /calculationHeader\("minLiquidityUsdc", "Min liquidity"\)/);

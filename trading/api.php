@@ -428,6 +428,7 @@ function compact_market_observation(array $item): array
         'lastLiveMarketProbability',
         'daysToResolution',
         'liquidity',
+        'volumeUsdc',
         'volume24hr',
         'stakeUsdc',
         'executableShares',
@@ -450,7 +451,13 @@ function compact_market_observation(array $item): array
         'firstObservedAt',
         'firstMarketProbability',
         'firstLiquidity',
+        // Keep both volume snapshots: the discovery-time value explains the
+        // opportunity as it was found, while the resolved-time value feeds the
+        // historical performance reports.
+        'firstVolumeUsdc',
         'firstVolume24hr',
+        'resolvedVolumeUsdc',
+        'resolvedVolume24hr',
         'firstDaysToResolution',
         'firstFeeRate',
         'firstOutcome',

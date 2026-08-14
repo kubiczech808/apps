@@ -2060,6 +2060,8 @@ function resolvedMarketObservationFromMarket(item, market, checkedAt = nowIso())
   const resolvedPrice = outcomeIndex >= 0 ? prices[outcomeIndex] : null;
   const dateContext = marketDateContext({ ...market, resolutionEndDate: market.endDate || item.resolutionEndDate || item.endDate || null }, item.firstObservedAt || item.observedAt);
   const endDate = dateContext.endDate;
+  const resolvedVolumeUsdc = marketVolumeSnapshotUsdc(market);
+  const resolvedVolume24hr = Number(market.volume24hr);
   const ended = Boolean(market.closed) || market.acceptingOrders === false;
   if (!ended) {
     return {
@@ -2086,6 +2088,12 @@ function resolvedMarketObservationFromMarket(item, market, checkedAt = nowIso())
     marketClosed: typeof market.closed === "boolean" ? market.closed : item.marketClosed ?? null,
     acceptingOrders: typeof market.acceptingOrders === "boolean" ? market.acceptingOrders : item.acceptingOrders ?? null,
     closedTime: market.closedTime || item.closedTime || null,
+    // Preserve both measurement points. The first snapshot evaluates what was
+    // tradable on discovery; this one describes the market when it resolved.
+    resolvedVolumeUsdc: resolvedVolumeUsdc == null ? item.resolvedVolumeUsdc ?? null : resolvedVolumeUsdc,
+    resolvedVolume24hr: Number.isFinite(resolvedVolume24hr)
+      ? Number(resolvedVolume24hr.toFixed(2))
+      : item.resolvedVolume24hr ?? null,
     finalOutcomePrice: market.closed && Number.isFinite(resolvedPrice) ? Number(resolvedPrice.toFixed(4)) : item.finalOutcomePrice ?? null,
     resolutionStatus: market.closed && Number.isFinite(resolvedPrice) ? "FINAL_PRICE_AVAILABLE" : (market.acceptingOrders === false ? "NOT_ACCEPTING_ORDERS" : "PENDING_RESULT"),
     status: "RESOLVED",
@@ -4833,12 +4841,16 @@ function strategyEligibleCandidates(eligible, strategy) {
 // Traded volume, which is the figure Polymarket itself shows on a market ("$37.9K Vol.").
 // Gamma's `liquidity` is order-book depth and is a different number entirely -- comparing
 // the two is what made the dashboard look wrong against the site.
-function marketVolumeUsdc(market = {}) {
+function marketVolumeSnapshotUsdc(market = {}) {
   for (const candidate of [market.volumeNum, market.volume, market.volume24hr]) {
     const numeric = Number(candidate);
-    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    if (Number.isFinite(numeric) && numeric >= 0) return Number(numeric.toFixed(2));
   }
-  return 0;
+  return null;
+}
+
+function marketVolumeUsdc(market = {}) {
+  return marketVolumeSnapshotUsdc(market) ?? 0;
 }
 
 // The same figure off an already-stored row. `liquidity` is the last fallback so rows
@@ -8040,12 +8052,14 @@ function scrapedSimulationTags(item) {
   return scrapedSimulationTaxonomy(item, "firstPolymarketTags", "polymarketTags");
 }
 
-// The parameter report measures the traded volume that was available when the
-// opportunity was first scraped. It deliberately falls back for older rows that
-// predate firstVolumeUsdc, but never treats order-book liquidity as a volume value
-// unless that is the only historical figure retained.
+// The report measures volume at resolution for settled markets, rather than a quote
+// from discovery that could be materially older. Earlier archive rows have no second
+// snapshot, so they deliberately fall back to their first scraped volume.
 function scrapedSimulationVolumeUsdc(item = {}) {
-  for (const candidate of [
+  const resolvedCandidates = scrapedSimulationOutcome(item) != null
+    ? [item.resolvedVolumeUsdc, item.resolvedVolume24hr]
+    : [];
+  for (const candidate of [...resolvedCandidates,
     item.firstVolumeUsdc,
     item.volumeUsdc,
     item.firstVolume24hr,
@@ -8298,22 +8312,29 @@ function buildCalculationReport(state) {
       category: scrapedSimulationTaxonomyCoverage(trades, "categories"),
       tag: scrapedSimulationTaxonomyCoverage(trades, "tags"),
     },
-    examples: trades.slice(0, 80).map((trade) => ({
-      id: trade.item.id,
-      marketType: trade.marketType,
-      categories: trade.categories,
-      tags: trade.tags,
-      question: trade.item.question,
-      selectedOutcome: trade.item.firstOutcome || trade.item.outcome,
-      url: `https://polymarket.com/event/${trade.item.eventSlug || trade.item.slug || ""}`,
-      firstObservedAt: trade.firstObservedAt,
-      firstProbability: trade.entry,
-      firstVolumeUsdc: trade.volumeUsdc,
-      daysToResolution: trade.days,
-      finalOutcomePrice: trade.item.finalOutcomePrice ?? null,
-      resolvedOutcome: trade.outcome,
-      pnlUsdc: trade.pnl,
-    })),
+    examples: trades.slice(0, 80).map((trade) => {
+      const item = trade.item || {};
+      const firstVolume = Number(item.firstVolumeUsdc ?? item.volumeUsdc ?? item.firstVolume24hr ?? item.volume24hr);
+      const resolvedVolume = Number(item.resolvedVolumeUsdc ?? item.resolvedVolume24hr);
+      return {
+        id: item.id,
+        marketType: trade.marketType,
+        categories: trade.categories,
+        tags: trade.tags,
+        question: item.question,
+        selectedOutcome: item.firstOutcome || item.outcome,
+        url: `https://polymarket.com/event/${item.eventSlug || item.slug || ""}`,
+        firstObservedAt: trade.firstObservedAt,
+        firstProbability: trade.entry,
+        firstVolumeUsdc: Number.isFinite(firstVolume) ? Number(firstVolume.toFixed(2)) : null,
+        resolvedVolumeUsdc: Number.isFinite(resolvedVolume) ? Number(resolvedVolume.toFixed(2)) : null,
+        volumeUsdc: trade.volumeUsdc,
+        daysToResolution: trade.days,
+        finalOutcomePrice: item.finalOutcomePrice ?? null,
+        resolvedOutcome: trade.outcome,
+        pnlUsdc: trade.pnl,
+      };
+    }),
   };
 }
 
