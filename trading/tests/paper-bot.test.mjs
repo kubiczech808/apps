@@ -1638,7 +1638,7 @@ test("taxonomy performance: real Polymarket categories and tags stay separate", 
   }));
 
   const report = bot.buildCalculationReport(state);
-  assert.equal(report.taxonomyVersion, 3);
+  assert.equal(report.taxonomyVersion, 4);
   const categoryLabels = report.categorySummaries.map((row) => row.label);
   const tagLabels = report.tagSummaries.map((row) => row.label);
   assert.deepEqual(new Set(categoryLabels), new Set(["sports", "politics"]));
@@ -1893,8 +1893,8 @@ test("taxonomy performance: categories and tags render as separately sorted tabl
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
 
   assert.match(app, /taxonomySort: \{/);
-  assert.match(app, /category: \{ key: "pnl", direction: "desc" \}/);
-  assert.match(app, /tag: \{ key: "pnl", direction: "desc" \}/);
+  assert.match(app, /category: \{ key: "roi", direction: "desc" \}/);
+  assert.match(app, /tag: \{ key: "roi", direction: "desc" \}/);
   assert.match(app, /data-taxonomy-sort="\$\{kind\}" data-taxonomy-sort-key="\$\{key\}"/);
   assert.match(app, /const taxonomyButton = event\.target\.closest\("\[data-taxonomy-sort\]"\);/);
   assert.match(app, /const button = event\.target\.closest\("\[data-calculation-sort\]"\);/);
@@ -1905,14 +1905,14 @@ test("taxonomy performance: categories and tags render as separately sorted tabl
     "legacy inferred categories must stay hidden until a split report is generated");
   // Every column in both tables is sortable.
   const sorted = [...app.matchAll(/taxonomyHeader\(kind, "([a-zA-Z]+)"/g)].map((match) => match[1]);
-  for (const key of ["label", "openCount", "trades", "accuracy", "pnl",
+  for (const key of ["label", "minimumProbability", "openCount", "trades", "accuracy", "pnl",
     "roi", "avgProbability", "avgVolumeUsdc", "lastResolvedAt"]) {
     assert.ok(sorted.includes(key), `${key} column must be sortable`);
   }
   assert.doesNotMatch(app, /taxonomyHeader\(kind, "annualizedPnlPerTradeUsdc", "P\/L p\.a\."/);
   // The header count must match the colspan on the empty row, or the layout breaks.
-  assert.match(app, /colspan="10"/);
-  assert.equal(sorted.length, 10);
+  assert.match(app, /colspan="\$\{hasProbabilityBreakdown \? 11 : 10\}"/);
+  assert.equal(sorted.length, 11);
   assert.doesNotMatch(app, /data-category-kind/);
 
   // The report is stored in the core state file, so its row count must be bounded.
@@ -1969,7 +1969,7 @@ test("taxonomy performance: rows open the current scraped markets for that categ
     "tag deep-links must prefer the market's current Polymarket tag over an old snapshot");
   assert.match(app, /selectedStatuses\.includes\(scrapedObservationFilterStatus\(item\)\)/,
     "the scraped list must respect multiple selected statuses");
-  assert.match(app, /scrapedTaxonomyOpportunityPath\(\{ kind, label: row\.label \}\)/,
+  assert.match(app, /scrapedTaxonomyOpportunityPath\(\{ kind, label: row\.label \}, \{ statuses: \["SCRAPED", "RESOLVED"\], rule: scrapedTaxonomyProbabilityRule\(row\) \}\)/,
     "both category and tag performance rows must link to their respective scraped markets");
   assert.match(html, /data-scraped-market-type-filter/,
     "parameter-combination links must expose their market type in the scraped catalogue");
@@ -1979,10 +1979,12 @@ test("taxonomy performance: rows open the current scraped markets for that categ
     "the current-open parameter count must carry its filters to the scraped catalogue");
   assert.match(app, /function scrapedResolvedRuleOpportunityPath/,
     "the resolved trade count must carry the same parameter filters to the scraped catalogue");
-  assert.match(app, /scrapedTaxonomyOpenOpportunityPath\(kind, row\.label\)/,
+  assert.match(app, /scrapedTaxonomyOpenOpportunityPath\(kind, row\.label, row\)/,
     "taxonomy open counts must link to current rows for the exact taxonomy label");
-  assert.match(app, /scrapedTaxonomyResolvedOpportunityPath\(kind, row\.label\)/,
+  assert.match(app, /scrapedTaxonomyResolvedOpportunityPath\(kind, row\.label, row\)/,
     "taxonomy trade counts must link to resolved rows for the exact taxonomy label");
+  assert.match(app, /function scrapedTaxonomyProbabilityRule/,
+    "tag probability bands must keep their minimum probability when opening the catalogue");
 });
 
 test("calculation report: open counts mirror parameter rules and taxonomy", () => {
@@ -2021,6 +2023,15 @@ test("calculation report: open counts mirror parameter rules and taxonomy", () =
   assert.equal(blockedByThreshold?.openCount, 0, "a lower-probability open market must not leak into stricter rules");
   assert.equal(report.categorySummaries.find((row) => row.label === "sports")?.openCount, 1);
   assert.equal(report.tagSummaries.find((row) => row.label === "football")?.openCount, 1);
+  const football = report.tagSummaries.find((row) => row.label === "football");
+  assert.deepEqual(
+    football?.minimumProbabilitySummaries?.map((row) => row.minimumProbability),
+    [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+    "every tag needs the complete 0%-90% minimum probability ladder",
+  );
+  const footballAtNinety = football?.minimumProbabilitySummaries?.find((row) => row.minimumProbability === 0.9);
+  assert.equal(footballAtNinety?.openCount, 1, "the matching open market belongs to its 90% tag band");
+  assert.equal(footballAtNinety?.trades, 0, "the lower-probability resolved market must not leak into the 90% tag band");
 });
 
 test("live events: the scan asks Gamma only for what was measured to work", async () => {

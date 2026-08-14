@@ -1209,12 +1209,25 @@ function scrapedResolvedRuleOpportunityPath(row, taxonomyFilter = null) {
   });
 }
 
-function scrapedTaxonomyOpenOpportunityPath(kind, label) {
-  return scrapedTaxonomyOpportunityPath({ kind, label }, { statuses: ["SCRAPED"] });
+function scrapedTaxonomyProbabilityRule(row) {
+  const minimumProbability = Number(row?.minimumProbability);
+  return Number.isFinite(minimumProbability) && minimumProbability > 0
+    ? { probabilityFilter: minimumProbability }
+    : null;
 }
 
-function scrapedTaxonomyResolvedOpportunityPath(kind, label) {
-  return scrapedTaxonomyOpportunityPath({ kind, label }, { statuses: ["RESOLVED"] });
+function scrapedTaxonomyOpenOpportunityPath(kind, label, row = null) {
+  return scrapedTaxonomyOpportunityPath({ kind, label }, {
+    statuses: ["SCRAPED"],
+    rule: scrapedTaxonomyProbabilityRule(row),
+  });
+}
+
+function scrapedTaxonomyResolvedOpportunityPath(kind, label, row = null) {
+  return scrapedTaxonomyOpportunityPath({ kind, label }, {
+    statuses: ["RESOLVED"],
+    rule: scrapedTaxonomyProbabilityRule(row),
+  });
 }
 
 function currentRouteState() {
@@ -9001,6 +9014,7 @@ function taxonomySortValue(row, key) {
     return Number.isFinite(result) ? result : null;
   };
   if (key === "label") return String(row.label || "").toLowerCase();
+  if (key === "minimumProbability") return numeric(row.minimumProbability);
   if (key === "accuracy") return numeric(row.winRate);
   if (key === "stake") return numeric(row.resolvedStakeUsdc ?? row.stakeUsdc ?? 0);
   if (key === "pnl") return numeric(row.pnlUsdc ?? 0);
@@ -9021,7 +9035,22 @@ function taxonomyRows(report, kind) {
       : legacyRows;
   // Reports written before the taxonomy split stored both kinds in categorySummaries.
   // Rows written after it may omit kind because the parent collection is authoritative.
-  const rows = directRows.filter((row) => (
+  const expandedRows = kind === "tag"
+    ? directRows.flatMap((row) => {
+      const summaries = Array.isArray(row?.minimumProbabilitySummaries)
+        ? row.minimumProbabilitySummaries
+        // Older reports remain useful until the next hourly calculation completes.
+        : [{ minimumProbability: 0, ...row }];
+      return summaries.map((summary) => ({
+        ...row,
+        ...summary,
+        minimumProbability: Number.isFinite(Number(summary?.minimumProbability))
+          ? Number(summary.minimumProbability)
+          : 0,
+      }));
+    })
+    : directRows;
+  const rows = expandedRows.filter((row) => (
     (!row?.kind || String(row.kind) === kind)
     && (state.calculationOpenFilter !== "open" || Number(row?.openCount || 0) > 0)
     && calculationRowPassesFilters(row)
@@ -9057,6 +9086,7 @@ function taxonomyRows(report, kind) {
 function renderTaxonomyPerformanceTable(report, kind, title, note) {
   const rows = taxonomyRows(report, kind);
   const label = kind === "category" ? "Category" : "Tag";
+  const hasProbabilityBreakdown = kind === "tag";
   const coverage = report?.taxonomyCoverage?.[kind] || {};
   const total = Number(coverage.totalTrades || report?.resolvedSampleSize || report?.sampleSize || 0);
   const classified = Number(coverage.classifiedTrades || 0);
@@ -9073,6 +9103,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
           <thead>
             <tr>
               ${taxonomyHeader(kind, "label", label)}
+              ${hasProbabilityBreakdown ? taxonomyHeader(kind, "minimumProbability", "Min probability", "Minimum Polymarket probability captured when the opportunity was first scraped.") : ""}
               ${taxonomyHeader(kind, "openCount", "Open now", `Current scraped opportunities with this Polymarket ${kind}.`)}
               ${taxonomyHeader(kind, "trades", "Trades")}
               ${taxonomyHeader(kind, "accuracy", "Accuracy")}
@@ -9087,9 +9118,10 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
           <tbody>
             ${rows.length ? rows.map((row) => `
               <tr>
-                <td data-label="${label}"><strong><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpportunityPath({ kind, label: row.label }))}" title="Show current and resolved scraped opportunities in this ${kind}">${escapeHtml(row.label || "-")}</a></strong></td>
-                <td data-label="Open now"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpenOpportunityPath(kind, row.label))}" title="Show current open scraped opportunities in this ${kind}">${formatInteger(Number(row.openCount || 0))}</a></td>
-                <td data-label="Trades"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyResolvedOpportunityPath(kind, row.label))}" title="Show resolved scraped opportunities in this ${kind}">${formatInteger(Number(row.trades || 0))}</a></td>
+                <td data-label="${label}"><strong><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpportunityPath({ kind, label: row.label }, { statuses: ["SCRAPED", "RESOLVED"], rule: scrapedTaxonomyProbabilityRule(row) }))}" title="Show current and resolved scraped opportunities in this ${kind}">${escapeHtml(row.label || "-")}</a></strong></td>
+                ${hasProbabilityBreakdown ? `<td data-label="Min probability">${probability(Number(row.minimumProbability || 0))}</td>` : ""}
+                <td data-label="Open now"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyOpenOpportunityPath(kind, row.label, row))}" title="Show current open scraped opportunities in this ${kind}">${formatInteger(Number(row.openCount || 0))}</a></td>
+                <td data-label="Trades"><a class="taxonomy-opportunity-link" href="${escapeHtml(scrapedTaxonomyResolvedOpportunityPath(kind, row.label, row))}" title="Show resolved scraped opportunities in this ${kind}">${formatInteger(Number(row.trades || 0))}</a></td>
                 <td data-label="Accuracy">${Number(row.trades || 0) ? `${Number(row.wins || 0)} / ${Number(row.trades || 0)} (${probability(Number(row.winRate))})` : "-"}</td>
                 <td data-label="Invested">${money(Number(row.resolvedStakeUsdc || row.stakeUsdc || 0))}</td>
                 <td data-label="P/L" class="${pnlClass(Number(row.pnlUsdc || 0))}">${signedMoney(Number(row.pnlUsdc || 0))}</td>
@@ -9098,7 +9130,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
                 <td data-label="Avg volume">${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
                 <td data-label="Last resolved">${escapeHtml(row.lastResolvedAt ? formatDate(row.lastResolvedAt) : "-")}</td>
               </tr>
-            `).join("") : `<tr><td colspan="10">No ${kind} statistics are available yet.</td></tr>`}
+            `).join("") : `<tr><td colspan="${hasProbabilityBreakdown ? 11 : 10}">No ${kind} statistics are available yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -9196,7 +9228,7 @@ function renderCalculationReport() {
         report,
         "tag",
         "Tag performance",
-        "Each opportunity contributes to every explicit Polymarket tag captured when it was first scraped.",
+        "Each tag is broken down by the minimum Polymarket probability captured when the opportunity was first scraped (0%, 10%, ... 90%).",
       )}
     </div>
   `;

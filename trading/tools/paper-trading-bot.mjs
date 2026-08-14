@@ -301,6 +301,9 @@ const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND",
 // Keep the original broad thresholds and add the intermediate 5-point steps so
 // the parameter report can distinguish, for example, a 75% rule from 70%/80%.
 const REPORT_THRESHOLDS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
+// Tag performance needs a complete, stable probability ladder rather than the
+// strategy presets above: every retained tag is reported at 0%, 10%, ... 90%.
+const TAG_PERFORMANCE_THRESHOLDS = Array.from({ length: 10 }, (_unused, index) => index / 10);
 const SCRAPED_SIMULATION_MAX_DAYS = [1, 3, 7, 14, 30];
 // Each scraped market contributes to every real Polymarket category and tag it
 // carries. The two taxonomies stay separate; risk groups and inferred question tags
@@ -8195,8 +8198,8 @@ function scrapedSimulationTaxonomyRows(trades, openTrades, field, kind) {
   const add = (label, trade, { open = false } = {}) => {
     const key = String(label || "").trim().toLowerCase();
     if (!key) return;
-    if (!groups.has(key)) groups.set(key, { kind, label: key, trades: [], openCount: 0 });
-    if (open) groups.get(key).openCount += 1;
+    if (!groups.has(key)) groups.set(key, { kind, label: key, trades: [], openTrades: [] });
+    if (open) groups.get(key).openTrades.push(trade);
     else groups.get(key).trades.push(trade);
   };
   const addTradeToGroups = (trade, options = {}) => {
@@ -8213,11 +8216,23 @@ function scrapedSimulationTaxonomyRows(trades, openTrades, field, kind) {
   for (const trade of trades) addTradeToGroups(trade);
   for (const trade of openTrades) addTradeToGroups(trade, { open: true });
   const rows = [...groups.values()]
-    .map(({ trades: groupTrades, openCount = 0, ...group }) => ({
-      ...group,
-      openCount,
-      ...summarizeScrapedSimulationRows(groupTrades),
-    }))
+    .map(({ trades: groupTrades, openTrades: groupOpenTrades, ...group }) => {
+      const row = {
+        ...group,
+        openCount: groupOpenTrades.length,
+        ...summarizeScrapedSimulationRows(groupTrades),
+      };
+      // Keep the stored representation compact: the UI expands these summaries
+      // into one row per tag/probability threshold only when Tag performance is open.
+      if (kind === "tag") {
+        row.minimumProbabilitySummaries = TAG_PERFORMANCE_THRESHOLDS.map((minimumProbability) => ({
+          minimumProbability,
+          openCount: groupOpenTrades.filter((trade) => trade.entry >= minimumProbability).length,
+          ...summarizeScrapedSimulationRows(groupTrades.filter((trade) => trade.entry >= minimumProbability)),
+        }));
+      }
+      return row;
+    })
     // Rank by evidence first: a group with one resolved trade is noise next to one
     // with fifty, whatever its ROI looks like.
     .sort((a, b) => (b.resolved - a.resolved)
@@ -8262,7 +8277,7 @@ function buildCalculationReport(state) {
   return {
     id: `calculation-report-${generatedAt}`,
     generatedAt,
-    taxonomyVersion: 3,
+    taxonomyVersion: 4,
     simulationType: "fresh_scraped_opportunities",
     observedSampleSize: observedTrades.length,
     sampleSize: trades.length,
