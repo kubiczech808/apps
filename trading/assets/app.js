@@ -214,7 +214,6 @@ const els = {
   calculationReport: document.querySelector("[data-calculation-report]"),
   systemStatus: document.querySelector("[data-system-status]"),
   evaluationProbabilityFilter: document.querySelector("[data-evaluation-probability-filter]"),
-  evaluationProbabilityFilterLabel: document.querySelector("[data-evaluation-probability-filter-label]"),
   evaluationDaysFilter: document.querySelector("[data-evaluation-days-filter]"),
   evaluationDaysFilterLabel: document.querySelector("[data-evaluation-days-filter-label]"),
   tradabilityFilterControls: document.querySelectorAll("[data-tradability-filter]"),
@@ -3155,9 +3154,6 @@ function syncEvaluationProbabilityFilterControl() {
   state.evaluationProbabilityFilter = value;
   if (els.evaluationProbabilityFilter) {
     els.evaluationProbabilityFilter.value = String(Math.round(value * 100));
-  }
-  if (els.evaluationProbabilityFilterLabel) {
-    els.evaluationProbabilityFilterLabel.textContent = `>= ${probability(value)}`;
   }
 }
 
