@@ -225,6 +225,7 @@ const els = {
   scrapedTaxonomyFilter: document.querySelector("[data-scraped-taxonomy-filter]"),
   scrapedMarketTypeFilter: document.querySelector("[data-scraped-market-type-filter]"),
   scrapedStatusOptions: document.querySelectorAll("[data-scraped-status]"),
+  scrapedStatusLabels: document.querySelectorAll("[data-scraped-status-label]"),
   portfolioName: document.querySelector("[data-portfolio-name]"),
   portfolioNameLabel: document.querySelector("[data-portfolio-name-label]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
@@ -1074,7 +1075,7 @@ function scrapedTaxonomyRouteFilter(search = window.location.search) {
 }
 
 function normalizeScrapedStatuses(values, fallback = ["SCRAPED"]) {
-  const allowed = new Set(["SCRAPED", "RESOLVED", "ERROR"]);
+  const allowed = new Set(["SCRAPED", "RESOLVED"]);
   const source = Array.isArray(values) ? values : String(values || "").split(",");
   const normalized = [...new Set(source.map((value) => String(value || "").trim().toUpperCase()).filter((value) => allowed.has(value)))];
   return normalized.length ? normalized : [...fallback];
@@ -1339,25 +1340,17 @@ function syncOpportunityViewControls() {
     element.hidden = scanLog;
   });
   // Days left, net yield and liquidity all describe whether a market can be traded
-  // now. When the multi-select contains only settled/error rows, they can only ever
+  // now. When the multi-select contains only settled rows, they can only ever
   // empty the list, so hide them instead of letting a leftover value silently do so.
   els.tradabilityFilterControls.forEach((element) => {
     element.hidden = scanLog || tradabilityFiltersAreIrrelevant();
   });
   const scrapedCounts = scraped ? scrapedOpportunityStatusCounts() : null;
-  els.evaluationStatusButtons.forEach((button) => {
-    const status = button.dataset.evaluationStatus;
-    if (scraped) {
-      const labels = {
-        EVALUATED: `Scraped (${formatInteger(scrapedCounts.scraped)})`,
-        RESOLVED: `Resolved (${formatInteger(scrapedCounts.resolved)})`,
-        ERROR: `Error (${formatInteger(scrapedCounts.error)})`,
-        ALL: `All (${formatInteger(scrapedCounts.all)})`,
-      };
-      button.textContent = labels[status] || status;
-    } else {
-      button.textContent = status === "EVALUATED" ? "Evaluated" : status === "ALL" ? "All evaluated" : button.textContent;
-    }
+  els.scrapedStatusLabels.forEach((label) => {
+    if (!scrapedCounts) return;
+    const status = label.dataset.scrapedStatusLabel;
+    const count = status === "RESOLVED" ? scrapedCounts.resolved : scrapedCounts.scraped;
+    label.textContent = `${status === "RESOLVED" ? "Resolved" : "Scraped"} (${formatInteger(count) || count})`;
   });
   els.scrapedStatusOptions.forEach((input) => {
     input.checked = state.scrapedStatuses.includes(input.value);
@@ -7336,7 +7329,6 @@ function tradabilityFiltersAreIrrelevant() {
 
 function scrapedObservationStatus(item) {
   const status = String(item?.status || item?.selectionStatus || "").trim().toUpperCase();
-  if (status === "ERROR") return "ERROR";
   if (["RESOLVED", "CLOSED", "FINALIZED", "SETTLED"].includes(status) || evaluationEnded(item)) return "RESOLVED";
   return "SCRAPED";
 }
@@ -7347,7 +7339,6 @@ function scrapedObservationFilterStatus(item) {
 
 function scrapedObservationStatusClass(item) {
   const status = scrapedObservationStatus(item);
-  if (status === "ERROR") return "negative";
   return status === "SCRAPED" ? "positive" : "muted";
 }
 
@@ -7474,8 +7465,6 @@ function renderScrapedOpportunities() {
   const scan = scrapedMarketScan();
   const scrapedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "SCRAPED").length;
   const resolvedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "RESOLVED").length;
-  const errorCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "ERROR").length;
-
   if (els.evaluationFilterCount) {
     const filters = [
       probabilityFilter > 0 ? `market >= ${(probabilityFilter * 100).toFixed(0)}%` : "",
@@ -7484,7 +7473,7 @@ function renderScrapedOpportunities() {
       minLiquidity > 0 ? `liquidity >= ${money(minLiquidity)}` : "",
       marketTypeFilter !== "all" ? `market type = ${calculationMarketLabel(marketTypeFilter)}` : "",
       taxonomyFilter ? `${taxonomyFilter.kind} = ${taxonomyFilterDisplayLabel(taxonomyFilter.kind, taxonomyFilter.label)}` : "",
-      selectedStatuses.length < 3 ? `status = ${selectedStatuses.map((status) => status.toLowerCase()).join(" + ")}` : "",
+      selectedStatuses.length < 2 ? `status = ${selectedStatuses.map((status) => status.toLowerCase()).join(" + ")}` : "",
     ].filter(Boolean);
     els.evaluationFilterCount.textContent = filters.length
       ? `${formatInteger(filtered.length) || filtered.length} scraped / ${filters.join(" / ")}`
@@ -7497,7 +7486,6 @@ function renderScrapedOpportunities() {
       `${formatInteger(observations.length) || observations.length} retained`,
       `${formatInteger(scrapedCount) || scrapedCount} scraped`,
       `${formatInteger(resolvedCount) || resolvedCount} resolved`,
-      errorCount ? `${formatInteger(errorCount) || errorCount} error` : null,
       scan.lastBatchCount != null ? `${formatInteger(scan.lastBatchCount)} in last batch` : null,
       scan.lastPreferredCount != null ? `${formatInteger(scan.lastPreferredCount)} preferred outcomes` : null,
       scan.lastShortHorizonCount != null ? `${formatInteger(scan.lastShortHorizonCount)} <= ${formatInteger(scan.preferredMaxResolutionDays || DEFAULT_MAX_RESOLUTION_DAYS)}d` : null,
@@ -7581,13 +7569,12 @@ function scanLogCounts(value) {
 }
 
 function scrapedOpportunityStatusCounts() {
-  const counts = { all: 0, scraped: 0, resolved: 0, error: 0 };
+  const counts = { all: 0, scraped: 0, resolved: 0 };
   for (const item of scrapedMarketObservations()) {
     counts.all += 1;
     const status = scrapedObservationStatus(item);
     if (status === "SCRAPED") counts.scraped += 1;
     else if (status === "RESOLVED") counts.resolved += 1;
-    else if (status === "ERROR") counts.error += 1;
   }
   // The backend reports what it actually retains. Counting only the rows that
   // survived response truncation made the tab labels drift downwards as the

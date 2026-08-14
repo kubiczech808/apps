@@ -260,16 +260,9 @@
                   </label>
                   <fieldset class="scraped-status-control" data-scraped-only data-opportunity-filter>
                     <legend>Status</legend>
-                    <label><input type="checkbox" value="SCRAPED" data-scraped-status checked> Scraped</label>
-                    <label><input type="checkbox" value="RESOLVED" data-scraped-status> Resolved</label>
-                    <label><input type="checkbox" value="ERROR" data-scraped-status> Error</label>
+                    <label><input type="checkbox" value="SCRAPED" data-scraped-status checked> <span data-scraped-status-label="SCRAPED">Scraped</span></label>
+                    <label><input type="checkbox" value="RESOLVED" data-scraped-status> <span data-scraped-status-label="RESOLVED">Resolved</span></label>
                   </fieldset>
-                  <div class="segmented" data-evaluation-filter data-evaluation-only data-opportunity-filter>
-                    <button class="segment-button active" type="button" data-evaluation-status="EVALUATED">Evaluated</button>
-                    <button class="segment-button" type="button" data-evaluation-status="RESOLVED">Resolved</button>
-                    <button class="segment-button" type="button" data-evaluation-status="ERROR">Error</button>
-                    <button class="segment-button" type="button" data-evaluation-status="ALL">All evaluated</button>
-                  </div>
               </div>
               <div class="ledger" data-bot-evaluations></div>
             </div>

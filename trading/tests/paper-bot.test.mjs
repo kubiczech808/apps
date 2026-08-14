@@ -1891,7 +1891,15 @@ test("taxonomy performance: rows open the current scraped markets for that categ
   assert.match(html, /data-scraped-taxonomy-filter/);
   assert.match(html, /data-scraped-status/,
     "scraped and resolved observations must be selectable together");
+  assert.doesNotMatch(html, /data-evaluation-status/,
+    "the retired evaluation status tabs must not remain in the opportunity filters");
+  assert.doesNotMatch(html, /value="ERROR" data-scraped-status/,
+    "scraped opportunity status must not expose an error option");
   assert.match(app, /function scrapedTaxonomyOpportunityPath/);
+  assert.match(app, /new Set\(\["SCRAPED", "RESOLVED"\]\)/,
+    "the scraped catalogue must allow only scraped and resolved statuses");
+  assert.doesNotMatch(app, /scrapedCounts\.error/,
+    "scraped opportunity counts must not expose an error bucket");
   assert.match(app, /taxonomy=|SCRAPED_TAXONOMY_KIND_QUERY_PARAM/);
   assert.match(app, /SCRAPED_STATUS_QUERY_PARAM/,
     "taxonomy links must carry their explicit scraped/resolved status scope");
