@@ -7524,14 +7524,19 @@ function scrapedRefreshControl(item) {
   `;
 }
 
-function binaryMarketProbabilityCell(item) {
-  const hasYes = item?.binaryYesMarketProbability != null && item.binaryYesMarketProbability !== "";
-  const hasNo = item?.binaryNoMarketProbability != null && item.binaryNoMarketProbability !== "";
-  if (!hasYes && !hasNo) return "-";
-  const yes = Number(item.binaryYesMarketProbability);
-  const no = Number(item.binaryNoMarketProbability);
-  if (!Number.isFinite(yes) || !Number.isFinite(no)) return "-";
-  return `<span>Yes ${probability(yes)} / No ${probability(no)}</span>`;
+function finalOutcomeCell(item) {
+  const finalPrice = Number(item?.finalOutcomePrice);
+  if (!Number.isFinite(finalPrice)) return "-";
+  // finalOutcomePrice applies to the selected outcome shown in the Market column:
+  // 1 means the simulated bet won, 0 means it lost. Do not infer this from the
+  // original Yes/No book probabilities, which only describe the live quote.
+  if (finalPrice >= 0.995) {
+    return '<span class="positive"><strong>Won</strong><br><span>100.0%</span></span>';
+  }
+  if (finalPrice <= 0.005) {
+    return '<span class="negative"><strong>Lost</strong><br><span>0.0%</span></span>';
+  }
+  return `<span>Final ${probability(finalPrice)}</span>`;
 }
 
 function renderScrapedOpportunities() {
@@ -7624,7 +7629,7 @@ function renderScrapedOpportunities() {
             ${scrapedSortableHeader("observedAt", "Scraped")}
             ${scrapedSortableHeader("status", "Status")}
             ${scrapedSortableHeader("endDate", "End date")}
-            <th>Yes / No</th>
+            <th>Final</th>
             <th><span class="table-action-heading" title="Refresh this one scraped market from Polymarket">Update</span></th>
           </tr>
         </thead>
@@ -7641,7 +7646,7 @@ function renderScrapedOpportunities() {
               <td data-label="Scraped">${escapeHtml(formatDate(item.observedAt || item.marketDataUpdatedAt || ""))}</td>
               <td data-label="Status" class="${scrapedObservationStatusClass(item)}"><strong>${scrapedObservationStatus(item)}</strong></td>
               <td data-label="End date">${evaluationEndDateCell(item)}</td>
-              <td data-label="Yes / No">${binaryMarketProbabilityCell(item)}</td>
+              <td data-label="Final">${finalOutcomeCell(item)}</td>
               <td data-label="Update">${scrapedRefreshControl(item)}</td>
             </tr>
           `).join("")}

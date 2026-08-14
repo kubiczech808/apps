@@ -1763,6 +1763,43 @@ test("parameter combinations: a resolved row keeps its scrape-time entry price",
   assert.equal(bot.buildCalculationReport(neverLive).sampleSize, 0);
 });
 
+test("calculation report: a resolved loss is never counted as a win", () => {
+  const base = {
+    status: "RESOLVED",
+    selectionStatus: "RESOLVED",
+    marketClosed: true,
+    question: "Will the selected outcome resolve?",
+    firstOutcome: "Yes",
+    firstMarketProbability: 0.8,
+    lastLiveMarketProbability: 0.8,
+    marketProbability: 0.8,
+    firstFeeRate: 0,
+    firstDaysToResolution: 1,
+    daysToResolution: 1,
+    firstObservedAt: "2026-08-01T00:00:00.000Z",
+    observedAt: "2026-08-01T00:00:00.000Z",
+    resolvedAt: "2026-08-02T00:00:00.000Z",
+    endDate: "2026-08-02T00:00:00.000Z",
+  };
+  const state = bot.normalizeState({
+    marketObservations: [
+      { ...base, id: "won-selected-outcome", tokenId: "11111111111111111111", finalOutcomePrice: 1 },
+      { ...base, id: "lost-selected-outcome", tokenId: "22222222222222222222", finalOutcomePrice: 0 },
+    ],
+  });
+  const report = bot.buildCalculationReport(state);
+  const broadestRule = report.parameterSummaries.find((row) => (
+    row.marketType === "all" && row.threshold === 0.5 && row.maxResolutionDays === 30
+  ));
+
+  assert.equal(report.sampleSize, 2);
+  assert.deepEqual(report.examples.map((row) => row.resolvedOutcome).sort(), [0, 1]);
+  assert.equal(broadestRule.wins, 1);
+  assert.equal(broadestRule.losses, 1);
+  assert.ok(broadestRule.pnlUsdc < 0,
+    "the full lost stake must make a one-win/one-loss sample negative at an 80% entry price");
+});
+
 test("parameter combinations: every distinct rule uses the full resolved sample and reports average resolution volume", async () => {
   // A liquidity-floor loop made four copies of each probability/horizon rule. It did
   // not make the report more informative, and its ROI-first UI slice hid most of the
