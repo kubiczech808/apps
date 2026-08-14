@@ -7548,18 +7548,11 @@ function renderScrapedOpportunities() {
   const scrapedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "SCRAPED").length;
   const resolvedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "RESOLVED").length;
   if (els.evaluationFilterCount) {
-    const filters = [
-      probabilityFilter > 0 ? `market >= ${(probabilityFilter * 100).toFixed(0)}%` : "",
-      daysFilter != null ? `days <= ${daysFilter}` : "",
-      minNetYield > 0 ? `net yield >= ${(minNetYield * 100).toFixed(1)}%` : "",
-      minLiquidity > 0 ? `liquidity >= ${money(minLiquidity)}` : "",
-      marketTypeFilter !== "all" ? `market type = ${calculationMarketLabel(marketTypeFilter)}` : "",
-      taxonomyFilter ? `${taxonomyFilter.kind} = ${taxonomyFilterDisplayLabel(taxonomyFilter.kind, taxonomyFilter.label)}` : "",
-      selectedStatuses.length < 2 ? `status = ${selectedStatuses.map((status) => status.toLowerCase()).join(" + ")}` : "",
-    ].filter(Boolean);
-    els.evaluationFilterCount.textContent = filters.length
-      ? `${formatInteger(filtered.length) || filtered.length} scraped / ${filters.join(" / ")}`
-      : `${formatInteger(filtered.length) || filtered.length} scraped markets`;
+    const filteredCount = formatInteger(filtered.length) || filtered.length;
+    const visibleCount = formatInteger(visible.length) || visible.length;
+    els.evaluationFilterCount.textContent = filtered.length > visible.length
+      ? `${visibleCount} of ${filteredCount} shown`
+      : `${filteredCount} shown`;
   }
   if (els.evaluationSummary) {
     const lastScan = scan.lastScanAt ? formatDate(scan.lastScanAt) : "pending";
