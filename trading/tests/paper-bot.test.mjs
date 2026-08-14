@@ -1951,8 +1951,14 @@ test("taxonomy performance: rows open the current scraped markets for that categ
     "deep-linked scraped filters must survive the asynchronous catalogue load");
   assert.match(app, /const routeFilter = state\.scrapedRouteFilter/,
     "the rendered rows must use the route filter, not only the visible inputs");
-  assert.match(app, /routeFilter \? routeFilter\.marketType/,
-    "a marketType URL filter must be applied to the rows");
+  assert.match(app, /routeFilter\?\.marketTypeExplicit/,
+    "an implicit route status/taxonomy filter must not override the selected market-type filter");
+  assert.match(app, /marketTypeExplicit = params\.has\(SCRAPED_MARKET_TYPE_QUERY_PARAM\)/,
+    "only an explicit marketType URL parameter may control the market-type filter");
+  assert.match(app, /query\.set\(SCRAPED_MARKET_TYPE_QUERY_PARAM, state\.scrapedMarketTypeFilter\)/,
+    "changing the market-type filter must survive a reload through the URL");
+  assert.match(app, /routeFilter\?\.marketTypeExplicit[\s\S]*?routeFilter\.marketType/,
+    "an explicit marketType URL filter must be applied to the rows");
   assert.match(app, /resetScrapedOpportunityFilters\(\)/,
     "a settings deep-link must clear the previous exploration filters");
   assert.match(app, /setScrapedStatuses\(\["SCRAPED", "RESOLVED"\]/,

@@ -1129,15 +1129,17 @@ function scrapedRuleFiltersFromRoute(search = window.location.search) {
   const params = new URLSearchParams(search || "");
   const probabilityRaw = Number(params.get(SCRAPED_PROBABILITY_QUERY_PARAM));
   const daysRaw = params.get(SCRAPED_MAX_DAYS_QUERY_PARAM);
+  const marketTypeExplicit = params.has(SCRAPED_MARKET_TYPE_QUERY_PARAM);
   return {
     probabilityFilter: Number.isFinite(probabilityRaw)
       ? normalizeEvaluationProbabilityFilter(probabilityRaw / 100)
       : null,
     daysFilter: daysRaw == null ? null : normalizeEvaluationDaysFilter(daysRaw),
     marketType: normalizeScrapedMarketType(params.get(SCRAPED_MARKET_TYPE_QUERY_PARAM)),
+    marketTypeExplicit,
     hasRuleFilters: params.has(SCRAPED_PROBABILITY_QUERY_PARAM)
       || params.has(SCRAPED_MAX_DAYS_QUERY_PARAM)
-      || params.has(SCRAPED_MARKET_TYPE_QUERY_PARAM),
+      || marketTypeExplicit,
   };
 }
 
@@ -1518,6 +1520,7 @@ function applyScrapedTaxonomyRouteFilter(filter, statuses = ["SCRAPED"], ruleFil
     probabilityFilter: ruleFilters?.hasRuleFilters ? (ruleFilters.probabilityFilter ?? 0) : 0,
     daysFilter: ruleFilters?.hasRuleFilters ? ruleFilters.daysFilter : null,
     marketType: ruleFilters?.hasRuleFilters ? normalizeScrapedMarketType(ruleFilters.marketType) : "all",
+    marketTypeExplicit: Boolean(ruleFilters?.marketTypeExplicit),
   };
   setScrapedStatuses(normalizedStatuses, { render: false });
   if (ruleFilters?.hasRuleFilters) {
@@ -7491,7 +7494,12 @@ function renderScrapedOpportunities() {
   const minNetYield = currentEvaluationNetYieldFilter();
   const minLiquidity = currentEvaluationLiquidityFilter();
   const taxonomyFilter = normalizedScrapedTaxonomyFilter();
-  const marketTypeFilter = routeFilter ? routeFilter.marketType : normalizeScrapedMarketType(state.scrapedMarketTypeFilter);
+  // A route filter is also created for ordinary status/taxonomy routes. It must not
+  // override a market-type value selected in the live UI unless the URL explicitly
+  // carried marketType (for example a link from the parameter report).
+  const marketTypeFilter = routeFilter?.marketTypeExplicit
+    ? normalizeScrapedMarketType(routeFilter.marketType)
+    : normalizeScrapedMarketType(state.scrapedMarketTypeFilter);
   const selectedStatuses = routeFilter ? routeFilter.statuses : normalizeScrapedStatuses(state.scrapedStatuses);
   const statusFiltered = observations.filter((item) => selectedStatuses.includes(scrapedObservationFilterStatus(item)));
   const filtered = statusFiltered.filter((item) => {
@@ -9359,6 +9367,16 @@ els.scrapedMarketTypeFilter?.addEventListener("change", () => {
   state.scrapedMarketTypeFilter = normalizeScrapedMarketType(els.scrapedMarketTypeFilter.value);
   syncScrapedMarketTypeFilterControl();
   renderBotEvaluations();
+  if (state.page === "opportunities" && state.opportunityView === "scraped") {
+    const query = new URLSearchParams(window.location.search);
+    if (state.scrapedMarketTypeFilter === "all") query.delete(SCRAPED_MARKET_TYPE_QUERY_PARAM);
+    else query.set(SCRAPED_MARKET_TYPE_QUERY_PARAM, state.scrapedMarketTypeFilter);
+    const targetPath = `${opportunityRoutePath("scraped")}${query.toString() ? `?${query.toString()}` : ""}`;
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (currentPath !== targetPath) {
+      window.history.pushState({ page: "opportunities", opportunityView: "scraped" }, "", targetPath);
+    }
+  }
 });
 
 els.portfolioName?.addEventListener("input", () => {
