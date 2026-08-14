@@ -121,6 +121,11 @@ const state = {
   // portfolio changes -- a poll refresh must not pull back what has been opened up.
   candidateVisibleCount: 0,
   candidateVisibleMode: "",
+  // The scraped catalogue can contain thousands of rows. Keep it progressively
+  // renderable without pretending that the first screenful is the whole result.
+  scrapedVisibleCount: 0,
+  scrapedVisibleScope: "",
+  scrapedFilteredCount: 0,
   userNavRefreshTimer: null,
   openedOpportunityKey: "",
 };
@@ -7539,6 +7544,27 @@ function finalOutcomeCell(item) {
   return `<span>Final ${probability(finalPrice)}</span>`;
 }
 
+const SCRAPED_PAGE_SIZE = 250;
+
+function scrapedVisibleCount(scope = "") {
+  if (state.scrapedVisibleScope !== scope) {
+    state.scrapedVisibleScope = scope;
+    state.scrapedVisibleCount = SCRAPED_PAGE_SIZE;
+  }
+  return Math.max(SCRAPED_PAGE_SIZE, Number(state.scrapedVisibleCount) || SCRAPED_PAGE_SIZE);
+}
+
+function showMoreScrapedOpportunities() {
+  if (scrapedVisibleCount(state.scrapedVisibleScope) >= Number(state.scrapedFilteredCount || 0)) return false;
+  const scroller = els.botEvaluations?.querySelector(".ledger-scroll");
+  const offset = scroller ? scroller.scrollTop : 0;
+  state.scrapedVisibleCount = scrapedVisibleCount(state.scrapedVisibleScope) + SCRAPED_PAGE_SIZE;
+  renderScrapedOpportunities();
+  const nextScroller = els.botEvaluations?.querySelector(".ledger-scroll");
+  if (nextScroller) nextScroller.scrollTop = offset;
+  return true;
+}
+
 function renderScrapedOpportunities() {
   syncScrapedTaxonomyFilterControl();
   const observations = scrapedMarketObservations();
@@ -7547,7 +7573,10 @@ function renderScrapedOpportunities() {
   const daysFilter = routeFilter ? routeFilter.daysFilter : currentEvaluationDaysFilter();
   const minNetYield = currentEvaluationNetYieldFilter();
   const minLiquidity = currentEvaluationLiquidityFilter();
-  const taxonomyFilter = normalizedScrapedTaxonomyFilter();
+  // `normalizedScrapedTaxonomyFilter()` only normalizes the value it receives.
+  // Pass the stored route/UI selection explicitly; omitting it made every deep
+  // linked taxonomy page quietly behave as if it had selected All.
+  const taxonomyFilter = normalizedScrapedTaxonomyFilter(state.scrapedTaxonomyFilter);
   // A route filter is also created for ordinary status/taxonomy routes. It must not
   // override a market-type value selected in the live UI unless the URL explicitly
   // carried marketType (for example a link from the parameter report).
@@ -7573,7 +7602,21 @@ function renderScrapedOpportunities() {
     const liquidity = rowVolumeUsdc(item);
     return minLiquidity <= 0 || (Number.isFinite(liquidity) && liquidity >= minLiquidity);
   });
-  const visible = sortedScrapedObservations(filtered).slice(0, 250);
+  const scope = JSON.stringify({
+    statuses: selectedStatuses,
+    taxonomy: taxonomyFilter,
+    probabilityFilter,
+    daysFilter,
+    minNetYield,
+    minLiquidity,
+    marketTypeFilter,
+    sort: state.scrapedSort,
+  });
+  const visibleLimit = scrapedVisibleCount(scope);
+  const sorted = sortedScrapedObservations(filtered);
+  const visible = sorted.slice(0, visibleLimit);
+  const remaining = Math.max(0, sorted.length - visible.length);
+  state.scrapedFilteredCount = sorted.length;
   const scan = scrapedMarketScan();
   const scrapedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "SCRAPED").length;
   const resolvedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "RESOLVED").length;
@@ -7653,6 +7696,7 @@ function renderScrapedOpportunities() {
         </tbody>
       </table>
     </div>
+    ${remaining ? `<div class="table-load-more"><button class="execution-button" type="button" data-scraped-load-more>Load more (${formatInteger(remaining) || remaining} remaining)</button></div>` : ""}
   `;
 }
 
@@ -9765,6 +9809,12 @@ els.crossLiveRisk?.addEventListener("change", () => {
 });
 
 els.botEvaluations?.addEventListener("click", (event) => {
+  const loadMoreScraped = event.target.closest("[data-scraped-load-more]");
+  if (loadMoreScraped) {
+    event.preventDefault();
+    showMoreScrapedOpportunities();
+    return;
+  }
   const loadMoreScrapeHistory = event.target.closest("[data-scrape-history-load-more]");
   if (loadMoreScrapeHistory) {
     loadScrapeRunHistory();

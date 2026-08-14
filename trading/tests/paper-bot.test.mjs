@@ -2008,6 +2008,14 @@ test("taxonomy performance: rows open the current scraped markets for that categ
     "a taxonomy deep-link must include both current and resolved markets");
   assert.match(app, /scrapedTaxonomyFilterMatches\(item, taxonomyFilter\)/,
     "the selected taxonomy must be applied to the scraped list itself");
+  assert.match(app, /normalizedScrapedTaxonomyFilter\(state\.scrapedTaxonomyFilter\)/,
+    "the renderer must pass the saved taxonomy selection into the row filter");
+  assert.match(app, /const SCRAPED_PAGE_SIZE = 250;/,
+    "the scraped catalogue must page rather than silently truncate its result set");
+  assert.match(app, /function showMoreScrapedOpportunities\(\)/,
+    "the scraped catalogue must expose a progressive load-more action");
+  assert.match(app, /data-scraped-load-more/,
+    "the rendered scraped table must offer remaining rows to the user");
   assert.match(app, /\["polymarketTags", "firstPolymarketTags", "tags", "firstTags"\]/,
     "tag deep-links must prefer the market's current Polymarket tag over an old snapshot");
   assert.match(app, /selectedStatuses\.includes\(scrapedObservationFilterStatus\(item\)\)/,
