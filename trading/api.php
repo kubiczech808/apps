@@ -698,6 +698,7 @@ function default_portfolio_config(): array
                 'marketType' => 'all',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
+                'autoRotatePositions' => true,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -714,6 +715,7 @@ function default_portfolio_config(): array
                 'marketType' => 'all',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
+                'autoRotatePositions' => true,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -730,6 +732,7 @@ function default_portfolio_config(): array
                 'marketType' => 'multi',
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
+                'autoRotatePositions' => true,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -751,6 +754,9 @@ function default_portfolio_config(): array
                 'marketType' => 'all',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'polymarket',
+                // Equal remains conservative by default, but the same On/Off control
+                // can explicitly enable its paper rotation review.
+                'autoRotatePositions' => false,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -769,6 +775,7 @@ function default_portfolio_config(): array
             'marketType' => 'all',
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'ai',
+            'autoRotatePositions' => true,
             'excludedCandidateTokenIds' => [],
             'includeOnlyMarketTags' => [],
             'excludedMarketTags' => [],
@@ -792,6 +799,7 @@ function default_portfolio_config(): array
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'polymarket',
             'automationEnabled' => false,
+            'autoRotatePositions' => false,
             // Sports and esports are where the short-dated, high-probability fixtures
             // this strategy rests bids against actually live. Empty means every tag.
             'allowedMarketTags' => ['sports', 'esports'],
@@ -1085,6 +1093,9 @@ function normalize_strategy_config(array $input, array $defaults): array
         // Absent means on, so a portfolio saved before this existed keeps trading
         // rather than silently stopping.
         'automationEnabled' => (bool) ($input['automationEnabled'] ?? $defaults['automationEnabled'] ?? true),
+        // Missing means the portfolio keeps its established behavior. Equal is the
+        // only default-off portfolio; all other existing portfolios keep rotation on.
+        'autoRotatePositions' => (bool) ($input['autoRotatePositions'] ?? $defaults['autoRotatePositions'] ?? true),
         'marketType' => $marketType,
         // Kept while older workflows are still in circulation. The three-value
         // marketType field above is the source of truth.

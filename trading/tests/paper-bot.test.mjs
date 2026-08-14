@@ -38,6 +38,22 @@ test("equal paper portfolio: its independent $100 account is registered with a s
   assert.equal(equal.portfolio.freeCapitalUsdc, 100);
 });
 
+test("automatic rotation: each portfolio receives its saved On/Off setting", () => {
+  assert.equal(bot.PAPER_STRATEGIES.conservative.allowRotation, true);
+  assert.equal(bot.PAPER_STRATEGIES.equal.allowRotation, false, "Equal remains disabled until explicitly enabled");
+
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const paperWorkflow = readFileSync(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8");
+  const liveWorkflow = readFileSync(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8");
+  const fixedWorkflow = readFileSync(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8");
+
+  assert.match(app, /data-auto-rotate-positions/);
+  assert.match(app, /autoRotatePositions: value/);
+  assert.match(paperWorkflow, /_AUTO_ROTATE/);
+  assert.match(liveWorkflow, /"LIVE_AUTO_ROTATE": str\(bool\(live\.get\("autoRotatePositions", True\)\)\)\.lower\(\)/);
+  assert.match(fixedWorkflow, /"LIVE_AUTO_ROTATE": str\(bool\(cfg\.get\("autoRotatePositions", False\)\)\)\.lower\(\)/);
+});
+
 test("paper reset: archives only More probable and prevents stale trades from returning", () => {
   const state = bot.normalizeState({
     generatedAt: "2026-08-13T09:00:00.000Z",

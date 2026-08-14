@@ -187,6 +187,8 @@ jobs:
               "LIVE_EXECUTION_CRON_MINUTES": live.get("executionCronMinutes"),
               # Default on: a portfolio that never stored the field must keep trading.
               "LIVE_AUTOMATION_ENABLED": str(bool(live.get("automationEnabled", True))).lower(),
+              # Keep the long-standing live behavior when the setting is absent.
+              "LIVE_AUTO_ROTATE": str(bool(live.get("autoRotatePositions", True))).lower(),
               "LIVE_EXCLUDED_CANDIDATE_TOKEN_IDS": ",".join(str(token) for token in (live.get("excludedCandidateTokenIds") or []) if str(token).isdigit()),
               # Whole tags this portfolio refuses. Empty excludes nothing, which is what an
               # unset variable means too, so the loop skipping it clears the setting rather

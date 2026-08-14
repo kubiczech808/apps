@@ -257,6 +257,8 @@ const els = {
   minNetYieldLabel: document.querySelector("[data-min-net-yield-label]"),
   executionTrigger: document.querySelector("[data-execution-trigger]"),
   executionTriggerLabel: document.querySelector("[data-execution-trigger-label]"),
+  autoRotatePositions: document.querySelector("[data-auto-rotate-positions]"),
+  autoRotatePositionsLabel: document.querySelector("[data-auto-rotate-positions-label]"),
   executionCronRow: document.querySelector("[data-execution-cron-row]"),
   executionCronMinutes: document.querySelector("[data-execution-cron-minutes]"),
   executionCronMinutesLabel: document.querySelector("[data-execution-cron-minutes-label]"),
@@ -533,6 +535,7 @@ function defaultPortfolioConfig() {
         executionTrigger: "cron",
         executionCronMinutes: 60,
         automationEnabled: true,
+        autoRotatePositions: true,
         marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -549,6 +552,7 @@ function defaultPortfolioConfig() {
         executionTrigger: "cron",
         executionCronMinutes: 60,
         automationEnabled: true,
+        autoRotatePositions: true,
         marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -565,6 +569,7 @@ function defaultPortfolioConfig() {
         executionTrigger: "cron",
         executionCronMinutes: 60,
         automationEnabled: true,
+        autoRotatePositions: true,
         marketType: "multi",
         requireMostProbableOutcome: true,
         probabilitySource: "polymarket",
@@ -581,6 +586,7 @@ function defaultPortfolioConfig() {
         executionTrigger: "after_scrape",
         executionCronMinutes: 0,
         automationEnabled: true,
+        autoRotatePositions: false,
         marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -598,6 +604,7 @@ function defaultPortfolioConfig() {
       executionTrigger: "cron",
       executionCronMinutes: 60,
       automationEnabled: true,
+      autoRotatePositions: true,
       useLimitOrders: true,
       marketType: "all",
       requireMostProbableOutcome: false,
@@ -621,6 +628,7 @@ function defaultPortfolioConfig() {
       executionTrigger: "cron",
       executionCronMinutes: 60,
       automationEnabled: false,
+      autoRotatePositions: false,
       useLimitOrders: true,
       marketType: "all",
       requireMostProbableOutcome: false,
@@ -749,6 +757,10 @@ function marketExcludedByTags(item, excludedTags = []) {
 
 function automationIsEnabled(config = {}) {
   return config.automationEnabled !== false;
+}
+
+function automaticRotationIsEnabled(config = {}) {
+  return config.autoRotatePositions !== false;
 }
 
 function probabilitySourceLabel(value) {
@@ -3598,6 +3610,9 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   if (els.executionTriggerLabel) {
     els.executionTriggerLabel.textContent = executionTriggerLabel(effectiveTrigger);
   }
+  const autoRotatePositions = automaticRotationIsEnabled(config);
+  if (els.autoRotatePositions) els.autoRotatePositions.checked = autoRotatePositions;
+  if (els.autoRotatePositionsLabel) els.autoRotatePositionsLabel.textContent = autoRotatePositions ? "On" : "Off";
   const cronMinutes = normalizeExecutionCronMinutes(config.executionCronMinutes);
   if (els.executionCronMinutes) els.executionCronMinutes.value = String(cronMinutes);
   if (els.executionCronMinutesLabel) els.executionCronMinutesLabel.textContent = executionCronMinutesLabel(cronMinutes);
@@ -5723,9 +5738,9 @@ function portfolioRuleRows(portfolio = {}) {
   ];
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Volume filter", `>= ${money(minLiquidityUsdc)}`]);
   rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
+  rows.push(["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"]);
   if (portfolio.id === "equal") {
     rows.push(["Risk protection", "Paper synthetic stop: planned maximum loss equals net potential win"]);
-    rows.push(["Rotation", "Disabled for this proof of concept"]);
   }
   // Only when something is actually excluded: a row reading "none" on every portfolio
   // that never touched the setting is noise in a list meant to be read at a glance.
@@ -5774,6 +5789,7 @@ function livePortfolioRuleRows() {
     ...(includeOnlyTags.length ? [["Included tags", includeOnlyTags.join(", ")]] : (excludedTags.length ? [["Excluded tags", excludedTags.join(", ")]] : [])),
     ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
+    ["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"],
     ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
     ["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "Block correlated exposure" : "Allow correlated exposure"],
   ];
@@ -9813,6 +9829,15 @@ els.portfolioMarketType?.addEventListener("change", () => {
   const updates = { marketType, requireMostProbableOutcome: marketType === "multi" };
   if (updateParameterDraft(updates)) return;
   updatePortfolioConfigForMode(state.mode, updates);
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.autoRotatePositions?.addEventListener("change", () => {
+  const value = Boolean(els.autoRotatePositions.checked);
+  if (updateParameterDraft({ autoRotatePositions: value })) return;
+  updatePortfolioConfigForMode(state.mode, { autoRotatePositions: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

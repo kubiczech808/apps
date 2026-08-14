@@ -311,6 +311,9 @@ jobs:
               emit(f"{prefix}_EXECUTION_CRON_MINUTES", row.get("executionCronMinutes"))
               # Default on: a portfolio saved before this switch existed must keep trading.
               emit(f"{prefix}_AUTOMATION_ENABLED", str(bool(row.get("automationEnabled", True))).lower())
+              # Rotation is independently configurable. Equal defaults off; every
+              # existing paper portfolio keeps its prior automatic behavior.
+              emit(f"{prefix}_AUTO_ROTATE", str(bool(row.get("autoRotatePositions", strategy != "equal"))).lower())
               emit(f"{prefix}_MARKET_TYPE", row.get("marketType"))
               emit(f"{prefix}_REQUIRE_MOST_PROBABLE", str(bool(row.get("requireMostProbableOutcome"))).lower())
               emit(f"{prefix}_PROBABILITY_SOURCE", row.get("probabilitySource"))
