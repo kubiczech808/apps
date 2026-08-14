@@ -4631,7 +4631,13 @@ function scrapedMarketStateIsLoaded() {
 
 function scrapedMarketObservations() {
   if (state.scrapedMarketStateLoaded) return state.scrapedMarketObservations;
-  return Array.isArray(state.botState?.marketObservations) ? state.botState.marketObservations : [];
+  const observations = Array.isArray(state.botState?.marketObservations) ? state.botState.marketObservations : [];
+  return observations.filter((item) => !scrapedObservationIsError(item));
+}
+
+function scrapedObservationIsError(item) {
+  const status = String(item?.status || item?.selectionStatus || "").trim().toUpperCase();
+  return status === "ERROR";
 }
 
 function scrapedMarketScan() {
@@ -4647,7 +4653,7 @@ function storeScrapedMarketState(scrapedState = {}, summary = "scraped") {
     state.scrapedMarketStateError = "Scraped state response did not include market observations.";
     return false;
   }
-  state.scrapedMarketObservations = scrapedState.marketObservations;
+  state.scrapedMarketObservations = scrapedState.marketObservations.filter((item) => !scrapedObservationIsError(item));
   // Retained totals, when the backend reports them, so the tab counts describe the
   // archive rather than the slice that fitted in this response.
   state.scrapedObservationTotals = scrapedState.observationTotals
