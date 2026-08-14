@@ -2379,8 +2379,11 @@ test("market metric: the app filters and shows traded volume, not order-book liq
   // The tables and the filter control say volume, and read it.
   assert.ok(!/<th>Liquidity<\/th>/.test(app), "no table may still head a column Liquidity");
   assert.ok(!/data-label="Liquidity"/.test(app), "no cell may still be labelled Liquidity");
-  assert.match(app, /data-label="Volume">\$\{money\(rowVolumeUsdc\(item\)\)\}/);
+  assert.match(app, /data-label="Volume">\$\{scrapedVolumeCell\(item\)\}/);
   assert.match(app, /scrapedSortableHeader\("liquidity", "Volume"\)/);
+  assert.doesNotMatch(app, /scrapedSortableHeader\("riskReward", "R\/R"\)/);
+  assert.doesNotMatch(app, /scrapedSortableHeader\("volume24hr", "24h volume"\)/);
+  assert.doesNotMatch(app, /scrapedSortableHeader\("outcomeCount", "Outcomes"\)/);
   assert.match(app, /\["Volume filter",/);
   assert.match(html, /<span>Probability &gt;=<\/span>/);
   assert.match(html, /<span>Days left max &lt;=<\/span>/);

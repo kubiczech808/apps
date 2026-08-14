@@ -2133,6 +2133,8 @@ function evaluationResolvedByMarket(item) {
 }
 
 function binaryOutcomeQuotesAreBothZero(item) {
+  // A multi-outcome event can still be represented by individual Yes/No CLOB books.
+  // This count is only a robust settlement fallback, never the portfolio type selector.
   const hasBinaryMetadata = Boolean(item?.binaryYesTokenId || item?.binaryNoTokenId)
     || String(item?.marketType || "").toLowerCase() === "binary"
     || Number(item?.outcomeCount) === 2;
@@ -7454,12 +7456,9 @@ function scrapedSortValue(item, key) {
   if (key === "netGainIfWinUsdc") return gainIfWin(item);
   if (key === "netYield") return netYield(item);
   if (key === "potentialAnnualizedReturn") return potentialAnnualizedReturn(item);
-  if (key === "riskReward") return evaluationRiskReward(item);
   if (key === "marketAnnualizedReturn") return marketAnnualizedExpectedReturn(item);
   if (key === "marketExpectedValueUsdc") return marketExpectedValueFromQuote(item);
   if (key === "liquidity") return rowVolumeUsdc(item);
-  if (key === "volume24hr") return Number(item.volume24hr);
-  if (key === "outcomeCount") return Number(item.outcomeCount);
   return "";
 }
 
@@ -7621,14 +7620,11 @@ function renderScrapedOpportunities() {
             ${scrapedSortableHeader("netGainIfWinUsdc", "Win @ $5")}
             ${scrapedSortableHeader("netYield", "Net yield %")}
             ${scrapedSortableHeader("potentialAnnualizedReturn", "Potential p.a.")}
-            ${scrapedSortableHeader("riskReward", "R/R")}
             ${scrapedSortableHeader("liquidity", "Volume")}
             ${scrapedSortableHeader("observedAt", "Scraped")}
             ${scrapedSortableHeader("status", "Status")}
             ${scrapedSortableHeader("endDate", "End date")}
             <th>Yes / No</th>
-            ${scrapedSortableHeader("volume24hr", "24h volume")}
-            ${scrapedSortableHeader("outcomeCount", "Outcomes")}
             <th><span class="table-action-heading" title="Refresh this one scraped market from Polymarket">Update</span></th>
           </tr>
         </thead>
@@ -7641,14 +7637,11 @@ function renderScrapedOpportunities() {
               <td data-label="Win @ $5">${gainCell(item)}</td>
               <td data-label="Net yield %">${netYieldCell(item)}</td>
               <td data-label="Potential p.a."><span class="${pnlClass(potentialAnnualizedReturn(item))}">${signedPercent(potentialAnnualizedReturn(item))}</span></td>
-              <td data-label="R/R">${evaluationRiskRewardCell(item)}</td>
               <td data-label="Volume">${scrapedVolumeCell(item)}</td>
               <td data-label="Scraped">${escapeHtml(formatDate(item.observedAt || item.marketDataUpdatedAt || ""))}</td>
               <td data-label="Status" class="${scrapedObservationStatusClass(item)}"><strong>${scrapedObservationStatus(item)}</strong></td>
               <td data-label="End date">${evaluationEndDateCell(item)}</td>
               <td data-label="Yes / No">${binaryMarketProbabilityCell(item)}</td>
-              <td data-label="24h volume">${money(Number(item.volume24hr || 0))}</td>
-              <td data-label="Outcomes">${formatInteger(Number(item.outcomeCount || 0)) || "-"}</td>
               <td data-label="Update">${scrapedRefreshControl(item)}</td>
             </tr>
           `).join("")}

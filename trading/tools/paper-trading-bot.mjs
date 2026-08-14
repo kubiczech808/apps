@@ -6876,6 +6876,9 @@ function finalOutcomePriceValue(value) {
 }
 
 function binaryOutcomeQuotesAreBothZero(item = {}) {
+  // Each CLOB market has a two-sided book, even when its parent Polymarket event is
+  // semantically multi-outcome. `outcomeCount` is therefore only a legacy settlement
+  // fallback here; portfolio market type is classified separately by reportMarketType().
   const hasBinaryMetadata = Boolean(item?.binaryYesTokenId || item?.binaryNoTokenId)
     || String(item?.marketType || "").toLowerCase() === "binary"
     || Number(item?.outcomeCount) === 2;
