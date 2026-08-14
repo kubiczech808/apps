@@ -93,6 +93,10 @@ const state = {
   calculationSource: "all",
   calculationMarket: "all",
   calculationOpenFilter: "all",
+  calculationTab: "parameters",
+  calculationMinOpen: "",
+  calculationMinTrades: "",
+  calculationMinVolume: "",
   calculationSort: {
     key: "roi",
     direction: "desc",
@@ -126,6 +130,10 @@ const EVALUATION_PROBABILITY_FILTER_STORAGE_KEY = "tradingEvaluationProbabilityF
 const EVALUATION_DAYS_FILTER_STORAGE_KEY = "tradingEvaluationDaysFilter";
 const EVALUATION_NET_YIELD_FILTER_STORAGE_KEY = "tradingEvaluationNetYieldFilter";
 const EVALUATION_LIQUIDITY_FILTER_STORAGE_KEY = "tradingEvaluationLiquidityFilter";
+const CALCULATION_TAB_STORAGE_KEY = "tradingCalculationTab";
+const CALCULATION_MIN_OPEN_STORAGE_KEY = "tradingCalculationMinOpen";
+const CALCULATION_MIN_TRADES_STORAGE_KEY = "tradingCalculationMinTrades";
+const CALCULATION_MIN_VOLUME_STORAGE_KEY = "tradingCalculationMinVolume";
 const SCRAPED_TAXONOMY_KIND_QUERY_PARAM = "taxonomy";
 const SCRAPED_TAXONOMY_VALUE_QUERY_PARAM = "taxonomyValue";
 const SCRAPED_STATUS_QUERY_PARAM = "statuses";
@@ -213,6 +221,8 @@ const els = {
   calculationSourceButtons: document.querySelectorAll("[data-calculation-source]"),
   calculationMarketButtons: document.querySelectorAll("[data-calculation-market]"),
   calculationOpenButtons: document.querySelectorAll("[data-calculation-open]"),
+  calculationTabButtons: document.querySelectorAll("[data-calculation-tab]"),
+  calculationMinFilters: document.querySelectorAll("[data-calculation-min-filter]"),
   calculationReport: document.querySelector("[data-calculation-report]"),
   systemStatus: document.querySelector("[data-system-status]"),
   evaluationProbabilityFilter: document.querySelector("[data-evaluation-probability-filter]"),
@@ -8813,6 +8823,84 @@ function renderRunLog() {
   `;
 }
 
+function normalizeCalculationMinimum(value) {
+  const raw = String(value ?? "").trim().replace(",", ".");
+  if (!raw) return "";
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) && numeric >= 0 ? String(numeric) : "";
+}
+
+function storedCalculationPreference(key) {
+  try {
+    return localStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+function saveCalculationPreference(key, value) {
+  try {
+    const normalized = normalizeCalculationMinimum(value);
+    if (normalized) localStorage.setItem(key, normalized);
+    else localStorage.removeItem(key);
+  } catch {
+    // The filter remains active for this page load if local storage is unavailable.
+  }
+}
+
+function storedCalculationTab() {
+  try {
+    const value = localStorage.getItem(CALCULATION_TAB_STORAGE_KEY);
+    return ["parameters", "category", "tag"].includes(value) ? value : "parameters";
+  } catch {
+    return "parameters";
+  }
+}
+
+function saveCalculationTab(value) {
+  try {
+    localStorage.setItem(CALCULATION_TAB_STORAGE_KEY, ["parameters", "category", "tag"].includes(value) ? value : "parameters");
+  } catch {
+    // The selected tab remains active for this page load if local storage is unavailable.
+  }
+}
+
+function calculationMinimumValue(value) {
+  const normalized = normalizeCalculationMinimum(value);
+  if (!normalized) return null;
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function calculationRowPassesFilters(row) {
+  const minOpen = calculationMinimumValue(state.calculationMinOpen);
+  const minTrades = calculationMinimumValue(state.calculationMinTrades);
+  const minVolume = calculationMinimumValue(state.calculationMinVolume);
+  const openCount = Number(row?.openCount || 0);
+  const trades = Number(row?.trades || 0);
+  const volume = Number(row?.avgVolumeUsdc ?? row?.avgLiquidity ?? 0);
+  return (minOpen == null || openCount >= minOpen)
+    && (minTrades == null || trades >= minTrades)
+    && (minVolume == null || (Number.isFinite(volume) && volume >= minVolume));
+}
+
+function syncCalculationControls() {
+  document.querySelectorAll("[data-calculation-tab]").forEach((button) => {
+    const active = button.dataset.calculationTab === state.calculationTab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  els.calculationMinFilters.forEach((input) => {
+    const key = input.dataset.calculationMinFilter;
+    const value = key === "open"
+      ? state.calculationMinOpen
+      : key === "trades"
+        ? state.calculationMinTrades
+        : state.calculationMinVolume;
+    if (input.value !== value) input.value = value;
+  });
+}
+
 function calculationSourceLabel(source) {
   if (source === "ai") return "AI probability";
   if (source === "polymarket") return "Polymarket probability";
@@ -8830,7 +8918,8 @@ function calculationRows(report) {
   const rows = Array.isArray(report?.parameterSummaries) ? report.parameterSummaries : [];
   const filtered = rows.filter((row) => {
     if (state.calculationMarket !== "all" && row.marketType !== state.calculationMarket) return false;
-    return state.calculationOpenFilter !== "open" || Number(row.openCount || 0) > 0;
+    if (state.calculationOpenFilter === "open" && Number(row.openCount || 0) <= 0) return false;
+    return calculationRowPassesFilters(row);
   });
   return sortedCalculationRows(filtered);
 }
@@ -8935,6 +9024,7 @@ function taxonomyRows(report, kind) {
   const rows = directRows.filter((row) => (
     (!row?.kind || String(row.kind) === kind)
     && (state.calculationOpenFilter !== "open" || Number(row?.openCount || 0) > 0)
+    && calculationRowPassesFilters(row)
   ));
   const sort = taxonomySortState(kind);
   const direction = sort.direction === "asc" ? 1 : -1;
@@ -9046,9 +9136,15 @@ function renderCalculationReport() {
         <span>first Polymarket probability and traded volume / ${binary} resolved Yes/No / ${multi} multi-outcome / market entry with fees</span>
       </div>
     </div>
-    <div class="calculation-section">
-      <h3>Best parameter combinations</h3>
-      <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon only on opportunities with a known final Polymarket outcome. Every trade uses a fixed $5 stake plus stored fees. ROI is total net P/L divided by the total invested capital; the default order is highest ROI, then P/L.</p>
+    <div class="calculation-tabs" role="tablist" aria-label="Calculation reports">
+      <button class="segment-button${state.calculationTab === "parameters" ? " active" : ""}" type="button" role="tab" aria-selected="${state.calculationTab === "parameters"}" data-calculation-tab="parameters">Best combinations</button>
+      <button class="segment-button${state.calculationTab === "category" ? " active" : ""}" type="button" role="tab" aria-selected="${state.calculationTab === "category"}" data-calculation-tab="category">Category performance</button>
+      <button class="segment-button${state.calculationTab === "tag" ? " active" : ""}" type="button" role="tab" aria-selected="${state.calculationTab === "tag"}" data-calculation-tab="tag">Tag performance</button>
+    </div>
+    <div class="calculation-tab-panel" data-calculation-tab-panel="parameters"${state.calculationTab === "parameters" ? "" : " hidden"}>
+      <div class="calculation-section">
+        <h3>Best parameter combinations</h3>
+        <p class="calculation-note">This ranking is independent of Conservative, High reward and More probable portfolios. It tests probability threshold and resolution horizon only on opportunities with a known final Polymarket outcome. Every trade uses a fixed $5 stake plus stored fees. ROI is total net P/L divided by the total invested capital; the default order is highest ROI, then P/L.</p>
       <div class="calculation-table-wrap">
         <table class="calculation-table">
           <thead>
@@ -9085,19 +9181,24 @@ function renderCalculationReport() {
           </tbody>
         </table>
       </div>
+      </div>
     </div>
-    ${renderTaxonomyPerformanceTable(
-      report,
-      "category",
-      "Category performance",
-      "Only explicit Polymarket Gamma categories are counted here. Inferred risk groups and tags are excluded.",
-    )}
-    ${renderTaxonomyPerformanceTable(
-      report,
-      "tag",
-      "Tag performance",
-      "Each opportunity contributes to every explicit Polymarket tag captured when it was first scraped.",
-    )}
+    <div class="calculation-tab-panel" data-calculation-tab-panel="category"${state.calculationTab === "category" ? "" : " hidden"}>
+      ${renderTaxonomyPerformanceTable(
+        report,
+        "category",
+        "Category performance",
+        "Only explicit Polymarket Gamma categories are counted here. Inferred risk groups and tags are excluded.",
+      )}
+    </div>
+    <div class="calculation-tab-panel" data-calculation-tab-panel="tag"${state.calculationTab === "tag" ? "" : " hidden"}>
+      ${renderTaxonomyPerformanceTable(
+        report,
+        "tag",
+        "Tag performance",
+        "Each opportunity contributes to every explicit Polymarket tag captured when it was first scraped.",
+      )}
+    </div>
   `;
 }
 
@@ -9167,7 +9268,35 @@ els.calculationOpenButtons.forEach((button) => {
   });
 });
 
+els.calculationMinFilters.forEach((input) => {
+  input.addEventListener("input", () => {
+    const value = normalizeCalculationMinimum(input.value);
+    const key = input.dataset.calculationMinFilter;
+    if (key === "open") {
+      state.calculationMinOpen = value;
+      saveCalculationPreference(CALCULATION_MIN_OPEN_STORAGE_KEY, value);
+    } else if (key === "trades") {
+      state.calculationMinTrades = value;
+      saveCalculationPreference(CALCULATION_MIN_TRADES_STORAGE_KEY, value);
+    } else if (key === "volume") {
+      state.calculationMinVolume = value;
+      saveCalculationPreference(CALCULATION_MIN_VOLUME_STORAGE_KEY, value);
+    }
+    renderCalculationReport();
+  });
+});
+
 els.calculationReport?.addEventListener("click", (event) => {
+  const tabButton = event.target.closest("[data-calculation-tab]");
+  if (tabButton) {
+    state.calculationTab = ["parameters", "category", "tag"].includes(tabButton.dataset.calculationTab)
+      ? tabButton.dataset.calculationTab
+      : "parameters";
+    saveCalculationTab(state.calculationTab);
+    renderCalculationReport();
+    return;
+  }
+
   const taxonomyButton = event.target.closest("[data-taxonomy-sort]");
   if (taxonomyButton) {
     const kind = taxonomyButton.dataset.taxonomySort;
@@ -9785,6 +9914,10 @@ els.openedTradesRefresh?.addEventListener("click", refreshOpenedTradesValues);
 
 state.mode = storedMode();
 state.runLogFilters = storedRunLogFilter(state.mode);
+state.calculationTab = storedCalculationTab();
+state.calculationMinOpen = normalizeCalculationMinimum(storedCalculationPreference(CALCULATION_MIN_OPEN_STORAGE_KEY));
+state.calculationMinTrades = normalizeCalculationMinimum(storedCalculationPreference(CALCULATION_MIN_TRADES_STORAGE_KEY));
+state.calculationMinVolume = normalizeCalculationMinimum(storedCalculationPreference(CALCULATION_MIN_VOLUME_STORAGE_KEY));
 state.liveExecutionArmed = storedLiveExecutionArmed();
 state.evaluationProbabilityFilter = storedEvaluationProbabilityFilter();
 state.evaluationDaysFilter = storedEvaluationDaysFilter();
@@ -9794,6 +9927,7 @@ syncEvaluationProbabilityFilterControl();
 syncEvaluationDaysFilterControl();
 syncEvaluationNetYieldFilterControl();
 syncEvaluationLiquidityFilterControl();
+syncCalculationControls();
 persistScrapedScanPreferences();
 applyInitialRoute();
 updateSchedulePanel();
