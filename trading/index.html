@@ -206,23 +206,24 @@
                 <p class="eyebrow">Market evaluation</p>
                 <h2 data-opportunity-panel-title>Evaluated opportunities</h2>
               </div>
-              <div class="panel-head-actions scraped-scan-controls" data-scraped-only>
-                <label class="scraped-scan-select-label" for="scraped-scan-tag">
-                  <span>Polymarket tag</span>
-                  <select id="scraped-scan-tag" data-scraped-scan-tag aria-label="Polymarket tag for one-time scan">
-                    <option value="">All tags</option>
-                  </select>
-                </label>
-                <button class="execution-button" type="button" data-scraped-scan title="Run a one-time Polymarket scan using the selected tag and current table filters">Scan Polymarket</button>
-                <span class="scraped-scan-status" data-scraped-scan-status aria-live="polite"></span>
+              <div class="panel-head-actions opportunity-header-actions">
+                <div class="segmented opportunity-view-toggle" data-opportunity-view-toggle>
+                  <button class="segment-button active" type="button" data-opportunity-view="scraped">Scraped</button>
+                  <button class="segment-button" type="button" data-opportunity-view="scan-log">Scraping log</button>
+                </div>
+                <div class="scraped-scan-controls" data-scraped-only>
+                  <div class="scraped-scan-select-label">
+                    <select id="scraped-scan-tag" data-scraped-scan-tag aria-label="Polymarket tag for one-time scan">
+                      <option value="">All tags</option>
+                    </select>
+                  </div>
+                  <button class="execution-button" type="button" data-scraped-scan title="Run a one-time Polymarket scan using the selected tag and current table filters">Scan Polymarket</button>
+                  <span class="scraped-scan-status" data-scraped-scan-status aria-live="polite"></span>
+                </div>
               </div>
             </div>
             <div class="settings-panel-body">
               <div class="evaluation-head" data-evaluation-controls>
-                  <div class="segmented opportunity-view-toggle" data-opportunity-view-toggle>
-                    <button class="segment-button active" type="button" data-opportunity-view="scraped">Scraped</button>
-                    <button class="segment-button" type="button" data-opportunity-view="scan-log">Scraping log</button>
-                  </div>
                   <label class="threshold-control evaluation-probability-control" data-opportunity-filter title="Display-only filter on the current Polymarket probability. Portfolio rules are not changed.">
                     <span>Probability filter</span>
                     <input type="number" min="0" max="99" step="1" value="0" data-evaluation-probability-filter>

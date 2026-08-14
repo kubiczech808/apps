@@ -538,8 +538,16 @@ button:disabled {
   gap: 8px;
 }
 
-.scraped-scan-controls {
+.opportunity-header-actions {
   align-items: center;
+}
+
+.scraped-scan-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .scraped-scan-select-label {
@@ -551,14 +559,6 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--soft);
-}
-
-.scraped-scan-select-label span {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 850;
-  text-transform: uppercase;
-  white-space: nowrap;
 }
 
 .scraped-scan-select-label select {
@@ -2202,6 +2202,40 @@ body.modal-open {
     justify-content: flex-start;
     min-width: 0;
     max-width: 100%;
+  }
+
+  .opportunity-header-actions,
+  .scraped-scan-controls {
+    align-items: stretch;
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .scraped-scan-controls > .scraped-scan-select-label,
+  .scraped-scan-controls > .execution-button,
+  .scraped-scan-controls > .scraped-scan-status {
+    width: 100%;
+    max-width: none;
+  }
+
+  .opportunity-header-actions > .opportunity-view-toggle {
+    width: 100%;
+  }
+
+  .opportunity-header-actions > .opportunity-view-toggle {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .opportunity-header-actions > .opportunity-view-toggle .segment-button {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .scraped-scan-select-label select {
+    width: 100%;
+    min-width: 0;
   }
 
   .run-log-head-actions {

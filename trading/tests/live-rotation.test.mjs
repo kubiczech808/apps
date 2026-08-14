@@ -3126,6 +3126,15 @@ test("opportunities page: the active choice is obvious and the filters belong to
   assert.doesNotMatch(app, /opportunityRoutePath\("evaluated"\)/);
   assert.doesNotMatch(app, /routePath\("opportunities", "evaluated"\)/);
 
+  // The view switch belongs to the page heading, while the tag picker and scan action
+  // remain scraped-only. This keeps the switch available on the scan-log route without
+  // making the filter row compete with it for space.
+  assert.match(html, /class="panel-head-actions opportunity-header-actions"[\s\S]*?data-opportunity-view-toggle[\s\S]*?class="scraped-scan-controls" data-scraped-only/);
+  assert.doesNotMatch(html, /<span>Polymarket tag<\/span>/);
+  assert.doesNotMatch(app, /Choose a category to scan\./);
+  assert.match(app, /els\.scrapedScanButton\.hidden = state\.scrapedScanBusy;/);
+  assert.match(app, /els\.scrapedScanStatus\.hidden = !state\.scrapedScanBusy && !state\.scrapedScanStatus;/);
+
   // And the page must not still explain a filter in terms of the view that is gone.
   assert.doesNotMatch(html, /It uses AI probability in Evaluated/);
 });

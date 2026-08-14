@@ -1640,7 +1640,6 @@ function renderScrapedScanControls() {
   if (!els.scrapedScanTag) return;
   const options = scrapedScanTagOptions();
   const availableTags = new Set(options.map(([tag]) => tag));
-  const selectedOption = options.find(([tag]) => tag === state.scrapedScanTag) || null;
   if (state.scrapedScanTag && !availableTags.has(state.scrapedScanTag)) state.scrapedScanTag = "";
   els.scrapedScanTag.innerHTML = [
     '<option value="">All tags</option>',
@@ -1658,14 +1657,12 @@ function renderScrapedScanControls() {
   els.scrapedScanTag.value = state.scrapedScanTag;
   if (els.scrapedScanButton) {
     els.scrapedScanButton.disabled = state.scrapedScanBusy;
-    els.scrapedScanButton.textContent = state.scrapedScanBusy ? "Scanning..." : "Scan Polymarket";
+    els.scrapedScanButton.hidden = state.scrapedScanBusy;
+    els.scrapedScanButton.textContent = "Scan Polymarket";
   }
   if (els.scrapedScanStatus) {
-    const selectedCount = selectedOption?.[1];
-    const storedNote = selectedCount == null
-      ? "Choose a category to scan."
-      : `${formatInteger(selectedCount) || selectedCount} event(s) on Polymarket match this scan's liquidity and horizon right now.`;
-    els.scrapedScanStatus.textContent = state.scrapedScanStatus || storedNote;
+    els.scrapedScanStatus.hidden = !state.scrapedScanBusy && !state.scrapedScanStatus;
+    els.scrapedScanStatus.textContent = state.scrapedScanStatus || (state.scrapedScanBusy ? "Scanning..." : "");
     els.scrapedScanStatus.className = `scraped-scan-status${state.scrapedScanStatus?.startsWith("Error") ? " error" : ""}`;
   }
 }
