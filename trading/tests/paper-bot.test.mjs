@@ -1891,6 +1891,10 @@ test("taxonomy performance: rows open the current scraped markets for that categ
   assert.match(html, /data-scraped-taxonomy-filter/);
   assert.match(html, /data-scraped-status/,
     "scraped and resolved observations must be selectable together");
+  assert.match(html, /<span>Tag<\/span>/,
+    "the taxonomy filter should use the compact Tag label");
+  assert.match(html, /<option value="">All<\/option>/,
+    "the taxonomy filter should use the compact All option");
   assert.doesNotMatch(html, /data-evaluation-status/,
     "the retired evaluation status tabs must not remain in the opportunity filters");
   assert.doesNotMatch(html, /value="ERROR" data-scraped-status/,

@@ -9283,9 +9283,14 @@ els.scrapedStatusOptions.forEach((input) => {
   });
 });
 
-els.scrapedTaxonomyFilter?.addEventListener("change", () => {
+els.scrapedTaxonomyFilter?.addEventListener("change", async () => {
   state.scrapedTaxonomyFilter = scrapedTaxonomyFilterFromValue(els.scrapedTaxonomyFilter.value);
   syncScrapedTaxonomyFilterControl();
+  // Keep the filter interaction asynchronous: use the already loaded catalogue when
+  // available, otherwise fetch the scraped dataset before rendering the selection.
+  if (state.page === "opportunities" && state.opportunityView === "scraped") {
+    await ensureScrapedMarketState({ summary: "scraped" });
+  }
   renderBotEvaluations();
   if (state.page === "opportunities" && state.opportunityView === "scraped") {
     const targetPath = scrapedTaxonomyOpportunityPath();

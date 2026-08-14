@@ -419,7 +419,7 @@ button:disabled {
 }
 
 .scraped-taxonomy-control select {
-  width: min(260px, 30vw);
+  width: 130px;
 }
 
 .scraped-status-control {
@@ -2348,7 +2348,7 @@ body.modal-open {
   }
 
   .scraped-taxonomy-control select {
-    width: min(100%, 260px);
+    width: min(100%, 130px);
   }
 
   .scraped-status-control {
