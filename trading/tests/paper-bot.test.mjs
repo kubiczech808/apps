@@ -5133,3 +5133,99 @@ test("paper rotation: the switch reaches the bot, and being off is logged too", 
   // the skip the report was filed against is one of them.
   assert.equal((bot.match(/rotationReview: rotationOutcome,/g) || []).length, 3);
 });
+
+// Reported: the Equal portfolio ends every trade on an enormous STOP_GAP, practically the
+// size of the whole position.
+//
+// Measured on its own numbers. A 5.00 USDC entry at 0.95 buys 5.2632 shares and wins
+// 0.2632, so capping the loss at the win puts the stop floor at 0.9000 -- a five-point
+// band. A near-certain outcome that turns against you does not sit inside that band
+// waiting to be polled; it collapses. Every check therefore saw a bid of 0.05 or 0.01,
+// booked the exit there, and recorded a 4.74 USDC loss against a 0.26 cap.
+//
+// The live side never did that: the RPi worker polls every five seconds and submits its
+// sell at stopPrice, not at the collapsed bid. Paper is meant to estimate the live
+// strategy and was measuring something no live run would produce.
+test("equal stop: a watched position exits at its floor, not at the collapsed bid", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const api = new Function(`
+    ${functionSource(bot, "netExitValueAtPrice")}
+    ${functionSource(bot, "equalRiskStopPlan")}
+    ${functionSource(bot, "equalRiskStopExitDecision")}
+    return { equalRiskStopPlan, equalRiskStopExitDecision };
+  `)();
+
+  // The reported trade, to its own arithmetic.
+  const shares = 5.2632;
+  const plan = api.equalRiskStopPlan({
+    totalCostUsdc: 5, netGainIfWinUsdc: 0.2632, shares, entryPrice: 0.95, feeRate: 0, feesEnabled: false,
+  });
+  assert.equal(plan.requiresStop, true);
+  // The floor comes from a bounded search, so it lands a hair under the round number
+  // rather than on it. The band is what matters: five points below a 0.95 entry.
+  assert.ok(Math.abs(plan.stopPrice - 0.9) < 0.0001, `stop floor ${plan.stopPrice} is ~0.90`);
+  assert.equal(plan.riskTargetUsdc, 0.2632);
+
+  const decide = (bestBid, previousBid) => api.equalRiskStopExitDecision({
+    plan, bestBid, shares, feeRate: 0, feesEnabled: false, previousBid,
+  });
+
+  // Watched above the floor, then found below it: the market traded through a resting
+  // exit, so it filled at the floor and the loss is the cap. This is the whole fix -- the
+  // same input used to book 4.7368.
+  for (const collapsed of [0.5, 0.05, 0.01, 0]) {
+    const exit = decide(collapsed, 0.95);
+    assert.equal(exit.triggered, true);
+    assert.equal(exit.fillPrice, plan.stopPrice, `crossing from 0.95 to ${collapsed} fills at the floor`);
+    assert.equal(exit.filledByCrossing, true);
+    assert.equal(exit.stopLossStatus, undefined);
+    assert.ok(Math.abs(exit.realizedLossUsdc - plan.riskTargetUsdc) < 0.0001,
+      `loss ${exit.realizedLossUsdc} must land on the ${plan.riskTargetUsdc} cap`);
+  }
+
+  // Caught at or above the floor, the bid is what fills -- it is better than the floor.
+  // 0.88 is *below* a 0.89998 floor, so it is a crossing, not an in-band catch: the case
+  // has to sit above the floor to test what it means to.
+  const inside = decide(plan.stopPrice, 0.95);
+  assert.equal(inside.fillPrice, plan.stopPrice);
+  assert.equal(inside.filledByCrossing, false);
+  assert.equal(inside.executableAtFloor, true);
+
+  // Never observed above the floor: no resting exit could have filled, so this is the
+  // genuine gap the status was invented for -- and it still reports the real loss.
+  const gapped = decide(0.05, null);
+  assert.equal(gapped.fillPrice, 0.05);
+  assert.equal(gapped.filledByCrossing, false);
+  assert.ok(gapped.realizedLossUsdc > 4.7, "a true gap still books what it really cost");
+  // Already below the floor at the previous look is the same case.
+  assert.equal(decide(0.05, 0.5).fillPrice, 0.05);
+
+  // Above the floor is not a stop at all.
+  assert.equal(decide(0.95, 0.95), null);
+});
+
+test("equal stop: the paper fill is modelled on what the live worker actually submits", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [bot, worker] = await Promise.all([
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../tools/rpi-live-exit-worker.mjs", import.meta.url), "utf8"),
+  ]);
+
+  // The live worker sells at the floor and triggers a touch above it so the order has
+  // room to fill. That is the mechanism paper is estimating.
+  assert.match(worker, /triggerPrice: round\(Math\.min\(0\.999999, stopPrice \+ STOP_PRETRIGGER_BUFFER\), 6\)/);
+  assert.match(worker, /const POLL_INTERVAL_MS = clampInteger\(process\.env\.LIVE_EXIT_POLL_INTERVAL_MS, 5000,/);
+
+  // Paper needs the previous mark to know a crossing happened; it is written by the
+  // check before, so nothing new has to be stored for this.
+  assert.match(bot, /previousBid: trade\.currentPrice,/);
+  assert.match(bot, /const crossedSinceLastLook = Number\.isFinite\(priorBid\) && priorBid > floor;/);
+  assert.match(bot, /const fillPrice = observedAtOrAboveFloor \? bid : \(crossedSinceLastLook \? floor : bid\);/);
+
+  // The row records the price it filled at, and keeps the observed bid beside it so the
+  // assumption is auditable rather than hidden.
+  assert.match(bot, /currentPrice: Number\(equalStopDecision\.fillPrice\.toFixed\(4\)\),/);
+  assert.match(bot, /observedBidAtStop: equalStopDecision\.observedBid,/);
+  assert.match(bot, /stopLossStatus: equalStopDecision\.filledByCrossing\n\s+\? "FILLED_AT_FLOOR"/);
+});

@@ -2871,25 +2871,55 @@ function equalRiskEntryProtection({ plan, bestBid, shares, feeRate = 0, feesEnab
   return { eligible: true, reason: null, exitValueUsdc };
 }
 
-// A synthetic stop cannot guarantee its target through a price gap. Once the
-// best executable bid crosses the floor, however, continuing to hold only makes
-// the protection worse. Paper execution therefore exits at that observed bid
-// and records whether the target was exceeded.
-function equalRiskStopExitDecision({ plan, bestBid, shares, feeRate = 0, feesEnabled = true } = {}) {
+// What the stop is worth depends entirely on the price it exits at, and paper was booking
+// the wrong one.
+//
+// Reported: the Equal portfolio ends every trade on an enormous STOP_GAP, practically the
+// size of the whole position. Measured on its own numbers -- a 5.00 USDC entry at 0.95
+// caps its planned loss at the 0.2632 USDC win, which puts the stop floor at 0.9000, a
+// five-point band. A near-certain outcome that turns against you does not sit inside that
+// band waiting to be looked at; it collapses. So every poll observed a bid of 0.05 or
+// 0.01, booked the exit *there*, and recorded a 4.74 USDC loss against a 0.26 target --
+// eighteen times the cap, on every trade.
+//
+// The live side does not work that way. The RPi exit worker polls every five seconds and
+// submits its sell **at stopPrice**, never at the collapsed bid, and triggers a touch
+// above the floor so the order has room to fill. Paper is meant to estimate that, and was
+// instead measuring something no live run would ever do.
+//
+// So the fill price is now derived the way a stop actually behaves. A limit sell resting
+// at the floor is taken out by the crossing: if the market was above the floor when this
+// position was last observed and is below it now, it traded through, and that order filled
+// at the floor. Only a position already below the floor when first seen has genuinely
+// gapped past a stop that could not fill -- and that, and only that, is a STOP_GAP.
+function equalRiskStopExitDecision({ plan, bestBid, shares, feeRate = 0, feesEnabled = true, previousBid = null } = {}) {
   if (!plan?.protectable || !plan.requiresStop) return null;
   const bid = Number(bestBid);
   const size = Number(shares);
   if (!Number.isFinite(bid) || !(bid >= 0) || !Number.isFinite(size) || !(size > 0)) return null;
   const currentValue = netExitValueAtPrice({ shares: size, price: bid, feeRate, feesEnabled });
   if (!Number.isFinite(currentValue) || currentValue > Number(plan.minimumExitValueUsdc) + 0.00001) return null;
-  const executableAtFloor = bid + 0.000001 >= Number(plan.stopPrice);
-  const exitValueUsdc = currentValue;
-  const realizedPnlUsdc = Number((exitValueUsdc - Number(plan.costUsdc || 0)).toFixed(5));
+
+  const floor = Number(plan.stopPrice);
+  const observedAtOrAboveFloor = bid + 0.000001 >= floor;
+  // The previous mark, written by the check before this one. Absent means this position
+  // has never been observed above the floor, so nothing can be assumed about a crossing.
+  const priorBid = Number(previousBid);
+  const crossedSinceLastLook = Number.isFinite(priorBid) && priorBid > floor;
+
+  // Filled at the floor by the crossing, or at the bid when that is better than the floor.
+  const fillPrice = observedAtOrAboveFloor ? bid : (crossedSinceLastLook ? floor : bid);
+  const executableAtFloor = observedAtOrAboveFloor || crossedSinceLastLook;
+  const exitValueUsdc = netExitValueAtPrice({ shares: size, price: fillPrice, feeRate, feesEnabled });
+  const realizedPnlUsdc = Number((Number(exitValueUsdc) - Number(plan.costUsdc || 0)).toFixed(5));
   return {
     triggered: true,
     executableAtFloor,
+    fillPrice: Number(Number(fillPrice).toFixed(6)),
+    filledByCrossing: !observedAtOrAboveFloor && crossedSinceLastLook,
+    observedBid: Number(bid.toFixed(6)),
     currentValueUsdc: Number(currentValue.toFixed(5)),
-    exitValueUsdc: Number(exitValueUsdc.toFixed(5)),
+    exitValueUsdc: Number(Number(exitValueUsdc).toFixed(5)),
     realizedPnlUsdc,
     realizedLossUsdc: Number(Math.max(0, -realizedPnlUsdc).toFixed(5)),
   };
@@ -3067,6 +3097,10 @@ async function markOpenTrade(trade) {
         shares: trade.shares,
         feeRate: trade.feeRate,
         feesEnabled: trade.feesEnabled,
+        // The mark written by the previous check. It is what says whether the market
+        // crossed the floor between two looks -- which a resting stop would have been
+        // filled by -- or was already through it before this position was ever watched.
+        previousBid: trade.currentPrice,
       });
       if (equalStopDecision?.triggered) {
         const capBreachUsdc = Number(Math.max(0, equalStopDecision.realizedLossUsdc - equalRiskPlan.riskTargetUsdc).toFixed(5));
@@ -3075,20 +3109,25 @@ async function markOpenTrade(trade) {
           status: "STOP_LOSS",
           closedAt: checkedAt,
           resolvedAt: checkedAt,
-          currentPrice: Number(bestBid.toFixed(4)),
+          currentPrice: Number(equalStopDecision.fillPrice.toFixed(4)),
+          observedBidAtStop: equalStopDecision.observedBid,
           currentValueUsdc: equalStopDecision.exitValueUsdc,
           unrealizedPnlUsdc: 0,
           unrealizedPnlPct: 0,
           realizedPnlUsdc: equalStopDecision.realizedPnlUsdc,
           realizedPnlPct: pnlPercent(equalStopDecision.realizedPnlUsdc, cost),
-          stopLossStatus: equalStopDecision.executableAtFloor ? "FILLED_WITHIN_TARGET" : "FILLED_AFTER_GAP",
+          stopLossStatus: equalStopDecision.filledByCrossing
+            ? "FILLED_AT_FLOOR"
+            : (equalStopDecision.executableAtFloor ? "FILLED_WITHIN_TARGET" : "FILLED_AFTER_GAP"),
           stopLossTriggeredAt: checkedAt,
           stopLossPrice: equalRiskPlan.stopPrice,
           riskTargetUsdc: equalRiskPlan.riskTargetUsdc,
           stopLossCapBreachUsdc: capBreachUsdc,
-          statusNote: equalStopDecision.executableAtFloor
-            ? `Synthetic Equal paper stop exited at executable bid ${bestBid.toFixed(4)} within its planned loss target.`
-            : `Equal stop price gapped from ${equalRiskPlan.stopPrice.toFixed(4)} to executable bid ${bestBid.toFixed(4)}. The paper position exited immediately; the loss target was exceeded by ${capBreachUsdc.toFixed(4)} USDC.`,
+          statusNote: equalStopDecision.filledByCrossing
+            ? `Equal stop filled at its ${equalRiskPlan.stopPrice.toFixed(4)} floor: the market was above the floor at the previous check and is ${bestBid.toFixed(4)} now, so it traded through the resting exit.`
+            : (equalStopDecision.executableAtFloor
+              ? `Synthetic Equal paper stop exited at executable bid ${bestBid.toFixed(4)} within its planned loss target.`
+              : `Equal stop could not fill: this position was already below its ${equalRiskPlan.stopPrice.toFixed(4)} floor when first observed, at bid ${bestBid.toFixed(4)}. The loss target was exceeded by ${capBreachUsdc.toFixed(4)} USDC.`),
         };
       }
       if (awaitingResolution) {
