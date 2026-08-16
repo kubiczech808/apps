@@ -160,6 +160,36 @@ async function reportScrapedCatalogue() {
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
   console.log(`   distinct tags seen: ${counts.size}`
     + (top.length ? ` | top: ${top.map(([tag, n]) => `${tag}=${n}`).join(", ")}` : ""));
+
+  // Reported: Tag performance says 937 resolved trades for league-of-legends and its own
+  // link lists 12. The statistic is computed by the bot over the whole stored archive;
+  // the browser is served a capped page of it. This counts both sides of that.
+  const tag = "league-of-legends";
+  const hasTag = (row) => [...(row?.tags || []), ...(row?.firstTags || []), row?.firstCategory]
+    .filter(Boolean).map((value) => String(value).toLowerCase()).includes(tag);
+  const resolved = rows.filter((row) => String(row?.status || row?.selectionStatus || "").toUpperCase() === "RESOLVED");
+  const entryOf = (row) => {
+    for (const candidate of [row?.firstMarketProbability, row?.lastLiveMarketProbability, row?.marketProbability, row?.marketPrice]) {
+      const numeric = Number(candidate);
+      if (Number.isFinite(numeric) && numeric > 0 && numeric < 1) return numeric;
+    }
+    return null;
+  };
+  const taggedResolved = resolved.filter(hasTag);
+  console.log(`\n== The reported row, counted in what the browser is served`);
+  console.log(`   rows served: ${rows.length} | resolved among them: ${resolved.length}`);
+  console.log(`   resolved carrying "${tag}": ${taggedResolved.length}`);
+  console.log(`   of those, entry probability >= 50%: ${taggedResolved.filter((row) => (entryOf(row) ?? 0) >= 0.5).length}`);
+  console.log(`   of those, priced at all: ${taggedResolved.filter((row) => entryOf(row) != null).length}`);
+  console.log(`   manifest says resolved in total: ${JSON.stringify(body.observationTotals || {})}`);
+
+  // And what the statistics themselves claim for the same group.
+  const report = await fetchJson(`${HOST}/api.php?action=state&target=paper&summary=calculations`);
+  const groups = report.ok
+    ? (report.body?.taxonomy?.tag || report.body?.calculationReport?.taxonomy?.tag || [])
+    : [];
+  const row = Array.isArray(groups) ? groups.find((entry) => String(entry?.label || "").toLowerCase() === tag) : null;
+  console.log(`   statistics row: ${row ? `trades=${row.trades} open=${row.openCount} resolved=${row.resolved}` : `not found (HTTP ${report.status})`}`);
 }
 
 async function main() {
