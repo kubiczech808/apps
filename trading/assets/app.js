@@ -7873,6 +7873,11 @@ function renderScrapedOpportunities() {
       </table>
     </div>
     ${remaining ? `<div class="table-load-more"><button class="execution-button" type="button" data-scraped-load-more>Load more (${formatInteger(remaining) || remaining} remaining)</button></div>` : ""}
+    ${drilldown?.truncated ? `<p class="calculation-note">${escapeHtml(
+      `${formatInteger(matchedCount) || matchedCount} stored opportunities are in this group. `
+      + `The newest ${formatInteger(drilldown.rows.length) || drilldown.rows.length} are listed; `
+      + "the statistics above are computed over all of them.",
+    )}</p>` : ""}
   `;
 }
 
