@@ -867,7 +867,11 @@ test("trade table: every header lines up with the cell beneath it", async () => 
   };
   const headers = [...thead.matchAll(/tradeHeader\(tableKey,\s*(?:showStatus \? "\w+" : "\w+"|"\w+"),\s*(showStatus \? "[^"]+" : "[^"]+"|"[^"]+")\)/g)]
     .map((match) => conditional(match[1]));
-  const cells = [...tbody.matchAll(/<td data-label="(\$\{showStatus \? "[^"]+" : "[^"]+"\}|[^"]+)"/g)]
+  // Any attribute may precede data-label -- the Market cell carries a class first -- and
+  // requiring it to come first made the extractor skip that column and report a
+  // misalignment that was not there. The order of the cells is what this test is about,
+  // not the order of attributes within one.
+  const cells = [...tbody.matchAll(/<td\b[^>]*?\bdata-label="(\$\{showStatus \? "[^"]+" : "[^"]+"\}|[^"]+)"/g)]
     .map((match) => conditional(match[1]));
 
   assert.ok(headers.length >= 10, `expected the full column set, found ${headers.length}`);
@@ -4485,9 +4489,15 @@ test("excluded tags: every portfolio carries the setting, and it starts empty", 
   const normalizer = functionSource(api.replace(/mixed \$/g, "$"), "normalize_strategy_config");
   assert.match(normalizer, /'excludedMarketTags' => normalize_market_tag_list\(\$input\['excludedMarketTags'\] \?\? \$defaults\['excludedMarketTags'\] \?\? \[\]\)/);
 
-  // Five defaults: three paper strategies, live, and 5050 -- each excluding nothing, so
-  // adding the setting changes no portfolio's behaviour until someone fills it in.
-  assert.equal((api.match(/^\s+'excludedMarketTags' => \[\],$/gm) || []).length, 5);
+  // Every portfolio default carries it, excluding nothing -- so adding the setting
+  // changed no portfolio's behaviour until someone fills it in. Counted against the
+  // defaults themselves rather than against a number: this said 5 and a fourth paper
+  // portfolio was added, which is a portfolio silently missing the setting if the count
+  // is wrong, and a test to edit if it is merely stale.
+  const portfolioDefaults = (api.match(/^\s+'minProbability' => /gm) || []).length;
+  const excluded = (api.match(/^\s+'excludedMarketTags' => \[\],$/gm) || []).length;
+  assert.ok(portfolioDefaults >= 6, `expected every portfolio default to be found, saw ${portfolioDefaults}`);
+  assert.equal(excluded, 6, `every portfolio default must exclude nothing to start with, saw ${excluded}`);
 
   // Unlike the allow-list, empty and absent mean the same thing here, so the setting
   // needs no array_key_exists special case to be clearable.
@@ -4589,10 +4599,20 @@ test("excluded tags: the rule sits above every mode-specific test", async () => 
 
   // The paper bot filters and explains in two separate places; a row dropped by one and
   // not the other is a candidate list that disagrees with its own rejection reasons.
+  // The test on the filtering side moved behind strategyAllowsTags when an include-only
+  // whitelist was added, so the rule is asserted where it now lives.
   assert.match(functionSource(bot, "strategyEligibleCandidates"),
-    /if \(excludedTagsOnRow\(item, strategy\)\.length\) return false;/);
+    /if \(!strategyAllowsTags\(item, strategy\)\) return false;/);
   assert.match(functionSource(bot, "portfolioFilterResult"),
     /const excludedTags = excludedTagsOnRow\(item, strategy\);/);
+
+  // And the precedence that rule introduced: a populated whitelist is the whole policy,
+  // but an empty one must fall through to the exclusions rather than admitting
+  // everything -- an empty list is how the whitelist is cleared, and clearing it must
+  // not quietly switch the exclusions off too.
+  const allows = functionSource(bot, "strategyAllowsTags");
+  assert.match(allows, /if \(strategy\?\.includeOnlyMarketTags\?\.size\) return includedTagsOnRow\(item, strategy\)\.length > 0;/);
+  assert.match(allows, /return excludedTagsOnRow\(item, strategy\)\.length === 0;/);
 });
 
 test("excluded tags: the saved value reaches all three runtimes", async () => {

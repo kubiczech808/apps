@@ -2252,8 +2252,21 @@ test("after a scrape: the cron interval does not also throttle an after-scrape r
   // A portfolio on cron keeps its interval exactly as before.
   assert.deepEqual(build({ LIVE_EXECUTION_TRIGGER: "cron", LIVE_EXECUTION_CRON_MINUTES: "30" }),
     { EXECUTION_TRIGGER: "cron", EXECUTION_CRON_MINUTES: 30 });
-  assert.deepEqual(build({}), { EXECUTION_TRIGGER: "cron", EXECUTION_CRON_MINUTES: 0 },
-    "an unset trigger is cron, and an unset interval is every run");
+  // An unset interval used to mean "every run". It now means hourly: a cron portfolio has
+  // a cadence of its own, independent of how often the workflow happens to be scheduled.
+  assert.deepEqual(build({}), { EXECUTION_TRIGGER: "cron", EXECUTION_CRON_MINUTES: 60 },
+    "an unset trigger is cron, and an unset interval is hourly");
+  // The floor exists so a stale or hand-set value cannot ask for a cadence the dashboard
+  // does not offer. It has to agree with the shortest option there, or the saved setting
+  // and the honoured one diverge without saying so -- which is what "it does not run as
+  // often as I set it" looks like from the outside.
+  assert.deepEqual(build({ LIVE_EXECUTION_CRON_MINUTES: "5" }),
+    { EXECUTION_TRIGGER: "cron", EXECUTION_CRON_MINUTES: 30 });
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const options = [...html.matchAll(/<option value="(\d+)">[^<]*<\/option>/g)]
+    .map((match) => Number(match[1]));
+  const shortestOffered = Math.min(...options.filter((value) => value >= 30 && value <= 1440));
+  assert.equal(shortestOffered, 30, "the shortest cadence the dashboard offers is the floor the executor applies");
 
   // Zero is what switches the gate off, so the value above has to reach it that way.
   assert.match(source, /&& EXECUTION_CRON_MINUTES > 0\n/);
