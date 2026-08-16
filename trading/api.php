@@ -183,9 +183,9 @@ function decode_state_file(string $path, bool $waitForUpload = true): ?array
     return null;
 }
 
-function state_payload(string $target, array $segments = ['observations', 'evaluations']): array
+function state_file_paths(): array
 {
-    $files = [
+    return [
         'paper' => __DIR__ . '/data/paper-state.json',
         'live' => __DIR__ . '/data/live-state.json',
         'live-execution' => __DIR__ . '/data/live-execution-state.json',
@@ -193,6 +193,11 @@ function state_payload(string $target, array $segments = ['observations', 'evalu
         // its decisions, so its run log lives in its own file.
         'live-5050-execution' => __DIR__ . '/data/live-5050-execution-state.json',
     ];
+}
+
+function state_payload(string $target, array $segments = ['observations', 'evaluations']): array
+{
+    $files = state_file_paths();
     if (!isset($files[$target])) {
         respond(['ok' => false, 'error' => 'Unknown state target'], 400);
     }
@@ -282,6 +287,286 @@ function state_observation_totals(array $data): array
     $active = max(0, (int) $active);
     $resolved = max(0, (int) $resolved);
     return ['active' => $active, 'resolved' => $resolved, 'all' => $active + $resolved];
+}
+
+/**
+ * Absolute path of a segment file named by the manifest, or null when the state is
+ * not segmented or does not carry that segment.
+ */
+function state_segment_path(array $data, string $corePath, string $segment): ?string
+{
+    $manifest = is_array($data['stateSegments'] ?? null) ? $data['stateSegments'] : [];
+    $file = (string) ($manifest[$segment]['file'] ?? '');
+    // The manifest is generated data, but it still reaches this code as file content,
+    // so the name is constrained to a plain sibling file.
+    if ($file === '' || !preg_match('/^[A-Za-z0-9._-]+\.json$/', $file)) {
+        return null;
+    }
+    $path = dirname($corePath) . '/' . $file;
+
+    return is_file($path) ? $path : null;
+}
+
+/**
+ * Walk a large top-level JSON array one member at a time.
+ *
+ * The resolved archive has reached 26,207 rows, and json_decode of the whole file
+ * peaks near 138 MB on a 128 MB host -- which is exactly why the browser is served a
+ * capped page of it. A drill-down from the performance tables has to reach every row
+ * those tables counted, so this scans the file structurally and decodes one member at
+ * a time. The buffer is trimmed after every member, so peak memory stays at one read
+ * chunk plus one row plus whatever the caller chooses to keep, however far the
+ * archive grows.
+ *
+ * $accepts receives the raw member text and may reject it before it is ever decoded;
+ * a tag drill-down uses that to skip the ~95% of rows that cannot possibly match.
+ * $onRow receives each decoded member and returns false to stop the walk.
+ */
+function stream_json_array_members(string $path, string $field, callable $onRow, ?callable $accepts = null): bool
+{
+    $handle = @fopen($path, 'rb');
+    if ($handle === false) {
+        return false;
+    }
+
+    $chunkSize = 1 << 19;
+    $buffer = '';
+    $eof = false;
+    $fill = static function () use (&$buffer, &$eof, $handle, $chunkSize): bool {
+        if ($eof) {
+            return false;
+        }
+        $data = fread($handle, $chunkSize);
+        if ($data === false || $data === '') {
+            $eof = true;
+            return false;
+        }
+        $buffer .= $data;
+        return true;
+    };
+
+    // Position the scan just past the opening bracket of the named array. The name is
+    // only accepted when the punctuation that follows it makes it a key holding an
+    // array, so the same text appearing inside a string value cannot derail the walk.
+    $needle = '"' . $field . '"';
+    $entered = false;
+    while (true) {
+        $at = strpos($buffer, $needle);
+        if ($at === false) {
+            $keep = strlen($needle);
+            if (strlen($buffer) > $keep) {
+                $buffer = substr($buffer, -$keep);
+            }
+            if (!$fill()) {
+                break;
+            }
+            continue;
+        }
+        $probe = $at + strlen($needle);
+        while (strlen($buffer) < $probe + 32 && $fill()) {
+            // Make sure the punctuation after the name is in the buffer.
+        }
+        $rest = ltrim(substr($buffer, $probe, 32));
+        if (strncmp($rest, ':', 1) === 0 && strncmp(ltrim(substr($rest, 1)), '[', 1) === 0) {
+            $open = strpos($buffer, '[', $probe);
+            if ($open !== false) {
+                $buffer = substr($buffer, $open + 1);
+                $entered = true;
+                break;
+            }
+        }
+        $buffer = substr($buffer, $at + 1);
+    }
+    if (!$entered) {
+        fclose($handle);
+        return false;
+    }
+
+    $index = 0;
+    $depth = 0;
+    $inString = false;
+    $escaped = false;
+    $memberStart = null;
+    $stopped = false;
+    while (!$stopped) {
+        $length = strlen($buffer);
+        if ($index >= $length) {
+            if (!$fill()) {
+                break;
+            }
+            continue;
+        }
+        if ($inString) {
+            $cursor = $index;
+            while ($cursor < $length) {
+                if ($escaped) {
+                    $escaped = false;
+                    $cursor += 1;
+                    continue;
+                }
+                $cursor += strcspn($buffer, "\"\\", $cursor);
+                if ($cursor >= $length) {
+                    break;
+                }
+                if ($buffer[$cursor] === '\\') {
+                    $escaped = true;
+                    $cursor += 1;
+                    continue;
+                }
+                $inString = false;
+                $cursor += 1;
+                break;
+            }
+            $index = $cursor;
+            continue;
+        }
+        $index += strcspn($buffer, "{}[]\"", $index);
+        if ($index >= $length) {
+            if (!$fill()) {
+                break;
+            }
+            continue;
+        }
+        $character = $buffer[$index];
+        if ($character === '"') {
+            $inString = true;
+            $index += 1;
+            continue;
+        }
+        if ($character === '{' || $character === '[') {
+            if ($depth === 0) {
+                $memberStart = $index;
+            }
+            $depth += 1;
+            $index += 1;
+            continue;
+        }
+        if ($depth === 0) {
+            // The closing bracket of the array itself.
+            break;
+        }
+        $depth -= 1;
+        $index += 1;
+        if ($depth !== 0 || $memberStart === null) {
+            continue;
+        }
+        $raw = substr($buffer, $memberStart, $index - $memberStart);
+        if ($accepts === null || $accepts($raw)) {
+            $member = json_decode($raw, true);
+            if (is_array($member) && $onRow($member) === false) {
+                $stopped = true;
+            }
+            unset($member);
+        }
+        unset($raw);
+        // Nothing before this point can be needed again, so the buffer never grows
+        // past one member plus one read chunk.
+        $buffer = substr($buffer, $index);
+        $index = 0;
+        $memberStart = null;
+    }
+
+    fclose($handle);
+
+    return true;
+}
+
+/**
+ * The entry price the performance tables simulate, ported from the bot's
+ * scrapedSimulationProbability(). A settled book prints 0 or 1, so a row is priced by
+ * the first genuinely live quote it ever carried.
+ */
+function simulation_entry_probability(array $item): ?float
+{
+    foreach (['firstMarketProbability', 'lastLiveMarketProbability', 'marketProbability', 'marketPrice'] as $field) {
+        $value = $item[$field] ?? null;
+        if (!is_numeric($value)) {
+            continue;
+        }
+        $numeric = (float) $value;
+        if ($numeric > 0 && $numeric < 1) {
+            return $numeric;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * 1 for a settled win, 0 for a settled loss, null while the market has no result.
+ * The performance tables count exactly the rows this answers non-null for.
+ */
+function simulation_outcome(array $item): ?int
+{
+    $value = $item['finalOutcomePrice'] ?? null;
+    if (!is_numeric($value)) {
+        return null;
+    }
+    $numeric = (float) $value;
+    if ($numeric < 0 || $numeric > 1) {
+        return null;
+    }
+
+    return $numeric >= 0.5 ? 1 : 0;
+}
+
+/**
+ * The taxonomy labels the performance tables group a row under, ported from the
+ * bot's scrapedSimulationTaxonomy(). Scrape-time relations win, the current Gamma
+ * relation is the fallback for rows stored before the immutable field existed, and
+ * per-fixture slugs are dropped because they group exactly one opportunity.
+ */
+function simulation_taxonomy_labels(array $item, string $firstField, string $currentField): array
+{
+    $first = is_array($item[$firstField] ?? null) ? $item[$firstField] : [];
+    $current = is_array($item[$currentField] ?? null) ? $item[$currentField] : [];
+    $source = $first !== [] ? $first : $current;
+    $labels = [];
+    foreach ($source as $raw) {
+        $text = '';
+        if (is_array($raw)) {
+            // Gamma returns tags both as plain strings and as {label,slug} objects.
+            foreach (['slug', 'label', 'name'] as $key) {
+                if (isset($raw[$key]) && is_scalar($raw[$key]) && (string) $raw[$key] !== '') {
+                    $text = (string) $raw[$key];
+                    break;
+                }
+            }
+        } elseif (is_scalar($raw)) {
+            $text = (string) $raw;
+        }
+        $text = strtolower(trim($text));
+        if ($text === '' || strlen($text) > 60) {
+            continue;
+        }
+        if (preg_match('/^(market|event|team|match|topic|entity)\s*:/i', $text)) {
+            continue;
+        }
+        if (preg_match('/-(?:19|20)\d{2}-\d{2}-\d{2}(?:-|$)/', $text)) {
+            continue;
+        }
+        if (in_array($text, $labels, true)) {
+            continue;
+        }
+        $labels[] = $text;
+        // PAPER_SCRAPED_SIMULATION_TAGS_PER_TRADE in the bot.
+        if (count($labels) >= 8) {
+            break;
+        }
+    }
+
+    return $labels;
+}
+
+/**
+ * The "Open now" population of the performance tables: an unsettled row that can
+ * still actually be opened, not merely one that is waiting for settlement.
+ */
+function simulation_row_is_open(array $item): bool
+{
+    return strtoupper((string) ($item['status'] ?? $item['selectionStatus'] ?? '')) !== 'RESOLVED'
+        && ($item['marketClosed'] ?? null) !== true
+        && ($item['acceptingOrders'] ?? null) !== false;
 }
 
 function compact_text(mixed $value, int $limit = 700): string
@@ -2312,6 +2597,154 @@ try {
             $payload = compact_state_payload($target, $payload, $summary);
         }
         respond($payload);
+    }
+
+    // The rows behind one row of the performance tables. Those tables are computed over
+    // the whole stored archive, while the scraped list is served a capped page of it --
+    // which is how a tag could report 937 resolved trades and its own link list 12. This
+    // reads the archive itself, applying the very predicates the tables count with, so
+    // the list and the statistic are the same set by construction.
+    if ($action === 'taxonomy-observations') {
+        $kind = strtolower(trim((string) ($_GET['kind'] ?? 'tag')));
+        if (!in_array($kind, ['tag', 'category'], true)) {
+            respond(['ok' => false, 'error' => 'kind must be tag or category'], 400);
+        }
+        $value = strtolower(trim((string) ($_GET['value'] ?? '')));
+        if ($value === '' || !preg_match('/^[a-z0-9 ._:-]{1,80}$/', $value)) {
+            respond(['ok' => false, 'error' => 'A taxonomy value is required'], 400);
+        }
+        $statuses = array_values(array_unique(array_filter(array_map(
+            static fn($status): string => strtoupper(trim((string) $status)),
+            explode(',', (string) ($_GET['statuses'] ?? 'RESOLVED')),
+        ), static fn($status): bool => in_array($status, ['SCRAPED', 'RESOLVED'], true))));
+        if ($statuses === []) {
+            $statuses = ['RESOLVED'];
+        }
+        $minProbability = 0.0;
+        if (isset($_GET['probability']) && is_numeric($_GET['probability'])) {
+            // The links carry whole percent, matching the stored probability ladder.
+            $minProbability = max(0.0, min(1.0, ((float) $_GET['probability']) / 100));
+        }
+        $rowLimit = 4000;
+        if (isset($_GET['limit']) && is_numeric($_GET['limit'])) {
+            $rowLimit = (int) max(1, min(8000, (int) $_GET['limit']));
+        }
+
+        $files = state_file_paths();
+        $corePath = $files['paper'];
+        $core = decode_state_file($corePath);
+        if ($core === null) {
+            respond(['ok' => false, 'error' => 'State file is not available yet'], 404);
+        }
+        $manifest = is_array($core['stateSegments'] ?? null) ? $core['stateSegments'] : [];
+        unset($core['marketObservations'], $core['evaluations'], $core['marketScanHistory']);
+
+        $sources = [];
+        $observationsPath = state_segment_path(['stateSegments' => $manifest], $corePath, 'observations');
+        if ($observationsPath !== null) {
+            $sources[] = [$observationsPath, 'marketObservations'];
+        }
+        // Deliberately the whole archive, not the capped `resolvedRecent` page the
+        // scraped summary reads: the point of this endpoint is the rows that page omits.
+        $resolvedPath = state_segment_path(['stateSegments' => $manifest], $corePath, 'resolvedObservations');
+        if ($resolvedPath !== null) {
+            $sources[] = [$resolvedPath, 'resolvedMarketObservations'];
+        }
+        if ($sources === []) {
+            // A state written before segmentation carries every observation inline.
+            $sources[] = [$corePath, 'marketObservations'];
+        }
+
+        $firstField = $kind === 'tag' ? 'firstPolymarketTags' : 'firstPolymarketCategories';
+        $currentField = $kind === 'tag' ? 'polymarketTags' : 'polymarketCategories';
+        $wantsEmpty = ($kind === 'tag' && $value === 'untagged') || ($kind === 'category' && $value === 'uncategorized');
+        $wantsResolved = in_array('RESOLVED', $statuses, true);
+        $wantsOpen = in_array('SCRAPED', $statuses, true);
+
+        $matched = 0;
+        $matchedResolved = 0;
+        $matchedOpen = 0;
+        $scanned = 0;
+        $rows = [];
+        // An unlabelled bucket cannot be pre-filtered, but a named one can: a row whose
+        // raw text never mentions the label cannot carry it, and skipping the decode for
+        // those is what keeps this endpoint answering in seconds over 31,000 rows.
+        $accepts = $wantsEmpty ? null : static function (string $raw) use ($value, &$scanned): bool {
+            $scanned += 1;
+            return stripos($raw, $value) !== false;
+        };
+        $onRow = static function (array $item) use (
+            $firstField,
+            $currentField,
+            $value,
+            $wantsEmpty,
+            $wantsResolved,
+            $wantsOpen,
+            $minProbability,
+            $rowLimit,
+            &$matched,
+            &$matchedResolved,
+            &$matchedOpen,
+            &$rows,
+            &$scanned
+        ): bool {
+            if ($wantsEmpty) {
+                $scanned += 1;
+            }
+            $entry = simulation_entry_probability($item);
+            // The simulation cannot price a row that never carried a live quote, so it
+            // counts none of them; listing them would again outnumber the statistic.
+            if ($entry === null || $entry < $minProbability) {
+                return true;
+            }
+            $labels = simulation_taxonomy_labels($item, $firstField, $currentField);
+            if ($wantsEmpty ? $labels !== [] : !in_array($value, $labels, true)) {
+                return true;
+            }
+            $outcome = simulation_outcome($item);
+            $isResolved = $outcome !== null;
+            if ($isResolved ? !$wantsResolved : !($wantsOpen && simulation_row_is_open($item))) {
+                return true;
+            }
+            $matched += 1;
+            if ($isResolved) {
+                $matchedResolved += 1;
+            } else {
+                $matchedOpen += 1;
+            }
+            if (count($rows) < $rowLimit) {
+                $rows[] = compact_market_observation($item);
+            }
+
+            return true;
+        };
+
+        foreach ($sources as [$path, $field]) {
+            stream_json_array_members($path, $field, $onRow, $accepts);
+        }
+
+        usort($rows, static function (array $a, array $b): int {
+            $left = strtotime((string) ($a['resolvedAt'] ?? $a['endDate'] ?? $a['observedAt'] ?? '')) ?: 0;
+            $right = strtotime((string) ($b['resolvedAt'] ?? $b['endDate'] ?? $b['observedAt'] ?? '')) ?: 0;
+            return $right <=> $left;
+        });
+
+        respond([
+            'ok' => true,
+            'generatedAt' => $core['generatedAt'] ?? null,
+            'kind' => $kind,
+            'value' => $value,
+            'statuses' => $statuses,
+            'minProbability' => $minProbability,
+            'marketObservations' => $rows,
+            'matched' => $matched,
+            'matchedResolved' => $matchedResolved,
+            'matchedOpen' => $matchedOpen,
+            'returned' => count($rows),
+            'truncated' => $matched > count($rows),
+            'scanned' => $scanned,
+            'marketDetailsMode' => 'compact',
+        ]);
     }
 
     if ($action === 'scan-audit') {

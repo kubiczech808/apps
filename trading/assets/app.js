@@ -59,6 +59,14 @@ const state = {
   evaluationNetYieldFilter: 0,
   evaluationLiquidityFilter: 0,
   scrapedTaxonomyFilter: null,
+  // The rows behind one row of the performance tables, fetched from the archive itself.
+  // The scraped catalogue the browser holds is a capped page of that archive, so a
+  // taxonomy view built from it can only ever show a fraction of what the statistic
+  // counted -- 12 of 937 for league-of-legends when this was measured.
+  scrapedTaxonomyRows: null,
+  scrapedTaxonomyRowsKey: "",
+  scrapedTaxonomyRowsPending: "",
+  scrapedTaxonomyRowsError: "",
   scrapedMarketTypeFilter: "all",
   // Keep explicit deep-link filters authoritative during asynchronous catalogue loads.
   scrapedRouteFilter: null,
@@ -1445,25 +1453,93 @@ function normalizedScrapedScanTag(value) {
     .slice(0, 80);
 }
 
+// A slug naming one fixture groups exactly one opportunity. The performance tables drop
+// these, so the catalogue must not offer them either -- picking one would produce a view
+// that no statistic in the application ever counted.
+const PER_FIXTURE_TAXONOMY_LABEL = /^(?:market|event|team|match|topic|entity)\s*:|-(?:19|20)\d{2}-\d{2}-\d{2}(?:-|$)/i;
+
 function taxonomyValuesFromRecord(item, kind) {
+  // Scrape-time relations first, exactly as scrapedSimulationTaxonomy() reads them when
+  // it builds the Category and Tag performance tables. The two used to disagree -- the catalogue
+  // preferred today's Gamma relation -- so a market re-tagged after it was scraped was
+  // counted in one group and listed in another.
   const fields = kind === "category"
-    ? ["polymarketCategories", "firstPolymarketCategories", "categories", "firstCategories"]
-    : ["polymarketTags", "firstPolymarketTags", "tags", "firstTags"];
-  // A catalogue link must describe the market as Polymarket classifies it now.
-  // First-seen taxonomy is retained only as a fallback for legacy rows, otherwise a
-  // historical label can leak unrelated current markets into a tag/category view.
-  const source = fields.map((field) => item?.[field]).find((value) => Array.isArray(value) && value.length)
-    || fields.map((field) => item?.[field]).find((value) => value != null);
-  const entries = Array.isArray(source) ? source : source == null ? [] : [source];
+    ? ["firstPolymarketCategories", "polymarketCategories"]
+    : ["firstPolymarketTags", "polymarketTags"];
+  const source = fields.map((field) => item?.[field]).find((value) => Array.isArray(value) && value.length);
+  const entries = Array.isArray(source) ? source : [];
   const values = new Set();
   for (const entry of entries) {
     const raw = entry && typeof entry === "object"
       ? (entry.slug || entry.label || entry.name || "")
       : entry;
     const label = normalizeScrapedTaxonomyLabel(raw);
-    if (label) values.add(label);
+    if (label && !PER_FIXTURE_TAXONOMY_LABEL.test(label)) values.add(label);
   }
   return values;
+}
+
+// The filter the archive is queried with, or null when no taxonomy is selected. The key
+// it produces is what tells a completed fetch from a stale one.
+function scrapedTaxonomyDrilldownRequest() {
+  const taxonomy = normalizedScrapedTaxonomyFilter(state.scrapedTaxonomyFilter);
+  if (!taxonomy) return null;
+  const routeFilter = state.scrapedRouteFilter;
+  const probabilityFilter = routeFilter ? routeFilter.probabilityFilter : currentEvaluationProbabilityFilter();
+  return {
+    kind: taxonomy.kind,
+    value: taxonomy.label,
+    statuses: normalizeScrapedStatuses(routeFilter ? routeFilter.statuses : state.scrapedStatuses),
+    probability: Math.round(Math.max(0, Number(probabilityFilter) || 0) * 100),
+  };
+}
+
+function scrapedTaxonomyDrilldownKey(request) {
+  return request ? JSON.stringify(request) : "";
+}
+
+// The rows the statistics counted, read straight from the stored archive. The catalogue
+// the browser holds is capped at the most recent 3,000 resolved rows, so a tag view built
+// from it lists a fraction of its own headline number.
+async function loadScrapedTaxonomyRows() {
+  const request = scrapedTaxonomyDrilldownRequest();
+  const key = scrapedTaxonomyDrilldownKey(request);
+  if (!key) {
+    if (state.scrapedTaxonomyRowsKey || state.scrapedTaxonomyRows) {
+      state.scrapedTaxonomyRows = null;
+      state.scrapedTaxonomyRowsKey = "";
+      state.scrapedTaxonomyRowsError = "";
+    }
+    return;
+  }
+  if (state.scrapedTaxonomyRowsKey === key || state.scrapedTaxonomyRowsPending === key) return;
+  state.scrapedTaxonomyRowsPending = key;
+  state.scrapedTaxonomyRowsError = "";
+  try {
+    const payload = await fetchApiJson("api.php?action=taxonomy-observations&target=paper"
+      + `&kind=${encodeURIComponent(request.kind)}`
+      + `&value=${encodeURIComponent(request.value)}`
+      + `&statuses=${encodeURIComponent(request.statuses.join(","))}`
+      + `&probability=${encodeURIComponent(String(request.probability))}`);
+    if (state.scrapedTaxonomyRowsPending !== key) return;
+    state.scrapedTaxonomyRows = {
+      rows: Array.isArray(payload.marketObservations) ? payload.marketObservations : [],
+      matched: Number(payload.matched) || 0,
+      truncated: payload.truncated === true,
+    };
+  } catch (error) {
+    if (state.scrapedTaxonomyRowsPending !== key) return;
+    state.scrapedTaxonomyRows = null;
+    state.scrapedTaxonomyRowsError = error?.message || "the stored archive could not be read";
+  } finally {
+    if (state.scrapedTaxonomyRowsPending === key) {
+      // Recorded either way, so a failure is reported once rather than retried on
+      // every render until the selection changes.
+      state.scrapedTaxonomyRowsKey = key;
+      state.scrapedTaxonomyRowsPending = "";
+      renderScrapedOpportunities();
+    }
+  }
 }
 
 function scrapedTaxonomyFilterMatches(item, filter = state.scrapedTaxonomyFilter) {
@@ -4429,7 +4505,11 @@ async function waitForExecutionResult(target, startedAt, steps, options = {}) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     let payload = null;
     try {
-      payload = await fetchApiJson(`api.php?action=state&target=${stateTarget}`);
+      // The unnamed summary decodes the whole evaluation archive on the way out, which is
+      // what made this poll answer "paper state HTTP 500" on a 128 MB host. The decision
+      // it reads lives in the core state, so the dashboard view carries it.
+      const summary = stateTarget === "paper" ? "&summary=dashboard" : "";
+      payload = await fetchApiJson(`api.php?action=state&target=${stateTarget}${summary}`);
     } catch (error) {
       lastError = error;
       await sleep(3000);
@@ -7619,7 +7699,17 @@ function showMoreScrapedOpportunities() {
 
 function renderScrapedOpportunities() {
   syncScrapedTaxonomyFilterControl();
-  const observations = scrapedMarketObservations();
+  const catalogue = scrapedMarketObservations();
+  const drilldownRequest = scrapedTaxonomyDrilldownRequest();
+  const drilldownKey = scrapedTaxonomyDrilldownKey(drilldownRequest);
+  // Served by the archive query, which already applied this taxonomy, these statuses and
+  // this probability floor -- with the very predicates the performance tables count with.
+  // Re-filtering them here could only make the list disagree with its own headline again.
+  const drilldown = drilldownKey && state.scrapedTaxonomyRowsKey === drilldownKey
+    ? state.scrapedTaxonomyRows
+    : null;
+  if (drilldownKey) loadScrapedTaxonomyRows();
+  const observations = drilldown ? drilldown.rows : catalogue;
   const routeFilter = state.scrapedRouteFilter;
   const probabilityFilter = routeFilter ? routeFilter.probabilityFilter : currentEvaluationProbabilityFilter();
   const daysFilter = routeFilter ? routeFilter.daysFilter : currentEvaluationDaysFilter();
@@ -7636,20 +7726,28 @@ function renderScrapedOpportunities() {
     ? normalizeScrapedMarketType(routeFilter.marketType)
     : normalizeScrapedMarketType(state.scrapedMarketTypeFilter);
   const selectedStatuses = routeFilter ? routeFilter.statuses : normalizeScrapedStatuses(state.scrapedStatuses);
-  const statusFiltered = observations.filter((item) => selectedStatuses.includes(scrapedObservationFilterStatus(item)));
+  const statusFiltered = drilldown
+    ? observations
+    : observations.filter((item) => selectedStatuses.includes(scrapedObservationFilterStatus(item)));
   const filtered = statusFiltered.filter((item) => {
-    if (!scrapedTaxonomyFilterMatches(item, taxonomyFilter)) return false;
+    // Taxonomy, status and entry price were all applied by the archive query for a
+    // drill-down, with the statistics' own definitions. Re-deriving them here could only
+    // reintroduce the disagreement. The filters below are the user's own further
+    // narrowing, so they still apply.
+    if (!drilldown && !scrapedTaxonomyFilterMatches(item, taxonomyFilter)) return false;
     if (marketTypeFilter !== "all" && scrapedMarketType(item) !== marketTypeFilter) return false;
     // Filtered on the price the statistics count this row at, not on today's quote.
     // These links come from the performance tables, and a count that does not match the
     // rows behind it is the report disagreeing with its own evidence. A resolved row is
     // settled anyway, so its current price was never the meaningful number.
     const isResolved = scrapedObservationStatus(item) === "RESOLVED";
-    const filterProbability = Number(isResolved ? scrapedEntryProbability(item) : scrapedDisplayProbability(item));
-    if (probabilityFilter > 0 && (!Number.isFinite(filterProbability) || filterProbability < probabilityFilter)) return false;
-    // The simulation cannot price a row with no live quote ever recorded, so it counts
-    // none -- and a resolved list that shows them would again outnumber its own statistic.
-    if (isResolved && scrapedEntryProbability(item) == null) return false;
+    if (!drilldown) {
+      const filterProbability = Number(isResolved ? scrapedEntryProbability(item) : scrapedDisplayProbability(item));
+      if (probabilityFilter > 0 && (!Number.isFinite(filterProbability) || filterProbability < probabilityFilter)) return false;
+      // The simulation cannot price a row with no live quote ever recorded, so it counts
+      // none -- and a resolved list that shows them would again outnumber its own statistic.
+      if (isResolved && scrapedEntryProbability(item) == null) return false;
+    }
     // A resolved market no longer trades, so the tradability filters must not apply
     // to it. A missing "days left", a days ceiling, a stale net yield or a collapsed
     // post-settlement liquidity would each empty the Resolved tab on their own.
@@ -7678,20 +7776,27 @@ function renderScrapedOpportunities() {
   const remaining = Math.max(0, sorted.length - visible.length);
   state.scrapedFilteredCount = sorted.length;
   const scan = scrapedMarketScan();
-  const scrapedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "SCRAPED").length;
-  const resolvedCount = observations.filter((item) => scrapedObservationFilterStatus(item) === "RESOLVED").length;
+  const scrapedCount = catalogue.filter((item) => scrapedObservationFilterStatus(item) === "SCRAPED").length;
+  const resolvedCount = catalogue.filter((item) => scrapedObservationFilterStatus(item) === "RESOLVED").length;
+  // The archive query reports how many rows matched even when it returns fewer, so a
+  // capped response still states the number the statistic it came from is showing. That
+  // only holds while nothing was narrowed further here; once the user adds a filter of
+  // their own, the honest number is what survived it.
+  const matchedCount = drilldown && filtered.length === drilldown.rows.length
+    ? drilldown.matched
+    : filtered.length;
   if (els.evaluationFilterCount) {
-    const filteredCount = formatInteger(filtered.length) || filtered.length;
+    const filteredCount = formatInteger(matchedCount) || matchedCount;
     const visibleCount = formatInteger(visible.length) || visible.length;
-    els.evaluationFilterCount.textContent = filtered.length > visible.length
+    els.evaluationFilterCount.textContent = matchedCount > visible.length
       ? `${visibleCount} of ${filteredCount} shown`
       : `${filteredCount} shown`;
   }
   if (els.evaluationSummary) {
     const lastScan = scan.lastScanAt ? formatDate(scan.lastScanAt) : "pending";
     els.evaluationSummary.textContent = [
-      `${formatInteger(filtered.length) || filtered.length} shown`,
-      `${formatInteger(observations.length) || observations.length} retained`,
+      `${formatInteger(matchedCount) || matchedCount} shown`,
+      `${formatInteger(catalogue.length) || catalogue.length} retained`,
       `${formatInteger(scrapedCount) || scrapedCount} scraped`,
       `${formatInteger(resolvedCount) || resolvedCount} resolved`,
       scan.lastBatchCount != null ? `${formatInteger(scan.lastBatchCount)} in last batch` : null,
@@ -7708,8 +7813,19 @@ function renderScrapedOpportunities() {
     ].filter(Boolean).join(" / ");
   }
 
+  // A taxonomy view is never rendered from the catalogue the browser holds. That
+  // catalogue is a capped page of the archive, so listing its subset is exactly how a
+  // group reporting 937 trades came to show 12 of them.
+  if (drilldownKey && !drilldown) {
+    els.botEvaluations.innerHTML = state.scrapedTaxonomyRowsError
+      ? `<div class="empty">The stored archive could not be read: ${escapeHtml(state.scrapedTaxonomyRowsError)}</div>`
+      : '<div class="empty">Reading every stored opportunity in this group from the archive...</div>';
+    return;
+  }
   if (!observations.length) {
-    els.botEvaluations.innerHTML = '<div class="empty">No scraped Polymarket opportunities are available yet. The next market scan will add them here.</div>';
+    els.botEvaluations.innerHTML = drilldown
+      ? '<div class="empty">No stored opportunity is grouped under this category or tag at this probability.</div>'
+      : '<div class="empty">No scraped Polymarket opportunities are available yet. The next market scan will add them here.</div>';
     return;
   }
   if (!visible.length) {

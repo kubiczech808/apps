@@ -1319,6 +1319,15 @@ test("state segments: api.php loads only the segments a summary reads", async ()
   // The audit endpoints only ever needed the scan history.
   assert.equal((api.match(/state_payload\('paper', \['scanHistory'\]\)/g) || []).length, 2);
 
+  // The browser must declare a summary too. The unnamed one decodes the evaluation
+  // archive and the scan history on the way out, and that is the read that answered
+  // "paper state HTTP 500" after every dispatched paper run.
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  for (const call of app.match(/api\.php\?action=state&target=[^`"']*/g) || []) {
+    assert.ok(!/target=paper(?![\w-])(?!.*summary=)/.test(call),
+      `${call} must name the summary it needs from the paper state`);
+  }
+
   // A state published before segmentation has no manifest and must still serve whole.
   assert.match(api, /if \(\$manifest === \[\]\) \{\s*\n\s*\/\/[^\n]*\n\s*return \$data;/);
   // A segment file name arrives as file content, so it stays a plain sibling name.
@@ -1486,7 +1495,7 @@ test("execution run-once: a missing result state is waited out, not reported as 
   // The reported bug: the first poll can land before the runner has published its
   // state, and an unguarded read turned that into "Execution failed / State file is
   // not available yet". Each attempt must absorb its own error and keep polling.
-  assert.match(waiter, /try \{\s*\n\s*payload = await fetchApiJson/);
+  assert.match(waiter, /try \{[\s\S]{0,400}?payload = await fetchApiJson/);
   assert.match(waiter, /catch \(error\) \{\s*\n\s*lastError = error;\s*\n\s*await sleep\(3000\);\s*\n\s*continue;/);
   // And the loop must never rethrow, or the outer catch reports a failed execution.
   assert.ok(!/throw /.test(waiter), "waitForExecutionResult must not throw");
@@ -2036,8 +2045,20 @@ test("taxonomy performance: rows open the current scraped markets for that categ
     "the scraped catalogue must expose a progressive load-more action");
   assert.match(app, /data-scraped-load-more/,
     "the rendered scraped table must offer remaining rows to the user");
-  assert.match(app, /\["polymarketTags", "firstPolymarketTags", "tags", "firstTags"\]/,
-    "tag deep-links must prefer the market's current Polymarket tag over an old snapshot");
+  // Reversed deliberately. Tag performance evaluates each market as it first appeared,
+  // so a market re-tagged on Polymarket after it was scraped is counted under its
+  // scrape-time tag. A deep-link preferring today's relation listed it under a different
+  // one, which is one of the ways a group's headline count and its own rows diverged.
+  assert.match(app, /\["firstPolymarketTags", "polymarketTags"\]/,
+    "tag deep-links must group by the scrape-time tag the statistics count with");
+  assert.match(app, /\["firstPolymarketCategories", "polymarketCategories"\]/,
+    "and category deep-links likewise");
+  assert.match(app, /if \(label && !PER_FIXTURE_TAXONOMY_LABEL\.test\(label\)\) values\.add\(label\);/,
+    "a per-fixture slug groups one opportunity, so no statistic offers it and neither may the picker");
+  assert.match(app, /action=taxonomy-observations/,
+    "a taxonomy view must query the stored archive, not filter the capped catalogue page");
+  assert.match(app, /if \(drilldownKey && !drilldown\) \{/,
+    "and must never fall back to rendering that page's subset under a taxonomy heading");
   assert.match(app, /selectedStatuses\.includes\(scrapedObservationFilterStatus\(item\)\)/,
     "the scraped list must respect multiple selected statuses");
   assert.match(app, /scrapedTaxonomyOpportunityPath\(\{ kind, label: row\.label \}, \{ statuses: \["SCRAPED", "RESOLVED"\], rule: scrapedTaxonomyProbabilityRule\(row\) \}\)/,
