@@ -4734,18 +4734,23 @@ test("paper rotation: free capital is spent before a position is given up", asyn
     0.15, 0.02,
   )({ trades: [held] }, [candidate], {}, available, stake);
 
-  assert.equal(review(9, 5), null, "with free cash to spare the portfolio buys, it does not rotate");
-  assert.equal(review(5, 5), null, "and exactly enough is enough -- the same bar the capital check uses");
+  // The rule is unchanged; only how a refusal is reported. It used to be a bare null,
+  // which threw away the reason and left the run log unable to show that rotation had
+  // run at all -- so a refusal now carries its verdict and `best` stays empty.
+  assert.equal(review(9, 5).best, null, "with free cash to spare the portfolio buys, it does not rotate");
+  assert.equal(review(5, 5).best, null, "and exactly enough is enough -- the same bar the capital check uses");
+  assert.match(review(9, 5).reason, /already covers the 5\.00 USDC stake/,
+    "and it says so, with the figures it decided on");
 
   // Rotation still does its job when the candidate genuinely cannot be funded otherwise.
   const short = review(1, 5);
-  assert.ok(short, "short of the stake, rotation is the only way to take the better candidate");
-  assert.equal(short.trade.id, "T1");
-  assert.equal(short.candidate.tokenId, "2");
+  assert.ok(short.best, "short of the stake, rotation is the only way to take the better candidate");
+  assert.equal(short.best.trade.id, "T1");
+  assert.equal(short.best.candidate.tokenId, "2");
 
   // The rule the live executor has always had, now stated on the paper side too, and
   // recorded so a ROTATED_OPENED row can be read without guessing at the cash position.
-  assert.match(bot, /if \(available >= stake\) return null;/);
+  assert.match(bot, /if \(available >= stake\) \{\n\s+return declined\(/);
   assert.match(bot, /freeCapitalCoversStake: Number\(available\) >= Number\(stake\),/);
 });
 
@@ -5042,4 +5047,89 @@ test("state segments: reading the hosted state never rebuilds it from the capped
     segments.resolvedRecent.resolvedMarketObservations.length,
     "merging the page replaces the archive rather than adding to it -- which is why it is skipped",
   );
+});
+
+// Reported on Paper 75: rotation is switched on in its parameters, and the run log showed
+// only "SKIP: not enough free paper capital for next Paper 75 trade: 6.10 USDC available,
+// 6.34 USDC required" -- nothing about rotation at all. From that it is impossible to tell
+// a rule declining from the logic never running.
+//
+// It had run. Every path out of the review returned a bare null, which threw away the
+// reasons it had collected, and the skip path built its batch log without them.
+test("paper rotation: every outcome says what rotation decided", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  const held = (id, hours) => ({ id, status: "OPEN", tokenId: id, maxLossUsdc: 5, stakeUsdc: 5, hours });
+  const build = (trades, { candidate = { tokenId: "9" }, score = 2, ev = 0.5 } = {}) => new Function(
+    "openTrades", "heldHours", "ROTATION_MIN_HOLD_HOURS", "findFirstOpenCandidate",
+    "tradeContinuationEconomics", "candidateRotationScore", "portfolioEconomics",
+    "ROTATION_MIN_SCORE_IMPROVEMENT", "ROTATION_MIN_EV_USDC_IMPROVEMENT",
+    `${functionSource(bot, "rotationPositionSummary")}\n${functionSource(bot, "rotationCandidateSummary")}\n`
+    + `${functionSource(bot, "rotationReview")}\nreturn rotationReview;`,
+  )(
+    (list) => list, (trade) => trade.hours, 6, () => ({ best: candidate }),
+    () => ({ score: 1, expectedValue: 0.10 }), () => score, () => ({ expectedValueUsdc: ev }),
+    0.15, 0.02,
+  )({ trades }, [candidate], {}, 1, 5);
+
+  // Production's numbers: short of the stake, so rotation is the portfolio's only route.
+  // Each refusal below is a different rule, and each has to be distinguishable.
+  const noHoldings = build([]);
+  assert.equal(noHoldings.best, null);
+  assert.match(noHoldings.reason, /holds no open paper trade to rotate out of/);
+
+  const tooYoung = build([held("A", 1), held("B", 2)]);
+  assert.equal(tooYoung.best, null);
+  assert.match(tooYoung.reason, /all 2 open trade\(s\) are still inside the 6h minimum hold/);
+
+  // Reviewable, but the candidate is not enough better. The per-holding reasons are the
+  // answer here, so they must survive the refusal rather than being dropped.
+  const tooSmall = build([held("A", 48)], { score: 1.05, ev: 0.11 });
+  assert.equal(tooSmall.best, null);
+  assert.match(tooSmall.reason, /none of the 1 reviewable holding\(s\) cleared the rotation bars/);
+  assert.ok(tooSmall.reviews.length, "the per-holding reasons must travel with the refusal");
+  assert.match(tooSmall.reviews[0].reason, /improvement too small/);
+
+  // And a rotation that does qualify still reports itself the same way.
+  const rotates = build([held("A", 48)]);
+  assert.ok(rotates.best);
+  assert.equal(rotates.action, "ROTATION_AVAILABLE");
+
+  // Every refusal uses the shape the run-log rotation block already renders for live.
+  for (const outcome of [noHoldings, tooYoung, tooSmall]) {
+    assert.equal(outcome.action, "NO_ROTATION_CANDIDATE");
+    assert.ok(Array.isArray(outcome.reviews));
+  }
+});
+
+test("paper rotation: the switch reaches the bot, and being off is logged too", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [bot, workflow, api] = await Promise.all([
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8"),
+    readFile(new URL("../api.php", import.meta.url), "utf8"),
+  ]);
+
+  // The chain the setting travels: saved config -> workflow env -> strategy flag. A break
+  // anywhere in it would look exactly like the reported symptom, so all three are pinned.
+  assert.match(api, /'autoRotatePositions' => \(bool\) \(\$input\['autoRotatePositions'\]/);
+  assert.match(workflow, /emit\(f"\{prefix\}_AUTO_ROTATE", str\(bool\(row\.get\("autoRotatePositions"/);
+  const strategies = [...bot.matchAll(/allowRotation: envBool\("PAPER_(\w+)_AUTO_ROTATE", (\w+)\)/g)];
+  assert.equal(strategies.length, 4, "every paper strategy reads its own rotation switch");
+  // Equal is the one that ships off; the rest keep the behaviour they had before the
+  // switch existed, so an existing portfolio does not silently stop rotating.
+  const defaults = Object.fromEntries(strategies.map((match) => [match[1], match[2]]));
+  assert.equal(defaults.EQUAL, "false");
+  for (const name of ["CONSERVATIVE", "HIGH_REWARD", "MORE_PROBABLE"]) {
+    assert.equal(defaults[name], "true", `${name} must keep rotating unless it is switched off`);
+  }
+  assert.match(bot, /allowRotation: strategy\.allowRotation !== false,/);
+
+  // Off is a reason, not an absence: "rotation is off" and "rotation ran and declined"
+  // are indistinguishable in a log that records neither.
+  assert.match(bot, /action: "ROTATION_DISABLED", reason: "position rotation is switched off for this portfolio"/);
+  // And whatever it concluded reaches the batch log on the paths that do not rotate --
+  // the skip the report was filed against is one of them.
+  assert.equal((bot.match(/rotationReview: rotationOutcome,/g) || []).length, 3);
 });

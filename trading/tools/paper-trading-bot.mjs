@@ -5558,7 +5558,19 @@ function findFirstOpenCandidate(portfolioState, eligible, excludedTradeId = null
   return { best: best || null, skippedForRisk };
 }
 
+// Always answers, even when it decides against rotating.
+//
+// Reported on Paper 75: rotation is switched on, and the run log showed only "SKIP: not
+// enough free paper capital" with nothing about rotation at all -- so from the log it was
+// impossible to tell a rule declining from the logic never running. It had run. Returning
+// a bare null threw away every reason it had collected, and the caller's skip path logged
+// none of it.
+//
+// So each exit carries a reason, in the same {action, reason, reviews} shape the live
+// portfolio's rotation block already renders.
 function rotationReview(portfolioState, eligible, strategy, available, stake) {
+  const declined = (reason, reviews = []) => ({ best: null, action: "NO_ROTATION_CANDIDATE", reason, reviews });
+
   // Free capital first. Rotation is what a portfolio does when it cannot fund the better
   // candidate any other way -- selling a position to buy one it could have bought outright
   // gives up a holding for nothing. This was missing entirely: rotation was evaluated
@@ -5566,11 +5578,17 @@ function rotationReview(portfolioState, eligible, strategy, available, stake) {
   // would fit *after* an exit, which is trivially true when it already fits without one.
   // The live executor has had the rule from the start ("use free cash for a direct
   // candidate before touching existing orders or positions"); the paper side had not.
-  if (available >= stake) return null;
+  if (available >= stake) {
+    return declined(`free capital of ${available.toFixed(2)} USDC already covers the ${stake.toFixed(2)} USDC stake, so no holding needs to be sold`);
+  }
 
   const allOpen = openTrades(portfolioState.trades).filter((trade) => trade.status === "OPEN");
   const openRows = allOpen.filter((trade) => heldHours(trade) >= ROTATION_MIN_HOLD_HOURS);
-  if (!openRows.length) return null;
+  if (!openRows.length) {
+    return declined(allOpen.length
+      ? `all ${allOpen.length} open trade(s) are still inside the ${ROTATION_MIN_HOLD_HOURS}h minimum hold`
+      : "this portfolio holds no open paper trade to rotate out of");
+  }
 
   // Every holding that was looked at, and what happened to it. Without this the run log
   // named the replacement candidate and nothing else -- not which position was being sold,
@@ -5650,7 +5668,10 @@ function rotationReview(portfolioState, eligible, strategy, available, stake) {
       bestReview = review;
     }
   }
-  return bestReview ? { ...bestReview, reviews } : null;
+  if (bestReview) return { ...bestReview, best: bestReview, action: "ROTATION_AVAILABLE", reviews };
+  // Every holding was looked at and none qualified. The per-holding reasons above are the
+  // answer, so they travel with the verdict instead of being dropped on the floor.
+  return declined(`none of the ${openRows.length} reviewable holding(s) cleared the rotation bars`, reviews);
 }
 
 // The shapes the run-log detail already knows how to render. It was written for the live
@@ -5747,7 +5768,12 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   const maxFraction = Number(strategy.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION);
   const stake = sizingCapital * maxFraction;
 
-  const rotation = strategy.allowRotation === false ? null : rotationReview(portfolioState, eligible, strategy, available, stake);
+  // Switched off is itself a reason worth logging: "rotation is off" and "rotation ran and
+  // declined" look identical in a log that records neither.
+  const rotationOutcome = strategy.allowRotation === false
+    ? { best: null, action: "ROTATION_DISABLED", reason: "position rotation is switched off for this portfolio", reviews: [] }
+    : rotationReview(portfolioState, eligible, strategy, available, stake);
+  const rotation = rotationOutcome.best;
   if (rotation) {
     const closedTrade = closeTradeForRotation(rotation.trade, rotation, strategy);
     portfolioState.trades = portfolioState.trades.map((trade) => trade.id === closedTrade.id ? closedTrade : trade);
@@ -5807,6 +5833,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         insufficientCapital: true,
         diversificationDiagnostics: options.diversificationDiagnostics || null,
         prevalidationFilter: options.prevalidationFilter || null,
+        rotationReview: rotationOutcome,
       }),
     };
   }
@@ -5832,6 +5859,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         stake,
         diversificationDiagnostics: options.diversificationDiagnostics || null,
         prevalidationFilter: options.prevalidationFilter || null,
+        rotationReview: rotationOutcome,
       }),
     };
   }
@@ -5861,6 +5889,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
         skippedForRisk,
         diversificationDiagnostics: options.diversificationDiagnostics || null,
         prevalidationFilter: options.prevalidationFilter || null,
+        rotationReview: rotationOutcome,
       }),
     };
   }
