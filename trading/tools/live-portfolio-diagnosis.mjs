@@ -236,6 +236,41 @@ async function reportScrapedCatalogue() {
   }
 }
 
+// Reported: the "stop loss" portfolio still shows an old value for its rotation
+// parameter rather than On/Off. Both sides of that are printed here -- the setting the
+// browser reads from portfolio-config, and the strategy the bot actually ran with --
+// because a stale display and a stale run are different faults with different fixes.
+async function reportPaperPortfolioSettings() {
+  console.log(`\n== Paper portfolio settings, as stored and as run`);
+  const [config, state] = await Promise.all([
+    fetchJson(`${HOST}/api.php?action=portfolio-config`),
+    fetchJson(`${HOST}/api.php?action=state&target=paper&summary=dashboard`),
+  ]);
+  const paper = (config.ok ? config.body?.config?.paper : null) || {};
+  const portfolios = ((state.ok ? (state.body?.state || state.body) : null) || {}).paperPortfolios || {};
+  const ids = [...new Set([...Object.keys(paper), ...Object.keys(portfolios)])];
+  if (!ids.length) console.log(`   nothing readable (config HTTP ${config.status}, state HTTP ${state.status})`);
+  for (const id of ids) {
+    const row = paper[id] || {};
+    const live = portfolios[id] || {};
+    const strategy = live.strategy || {};
+    console.log(`   ${id}: name=${JSON.stringify(row.displayName ?? live.label ?? null)}`
+      + ` autoRotatePositions=${JSON.stringify(row.autoRotatePositions)} (${typeof row.autoRotatePositions})`
+      + ` automationEnabled=${JSON.stringify(row.automationEnabled)}`
+      + ` executionTrigger=${JSON.stringify(row.executionTrigger)}`);
+    console.log(`      as run: allowRotation=${JSON.stringify(strategy.allowRotation)}`
+      + ` label=${JSON.stringify(strategy.label ?? live.label)}`
+      + ` | portfolio initialUsdc=${live.portfolio?.initialUsdc ?? "-"}`
+      + ` equity=${live.portfolio?.equityUsdc ?? "-"}`
+      + ` trades=${(live.trades || []).length} resetAt=${live.resetAt || "never"}`);
+    // Any key the browser could still be reading a legacy value from.
+    const legacy = Object.keys(row).filter((key) => /rotat/i.test(key) && key !== "autoRotatePositions");
+    if (legacy.length) console.log(`      legacy rotation keys in config: ${legacy.map((key) => `${key}=${JSON.stringify(row[key])}`).join(", ")}`);
+    const legacyRun = Object.keys(strategy).filter((key) => /rotat/i.test(key) && key !== "allowRotation");
+    if (legacyRun.length) console.log(`      legacy rotation keys as run: ${legacyRun.map((key) => `${key}=${JSON.stringify(strategy[key])}`).join(", ")}`);
+  }
+}
+
 async function main() {
   console.log(`Live portfolio attribution diagnosis at ${new Date().toISOString()}`);
   console.log("Read-only: nothing is written, no credentials are used.\n");
@@ -375,7 +410,7 @@ async function main() {
 
   // Last on purpose: only the tail of a runner log can be read back through the API, so
   // the section being investigated has to be the one that lands there.
-  await reportScrapedCatalogue();
+  await reportPaperPortfolioSettings();
 }
 
 const invokedDirectly = process.argv[1]
