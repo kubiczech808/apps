@@ -216,6 +216,24 @@ async function reportScrapedCatalogue() {
   } else if (calculation) {
     console.log(`   statistics row: "${tag}" is not among the stored tag rows`);
   }
+
+  // The link the user clicks now asks the archive for the rows behind that number rather
+  // than filtering the capped page above. Every rung is compared, because each is its own
+  // statistic with its own link -- one matching rung would not prove the rest do.
+  console.log(`\n== What the "trades" link now serves, rung by rung`);
+  for (const summary of (row?.minimumProbabilitySummaries || [])) {
+    const percent = Math.round(Number(summary.minimumProbability) * 100);
+    const [resolved, open] = await Promise.all(["RESOLVED", "SCRAPED"].map((status) => fetchJson(
+      `${HOST}/api.php?action=taxonomy-observations&target=paper&kind=tag`
+      + `&value=${encodeURIComponent(tag)}&statuses=${status}&probability=${percent}`,
+    )));
+    const line = (result, expected) => (result.ok
+      ? `${result.body?.matched} (returned ${result.body?.returned}${result.body?.truncated ? ", capped" : ""})`
+        + `${Number(result.body?.matched) === Number(expected) ? " ==" : " != "}${expected}`
+      : `HTTP ${result.status}`);
+    console.log(`   ${percent}%: resolved ${line(resolved, summary.trades)}`
+      + ` | open ${line(open, summary.openCount)}`);
+  }
 }
 
 async function main() {
