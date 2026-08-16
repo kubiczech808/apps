@@ -100,7 +100,7 @@ jobs:
       # also verifies the discovered proxy address, but type 3 is the safe
       # default whenever no explicit account override is configured.
       POLYMARKET_SIGNATURE_TYPE: ${{ secrets.POLYMARKET_SIGNATURE_TYPE || '3' }}
-      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper
+      PAPER_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=dashboard
       PAPER_SCRAPED_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=execution
       LIVE_STATE_PATH: data/live-state.json
       LIVE_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live

@@ -3398,3 +3398,64 @@ test("tag picker: the bracket is a live Polymarket count, on a budget, or nothin
       `${category} is offered in the picker but has no Gamma tag id`);
   }
 });
+
+// Reported from the live run log: ERROR "paper state HTTP 500". The same shape as the
+// scraped-state failure, on the other endpoint the run reads.
+//
+// Measured against the real api.php: the unnamed summary decodes and re-encodes every
+// stored evaluation. 20,000 of them peak at 94 MB, 40,000 exhaust the host's 128 MB, and
+// the manifest-only summary costs 2 MB at 60,000 while still carrying the true count.
+//
+// The run never used that catalogue. PROBABILITY_SOURCE is a constant, so candidates
+// always come from the scraped Polymarket state; the evaluations were fetched in full to
+// print one number in the log. It was downloading a catalogue it does not read, until the
+// catalogue grew past the host.
+test("live executor: the paper state is read for a count, not for a catalogue", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [executorSource, fixedWorkflow, liveWorkflow, api] = await Promise.all([
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/polymarket-live-limit-order-test.yml", import.meta.url), "utf8"),
+    readFile(new URL("../api.php", import.meta.url), "utf8"),
+  ]);
+
+  for (const [name, source] of [["executor", executorSource], ["5050", fixedWorkflow], ["live", liveWorkflow]]) {
+    assert.match(source, /PAPER_STATE_URL[^\n]*target=paper&summary=dashboard/,
+      `${name} must not download the evaluation catalogue it never reads`);
+    assert.doesNotMatch(source, /PAPER_STATE_URL[^\n]*target=paper(?!&summary)/);
+  }
+
+  // That summary decodes no segments at all, which is what makes it cheap.
+  assert.match(api, /case 'dashboard':\n\s+return \[\];/);
+  // And the core still carries the manifest the count comes from.
+  assert.match(executorSource, /paperState\?\.stateSegments\?\.evaluations\?\.counts\?\.evaluations/);
+
+  // The count still reaches the log, from the manifest rather than by counting rows.
+  const main = functionSource(executorSource, "main");
+  assert.match(main, /const storedEvaluations = storedEvaluationCount\(paperState\);/);
+  assert.doesNotMatch(main, /rawEvaluations/,
+    "nothing may read the catalogue now that the response does not carry it");
+
+  // The dead branch that would have silently produced an empty shortlist is gone, not
+  // left to be switched on by someone changing the constant.
+  assert.match(main, /const rawCandidateRows = rawMarketObservations;/);
+});
+
+test("live executor: the stored-evaluation count survives both state shapes", () => {
+  const source = readFileSync(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
+  const count = new Function(`
+    ${functionSource(source, "storedEvaluationCount")}
+    return storedEvaluationCount;
+  `)();
+
+  // A segmented state: the rows are not in the response, the manifest says how many.
+  assert.equal(count({ evaluations: [], stateSegments: { evaluations: { counts: { evaluations: 60000 } } } }), 60000);
+  // A state written before segmentation carries the rows inline, and counting is then the
+  // only way to answer.
+  assert.equal(count({ evaluations: [{}, {}, {}] }), 3);
+  // Neither: a number is still reported rather than the log breaking on it.
+  assert.equal(count({}), 0);
+  assert.equal(count(null), 0);
+  // Zero declared is a real answer, not a missing one.
+  assert.equal(count({ evaluations: [{}], stateSegments: { evaluations: { counts: { evaluations: 0 } } } }), 0);
+});

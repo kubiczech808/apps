@@ -24,7 +24,7 @@ function normalizePortfolioMarketType(value, legacyMultichoice = false) {
   return legacyMultichoice ? "multi" : "all";
 }
 
-const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper";
+const PAPER_STATE_URL = process.env.PAPER_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=dashboard";
 const PAPER_SCRAPED_STATE_URL = process.env.PAPER_SCRAPED_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=paper&summary=execution";
 const LIVE_STATE_URL = process.env.LIVE_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live";
 const LIVE_EXECUTION_STATE_URL = process.env.LIVE_EXECUTION_STATE_URL || "https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution";
@@ -1305,6 +1305,23 @@ function liveStateWithoutPosition(liveState, position) {
       return !(tokenId && itemToken === tokenId);
     }),
   };
+}
+
+// The one number this run needs from the paper state. The catalogue behind it is never
+// read -- candidates come from the scraped Polymarket state -- so the run asks for the
+// summary that carries the manifest and no rows, and takes the count from there.
+//
+// Reported as "paper state HTTP 500": the unnamed summary decodes and re-encodes every
+// stored evaluation. Measured against the real api.php, 20,000 evaluations peak at 94 MB
+// and 40,000 exhaust the host's 128 MB, while the manifest-only summary costs 2 MB at
+// 60,000. The run was downloading a catalogue it does not use, until the catalogue grew
+// past the host.
+function storedEvaluationCount(paperState) {
+  const declared = Number(paperState?.stateSegments?.evaluations?.counts?.evaluations);
+  if (Number.isFinite(declared)) return declared;
+  // A state written before segmentation carries the rows inline, and counting them is
+  // then the only way to answer.
+  return Array.isArray(paperState?.evaluations) ? paperState.evaluations.length : 0;
 }
 
 function liveTradingConfig(liveState) {
@@ -4085,13 +4102,16 @@ async function main() {
   const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, availableCash - IDLE_CASH_MAX_USDC) : 0;
   const maxNotional = Number(regularMaxNotional.toFixed(5));
   const directMaxNotional = Number(Math.min(maxNotional, availableCash).toFixed(5));
-  const rawEvaluations = Array.isArray(paperState.evaluations) ? paperState.evaluations : [];
-  const rawMarketObservations = PROBABILITY_SOURCE === "polymarket" && Array.isArray(scrapedState?.marketObservations)
+  const storedEvaluations = storedEvaluationCount(paperState);
+  const rawMarketObservations = Array.isArray(scrapedState?.marketObservations)
     ? scrapedState.marketObservations
     : [];
-  const rawCandidateRows = PROBABILITY_SOURCE === "polymarket"
-    ? rawMarketObservations
-    : rawEvaluations;
+  // Candidates come from the scraped Polymarket catalogue. PROBABILITY_SOURCE is a
+  // constant here, so the stored evaluations were never the source -- they were fetched,
+  // in full, to print one count. The ternary that pretended otherwise is gone rather than
+  // left as a branch that would silently produce an empty shortlist now that the paper
+  // state is read as a summary that carries no catalogue.
+  const rawCandidateRows = rawMarketObservations;
   const candidatePool = prepareLiveCandidatePool(rawCandidateRows, liveState);
   const latestEvaluations = candidatePool.uniqueEvaluations;
   const evaluationByToken = new Map(latestEvaluations.map((item) => [String(item.tokenId || ""), item]).filter(([tokenId]) => tokenId));
@@ -4338,7 +4358,7 @@ async function main() {
       directCandidateCostUsdc: directCandidateCost,
       manualShortlistFallback,
       capitalUtilizationOverride: monitoring.idleCashOverdue,
-      storedEvaluations: rawEvaluations.length,
+      storedEvaluations,
       uniqueEvaluations: latestEvaluations.length,
       prefilterPassedCandidates: candidatePool.diagnostics.prefilterPassed,
       prefilterRejectedCandidates: candidatePool.diagnostics.prefilterRejected,
@@ -4420,7 +4440,7 @@ async function main() {
         expiredOrderCashReleasedUsdc: expiredOrderSweep.releasedUsdc,
       },
       counts: {
-        storedEvaluations: rawEvaluations.length,
+        storedEvaluations,
         uniqueEvaluations: latestEvaluations.length,
         prefilterPassedCandidates: candidatePool.diagnostics.prefilterPassed,
         prefilterRejectedCandidates: candidatePool.diagnostics.prefilterRejected,
