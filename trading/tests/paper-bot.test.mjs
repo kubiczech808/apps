@@ -5253,3 +5253,66 @@ test("equal stop: the paper fill is modelled on what the live worker actually su
   assert.match(bot, /observedBidAtStop: equalStopDecision\.observedBid,/);
   assert.match(bot, /stopLossStatus: equalStopDecision\.filledByCrossing\n\s+\? "FILLED_AT_FLOOR"/);
 });
+
+// Reported: the trade count in Tag performance does not match the number of rows its own
+// link shows, so the statistics look as though they are computed on something other than
+// the data behind them.
+//
+// They were. Three different orders of preference for the same idea -- "the price this row
+// is counted at" -- existed at once: the simulation used
+// firstMarketProbability ?? marketProbability ?? marketPrice, the list used the current
+// quote falling back to lastLiveMarketProbability, and firstObservationMetadata used a
+// fourth. A market first seen at 0.85 and last quoted at 0.55 therefore sat in the >=60
+// bucket and was filtered out of the list at that same threshold.
+test("tag performance: the list behind a statistic is the set the statistic counted", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [app, bot] = await Promise.all([
+    readFile(new URL("../assets/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8"),
+  ]);
+
+  const statsEntry = new Function(`
+    ${functionSource(bot, "firstLiveProbability")}
+    ${functionSource(bot, "scrapedSimulationProbability")}
+    return scrapedSimulationProbability;
+  `)();
+  const listEntry = new Function(`
+    ${functionSource(app, "scrapedEntryProbability")}
+    return scrapedEntryProbability;
+  `)();
+
+  // Every shape a stored observation actually takes, including the ones that made the two
+  // disagree. The point is not what the answer is -- it is that there is only one.
+  const rows = [
+    { firstMarketProbability: 0.85, lastLiveMarketProbability: 0.55, marketProbability: 1 },
+    { firstMarketProbability: 0.62, lastLiveMarketProbability: 0.95, marketProbability: 1 },
+    // An old row whose first price was seeded from a settlement print: the live quote
+    // beside it is the only usable number, and both sides must reach for it.
+    { firstMarketProbability: 1, lastLiveMarketProbability: 0.73, marketProbability: 1 },
+    { firstMarketProbability: 0, lastLiveMarketProbability: 0.41, marketPrice: 0 },
+    { marketProbability: 0.9 },
+    { marketPrice: 0.77 },
+    // Nothing tradable was ever recorded: the simulation counts no such row, so the list
+    // must not show one under a statistic either.
+    { firstMarketProbability: 1, marketProbability: 1 },
+    { firstMarketProbability: 0, marketProbability: 0 },
+    {},
+  ];
+  for (const row of rows) {
+    assert.equal(listEntry(row), statsEntry(row),
+      `the list and the statistics must price ${JSON.stringify(row)} identically`);
+  }
+
+  // The two cases that were reported, spelled out: they now land in the same bucket.
+  assert.equal(statsEntry(rows[0]), 0.85, "first seen at 0.85 is counted at 0.85, not at its last quote");
+  assert.equal(statsEntry(rows[2]), 0.73, "a settlement print is not a quote; the live number wins");
+  assert.equal(statsEntry(rows[6]), null, "a row with no live quote is counted by neither side");
+
+  // And the list applies both of those rules where it filters, not only where it displays.
+  const render = functionSource(app, "renderScrapedOpportunities");
+  assert.match(render, /const filterProbability = Number\(isResolved \? scrapedEntryProbability\(item\) : scrapedDisplayProbability\(item\)\);/);
+  assert.match(render, /if \(isResolved && scrapedEntryProbability\(item\) == null\) return false;/);
+  // A settled row shows the number it was filtered on, so the column cannot contradict
+  // the filter that admitted it.
+  assert.match(functionSource(app, "scrapedDisplayProbability"), /const entry = scrapedEntryProbability\(item\);/);
+});

@@ -8087,9 +8087,24 @@ function reportProbability(item, source) {
   return null;
 }
 
+// The one price a scraped row is counted at, everywhere. The statistics simulate entering
+// at the first live quote and holding to resolution, so that quote is what a row's tag
+// bucket, its ROI and the list behind the link all have to agree on.
+//
+// Reported: the trade count in Tag performance does not match the number of rows its own
+// link shows. It could not. This used `?? ` over three fields, the list used the current
+// price falling back to lastLiveMarketProbability, and firstObservationMetadata used a
+// fourth order again -- so a market first seen at 0.85 and last quoted at 0.55 sat in the
+// >=60 bucket and was filtered out of the list at the same threshold. Now there is one
+// order, and it is firstLiveProbability's: a settlement print of 0 or 1 is not a quote,
+// so any genuinely live number on the row beats it, whichever field it sits in.
 function scrapedSimulationProbability(item) {
-  const value = Number(item?.firstMarketProbability ?? item?.marketProbability ?? item?.marketPrice);
-  return Number.isFinite(value) && value > 0 && value < 1 ? value : null;
+  return firstLiveProbability(
+    item?.firstMarketProbability,
+    item?.lastLiveMarketProbability,
+    item?.marketProbability,
+    item?.marketPrice,
+  );
 }
 
 function scrapedSimulationDays(item) {

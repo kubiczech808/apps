@@ -7454,14 +7454,32 @@ function updateHistoryCell(item) {
 // probability the row carried while it was still tradable and make every resolved
 // entry read 0% or 100%. Keep showing the last live quote; the settlement outcome
 // is reported separately through finalOutcomePrice and the resolution status.
+// The price a scraped row is counted at by the statistics, mirroring
+// scrapedSimulationProbability in the bot exactly. A settlement print of 0 or 1 is not a
+// quote, so any genuinely live number on the row beats it, whichever field it sits in --
+// and the first one recorded is the one a simulated entry would have paid.
+function scrapedEntryProbability(item) {
+  for (const candidate of [
+    item?.firstMarketProbability,
+    item?.lastLiveMarketProbability,
+    item?.marketProbability,
+    item?.marketPrice,
+  ]) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0 && numeric < 1) return numeric;
+  }
+  return null;
+}
+
 function scrapedDisplayProbability(item) {
   const current = Number(item?.marketProbability ?? item?.marketPrice);
   const looksSettled = !Number.isFinite(current) || current <= 0 || current >= 1;
   if (!looksSettled) return current;
-  const preserved = [item?.lastLiveMarketProbability, item?.firstMarketProbability]
-    .map(Number)
-    .find((value) => Number.isFinite(value) && value > 0 && value < 1);
-  return preserved == null ? current : preserved;
+  // A settled row has no current price worth showing, so it shows the one it is counted
+  // at -- which is also the one the probability filter now applies to it, so a row can no
+  // longer display a number the filter it passed disagrees with.
+  const entry = scrapedEntryProbability(item);
+  return entry == null ? current : entry;
 }
 
 // The Resolved tab lists markets that no longer trade, so every tradability filter
@@ -7622,8 +7640,16 @@ function renderScrapedOpportunities() {
   const filtered = statusFiltered.filter((item) => {
     if (!scrapedTaxonomyFilterMatches(item, taxonomyFilter)) return false;
     if (marketTypeFilter !== "all" && scrapedMarketType(item) !== marketTypeFilter) return false;
-    const marketProbability = Number(scrapedDisplayProbability(item));
-    if (probabilityFilter > 0 && (!Number.isFinite(marketProbability) || marketProbability < probabilityFilter)) return false;
+    // Filtered on the price the statistics count this row at, not on today's quote.
+    // These links come from the performance tables, and a count that does not match the
+    // rows behind it is the report disagreeing with its own evidence. A resolved row is
+    // settled anyway, so its current price was never the meaningful number.
+    const isResolved = scrapedObservationStatus(item) === "RESOLVED";
+    const filterProbability = Number(isResolved ? scrapedEntryProbability(item) : scrapedDisplayProbability(item));
+    if (probabilityFilter > 0 && (!Number.isFinite(filterProbability) || filterProbability < probabilityFilter)) return false;
+    // The simulation cannot price a row with no live quote ever recorded, so it counts
+    // none -- and a resolved list that shows them would again outnumber its own statistic.
+    if (isResolved && scrapedEntryProbability(item) == null) return false;
     // A resolved market no longer trades, so the tradability filters must not apply
     // to it. A missing "days left", a days ceiling, a stale net yield or a collapsed
     // post-settlement liquidity would each empty the Resolved tab on their own.
