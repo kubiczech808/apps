@@ -2646,7 +2646,12 @@ test("portfolio parameters: both live portfolios state their order price", () =>
     "stakeSizingRuleValue", "normalizeExecutionTrigger", "executionTriggerLabel",
     "executionCronMinutesLabel", "normalizeFixedEntryPrice", "percent", "money",
     "currentLimitOrders", "systemConfig",
-    `${functionSource(app, "livePortfolioRuleRows")}\nreturn livePortfolioRuleRows;`,
+    // The row builder gained a market-type row, so its two helpers come across as the
+    // real thing rather than as stubs -- they are pure, and a stub here would only prove
+    // the harness agrees with itself.
+    `${functionSource(app, "normalizePortfolioMarketType")}\n${functionSource(app, "portfolioMarketTypeLabel")}\n`
+    + `${functionSource(app, "automaticRotationIsEnabled")}\n`
+    + `${functionSource(app, "livePortfolioRuleRows")}\nreturn livePortfolioRuleRows;`,
   )(
     { liveState: { portfolio: {} } },
     () => fixedEntry,
@@ -2695,7 +2700,12 @@ test("portfolio switch: the open portfolio is unmistakable", async () => {
   // 5050 is a live portfolio but not the Live one. Both tabs headed their tables
   // "Opened live trades", so the two read identically while showing different rows.
   const sync = functionSource(app, "syncModeUi");
-  assert.match(sync, /const portfolioLabel = isFixedEntryMode\(\) \? "5050" : \(live \? "live" : paperModeLabel\(\)\);/);
+  // A portfolio may now carry a name of its own, which takes precedence; the fallback
+  // behind it is what still has to tell 5050, Live and the paper portfolios apart. The
+  // property is asserted rather than the exact expression, which is what broke when the
+  // custom name was put in front of it.
+  assert.match(sync, /const portfolioLabel = portfolioUsesCustomName\(\)\n\s+\? portfolioNameForMode\(\)/);
+  assert.match(sync, /: \(isFixedEntryMode\(\) \? "5050" : \(live \? "live" : paperModeLabel\(\)\)\);/);
   assert.match(sync, /`Opened \$\{portfolioLabel\} trades`/);
   assert.match(sync, /`Closed \$\{portfolioLabel\} trades`/);
   // Checked against the code rather than the whole file, or the comment above explaining

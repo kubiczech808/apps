@@ -2840,6 +2840,8 @@ test("portfolio settings: each portfolio owns its own, and cannot change another
     pick(/function isFixedEntryMode\(mode = state\.mode\)[\s\S]*?\n\}/),
     pick(/function liveConfigKeyForMode\(mode = state\.mode\)[\s\S]*?\n\}/),
     pick(/function paperStrategyIdFromMode\(mode = state\.mode\)[\s\S]*?\n\}/),
+    // defaultPortfolioConfig gained a market-type default, so its normalizer comes too.
+    pick(/function normalizePortfolioMarketType\(value, legacyMultichoice = false\)[\s\S]*?\n\}/),
     pick(/function defaultPortfolioConfig\(\)[\s\S]*?\n\}/),
     pick(/function portfolioConfigForMode\(mode = state\.mode\)[\s\S]*?\n\}/),
     pick(/function updatePortfolioConfigForMode\(mode, updates\)[\s\S]*?\n\}/),
@@ -3822,7 +3824,9 @@ test("5050 run log: the cache keeps enough to identify the run it stored", async
   // synthesized here rather than by the executor.
   assert.match(app, /if \(leftId && rightId && leftId === rightId\) return true;/);
   // And the title must name the portfolio whose log it is.
-  assert.match(app, /const label = isFixedEntryMode\(\) \? "5050" : \(isLiveMode\(\) \? "Live" : paperModeLabel\(\)\);/);
+  // Same shape as the panel titles: a custom portfolio name wins, and the fallback behind
+  // it still names which portfolio the run belongs to.
+  assert.match(app, /const label = portfolioUsesCustomName\(\) \? portfolioNameForMode\(\) : \(isFixedEntryMode\(\) \? "5050" : \(isLiveMode\(\) \? "Live" : paperModeLabel\(\)\)\);/);
 
   // The browser caches the script URL, so a dashboard fix that does not bump this is
   // published and never served -- which is why the earlier fix appeared not to work.
