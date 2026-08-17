@@ -253,21 +253,25 @@ async function reportPaperPortfolioSettings() {
   for (const id of ids) {
     const row = paper[id] || {};
     const live = portfolios[id] || {};
-    const strategy = live.strategy || {};
+    // The published portfolio row, not a "strategy" sub-object -- normalizePaperPortfolio
+    // stamps both flags directly onto .portfolio, and every prior probe reading
+    // .strategy here printed "undefined" for every single portfolio because no such key
+    // is ever published.
+    const runPortfolio = live.portfolio || {};
     console.log(`   ${id}: name=${JSON.stringify(row.displayName ?? live.label ?? null)}`
       + ` autoRotatePositions=${JSON.stringify(row.autoRotatePositions)} (${typeof row.autoRotatePositions})`
+      + ` stopLossEnabled=${JSON.stringify(row.stopLossEnabled)} (${typeof row.stopLossEnabled})`
       + ` automationEnabled=${JSON.stringify(row.automationEnabled)}`
       + ` executionTrigger=${JSON.stringify(row.executionTrigger)}`);
-    console.log(`      as run: allowRotation=${JSON.stringify(strategy.allowRotation)}`
-      + ` label=${JSON.stringify(strategy.label ?? live.label)}`
-      + ` | portfolio initialUsdc=${live.portfolio?.initialUsdc ?? "-"}`
-      + ` equity=${live.portfolio?.equityUsdc ?? "-"}`
+    console.log(`      as run: allowRotation=${JSON.stringify(runPortfolio.allowRotation)}`
+      + ` equalRiskProtection=${JSON.stringify(runPortfolio.equalRiskProtection)}`
+      + ` label=${JSON.stringify(live.label)}`
+      + ` | portfolio initialUsdc=${runPortfolio.initialUsdc ?? "-"}`
+      + ` equity=${runPortfolio.equityUsdc ?? "-"}`
       + ` trades=${(live.trades || []).length} resetAt=${live.resetAt || "never"}`);
     // Any key the browser could still be reading a legacy value from.
     const legacy = Object.keys(row).filter((key) => /rotat/i.test(key) && key !== "autoRotatePositions");
     if (legacy.length) console.log(`      legacy rotation keys in config: ${legacy.map((key) => `${key}=${JSON.stringify(row[key])}`).join(", ")}`);
-    const legacyRun = Object.keys(strategy).filter((key) => /rotat/i.test(key) && key !== "allowRotation");
-    if (legacyRun.length) console.log(`      legacy rotation keys as run: ${legacyRun.map((key) => `${key}=${JSON.stringify(strategy[key])}`).join(", ")}`);
   }
 }
 
