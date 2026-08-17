@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <base href="/trading/">
   <title>Polymarket Trading Desk</title>
-  <link rel="stylesheet" href="assets/app.css?v=20260810-active-choices">
+  <link rel="stylesheet" href="assets/app.css?v=20260817-portfolio-management">
 </head>
 <body>
   <main class="shell" data-app-shell>
@@ -51,20 +51,22 @@
       </header>
 
       <section class="portfolio-overview panel" data-page-section="portfolios">
+        <!-- Above the selector on purpose: with many portfolios, which one to open is a
+             decision made from these numbers. -->
+        <div class="portfolio-summary-table" data-portfolio-overview hidden></div>
         <div class="panel-head">
           <div>
             <p class="eyebrow">Portfolio</p>
             <h2 data-portfolio-title>Autonomous paper portfolio</h2>
           </div>
           <div class="portfolio-actions">
-            <div class="mode-switch" role="group" aria-label="Portfolio mode">
+            <!-- Rebuilt by the script: portfolios can be created, archived and
+                 restored, so the tabs are whatever the saved config holds. The
+                 shipped row below is only what shows before the config loads. -->
+            <div class="mode-switch" role="group" aria-label="Portfolio mode" data-mode-switch>
               <button class="mode-button active" type="button" data-mode-toggle="paper-conservative">Paper - Conservative</button>
-              <button class="mode-button" type="button" data-mode-toggle="paper-highReward">Paper - High reward</button>
-              <button class="mode-button" type="button" data-mode-toggle="paper-moreProbable">Paper - More probable</button>
-              <button class="mode-button" type="button" data-mode-toggle="paper-equal">Paper - Equal</button>
-              <button class="mode-button" type="button" data-mode-toggle="live">Live</button>
-              <button class="mode-button" type="button" data-mode-toggle="live-5050">5050</button>
             </div>
+            <button class="execution-button" type="button" data-create-portfolio title="Create a new paper portfolio">+ Portfolio</button>
           </div>
         </div>
         <div class="portfolio-cards">
@@ -276,6 +278,9 @@
             </div>
             <div class="settings-panel-body">
               <div class="system-status-card" data-system-status hidden></div>
+              <!-- Archived portfolios keep every trade they made. This is where they are
+                   found again, because they are deliberately not on the dashboard. -->
+              <div class="system-status-card" data-archived-portfolios hidden></div>
               <div class="system-status-card">
                 <div class="system-status-head">
                   <div>
@@ -440,6 +445,10 @@
         </label>
       </div>
       <div class="parameter-modal-footer">
+        <!-- Archiving is not deleting: the portfolio keeps every trade it made and can
+             be restored from Settings. It is placed apart from Save because it takes
+             effect on its own, not as part of the form. -->
+        <button class="execution-button parameter-archive-button" type="button" data-parameter-modal-archive hidden>Archive portfolio</button>
         <button class="parameter-confirm-button" type="button" data-parameter-modal-confirm>Save and close</button>
       </div>
     </section>
@@ -447,6 +456,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260814-opportunity-filter-labels"></script>
+  <script src="assets/app.js?v=20260817-portfolio-management"></script>
 </body>
 </html>

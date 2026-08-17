@@ -1983,7 +1983,7 @@ test("taxonomy performance: categories and tags render as separately sorted tabl
   }
   assert.doesNotMatch(app, /taxonomyHeader\(kind, "annualizedPnlPerTradeUsdc", "P\/L p\.a\."/);
   // The header count must match the colspan on the empty row, or the layout breaks.
-  assert.match(app, /colspan="\$\{hasProbabilityBreakdown \? 11 : 10\}"/);
+  assert.match(app, /colspan="\$\{hasProbabilityBreakdown \? 12 : 11\}"/);
   assert.equal(sorted.length, 11);
   assert.doesNotMatch(app, /data-category-kind/);
 
@@ -2705,7 +2705,11 @@ test("5050 tab: the portfolio is a live mode with its own config and run log", a
   // 5050 trades the same wallet as the main live portfolio, so it shares every live
   // view -- positions, orders, account. What must not be shared is the config it is
   // steered by and the run log it writes, because the two decide separately.
-  assert.match(html, /data-mode-toggle="live-5050"/, "it needs its own tab");
+  // The tab row is rebuilt from the saved portfolios, so 5050's tab is asserted where
+  // it is now produced rather than in the shipped markup.
+  assert.match(app, /return \[\.\.\.paperStrategyIds\(\)\.map\(\(id\) => `paper-\$\{id\}`\), "live", "live-5050"\];/,
+    "it needs its own tab");
+  assert.match(html, /data-mode-switch/, "and a container the script can rebuild");
   assert.match(app, /const LIVE_MODES = new Set\(\["live", "live-5050"\]\);/);
   assert.match(app, /function isLiveMode\(\) \{\n  return LIVE_MODES\.has\(state\.mode\);\n\}/,
     "every live view must recognise it, or the tab renders as a paper portfolio");
@@ -2860,6 +2864,8 @@ test("portfolio settings: each portfolio owns its own, and cannot change another
   // paper portfolio.
   const pick = (re) => re.exec(src)[0];
   const run = new Function("state", `${[
+    pick(/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/),
+    pick(/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/),
     pick(/function normalizeMode\(mode\)[\s\S]*?\n\}/),
     pick(/const LIVE_MODES = new Set\(\[[^\]]*\]\);/),
     pick(/function isFixedEntryMode\(mode = state\.mode\)[\s\S]*?\n\}/),
@@ -2869,6 +2875,7 @@ test("portfolio settings: each portfolio owns its own, and cannot change another
     pick(/function normalizePortfolioMarketType\(value, legacyMultichoice = false\)[\s\S]*?\n\}/),
     pick(/function defaultPortfolioConfig\(\)[\s\S]*?\n\}/),
     pick(/function portfolioConfigForMode\(mode = state\.mode\)[\s\S]*?\n\}/),
+    pick(/function customPaperPortfolioDefaults\(strategyId\)[\s\S]*?\n\}/),
     pick(/function updatePortfolioConfigForMode\(mode, updates\)[\s\S]*?\n\}/),
   ].join("\n")}
     const DEFAULT_MAX_RESOLUTION_DAYS = 7;

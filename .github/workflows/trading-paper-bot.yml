@@ -273,6 +273,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import re
           import urllib.request
 
           url = "https://osobnizkusenosti.cz/trading/api.php?action=portfolio-config"
@@ -298,9 +299,26 @@ jobs:
               with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
                   handle.write(f"{key}={value}\n")
 
+          # Portfolios the user created. Their ids are not known when this workflow is
+          # written, so they travel as one JSON variable rather than a per-portfolio set
+          # of names. The bot validates every id again before it becomes a strategy.
+          custom = {
+              key: value for key, value in paper.items()
+              if key not in mapping and isinstance(value, dict)
+              and re.fullmatch(r"[a-z][a-zA-Z0-9]{1,30}", str(key))
+          }
+          # Always written, even when empty: an unset variable would leave whatever the
+          # step wrote on a previous run in place, so deleting the last created portfolio
+          # would not actually remove it.
+          emit("PAPER_CUSTOM_PORTFOLIOS", json.dumps(custom, separators=(",", ":")))
+
           for strategy, prefix in mapping.items():
               row = paper.get(strategy) or {}
               emit(f"{prefix}_DISPLAY_NAME", row.get("displayName"))
+              # Archiving takes a portfolio off the dashboard and stops it being run while
+              # keeping everything it traded. Always written, for the same reason as above:
+              # clearing the flag is what restores the portfolio.
+              emit(f"{prefix}_ARCHIVED", str(bool(row.get("archived"))).lower())
               emit(f"{prefix}_MIN_PROBABILITY", row.get("minProbability"))
               emit(f"{prefix}_MAX_FRACTION", row.get("maxOrderFraction"))
               emit(f"{prefix}_MAX_RESOLUTION_DAYS", row.get("maxResolutionDays"))

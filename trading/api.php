@@ -2,6 +2,11 @@
 
 declare(strict_types=1);
 
+// Every created portfolio becomes a strategy the bot runs each pass and a portfolio row
+// in the published state, so the number of them is bounded rather than left to whatever
+// a form can be submitted enough times to produce.
+const CUSTOM_PAPER_PORTFOLIO_LIMIT = 12;
+
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');
 
@@ -1395,7 +1400,41 @@ function normalize_strategy_config(array $input, array $defaults): array
         // means nothing is excluded, so unlike the allow-list an absent value and an
         // explicitly cleared one mean the same thing and need no special case here.
         'excludedMarketTags' => normalize_market_tag_list($input['excludedMarketTags'] ?? $defaults['excludedMarketTags'] ?? []),
+        // Archived portfolios keep every row they ever traded and every setting they
+        // were traded under. They leave the dashboard and stop being executed, and
+        // restoring one is only clearing this flag.
+        'archived' => (bool) ($input['archived'] ?? $defaults['archived'] ?? false),
     ];
+}
+
+// A created portfolio needs an id that can safely become a state key, a mode name and a
+// workflow input. Anything that would not survive all three is refused rather than
+// silently rewritten into something the user did not name.
+function normalize_custom_paper_portfolio_id(mixed $value): ?string
+{
+    $id = trim((string) ($value ?? ''));
+
+    return preg_match('/^[a-z][a-zA-Z0-9]{1,30}$/', $id) ? $id : null;
+}
+
+/**
+ * The starting point for a portfolio the user creates. Deliberately the most permissive
+ * of the shipped profiles, so a created portfolio trades what its own form says and not
+ * what some template quietly also required.
+ */
+function custom_paper_portfolio_defaults(string $id): array
+{
+    $defaults = default_portfolio_config()['paper']['highReward'];
+    $defaults['displayName'] = $id;
+    $defaults['minProbability'] = 0.5;
+    $defaults['minLiquidityUsdc'] = null;
+    $defaults['autoRotatePositions'] = false;
+    // A new portfolio does not start trading the moment it is saved. Turning it on is a
+    // separate, deliberate act on a form the user has already read.
+    $defaults['automationEnabled'] = false;
+    $defaults['archived'] = false;
+
+    return $defaults;
 }
 
 function normalize_portfolio_config(array $input): array
@@ -1409,7 +1448,28 @@ function normalize_portfolio_config(array $input): array
         $strategyInput = is_array($paperInput[$id] ?? null) ? $paperInput[$id] : [];
         $config['paper'][$id] = normalize_strategy_config($strategyInput, $strategyDefaults);
     }
+    // Portfolios the user created. They are stored beside the shipped ones and are
+    // otherwise identical; the count is bounded because every one of them becomes a
+    // strategy the bot runs and a row in the published state.
+    $customCount = 0;
+    foreach ($paperInput as $rawId => $strategyInput) {
+        if (isset($config['paper'][$rawId]) || !is_array($strategyInput)) {
+            continue;
+        }
+        $id = normalize_custom_paper_portfolio_id($rawId);
+        if ($id === null || $customCount >= CUSTOM_PAPER_PORTFOLIO_LIMIT) {
+            continue;
+        }
+        $customCount += 1;
+        $config['paper'][$id] = normalize_strategy_config($strategyInput, custom_paper_portfolio_defaults($id));
+        // Stated rather than inferred from "not one of the four shipped ids", so the
+        // browser and the bot agree on which portfolios the user owns outright.
+        $config['paper'][$id]['custom'] = true;
+    }
     $config['live'] = normalize_strategy_config($liveInput, $defaults['live']);
+    // Only paper portfolios can be archived. A live portfolio holds real positions and
+    // open orders, and hiding those from the dashboard would hide real exposure.
+    $config['live']['archived'] = false;
     $config['live']['useLimitOrders'] = (bool) ($liveInput['useLimitOrders'] ?? $defaults['live']['useLimitOrders']);
     // 5050 carries three settings no other portfolio has. They are normalized here
     // rather than passed through, so a bad value cannot reach the executor and be
@@ -1417,6 +1477,7 @@ function normalize_portfolio_config(array $input): array
     $fixedInput = is_array($input['live5050'] ?? null) ? $input['live5050'] : [];
     $config['live5050'] = normalize_strategy_config($fixedInput, $defaults['live5050']);
     $config['live5050']['useLimitOrders'] = true;
+    $config['live5050']['archived'] = false;
     $entryPrice = is_numeric($fixedInput['fixedEntryPrice'] ?? null)
         ? (float) $fixedInput['fixedEntryPrice']
         : (float) $defaults['live5050']['fixedEntryPrice'];

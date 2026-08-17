@@ -289,7 +289,10 @@ const CONTINUOUS_EVALUATION = envBool("PAPER_CONTINUOUS_EVALUATION", false);
 const EVALUATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_EVALUATION_RESOLUTION_SYNC_LIMIT", 120);
 const SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT = envNumber("PAPER_SCRAPED_SIMULATION_RESOLUTION_SYNC_LIMIT", 300);
 const SCRAPED_SIMULATION_STAKE_USDC = envNumber("PAPER_SCRAPED_SIMULATION_STAKE_USDC", 5);
-const PAPER_STRATEGY_ID = ["conservative", "highReward", "moreProbable", "equal"].includes(process.env.PAPER_STRATEGY_ID)
+// Validated by shape rather than against a fixed list: the user can create portfolios,
+// so the set of valid ids is not known when this file is written. Every use site looks
+// the id up in PAPER_STRATEGIES, which is what rejects one that does not exist.
+const PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/.test(String(process.env.PAPER_STRATEGY_ID || ""))
   ? process.env.PAPER_STRATEGY_ID
   : "";
 const PAPER_RESET_PORTFOLIO = envBool("PAPER_RESET_PORTFOLIO", false);
@@ -327,6 +330,7 @@ const PAPER_STRATEGIES = {
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_CONSERVATIVE_EXECUTION_TRIGGER),
     executionCronMinutes: Math.max(30, envNumber("PAPER_CONSERVATIVE_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_CONSERVATIVE_AUTOMATION_ENABLED", true),
+    archived: envBool("PAPER_CONSERVATIVE_ARCHIVED", false),
     allowRotation: envBool("PAPER_CONSERVATIVE_AUTO_ROTATE", true),
     marketType: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all") === "multi",
@@ -349,6 +353,7 @@ const PAPER_STRATEGIES = {
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_HIGH_REWARD_EXECUTION_TRIGGER),
     executionCronMinutes: Math.max(30, envNumber("PAPER_HIGH_REWARD_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_HIGH_REWARD_AUTOMATION_ENABLED", true),
+    archived: envBool("PAPER_HIGH_REWARD_ARCHIVED", false),
     allowRotation: envBool("PAPER_HIGH_REWARD_AUTO_ROTATE", true),
     marketType: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all") === "multi",
@@ -371,6 +376,7 @@ const PAPER_STRATEGIES = {
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_MORE_PROBABLE_EXECUTION_TRIGGER),
     executionCronMinutes: Math.max(30, envNumber("PAPER_MORE_PROBABLE_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_MORE_PROBABLE_AUTOMATION_ENABLED", true),
+    archived: envBool("PAPER_MORE_PROBABLE_ARCHIVED", false),
     allowRotation: envBool("PAPER_MORE_PROBABLE_AUTO_ROTATE", true),
     marketType: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi") === "multi",
@@ -397,6 +403,7 @@ const PAPER_STRATEGIES = {
     executionTrigger: normalizeExecutionTrigger(process.env.PAPER_EQUAL_EXECUTION_TRIGGER || "after_scrape"),
     executionCronMinutes: Math.max(30, envNumber("PAPER_EQUAL_EXECUTION_CRON_MINUTES", 60) || 60),
     automationEnabled: envBool("PAPER_EQUAL_AUTOMATION_ENABLED", true),
+    archived: envBool("PAPER_EQUAL_ARCHIVED", false),
     allowRotation: envBool("PAPER_EQUAL_AUTO_ROTATE", false),
     marketType: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all") === "multi",
@@ -412,11 +419,82 @@ const PAPER_STRATEGIES = {
   },
 };
 
+// Portfolios the user created in the browser. They arrive as one JSON variable rather
+// than as a per-portfolio set of environment names, because their ids are not known when
+// the workflow is written -- which is exactly what stopped them from existing before.
+function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
+  const text = String(raw || "").trim();
+  if (!text) return {};
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // A malformed variable must not take the shipped portfolios down with it.
+    console.warn("PAPER_CUSTOM_PORTFOLIOS is not valid JSON; no created portfolios are loaded.");
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object") return {};
+  const strategies = {};
+  for (const [id, row] of Object.entries(parsed)) {
+    // The same shape the API enforces. A created portfolio must never be able to
+    // introduce a strategy id that cannot be a state key or a workflow input.
+    if (!/^[a-z][a-zA-Z0-9]{1,30}$/.test(id) || PAPER_STRATEGIES[id] || !row || typeof row !== "object") continue;
+    const marketType = ["all", "binary", "multi"].includes(row.marketType) ? row.marketType : "all";
+    strategies[id] = {
+      id,
+      custom: true,
+      label: String(row.displayName || id).slice(0, 80),
+      selectionMetric: row.selectionOrder === "highest_reward_risk_first" ? "Reward / risk" : "EV p.a.",
+      minProbability: Number.isFinite(Number(row.minProbability)) ? Number(row.minProbability) : 0.5,
+      maxFraction: Number.isFinite(Number(row.maxOrderFraction)) ? Number(row.maxOrderFraction) : MAX_FRACTION,
+      maxResolutionDays: Number.isFinite(Number(row.maxResolutionDays))
+        ? Number(row.maxResolutionDays)
+        : DEFAULT_MAX_RESOLUTION_DAYS,
+      minLiquidityUsdc: Number.isFinite(Number(row.minLiquidityUsdc)) ? Number(row.minLiquidityUsdc) : null,
+      minNetYield: Number.isFinite(Number(row.minNetYield)) ? Number(row.minNetYield) : 0,
+      executionTrigger: normalizeExecutionTrigger(row.executionTrigger),
+      executionCronMinutes: Math.max(30, Number(row.executionCronMinutes) || 60),
+      // A created portfolio only trades once its own switch is on, so an id that
+      // reaches the bot before the user has finished with the form stays idle.
+      automationEnabled: row.automationEnabled === true,
+      allowRotation: row.autoRotatePositions === true,
+      archived: row.archived === true,
+      marketType,
+      requireMostProbableOutcome: marketType === "multi",
+      probabilitySource: row.probabilitySource === "ai" ? "ai" : "polymarket",
+      excludedCandidateTokenIds: new Set((Array.isArray(row.excludedCandidateTokenIds) ? row.excludedCandidateTokenIds : [])
+        .map((token) => String(token)).filter((token) => /^\d+$/.test(token))),
+      includeOnlyMarketTags: new Set((Array.isArray(row.includeOnlyMarketTags) ? row.includeOnlyMarketTags : [])
+        .map((tag) => String(tag).trim().toLowerCase()).filter(Boolean)),
+      excludedMarketTags: new Set((Array.isArray(row.excludedMarketTags) ? row.excludedMarketTags : [])
+        .map((tag) => String(tag).trim().toLowerCase()).filter(Boolean)),
+      selectionOrder: row.selectionOrder === "highest_reward_risk_first"
+        ? "highest_reward_risk_first"
+        : "highest_ev_pa_first",
+      description: `Created paper portfolio: ${String(row.displayName || id).slice(0, 80)}.`,
+    };
+  }
+  return strategies;
+}
+
+Object.assign(PAPER_STRATEGIES, customPaperStrategies());
+// Archiving is stronger than switching automation off: the portfolio leaves the
+// dashboard and stops being run at all, while every row it traded is kept.
+const ARCHIVED_PAPER_STRATEGY_IDS = new Set(
+  Object.values(PAPER_STRATEGIES).filter((strategy) => strategy.archived === true).map((strategy) => strategy.id),
+);
+
+function paperStrategyIsArchived(strategy) {
+  return Boolean(strategy) && ARCHIVED_PAPER_STRATEGY_IDS.has(strategy.id);
+}
+
 function executionStrategies() {
   if (MANUAL_RUN_ONCE && PAPER_STRATEGY_ID && PAPER_STRATEGIES[PAPER_STRATEGY_ID]) {
-    return [PAPER_STRATEGIES[PAPER_STRATEGY_ID]];
+    // A manual run reaches a portfolio whose automation is off, but not one that has
+    // been archived: archiving is the statement that it is finished.
+    return paperStrategyIsArchived(PAPER_STRATEGIES[PAPER_STRATEGY_ID]) ? [] : [PAPER_STRATEGIES[PAPER_STRATEGY_ID]];
   }
-  return Object.values(PAPER_STRATEGIES);
+  return Object.values(PAPER_STRATEGIES).filter((strategy) => !paperStrategyIsArchived(strategy));
 }
 
 // A manual run always overrides the portfolio's own automation settings: switching
@@ -2232,6 +2310,9 @@ function portfoliosWithDeployableCapital(state) {
     : {};
   const ready = [];
   for (const strategy of Object.values(PAPER_STRATEGIES)) {
+    // An archived portfolio is never executed, so its free capital is not a reason to
+    // bring a pass forward. Its stored rows are still maintained everywhere else.
+    if (paperStrategyIsArchived(strategy)) continue;
     const portfolio = portfolios[strategy.id]?.portfolio;
     if (!portfolio) continue;
     const free = Number(portfolio.freeCapitalUsdc);

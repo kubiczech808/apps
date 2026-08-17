@@ -158,6 +158,110 @@ button:disabled {
   display: none;
 }
 
+/* The overview above the selector. With many portfolios, which one to open is decided
+   from these numbers, so they are read before the tabs and not after them. */
+.portfolio-summary-table {
+  margin-bottom: 14px;
+  overflow-x: auto;
+}
+
+.portfolio-summary {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.portfolio-summary th,
+.portfolio-summary td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.portfolio-summary th:first-child,
+.portfolio-summary td:first-child {
+  text-align: left;
+  white-space: normal;
+}
+
+.portfolio-summary th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.portfolio-summary-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-dark);
+  font-weight: 800;
+  text-align: left;
+}
+
+.portfolio-summary-link:hover {
+  text-decoration: underline;
+}
+
+.portfolio-summary-current {
+  background: var(--soft);
+}
+
+.portfolio-summary-current .portfolio-summary-link {
+  color: var(--ink);
+}
+
+/* Same reason as the tab border: a live row spends real money. */
+.portfolio-summary-live .portfolio-summary-link {
+  color: var(--danger);
+}
+
+.archived-portfolio-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.archived-portfolio-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.archived-portfolio-list .muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Archiving looks destructive but is reversible, so it reads as a warning rather than
+   in the danger colour the live portfolios own. */
+.parameter-archive-button {
+  margin-right: auto;
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.parameter-archive-button:hover {
+  border-color: var(--warning);
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.table-inline-button {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
 .portfolio-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
@@ -642,6 +746,29 @@ button:disabled {
 
 .mode-button.active:hover {
   background: var(--accent);
+}
+
+/* A live tab spends real money and a paper tab does not, so which is which must not
+   depend on reading the names. The border is drawn in every state, including the open
+   one, because the distinction does not stop applying once you are standing on it. */
+.mode-button.mode-button-live {
+  border: 2px solid var(--danger);
+  padding: 0 10px;
+}
+
+.mode-button.mode-button-live:hover:not(.active) {
+  background: #ffffff;
+  color: var(--danger);
+}
+
+.mode-button.mode-button-live.active {
+  background: var(--danger);
+  color: #ffffff;
+  box-shadow: 0 1px 2px rgba(194, 65, 12, 0.45);
+}
+
+.mode-button.mode-button-live.active:hover {
+  background: #9a3412;
 }
 
 .execution-button {
@@ -2208,17 +2335,26 @@ body.modal-open {
     flex: 0 0 auto;
   }
 
+  /* A two-column grid was fine for six shipped portfolios. Portfolios are created now,
+     so the row would grow downwards until the tabs pushed the dashboard off the screen.
+     One row that scrolls sideways keeps the selector a fixed height whatever the count,
+     and keeps every tab the same size instead of squeezing them. */
   .mode-switch {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: nowrap;
     max-width: 100%;
     width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    scrollbar-width: thin;
   }
 
   .mode-button {
+    flex: 0 0 auto;
     min-width: 0;
-    width: 100%;
-    white-space: normal;
+    white-space: nowrap;
+    scroll-snap-align: start;
   }
 
   .mode-button,

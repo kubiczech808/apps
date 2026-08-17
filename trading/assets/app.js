@@ -86,6 +86,14 @@ const state = {
   portfolioConfigSaveTimer: null,
   parameterDraft: null,
   parameterDraftMode: "",
+  // The id a portfolio being created will be stored under, or "" while an existing
+  // portfolio is merely being edited.
+  parameterDraftCreate: "",
+  // The last paper portfolio snapshot seen, kept across tab switches so the overview
+  // still has numbers while a live tab is open and only the live state is loaded.
+  portfolioOverview: null,
+  portfolioOverviewAt: 0,
+  portfolioOverviewPending: false,
   parameterDraftSystem: null,
   parameterCapitalContext: null,
   stateFetchErrors: {},
@@ -298,6 +306,11 @@ const els = {
   parameterModal: document.querySelector("[data-parameter-modal]"),
   parameterModalClose: document.querySelector("[data-parameter-modal-close]"),
   parameterModalConfirm: document.querySelector("[data-parameter-modal-confirm]"),
+  parameterModalArchive: document.querySelector("[data-parameter-modal-archive]"),
+  createPortfolio: document.querySelector("[data-create-portfolio]"),
+  archivedPortfolios: document.querySelector("[data-archived-portfolios]"),
+  portfolioOverview: document.querySelector("[data-portfolio-overview]"),
+  modeSwitch: document.querySelector("[data-mode-switch]"),
   modeButtons: document.querySelectorAll("[data-mode-toggle]"),
   liveActivation: document.querySelector("[data-live-activation]"),
   tabButtons: document.querySelectorAll("[data-tab-target]"),
@@ -445,9 +458,24 @@ function saveRunLogFilter(value, mode = state.mode) {
   }
 }
 
+// The four shipped paper portfolios. Created ones are stored beside them and are named
+// the same way, so this list is only what the application ships with, never the set of
+// portfolios that exist.
+const BUILT_IN_PAPER_STRATEGY_IDS = ["conservative", "highReward", "moreProbable", "equal"];
+const CUSTOM_PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/;
+
 function normalizeMode(mode) {
-  if (mode === "live" || mode === "live-5050" || mode === "paper-highReward" || mode === "paper-moreProbable" || mode === "paper-equal" || mode === "paper-conservative") return mode;
-  return mode === "paper" ? "paper-conservative" : "paper-conservative";
+  if (mode === "live" || mode === "live-5050") return mode;
+  const paperMode = /^paper-(.+)$/.exec(String(mode || ""));
+  const strategyId = paperMode?.[1];
+  // A created portfolio's mode is only real while the portfolio is: a bookmark or a
+  // stored last-open tab pointing at a deleted one falls back rather than showing a
+  // dashboard with no portfolio behind it.
+  if (strategyId && (BUILT_IN_PAPER_STRATEGY_IDS.includes(strategyId)
+    || (CUSTOM_PAPER_STRATEGY_ID.test(strategyId) && Boolean((state.portfolioConfig?.paper || {})[strategyId])))) {
+    return mode;
+  }
+  return "paper-conservative";
 }
 
 // 5050 is a live portfolio: same wallet, same positions and orders, so it shares
@@ -472,18 +500,49 @@ function liveExecutionStateFile(mode = state.mode) {
 }
 
 function paperStrategyIdFromMode(mode = state.mode) {
-  if (mode === "paper-highReward") return "highReward";
-  if (mode === "paper-moreProbable") return "moreProbable";
-  if (mode === "paper-equal") return "equal";
-  return "conservative";
+  const strategyId = /^paper-(.+)$/.exec(String(mode || ""))?.[1];
+  if (!strategyId) return "conservative";
+  if (BUILT_IN_PAPER_STRATEGY_IDS.includes(strategyId)) return strategyId;
+  return CUSTOM_PAPER_STRATEGY_ID.test(strategyId) ? strategyId : "conservative";
 }
+
+const BUILT_IN_PAPER_LABELS = {
+  conservative: "Conservative",
+  highReward: "High reward",
+  moreProbable: "More probable",
+  equal: "Equal",
+};
 
 function paperModeLabel(mode = state.mode) {
   const strategyId = paperStrategyIdFromMode(mode);
-  if (strategyId === "highReward") return "High reward";
-  if (strategyId === "moreProbable") return "More probable";
-  if (strategyId === "equal") return "Equal";
-  return "Conservative";
+  // A created portfolio has no shipped name to fall back to, so its id is the label
+  // until the user gives it one.
+  return BUILT_IN_PAPER_LABELS[strategyId] || strategyId;
+}
+
+// Paper portfolios in the order they are shown, archived ones left out. Created
+// portfolios follow the shipped ones so the tabs the user knows do not move when one
+// is added.
+function paperStrategyIds({ includeArchived = false } = {}) {
+  const paper = (state.portfolioConfig || defaultPortfolioConfig()).paper || {};
+  const custom = Object.keys(paper)
+    .filter((id) => !BUILT_IN_PAPER_STRATEGY_IDS.includes(id) && CUSTOM_PAPER_STRATEGY_ID.test(id))
+    .sort((left, right) => left.localeCompare(right));
+  return [...BUILT_IN_PAPER_STRATEGY_IDS, ...custom]
+    .filter((id) => includeArchived || paper[id]?.archived !== true);
+}
+
+function portfolioIsArchived(mode = state.mode) {
+  const normalized = normalizeMode(mode);
+  if (LIVE_MODES.has(normalized)) return false;
+  const paper = (state.portfolioConfig || {}).paper || {};
+
+  return paper[paperStrategyIdFromMode(normalized)]?.archived === true;
+}
+
+// Every mode the dashboard can show, in tab order.
+function dashboardModes() {
+  return [...paperStrategyIds().map((id) => `paper-${id}`), "live", "live-5050"];
 }
 
 function defaultPortfolioNameForMode(mode = state.mode) {
@@ -850,15 +909,33 @@ function portfolioConfigForMode(mode = state.mode) {
   }
   const strategyId = paperStrategyIdFromMode(mode);
   const saved = (config.paper || {})[strategyId] || {};
+  // A created portfolio has no shipped defaults to fall back to, so it starts from the
+  // same base the API applies when it stores one.
+  const strategyDefaults = defaults.paper[strategyId] || customPaperPortfolioDefaults(strategyId);
   const merged = {
-    ...defaults.paper[strategyId],
+    ...strategyDefaults,
     ...saved,
   };
   const marketType = normalizePortfolioMarketType(
     saved.marketType,
-    saved.requireMostProbableOutcome ?? defaults.paper[strategyId].requireMostProbableOutcome,
+    saved.requireMostProbableOutcome ?? strategyDefaults.requireMostProbableOutcome,
   );
   return { ...merged, marketType, requireMostProbableOutcome: marketType === "multi" };
+}
+
+// Mirrors custom_paper_portfolio_defaults() in api.php. A created portfolio starts from
+// the most permissive shipped profile and trades nothing until its own switch is on.
+function customPaperPortfolioDefaults(strategyId) {
+  return {
+    ...defaultPortfolioConfig().paper.highReward,
+    displayName: strategyId,
+    minProbability: 0.5,
+    minLiquidityUsdc: null,
+    autoRotatePositions: false,
+    automationEnabled: false,
+    archived: false,
+    custom: true,
+  };
 }
 
 function updatePortfolioConfigForMode(mode, updates) {
@@ -1916,12 +1993,33 @@ function toggleLiveExecutionGate() {
   );
 }
 
+// The tab row is data, not markup: portfolios can be created, archived and restored, so
+// the buttons are rebuilt whenever that set changes rather than shipped as fixed HTML.
+function syncModeButtons() {
+  if (!els.modeSwitch) return;
+  const modes = dashboardModes();
+  // A mode the user is standing on stays reachable even if it has just been archived,
+  // so archiving from its own tab does not leave the dashboard with no tab selected.
+  if (!modes.includes(state.mode)) modes.splice(modes.length - 2, 0, state.mode);
+  const signature = modes.map((mode) => `${mode}:${portfolioNavigationLabelForMode(mode)}`).join("|");
+  if (els.modeSwitch.dataset.modeSignature === signature) return;
+  els.modeSwitch.dataset.modeSignature = signature;
+  els.modeSwitch.innerHTML = modes.map((mode) => `
+    <button class="mode-button" type="button" data-mode-toggle="${escapeHtml(mode)}">${escapeHtml(portfolioNavigationLabelForMode(mode))}</button>
+  `).join("");
+  els.modeButtons = els.modeSwitch.querySelectorAll("[data-mode-toggle]");
+}
+
 function syncModeUi() {
   const live = isLiveMode();
+  syncModeButtons();
   els.modeButtons.forEach((button) => {
     const buttonMode = normalizeMode(button.dataset.modeToggle);
     const isCurrent = button.dataset.modeToggle === state.mode;
     button.classList.toggle("active", isCurrent);
+    // A live portfolio trades the real wallet. Portfolios are renameable, so the name
+    // alone cannot be what tells them apart.
+    button.classList.toggle("mode-button-live", LIVE_MODES.has(buttonMode));
     button.textContent = portfolioNavigationLabelForMode(buttonMode);
     // Not only a class: which portfolio is open decides whether what the tables show is
     // correct or a bug, so it is stated to assistive tech rather than left to colour.
@@ -3689,6 +3787,14 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const autoRotatePositions = automaticRotationIsEnabled(config);
   if (els.autoRotatePositions) els.autoRotatePositions.checked = autoRotatePositions;
   if (els.autoRotatePositionsLabel) els.autoRotatePositionsLabel.textContent = autoRotatePositions ? "On" : "Off";
+  if (els.parameterModalArchive) {
+    // Only an existing paper portfolio can be archived. A live one holds real positions
+    // and open orders, and hiding those would hide real exposure; one being created does
+    // not exist yet.
+    const archivable = !LIVE_MODES.has(normalizeMode(mode)) && !state.parameterDraftCreate;
+    els.parameterModalArchive.hidden = !archivable;
+    els.parameterModalArchive.dataset.portfolioId = archivable ? paperStrategyIdFromMode(mode) : "";
+  }
   const cronMinutes = normalizeExecutionCronMinutes(config.executionCronMinutes);
   if (els.executionCronMinutes) els.executionCronMinutes.value = String(cronMinutes);
   if (els.executionCronMinutesLabel) els.executionCronMinutesLabel.textContent = executionCronMinutesLabel(cronMinutes);
@@ -3743,6 +3849,10 @@ function rerenderCurrentDashboard() {
   }
   renderBotEvaluations();
   renderPortfolioCandidates();
+  renderArchivedPortfolios();
+  renderPortfolioOverview();
+  // Only fetched when the open tab is not the one that carries these numbers.
+  if (isLiveMode()) loadPortfolioOverview();
 }
 
 function openParameterModal(trigger) {
@@ -3765,12 +3875,234 @@ function openParameterModal(trigger) {
   }
 }
 
+// A statistics row states the rule it was measured under. These attributes carry that
+// rule onto the create button so the portfolio that opens is already set to trade the
+// row the user clicked, rather than a blank form they must copy the numbers into.
+function portfolioPrefillAttributes(prefill = {}) {
+  const attributes = [];
+  for (const [key, value] of Object.entries(prefill)) {
+    if (value == null || value === "") continue;
+    attributes.push(`data-prefill-${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}="${escapeHtml(String(value))}"`);
+  }
+  return attributes.join(" ");
+}
+
+function portfolioPrefillFromDataset(dataset = {}) {
+  const read = (key) => dataset[`prefill${key[0].toUpperCase()}${key.slice(1)}`];
+  const prefill = {};
+  const name = read("name");
+  if (name) prefill.displayName = normalizePortfolioName(name, "");
+  const probability = Number(read("probability"));
+  if (Number.isFinite(probability) && probability > 0 && probability < 1) prefill.minProbability = probability;
+  const days = Number(read("days"));
+  if (Number.isFinite(days) && days > 0) prefill.maxResolutionDays = Math.round(days);
+  const marketType = read("marketType");
+  if (["all", "binary", "multi"].includes(marketType)) {
+    prefill.marketType = marketType;
+    prefill.requireMostProbableOutcome = marketType === "multi";
+  }
+  const tag = read("tag");
+  // A tag row measured one tag, so the portfolio that reproduces it trades that tag and
+  // nothing else. Categories are not a tradable filter, so they only name the portfolio.
+  if (tag) prefill.includeOnlyMarketTags = [tag];
+  return prefill;
+}
+
+// A created portfolio needs an id that survives being a state key, a dashboard mode and
+// a workflow input. The name the user types is only its label; this is derived from it
+// so the stored key stays readable, and falls back to a counter when it cannot be.
+function newPaperPortfolioId(name) {
+  const existing = new Set(Object.keys((state.portfolioConfig || defaultPortfolioConfig()).paper || {}));
+  const base = String(name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "")
+    .replace(/^[^a-z]+/, "")
+    .slice(0, 24)
+    .toLowerCase();
+  const seed = CUSTOM_PAPER_STRATEGY_ID.test(base) ? base : "portfolio";
+  if (!existing.has(seed) && CUSTOM_PAPER_STRATEGY_ID.test(seed)) return seed;
+  for (let suffix = 2; suffix < 200; suffix += 1) {
+    const candidate = `${seed}${suffix}`;
+    if (!existing.has(candidate)) return candidate;
+  }
+  return "";
+}
+
+/**
+ * Open the parameters form for a portfolio that does not exist yet. `prefill` carries
+ * whatever the caller already knows -- a statistics row passes the rule it was measured
+ * under -- so the created portfolio trades what that row describes.
+ */
+function openCreatePortfolioModal(prefill = {}, trigger = null) {
+  if (!els.parameterModal) return;
+  const label = normalizePortfolioName(prefill.displayName, "") || "New portfolio";
+  const strategyId = newPaperPortfolioId(label);
+  if (!strategyId) {
+    setExecutionStatus("no room for another portfolio", "error");
+    return;
+  }
+  const { displayName, ...rest } = prefill;
+  const draft = {
+    ...customPaperPortfolioDefaults(strategyId),
+    ...rest,
+    displayName: label,
+  };
+  state.parameterDraftMode = `paper-${strategyId}`;
+  state.parameterDraftCreate = strategyId;
+  state.parameterDraft = draft;
+  state.parameterDraftSystem = { ...systemConfig() };
+  state.parameterCapitalContext = parameterCapitalContextForMode("paper-conservative");
+  syncPortfolioParameterControls(draft, {
+    mode: state.parameterDraftMode,
+    systemConfig: state.parameterDraftSystem,
+    capitalContext: state.parameterCapitalContext,
+  });
+  els.parameterModal.hidden = false;
+  document.body.classList.add("modal-open");
+  els.portfolioName?.focus();
+  els.portfolioName?.select();
+  if (trigger) openParameterModal.lastTrigger = trigger;
+}
+
+// Every portfolio's headline numbers in one place, above the selector: with many
+// portfolios, choosing which to open is a decision made from these and not from names.
+function renderPortfolioOverview() {
+  if (!els.portfolioOverview) return;
+  const paperPortfolios = state.botState?.paperPortfolios || state.portfolioOverview || null;
+  const live = state.liveState?.portfolio || null;
+  const rows = paperStrategyIds().map((id) => {
+    const config = portfolioConfigForMode(`paper-${id}`);
+    const portfolio = paperPortfolios?.[id]?.portfolio || null;
+    return {
+      mode: `paper-${id}`,
+      name: normalizePortfolioName(config.displayName, id),
+      equity: portfolio ? Number(portfolio.equityUsdc) : null,
+      risk: portfolio ? Number(portfolio.openRiskUsdc) : null,
+      free: portfolio ? Number(portfolio.freeCapitalUsdc) : null,
+      live: false,
+    };
+  });
+  // Both live tabs trade one Polymarket wallet, so their capital is one row. Splitting
+  // it would print the same equity twice and read as two accounts that do not exist.
+  rows.push({
+    mode: "live",
+    name: "Live account (Live + 5050)",
+    equity: live ? Number(live.equityUsdc) : null,
+    risk: live ? Number(live.marketValueUsdc) : null,
+    free: live ? Number(live.cashUsdc) : null,
+    live: true,
+  });
+  els.portfolioOverview.hidden = false;
+  const cell = (value) => (Number.isFinite(value) ? money(value) : "-");
+  els.portfolioOverview.innerHTML = `
+    <table class="portfolio-summary">
+      <thead>
+        <tr><th>Portfolio</th><th>Equity</th><th>Risk / free</th></tr>
+      </thead>
+      <tbody>
+        ${rows.map((row) => `
+          <tr class="${row.mode === state.mode ? "portfolio-summary-current" : ""}${row.live ? " portfolio-summary-live" : ""}">
+            <td data-label="Portfolio"><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button></td>
+            <td data-label="Equity">${cell(row.equity)}</td>
+            <td data-label="Risk / free">${cell(row.risk)} / ${cell(row.free)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+// The paper numbers above have to survive a live tab being open, where only the live
+// state is loaded. This is the cheap dashboard summary, not the catalogue.
+async function loadPortfolioOverview({ force = false } = {}) {
+  if (state.portfolioOverviewPending) return;
+  if (!force && state.portfolioOverviewAt && Date.now() - state.portfolioOverviewAt < 60000) return;
+  state.portfolioOverviewPending = true;
+  try {
+    const payload = await fetchApiJson("api.php?action=state&target=paper&summary=dashboard");
+    const portfolios = (payload.state || payload)?.paperPortfolios;
+    if (portfolios && typeof portfolios === "object") {
+      state.portfolioOverview = portfolios;
+      state.portfolioOverviewAt = Date.now();
+      renderPortfolioOverview();
+    }
+  } catch {
+    // A summary that fails to refresh keeps its last good numbers rather than blanking.
+  } finally {
+    state.portfolioOverviewPending = false;
+  }
+}
+
+function renderArchivedPortfolios() {
+  if (!els.archivedPortfolios) return;
+  const paper = (state.portfolioConfig || defaultPortfolioConfig()).paper || {};
+  const archived = Object.entries(paper).filter(([, row]) => row?.archived === true);
+  els.archivedPortfolios.hidden = archived.length === 0;
+  if (!archived.length) {
+    els.archivedPortfolios.innerHTML = "";
+    return;
+  }
+  els.archivedPortfolios.innerHTML = `
+    <div class="system-status-head">
+      <div>
+        <p class="eyebrow">Portfolios</p>
+        <h3>Archived</h3>
+      </div>
+    </div>
+    <p class="calculation-note">These portfolios are not shown on the dashboard and are not executed. Every trade, run log and statistic they hold is kept, and restoring one brings it back exactly as it was.</p>
+    <ul class="archived-portfolio-list">
+      ${archived.map(([id, row]) => {
+        const stored = state.botState?.paperPortfolios?.[id];
+        const detail = stored?.portfolio
+          ? `${money(Number(stored.portfolio.equityUsdc))} equity / ${formatInteger((stored.trades || []).length) || 0} trades`
+          : "no stored account yet";
+        return `
+          <li>
+            <span><strong>${escapeHtml(normalizePortfolioName(row?.displayName, id))}</strong> <span class="muted">${escapeHtml(detail)}</span></span>
+            <button class="execution-button" type="button" data-restore-portfolio="${escapeHtml(id)}">Restore</button>
+          </li>
+        `;
+      }).join("")}
+    </ul>
+  `;
+}
+
+// Archiving is deliberately not a delete: the portfolio stops being executed and leaves
+// the dashboard, and everything it traded stays exactly where it is.
+async function setPortfolioArchived(strategyId, archived) {
+  const config = state.portfolioConfig || defaultPortfolioConfig();
+  const saved = (config.paper || {})[strategyId];
+  if (!saved) return;
+  state.portfolioConfig = {
+    ...config,
+    paper: { ...(config.paper || {}), [strategyId]: { ...saved, archived } },
+  };
+  // Archiving the open tab would leave the dashboard on a portfolio that is no longer
+  // listed, so move to the first one that still is.
+  if (archived && paperStrategyIdFromMode(state.mode) === strategyId && !isLiveMode()) {
+    const next = paperStrategyIds()[0];
+    state.mode = next ? `paper-${next}` : "live";
+    saveMode(state.mode);
+  }
+  try {
+    await savePortfolioConfigNow();
+    setExecutionStatus(archived ? "portfolio archived" : "portfolio restored");
+  } catch (error) {
+    setExecutionStatus(error.message || "portfolio archive failed", "error");
+  }
+  syncModeUi();
+  renderArchivedPortfolios();
+  loadDashboardState();
+}
+
 function closeParameterModal() {
   if (!els.parameterModal || els.parameterModal.hidden) return;
   els.parameterModal.hidden = true;
   document.body.classList.remove("modal-open");
   state.parameterDraft = null;
   state.parameterDraftMode = "";
+  state.parameterDraftCreate = "";
   state.parameterDraftSystem = null;
   state.parameterCapitalContext = null;
   refreshEligibilityThreshold();
@@ -3792,8 +4124,22 @@ async function confirmParameterModal() {
     els.parameterModalConfirm.disabled = true;
     els.parameterModalConfirm.textContent = "Saving...";
   }
+  const creating = state.parameterDraftCreate;
   try {
-    updatePortfolioConfigForMode(draftMode, draft);
+    if (creating) {
+      // The portfolio comes into existence here, on Save -- not when the form was
+      // opened. Closing the form without saving leaves the config exactly as it was.
+      const base = state.portfolioConfig || defaultPortfolioConfig();
+      state.portfolioConfig = {
+        ...base,
+        paper: {
+          ...(base.paper || {}),
+          [creating]: { ...customPaperPortfolioDefaults(creating), ...draft, archived: false, custom: true },
+        },
+      };
+    } else {
+      updatePortfolioConfigForMode(draftMode, draft);
+    }
     updateSystemConfig(draftSystem);
     const threshold = normalizeEligibilityThreshold(draft.minProbability);
     const allocation = normalizeRiskAllocation(draft.maxOrderFraction);
@@ -3810,8 +4156,18 @@ async function confirmParameterModal() {
       saveLimitOrders(draft.useLimitOrders);
     }
     await savePortfolioConfigNow();
-    setExecutionStatus("portfolio parameters saved");
+    setExecutionStatus(creating ? "portfolio created" : "portfolio parameters saved");
+    const createdMode = creating ? `paper-${creating}` : "";
     closeParameterModal();
+    if (createdMode) {
+      // Open what was just created: a new portfolio that stays hidden behind the tab
+      // you were already on reads as a save that did not work.
+      state.mode = createdMode;
+      saveMode(createdMode);
+      syncModeUi();
+      loadDashboardState();
+      return;
+    }
     rerenderCurrentDashboard();
   } catch (error) {
     setExecutionStatus(error.message || "portfolio parameter save failed", "error");
@@ -9359,6 +9715,7 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
               ${taxonomyHeader(kind, "avgProbability", "Avg entry")}
               ${taxonomyHeader(kind, "avgVolumeUsdc", "Avg volume")}
               ${taxonomyHeader(kind, "lastResolvedAt", "Last resolved", "Most recent resolution in this group.")}
+              <th><div class="th-content"><span class="table-action-heading" title="Create a paper portfolio set to trade this row">Portfolio</span></div></th>
             </tr>
           </thead>
           <tbody>
@@ -9375,8 +9732,13 @@ function renderTaxonomyPerformanceTable(report, kind, title, note) {
                 <td data-label="Avg entry">${probability(Number(row.avgProbability))}</td>
                 <td data-label="Avg volume">${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
                 <td data-label="Last resolved">${escapeHtml(row.lastResolvedAt ? formatDate(row.lastResolvedAt) : "-")}</td>
+                <td data-label="Portfolio"><button class="execution-button table-inline-button" type="button" title="Create a paper portfolio that trades exactly this row" data-create-portfolio ${portfolioPrefillAttributes({
+                  name: row.label,
+                  probability: Number(row.minimumProbability) > 0 ? Number(row.minimumProbability) : "",
+                  tag: kind === "tag" ? row.label : "",
+                })}>+ Portfolio</button></td>
               </tr>
-            `).join("") : `<tr><td colspan="${hasProbabilityBreakdown ? 11 : 10}">No ${kind} statistics are available yet.</td></tr>`}
+            `).join("") : `<tr><td colspan="${hasProbabilityBreakdown ? 12 : 11}">No ${kind} statistics are available yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -9438,6 +9800,7 @@ function renderCalculationReport() {
               ${calculationHeader("roi", "ROI")}
               ${calculationHeader("avgProbability", "Avg entry")}
               ${calculationHeader("avgVolumeUsdc", "Avg volume")}
+              <th><div class="th-content"><span class="table-action-heading" title="Create a paper portfolio set to trade this combination">Portfolio</span></div></th>
             </tr>
           </thead>
           <tbody>
@@ -9454,8 +9817,14 @@ function renderCalculationReport() {
                 <td class="${pnlClass(Number(row.roi || 0))}">${row.roi == null ? "-" : signedPercent(Number(row.roi))}</td>
                 <td>${probability(Number(row.avgProbability))}</td>
                 <td>${Number.isFinite(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) ? money(Number(row.avgVolumeUsdc ?? row.avgLiquidity)) : "-"}</td>
+                <td><button class="execution-button table-inline-button" type="button" title="Create a paper portfolio that trades exactly this combination" data-create-portfolio ${portfolioPrefillAttributes({
+                  name: `${Math.round(Number(row.threshold || 0) * 100)}% ${calculationMarketLabel(row.marketType)} ${Number(row.maxResolutionDays || 0)}d`,
+                  probability: Number(row.threshold) > 0 ? Number(row.threshold) : "",
+                  days: Number(row.maxResolutionDays) > 0 ? Number(row.maxResolutionDays) : "",
+                  marketType: row.marketType || "all",
+                })}>+ Portfolio</button></td>
               </tr>
-            `).join("") : '<tr><td colspan="11">No resolved scraped opportunity simulation is available yet.</td></tr>'}
+            `).join("") : '<tr><td colspan="12">No resolved scraped opportunity simulation is available yet.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -9604,22 +9973,25 @@ els.calculationReport?.addEventListener("click", (event) => {
   renderCalculationReport();
 });
 
-els.modeButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    const mode = normalizeMode(button.dataset.modeToggle);
-    if (state.mode === mode) return;
-    state.mode = mode;
-    saveMode(mode);
-    state.runLogFilters = storedRunLogFilter(mode);
-    setRunLogFilterMenuOpen(false);
-    state.eligibilityThreshold = null;
-    state.eligibilityThresholdKey = "";
-    state.riskAllocation = null;
-    state.riskAllocationKey = "";
-    state.limitOrders = null;
-    state.limitOrdersKey = "";
-    loadDashboardState();
-  });
+// Delegated, because the tab row is rebuilt whenever a portfolio is created, renamed,
+// archived or restored. Handlers bound to the buttons themselves would only work until
+// the first of those.
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-mode-toggle]");
+  if (!button) return;
+  const mode = normalizeMode(button.dataset.modeToggle);
+  if (state.mode === mode) return;
+  state.mode = mode;
+  saveMode(mode);
+  state.runLogFilters = storedRunLogFilter(mode);
+  setRunLogFilterMenuOpen(false);
+  state.eligibilityThreshold = null;
+  state.eligibilityThresholdKey = "";
+  state.riskAllocation = null;
+  state.riskAllocationKey = "";
+  state.limitOrders = null;
+  state.limitOrdersKey = "";
+  loadDashboardState();
 });
 
 els.liveActivation?.addEventListener("click", (event) => {
@@ -10153,6 +10525,38 @@ document.addEventListener("click", (event) => {
   if (parameterEditButton) {
     event.preventDefault();
     openParameterModal(parameterEditButton);
+    return;
+  }
+
+  const createPortfolioButton = event.target.closest("[data-create-portfolio]");
+  if (createPortfolioButton) {
+    event.preventDefault();
+    // A statistics row carries the rule it was measured under, so the created portfolio
+    // trades what that row describes rather than a blank template.
+    openCreatePortfolioModal(portfolioPrefillFromDataset(createPortfolioButton.dataset), createPortfolioButton);
+    return;
+  }
+
+  const archiveButton = event.target.closest("[data-parameter-modal-archive]");
+  if (archiveButton) {
+    event.preventDefault();
+    const strategyId = archiveButton.dataset.portfolioId || "";
+    if (!strategyId) return;
+    const label = normalizePortfolioName(portfolioConfigForMode(`paper-${strategyId}`).displayName, strategyId);
+    // Asked for explicitly: archiving is a deliberate act, so it is confirmed before it
+    // happens rather than offered as an undo afterwards.
+    if (!window.confirm(`Archive "${label}"?\n\nIt disappears from the dashboard and stops trading. Every trade, run log and statistic it holds is kept, and you can restore it from Settings.`)) {
+      return;
+    }
+    closeParameterModal();
+    setPortfolioArchived(strategyId, true);
+    return;
+  }
+
+  const restoreButton = event.target.closest("[data-restore-portfolio]");
+  if (restoreButton) {
+    event.preventDefault();
+    setPortfolioArchived(restoreButton.dataset.restorePortfolio || "", false);
     return;
   }
 
