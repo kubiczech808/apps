@@ -421,3 +421,21 @@ test("dashboard: a live portfolio's tab is marked, not merely named", () => {
   assert.match(CSS, /\.mode-button\.mode-button-live\.active \{/,
     "the mark stays on the tab you are standing on");
 });
+
+// Reported: the "stop loss" (Equal) portfolio's Rotation row still showed an old value.
+// Measured against history: a prior commit replaced a hardcoded
+// ["Rotation", "Disabled for this proof of concept"] row with the real On/Off one
+// driven by autoRotatePositions, in the same change that added the checkbox -- but
+// never bumped assets/app.js's cache-busting query string. Every deploy from that day
+// until this session's kept re-serving the old URL, so a browser that had it cached
+// went on running the pre-fix script and showing the stale text indefinitely. The
+// source has been correct since; this guards the regression class, not the display.
+test("rotation: the retired hardcoded label for Equal cannot come back", () => {
+  assert.ok(!/Disabled for this proof of concept/.test(APP),
+    "Equal's Rotation row must stay driven by autoRotatePositions, not a fixed string");
+  const rows = extractFunction(APP, "portfolioRuleRows");
+  // Exactly one Rotation row: a stale hardcoded one alongside the real one is the
+  // exact shape of the regression, whether or not the stale copy also renders "old
+  // value" text.
+  assert.equal((rows.match(/rows\.push\(\["Rotation",/g) || []).length, 1);
+});
