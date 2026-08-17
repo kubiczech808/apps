@@ -367,19 +367,41 @@ test("dashboard: the tab row survives being rebuilt", () => {
   assert.match(APP, /els\.modeButtons = els\.modeSwitch\.querySelectorAll\("\[data-mode-toggle\]"\);/);
 });
 
-test("mobile: the portfolio tabs stay on one row and scroll sideways", () => {
-  const mobile = /@media \(max-width: 680px\) \{[\s\S]*?\n\}/.exec(CSS);
-  assert.ok(mobile, "the mobile breakpoint exists");
-  const modeSwitch = /\.mode-switch \{[^}]*\}/.exec(mobile[0]);
-  assert.ok(modeSwitch, "the tab row is styled for mobile");
-  // A wrapping grid grew downwards as portfolios were created until the tabs pushed the
-  // dashboard off the screen.
+// Reported live: between the mobile breakpoint and a full-width desktop, the tab row had
+// nowhere to shrink to, so the whole page overflowed sideways and the overflow was clipped
+// by body's overflow-x: hidden -- Stop loss, Live and 90 -> 50% did not wrap to a second
+// row, they simply vanished, unreachable by any scroll. The row must scroll sideways on
+// every width, not only below 680px, so these rules live outside any media query.
+test("dashboard: the portfolio tabs stay on one row and scroll sideways on every screen width", () => {
+  // Matched against the whole file rather than a slice before it: an unrelated @media
+  // (min-width: 1181px) block sits even earlier in the file, so cutting the file at the
+  // first @media would drop these rules entirely. exec() without the g flag returns the
+  // first match in document order, and the unconditional rule is the first of each
+  // selector in the file -- the mobile-scoped, indented copy comes later.
+  const modeSwitch = /\.mode-switch \{[^}]*\}/.exec(CSS);
+  assert.ok(modeSwitch, "the tab row is styled unconditionally, not only inside a media query");
   assert.match(modeSwitch[0], /flex-wrap: nowrap;/);
   assert.match(modeSwitch[0], /overflow-x: auto;/);
   assert.ok(!/grid-template-columns/.test(modeSwitch[0]), "it must not wrap into rows again");
-  const modeButton = /\n  \.mode-button \{[^}]*\}/.exec(mobile[0]);
+  // A flex item's default min-width is auto (never shrink below content), so without this
+  // on both the row and its parent, .mode-switch is held to its full content width and the
+  // page overflows instead of the row scrolling internally.
+  assert.match(modeSwitch[0], /min-width: 0;/);
+  assert.match(modeSwitch[0], /flex: 1 1 0%;/, "sized from available space, not from its own content, or it cannot shrink smaller than its tabs");
+  const portfolioActions = /\.portfolio-actions \{[^}]*\}/.exec(CSS);
+  assert.ok(portfolioActions, "the row's parent exists");
+  assert.match(portfolioActions[0], /min-width: 0;/,
+    "the parent must also be allowed to shrink, or it holds the row to its content width regardless");
+  const modeButton = /\.mode-button \{[^}]*\}/.exec(CSS);
+  assert.ok(modeButton, "the tab button is styled unconditionally");
   assert.match(modeButton[0], /flex: 0 0 auto;/, "tabs keep their size rather than being squeezed");
   assert.match(modeButton[0], /white-space: nowrap;/);
+  // A more specific selector further down the file silently overrode exactly these two
+  // properties for every button actually inside the row (flex: 1 1 auto + white-space:
+  // normal), which is how tab text ended up wrapping inside the tabs themselves even
+  // though the plain .mode-button rule already said the opposite.
+  assert.ok(!/\.mode-switch \.mode-button \{/.test(CSS),
+    "no later, more specific rule may re-enable squeezing or text wrap for the row's own buttons");
 });
 
 test("dashboard: the overview above the selector states equity and risk against free", () => {

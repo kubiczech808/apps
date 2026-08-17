@@ -698,25 +698,41 @@ button:disabled {
   font-size: 24px;
 }
 
+/* Flex, not grid: a wrapping grid grew downwards as portfolios were created until the
+   tabs pushed the dashboard off the screen. One row that scrolls sideways instead keeps
+   the selector a fixed height whatever the tab count, on every screen width -- not only
+   below the mobile breakpoint, where the row still fits fewer tabs than this one holds. */
 .mode-switch {
-  display: inline-flex;
+  display: flex;
+  flex: 1 1 0%;
+  flex-wrap: nowrap;
   gap: 4px;
   min-width: 0;
+  max-width: 100%;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--soft);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 
+/* min-width: 0 here too: a flex item's default min-width is auto, i.e. "never shrink
+   below your content's size" -- without overriding it at every level the row wraps, this
+   one alone would still hold .mode-switch to its full content width and push the whole
+   row past the panel's edge instead of letting it shrink and scroll internally. */
 .portfolio-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
 }
 
 .mode-button {
+  flex: 0 0 auto;
   min-height: 32px;
   padding: 0 12px;
   border: 0;
@@ -726,6 +742,7 @@ button:disabled {
   font-size: 12px;
   font-weight: 850;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 /* Hover is a hint that a tab is clickable. It must not look like the tab you are on:
@@ -2335,25 +2352,15 @@ body.modal-open {
     flex: 0 0 auto;
   }
 
-  /* A two-column grid was fine for six shipped portfolios. Portfolios are created now,
-     so the row would grow downwards until the tabs pushed the dashboard off the screen.
-     One row that scrolls sideways keeps the selector a fixed height whatever the count,
-     and keeps every tab the same size instead of squeezing them. */
+  /* Nowrap and the internal scroll are unconditional now (see the base .mode-switch and
+     .mode-button rules) -- full width and snap-scrolling here are what is actually
+     mobile-specific, stretching the row to fill the stacked layout below it. */
   .mode-switch {
-    display: flex;
-    flex-wrap: nowrap;
-    max-width: 100%;
     width: 100%;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
     scroll-snap-type: x proximity;
-    scrollbar-width: thin;
   }
 
   .mode-button {
-    flex: 0 0 auto;
-    min-width: 0;
-    white-space: nowrap;
     scroll-snap-align: start;
   }
 
@@ -2365,13 +2372,6 @@ body.modal-open {
     flex: 0 0 auto;
     min-height: 42px;
     white-space: nowrap;
-  }
-
-  .mode-switch .mode-button {
-    flex: 1 1 auto;
-    padding: 0 8px;
-    line-height: 1.15;
-    white-space: normal;
   }
 
   .evaluation-head {
