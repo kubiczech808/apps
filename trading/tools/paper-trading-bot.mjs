@@ -6008,7 +6008,13 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   const today = pragueDateKey();
   const currentHour = pragueHourKey();
   const realizedPnl = portfolioState.trades.reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0);
-  const sizingCapital = Math.max(0, PORTFOLIO_USDC + realizedPnl);
+  // Mirrors updatePaperPortfolio()'s baseline: a portfolio carrying a manual capital
+  // adjustment must size its next trade off the same equity the dashboard shows, or it
+  // skips (and undersizes) trades it can actually afford -- the dashboard's free capital
+  // moves with the adjustment while this decision kept comparing against the un-adjusted
+  // constant alone.
+  const capitalAdjustment = Number(portfolioState.capitalAdjustmentUsdc) || 0;
+  const sizingCapital = Math.max(0, PORTFOLIO_USDC + capitalAdjustment + realizedPnl);
   const available = Math.max(0, sizingCapital - openRisk(portfolioState.trades));
   const maxFraction = Number(strategy.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION);
   const stake = sizingCapital * maxFraction;
@@ -9459,6 +9465,7 @@ export {
   archiveAndResetPaperPortfolio,
   restoreArchivedPaperPortfolio,
   adjustPaperPortfolioCapital,
+  maybeOpenScheduledTrade,
   mergeStates,
   openRisk,
   pnlPercent,

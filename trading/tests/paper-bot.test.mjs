@@ -414,6 +414,26 @@ test("paper capital adjustment: the workflow and bot expose it as a dispatchable
   assert.match(source, /adjustPaperPortfolioCapital\(state, PAPER_STRATEGY_ID, PAPER_TARGET_EQUITY_USDC\)/);
 });
 
+// Reported live: High reward's dashboard header read $25.12 free, but the same run's own
+// log line skipped a trade over "0.67 USDC available" -- a real rebased portfolio skipping
+// (and undersizing) trades it could actually afford. maybeOpenScheduledTrade() sized every
+// decision off the raw PORTFOLIO_USDC constant alone, never portfolioState.capitalAdjustmentUsdc,
+// so a rebased portfolio's decisions and its own published free capital disagreed.
+test("paper capital adjustment: a rebased portfolio sizes its next trade off the same capital its dashboard shows", () => {
+  const strategy = { id: "test", label: "Test", selectionMetric: "EV p.a.", maxFraction: 0.05, allowRotation: false };
+
+  // No adjustment: sizing must reproduce the untouched formula exactly (100 * 0.05 = 5).
+  const untouched = bot.maybeOpenScheduledTrade({ trades: [], capitalAdjustmentUsdc: 0 }, [], strategy);
+  assert.equal(untouched.available, 100);
+  assert.equal(untouched.requiredStake, 5);
+
+  // Rebased by +50: available and the stake it is willing to size must move with it
+  // (150 * 0.05 = 7.5), the same baseline updatePaperPortfolio() already publishes.
+  const rebased = bot.maybeOpenScheduledTrade({ trades: [], capitalAdjustmentUsdc: 50 }, [], strategy);
+  assert.equal(rebased.available, 150);
+  assert.equal(rebased.requiredStake, 7.5);
+});
+
 test("run log: a paper OPENED row keeps the selected order summary in the compact list", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
