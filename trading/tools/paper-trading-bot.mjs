@@ -299,6 +299,10 @@ const PAPER_RESET_PORTFOLIO = envBool("PAPER_RESET_PORTFOLIO", false);
 // One-off undo for a reset dispatched by mistake. No UI surfaces this; it exists so a
 // wrong reset can be reversed the same way it was made, by workflow dispatch.
 const PAPER_RESTORE_PORTFOLIO = envBool("PAPER_RESTORE_PORTFOLIO", false);
+// One-off capital rebase: a portfolio's true equity stays exactly what its trades
+// compute, but its displayed baseline gets a manual top-up. No UI surfaces this either.
+const PAPER_ADJUST_CAPITAL = envBool("PAPER_ADJUST_CAPITAL", false);
+const PAPER_TARGET_EQUITY_USDC = envNumber("PAPER_TARGET_EQUITY_USDC", 100);
 const TZ = "Europe/Prague";
 // Legacy STOP_BREACH rows remain refreshable so the next pass can close them at
 // the actually executable bid. The old behaviour kept them open after a gap and
@@ -1088,6 +1092,10 @@ function normalizePaperPortfolio(strategy, input = {}) {
     description: strategy.description,
     resetAt: input.resetAt || null,
     resetArchiveId: input.resetArchiveId || null,
+    // Carried at this level, like resetAt, rather than inside .portfolio -- that object
+    // is fully recomputed by updatePaperPortfolio() every pass, so anything meant to
+    // persist across passes has to live outside it.
+    capitalAdjustmentUsdc: Number(input.capitalAdjustmentUsdc) || 0,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
       maxFraction: Number(strategy.maxFraction ?? input.portfolio?.maxFraction ?? MAX_FRACTION),
@@ -1251,6 +1259,39 @@ function restoreArchivedPaperPortfolio(state, strategyId, { archiveId } = {}) {
   state.paperPortfolios[strategyId] = restored;
   syncLegacyPaperAliases(state);
   return { archiveId: archive.id, restoredTrades: restored.trades.length, collisions };
+}
+
+/**
+ * A one-time manual top-up of a portfolio's capital baseline so its displayed equity
+ * reads `targetEquity`, without touching a single trade. Reported: after a mistaken
+ * reset was undone, the account's true equity reflects its full, real historical PnL --
+ * which is exactly what should not be erased -- but the request was only ever to rebase
+ * the number, never to lose the history behind it.
+ *
+ * `capitalAdjustmentUsdc` is not a hidden fudge: updatePaperPortfolio() folds it into
+ * PORTFOLIO_USDC to form this portfolio's baseline, so it is published on every row and
+ * moves equity, free capital and percentage returns together, consistently, from here on.
+ */
+function adjustPaperPortfolioCapital(state, strategyId, targetEquity = 100) {
+  const strategy = PAPER_STRATEGIES[strategyId];
+  if (!strategy) throw new Error(`Unknown paper portfolio strategy: ${strategyId}`);
+
+  state.paperPortfolios ||= {};
+  // normalizePaperPortfolio() recomputes portfolio.* before returning, so this reads the
+  // account's genuine current equity under whatever adjustment it already carries.
+  const current = normalizePaperPortfolio(strategy, state.paperPortfolios[strategyId] || {});
+  const priorEquity = Number(current.portfolio.equityUsdc);
+  const priorAdjustment = Number(current.capitalAdjustmentUsdc) || 0;
+  const newAdjustment = Number((priorAdjustment + (Number(targetEquity) - priorEquity)).toFixed(4));
+  const adjusted = normalizePaperPortfolio(strategy, { ...current, capitalAdjustmentUsdc: newAdjustment });
+  state.paperPortfolios[strategyId] = adjusted;
+  syncLegacyPaperAliases(state);
+  return {
+    priorEquity,
+    priorAdjustment,
+    newAdjustment,
+    newEquity: adjusted.portfolio.equityUsdc,
+  };
 }
 
 function compactReasonCounts(reasonCounts) {
@@ -8628,11 +8669,16 @@ function updatePaperPortfolio(portfolioState) {
     .filter((trade) => OPEN_STATUSES.has(String(trade.status || "").toUpperCase()))
     .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
   const openRiskValue = openRisk(portfolioState.trades);
-  const equity = PORTFOLIO_USDC + realizedPnl + openPnl;
+  // A one-time manual correction to the account's capital baseline, applied by
+  // adjustPaperPortfolioCapital() -- never by ordinary trading. Every other portfolio
+  // carries 0 here, so PORTFOLIO_USDC + 0 reproduces the prior formula exactly.
+  const capitalAdjustment = Number(portfolioState.capitalAdjustmentUsdc) || 0;
+  const baseline = PORTFOLIO_USDC + capitalAdjustment;
+  const equity = baseline + realizedPnl + openPnl;
   const portfolioMaxFraction = Number(
     portfolioState.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION,
   );
-  const freeCapital = Math.max(0, PORTFOLIO_USDC + realizedPnl - openRiskValue);
+  const freeCapital = Math.max(0, baseline + realizedPnl - openRiskValue);
   portfolioState.portfolio = {
     ...(portfolioState.portfolio || {}),
     strategyId: portfolioState.id,
@@ -8640,7 +8686,11 @@ function updatePaperPortfolio(portfolioState) {
     selectionMetric: portfolioState.selectionMetric,
     selectionOrder: portfolioState.selectionOrder,
     strategyDescription: portfolioState.description,
-    initialUsdc: PORTFOLIO_USDC,
+    initialUsdc: baseline,
+    // Kept visible on the published row rather than only on the portfolio state, so a
+    // dashboard reading this object directly can still explain why equity does not
+    // equal PORTFOLIO_USDC + realized + open.
+    capitalAdjustmentUsdc: Number(capitalAdjustment.toFixed(4)),
     // The per-portfolio setting is the source of truth. Using the global fraction
     // here would overwrite it in the persisted state, so the UI, the backend and
     // the workflow would stop agreeing on the same stake sizing.
@@ -8656,12 +8706,12 @@ function updatePaperPortfolio(portfolioState) {
     marketType: normalizePortfolioMarketType(portfolioState.marketType, portfolioState.requireMostProbableOutcome),
     requireMostProbableOutcome: Boolean(portfolioState.requireMostProbableOutcome),
     realizedPnlUsdc: Number(realizedPnl.toFixed(4)),
-    realizedPnlPct: pnlPercent(realizedPnl, PORTFOLIO_USDC),
+    realizedPnlPct: pnlPercent(realizedPnl, baseline),
     openPnlUsdc: Number(openPnl.toFixed(4)),
-    openPnlPct: pnlPercent(openPnl, PORTFOLIO_USDC),
+    openPnlPct: pnlPercent(openPnl, baseline),
     equityUsdc: Number(equity.toFixed(4)),
     totalPnlUsdc: Number((realizedPnl + openPnl).toFixed(4)),
-    totalPnlPct: pnlPercent(realizedPnl + openPnl, PORTFOLIO_USDC),
+    totalPnlPct: pnlPercent(realizedPnl + openPnl, baseline),
     openRiskUsdc: Number(openRiskValue.toFixed(2)),
     freeCapitalUsdc: Number(freeCapital.toFixed(2)),
   };
@@ -8983,6 +9033,22 @@ async function run() {
       ...result,
       equityUsdc: state.paperPortfolios[PAPER_STRATEGY_ID].portfolio.equityUsdc,
       runLog: state.paperPortfolios[PAPER_STRATEGY_ID].runLog.length,
+    }, null, 2));
+    return;
+  }
+  if (PAPER_ADJUST_CAPITAL) {
+    if (!PAPER_STRATEGY_ID) {
+      throw new Error("PAPER_ADJUST_CAPITAL requires a valid PAPER_STRATEGY_ID.");
+    }
+    const result = adjustPaperPortfolioCapital(state, PAPER_STRATEGY_ID, PAPER_TARGET_EQUITY_USDC);
+    state.generatedAt = nowIso();
+    state.aiUsage = aiUsageSnapshot(state);
+    await writeState(state);
+    console.log(JSON.stringify({
+      action: "PAPER_PORTFOLIO_CAPITAL_ADJUSTED",
+      strategyId: PAPER_STRATEGY_ID,
+      ...result,
+      trades: state.paperPortfolios[PAPER_STRATEGY_ID].trades.length,
     }, null, 2));
     return;
   }
@@ -9392,6 +9458,7 @@ export {
   normalizePaperPortfolioArchives,
   archiveAndResetPaperPortfolio,
   restoreArchivedPaperPortfolio,
+  adjustPaperPortfolioCapital,
   mergeStates,
   openRisk,
   pnlPercent,

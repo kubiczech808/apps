@@ -320,6 +320,100 @@ test("paper restore: the workflow and bot expose it as a dispatchable mode", asy
   assert.match(source, /restoreArchivedPaperPortfolio\(state, PAPER_STRATEGY_ID\)/);
 });
 
+// Reported: after undoing the mistaken reset, a portfolio's equity truthfully reflects
+// its full historical PnL -- which is exactly what must not be erased -- but the request
+// was only ever to rebase the displayed number, never to lose the history behind it.
+// initialUsdc turned out not to be a real per-portfolio store: updatePaperPortfolio()
+// overwrites it with the fixed PORTFOLIO_USDC constant on every single pass, so a
+// genuine adjustment has to live in its own field and be folded into that formula.
+test("paper capital adjustment: rebases equity to the target without changing a single trade", () => {
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-17T10:00:00.000Z",
+    paperPortfolios: {
+      highReward: {
+        trades: [
+          { id: "t1", status: "WON", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: 4 },
+          { id: "t2", status: "LOST", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: -36.2451 },
+          { id: "t3", status: "OPEN", stakeUsdc: 5, totalCostUsdc: 5, unrealizedPnlUsdc: 1.5 },
+        ],
+      },
+    },
+  });
+  // Baseline 100 + realized (4 - 36.2451) + open 1.5 = 69.2549, matching the shape of
+  // the real production account this was measured against.
+  assert.equal(state.paperPortfolios.highReward.portfolio.equityUsdc, 69.2549,
+    "sanity: the fixture reproduces a realistic drawdown");
+
+  const result = bot.adjustPaperPortfolioCapital(state, "highReward", 100);
+  const adjusted = state.paperPortfolios.highReward;
+
+  assert.equal(result.priorEquity, 69.2549);
+  assert.equal(result.newEquity, 100);
+  assert.equal(adjusted.portfolio.equityUsdc, 100);
+  // Not one trade's own recorded PnL moved -- the account's true performance is
+  // unchanged and fully readable from its history. retainPaperTrades() may reorder
+  // (open positions are kept ahead of closed ones), so this checks each trade by id
+  // rather than assuming the array order survived.
+  const byId = Object.fromEntries(adjusted.trades.map((trade) => [trade.id, trade]));
+  assert.equal(byId.t1.realizedPnlUsdc, 4);
+  assert.equal(byId.t2.realizedPnlUsdc, -36.2451);
+  assert.equal(byId.t3.unrealizedPnlUsdc, 1.5);
+  assert.equal(adjusted.trades.length, 3);
+  // The adjustment is stated, not hidden: it is exactly what closes the gap between the
+  // fixed global baseline and the requested equity.
+  assert.equal(adjusted.capitalAdjustmentUsdc, Number((100 - 69.2549).toFixed(4)));
+  assert.equal(adjusted.portfolio.initialUsdc, 100 + adjusted.capitalAdjustmentUsdc);
+});
+
+test("paper capital adjustment: a second rebase adds to the existing adjustment, not past it", () => {
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-17T10:00:00.000Z",
+    paperPortfolios: {
+      equal: {
+        trades: [{ id: "t1", status: "LOST", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: -5 }],
+        capitalAdjustmentUsdc: 10,
+      },
+    },
+  });
+  // Equity is already 100 + 10 - 5 = 105 under the existing adjustment.
+  const result = bot.adjustPaperPortfolioCapital(state, "equal", 100);
+  assert.equal(result.priorEquity, 105);
+  assert.equal(result.priorAdjustment, 10);
+  // Moves the adjustment down by 5, not by 100 -- a rebase is relative to where the
+  // account already stands, or a second correction would overwrite the first.
+  assert.equal(result.newAdjustment, 5);
+  assert.equal(state.paperPortfolios.equal.portfolio.equityUsdc, 100);
+});
+
+test("paper capital adjustment: an untouched portfolio's formula is exactly the old one", () => {
+  // capitalAdjustmentUsdc defaults to 0 for every portfolio that never had this run
+  // against it, so PORTFOLIO_USDC + 0 must reproduce the pre-existing baseline exactly.
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-17T10:00:00.000Z",
+    paperPortfolios: {
+      conservative: {
+        trades: [{ id: "t1", status: "WON", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: 3.75 }],
+      },
+    },
+  });
+  const portfolio = state.paperPortfolios.conservative.portfolio;
+  assert.equal(portfolio.initialUsdc, 100);
+  assert.equal(portfolio.equityUsdc, 103.75);
+  assert.equal(state.paperPortfolios.conservative.capitalAdjustmentUsdc, 0);
+});
+
+test("paper capital adjustment: the workflow and bot expose it as a dispatchable mode", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8");
+  assert.match(workflow, /- adjust_capital\n/);
+  assert.match(workflow,
+    /PAPER_ADJUST_CAPITAL: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.mode == 'adjust_capital' && 'true' \|\| 'false' \}\}/);
+  assert.match(workflow, /paper_target_equity_usdc:/);
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(source, /if \(PAPER_ADJUST_CAPITAL\) \{/);
+  assert.match(source, /adjustPaperPortfolioCapital\(state, PAPER_STRATEGY_ID, PAPER_TARGET_EQUITY_USDC\)/);
+});
+
 test("run log: a paper OPENED row keeps the selected order summary in the compact list", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
