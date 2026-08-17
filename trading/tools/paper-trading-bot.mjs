@@ -296,6 +296,9 @@ const PAPER_STRATEGY_ID = /^[a-z][a-zA-Z0-9]{1,30}$/.test(String(process.env.PAP
   ? process.env.PAPER_STRATEGY_ID
   : "";
 const PAPER_RESET_PORTFOLIO = envBool("PAPER_RESET_PORTFOLIO", false);
+// One-off undo for a reset dispatched by mistake. No UI surfaces this; it exists so a
+// wrong reset can be reversed the same way it was made, by workflow dispatch.
+const PAPER_RESTORE_PORTFOLIO = envBool("PAPER_RESTORE_PORTFOLIO", false);
 const TZ = "Europe/Prague";
 // Legacy STOP_BREACH rows remain refreshable so the next pass can close them at
 // the actually executable bid. The old behaviour kept them open after a gap and
@@ -1179,6 +1182,75 @@ function archiveAndResetPaperPortfolio(state, strategyId, reason = "manual paper
   });
   syncLegacyPaperAliases(state);
   return archive;
+}
+
+/**
+ * Undoes a reset: restores a portfolio's trades, run log and last-decision record from
+ * its own archive snapshot, keeping this exact undo one-off rather than a repeatable
+ * feature -- there is no UI for it, only a bot mode a workflow dispatch can reach.
+ *
+ * A trade opened after the reset can share its id with an archived one: the id is
+ * built as strategyId+day+tokenId, which collides on purpose within one portfolio on
+ * one day. Restoring must not let that collision silently drop either side, so a
+ * colliding pair is kept as two rows unless they are identical, and every collision is
+ * named in the return value so the operator can see exactly what happened.
+ */
+function restoreArchivedPaperPortfolio(state, strategyId, { archiveId } = {}) {
+  const strategy = PAPER_STRATEGIES[strategyId];
+  if (!strategy) throw new Error(`Unknown paper portfolio strategy: ${strategyId}`);
+
+  state.paperPortfolios ||= {};
+  const current = normalizePaperPortfolio(strategy, state.paperPortfolios[strategyId] || {});
+  const archives = normalizePaperPortfolioArchives(state.paperPortfolioArchives || []);
+  const targetId = archiveId || current.resetArchiveId;
+  const archive = (targetId && archives.find((entry) => entry.id === targetId))
+    || archives.find((entry) => entry.strategyId === strategyId);
+  if (!archive) throw new Error(`No archive found to restore ${strategyId} from.`);
+
+  const snapshot = archive.snapshot || {};
+  const archivedTrades = Array.isArray(snapshot.trades) ? snapshot.trades : [];
+  const archivedById = new Map(archivedTrades.map((trade) => [trade.id, trade]));
+  const collisions = [];
+  const additional = [];
+  for (const trade of current.trades) {
+    const archived = archivedById.get(trade.id);
+    if (!archived) {
+      additional.push(trade);
+      continue;
+    }
+    if (JSON.stringify(archived) === JSON.stringify(trade)) continue;
+    // Real progress since the reset -- the reopened position was closed out -- is kept
+    // over the archived, still-open row for the same id. Anything else is a collision
+    // this function will not guess at, so both rows are kept, one under a disambiguated
+    // id, and the collision is reported rather than silently resolved either way.
+    if (!OPEN_STATUSES.has(String(archived.status || "").toUpperCase())
+      || OPEN_STATUSES.has(String(trade.status || "").toUpperCase())) {
+      collisions.push({ id: trade.id, resolution: "kept-both" });
+      additional.push({ ...trade, id: `${trade.id}-post-reset` });
+    } else {
+      collisions.push({ id: trade.id, resolution: "kept-post-reset-close" });
+    }
+  }
+  const restoredTrades = archivedTrades.map((trade) => {
+    const collidedClose = current.trades.find((row) => row.id === trade.id
+      && !OPEN_STATUSES.has(String(row.status || "").toUpperCase())
+      && OPEN_STATUSES.has(String(trade.status || "").toUpperCase()));
+    return collidedClose || trade;
+  });
+
+  const restored = normalizePaperPortfolio(strategy, {
+    ...snapshot,
+    trades: [...restoredTrades, ...additional],
+    // The reset's own markers no longer describe this portfolio's history.
+    resetAt: null,
+    resetArchiveId: null,
+  });
+  // normalizePaperPortfolio() already recomputes portfolio.* (equity, free capital,
+  // realized/open PnL) from `restored.trades` before returning, so it reflects whatever
+  // ended up in the restored set, including any trade kept from after the reset.
+  state.paperPortfolios[strategyId] = restored;
+  syncLegacyPaperAliases(state);
+  return { archiveId: archive.id, restoredTrades: restored.trades.length, collisions };
 }
 
 function compactReasonCounts(reasonCounts) {
@@ -8897,6 +8969,23 @@ async function run() {
     }, null, 2));
     return;
   }
+  if (PAPER_RESTORE_PORTFOLIO) {
+    if (!PAPER_STRATEGY_ID) {
+      throw new Error("PAPER_RESTORE_PORTFOLIO requires a valid PAPER_STRATEGY_ID.");
+    }
+    const result = restoreArchivedPaperPortfolio(state, PAPER_STRATEGY_ID);
+    state.generatedAt = nowIso();
+    state.aiUsage = aiUsageSnapshot(state);
+    await writeState(state);
+    console.log(JSON.stringify({
+      action: "PAPER_PORTFOLIO_RESTORED",
+      strategyId: PAPER_STRATEGY_ID,
+      ...result,
+      equityUsdc: state.paperPortfolios[PAPER_STRATEGY_ID].portfolio.equityUsdc,
+      runLog: state.paperPortfolios[PAPER_STRATEGY_ID].runLog.length,
+    }, null, 2));
+    return;
+  }
   if (SCHEDULED_CADENCE && !COMPACT_ONLY && !REFRESH_ONLY && !EXECUTION_ONLY && !EVALUATION_ONLY) {
     const cadence = resolveScheduledCadence(state);
     scanOnly = cadence.scanOnly;
@@ -9302,6 +9391,7 @@ export {
   normalizeState,
   normalizePaperPortfolioArchives,
   archiveAndResetPaperPortfolio,
+  restoreArchivedPaperPortfolio,
   mergeStates,
   openRisk,
   pnlPercent,

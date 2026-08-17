@@ -17,6 +17,7 @@ on:
           - full
           - repair
           - reset
+          - restore
           - refresh
           - report
           - after_scan
@@ -232,6 +233,8 @@ jobs:
       PAPER_EXECUTION_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'true' || 'false' }}
       PAPER_COMPACT_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'repair' && 'true' || 'false' }}
       PAPER_RESET_PORTFOLIO: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'reset' && 'true' || 'false' }}
+      # One-off undo for a reset dispatched by mistake. No UI surfaces this.
+      PAPER_RESTORE_PORTFOLIO: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'restore' && 'true' || 'false' }}
       PAPER_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'after_scrape' || 'cron' }}
       PAPER_MANUAL_RUN_ONCE: ${{ github.event_name == 'workflow_dispatch' && inputs.manual_run_once == 'true' && 'true' || 'false' }}
       PAPER_STRATEGY_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_strategy_id || '' }}

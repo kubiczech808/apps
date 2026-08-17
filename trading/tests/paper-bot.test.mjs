@@ -93,6 +93,233 @@ test("paper reset: archives only More probable and prevents stale trades from re
   assert.equal(merged.paperPortfolioArchives.length, 1);
 });
 
+// Reported: a reset dispatched by mistake removed the open positions, closed-trade
+// history and run log of a portfolio that was still running -- the request was only to
+// rebase its displayed equity, never to touch any of that. Measured against the
+// production incident: a plain undo cannot just restore the archived trades wholesale,
+// because a paper trade's id is strategyId+day+tokenId, which collides on purpose
+// within one portfolio on one day -- and the bot, run again after the reset with an
+// empty account, reopened a position on the very market an archived trade already held,
+// producing two real, distinct fills sharing one id.
+test("paper restore: undoes a mistaken reset without losing a fill that collided on id", () => {
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-17T05:20:00.000Z",
+    paperPortfolios: {
+      highReward: {
+        // What the reset produced: an empty account plus one trade opened after it, on
+        // the same market (day) an archived trade already held -- the exact production
+        // shape, entry price and stake deliberately different from the archived one.
+        trades: [{
+          id: "paper-highReward-2026-08-17-76203494307980720620810691744802511525054908181575758165291891445551300956006",
+          status: "OPEN",
+          tokenId: "76203494307980720620810691744802511525054908181575758165291891445551300956006",
+          question: "Pisa SC leading at halftime?",
+          openedAt: "2026-08-17T05:17:26.959Z",
+          entryPrice: 0.63,
+          stakeUsdc: 5,
+          totalCostUsdc: 5,
+        }],
+        runLog: [{ id: "post-reset-run", runAt: "2026-08-17T05:18:00.000Z", strategyId: "highReward" }],
+        resetAt: "2026-08-17T05:10:22.606Z",
+        resetArchiveId: "paper-archive-highReward-20260817051022606",
+      },
+    },
+    paperPortfolioArchives: [{
+      id: "paper-archive-highReward-20260817051022606",
+      strategyId: "highReward",
+      label: "High reward",
+      archivedAt: "2026-08-17T05:10:22.606Z",
+      reason: "manual paper portfolio reset",
+      snapshot: {
+        portfolio: { initialUsdc: 100 },
+        lastTradeDate: "2026-08-17",
+        lastTradeHour: 9,
+        lastDecision: { runAt: "2026-08-17T05:09:00.000Z" },
+        runLog: [
+          { id: "old-run-1", runAt: "2026-08-16T09:00:00.000Z", strategyId: "highReward" },
+          { id: "old-run-2", runAt: "2026-08-17T05:09:00.000Z", strategyId: "highReward" },
+        ],
+        trades: [
+          // The colliding id: same market, same day, opened well before the reset, still
+          // open -- and materially different terms from the post-reset trade sharing it.
+          {
+            id: "paper-highReward-2026-08-17-76203494307980720620810691744802511525054908181575758165291891445551300956006",
+            status: "OPEN",
+            tokenId: "76203494307980720620810691744802511525054908181575758165291891445551300956006",
+            question: "Pisa SC leading at halftime?",
+            openedAt: "2026-08-17T01:56:07.167Z",
+            entryPrice: 0.64,
+            stakeUsdc: 3.85,
+            totalCostUsdc: 3.85,
+          },
+          { id: "old-closed-trade", status: "WON", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: 4.2 },
+        ],
+      },
+    }],
+  });
+
+  const result = bot.restoreArchivedPaperPortfolio(state, "highReward");
+  const restored = state.paperPortfolios.highReward;
+
+  assert.equal(result.collisions.length, 1, "the id collision must be reported, not silently resolved");
+  assert.equal(result.collisions[0].id,
+    "paper-highReward-2026-08-17-76203494307980720620810691744802511525054908181575758165291891445551300956006");
+  assert.equal(result.collisions[0].resolution, "kept-both");
+
+  // Nothing lost: the archived open position, the archived closed trade, and the
+  // genuinely new post-reset fill are all present, as three separate rows.
+  assert.equal(restored.trades.length, 3);
+  const archivedOpen = restored.trades.find((trade) => trade.entryPrice === 0.64 && trade.stakeUsdc === 3.85);
+  assert.ok(archivedOpen, "the pre-reset open position must survive under its original id");
+  assert.equal(archivedOpen.openedAt, "2026-08-17T01:56:07.167Z");
+  const postReset = restored.trades.find((trade) => trade.entryPrice === 0.63 && trade.stakeUsdc === 5);
+  assert.ok(postReset, "the post-reset fill on the same market must not be discarded");
+  assert.notEqual(postReset.id, archivedOpen.id, "the two fills must not share an id after the restore");
+  assert.ok(restored.trades.some((trade) => trade.id === "old-closed-trade"), "unrelated archived trades are untouched");
+
+  // The reset's own markers are gone -- this portfolio's history no longer began there.
+  assert.equal(restored.resetAt, null);
+  assert.equal(restored.resetArchiveId, null);
+  assert.equal(restored.runLog.length, 2, "the archived run log is restored");
+  assert.equal(restored.lastTradeDate, "2026-08-17");
+
+  // portfolio.* is recomputed from the restored trades, not left at whatever
+  // normalizePaperPortfolio defaults to before a real pass ever runs: realizedPnl 4.2
+  // from the one closed trade, on top of the 100 baseline, with both OPEN positions
+  // contributing nothing until they resolve.
+  assert.equal(restored.portfolio.initialUsdc, 100);
+  assert.equal(restored.portfolio.equityUsdc, 104.2);
+});
+
+// The equal (Stop loss) portfolio's own incident: two trades opened after its reset,
+// neither sharing an id with anything archived. No collision to resolve here -- both
+// are simply additional rows alongside the full archived history.
+test("paper restore: two clean post-reset trades are appended, not merged into anything", () => {
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-17T05:20:00.000Z",
+    paperPortfolios: {
+      equal: {
+        trades: [
+          { id: "post-reset-a", status: "PENDING_RESOLUTION", stakeUsdc: 5, totalCostUsdc: 5 },
+          { id: "post-reset-b", status: "OPEN", stakeUsdc: 5, totalCostUsdc: 5 },
+        ],
+        runLog: [{ id: "post-reset-run", runAt: "2026-08-17T05:00:00.000Z", strategyId: "equal" }],
+        resetAt: "2026-08-17T04:56:21.125Z",
+        resetArchiveId: "paper-archive-equal-20260817045621125",
+      },
+    },
+    paperPortfolioArchives: [{
+      id: "paper-archive-equal-20260817045621125",
+      strategyId: "equal",
+      label: "Stop loss",
+      archivedAt: "2026-08-17T04:56:21.125Z",
+      reason: "manual paper portfolio reset",
+      snapshot: {
+        portfolio: { initialUsdc: 100 },
+        lastTradeDate: "2026-08-17",
+        runLog: [{ id: "old-run", runAt: "2026-08-17T04:00:00.000Z", strategyId: "equal" }],
+        trades: [{ id: "old-trade", status: "OPEN", stakeUsdc: 5, totalCostUsdc: 5 }],
+      },
+    }],
+  });
+
+  const result = bot.restoreArchivedPaperPortfolio(state, "equal");
+  const restored = state.paperPortfolios.equal;
+
+  assert.equal(result.collisions.length, 0);
+  assert.equal(restored.trades.length, 3);
+  assert.ok(restored.trades.some((trade) => trade.id === "old-trade"));
+  assert.ok(restored.trades.some((trade) => trade.id === "post-reset-a"));
+  assert.ok(restored.trades.some((trade) => trade.id === "post-reset-b"));
+  assert.equal(restored.resetAt, null);
+});
+
+// A collision where the post-reset re-buy on the same market actually settled must not
+// be shadowed by the archived, still-open row for the same id: the settlement is real
+// progress and the archived row is now simply stale.
+test("paper restore: a post-reset fill that already closed replaces the archived open row", () => {
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-17T06:00:00.000Z",
+    paperPortfolios: {
+      highReward: {
+        trades: [{
+          id: "collide-and-close",
+          status: "WON",
+          stakeUsdc: 5,
+          totalCostUsdc: 5,
+          realizedPnlUsdc: 3,
+        }],
+        resetArchiveId: "archive-a",
+      },
+    },
+    paperPortfolioArchives: [{
+      id: "archive-a",
+      strategyId: "highReward",
+      label: "High reward",
+      archivedAt: "2026-08-17T05:00:00.000Z",
+      snapshot: {
+        portfolio: { initialUsdc: 100 },
+        trades: [{ id: "collide-and-close", status: "OPEN", stakeUsdc: 5, totalCostUsdc: 5 }],
+      },
+    }],
+  });
+
+  const result = bot.restoreArchivedPaperPortfolio(state, "highReward");
+  const restored = state.paperPortfolios.highReward;
+
+  assert.equal(result.collisions.length, 1);
+  assert.equal(result.collisions[0].resolution, "kept-post-reset-close");
+  assert.equal(restored.trades.length, 1, "the settled fill replaces the archived open row rather than sitting beside it");
+  assert.equal(restored.trades[0].status, "WON");
+  assert.equal(restored.trades[0].realizedPnlUsdc, 3);
+});
+
+// Multiple archives can exist for one strategy (every reset adds one). Restoring must
+// undo the SPECIFIC reset this portfolio's own resetArchiveId points at, not merely
+// whichever archive for that strategy happens to be newest.
+test("paper restore: picks the archive this portfolio's own reset points at, not just the newest", () => {
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-17T06:00:00.000Z",
+    paperPortfolios: {
+      highReward: {
+        trades: [],
+        resetArchiveId: "archive-older-correct",
+      },
+    },
+    paperPortfolioArchives: [
+      {
+        id: "archive-newer-wrong",
+        strategyId: "highReward",
+        label: "High reward",
+        archivedAt: "2026-08-17T06:00:00.000Z",
+        snapshot: { portfolio: { initialUsdc: 100 }, trades: [{ id: "wrong-trade", status: "OPEN", stakeUsdc: 5, totalCostUsdc: 5 }] },
+      },
+      {
+        id: "archive-older-correct",
+        strategyId: "highReward",
+        label: "High reward",
+        archivedAt: "2026-08-17T05:00:00.000Z",
+        snapshot: { portfolio: { initialUsdc: 100 }, trades: [{ id: "correct-trade", status: "OPEN", stakeUsdc: 5, totalCostUsdc: 5 }] },
+      },
+    ],
+  });
+
+  const result = bot.restoreArchivedPaperPortfolio(state, "highReward");
+  assert.equal(result.archiveId, "archive-older-correct");
+  assert.deepEqual(state.paperPortfolios.highReward.trades.map((trade) => trade.id), ["correct-trade"]);
+});
+
+test("paper restore: the workflow and bot expose it as a dispatchable mode", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8");
+  assert.match(workflow, /- restore\n/);
+  assert.match(workflow,
+    /PAPER_RESTORE_PORTFOLIO: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.mode == 'restore' && 'true' \|\| 'false' \}\}/);
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(source, /if \(PAPER_RESTORE_PORTFOLIO\) \{/);
+  assert.match(source, /restoreArchivedPaperPortfolio\(state, PAPER_STRATEGY_ID\)/);
+});
+
 test("run log: a paper OPENED row keeps the selected order summary in the compact list", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
