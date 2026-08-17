@@ -2034,6 +2034,14 @@ function syncModeUi() {
   if (els.portfolioTitle) {
     els.portfolioTitle.textContent = portfolioTitleForMode();
   }
+  // Hooked here rather than on the dashboard rerender: both the paper and the live
+  // render paths call this, including on the first load, which the rerender does not
+  // sit on top of -- so the overview and the archived list would have stayed empty
+  // until something else changed.
+  renderPortfolioOverview();
+  renderArchivedPortfolios();
+  // Only fetched when the open tab is not the one that carries the paper numbers.
+  if (live) loadPortfolioOverview();
   // 5050 is a live portfolio but not the Live one, and both tabs used to head their
   // tables "Opened live trades" -- so the two read identically while showing different
   // portfolios' rows. The same fix the run-log title already carries: name the portfolio.
@@ -3849,10 +3857,6 @@ function rerenderCurrentDashboard() {
   }
   renderBotEvaluations();
   renderPortfolioCandidates();
-  renderArchivedPortfolios();
-  renderPortfolioOverview();
-  // Only fetched when the open tab is not the one that carries these numbers.
-  if (isLiveMode()) loadPortfolioOverview();
 }
 
 function openParameterModal(trigger) {

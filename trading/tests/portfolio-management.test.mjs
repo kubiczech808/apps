@@ -398,6 +398,20 @@ test("dashboard: the overview above the selector states equity and risk against 
   assert.match(overview, /Number\.isFinite\(value\) \? money\(value\) : "-"/);
 });
 
+test("dashboard: the overview and the archived list render on the first load", () => {
+  // Both the paper and the live render paths call syncModeUi, including on the first
+  // load. Hanging these off the dashboard rerender instead left both panels empty until
+  // something else on the page changed.
+  const sync = extractFunction(APP, "syncModeUi");
+  assert.match(sync, /renderPortfolioOverview\(\);/);
+  assert.match(sync, /renderArchivedPortfolios\(\);/);
+  assert.match(sync, /if \(live\) loadPortfolioOverview\(\);/,
+    "the paper numbers are only fetched when the open tab does not already carry them");
+  for (const path of ["renderBotState", "renderLiveState"]) {
+    assert.match(extractFunction(APP, path), /syncModeUi\(\);/, `${path} must reach it`);
+  }
+});
+
 test("dashboard: a live portfolio's tab is marked, not merely named", () => {
   assert.match(APP, /button\.classList\.toggle\("mode-button-live", LIVE_MODES\.has\(buttonMode\)\);/);
   const rule = /\.mode-button\.mode-button-live \{[^}]*\}/.exec(CSS);
