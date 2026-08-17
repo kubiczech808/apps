@@ -275,6 +275,43 @@ async function reportPaperPortfolioSettings() {
   }
 }
 
+// One-off: checking what a mistaken reset on highReward left recoverable before writing
+// any restore. Read-only -- prints the archive snapshot's shape and whether anything
+// has traded since the reset, so a restore can be built to keep both.
+async function reportResetRecovery(strategyId) {
+  console.log(`\n== Reset recovery check for "${strategyId}"`);
+  const result = await fetchJson(`${HOST}/api.php?action=state&target=paper&summary=dashboard`);
+  if (!result.ok) {
+    console.log(`   HTTP ${result.status}: ${String(result.error).slice(0, 200)}`);
+    return;
+  }
+  const state = result.body?.state || result.body || {};
+  const live = state.paperPortfolios?.[strategyId] || {};
+  console.log(`   live now: resetAt=${live.resetAt || "none"} resetArchiveId=${live.resetArchiveId || "none"}`
+    + ` trades=${(live.trades || []).length} runLog=${(live.runLog || []).length}`
+    + ` equity=${live.portfolio?.equityUsdc ?? "-"}`);
+  const archives = Array.isArray(state.paperPortfolioArchives) ? state.paperPortfolioArchives : [];
+  console.log(`   archives stored: ${archives.length}`);
+  const match = archives.find((entry) => entry.id === live.resetArchiveId)
+    || archives.find((entry) => entry.strategyId === strategyId);
+  if (!match) {
+    console.log(`   no archive entry found for ${strategyId}`);
+    return;
+  }
+  const snapshot = match.snapshot || {};
+  console.log(`   archive "${match.id}": archivedAt=${match.archivedAt} reason=${JSON.stringify(match.reason)}`);
+  console.log(`      snapshot: trades=${(snapshot.trades || []).length} runLog=${(snapshot.runLog || []).length}`
+    + ` lastTradeDate=${snapshot.lastTradeDate || "-"} equity=${snapshot.portfolio?.equityUsdc ?? "-"}`
+    + ` initialUsdc=${snapshot.portfolio?.initialUsdc ?? "-"}`);
+  const liveIds = new Set((live.trades || []).map((trade) => trade.id || trade.tokenId));
+  const newSinceReset = (live.trades || []).filter((trade) => !(snapshot.trades || [])
+    .some((archived) => (archived.id || archived.tokenId) === (trade.id || trade.tokenId)));
+  console.log(`   trades in the live portfolio not present in the archive (opened since the reset): ${newSinceReset.length}`);
+  for (const trade of newSinceReset.slice(0, 10)) {
+    console.log(`      ${trade.id || trade.tokenId} status=${trade.status} openedAt=${trade.openedAt || trade.createdAt || "-"}`);
+  }
+}
+
 async function main() {
   console.log(`Live portfolio attribution diagnosis at ${new Date().toISOString()}`);
   console.log("Read-only: nothing is written, no credentials are used.\n");
@@ -415,6 +452,7 @@ async function main() {
   // Last on purpose: only the tail of a runner log can be read back through the API, so
   // the section being investigated has to be the one that lands there.
   await reportPaperPortfolioSettings();
+  await reportResetRecovery("highReward");
 }
 
 const invokedDirectly = process.argv[1]
