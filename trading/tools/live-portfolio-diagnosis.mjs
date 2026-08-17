@@ -303,12 +303,25 @@ async function reportResetRecovery(strategyId) {
   console.log(`      snapshot: trades=${(snapshot.trades || []).length} runLog=${(snapshot.runLog || []).length}`
     + ` lastTradeDate=${snapshot.lastTradeDate || "-"} equity=${snapshot.portfolio?.equityUsdc ?? "-"}`
     + ` initialUsdc=${snapshot.portfolio?.initialUsdc ?? "-"}`);
-  const liveIds = new Set((live.trades || []).map((trade) => trade.id || trade.tokenId));
-  const newSinceReset = (live.trades || []).filter((trade) => !(snapshot.trades || [])
-    .some((archived) => (archived.id || archived.tokenId) === (trade.id || trade.tokenId)));
-  console.log(`   trades in the live portfolio not present in the archive (opened since the reset): ${newSinceReset.length}`);
-  for (const trade of newSinceReset.slice(0, 10)) {
-    console.log(`      ${trade.id || trade.tokenId} status=${trade.status} openedAt=${trade.openedAt || trade.createdAt || "-"}`);
+  // A paper trade's id is built as `paper-{strategyId}-{today}-{tokenId}` -- same
+  // strategy, same day, same market collide on purpose (one entry per market per day).
+  // A reset re-opening a market it already held before the reset would print "0 new"
+  // by id alone and silently lose the archived entry, so every live row is shown in
+  // full against its id-matching archived row, not just counted.
+  for (const trade of (live.trades || [])) {
+    const archived = (snapshot.trades || []).find((entry) => entry.id === trade.id);
+    console.log(`   live trade ${trade.id}: status=${trade.status} tokenId=${trade.tokenId}`
+      + ` question=${JSON.stringify(String(trade.question || "").slice(0, 60))}`
+      + ` openedAt=${trade.openedAt || trade.createdAt || "-"} entryPrice=${trade.entryPrice ?? "-"}`
+      + ` stakeUsdc=${trade.stakeUsdc ?? "-"} realizedPnlUsdc=${trade.realizedPnlUsdc ?? "-"}`);
+    if (archived) {
+      console.log(`      matches an archived trade by id: status=${archived.status}`
+        + ` openedAt=${archived.openedAt || archived.createdAt || "-"} entryPrice=${archived.entryPrice ?? "-"}`
+        + ` stakeUsdc=${archived.stakeUsdc ?? "-"} realizedPnlUsdc=${archived.realizedPnlUsdc ?? "-"}`
+        + ` -- ${trade.openedAt === archived.openedAt && trade.stakeUsdc === archived.stakeUsdc ? "looks like the same fill" : "DIFFERS -- likely a distinct fill sharing the id"}`);
+    } else {
+      console.log("      no archived trade shares this id");
+    }
   }
 }
 
@@ -453,6 +466,7 @@ async function main() {
   // the section being investigated has to be the one that lands there.
   await reportPaperPortfolioSettings();
   await reportResetRecovery("highReward");
+  await reportResetRecovery("equal");
 }
 
 const invokedDirectly = process.argv[1]
