@@ -275,10 +275,15 @@ const els = {
   executionTriggerLabel: document.querySelector("[data-execution-trigger-label]"),
   autoRotatePositions: document.querySelector("[data-auto-rotate-positions]"),
   autoRotatePositionsLabel: document.querySelector("[data-auto-rotate-positions-label]"),
+  stopLossEnabled: document.querySelector("[data-stop-loss-enabled]"),
+  stopLossEnabledLabel: document.querySelector("[data-stop-loss-enabled-label]"),
   executionCronRow: document.querySelector("[data-execution-cron-row]"),
   executionCronMinutes: document.querySelector("[data-execution-cron-minutes]"),
   executionCronMinutesLabel: document.querySelector("[data-execution-cron-minutes-label]"),
   fixedEntryRows: document.querySelectorAll("[data-fixed-entry-row]"),
+  // Paper-only: Polymarket has no conditional stop order, so live portfolios have no
+  // equivalent setting to show this row for.
+  paperOnlyRows: document.querySelectorAll("[data-paper-only-row]"),
   fixedEntryPrice: document.querySelector("[data-fixed-entry-price]"),
   fixedEntryPriceLabel: document.querySelector("[data-fixed-entry-price-label]"),
   fixedEntryTags: document.querySelector("[data-fixed-entry-tags]"),
@@ -603,6 +608,7 @@ function defaultPortfolioConfig() {
         executionCronMinutes: 60,
         automationEnabled: true,
         autoRotatePositions: true,
+        stopLossEnabled: false,
         marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -620,6 +626,7 @@ function defaultPortfolioConfig() {
         executionCronMinutes: 60,
         automationEnabled: true,
         autoRotatePositions: true,
+        stopLossEnabled: false,
         marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -637,6 +644,7 @@ function defaultPortfolioConfig() {
         executionCronMinutes: 60,
         automationEnabled: true,
         autoRotatePositions: true,
+        stopLossEnabled: false,
         marketType: "multi",
         requireMostProbableOutcome: true,
         probabilitySource: "polymarket",
@@ -654,6 +662,9 @@ function defaultPortfolioConfig() {
         executionCronMinutes: 0,
         automationEnabled: true,
         autoRotatePositions: false,
+        // The mechanism this portfolio is named for. It is now a parameter any paper
+        // portfolio may turn on, but Equal is where it ships enabled.
+        stopLossEnabled: true,
         marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -828,6 +839,13 @@ function automationIsEnabled(config = {}) {
 
 function automaticRotationIsEnabled(config = {}) {
   return config.autoRotatePositions !== false;
+}
+
+// The paper synthetic stop Equal was built around. Off by default for every portfolio
+// except Equal, which carries it in its own shipped default -- unlike rotation, most
+// portfolios have never had this behavior, so absent must not read as on.
+function stopLossIsEnabled(config = {}) {
+  return config.stopLossEnabled === true;
 }
 
 function probabilitySourceLabel(value) {
@@ -2432,11 +2450,13 @@ function isClosedTrade(trade) {
 function closedTradePredictionResult(trade) {
   const status = String(trade.status || "").toUpperCase();
   if (["WON", "REDEEMED", "REDEEM_REQUIRED"].includes(status)) return true;
-  if (status === "LOST") return false;
+  // A stop loss firing is realizing a loss by design -- the position moved against the
+  // pick badly enough to force an exit -- so it counts as a miss regardless of what the
+  // market eventually resolves to, the same as an outright LOST.
+  if (["LOST", "STOP_LOSS", "STOP_GAP"].includes(status)) return false;
 
-  // A sale, rotation or protective exit measures execution performance, not
-  // prediction accuracy. Count it only after Polymarket publishes the selected
-  // outcome's final settlement price.
+  // A sale or rotation measures execution performance, not prediction accuracy. Count
+  // it only after Polymarket publishes the selected outcome's final settlement price.
   const finalOutcomePrice = trade.finalOutcomePrice == null || trade.finalOutcomePrice === ""
     ? null
     : Number(trade.finalOutcomePrice);
@@ -3795,6 +3815,12 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const autoRotatePositions = automaticRotationIsEnabled(config);
   if (els.autoRotatePositions) els.autoRotatePositions.checked = autoRotatePositions;
   if (els.autoRotatePositionsLabel) els.autoRotatePositionsLabel.textContent = autoRotatePositions ? "On" : "Off";
+  const stopLossEnabled = stopLossIsEnabled(config);
+  if (els.stopLossEnabled) els.stopLossEnabled.checked = stopLossEnabled;
+  if (els.stopLossEnabledLabel) els.stopLossEnabledLabel.textContent = stopLossEnabled ? "On" : "Off";
+  // Paper-only: live portfolios have no equivalent to this mechanism, keyed on the
+  // portfolio being edited rather than the open tab, like the 5050 rows below.
+  els.paperOnlyRows?.forEach((row) => row.toggleAttribute("hidden", LIVE_MODES.has(normalizeMode(mode))));
   if (els.parameterModalArchive) {
     // Only an existing paper portfolio can be archived. A live one holds real positions
     // and open orders, and hiding those would hide real exposure; one being created does
@@ -6182,9 +6208,10 @@ function portfolioRuleRows(portfolio = {}) {
   if (Number.isFinite(minLiquidityUsdc)) rows.push(["Volume filter", `>= ${money(minLiquidityUsdc)}`]);
   rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
   rows.push(["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"]);
-  if (portfolio.id === "equal") {
-    rows.push(["Risk protection", "Paper synthetic stop: planned maximum loss equals net potential win"]);
-  }
+  // Any paper portfolio can turn this on now; Equal is only where it ships enabled.
+  rows.push(["Stop loss", stopLossIsEnabled(config)
+    ? "On - planned maximum loss equals net potential win"
+    : "Off"]);
   // Only when something is actually excluded: a row reading "none" on every portfolio
   // that never touched the setting is noise in a list meant to be read at a glance.
   const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
@@ -10364,6 +10391,15 @@ els.autoRotatePositions?.addEventListener("change", () => {
   const value = Boolean(els.autoRotatePositions.checked);
   if (updateParameterDraft({ autoRotatePositions: value })) return;
   updatePortfolioConfigForMode(state.mode, { autoRotatePositions: value });
+  savePortfolioConfigSoon();
+  syncPortfolioParameterControls();
+  rerenderCurrentDashboard();
+});
+
+els.stopLossEnabled?.addEventListener("change", () => {
+  const value = Boolean(els.stopLossEnabled.checked);
+  if (updateParameterDraft({ stopLossEnabled: value })) return;
+  updatePortfolioConfigForMode(state.mode, { stopLossEnabled: value });
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

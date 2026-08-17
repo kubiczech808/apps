@@ -397,6 +397,13 @@
           <input type="checkbox" data-auto-rotate-positions>
           <strong data-auto-rotate-positions-label>On</strong>
         </label>
+        <!-- Paper-only: Polymarket offers no conditional stop order, so live portfolios
+             have no equivalent mechanism to turn on here. -->
+        <label class="parameter-control order-mode-toggle" data-paper-only-row title="Closes the position when its price falls to where the loss equals the net potential win, instead of waiting for resolution.">
+          <span>Stop loss</span>
+          <input type="checkbox" data-stop-loss-enabled>
+          <strong data-stop-loss-enabled-label>Off</strong>
+        </label>
         <label class="parameter-control" data-fixed-entry-row>
           <span>Order price (5050)</span>
           <input type="number" min="1" max="99" step="1" value="50" data-fixed-entry-price>
@@ -456,6 +463,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260817-portfolio-management"></script>
+  <script src="assets/app.js?v=20260817-stop-loss-parameter"></script>
 </body>
 </html>

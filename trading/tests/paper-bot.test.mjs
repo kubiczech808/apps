@@ -3304,7 +3304,12 @@ test("5050: its own resting orders appear on its tab straight away", async () =>
   assert.equal(belongs(true, [])({ tokenId: "T4", price: 0.5099 }), true);
 });
 
-test("dashboard accuracy excludes rotations and protective exits until final resolution", async () => {
+// Reported: a position closed by the stop loss should count as a loss in the accuracy
+// tile, whatever the underlying market eventually resolves to. Before this, STOP_LOSS
+// and STOP_GAP fell through to the same "wait for final resolution" rule as an ordinary
+// sale or rotation -- so a stopped-out position with no recorded final price sat
+// excluded from the tile indefinitely, understating how often the strategy was wrong.
+test("dashboard accuracy: a stop loss counts as a loss; an unresolved sale stays excluded", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
   const pick = (re) => re.exec(app)[0];
@@ -3318,8 +3323,11 @@ test("dashboard accuracy excludes rotations and protective exits until final res
   const stats = calculate([
     { status: "WON" },
     { status: "LOST" },
+    // Neither carries a final settlement price, so a rotation/sale is still excluded --
+    // only a stop loss is unconditional.
     { status: "SOLD", realizedPnlUsdc: -0.15 },
     { status: "STOP_LOSS", realizedPnlUsdc: -1.2 },
+    { status: "STOP_GAP", realizedPnlUsdc: -4.6 },
     { status: "SOLD", realizedPnlUsdc: -0.1, finalOutcomePrice: 1 },
     { status: "CLOSED", realizedPnlUsdc: 0.1, finalOutcomePrice: 0 },
     { status: "OPEN" },
@@ -3327,9 +3335,9 @@ test("dashboard accuracy excludes rotations and protective exits until final res
 
   assert.deepEqual(stats, {
     correct: 2,
-    total: 4,
-    excluded: 2,
-    rate: 0.5,
+    total: 6,
+    excluded: 1,
+    rate: 2 / 6,
   });
 });
 

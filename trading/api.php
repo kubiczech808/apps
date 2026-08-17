@@ -989,6 +989,9 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
+                // Off by default: Conservative never had a protective stop, and turning
+                // this on is what makes Equal's mechanism apply here too.
+                'stopLossEnabled' => false,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -1006,6 +1009,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
+                'stopLossEnabled' => false,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -1023,6 +1027,7 @@ function default_portfolio_config(): array
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
+                'stopLossEnabled' => false,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -1047,6 +1052,9 @@ function default_portfolio_config(): array
                 // Equal remains conservative by default, but the same On/Off control
                 // can explicitly enable its paper rotation review.
                 'autoRotatePositions' => false,
+                // The mechanism this portfolio is named for. It is now a parameter any
+                // paper portfolio may turn on, but Equal is where it ships enabled.
+                'stopLossEnabled' => true,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -1404,6 +1412,12 @@ function normalize_strategy_config(array $input, array $defaults): array
         // were traded under. They leave the dashboard and stop being executed, and
         // restoring one is only clearing this flag.
         'archived' => (bool) ($input['archived'] ?? $defaults['archived'] ?? false),
+        // The paper synthetic stop Equal was built around, now a parameter any paper
+        // portfolio can turn on. Absent means the portfolio keeps its established
+        // behavior, matching every other On/Off switch here. Live portfolios have no
+        // equivalent -- Polymarket offers no conditional stop order -- so this field is
+        // stored on their config too but nothing ever reads it there.
+        'stopLossEnabled' => (bool) ($input['stopLossEnabled'] ?? $defaults['stopLossEnabled'] ?? false),
     ];
 }
 

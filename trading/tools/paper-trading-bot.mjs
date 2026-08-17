@@ -332,6 +332,9 @@ const PAPER_STRATEGIES = {
     automationEnabled: envBool("PAPER_CONSERVATIVE_AUTOMATION_ENABLED", true),
     archived: envBool("PAPER_CONSERVATIVE_ARCHIVED", false),
     allowRotation: envBool("PAPER_CONSERVATIVE_AUTO_ROTATE", true),
+    // The mechanism Equal is named for, now a parameter every paper portfolio can
+    // turn on. Default preserves each portfolio's established behavior.
+    equalRiskProtection: envBool("PAPER_CONSERVATIVE_STOP_LOSS_ENABLED", false),
     marketType: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
@@ -355,6 +358,9 @@ const PAPER_STRATEGIES = {
     automationEnabled: envBool("PAPER_HIGH_REWARD_AUTOMATION_ENABLED", true),
     archived: envBool("PAPER_HIGH_REWARD_ARCHIVED", false),
     allowRotation: envBool("PAPER_HIGH_REWARD_AUTO_ROTATE", true),
+    // The mechanism Equal is named for, now a parameter every paper portfolio can
+    // turn on. Default preserves each portfolio's established behavior.
+    equalRiskProtection: envBool("PAPER_HIGH_REWARD_STOP_LOSS_ENABLED", false),
     marketType: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
@@ -378,6 +384,9 @@ const PAPER_STRATEGIES = {
     automationEnabled: envBool("PAPER_MORE_PROBABLE_AUTOMATION_ENABLED", true),
     archived: envBool("PAPER_MORE_PROBABLE_ARCHIVED", false),
     allowRotation: envBool("PAPER_MORE_PROBABLE_AUTO_ROTATE", true),
+    // The mechanism Equal is named for, now a parameter every paper portfolio can
+    // turn on. Default preserves each portfolio's established behavior.
+    equalRiskProtection: envBool("PAPER_MORE_PROBABLE_STOP_LOSS_ENABLED", false),
     marketType: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi") === "multi",
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
@@ -405,6 +414,9 @@ const PAPER_STRATEGIES = {
     automationEnabled: envBool("PAPER_EQUAL_AUTOMATION_ENABLED", true),
     archived: envBool("PAPER_EQUAL_ARCHIVED", false),
     allowRotation: envBool("PAPER_EQUAL_AUTO_ROTATE", false),
+    // The mechanism Equal is named for, now a parameter every paper portfolio can
+    // turn on. Default preserves each portfolio's established behavior.
+    equalRiskProtection: envBool("PAPER_EQUAL_STOP_LOSS_ENABLED", true),
     marketType: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_EQUAL_PROBABILITY_SOURCE"),
@@ -414,7 +426,6 @@ const PAPER_STRATEGIES = {
     selectionOrder: envSelectionOrder("PAPER_EQUAL_SELECTION_ORDER", "highest_ev_pa_first"),
     // Paper-only proof of concept. Polymarket's current API offers no conditional
     // stop order, so this portfolio records a synthetic exit from a refreshed book.
-    equalRiskProtection: true,
     description: "Paper-only equal-risk strategy: planned maximum loss equals the net potential win. A synthetic protective exit follows the selected execution trigger.",
   },
 };
@@ -458,6 +469,7 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       // reaches the bot before the user has finished with the form stays idle.
       automationEnabled: row.automationEnabled === true,
       allowRotation: row.autoRotatePositions === true,
+      equalRiskProtection: row.stopLossEnabled === true,
       archived: row.archived === true,
       marketType,
       requireMostProbableOutcome: marketType === "multi",
