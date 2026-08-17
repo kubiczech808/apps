@@ -245,6 +245,23 @@ test("dashboard: the tab row is built from the saved portfolios, archived ones l
   assert.equal(api.normalizeMode("live-5050"), "live-5050");
 });
 
+test("dashboard: a created portfolio is not mistaken for the conservative one", () => {
+  const run = new Function(`
+    ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
+    ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
+    ${extractFunction(APP, "paperModeFromStrategyId")}
+    return paperModeFromStrategyId;
+  `)();
+  // A portfolio's own id decides which rules panel, run-log title and execution result
+  // it gets. A fixed list here answered "conservative" for every created portfolio, so
+  // all three described a different portfolio's settings.
+  assert.equal(run("esports"), "paper-esports");
+  assert.equal(run("equal"), "paper-equal");
+  assert.equal(run("highReward"), "paper-highReward");
+  assert.equal(run(""), "paper-conservative");
+  assert.equal(run("../escape"), "paper-conservative");
+});
+
 test("dashboard: a created portfolio's settings are its own", () => {
   const run = new Function("state", `
     ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}

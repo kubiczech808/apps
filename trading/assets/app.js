@@ -4911,11 +4911,14 @@ function normalizeEligibilityThreshold(value) {
   return numeric;
 }
 
+// The inverse of paperStrategyIdFromMode. A fixed list here answered "conservative" for
+// every created portfolio, so its rules panel, run-log title and execution result would
+// all have described a different portfolio's settings.
 function paperModeFromStrategyId(strategyId) {
-  if (strategyId === "highReward") return "paper-highReward";
-  if (strategyId === "moreProbable") return "paper-moreProbable";
-  if (strategyId === "equal") return "paper-equal";
-  return "paper-conservative";
+  const id = String(strategyId || "");
+  return BUILT_IN_PAPER_STRATEGY_IDS.includes(id) || CUSTOM_PAPER_STRATEGY_ID.test(id)
+    ? `paper-${id}`
+    : "paper-conservative";
 }
 
 function portfolioForMode(mode = state.mode) {
