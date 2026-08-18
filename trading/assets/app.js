@@ -541,6 +541,10 @@ function paperStrategyIds({ includeArchived = false } = {}) {
 
 function portfolioIsArchived(mode = state.mode) {
   const normalized = normalizeMode(mode);
+  // Unlike the plain live portfolio, 5050 may be archived -- withdrawing an expired
+  // resting order and refreshing the account snapshot are unconditional in the
+  // executor, so archiving it only stops new bids, nothing already held goes dark.
+  if (normalized === "live-5050") return (state.portfolioConfig || {}).live5050?.archived === true;
   if (LIVE_MODES.has(normalized)) return false;
   const paper = (state.portfolioConfig || {}).paper || {};
 
@@ -549,7 +553,8 @@ function portfolioIsArchived(mode = state.mode) {
 
 // Every mode the dashboard can show, in tab order.
 function dashboardModes() {
-  return [...paperStrategyIds().map((id) => `paper-${id}`), "live", "live-5050"];
+  const liveModes = ["live", "live-5050"].filter((mode) => !portfolioIsArchived(mode));
+  return [...paperStrategyIds().map((id) => `paper-${id}`), ...liveModes];
 }
 
 function defaultPortfolioNameForMode(mode = state.mode) {
@@ -4078,8 +4083,13 @@ async function loadPortfolioOverview({ force = false } = {}) {
 
 function renderArchivedPortfolios() {
   if (!els.archivedPortfolios) return;
-  const paper = (state.portfolioConfig || defaultPortfolioConfig()).paper || {};
+  const config = state.portfolioConfig || defaultPortfolioConfig();
+  const paper = config.paper || {};
   const archived = Object.entries(paper).filter(([, row]) => row?.archived === true);
+  // 5050 shares the live wallet's positions and orders, not a paper portfolio's own
+  // stored account, so it carries no equity/trades detail of its own here -- only
+  // whether new bids are currently paused, which is the one thing archiving it changes.
+  if (config.live5050?.archived === true) archived.push(["live-5050", config.live5050]);
   els.archivedPortfolios.hidden = archived.length === 0;
   if (!archived.length) {
     els.archivedPortfolios.innerHTML = "";
@@ -4095,13 +4105,15 @@ function renderArchivedPortfolios() {
     <p class="calculation-note">These portfolios are not shown on the dashboard and are not executed. Every trade, run log and statistic they hold is kept, and restoring one brings it back exactly as it was.</p>
     <ul class="archived-portfolio-list">
       ${archived.map(([id, row]) => {
-        const stored = state.botState?.paperPortfolios?.[id];
-        const detail = stored?.portfolio
-          ? `${money(Number(stored.portfolio.equityUsdc))} equity / ${formatInteger((stored.trades || []).length) || 0} trades`
-          : "no stored account yet";
+        const stored = id === "live-5050" ? null : state.botState?.paperPortfolios?.[id];
+        const detail = id === "live-5050"
+          ? "new bids paused; existing orders and positions are still watched"
+          : (stored?.portfolio
+            ? `${money(Number(stored.portfolio.equityUsdc))} equity / ${formatInteger((stored.trades || []).length) || 0} trades`
+            : "no stored account yet");
         return `
           <li>
-            <span><strong>${escapeHtml(normalizePortfolioName(row?.displayName, id))}</strong> <span class="muted">${escapeHtml(detail)}</span></span>
+            <span><strong>${escapeHtml(normalizePortfolioName(row?.displayName, id === "live-5050" ? "5050" : id))}</strong> <span class="muted">${escapeHtml(detail)}</span></span>
             <button class="execution-button" type="button" data-restore-portfolio="${escapeHtml(id)}">Restore</button>
           </li>
         `;
@@ -4111,21 +4123,33 @@ function renderArchivedPortfolios() {
 }
 
 // Archiving is deliberately not a delete: the portfolio stops being executed and leaves
-// the dashboard, and everything it traded stays exactly where it is.
+// the dashboard, and everything it traded stays exactly where it is. 5050 is the one
+// live portfolio this applies to -- its config lives at a different key from a paper
+// portfolio's, keyed by mode rather than by strategy id, so it is handled separately.
 async function setPortfolioArchived(strategyId, archived) {
   const config = state.portfolioConfig || defaultPortfolioConfig();
-  const saved = (config.paper || {})[strategyId];
-  if (!saved) return;
-  state.portfolioConfig = {
-    ...config,
-    paper: { ...(config.paper || {}), [strategyId]: { ...saved, archived } },
-  };
-  // Archiving the open tab would leave the dashboard on a portfolio that is no longer
-  // listed, so move to the first one that still is.
-  if (archived && paperStrategyIdFromMode(state.mode) === strategyId && !isLiveMode()) {
-    const next = paperStrategyIds()[0];
-    state.mode = next ? `paper-${next}` : "live";
-    saveMode(state.mode);
+  if (strategyId === "live-5050") {
+    const saved = config.live5050;
+    if (!saved) return;
+    state.portfolioConfig = { ...config, live5050: { ...saved, archived } };
+    if (archived && state.mode === "live-5050") {
+      state.mode = "live";
+      saveMode(state.mode);
+    }
+  } else {
+    const saved = (config.paper || {})[strategyId];
+    if (!saved) return;
+    state.portfolioConfig = {
+      ...config,
+      paper: { ...(config.paper || {}), [strategyId]: { ...saved, archived } },
+    };
+    // Archiving the open tab would leave the dashboard on a portfolio that is no longer
+    // listed, so move to the first one that still is.
+    if (archived && paperStrategyIdFromMode(state.mode) === strategyId && !isLiveMode()) {
+      const next = paperStrategyIds()[0];
+      state.mode = next ? `paper-${next}` : "live";
+      saveMode(state.mode);
+    }
   }
   try {
     await savePortfolioConfigNow();
@@ -7870,7 +7894,7 @@ function renderLiveState(liveState) {
   if (els.portfolioRules) {
     els.portfolioRules.innerHTML = `
     <div class="bot-summary">
-      ${renderPortfolioRulesCard(isFixedEntryMode() ? "5050 portfolio" : "Live portfolio", livePortfolioRuleRows())}
+      ${renderPortfolioRulesCard(isFixedEntryMode() ? "5050 portfolio" : "Live portfolio", livePortfolioRuleRows(), isFixedEntryMode() ? "live-5050" : null)}
     </div>
   `;
   }
@@ -10722,8 +10746,19 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     const strategyId = directArchiveButton.dataset.portfolioArchiveDirect || "";
     if (!strategyId) return;
-    const label = normalizePortfolioName(portfolioConfigForMode(`paper-${strategyId}`).displayName, strategyId);
-    if (!window.confirm(`Archive "${label}"?\n\nIt disappears from the dashboard and stops trading. Every trade, run log and statistic it holds is kept, and you can restore it from Settings.`)) {
+    const isLive5050 = strategyId === "live-5050";
+    const label = normalizePortfolioName(
+      portfolioConfigForMode(isLive5050 ? strategyId : `paper-${strategyId}`).displayName,
+      isLive5050 ? "5050" : strategyId,
+    );
+    // 5050 holds real positions and open orders, unlike a paper portfolio, so its
+    // confirmation says plainly what keeps running: withdrawing an expired resting
+    // order and refreshing the account snapshot are unconditional in the executor,
+    // and only opening new bids actually stops.
+    const confirmMessage = isLive5050
+      ? `Archive "${label}"?\n\nIt disappears from the dashboard and stops resting new bids. Existing positions and open orders keep being watched and their expired orders withdrawn as normal. Every trade, run log and statistic it holds is kept, and you can restore it from Settings.`
+      : `Archive "${label}"?\n\nIt disappears from the dashboard and stops trading. Every trade, run log and statistic it holds is kept, and you can restore it from Settings.`;
+    if (!window.confirm(confirmMessage)) {
       return;
     }
     setPortfolioArchived(strategyId, true);

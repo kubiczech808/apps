@@ -1527,7 +1527,11 @@ function normalize_portfolio_config(array $input): array
     $fixedInput = is_array($input['live5050'] ?? null) ? $input['live5050'] : [];
     $config['live5050'] = normalize_strategy_config($fixedInput, $defaults['live5050']);
     $config['live5050']['useLimitOrders'] = true;
-    $config['live5050']['archived'] = false;
+    // Unlike the plain live portfolio above, 5050 may be archived: it hides the tab and
+    // stops resting new bids, but withdrawing an expired resting order and refreshing
+    // the account snapshot are unconditional in the executor, so an archived 5050 still
+    // keeps whatever it is already holding under watch. normalize_strategy_config()
+    // already carried the field through; nothing here needs to force it either way.
     $entryPrice = is_numeric($fixedInput['fixedEntryPrice'] ?? null)
         ? (float) $fixedInput['fixedEntryPrice']
         : (float) $defaults['live5050']['fixedEntryPrice'];

@@ -3227,7 +3227,7 @@ test("5050 tab: the portfolio is a live mode with its own config and run log", a
   // steered by and the run log it writes, because the two decide separately.
   // The tab row is rebuilt from the saved portfolios, so 5050's tab is asserted where
   // it is now produced rather than in the shipped markup.
-  assert.match(app, /return \[\.\.\.paperStrategyIds\(\)\.map\(\(id\) => `paper-\$\{id\}`\), "live", "live-5050"\];/,
+  assert.match(app, /const liveModes = \["live", "live-5050"\]\.filter\(\(mode\) => !portfolioIsArchived\(mode\)\);/,
     "it needs its own tab");
   assert.match(html, /data-mode-switch/, "and a container the script can rebuild");
   assert.match(app, /const LIVE_MODES = new Set\(\["live", "live-5050"\]\);/);

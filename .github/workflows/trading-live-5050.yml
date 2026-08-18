@@ -175,6 +175,11 @@ jobs:
               # than silently stopping.
               "LIVE_AUTOMATION_ENABLED": str(bool(cfg.get("automationEnabled", True))).lower(),
               "LIVE_AUTO_ROTATE": str(bool(cfg.get("autoRotatePositions", False))).lower(),
+              # Narrower than automation off: only stops resting new bids. Withdrawing
+              # an expired resting order and refreshing the account snapshot are both
+              # unconditional in the executor, so an archived portfolio still keeps
+              # whatever it already holds under watch.
+              "LIVE_ARCHIVED": str(bool(cfg.get("archived", False))).lower(),
           }
           # An explicit dispatch input wins over the saved value for this run only.
           for key, dispatched in [
@@ -208,6 +213,7 @@ jobs:
           echo "Stake per order:  ${LIVE_FIXED_ENTRY_STAKE_USDC:-exchange minimum}"
           echo "Trigger:          ${LIVE_EXECUTION_TRIGGER:-cron} (this run: ${LIVE_RUN_SOURCE}, skip=${LIVE_SKIP_SCHEDULED_EXECUTION})"
           echo "Automation:       ${LIVE_AUTOMATION_ENABLED}"
+          echo "Archived:         ${LIVE_ARCHIVED:-false}"
 
       - name: Generate fresh live account snapshot
         working-directory: trading

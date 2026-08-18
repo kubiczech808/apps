@@ -131,7 +131,7 @@ test("created portfolios: the stored count is bounded", () => {
 
 // Asked for explicitly: archiving hides a portfolio and deactivates it, without losing
 // anything, and restoring is only clearing the flag.
-test("archiving: the flag round-trips on paper and is refused on live", () => {
+test("archiving: the flag round-trips on paper and 5050, and is refused on plain live", () => {
   const config = normalizeConfig({
     paper: { equal: { archived: true }, conservative: { archived: false } },
     live: { archived: true },
@@ -139,10 +139,13 @@ test("archiving: the flag round-trips on paper and is refused on live", () => {
   });
   assert.equal(config.paper.equal.archived, true);
   assert.equal(config.paper.conservative.archived, false);
-  // A live portfolio holds real positions and open orders; hiding those from the
-  // dashboard would hide real exposure.
+  // The plain live portfolio holds real positions and open orders with no automatic
+  // way to stop opening more; hiding it from the dashboard would hide real exposure.
   assert.equal(config.live.archived, false);
-  assert.equal(config.live5050.archived, false);
+  // 5050 is the one live portfolio archiving was asked for. Withdrawing an expired
+  // resting order and refreshing the account snapshot are unconditional in the
+  // executor, so archiving it only stops new bids -- nothing already held goes dark.
+  assert.equal(config.live5050.archived, true);
 });
 
 test("archiving: nothing a portfolio was traded under is dropped by archiving it", () => {
@@ -272,6 +275,36 @@ test("dashboard: the tab row is built from the saved portfolios, archived ones l
   assert.equal(api.normalizeMode("paper-esports"), "paper-esports");
   assert.equal(api.normalizeMode("paper-deleted"), "paper-conservative");
   assert.equal(api.normalizeMode("live-5050"), "live-5050");
+});
+
+test("dashboard: an archived 5050 leaves the tab row too, the plain live portfolio never does", () => {
+  const run = new Function("state", `
+    ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
+    ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
+    ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
+    ${extractFunction(APP, "normalizeMode")}
+    ${extractFunction(APP, "paperStrategyIdFromMode")}
+    ${extractFunction(APP, "defaultPortfolioConfig")}
+    ${extractFunction(APP, "paperStrategyIds")}
+    ${extractFunction(APP, "dashboardModes")}
+    ${extractFunction(APP, "portfolioIsArchived")}
+    const DEFAULT_MAX_RESOLUTION_DAYS = 7;
+    return { dashboardModes, portfolioIsArchived };
+  `);
+
+  const archived5050 = run({ mode: "live", portfolioConfig: { live5050: { archived: true } } });
+  assert.equal(archived5050.portfolioIsArchived("live-5050"), true);
+  assert.equal(archived5050.portfolioIsArchived("live"), false,
+    "archiving 5050 must not also archive the plain live portfolio -- they are different config keys");
+  assert.deepEqual(archived5050.dashboardModes(),
+    ["paper-conservative", "paper-highReward", "paper-moreProbable", "paper-equal", "live"],
+    "an archived 5050 leaves the tab row, the same as an archived paper portfolio would");
+
+  const neither = run({ mode: "live", portfolioConfig: {} });
+  assert.equal(neither.portfolioIsArchived("live-5050"), false);
+  assert.deepEqual(neither.dashboardModes(),
+    ["paper-conservative", "paper-highReward", "paper-moreProbable", "paper-equal", "live", "live-5050"],
+    "unarchived, both live tabs still show exactly as before this feature existed");
 });
 
 test("dashboard: a created portfolio is not mistaken for the conservative one", () => {
@@ -426,21 +459,26 @@ test("archiving: it is confirmed before it happens and restorable afterwards", (
 // Reported live: archiving existed only inside the parameter-edit modal, so it read as
 // not existing at all -- the user expected it next to the edit icon and found nothing
 // there. A second, direct control now sits beside the pencil icon on the rules card.
-test("archiving: a direct control sits next to the edit icon, for paper only", () => {
+test("archiving: a direct control sits next to the edit icon, for paper and 5050", () => {
   const card = extractFunction(APP, "renderPortfolioRulesCard");
   assert.match(card, /archiveStrategyId \? `[\s\S]*?data-portfolio-archive-direct="\$\{escapeHtml\(archiveStrategyId\)\}"[\s\S]*?` : ""/,
     "the button only renders when a strategy id is actually passed in");
 
   assert.match(APP, /renderPortfolioRulesCard\(portfolioState\.label \|\| "Paper portfolio", portfolioRuleRows\(\{ \.\.\.portfolioState, \.\.\.portfolio \}\), portfolioState\.id\)/,
     "the paper card passes its own strategy id");
-  assert.match(APP, /renderPortfolioRulesCard\(isFixedEntryMode\(\) \? "5050 portfolio" : "Live portfolio", livePortfolioRuleRows\(\)\)/,
-    "the live card passes none, so live portfolios get no archive control -- they hold real positions");
+  assert.match(APP, /renderPortfolioRulesCard\(isFixedEntryMode\(\) \? "5050 portfolio" : "Live portfolio", livePortfolioRuleRows\(\), isFixedEntryMode\(\) \? "live-5050" : null\)/,
+    "the live card passes an archive id only in 5050 mode -- the plain live portfolio still gets no archive control");
 
   const handler = /const directArchiveButton = event\.target\.closest\("\[data-portfolio-archive-direct\]"\);[\s\S]*?\n  \}/.exec(APP);
   assert.ok(handler, "the direct archive control is wired");
-  assert.match(handler[0], /if \(!window\.confirm\([\s\S]*?\)\) \{\n      return;\n    \}/,
+  assert.match(handler[0], /if \(!window\.confirm\(confirmMessage\)\) \{\n      return;\n    \}/,
     "the same confirmation gates it as the modal's own archive button");
   assert.match(handler[0], /setPortfolioArchived\(strategyId, true\)/);
+  // The live5050 branch must resolve its own saved config, not a paper portfolio's --
+  // the two are keyed differently, and this exact mismatch was live in one draft of
+  // this fix (portfolioConfigForMode(`paper-${strategyId}`) for a strategyId that was
+  // never a paper id at all).
+  assert.match(handler[0], /portfolioConfigForMode\(isLive5050 \? strategyId : `paper-\$\{strategyId\}`\)/);
 });
 
 test("dashboard: the tab row survives being rebuilt", () => {

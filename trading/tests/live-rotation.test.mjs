@@ -1486,7 +1486,7 @@ test("5050: the strategy is opt-in and does not disturb the main live portfolio"
 
   // Off unless explicitly asked for, so the existing live portfolio is untouched.
   assert.match(source, /const FIXED_ENTRY_STRATEGY = String\(process\.env\.LIVE_STRATEGY \|\| ""\)\.trim\(\)\.toLowerCase\(\) === "fixed_entry";/);
-  assert.match(source, /if \(FIXED_ENTRY_STRATEGY\) \{\n\s*await runFixedEntryBatch\(/);
+  assert.match(source, /if \(FIXED_ENTRY_STRATEGY\) \{[\s\S]*?await runFixedEntryBatch\(/);
 
   // It writes its own run log: same wallet, separate decisions.
   assert.match(workflow, /LIVE_EXECUTION_STATE_PATH: data\/live-5050-execution-state\.json/);
@@ -2907,6 +2907,37 @@ test("expired orders: the sweep runs before the run measures its own capital", a
   // A cancel the exchange refused leaves the order exactly where it was, collateral
   // included -- otherwise the run would go on to spend capital that is still committed.
   assert.match(withdraw, /failed\.push\(summary\);\n\s+remaining\.push\(order\);/);
+});
+
+// Asked for explicitly: an archived 5050 stops resting new bids, but nothing it already
+// holds goes dark -- the sweep above still runs, and the account snapshot around this
+// whole script is unconditional either way.
+test("archiving: 5050 stops resting new bids, but the sweep above it still runs", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const [executorSource, loaderWorkflow] = await Promise.all([
+    readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/trading-live-5050.yml", import.meta.url), "utf8"),
+  ]);
+  const body = functionSource(executorSource, "main");
+
+  const sweep = body.indexOf("withdrawExpiredOpenOrders({ liveState, tradingConfig })");
+  const fixedEntryBranch = body.indexOf("if (FIXED_ENTRY_STRATEGY) {");
+  const archivedGuard = body.indexOf("if (!IS_MANUAL_RUN && ARCHIVED) {");
+  const runBatch = body.indexOf("await runFixedEntryBatch(");
+  assert.ok(sweep > 0 && fixedEntryBranch > sweep,
+    "archiving must not move new-bid placement's own guard ahead of the unconditional sweep");
+  assert.ok(archivedGuard > fixedEntryBranch && archivedGuard < runBatch,
+    "the archived check belongs inside the fixed-entry branch, before the batch it gates");
+
+  assert.match(executorSource, /const ARCHIVED = String\(process\.env\.LIVE_ARCHIVED \?\? "false"\)\.toLowerCase\(\) === "true"/,
+    "an unwritten switch must mean not archived, matching every portfolio that predates this feature");
+
+  // The same manual-overrides-a-portfolio-switch rule automation already follows --
+  // a person can still run it by hand on an archived portfolio.
+  assert.match(body.slice(fixedEntryBranch, runBatch), /if \(!IS_MANUAL_RUN && ARCHIVED\) \{/);
+
+  assert.match(loaderWorkflow, /"LIVE_ARCHIVED": str\(bool\(cfg\.get\("archived", False\)\)\)\.lower\(\)/,
+    "the saved config's archived flag must reach the executor");
 });
 
 test("expired orders: the market's trading state is recorded where both readers can see it", async () => {

@@ -84,6 +84,13 @@ const SKIP_SCHEDULED_EXECUTION = String(process.env.LIVE_SKIP_SCHEDULED_EXECUTIO
 // Automation is a portfolio switch, not a workflow one: the schedule keeps firing so
 // a manual run is always available, but an automatic run does nothing while it is off.
 const AUTOMATION_ENABLED = String(process.env.LIVE_AUTOMATION_ENABLED ?? "true").toLowerCase() !== "false";
+// Archiving is narrower than automation being off: it only stops resting new bids.
+// Withdrawing an expired resting order and refreshing the account snapshot both run
+// unconditionally above this flag, so an archived portfolio still keeps whatever it
+// is already holding under watch -- archiving is "stop growing it", not "stop
+// watching it". Only the fixed-entry (5050) batch reads this; the other live
+// portfolio has no archive switch at all.
+const ARCHIVED = String(process.env.LIVE_ARCHIVED ?? "false").toLowerCase() === "true";
 // What starts an automatic run: this workflow's own cron, or the scan finishing.
 const EXECUTION_TRIGGER = String(process.env.LIVE_EXECUTION_TRIGGER || "cron").toLowerCase() === "after_scrape"
   ? "after_scrape"
@@ -4146,6 +4153,16 @@ async function main() {
   }
 
   if (FIXED_ENTRY_STRATEGY) {
+    // Expired-order withdrawal already ran above, unconditionally. Archiving stops
+    // only what happens next: resting new bids.
+    if (!IS_MANUAL_RUN && ARCHIVED) {
+      console.log(JSON.stringify({
+        action: "ARCHIVED",
+        reason: "This portfolio is archived; automatic runs no longer rest new bids. Expired resting orders are still withdrawn and the account snapshot still refreshes.",
+        archived: true,
+      }, null, 2));
+      return;
+    }
     await runFixedEntryBatch({ checked, liveState, tradingConfig, cash, availableCash, evaluationByToken, expiredOrderSweep });
     return;
   }
