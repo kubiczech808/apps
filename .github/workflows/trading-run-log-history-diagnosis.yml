@@ -1,0 +1,31 @@
+name: Trading Run Log History Diagnosis
+
+# Read-only diagnostic, manual only. Confirms action=portfolio-run-log answers correctly
+# against the live hosting -- exactly what the dashboard's "Load older runs" button calls.
+on:
+  workflow_dispatch:
+    inputs:
+      strategy_id:
+        description: "Which paper portfolio's run-log history to page through"
+        required: false
+        default: "moreProbable"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Page through the live run-log history
+        working-directory: trading
+        env:
+          RUN_LOG_DIAGNOSIS_STRATEGY_ID: ${{ inputs.strategy_id || 'moreProbable' }}
+        run: node tools/run-log-history-diagnosis.mjs
