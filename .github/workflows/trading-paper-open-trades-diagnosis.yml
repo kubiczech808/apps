@@ -1,0 +1,36 @@
+name: Trading Paper Open Trades Diagnosis
+
+# Read-only diagnostic, manual only. Reads the published paper state and asks the
+# dashboard's own end-date and days-left functions about one portfolio's open trades --
+# which ones show a negative days-left, and what its stored and computed end dates are.
+#
+# Like the live portfolio diagnosis it deliberately has no access to anything: no secrets,
+# no FTP, no deploy, no state file, contents: read only. The URL it reads is the same
+# public one the dashboard reads from a browser.
+on:
+  workflow_dispatch:
+    inputs:
+      paper_strategy_id:
+        description: "Which paper portfolio to inspect (e.g. moreProbable, conservative, highReward, equal)"
+        required: false
+        default: "moreProbable"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Diagnose open trades with a negative days-left
+        working-directory: trading
+        env:
+          PAPER_DIAGNOSIS_STRATEGY_ID: ${{ inputs.paper_strategy_id || 'moreProbable' }}
+        run: node tools/paper-open-trades-diagnosis.mjs
