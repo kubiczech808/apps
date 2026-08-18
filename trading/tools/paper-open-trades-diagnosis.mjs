@@ -161,6 +161,19 @@ async function main() {
         console.log(`     isSportsMarket=${sports} scheduled.precise=${scheduled.precise}`
           + ` tags=${JSON.stringify(market.tags ?? null)} category=${market.category || "-"}`
           + ` slug=${market.slug || "-"} eventSlug=${market.eventSlug || "-"}`);
+        // Which exact raw field the "scheduled" date came from -- not inferred, printed
+        // straight off the live Gamma payload, so the fix targets the real field, not a guess.
+        console.log(`     raw sports fields: gameStartTime=${market.gameStartTime ?? "-"} eventStartTime=${market.eventStartTime ?? "-"}`
+          + ` gameId=${market.gameId ?? "-"} sportsMarketType=${market.sportsMarketType ?? "-"}`
+          + ` teamAID=${market.teamAID ?? "-"} teamBID=${market.teamBID ?? "-"}`);
+        if (Array.isArray(market.events) && market.events.length) {
+          market.events.forEach((event, index) => {
+            console.log(`     raw events[${index}]: gameStartTime=${event?.gameStartTime ?? "-"} startDateIso=${event?.startDateIso ?? "-"}`
+              + ` startDate=${event?.startDate ?? "-"} title=${String(event?.title || "-").slice(0, 60)}`);
+          });
+        } else {
+          console.log("     raw events: (none)");
+        }
       }
     }
     console.log("");
