@@ -627,6 +627,28 @@ test("capital rebase: the accuracy note names pre-reset trades separately from e
     "an unrebased portfolio's note must read exactly as it did before this feature existed");
 });
 
+test("limit orders: an unfilled expiry is excluded from accuracy, a still-waiting order is not counted at all", () => {
+  const els = { portfolioAccuracy: { textContent: "", className: "" }, portfolioAccuracyNote: { textContent: "" } };
+  const run = new Function("els", "probability", "pnlClass", `
+    ${extractFunction(APP, "isClosedTrade")}
+    ${extractFunction(APP, "closedTradePredictionResult")}
+    ${extractFunction(APP, "closedAccuracyStats")}
+    ${extractFunction(APP, "renderClosedAccuracy")}
+    return renderClosedAccuracy;
+  `)(els, (value) => String(value), () => "");
+
+  // Nothing was ever bought on the expired one, so it is neither a win nor a loss --
+  // excluded, the same bucket a same-day sale with no settlement price yet lands in.
+  // The still-resting one belongs on the open-positions table, not this closed count.
+  run([
+    { status: "WON" },
+    { status: "LIMIT_ORDER_EXPIRED" },
+    { status: "LIMIT_ORDER_WAITING" },
+  ], 0);
+  assert.equal(els.portfolioAccuracyNote.textContent, "1 / 1 resolved · 1 early exits excluded",
+    "the expired order is excluded, and the still-waiting one is not in this count at all");
+});
+
 // Reported: a "queued"/"running" (manual) row appeared in 90->50%'s run log for a run the
 // user never started, then vanished on its own once it finished. dispatch-after-scan.mjs
 // chains a run onto a finished scrape as a real workflow_dispatch event -- indistinguishable

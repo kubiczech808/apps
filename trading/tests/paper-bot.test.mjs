@@ -5925,6 +5925,85 @@ test("equal stop: the paper fill is modelled on what the live worker actually su
   assert.match(bot, /stopLossStatus: equalStopDecision\.filledByCrossing\n\s+\? "FILLED_AT_FLOOR"/);
 });
 
+// Reported: paper portfolios had no "use limit orders" row in their parameter overview,
+// and the user wanted to be sure that was only a UI gap -- that a checked portfolio
+// really does simulate whether a resting order would have filled, or been discarded
+// unfilled, rather than always buying at the market ask regardless of the setting. It
+// was not only a UI gap: the field was saved but never read anywhere in the bot.
+function candidateFixture(overrides = {}) {
+  return {
+    id: "token:1",
+    tokenId: "1",
+    question: "Will it happen?",
+    slug: "will-it-happen",
+    outcome: "Yes",
+    tags: [],
+    marketPrice: 0.7,
+    bestAsk: 0.7,
+    bestBid: 0.65,
+    executableShares: 7.1429,
+    feesEnabled: false,
+    feeRate: 0,
+    daysToResolution: 2,
+    ...overrides,
+  };
+}
+
+test("limit orders: a portfolio without the setting still fills at the market ask", () => {
+  const strategy = { ...bot.PAPER_STRATEGIES.conservative, useLimitOrders: false };
+  const best = candidateFixture();
+  const marketTrade = bot.paperTradeFromCandidate(best, strategy, "2026-08-18", 5);
+  const trade = bot.openPaperTradeForStrategy(best, strategy, "2026-08-18", 5);
+  // openedAt is a fresh timestamp on each call, so it is excluded rather than compared.
+  assert.deepEqual({ ...trade, openedAt: null }, { ...marketTrade, openedAt: null },
+    "unset, this must be exactly the existing market-buy path");
+  assert.equal(trade.status, "OPEN");
+  assert.equal(trade.entryPrice, 0.7);
+});
+
+test("limit orders: a portfolio with the setting rests at the best bid instead of paying the ask", () => {
+  const strategy = { ...bot.PAPER_STRATEGIES.conservative, useLimitOrders: true };
+  const best = candidateFixture();
+  const trade = bot.openPaperTradeForStrategy(best, strategy, "2026-08-18", 5);
+  assert.equal(trade.status, "LIMIT_ORDER_WAITING", "must not be booked as an already-filled position");
+  assert.equal(trade.entryPrice, 0.65, "rests at the bid, not the ask it would have paid crossing the spread");
+  assert.equal(trade.executionMode, "LIMIT_BUY");
+  assert.equal(trade.shares, Number((5 / 0.65).toFixed(4)));
+  assert.equal(trade.maxLossUsdc, trade.totalCostUsdc, "the whole reserved stake is still what is at risk");
+  assert.equal(trade.currentValueUsdc, 5, "capital is reserved for a resting order the same as a filled one");
+});
+
+test("limit orders: with no usable bid, the order still falls back to a market fill", () => {
+  // A thin book with no visible bid cannot be rested on; opening nothing at all would
+  // silently drop the candidate the portfolio ranking already chose.
+  const strategy = { ...bot.PAPER_STRATEGIES.conservative, useLimitOrders: true };
+  for (const bestBid of [null, undefined, 0, 1, NaN]) {
+    const trade = bot.openPaperTradeForStrategy(candidateFixture({ bestBid }), strategy, "2026-08-18", 5);
+    assert.equal(trade.status, "OPEN", `bestBid=${bestBid} must fall back to a market fill`);
+  }
+});
+
+test("limit orders: filled when the ask reaches the resting price, discarded unfilled once the event ends", () => {
+  const waiting = bot.limitOrderFillDecision({ limitPrice: 0.65, bestAsk: 0.7, eventEnded: false });
+  assert.equal(waiting.outcome, "WAITING", "the ask has not come down to the resting bid yet");
+
+  const filled = bot.limitOrderFillDecision({ limitPrice: 0.65, bestAsk: 0.65, eventEnded: false });
+  assert.equal(filled.outcome, "FILLED");
+  assert.equal(filled.fillPrice, 0.65, "fills at the resting price, not the crossing ask");
+
+  const filledByCrossing = bot.limitOrderFillDecision({ limitPrice: 0.65, bestAsk: 0.5, eventEnded: false });
+  assert.equal(filledByCrossing.outcome, "FILLED");
+  assert.equal(filledByCrossing.fillPrice, 0.65, "a deeper crossing still only costs the resting price, not the lower ask");
+
+  const expired = bot.limitOrderFillDecision({ limitPrice: 0.65, bestAsk: 0.7, eventEnded: true });
+  assert.equal(expired.outcome, "EXPIRED", "the event ended before the market ever came down to the resting bid");
+
+  // A fill discovered in the very same look that also finds the event over must still
+  // count as a fill: the order could have traded through at any point up to that check.
+  const filledAtTheWire = bot.limitOrderFillDecision({ limitPrice: 0.65, bestAsk: 0.65, eventEnded: true });
+  assert.equal(filledAtTheWire.outcome, "FILLED");
+});
+
 // Reported: the trade count in Tag performance does not match the number of rows its own
 // link shows, so the statistics look as though they are computed on something other than
 // the data behind them.

@@ -317,7 +317,7 @@ const TZ = "Europe/Prague";
 // Legacy STOP_BREACH rows remain refreshable so the next pass can close them at
 // the actually executable bid. The old behaviour kept them open after a gap and
 // allowed a small intended loss to grow into almost the whole stake.
-const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "STOP_BREACH"]);
+const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "STOP_BREACH", "LIMIT_ORDER_WAITING"]);
 // Keep the original broad thresholds and add the intermediate 5-point steps so
 // the parameter report can distinguish, for example, a 75% rule from 70%/80%.
 const REPORT_THRESHOLDS = [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
@@ -352,6 +352,9 @@ const PAPER_STRATEGIES = {
     // The mechanism Equal is named for, now a parameter every paper portfolio can
     // turn on. Default preserves each portfolio's established behavior.
     equalRiskProtection: envBool("PAPER_CONSERVATIVE_STOP_LOSS_ENABLED", false),
+    // A resting limit buy at the current best bid instead of a market buy at the
+    // ask. Default off, unchanged behavior absent a saved value.
+    useLimitOrders: envBool("PAPER_CONSERVATIVE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_CONSERVATIVE_MARKET_TYPE", "PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_CONSERVATIVE_PROBABILITY_SOURCE"),
@@ -378,6 +381,7 @@ const PAPER_STRATEGIES = {
     // The mechanism Equal is named for, now a parameter every paper portfolio can
     // turn on. Default preserves each portfolio's established behavior.
     equalRiskProtection: envBool("PAPER_HIGH_REWARD_STOP_LOSS_ENABLED", false),
+    useLimitOrders: envBool("PAPER_HIGH_REWARD_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_HIGH_REWARD_PROBABILITY_SOURCE"),
@@ -404,6 +408,7 @@ const PAPER_STRATEGIES = {
     // The mechanism Equal is named for, now a parameter every paper portfolio can
     // turn on. Default preserves each portfolio's established behavior.
     equalRiskProtection: envBool("PAPER_MORE_PROBABLE_STOP_LOSS_ENABLED", false),
+    useLimitOrders: envBool("PAPER_MORE_PROBABLE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi") === "multi",
     probabilitySource: envProbabilitySource("PAPER_MORE_PROBABLE_PROBABILITY_SOURCE"),
@@ -434,6 +439,7 @@ const PAPER_STRATEGIES = {
     // The mechanism Equal is named for, now a parameter every paper portfolio can
     // turn on. Default preserves each portfolio's established behavior.
     equalRiskProtection: envBool("PAPER_EQUAL_STOP_LOSS_ENABLED", true),
+    useLimitOrders: envBool("PAPER_EQUAL_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all") === "multi",
     probabilitySource: envProbabilitySource("PAPER_EQUAL_PROBABILITY_SOURCE"),
@@ -487,6 +493,7 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       automationEnabled: row.automationEnabled === true,
       allowRotation: row.autoRotatePositions === true,
       equalRiskProtection: row.stopLossEnabled === true,
+      useLimitOrders: row.useLimitOrders === true,
       archived: row.archived === true,
       marketType,
       requireMostProbableOutcome: marketType === "multi",
@@ -2409,7 +2416,7 @@ function retainPaperTrades(trades = []) {
   const closed = [];
   for (const trade of Array.isArray(trades) ? trades : []) {
     const status = String(trade?.status || "OPEN").toUpperCase();
-    (["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS", "STOP_GAP"].includes(status) ? closed : active).push(trade);
+    (["WON", "LOST", "CLOSED", "CANCELLED", "CANCELED", "STOP_LOSS", "STOP_GAP", "LIMIT_ORDER_EXPIRED"].includes(status) ? closed : active).push(trade);
   }
   return [
     ...active,
@@ -3244,7 +3251,105 @@ function shouldCheckEqualStopBeforePending({ equalRiskProtection = false, awaiti
   return Boolean(equalRiskProtection && awaitingResolution && !marketClosed);
 }
 
+// Pure decision, kept apart from the fetching around it: the same "did it cross
+// since the last look" comparison the Equal stop already makes on the way out
+// (equalRiskStopExitDecision), just on the way in. A resting buy fills the moment
+// the market's best ask reaches down to (or through) the resting price; short of
+// that, it is discarded with no fill, no stake spent, once the event ends --
+// exactly what a real resting order nobody took would do.
+function limitOrderFillDecision({ limitPrice, bestAsk, eventEnded }) {
+  if (Number.isFinite(bestAsk) && Number.isFinite(limitPrice) && bestAsk <= limitPrice) {
+    return { outcome: "FILLED", fillPrice: limitPrice };
+  }
+  return { outcome: eventEnded ? "EXPIRED" : "WAITING" };
+}
+
+// A resting limit buy is not a position yet, so it is refreshed on its own terms
+// instead of falling into markOpenTrade()'s resolution/P&L logic below, which
+// assumes an already-executed fill.
+async function markWaitingLimitOrder(trade) {
+  const checkedAt = nowIso();
+  let market = null;
+  try {
+    market = await fetchMarketBySlug(trade.slug);
+  } catch (error) {
+    return { ...trade, statusNote: `Market refresh failed: ${error.message}`, lastCheckedAt: checkedAt };
+  }
+  if (!market) {
+    return {
+      ...trade,
+      status: "MARKET_NOT_FOUND",
+      statusNote: "Market slug not found in Gamma API.",
+      lastCheckedAt: checkedAt,
+      marketUrlStatus: "not_found",
+    };
+  }
+
+  const dateContext = marketDateContext({ ...market, resolutionEndDate: market.endDate || trade.resolutionEndDate || trade.endDate || null }, trade.openedAt || trade.date);
+  const endDate = dateContext.endDate;
+  const remainingDays = endDate ? daysToEnd(endDate) : null;
+  const eventEnded = Boolean(market.closed) || (remainingDays != null && remainingDays <= 0);
+  const base = {
+    ...trade,
+    question: market.question || trade.question,
+    endDate,
+    scheduledEventDate: dateContext.scheduledEventDate,
+    resolutionEndDate: dateContext.resolutionEndDate,
+    endDateSource: dateContext.endDateSource,
+    daysToResolution: remainingDays == null ? trade.daysToResolution ?? null : Number(remainingDays.toFixed(2)),
+    lastCheckedAt: checkedAt,
+  };
+
+  let bestAsk = null;
+  try {
+    const book = await fetchJson(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(trade.tokenId)}`);
+    bestAsk = bestBook(book).bestAsk;
+  } catch (error) {
+    return { ...base, statusNote: `Order book refresh failed: ${error.message}` };
+  }
+
+  const limitPrice = Number(trade.entryPrice);
+  const decision = limitOrderFillDecision({ limitPrice, bestAsk, eventEnded });
+  const askNote = Number.isFinite(bestAsk) ? bestAsk.toFixed(4) : "n/a";
+
+  if (decision.outcome === "FILLED") {
+    return {
+      ...base,
+      status: "OPEN",
+      filledAt: checkedAt,
+      currentPrice: decision.fillPrice,
+      currentValueUsdc: trade.currentValueUsdc,
+      unrealizedPnlUsdc: 0,
+      unrealizedPnlPct: 0,
+      statusNote: `Resting limit buy at ${limitPrice.toFixed(4)} was filled: the best ask reached ${askNote}.`,
+    };
+  }
+
+  if (decision.outcome === "EXPIRED") {
+    return {
+      ...base,
+      status: "LIMIT_ORDER_EXPIRED",
+      closedAt: checkedAt,
+      resolvedAt: checkedAt,
+      currentPrice: null,
+      currentValueUsdc: 0,
+      unrealizedPnlUsdc: 0,
+      unrealizedPnlPct: 0,
+      realizedPnlUsdc: 0,
+      realizedPnlPct: 0,
+      statusNote: `Resting limit buy at ${limitPrice.toFixed(4)} never filled before the event ended`
+        + ` (best ask stayed at ${askNote}); discarded with no fill.`,
+    };
+  }
+
+  return {
+    ...base,
+    statusNote: `Waiting to fill a resting limit buy at ${limitPrice.toFixed(4)}; best ask is ${askNote}.`,
+  };
+}
+
 async function markOpenTrade(trade) {
+  if (trade.status === "LIMIT_ORDER_WAITING") return markWaitingLimitOrder(trade);
   if (!OPEN_STATUSES.has(trade.status)) return trade;
 
   const checkedAt = nowIso();
@@ -5557,6 +5662,45 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
   };
 }
 
+// Reported: "use limit orders" saved for a paper portfolio, but every entry still
+// filled at the market ask regardless -- the setting was read nowhere. A resting
+// limit buy at the current best bid is cheaper than crossing the spread, but it is
+// not guaranteed: it only becomes a real position if the market comes down to meet
+// it before the event ends, mirroring what a real resting order on Polymarket would
+// do. Every other field (tags, risk grouping, dates, selection-time economics) is
+// left exactly as paperTradeFromCandidate already computes it; only the entry
+// itself -- price, status, shares, cost -- describes a still-unfilled order rather
+// than an already-executed fill.
+function openPaperTradeForStrategy(best, strategy, today, stake) {
+  const trade = paperTradeFromCandidate(best, strategy, today, stake);
+  if (!strategy.useLimitOrders) return trade;
+  const limitPrice = Number(best.bestBid);
+  if (!Number.isFinite(limitPrice) || limitPrice <= 0 || limitPrice >= 1) return trade;
+  const shares = Number((stake / limitPrice).toFixed(4));
+  const takerFeeUsdc = trade.feesEnabled ? takerFeeForFills([{ size: shares, price: limitPrice }], trade.feeRate) : 0;
+  const totalCostUsdc = Number((stake + takerFeeUsdc).toFixed(5));
+  const netGainIfWinUsdc = Number((shares - totalCostUsdc).toFixed(4));
+  return {
+    ...trade,
+    status: "LIMIT_ORDER_WAITING",
+    executionMode: "LIMIT_BUY",
+    entryPrice: limitPrice,
+    bestAsk: best.bestAsk,
+    bestBid: best.bestBid,
+    slippage: 0,
+    shares,
+    takerFeeUsdc,
+    totalCostUsdc,
+    grossGainIfWinUsdc: Number((shares - stake).toFixed(4)),
+    netGainIfWinUsdc,
+    maxLossUsdc: totalCostUsdc,
+    currentPrice: limitPrice,
+    currentValueUsdc: Number(stake.toFixed(2)),
+    marketFills: [{ price: limitPrice, size: shares, costUsdc: Number(stake.toFixed(2)) }],
+    statusNote: `Resting limit buy placed at ${limitPrice.toFixed(4)} (the best bid at selection); waiting for the market to fill it.`,
+  };
+}
+
 function tradeBatchCandidateSummary(item) {
   if (!item) return null;
   const executionQuoteUnavailable = item.executionQuoteVerified === false
@@ -6099,7 +6243,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   if (rotation) {
     const closedTrade = closeTradeForRotation(rotation.trade, rotation, strategy);
     portfolioState.trades = portfolioState.trades.map((trade) => trade.id === closedTrade.id ? closedTrade : trade);
-    const newTrade = paperTradeFromCandidate(rotation.candidate, strategy, today, stake);
+    const newTrade = openPaperTradeForStrategy(rotation.candidate, strategy, today, stake);
     newTrade.openedAfterRotationOfTradeId = closedTrade.id;
     newTrade.rotationEntryReason = closedTrade.rotationReview?.note || "";
     portfolioState.trades.unshift(newTrade);
@@ -6216,7 +6360,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
     };
   }
 
-  const trade = paperTradeFromCandidate(best, strategy, today, stake);
+  const trade = openPaperTradeForStrategy(best, strategy, today, stake);
 
   portfolioState.trades.unshift(trade);
   portfolioState.lastTradeDate = today;
@@ -9594,6 +9738,11 @@ export {
   adjustPaperPortfolioCapital,
   backfillCapitalAdjustmentAt,
   maybeOpenScheduledTrade,
+  markOpenTrade,
+  markWaitingLimitOrder,
+  limitOrderFillDecision,
+  openPaperTradeForStrategy,
+  paperTradeFromCandidate,
   mergeStates,
   openRisk,
   pnlPercent,

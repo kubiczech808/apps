@@ -359,6 +359,11 @@ jobs:
               # portfolio can turn on. Equal is the only one that shipped with it on;
               # every existing portfolio keeps its prior behavior absent a saved value.
               emit(f"{prefix}_STOP_LOSS_ENABLED", str(bool(row.get("stopLossEnabled", strategy == "equal"))).lower())
+              # A resting limit buy at the current best bid instead of a market buy at
+              # the ask: cheaper on fill, but only fills if the market comes to meet it,
+              # and is discarded unfilled once the event ends. Default off, unchanged
+              # behavior for every portfolio that has not turned it on.
+              emit(f"{prefix}_USE_LIMIT_ORDERS", str(bool(row.get("useLimitOrders"))).lower())
               emit(f"{prefix}_MARKET_TYPE", row.get("marketType"))
               emit(f"{prefix}_REQUIRE_MOST_PROBABLE", str(bool(row.get("requireMostProbableOutcome"))).lower())
               emit(f"{prefix}_PROBABILITY_SOURCE", row.get("probabilitySource"))

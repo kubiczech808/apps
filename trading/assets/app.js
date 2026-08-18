@@ -2449,7 +2449,7 @@ function tradePnlPct(trade) {
 }
 
 function isClosedTrade(trade) {
-  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED", "STOP_LOSS", "STOP_GAP"].includes(String(trade.status || "").toUpperCase());
+  return ["WON", "LOST", "CLOSED", "REDEEMED", "SOLD", "REDEEM_REQUIRED", "RESOLVED", "STOP_LOSS", "STOP_GAP", "LIMIT_ORDER_EXPIRED"].includes(String(trade.status || "").toUpperCase());
 }
 
 function closedTradePredictionResult(trade) {
@@ -2459,6 +2459,9 @@ function closedTradePredictionResult(trade) {
   // pick badly enough to force an exit -- so it counts as a miss regardless of what the
   // market eventually resolves to, the same as an outright LOST.
   if (["LOST", "STOP_LOSS", "STOP_GAP"].includes(status)) return false;
+  // No position was ever bought, so there is no prediction to grade -- neither a win
+  // nor a loss, just excluded, the same as a sale with no settlement price yet.
+  if (status === "LIMIT_ORDER_EXPIRED") return null;
 
   // A sale or rotation measures execution performance, not prediction accuracy. Count
   // it only after Polymarket publishes the selected outcome's final settlement price.
@@ -3211,6 +3214,11 @@ function tradeTypeBadge(trade) {
       : '<span class="order-chip">Limit order waiting</span>';
   }
   if (trade.mode === "LIVE_RECONCILIATION") return '<span class="order-chip warning">Sync gap</span>';
+  // The paper twin of the live chip above: a resting simulated buy, not yet a
+  // position. "Expired" is its own case rather than falling through to the closed-
+  // trade chips below -- nothing was ever bought, so it is not a settled position.
+  if (String(trade.status || "").toUpperCase() === "LIMIT_ORDER_WAITING") return '<span class="order-chip">Limit order waiting</span>';
+  if (String(trade.status || "").toUpperCase() === "LIMIT_ORDER_EXPIRED") return '<span class="order-chip warning">Limit order expired &middot; unfilled</span>';
   if (String(trade.status || "").toUpperCase() === "REDEEM_REQUIRED") return '<span class="order-chip warning">Redeem needed</span>';
   if (String(trade.status || "").toUpperCase() === "PENDING_RESOLUTION") return '<span class="order-chip warning">Pending resolution</span>';
   if (String(trade.status || "").toUpperCase() === "STOP_LOSS") return '<span class="order-chip warning">Protective exit</span>';
