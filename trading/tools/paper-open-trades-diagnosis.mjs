@@ -54,7 +54,10 @@ async function main() {
   console.log("Read-only: nothing is written, no credentials are used.\n");
 
   const api = await daysLeftApi();
-  const paper = await fetchJson(`${HOST}/api.php?action=state&target=paper`);
+  // The unfiltered payload is too large for PHP to serve reliably (HTTP 500) -- the
+  // dashboard summary strips evaluations/runLog/scan history, none of which this needs,
+  // and leaves paperPortfolios[*].trades untouched.
+  const paper = await fetchJson(`${HOST}/api.php?action=state&target=paper&summary=dashboard`);
   if (!paper.ok) {
     console.log(`!! could not read paper state: HTTP ${paper.status} ${paper.error || ""}`);
     return;
