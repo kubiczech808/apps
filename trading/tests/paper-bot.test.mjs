@@ -5293,6 +5293,60 @@ test("execution candidates: Win and Days left lead, precheck follows the market"
   assert.match(app, /\$\{status \? `<span>\$\{escapeHtml\(status\)\}<\/span>` : ""\}/);
 });
 
+test("execution candidates: the last column names when the record was added or updated", () => {
+  const renderer = candidateRenderer({ candidateVisibleCount: 80, candidateVisibleMode: "live" });
+  const rows = [{ tokenId: "1", question: "A market", outcome: "Yes" }];
+  const html = renderer.render(rows, "live", null);
+  const headers = [...html.matchAll(/<th>([^<]*)<\/th>/g)].map((match) => match[1].trim());
+  const cells = [...html.matchAll(/<td data-label="([^"]*)"/g)].map((match) => match[1].trim());
+
+  assert.equal(headers[headers.length - 1], "Added / updated", "it must be the last column, not inserted before Analysis");
+  assert.deepEqual(cells, headers, "the cell must sit under its own header");
+});
+
+// firstAnalysisDate/reassessmentDate already carry this exact "added vs updated"
+// distinction for the Analysis modal's original/current comparison, so the candidates
+// table's new column is only a thin cell around them -- this pins their actual behavior
+// rather than the stubbed-out call the table-layout test above leaves them as.
+test("execution candidates: added/updated picks the reassessment over the original add date", () => {
+  const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
+  const extract = (name) => {
+    const start = app.indexOf(`function ${name}(`);
+    if (start < 0) throw new Error(`missing ${name}`);
+    const bodyStart = app.indexOf(") {\n", start);
+    let depth = 0;
+    for (let i = bodyStart + 2; i < app.length; i += 1) {
+      if (app[i] === "{") depth += 1;
+      else if (app[i] === "}") {
+        depth -= 1;
+        if (!depth) return app.slice(start, i + 1);
+      }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const src = [extract("firstAnalysisDate"), extract("reassessmentDate"), extract("formatDate"), extract("candidateAddedOrUpdatedCell")].join("\n\n");
+  const candidateAddedOrUpdatedCell = new Function(
+    "escapeHtml",
+    `${src}\nreturn candidateAddedOrUpdatedCell;`,
+  )((value) => String(value ?? ""));
+
+  // Never evaluated: nothing to report.
+  assert.equal(candidateAddedOrUpdatedCell({}), "<span>-</span>");
+
+  // Added once, never reassessed since: names when it was first added.
+  const added = candidateAddedOrUpdatedCell({ firstEvaluatedAt: "2026-08-01T10:00:00.000Z" });
+  assert.match(added, /^<span>Added /);
+  assert.ok(!/Updated/.test(added), "must not claim an update that never happened");
+
+  // Reassessed since: the later date wins, or the column would always say "Added" and
+  // never reflect a candidate the bot has actually looked at again.
+  const updated = candidateAddedOrUpdatedCell({
+    firstEvaluatedAt: "2026-08-01T10:00:00.000Z",
+    lastSeenAt: "2026-08-10T10:00:00.000Z",
+  });
+  assert.match(updated, /^<span>Updated /);
+});
+
 // Reported from the conservative portfolio's run log: every candidate came back as
 // "execution shortlist revalidation failed: scoringEconomics is not defined; base status
 // ERROR is not executable", and the portfolio stopped opening orders altogether.

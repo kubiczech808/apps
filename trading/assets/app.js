@@ -6870,6 +6870,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
             <th>Volume</th>
           `}
           <th>Analysis</th>
+          <th>Added / updated</th>
         </tr>
       </thead>
       <tbody>
@@ -6927,6 +6928,7 @@ function renderPortfolioCandidateRows(rows = [], mode = state.mode, diagnostics 
                 <td data-label="Volume">${money(rowVolumeUsdc(item))}</td>
               `}
               <td data-label="Analysis">${analysisBadge(item)}</td>
+              <td data-label="Added / updated">${candidateAddedOrUpdatedCell(item)}</td>
             </tr>
           `;
         }).join("")}
@@ -7883,6 +7885,17 @@ function evaluationRiskRewardCell(item) {
 function evaluationEndDateCell(item) {
   const endDate = evaluationEndDate(item);
   return `<span>${escapeHtml(endDate ? formatDate(endDate) : "-")}</span>`;
+}
+
+// firstAnalysisDate/reassessmentDate already carry this same "added vs updated" distinction
+// for the Analysis modal's original/current comparison; reused here rather than a second
+// notion of the same thing so a candidate that has been reassessed shows the reassessment,
+// not just when it first entered the shortlist.
+function candidateAddedOrUpdatedCell(item) {
+  const added = firstAnalysisDate(item);
+  const updated = reassessmentDate(item, added);
+  const label = updated ? `Updated ${formatDate(updated)}` : (added ? `Added ${formatDate(added)}` : "-");
+  return `<span>${escapeHtml(label)}</span>`;
 }
 
 function evaluationDaysLeftCell(item) {
