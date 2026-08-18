@@ -2732,6 +2732,26 @@ test("market dates: a date recovered from a slug is a whole day, not a kickoff",
   assert.equal(slugOnly.endDateSource, "sports-event-start");
 });
 
+test("market dates: an election's own event metadata does not masquerade as a kickoff", () => {
+  // Reported: open "... nominee" and "By-Election Winner" positions showed a negative
+  // days-left, some by months. isSportsMarket was (correctly, if accidentally) true only
+  // because "winner" is in SPORTS_MARKET_HINT -- a normal word for any single-winner
+  // contest, not a sports-only one. With no real gameStartTime anywhere, event.startDate --
+  // an unrelated internal timestamp Gamma sets on the event record -- was the only
+  // candidate found, so it was taken as a "precise" kickoff and silently overrode the
+  // market's correct, much later resolutionEndDate.
+  const freshEndDate = "2026-08-18T00:00:00Z";
+  const context = bot.marketDateContext({
+    question: "Will Thomas Chalifoux be the Republican nominee for FL-09?",
+    slug: "will-thomas-chalifoux-be-the-republican-nominee-for-fl-09",
+    resolutionEndDate: freshEndDate,
+    events: [{ title: "FL-09 Republican Primary Winner", startDate: "2025-12-23T22:44:51.742349Z" }],
+  }, null);
+  assert.equal(context.endDate, freshEndDate, "the market's real, fresh end date must win over event.startDate");
+  assert.equal(context.endDateSource, "polymarket-resolution-window");
+  assert.equal(context.scheduledEventDate, null, "event.startDate must not be surfaced as a scheduled kickoff at all");
+});
+
 test("market dates: a kickoff that hasn't happened yet outranks a stale resolution window", () => {
   // Live bug: an exact-score sub-market's own resolutionEndDate said 02:00 (already
   // past), while Polymarket's own event page still showed a ~2h countdown to an 18:30

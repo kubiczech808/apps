@@ -2705,13 +2705,21 @@ function sportsDateFromSlug(value) {
 // ("val-fpx-jdg-2026-08-06") is only the day the fixture belongs to, and parseSportsDate
 // stretches it to 23:59:59 -- a whole-day bucket, not a time the match starts or ends.
 // Treating the second as a kickoff kept finished matches looking open until end of day.
+//
+// event.startDate is a third thing and was dropped from the candidates below: on live
+// "... nominee" and "By-Election Winner" markets (isSportsMarket true only because
+// "winner" -- a normal word for a single-winner election -- is in SPORTS_MARKET_HINT, not
+// because these are sports) it held an arbitrary timestamp unrelated to any real election
+// date, while every other candidate here was empty. With nothing to outrank it, it was
+// taken as a "precise" kickoff and silently overrode the market's correct, much later
+// resolutionEndDate with a date months in the past.
 function sportsScheduledEventDateDetail(market = {}) {
   if (!isSportsMarket(market)) return { date: null, precise: false };
   const events = Array.isArray(market.events) ? market.events : [];
   const candidates = [
     market.gameStartTime,
     market.eventStartTime,
-    ...events.flatMap((event) => [event?.gameStartTime, event?.eventStartTime, event?.startDateIso, event?.startDate]),
+    ...events.flatMap((event) => [event?.gameStartTime, event?.eventStartTime, event?.startDateIso]),
   ];
   for (const candidate of candidates) {
     const parsed = parseSportsDate(candidate);
