@@ -9,6 +9,7 @@ process.env.PAPER_REPORT_CADENCE_MINUTES = "55";
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const bot = await import("../tools/paper-trading-bot.mjs");
@@ -815,6 +816,50 @@ test("portfolio: aggregates survive a repeated normalize round-trip", () => {
     once.paperPortfolios.conservative.portfolio.equityUsdc,
   );
   assert.equal(twice.paperPortfolios.conservative.portfolio.realizedPnlUsdc, 0.25);
+});
+
+test("portfolio: a created portfolio's trades and run log survive a reload, not only the four shipped ones", () => {
+  // Reported live: a portfolio created (and started) in the browser never opened a
+  // single trade. normalizeState's paperPortfolios object literal only ever named the
+  // four shipped portfolios, so every reload silently dropped every other key in
+  // input.paperPortfolios -- a created portfolio's trades, run log and capital
+  // adjustment included, however many cycles they had accumulated over. Its own
+  // strategy is only known to PAPER_STRATEGIES once PAPER_CUSTOM_PORTFOLIOS is read at
+  // import time, so this runs the real module fresh in a subprocess rather than
+  // reaching for the copy this file already imported without one.
+  const customPortfolios = JSON.stringify({
+    createdtest: {
+      displayName: "Created test portfolio",
+      minProbability: 0.55,
+      executionTrigger: "cron",
+      automationEnabled: true,
+    },
+  });
+  const rawInput = JSON.stringify({
+    paperPortfolios: {
+      createdtest: {
+        trades: [{ id: "paper-createdtest-2026-08-01-1", status: "WON", realizedPnlUsdc: 3.5 }],
+        runLog: [{ runAt: "2026-08-01T00:00:00Z", action: "OPENED" }],
+        capitalAdjustmentUsdc: 12.5,
+      },
+    },
+  });
+  const modulePath = new URL("../tools/paper-trading-bot.mjs", import.meta.url).href;
+  const script = `
+    import { normalizeState } from ${JSON.stringify(modulePath)};
+    const state = normalizeState(JSON.parse(process.argv[1]));
+    process.stdout.write(JSON.stringify(state.paperPortfolios.createdtest ?? null));
+  `;
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", script, rawInput], {
+    encoding: "utf8",
+    env: { ...process.env, PAPER_CUSTOM_PORTFOLIOS: customPortfolios },
+  });
+  const survived = JSON.parse(output);
+  assert.ok(survived, "a created portfolio must exist in the normalized state at all");
+  assert.equal(survived.trades?.length, 1, "its trade history must survive a reload");
+  assert.equal(survived.trades[0].id, "paper-createdtest-2026-08-01-1");
+  assert.equal(survived.runLog?.length, 1, "its run log must survive a reload");
+  assert.equal(survived.capitalAdjustmentUsdc, 12.5, "its capital adjustment must survive a reload");
 });
 
 test("portfolio: normalization keeps the per-portfolio stake fraction", () => {

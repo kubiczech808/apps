@@ -1042,15 +1042,21 @@ function normalizeState(input) {
     lastDecision: input.lastDecision,
     runLog: input.runLog,
   };
-  const highRewardInput = input.paperPortfolios?.highReward || {};
-  const moreProbableInput = input.paperPortfolios?.moreProbable || {};
-  const equalInput = input.paperPortfolios?.equal || {};
-  const paperPortfolios = {
-    conservative: normalizePaperPortfolio(PAPER_STRATEGIES.conservative, conservativeInput),
-    highReward: normalizePaperPortfolio(PAPER_STRATEGIES.highReward, highRewardInput),
-    moreProbable: normalizePaperPortfolio(PAPER_STRATEGIES.moreProbable, moreProbableInput),
-    equal: normalizePaperPortfolio(PAPER_STRATEGIES.equal, equalInput),
-  };
+  // Reported: a portfolio created (and started) in the browser never opened a single
+  // trade. This object literal only ever named the four shipped portfolios, so on
+  // every reload it silently dropped every other key in input.paperPortfolios --
+  // a created portfolio's trades, run log and capital adjustment included, however
+  // many cycles they had accumulated over. Looping every currently-known strategy
+  // (built-in and created) is what updatePortfolio() already does after a run; doing
+  // the same here on the way in is what keeps a created portfolio's history from
+  // being wiped back to blank before this run's decisions are even made.
+  const paperPortfolios = {};
+  for (const strategy of Object.values(PAPER_STRATEGIES)) {
+    const strategyInput = strategy.id === "conservative"
+      ? conservativeInput
+      : input.paperPortfolios?.[strategy.id] || {};
+    paperPortfolios[strategy.id] = normalizePaperPortfolio(strategy, strategyInput);
+  }
   return {
     schemaVersion: 2,
     generatedAt: input.generatedAt || null,
