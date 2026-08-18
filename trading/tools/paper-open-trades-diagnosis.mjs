@@ -40,11 +40,41 @@ function extractFunction(source, name) {
   throw new Error(`function ${name} is unbalanced`);
 }
 
+function extractConst(source, name) {
+  const marker = `const ${name} = `;
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`missing const ${name}`);
+  const end = source.indexOf(";\n", start);
+  if (end < 0) throw new Error(`const ${name} is not terminated`);
+  return source.slice(start, end + 1);
+}
+
 async function daysLeftApi() {
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
   const names = ["isClosedTrade", "inferredDateFromQuestion", "tradeEndDate", "daysUntil", "evaluationEndDate", "evaluationDaysLeft", "daysToResolution"];
   const body = names.map((name) => extractFunction(app, name)).join("\n\n");
   return new Function(`${body}\nreturn { evaluationEndDate, evaluationDaysLeft, tradeEndDate, daysUntil, isClosedTrade };`)();
+}
+
+// The bot's own end-date resolution, lifted from paper-trading-bot.mjs (not assets/app.js --
+// that is the dashboard's display-only copy). This is what markOpenTrade() itself would
+// compute right now for a given trade and its freshly fetched Gamma market, so a mismatch
+// against the stored trade.endDate points at exactly where the staleness is introduced.
+async function botDateApi() {
+  const bot = await readFile(new URL("./paper-trading-bot.mjs", import.meta.url), "utf8");
+  const consts = [extractConst(bot, "SPORTS_MARKET_HINT")];
+  const names = [
+    "inferredEndDateFromQuestion",
+    "correctedEndDate",
+    "isSportsMarket",
+    "parseSportsDate",
+    "sportsDateFromSlug",
+    "sportsScheduledEventDateDetail",
+    "marketDateContext",
+    "daysToEnd",
+  ];
+  const body = [...consts, ...names.map((name) => extractFunction(bot, name))].join("\n\n");
+  return new Function(`${body}\nreturn { marketDateContext, isSportsMarket, sportsScheduledEventDateDetail, correctedEndDate, daysToEnd };`)();
 }
 
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "STOP_BREACH"]);
@@ -69,6 +99,7 @@ async function main() {
   console.log("Read-only: nothing is written, no credentials are used.\n");
 
   const api = await daysLeftApi();
+  const botApi = await botDateApi();
   // The unfiltered payload is too large for PHP to serve reliably (HTTP 500) -- the
   // dashboard summary strips evaluations/runLog/scan history, none of which this needs,
   // and leaves paperPortfolios[*].trades untouched.
@@ -115,6 +146,21 @@ async function main() {
         console.log(`     gamma (live): endDate=${market.endDate || "-"} closed=${market.closed ?? "-"}`
           + ` active=${market.active ?? "-"} acceptingOrders=${market.acceptingOrders ?? "-"}`
           + ` umaResolutionStatus=${market.umaResolutionStatus || "-"}`);
+
+        // Reproduces markOpenTrade()'s own dateContext call exactly (same synthetic
+        // resolutionEndDate override), so this is what the bot would store on its very
+        // next refresh cycle for this trade -- not a guess about its logic.
+        const dateContext = botApi.marketDateContext(
+          { ...market, resolutionEndDate: market.endDate || trade.resolutionEndDate || trade.endDate || null },
+          trade.openedAt || trade.date,
+        );
+        const sports = botApi.isSportsMarket(market);
+        const scheduled = botApi.sportsScheduledEventDateDetail(market);
+        console.log(`     bot would compute now: endDate=${dateContext.endDate || "-"} source=${dateContext.endDateSource}`
+          + ` resolutionEndDate=${dateContext.resolutionEndDate || "-"} scheduledEventDate=${dateContext.scheduledEventDate || "-"}`);
+        console.log(`     isSportsMarket=${sports} scheduled.precise=${scheduled.precise}`
+          + ` tags=${JSON.stringify(market.tags ?? null)} category=${market.category || "-"}`
+          + ` slug=${market.slug || "-"} eventSlug=${market.eventSlug || "-"}`);
       }
     }
     console.log("");
