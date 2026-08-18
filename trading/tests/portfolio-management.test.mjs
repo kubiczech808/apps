@@ -394,6 +394,26 @@ test("archiving: it is confirmed before it happens and restorable afterwards", (
   assert.match(setter, /const next = paperStrategyIds\(\)\[0\];/);
 });
 
+// Reported live: archiving existed only inside the parameter-edit modal, so it read as
+// not existing at all -- the user expected it next to the edit icon and found nothing
+// there. A second, direct control now sits beside the pencil icon on the rules card.
+test("archiving: a direct control sits next to the edit icon, for paper only", () => {
+  const card = extractFunction(APP, "renderPortfolioRulesCard");
+  assert.match(card, /archiveStrategyId \? `[\s\S]*?data-portfolio-archive-direct="\$\{escapeHtml\(archiveStrategyId\)\}"[\s\S]*?` : ""/,
+    "the button only renders when a strategy id is actually passed in");
+
+  assert.match(APP, /renderPortfolioRulesCard\(portfolioState\.label \|\| "Paper portfolio", portfolioRuleRows\(\{ \.\.\.portfolioState, \.\.\.portfolio \}\), portfolioState\.id\)/,
+    "the paper card passes its own strategy id");
+  assert.match(APP, /renderPortfolioRulesCard\(isFixedEntryMode\(\) \? "5050 portfolio" : "Live portfolio", livePortfolioRuleRows\(\)\)/,
+    "the live card passes none, so live portfolios get no archive control -- they hold real positions");
+
+  const handler = /const directArchiveButton = event\.target\.closest\("\[data-portfolio-archive-direct\]"\);[\s\S]*?\n  \}/.exec(APP);
+  assert.ok(handler, "the direct archive control is wired");
+  assert.match(handler[0], /if \(!window\.confirm\([\s\S]*?\)\) \{\n      return;\n    \}/,
+    "the same confirmation gates it as the modal's own archive button");
+  assert.match(handler[0], /setPortfolioArchived\(strategyId, true\)/);
+});
+
 test("dashboard: the tab row survives being rebuilt", () => {
   // Portfolios are created, renamed, archived and restored, so handlers bound to the
   // buttons themselves would stop working after the first of those.

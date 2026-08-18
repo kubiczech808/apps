@@ -7040,7 +7040,11 @@ function automationBadgeMarkup() {
   </button>`;
 }
 
-function renderPortfolioRulesCard(title, rows) {
+// Reported: archiving existed only inside the parameter-edit modal, so a user looking
+// for a way to deactivate a portfolio next to the edit icon found nothing there at all.
+// Only an existing paper portfolio can be archived -- a live one holds real positions and
+// open orders, and archiving here always means an already-existing one, never a draft.
+function renderPortfolioRulesCard(title, rows, archiveStrategyId = null) {
   return `
     <div class="portfolio-rules-card">
       <div class="portfolio-rules-head">
@@ -7052,6 +7056,17 @@ function renderPortfolioRulesCard(title, rows) {
             <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"></path>
           </svg>
         </button>
+        ${archiveStrategyId ? `
+          <button class="portfolio-rules-archive" type="button" data-portfolio-archive-direct="${escapeHtml(archiveStrategyId)}" aria-label="Archive portfolio" title="Archive portfolio">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M3 7h18"></path>
+              <path d="M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7"></path>
+              <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3"></path>
+              <path d="M10 12v5"></path>
+              <path d="M14 12v5"></path>
+            </svg>
+          </button>
+        ` : ""}
       </div>
       <div class="portfolio-rule-list">
         ${rows.map(([label, value]) => `
@@ -7137,7 +7152,7 @@ function renderBotState(botState) {
   if (els.portfolioRules) {
     els.portfolioRules.innerHTML = `
     <div class="bot-summary">
-      ${renderPortfolioRulesCard(portfolioState.label || "Paper portfolio", portfolioRuleRows({ ...portfolioState, ...portfolio }))}
+      ${renderPortfolioRulesCard(portfolioState.label || "Paper portfolio", portfolioRuleRows({ ...portfolioState, ...portfolio }), portfolioState.id)}
     </div>
   `;
   }
@@ -10578,6 +10593,21 @@ document.addEventListener("click", (event) => {
   if (parameterEditButton) {
     event.preventDefault();
     openParameterModal(parameterEditButton);
+    return;
+  }
+
+  // Asked for explicitly: a direct way to archive next to the edit icon, not only buried
+  // inside the parameter modal. Same confirmation and action, no modal to open first.
+  const directArchiveButton = event.target.closest("[data-portfolio-archive-direct]");
+  if (directArchiveButton) {
+    event.preventDefault();
+    const strategyId = directArchiveButton.dataset.portfolioArchiveDirect || "";
+    if (!strategyId) return;
+    const label = normalizePortfolioName(portfolioConfigForMode(`paper-${strategyId}`).displayName, strategyId);
+    if (!window.confirm(`Archive "${label}"?\n\nIt disappears from the dashboard and stops trading. Every trade, run log and statistic it holds is kept, and you can restore it from Settings.`)) {
+      return;
+    }
+    setPortfolioArchived(strategyId, true);
     return;
   }
 

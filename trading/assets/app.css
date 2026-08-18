@@ -970,6 +970,35 @@ button:disabled {
   stroke-linejoin: round;
 }
 
+/* Same shape as the edit button, and the same warning colour the parameter modal's own
+   archive button already carries: archiving looks destructive but is reversible. */
+.portfolio-rules-archive {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+}
+
+.portfolio-rules-archive:hover {
+  border-color: var(--warning);
+  color: #92400e;
+}
+
+.portfolio-rules-archive svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .portfolio-rule-list {
   display: grid;
   gap: 8px;
