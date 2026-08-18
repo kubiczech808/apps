@@ -693,6 +693,57 @@ test("run log history: the workflow archives every portfolio's new runs, and the
   assert.match(APP, /loadPortfolioRunLogHistory\(strategyId\);/);
 });
 
+test("run log history: a Unicode line-boundary character inside a record does not corrupt the archive", () => {
+  // Reported live: the workflow's "Append portfolio run-log history entries" step crashed
+  // with json.decoder.JSONDecodeError: Unterminated string. splitlines() treats far more
+  // than "\n" as a line break -- U+2028/U+2029 among them -- and JSON.stringify (the bot's
+  // own writer) does not escape those, so a single valid JSON line containing one in a
+  // question or an AI-generated rejection reason was silently cut in half before
+  // json.loads ever saw either fragment. Only "\n" is a real line boundary here; it is the
+  // exact byte the writer joins entries with.
+  const source = /entry = Path\(os\.environ\["PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH"\]\)[\s\S]*?groups\[\(strategy_id, month\)\]\.append\(line\)/
+    .exec(WORKFLOW);
+  assert.ok(source, "the parsing block must be findable in the workflow");
+  assert.ok(!/\.splitlines\(\)/.test(source[0]),
+    "splitlines() must not return here -- U+2028/U+2029 inside a record silently truncate it");
+  // The match starts mid-line (right at "entry"), so its own first line carries no
+  // leading whitespace to measure -- the next line, a complete one, is what the whole
+  // block's base indentation has to be read from.
+  const scriptLines = source[0].split("\n");
+  const indent = scriptLines[1].match(/^ +/)?.[0] || "";
+  const script = scriptLines.map((line) => (line.startsWith(indent) ? line.slice(indent.length) : line)).join("\n");
+
+  const directory = mkdtempSync(join(tmpdir(), "portfolio-run-log-entry-"));
+  try {
+    const entryPath = join(directory, "portfolio-run-log-entry.ndjson");
+    // A real shape: one clean record, one whose note carries an embedded U+2028 the way a
+    // scraped question or an AI-generated reason could.
+    const lines = [
+      { strategyId: "moreProbable", runAt: "2026-08-18T09:00:00Z", note: "clean" },
+      { strategyId: "equal", runAt: "2026-08-18T09:05:00Z", note: "line one line two" },
+    ].map((entry) => JSON.stringify(entry));
+    writeFileSync(entryPath, `${lines.join("\n")}\n`, "utf8");
+
+    const output = execFileSync("python3", ["-c", `
+import json, os, re
+from collections import defaultdict
+from pathlib import Path
+os.environ["PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH"] = ${JSON.stringify(entryPath)}
+${script}
+print(json.dumps({f"{k[0]}|{k[1]}": v for k, v in groups.items()}))
+`], { encoding: "utf8" });
+
+    const groups = JSON.parse(output);
+    assert.deepEqual(Object.keys(groups).sort(), ["equal|2026-08", "moreProbable|2026-08"],
+      "both records must survive as their own group, the embedded separator included");
+    const recovered = JSON.parse(groups["equal|2026-08"][0]);
+    assert.equal(recovered.note, "line one line two",
+      "the embedded U+2028 must round-trip intact, not truncate the record");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 // Reported live: between the mobile breakpoint and a full-width desktop, the tab row had
 // nowhere to shrink to, so the whole page overflowed sideways and the overflow was clipped
 // by body's overflow-x: hidden -- Stop loss, Live and 90 -> 50% did not wrap to a second

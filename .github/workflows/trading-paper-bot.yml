@@ -454,7 +454,13 @@ jobs:
               print("No new scraping history entry to append")
               raise SystemExit(0)
 
-          record = json.loads(entry.read_text(encoding="utf-8").splitlines()[0])
+          # split("\n"), not splitlines(): a question or AI-generated reason string can
+          # contain a Unicode line-boundary character (U+2028/U+2029 and friends) that
+          # JSON.stringify leaves unescaped but splitlines() still treats as a break,
+          # corrupting an otherwise-valid single-line JSON record into two fragments.
+          # Only "\n" is a real line boundary here -- it is the exact byte the writer
+          # joined with.
+          record = json.loads(entry.read_text(encoding="utf-8").split("\n")[0])
           run_at = str(record.get("runAt") or "")
           month = run_at[:7] if re.fullmatch(r"\d{4}-\d{2}", run_at[:7]) else "unknown"
 
@@ -509,7 +515,13 @@ jobs:
               raise SystemExit(0)
 
           groups = defaultdict(list)
-          for line in entry.read_text(encoding="utf-8").splitlines():
+          # split("\n"), not splitlines(): a question or AI-generated reason string can
+          # contain a Unicode line-boundary character (U+2028/U+2029 and friends) that
+          # JSON.stringify leaves unescaped but splitlines() still treats as a break,
+          # corrupting an otherwise-valid single-line JSON record into two fragments and
+          # crashing json.loads on the fragment with "Unterminated string". Only "\n" is
+          # a real line boundary here -- it is the exact byte the writer joined with.
+          for line in entry.read_text(encoding="utf-8").split("\n"):
               line = line.strip()
               if not line:
                   continue
