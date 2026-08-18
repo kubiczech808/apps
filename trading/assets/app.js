@@ -7282,20 +7282,23 @@ function fixedEntryOrderPricesByToken() {
   return prices;
 }
 
+// Reported live: a trade opened and shown under Live closed under 90 -> 50% instead.
+// This used to fall back to matchesFixedEntryPrice(paid) -- any price 5050 is configured
+// at now or has ever been configured at, whether or not this token has anything to do
+// with it -- when no per-token order was on record. Live prices its own buys off market
+// probability, and 5050's configured prices (0.50, 0.65) are ordinary enough numbers that
+// Live lands on them too: every misattributed trade had loggedTokenPrices=[] -- no order
+// from 5050 on that token at all -- while paying almost exactly 0.50 or 0.65. The
+// per-token order log is the one signal that is actually about this token; without a
+// match there, the row stays with Live, the documented safe default for an unknown fill.
 function boughtAtFixedEntryPrice(row) {
   const paid = Number(row?.entryPrice ?? row?.avgPrice ?? row?.averagePrice);
   if (!Number.isFinite(paid)) return false;
   // Same window as the signature match above, and for the same reason: an averaged fill
   // price drifts by cents, not by half-cents.
   const matches = (price) => Math.abs(paid - price) < FIXED_ENTRY_PRICE_TOLERANCE;
-  // A price 5050 is on record as having bid for this very token settles it, whether or
-  // not the portfolio is still configured that way.
   const ordered = fixedEntryOrderPricesByToken().get(String(row?.tokenId || row?.assetId || ""));
-  if (ordered && [...ordered].some(matches)) return true;
-  // Failing that, any price this portfolio is known to bid at -- for a fill whose own bid
-  // has aged out of the log. Live buys at the market with a high probability bar, so a
-  // Live fill landing on one of 5050's prices is not a case that occurs in practice.
-  return matchesFixedEntryPrice(paid);
+  return Boolean(ordered && [...ordered].some(matches));
 }
 
 function belongsToActiveLivePortfolio(row) {

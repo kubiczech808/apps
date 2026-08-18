@@ -4322,8 +4322,12 @@ test("live closed trades: a resting 5050 bid does not take a trade Live actually
       { ...closed("104", 0.9), tokenId: "" },     // no token at all
     ],
   };
-  // 5050 has a bid resting on 100 -- the market Live bought and closed.
-  const execution5050 = { runLog: [{ attempts: [{ tokenId: "100", action: "SUBMITTED" }] }] };
+  // 5050 has a bid resting on 100 -- the market Live bought and closed -- and a genuine
+  // logged order of its own on 102, the fill it actually owns.
+  const execution5050 = { runLog: [
+    { attempts: [{ tokenId: "100", action: "SUBMITTED" }] },
+    { attempts: [{ tokenId: "102", orderPrice: 0.51, action: "SUBMITTED" }] },
+  ] };
 
   const onLive = liveTradeAttribution(app, { mode: "live", execution5050 }).liveClosedTrades(liveState);
   const on5050 = liveTradeAttribution(app, { mode: "live-5050", execution5050 }).liveClosedTrades(liveState);
@@ -4339,8 +4343,9 @@ test("live closed trades: a resting 5050 bid does not take a trade Live actually
   assert.equal(liveTradeAttribution(app, { mode: "live-5050", execution5050 }).liveClosedTrades(unknown).length, 0);
 
   // With no 5050 state at all -- its file 404s until its first run publishes -- nothing
-  // may be taken from Live.
-  assert.equal(liveTradeAttribution(app, { mode: "live", execution5050: null }).liveClosedTrades(liveState).length, 4);
+  // may be taken from Live: all 5 rows, including 102, which only ever matched on the
+  // default configured price coincidentally, not on anything recorded about that token.
+  assert.equal(liveTradeAttribution(app, { mode: "live", execution5050: null }).liveClosedTrades(liveState).length, 5);
 });
 
 test("live closed trades: resting orders are still attributed by price and run log", async () => {
@@ -4593,11 +4598,12 @@ test("5050 fills: a changed entry price does not hand old fills to Live", async 
   assert.equal(belongs("live", log, 0.51)(liveFill), true);
   assert.equal(belongs("live-5050", log, 0.51)(liveFill), false);
 
-  // And a 5050 fill whose bid has aged out of the capped run log still matches on the
-  // price the portfolio is set to now, so history does not leak to Live as the log rolls.
+  // Reversed by a later, better-evidenced report (see the test below): a fill with no
+  // per-token order on record at all -- aged out of the log, or simply never 5050's --
+  // now stays with Live, the documented safe default, rather than matching on price alone.
   const aged = { tokenId: "999", status: "OPEN", shares: 5, entryPrice: 0.51 };
-  assert.equal(belongs("live-5050", { runLog: [] }, 0.51)(aged), true);
-  assert.equal(belongs("live", { runLog: [] }, 0.51)(aged), false);
+  assert.equal(belongs("live-5050", { runLog: [] }, 0.51)(aged), false);
+  assert.equal(belongs("live", { runLog: [] }, 0.51)(aged), true);
 
   // A rejected attempt claims no token. A market 5050 asked for and was refused, which
   // Live then bought at the market, stays with Live -- that is the guard that stops a
@@ -4607,13 +4613,66 @@ test("5050 fills: a changed entry price does not hand old fills to Live", async 
   assert.equal(belongs("live-5050", refused, 0.62)(liveFillOnRefusedToken), false);
   assert.equal(belongs("live", refused, 0.62)(liveFillOnRefusedToken), true);
 
-  // Its price is a different matter: a refused bid is still a bid, and says what price
-  // this portfolio rests at. So a fill at 0.50 is 5050's whatever the setting has since
-  // become. The two signals cannot collide in practice -- Live's 80% probability bar
-  // means it does not buy at 50c.
+  // Also reversed: a DIFFERENT token (666) filled at a price 5050 once had refused
+  // elsewhere (555, at 0.50) is not 5050's just because the number matches. Nothing here
+  // says 666 has anything to do with 5050 at all.
   const fillAtARefusedPrice = { tokenId: "666", status: "OPEN", shares: 5, entryPrice: 0.5 };
-  assert.equal(belongs("live-5050", refused, 0.62)(fillAtARefusedPrice), true);
-  assert.equal(belongs("live", refused, 0.62)(fillAtARefusedPrice), false);
+  assert.equal(belongs("live-5050", refused, 0.62)(fillAtARefusedPrice), false);
+  assert.equal(belongs("live", refused, 0.62)(fillAtARefusedPrice), true);
+});
+
+// Reported live: a position opened and shown under Live closed under 90 -> 50% instead.
+// The production account had two such trades, both bought at ordinary market prices
+// (0.64, 0.65) that happen to sit within FIXED_ENTRY_PRICE_TOLERANCE of 5050's configured
+// price, with no order for either token anywhere in 5050's run log -- proof that "Live's
+// probability bar means it never prices near 5050's setting" was not actually true.
+test("live fills: a price that merely matches 5050's setting does not hand the trade to 5050", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const pick = (name) => {
+    const start = app.indexOf(`function ${name}(`);
+    if (start < 0) throw new Error(`missing ${name}`);
+    const bodyStart = app.indexOf(") {\n", start);
+    let depth = 0;
+    for (let i = bodyStart + 2; i < app.length; i += 1) {
+      if (app[i] === "{") depth += 1;
+      else if (app[i] === "}") {
+        depth -= 1;
+        if (!depth) return app.slice(start, i + 1);
+      }
+    }
+    throw new Error(`unbalanced ${name}`);
+  };
+  const body = ["submittedTokenIds", "fixedEntryTokenIds", "fixedEntryPriceSignatures",
+    "matchesFixedEntryPrice", "restsAtFixedEntryPrice", "fixedEntryOrderPricesByToken",
+    "isFilledPortfolioRow", "boughtAtFixedEntryPrice", "belongsToActiveLivePortfolio",
+    "isClosedTrade"].map(pick).join("\n\n");
+  const tolerance = /const FIXED_ENTRY_PRICE_TOLERANCE = [\d.]+;/.exec(app)[0];
+  const belongs = (mode, execution5050, configuredPrice) => new Function(
+    "state", "isFixedEntryMode", "normalizeFixedEntryPrice", "portfolioConfigForMode",
+    `${tolerance}\n${body}\nreturn belongsToActiveLivePortfolio;`,
+  )(
+    { mode, live5050ExecutionState: execution5050 },
+    () => mode === "live-5050",
+    (value) => Number(value),
+    () => ({ fixedEntryPrice: configuredPrice }),
+  );
+
+  // The exact shape of the two production rows: closed, no logged 5050 order for either
+  // token, priced within tolerance of 5050's configured 0.65 (once also 0.50).
+  const execution = { runLog: [], fixedEntryPriceHistory: [0.65, 0.5] };
+  const jdGaming = {
+    tokenId: "6246925247605876855027437546764427752148257339899783681629942804531689023181",
+    status: "LOST", entryPrice: 0.64, question: "Game Handicap: JDG (-1.5) vs LGD Gaming (+1.5)",
+  };
+  const teamYandex = {
+    tokenId: "68743192567142339680992828280592921309106672174739147121902853530055585225049",
+    status: "LOST", entryPrice: 0.65, question: "Dota 2: LGD Gaming vs Team Yandex - Game 1 Winner",
+  };
+  for (const row of [jdGaming, teamYandex]) {
+    assert.equal(belongs("live", execution, 0.65)(row), true, `${row.question}: must stay with Live`);
+    assert.equal(belongs("live-5050", execution, 0.65)(row), false, `${row.question}: must not go to 5050`);
+  }
 });
 
 // Reported: the 5050 run log held a single entry, which is not what happened -- the
