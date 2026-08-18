@@ -473,6 +473,36 @@ test("paper capital adjustment: the workflow and bot expose it as a dispatchable
   assert.match(source, /adjustPaperPortfolioCapital\(state, PAPER_STRATEGY_ID, PAPER_TARGET_EQUITY_USDC\)/);
 });
 
+// Two already-rebased portfolios (Stop loss, High reward) predate capitalAdjustmentAt, so
+// their "since the rebase" stats have nothing to filter by until this backfill runs once.
+test("paper capital adjustment: the backfill-only timestamp is exposed as its own dispatchable mode", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8");
+  assert.match(workflow, /- set_capital_adjustment_at\n/);
+  assert.match(workflow,
+    /PAPER_SET_CAPITAL_ADJUSTMENT_AT: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.mode == 'set_capital_adjustment_at' && 'true' \|\| 'false' \}\}/);
+  assert.match(workflow, /paper_capital_adjustment_at_iso:/);
+  const source = readFileSync(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  assert.match(source, /if \(PAPER_SET_CAPITAL_ADJUSTMENT_AT\) \{/);
+  assert.match(source, /backfillCapitalAdjustmentAt\(state, PAPER_STRATEGY_ID, PAPER_CAPITAL_ADJUSTMENT_AT_ISO\)/);
+
+  // And the function itself changes nothing but the timestamp.
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-17T10:00:00.000Z",
+    paperPortfolios: {
+      equal: {
+        trades: [{ id: "t1", status: "LOST", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: -5 }],
+        capitalAdjustmentUsdc: 66.2259,
+      },
+    },
+  });
+  const result = bot.backfillCapitalAdjustmentAt(state, "equal", "2026-08-17T04:00:00.000Z");
+  assert.equal(result.capitalAdjustmentAt, "2026-08-17T04:00:00.000Z");
+  assert.equal(result.capitalAdjustmentUsdc, 66.2259, "the already-correct adjustment amount must not move");
+  assert.equal(state.paperPortfolios.equal.trades[0].realizedPnlUsdc, -5, "not one trade is touched");
+  assert.throws(() => bot.backfillCapitalAdjustmentAt(state, "equal", "not a date"), /Invalid capitalAdjustmentAt timestamp/);
+});
+
 // Reported live: High reward's dashboard header read $25.12 free, but the same run's own
 // log line skipped a trade over "0.67 USDC available" -- a real rebased portfolio skipping
 // (and undersizing) trades it could actually afford. maybeOpenScheduledTrade() sized every

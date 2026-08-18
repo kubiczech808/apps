@@ -19,6 +19,7 @@ on:
           - reset
           - restore
           - adjust_capital
+          - set_capital_adjustment_at
           - refresh
           - report
           - after_scan
@@ -36,6 +37,11 @@ on:
         description: "adjust_capital mode: the equity this portfolio's baseline should be rebased to"
         required: false
         default: "100"
+        type: string
+      paper_capital_adjustment_at_iso:
+        description: "set_capital_adjustment_at mode: ISO timestamp (UTC) the rebase actually happened at"
+        required: false
+        default: ""
         type: string
       paper_max_order_fraction:
         description: "Maximum stake per paper trade as fraction of portfolio, decimal 0.01-0.50"
@@ -245,6 +251,10 @@ jobs:
       # baseline it is measured from is topped up. No UI surfaces this either.
       PAPER_ADJUST_CAPITAL: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'adjust_capital' && 'true' || 'false' }}
       PAPER_TARGET_EQUITY_USDC: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_target_equity_usdc || '100' }}
+      # One-off backfill for a rebase dispatched before capitalAdjustmentAt existed. No UI
+      # surfaces this either.
+      PAPER_SET_CAPITAL_ADJUSTMENT_AT: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'set_capital_adjustment_at' && 'true' || 'false' }}
+      PAPER_CAPITAL_ADJUSTMENT_AT_ISO: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_capital_adjustment_at_iso || '' }}
       PAPER_EXECUTION_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'after_scan' && 'after_scrape' || 'cron' }}
       PAPER_MANUAL_RUN_ONCE: ${{ github.event_name == 'workflow_dispatch' && inputs.manual_run_once == 'true' && 'true' || 'false' }}
       PAPER_STRATEGY_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.paper_strategy_id || '' }}

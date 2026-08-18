@@ -308,6 +308,11 @@ const PAPER_RESTORE_PORTFOLIO = envBool("PAPER_RESTORE_PORTFOLIO", false);
 // compute, but its displayed baseline gets a manual top-up. No UI surfaces this either.
 const PAPER_ADJUST_CAPITAL = envBool("PAPER_ADJUST_CAPITAL", false);
 const PAPER_TARGET_EQUITY_USDC = envNumber("PAPER_TARGET_EQUITY_USDC", 100);
+// One-off backfill for a rebase that happened before capitalAdjustmentAt existed to
+// record it: stamps only the moment the "since rebase" stats should start counting from,
+// never the adjustment amount itself or a trade. No UI surfaces this either.
+const PAPER_SET_CAPITAL_ADJUSTMENT_AT = envBool("PAPER_SET_CAPITAL_ADJUSTMENT_AT", false);
+const PAPER_CAPITAL_ADJUSTMENT_AT_ISO = String(process.env.PAPER_CAPITAL_ADJUSTMENT_AT_ISO || "").trim();
 const TZ = "Europe/Prague";
 // Legacy STOP_BREACH rows remain refreshable so the next pass can close them at
 // the actually executable bid. The old behaviour kept them open after a gap and
@@ -1306,6 +1311,30 @@ function adjustPaperPortfolioCapital(state, strategyId, targetEquity = 100) {
     newAdjustment,
     newEquity: adjusted.portfolio.equityUsdc,
     adjustedAt,
+  };
+}
+
+/**
+ * A rebase dispatched before capitalAdjustmentAt existed has the right
+ * capitalAdjustmentUsdc already, just no recorded moment for "since the rebase" stats to
+ * start counting from. This backfills only that timestamp -- never the adjustment amount,
+ * a trade, or anything else -- for a portfolio the user identifies by when they actually
+ * did it.
+ */
+function backfillCapitalAdjustmentAt(state, strategyId, isoTimestamp) {
+  const strategy = PAPER_STRATEGIES[strategyId];
+  if (!strategy) throw new Error(`Unknown paper portfolio strategy: ${strategyId}`);
+  if (!Number.isFinite(Date.parse(isoTimestamp))) {
+    throw new Error(`Invalid capitalAdjustmentAt timestamp: ${isoTimestamp}`);
+  }
+  state.paperPortfolios ||= {};
+  const current = normalizePaperPortfolio(strategy, state.paperPortfolios[strategyId] || {});
+  const adjusted = normalizePaperPortfolio(strategy, { ...current, capitalAdjustmentAt: isoTimestamp });
+  state.paperPortfolios[strategyId] = adjusted;
+  syncLegacyPaperAliases(state);
+  return {
+    capitalAdjustmentUsdc: adjusted.capitalAdjustmentUsdc,
+    capitalAdjustmentAt: adjusted.capitalAdjustmentAt,
   };
 }
 
@@ -9116,6 +9145,24 @@ async function run() {
     }, null, 2));
     return;
   }
+  if (PAPER_SET_CAPITAL_ADJUSTMENT_AT) {
+    if (!PAPER_STRATEGY_ID) {
+      throw new Error("PAPER_SET_CAPITAL_ADJUSTMENT_AT requires a valid PAPER_STRATEGY_ID.");
+    }
+    if (!PAPER_CAPITAL_ADJUSTMENT_AT_ISO) {
+      throw new Error("PAPER_SET_CAPITAL_ADJUSTMENT_AT requires PAPER_CAPITAL_ADJUSTMENT_AT_ISO.");
+    }
+    const result = backfillCapitalAdjustmentAt(state, PAPER_STRATEGY_ID, PAPER_CAPITAL_ADJUSTMENT_AT_ISO);
+    state.generatedAt = nowIso();
+    state.aiUsage = aiUsageSnapshot(state);
+    await writeState(state);
+    console.log(JSON.stringify({
+      action: "PAPER_PORTFOLIO_CAPITAL_ADJUSTMENT_AT_SET",
+      strategyId: PAPER_STRATEGY_ID,
+      ...result,
+    }, null, 2));
+    return;
+  }
   if (SCHEDULED_CADENCE && !COMPACT_ONLY && !REFRESH_ONLY && !EXECUTION_ONLY && !EVALUATION_ONLY) {
     const cadence = resolveScheduledCadence(state);
     scanOnly = cadence.scanOnly;
@@ -9526,6 +9573,7 @@ export {
   archiveAndResetPaperPortfolio,
   restoreArchivedPaperPortfolio,
   adjustPaperPortfolioCapital,
+  backfillCapitalAdjustmentAt,
   maybeOpenScheduledTrade,
   mergeStates,
   openRisk,
