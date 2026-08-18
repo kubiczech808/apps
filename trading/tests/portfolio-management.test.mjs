@@ -604,6 +604,29 @@ test("run log history: the dashboard merges loaded history with the live cap, ne
   ], "the fresh run leads, the overlap appears once, older history still follows");
 });
 
+test("capital rebase: the accuracy note names pre-reset trades separately from early exits", () => {
+  const els = { portfolioAccuracy: { textContent: "", className: "" }, portfolioAccuracyNote: { textContent: "" } };
+  const run = new Function("els", "probability", "pnlClass", `
+    ${extractFunction(APP, "isClosedTrade")}
+    ${extractFunction(APP, "closedTradePredictionResult")}
+    ${extractFunction(APP, "closedAccuracyStats")}
+    ${extractFunction(APP, "renderClosedAccuracy")}
+    return renderClosedAccuracy;
+  `)(els, (value) => String(value), () => "");
+
+  // One resolved trade behind the (fake) cutoff, one early exit (no final price yet).
+  run([
+    { status: "WON" },
+    { status: "SOLD", finalOutcomePrice: null },
+  ], 3);
+  assert.equal(els.portfolioAccuracyNote.textContent, "1 / 1 resolved · 1 early exits excluded · 3 pre-reset trades excluded",
+    "both exclusion reasons must be named, and neither hides the other");
+
+  run([{ status: "WON" }], 0);
+  assert.equal(els.portfolioAccuracyNote.textContent, "1 / 1 resolved",
+    "an unrebased portfolio's note must read exactly as it did before this feature existed");
+});
+
 test("run log history: the workflow archives every portfolio's new runs, and the bot writes them", () => {
   assert.match(BOT, /const PORTFOLIO_RUN_LOG_ENTRY_PATH = process\.env\.PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH/);
   assert.match(BOT, /async function writePortfolioRunLogEntries\(entries\)/);

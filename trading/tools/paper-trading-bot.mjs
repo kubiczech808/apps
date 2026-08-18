@@ -1101,6 +1101,10 @@ function normalizePaperPortfolio(strategy, input = {}) {
     // is fully recomputed by updatePaperPortfolio() every pass, so anything meant to
     // persist across passes has to live outside it.
     capitalAdjustmentUsdc: Number(input.capitalAdjustmentUsdc) || 0,
+    // When this was last rebased. Trades resolved before it are excluded from the
+    // performance stats below, but never from the trade itself or from closed-position
+    // history -- this only marks where "performance since" starts counting from.
+    capitalAdjustmentAt: input.capitalAdjustmentAt || null,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
       maxFraction: Number(strategy.maxFraction ?? input.portfolio?.maxFraction ?? MAX_FRACTION),
@@ -1288,7 +1292,12 @@ function adjustPaperPortfolioCapital(state, strategyId, targetEquity = 100) {
   const priorEquity = Number(current.portfolio.equityUsdc);
   const priorAdjustment = Number(current.capitalAdjustmentUsdc) || 0;
   const newAdjustment = Number((priorAdjustment + (Number(targetEquity) - priorEquity)).toFixed(4));
-  const adjusted = normalizePaperPortfolio(strategy, { ...current, capitalAdjustmentUsdc: newAdjustment });
+  const adjustedAt = nowIso();
+  const adjusted = normalizePaperPortfolio(strategy, {
+    ...current,
+    capitalAdjustmentUsdc: newAdjustment,
+    capitalAdjustmentAt: adjustedAt,
+  });
   state.paperPortfolios[strategyId] = adjusted;
   syncLegacyPaperAliases(state);
   return {
@@ -1296,6 +1305,7 @@ function adjustPaperPortfolioCapital(state, strategyId, targetEquity = 100) {
     priorAdjustment,
     newAdjustment,
     newEquity: adjusted.portfolio.equityUsdc,
+    adjustedAt,
   };
 }
 
@@ -8688,6 +8698,19 @@ function updatePaperPortfolio(portfolioState) {
     .filter((trade) => OPEN_STATUSES.has(String(trade.status || "").toUpperCase()))
     .reduce((sum, trade) => sum + Number(trade.unrealizedPnlUsdc || 0), 0);
   const openRiskValue = openRisk(portfolioState.trades);
+  // Reported: a capital rebase correctly moved equity, but Total P/L, Realized P/L and
+  // Resolved accuracy kept counting trades closed before it -- history the user asked to
+  // stop weighing performance by, not to lose. Only realized P/L is filtered: an open
+  // position is a live thing regardless of when it was opened, not a historical trade.
+  const adjustedAtTime = Date.parse(portfolioState.capitalAdjustmentAt || "");
+  const realizedPnlSinceAdjustment = Number.isFinite(adjustedAtTime)
+    ? portfolioState.trades
+        .filter((trade) => {
+          const resolvedTime = Date.parse(trade.resolvedAt || "");
+          return Number.isFinite(resolvedTime) && resolvedTime >= adjustedAtTime;
+        })
+        .reduce((sum, trade) => sum + Number(trade.realizedPnlUsdc || 0), 0)
+    : realizedPnl;
   // A one-time manual correction to the account's capital baseline, applied by
   // adjustPaperPortfolioCapital() -- never by ordinary trading. Every other portfolio
   // carries 0 here, so PORTFOLIO_USDC + 0 reproduces the prior formula exactly.
@@ -8710,6 +8733,7 @@ function updatePaperPortfolio(portfolioState) {
     // dashboard reading this object directly can still explain why equity does not
     // equal PORTFOLIO_USDC + realized + open.
     capitalAdjustmentUsdc: Number(capitalAdjustment.toFixed(4)),
+    capitalAdjustmentAt: portfolioState.capitalAdjustmentAt || null,
     // The per-portfolio setting is the source of truth. Using the global fraction
     // here would overwrite it in the persisted state, so the UI, the backend and
     // the workflow would stop agreeing on the same stake sizing.
@@ -8731,6 +8755,13 @@ function updatePaperPortfolio(portfolioState) {
     equityUsdc: Number(equity.toFixed(4)),
     totalPnlUsdc: Number((realizedPnl + openPnl).toFixed(4)),
     totalPnlPct: pnlPercent(realizedPnl + openPnl, baseline),
+    // Display-only: equity, free capital and sizing must keep using the true, unfiltered
+    // realizedPnl above -- only these two exist so a rebased portfolio's headline stats can
+    // read "since the reset" without that filtering ever touching what the bot trades on.
+    realizedPnlSinceAdjustmentUsdc: Number(realizedPnlSinceAdjustment.toFixed(4)),
+    realizedPnlSinceAdjustmentPct: pnlPercent(realizedPnlSinceAdjustment, baseline),
+    totalPnlSinceAdjustmentUsdc: Number((realizedPnlSinceAdjustment + openPnl).toFixed(4)),
+    totalPnlSinceAdjustmentPct: pnlPercent(realizedPnlSinceAdjustment + openPnl, baseline),
     openRiskUsdc: Number(openRiskValue.toFixed(2)),
     freeCapitalUsdc: Number(freeCapital.toFixed(2)),
   };

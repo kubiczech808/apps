@@ -402,6 +402,65 @@ test("paper capital adjustment: an untouched portfolio's formula is exactly the 
   assert.equal(state.paperPortfolios.conservative.capitalAdjustmentUsdc, 0);
 });
 
+// Reported: after a rebase, Total P/L, Realized P/L and Resolved accuracy kept weighing
+// performance by trades closed before it -- the user wanted performance measured "since"
+// the rebase, without erasing the older trades from Closed positions history.
+test("paper capital adjustment: 'since the rebase' stats exclude older trades, equity does not", () => {
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-17T10:00:00.000Z",
+    paperPortfolios: {
+      moreProbable: {
+        trades: [
+          { id: "old-loss", status: "LOST", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: -10, resolvedAt: "2026-01-01T00:00:00.000Z" },
+          { id: "old-win", status: "WON", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: 20, resolvedAt: "2026-06-01T00:00:00.000Z" },
+        ],
+      },
+    },
+  });
+
+  const result = bot.adjustPaperPortfolioCapital(state, "moreProbable", 100);
+  assert.ok(result.adjustedAt, "the rebase moment must be recorded, or nothing can be filtered by it");
+  assert.equal(state.paperPortfolios.moreProbable.capitalAdjustmentAt, result.adjustedAt);
+
+  // A trade that closes after the rebase.
+  const after = new Date(Date.parse(result.adjustedAt) + 60000).toISOString();
+  state.paperPortfolios.moreProbable.trades.push(
+    { id: "new-win", status: "WON", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: 7, resolvedAt: after },
+  );
+  bot.updatePaperPortfolio(state.paperPortfolios.moreProbable);
+  const portfolio = state.paperPortfolios.moreProbable.portfolio;
+
+  // Equity is real money: it must still reflect every trade, or free capital and sizing
+  // would drift from the account's actual balance. The rebase moved the baseline itself
+  // (100 - 10, since it had to close a +10 pre-existing gap to land exactly on 100), so
+  // equity is that baseline plus every trade's realized P/L, not 100 plus it.
+  assert.equal(portfolio.realizedPnlUsdc, -10 + 20 + 7);
+  assert.equal(portfolio.totalPnlUsdc, -10 + 20 + 7);
+  assert.equal(state.paperPortfolios.moreProbable.capitalAdjustmentUsdc, -10);
+  assert.equal(portfolio.equityUsdc, (100 - 10) + (-10 + 20 + 7));
+
+  // "Since the rebase" counts only the one trade that closed after it.
+  assert.equal(portfolio.realizedPnlSinceAdjustmentUsdc, 7);
+  assert.equal(portfolio.totalPnlSinceAdjustmentUsdc, 7);
+});
+
+test("paper capital adjustment: a portfolio never rebased has nothing to exclude", () => {
+  const state = bot.normalizeState({
+    generatedAt: "2026-08-17T10:00:00.000Z",
+    paperPortfolios: {
+      conservative: {
+        trades: [{ id: "t1", status: "WON", stakeUsdc: 5, totalCostUsdc: 5, realizedPnlUsdc: 3.75, resolvedAt: "2020-01-01T00:00:00.000Z" }],
+      },
+    },
+  });
+  const portfolio = state.paperPortfolios.conservative.portfolio;
+  assert.equal(state.paperPortfolios.conservative.capitalAdjustmentAt, null);
+  // With no rebase recorded, "since" must equal the true all-time figure exactly -- an
+  // untouched portfolio's dashboard tiles must not change at all.
+  assert.equal(portfolio.realizedPnlSinceAdjustmentUsdc, portfolio.realizedPnlUsdc);
+  assert.equal(portfolio.totalPnlSinceAdjustmentUsdc, portfolio.totalPnlUsdc);
+});
+
 test("paper capital adjustment: the workflow and bot expose it as a dispatchable mode", async () => {
   const { readFile } = await import("node:fs/promises");
   const workflow = await readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8");
@@ -3350,10 +3409,12 @@ test("dashboard: a renderer cannot read another renderer's local variables", asy
     });
   }
 
-  // And the paper renderer keeps its own figure.
+  // And the paper renderer keeps its own figure. Renamed to totalPnlDisplay when the
+  // capital-rebase display filter was added -- still a local of this function alone,
+  // never renderLiveState's.
   const [paperStart, paperEnd] = bounds("renderBotState");
   const paper = lines.slice(paperStart, paperEnd).join("\n");
-  assert.match(paper, /els\.portfolioTotalPl\.textContent = signedMoney\(totalPnl\);/,
+  assert.match(paper, /els\.portfolioTotalPl\.textContent = signedMoney\(totalPnlDisplay\);/,
     "the paper portfolio must report its own total P/L");
 });
 

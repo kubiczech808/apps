@@ -2487,14 +2487,19 @@ function closedAccuracyStats(closedTrades) {
   };
 }
 
-function renderClosedAccuracy(closedTrades) {
+function renderClosedAccuracy(closedTrades, rebaseExcludedCount = 0) {
   const stats = closedAccuracyStats(closedTrades);
   if (els.portfolioAccuracy) {
     els.portfolioAccuracy.textContent = stats.rate == null ? "-" : probability(stats.rate);
     els.portfolioAccuracy.className = stats.rate == null ? "" : (stats.rate >= 0.5 ? "positive" : "negative");
   }
   if (els.portfolioAccuracyNote) {
-    els.portfolioAccuracyNote.textContent = `${stats.correct} / ${stats.total} resolved${stats.excluded ? ` · ${stats.excluded} early exits excluded` : ""}`;
+    const parts = [`${stats.correct} / ${stats.total} resolved`];
+    if (stats.excluded) parts.push(`${stats.excluded} early exits excluded`);
+    // Trades closed before a capital rebase: still real history, kept in Closed positions,
+    // just not weighed into performance measured "since" the rebase.
+    if (rebaseExcludedCount) parts.push(`${rebaseExcludedCount} pre-reset trades excluded`);
+    els.portfolioAccuracyNote.textContent = parts.join(" · ");
   }
 }
 
@@ -7161,6 +7166,16 @@ function renderBotState(botState) {
   const totalPnlPct = Number(portfolio.totalPnlPct || 0);
   const realizedPnl = Number(portfolio.realizedPnlUsdc || 0);
   const realizedPnlPct = Number(portfolio.realizedPnlPct || 0);
+  // Reported: after a capital rebase, Total P/L, Realized P/L and Resolved accuracy kept
+  // weighing performance by trades closed before it. Those trades stay in Closed positions
+  // history and equity keeps counting their real historical PnL, as designed -- only what
+  // these two tiles display stops counting them, from the moment the bot recorded the
+  // rebase onward. Equity, free capital and sizing above still use the true totals.
+  const capitalAdjustmentAt = portfolio.capitalAdjustmentAt || portfolioState.capitalAdjustmentAt || null;
+  const totalPnlDisplay = capitalAdjustmentAt ? Number(portfolio.totalPnlSinceAdjustmentUsdc || 0) : totalPnl;
+  const totalPnlDisplayPct = capitalAdjustmentAt ? Number(portfolio.totalPnlSinceAdjustmentPct || 0) : totalPnlPct;
+  const realizedPnlDisplay = capitalAdjustmentAt ? Number(portfolio.realizedPnlSinceAdjustmentUsdc || 0) : realizedPnl;
+  const realizedPnlDisplayPct = capitalAdjustmentAt ? Number(portfolio.realizedPnlSinceAdjustmentPct || 0) : realizedPnlPct;
   const openPnl = Number(portfolio.openPnlUsdc || 0);
   const openPnlPct = Number(portfolio.openPnlPct || 0);
   const freeCapital = Number(portfolio.freeCapitalUsdc ?? portfolio.initialUsdc ?? 100);
@@ -7175,9 +7190,9 @@ function renderBotState(botState) {
   els.portfolioEquity.textContent = money(Number(portfolio.equityUsdc ?? portfolio.initialUsdc ?? 100));
   els.portfolioEquity.className = pnlClass(totalPnl);
   els.portfolioLastRun.textContent = `Last run ${botState.generatedAt ? formatDate(botState.generatedAt) : "-"}`;
-  els.portfolioTotalPl.textContent = signedMoney(totalPnl);
-  els.portfolioTotalPl.className = pnlClass(totalPnl);
-  els.portfolioTotalPlPct.textContent = signedPercent(totalPnlPct);
+  els.portfolioTotalPl.textContent = signedMoney(totalPnlDisplay);
+  els.portfolioTotalPl.className = pnlClass(totalPnlDisplay);
+  els.portfolioTotalPlPct.textContent = signedPercent(totalPnlDisplayPct);
   if (els.portfolioAnnualized) {
     els.portfolioAnnualized.textContent = signedPercent(annualized);
     els.portfolioAnnualized.className = pnlClass(annualized);
@@ -7185,10 +7200,18 @@ function renderBotState(botState) {
   if (els.portfolioPeriod) {
     els.portfolioPeriod.textContent = periodDays == null ? "No trades yet" : `since first trade, ${periodDays.toFixed(1)} days`;
   }
-  els.portfolioRealized.textContent = signedMoney(realizedPnl);
-  els.portfolioRealized.className = pnlClass(realizedPnl);
-  els.portfolioRealizedPct.textContent = signedPercent(realizedPnlPct);
-  renderClosedAccuracy(closedTrades);
+  els.portfolioRealized.textContent = signedMoney(realizedPnlDisplay);
+  els.portfolioRealized.className = pnlClass(realizedPnlDisplay);
+  els.portfolioRealizedPct.textContent = signedPercent(realizedPnlDisplayPct);
+  // Closed positions itself (below) always lists every trade -- only the accuracy stat
+  // stops counting ones closed before the rebase.
+  const accuracyTrades = capitalAdjustmentAt
+    ? closedTrades.filter((trade) => {
+        const resolvedTime = Date.parse(trade.resolvedAt || "");
+        return Number.isFinite(resolvedTime) && resolvedTime >= Date.parse(capitalAdjustmentAt);
+      })
+    : closedTrades;
+  renderClosedAccuracy(accuracyTrades, closedTrades.length - accuracyTrades.length);
   els.portfolioOpenPl.textContent = signedMoney(openPnl);
   els.portfolioOpenPl.className = pnlClass(openPnl);
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
