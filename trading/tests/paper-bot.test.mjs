@@ -2806,6 +2806,7 @@ test("market dates: a date recovered from a slug is a whole day, not a kickoff",
   const kickoff = new Date(Date.now() + 2 * 3600000).toISOString();
   const upcoming = bot.marketDateContext({
     question: "Exact Score: SSC Napoli 1 - 0 CA Osasuna?",
+    sportsMarketType: "soccer_exact_score",
     gameStartTime: kickoff,
     resolutionEndDate: new Date(Date.now() - 3 * 3600000).toISOString(),
   });
@@ -2841,6 +2842,28 @@ test("market dates: an election's own event metadata does not masquerade as a ki
   assert.equal(context.scheduledEventDate, null, "event.startDate must not be surfaced as a scheduled kickoff at all");
 });
 
+test("market dates: a tracked-metric window's start does not masquerade as a kickoff", () => {
+  // Live case: "Elon Musk # tweets August 11 - August 18, 2026?" is not a sports market,
+  // but Gamma still sets gameStartTime to the tracking window's *start* (the 11th) with
+  // gameId/sportsMarketType/eventStartTime/teamAID/teamBID all blank. isSportsMarket came
+  // back true only because gameStartTime itself is truthy, and with nothing else to check
+  // it against, the window's start -- days in the past by the time the position was
+  // rechecked -- was taken as a "precise" kickoff and silently overrode the market's
+  // correct, still-days-away real end date (the 18th), showing the open position as
+  // already several days overdue.
+  const windowStart = new Date(Date.now() - 6 * 24 * 3600000).toISOString();
+  const realEndDate = new Date(Date.now() + 24 * 3600000).toISOString();
+  const context = bot.marketDateContext({
+    question: "Will Elon Musk post 180-199 tweets from August 11 to August 18, 2026?",
+    slug: "elon-musk-of-tweets-august-11-august-18-180-199",
+    gameStartTime: windowStart,
+    resolutionEndDate: realEndDate,
+  });
+  assert.equal(context.endDate, realEndDate, "the market's real end date must win over the tracking window's start");
+  assert.equal(context.endDateSource, "polymarket-resolution-window");
+  assert.equal(context.scheduledEventDate, null, "an uncorroborated gameStartTime must not be surfaced as a scheduled kickoff at all");
+});
+
 test("market dates: a kickoff that hasn't happened yet outranks a stale resolution window", () => {
   // Live bug: an exact-score sub-market's own resolutionEndDate said 02:00 (already
   // past), while Polymarket's own event page still showed a ~2h countdown to an 18:30
@@ -2850,6 +2873,7 @@ test("market dates: a kickoff that hasn't happened yet outranks a stale resoluti
   const staleResolutionWindow = new Date(Date.now() - 3 * 3600000).toISOString();
   const context = bot.marketDateContext({
     question: "Exact Score: SSC Napoli 1 - 0 CA Osasuna?",
+    sportsMarketType: "soccer_exact_score",
     gameStartTime: kickoff,
     resolutionEndDate: staleResolutionWindow,
   });
@@ -2872,6 +2896,7 @@ test("market dates: an already-past kickoff still yields to an even-earlier-clos
   const resolutionWindow = new Date(Date.now() - 2 * 3600000).toISOString();
   const context = bot.marketDateContext({
     question: "Exact Score: SSC Napoli 1 - 0 CA Osasuna?",
+    sportsMarketType: "soccer_exact_score",
     gameStartTime: kickoff,
     resolutionEndDate: resolutionWindow,
   });

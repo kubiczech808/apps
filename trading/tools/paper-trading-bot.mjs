@@ -2760,8 +2760,21 @@ function sportsDateFromSlug(value) {
 function sportsScheduledEventDateDetail(market = {}) {
   if (!isSportsMarket(market)) return { date: null, precise: false };
   const events = Array.isArray(market.events) ? market.events : [];
+  // A bare top-level gameStartTime is not on its own proof of a real kickoff. Live case:
+  // "Elon Musk # tweets August 11 - August 18, 2026?" is not a sports market at all, but
+  // Gamma still populates gameStartTime with the tracking window's *start* (the 11th),
+  // with every other sports-only field -- gameId, sportsMarketType, eventStartTime,
+  // teamAID/teamBID -- left blank. isSportsMarket came back true only because
+  // gameStartTime itself is truthy, and with nothing to outrank it, the window's start
+  // (already days in the past) was taken as a "precise" kickoff and silently overrode the
+  // market's correct, still-days-away real end date. Every genuine fixture seen in
+  // production (soccer, esports) carries at least one of these alongside gameStartTime;
+  // require that corroboration before trusting it.
+  const hasSportsFixtureSignal = Boolean(
+    market.gameId || market.sportsMarketType || market.eventStartTime || market.teamAID || market.teamBID,
+  );
   const candidates = [
-    market.gameStartTime,
+    hasSportsFixtureSignal ? market.gameStartTime : null,
     market.eventStartTime,
     ...events.flatMap((event) => [event?.gameStartTime, event?.eventStartTime, event?.startDateIso]),
   ];
