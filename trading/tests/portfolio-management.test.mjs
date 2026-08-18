@@ -38,6 +38,35 @@ function normalizeConfig(input) {
   }
 }
 
+// Runs the real request dispatch (unlike normalizeConfig above, which cuts it away), the
+// same way taxonomy-drilldown.test.mjs drives api.php: a temp directory standing in for
+// the hosting docroot, $_GET set from the query, and the file required whole so its own
+// action routing runs rather than a restatement of it.
+function callPortfolioRunLogApi(directory, query) {
+  const encoded = Buffer.from(JSON.stringify(query)).toString("base64");
+  const output = execFileSync("php", ["-r",
+    `$_GET = json_decode(base64_decode('${encoded}'), true); require '${join(directory, "api.php")}';`,
+  ], { encoding: "utf8" });
+  return JSON.parse(output);
+}
+
+function withPortfolioRunLogApi(paperState, archives, run) {
+  const directory = mkdtempSync(join(tmpdir(), "portfolio-run-log-"));
+  try {
+    writeFileSync(join(directory, "api.php"), API);
+    mkdirSync(join(directory, "data"), { recursive: true });
+    writeFileSync(join(directory, "data/paper-state.json"), JSON.stringify(paperState));
+    for (const [relativePath, lines] of Object.entries(archives)) {
+      const file = join(directory, "data", relativePath);
+      mkdirSync(join(file, ".."), { recursive: true });
+      writeFileSync(file, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+    }
+    return run(directory);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 function extractFunction(source, name) {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `function ${name} was not found`);
@@ -459,6 +488,142 @@ test("run log: the manual-run button lives in its header, not a separate control
   assert.ok(runLogPanel, "the run log panel exists");
   assert.match(runLogPanel[0], /<div class="run-log-head-actions">\s*<button class="execution-button" type="button" data-one-time-execution="current">Run once<\/button>\s*<span class="pill muted" data-execution-status>ready<\/span>/,
     "the button and its status pill must be the header-actions row's first two children");
+});
+
+// Reported at least three times: the run log only ever shows a portfolio's newest ~24
+// runs (PORTFOLIO_RUN_LOG_LIMIT) and there was no way to see anything older. The live
+// state cannot hold the whole history, so the bot now appends every run to a per-portfolio,
+// per-month ndjson archive on the hosting, and the dashboard pages back through it.
+test("run log history: one portfolio's page never returns another's rows, oldest last", () => {
+  const paperState = {
+    generatedAt: "2026-08-18T00:00:00Z",
+    paperPortfolios: {
+      moreProbable: {
+        id: "moreProbable",
+        // The live cap still carries this run -- it is also the newest archived one,
+        // so the merge by runAt must not show it twice.
+        runLog: [{ runAt: "2026-08-10T00:00:00Z", strategyId: "moreProbable", action: "OPEN" }],
+      },
+      conservative: { id: "conservative", runLog: [] },
+    },
+  };
+  const archives = {
+    "portfolio-run-log/moreProbable/2026-08.ndjson": [
+      { runAt: "2026-08-10T00:00:00Z", strategyId: "moreProbable", action: "OPEN" },
+      { runAt: "2026-08-05T00:00:00Z", strategyId: "moreProbable", action: "SKIP" },
+    ],
+    "portfolio-run-log/moreProbable/2026-07.ndjson": [
+      { runAt: "2026-07-20T00:00:00Z", strategyId: "moreProbable", action: "SKIP" },
+    ],
+    // A different portfolio's own archive, present at the same time -- must never leak
+    // into moreProbable's page even though both live under portfolio-run-log/.
+    "portfolio-run-log/conservative/2026-08.ndjson": [
+      { runAt: "2026-08-09T00:00:00Z", strategyId: "conservative", action: "OPEN" },
+    ],
+  };
+
+  withPortfolioRunLogApi(paperState, archives, (directory) => {
+    const first = callPortfolioRunLogApi(directory, { action: "portfolio-run-log", strategy_id: "moreProbable", page: 0, page_size: 2 });
+    assert.equal(first.ok, true);
+    assert.equal(first.total, 3, "the overlapping runAt is de-duplicated, not double-counted");
+    assert.equal(first.hasMore, true);
+    assert.deepEqual(first.records.map((r) => r.runAt),
+      ["2026-08-10T00:00:00Z", "2026-08-05T00:00:00Z"], "newest first");
+
+    const second = callPortfolioRunLogApi(directory, { action: "portfolio-run-log", strategy_id: "moreProbable", page: 1, page_size: 2 });
+    assert.equal(second.hasMore, false);
+    assert.deepEqual(second.records.map((r) => r.runAt), ["2026-07-20T00:00:00Z"]);
+    assert.ok(second.records.every((r) => r.strategyId === "moreProbable"),
+      "conservative's archived row must never appear on moreProbable's page");
+
+    const empty = callPortfolioRunLogApi(directory, { action: "portfolio-run-log", strategy_id: "equal", page: 0 });
+    assert.equal(empty.total, 0, "a portfolio with no archive at all just has an empty history, not an error");
+  });
+});
+
+test("run log history: a missing or malformed strategy_id is rejected, not silently defaulted", () => {
+  const paperState = { generatedAt: "2026-08-18T00:00:00Z", paperPortfolios: {} };
+  withPortfolioRunLogApi(paperState, {}, (directory) => {
+    for (const strategyId of [undefined, "", "../escape", "has spaces"]) {
+      const query = { action: "portfolio-run-log", page: 0 };
+      if (strategyId !== undefined) query.strategy_id = strategyId;
+      const response = callPortfolioRunLogApi(directory, query);
+      assert.equal(response.ok, false, `strategy_id ${JSON.stringify(strategyId)} must be refused`);
+    }
+  });
+});
+
+// The client-side half: once "load more" has paged in older history, a run that finishes
+// afterwards must still appear without another click, and the same run must never be
+// counted twice just because it exists in both the live cap and the loaded archive page.
+test("run log history: the dashboard merges loaded history with the live cap, never duplicating", () => {
+  const run = new Function("state", `
+    ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
+    ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
+    ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
+    ${extractFunction(APP, "isLiveMode")}
+    ${extractFunction(APP, "paperStrategyIdFromMode")}
+    ${extractFunction(APP, "selectedPaperPortfolio")}
+    ${extractFunction(APP, "paperPortfolioList")}
+    ${extractFunction(APP, "normalizePortfolioName")}
+    ${extractFunction(APP, "portfolioRunLogHistoryState")}
+    ${extractFunction(APP, "isCadenceWaitRun")}
+    function withRunningExecutionRow(rows) { return rows; }
+    ${extractFunction(APP, "currentPortfolioRunLog")}
+    return currentPortfolioRunLog;
+  `);
+
+  const state = {
+    mode: "paper-moreProbable",
+    portfolioRunLogHistory: {
+      moreProbable: {
+        records: [
+          { runAt: "2026-08-10T00:00:00Z", action: "OPEN" },
+          { runAt: "2026-08-05T00:00:00Z", action: "SKIP" },
+        ],
+        page: 0, total: 2, hasMore: false, busy: false, error: "",
+      },
+    },
+    botState: {
+      paperPortfolios: {
+        moreProbable: {
+          id: "moreProbable",
+          // A newer run landed after the history page loaded.
+          runLog: [
+            { runAt: "2026-08-12T00:00:00Z", action: "OPEN" },
+            { runAt: "2026-08-10T00:00:00Z", action: "OPEN" },
+          ],
+        },
+      },
+    },
+  };
+
+  const rows = run(state)();
+  assert.deepEqual(rows.map((r) => r.runAt), [
+    "2026-08-12T00:00:00Z", "2026-08-10T00:00:00Z", "2026-08-05T00:00:00Z",
+  ], "the fresh run leads, the overlap appears once, older history still follows");
+});
+
+test("run log history: the workflow archives every portfolio's new runs, and the bot writes them", () => {
+  assert.match(BOT, /const PORTFOLIO_RUN_LOG_ENTRY_PATH = process\.env\.PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH/);
+  assert.match(BOT, /async function writePortfolioRunLogEntries\(entries\)/);
+  assert.match(BOT, /const newRunLogEntries = recordRun\(state, \{ evaluations, eligible, decisions \}\);/);
+  // recordRun must hand back what it just wrote to each portfolio's own runLog, or the
+  // workflow step has nothing to archive.
+  assert.match(BOT, /newRunLogEntries\.push\(recordPortfolioRun\(state, portfolioState, \{ evaluations, eligible, decision \}\)\);/);
+  assert.match(BOT, /return newRunLogEntries;/);
+
+  assert.match(WORKFLOW, /Append portfolio run-log history entries/);
+  assert.match(WORKFLOW, /PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH: trading\/data\/portfolio-run-log-entry\.ndjson/);
+  // Routed per portfolio, per month -- not one shared file every portfolio would collide in.
+  assert.match(WORKFLOW, /"portfolio-run-log"\]/);
+  assert.match(WORKFLOW, /enter_dir\(ftp, base \+ \[strategy_id\]\)/);
+
+  assert.match(API, /function portfolio_run_log_records\(string \$strategyId, array \$fallback = \[\]\): array/);
+  assert.match(API, /if \(\$action === 'portfolio-run-log'\)/);
+
+  assert.match(APP, /data-run-log-load-more/);
+  assert.match(APP, /loadPortfolioRunLogHistory\(strategyId\);/);
 });
 
 // Reported live: between the mobile breakpoint and a full-width desktop, the tab row had

@@ -73,6 +73,11 @@ function envTagSet(name) {
 
 const OUTPUT_PATH = process.env.PAPER_STATE_PATH || "data/paper-state.json";
 const SCAN_HISTORY_ENTRY_PATH = process.env.PAPER_SCAN_HISTORY_ENTRY_PATH || "data/market-scan-history-entry.ndjson";
+// Every portfolio's runLog is capped to PORTFOLIO_RUN_LOG_LIMIT in the published state, so
+// older entries are gone the moment a new one pushes them out. Mirrors the scan-history
+// journal: this run's newest entries are written here, and the workflow appends them to a
+// per-portfolio, per-month archive the dashboard can page back through indefinitely.
+const PORTFOLIO_RUN_LOG_ENTRY_PATH = process.env.PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH || "data/portfolio-run-log-entry.ndjson";
 // Written only when a scan attempt failed. The scan workflow publishes the state first and
 // then reads this file, so a failed scan still lands in the dashboard's log and the run
 // itself turns red instead of reporting success over a scan that fetched nothing.
@@ -8769,40 +8774,40 @@ function recordPortfolioRun(state, portfolioState, { evaluations = [], eligible 
     brierScore: state.learningProfile.brierScore,
     calibrationBias: state.learningProfile.calibrationBias,
   };
-  portfolioState.runLog = [
-    {
-      runAt,
-      runSource: MANUAL_RUN_ONCE ? "MANUAL" : "AUTO",
-      strategyId: portfolioState.id,
-      strategyLabel: portfolioState.label,
-      selectionMetric: portfolioState.selectionMetric,
-      evaluatedCount: evaluations.length,
-      eligibleCount,
-      action: decision.action,
-      reason: decision.reason,
-      tradeId: decision.trade?.id || null,
-      closedTradeId: decision.closedTrade?.id || null,
-      rotationReview: decision.rotationReview || null,
-      batchLog: decision.batchLog || null,
-      availableCapitalUsdc: decision.available == null ? null : Number(Number(decision.available).toFixed(4)),
-      requiredStakeUsdc: decision.requiredStake == null ? null : Number(Number(decision.requiredStake).toFixed(4)),
-      insufficientCapital: Boolean(decision.insufficientCapital),
-      riskSkippedCount: decision.skippedForRisk || 0,
-      refreshOnly: REFRESH_ONLY,
-      reportOnly,
-      learningSampleSize: state.learningProfile.sampleSize,
-      brierScore: state.learningProfile.brierScore,
-    },
-    ...portfolioState.runLog,
-  ].slice(0, PORTFOLIO_RUN_LOG_LIMIT);
+  const entry = {
+    runAt,
+    runSource: MANUAL_RUN_ONCE ? "MANUAL" : "AUTO",
+    strategyId: portfolioState.id,
+    strategyLabel: portfolioState.label,
+    selectionMetric: portfolioState.selectionMetric,
+    evaluatedCount: evaluations.length,
+    eligibleCount,
+    action: decision.action,
+    reason: decision.reason,
+    tradeId: decision.trade?.id || null,
+    closedTradeId: decision.closedTrade?.id || null,
+    rotationReview: decision.rotationReview || null,
+    batchLog: decision.batchLog || null,
+    availableCapitalUsdc: decision.available == null ? null : Number(Number(decision.available).toFixed(4)),
+    requiredStakeUsdc: decision.requiredStake == null ? null : Number(Number(decision.requiredStake).toFixed(4)),
+    insufficientCapital: Boolean(decision.insufficientCapital),
+    riskSkippedCount: decision.skippedForRisk || 0,
+    refreshOnly: REFRESH_ONLY,
+    reportOnly,
+    learningSampleSize: state.learningProfile.sampleSize,
+    brierScore: state.learningProfile.brierScore,
+  };
+  portfolioState.runLog = [entry, ...portfolioState.runLog].slice(0, PORTFOLIO_RUN_LOG_LIMIT);
   syncLegacyPaperAliases(state);
+  return entry;
 }
 
 function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
+  const newRunLogEntries = [];
   for (const decision of decisions) {
     const portfolioState = state.paperPortfolios?.[decision.strategyId] || state.paperPortfolios?.conservative;
     if (!portfolioState) continue;
-    recordPortfolioRun(state, portfolioState, { evaluations, eligible, decision });
+    newRunLogEntries.push(recordPortfolioRun(state, portfolioState, { evaluations, eligible, decision }));
   }
   state.evaluationRunLog = [
     {
@@ -8863,6 +8868,7 @@ function recordRun(state, { evaluations = [], eligible = [], decisions = [] }) {
     },
     ...(state.evaluationRunLog || []),
   ].slice(0, EVALUATION_RUN_LOG_LIMIT);
+  return newRunLogEntries;
 }
 
 function updateEvaluationStats(state, { evaluations = [], retainedBefore = 0, retainedAfter = 0 } = {}) {
@@ -8951,8 +8957,9 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
   state.evaluations = mergedEvaluations.map(ensureEvaluationErrorMetadata);
   updateCalculationReport(state);
   updateEvaluationStats(state, { evaluations, retainedBefore, retainedAfter: state.evaluations.length });
-  recordRun(state, { evaluations, eligible, decisions });
+  const newRunLogEntries = recordRun(state, { evaluations, eligible, decisions });
   await writeState(state);
+  await writePortfolioRunLogEntries(newRunLogEntries);
   console.log(JSON.stringify({
     generatedAt: state.generatedAt,
     source: source === "after_scrape" ? "stored_execution_candidates_after_scrape" : "stored_execution_candidates",
@@ -8993,6 +9000,17 @@ async function writeScanHistoryEntry(run) {
   await writeFile(SCAN_HISTORY_ENTRY_PATH, `${JSON.stringify(entry)}\n`, "utf8");
 }
 
+// One line per portfolio that got a new run-log entry this cycle -- a single run can
+// evaluate several portfolios at once, unlike the one-run-per-cycle scan history.
+async function writePortfolioRunLogEntries(entries) {
+  const lines = (entries || [])
+    .filter((entry) => entry && entry.strategyId && entry.runAt)
+    .map((entry) => JSON.stringify(entry));
+  if (!lines.length) return;
+  await mkdir(dirname(PORTFOLIO_RUN_LOG_ENTRY_PATH), { recursive: true });
+  await writeFile(PORTFOLIO_RUN_LOG_ENTRY_PATH, `${lines.join("\n")}\n`, "utf8");
+}
+
 async function writeScanErrorMarker(message) {
   const text = String(message || "").trim();
   if (!text) return;
@@ -9013,6 +9031,7 @@ async function run() {
   }));
   await rm(SCAN_HISTORY_ENTRY_PATH, { force: true }).catch(() => {});
   await rm(SCAN_ERROR_MARKER_PATH, { force: true }).catch(() => {});
+  await rm(PORTFOLIO_RUN_LOG_ENTRY_PATH, { force: true }).catch(() => {});
   const state = await readState();
   if (PAPER_RESET_PORTFOLIO) {
     if (!PAPER_STRATEGY_ID) {
@@ -9176,13 +9195,14 @@ async function run() {
       action: "REPORT",
       reason: "hourly fresh-scraped opportunity simulation updated",
     }));
-    recordRun(state, {
+    const newRunLogEntries = recordRun(state, {
       decisions,
       eligible: [],
       evaluations: [],
     });
     markCadenceStage(state, "report");
     await writeState(state);
+    await writePortfolioRunLogEntries(newRunLogEntries);
     console.log(JSON.stringify({
       action: "REPORT",
       reason: "hourly fresh-scraped opportunity simulation updated",
@@ -9217,12 +9237,13 @@ async function run() {
       action: "REFRESH",
       reason: "refreshed open positions and resolved markets only",
     }));
-    recordRun(state, {
+    const newRunLogEntries = recordRun(state, {
       decisions,
       eligible: [],
       evaluations: [],
     });
     await writeState(state);
+    await writePortfolioRunLogEntries(newRunLogEntries);
     console.log(JSON.stringify({
         action: "REFRESH",
         reason: "refreshed open positions and resolved markets only",
@@ -9408,8 +9429,9 @@ async function run() {
   state.evaluations = mergedEvaluations.map(ensureEvaluationErrorMetadata);
   updateCalculationReport(state);
   updateEvaluationStats(state, { evaluations, retainedBefore, retainedAfter: state.evaluations.length });
-  recordRun(state, { evaluations, eligible, decisions });
+  const newRunLogEntries = recordRun(state, { evaluations, eligible, decisions });
   await writeState(state);
+  await writePortfolioRunLogEntries(newRunLogEntries);
   console.log(JSON.stringify({
     generatedAt: state.generatedAt,
     decisions: Object.fromEntries(decisions.map((decision) => [decision.strategyId, {

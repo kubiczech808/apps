@@ -860,6 +860,42 @@ function market_scan_history_records(array $fallback = []): array
     return $records;
 }
 
+// One portfolio's full run-log history: the live state only ever carries the newest
+// PORTFOLIO_RUN_LOG_LIMIT rows, everything older survives only in these per-portfolio,
+// per-month archives the paper-bot workflow appends to after every run.
+function portfolio_run_log_records(string $strategyId, array $fallback = []): array
+{
+    $byRunAt = [];
+    $safeId = preg_replace('/[^a-zA-Z0-9_-]/', '', $strategyId);
+    $archiveFiles = $safeId === '' ? [] : (glob(__DIR__ . "/data/portfolio-run-log/{$safeId}/*.ndjson") ?: []);
+    sort($archiveFiles, SORT_STRING);
+    foreach ($archiveFiles as $archiveFile) {
+        $handle = @fopen($archiveFile, 'rb');
+        if ($handle === false) {
+            continue;
+        }
+        while (($line = fgets($handle)) !== false) {
+            $item = json_decode(trim($line), true);
+            if (!is_array($item) || !isset($item['runAt']) || (string) ($item['strategyId'] ?? '') !== $strategyId) {
+                continue;
+            }
+            $byRunAt[(string) $item['runAt']] = $item;
+        }
+        fclose($handle);
+    }
+    foreach ($fallback as $item) {
+        if (!is_array($item) || !isset($item['runAt']) || (string) ($item['strategyId'] ?? '') !== $strategyId) {
+            continue;
+        }
+        $byRunAt[(string) $item['runAt']] = $item;
+    }
+    $records = array_values($byRunAt);
+    usort($records, static function (array $left, array $right): int {
+        return strtotime((string) ($right['runAt'] ?? '')) <=> strtotime((string) ($left['runAt'] ?? ''));
+    });
+    return $records;
+}
+
 function compact_state_payload(string $target, array $data, string $summary): array
 {
     if ($target !== 'paper') {
@@ -2859,6 +2895,32 @@ try {
         $offset = $page * $pageSize;
         respond([
             'ok' => true,
+            'records' => array_slice($records, $offset, $pageSize),
+            'page' => $page,
+            'pageSize' => $pageSize,
+            'total' => count($records),
+            'hasMore' => $offset + $pageSize < count($records),
+        ]);
+    }
+
+    if ($action === 'portfolio-run-log') {
+        $strategyId = trim((string) ($_GET['strategy_id'] ?? ''));
+        if ($strategyId === '' || !preg_match('/^[a-zA-Z0-9_-]{1,40}$/', $strategyId)) {
+            respond(['ok' => false, 'error' => 'A valid strategy_id is required'], 400);
+        }
+        $page = max(0, (int) ($_GET['page'] ?? 0));
+        // Unlike scraping runs (frequent, so a page is worth a floor of 25), a young
+        // portfolio may only have a handful of runs ever -- no floor beyond "at least one".
+        $pageSize = min(200, max(1, (int) ($_GET['page_size'] ?? 24)));
+        $state = state_payload('paper', []);
+        $portfolios = is_array($state['paperPortfolios'] ?? null) ? $state['paperPortfolios'] : [];
+        $portfolio = is_array($portfolios[$strategyId] ?? null) ? $portfolios[$strategyId] : [];
+        $fallback = is_array($portfolio['runLog'] ?? null) ? $portfolio['runLog'] : [];
+        $records = portfolio_run_log_records($strategyId, $fallback);
+        $offset = $page * $pageSize;
+        respond([
+            'ok' => true,
+            'strategyId' => $strategyId,
             'records' => array_slice($records, $offset, $pageSize),
             'page' => $page,
             'pageSize' => $pageSize,

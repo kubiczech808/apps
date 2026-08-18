@@ -470,6 +470,76 @@ jobs:
           print(f"Appended compact scan history entry to {month}.ndjson")
           PY
 
+      - name: Append portfolio run-log history entries
+        if: always()
+        env:
+          HOSTING_FTP_SERVER: ${{ secrets.HOSTING_FTP_SERVER }}
+          HOSTING_FTP_USERNAME: ${{ secrets.HOSTING_FTP_USERNAME }}
+          HOSTING_FTP_PASSWORD: ${{ secrets.HOSTING_FTP_PASSWORD }}
+          TRADING_FTP_DIR: /www/trading/data
+          PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH: trading/data/portfolio-run-log-entry.ndjson
+        # A run can advance several portfolios at once (unlike the single scraping run
+        # above), so this file can hold multiple lines. Each one is routed to its own
+        # portfolio's monthly archive -- portfolio-run-log/<strategyId>/<month>.ndjson --
+        # so the dashboard can page back through one portfolio's full history later
+        # without ever reading another portfolio's.
+        run: |
+          python3 - <<'PY'
+          import ftplib
+          import json
+          import os
+          import re
+          from collections import defaultdict
+          from io import BytesIO
+          from pathlib import Path
+
+          entry = Path(os.environ["PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH"])
+          if not entry.exists() or not entry.read_text(encoding="utf-8").strip():
+              print("No new portfolio run-log entries to append")
+              raise SystemExit(0)
+
+          groups = defaultdict(list)
+          for line in entry.read_text(encoding="utf-8").splitlines():
+              line = line.strip()
+              if not line:
+                  continue
+              record = json.loads(line)
+              strategy_id = str(record.get("strategyId") or "")
+              run_at = str(record.get("runAt") or "")
+              if not re.fullmatch(r"[a-zA-Z0-9_-]{1,40}", strategy_id):
+                  continue
+              month = run_at[:7] if re.fullmatch(r"\d{4}-\d{2}", run_at[:7]) else "unknown"
+              groups[(strategy_id, month)].append(line)
+
+          if not groups:
+              print("No valid portfolio run-log entries to append")
+              raise SystemExit(0)
+
+          def enter_dir(ftp, parts):
+              try:
+                  ftp.cwd("/")
+              except ftplib.all_errors:
+                  pass
+              for part in parts:
+                  if not part:
+                      continue
+                  try:
+                      ftp.cwd(part)
+                  except ftplib.error_perm:
+                      ftp.mkd(part)
+                      ftp.cwd(part)
+
+          with ftplib.FTP(os.environ["HOSTING_FTP_SERVER"], timeout=30) as ftp:
+              ftp.login(os.environ["HOSTING_FTP_USERNAME"], os.environ["HOSTING_FTP_PASSWORD"])
+              base = os.environ["TRADING_FTP_DIR"].strip("/").split("/") + ["portfolio-run-log"]
+              for (strategy_id, month), lines in groups.items():
+                  enter_dir(ftp, base + [strategy_id])
+                  payload = BytesIO(("\n".join(lines) + "\n").encode("utf-8"))
+                  ftp.storbinary(f"APPE {month}.ndjson", payload)
+          total = sum(len(v) for v in groups.values())
+          print(f"Appended {total} portfolio run-log entr{'y' if total == 1 else 'ies'} across {len(groups)} (portfolio, month) file(s)")
+          PY
+
       # Same reason as the live workflow: the run summary is printed early and falls out
       # of the window a log reader can fetch, which makes a run unexplainable from its
       # timestamp alone. This digest is the last thing the job prints.

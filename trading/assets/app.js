@@ -43,6 +43,10 @@ const state = {
   scrapeHistoryHasMore: false,
   scrapeHistoryBusy: false,
   scrapeHistoryError: "",
+  // Keyed by paper strategy id. Each portfolio's runLog is capped in the live state, so
+  // this holds whatever the "Load older runs" button has paged in beyond that cap, kept
+  // separate per portfolio so switching portfolios never mixes one's history into another's.
+  portfolioRunLogHistory: {},
   scrapedScanTag: "",
   scrapedScanBusy: false,
   // Live per-category counts from Polymarket, and when they were fetched. Absent until
@@ -5830,6 +5834,48 @@ async function loadScrapeRunHistory({ reset = false } = {}) {
   }
 }
 
+function portfolioRunLogHistoryState(strategyId) {
+  if (!strategyId) return null;
+  if (!state.portfolioRunLogHistory[strategyId]) {
+    state.portfolioRunLogHistory[strategyId] = { records: null, page: -1, total: 0, hasMore: false, busy: false, error: "" };
+  }
+  return state.portfolioRunLogHistory[strategyId];
+}
+
+// Every portfolio's runLog is capped in the live state (see PORTFOLIO_RUN_LOG_LIMIT in the
+// bot), so "load more" pages back through the per-portfolio archive the paper-bot workflow
+// appends to after every run -- the same shape as loadScrapeRunHistory, kept per strategy id
+// so paging one portfolio's history never touches another's.
+async function loadPortfolioRunLogHistory(strategyId, { reset = false } = {}) {
+  const entry = portfolioRunLogHistoryState(strategyId);
+  if (!entry || entry.busy || (!reset && entry.page >= 0 && !entry.hasMore)) return;
+  const page = reset ? 0 : entry.page + 1;
+  entry.busy = true;
+  entry.error = "";
+  rerenderRunLogInPlace();
+  try {
+    const payload = await fetchApiJson(`api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(strategyId)}&page=${page}&page_size=24`);
+    const incoming = Array.isArray(payload.records) ? payload.records : [];
+    const known = reset || !Array.isArray(entry.records)
+      ? (state.botState?.paperPortfolios?.[strategyId]?.runLog || [])
+      : entry.records;
+    const merged = new Map(known.map((item) => [String(item?.runAt || ""), item]).filter(([key]) => key));
+    incoming.forEach((item) => {
+      const key = String(item?.runAt || "");
+      if (key) merged.set(key, item);
+    });
+    entry.records = [...merged.values()].sort((a, b) => (Date.parse(b?.runAt || "") || 0) - (Date.parse(a?.runAt || "") || 0));
+    entry.page = Number(payload.page ?? page);
+    entry.total = Number(payload.total ?? entry.records.length);
+    entry.hasMore = Boolean(payload.hasMore);
+  } catch (error) {
+    entry.error = error?.message || "Run log history could not be loaded.";
+  } finally {
+    entry.busy = false;
+    rerenderRunLogInPlace();
+  }
+}
+
 function publishedScanSummary(scrapedState, startedAt, selectedTag = "", previousScanIds = new Set()) {
   const startedAtMs = Date.parse(startedAt || "");
   const recentRuns = Array.isArray(scrapedState?.marketScanHistory)
@@ -9167,7 +9213,22 @@ function mergeUniqueByRun(rows = []) {
 function currentPortfolioRunLog() {
   if (isLiveMode()) return withRunningExecutionRow(liveRunLogRows());
   const portfolio = selectedPaperPortfolio(state.botState || {});
-  const rows = Array.isArray(portfolio.runLog) ? portfolio.runLog.filter((row) => !isCadenceWaitRun(row)) : [];
+  const live = Array.isArray(portfolio.runLog) ? portfolio.runLog : [];
+  // Once "load more" has paged in older history, merge it with whatever the live state's
+  // own capped runLog carries right now -- a run finishing after that page loaded must
+  // still show up without forcing another click, and de-duping by runAt means the overlap
+  // between the two never double-counts.
+  const historyEntry = portfolioRunLogHistoryState(portfolio.id);
+  let source = live;
+  if (historyEntry && Array.isArray(historyEntry.records)) {
+    const merged = new Map(historyEntry.records.map((item) => [String(item?.runAt || ""), item]).filter(([key]) => key));
+    live.forEach((item) => {
+      const key = String(item?.runAt || "");
+      if (key) merged.set(key, item);
+    });
+    source = [...merged.values()].sort((a, b) => (Date.parse(b?.runAt || "") || 0) - (Date.parse(a?.runAt || "") || 0));
+  }
+  const rows = source.filter((row) => !isCadenceWaitRun(row));
   return withRunningExecutionRow(rows);
 }
 
@@ -9455,21 +9516,31 @@ function renderRunLog() {
   if (els.runLogTitle) {
     els.runLogTitle.textContent = `${label} run log`;
   }
+  const strategyId = isLiveMode() ? null : paperStrategyIdFromMode();
+  const historyEntry = strategyId ? portfolioRunLogHistoryState(strategyId) : null;
   if (els.runLogSummary) {
+    const totalKnown = historyEntry?.page >= 0 ? historyEntry.total : allRuns.length;
     els.runLogSummary.textContent = filters.length === 0
-      ? `${runs.length} runs`
+      ? `${runs.length} runs${totalKnown > allRuns.length ? ` of ${totalKnown}` : ""}`
       : `${runs.length} / ${allRuns.length} runs`;
   }
+  // Paper portfolios can always page further back through their archive; a portfolio that
+  // turns out to have no older history simply loses the button after its first click.
+  const loadMoreVisible = Boolean(strategyId) && (!historyEntry || historyEntry.page < 0 || historyEntry.hasMore);
+  const loadMoreMarkup = loadMoreVisible
+    ? `<div class="table-load-more"><button class="execution-button" type="button" data-run-log-load-more ${historyEntry?.busy ? "disabled" : ""}>${historyEntry?.busy ? "Loading..." : "Load older runs"}</button></div>`
+    : "";
+  const historyErrorMarkup = historyEntry?.error ? `<div class="empty negative">${escapeHtml(historyEntry.error)}</div>` : "";
   if (!runs.length) {
     const actionText = filters.length === 0 ? "" : ` with selected statuses ${filters.map(runActionFilterLabel).join(", ")}`;
-    els.runLog.innerHTML = `<div class="empty">No ${escapeHtml(label)} trading decision runs${escapeHtml(actionText)} recorded yet.</div>`;
+    els.runLog.innerHTML = `<div class="empty">No ${escapeHtml(label)} trading decision runs${escapeHtml(actionText)} recorded yet.</div>${historyErrorMarkup}${loadMoreMarkup}`;
     return;
   }
 
   els.runLog.innerHTML = `
     <div class="ledger-scroll run-log-scroll" tabindex="0" aria-label="Scrollable portfolio run log">
     <div class="trade-batches portfolio-run-list">
-      ${runs.slice(0, 120).map((run, index) => {
+      ${runs.map((run, index) => {
         const batch = run.batchLog || run;
         const cells = `
             <span class="${runActionClass(run.action || batch.action)}">${escapeHtml(run.action || batch.action || "-")}</span>
@@ -9490,6 +9561,8 @@ function renderRunLog() {
       }).join("")}
     </div>
     </div>
+    ${historyErrorMarkup}
+    ${loadMoreMarkup}
   `;
 }
 
@@ -10569,6 +10642,14 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     const run = state.displayedRunLog[Number(portfolioRunButton.dataset.portfolioRun)];
     openExecutionRunDetail(portfolioRunBatch(run || {}), portfolioRunButton);
+    return;
+  }
+
+  const runLogLoadMoreButton = event.target.closest("[data-run-log-load-more]");
+  if (runLogLoadMoreButton) {
+    event.preventDefault();
+    const strategyId = isLiveMode() ? null : paperStrategyIdFromMode();
+    if (strategyId) loadPortfolioRunLogHistory(strategyId);
     return;
   }
 
