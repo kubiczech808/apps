@@ -389,6 +389,24 @@ async function main() {
     reportSet("closed trades", liveState.closedTrades || [], api, mode);
   }
 
+  // Reported: a trade that showed as an opened Live position closed under 90 -> 50%
+  // instead. reportSet's sample is only the first 12 rows regardless of which side of the
+  // split they land on, so the minority side -- whichever trades actually flipped -- can
+  // be entirely outside that sample. Every row 5050 claims, uncapped, with the reasoning.
+  {
+    const api = await attributionFor("live-5050", { fixedEntryExecution: execution, config: portfolioConfig });
+    const claimedBy5050 = (liveState.closedTrades || []).filter((row) => api.belongsToActiveLivePortfolio(row));
+    console.log(`\n== Every closed trade attributed to live-5050 (${claimedBy5050.length} total, uncapped)`);
+    for (const row of claimedBy5050) {
+      const tokenId = String(row?.tokenId || row?.assetId || "");
+      const loggedPrices = [...(api.fixedEntryOrderPricesByToken().get(tokenId) || [])];
+      console.log(`   tokenId=${tokenId} price=${priceOf(row)} status=${row?.status || "-"}`
+        + ` openedAt=${row?.openedAt || "-"} closedAt=${row?.closedAt || row?.resolvedAt || "-"}`
+        + ` loggedTokenPrices=[${loggedPrices.join(", ")}] boughtAt5050Price=${api.boughtAtFixedEntryPrice(row)}`
+        + `  ${rowLabel(row)}`);
+    }
+  }
+
   // Reported: rows showing 50-51% turn up on the live portfolio, which trades against a
   // high probability bar and should never hold one. Two different columns can read as a
   // percentage -- the entry price and a leftover AI probability -- so both are counted
