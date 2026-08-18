@@ -100,30 +100,8 @@
             <strong data-portfolio-risk>$0.00</strong>
             <span data-portfolio-free>$100.00 free</span>
           </div>
-          <div class="metric-card">
-            <span class="label">Risk / reward</span>
-            <strong data-portfolio-rr>-</strong>
-            <span data-portfolio-rr-note>reward / risk</span>
-          </div>
         </div>
         <div class="portfolio-rules-slot" data-portfolio-rules></div>
-        <section class="control-panel" aria-label="Trading controls">
-          <div class="control-panel-head">
-            <div>
-              <p class="eyebrow">Control panel</p>
-              <h3>Execution controls</h3>
-            </div>
-            <span class="pill muted" data-execution-status>ready</span>
-          </div>
-          <div class="control-grid">
-            <div class="control-block">
-              <span class="label">Manual run</span>
-              <div class="execution-actions">
-                <button class="execution-button" type="button" data-one-time-execution="current">Run once</button>
-              </div>
-            </div>
-          </div>
-        </section>
         <div class="account-summary" data-account-summary hidden></div>
       </section>
 
@@ -173,6 +151,8 @@
                 <h2 data-run-log-title>Portfolio run log</h2>
               </div>
               <div class="run-log-head-actions">
+                <button class="execution-button" type="button" data-one-time-execution="current">Run once</button>
+                <span class="pill muted" data-execution-status>ready</span>
                 <div class="run-log-filter-control" data-run-log-filter-control>
                   <span>Status</span>
                   <button class="run-log-filter-toggle" type="button" data-run-log-filter-toggle aria-expanded="false">All statuses</button>

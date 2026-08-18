@@ -367,6 +367,43 @@ test("dashboard: the tab row survives being rebuilt", () => {
   assert.match(APP, /els\.modeButtons = els\.modeSwitch\.querySelectorAll\("\[data-mode-toggle\]"\);/);
 });
 
+// Reported live: after renaming Equal to Stop loss, the tab and the page title both
+// correctly read "Stop loss" (they already went through portfolioNameForMode), but the
+// run-once button's busy label, the execution-progress modal, and the corner
+// workflow-status toast still said "Equal" or the raw "paper-equal" target -- they read
+// paperModeLabel/the target string directly, which only ever knows the shipped name.
+test("portfolio rename propagates to execution status text, not only the tab and title", () => {
+  assert.match(APP,
+    /if \(isPaperExecutionTarget\(target\)\) return portfolioNameForMode\(target === "paper" \? state\.mode : target\);/,
+    "executionTargetLabel must read the current configured name");
+  assert.ok(!/paperModeLabel\(target === "paper" \? state\.mode : target\)/.test(APP),
+    "it must not fall back to the shipped-only name");
+  assert.match(APP, /setExecutionStatus\(`\$\{executionTargetLabel\(target\)\} workflow started`\);/);
+  assert.match(APP, /setExecutionStatus\(`\$\{executionTargetLabel\(target\)\} workflow \$\{workflow\.run\.conclusion\}`, "error"\);/);
+  assert.match(APP, /setExecutionStatus\(`\$\{executionTargetLabel\(target\)\} workflow completed`\);/);
+  assert.match(APP, /: `Paper \$\{portfolioNameForMode\(paperModeFromStrategyId\(options\.paperStrategyId\)\)\} action:/,
+    "the execution-result step must also name the current portfolio, not its shipped label");
+});
+
+test("portfolio overview: the Risk / reward tile is gone from the tile row and the code", () => {
+  assert.ok(!/Risk \/ reward/.test(HTML), "the tile's label must be gone from the markup");
+  assert.ok(!/data-portfolio-rr/.test(HTML), "and its two data attributes with it");
+  assert.ok(!/portfolioRr\b|portfolioRrNote\b|averageRiskReward\(/.test(APP),
+    "no dead lookup, renderer, or now-unused helper may be left behind");
+});
+
+// Asked for: the control panel tile held nothing but the one manual-run button, so it was
+// removed and that button (with the status text next to it) moved into the run log's own
+// header, which already had a header-actions row for exactly this kind of control.
+test("run log: the manual-run button lives in its header, not a separate control panel", () => {
+  assert.ok(!/class="control-panel"/.test(HTML), "the tile is gone");
+  assert.ok(!/Control panel|Execution controls/.test(HTML), "and its chrome with it");
+  const runLogPanel = /<section class="tab-panel" data-tab-panel="run-log"[\s\S]*?<\/section>/.exec(HTML);
+  assert.ok(runLogPanel, "the run log panel exists");
+  assert.match(runLogPanel[0], /<div class="run-log-head-actions">\s*<button class="execution-button" type="button" data-one-time-execution="current">Run once<\/button>\s*<span class="pill muted" data-execution-status>ready<\/span>/,
+    "the button and its status pill must be the header-actions row's first two children");
+});
+
 // Reported live: between the mobile breakpoint and a full-width desktop, the tab row had
 // nowhere to shrink to, so the whole page overflowed sideways and the overflow was clipped
 // by body's overflow-x: hidden -- Stop loss, Live and 90 -> 50% did not wrap to a second

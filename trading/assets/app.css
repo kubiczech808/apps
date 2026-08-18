@@ -276,59 +276,6 @@ button:disabled {
   margin-bottom: 0;
 }
 
-.control-panel {
-  margin-top: 12px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--soft);
-}
-
-.control-panel-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.control-panel h3 {
-  margin: 0;
-  font-size: 18px;
-  letter-spacing: 0;
-}
-
-.control-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(180px, 1fr));
-  gap: 10px;
-}
-
-.control-block {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.execution-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.control-note {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
 .capital-status {
   display: block;
   color: var(--muted);

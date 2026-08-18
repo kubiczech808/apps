@@ -334,8 +334,6 @@ const els = {
   portfolioOpenPlPct: document.querySelector("[data-portfolio-open-pl-pct]"),
   portfolioRisk: document.querySelector("[data-portfolio-risk]"),
   portfolioFree: document.querySelector("[data-portfolio-free]"),
-  portfolioRr: document.querySelector("[data-portfolio-rr]"),
-  portfolioRrNote: document.querySelector("[data-portfolio-rr-note]"),
 };
 
 function escapeHtml(value) {
@@ -1165,7 +1163,10 @@ function isPaperExecutionTarget(target) {
 function executionTargetLabel(target) {
   if (target === "live-5050") return "5050";
   if (target === "live") return "live";
-  if (isPaperExecutionTarget(target)) return paperModeLabel(target === "paper" ? state.mode : target);
+  // portfolioNameForMode, not paperModeLabel: the latter only ever reads the shipped
+  // built-in name, so a renamed portfolio (Equal -> Stop loss) still read as its old name
+  // in the run-once button, the execution-progress modal, and the workflow-started toast.
+  if (isPaperExecutionTarget(target)) return portfolioNameForMode(target === "paper" ? state.mode : target);
   return "paper";
 }
 
@@ -2604,12 +2605,6 @@ function riskRewardClass(value) {
   if (value >= 1) return "positive";
   if (value >= 0.33) return "";
   return "negative";
-}
-
-function averageRiskReward(items, mapper) {
-  const values = items.map(mapper).filter(Number.isFinite);
-  if (!values.length) return null;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function tradePotentialAnnualized(trade) {
@@ -4910,7 +4905,7 @@ async function waitForExecutionResult(target, startedAt, steps, options = {}) {
     if (!Number.isFinite(start) || (Number.isFinite(generated) && generated >= start - 120000)) {
       const detail = target === "live"
         ? liveExecutionSummary(payload)
-        : `Paper ${paperModeLabel(paperModeFromStrategyId(options.paperStrategyId))} action: ${paperDecision?.action || "-"} / ${paperDecision?.reason || "-"}`;
+        : `Paper ${portfolioNameForMode(paperModeFromStrategyId(options.paperStrategyId))} action: ${paperDecision?.action || "-"} / ${paperDecision?.reason || "-"}`;
       steps = addExecutionStep(steps, "Execution result", detail, "done");
       return { payload, steps };
     }
@@ -5641,7 +5636,7 @@ async function triggerOneTimeExecution(target) {
       throw new Error(payload.error || `workflow HTTP ${response.status}`);
     }
     steps = addExecutionStep(steps, "Workflow dispatched", payload.workflow || payload.message || "GitHub Actions accepted the request", "done");
-    setExecutionStatus(`${target} workflow started`);
+    setExecutionStatus(`${executionTargetLabel(target)} workflow started`);
     // The runner publishes its decision only at the end of the run, so until then
     // the most informative thing available is the shortlist this browser just sent
     // and the ranking numbers behind it. Without this the popup showed nothing but
@@ -5664,11 +5659,11 @@ async function triggerOneTimeExecution(target) {
       const actualResult = live ? "The recorded live trading result is shown above; a post-trade maintenance step failed after it." : "The recorded paper decision is shown above.";
       const failureDetail = workflow.run.failureDetail ? ` Failed step: ${workflow.run.failureDetail}.` : "";
       steps = addExecutionStep(steps, "Workflow finished with warning", `Conclusion: ${workflow.run.conclusion}.${failureDetail} ${actualResult}`, "error");
-      setExecutionStatus(`${target} workflow ${workflow.run.conclusion}`, "error");
+      setExecutionStatus(`${executionTargetLabel(target)} workflow ${workflow.run.conclusion}`, "error");
     }
     steps = addExecutionStep(steps, "Dashboard refreshed", "Open positions and limit orders are shown in the tables below.", "done");
     if (!workflow.run?.conclusion || workflow.run.conclusion === "success") {
-      setExecutionStatus(`${target} workflow completed`);
+      setExecutionStatus(`${executionTargetLabel(target)} workflow completed`);
     }
     await loadDashboardState();
   } catch (error) {
@@ -6091,8 +6086,6 @@ async function loadLiveState(options = {}) {
     els.portfolioOpenPlPct.textContent = "-";
     els.portfolioRisk.textContent = "-";
     els.portfolioFree.textContent = "-";
-    if (els.portfolioRr) els.portfolioRr.textContent = "-";
-    if (els.portfolioRrNote) els.portfolioRrNote.textContent = "live data not available";
     if (els.accountSummary) {
       els.accountSummary.hidden = false;
       els.accountSummary.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
@@ -7083,7 +7076,6 @@ function renderBotState(botState) {
   const trades = paperPortfolioTrades(portfolioState);
   const closedTrades = trades.filter(isClosedTrade);
   const openTrades = trades.filter((trade) => !isClosedTrade(trade));
-  const portfolioRiskReward = averageRiskReward(trades, tradeRiskReward);
   const periodDays = portfolioPeriodDays(botState, trades);
   const annualized = annualizedPortfolioReturn(portfolio, periodDays);
   const totalPnl = Number(portfolio.totalPnlUsdc || 0);
@@ -7123,13 +7115,6 @@ function renderBotState(botState) {
   els.portfolioOpenPlPct.textContent = signedPercent(openPnlPct);
   els.portfolioRisk.textContent = money(Number(portfolio.openRiskUsdc || 0));
   els.portfolioFree.textContent = `${money(freeCapital)} free`;
-  if (els.portfolioRr) {
-    els.portfolioRr.textContent = riskReward(portfolioRiskReward);
-    els.portfolioRr.className = riskRewardClass(portfolioRiskReward);
-  }
-  if (els.portfolioRrNote) {
-    els.portfolioRrNote.textContent = trades.length ? `avg all, ${trades.length} trades` : "no trades";
-  }
 
   if (els.portfolioRules) {
     els.portfolioRules.innerHTML = `
@@ -7630,7 +7615,6 @@ function renderLiveState(liveState) {
   ]);
   const activity = liveActivity(liveState);
   const closedTrades = liveClosedTrades(liveState).map(decorateLiveTradeForTable);
-  const portfolioRiskReward = averageRiskReward([...openedRows, ...closedTrades], tradeRiskReward);
   const sync = liveState.sync || {};
   const reconciliation = liveState.reconciliation || {};
   const reconciliationGaps = Number(reconciliation.orphanedCount || 0);
@@ -7760,14 +7744,6 @@ function renderLiveState(liveState) {
   els.portfolioFree.textContent = freeCash == null
     ? "cash not available"
     : `${money(freeCash)} free cash${otherPortfolioReservation > 0.01 ? ` (${money(otherPortfolioReservation)} locked by the other portfolio)` : ""}`;
-  if (els.portfolioRr) {
-    els.portfolioRr.textContent = riskReward(portfolioRiskReward);
-    els.portfolioRr.className = riskRewardClass(portfolioRiskReward);
-  }
-  if (els.portfolioRrNote) {
-    const portfolioRows = openedRows.length + closedTrades.length;
-    els.portfolioRrNote.textContent = portfolioRows ? `avg all, ${portfolioRows} rows` : "no rows";
-  }
 
   if (els.accountSummary) {
     els.accountSummary.hidden = true;
