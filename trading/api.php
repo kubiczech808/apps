@@ -2233,6 +2233,11 @@ function workflow_status_payload(string $target): array
             'createdAt' => $run['created_at'] ?? null,
             'updatedAt' => $run['updated_at'] ?? null,
             'htmlUrl' => $run['html_url'] ?? null,
+            // dispatch-after-scan.mjs dispatches this same event type ("workflow_dispatch")
+            // to chain a run onto a scan, so the event alone cannot tell a person's click
+            // apart from that machine call. Its own dispatches always run as this actor;
+            // a person's always run as their own GitHub login.
+            'triggeringActor' => $run['triggering_actor']['login'] ?? null,
         ];
     }
 

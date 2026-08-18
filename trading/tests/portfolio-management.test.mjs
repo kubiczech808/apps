@@ -627,6 +627,50 @@ test("capital rebase: the accuracy note names pre-reset trades separately from e
     "an unrebased portfolio's note must read exactly as it did before this feature existed");
 });
 
+// Reported: a "queued"/"running" (manual) row appeared in 90->50%'s run log for a run the
+// user never started, then vanished on its own once it finished. dispatch-after-scan.mjs
+// chains a run onto a finished scrape as a real workflow_dispatch event -- indistinguishable
+// from a person's own click by event type alone -- but always as github-actions[bot].
+test("live run in progress: an auto-chained dispatch is not mislabelled as a person's own click", () => {
+  const run = new Function("state", `
+    ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
+    ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
+    ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
+    ${extractFunction(APP, "normalizeMode")}
+    ${extractFunction(APP, "isLiveMode")}
+    ${extractFunction(APP, "isFixedEntryMode")}
+    ${extractFunction(APP, "currentExecutionTarget")}
+    ${extractFunction(APP, "runningExecutionRun")}
+    function formatDuration() { return ""; }
+    ${extractFunction(APP, "runningExecutionRow")}
+    return runningExecutionRow;
+  `);
+
+  const rowFor = (triggeringActor) => run({
+    mode: "live-5050",
+    runningExecutions: {
+      "live-5050": { id: 1, status: "in_progress", createdAt: new Date().toISOString(), event: "workflow_dispatch", triggeringActor },
+    },
+  })();
+
+  assert.equal(rowFor("github-actions[bot]").runSource, "AUTO",
+    "dispatch-after-scan.mjs's own chained run must not read as a person's manual click");
+  assert.equal(rowFor("kubiczech808").runSource, "MANUAL",
+    "a real person's dispatch must still read as manual");
+});
+
+// Reported: paper portfolios' parameter overview never showed "use limit orders" at all,
+// reading as if the setting only existed for live. The checkbox already saves it for paper
+// (no data-model gap -- see the live mirror at index.html:429-432, unconditional), only
+// this card's row was missing.
+test("paper portfolio rules: 'Order mode' is shown, mirroring the live card", () => {
+  const paper = extractFunction(APP, "portfolioRuleRows");
+  assert.match(paper, /rows\.push\(\["Order mode", config\.useLimitOrders \? "Limit orders" : "Market orders"\]\);/);
+  // The live card's own row must still exist unchanged.
+  const live = extractFunction(APP, "livePortfolioRuleRows");
+  assert.match(live, /\["Order mode", currentLimitOrders\(\) \? "Limit orders" : "Market orders"\],/);
+});
+
 test("run log history: the workflow archives every portfolio's new runs, and the bot writes them", () => {
   assert.match(BOT, /const PORTFOLIO_RUN_LOG_ENTRY_PATH = process\.env\.PAPER_PORTFOLIO_RUN_LOG_ENTRY_PATH/);
   assert.match(BOT, /async function writePortfolioRunLogEntries\(entries\)/);

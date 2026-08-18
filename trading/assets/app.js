@@ -6274,6 +6274,10 @@ function portfolioRuleRows(portfolio = {}) {
   rows.push(["Stop loss", stopLossIsEnabled(config)
     ? "On - planned maximum loss equals net potential win"
     : "Off"]);
+  // The parameter modal already saves this for paper portfolios (the checkbox has no
+  // paper-only hide), but this card never showed it -- reading like the setting was
+  // live-only, when it is only this row that was missing.
+  rows.push(["Order mode", config.useLimitOrders ? "Limit orders" : "Market orders"]);
   // Only when something is actually excluded: a row reading "none" on every portfolio
   // that never touched the setting is noise in a list meant to be read at a glance.
   const includeOnlyTags = normalizeMarketTagList(config.includeOnlyMarketTags);
@@ -9316,8 +9320,11 @@ function runningExecutionRow() {
     action: run.status === "queued" ? "QUEUED" : "RUNNING",
     runAt: startedAt,
     // A dispatch is a person only when the dashboard asked; everything else is the
-    // schedule. The run log's own rows are labelled the same way.
-    runSource: run.event === "workflow_dispatch" ? "MANUAL" : "AUTO",
+    // schedule. The run log's own rows are labelled the same way. dispatch-after-scan.mjs
+    // chains a run onto a finished scrape with this exact same GitHub event, so the event
+    // alone cannot tell the two apart -- only who triggered it can: that script always
+    // runs as github-actions[bot], never as a person's own login.
+    runSource: run.event === "workflow_dispatch" && run.triggeringActor !== "github-actions[bot]" ? "MANUAL" : "AUTO",
     runningExecution: true,
     htmlUrl: run.htmlUrl || null,
     humanReason: `Execution in progress: ${where}${elapsed == null ? "" : ` · ${formatDuration(elapsed)} elapsed`}.`,
