@@ -297,6 +297,43 @@ test("dashboard: a created portfolio's settings are its own", () => {
     "a created portfolio's change must not reach a shipped one");
 });
 
+// Reported live: a portfolio created from a statistics row ("55% Multi-outcome 1d") had
+// correct settings in the form, but showed Conservative's equity, trades and run log --
+// the same family of bug the two tests above already fixed for routing and settings, in
+// a third place they did not cover. A portfolio has no entry in the bot's own state until
+// it runs once; selectedPaperPortfolio() fell through to portfolios[0], which is whichever
+// shipped portfolio happens to be first in the object, not an empty shape of its own.
+test("dashboard: a portfolio not yet run does not show another portfolio's trades or equity", () => {
+  const run = new Function("paperStrategyIdFromMode", "portfolioConfigForMode", `
+    ${extractFunction(APP, "paperPortfolioList")}
+    ${extractFunction(APP, "normalizePortfolioName")}
+    ${extractFunction(APP, "selectedPaperPortfolio")}
+    return selectedPaperPortfolio;
+  `);
+
+  const botState = {
+    paperPortfolios: {
+      conservative: {
+        id: "conservative", label: "Conservative",
+        portfolio: { equityUsdc: 137.42, initialUsdc: 100 },
+        trades: [{ id: "t1" }], runLog: [{ id: "r1" }],
+      },
+    },
+  };
+  const configFor = (mode) => (mode === "paper-esports" ? { displayName: "55% Multi-outcome 1d" } : {});
+
+  const fresh = run(() => "esports", configFor)(botState);
+  assert.equal(fresh.id, "esports");
+  assert.equal(fresh.label, "55% Multi-outcome 1d", "must show its own name, not borrow another portfolio's");
+  assert.deepEqual(fresh.portfolio, {}, "must not carry Conservative's equity");
+  assert.deepEqual(fresh.trades, [], "no trades until it actually runs");
+  assert.deepEqual(fresh.runLog, [], "no run log until it actually runs");
+
+  // An existing portfolio is unaffected and still returns its own real data.
+  const existing = run(() => "conservative", configFor)(botState);
+  assert.equal(existing.portfolio.equityUsdc, 137.42);
+});
+
 test("dashboard: a statistics row prefills the portfolio it would create", () => {
   const run = new Function(`
     ${extractFunction(APP, "normalizePortfolioName")}

@@ -6136,7 +6136,25 @@ function paperPortfolioList(botState) {
 function selectedPaperPortfolio(botState) {
   const portfolios = paperPortfolioList(botState);
   const strategyId = paperStrategyIdFromMode();
-  return portfolios.find((item) => item.id === strategyId) || portfolios[0] || {};
+  if (!strategyId) return portfolios[0] || {};
+  const found = portfolios.find((item) => item.id === strategyId);
+  if (found) return found;
+  // A portfolio just created has no entry in the bot's state until it runs once -- the
+  // dashboard only saves its config. Falling back to portfolios[0] here handed a brand
+  // new portfolio Conservative's entire live state (equity, trades, run log) instead of
+  // the fresh, empty one it actually has; every render fallback below (?? 100, || 0,
+  // empty arrays) already renders this correctly once it is not silently someone else's.
+  const config = portfolioConfigForMode(`paper-${strategyId}`) || {};
+  return {
+    id: strategyId,
+    label: normalizePortfolioName(config.displayName, strategyId),
+    description: "",
+    selectionMetric: "",
+    portfolio: {},
+    trades: [],
+    runLog: [],
+    lastDecision: null,
+  };
 }
 
 function paperPortfolioTrades(portfolioState) {
