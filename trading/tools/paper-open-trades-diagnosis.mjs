@@ -49,6 +49,21 @@ async function daysLeftApi() {
 
 const OPEN_STATUSES = new Set(["OPEN", "PENDING_RESOLUTION", "MARKET_NOT_FOUND", "STOP_BREACH"]);
 
+// Mirrors fetchMarketBySlug() in the bot exactly: same URL, same two-pass closed=true/false
+// fallback. This is the live check for whether Gamma itself, right now, still reports the
+// end date the bot stored -- not a second opinion, the actual source the bot reads from.
+async function fetchMarketBySlug(slug) {
+  if (!slug) return null;
+  for (const closed of ["true", "false"]) {
+    const url = new URL("https://gamma-api.polymarket.com/markets");
+    url.searchParams.set("slug", slug);
+    url.searchParams.set("closed", closed);
+    const result = await fetchJson(url.toString());
+    if (result.ok && Array.isArray(result.body) && result.body[0]) return result.body[0];
+  }
+  return null;
+}
+
 async function main() {
   console.log(`Paper open-trades days-left diagnosis at ${new Date().toISOString()}`);
   console.log("Read-only: nothing is written, no credentials are used.\n");
@@ -88,7 +103,20 @@ async function main() {
     console.log(`     openedAt=${trade.openedAt || trade.date || "-"} lastCheckedAt=${trade.lastCheckedAt || "-"}`
       + ` resolutionStatus=${trade.resolutionStatus || "-"} umaResolutionStatus=${trade.umaResolutionStatus || "-"}`
       + ` marketClosed=${trade.marketClosed ?? "-"} closed=${trade.closed ?? "-"} resolved=${trade.resolved ?? "-"}`);
-    console.log(`     question="${String(trade.question || "").slice(0, 90)}" outcome=${trade.outcome || "-"} tokenId=${trade.tokenId || "-"}`);
+    console.log(`     question="${String(trade.question || "").slice(0, 90)}" outcome=${trade.outcome || "-"} tokenId=${trade.tokenId || "-"} slug=${trade.slug || "-"}`);
+
+    // The bot's own source, queried live, right now -- not a stored value, the actual
+    // thing markOpenTrade() would read on its next refresh.
+    if (trade.slug) {
+      const market = await fetchMarketBySlug(trade.slug);
+      if (!market) {
+        console.log("     gamma (live): slug not found under either closed=true or closed=false");
+      } else {
+        console.log(`     gamma (live): endDate=${market.endDate || "-"} closed=${market.closed ?? "-"}`
+          + ` active=${market.active ?? "-"} acceptingOrders=${market.acceptingOrders ?? "-"}`
+          + ` umaResolutionStatus=${market.umaResolutionStatus || "-"}`);
+      }
+    }
     console.log("");
   }
 
