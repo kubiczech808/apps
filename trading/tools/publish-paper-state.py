@@ -62,6 +62,14 @@ def enter_dir(ftp: ftplib.FTP, parts: list[str]) -> None:
             ftp.cwd(part)
 
 
+def remove_temporary(ftp: ftplib.FTP, name: str) -> None:
+    """Best-effort delete of a half-written upload, so it cannot eat the next one's room."""
+    try:
+        ftp.delete(name)
+    except ftplib.all_errors:
+        pass
+
+
 def publish(ftp: ftplib.FTP, source: Path, suffix: str) -> None:
     """Upload under a temporary name, then swap it in.
 
@@ -71,8 +79,28 @@ def publish(ftp: ftplib.FTP, source: Path, suffix: str) -> None:
     backup removed only once the new file is in place.
     """
     temporary = f"{source.name}.{suffix}"
+    expected = source.stat().st_size
     with source.open("rb") as handle:
         ftp.storbinary(f"STOR {temporary}", handle)
+
+    # A STOR that ran out of remote space does not always answer with an error: the
+    # observed failure was a clean-looking upload followed by "550 <temp>: No such file
+    # or directory" from the rename, after ~112 MB had been sent in one session. Checking
+    # the size the host actually kept turns that into a legible message naming the file
+    # and the shortfall, instead of a traceback from the next command along.
+    try:
+        stored = ftp.size(temporary)
+    except ftplib.all_errors:
+        stored = None
+    if stored is not None and stored != expected:
+        remove_temporary(ftp, temporary)
+        raise SystemExit(
+            f"{source.name}: uploaded {stored} of {expected} bytes. The hosting kept a "
+            "short file, which usually means the account is out of space -- publishing "
+            "writes a second copy of each file before swapping it in, so the state needs "
+            "roughly twice its own size free."
+        )
+
     try:
         ftp.rename(temporary, source.name)
     except ftplib.all_errors:
@@ -95,6 +123,12 @@ def publish(ftp: ftplib.FTP, source: Path, suffix: str) -> None:
                     ftp.rename(backup, source.name)
                 except ftplib.all_errors:
                     pass
+            # Leaving the temporary behind is what turns one failed publish into every
+            # later one failing too: these files are the size of the state itself, they
+            # are not named *.json so the site deploy's keep-rule does not protect them
+            # from deletion but nothing else removes them either, and each one left
+            # around takes space the next upload needs.
+            remove_temporary(ftp, temporary)
             raise
         if moved_aside:
             try:
