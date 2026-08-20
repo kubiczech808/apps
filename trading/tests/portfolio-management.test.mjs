@@ -244,6 +244,12 @@ test("created portfolios: the workflow passes them and the archive flag to the b
   for (const prefix of ["PAPER_CONSERVATIVE", "PAPER_HIGH_REWARD", "PAPER_MORE_PROBABLE", "PAPER_EQUAL"]) {
     assert.match(BOT, new RegExp(`archived: envBool\\("${prefix}_ARCHIVED", false\\)`));
   }
+  assert.match(API, /return in_array\(\$text, \['conservative', 'highReward', 'moreProbable', 'equal'\], true\)[\s\S]*?: normalize_custom_paper_portfolio_id\(\$text\);/,
+    "api.php must accept created portfolio ids in paper_strategy_id");
+  assert.match(API, /str_starts_with\(\$target, 'paper-'\)[\s\S]*?normalize_custom_paper_portfolio_id\(substr\(\$target, 6\)\)/,
+    "api.php must map paper-<created-id> targets onto the shared paper workflow");
+  assert.match(API, /paper_strategy_is_known\(\$paperStrategyId\)/,
+    "dispatch still verifies the created portfolio exists and is not archived before running it");
   // The reset path accepts a created portfolio's id too, or a created portfolio could
   // never be reset from the dashboard.
   assert.match(BOT, /const PAPER_STRATEGY_ID = \/\^\[a-z\]\[a-zA-Z0-9\]\{1,30\}\$\/\.test/);

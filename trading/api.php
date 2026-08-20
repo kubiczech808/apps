@@ -2479,18 +2479,40 @@ function normalized_paper_strategy_input($value): ?string
         return null;
     }
     $text = (string) $value;
-    return in_array($text, ['conservative', 'highReward', 'moreProbable', 'equal'], true) ? $text : null;
+    return in_array($text, ['conservative', 'highReward', 'moreProbable', 'equal'], true)
+        ? $text
+        : normalize_custom_paper_portfolio_id($text);
 }
 
 function paper_strategy_from_target(string $target): ?string
 {
-    return match ($target) {
+    $builtIn = match ($target) {
         'paper-conservative' => 'conservative',
         'paper-highReward' => 'highReward',
         'paper-moreProbable' => 'moreProbable',
         'paper-equal' => 'equal',
         default => null,
     };
+    if ($builtIn !== null) {
+        return $builtIn;
+    }
+
+    if (!str_starts_with($target, 'paper-')) {
+        return null;
+    }
+
+    return normalize_custom_paper_portfolio_id(substr($target, 6));
+}
+
+function paper_strategy_is_known(?string $strategyId, ?array $config = null): bool
+{
+    if ($strategyId === null || $strategyId === '') {
+        return false;
+    }
+    $config = $config ?? load_portfolio_config();
+    $paper = is_array($config['paper'] ?? null) ? $config['paper'] : [];
+
+    return isset($paper[$strategyId]) && is_array($paper[$strategyId]) && ($paper[$strategyId]['archived'] ?? false) !== true;
 }
 
 function workflow_target_key(string $target): string
@@ -2591,6 +2613,9 @@ try {
             respond(['ok' => false, 'error' => 'A scraped market slug is required for refresh.'], 400);
         }
         $paperStrategyId = paper_strategy_from_target($target) ?? normalized_paper_strategy_input($payload['paper_strategy_id'] ?? $payload['paperStrategyId'] ?? null);
+        if ($targetKey === 'paper' && $paperStrategyId !== null && !paper_strategy_is_known($paperStrategyId)) {
+            respond(['ok' => false, 'error' => 'Unknown or archived paper portfolio'], 400);
+        }
         // Equal reads its complete configuration from portfolio-config.json in the
         // paper bot. Do not add unsupported workflow_dispatch inputs here.
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
