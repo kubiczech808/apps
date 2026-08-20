@@ -4289,7 +4289,7 @@ async function loadPortfolioOverview({ force = false } = {}) {
   if (!force && state.portfolioOverviewAt && Date.now() - state.portfolioOverviewAt < 60000) return;
   state.portfolioOverviewPending = true;
   try {
-    const payload = await fetchApiJson("api.php?action=state&target=paper&summary=dashboard");
+    const payload = await fetchApiJson("api.php?action=state&target=paper&summary=portfolio-overview");
     const portfolios = (payload.state || payload)?.paperPortfolios;
     if (portfolios && typeof portfolios === "object") {
       state.portfolioOverview = portfolios;
@@ -5318,7 +5318,7 @@ function renderKnownStateForMode(mode = state.mode) {
 
 function botStateIsFull(botState) {
   const detailsMode = String(botState?.evaluationDetailsMode || "");
-  return Boolean(botState) && detailsMode !== "compact" && detailsMode !== "dashboard";
+  return Boolean(botState) && detailsMode !== "compact" && detailsMode !== "dashboard" && detailsMode !== "portfolio-overview";
 }
 
 function shouldLoadFullBotState() {
@@ -5544,7 +5544,11 @@ async function ensureScrapedMarketState(options = {}) {
 
 async function loadBotState(options = {}) {
   try {
-    const botState = await fetchJson("data/paper-state.json", { summary: "dashboard" });
+    const requestedMode = options.requestedMode || state.mode;
+    const botState = await fetchJson("data/paper-state.json", {
+      summary: "dashboard",
+      strategyId: paperStrategyIdFromMode(requestedMode),
+    });
     if (dashboardLoadIsStale(options) || isLiveMode()) return;
     const mergedBotState = botStateWithPreservedEvaluations(botState);
     state.botStateFull = botStateIsFull(mergedBotState);
@@ -5574,9 +5578,14 @@ async function fetchJson(path, options = {}) {
   const statePath = String(path || "");
   const stateTarget = statePath === "data/live-state.json" ? "live" : (statePath === "data/paper-state.json" ? "paper" : "");
   const summary = options.summary ? `&summary=${encodeURIComponent(options.summary)}` : "";
-  const cacheSummary = options.summary || "full";
+  const strategyId = stateTarget === "paper" && options.strategyId
+    ? `&strategy_id=${encodeURIComponent(options.strategyId)}`
+    : "";
+  const cacheSummary = options.strategyId
+    ? `${options.summary || "full"}:${options.strategyId}`
+    : (options.summary || "full");
   const url = stateTarget
-    ? appPath(`api.php?action=state&target=${stateTarget}${summary}&t=${Date.now()}`)
+    ? appPath(`api.php?action=state&target=${stateTarget}${summary}${strategyId}&t=${Date.now()}`)
     : appPath(`${statePath}?t=${Date.now()}`);
   try {
     const fetchOptions = { cache: "no-store" };
@@ -6333,7 +6342,7 @@ async function loadLiveState(options = {}) {
     // needs 5050's log to know what is not its own.
     const [liveResult, botResult, executionResult, fixedEntryResult] = await Promise.allSettled([
       fetchJson("data/live-state.json"),
-      fetchJson("data/paper-state.json", { summary: "dashboard" }),
+      fetchJson("data/paper-state.json", { summary: "portfolio-overview" }),
       fetchJson(liveExecutionStateFile(options.requestedMode || state.mode)),
       fetchJson("data/live-5050-execution-state.json"),
     ]);

@@ -132,6 +132,8 @@ function state_segments_for_summary(string $summary): array
     switch ($summary) {
         case 'dashboard':
             return [];
+        case 'portfolio-overview':
+            return [];
         case 'candidates':
             return ['evaluations'];
         case 'execution':
@@ -927,14 +929,80 @@ function portfolio_run_log_records(string $strategyId, array $fallback = []): ar
     return $records;
 }
 
-function compact_state_payload(string $target, array $data, string $summary): array
+function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades): array
+{
+    if ($includeTrades) {
+        if (isset($portfolio['runLog']) && is_array($portfolio['runLog'])) {
+            $portfolio['runLog'] = array_slice($portfolio['runLog'], 0, 80);
+        }
+        return $portfolio;
+    }
+
+    $compact = [];
+    foreach ([
+        'id',
+        'label',
+        'displayName',
+        'description',
+        'selectionMetric',
+        'portfolio',
+        'lastDecision',
+        'lastTradeDate',
+        'capitalAdjustmentAt',
+        'archived',
+    ] as $field) {
+        if (array_key_exists($field, $portfolio)) {
+            $compact[$field] = $portfolio[$field];
+        }
+    }
+    $compact['trades'] = [];
+    $compact['runLog'] = [];
+    return $compact;
+}
+
+function compact_dashboard_paper_portfolios(array $data, ?string $selectedStrategyId, bool $overviewOnly): array
+{
+    if (!isset($data['paperPortfolios']) || !is_array($data['paperPortfolios'])) {
+        if (!$overviewOnly && isset($data['runLog']) && is_array($data['runLog'])) {
+            $data['runLog'] = array_slice($data['runLog'], 0, 80);
+        }
+        if ($overviewOnly) {
+            $data['trades'] = [];
+            $data['runLog'] = [];
+        }
+        return $data;
+    }
+
+    $selectedStrategyId = $selectedStrategyId !== null && preg_match('/^[A-Za-z0-9_-]{1,64}$/', $selectedStrategyId)
+        ? $selectedStrategyId
+        : null;
+
+    foreach ($data['paperPortfolios'] as $id => $portfolio) {
+        if (!is_array($portfolio)) {
+            continue;
+        }
+        $includeTrades = !$overviewOnly && $selectedStrategyId !== null && (string) $id === $selectedStrategyId;
+        $data['paperPortfolios'][$id] = compact_dashboard_paper_portfolio($portfolio, $includeTrades);
+    }
+
+    return $data;
+}
+
+function compact_state_payload(string $target, array $data, string $summary, ?string $selectedStrategyId = null): array
 {
     if ($target !== 'paper') {
         return $data;
     }
 
+    if ($summary === 'portfolio-overview') {
+        $compact = compact_dashboard_paper_portfolios($data, null, true);
+        unset($compact['evaluations'], $compact['evaluationRunLog'], $compact['calculationReports'], $compact['runLog'], $compact['marketObservations'], $compact['marketScan'], $compact['marketScanHistory'], $compact['trades']);
+        $compact['evaluationDetailsMode'] = 'portfolio-overview';
+        return $compact;
+    }
+
     if ($summary === 'dashboard') {
-        $compact = $data;
+        $compact = compact_dashboard_paper_portfolios($data, $selectedStrategyId, false);
         $compact['evaluations'] = [];
         // Scraping history is read only from the scraped/execution state, never
         // from the dashboard payload, so this view does not load that segment.
@@ -2826,12 +2894,13 @@ try {
     if ($action === 'state') {
         $target = (string) ($_GET['target'] ?? '');
         $summary = (string) ($_GET['summary'] ?? '');
+        $strategyId = isset($_GET['strategy_id']) ? (string) $_GET['strategy_id'] : null;
         // Load the segments this summary reads before decoding anything else. The
         // dashboard is by far the most requested view and needs none of them.
         $payload = state_payload($target, state_segments_for_summary($summary));
         if ($target === 'paper') {
             $payload = paper_state_with_consistent_portfolios($payload, $summary);
-            $payload = compact_state_payload($target, $payload, $summary);
+            $payload = compact_state_payload($target, $payload, $summary, $strategyId);
         }
         respond($payload);
     }
