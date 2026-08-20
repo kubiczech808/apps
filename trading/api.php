@@ -929,9 +929,97 @@ function portfolio_run_log_records(string $strategyId, array $fallback = []): ar
     return $records;
 }
 
+function compact_dashboard_trade(array $trade): array
+{
+    $compact = [];
+    foreach ([
+        'id',
+        'orderId',
+        'tokenId',
+        'clobTokenId',
+        'assetId',
+        'conditionId',
+        'mode',
+        'status',
+        'question',
+        'outcome',
+        'url',
+        'marketUrl',
+        'slug',
+        'eventSlug',
+        'openedAt',
+        'date',
+        'resolvedAt',
+        'closedTime',
+        'lastCheckedAt',
+        'endDate',
+        'daysToResolution',
+        'pendingResolutionAnnualizedReference',
+        'entryPrice',
+        'currentPrice',
+        'markPrice',
+        'price',
+        'finalOutcomePrice',
+        'stakeUsdc',
+        'totalCostUsdc',
+        'maxLossUsdc',
+        'shares',
+        'size',
+        'takerFeeUsdc',
+        'netGainIfWinUsdc',
+        'unrealizedPnlUsdc',
+        'unrealizedPnlPct',
+        'realizedPnlUsdc',
+        'realizedPnlPct',
+        'currentValueUsdc',
+        'marketValueUsdc',
+        'valueUsdc',
+        'annualizedReturn',
+        'strategyId',
+        'strategyLabel',
+    ] as $field) {
+        if (array_key_exists($field, $trade)) {
+            $compact[$field] = $trade[$field];
+        }
+    }
+    return $compact;
+}
+
+function compact_dashboard_last_decision(mixed $decision): mixed
+{
+    if (!is_array($decision)) {
+        return $decision;
+    }
+    $compact = [];
+    foreach ([
+        'id',
+        'runAt',
+        'generatedAt',
+        'strategyId',
+        'strategyLabel',
+        'action',
+        'reason',
+        'summary',
+    ] as $field) {
+        if (array_key_exists($field, $decision)) {
+            $compact[$field] = $decision[$field];
+        }
+    }
+    return $compact;
+}
+
 function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades): array
 {
+    if (isset($portfolio['lastDecision'])) {
+        $portfolio['lastDecision'] = compact_dashboard_last_decision($portfolio['lastDecision']);
+    }
     if ($includeTrades) {
+        if (isset($portfolio['trades']) && is_array($portfolio['trades'])) {
+            $portfolio['trades'] = array_map(
+                static fn($trade): array => is_array($trade) ? compact_dashboard_trade($trade) : [],
+                $portfolio['trades']
+            );
+        }
         if (isset($portfolio['runLog']) && is_array($portfolio['runLog'])) {
             $portfolio['runLog'] = array_slice($portfolio['runLog'], 0, 80);
         }
@@ -996,7 +1084,7 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
 
     if ($summary === 'portfolio-overview') {
         $compact = compact_dashboard_paper_portfolios($data, null, true);
-        unset($compact['evaluations'], $compact['evaluationRunLog'], $compact['calculationReports'], $compact['runLog'], $compact['marketObservations'], $compact['marketScan'], $compact['marketScanHistory'], $compact['trades']);
+        unset($compact['evaluations'], $compact['evaluationRunLog'], $compact['calculationReports'], $compact['latestCalculationReport'], $compact['paperPortfolioArchives'], $compact['runLog'], $compact['marketObservations'], $compact['marketScan'], $compact['marketScanHistory'], $compact['trades'], $compact['lastDecision']);
         $compact['evaluationDetailsMode'] = 'portfolio-overview';
         return $compact;
     }
@@ -1009,7 +1097,10 @@ function compact_state_payload(string $target, array $data, string $summary, ?st
         // Emptying it here keeps the response shape stable whether or not the
         // published state is segmented.
         $compact['marketScanHistory'] = [];
-        unset($compact['evaluationRunLog'], $compact['calculationReports'], $compact['runLog'], $compact['marketObservations'], $compact['marketScan']);
+        unset($compact['evaluationRunLog'], $compact['calculationReports'], $compact['paperPortfolioArchives'], $compact['runLog'], $compact['marketObservations'], $compact['marketScan'], $compact['trades']);
+        if (isset($compact['lastDecision'])) {
+            $compact['lastDecision'] = compact_dashboard_last_decision($compact['lastDecision']);
+        }
         $compact['evaluationDetailsMode'] = 'dashboard';
         return $compact;
     }
