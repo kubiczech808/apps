@@ -270,7 +270,7 @@ function state_payload(string $target, array $segments = ['observations', 'evalu
  * legitimate -- it means this read raced an in-flight replication, and re-reading
  * a moment later almost always sees the current copy.
  */
-function paper_state_with_consistent_portfolios(array $payload, array $segments): array
+function paper_state_with_consistent_portfolios(array $payload, string $summary): array
 {
     $configuredIds = array_keys(load_portfolio_config()['paper'] ?? []);
     if ($configuredIds === []) {
@@ -283,7 +283,7 @@ function paper_state_with_consistent_portfolios(array $payload, array $segments)
         }
         usleep(250000);
         clearstatcache(true, state_file_paths()['paper']);
-        $payload = state_payload('paper', $segments);
+        $payload = state_payload('paper', state_segments_for_summary($summary));
     }
     return $payload;
 }
@@ -2743,10 +2743,9 @@ try {
         $summary = (string) ($_GET['summary'] ?? '');
         // Load the segments this summary reads before decoding anything else. The
         // dashboard is by far the most requested view and needs none of them.
-        $segments = state_segments_for_summary($summary);
-        $payload = state_payload($target, $segments);
+        $payload = state_payload($target, state_segments_for_summary($summary));
         if ($target === 'paper') {
-            $payload = paper_state_with_consistent_portfolios($payload, $segments);
+            $payload = paper_state_with_consistent_portfolios($payload, $summary);
             $payload = compact_state_payload($target, $payload, $summary);
         }
         respond($payload);
