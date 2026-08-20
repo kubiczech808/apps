@@ -221,6 +221,7 @@ const els = {
   portfolioRules: document.querySelector("[data-portfolio-rules]"),
   botTrades: document.querySelector("[data-bot-trades]"),
   closedTrades: document.querySelector("[data-closed-trades]"),
+  closedTradesExport: document.querySelector("[data-closed-trades-export]"),
   closedSummary: document.querySelector("[data-closed-summary]"),
   botEvaluations: document.querySelector("[data-bot-evaluations]"),
   evaluationSummary: document.querySelector("[data-evaluation-summary]"),
@@ -3309,6 +3310,108 @@ function renderTradeRows(trades, emptyText, options = {}) {
     </table>
     </div>
   `;
+}
+
+function closedTradesForCurrentPortfolio() {
+  if (isLiveMode()) {
+    return liveClosedTrades(state.liveState).map(decorateLiveTradeForTable);
+  }
+  const portfolioState = selectedPaperPortfolio(state.botState);
+  return paperPortfolioTrades(portfolioState).filter(isClosedTrade);
+}
+
+function csvSafeCell(value) {
+  if (value == null) return "";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  const text = String(value).replace(/\r?\n|\r/g, " ").trim();
+  const safeText = /^[=+\-@]/.test(text) ? `'${text}` : text;
+  return `"${safeText.replace(/"/g, '""')}"`;
+}
+
+function csvNumber(value, multiplier = 1, digits = 6) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return Number((number * multiplier).toFixed(digits));
+}
+
+function closedTradeCsvRow(trade) {
+  const result = closedTradePredictionResult(trade);
+  const closedAt = trade.resolvedAt || trade.closedTime || trade.lastCheckedAt || "";
+  const resolutionAt = tradeResolutionDate(trade) || tradeEndDate(trade) || "";
+  return {
+    portfolio: portfolioNavigationLabelForMode(state.mode),
+    status: trade.status || "",
+    prediction_result: result == null ? "" : (result ? "correct" : "incorrect"),
+    outcome: trade.outcome || "",
+    market: trade.question || "",
+    polymarket_url: polymarketUrl(trade),
+    opened_at: formatDate(trade.openedAt || trade.date || ""),
+    opened_at_iso: trade.openedAt || trade.date || "",
+    closed_at: formatDate(closedAt),
+    closed_at_iso: closedAt,
+    resolution_at: formatDate(resolutionAt),
+    resolution_at_iso: resolutionAt,
+    entry_price_pct: csvNumber(trade.entryPrice, 100, 4),
+    final_or_mark_price_pct: csvNumber(trade.currentPrice, 100, 4),
+    price_change_pct: (() => {
+      const entry = Number(trade.entryPrice);
+      const current = Number(trade.currentPrice);
+      return Number.isFinite(entry) && entry > 0 && Number.isFinite(current)
+        ? csvNumber((current / entry) - 1, 100, 4)
+        : "";
+    })(),
+    stake_usdc: csvNumber(trade.stakeUsdc || 0, 1, 6),
+    total_cost_usdc: csvNumber(tradeCostBasis(trade), 1, 6),
+    shares: csvNumber(trade.shares ?? trade.size, 1, 6),
+    win_if_correct_usdc: csvNumber(tradePotentialGain(trade), 1, 6),
+    win_if_correct_pct: csvNumber(tradePotentialGainPct(trade), 100, 4),
+    win_pa_pct: csvNumber(tradePotentialAnnualized(trade), 100, 4),
+    realized_pl_usdc: csvNumber(tradePnlValue(trade), 1, 6),
+    realized_pl_pct: csvNumber(tradePnlPct(trade), 100, 4),
+    risk_reward: csvNumber(tradeRiskReward(trade), 1, 6),
+    final_probability_pct: csvNumber(trade.finalOutcomePrice, 100, 4),
+    token_id: trade.tokenId || trade.clobTokenId || trade.assetId || "",
+    order_id: trade.orderId || trade.id || "",
+    event_slug: trade.eventSlug || trade.slug || "",
+    strategy_id: trade.strategyId || "",
+    strategy_label: trade.strategyLabel || "",
+    mode: trade.mode || "",
+    notes: postMortemLine(trade),
+  };
+}
+
+function downloadCsv(filename, rows) {
+  const blob = new Blob([`\uFEFF${rows.join("\n")}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportClosedTradesCsv() {
+  const tableKey = isLiveMode() ? "liveClosed" : "closed";
+  const trades = sortedTrades(closedTradesForCurrentPortfolio(), tableKey);
+  if (!trades.length) {
+    if (els.closedSummary) els.closedSummary.textContent = "0 closed / nothing to export";
+    return;
+  }
+  const rows = trades.map(closedTradeCsvRow);
+  const headers = Object.keys(rows[0]);
+  const csvRows = [
+    headers.map(csvSafeCell).join(","),
+    ...rows.map((row) => headers.map((header) => csvSafeCell(row[header])).join(",")),
+  ];
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const portfolioSlug = portfolioNavigationLabelForMode(state.mode)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || "portfolio";
+  downloadCsv(`trading-${portfolioSlug}-closed-trades-${stamp}.csv`, csvRows);
 }
 
 function portfolioPeriodDays(botState, trades) {
@@ -10854,6 +10957,7 @@ function handleTradeSort(event) {
 els.botTrades?.addEventListener("click", handleTradeSort);
 els.closedTrades?.addEventListener("click", handleTradeSort);
 els.openedTradesRefresh?.addEventListener("click", refreshOpenedTradesValues);
+els.closedTradesExport?.addEventListener("click", exportClosedTradesCsv);
 
 state.mode = storedMode();
 state.runLogFilters = storedRunLogFilter(state.mode);

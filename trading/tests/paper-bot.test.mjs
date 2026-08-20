@@ -1367,6 +1367,22 @@ test("trade table: every header lines up with the cell beneath it", async () => 
   assert.ok(!/showAiProbability/.test(app), "and no leftover switch for it");
 });
 
+test("closed trades: the header exposes a Google Sheets CSV export", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+
+  assert.match(html, /data-closed-trades-export/, "closed tab must expose the export button");
+  assert.match(app, /function exportClosedTradesCsv\(\)/, "the export action must be implemented");
+  assert.match(app, /closedTradesForCurrentPortfolio\(\)/, "export must use the active portfolio data, not DOM text");
+  for (const column of ["portfolio", "status", "prediction_result", "outcome", "market", "polymarket_url"]) {
+    assert.match(app, new RegExp(`${column}:`), `CSV includes ${column}`);
+  }
+  assert.match(app, /win_if_correct_usdc/, "CSV includes the Win column as a numeric value");
+  assert.match(app, /realized_pl_usdc/, "CSV includes the P\\/L column as a numeric value");
+  assert.match(app, /els\.closedTradesExport\?\.addEventListener\("click", exportClosedTradesCsv\)/);
+});
+
 test("candidates: the precheck column has no WAITING state", async () => {
   // The precheck column is informational. Execution revalidates every shortlisted
   // candidate from scratch and the shortlist is dispatched without consulting the
