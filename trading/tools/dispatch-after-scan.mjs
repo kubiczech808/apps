@@ -81,14 +81,25 @@ async function main() {
     return;
   }
 
+  const failures = [];
   for (const { workflow, inputs } of planned) {
     const url = `https://api.github.com/repos/${repository}/actions/workflows/${workflow}/dispatches`;
-    await readJson(url, {
-      method: "POST",
-      headers: { ...apiHeaders(token), "Content-Type": "application/json" },
-      body: JSON.stringify({ ref, inputs }),
-    });
-    console.log(`Dispatched ${workflow} for ref ${ref}.`);
+    try {
+      await readJson(url, {
+        method: "POST",
+        headers: { ...apiHeaders(token), "Content-Type": "application/json" },
+        body: JSON.stringify({ ref, inputs }),
+      });
+      console.log(`Dispatched ${workflow} for ref ${ref}.`);
+    } catch (error) {
+      const message = error?.message || String(error);
+      failures.push(`${workflow}: ${message}`);
+      console.warn(`Post-scrape dispatch skipped ${workflow}: ${message}`);
+    }
+  }
+
+  if (failures.length) {
+    console.warn(`Post-scrape dispatch finished with ${failures.length} warning(s); market scan data remains published.`);
   }
 }
 

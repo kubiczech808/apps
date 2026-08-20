@@ -949,6 +949,7 @@ function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades
 {
     if ($includeTrades) {
         if (isset($portfolio['runLog']) && is_array($portfolio['runLog'])) {
+            $portfolio['runLog'] = sorted_run_log_rows($portfolio['runLog']);
             $portfolio['runLog'] = array_slice($portfolio['runLog'], 0, 80);
         }
         return $portfolio;
@@ -974,6 +975,16 @@ function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades
     $compact['trades'] = [];
     $compact['runLog'] = [];
     return $compact;
+}
+
+function sorted_run_log_rows(array $rows): array
+{
+    usort($rows, static function (array $left, array $right): int {
+        $rightTime = strtotime((string) ($right['runAt'] ?? $right['generatedAt'] ?? $right['createdAt'] ?? '')) ?: 0;
+        $leftTime = strtotime((string) ($left['runAt'] ?? $left['generatedAt'] ?? $left['createdAt'] ?? '')) ?: 0;
+        return $rightTime <=> $leftTime;
+    });
+    return $rows;
 }
 
 function compact_dashboard_paper_portfolios(array $data, ?string $selectedStrategyId, bool $overviewOnly): array

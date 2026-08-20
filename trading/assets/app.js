@@ -9478,10 +9478,19 @@ function isSameLiveRun(left, right) {
   return Math.abs(leftAt - rightAt) <= 2000;
 }
 
+function runLogTimestamp(row = {}) {
+  const timestamp = Date.parse(row.runAt || row.generatedAt || row.createdAt || "");
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function sortRunLogRows(rows = []) {
+  return [...rows].sort((left, right) => runLogTimestamp(right) - runLogTimestamp(left));
+}
+
 function mergeUniqueByRun(rows = []) {
   const seen = new Set();
   const merged = [];
-  for (const row of rows) {
+  for (const row of sortRunLogRows(rows)) {
     const key = row?.id || `${row?.runAt || ""}:${row?.strategyId || ""}:${row?.action || ""}`;
     if (!key || seen.has(key)) continue;
     seen.add(key);
@@ -9506,9 +9515,9 @@ function currentPortfolioRunLog() {
       const key = String(item?.runAt || "");
       if (key) merged.set(key, item);
     });
-    source = [...merged.values()].sort((a, b) => (Date.parse(b?.runAt || "") || 0) - (Date.parse(a?.runAt || "") || 0));
+    source = sortRunLogRows([...merged.values()]);
   }
-  const rows = source.filter((row) => !isCadenceWaitRun(row));
+  const rows = sortRunLogRows(source.filter((row) => !isCadenceWaitRun(row)));
   return withRunningExecutionRow(rows);
 }
 
