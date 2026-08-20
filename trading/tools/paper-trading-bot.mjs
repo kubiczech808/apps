@@ -17,6 +17,27 @@ function envBool(name, fallback = false) {
   return String(value).toLowerCase() === "true";
 }
 
+function normalizeStopLossRiskMultiplier(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(3, Number(numeric.toFixed(2))));
+}
+
+function envStopLossRiskMultiplier(prefix, fallback = 0) {
+  const explicit = envNumber(`${prefix}_STOP_LOSS_RISK_MULTIPLIER`, null);
+  if (Number.isFinite(explicit)) return normalizeStopLossRiskMultiplier(explicit, fallback);
+  return envBool(`${prefix}_STOP_LOSS_ENABLED`, fallback > 0)
+    ? (fallback > 0 ? fallback : 1)
+    : 0;
+}
+
+function rowStopLossRiskMultiplier(row = {}, fallback = 0) {
+  if (row && Object.prototype.hasOwnProperty.call(row, "stopLossRiskMultiplier")) {
+    return normalizeStopLossRiskMultiplier(row.stopLossRiskMultiplier, fallback);
+  }
+  return row?.stopLossEnabled === true ? (fallback > 0 ? fallback : 1) : 0;
+}
+
 function envText(name, fallback = "") {
   const value = String(process.env[name] || "")
     .replace(/[\u0000-\u001F\u007F]/g, " ")
@@ -351,7 +372,8 @@ const PAPER_STRATEGIES = {
     allowRotation: envBool("PAPER_CONSERVATIVE_AUTO_ROTATE", true),
     // The mechanism Equal is named for, now a parameter every paper portfolio can
     // turn on. Default preserves each portfolio's established behavior.
-    equalRiskProtection: envBool("PAPER_CONSERVATIVE_STOP_LOSS_ENABLED", false),
+    equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_CONSERVATIVE", 0),
+    equalRiskProtection: envStopLossRiskMultiplier("PAPER_CONSERVATIVE", 0) > 0,
     // A resting limit buy at the current best bid instead of a market buy at the
     // ask. Default off, unchanged behavior absent a saved value.
     useLimitOrders: envBool("PAPER_CONSERVATIVE_USE_LIMIT_ORDERS", false),
@@ -380,7 +402,8 @@ const PAPER_STRATEGIES = {
     allowRotation: envBool("PAPER_HIGH_REWARD_AUTO_ROTATE", true),
     // The mechanism Equal is named for, now a parameter every paper portfolio can
     // turn on. Default preserves each portfolio's established behavior.
-    equalRiskProtection: envBool("PAPER_HIGH_REWARD_STOP_LOSS_ENABLED", false),
+    equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_HIGH_REWARD", 0),
+    equalRiskProtection: envStopLossRiskMultiplier("PAPER_HIGH_REWARD", 0) > 0,
     useLimitOrders: envBool("PAPER_HIGH_REWARD_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_HIGH_REWARD_MARKET_TYPE", "PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE", "all") === "multi",
@@ -407,7 +430,8 @@ const PAPER_STRATEGIES = {
     allowRotation: envBool("PAPER_MORE_PROBABLE_AUTO_ROTATE", true),
     // The mechanism Equal is named for, now a parameter every paper portfolio can
     // turn on. Default preserves each portfolio's established behavior.
-    equalRiskProtection: envBool("PAPER_MORE_PROBABLE_STOP_LOSS_ENABLED", false),
+    equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_MORE_PROBABLE", 0),
+    equalRiskProtection: envStopLossRiskMultiplier("PAPER_MORE_PROBABLE", 0) > 0,
     useLimitOrders: envBool("PAPER_MORE_PROBABLE_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_MORE_PROBABLE_MARKET_TYPE", "PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE", "multi") === "multi",
@@ -438,7 +462,8 @@ const PAPER_STRATEGIES = {
     allowRotation: envBool("PAPER_EQUAL_AUTO_ROTATE", false),
     // The mechanism Equal is named for, now a parameter every paper portfolio can
     // turn on. Default preserves each portfolio's established behavior.
-    equalRiskProtection: envBool("PAPER_EQUAL_STOP_LOSS_ENABLED", true),
+    equalRiskMultiplier: envStopLossRiskMultiplier("PAPER_EQUAL", 1.5),
+    equalRiskProtection: envStopLossRiskMultiplier("PAPER_EQUAL", 1.5) > 0,
     useLimitOrders: envBool("PAPER_EQUAL_USE_LIMIT_ORDERS", false),
     marketType: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all"),
     requireMostProbableOutcome: envPortfolioMarketType("PAPER_EQUAL_MARKET_TYPE", "PAPER_EQUAL_REQUIRE_MOST_PROBABLE", "all") === "multi",
@@ -449,7 +474,7 @@ const PAPER_STRATEGIES = {
     selectionOrder: envSelectionOrder("PAPER_EQUAL_SELECTION_ORDER", "highest_ev_pa_first"),
     // Paper-only proof of concept. Polymarket's current API offers no conditional
     // stop order, so this portfolio records a synthetic exit from a refreshed book.
-    description: "Paper-only equal-risk strategy: planned maximum loss equals the net potential win. A synthetic protective exit follows the selected execution trigger.",
+    description: "Paper-only equal-risk strategy: planned maximum loss is configurable against the net potential win. A synthetic protective exit follows the selected execution trigger.",
   },
 };
 
@@ -493,7 +518,8 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       // stop trading just because its config JSON lacks the key.
       automationEnabled: row.automationEnabled !== false,
       allowRotation: row.autoRotatePositions === true,
-      equalRiskProtection: row.stopLossEnabled === true,
+      equalRiskMultiplier: rowStopLossRiskMultiplier(row, 0),
+      equalRiskProtection: rowStopLossRiskMultiplier(row, 0) > 0,
       useLimitOrders: row.useLimitOrders === true,
       archived: row.archived === true,
       marketType,
@@ -1111,6 +1137,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
     requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
     probabilitySource: strategy.probabilitySource,
+    equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
     equalRiskProtection: Boolean(strategy.equalRiskProtection),
     allowRotation: strategy.allowRotation !== false,
     description: strategy.description,
@@ -1139,6 +1166,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
       marketType: normalizePortfolioMarketType(strategy.marketType, strategy.requireMostProbableOutcome),
       requireMostProbableOutcome: Boolean(strategy.requireMostProbableOutcome),
       probabilitySource: strategy.probabilitySource,
+      equalRiskMultiplier: normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, strategy.equalRiskProtection ? 1 : 0),
       equalRiskProtection: Boolean(strategy.equalRiskProtection),
       allowRotation: strategy.allowRotation !== false,
     },
@@ -3093,29 +3121,32 @@ function netExitValueAtPrice({ shares, price, feeRate = 0, feesEnabled = true } 
   return Number((gross - fee).toFixed(5));
 }
 
-// Equal caps the planned loss at the net gain on a winning resolution. The exit
-// fee is price dependent, therefore a bounded search is safer than duplicating a
-// hand-derived fee equation elsewhere in the trading logic.
-function equalRiskStopPlan({ totalCostUsdc, netGainIfWinUsdc, shares, entryPrice, feeRate = 0, feesEnabled = true } = {}) {
+// Equal caps the planned loss at a configurable multiple of the net gain on a
+// winning resolution. The exit fee is price dependent, therefore a bounded search
+// is safer than duplicating a hand-derived fee equation elsewhere in the trading logic.
+function equalRiskStopPlan({ totalCostUsdc, netGainIfWinUsdc, shares, entryPrice, feeRate = 0, feesEnabled = true, riskMultiplier = 1 } = {}) {
   const cost = Number(totalCostUsdc);
   const reward = Number(netGainIfWinUsdc);
   const size = Number(shares);
   const entry = Number(entryPrice);
-  if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(reward) || reward <= 0 || !Number.isFinite(size) || size <= 0 || !Number.isFinite(entry) || entry <= 0 || entry >= 1) {
+  const multiplier = normalizeStopLossRiskMultiplier(riskMultiplier, 1);
+  if (!Number.isFinite(cost) || cost <= 0 || !Number.isFinite(reward) || reward <= 0 || multiplier <= 0 || !Number.isFinite(size) || size <= 0 || !Number.isFinite(entry) || entry <= 0 || entry >= 1) {
     return { protectable: false, reason: "missing valid entry economics" };
   }
-  if (reward >= cost) {
+  const riskTarget = Number(Math.min(cost, reward * multiplier).toFixed(5));
+  if (riskTarget >= cost) {
     return {
       protectable: true,
       requiresStop: false,
       costUsdc: Number(cost.toFixed(5)),
       riskTargetUsdc: Number(cost.toFixed(5)),
+      stopLossRiskMultiplier: Number(multiplier.toFixed(2)),
       minimumExitValueUsdc: 0,
       stopPrice: null,
     };
   }
 
-  const minimumExitValueUsdc = Number((cost - reward).toFixed(5));
+  const minimumExitValueUsdc = Number((cost - riskTarget).toFixed(5));
   const entryExitValue = netExitValueAtPrice({ shares: size, price: entry, feeRate, feesEnabled });
   if (!Number.isFinite(entryExitValue) || entryExitValue < minimumExitValueUsdc) {
     return { protectable: false, reason: "entry cannot support the required net-loss boundary" };
@@ -3133,7 +3164,8 @@ function equalRiskStopPlan({ totalCostUsdc, netGainIfWinUsdc, shares, entryPrice
     protectable: true,
     requiresStop: true,
     costUsdc: Number(cost.toFixed(5)),
-    riskTargetUsdc: Number(reward.toFixed(5)),
+    riskTargetUsdc: riskTarget,
+    stopLossRiskMultiplier: Number(multiplier.toFixed(2)),
     minimumExitValueUsdc,
     stopPrice: Number(high.toFixed(5)),
   };
@@ -3467,6 +3499,7 @@ async function markOpenTrade(trade) {
           entryPrice: trade.entryPrice,
           feeRate: trade.feeRate,
           feesEnabled: trade.feesEnabled,
+          riskMultiplier: trade.riskTargetUsdc ? 1 : (trade.stopLossRiskMultiplier ?? 1),
         })
         : null;
       const grossCurrentValue = Number((Number(trade.shares || 0) * bestBid).toFixed(4));
@@ -3505,6 +3538,7 @@ async function markOpenTrade(trade) {
           stopLossTriggeredAt: checkedAt,
           stopLossPrice: equalRiskPlan.stopPrice,
           riskTargetUsdc: equalRiskPlan.riskTargetUsdc,
+          stopLossRiskMultiplier: equalRiskPlan.stopLossRiskMultiplier ?? trade.stopLossRiskMultiplier ?? null,
           stopLossCapBreachUsdc: capBreachUsdc,
           statusNote: equalStopDecision.filledByCrossing
             ? `Equal stop filled at its ${equalRiskPlan.stopPrice.toFixed(4)} floor: the market was above the floor at the previous check and is ${bestBid.toFixed(4)} now, so it traded through the resting exit.`
@@ -3533,6 +3567,7 @@ async function markOpenTrade(trade) {
         unrealizedPnlPct: pnlPercent(unrealizedPnl, cost),
         equalRiskProtection: Boolean(trade.equalRiskProtection),
         riskTargetUsdc: equalRiskPlan?.riskTargetUsdc ?? trade.riskTargetUsdc ?? null,
+        stopLossRiskMultiplier: equalRiskPlan?.stopLossRiskMultiplier ?? trade.stopLossRiskMultiplier ?? null,
         stopLossPrice: equalRiskPlan?.stopPrice ?? trade.stopLossPrice ?? null,
         stopLossStatus: equalRiskPlan?.requiresStop ? "ARMED" : (trade.equalRiskProtection ? "NOT_REQUIRED" : null),
         statusNote: trade.equalRiskProtection ? "Marked to current best bid; Equal paper stop is armed." : "Marked to current best bid.",
@@ -5255,6 +5290,7 @@ function strategyEligibleCandidates(eligible, strategy) {
         entryPrice: item.marketPrice,
         feeRate: item.feeRate,
         feesEnabled: item.feesEnabled,
+        riskMultiplier: strategy.equalRiskMultiplier ?? 1,
       });
       if (!plan.protectable) return false;
       const protection = equalRiskEntryProtection({
@@ -5477,6 +5513,7 @@ function portfolioFilterResult(item, strategy) {
       entryPrice: item.marketPrice,
       feeRate: item.feeRate,
       feesEnabled: item.feesEnabled,
+      riskMultiplier: strategy.equalRiskMultiplier ?? 1,
     });
     if (!plan.protectable) reasons.push(`equal-risk protection unavailable: ${plan.reason}`);
     else {
@@ -5573,6 +5610,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
       entryPrice: best.marketPrice,
       feeRate: best.feeRate,
       feesEnabled: best.feesEnabled,
+      riskMultiplier: strategy.equalRiskMultiplier ?? 1,
     })
     : null;
   const selectionEconomics = portfolioEconomics(best, strategy);
@@ -5656,6 +5694,7 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
     unrealizedPnlUsdc: 0,
     unrealizedPnlPct: 0,
     equalRiskProtection: Boolean(strategy.equalRiskProtection),
+    stopLossRiskMultiplier: equalRiskPlan?.stopLossRiskMultiplier ?? (strategy.equalRiskProtection ? normalizeStopLossRiskMultiplier(strategy.equalRiskMultiplier, 1) : null),
     riskTargetUsdc: equalRiskPlan?.riskTargetUsdc ?? null,
     stopLossPrice: equalRiskPlan?.stopPrice ?? null,
     stopLossStatus: equalRiskPlan?.requiresStop ? "ARMED" : (strategy.equalRiskProtection ? "NOT_REQUIRED" : null),
@@ -5686,6 +5725,17 @@ function openPaperTradeForStrategy(best, strategy, today, stake) {
   const takerFeeUsdc = trade.feesEnabled ? takerFeeForFills([{ size: shares, price: limitPrice }], trade.feeRate) : 0;
   const totalCostUsdc = Number((stake + takerFeeUsdc).toFixed(5));
   const netGainIfWinUsdc = Number((shares - totalCostUsdc).toFixed(4));
+  const equalRiskPlan = strategy.equalRiskProtection
+    ? equalRiskStopPlan({
+      totalCostUsdc,
+      netGainIfWinUsdc,
+      shares,
+      entryPrice: limitPrice,
+      feeRate: trade.feeRate,
+      feesEnabled: trade.feesEnabled,
+      riskMultiplier: strategy.equalRiskMultiplier ?? 1,
+    })
+    : null;
   return {
     ...trade,
     status: "LIMIT_ORDER_WAITING",
@@ -5702,6 +5752,11 @@ function openPaperTradeForStrategy(best, strategy, today, stake) {
     maxLossUsdc: totalCostUsdc,
     currentPrice: limitPrice,
     currentValueUsdc: Number(stake.toFixed(2)),
+    stopLossRiskMultiplier: equalRiskPlan?.stopLossRiskMultiplier ?? trade.stopLossRiskMultiplier ?? null,
+    riskTargetUsdc: equalRiskPlan?.riskTargetUsdc ?? null,
+    stopLossPrice: equalRiskPlan?.stopPrice ?? null,
+    stopLossStatus: equalRiskPlan?.requiresStop ? "ARMED" : (strategy.equalRiskProtection ? "NOT_REQUIRED" : null),
+    stopLossMinimumExitUsdc: equalRiskPlan?.minimumExitValueUsdc ?? null,
     marketFills: [{ price: limitPrice, size: shares, costUsdc: Number(stake.toFixed(2)) }],
     statusNote: `Resting limit buy placed at ${limitPrice.toFixed(4)} (the best bid at selection); waiting for the market to fill it.`,
   };

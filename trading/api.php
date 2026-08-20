@@ -1059,6 +1059,7 @@ function default_portfolio_config(): array
                 // Off by default: Conservative never had a protective stop, and turning
                 // this on is what makes Equal's mechanism apply here too.
                 'stopLossEnabled' => false,
+                'stopLossRiskMultiplier' => 0.0,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -1077,6 +1078,7 @@ function default_portfolio_config(): array
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
                 'stopLossEnabled' => false,
+                'stopLossRiskMultiplier' => 0.0,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -1095,6 +1097,7 @@ function default_portfolio_config(): array
                 'probabilitySource' => 'ai',
                 'autoRotatePositions' => true,
                 'stopLossEnabled' => false,
+                'stopLossRiskMultiplier' => 0.0,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -1122,6 +1125,7 @@ function default_portfolio_config(): array
                 // The mechanism this portfolio is named for. It is now a parameter any
                 // paper portfolio may turn on, but Equal is where it ships enabled.
                 'stopLossEnabled' => true,
+                'stopLossRiskMultiplier' => 1.5,
                 'excludedCandidateTokenIds' => [],
                 'includeOnlyMarketTags' => [],
                 'excludedMarketTags' => [],
@@ -1141,6 +1145,8 @@ function default_portfolio_config(): array
             'requireMostProbableOutcome' => false,
             'probabilitySource' => 'ai',
             'autoRotatePositions' => true,
+            'stopLossEnabled' => false,
+            'stopLossRiskMultiplier' => 0.0,
             'excludedCandidateTokenIds' => [],
             'includeOnlyMarketTags' => [],
             'excludedMarketTags' => [],
@@ -1165,6 +1171,8 @@ function default_portfolio_config(): array
             'probabilitySource' => 'polymarket',
             'automationEnabled' => false,
             'autoRotatePositions' => false,
+            'stopLossEnabled' => false,
+            'stopLossRiskMultiplier' => 0.0,
             // Sports and esports are where the short-dated, high-probability fixtures
             // this strategy rests bids against actually live. Empty means every tag.
             'allowedMarketTags' => ['sports', 'esports'],
@@ -1304,6 +1312,18 @@ function normalize_net_yield_value(mixed $value, float $fallback): float
     return max(0.0, min(10.0, round($yield, 3)));
 }
 
+function normalize_stop_loss_risk_multiplier_value(mixed $value, float $fallback): float
+{
+    if (!is_numeric($value)) {
+        return $fallback;
+    }
+    $multiplier = (float) $value;
+    if ($multiplier > 10) {
+        $multiplier /= 100;
+    }
+    return max(0.0, min(3.0, round($multiplier, 2)));
+}
+
 function normalize_selection_order_value(mixed $value): string
 {
     return $value === 'highest_reward_risk_first' ? 'highest_reward_risk_first' : 'highest_ev_pa_first';
@@ -1440,6 +1460,22 @@ function normalize_strategy_config(array $input, array $defaults): array
         $input['marketType'] ?? $defaults['marketType'] ?? null,
         $legacyMultichoice
     );
+    $defaultStopLossRiskMultiplier = normalize_stop_loss_risk_multiplier_value(
+        $defaults['stopLossRiskMultiplier'] ?? (($defaults['stopLossEnabled'] ?? false) ? 1.0 : 0.0),
+        0.0
+    );
+    if (array_key_exists('stopLossRiskMultiplier', $input)) {
+        $stopLossRiskMultiplier = normalize_stop_loss_risk_multiplier_value(
+            $input['stopLossRiskMultiplier'],
+            $defaultStopLossRiskMultiplier
+        );
+    } elseif (array_key_exists('stopLossEnabled', $input)) {
+        $stopLossRiskMultiplier = (bool) $input['stopLossEnabled']
+            ? max(1.0, $defaultStopLossRiskMultiplier)
+            : 0.0;
+    } else {
+        $stopLossRiskMultiplier = $defaultStopLossRiskMultiplier;
+    }
     return [
         'displayName' => normalize_portfolio_display_name(
             $input['displayName'] ?? $defaults['displayName'],
@@ -1484,7 +1520,8 @@ function normalize_strategy_config(array $input, array $defaults): array
         // behavior, matching every other On/Off switch here. Live portfolios have no
         // equivalent -- Polymarket offers no conditional stop order -- so this field is
         // stored on their config too but nothing ever reads it there.
-        'stopLossEnabled' => (bool) ($input['stopLossEnabled'] ?? $defaults['stopLossEnabled'] ?? false),
+        'stopLossEnabled' => $stopLossRiskMultiplier > 0,
+        'stopLossRiskMultiplier' => $stopLossRiskMultiplier,
     ];
 }
 

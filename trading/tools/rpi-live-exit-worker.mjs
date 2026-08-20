@@ -82,6 +82,12 @@ function feeUsdc(shares, price, feeRate, feesEnabled) {
   return Math.max(0, shares * feeRate * price * (1 - price));
 }
 
+function normalizeStopLossRiskMultiplier(value, fallback = 1) {
+  const numeric = number(value);
+  if (numeric == null) return fallback;
+  return Math.max(0, Math.min(3, round(numeric, 2)));
+}
+
 export function netExitValue({ shares, price, feeRate = 0, feesEnabled = true } = {}) {
   const size = number(shares, 0);
   const quote = number(price, 0);
@@ -89,8 +95,9 @@ export function netExitValue({ shares, price, feeRate = 0, feesEnabled = true } 
   return size * quote - feeUsdc(size, quote, feeRate, feesEnabled);
 }
 
-// Solve for the lowest allowed sell price such that the loss is no greater than
-// the potential net win. It is a price floor, not a promise that the book will fill.
+// Solve for the lowest allowed sell price such that the loss is no greater than the
+// configured multiple of the potential net win. It is a price floor, not a promise
+// that the book will fill.
 export function equalRiskExitPlan(position = {}) {
   const shares = number(position.shares ?? position.size);
   const cost = number(position.totalCostUsdc ?? position.stakeUsdc ?? position.initialValue);
@@ -100,12 +107,17 @@ export function equalRiskExitPlan(position = {}) {
   if (!(shares > 0) || !(cost > 0) || potentialWin == null || potentialWin <= 0) {
     return { protectable: false, reason: "position has no positive bounded potential win" };
   }
-  const minimumExitValueUsdc = Math.max(0, cost - potentialWin);
+  const riskMultiplier = normalizeStopLossRiskMultiplier(position.stopLossRiskMultiplier, 1);
+  const riskTargetUsdc = number(position.riskTargetUsdc, Math.min(cost, potentialWin * riskMultiplier));
+  if (!(riskTargetUsdc > 0)) {
+    return { protectable: false, reason: "position stop-loss multiplier is disabled" };
+  }
+  const minimumExitValueUsdc = Math.max(0, cost - riskTargetUsdc);
   if (minimumExitValueUsdc <= 0) {
-    return { protectable: false, reason: "loss target is already fully covered", riskTargetUsdc: potentialWin };
+    return { protectable: false, reason: "loss target is already fully covered", riskTargetUsdc };
   }
   if ((netExitValue({ shares, price: 1, feeRate, feesEnabled }) || 0) < minimumExitValueUsdc) {
-    return { protectable: false, reason: "position cannot cover the risk target at any executable price", riskTargetUsdc: potentialWin };
+    return { protectable: false, reason: "position cannot cover the risk target at any executable price", riskTargetUsdc };
   }
   let low = 0;
   let high = 1;
@@ -118,7 +130,8 @@ export function equalRiskExitPlan(position = {}) {
     protectable: true,
     shares,
     costUsdc: cost,
-    riskTargetUsdc: potentialWin,
+    riskTargetUsdc,
+    stopLossRiskMultiplier: riskMultiplier,
     minimumExitValueUsdc,
     stopPrice: round(high, 6),
     feeRate,

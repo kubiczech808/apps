@@ -27,6 +27,7 @@ test("economics: taker fee follows shares * rate * price * (1 - price)", () => {
 test("equal paper portfolio: its independent $100 account is registered with a synthetic risk cap", () => {
   assert.equal(bot.PAPER_STRATEGIES.equal.label, "Equal");
   assert.equal(bot.PAPER_STRATEGIES.equal.equalRiskProtection, true);
+  assert.equal(bot.PAPER_STRATEGIES.equal.equalRiskMultiplier, 1.5);
   assert.equal(bot.PAPER_STRATEGIES.equal.allowRotation, false);
   assert.equal(bot.PAPER_STRATEGIES.equal.maxFraction, 0.05);
   assert.equal(bot.PAPER_STRATEGIES.equal.executionTrigger, "after_scrape", "Equal defaults to inspecting its synthetic stop after every completed scan");
@@ -558,6 +559,24 @@ test("equal risk: the planned exit leaves no more loss than the net winning gain
   });
   assert.equal(natural.protectable, true);
   assert.equal(natural.requiresStop, false, "a whole-stake loss is already below the possible reward");
+});
+
+test("equal risk: stop multiplier widens the allowed paper loss band", () => {
+  const plan = bot.equalRiskStopPlan({
+    totalCostUsdc: 5,
+    netGainIfWinUsdc: 0.5,
+    shares: 5.5,
+    entryPrice: 0.9,
+    feeRate: 0,
+    feesEnabled: false,
+    riskMultiplier: 1.5,
+  });
+  assert.equal(plan.protectable, true);
+  assert.equal(plan.requiresStop, true);
+  assert.equal(plan.riskTargetUsdc, 0.75);
+  assert.equal(plan.stopLossRiskMultiplier, 1.5);
+  const exitValue = bot.netExitValueAtPrice({ shares: 5.5, price: plan.stopPrice, feesEnabled: false });
+  assert.ok(Math.abs(exitValue - 4.25) < 0.0001, `expected $4.25 exit value, got ${exitValue}`);
 });
 
 test("equal risk: a bid below the sell floor exits immediately and records the gap", () => {
@@ -5868,6 +5887,7 @@ test("equal stop: a watched position exits at its floor, not at the collapsed bi
   const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
   const api = new Function(`
     ${functionSource(bot, "netExitValueAtPrice")}
+    ${functionSource(bot, "normalizeStopLossRiskMultiplier")}
     ${functionSource(bot, "equalRiskStopPlan")}
     ${functionSource(bot, "equalRiskStopExitDecision")}
     return { equalRiskStopPlan, equalRiskStopExitDecision };
@@ -5944,7 +5964,7 @@ test("equal stop: the paper fill is modelled on what the live worker actually su
   // assumption is auditable rather than hidden.
   assert.match(bot, /currentPrice: Number\(equalStopDecision\.fillPrice\.toFixed\(4\)\),/);
   assert.match(bot, /observedBidAtStop: equalStopDecision\.observedBid,/);
-  assert.match(bot, /stopLossStatus: equalStopDecision\.filledByCrossing\n\s+\? "FILLED_AT_FLOOR"/);
+  assert.match(bot, /stopLossStatus: equalStopDecision\.filledByCrossing\r?\n\s+\? "FILLED_AT_FLOOR"/);
 });
 
 // Reported: paper portfolios had no "use limit orders" row in their parameter overview,

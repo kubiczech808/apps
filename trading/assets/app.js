@@ -289,8 +289,8 @@ const els = {
   executionTriggerLabel: document.querySelector("[data-execution-trigger-label]"),
   autoRotatePositions: document.querySelector("[data-auto-rotate-positions]"),
   autoRotatePositionsLabel: document.querySelector("[data-auto-rotate-positions-label]"),
-  stopLossEnabled: document.querySelector("[data-stop-loss-enabled]"),
-  stopLossEnabledLabel: document.querySelector("[data-stop-loss-enabled-label]"),
+  stopLossRiskMultiplier: document.querySelector("[data-stop-loss-risk-multiplier]"),
+  stopLossRiskMultiplierLabel: document.querySelector("[data-stop-loss-risk-multiplier-label]"),
   executionCronRow: document.querySelector("[data-execution-cron-row]"),
   executionCronMinutes: document.querySelector("[data-execution-cron-minutes]"),
   executionCronMinutesLabel: document.querySelector("[data-execution-cron-minutes-label]"),
@@ -626,6 +626,7 @@ function defaultPortfolioConfig() {
         automationEnabled: true,
         autoRotatePositions: true,
         stopLossEnabled: false,
+        stopLossRiskMultiplier: 0,
         marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -644,6 +645,7 @@ function defaultPortfolioConfig() {
         automationEnabled: true,
         autoRotatePositions: true,
         stopLossEnabled: false,
+        stopLossRiskMultiplier: 0,
         marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -662,6 +664,7 @@ function defaultPortfolioConfig() {
         automationEnabled: true,
         autoRotatePositions: true,
         stopLossEnabled: false,
+        stopLossRiskMultiplier: 0,
         marketType: "multi",
         requireMostProbableOutcome: true,
         probabilitySource: "polymarket",
@@ -682,6 +685,7 @@ function defaultPortfolioConfig() {
         // The mechanism this portfolio is named for. It is now a parameter any paper
         // portfolio may turn on, but Equal is where it ships enabled.
         stopLossEnabled: true,
+        stopLossRiskMultiplier: 1.5,
         marketType: "all",
         requireMostProbableOutcome: false,
         probabilitySource: "polymarket",
@@ -700,6 +704,8 @@ function defaultPortfolioConfig() {
       executionCronMinutes: 60,
       automationEnabled: true,
       autoRotatePositions: true,
+      stopLossEnabled: false,
+      stopLossRiskMultiplier: 0,
       useLimitOrders: true,
       marketType: "all",
       requireMostProbableOutcome: false,
@@ -724,6 +730,8 @@ function defaultPortfolioConfig() {
       executionCronMinutes: 60,
       automationEnabled: false,
       autoRotatePositions: false,
+      stopLossEnabled: false,
+      stopLossRiskMultiplier: 0,
       useLimitOrders: true,
       marketType: "all",
       requireMostProbableOutcome: false,
@@ -858,11 +866,29 @@ function automaticRotationIsEnabled(config = {}) {
   return config.autoRotatePositions !== false;
 }
 
+function normalizeStopLossRiskMultiplier(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(3, Number(numeric.toFixed(2))));
+}
+
+function stopLossRiskMultiplier(config = {}) {
+  if (config.stopLossRiskMultiplier != null) {
+    return normalizeStopLossRiskMultiplier(config.stopLossRiskMultiplier, 0);
+  }
+  return config.stopLossEnabled === true ? 1 : 0;
+}
+
 // The paper synthetic stop Equal was built around. Off by default for every portfolio
 // except Equal, which carries it in its own shipped default -- unlike rotation, most
 // portfolios have never had this behavior, so absent must not read as on.
 function stopLossIsEnabled(config = {}) {
-  return config.stopLossEnabled === true;
+  return stopLossRiskMultiplier(config) > 0;
+}
+
+function stopLossRiskLabel(config = {}) {
+  const multiplier = stopLossRiskMultiplier(config);
+  return multiplier > 0 ? `${percent(multiplier)} of net win` : "Off";
 }
 
 function probabilitySourceLabel(value) {
@@ -3972,9 +3998,9 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const autoRotatePositions = automaticRotationIsEnabled(config);
   if (els.autoRotatePositions) els.autoRotatePositions.checked = autoRotatePositions;
   if (els.autoRotatePositionsLabel) els.autoRotatePositionsLabel.textContent = autoRotatePositions ? "On" : "Off";
-  const stopLossEnabled = stopLossIsEnabled(config);
-  if (els.stopLossEnabled) els.stopLossEnabled.checked = stopLossEnabled;
-  if (els.stopLossEnabledLabel) els.stopLossEnabledLabel.textContent = stopLossEnabled ? "On" : "Off";
+  const stopLossMultiplier = stopLossRiskMultiplier(config);
+  if (els.stopLossRiskMultiplier) els.stopLossRiskMultiplier.value = String(Math.round(stopLossMultiplier * 100));
+  if (els.stopLossRiskMultiplierLabel) els.stopLossRiskMultiplierLabel.textContent = stopLossRiskLabel(config);
   // Paper-only: live portfolios have no equivalent to this mechanism, keyed on the
   // portfolio being edited rather than the open tab, like the 5050 rows below.
   els.paperOnlyRows?.forEach((row) => row.toggleAttribute("hidden", LIVE_MODES.has(normalizeMode(mode))));
@@ -6497,9 +6523,7 @@ function portfolioRuleRows(portfolio = {}) {
   rows.push(["Minimum net profit", `>= ${percent(minNetYield)} after fees`]);
   rows.push(["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"]);
   // Any paper portfolio can turn this on now; Equal is only where it ships enabled.
-  rows.push(["Stop loss", stopLossIsEnabled(config)
-    ? "On - planned maximum loss equals net potential win"
-    : "Off"]);
+  rows.push(["Stop loss", stopLossRiskLabel(config)]);
   // The parameter modal already saves this for paper portfolios (the checkbox has no
   // paper-only hide), but this card never showed it -- reading like the setting was
   // live-only, when it is only this row that was missing.
@@ -10754,10 +10778,21 @@ els.autoRotatePositions?.addEventListener("change", () => {
   rerenderCurrentDashboard();
 });
 
-els.stopLossEnabled?.addEventListener("change", () => {
-  const value = Boolean(els.stopLossEnabled.checked);
-  if (updateParameterDraft({ stopLossEnabled: value })) return;
-  updatePortfolioConfigForMode(state.mode, { stopLossEnabled: value });
+els.stopLossRiskMultiplier?.addEventListener("input", () => {
+  if (parameterDraftInputIsEmpty(els.stopLossRiskMultiplier)) {
+    if (els.stopLossRiskMultiplierLabel) els.stopLossRiskMultiplierLabel.textContent = "-";
+    return;
+  }
+  const multiplier = normalizeStopLossRiskMultiplier(Number(els.stopLossRiskMultiplier.value) / 100, 0);
+  const updates = {
+    stopLossEnabled: multiplier > 0,
+    stopLossRiskMultiplier: multiplier,
+  };
+  if (els.stopLossRiskMultiplierLabel) {
+    els.stopLossRiskMultiplierLabel.textContent = multiplier > 0 ? `${percent(multiplier)} of net win` : "Off";
+  }
+  if (updateParameterDraft(updates)) return;
+  updatePortfolioConfigForMode(state.mode, updates);
   savePortfolioConfigSoon();
   syncPortfolioParameterControls();
   rerenderCurrentDashboard();

@@ -391,10 +391,10 @@
         </label>
         <!-- Paper-only: Polymarket offers no conditional stop order, so live portfolios
              have no equivalent mechanism to turn on here. -->
-        <label class="parameter-control order-mode-toggle" data-paper-only-row title="Closes the position when its price falls to where the loss equals the net potential win, instead of waiting for resolution.">
-          <span>Stop loss</span>
-          <input type="checkbox" data-stop-loss-enabled>
-          <strong data-stop-loss-enabled-label>Off</strong>
+        <label class="parameter-control" data-paper-only-row title="0 disables the synthetic paper stop. 100 means the planned maximum loss equals the net potential win; 150 means one and a half times the net potential win.">
+          <span>Stop loss risk</span>
+          <input type="number" min="0" max="300" step="10" value="0" data-stop-loss-risk-multiplier>
+          <strong data-stop-loss-risk-multiplier-label>Off</strong>
         </label>
         <label class="parameter-control" data-fixed-entry-row>
           <span>Order price (5050)</span>
@@ -455,6 +455,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260820-portfolio-type-create"></script>
+  <script src="assets/app.js?v=20260820-stop-loss-risk-multiplier"></script>
 </body>
 </html>

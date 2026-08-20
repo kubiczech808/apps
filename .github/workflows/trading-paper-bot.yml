@@ -322,6 +322,18 @@ jobs:
               with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
                   handle.write(f"{key}={value}\n")
 
+          def stop_loss_multiplier(row, strategy):
+              if isinstance(row, dict) and row.get("stopLossRiskMultiplier") is not None:
+                  try:
+                      value = float(row.get("stopLossRiskMultiplier"))
+                      return max(0.0, min(3.0, round(value, 2)))
+                  except (TypeError, ValueError):
+                      pass
+              enabled = bool(row.get("stopLossEnabled", strategy == "equal")) if isinstance(row, dict) else strategy == "equal"
+              if not enabled:
+                  return 0.0
+              return 1.5 if strategy == "equal" else 1.0
+
           # Portfolios the user created. Their ids are not known when this workflow is
           # written, so they travel as one JSON variable rather than a per-portfolio set
           # of names. The bot validates every id again before it becomes a strategy.
@@ -358,7 +370,9 @@ jobs:
               # The paper synthetic stop Equal was built around, now a parameter every
               # portfolio can turn on. Equal is the only one that shipped with it on;
               # every existing portfolio keeps its prior behavior absent a saved value.
-              emit(f"{prefix}_STOP_LOSS_ENABLED", str(bool(row.get("stopLossEnabled", strategy == "equal"))).lower())
+              multiplier = stop_loss_multiplier(row, strategy)
+              emit(f"{prefix}_STOP_LOSS_RISK_MULTIPLIER", multiplier)
+              emit(f"{prefix}_STOP_LOSS_ENABLED", str(multiplier > 0).lower())
               # A resting limit buy at the current best bid instead of a market buy at
               # the ask: cheaper on fill, but only fills if the market comes to meet it,
               # and is discarded unfilled once the event ends. Default off, unchanged

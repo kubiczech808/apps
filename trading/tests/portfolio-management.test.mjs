@@ -931,28 +931,35 @@ test("rotation: the retired hardcoded label for Equal cannot come back", () => {
 test("stop loss: it is a config parameter on every paper portfolio, defaulting to Equal's established behavior", () => {
   const config = normalizeConfig({
     paper: {
-      conservative: { stopLossEnabled: true },
+      conservative: { stopLossRiskMultiplier: 1.7 },
       highReward: {},
-      equal: { stopLossEnabled: false },
+      equal: { stopLossRiskMultiplier: 0 },
     },
   });
   assert.equal(config.paper.conservative.stopLossEnabled, true, "any portfolio can turn it on");
+  assert.equal(config.paper.conservative.stopLossRiskMultiplier, 1.7, "it stores the configured risk multiple");
   assert.equal(config.paper.highReward.stopLossEnabled, false, "off unless explicitly enabled");
+  assert.equal(config.paper.highReward.stopLossRiskMultiplier, 0);
   assert.equal(config.paper.moreProbable.stopLossEnabled, false);
+  assert.equal(config.paper.moreProbable.stopLossRiskMultiplier, 0);
   assert.equal(config.paper.equal.stopLossEnabled, false, "and Equal can turn it off too");
+  assert.equal(config.paper.equal.stopLossRiskMultiplier, 0);
 });
 
 test("stop loss: an untouched config keeps every portfolio's established behavior", () => {
   const config = normalizeConfig({});
   for (const id of ["conservative", "highReward", "moreProbable"]) {
     assert.equal(config.paper[id].stopLossEnabled, false, `${id} never had this on`);
+    assert.equal(config.paper[id].stopLossRiskMultiplier, 0);
   }
   assert.equal(config.paper.equal.stopLossEnabled, true, "Equal shipped with it on");
+  assert.equal(config.paper.equal.stopLossRiskMultiplier, 1.5, "Equal now defaults to a wider 150% protective band");
 });
 
 test("stop loss: a created portfolio starts with it off, like every other new switch", () => {
   const config = normalizeConfig({ paper: { esports: { displayName: "Esports 60" } } });
   assert.equal(config.paper.esports.stopLossEnabled, false);
+  assert.equal(config.paper.esports.stopLossRiskMultiplier, 0);
 });
 
 test("stop loss: the bot reads a per-portfolio switch, not a constant on Equal alone", () => {
@@ -960,53 +967,44 @@ test("stop loss: the bot reads a per-portfolio switch, not a constant on Equal a
   // rotation is already wired -- and there is no longer a bare `equalRiskProtection:
   // true` sitting outside that pattern for Equal specifically.
   for (const [prefix, fallback] of [
-    ["PAPER_CONSERVATIVE", "false"],
-    ["PAPER_HIGH_REWARD", "false"],
-    ["PAPER_MORE_PROBABLE", "false"],
-    ["PAPER_EQUAL", "true"],
+    ["PAPER_CONSERVATIVE", "0"],
+    ["PAPER_HIGH_REWARD", "0"],
+    ["PAPER_MORE_PROBABLE", "0"],
+    ["PAPER_EQUAL", "1\\.5"],
   ]) {
-    assert.match(BOT, new RegExp(`equalRiskProtection: envBool\\("${prefix}_STOP_LOSS_ENABLED", ${fallback}\\)`));
+    assert.match(BOT, new RegExp(`equalRiskMultiplier: envStopLossRiskMultiplier\\("${prefix}", ${fallback}\\)`));
   }
   assert.equal((BOT.match(/equalRiskProtection: true,/g) || []).length, 0,
     "no strategy may hardcode this outside the per-portfolio switch");
 
-  const build = new Function("process", "MAX_FRACTION", "DEFAULT_MAX_RESOLUTION_DAYS", "PAPER_STRATEGIES",
-    "normalizeExecutionTrigger", "console", `
-    ${extractFunction(BOT, "customPaperStrategies")}
-    return customPaperStrategies;
-  `)({ env: {} }, 0.05, 7, { conservative: { id: "conservative" } },
-    (value) => (value === "after_scrape" ? "after_scrape" : "cron"), console);
-  const strategies = build(JSON.stringify({
-    esports: { displayName: "Esports 60", stopLossEnabled: true },
-    dota: { displayName: "Dota" },
-  }));
-  assert.equal(strategies.esports.equalRiskProtection, true);
-  assert.equal(strategies.dota.equalRiskProtection, false);
+  assert.match(BOT, /equalRiskMultiplier: rowStopLossRiskMultiplier\(row, 0\)/);
+  assert.match(BOT, /equalRiskProtection: rowStopLossRiskMultiplier\(row, 0\) > 0/);
 });
 
 test("stop loss: the workflow passes it through with Equal's established default", () => {
-  assert.match(WORKFLOW,
-    /emit\(f"\{prefix\}_STOP_LOSS_ENABLED", str\(bool\(row\.get\("stopLossEnabled", strategy == "equal"\)\)\)\.lower\(\)\)/);
+  assert.match(WORKFLOW, /def stop_loss_multiplier\(row, strategy\):/);
+  assert.match(WORKFLOW, /emit\(f"\{prefix\}_STOP_LOSS_RISK_MULTIPLIER", multiplier\)/);
+  assert.match(WORKFLOW, /emit\(f"\{prefix\}_STOP_LOSS_ENABLED", str\(multiplier > 0\)\.lower\(\)\)/);
 });
 
 test("stop loss: the parameter modal offers it for every paper portfolio and hides it for live", () => {
-  assert.match(HTML, /data-stop-loss-enabled/);
+  assert.match(HTML, /data-stop-loss-risk-multiplier/);
   assert.match(HTML, /data-paper-only-row/);
   const sync = extractFunction(APP, "syncPortfolioParameterControls");
-  assert.match(sync, /const stopLossEnabled = stopLossIsEnabled\(config\);/);
-  assert.match(sync, /els\.stopLossEnabled\.checked = stopLossEnabled;/);
+  assert.match(sync, /const stopLossMultiplier = stopLossRiskMultiplier\(config\);/);
+  assert.match(sync, /els\.stopLossRiskMultiplier\.value = String\(Math\.round\(stopLossMultiplier \* 100\)\);/);
   assert.match(sync,
     /els\.paperOnlyRows\?\.forEach\(\(row\) => row\.toggleAttribute\("hidden", LIVE_MODES\.has\(normalizeMode\(mode\)\)\)\);/,
     "hidden specifically for live modes, not merely for one hardcoded mode");
-  assert.match(APP, /els\.stopLossEnabled\?\.addEventListener\("change"/);
+  assert.match(APP, /els\.stopLossRiskMultiplier\?\.addEventListener\("input"/);
   // Off by default: unlike rotation (on unless explicitly false), most portfolios have
   // never had this behavior, so an absent value must not read as enabled.
-  assert.match(APP, /function stopLossIsEnabled\(config = \{\}\) \{\n  return config\.stopLossEnabled === true;\n\}/);
+  assert.match(APP, /function stopLossIsEnabled\(config = \{\}\) \{\n  return stopLossRiskMultiplier\(config\) > 0;\n\}/);
 });
 
 test("stop loss: the rules card shows it for every paper portfolio, not only Equal", () => {
   const rows = extractFunction(APP, "portfolioRuleRows");
   assert.ok(!/if \(portfolio\.id === "equal"\)/.test(rows),
     "the row must not be conditional on which portfolio this is");
-  assert.match(rows, /rows\.push\(\["Stop loss", stopLossIsEnabled\(config\)/);
+  assert.match(rows, /rows\.push\(\["Stop loss", stopLossRiskLabel\(config\)\]\);/);
 });
