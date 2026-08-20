@@ -93,6 +93,11 @@ const state = {
   // The id a portfolio being created will be stored under, or "" while an existing
   // portfolio is merely being edited.
   parameterDraftCreate: "",
+  // Portfolio creation can either create a new paper account or configure the existing
+  // connected live account. Live execution is backed by fixed workflows, so this is a
+  // type choice for the create flow, not a hidden third live account.
+  parameterDraftCreateType: "",
+  parameterDraftCreatePrefill: null,
   // The last paper portfolio snapshot seen, kept across tab switches so the overview
   // still has numbers while a live tab is open and only the live state is loaded.
   portfolioOverview: null,
@@ -262,6 +267,10 @@ const els = {
   scrapedStatusLabels: document.querySelectorAll("[data-scraped-status-label]"),
   portfolioName: document.querySelector("[data-portfolio-name]"),
   portfolioNameLabel: document.querySelector("[data-portfolio-name-label]"),
+  portfolioAccountTypeRow: document.querySelector("[data-create-portfolio-type-row]"),
+  portfolioAccountType: document.querySelector("[data-portfolio-account-type]"),
+  portfolioAccountTypeLabel: document.querySelector("[data-portfolio-account-type-label]"),
+  portfolioAccountTypeNote: document.querySelector("[data-portfolio-account-type-note]"),
   eligibilityThreshold: document.querySelector("[data-eligibility-threshold]"),
   eligibilityThresholdLabel: document.querySelector("[data-eligibility-threshold-label]"),
   riskAllocation: document.querySelector("[data-risk-allocation]"),
@@ -962,6 +971,20 @@ function customPaperPortfolioDefaults(strategyId) {
     archived: false,
     custom: true,
   };
+}
+
+function normalizePortfolioAccountType(value) {
+  return value === "live" ? "live" : "paper";
+}
+
+function portfolioAccountTypeLabel(value) {
+  return normalizePortfolioAccountType(value) === "live" ? "Live" : "Paper";
+}
+
+function portfolioAccountTypeNote(value) {
+  return normalizePortfolioAccountType(value) === "live"
+    ? "Live uses the connected Polymarket account and updates the existing Live portfolio."
+    : "Paper keeps its own simulated account and does not touch the live wallet.";
 }
 
 function updatePortfolioConfigForMode(mode, updates) {
@@ -3910,6 +3933,19 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
     els.portfolioName.value = portfolioNameForMode(mode, config);
   }
   if (els.portfolioNameLabel) els.portfolioNameLabel.textContent = portfolioNameForMode(mode, config);
+  const createType = normalizePortfolioAccountType(state.parameterDraftCreateType);
+  if (els.portfolioAccountTypeRow) {
+    els.portfolioAccountTypeRow.hidden = !state.parameterDraftCreate;
+  }
+  if (els.portfolioAccountType) {
+    els.portfolioAccountType.value = createType;
+  }
+  if (els.portfolioAccountTypeLabel) {
+    els.portfolioAccountTypeLabel.textContent = portfolioAccountTypeLabel(createType);
+  }
+  if (els.portfolioAccountTypeNote) {
+    els.portfolioAccountTypeNote.textContent = portfolioAccountTypeNote(createType);
+  }
   if (els.eligibilityThreshold) els.eligibilityThreshold.value = String(Math.round(threshold * 100));
   if (els.eligibilityThresholdLabel) els.eligibilityThresholdLabel.textContent = probability(threshold);
   syncDraftRiskAllocationControl(allocation, capitalContext);
@@ -4009,6 +4045,9 @@ function openParameterModal(trigger) {
   if (!els.parameterModal) return;
   const mode = state.mode;
   state.parameterDraftMode = mode;
+  state.parameterDraftCreate = "";
+  state.parameterDraftCreateType = "";
+  state.parameterDraftCreatePrefill = null;
   state.parameterDraft = { ...portfolioConfigForMode(mode) };
   state.parameterDraftSystem = { ...systemConfig() };
   state.parameterCapitalContext = parameterCapitalContextForMode(mode);
@@ -4079,6 +4118,53 @@ function newPaperPortfolioId(name) {
   return "";
 }
 
+function createPortfolioDraftForType(type, strategyId, prefill = {}, displayName = "") {
+  const accountType = normalizePortfolioAccountType(type);
+  const { displayName: ignoredDisplayName, ...rest } = prefill || {};
+  const label = normalizePortfolioName(displayName || prefill?.displayName, accountType === "live" ? "Live" : "New portfolio");
+  if (accountType === "live") {
+    return {
+      mode: "live",
+      draft: {
+        ...portfolioConfigForMode("live"),
+        ...rest,
+        displayName: label,
+      },
+      capitalContext: parameterCapitalContextForMode("live"),
+    };
+  }
+  return {
+    mode: `paper-${strategyId}`,
+    draft: {
+      ...customPaperPortfolioDefaults(strategyId),
+      ...rest,
+      displayName: label,
+    },
+    capitalContext: parameterCapitalContextForMode("paper-conservative"),
+  };
+}
+
+function switchCreatePortfolioType(type) {
+  if (!state.parameterDraftCreate) return;
+  const accountType = normalizePortfolioAccountType(type);
+  state.parameterDraftCreateType = accountType;
+  const label = normalizePortfolioName(els.portfolioName?.value || state.parameterDraft?.displayName, accountType === "live" ? "Live" : "New portfolio");
+  const next = createPortfolioDraftForType(
+    accountType,
+    state.parameterDraftCreate,
+    state.parameterDraftCreatePrefill || {},
+    label,
+  );
+  state.parameterDraftMode = next.mode;
+  state.parameterDraft = next.draft;
+  state.parameterCapitalContext = next.capitalContext;
+  syncPortfolioParameterControls(next.draft, {
+    mode: next.mode,
+    systemConfig: state.parameterDraftSystem || systemConfig(),
+    capitalContext: next.capitalContext,
+  });
+}
+
 /**
  * Open the parameters form for a portfolio that does not exist yet. `prefill` carries
  * whatever the caller already knows -- a statistics row passes the rule it was measured
@@ -4092,18 +4178,15 @@ function openCreatePortfolioModal(prefill = {}, trigger = null) {
     setExecutionStatus("no room for another portfolio", "error");
     return;
   }
-  const { displayName, ...rest } = prefill;
-  const draft = {
-    ...customPaperPortfolioDefaults(strategyId),
-    ...rest,
-    displayName: label,
-  };
-  state.parameterDraftMode = `paper-${strategyId}`;
+  state.parameterDraftCreateType = "paper";
+  state.parameterDraftCreatePrefill = { ...prefill, displayName: label };
+  const next = createPortfolioDraftForType("paper", strategyId, state.parameterDraftCreatePrefill, label);
+  state.parameterDraftMode = next.mode;
   state.parameterDraftCreate = strategyId;
-  state.parameterDraft = draft;
+  state.parameterDraft = next.draft;
   state.parameterDraftSystem = { ...systemConfig() };
-  state.parameterCapitalContext = parameterCapitalContextForMode("paper-conservative");
-  syncPortfolioParameterControls(draft, {
+  state.parameterCapitalContext = next.capitalContext;
+  syncPortfolioParameterControls(next.draft, {
     mode: state.parameterDraftMode,
     systemConfig: state.parameterDraftSystem,
     capitalContext: state.parameterCapitalContext,
@@ -4272,6 +4355,8 @@ function closeParameterModal() {
   state.parameterDraft = null;
   state.parameterDraftMode = "";
   state.parameterDraftCreate = "";
+  state.parameterDraftCreateType = "";
+  state.parameterDraftCreatePrefill = null;
   state.parameterDraftSystem = null;
   state.parameterCapitalContext = null;
   refreshEligibilityThreshold();
@@ -4294,18 +4379,23 @@ async function confirmParameterModal() {
     els.parameterModalConfirm.textContent = "Saving...";
   }
   const creating = state.parameterDraftCreate;
+  const creatingType = normalizePortfolioAccountType(state.parameterDraftCreateType);
   try {
     if (creating) {
       // The portfolio comes into existence here, on Save -- not when the form was
       // opened. Closing the form without saving leaves the config exactly as it was.
-      const base = state.portfolioConfig || defaultPortfolioConfig();
-      state.portfolioConfig = {
-        ...base,
-        paper: {
-          ...(base.paper || {}),
-          [creating]: { ...customPaperPortfolioDefaults(creating), ...draft, archived: false, custom: true },
-        },
-      };
+      if (creatingType === "live") {
+        updatePortfolioConfigForMode("live", { ...draft, archived: false });
+      } else {
+        const base = state.portfolioConfig || defaultPortfolioConfig();
+        state.portfolioConfig = {
+          ...base,
+          paper: {
+            ...(base.paper || {}),
+            [creating]: { ...customPaperPortfolioDefaults(creating), ...draft, archived: false, custom: true },
+          },
+        };
+      }
     } else {
       updatePortfolioConfigForMode(draftMode, draft);
     }
@@ -4325,8 +4415,8 @@ async function confirmParameterModal() {
       saveLimitOrders(draft.useLimitOrders);
     }
     await savePortfolioConfigNow();
-    setExecutionStatus(creating ? "portfolio created" : "portfolio parameters saved");
-    const createdMode = creating ? `paper-${creating}` : "";
+    setExecutionStatus(creating ? (creatingType === "live" ? "live portfolio configured" : "portfolio created") : "portfolio parameters saved");
+    const createdMode = creating ? (creatingType === "live" ? "live" : `paper-${creating}`) : "";
     closeParameterModal();
     if (createdMode) {
       // Open what was just created: a new portfolio that stays hidden behind the tab
@@ -10487,6 +10577,10 @@ els.portfolioName?.addEventListener("input", () => {
   updatePortfolioConfigForMode(state.mode, { displayName: value });
   savePortfolioConfigSoon();
   syncModeUi();
+});
+
+els.portfolioAccountType?.addEventListener("change", () => {
+  switchCreatePortfolioType(els.portfolioAccountType.value);
 });
 
 els.eligibilityThreshold?.addEventListener("input", () => {

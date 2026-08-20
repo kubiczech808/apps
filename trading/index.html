@@ -66,7 +66,7 @@
             <div class="mode-switch" role="group" aria-label="Portfolio mode" data-mode-switch>
               <button class="mode-button active" type="button" data-mode-toggle="paper-conservative">Paper - Conservative</button>
             </div>
-            <button class="execution-button" type="button" data-create-portfolio title="Create a new paper portfolio">+ Portfolio</button>
+            <button class="execution-button" type="button" data-create-portfolio title="Create a paper or live portfolio configuration">+ Portfolio</button>
           </div>
         </div>
         <div class="portfolio-cards">
@@ -332,6 +332,15 @@
           <input type="text" maxlength="80" autocomplete="off" data-portfolio-name>
           <strong data-portfolio-name-label>Portfolio</strong>
         </label>
+        <label class="parameter-control" data-create-portfolio-type-row hidden>
+          <span>Portfolio type</span>
+          <select data-portfolio-account-type>
+            <option value="paper">Paper</option>
+            <option value="live">Live</option>
+          </select>
+          <strong data-portfolio-account-type-label>Paper</strong>
+          <em data-portfolio-account-type-note>Paper keeps its own simulated account.</em>
+        </label>
         <label class="parameter-control">
           <span>Probability threshold</span>
           <input type="number" min="1" max="99" step="1" value="95" data-eligibility-threshold>
@@ -446,6 +455,6 @@
 
   <!-- Bump on every assets/app.js change. The browser caches this exact URL, so a deploy
        that leaves it alone publishes the new file and keeps serving the old one. -->
-  <script src="assets/app.js?v=20260817-stop-loss-parameter"></script>
+  <script src="assets/app.js?v=20260820-portfolio-type-create"></script>
 </body>
 </html>

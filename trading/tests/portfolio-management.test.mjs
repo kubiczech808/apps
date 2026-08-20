@@ -441,6 +441,20 @@ test("dashboard: both statistics tables offer to create the portfolio behind a r
   assert.match(APP, /colspan="12">No resolved scraped opportunity simulation/);
 });
 
+test("portfolio creation: user chooses paper or the connected live account", () => {
+  assert.match(HTML, /data-portfolio-account-type/);
+  assert.match(HTML, /<option value="paper">Paper<\/option>/);
+  assert.match(HTML, /<option value="live">Live<\/option>/);
+  assert.match(APP, /function switchCreatePortfolioType\(type\)/,
+    "the create dialog can rebuild its draft when the account type changes");
+  assert.match(APP, /els\.portfolioAccountType\?\.addEventListener\("change", \(\) => \{\s+switchCreatePortfolioType\(els\.portfolioAccountType\.value\);/,
+    "the selector is wired");
+  assert.match(APP, /creatingType === "live"[\s\S]*?updatePortfolioConfigForMode\("live", \{ \.\.\.draft, archived: false \}\);/,
+    "saving a live creation must configure the existing connected live portfolio");
+  assert.match(APP, /creatingType === "live" \? "live" : `paper-\$\{creating\}`/,
+    "after saving, the dashboard opens the portfolio type the user selected");
+});
+
 test("archiving: it is confirmed before it happens and restorable afterwards", () => {
   const handler = /const archiveButton = event\.target\.closest\("\[data-parameter-modal-archive\]"\);[\s\S]*?\n  \}/.exec(APP);
   assert.ok(handler, "the archive control is wired");
