@@ -652,7 +652,7 @@ jobs:
         # is "a scheduled scrape finished" rather than one specific cron entry.
         if: github.event_name == 'schedule' && success()
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.POLY_TRADING_GITHUB_TOKEN || github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: node trading/tools/dispatch-after-scan.mjs
