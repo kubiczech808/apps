@@ -36,6 +36,20 @@ async function main() {
       console.log(`id=${strategyId} displayName=${JSON.stringify(row.displayName)}`);
     }
   }
+
+  // Bypasses api.php entirely: reads the raw file the workflow's FTP upload
+  // wrote, so a mismatch against the api.php-served list above localizes the
+  // bug to either the publish step or the read/serve layer.
+  console.log("\n-- raw static paper-state.json (bypasses api.php) --");
+  const staticResult = await fetchJson(`${HOST}/data/paper-state.json`);
+  if (!staticResult.ok) {
+    console.log(`!! could not read static state: HTTP ${staticResult.status} ${staticResult.error || ""}`);
+  } else {
+    const staticPortfolios = staticResult.body?.paperPortfolios || {};
+    console.log(`generatedAt : ${staticResult.body?.generatedAt}`);
+    console.log(`stateSegments keys: ${Object.keys(staticResult.body?.stateSegments || {}).join(", ") || "(none)"}`);
+    console.log(`portfolio ids: ${Object.keys(staticPortfolios).join(", ") || "(none)"}`);
+  }
 }
 
 main();
