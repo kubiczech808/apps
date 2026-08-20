@@ -5733,7 +5733,10 @@ async function refreshOpenedTradesValues() {
       if (liveState) renderLiveState(liveState);
       setExecutionStatus("opened-trade values recalculated");
     } else {
-      const botState = await fetchJson("data/paper-state.json");
+      const botState = await fetchJson("data/paper-state.json", {
+        summary: "dashboard",
+        strategyId: paperStrategyIdFromMode(),
+      });
       state.botState = botStateWithPreservedEvaluations(botState);
       state.botStateFull = botStateIsFull(state.botState);
       renderBotState(state.botState);
@@ -5988,8 +5991,11 @@ async function triggerManualOpportunityEvaluation(item, trigger = null) {
       steps = addExecutionStep(steps, "Workflow finished with warning", `Conclusion: ${workflow.run.conclusion}`, "error");
       return;
     }
-    const refreshed = await fetchJson("data/paper-state.json");
-    state.botStateFull = true;
+    const refreshed = await fetchJson("data/paper-state.json", {
+      summary: "dashboard",
+      strategyId: paperStrategyIdFromMode(),
+    });
+    state.botStateFull = botStateIsFull(refreshed);
     state.botState = refreshed;
     renderBotState(refreshed);
     steps = addExecutionStep(steps, "Evaluation saved", "The analysis and any changed values are now in the evaluation log.", "done");

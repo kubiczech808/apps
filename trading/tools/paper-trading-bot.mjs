@@ -727,6 +727,8 @@ async function fetchJson(url) {
 const STATE_SEGMENT_FIELDS = {
   observations: ["marketObservations", "marketScan"],
   evaluations: ["evaluations"],
+  archives: ["paperPortfolioArchives"],
+  reports: ["evaluationRunLog", "calculationReports", "latestCalculationReport"],
   // Scan history is short but carries per-run audits, and the audit endpoints
   // read nothing else. A separate file lets them skip the market catalogue.
   scanHistory: ["marketScanHistory"],
@@ -779,11 +781,56 @@ function observationIsResolved(item) {
 
 function stateSegmentFileName(name) {
   const base = basename(OUTPUT_PATH).replace(/\.json$/i, "");
-  return `${base}.${name}.json`;
+  const safeName = String(name).replace(/[^A-Za-z0-9_-]+/g, "-");
+  return `${base}.${safeName}.json`;
 }
 
 function stateSegmentPath(name) {
   return join(dirname(OUTPUT_PATH), stateSegmentFileName(name));
+}
+
+function compactPaperPortfolioForCore(portfolio) {
+  if (!portfolio || typeof portfolio !== "object") return portfolio;
+  const compact = {};
+  for (const field of [
+    "id",
+    "label",
+    "displayName",
+    "description",
+    "selectionMetric",
+    "selectionOrder",
+    "minProbability",
+    "stakeUsdc",
+    "maxFraction",
+    "maxResolutionDays",
+    "minLiquidityUsdc",
+    "minNetYield",
+    "executionTrigger",
+    "marketType",
+    "requireMostProbableOutcome",
+    "probabilitySource",
+    "equalRiskMultiplier",
+    "equalRiskProtection",
+    "allowRotation",
+    "resetAt",
+    "resetArchiveId",
+    "capitalAdjustmentUsdc",
+    "capitalAdjustmentAt",
+    "portfolio",
+    "lastTradeDate",
+    "lastTradeHour",
+    "lastDecision",
+    "archived",
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(portfolio, field)) compact[field] = portfolio[field];
+  }
+  compact.trades = [];
+  compact.runLog = [];
+  return compact;
+}
+
+function portfolioSegmentName(id) {
+  return `portfolio:${id}`;
 }
 
 // An absent field and an empty field are not the same thing here: a reader that
@@ -797,6 +844,32 @@ function splitStateIntoSegments(state) {
   const allObservations = Array.isArray(state.marketObservations) ? state.marketObservations : [];
   const activeObservations = allObservations.filter((item) => !observationIsResolved(item));
   const resolvedObservations = allObservations.filter(observationIsResolved);
+  const paperPortfolios = state.paperPortfolios && typeof state.paperPortfolios === "object" && !Array.isArray(state.paperPortfolios)
+    ? state.paperPortfolios
+    : {};
+
+  core.paperPortfolios = {};
+  for (const [id, portfolio] of Object.entries(paperPortfolios)) {
+    if (!portfolio || typeof portfolio !== "object") continue;
+    const name = portfolioSegmentName(id);
+    segments[name] = {
+      strategyId: id,
+      paperPortfolio: portfolio,
+    };
+    manifest[name] = {
+      file: stateSegmentFileName(name),
+      fields: ["paperPortfolio"],
+      strategyId: id,
+      counts: { trades: Array.isArray(portfolio.trades) ? portfolio.trades.length : 0 },
+    };
+    core.paperPortfolios[id] = compactPaperPortfolioForCore(portfolio);
+  }
+
+  // These are legacy aliases or rarely opened historical views. The full data remains
+  // recoverable from the portfolio segments above, while the core has to stay small
+  // enough for the hosting's PHP memory limit.
+  core.trades = [];
+  core.runLog = [];
 
   for (const [name, fields] of Object.entries(STATE_SEGMENT_FIELDS)) {
     const payload = {};
@@ -850,6 +923,15 @@ function splitStateIntoSegments(state) {
 function mergeStateSegment(state, segment) {
   if (!segment || typeof segment !== "object") return state;
   const merged = { ...state };
+  if (segment.paperPortfolio && typeof segment.paperPortfolio === "object") {
+    const id = String(segment.strategyId || segment.paperPortfolio.id || "").trim();
+    if (id) {
+      merged.paperPortfolios = {
+        ...(merged.paperPortfolios && typeof merged.paperPortfolios === "object" ? merged.paperPortfolios : {}),
+        [id]: segment.paperPortfolio,
+      };
+    }
+  }
   for (const fields of Object.values(STATE_SEGMENT_FIELDS)) {
     for (const field of fields) {
       if (!(field in segment)) continue;
@@ -895,13 +977,18 @@ function stateSegmentUrls(manifest) {
     .map((file) => `${prefix}${file}`);
 }
 
+function stateSegmentNamesFromManifest(manifest) {
+  if (!manifest || typeof manifest !== "object") return [];
+  return Object.keys(manifest).filter((name) => !DERIVED_STATE_SEGMENTS.has(name));
+}
+
 // A checked-out or previously written state on disk is segmented the same way,
 // so local reads have to reassemble it before the shape checks run.
 async function readLocalStateFile(path) {
   const raw = await readFile(path, "utf8");
   let parsed = JSON.parse(raw);
   if (!parsed || typeof parsed !== "object" || !parsed.stateSegments) return parsed;
-  for (const name of STATE_SEGMENT_NAMES) {
+  for (const name of stateSegmentNamesFromManifest(parsed.stateSegments)) {
     try {
       parsed = mergeStateSegment(parsed, JSON.parse(await readFile(stateSegmentPath(name), "utf8")));
     } catch {
@@ -920,7 +1007,7 @@ async function readStateWithSegments(payload) {
   // readers that display part of another one and is deliberately not fetched here, so
   // counting it as missing below would refuse to run on a perfectly complete state.
   const declared = manifest && typeof manifest === "object"
-    ? Object.keys(manifest).filter((name) => !DERIVED_STATE_SEGMENTS.has(name))
+    ? stateSegmentNamesFromManifest(manifest)
     : [];
   if (declared.length === 0) return payload;
 

@@ -202,7 +202,7 @@ function state_file_paths(): array
     ];
 }
 
-function state_payload(string $target, array $segments = ['observations', 'evaluations']): array
+function state_payload(string $target, array $segments = ['observations', 'evaluations'], ?string $selectedStrategyId = null): array
 {
     $files = state_file_paths();
     if (!isset($files[$target])) {
@@ -256,6 +256,22 @@ function state_payload(string $target, array $segments = ['observations', 'evalu
         unset($segment);
     }
 
+    if ($target === 'paper' && $selectedStrategyId !== null && preg_match('/^[A-Za-z0-9_-]{1,64}$/', $selectedStrategyId)) {
+        $name = 'portfolio:' . $selectedStrategyId;
+        if (isset($manifest[$name]) && is_array($manifest[$name])) {
+            $file = (string) ($manifest[$name]['file'] ?? '');
+            if (preg_match('/^[A-Za-z0-9._-]+\.json$/', $file)) {
+                $segment = decode_state_file(dirname($path) . '/' . $file, false);
+                if (is_array($segment) && isset($segment['paperPortfolio']) && is_array($segment['paperPortfolio'])) {
+                    if (!isset($data['paperPortfolios']) || !is_array($data['paperPortfolios'])) {
+                        $data['paperPortfolios'] = [];
+                    }
+                    $data['paperPortfolios'][$selectedStrategyId] = $segment['paperPortfolio'];
+                }
+            }
+        }
+    }
+
     return $data;
 }
 
@@ -272,7 +288,7 @@ function state_payload(string $target, array $segments = ['observations', 'evalu
  * legitimate -- it means this read raced an in-flight replication, and re-reading
  * a moment later almost always sees the current copy.
  */
-function paper_state_with_consistent_portfolios(array $payload, string $summary): array
+function paper_state_with_consistent_portfolios(array $payload, string $summary, ?string $selectedStrategyId = null): array
 {
     $configuredIds = array_keys(load_portfolio_config()['paper'] ?? []);
     if ($configuredIds === []) {
@@ -285,7 +301,7 @@ function paper_state_with_consistent_portfolios(array $payload, string $summary)
         }
         usleep(250000);
         clearstatcache(true, state_file_paths()['paper']);
-        $payload = state_payload('paper', state_segments_for_summary($summary));
+        $payload = state_payload('paper', state_segments_for_summary($summary), $selectedStrategyId);
     }
     return $payload;
 }
@@ -2619,6 +2635,10 @@ function paper_strategy_from_target(string $target): ?string
         return $builtIn;
     }
 
+    if (in_array($target, ['paper-scan', 'paper-evaluation', 'paper-refresh'], true)) {
+        return null;
+    }
+
     if (!str_starts_with($target, 'paper-')) {
         return null;
     }
@@ -2897,9 +2917,9 @@ try {
         $strategyId = isset($_GET['strategy_id']) ? (string) $_GET['strategy_id'] : null;
         // Load the segments this summary reads before decoding anything else. The
         // dashboard is by far the most requested view and needs none of them.
-        $payload = state_payload($target, state_segments_for_summary($summary));
+        $payload = state_payload($target, state_segments_for_summary($summary), $strategyId);
         if ($target === 'paper') {
-            $payload = paper_state_with_consistent_portfolios($payload, $summary);
+            $payload = paper_state_with_consistent_portfolios($payload, $summary, $strategyId);
             $payload = compact_state_payload($target, $payload, $summary, $strategyId);
         }
         respond($payload);
