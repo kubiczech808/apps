@@ -959,7 +959,8 @@ function portfolioConfigForMode(mode = state.mode) {
 }
 
 // Mirrors custom_paper_portfolio_defaults() in api.php. A created portfolio starts from
-// the most permissive shipped profile and trades nothing until its own switch is on.
+// the most permissive shipped profile and is executed through the same automation path
+// as shipped paper portfolios unless the user explicitly switches it off.
 function customPaperPortfolioDefaults(strategyId) {
   return {
     ...defaultPortfolioConfig().paper.highReward,
@@ -967,7 +968,7 @@ function customPaperPortfolioDefaults(strategyId) {
     minProbability: 0.5,
     minLiquidityUsdc: null,
     autoRotatePositions: false,
-    automationEnabled: false,
+    automationEnabled: true,
     archived: false,
     custom: true,
   };

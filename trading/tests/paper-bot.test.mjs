@@ -3181,6 +3181,12 @@ test("automation: a portfolio can be switched off and paced, and a manual run ov
   assert.equal(bot.strategyCadenceIsDue(hourly, minutesAgoIso(59), now, { manual: true }), true, "a manual run ignores the cadence");
   assert.equal(bot.strategyCadenceIsDue(hourly, minutesAgoIso(61), now, { manual: false }), true, "due");
   assert.equal(bot.strategyCadenceIsDue(hourly, null, now, { manual: false }), true, "no previous run is not a reason to wait");
+  assert.equal(bot.lastRunAtForStrategy({
+    runLog: [{ strategyId: "conservative", runAt: minutesAgoIso(5) }],
+    paperPortfolios: {
+      customOne: { runLog: [{ strategyId: "customOne", runAt: minutesAgoIso(65) }] },
+    },
+  }, { id: "customOne" }), minutesAgoIso(65), "a created portfolio uses its own run log for cadence");
   // Legacy 0 becomes the concrete one-hour default, while after-scrape still
   // runs every batch.
   assert.equal(bot.strategyCadenceIsDue({ ...base, executionCronMinutes: 0 }, minutesAgoIso(1), now, { manual: false }), false);

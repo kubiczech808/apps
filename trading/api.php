@@ -1510,9 +1510,10 @@ function custom_paper_portfolio_defaults(string $id): array
     $defaults['minProbability'] = 0.5;
     $defaults['minLiquidityUsdc'] = null;
     $defaults['autoRotatePositions'] = false;
-    // A new portfolio does not start trading the moment it is saved. Turning it on is a
-    // separate, deliberate act on a form the user has already read.
-    $defaults['automationEnabled'] = false;
+    // A created paper portfolio is still a paper portfolio: once the user saves it, it
+    // should participate in the same scheduled execution pipeline as the shipped ones
+    // unless its own automation switch is deliberately turned off.
+    $defaults['automationEnabled'] = true;
     $defaults['archived'] = false;
 
     return $defaults;

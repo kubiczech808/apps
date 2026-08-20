@@ -488,9 +488,10 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       minNetYield: Number.isFinite(Number(row.minNetYield)) ? Number(row.minNetYield) : 0,
       executionTrigger: normalizeExecutionTrigger(row.executionTrigger),
       executionCronMinutes: Math.max(30, Number(row.executionCronMinutes) || 60),
-      // A created portfolio only trades once its own switch is on, so an id that
-      // reaches the bot before the user has finished with the form stays idle.
-      automationEnabled: row.automationEnabled === true,
+      // Absent means on, matching shipped paper portfolios and the API normalizer. A
+      // created portfolio that was saved before this field existed must not silently
+      // stop trading just because its config JSON lacks the key.
+      automationEnabled: row.automationEnabled !== false,
       allowRotation: row.autoRotatePositions === true,
       equalRiskProtection: row.stopLossEnabled === true,
       useLimitOrders: row.useLimitOrders === true,
@@ -5205,10 +5206,15 @@ function normalizeExecutionTrigger(value) {
 }
 
 function lastRunAtForStrategy(state, strategy) {
-  const rows = Array.isArray(state?.runLog) ? state.runLog : [];
+  const strategyId = String(strategy?.id || "");
+  const ownRows = Array.isArray(state?.paperPortfolios?.[strategyId]?.runLog)
+    ? state.paperPortfolios[strategyId].runLog
+    : [];
+  const legacyRows = strategyId === "conservative" && Array.isArray(state?.runLog) ? state.runLog : [];
+  const rows = [...ownRows, ...legacyRows];
   let latest = null;
   for (const row of rows) {
-    if (String(row?.strategyId || "") !== String(strategy?.id || "")) continue;
+    if (String(row?.strategyId || strategyId) !== strategyId) continue;
     const time = Date.parse(row?.runAt || row?.generatedAt || "");
     if (!Number.isFinite(time)) continue;
     if (latest == null || time > latest) latest = time;
@@ -9727,6 +9733,7 @@ export {
   mergeCadence,
   minutesSinceIso,
   netYieldAfterFees,
+  lastRunAtForStrategy,
   strategyCadenceIsDue,
   strategyEligibleCandidates,
   strategyMatchesExecutionTrigger,

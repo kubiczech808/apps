@@ -97,8 +97,9 @@ test("created portfolios: a config carrying one is stored beside the shipped fou
   assert.equal(created.displayName, "Esports 60");
   assert.equal(created.minProbability, 0.6);
   assert.deepEqual(created.includeOnlyMarketTags, ["league-of-legends"]);
-  // A created portfolio does not start trading the moment it is saved.
-  assert.equal(created.automationEnabled, false);
+  // A created paper portfolio participates in the same paper execution pipeline as
+  // shipped portfolios unless its own switch is deliberately turned off.
+  assert.equal(created.automationEnabled, true);
   assert.equal(created.archived, false);
 });
 
@@ -203,6 +204,11 @@ test("created portfolios: the bot builds strategies from the config the workflow
   assert.equal(strategies.esports.automationEnabled, true);
   assert.equal(strategies.esports.allowRotation, true);
   assert.deepEqual([...strategies.esports.includeOnlyMarketTags], ["league-of-legends"]);
+  const legacyStrategies = build(JSON.stringify({
+    oldConfig: { displayName: "Saved before automation switch" },
+  }));
+  assert.equal(legacyStrategies.oldConfig.automationEnabled, true,
+    "a created portfolio without the field must keep trading automatically");
   // Malformed input must not take the shipped portfolios down with it.
   assert.deepEqual(build("{not json"), {});
   assert.deepEqual(build(""), {});
@@ -349,9 +355,9 @@ test("dashboard: a created portfolio's settings are its own", () => {
   assert.equal(api.portfolioConfigForMode("paper-esports").displayName, "Esports 60");
   // The fields it did not set come from the created-portfolio base, not from whichever
   // shipped portfolio happens to be first: Conservative would require 95% probability
-  // and start trading immediately, neither of which this portfolio asked for.
+  // and its other settings would leak into a custom portfolio.
   assert.equal(api.portfolioConfigForMode("paper-esports").minProbability, 0.5);
-  assert.equal(api.portfolioConfigForMode("paper-esports").automationEnabled, false);
+  assert.equal(api.portfolioConfigForMode("paper-esports").automationEnabled, true);
   assert.equal(api.portfolioConfigForMode("paper-esports").archived, false);
   api.updatePortfolioConfigForMode("paper-esports", { minProbability: 0.62 });
   assert.equal(api.portfolioConfigForMode("paper-esports").minProbability, 0.62);
