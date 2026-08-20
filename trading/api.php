@@ -1046,6 +1046,7 @@ function default_portfolio_config(): array
             'conservative' => [
                 'displayName' => 'Conservative',
                 'minProbability' => 0.95,
+                'stakeUsdc' => 5.0,
                 'maxOrderFraction' => 0.05,
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_ev_pa_first',
@@ -1067,6 +1068,7 @@ function default_portfolio_config(): array
             'highReward' => [
                 'displayName' => 'High reward',
                 'minProbability' => 0.6,
+                'stakeUsdc' => 5.0,
                 'maxOrderFraction' => 0.05,
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_reward_risk_first',
@@ -1086,6 +1088,7 @@ function default_portfolio_config(): array
             'moreProbable' => [
                 'displayName' => 'More probable',
                 'minProbability' => 0.6,
+                'stakeUsdc' => 5.0,
                 'maxOrderFraction' => 0.05,
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_reward_risk_first',
@@ -1105,6 +1108,7 @@ function default_portfolio_config(): array
             'equal' => [
                 'displayName' => 'Equal',
                 'minProbability' => 0.75,
+                'stakeUsdc' => 5.0,
                 'maxOrderFraction' => 0.05,
                 'maxResolutionDays' => 7,
                 'selectionOrder' => 'highest_ev_pa_first',
@@ -1134,6 +1138,7 @@ function default_portfolio_config(): array
         'live' => [
             'displayName' => 'Live',
             'minProbability' => 0.95,
+            'stakeUsdc' => 5.0,
             'maxOrderFraction' => 0.05,
             'maxResolutionDays' => 7,
             'selectionOrder' => 'highest_ev_pa_first',
@@ -1159,6 +1164,7 @@ function default_portfolio_config(): array
             'minProbability' => 0.90,
             'fixedEntryPrice' => 0.50,
             'stakePerOrderUsdc' => null,
+            'stakeUsdc' => 5.0,
             'maxOrderFraction' => 0.05,
             'maxResolutionDays' => 30,
             'selectionOrder' => 'highest_ev_pa_first',
@@ -1271,6 +1277,14 @@ function normalize_fraction_value(mixed $value, float $fallback): float
         $fraction /= 100;
     }
     return max(0.01, min(0.5, $fraction));
+}
+
+function normalize_stake_usdc_value(mixed $value, float $fallback): float
+{
+    if (!is_numeric($value)) {
+        return max(0.01, min(1000.0, round($fallback, 2)));
+    }
+    return max(0.01, min(1000.0, round((float) $value, 2)));
 }
 
 function normalize_optional_days_value(mixed $value): ?int
@@ -1482,6 +1496,9 @@ function normalize_strategy_config(array $input, array $defaults): array
             (string) $defaults['displayName']
         ),
         'minProbability' => normalize_probability_value($input['minProbability'] ?? null, (float) $defaults['minProbability']),
+        'stakeUsdc' => normalize_stake_usdc_value($input['stakeUsdc'] ?? null, (float) ($defaults['stakeUsdc'] ?? 5.0)),
+        // Kept for backward compatibility with older workflow inputs and archived
+        // states. New sizing uses the fixed stakeUsdc field above.
         'maxOrderFraction' => normalize_fraction_value($input['maxOrderFraction'] ?? null, (float) $defaults['maxOrderFraction']),
         'maxResolutionDays' => normalize_days_value($input['maxResolutionDays'] ?? null, (int) $defaults['maxResolutionDays']),
         'selectionOrder' => normalize_selection_order_value($input['selectionOrder'] ?? $defaults['selectionOrder']),
@@ -2629,6 +2646,8 @@ try {
         $scanTag = normalized_scan_tag_input($payload['market_scan_tag'] ?? null);
         $scanLiquidityMin = normalized_money_input($payload['market_scan_liquidity_min'] ?? $payload['marketScanLiquidityMin'] ?? null);
         $scanMaxDays = normalized_scan_max_days_input($payload['market_scan_max_days'] ?? $payload['marketScanMaxDays'] ?? null);
+        $liveStakeUsdc = normalized_money_input($payload['stake_usdc'] ?? $payload['stakeUsdc'] ?? $payload['live_stake_usdc'] ?? null);
+        $paperStakeUsdc = normalized_money_input($payload['stake_usdc'] ?? $payload['stakeUsdc'] ?? $payload['paper_stake_usdc'] ?? null);
         $liveMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['live_max_order_fraction'] ?? null);
         $paperMaxOrderFraction = normalized_fraction_input($payload['max_order_fraction'] ?? $payload['paper_max_order_fraction'] ?? null);
         $liveMaxResolutionDays = normalized_days_input($payload['maxResolutionDays'] ?? $payload['live_max_resolution_days'] ?? null);
@@ -2658,6 +2677,7 @@ try {
         $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
         $paperExtraInputs = [];
         foreach ($paperStrategies as $strategy) {
+            $paperExtraInputs["paper_{$strategy}_stake_usdc"] = normalized_money_input($payload["paper_{$strategy}_stake_usdc"] ?? null);
             $paperExtraInputs["paper_{$strategy}_max_order_fraction"] = normalized_fraction_input($payload["paper_{$strategy}_max_order_fraction"] ?? null);
             $paperExtraInputs["paper_{$strategy}_max_resolution_days"] = normalized_days_input($payload["paper_{$strategy}_max_resolution_days"] ?? null);
             $paperExtraInputs["paper_{$strategy}_selection_order"] = normalized_selection_order_input($payload["paper_{$strategy}_selection_order"] ?? null);
@@ -2669,6 +2689,7 @@ try {
                 'workflow' => 'trading-paper-bot.yml',
                 'inputs' => array_filter(array_merge([
                     'mode' => 'full',
+                    'paper_stake_usdc' => $paperStakeUsdc,
                     'paper_max_order_fraction' => $paperMaxOrderFraction,
                     'paper_conservative_min_probability' => $paperConservativeMinProbability,
                     'paper_high_reward_min_probability' => $paperHighRewardMinProbability,
@@ -2683,6 +2704,7 @@ try {
                 'inputs' => array_filter([
                     'live_confirm' => true,
                     'live_min_probability' => $liveMinProbability,
+                    'live_stake_usdc' => $liveStakeUsdc,
                     'live_max_order_fraction' => $liveMaxOrderFraction,
                     'live_max_resolution_days' => $liveMaxResolutionDays,
                     'live_selection_order' => $liveSelectionOrder,

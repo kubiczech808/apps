@@ -48,6 +48,11 @@ on:
         required: false
         default: "0.05"
         type: string
+      paper_stake_usdc:
+        description: "Fixed maximum stake per paper trade in USDC"
+        required: false
+        default: "5"
+        type: string
       paper_conservative_min_probability:
         description: "Conservative configured probability threshold, decimal 0.01-0.99"
         required: false
@@ -68,13 +73,28 @@ on:
         required: false
         default: ""
         type: string
+      paper_conservative_stake_usdc:
+        description: "Conservative fixed stake in USDC"
+        required: false
+        default: ""
+        type: string
       paper_high_reward_max_order_fraction:
         description: "High reward max stake fraction"
         required: false
         default: ""
         type: string
+      paper_high_reward_stake_usdc:
+        description: "High reward fixed stake in USDC"
+        required: false
+        default: ""
+        type: string
       paper_more_probable_max_order_fraction:
         description: "More probable max stake fraction"
+        required: false
+        default: ""
+        type: string
+      paper_more_probable_stake_usdc:
+        description: "More probable fixed stake in USDC"
         required: false
         default: ""
         type: string
@@ -169,6 +189,7 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=6144
       PAPER_PORTFOLIO_USDC: "100"
       PAPER_MAX_FRACTION: ${{ github.event.inputs.paper_max_order_fraction || '0.05' }}
+      PAPER_STAKE_USDC: ${{ github.event.inputs.paper_stake_usdc || '5' }}
       PAPER_MIN_PROBABILITY: "0.95"
       PAPER_CONSERVATIVE_MIN_PROBABILITY: ${{ github.event.inputs.paper_conservative_min_probability || '0.95' }}
       PAPER_HIGH_REWARD_MIN_PROBABILITY: ${{ github.event.inputs.paper_high_reward_min_probability || '0.60' }}
@@ -177,6 +198,9 @@ jobs:
       PAPER_CONSERVATIVE_MAX_FRACTION: ${{ github.event.inputs.paper_conservative_max_order_fraction || '' }}
       PAPER_HIGH_REWARD_MAX_FRACTION: ${{ github.event.inputs.paper_high_reward_max_order_fraction || '' }}
       PAPER_MORE_PROBABLE_MAX_FRACTION: ${{ github.event.inputs.paper_more_probable_max_order_fraction || '' }}
+      PAPER_CONSERVATIVE_STAKE_USDC: ${{ github.event.inputs.paper_conservative_stake_usdc || '' }}
+      PAPER_HIGH_REWARD_STAKE_USDC: ${{ github.event.inputs.paper_high_reward_stake_usdc || '' }}
+      PAPER_MORE_PROBABLE_STAKE_USDC: ${{ github.event.inputs.paper_more_probable_stake_usdc || '' }}
       PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.paper_conservative_max_resolution_days || '' }}
       PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.paper_high_reward_max_resolution_days || '' }}
       PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.paper_more_probable_max_resolution_days || '' }}
@@ -355,6 +379,7 @@ jobs:
               # clearing the flag is what restores the portfolio.
               emit(f"{prefix}_ARCHIVED", str(bool(row.get("archived"))).lower())
               emit(f"{prefix}_MIN_PROBABILITY", row.get("minProbability"))
+              emit(f"{prefix}_STAKE_USDC", row.get("stakeUsdc"))
               emit(f"{prefix}_MAX_FRACTION", row.get("maxOrderFraction"))
               emit(f"{prefix}_MAX_RESOLUTION_DAYS", row.get("maxResolutionDays"))
               emit(f"{prefix}_SELECTION_ORDER", row.get("selectionOrder"))

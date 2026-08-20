@@ -115,6 +115,7 @@ const STATE_SEGMENT_BASE_URL = (process.env.PAPER_STATE_SEGMENT_BASE_URL
   || (STATIC_STATE_URL ? STATIC_STATE_URL.replace(/\/[^/?#]*(?:[?#].*)?$/, "/") : "")).trim();
 const PORTFOLIO_USDC = envNumber("PAPER_PORTFOLIO_USDC", 100);
 const MAX_FRACTION = envNumber("PAPER_MAX_FRACTION", 0.05);
+const STAKE_USDC = Math.max(0.01, envNumber("PAPER_STAKE_USDC", PORTFOLIO_USDC * MAX_FRACTION));
 const MIN_PROBABILITY = envNumber("PAPER_MIN_PROBABILITY", 0.95);
 const CONSERVATIVE_MIN_PROBABILITY = envNumber("PAPER_CONSERVATIVE_MIN_PROBABILITY", MIN_PROBABILITY);
 const HIGH_REWARD_MIN_PROBABILITY = envNumber("PAPER_HIGH_REWARD_MIN_PROBABILITY", 0.6);
@@ -361,6 +362,7 @@ const PAPER_STRATEGIES = {
     label: envText("PAPER_CONSERVATIVE_DISPLAY_NAME", "Conservative"),
     selectionMetric: "EV p.a.",
     minProbability: CONSERVATIVE_MIN_PROBABILITY,
+    stakeUsdc: Math.max(0.01, envNumber("PAPER_CONSERVATIVE_STAKE_USDC", STAKE_USDC)),
     maxFraction: envNumber("PAPER_CONSERVATIVE_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC", null),
@@ -391,6 +393,7 @@ const PAPER_STRATEGIES = {
     label: envText("PAPER_HIGH_REWARD_DISPLAY_NAME", "High reward"),
     selectionMetric: "Reward / risk",
     minProbability: HIGH_REWARD_MIN_PROBABILITY,
+    stakeUsdc: Math.max(0.01, envNumber("PAPER_HIGH_REWARD_STAKE_USDC", STAKE_USDC)),
     maxFraction: envNumber("PAPER_HIGH_REWARD_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC", null),
@@ -419,6 +422,7 @@ const PAPER_STRATEGIES = {
     label: envText("PAPER_MORE_PROBABLE_DISPLAY_NAME", "More probable"),
     selectionMetric: "Reward / risk",
     minProbability: MORE_PROBABLE_STRATEGY_MIN_PROBABILITY,
+    stakeUsdc: Math.max(0.01, envNumber("PAPER_MORE_PROBABLE_STAKE_USDC", STAKE_USDC)),
     maxFraction: envNumber("PAPER_MORE_PROBABLE_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     minLiquidityUsdc: envNumber("PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC", MORE_PROBABLE_MIN_LIQUIDITY_USDC),
@@ -447,6 +451,7 @@ const PAPER_STRATEGIES = {
     label: envText("PAPER_EQUAL_DISPLAY_NAME", "Equal"),
     selectionMetric: "Potential p.a.",
     minProbability: envNumber("PAPER_EQUAL_MIN_PROBABILITY", 0.75),
+    stakeUsdc: Math.max(0.01, envNumber("PAPER_EQUAL_STAKE_USDC", STAKE_USDC)),
     maxFraction: envNumber("PAPER_EQUAL_MAX_FRACTION", MAX_FRACTION),
     maxResolutionDays: envNumber("PAPER_EQUAL_MAX_RESOLUTION_DAYS", DEFAULT_MAX_RESOLUTION_DAYS),
     // This is traded volume, despite the legacy internal property name. Equal
@@ -505,6 +510,11 @@ function customPaperStrategies(raw = process.env.PAPER_CUSTOM_PORTFOLIOS) {
       label: String(row.displayName || id).slice(0, 80),
       selectionMetric: row.selectionOrder === "highest_reward_risk_first" ? "Reward / risk" : "EV p.a.",
       minProbability: Number.isFinite(Number(row.minProbability)) ? Number(row.minProbability) : 0.5,
+      stakeUsdc: Number.isFinite(Number(row.stakeUsdc)) && Number(row.stakeUsdc) > 0
+        ? Number(row.stakeUsdc)
+        : (Number.isFinite(Number(row.maxOrderFraction)) && Number(row.maxOrderFraction) > 0
+          ? Math.max(0.01, Number(row.maxOrderFraction) * PORTFOLIO_USDC)
+          : STAKE_USDC),
       maxFraction: Number.isFinite(Number(row.maxOrderFraction)) ? Number(row.maxOrderFraction) : MAX_FRACTION,
       maxResolutionDays: Number.isFinite(Number(row.maxResolutionDays))
         ? Number(row.maxResolutionDays)
@@ -1129,6 +1139,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     selectionMetric: strategy.selectionMetric,
     selectionOrder: strategy.selectionOrder,
     minProbability: strategy.minProbability,
+    stakeUsdc: Number(strategy.stakeUsdc ?? input.stakeUsdc ?? input.portfolio?.stakeUsdc ?? STAKE_USDC),
     maxFraction: strategy.maxFraction,
     maxResolutionDays: strategyMaxResolutionDays(strategy),
     minLiquidityUsdc: strategy.minLiquidityUsdc,
@@ -1153,6 +1164,7 @@ function normalizePaperPortfolio(strategy, input = {}) {
     capitalAdjustmentAt: input.capitalAdjustmentAt || null,
     portfolio: {
       initialUsdc: Number(input.portfolio?.initialUsdc || PORTFOLIO_USDC),
+      stakeUsdc: Number(strategy.stakeUsdc ?? input.portfolio?.stakeUsdc ?? input.stakeUsdc ?? STAKE_USDC),
       maxFraction: Number(strategy.maxFraction ?? input.portfolio?.maxFraction ?? MAX_FRACTION),
       minProbability: Number(strategy.minProbability ?? input.portfolio?.minProbability ?? MIN_PROBABILITY),
       minAnnualReturn: Number(input.portfolio?.minAnnualReturn || MIN_ANNUAL_RETURN),
@@ -6018,6 +6030,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       : `No ${strategy.label} trade was opened: ${reason}.`,
     settings: {
       minProbability: strategy.minProbability,
+      stakeUsdc: Number(stake.toFixed(2)),
       maxFraction: strategy.maxFraction ?? null,
       maxResolutionDays: strategyMaxResolutionDays(strategy),
       minLiquidityUsdc: strategy.minLiquidityUsdc ?? null,
@@ -6293,7 +6306,10 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   const sizingCapital = Math.max(0, PORTFOLIO_USDC + capitalAdjustment + realizedPnl);
   const available = Math.max(0, sizingCapital - openRisk(portfolioState.trades));
   const maxFraction = Number(strategy.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION);
-  const stake = sizingCapital * maxFraction;
+  const configuredStake = Number(strategy.stakeUsdc ?? portfolioState.stakeUsdc ?? portfolioState.portfolio?.stakeUsdc);
+  const stake = Number.isFinite(configuredStake) && configuredStake > 0
+    ? configuredStake
+    : sizingCapital * maxFraction;
 
   // Switched off is itself a reason worth logging: "rotation is off" and "rotation ran and
   // declined" look identical in a log that records neither.
@@ -6339,7 +6355,7 @@ function maybeOpenScheduledTrade(portfolioState, eligible, strategy = PAPER_STRA
   }
 
   if (available < stake) {
-    const reason = `not enough free paper capital for next ${strategy.label} trade: ${available.toFixed(2)} USDC available, ${stake.toFixed(2)} USDC required by diversification settings`;
+    const reason = `not enough free paper capital for next ${strategy.label} trade: ${available.toFixed(2)} USDC available, ${stake.toFixed(2)} USDC fixed stake required`;
     return {
       action: "SKIP",
       reason,
@@ -8973,6 +8989,10 @@ function updatePaperPortfolio(portfolioState) {
   const portfolioMaxFraction = Number(
     portfolioState.maxFraction ?? portfolioState.portfolio?.maxFraction ?? MAX_FRACTION,
   );
+  const configuredStakeUsdc = Number(portfolioState.stakeUsdc ?? portfolioState.portfolio?.stakeUsdc);
+  const portfolioStakeUsdc = Number.isFinite(configuredStakeUsdc) && configuredStakeUsdc > 0
+    ? configuredStakeUsdc
+    : Math.max(0.01, baseline * portfolioMaxFraction);
   const freeCapital = Math.max(0, baseline + realizedPnl - openRiskValue);
   portfolioState.portfolio = {
     ...(portfolioState.portfolio || {}),
@@ -8987,11 +9007,11 @@ function updatePaperPortfolio(portfolioState) {
     // equal PORTFOLIO_USDC + realized + open.
     capitalAdjustmentUsdc: Number(capitalAdjustment.toFixed(4)),
     capitalAdjustmentAt: portfolioState.capitalAdjustmentAt || null,
-    // The per-portfolio setting is the source of truth. Using the global fraction
-    // here would overwrite it in the persisted state, so the UI, the backend and
-    // the workflow would stop agreeing on the same stake sizing.
+    // The fixed per-portfolio USDC stake is the source of truth. The legacy fraction is
+    // kept for old configs only, not for resizing the next order as equity changes.
+    stakeUsdc: Number(portfolioStakeUsdc.toFixed(2)),
     maxFraction: portfolioMaxFraction,
-    maxStakeUsdc: Number((equity * portfolioMaxFraction).toFixed(2)),
+    maxStakeUsdc: Number(portfolioStakeUsdc.toFixed(2)),
     minProbability: Number(portfolioState.minProbability ?? MIN_PROBABILITY),
     minAnnualReturn: MIN_ANNUAL_RETURN,
     opportunityMinProbability: OPPORTUNITY_MIN_PROBABILITY,

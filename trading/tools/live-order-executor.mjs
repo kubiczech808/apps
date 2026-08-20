@@ -64,6 +64,7 @@ const MANUAL_SHORTLIST_TOKEN_IDS = [...new Set(String(process.env.LIVE_EXECUTION
 const HAS_MANUAL_SHORTLIST = MANUAL_SHORTLIST_TOKEN_IDS.length > 0;
 const EXCLUDED_CANDIDATE_TOKEN_IDS = envTokenIdSet("LIVE_EXCLUDED_CANDIDATE_TOKEN_IDS");
 const MAX_ORDER_FRACTION = envNumber("MAX_ORDER_FRACTION", envNumber("LIVE_MAX_ORDER_FRACTION", 0.05));
+const LIVE_STAKE_USDC = envNumber("LIVE_STAKE_USDC", envNumber("LIVE_FIXED_STAKE_USDC", NaN));
 const MAX_ORDER_NOTIONAL_USDC = envNumber("MAX_ORDER_NOTIONAL_USDC", envNumber("LIVE_MAX_ORDER_NOTIONAL_USDC", Infinity));
 const CANDIDATE_SCAN_LIMIT = envNumber("LIVE_CANDIDATE_SCAN_LIMIT", 120);
 const REJECTED_CANDIDATE_LOG_LIMIT = envNumber("LIVE_REJECTED_CANDIDATE_LOG_LIMIT", 16);
@@ -2523,7 +2524,7 @@ async function revalidateEvaluation(
         + " USDC including fees, above the " + availableCash.toFixed(4)
         + " USDC available; rotation may release capital"
       : (orderSizing.stakeCapBelowExchangeMinimum
-        ? "Polymarket minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above this portfolio's max per trade " + targetStake.toFixed(4) + " USDC and above the " + Number(orderSizing.stakeFloorCeilingUsdc || 0).toFixed(2) + " USDC stake-floor ceiling, so the stake was not raised to meet it; " + availableCash.toFixed(4) + " USDC remains free, so rotation is not needed"
+        ? "Polymarket minimum order " + minOrderSize.toFixed(4) + " shares costs " + minimumCost.toFixed(4) + " USDC, above this portfolio's fixed stake " + targetStake.toFixed(4) + " USDC and above the " + Number(orderSizing.stakeFloorCeilingUsdc || 0).toFixed(2) + " USDC stake-floor ceiling, so the stake was not raised to meet it; " + availableCash.toFixed(4) + " USDC remains free, so rotation is not needed"
         : (orderSizing.makerPrecisionBlocked
           ? "configured stake would produce a sub-cent maker amount; changing the stake or order mode is required"
           : (minimumCost > 0
@@ -4103,9 +4104,12 @@ async function main() {
   );
   const availableCash = availableLiveCashUsdc(liveState, cash, previousExecution);
   const portfolioValue = livePortfolioValue(liveState, cash);
-  const fractionNotional = portfolioValue * MAX_ORDER_FRACTION;
+  const legacyFractionNotional = portfolioValue * MAX_ORDER_FRACTION;
+  const configuredStakeUsdc = Number.isFinite(LIVE_STAKE_USDC) && LIVE_STAKE_USDC > 0
+    ? LIVE_STAKE_USDC
+    : legacyFractionNotional;
   const monitoring = liveCashMonitoring(previousExecution, availableCash);
-  const regularMaxNotional = Math.min(fractionNotional, MAX_ORDER_NOTIONAL_USDC);
+  const regularMaxNotional = Math.min(configuredStakeUsdc, MAX_ORDER_NOTIONAL_USDC);
   const idleUtilizationNotional = monitoring.idleCashOverdue ? Math.max(0, availableCash - IDLE_CASH_MAX_USDC) : 0;
   const maxNotional = Number(regularMaxNotional.toFixed(5));
   const directMaxNotional = Number(Math.min(maxNotional, availableCash).toFixed(5));
@@ -4288,7 +4292,7 @@ async function main() {
             : (cashSizingBlocked.length
                 ? `live candidates blocked by available USDC: ${cashSizingBlocked.length} cannot meet the current Polymarket minimum order size${cheapestBlockedMinimumCost != null ? ` (cheapest needs ${cheapestBlockedMinimumCost.toFixed(4)} USDC including fees, ${number(availableCashAfterOrderManagement, 0).toFixed(4)} USDC available)` : ""}`
                 : (stakeCapBlockedCandidates.length
-                  ? `free cash is sufficient, but ${stakeCapBlockedCandidates.length} live candidate${stakeCapBlockedCandidates.length === 1 ? " is" : "s are"} below Polymarket's minimum order size at the configured max per trade`
+                  ? `free cash is sufficient, but ${stakeCapBlockedCandidates.length} live candidate${stakeCapBlockedCandidates.length === 1 ? " is" : "s are"} below Polymarket's minimum order size at the configured fixed stake`
                   : "no currently executable candidate after live revalidation")))));
   // The rest of the capital is either in positions, which position rotation decides on,
   // or in resting orders, which the open-order review decides on. Saying which, and what
@@ -4324,7 +4328,7 @@ async function main() {
                 // unable to tell a working rule from a broken one.
                 ? `No live order was submitted because available USDC cannot cover the exchange minimum size for the revalidated candidate(s).${cheapestBlockedMinimumCost != null ? ` The cheapest of them needs ${cheapestBlockedMinimumCost.toFixed(4)} USDC including fees against ${number(availableCashAfterOrderManagement, 0).toFixed(4)} USDC available.` : ""}${capitalLocationNote}`
                 : (stakeCapBlockedCandidates.length
-                  ? "No live order was submitted because the configured max per trade is below Polymarket's exchange minimum. Free cash was sufficient, so no order or position was rotated."
+                  ? "No live order was submitted because the configured fixed stake is below Polymarket's exchange minimum. Free cash was sufficient, so no order or position was rotated."
                   : "No live order was submitted because all revalidated candidates failed current execution criteria.")))));
   const decision = {
     mode: DRY_RUN || !hasFlag("confirm-live") ? "validated-dry-run" : "live-submit",
@@ -4342,6 +4346,7 @@ async function main() {
       ownReservedOpenOrderUsdc: Number(ownReservedOpenOrderUsdc.toFixed(5)),
       availableCashUsdc: Number(availableCash.toFixed(5)),
       portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
+      stakeUsdc: Number(configuredStakeUsdc.toFixed(5)),
       maxOrderFraction: MAX_ORDER_FRACTION,
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
       maxNotionalUsdc: maxNotional,
@@ -4366,6 +4371,7 @@ async function main() {
       minNetYield: MIN_NET_YIELD,
       maxResolutionDays: MAX_RESOLUTION_DAYS,
       selectionOrder: SELECTION_ORDER,
+      stakeUsdc: Number(configuredStakeUsdc.toFixed(5)),
       maxOrderNotionalCapUsdc: Number.isFinite(MAX_ORDER_NOTIONAL_USDC) ? MAX_ORDER_NOTIONAL_USDC : null,
       idleCashMaxUsdc: IDLE_CASH_MAX_USDC,
       idleCashGraceHours: IDLE_CASH_GRACE_HOURS,
@@ -4433,6 +4439,7 @@ async function main() {
         useLimitOrders: USE_LIMIT_ORDERS,
         crossPortfolioRiskDiversification: CROSS_PORTFOLIO_RISK_DIVERSIFICATION,
         liveAutoRotate: LIVE_AUTO_ROTATE,
+        stakeUsdc: Number(configuredStakeUsdc.toFixed(5)),
         maxOrderFraction: MAX_ORDER_FRACTION,
         rotationMinimumPriorityImprovement: ROTATION_MIN_PRIORITY_IMPROVEMENT,
         rotationMinimumNetPnlImprovementUsdc: ROTATION_MIN_NET_PNL_IMPROVEMENT_USDC,
@@ -4444,6 +4451,7 @@ async function main() {
         reservedOpenOrderUsdc: Number(reservedOpenOrderUsdc.toFixed(5)),
         ownReservedOpenOrderUsdc: Number(ownReservedOpenOrderUsdc.toFixed(5)),
         portfolioValueUsdc: Number(portfolioValue.toFixed(5)),
+        configuredStakeUsdc: Number(configuredStakeUsdc.toFixed(5)),
         targetStakeUsdc: maxNotional,
         requiredStakeUsdc: Number(appliedDirectStake.toFixed(5)),
         insufficientCapital: !best && (!Number.isFinite(maxNotional) || maxNotional <= 0 || cashSizingBlocked.length > 0),

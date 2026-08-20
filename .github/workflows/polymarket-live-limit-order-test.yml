@@ -24,6 +24,11 @@ on:
         required: false
         default: "0.05"
         type: string
+      live_stake_usdc:
+        description: Fixed maximum stake per live trade in USDC
+        required: false
+        default: "5"
+        type: string
       live_max_resolution_days:
         description: Optional hard max resolution days
         required: false
@@ -107,6 +112,7 @@ jobs:
       LIVE_EXECUTION_STATE_PATH: data/live-execution-state.json
       LIVE_EXECUTION_STATE_URL: https://osobnizkusenosti.cz/trading/api.php?action=state&target=live-execution
       MAX_ORDER_FRACTION: ${{ github.event.inputs.live_max_order_fraction || '0.05' }}
+      LIVE_STAKE_USDC: ${{ github.event.inputs.live_stake_usdc || '5' }}
       MAX_ORDER_NOTIONAL_USDC: "50"
       LIVE_IDLE_CASH_MAX_USDC: "5"
       LIVE_IDLE_CASH_GRACE_HOURS: "24"
@@ -177,6 +183,7 @@ jobs:
           system = (payload.get("config") or {}).get("system") or {}
           mapping = {
               "LIVE_MIN_PROBABILITY": live.get("minProbability"),
+              "LIVE_STAKE_USDC": live.get("stakeUsdc"),
               "MAX_ORDER_FRACTION": live.get("maxOrderFraction"),
               "LIVE_MAX_RESOLUTION_DAYS": live.get("maxResolutionDays"),
               "LIVE_SELECTION_ORDER": live.get("selectionOrder"),

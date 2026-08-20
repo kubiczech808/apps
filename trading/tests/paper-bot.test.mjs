@@ -505,24 +505,18 @@ test("paper capital adjustment: the backfill-only timestamp is exposed as its ow
   assert.throws(() => bot.backfillCapitalAdjustmentAt(state, "equal", "not a date"), /Invalid capitalAdjustmentAt timestamp/);
 });
 
-// Reported live: High reward's dashboard header read $25.12 free, but the same run's own
-// log line skipped a trade over "0.67 USDC available" -- a real rebased portfolio skipping
-// (and undersizing) trades it could actually afford. maybeOpenScheduledTrade() sized every
-// decision off the raw PORTFOLIO_USDC constant alone, never portfolioState.capitalAdjustmentUsdc,
-// so a rebased portfolio's decisions and its own published free capital disagreed.
-test("paper capital adjustment: a rebased portfolio sizes its next trade off the same capital its dashboard shows", () => {
-  const strategy = { id: "test", label: "Test", selectionMetric: "EV p.a.", maxFraction: 0.05, allowRotation: false };
+test("paper stake sizing: a rebased portfolio keeps the fixed configured trade amount", () => {
+  const strategy = { id: "test", label: "Test", selectionMetric: "EV p.a.", stakeUsdc: 5, maxFraction: 0.05, allowRotation: false };
 
-  // No adjustment: sizing must reproduce the untouched formula exactly (100 * 0.05 = 5).
+  // No adjustment: the fixed stake is the configured nominal value.
   const untouched = bot.maybeOpenScheduledTrade({ trades: [], capitalAdjustmentUsdc: 0 }, [], strategy);
   assert.equal(untouched.available, 100);
   assert.equal(untouched.requiredStake, 5);
 
-  // Rebased by +50: available and the stake it is willing to size must move with it
-  // (150 * 0.05 = 7.5), the same baseline updatePaperPortfolio() already publishes.
+  // Rebased by +50: available moves, but the trade size deliberately does not.
   const rebased = bot.maybeOpenScheduledTrade({ trades: [], capitalAdjustmentUsdc: 50 }, [], strategy);
   assert.equal(rebased.available, 150);
-  assert.equal(rebased.requiredStake, 7.5);
+  assert.equal(rebased.requiredStake, 5);
 });
 
 test("run log: a paper OPENED row keeps the selected order summary in the compact list", async () => {
@@ -881,17 +875,19 @@ test("portfolio: a created portfolio's trades and run log survive a reload, not 
   assert.equal(survived.capitalAdjustmentUsdc, 12.5, "its capital adjustment must survive a reload");
 });
 
-test("portfolio: normalization keeps the per-portfolio stake fraction", () => {
-  // portfolio-config is the source of truth; the global fraction must not win.
+test("portfolio: normalization keeps the per-portfolio fixed stake", () => {
+  // portfolio-config is the source of truth; equity and the global fraction must not resize it.
   const portfolioState = {
     id: "highReward",
+    stakeUsdc: 4.25,
     maxFraction: 0.12,
     trades: [],
     portfolio: {},
   };
   bot.updatePaperPortfolio(portfolioState);
+  assert.equal(portfolioState.portfolio.stakeUsdc, 4.25);
   assert.equal(portfolioState.portfolio.maxFraction, 0.12);
-  assert.equal(portfolioState.portfolio.maxStakeUsdc, Number((100 * 0.12).toFixed(2)));
+  assert.equal(portfolioState.portfolio.maxStakeUsdc, 4.25);
 });
 
 test("portfolio: closed trades with no booked P/L cannot invent equity", () => {
@@ -1257,44 +1253,37 @@ test("live sync: an open dashboard cannot dispatch a workflow every 30 seconds",
     `a manual refresh must beat the background poll but respect the server floor, got ${manual}s`);
 });
 
-test("stake sizing: the summary row, the control and the executor share one base", async () => {
+test("stake sizing: the summary row, the control and the executor use a fixed USDC stake", async () => {
   const { readFile } = await import("node:fs/promises");
   const app = await readFile(new URL("../assets/app.js", import.meta.url), "utf8");
   const executor = await readFile(new URL("../tools/live-order-executor.mjs", import.meta.url), "utf8");
 
-  // Reported inconsistency: the Live portfolio row said "12.4% of live equity ($2.48)"
-  // while MAX PER TRADE right below it said "Calculated stake $3.04 / base $24.50". Both
-  // numbers were real -- the row used full equity, the control used equity minus
-  // unrealized P/L -- and with -4.50 unrealized they disagreed by 56 cents. The executor
-  // sizes from equity minus unrealized P/L, so the row was the wrong one.
-  assert.match(executor, /if \(equity != null && equity > 0\) return Math\.max\(0, equity - openPnl\);/,
-    "the executor's base is equity minus unrealized P/L");
-
-  // The summary row must use that same base for live, and must not silently fall back to
-  // plain equity the way it used to.
+  // The setting used to be a percentage of a moving equity base. It is now a fixed
+  // nominal cap, so the displayed rule must not read equity or open P/L at all.
   const rule = app.slice(app.indexOf("function stakeSizingRuleValue"));
   const body = rule.slice(0, rule.indexOf("\nfunction "));
-  assert.match(body, /const sizingBase = isLive && Number\.isFinite\(equity\)\s*\n\s*\? Math\.max\(0, equity - \(Number\.isFinite\(openPnl\) \? openPnl : 0\)\)\s*\n\s*: equity;/);
-  assert.match(body, /const nominalStake = Number\.isFinite\(sizingBase\)/,
-    "the displayed stake must come from the sizing base, not from equity");
-  assert.ok(!/const nominalStake = Number\.isFinite\(equity\) \? Math\.max\(0, equity\) \* allocation/.test(body),
-    "the old full-equity computation must be gone");
-  // Equity and open P/L have to be read off one snapshot, or the two could be mixed.
-  assert.match(body, /const source = portfolio\?\.equityUsdc != null \? portfolio : fallbackPortfolio;/);
-  // The label has to say which base it is, so the two places cannot read as contradictory.
-  assert.match(body, /isLive \? "live equity excl\. unrealized P\/L" : "portfolio equity"/);
+  assert.match(body, /const stake = normalizeRiskAllocation\(config\.stakeUsdc\) \?\? DEFAULT_RISK_ALLOCATION;/);
+  assert.match(body, /return `\$\{money\(stake\)\} fixed per trade`;/);
+  assert.ok(!/equity|openPnl|sizingBase|nominalStake/.test(body),
+    "the rule row must not compute the stake from portfolio equity anymore");
 
-  // Paper legitimately sizes from full equity, so the fix must not change that.
+  assert.match(app, /stake_usdc: config\.stakeUsdc/,
+    "manual live dispatch must send the fixed stake to the workflow");
+  assert.match(app, /paper_conservative_stake_usdc: conservative\.stakeUsdc/,
+    "paper dispatch must send the per-portfolio fixed stake to the workflow");
+
+  assert.match(executor, /const LIVE_STAKE_USDC = envNumber\("LIVE_STAKE_USDC", envNumber\("LIVE_FIXED_STAKE_USDC", NaN\)\);/,
+    "the live executor must read the fixed stake from workflow input/env");
+  assert.match(executor, /const configuredStakeUsdc = Number\.isFinite\(LIVE_STAKE_USDC\) && LIVE_STAKE_USDC > 0\s*\n\s*\? LIVE_STAKE_USDC\s*\n\s*: legacyFractionNotional;/,
+    "legacy percentage sizing may only be a fallback for old runs");
+
+  // Paper also keeps the configured fixed stake instead of rebasing it when the
+  // account equity changes.
   const bot = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
-  assert.match(bot, /maxStakeUsdc: Number\(\(equity \* portfolioMaxFraction\)\.toFixed\(2\)\)/);
-
-  // The arithmetic that was reported, pinned: 12.4% on the live account's own numbers.
-  const equity = 20.00;
-  const openPnl = -4.50;
-  const allocation = 0.124;
-  const base = Math.max(0, equity - openPnl);
-  assert.equal(Number((base * allocation).toFixed(2)), 3.04, "both places must show 3.04");
-  assert.notEqual(Number((equity * allocation).toFixed(2)), 3.04, "full equity is what produced the wrong 2.48");
+  assert.match(bot, /const configuredStakeUsdc = Number\(portfolioState\.stakeUsdc \?\? portfolioState\.portfolio\?\.stakeUsdc\);/);
+  assert.match(bot, /maxStakeUsdc: Number\(portfolioStakeUsdc\.toFixed\(2\)\)/);
+  assert.ok(!/maxStakeUsdc: Number\(\(equity \* portfolioMaxFraction\)\.toFixed\(2\)\)/.test(bot),
+    "paper portfolios must not turn the old percentage into a moving stake");
 });
 
 test("market scan: sports and esports get a guaranteed slot every hour", async () => {

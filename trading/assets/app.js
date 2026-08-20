@@ -170,7 +170,8 @@ const SCRAPED_STATUS_QUERY_PARAM = "statuses";
 const SCRAPED_PROBABILITY_QUERY_PARAM = "probability";
 const SCRAPED_MAX_DAYS_QUERY_PARAM = "maxDays";
 const SCRAPED_MARKET_TYPE_QUERY_PARAM = "marketType";
-const RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
+const RISK_ALLOCATION_STORAGE_KEY = "tradingStakeUsdc";
+const LEGACY_RISK_ALLOCATION_STORAGE_KEY = "tradingRiskAllocationFraction";
 const LIMIT_ORDERS_STORAGE_KEY = "tradingUseLimitOrders";
 const MODE_STORAGE_KEY = "tradingDashboardMode";
 const LIVE_EXECUTION_STORAGE_KEY = "tradingLiveExecutionArmed";
@@ -180,9 +181,9 @@ const DEFAULT_ELIGIBILITY_THRESHOLD = 0.95;
 const MIN_ELIGIBILITY_THRESHOLD = 0.01;
 const MAX_ELIGIBILITY_THRESHOLD = 0.99;
 const MIN_PORTFOLIO_EV_PA = 0.05;
-const DEFAULT_RISK_ALLOCATION = 0.05;
+const DEFAULT_RISK_ALLOCATION = 5;
 const MIN_RISK_ALLOCATION = 0.01;
-const MAX_RISK_ALLOCATION = 0.5;
+const MAX_RISK_ALLOCATION = 1000;
 const DEFAULT_MAX_RESOLUTION_DAYS = 7;
 // Annualizing a few minutes as if the trade could be repeated continuously is
 // misleading, so potential p.a. is floored. The floor is one hour rather than one
@@ -616,6 +617,7 @@ function defaultPortfolioConfig() {
       conservative: {
         displayName: "Conservative",
         minProbability: 0.95,
+        stakeUsdc: 5,
         maxOrderFraction: 0.05,
         maxResolutionDays: 7,
         selectionOrder: "highest_ev_pa_first",
@@ -635,6 +637,7 @@ function defaultPortfolioConfig() {
       highReward: {
         displayName: "High reward",
         minProbability: 0.6,
+        stakeUsdc: 5,
         maxOrderFraction: 0.05,
         maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
         selectionOrder: "highest_reward_risk_first",
@@ -654,6 +657,7 @@ function defaultPortfolioConfig() {
       moreProbable: {
         displayName: "More probable",
         minProbability: 0.6,
+        stakeUsdc: 5,
         maxOrderFraction: 0.05,
         maxResolutionDays: 7,
         selectionOrder: "highest_reward_risk_first",
@@ -673,6 +677,7 @@ function defaultPortfolioConfig() {
       equal: {
         displayName: "Equal",
         minProbability: 0.75,
+        stakeUsdc: 5,
         maxOrderFraction: 0.05,
         maxResolutionDays: 7,
         selectionOrder: "highest_ev_pa_first",
@@ -695,6 +700,7 @@ function defaultPortfolioConfig() {
     live: {
       displayName: "Live",
       minProbability: 0.95,
+      stakeUsdc: 5,
       maxOrderFraction: 0.05,
       maxResolutionDays: DEFAULT_MAX_RESOLUTION_DAYS,
       selectionOrder: "highest_ev_pa_first",
@@ -721,6 +727,7 @@ function defaultPortfolioConfig() {
       minProbability: 0.9,
       fixedEntryPrice: 0.5,
       stakePerOrderUsdc: null,
+      stakeUsdc: 5,
       maxOrderFraction: 0.05,
       maxResolutionDays: 30,
       selectionOrder: "highest_ev_pa_first",
@@ -3691,13 +3698,13 @@ function normalizeRiskAllocation(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;
   if (numeric < MIN_RISK_ALLOCATION || numeric > MAX_RISK_ALLOCATION) return null;
-  return numeric;
+  return Number(numeric.toFixed(2));
 }
 
 function riskAllocationInputValue(value) {
-  const percentage = Number(value) * 100;
-  if (!Number.isFinite(percentage)) return "";
-  return percentage.toFixed(1).replace(/\.0$/, "");
+  const stake = Number(value);
+  if (!Number.isFinite(stake)) return "";
+  return stake.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
 function storedRiskAllocation() {
@@ -3705,8 +3712,11 @@ function storedRiskAllocation() {
     const scopedKey = riskAllocationStorageKey();
     const scopedValue = normalizeRiskAllocation(Number(localStorage.getItem(scopedKey)));
     if (scopedValue != null) return scopedValue;
-    const legacyValue = normalizeRiskAllocation(Number(localStorage.getItem(RISK_ALLOCATION_STORAGE_KEY)));
-    return legacyValue;
+    const legacyFraction = Number(localStorage.getItem(LEGACY_RISK_ALLOCATION_STORAGE_KEY));
+    if (Number.isFinite(legacyFraction) && legacyFraction > 0 && legacyFraction <= 0.5) {
+      return normalizeRiskAllocation(legacyFraction * 100);
+    }
+    return null;
   } catch {
     return null;
   }
@@ -3733,7 +3743,8 @@ function refreshRiskAllocation() {
     syncRiskAllocationControl();
     return;
   }
-  state.riskAllocation = portfolioConfigForMode(state.mode).maxOrderFraction ?? storedRiskAllocation() ?? DEFAULT_RISK_ALLOCATION;
+  const config = portfolioConfigForMode(state.mode);
+  state.riskAllocation = config.stakeUsdc ?? storedRiskAllocation() ?? DEFAULT_RISK_ALLOCATION;
   state.riskAllocationKey = key;
   syncRiskAllocationControl();
 }
@@ -3823,24 +3834,23 @@ function syncEvaluationNetYieldFilterControl() {
 
 function syncRiskAllocationControl(availableCapital = null, sourceLabel = "available capital", options = {}) {
   const value = currentRiskAllocation();
-  const base = Number(options.baseCapital ?? availableCapital);
   const available = Number(availableCapital);
-  const stake = Number.isFinite(base) ? base * value : null;
+  const stake = value;
   if (els.riskAllocation) {
     els.riskAllocation.value = riskAllocationInputValue(value);
   }
   if (els.riskAllocationLabel) {
-    els.riskAllocationLabel.textContent = probability(value);
+    els.riskAllocationLabel.textContent = money(value);
   }
   if (els.riskAllocationValue) {
     els.riskAllocationValue.textContent = Number.isFinite(stake) ? money(stake) : "-";
   }
   if (els.riskAllocationNote) {
-    els.riskAllocationNote.textContent = `maximum stake from ${sourceLabel}`;
+    els.riskAllocationNote.textContent = "fixed per-trade cap, independent of equity";
   }
   syncCapitalStatus({
     availableCapital: Number.isFinite(available) ? available : null,
-    baseCapital: Number.isFinite(base) ? base : null,
+    baseCapital: null,
     stake,
     cadenceLabel: options.cadenceLabel || "next scheduled run",
   });
@@ -3928,17 +3938,16 @@ function parameterCapitalContextForMode(mode = state.mode) {
 
 function syncDraftRiskAllocationControl(value, context = {}) {
   const normalized = normalizeRiskAllocation(value) ?? DEFAULT_RISK_ALLOCATION;
-  const base = Number(context.baseCapital);
   const available = Number(context.availableCapital);
-  const stake = Number.isFinite(base) ? base * normalized : null;
+  const stake = normalized;
   const editingRiskAllocation = parameterDraftActive() && document.activeElement === els.riskAllocation;
   if (els.riskAllocation && !editingRiskAllocation) els.riskAllocation.value = riskAllocationInputValue(normalized);
-  if (els.riskAllocationLabel) els.riskAllocationLabel.textContent = probability(normalized);
+  if (els.riskAllocationLabel) els.riskAllocationLabel.textContent = money(normalized);
   if (els.riskAllocationValue) els.riskAllocationValue.textContent = Number.isFinite(stake) ? money(stake) : "-";
-  if (els.riskAllocationNote) els.riskAllocationNote.textContent = `maximum stake from ${context.sourceLabel || "portfolio capital"}`;
+  if (els.riskAllocationNote) els.riskAllocationNote.textContent = "fixed per-trade cap, independent of equity";
   syncCapitalStatus({
     availableCapital: Number.isFinite(available) ? available : null,
-    baseCapital: Number.isFinite(base) ? base : null,
+    baseCapital: null,
     stake,
     cadenceLabel: context.cadenceLabel || "next scheduled run",
   });
@@ -3953,7 +3962,7 @@ function syncPortfolioParameterControls(configOverride = null, options = {}) {
   const order = normalizeSelectionOrder(config.selectionOrder);
   const isLive = LIVE_MODES.has(normalizeMode(mode));
   const threshold = normalizeEligibilityThreshold(config.minProbability) ?? thresholdDefaultForMode(mode);
-  const allocation = normalizeRiskAllocation(config.maxOrderFraction) ?? DEFAULT_RISK_ALLOCATION;
+  const allocation = normalizeRiskAllocation(config.stakeUsdc) ?? DEFAULT_RISK_ALLOCATION;
   const limitOrders = config.useLimitOrders ?? isLive;
   const capitalContext = options.capitalContext || parameterCapitalContextForMode(mode);
   if (els.portfolioName && document.activeElement !== els.portfolioName) {
@@ -4428,7 +4437,7 @@ async function confirmParameterModal() {
     }
     updateSystemConfig(draftSystem);
     const threshold = normalizeEligibilityThreshold(draft.minProbability);
-    const allocation = normalizeRiskAllocation(draft.maxOrderFraction);
+    const allocation = normalizeRiskAllocation(draft.stakeUsdc);
     if (threshold != null) {
       state.eligibilityThreshold = threshold;
       saveEligibilityThreshold(threshold, draftMode);
@@ -5737,9 +5746,9 @@ function paperThresholdPayload() {
     paper_conservative_min_probability: thresholdForMode("paper-conservative"),
     paper_high_reward_min_probability: thresholdForMode("paper-highReward"),
     paper_more_probable_min_probability: thresholdForMode("paper-moreProbable"),
-    paper_conservative_max_order_fraction: conservative.maxOrderFraction,
-    paper_high_reward_max_order_fraction: highReward.maxOrderFraction,
-    paper_more_probable_max_order_fraction: moreProbable.maxOrderFraction,
+    paper_conservative_stake_usdc: conservative.stakeUsdc,
+    paper_high_reward_stake_usdc: highReward.stakeUsdc,
+    paper_more_probable_stake_usdc: moreProbable.stakeUsdc,
     paper_conservative_max_resolution_days: conservative.maxResolutionDays,
     paper_high_reward_max_resolution_days: highReward.maxResolutionDays,
     paper_more_probable_max_resolution_days: moreProbable.maxResolutionDays,
@@ -5764,7 +5773,7 @@ function liveWorkflowPayload() {
   return {
     ...config,
     min_probability: config.minProbability,
-    max_order_fraction: config.maxOrderFraction,
+    stake_usdc: config.stakeUsdc,
     use_limit_orders: config.useLimitOrders,
     manual_run_once: true,
     live_run_source: "MANUAL",
@@ -6472,29 +6481,8 @@ function paperPortfolioTrades(portfolioState) {
 function stakeSizingRuleValue(mode, portfolio = {}) {
   const normalizedMode = normalizeMode(mode);
   const config = portfolioConfigForMode(normalizedMode);
-  const allocation = normalizeRiskAllocation(config.maxOrderFraction) ?? DEFAULT_RISK_ALLOCATION;
-  const fallbackPortfolio = LIVE_MODES.has(normalizedMode)
-    ? state.liveState?.portfolio
-    : state.botState?.paperPortfolios?.[paperStrategyIdFromMode(normalizedMode)]?.portfolio;
-  // Equity and open P/L must come from the same snapshot, or the two could be mixed.
-  const source = portfolio?.equityUsdc != null ? portfolio : fallbackPortfolio;
-  const equity = Number(source?.equityUsdc);
-  // The two modes size from different bases, and this row used plain equity for both.
-  //
-  // Live execution sizes from equity with unrealized P/L removed -- livePortfolioValue()
-  // in live-order-executor.mjs is `equity - openPnlUsdc` -- while a paper portfolio sizes
-  // from full equity (updatePaperPortfolio's maxStakeUsdc). With -4.50 unrealized P/L on
-  // the live account that made this row read "12.4% of live equity ($2.48)" while the MAX
-  // PER TRADE control right below it read $3.04, and the executor actually sized $3.04.
-  // The stake shown here now comes from the same base the order will use.
-  const isLive = LIVE_MODES.has(normalizedMode);
-  const openPnl = Number(source?.openPnlUsdc);
-  const sizingBase = isLive && Number.isFinite(equity)
-    ? Math.max(0, equity - (Number.isFinite(openPnl) ? openPnl : 0))
-    : equity;
-  const equityLabel = isLive ? "live equity excl. unrealized P/L" : "portfolio equity";
-  const nominalStake = Number.isFinite(sizingBase) ? Math.max(0, sizingBase) * allocation : null;
-  return `${probability(allocation)} of ${equityLabel}${Number.isFinite(nominalStake) ? ` (${money(nominalStake)})` : ""}`;
+  const stake = normalizeRiskAllocation(config.stakeUsdc) ?? DEFAULT_RISK_ALLOCATION;
+  return `${money(stake)} fixed per trade`;
 }
 
 function portfolioRuleRows(portfolio = {}) {
@@ -10634,11 +10622,11 @@ els.riskAllocation?.addEventListener("input", () => {
   }
   const raw = Number(els.riskAllocation.value);
   if (!Number.isFinite(raw)) return;
-  const normalized = normalizeRiskAllocation(raw / 100);
+  const normalized = normalizeRiskAllocation(raw);
   const value = normalized ?? currentRiskAllocation();
-  if (updateParameterDraft({ maxOrderFraction: value })) return;
+  if (updateParameterDraft({ stakeUsdc: value })) return;
   state.riskAllocation = value;
-  updatePortfolioConfigForMode(state.mode, { maxOrderFraction: value });
+  updatePortfolioConfigForMode(state.mode, { stakeUsdc: value });
   saveRiskAllocation(value);
   savePortfolioConfigSoon();
   rerenderCurrentDashboard();
