@@ -2739,9 +2739,6 @@ try {
         $target = (string) ($payload['target'] ?? '');
         $targetKey = workflow_target_key($target);
         $liveMinProbability = normalized_probability_input($payload['min_probability'] ?? $payload['live_min_probability'] ?? null);
-        $paperConservativeMinProbability = normalized_probability_input($payload['paper_conservative_min_probability'] ?? null);
-        $paperHighRewardMinProbability = normalized_probability_input($payload['paper_high_reward_min_probability'] ?? null);
-        $paperMoreProbableMinProbability = normalized_probability_input($payload['paper_more_probable_min_probability'] ?? null);
         $scanTag = normalized_scan_tag_input($payload['market_scan_tag'] ?? null);
         $scanLiquidityMin = normalized_money_input($payload['market_scan_liquidity_min'] ?? $payload['marketScanLiquidityMin'] ?? null);
         $scanMaxDays = normalized_scan_max_days_input($payload['market_scan_max_days'] ?? $payload['marketScanMaxDays'] ?? null);
@@ -2771,31 +2768,26 @@ try {
         if ($targetKey === 'paper' && $paperStrategyId !== null && !paper_strategy_is_known($paperStrategyId)) {
             respond(['ok' => false, 'error' => 'Unknown or archived paper portfolio'], 400);
         }
-        // Equal reads its complete configuration from portfolio-config.json in the
-        // paper bot. Do not add unsupported workflow_dispatch inputs here.
-        $paperStrategies = ['conservative', 'high_reward', 'more_probable'];
-        $paperExtraInputs = [];
-        foreach ($paperStrategies as $strategy) {
-            $paperExtraInputs["paper_{$strategy}_stake_usdc"] = normalized_money_input($payload["paper_{$strategy}_stake_usdc"] ?? null);
-            $paperExtraInputs["paper_{$strategy}_max_order_fraction"] = normalized_fraction_input($payload["paper_{$strategy}_max_order_fraction"] ?? null);
-            $paperExtraInputs["paper_{$strategy}_max_resolution_days"] = normalized_days_input($payload["paper_{$strategy}_max_resolution_days"] ?? null);
-            $paperExtraInputs["paper_{$strategy}_selection_order"] = normalized_selection_order_input($payload["paper_{$strategy}_selection_order"] ?? null);
-            $paperExtraInputs["paper_{$strategy}_min_liquidity_usdc"] = normalized_money_input($payload["paper_{$strategy}_min_liquidity_usdc"] ?? null);
-            $paperExtraInputs["paper_{$strategy}_require_most_probable"] = normalized_bool_input($payload["paper_{$strategy}_require_most_probable"] ?? null);
-        }
+        // Every portfolio, shipped or created, reads its complete configuration from
+        // portfolio-config.json in the paper bot: the workflow's "Load portfolio config"
+        // step appends it to GITHUB_ENV, which overrides the job env for every later
+        // step. So per-strategy dispatch inputs could never actually take effect, and
+        // sending them only created two ways to fail -- GitHub rejects an input the
+        // workflow does not declare ("Unexpected inputs provided"), and declaring them
+        // took the file past its hard ceiling of 25 inputs, which made GitHub refuse to
+        // parse the workflow at all and stopped both dispatches and the schedule.
+        // A portfolio's parameters are saved, not dispatched. Nothing per-strategy
+        // belongs in this payload.
         $workflows = [
             'paper' => [
                 'workflow' => 'trading-paper-bot.yml',
-                'inputs' => array_filter(array_merge([
+                'inputs' => array_filter([
                     'mode' => 'full',
                     'paper_stake_usdc' => $paperStakeUsdc,
                     'paper_max_order_fraction' => $paperMaxOrderFraction,
-                    'paper_conservative_min_probability' => $paperConservativeMinProbability,
-                    'paper_high_reward_min_probability' => $paperHighRewardMinProbability,
-                    'paper_more_probable_min_probability' => $paperMoreProbableMinProbability,
                     'manual_run_once' => $manualRunOnce,
                     'paper_strategy_id' => $paperStrategyId,
-                ], $paperExtraInputs), static fn ($value): bool => $value !== null),
+                ], static fn ($value): bool => $value !== null),
                 'message' => 'Paper bot workflow dispatched.',
             ],
             'live' => [

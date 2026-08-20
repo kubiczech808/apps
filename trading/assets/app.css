@@ -218,6 +218,16 @@ button:disabled {
   color: var(--danger);
 }
 
+/* Two live portfolios trading one Polymarket account report the same account capital.
+   Stated on each row, because merging them into one row hid which portfolio was which. */
+.portfolio-summary-note {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .archived-portfolio-list {
   margin: 8px 0 0;
   padding: 0;

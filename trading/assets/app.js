@@ -103,6 +103,10 @@ const state = {
   portfolioOverview: null,
   portfolioOverviewAt: 0,
   portfolioOverviewPending: false,
+  // Whether this page load has already settled which portfolio to open. Set once the
+  // richest one has been picked, and also the moment the reader picks a tab themselves,
+  // so the automatic choice can never fight a deliberate click.
+  portfolioPreselectDone: false,
   parameterDraftSystem: null,
   parameterCapitalContext: null,
   stateFetchErrors: {},
@@ -562,10 +566,61 @@ function portfolioIsArchived(mode = state.mode) {
   return paper[paperStrategyIdFromMode(normalized)]?.archived === true;
 }
 
-// Every mode the dashboard can show, in tab order.
+// One portfolio's equity, wherever this page happens to have it. The dashboard payload
+// carries the selected portfolio in full; the cheap overview summary carries every
+// portfolio's headline numbers, which is what a live tab leaves loaded. Returns null when
+// the number is genuinely not known yet, so callers can order those last rather than
+// treating "not loaded" as zero.
+function portfolioEquityUsdc(mode = state.mode) {
+  const normalized = normalizeMode(mode);
+  if (LIVE_MODES.has(normalized)) {
+    const equity = Number(state.liveState?.portfolio?.equityUsdc);
+    return Number.isFinite(equity) ? equity : null;
+  }
+  const portfolios = state.botState?.paperPortfolios || state.portfolioOverview || null;
+  const equity = Number(portfolios?.[paperStrategyIdFromMode(normalized)]?.portfolio?.equityUsdc);
+  return Number.isFinite(equity) ? equity : null;
+}
+
+// Asked for: order the portfolios by equity, largest first. Sorting a copy and falling
+// back to the incoming order keeps it stable, so portfolios whose equity is not loaded
+// yet (and portfolios level with each other) do not shuffle between renders.
+function byEquityDescending(modes) {
+  const order = new Map(modes.map((mode, index) => [mode, index]));
+  return [...modes].sort((left, right) => {
+    const leftEquity = portfolioEquityUsdc(left);
+    const rightEquity = portfolioEquityUsdc(right);
+    if (leftEquity === rightEquity) return order.get(left) - order.get(right);
+    if (leftEquity == null) return 1;
+    if (rightEquity == null) return -1;
+    return rightEquity - leftEquity || order.get(left) - order.get(right);
+  });
+}
+
+// Asked for: the portfolio holding the most equity is the one that opens. It runs once
+// per page load, as soon as any equity is actually known, and never after the reader has
+// picked a tab -- so it decides the first view without overriding a deliberate choice.
+// Equity arrives with the state, not with the markup, so this cannot be decided at
+// startup: the stored mode opens first and this corrects it on the first payload.
+function preselectRichestPortfolio() {
+  if (state.portfolioPreselectDone) return;
+  const [richest] = dashboardModes();
+  // Nothing loaded yet: leave the flag clear so the next payload gets a turn.
+  if (!richest || portfolioEquityUsdc(richest) == null) return;
+  state.portfolioPreselectDone = true;
+  if (normalizeMode(richest) === normalizeMode(state.mode)) return;
+  state.mode = normalizeMode(richest);
+  saveMode(state.mode);
+  state.runLogFilters = storedRunLogFilter(state.mode);
+  // The dashboard payload carries the trades of the selected portfolio only, so the
+  // switch has to refetch rather than re-render what is already in hand.
+  loadDashboardState();
+}
+
+// Every mode the dashboard can show, in tab order: richest portfolio first.
 function dashboardModes() {
   const liveModes = ["live", "live-5050"].filter((mode) => !portfolioIsArchived(mode));
-  return [...paperStrategyIds().map((id) => `paper-${id}`), ...liveModes];
+  return byEquityDescending([...paperStrategyIds().map((id) => `paper-${id}`), ...liveModes]);
 }
 
 function defaultPortfolioNameForMode(mode = state.mode) {
@@ -2097,6 +2152,7 @@ function syncModeButtons() {
 }
 
 function syncModeUi() {
+  preselectRichestPortfolio();
   const live = isLiveMode();
   syncModeButtons();
   els.modeButtons.forEach((button) => {
@@ -4240,28 +4296,36 @@ function renderPortfolioOverview() {
   if (!els.portfolioOverview) return;
   const paperPortfolios = state.botState?.paperPortfolios || state.portfolioOverview || null;
   const live = state.liveState?.portfolio || null;
-  const rows = paperStrategyIds().map((id) => {
-    const config = portfolioConfigForMode(`paper-${id}`);
-    const portfolio = paperPortfolios?.[id]?.portfolio || null;
+  // One row per portfolio, in the same order as the tabs. The live portfolios used to be
+  // collapsed into a single combined account row on the grounds that they share one
+  // Polymarket wallet -- but they are separate portfolios with separate rules and
+  // separate decisions, and the combined row was not a portfolio at all: it could not be
+  // opened as one, and it read as an account that does not exist. What they really share
+  // is the account capital, so each keeps its own row under its own name and the sharing
+  // is stated on the row instead of being hidden by merging them.
+  const rows = dashboardModes().map((mode) => {
+    if (LIVE_MODES.has(normalizeMode(mode))) {
+      return {
+        mode,
+        name: portfolioNameForMode(mode),
+        equity: live ? Number(live.equityUsdc) : null,
+        risk: live ? Number(live.marketValueUsdc) : null,
+        free: live ? Number(live.cashUsdc) : null,
+        live: true,
+      };
+    }
+    const portfolio = paperPortfolios?.[paperStrategyIdFromMode(mode)]?.portfolio || null;
     return {
-      mode: `paper-${id}`,
-      name: normalizePortfolioName(config.displayName, id),
+      mode,
+      name: portfolioNameForMode(mode),
       equity: portfolio ? Number(portfolio.equityUsdc) : null,
       risk: portfolio ? Number(portfolio.openRiskUsdc) : null,
       free: portfolio ? Number(portfolio.freeCapitalUsdc) : null,
       live: false,
     };
   });
-  // Both live tabs trade one Polymarket wallet, so their capital is one row. Splitting
-  // it would print the same equity twice and read as two accounts that do not exist.
-  rows.push({
-    mode: "live",
-    name: "Live account (Live + 5050)",
-    equity: live ? Number(live.equityUsdc) : null,
-    risk: live ? Number(live.marketValueUsdc) : null,
-    free: live ? Number(live.cashUsdc) : null,
-    live: true,
-  });
+  // Only worth saying when there is in fact more than one live portfolio on the account.
+  const sharedWallet = rows.filter((row) => row.live).length > 1;
   els.portfolioOverview.hidden = false;
   const cell = (value) => (Number.isFinite(value) ? money(value) : "-");
   els.portfolioOverview.innerHTML = `
@@ -4272,7 +4336,7 @@ function renderPortfolioOverview() {
       <tbody>
         ${rows.map((row) => `
           <tr class="${row.mode === state.mode ? "portfolio-summary-current" : ""}${row.live ? " portfolio-summary-live" : ""}">
-            <td data-label="Portfolio"><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button></td>
+            <td data-label="Portfolio"><button class="portfolio-summary-link" type="button" data-mode-toggle="${escapeHtml(row.mode)}">${escapeHtml(row.name)}</button>${row.live && sharedWallet ? ' <span class="portfolio-summary-note" title="These live portfolios trade one Polymarket account, so they report the same account capital.">shared account</span>' : ""}</td>
             <td data-label="Equity">${cell(row.equity)}</td>
             <td data-label="Risk / free">${cell(row.risk)} / ${cell(row.free)}</td>
           </tr>
@@ -5750,30 +5814,16 @@ async function refreshOpenedTradesValues() {
   }
 }
 
+// Deliberately empty of per-strategy parameters. Every portfolio's settings are read
+// from portfolio-config.json by the workflow's "Load portfolio config" step, which
+// appends them to GITHUB_ENV and so overrides the job env for every later step -- these
+// inputs could never take effect. Sending them anyway produced GitHub 422s two ways:
+// "Unexpected inputs provided" once the workflow stopped declaring them, and, while it
+// did declare them, a file over the hard ceiling of 25 workflow_dispatch inputs, which
+// GitHub refuses to parse at all -- that took every dispatch and the whole schedule down.
+// A portfolio's parameters are saved, not dispatched.
 function paperThresholdPayload() {
-  const conservative = portfolioConfigForMode("paper-conservative");
-  const highReward = portfolioConfigForMode("paper-highReward");
-  const moreProbable = portfolioConfigForMode("paper-moreProbable");
-  return {
-    paper_conservative_min_probability: thresholdForMode("paper-conservative"),
-    paper_high_reward_min_probability: thresholdForMode("paper-highReward"),
-    paper_more_probable_min_probability: thresholdForMode("paper-moreProbable"),
-    paper_conservative_stake_usdc: conservative.stakeUsdc,
-    paper_high_reward_stake_usdc: highReward.stakeUsdc,
-    paper_more_probable_stake_usdc: moreProbable.stakeUsdc,
-    paper_conservative_max_resolution_days: conservative.maxResolutionDays,
-    paper_high_reward_max_resolution_days: highReward.maxResolutionDays,
-    paper_more_probable_max_resolution_days: moreProbable.maxResolutionDays,
-    paper_conservative_selection_order: conservative.selectionOrder,
-    paper_high_reward_selection_order: highReward.selectionOrder,
-    paper_more_probable_selection_order: moreProbable.selectionOrder,
-    paper_conservative_min_liquidity_usdc: conservative.minLiquidityUsdc,
-    paper_high_reward_min_liquidity_usdc: highReward.minLiquidityUsdc,
-    paper_more_probable_min_liquidity_usdc: moreProbable.minLiquidityUsdc,
-    paper_conservative_require_most_probable: conservative.requireMostProbableOutcome,
-    paper_high_reward_require_most_probable: highReward.requireMostProbableOutcome,
-    paper_more_probable_require_most_probable: moreProbable.requireMostProbableOutcome,
-  };
+  return {};
 }
 
 function liveWorkflowPayload() {
@@ -10404,6 +10454,9 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-mode-toggle]");
   if (!button) return;
   const mode = normalizeMode(button.dataset.modeToggle);
+  // Even when it lands on the tab already open: the reader has now chosen, so the
+  // richest-portfolio preselection must not move them somewhere else later.
+  state.portfolioPreselectDone = true;
   if (state.mode === mode) return;
   state.mode = mode;
   saveMode(mode);

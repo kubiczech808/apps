@@ -271,6 +271,8 @@ test("dashboard: the tab row is built from the saved portfolios, archived ones l
     ${extractFunction(APP, "paperStrategyIdFromMode")}
     ${extractFunction(APP, "defaultPortfolioConfig")}
     ${extractFunction(APP, "paperStrategyIds")}
+    ${extractFunction(APP, "portfolioEquityUsdc")}
+    ${extractFunction(APP, "byEquityDescending")}
     ${extractFunction(APP, "dashboardModes")}
     ${extractFunction(APP, "portfolioIsArchived")}
     const DEFAULT_MAX_RESOLUTION_DAYS = 7;
@@ -305,6 +307,8 @@ test("dashboard: an archived 5050 leaves the tab row too, the plain live portfol
     ${extractFunction(APP, "paperStrategyIdFromMode")}
     ${extractFunction(APP, "defaultPortfolioConfig")}
     ${extractFunction(APP, "paperStrategyIds")}
+    ${extractFunction(APP, "portfolioEquityUsdc")}
+    ${extractFunction(APP, "byEquityDescending")}
     ${extractFunction(APP, "dashboardModes")}
     ${extractFunction(APP, "portfolioIsArchived")}
     const DEFAULT_MAX_RESOLUTION_DAYS = 7;
@@ -883,11 +887,19 @@ test("dashboard: the overview above the selector states equity and risk against 
   assert.match(overview, /equity: portfolio \? Number\(portfolio\.equityUsdc\) : null/);
   assert.match(overview, /risk: portfolio \? Number\(portfolio\.openRiskUsdc\) : null/);
   assert.match(overview, /free: portfolio \? Number\(portfolio\.freeCapitalUsdc\) : null/);
-  // Both live tabs trade one wallet, so their capital is one row rather than the same
-  // equity printed twice.
-  assert.match(overview, /name: "Live account \(Live \+ 5050\)"/);
+  // Reported: the table merged several portfolios into one row. They are separate
+  // portfolios with separate rules and separate decisions, and the merged row was not a
+  // portfolio at all -- it could not be opened as one. What the live portfolios really
+  // share is the account capital, so each keeps its own row under its own name and the
+  // sharing is stated on the row rather than hidden by collapsing them.
+  assert.ok(!/Live account \(Live \+ 5050\)/.test(overview),
+    "no row may stand for more than one portfolio");
+  assert.match(overview, /name: portfolioNameForMode\(mode\)/,
+    "every row is named after the portfolio it opens");
+  assert.match(overview, /sharedWallet \? ' <span class="portfolio-summary-note"/,
+    "the shared live account is stated on the row instead of merging the rows");
   // It must show every listed portfolio, so it is built from the same list as the tabs.
-  assert.match(overview, /paperStrategyIds\(\)\.map/);
+  assert.match(overview, /dashboardModes\(\)\.map/);
   // And a number that is not loaded reads as absent rather than as zero.
   assert.match(overview, /Number\.isFinite\(value\) \? money\(value\) : "-"/);
 });
@@ -1016,4 +1028,84 @@ test("stop loss: the rules card shows it for every paper portfolio, not only Equ
   assert.ok(!/if \(portfolio\.id === "equal"\)/.test(rows),
     "the row must not be conditional on which portfolio this is");
   assert.match(rows, /rows\.push\(\["Stop loss", stopLossRiskLabel\(config\)\]\);/);
+});
+
+// Asked for: order the portfolios by equity, largest first, and open the largest.
+test("dashboard: the tab row is ordered by equity, richest first", () => {
+  const run = new Function("state", `
+    ${/const BUILT_IN_PAPER_STRATEGY_IDS = \[[^\]]*\];/.exec(APP)[0]}
+    ${/const CUSTOM_PAPER_STRATEGY_ID = [^\n]+/.exec(APP)[0]}
+    ${/const LIVE_MODES = new Set\(\[[^\]]*\]\);/.exec(APP)[0]}
+    ${extractFunction(APP, "normalizeMode")}
+    ${extractFunction(APP, "paperStrategyIdFromMode")}
+    ${extractFunction(APP, "defaultPortfolioConfig")}
+    ${extractFunction(APP, "paperStrategyIds")}
+    ${extractFunction(APP, "portfolioEquityUsdc")}
+    ${extractFunction(APP, "byEquityDescending")}
+    ${extractFunction(APP, "dashboardModes")}
+    ${extractFunction(APP, "portfolioIsArchived")}
+    const DEFAULT_MAX_RESOLUTION_DAYS = 7;
+    return { dashboardModes, portfolioEquityUsdc };
+  `);
+
+  const paperPortfolios = {
+    conservative: { portfolio: { equityUsdc: 84 } },
+    highReward: { portfolio: { equityUsdc: 68 } },
+    moreProbable: { portfolio: { equityUsdc: 141 } },
+    equal: { portfolio: { equityUsdc: 55 } },
+  };
+  const app = run({
+    mode: "paper-conservative",
+    portfolioConfig: { live5050: { archived: true } },
+    botState: { paperPortfolios },
+    liveState: { portfolio: { equityUsdc: 120 } },
+  });
+  assert.deepEqual(app.dashboardModes(), [
+    "paper-moreProbable", // 141
+    "live", // 120
+    "paper-conservative", // 84
+    "paper-highReward", // 68
+    "paper-equal", // 55
+  ]);
+
+  // A portfolio whose equity has not loaded yet is ordered last rather than treated as
+  // zero, and the incoming order breaks the tie so the row does not shuffle per render.
+  const partial = run({
+    mode: "paper-conservative",
+    portfolioConfig: { live5050: { archived: true } },
+    botState: { paperPortfolios: { moreProbable: { portfolio: { equityUsdc: 141 } } } },
+    liveState: null,
+  });
+  assert.deepEqual(partial.dashboardModes(), [
+    "paper-moreProbable",
+    "paper-conservative",
+    "paper-highReward",
+    "paper-equal",
+    "live",
+  ]);
+});
+
+test("dashboard: the richest portfolio opens on load, but never over a reader's own click", () => {
+  const preselect = extractFunction(APP, "preselectRichestPortfolio");
+  // Equity arrives with the state, not the markup, so the choice cannot be made at
+  // startup: it has to wait for a payload and then correct the stored mode.
+  assert.match(preselect, /if \(state\.portfolioPreselectDone\) return;/);
+  assert.match(preselect, /const \[richest\] = dashboardModes\(\);/);
+  // Nothing loaded yet must leave the flag clear, or the first empty payload would
+  // consume the one chance to pick and the reader would be left on the stored tab.
+  assert.match(preselect, /if \(!richest \|\| portfolioEquityUsdc\(richest\) == null\) return;/);
+  assert.ok(preselect.indexOf("portfolioPreselectDone = true") > preselect.indexOf("== null) return;"),
+    "the flag may only be set once an equity is actually known");
+  // Switching portfolios has to refetch: the dashboard payload carries the trades of the
+  // selected portfolio alone.
+  assert.match(preselect, /loadDashboardState\(\);/);
+
+  // It runs from the one place both the paper and the live render paths reach.
+  assert.match(extractFunction(APP, "syncModeUi"), /preselectRichestPortfolio\(\);/);
+  // And a deliberate click settles it for the rest of the page load, including a click
+  // on the tab that is already open.
+  const handler = APP.slice(APP.indexOf('const button = event.target.closest("[data-mode-toggle]");'));
+  const body = handler.slice(0, handler.indexOf("\n});"));
+  assert.ok(body.indexOf("state.portfolioPreselectDone = true;") < body.indexOf("if (state.mode === mode) return;"),
+    "the flag must be set before the early return, or clicking the open tab would not settle it");
 });

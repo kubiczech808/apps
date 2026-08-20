@@ -53,96 +53,6 @@ on:
         required: false
         default: "5"
         type: string
-      paper_conservative_min_probability:
-        description: "Conservative configured probability threshold, decimal 0.01-0.99"
-        required: false
-        default: "0.95"
-        type: string
-      paper_high_reward_min_probability:
-        description: "High reward configured probability threshold, decimal 0.01-0.99"
-        required: false
-        default: "0.60"
-        type: string
-      paper_more_probable_min_probability:
-        description: "More probable configured probability threshold, decimal 0.01-0.99"
-        required: false
-        default: "0.60"
-        type: string
-      paper_conservative_max_order_fraction:
-        description: "Conservative max stake fraction"
-        required: false
-        default: ""
-        type: string
-      paper_high_reward_max_order_fraction:
-        description: "High reward max stake fraction"
-        required: false
-        default: ""
-        type: string
-      paper_more_probable_max_order_fraction:
-        description: "More probable max stake fraction"
-        required: false
-        default: ""
-        type: string
-      paper_conservative_max_resolution_days:
-        description: "Conservative max resolution days"
-        required: false
-        default: ""
-        type: string
-      paper_high_reward_max_resolution_days:
-        description: "High reward max resolution days"
-        required: false
-        default: ""
-        type: string
-      paper_more_probable_max_resolution_days:
-        description: "More probable max resolution days"
-        required: false
-        default: ""
-        type: string
-      paper_conservative_selection_order:
-        description: "Conservative selection order"
-        required: false
-        default: ""
-        type: string
-      paper_high_reward_selection_order:
-        description: "High reward selection order"
-        required: false
-        default: ""
-        type: string
-      paper_more_probable_selection_order:
-        description: "More probable selection order"
-        required: false
-        default: ""
-        type: string
-      paper_conservative_min_liquidity_usdc:
-        description: "Conservative min liquidity"
-        required: false
-        default: ""
-        type: string
-      paper_high_reward_min_liquidity_usdc:
-        description: "High reward min liquidity"
-        required: false
-        default: ""
-        type: string
-      paper_more_probable_min_liquidity_usdc:
-        description: "More probable min liquidity"
-        required: false
-        default: ""
-        type: string
-      paper_conservative_require_most_probable:
-        description: "Conservative only multichoice events"
-        required: false
-        default: ""
-        type: string
-      paper_high_reward_require_most_probable:
-        description: "High reward only multichoice events"
-        required: false
-        default: ""
-        type: string
-      paper_more_probable_require_most_probable:
-        description: "More probable only multichoice events"
-        required: false
-        default: ""
-        type: string
   schedule:
     # These three entries are only delivery attempts, not modes. GitHub delays and
     # drops scheduled ticks heavily, so the bot resolves what to do from the
@@ -176,25 +86,33 @@ jobs:
       PAPER_MAX_FRACTION: ${{ github.event.inputs.paper_max_order_fraction || '0.05' }}
       PAPER_STAKE_USDC: ${{ github.event.inputs.paper_stake_usdc || '5' }}
       PAPER_MIN_PROBABILITY: "0.95"
-      PAPER_CONSERVATIVE_MIN_PROBABILITY: ${{ github.event.inputs.paper_conservative_min_probability || '0.95' }}
-      PAPER_HIGH_REWARD_MIN_PROBABILITY: ${{ github.event.inputs.paper_high_reward_min_probability || '0.60' }}
-      PAPER_MORE_PROBABLE_MIN_PROBABILITY: ${{ github.event.inputs.paper_more_probable_min_probability || '0.60' }}
+      # Fallbacks only. Every per-strategy value below is set from
+      # portfolio-config.json by the "Load portfolio config" step, which appends to
+      # GITHUB_ENV and therefore overrides this job-level env for every later step --
+      # so these were already unreachable whenever the dashboard had saved a value.
+      # They used to be workflow_dispatch inputs as well, which is what pushed the file
+      # past GitHub's hard ceiling of 25 inputs; above that GitHub refuses to parse the
+      # whole workflow, so every dispatch answered 422 and the schedule stopped firing.
+      # A portfolio's settings belong in the saved config, never in a dispatch input.
+      PAPER_CONSERVATIVE_MIN_PROBABILITY: "0.95"
+      PAPER_HIGH_REWARD_MIN_PROBABILITY: '0.60'
+      PAPER_MORE_PROBABLE_MIN_PROBABILITY: '0.60'
       PAPER_EQUAL_MIN_PROBABILITY: "0.75"
-      PAPER_CONSERVATIVE_MAX_FRACTION: ${{ github.event.inputs.paper_conservative_max_order_fraction || '' }}
-      PAPER_HIGH_REWARD_MAX_FRACTION: ${{ github.event.inputs.paper_high_reward_max_order_fraction || '' }}
-      PAPER_MORE_PROBABLE_MAX_FRACTION: ${{ github.event.inputs.paper_more_probable_max_order_fraction || '' }}
-      PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.paper_conservative_max_resolution_days || '' }}
-      PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.paper_high_reward_max_resolution_days || '' }}
-      PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS: ${{ github.event.inputs.paper_more_probable_max_resolution_days || '' }}
-      PAPER_CONSERVATIVE_SELECTION_ORDER: ${{ github.event.inputs.paper_conservative_selection_order || '' }}
-      PAPER_HIGH_REWARD_SELECTION_ORDER: ${{ github.event.inputs.paper_high_reward_selection_order || '' }}
-      PAPER_MORE_PROBABLE_SELECTION_ORDER: ${{ github.event.inputs.paper_more_probable_selection_order || '' }}
-      PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.paper_conservative_min_liquidity_usdc || '' }}
-      PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.paper_high_reward_min_liquidity_usdc || '' }}
-      PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC: ${{ github.event.inputs.paper_more_probable_min_liquidity_usdc || '' }}
-      PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_conservative_require_most_probable || '' }}
-      PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_high_reward_require_most_probable || '' }}
-      PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE: ${{ github.event.inputs.paper_more_probable_require_most_probable || '' }}
+      PAPER_CONSERVATIVE_MAX_FRACTION: ""
+      PAPER_HIGH_REWARD_MAX_FRACTION: ""
+      PAPER_MORE_PROBABLE_MAX_FRACTION: ""
+      PAPER_CONSERVATIVE_MAX_RESOLUTION_DAYS: ""
+      PAPER_HIGH_REWARD_MAX_RESOLUTION_DAYS: ""
+      PAPER_MORE_PROBABLE_MAX_RESOLUTION_DAYS: ""
+      PAPER_CONSERVATIVE_SELECTION_ORDER: ""
+      PAPER_HIGH_REWARD_SELECTION_ORDER: ""
+      PAPER_MORE_PROBABLE_SELECTION_ORDER: ""
+      PAPER_CONSERVATIVE_MIN_LIQUIDITY_USDC: ""
+      PAPER_HIGH_REWARD_MIN_LIQUIDITY_USDC: ""
+      PAPER_MORE_PROBABLE_MIN_LIQUIDITY_USDC: ""
+      PAPER_CONSERVATIVE_REQUIRE_MOST_PROBABLE: ""
+      PAPER_HIGH_REWARD_REQUIRE_MOST_PROBABLE: ""
+      PAPER_MORE_PROBABLE_REQUIRE_MOST_PROBABLE: ""
       # The portfolios rank on Polymarket's own quoted probability; no model is consulted.
       PAPER_CONSERVATIVE_PROBABILITY_SOURCE: "polymarket"
       PAPER_HIGH_REWARD_PROBABILITY_SOURCE: "polymarket"

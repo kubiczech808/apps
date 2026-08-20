@@ -1315,8 +1315,16 @@ test("stake sizing: the summary row, the control and the executor use a fixed US
 
   assert.match(app, /stake_usdc: config\.stakeUsdc/,
     "manual live dispatch must send the fixed stake to the workflow");
-  assert.match(app, /paper_conservative_stake_usdc: conservative\.stakeUsdc/,
-    "paper dispatch must send the per-portfolio fixed stake to the workflow");
+  // A paper portfolio's stake is saved, never dispatched. The workflow's "Load portfolio
+  // config" step reads portfolio-config.json and appends it to GITHUB_ENV, which
+  // overrides the job env for every later step -- so a per-strategy dispatch input could
+  // not take effect even when it was declared, and sending one now that it is not
+  // declared makes GitHub answer 422 "Unexpected inputs provided" for every manual run.
+  assert.ok(!/paper_(?:conservative|high_reward|more_probable)_/.test(app),
+    "the paper dispatch payload must carry no per-strategy inputs");
+  const workflow = await readFile(new URL("../../.github/workflows/trading-paper-bot.yml", import.meta.url), "utf8");
+  assert.match(workflow, /emit\(f"\{prefix\}_STAKE_USDC", row\.get\("stakeUsdc"\)\)/,
+    "the workflow must read each portfolio's stake from the saved config instead");
 
   assert.match(executor, /const LIVE_STAKE_USDC = envNumber\("LIVE_STAKE_USDC", envNumber\("LIVE_FIXED_STAKE_USDC", NaN\)\);/,
     "the live executor must read the fixed stake from workflow input/env");
@@ -1965,6 +1973,39 @@ test("workflows: no workflow_dispatch may exceed GitHub's 25-input limit", async
     const names = inputs.match(/^ {6}([A-Za-z0-9_-]+):$/gm) || [];
     assert.ok(names.length <= 25,
       `${file} defines ${names.length} workflow_dispatch inputs; GitHub rejects the whole file above 25`);
+  }
+});
+
+test("workflows: api.php only dispatches inputs the target workflow declares", async () => {
+  const { readFile, readdir } = await import("node:fs/promises");
+  // GitHub rejects a dispatch carrying an input the workflow does not declare
+  // ("Unexpected inputs provided"), so the two sides have to agree. They did not: the
+  // dashboard kept sending per-strategy inputs after the workflow stopped declaring
+  // them, and every manual run of every portfolio failed with a 422.
+  const api = await readFile(new URL("../api.php", import.meta.url), "utf8");
+  const dir = new URL("../../.github/workflows/", import.meta.url);
+  const declaredInputs = async (file) => {
+    const workflow = await readFile(new URL(file, dir), "utf8");
+    const block = /^ {2}workflow_dispatch:\n((?:^ {4}.*\n|^\s*\n)*)/m.exec(workflow)?.[1] || "";
+    const inputs = /^ {4}inputs:\n((?:^ {6}.*\n|^\s*\n)*)/m.exec(block)?.[1] || "";
+    return new Set((inputs.match(/^ {6}([A-Za-z0-9_-]+):$/gm) || []).map((line) => line.trim().replace(/:$/, "")));
+  };
+  const files = (await readdir(dir)).filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"));
+
+  // Every `'workflow' => 'x.yml'` entry with its own `'inputs' => [...]` literal.
+  const entries = [...api.matchAll(/'workflow' => '([^']+\.ya?ml)',\s*\n\s*'inputs' => ([\s\S]*?)\n\s*'message' =>/g)];
+  assert.ok(entries.length >= 2, `expected api.php to dispatch several workflows, found ${entries.length}`);
+  for (const [, workflowFile, inputsBlock] of entries) {
+    assert.ok(files.includes(workflowFile), `api.php dispatches ${workflowFile}, which does not exist`);
+    const declared = await declaredInputs(workflowFile);
+    assert.ok(declared.size > 0, `${workflowFile} declares no workflow_dispatch inputs`);
+    // Keys of the PHP array literal: 'name' => value.
+    const sent = [...inputsBlock.matchAll(/'([a-z0-9_]+)' =>/g)].map((match) => match[1]);
+    assert.ok(sent.length > 0, `no inputs parsed out of the ${workflowFile} dispatch payload`);
+    for (const name of sent) {
+      assert.ok(declared.has(name),
+        `api.php sends "${name}" to ${workflowFile}, which does not declare it -- GitHub answers 422`);
+    }
   }
 });
 
