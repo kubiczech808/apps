@@ -1658,7 +1658,7 @@ function functionSource(source, name) {
 
 function dashboardRunLog(executionState) {
   const app = readFileSync(new URL("../assets/app.js", import.meta.url), "utf8");
-  const body = ["normalizeLiveExecutionRun", "isSameLiveRun", "mergeUniqueByRun",
+  const body = ["normalizeLiveExecutionRun", "isSameLiveRun", "runLogTimestamp", "sortRunLogRows", "mergeUniqueByRun",
     "isCadenceWaitRun", "isHistoryRecoveryRun", "liveRunLogRows"]
     .map((name) => functionSource(app, name)).join("\n\n");
   const build = new Function("state", "isFixedEntryMode", "liveBatchCandidateSummaryFromExecution", "portfolioReturnMetricLabel", `

@@ -972,9 +972,21 @@ function stateSegmentUrls(manifest) {
     // write would put a 3,000-row page back as the whole archive. The local reader was
     // already restricted by name; this one walks the manifest, and was not.
     .filter(([name]) => !DERIVED_STATE_SEGMENTS.has(name))
-    .map(([, entry]) => String(entry?.file || "").trim())
-    .filter((file) => /^[A-Za-z0-9._-]+\.json$/.test(file))
-    .map((file) => `${prefix}${file}`);
+    .map(([name, entry]) => ({ name, file: String(entry?.file || "").trim() }))
+    .filter(({ file }) => /^[A-Za-z0-9._-]+\.json$/.test(file))
+    .map(({ name, file }) => ({ name, url: `${prefix}${file}` }));
+}
+
+// Whether a segment's contents can be regenerated if it is genuinely gone. The market
+// catalogue, the stored evaluations and the scan history are all rebuilt by later scans,
+// so continuing without them costs nothing that will not come back. A portfolio's trades
+// and run log, the portfolio archives and the calculation reports are the opposite: they
+// are the only copy, nothing regenerates them, and continuing would publish a state that
+// has silently dropped them.
+function stateSegmentIsRebuildable(name) {
+  return Object.prototype.hasOwnProperty.call(STATE_SEGMENT_FIELDS, name)
+    || name === RESOLVED_OBSERVATION_SEGMENT
+    || name === RESOLVED_RECENT_SEGMENT;
 }
 
 function stateSegmentNamesFromManifest(manifest) {
@@ -1024,16 +1036,25 @@ async function readStateWithSegments(payload) {
   }
 
   let merged = payload;
-  for (const url of urls) {
+  for (const { name, url } of urls) {
     try {
       const segment = await fetchJson(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`);
       merged = mergeStateSegment(merged, segment);
     } catch (error) {
       const message = String(error?.message || error);
-      // A genuinely absent segment cannot be recovered by refusing to run, and the
-      // core file still holds every portfolio, trade and P/L figure — only the
-      // rebuildable catalogue is gone. Warn loudly and continue with what exists.
+      // A genuinely absent catalogue segment cannot be recovered by refusing to run, and
+      // the next scans rebuild it, so warn loudly and continue. This used to apply to
+      // every segment on the grounds that the core still held every portfolio and trade
+      // -- which stopped being true once each portfolio's trades and run log moved into
+      // a segment of its own. Continuing past one of those 404s would publish a state
+      // with that portfolio's whole history silently emptied, so it has to fail closed.
       if (/HTTP 404\b/.test(message)) {
+        if (!stateSegmentIsRebuildable(name)) {
+          throw new Error(
+            `Published state segment "${name}" is missing (${url}) and nothing regenerates it. `
+            + "Refusing to continue: publishing now would drop the history it holds.",
+          );
+        }
         console.warn(
           `Published state segment is missing: ${url}. Continuing with the core state; `
           + "the affected catalogue will be rebuilt by the next scans.",
@@ -1182,10 +1203,29 @@ function normalizeState(input) {
   // the same here on the way in is what keeps a created portfolio's history from
   // being wiped back to blank before this run's decisions are even made.
   const paperPortfolios = {};
+  const persisted = input.paperPortfolios && typeof input.paperPortfolios === "object" && !Array.isArray(input.paperPortfolios)
+    ? input.paperPortfolios
+    : {};
+  // A persisted portfolio this process has no strategy for is carried through
+  // untouched. Not every workflow that writes paper state loads the saved portfolio
+  // config first: the market scan runs this same module with PAPER_CUSTOM_PORTFOLIOS
+  // unset, so PAPER_STRATEGIES there is only the four shipped ones. Rebuilding the map
+  // from PAPER_STRATEGIES alone therefore deleted every created portfolio's trades and
+  // run log on each scan and published the truncated state -- which is how a portfolio
+  // came to show OPENED rows in its archived run log (those are appended to their own
+  // NDJSON files and survive) and nothing at all in its positions. Missing from this
+  // process's strategy list means "not configured here", never "delete it". It is kept
+  // verbatim rather than normalized because there is no strategy definition to
+  // normalize it against, and normalizing against the wrong one is what previously
+  // made created portfolios inherit Conservative's settings.
+  for (const [id, portfolio] of Object.entries(persisted)) {
+    if (PAPER_STRATEGIES[id] || !portfolio || typeof portfolio !== "object") continue;
+    paperPortfolios[id] = portfolio;
+  }
   for (const strategy of Object.values(PAPER_STRATEGIES)) {
     const strategyInput = strategy.id === "conservative"
       ? conservativeInput
-      : input.paperPortfolios?.[strategy.id] || {};
+      : persisted[strategy.id] || {};
     paperPortfolios[strategy.id] = normalizePaperPortfolio(strategy, strategyInput);
   }
   return {
@@ -9926,6 +9966,7 @@ export {
   stateHasCurrentSchema,
   stateSegmentFileName,
   mergeStateSegment,
+  syncLegacyPaperAliases,
   takerFeeForFills,
   netExitValueAtPrice,
   equalRiskStopPlan,

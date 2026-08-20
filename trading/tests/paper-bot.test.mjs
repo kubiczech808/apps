@@ -875,6 +875,52 @@ test("portfolio: a created portfolio's trades and run log survive a reload, not 
   assert.equal(survived.capitalAdjustmentUsdc, 12.5, "its capital adjustment must survive a reload");
 });
 
+test("portfolio: a run that was never told about a created portfolio still must not delete it", () => {
+  // Reported live: "75 + SL" showed OPENED rows in its run log and nothing in either
+  // its open or its closed positions. Cause: not every workflow that writes paper
+  // state loads the saved portfolio config first. The market scan runs this same module
+  // with PAPER_CUSTOM_PORTFOLIOS unset, so PAPER_STRATEGIES there is only the four
+  // shipped portfolios -- and normalizeState rebuilt paperPortfolios from that list
+  // alone, dropping every created portfolio's trades before publishing the truncated
+  // state over FTP. The run log survived only because it is appended to its own NDJSON
+  // archive. So this runs the module with NO custom portfolios declared, exactly as a
+  // scan does, and requires the persisted ones to come back untouched.
+  const rawInput = JSON.stringify({
+    paperPortfolios: {
+      conservative: { trades: [], runLog: [] },
+      ewportfolio: {
+        id: "ewportfolio",
+        label: "75 + SL",
+        trades: [
+          { id: "paper-ewportfolio-2026-08-19-1", status: "OPEN", stakeUsdc: 5 },
+          { id: "paper-ewportfolio-2026-08-18-1", status: "WON", realizedPnlUsdc: 1.25 },
+        ],
+        runLog: [{ runAt: "2026-08-19T00:00:00Z", action: "OPENED" }],
+        portfolio: { equityUsdc: 101.25 },
+      },
+    },
+  });
+  const modulePath = new URL("../tools/paper-trading-bot.mjs", import.meta.url).href;
+  const script = `
+    import { normalizeState } from ${JSON.stringify(modulePath)};
+    const state = normalizeState(JSON.parse(process.argv[1]));
+    process.stdout.write(JSON.stringify(state.paperPortfolios.ewportfolio ?? null));
+  `;
+  const env = { ...process.env };
+  delete env.PAPER_CUSTOM_PORTFOLIOS;
+  const kept = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", script, rawInput], {
+    encoding: "utf8",
+    env,
+  }));
+  assert.ok(kept, "a portfolio this process has no strategy for must not be deleted from the state");
+  assert.equal(kept.trades?.length, 2, "both its open and its closed trade must survive");
+  assert.equal(kept.trades.filter((trade) => trade.status === "OPEN").length, 1);
+  assert.equal(kept.runLog?.length, 1);
+  // Kept verbatim: with no strategy to normalize against, re-deriving its numbers
+  // would mean guessing them from another portfolio's rules.
+  assert.equal(kept.portfolio?.equityUsdc, 101.25);
+});
+
 test("portfolio: normalization keeps the per-portfolio fixed stake", () => {
   // portfolio-config is the source of truth; equity and the global fraction must not resize it.
   const portfolioState = {
@@ -1657,18 +1703,32 @@ test("state segments: the core file never carries the heavy collections", async 
   const { core, segments } = bot.splitStateIntoSegments(state);
   // resolvedRecent joined these: the archive is kept whole and the newest page of it is
   // published beside it, so the opportunities page never decodes all of history to show
-  // its most recent rows.
-  assert.deepEqual(Object.keys(segments).sort(),
-    ["evaluations", "observations", "resolvedObservations", "resolvedRecent", "scanHistory"]);
+  // its most recent rows. Each portfolio then got a segment of its own, so the core no
+  // longer grows with every trade every portfolio has ever made and the dashboard reads
+  // the history of just the one it is showing.
+  const fixedSegments = ["archives", "evaluations", "observations", "reports", "resolvedObservations", "resolvedRecent", "scanHistory"];
+  const portfolioSegments = Object.keys(state.paperPortfolios).map((id) => `portfolio:${id}`);
+  assert.ok(portfolioSegments.length > 0, "fixture must have portfolios to segment");
+  assert.deepEqual(Object.keys(segments).sort(), [...fixedSegments, ...portfolioSegments].sort());
 
   // The whole point is that a reader of the core file decodes none of the catalogue.
   assert.deepEqual(core.marketObservations, []);
   assert.deepEqual(core.evaluations, []);
   assert.deepEqual(core.marketScanHistory, []);
   assert.deepEqual(core.marketScan, {});
-  // Portfolio numbers stay in the core: they are what the dashboard renders.
+  // Portfolio headline numbers stay in the core: the overview renders them for every
+  // portfolio at once, and they stay small however long a trade history grows.
   assert.equal(core.paperPortfolios.conservative.portfolio.equityUsdc, state.paperPortfolios.conservative.portfolio.equityUsdc);
-  assert.ok(Array.isArray(core.trades), "trades stay in the core so the shape check still passes");
+  // The rows themselves are what the per-portfolio segments carry, so the core must be
+  // emptied of them -- but every one still has to be somewhere, checked next.
+  assert.deepEqual(core.paperPortfolios.conservative.trades, []);
+  assert.deepEqual(core.trades, [], "the legacy top-level alias is emptied with the rest");
+  for (const [id, portfolio] of Object.entries(state.paperPortfolios)) {
+    assert.deepEqual(segments[`portfolio:${id}`].paperPortfolio.trades, portfolio.trades,
+      `${id} must keep every trade in its own segment`);
+    assert.equal(core.stateSegments[`portfolio:${id}`].counts.trades, portfolio.trades.length,
+      `${id}'s manifest must state its real trade count`);
+  }
 
   // Resolved history is archived apart from the active catalogue. That separation is
   // what lets it accumulate instead of competing for one retention budget, and it
@@ -1694,12 +1754,25 @@ test("state segments: the core file never carries the heavy collections", async 
   delete rebuilt.stateSegments;
   // The combined list is active-then-resolved; order within each group is preserved.
   assert.deepEqual(rebuilt.marketObservations, [...activeRows, ...resolvedRows]);
+  // The top-level portfolio/trades/runLog keys are aliases of paperPortfolios.conservative
+  // kept for older readers. They are derived, not stored: every path that assembles a
+  // state ends in syncLegacyPaperAliases, which rewrites them from the conservative
+  // portfolio. So the round-trip is checked on the authoritative data and the aliases are
+  // asserted to be rebuilt from it, rather than expected to survive the split themselves.
+  const aliases = ["portfolio", "trades", "runLog", "lastTradeDate", "lastTradeHour", "lastDecision"];
+  const withoutAliases = (value) => Object.fromEntries(Object.entries(value).filter(([key]) => !aliases.includes(key)));
   assert.deepEqual(
-    { ...rebuilt, marketObservations: state.marketObservations },
-    state,
+    withoutAliases({ ...rebuilt, marketObservations: state.marketObservations }),
+    withoutAliases(state),
     "everything other than observation ordering must round-trip exactly",
   );
   assert.equal(rebuilt.marketObservations.length, state.marketObservations.length, "no row may be lost");
+  // Rebuilding the aliases is what makes dropping them from the core safe.
+  const synced = bot.syncLegacyPaperAliases({ ...rebuilt });
+  for (const alias of aliases) {
+    assert.deepEqual(synced[alias], state.paperPortfolios.conservative[alias],
+      `${alias} must be rebuilt from the conservative portfolio`);
+  }
 });
 
 test("state segments: resolved history retains every measurable trade and purges settlement-only rows", () => {
@@ -1764,15 +1837,23 @@ test("state segments: writeState publishes siblings that readState reassembles",
 
     const published = (await readdir(dir)).sort();
     assert.deepEqual(published, [
+      // Portfolio archives and the calculation reports: history that only their own
+      // views open, so the core no longer carries either.
+      "paper-state.archives.json",
       "paper-state.evaluations.json",
       "paper-state.json",
       "paper-state.observations.json",
+      // One file per portfolio. Its trades and run log live here, so the core stops
+      // growing with every trade every portfolio has ever made and the dashboard reads
+      // back only the portfolio it is showing.
+      ...Object.keys(source.paperPortfolios).map((id) => `paper-state.portfolio-${id}.json`).sort(),
+      "paper-state.reports.json",
       "paper-state.resolvedObservations.json",
       // The newest page of the archive, so the opportunities page can show recent
       // resolved markets without decoding all of history to find them.
       "paper-state.resolvedRecent.json",
       "paper-state.scanHistory.json",
-    ]);
+    ].sort());
 
     // The published core must be small: that is the property that stops PHP 500s.
     const coreRaw = await readFile(join(dir, "paper-state.json"), "utf8");
@@ -1859,6 +1940,32 @@ test("state segments: every state-writing workflow publishes them", async () => 
   assert.match(publisher, /uploads = declared_segments\(state_file\) \+ \[state_file\]/);
   // And a manifest naming a file that was never written has to fail the run.
   assert.match(publisher, /was not generated/);
+});
+
+test("workflows: no workflow_dispatch may exceed GitHub's 25-input limit", async () => {
+  const { readFile, readdir } = await import("node:fs/promises");
+  // GitHub refuses to parse a workflow that defines more than 25 workflow_dispatch
+  // inputs. It is not a warning and not per-run: the whole file becomes invalid, so
+  // every dispatch answers 422 and every scheduled tick stops firing too. That is
+  // exactly what a 26th input did here -- the paper bot went completely dark, the
+  // post-scrape chain failed with "you may only define up to 25 inputs", and the
+  // symptom on the dashboard was portfolios frozen mid-history. A count is far
+  // cheaper to check here than to rediscover from a silent cron.
+  const dir = new URL("../../.github/workflows/", import.meta.url);
+  const files = (await readdir(dir)).filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"));
+  assert.ok(files.length > 0, "no workflow files were found to check");
+  for (const file of files) {
+    const workflow = await readFile(new URL(file, dir), "utf8");
+    // Counted off the indented block under workflow_dispatch's own `inputs:` rather
+    // than by parsing YAML, so this test needs no dependency the repo does not have.
+    const block = /^ {2}workflow_dispatch:\n((?:^ {4}.*\n|^\s*\n)*)/m.exec(workflow)?.[1];
+    if (!block) continue;
+    const inputs = /^ {4}inputs:\n((?:^ {6}.*\n|^\s*\n)*)/m.exec(block)?.[1];
+    if (!inputs) continue;
+    const names = inputs.match(/^ {6}([A-Za-z0-9_-]+):$/gm) || [];
+    assert.ok(names.length <= 25,
+      `${file} defines ${names.length} workflow_dispatch inputs; GitHub rejects the whole file above 25`);
+  }
 });
 
 test("state segments: the publisher refuses to write outside the trading tree", async () => {
@@ -2028,10 +2135,23 @@ test("state segments: a missing segment does not read as a missing state", async
   const { core } = bot.splitStateIntoSegments(source);
 
   let segmentStatus = 404;
+  // Which segment files the hosting still has. Everything absent by default, so the
+  // first read below is the full "the deploy deleted them all" case.
+  let segmentServed = () => false;
+  const { segments } = bot.splitStateIntoSegments(source);
+  const fileFor = (name) => bot.stateSegmentFileName(name);
   const server = http.createServer((req, res) => {
-    if (req.url.split("?")[0] === "/paper-state.json") {
+    const path = req.url.split("?")[0];
+    if (path === "/paper-state.json") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(core));
+      return;
+    }
+    const file = path.replace(/^\//, "");
+    const name = Object.keys(segments).find((key) => fileFor(key) === file);
+    if (name && segmentServed(file)) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(segments[name]));
       return;
     }
     res.writeHead(segmentStatus, { "Content-Type": "application/json" });
@@ -2051,8 +2171,21 @@ test("state segments: a missing segment does not read as a missing state", async
     process.env.PAPER_STATIC_STATE_URL = `${base}/paper-state.json`;
     const scoped = await import(`../tools/paper-trading-bot.mjs?missingSegment=${Date.now()}`);
 
-    const restored = await scoped.readState();
-    assert.equal(restored.trades.length, source.trades.length, "trades live in the core and must survive");
+    // Only the rebuildable catalogue may 404 its way to empty. A portfolio's trades and
+    // run log now live in a segment of their own, and nothing regenerates them, so a 404
+    // there has to stop the run rather than publish the portfolio with an empty history.
+    await assert.rejects(
+      () => scoped.readState(),
+      /missing .* and nothing regenerates it/,
+      "a missing portfolio segment must fail closed, not publish an emptied history",
+    );
+
+    // With the irreplaceable segments served and only the catalogue missing, the run
+    // continues: that is the case this test was written for.
+    segmentServed = (file) => /portfolio-|archives|reports/.test(file);
+    const catalogueOnly = await import(`../tools/paper-trading-bot.mjs?catalogueGone=${Date.now()}`);
+    const restored = await catalogueOnly.readState();
+    assert.equal(restored.trades.length, source.trades.length, "trades must survive a missing catalogue");
     assert.equal(
       restored.paperPortfolios.conservative.portfolio.equityUsdc,
       source.paperPortfolios.conservative.portfolio.equityUsdc,
@@ -2122,7 +2255,11 @@ test("state segments: segments can be merged in any order", async () => {
     assert.equal(merged.marketObservations.length, expected, `order ${order.join(",")} lost rows`);
     checked += 1;
   }
-  assert.equal(checked, 24, "all four segment orderings must be covered");
+  // Derived from the segment list rather than hardcoded: segments have been added since
+  // (portfolio archives, calculation reports), and a fixed count silently stopped
+  // asserting anything the moment the list grew.
+  const factorial = (value) => (value <= 1 ? 1 : value * factorial(value - 1));
+  assert.equal(checked, factorial(names.length), `all ${names.length} segment orderings must be covered`);
 });
 
 test("state segments: retention is not silently throttled by workflow env", async () => {
@@ -4346,7 +4483,7 @@ function runLogRenderer(app, executionState, { fixedEntry = true } = {}) {
     }
     throw new Error(`unbalanced ${name}`);
   };
-  const body = ["normalizeLiveExecutionRun", "isSameLiveRun", "mergeUniqueByRun",
+  const body = ["normalizeLiveExecutionRun", "isSameLiveRun", "runLogTimestamp", "sortRunLogRows", "mergeUniqueByRun",
     "isCadenceWaitRun", "isHistoryRecoveryRun", "liveRunLogRows"].map(pick).join("\n\n");
   return new Function("state", "isFixedEntryMode", "liveBatchCandidateSummaryFromExecution", "portfolioReturnMetricLabel",
     `${body}\nreturn liveRunLogRows;`)(
@@ -5110,10 +5247,26 @@ function functionSource(src, name) {
   const start = src.indexOf(`function ${name}(`);
   if (start < 0) throw new Error(`missing ${name}`);
   // Counted from the end of the parameter list, or a `= {}` default parameter would
-  // close the brace count before the body has opened.
-  const bodyStart = src.indexOf(") {\n", start);
+  // close the brace count before the body has opened. The parameter list is found by
+  // matching its own parentheses rather than by searching for a literal ") {": a PHP
+  // signature may carry a return type with the brace on the next line (`): array\n{`),
+  // and not finding the body there silently started the brace count near the top of the
+  // file, returning a truncated function that then matched no assertion at all.
+  let parens = 0;
+  let bodyStart = -1;
+  for (let i = src.indexOf("(", start); i < src.length; i += 1) {
+    if (src[i] === "(") parens += 1;
+    else if (src[i] === ")") {
+      parens -= 1;
+      if (parens === 0) {
+        bodyStart = src.indexOf("{", i);
+        break;
+      }
+    }
+  }
+  if (bodyStart < 0) throw new Error(`no body found for ${name}`);
   let depth = 0;
-  for (let i = bodyStart + 2; i < src.length; i += 1) {
+  for (let i = bodyStart; i < src.length; i += 1) {
     if (src[i] === "{") depth += 1;
     else if (src[i] === "}") {
       depth -= 1;

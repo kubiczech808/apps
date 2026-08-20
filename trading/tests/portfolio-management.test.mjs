@@ -168,8 +168,13 @@ test("archiving: nothing a portfolio was traded under is dropped by archiving it
 
 test("created portfolios: the bot builds strategies from the config the workflow passes", async () => {
   const bot = await import("../tools/paper-trading-bot.mjs");
+  // PORTFOLIO_USDC and STAKE_USDC arrived with fixed-USDC stake sizing: a created
+  // portfolio saved before that field existed still derives its stake from the
+  // fraction, so both have to be in scope here or the extraction throws.
   const build = new Function("process", "MAX_FRACTION", "DEFAULT_MAX_RESOLUTION_DAYS", "PAPER_STRATEGIES",
-    "normalizeExecutionTrigger", "console", `
+    "normalizeExecutionTrigger", "PORTFOLIO_USDC", "STAKE_USDC", "console", `
+    ${extractFunction(BOT, "normalizeStopLossRiskMultiplier")}
+    ${extractFunction(BOT, "rowStopLossRiskMultiplier")}
     ${extractFunction(BOT, "customPaperStrategies")}
     return customPaperStrategies;
   `)(
@@ -178,6 +183,8 @@ test("created portfolios: the bot builds strategies from the config the workflow
     7,
     { conservative: { id: "conservative" } },
     (value) => (value === "after_scrape" ? "after_scrape" : "cron"),
+    100,
+    5,
     console,
   );
 
@@ -632,6 +639,8 @@ test("run log history: the dashboard merges loaded history with the live cap, ne
     ${extractFunction(APP, "normalizePortfolioName")}
     ${extractFunction(APP, "portfolioRunLogHistoryState")}
     ${extractFunction(APP, "isCadenceWaitRun")}
+    ${extractFunction(APP, "runLogTimestamp")}
+    ${extractFunction(APP, "sortRunLogRows")}
     function withRunningExecutionRow(rows) { return rows; }
     ${extractFunction(APP, "currentPortfolioRunLog")}
     return currentPortfolioRunLog;
