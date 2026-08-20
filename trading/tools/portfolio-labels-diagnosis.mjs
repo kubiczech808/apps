@@ -22,6 +22,7 @@ async function main() {
   }
   const state = paper.body?.state || paper.body || {};
   const portfolios = state.paperPortfolios || {};
+  console.log(`generatedAt (api.php dashboard) : ${state.generatedAt}`);
   for (const [strategyId, portfolio] of Object.entries(portfolios)) {
     console.log(`id=${strategyId} label=${JSON.stringify(portfolio.label)} archived=${Boolean(portfolio.archived)}`);
     console.log(`   capitalAdjustmentUsdc=${portfolio.capitalAdjustmentUsdc ?? "-"} capitalAdjustmentAt=${portfolio.capitalAdjustmentAt ?? "-"}`);
@@ -46,7 +47,7 @@ async function main() {
     console.log(`!! could not read static state: HTTP ${staticResult.status} ${staticResult.error || ""}`);
   } else {
     const staticPortfolios = staticResult.body?.paperPortfolios || {};
-    console.log(`generatedAt : ${staticResult.body?.generatedAt}`);
+    console.log(`generatedAt (raw static)        : ${staticResult.body?.generatedAt}`);
     console.log(`stateSegments keys: ${Object.keys(staticResult.body?.stateSegments || {}).join(", ") || "(none)"}`);
     console.log(`portfolio ids: ${Object.keys(staticPortfolios).join(", ") || "(none)"}`);
   }
