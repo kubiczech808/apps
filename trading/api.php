@@ -258,6 +258,37 @@ function state_payload(string $target, array $segments = ['observations', 'evalu
 }
 
 /**
+ * paper-state.json runs tens of megabytes once a few paper portfolios accumulate
+ * real trade history, and this hosting's file replication for something that size
+ * is not always read-your-writes consistent: a request can occasionally decode an
+ * older copy that is still perfectly valid JSON but predates a portfolio's first
+ * trade, so that portfolio's entry in paperPortfolios is simply absent (not blank
+ * -- absent, since it was never written at all in that older copy). Every
+ * portfolio saved in portfolio-config.json always has a paperPortfolios entry
+ * once the bot has run even once (normalizeState() seeds a blank one for every
+ * configured strategy immediately), so a configured id missing here is never
+ * legitimate -- it means this read raced an in-flight replication, and re-reading
+ * a moment later almost always sees the current copy.
+ */
+function paper_state_with_consistent_portfolios(array $payload, array $segments): array
+{
+    $configuredIds = array_keys(load_portfolio_config()['paper'] ?? []);
+    if ($configuredIds === []) {
+        return $payload;
+    }
+    for ($attempt = 0; $attempt < 4; $attempt++) {
+        $portfolios = is_array($payload['paperPortfolios'] ?? null) ? $payload['paperPortfolios'] : [];
+        if (array_diff($configuredIds, array_keys($portfolios)) === []) {
+            break;
+        }
+        usleep(250000);
+        clearstatcache(true, state_file_paths()['paper']);
+        $payload = state_payload('paper', $segments);
+    }
+    return $payload;
+}
+
+/**
  * True retained row counts, taken from the manifest rather than from the rows that
  * survived response truncation. The scraped tabs show these in parentheses; deriving
  * them from a truncated payload is what made them look like they were shrinking.
@@ -2712,8 +2743,10 @@ try {
         $summary = (string) ($_GET['summary'] ?? '');
         // Load the segments this summary reads before decoding anything else. The
         // dashboard is by far the most requested view and needs none of them.
-        $payload = state_payload($target, state_segments_for_summary($summary));
+        $segments = state_segments_for_summary($summary);
+        $payload = state_payload($target, $segments);
         if ($target === 'paper') {
+            $payload = paper_state_with_consistent_portfolios($payload, $segments);
             $payload = compact_state_payload($target, $payload, $summary);
         }
         respond($payload);
