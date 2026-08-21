@@ -803,6 +803,24 @@ function phaseTimingSummary() {
   };
 }
 
+// Carried in the state as well as printed.
+//
+// The printed line sits at the end of a step whose log is followed by several environment
+// dumps, so reading it back after the fact means paging through thousands of lines of
+// PAPER_* variables to reach it. In the state, the run digest can state it in three lines
+// at the bottom of the job, which is where anyone asking "why did that take so long" looks.
+//
+// Stamped from inside writeState, so it covers every phase up to that write -- the one
+// phase whose own duration cannot be inside the file it produces.
+function recordPassTimingOnState(state) {
+  if (!state || typeof state !== "object") return;
+  state.lastPassTiming = {
+    at: state.generatedAt || nowIso(),
+    executionPass: EXECUTION_PASS,
+    ...phaseTimingSummary(),
+  };
+}
+
 // One market lookup per slug per process.
 //
 // The same slug is asked for by several phases of a single pass -- stored evaluations and
@@ -1484,6 +1502,10 @@ function normalizeState(input) {
     lastTradeHour: paperPortfolios.conservative.lastTradeHour,
     lastDecision: paperPortfolios.conservative.lastDecision,
     runLog: paperPortfolios.conservative.runLog,
+    // Where the last run's time went. This object is rebuilt field by field, so a phase
+    // breakdown stamped on the state just before the write would be dropped here without
+    // being named.
+    lastPassTiming: input.lastPassTiming && typeof input.lastPassTiming === "object" ? input.lastPassTiming : null,
   };
 }
 
@@ -9878,6 +9900,7 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
 }
 
 async function writeState(state) {
+  recordPassTimingOnState(state);
   await timed("writeState", async () => {
     await mkdir(dirname(OUTPUT_PATH), { recursive: true });
     // Normalize immediately before persistence. This protects the public state

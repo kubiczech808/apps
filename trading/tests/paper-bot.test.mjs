@@ -7068,12 +7068,16 @@ spec.loader.exec_module(module)
 
 lock = threading.Lock()
 stored = []
-state = {"open": 0, "refused": 0}
+state = {"open": 0, "refused": 0, "asked": 0}
 
 class PickyFTP:
     def __init__(self, host, timeout=None):
+        # Refuses the second session it is ever asked for, whichever thread asks. Counting
+        # sessions currently open would be a race: one worker can finish and close before
+        # another opens, and then nothing is refused and the test proves nothing.
         with lock:
-            if state["open"] >= 1:
+            state["asked"] += 1
+            if state["asked"] == 2:
                 state["refused"] += 1
                 raise ftplib.error_temp("421 too many connections")
             state["open"] += 1

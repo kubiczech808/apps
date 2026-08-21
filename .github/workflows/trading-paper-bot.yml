@@ -532,6 +532,17 @@ jobs:
           print(f"scan        : scope={scan.get('lastScope')} at={scan.get('lastScanAt')} "
                 f"batch={scan.get('lastBatchCount')} hourlySlot={scan.get('usedHourlyScanSlot')}")
 
+          # Where the bot's own time went. The bot prints the same breakdown itself, but
+          # that line is followed by several environment dumps, so restating it at the
+          # bottom of the job is the difference between reading it and paging past it.
+          timing = state.get("lastPassTiming") or {}
+          if timing:
+              print(f"timing      : executionPass={timing.get('executionPass')} "
+                    f"total={round(float(timing.get('totalMs') or 0) / 1000, 1)}s "
+                    f"(excludes the write that produced this file)")
+              for name, ms in list((timing.get("phasesMs") or {}).items())[:10]:
+                  print(f"  phase     : {name} {round(float(ms) / 1000, 2)}s")
+
           for strategy_id, portfolio in (state.get("paperPortfolios") or {}).items():
               decision = portfolio.get("lastDecision") or {}
               summary = portfolio.get("portfolio") or {}
