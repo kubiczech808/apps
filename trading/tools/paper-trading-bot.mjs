@@ -745,7 +745,12 @@ const STATE_SEGMENT_FIELDS = {
   observations: ["marketObservations", "marketScan"],
   evaluations: ["evaluations"],
   archives: ["paperPortfolioArchives"],
-  reports: ["evaluationRunLog", "calculationReports", "latestCalculationReport"],
+  // latestCalculationReport deliberately stays in the core. It is the one object every
+  // statistics tab renders, and segmenting it emptied all of them: the dashboard summary
+  // loads no segments, so the page had nothing to draw and said "No category statistics
+  // are available yet" while the data sat in a file nobody fetched. The historical array
+  // beside it is what actually grows, so that is what stays segmented.
+  reports: ["evaluationRunLog", "calculationReports"],
   // Scan history is short but carries per-run audits, and the audit endpoints
   // read nothing else. A separate file lets them skip the market catalogue.
   scanHistory: ["marketScanHistory"],
@@ -1054,12 +1059,32 @@ async function readStateWithSegments(payload) {
     );
   }
 
-  let merged = payload;
-  for (const { name, url } of urls) {
+  // Fetched a few at a time rather than one after another. These files total a few
+  // hundred megabytes over a shared host, and downloading them strictly in sequence was
+  // the single largest cost of a run -- the wait is network latency, not work, so it
+  // overlaps for free. The cap keeps peak memory bounded: each batch holds only its own
+  // parsed segments beyond the ones already merged.
+  //
+  // Merging stays strictly in manifest order regardless of which download finishes first.
+  // That matters: mergeStateSegment replaces the resolved half of marketObservations and
+  // appends the active half, so a different order would reassemble a different catalogue.
+  const SEGMENT_FETCH_CONCURRENCY = 4;
+  const fetchOne = async ({ name, url }) => {
     try {
-      const segment = await fetchJson(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`);
-      merged = mergeStateSegment(merged, segment);
+      return { name, url, segment: await fetchJson(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`) };
     } catch (error) {
+      return { name, url, error };
+    }
+  };
+
+  let merged = payload;
+  for (let index = 0; index < urls.length; index += SEGMENT_FETCH_CONCURRENCY) {
+    const batch = await Promise.all(urls.slice(index, index + SEGMENT_FETCH_CONCURRENCY).map(fetchOne));
+    for (const { name, url, segment, error } of batch) {
+      if (!error) {
+        merged = mergeStateSegment(merged, segment);
+        continue;
+      }
       const message = String(error?.message || error);
       // A genuinely absent catalogue segment cannot be recovered by refusing to run, and
       // the next scans rebuild it, so warn loudly and continue. This used to apply to
@@ -9273,7 +9298,12 @@ function updatePaperPortfolio(portfolioState) {
   // is 0 -- which would read as "the reset handed this account zero equity".
   const equityAtAdjustment = numericOrNaN(portfolioState.capitalAdjustmentEquityUsdc);
   const openPnlAtAdjustment = numericOrNaN(portfolioState.capitalAdjustmentOpenPnlUsdc);
-  const rebaseEquity = Number.isFinite(equityAtAdjustment)
+  // A recorded baseline of zero or less is not a baseline. A reset always puts equity on a
+  // positive target, so zero can only be the Number(null) === 0 trap that an earlier pass
+  // wrote into the published state -- and dividing by it made High reward report its whole
+  // balance as profit since the reset (+$110.11 on equity of $110.11, at +0.0%). Guarding
+  // the value, not just the write, is what heals a state that already carries the zero.
+  const rebaseEquity = Number.isFinite(equityAtAdjustment) && equityAtAdjustment > 0
     ? equityAtAdjustment
     : (Number.isFinite(adjustedAtTime) ? PORTFOLIO_USDC : baseline);
   const rebaseOpenPnl = Number.isFinite(openPnlAtAdjustment) ? openPnlAtAdjustment : 0;
