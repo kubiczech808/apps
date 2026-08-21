@@ -579,7 +579,24 @@ function strategyMatchesExecutionTrigger(strategy, { manual = MANUAL_RUN_ONCE ||
   // Absent means on: a portfolio saved before this switch existed must keep trading
   // rather than silently stop because a field it never had reads as false.
   if (strategy?.automationEnabled === false) return false;
-  if (EXECUTION_TRIGGER === "after_scrape") return strategy.executionTrigger === "after_scrape";
+  // An after-scrape pass runs every portfolio whose cadence is due, not only the ones
+  // whose trigger is literally "after_scrape".
+  //
+  // Reported: portfolios created in the browser never ran. Both were saved with the
+  // "cron" trigger, and this returned false for them on every after-scrape pass -- which
+  // is nearly every execution pass there is. A scheduled tick normally resolves to a
+  // catalogue scan and then chains an after_scan run to do the trading, so the only
+  // passes that carried EXECUTION_TRIGGER=cron were the occasional scheduled full ones.
+  // A created portfolio was left with no run log, no positions and equity still at its
+  // opening balance, while the four shipped portfolios (all "after_scrape") traded on.
+  //
+  // "cron" is a statement about how often to check, not about which pass may check. The
+  // interval is enforced by strategyCadenceIsDue, which every caller here applies right
+  // after this, so letting a cron portfolio through an after-scrape pass cannot make it
+  // trade more often than its own executionCronMinutes allows.
+  if (EXECUTION_TRIGGER === "after_scrape") return true;
+  // The reverse stays exclusive: "after_scrape" means "only on freshly scanned data",
+  // so those portfolios are still not run by a plain cron pass.
   if (EXECUTION_TRIGGER === "cron") return strategy.executionTrigger !== "after_scrape";
   return true;
 }

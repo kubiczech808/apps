@@ -6291,3 +6291,44 @@ test("tag performance: the list behind a statistic is the set the statistic coun
   // the filter that admitted it.
   assert.match(functionSource(app, "scrapedDisplayProbability"), /const entry = scrapedEntryProbability\(item\);/);
 });
+
+test("automation: an after-scrape pass runs a cron portfolio once its own interval is due", async () => {
+  // Reported: portfolios created in the browser never ran at all -- no run log, no
+  // positions, equity still at the opening balance -- while the four shipped ones traded
+  // on. Both were saved with the "cron" trigger, and an after-scrape pass used to admit
+  // only portfolios whose trigger was literally "after_scrape". That is nearly every
+  // execution pass there is: a scheduled tick resolves to a catalogue scan and chains an
+  // after_scan run to do the trading, so EXECUTION_TRIGGER was almost never "cron".
+  //
+  // The pacing has to stay with the cadence, so this checks both halves: the trigger gate
+  // lets a cron portfolio through, and the cadence gate is what still holds it to its own
+  // interval.
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const gate = source.slice(source.indexOf("function strategyMatchesExecutionTrigger"));
+  const body = gate.slice(0, gate.indexOf("\nfunction "));
+  assert.match(body, /if \(EXECUTION_TRIGGER === "after_scrape"\) return true;/,
+    "an after-scrape pass must not exclude a portfolio by trigger alone");
+  // The reverse stays exclusive: after_scrape means "only on freshly scanned data".
+  assert.match(body, /if \(EXECUTION_TRIGGER === "cron"\) return strategy\.executionTrigger !== "after_scrape";/);
+
+  // And both gates are applied together, so admitting cron portfolios above cannot make
+  // them trade more often than their interval allows.
+  const due = source.slice(source.indexOf("function dueExecutionStrategies"));
+  const dueBody = due.slice(0, due.indexOf("\nfunction "));
+  assert.match(dueBody, /strategyMatchesExecutionTrigger\(strategy\)/);
+  assert.match(dueBody, /strategyCadenceIsDue\(strategy, lastRunAtForStrategy\(state, strategy\)\)/);
+
+  const now = Date.parse("2026-08-21T12:00:00Z");
+  const minutesAgoIso = (minutes) => new Date(now - minutes * 60000).toISOString();
+  const created = { id: "ewportfolio", executionTrigger: "cron", executionCronMinutes: 60, automationEnabled: true };
+  assert.equal(bot.strategyMatchesExecutionTrigger(created, { manual: false }), true,
+    "a created cron portfolio is eligible for the pass that is running");
+  assert.equal(bot.strategyCadenceIsDue(created, minutesAgoIso(59), now, { manual: false }), false,
+    "but its own hourly interval still paces it");
+  assert.equal(bot.strategyCadenceIsDue(created, minutesAgoIso(61), now, { manual: false }), true);
+  // Never ran yet is not a reason to keep waiting -- that was the state it was stuck in.
+  assert.equal(bot.strategyCadenceIsDue(created, null, now, { manual: false }), true);
+  // Switching automation off is still respected.
+  assert.equal(bot.strategyMatchesExecutionTrigger({ ...created, automationEnabled: false }, { manual: false }), false);
+});
