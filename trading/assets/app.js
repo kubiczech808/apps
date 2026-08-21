@@ -3625,6 +3625,15 @@ function equityChartDate(timestamp, scale) {
   }).format(date);
 }
 
+function equityChartTooltipDate(timestamp) {
+  return new Intl.DateTimeFormat("cs-CZ", {
+    timeZone: "Europe/Prague",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date(timestamp));
+}
+
 // The state has transaction-level P/L rather than periodic account snapshots. Rebuild a
 // compact realized-equity path from settled trades without publishing a second,
 // ever-growing history file.
@@ -3748,7 +3757,7 @@ function renderPortfolioEquityChart({ trades = [], equity, openPnl = 0, generate
       Math.abs(x(point.timestamp) - viewX) < Math.abs(x(best.timestamp) - viewX) ? point : best
     ), history.points[0]);
     const left = Math.max(4, Math.min(96, (x(nearest.timestamp) / width) * 100));
-    tooltip.textContent = `${formatDate(nearest.timestamp)} - ${money(nearest.value)}`;
+    tooltip.textContent = `${equityChartTooltipDate(nearest.timestamp)} - ${money(nearest.value)}`;
     tooltip.style.left = `${left}%`;
     tooltip.hidden = false;
   };
