@@ -38,6 +38,27 @@ The bot:
 - skips new entries when available paper capital is exhausted, the same token already has an open paper position, or an open position shares the same event/team risk group,
 - refreshes existing paper positions on every run; open positions are marked to current best bid, while closed/resolved markets are moved to `WON`/`LOST` with realized P/L and P/L percent.
 
+### Execution passes
+
+A run whose job is to place an order — the after-scrape execution the scan dispatches, and
+the dashboard's per-portfolio "run now" button — is an *execution pass*, and it
+deliberately skips the maintenance a scheduled full pass does: no fresh market scrape, no
+resolution sync over stored evaluations and observations, no AI review of closed trades, and
+no read or rewrite of the resolved-observation archive. None of that is an input to the
+decision, and doing it all put minutes between choosing a candidate and buying it.
+
+An execution pass still does everything the decision depends on: expire finished
+evaluations, mark open positions to market, recalculate capital and equity, and requote
+every shortlisted candidate against the live orderbook immediately before ordering. It does
+not claim the scheduled "full" cadence stage either, so the pass that does the maintenance
+is not postponed by one that skipped it.
+
+The budget for the whole job is one minute. Every run prints its phase breakdown as a
+`PASS_TIMING` line and carries it on the state as `lastPassTiming`, which the run digest
+restates at the bottom of the job — so a run that misses the budget says which phase took
+it. `PAPER_REQUEST_CONCURRENCY` (default 8) caps how many Polymarket requests are in flight
+at once; `PAPER_UPLOAD_CONCURRENCY` (default 4) how many FTP sessions the publisher opens.
+
 ## Optimization loop
 
 The bot now writes a `learningProfile` into `paper-state.json`.
