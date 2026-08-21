@@ -2668,7 +2668,14 @@ test("portfolio parameters: both live portfolios state their order price", () =>
   )(
     { liveState: { portfolio: {} } },
     () => fixedEntry,
-    () => ({ fixedEntryPrice: 0.65, allowedMarketTags: ["sports"], excludedMarketTags: [] }),
+    // The order mode is read off the open tab's saved config rather than the checkbox, so
+    // it belongs on the config the row builder is handed.
+    () => ({
+      fixedEntryPrice: 0.65,
+      allowedMarketTags: ["sports"],
+      excludedMarketTags: [],
+      useLimitOrders: limitOrders,
+    }),
     () => 30, (value) => value, (value) => value || 0, (value) => (Array.isArray(value) ? value : []),
     () => "Potential p.a.", () => "Polymarket probability", () => 0.93, () => "stake",
     (value) => value, () => "After each scraping batch", () => "x", (value) => Number(value),

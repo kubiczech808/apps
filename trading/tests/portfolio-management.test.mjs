@@ -767,9 +767,11 @@ test("live run in progress: an auto-chained dispatch is not mislabelled as a per
 test("paper portfolio rules: 'Order mode' is shown, mirroring the live card", () => {
   const paper = extractFunction(APP, "portfolioRuleRows");
   assert.match(paper, /rows\.push\(\["Order mode", config\.useLimitOrders \? "Limit orders" : "Market orders"\]\);/);
-  // The live card's own row must still exist unchanged.
+  // The live card's own row must still exist, and it now reads the same saved setting the
+  // paper card does rather than the checkbox's current position.
   const live = extractFunction(APP, "livePortfolioRuleRows");
-  assert.match(live, /\["Order mode", currentLimitOrders\(\) \? "Limit orders" : "Market orders"\],/);
+  assert.match(live, /const useLimitOrders = config\.useLimitOrders === true;/);
+  assert.match(live, /\["Order mode", useLimitOrders \? "Limit orders" : "Market orders"\],/);
 });
 
 test("run log history: the workflow archives every portfolio's new runs, and the bot writes them", () => {
