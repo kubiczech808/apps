@@ -170,6 +170,62 @@ async function main() {
     }
   }
 
+  // What the resolved rows actually settled at.
+  //
+  // Reported: rows in the Resolved view showing "Final 50.0%", which is not a settlement --
+  // a contract settles to 0 or 1. scrapedSimulationOutcome scores anything >= 0.5 as a win,
+  // so every one of those counts as a full winning trade, which is what a 92.7% accuracy on
+  // a 55% threshold looks like. Before changing the rule, this says how many rows sit at
+  // exactly 0.5, how many are cleanly settled, and how many are somewhere in between.
+  //
+  // Read off the capped recent page rather than the whole archive: a few thousand rows is
+  // plenty for a distribution and does not pull 143 MB through a diagnostic.
+  {
+    console.log(`\n-- resolved settlement prices -- 0.5 is not a settlement --`);
+    const recentFile = manifest.resolvedRecent?.file;
+    const page = recentFile ? await fetchJson(`${HOST}/data/${recentFile}`) : { ok: false, error: "no recent page in the manifest" };
+    if (!page.ok) {
+      console.log(`   could not read the recent page: ${page.error || `HTTP ${page.status}`}`);
+    } else {
+      const rows = Array.isArray(page.body?.resolvedMarketObservations) ? page.body.resolvedMarketObservations : [];
+      const buckets = { "null": 0, "exactly 0.5": 0, "0 or 1": 0, "<0.02 or >0.98": 0, "in between": 0 };
+      const middleExamples = [];
+      for (const row of rows) {
+        const value = row?.finalOutcomePrice;
+        if (value == null || value === "") { buckets["null"] += 1; continue; }
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) { buckets["null"] += 1; continue; }
+        if (numeric === 0.5) {
+          buckets["exactly 0.5"] += 1;
+          if (middleExamples.length < 5) {
+            middleExamples.push(`${numeric} closed=${row.marketClosed} accepting=${row.acceptingOrders} status=${row.resolutionStatus} ${String(row.question || "").slice(0, 48)}`);
+          }
+          continue;
+        }
+        if (numeric === 0 || numeric === 1) { buckets["0 or 1"] += 1; continue; }
+        if (numeric < 0.02 || numeric > 0.98) { buckets["<0.02 or >0.98"] += 1; continue; }
+        buckets["in between"] += 1;
+        if (middleExamples.length < 5) {
+          middleExamples.push(`${numeric} closed=${row.marketClosed} accepting=${row.acceptingOrders} status=${row.resolutionStatus} ${String(row.question || "").slice(0, 48)}`);
+        }
+      }
+      console.log(`   rows on the recent page: ${rows.length}`);
+      for (const [name, count] of Object.entries(buckets)) {
+        const share = rows.length ? ((count / rows.length) * 100).toFixed(1) : "0.0";
+        console.log(`   ${name.padEnd(16)} ${String(count).padStart(6)}  (${share}%)`);
+      }
+      // How many of those the current rule would score as wins.
+      const scoredWins = rows.filter((row) => {
+        const numeric = Number(row?.finalOutcomePrice);
+        return Number.isFinite(numeric) && numeric >= 0.5 && numeric <= 1;
+      }).length;
+      const cleanWins = rows.filter((row) => Number(row?.finalOutcomePrice) > 0.98).length;
+      console.log(`   scored as wins by the >= 0.5 rule: ${scoredWins}`);
+      console.log(`   settled clearly toward 1 (> 0.98) : ${cleanWins}`);
+      for (const example of middleExamples) console.log(`   example  : ${example}`);
+    }
+  }
+
   const configResult = await fetchJson(`${HOST}/api.php?action=portfolio-config`);
   const paperConfig = configResult.ok ? (configResult.body?.config?.paper || {}) : {};
 
