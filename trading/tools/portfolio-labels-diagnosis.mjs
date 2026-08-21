@@ -7,14 +7,29 @@
 // Writes nothing.
 const HOST = process.env.TRADING_HOST || "https://osobnizkusenosti.cz/trading";
 
-async function fetchJson(url) {
-  const response = await fetch(url);
-  const text = await response.text();
-  try {
-    return { ok: response.ok, status: response.status, body: JSON.parse(text) };
-  } catch {
-    return { ok: false, status: response.status, error: text.slice(0, 300) };
+// Network failures are reported, not thrown. This host closes a connection part-way
+// through a multi-megabyte file often enough that one dropped read used to take the whole
+// diagnostic down with an unhandled rejection -- losing every check that had not run yet
+// to a transport hiccup that says nothing about what is being diagnosed. One retry, then a
+// line saying so and on to the next check.
+async function fetchJson(url, attempts = 2) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let response;
+    let text;
+    try {
+      response = await fetch(url);
+      text = await response.text();
+    } catch (error) {
+      if (attempt < attempts) continue;
+      return { ok: false, status: 0, error: `read failed: ${error?.message || error}` };
+    }
+    try {
+      return { ok: response.ok, status: response.status, body: JSON.parse(text) };
+    } catch {
+      return { ok: false, status: response.status, error: text.slice(0, 300) };
+    }
   }
+  return { ok: false, status: 0, error: "read failed" };
 }
 
 const OPEN_STATUSES = new Set([
@@ -223,4 +238,10 @@ async function main() {
   }
 }
 
-main();
+// A read-only diagnostic that dies on a dropped connection is worse than one that says so:
+// the exit code then reads as "something is wrong with production" when the finding is
+// only that a shared host hung up.
+main().catch((error) => {
+  console.log(`\n!! diagnosis stopped early: ${error?.message || error}`);
+  process.exitCode = 1;
+});
