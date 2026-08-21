@@ -74,6 +74,87 @@ async function main() {
     }
   }
 
+  // The resolved archive is carried over untouched by an execution pass rather than
+  // downloaded and uploaded back unchanged. The manifest entry is the whole mechanism: it
+  // has to keep naming the hosted file and keep the real row count, because a count of 0
+  // would mean the archive really had been replaced by an empty one.
+  {
+    const archive = manifest.resolvedObservations || {};
+    const recent = manifest.resolvedRecent || {};
+    console.log(`\n-- resolved archive -- carried over by execution passes --`);
+    console.log(`   archive  : file=${archive.file || "MISSING"} carriedOver=${Boolean(archive.carriedOver)}`
+      + ` rows=${archive.counts?.resolvedMarketObservations ?? "MISSING"}`);
+    console.log(`   recent   : file=${recent.file || "MISSING"} carriedOver=${Boolean(recent.carriedOver)}`
+      + ` rows=${recent.counts?.resolvedMarketObservations ?? "MISSING"}`
+      + ` truncatedFrom=${recent.truncatedFrom ?? "-"}`);
+    if (archive.file) {
+      // HEAD, not GET: the point is that the file is still there and still large, not to
+      // pull 143 MB through a diagnostic.
+      try {
+        const response = await fetch(`${HOST}/data/${archive.file}`, { method: "HEAD" });
+        console.log(`   hosted   : HTTP ${response.status} contentLength=${response.headers.get("content-length") ?? "-"}`);
+      } catch (error) {
+        console.log(`   hosted   : HEAD failed -- ${error?.message || error}`);
+      }
+    }
+  }
+
+  // Every statistics tab renders one object. Segmenting it emptied all of them: the
+  // dashboard summary loads no segments, so the page had nothing to draw and said "No
+  // category statistics are available yet" while the data sat in a file nobody fetched.
+  // What matters is that it is in the payload the dashboard actually receives.
+  {
+    const payload = await fetchJson(`${HOST}/api.php?action=state&target=paper&summary=dashboard&strategy_id=conservative`);
+    const report = payload.ok ? payload.body?.latestCalculationReport : null;
+    console.log(`\n-- statistics tabs -- what renderCalculationReport reads --`);
+    if (!payload.ok) {
+      console.log(`   dashboard payload HTTP ${payload.status} ${payload.error || ""}`);
+    } else if (!report) {
+      console.log(`   latestCalculationReport MISSING from the dashboard payload -- every tab would be empty`);
+    } else {
+      const rows = (key) => (Array.isArray(report[key]) ? report[key].length : "MISSING");
+      console.log(`   generatedAt=${report.generatedAt} sampleSize=${report.sampleSize ?? "-"} openSampleSize=${report.openSampleSize ?? "-"}`);
+      console.log(`   parameterSummaries=${rows("parameterSummaries")}`
+        + ` categorySummaries=${rows("categorySummaries")} tagSummaries=${rows("tagSummaries")}`);
+    }
+  }
+
+  // High reward measured "since the reset" against a baseline of 0, so its whole balance
+  // read as profit. A reset always puts equity on a positive target, so a stored 0 can only
+  // be the Number(null) trap -- and these tiles are what the report was about.
+  {
+    const payload = await fetchJson(`${HOST}/api.php?action=state&target=paper&summary=portfolio-overview`);
+    console.log(`\n-- since-the-reset baselines -- a rebaseEquity of 0 is the bug --`);
+    if (!payload.ok) {
+      console.log(`   overview payload HTTP ${payload.status} ${payload.error || ""}`);
+    } else {
+      const rows = Object.entries(payload.body?.paperPortfolios || {});
+      const rebased = rows.filter(([, row]) => (row?.capitalAdjustmentAt ?? row?.portfolio?.capitalAdjustmentAt) != null);
+      if (!rebased.length) console.log(`   no portfolio reports a capital adjustment`);
+      for (const [id, row] of rebased) {
+        const portfolio = row?.portfolio || {};
+        console.log(`   ${id.padEnd(16)} rebaseEquity=${portfolio.rebaseEquityUsdc ?? "MISSING"}`
+          + ` equity=${portfolio.equityUsdc ?? "-"}`
+          + ` totalSince=${portfolio.totalPnlSinceAdjustmentUsdc ?? "-"}`
+          + ` (${portfolio.totalPnlSinceAdjustmentPct ?? "-"})`);
+      }
+    }
+  }
+
+  // Where the last run's time went, as the bot recorded it. The budget is a minute for the
+  // whole job, and this is the part of it the bot controls.
+  {
+    const timing = core.lastPassTiming;
+    console.log(`\n-- last pass timing --`);
+    if (!timing) console.log(`   lastPassTiming absent -- the state predates the phase breakdown`);
+    else {
+      console.log(`   at=${timing.at} executionPass=${timing.executionPass} total=${(Number(timing.totalMs || 0) / 1000).toFixed(1)}s`);
+      for (const [name, ms] of Object.entries(timing.phasesMs || {})) {
+        console.log(`   ${name.padEnd(24)} ${(Number(ms) / 1000).toFixed(2)}s`);
+      }
+    }
+  }
+
   const configResult = await fetchJson(`${HOST}/api.php?action=portfolio-config`);
   const paperConfig = configResult.ok ? (configResult.body?.config?.paper || {}) : {};
 
