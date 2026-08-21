@@ -6412,7 +6412,15 @@ async function loadScrapeRunHistory({ reset = false } = {}) {
 function portfolioRunLogHistoryState(strategyId) {
   if (!strategyId) return null;
   if (!state.portfolioRunLogHistory[strategyId]) {
-    state.portfolioRunLogHistory[strategyId] = { records: null, page: -1, total: 0, hasMore: false, busy: false, error: "" };
+    state.portfolioRunLogHistory[strategyId] = {
+      records: null,
+      details: {},
+      page: -1,
+      total: 0,
+      hasMore: false,
+      busy: false,
+      error: "",
+    };
   }
   return state.portfolioRunLogHistory[strategyId];
 }
@@ -6429,7 +6437,7 @@ async function loadPortfolioRunLogHistory(strategyId, { reset = false } = {}) {
   entry.error = "";
   rerenderRunLogInPlace();
   try {
-    const payload = await fetchApiJson(`api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(strategyId)}&page=${page}&page_size=24`);
+    const payload = await fetchApiJson(`api.php?action=portfolio-run-log&strategy_id=${encodeURIComponent(strategyId)}&page=${page}&page_size=12`);
     const incoming = Array.isArray(payload.records) ? payload.records : [];
     const known = reset || !Array.isArray(entry.records)
       ? (state.botState?.paperPortfolios?.[strategyId]?.runLog || [])
@@ -6448,6 +6456,41 @@ async function loadPortfolioRunLogHistory(strategyId, { reset = false } = {}) {
   } finally {
     entry.busy = false;
     rerenderRunLogInPlace();
+  }
+}
+
+// Archive pages deliberately contain only compact run summaries. A run can carry a long
+// candidate audit, and downloading 24 such audits at once was large enough for shared
+// hosting to intermittently terminate the request. Fetch the full audit only when its
+// row is opened, then retain it locally for the rest of this page visit.
+async function openPaperRunLogDetail(strategyId, run, trigger) {
+  const runAt = String(run?.runAt || run?.generatedAt || "");
+  const history = portfolioRunLogHistoryState(strategyId);
+  const cached = runAt ? history?.details?.[runAt] : null;
+  if (cached) {
+    openExecutionRunDetail(portfolioRunBatch(cached), trigger);
+    return;
+  }
+  if (!run?.detailAvailable || !runAt) {
+    openExecutionRunDetail(portfolioRunBatch(run || {}), trigger);
+    return;
+  }
+
+  openAnalysisModal("Loading the saved execution detail...", trigger, {
+    title: "Execution run log",
+    singleColumn: true,
+  });
+  try {
+    const payload = await fetchApiJson(
+      `api.php?action=portfolio-run-log-detail&strategy_id=${encodeURIComponent(strategyId)}&run_at=${encodeURIComponent(runAt)}`,
+    );
+    const detail = payload.record && typeof payload.record === "object" ? payload.record : run;
+    if (history && runAt) history.details[runAt] = detail;
+    openExecutionRunDetail(portfolioRunBatch(detail), trigger);
+  } catch {
+    // The row is still useful even when its older diagnostic bundle has gone away.
+    // Show the saved summary instead of turning the run-log screen into an error state.
+    openExecutionRunDetail(portfolioRunBatch(run || {}), trigger);
   }
 }
 
@@ -11268,6 +11311,11 @@ document.addEventListener("click", (event) => {
   if (portfolioRunButton) {
     event.preventDefault();
     const run = state.displayedRunLog[Number(portfolioRunButton.dataset.portfolioRun)];
+    const strategyId = isLiveMode() ? "" : paperStrategyIdFromMode();
+    if (strategyId) {
+      openPaperRunLogDetail(strategyId, run, portfolioRunButton);
+      return;
+    }
     openExecutionRunDetail(portfolioRunBatch(run || {}), portfolioRunButton);
     return;
   }

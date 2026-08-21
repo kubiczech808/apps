@@ -945,6 +945,102 @@ function portfolio_run_log_records(string $strategyId, array $fallback = []): ar
     return $records;
 }
 
+// The archive holds the complete diagnostic bundle for every execution run. Returning
+// all of it for 24 rows made the list request several hundred kilobytes large and the
+// shared host intermittently closed it before the browser received a response. The list
+// only needs a human-readable verdict and the selected order; the full bundle is fetched
+// on demand when someone opens one row.
+function compact_portfolio_run_log_candidate(array $candidate): array
+{
+    $keys = [
+        'id',
+        'question',
+        'outcome',
+        'tokenId',
+        'marketPrice',
+        'marketProbability',
+        'aiProbability',
+        'netGainIfWinUsdc',
+        'netYield',
+        'potentialAnnualizedReturn',
+        'annualizedReturn',
+        'daysToResolution',
+        'liquidity',
+        'url',
+    ];
+    $compact = [];
+    foreach ($keys as $key) {
+        if (array_key_exists($key, $candidate)) {
+            $compact[$key] = $candidate[$key];
+        }
+    }
+    return $compact;
+}
+
+function portfolio_run_log_excerpt(mixed $value, int $length): string
+{
+    $text = (string) $value;
+    return function_exists('mb_substr')
+        ? mb_substr($text, 0, $length, 'UTF-8')
+        : substr($text, 0, $length);
+}
+
+function compact_portfolio_run_log_list_record(array $run): array
+{
+    $batch = is_array($run['batchLog'] ?? null) ? $run['batchLog'] : [];
+    $selected = is_array($batch['selected'] ?? null) ? $batch['selected'] : (is_array($run['selected'] ?? null) ? $run['selected'] : []);
+    $settings = is_array($batch['settings'] ?? null) ? $batch['settings'] : [];
+    $counts = is_array($batch['counts'] ?? null) ? $batch['counts'] : [];
+    $capital = is_array($batch['capital'] ?? null) ? $batch['capital'] : [];
+    $batchSummary = [
+        'id' => $batch['id'] ?? null,
+        'runAt' => $batch['runAt'] ?? ($run['runAt'] ?? null),
+        'strategyId' => $batch['strategyId'] ?? ($run['strategyId'] ?? null),
+        'strategyLabel' => $batch['strategyLabel'] ?? ($run['strategyLabel'] ?? null),
+        'selectionMetric' => $batch['selectionMetric'] ?? ($run['selectionMetric'] ?? null),
+        'action' => $batch['action'] ?? ($run['action'] ?? null),
+        'reason' => portfolio_run_log_excerpt($batch['reason'] ?? $run['reason'] ?? '', 1000),
+        'humanReason' => portfolio_run_log_excerpt($batch['humanReason'] ?? '', 1000),
+        'explanation' => portfolio_run_log_excerpt($batch['explanation'] ?? '', 1200),
+        'settings' => [
+            'probabilitySource' => $settings['probabilitySource'] ?? null,
+            'selectionOrder' => $settings['selectionOrder'] ?? null,
+        ],
+        'counts' => [
+            'rankedEligible' => $counts['rankedEligible'] ?? null,
+            'eligibleCandidates' => $counts['eligibleCandidates'] ?? null,
+            'revalidatedCandidates' => $counts['revalidatedCandidates'] ?? null,
+            'skippedForRisk' => $counts['skippedForRisk'] ?? null,
+        ],
+        'capital' => [
+            'availableUsdc' => $capital['availableUsdc'] ?? ($run['availableCapitalUsdc'] ?? null),
+            'requiredStakeUsdc' => $capital['requiredStakeUsdc'] ?? ($run['requiredStakeUsdc'] ?? null),
+            'insufficientCapital' => $capital['insufficientCapital'] ?? ($run['insufficientCapital'] ?? false),
+        ],
+        'selected' => $selected === [] ? null : compact_portfolio_run_log_candidate($selected),
+    ];
+
+    return [
+        'runAt' => $run['runAt'] ?? null,
+        'runSource' => $run['runSource'] ?? null,
+        'strategyId' => $run['strategyId'] ?? ($batch['strategyId'] ?? null),
+        'strategyLabel' => $run['strategyLabel'] ?? ($batch['strategyLabel'] ?? null),
+        'selectionMetric' => $run['selectionMetric'] ?? ($batch['selectionMetric'] ?? null),
+        'evaluatedCount' => $run['evaluatedCount'] ?? null,
+        'eligibleCount' => $run['eligibleCount'] ?? null,
+        'action' => $run['action'] ?? ($batch['action'] ?? null),
+        'reason' => portfolio_run_log_excerpt($run['reason'] ?? $batch['reason'] ?? '', 1000),
+        'tradeId' => $run['tradeId'] ?? null,
+        'closedTradeId' => $run['closedTradeId'] ?? null,
+        'availableCapitalUsdc' => $run['availableCapitalUsdc'] ?? null,
+        'requiredStakeUsdc' => $run['requiredStakeUsdc'] ?? null,
+        'insufficientCapital' => (bool) ($run['insufficientCapital'] ?? false),
+        'riskSkippedCount' => $run['riskSkippedCount'] ?? null,
+        'batchLog' => $batchSummary,
+        'detailAvailable' => $batch !== [] || is_array($run['rotationReview'] ?? null),
+    ];
+}
+
 function compact_dashboard_paper_portfolio(array $portfolio, bool $includeTrades): array
 {
     if ($includeTrades) {
@@ -3162,12 +3258,33 @@ try {
         respond([
             'ok' => true,
             'strategyId' => $strategyId,
-            'records' => array_slice($records, $offset, $pageSize),
+            'records' => array_map(
+                static fn(array $record): array => compact_portfolio_run_log_list_record($record),
+                array_slice($records, $offset, $pageSize),
+            ),
             'page' => $page,
             'pageSize' => $pageSize,
             'total' => count($records),
             'hasMore' => $offset + $pageSize < count($records),
         ]);
+    }
+
+    if ($action === 'portfolio-run-log-detail') {
+        $strategyId = trim((string) ($_GET['strategy_id'] ?? ''));
+        $runAt = trim((string) ($_GET['run_at'] ?? ''));
+        if ($strategyId === '' || !preg_match('/^[a-zA-Z0-9_-]{1,40}$/', $strategyId) || $runAt === '') {
+            respond(['ok' => false, 'error' => 'A valid strategy_id and run_at are required'], 400);
+        }
+        $state = state_payload('paper', [], $strategyId);
+        $portfolios = is_array($state['paperPortfolios'] ?? null) ? $state['paperPortfolios'] : [];
+        $portfolio = is_array($portfolios[$strategyId] ?? null) ? $portfolios[$strategyId] : [];
+        $fallback = is_array($portfolio['runLog'] ?? null) ? $portfolio['runLog'] : [];
+        foreach (portfolio_run_log_records($strategyId, $fallback) as $record) {
+            if ((string) ($record['runAt'] ?? '') === $runAt) {
+                respond(['ok' => true, 'strategyId' => $strategyId, 'record' => $record]);
+            }
+        }
+        respond(['ok' => false, 'error' => 'Portfolio run log record was not found'], 404);
     }
 
     if ($action === 'markets') {
