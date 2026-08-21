@@ -24,6 +24,16 @@ test("economics: taker fee follows shares * rate * price * (1 - price)", () => {
   assert.equal(bot.takerFeeForFills([{ size: 10, price: 0.9 }], -1), 0, "a negative rate must never credit the trade");
 });
 
+test("economics: a persisted fee market keeps its taker rate during revalidation", () => {
+  const fees = bot.feeConfig({ feesEnabled: true, feeRate: 0.02 });
+  assert.deepEqual(fees, {
+    feesEnabled: true,
+    feeRate: 0.02,
+    feeType: "unknown",
+    takerOnly: true,
+  });
+});
+
 test("equal paper portfolio: its independent $100 account is registered with a synthetic risk cap", () => {
   assert.equal(bot.PAPER_STRATEGIES.equal.label, "Equal");
   assert.equal(bot.PAPER_STRATEGIES.equal.equalRiskProtection, true);
@@ -6227,6 +6237,26 @@ test("limit orders: a portfolio with the setting rests at the best bid instead o
   assert.equal(trade.shares, Number((5 / 0.65).toFixed(4)));
   assert.equal(trade.maxLossUsdc, trade.totalCostUsdc, "the whole reserved stake is still what is at risk");
   assert.equal(trade.currentValueUsdc, 5, "capital is reserved for a resting order the same as a filled one");
+});
+
+test("limit orders: a resting maker buy reserves no taker fee", () => {
+  const strategy = { ...bot.PAPER_STRATEGIES.conservative, useLimitOrders: true };
+  const trade = bot.openPaperTradeForStrategy(candidateFixture({
+    feesEnabled: true,
+    feeRate: 0.02,
+  }), strategy, "2026-08-18", 5);
+
+  assert.equal(trade.takerFeeUsdc, 0, "Polymarket fees apply to takers, not a resting bid");
+  assert.equal(trade.totalCostUsdc, 5, "only the configured stake is reserved");
+  assert.equal(trade.netGainIfWinUsdc, Number(((5 / 0.65) - 5).toFixed(4)));
+
+  const economics = bot.portfolioEconomics(candidateFixture({
+    stakeUsdc: 5,
+    netGainIfWinUsdc: 2,
+    totalCostUsdc: 5.04,
+    daysToResolution: 2,
+  }), strategy);
+  assert.ok(economics.annualizedReturn > 0, "the shortlist uses the maker entry economics for a limit portfolio");
 });
 
 test("limit orders: with no usable bid, the order still falls back to a market fill", () => {

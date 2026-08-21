@@ -3317,7 +3317,13 @@ function simulateMarketBuy(asks, stakeUsdc) {
 
 function feeConfig(market) {
   const schedule = market.feeSchedule && typeof market.feeSchedule === "object" ? market.feeSchedule : {};
-  const rate = Number(schedule.rate ?? 0);
+  // Revalidation rebuilds a minimal market object from the stored opportunity. That
+  // object retains feeRate, but does not need to retain Gamma's full feeSchedule.
+  // Prefer the live schedule and fall back to the persisted per-market rate so a
+  // revalidated fee market cannot accidentally become fee-free in paper trading.
+  const scheduledRate = Number(schedule.rate);
+  const storedRate = Number(market.feeRate);
+  const rate = Number.isFinite(scheduledRate) && scheduledRate > 0 ? scheduledRate : storedRate;
   const enabled = Boolean(market.feesEnabled) && Number.isFinite(rate) && rate > 0;
   return {
     feesEnabled: enabled,
@@ -5503,17 +5509,18 @@ function strategyEligibleCandidates(eligible, strategy) {
     const minLiquidityUsdc = Number(strategy.minLiquidityUsdc);
     if (Number.isFinite(minLiquidityUsdc) && rowVolumeUsdc(item) < minLiquidityUsdc) return false;
     const minimumNetYield = Math.max(0, Number(strategy.minNetYield) || 0);
-    const candidateNetYield = netYieldAfterFees(item);
+    const candidateNetYield = netYieldAfterFees(item, strategy);
     if (!Number.isFinite(candidateNetYield) || candidateNetYield < minimumNetYield) return false;
     const storedMarketType = normalizePortfolioMarketType(item.marketType);
     const marketType = storedMarketType === "all" ? reportMarketType(item) : storedMarketType;
     if (requiredMarketType !== "all" && marketType !== requiredMarketType) return false;
     if (strategy.equalRiskProtection) {
+      const entry = paperEntryEconomics(item, strategy);
       const plan = equalRiskStopPlan({
-        totalCostUsdc: item.totalCostUsdc ?? item.stakeUsdc,
-        netGainIfWinUsdc: item.netGainIfWinUsdc,
-        shares: item.executableShares ?? item.shares,
-        entryPrice: item.marketPrice,
+        totalCostUsdc: entry.totalCostUsdc,
+        netGainIfWinUsdc: entry.netGainIfWinUsdc,
+        shares: entry.shares,
+        entryPrice: entry.entryPrice,
         feeRate: item.feeRate,
         feesEnabled: item.feesEnabled,
         riskMultiplier: strategy.equalRiskMultiplier ?? 1,
@@ -5522,7 +5529,7 @@ function strategyEligibleCandidates(eligible, strategy) {
       const protection = equalRiskEntryProtection({
         plan,
         bestBid: item.bestBid,
-        shares: item.executableShares ?? item.shares,
+        shares: entry.shares,
         feeRate: item.feeRate,
         feesEnabled: item.feesEnabled,
       });
@@ -5620,11 +5627,41 @@ function portfolioProbabilityForStrategy(item = {}, strategy = {}) {
   return numericOrNaN(item.aiProbability);
 }
 
-function netYieldAfterFees(item = {}) {
+function paperEntryEconomics(item = {}, strategy = null) {
+  const stake = Number(item.stakeUsdc ?? item.filledStakeUsdc);
+  const limitPrice = Number(item.bestBid);
+  if (strategy?.useLimitOrders && Number.isFinite(stake) && stake > 0
+    && Number.isFinite(limitPrice) && limitPrice > 0 && limitPrice < 1) {
+    const shares = stake / limitPrice;
+    return {
+      executionMode: "LIMIT_BUY",
+      entryPrice: limitPrice,
+      shares,
+      entryFeeUsdc: 0,
+      totalCostUsdc: stake,
+      netGainIfWinUsdc: shares - stake,
+    };
+  }
+
+  return {
+    executionMode: item.executionMode || "MARKET_BUY",
+    entryPrice: Number(item.marketPrice),
+    shares: Number(item.executableShares ?? item.shares),
+    entryFeeUsdc: Number(item.takerFeeUsdc || 0),
+    totalCostUsdc: Number(item.totalCostUsdc ?? item.stakeUsdc),
+    netGainIfWinUsdc: Number(item.netGainIfWinUsdc),
+  };
+}
+
+function netYieldAfterFees(item = {}, strategy = null) {
+  const entry = paperEntryEconomics(item, strategy);
+  if (strategy?.useLimitOrders && entry.executionMode === "LIMIT_BUY") {
+    return entry.totalCostUsdc > 0 ? entry.netGainIfWinUsdc / entry.totalCostUsdc : null;
+  }
   const stored = Number(item.netYield);
   if (Number.isFinite(stored)) return stored;
-  const gain = Number(item.netGainIfWinUsdc);
-  const cost = Number(item.totalCostUsdc ?? item.stakeUsdc);
+  const gain = entry.netGainIfWinUsdc;
+  const cost = entry.totalCostUsdc;
   if (!Number.isFinite(gain) || !Number.isFinite(cost) || cost <= 0) return null;
   return gain / cost;
 }
@@ -5635,7 +5672,7 @@ function portfolioEconomics(item, strategy = PAPER_STRATEGIES.conservative) {
   // directly left every candidate with nothing to annualize. netYieldAfterFees
   // derives it from the net gain and the real cost, both of which the record does
   // carry.
-  const netYield = netYieldAfterFees(item);
+  const netYield = netYieldAfterFees(item, strategy);
   // Recalculate instead of trusting an older persisted p.a. value. This keeps
   // stored rows made before the one-day annualization floor from dominating a
   // current portfolio shortlist.
@@ -5724,7 +5761,7 @@ function portfolioFilterResult(item, strategy) {
   if (Number.isFinite(minLiquidityUsdc) && candidateVolume < minLiquidityUsdc) {
     reasons.push(`volume ${candidateVolume.toFixed(2)} below ${minLiquidityUsdc.toFixed(2)} USDC`);
   }
-  const candidateNetYield = netYieldAfterFees(item);
+  const candidateNetYield = netYieldAfterFees(item, strategy);
   if (!Number.isFinite(candidateNetYield) || candidateNetYield < minNetYield) {
     reasons.push(`net profit ${Number.isFinite(candidateNetYield) ? `${(candidateNetYield * 100).toFixed(1)}%` : "-"} below ${(minNetYield * 100).toFixed(1)}% after fees`);
   }
@@ -5732,11 +5769,12 @@ function portfolioFilterResult(item, strategy) {
     reasons.push(`market type ${marketType || "-"} does not match portfolio market type ${requiredMarketType}`);
   }
   if (strategy.equalRiskProtection) {
+    const entry = paperEntryEconomics(item, strategy);
     const plan = equalRiskStopPlan({
-      totalCostUsdc: item.totalCostUsdc ?? item.stakeUsdc,
-      netGainIfWinUsdc: item.netGainIfWinUsdc,
-      shares: item.executableShares ?? item.shares,
-      entryPrice: item.marketPrice,
+      totalCostUsdc: entry.totalCostUsdc,
+      netGainIfWinUsdc: entry.netGainIfWinUsdc,
+      shares: entry.shares,
+      entryPrice: entry.entryPrice,
       feeRate: item.feeRate,
       feesEnabled: item.feesEnabled,
       riskMultiplier: strategy.equalRiskMultiplier ?? 1,
@@ -5746,7 +5784,7 @@ function portfolioFilterResult(item, strategy) {
       const protection = equalRiskEntryProtection({
         plan,
         bestBid: item.bestBid,
-        shares: item.executableShares ?? item.shares,
+        shares: entry.shares,
         feeRate: item.feeRate,
         feesEnabled: item.feesEnabled,
       });
@@ -5938,18 +5976,18 @@ function paperTradeFromCandidate(best, strategy, today, stake) {
 // limit buy at the current best bid is cheaper than crossing the spread, but it is
 // not guaranteed: it only becomes a real position if the market comes down to meet
 // it before the event ends, mirroring what a real resting order on Polymarket would
-// do. Every other field (tags, risk grouping, dates, selection-time economics) is
-// left exactly as paperTradeFromCandidate already computes it; only the entry
-// itself -- price, status, shares, cost -- describes a still-unfilled order rather
-// than an already-executed fill.
+// do. The shortlist uses the same maker entry economics; this record adds only the
+// lifecycle state of an order that has not filled yet.
 function openPaperTradeForStrategy(best, strategy, today, stake) {
   const trade = paperTradeFromCandidate(best, strategy, today, stake);
   if (!strategy.useLimitOrders) return trade;
   const limitPrice = Number(best.bestBid);
   if (!Number.isFinite(limitPrice) || limitPrice <= 0 || limitPrice >= 1) return trade;
   const shares = Number((stake / limitPrice).toFixed(4));
-  const takerFeeUsdc = trade.feesEnabled ? takerFeeForFills([{ size: shares, price: limitPrice }], trade.feeRate) : 0;
-  const totalCostUsdc = Number((stake + takerFeeUsdc).toFixed(5));
+  // A limit order that rests at the bid is a maker fill. Polymarket charges the
+  // taker, not the maker; rebates are conditional and are intentionally not credited.
+  const takerFeeUsdc = 0;
+  const totalCostUsdc = Number(stake.toFixed(5));
   const netGainIfWinUsdc = Number((shares - totalCostUsdc).toFixed(4));
   const equalRiskPlan = strategy.equalRiskProtection
     ? equalRiskStopPlan({
@@ -5988,11 +6026,11 @@ function openPaperTradeForStrategy(best, strategy, today, stake) {
   };
 }
 
-function tradeBatchCandidateSummary(item) {
+function tradeBatchCandidateSummary(item, strategy = null) {
   if (!item) return null;
   const executionQuoteUnavailable = item.executionQuoteVerified === false
     || String(item.selectionStatus || "").toUpperCase() === "REVALIDATION_FAILED";
-  const calculatedNetYield = netYieldAfterFees(item);
+  const calculatedNetYield = netYieldAfterFees(item, strategy);
   const calculatedPotentialPa = executionQuoteUnavailable
     ? null
     : annualizedPotentialReturn(calculatedNetYield, item.daysToResolution);
@@ -6052,7 +6090,7 @@ function portfolioFilterDiagnostics(evaluations, strategy) {
     for (const reason of result.reasons) incrementCount(reasonCounts, reason);
     if (excludedSample.length < 20) {
       excludedSample.push({
-        ...tradeBatchCandidateSummary(item),
+        ...tradeBatchCandidateSummary(item, strategy),
         portfolioRejectReasons: result.reasons,
       });
     }
@@ -6102,7 +6140,7 @@ function storedExecutionShortlist(state, strategy) {
     for (const reason of result.reasons) incrementCount(reasonCounts, reason);
     if (rejected.length < 20) {
       rejected.push({
-        ...tradeBatchCandidateSummary(item),
+        ...tradeBatchCandidateSummary(item, strategy),
         portfolioRejectReasons: result.reasons,
       });
     }
@@ -6123,7 +6161,7 @@ function storedExecutionShortlist(state, strategy) {
       portfolioPrefilterPassed: rows.length,
       portfolioPrefilterRejected: Math.max(0, unique.length - rows.length),
       rejectedSample: rejected,
-      executionShortlist: rows.slice(0, 30).map(tradeBatchCandidateSummary).filter(Boolean),
+      executionShortlist: rows.slice(0, 30).map((item) => tradeBatchCandidateSummary(item, strategy)).filter(Boolean),
     },
   };
 }
@@ -6227,7 +6265,7 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
   const eligibleCandidates = ranked
     .slice(0, TRADE_BATCH_CANDIDATE_LOG_LIMIT)
     .map((item) => ({
-      ...tradeBatchCandidateSummary(item),
+      ...tradeBatchCandidateSummary(item, strategy),
       selectionDecision: candidateSelectionDecision({ candidate: item, portfolioState, selected, action, reason }),
     }))
     .filter(Boolean);
@@ -6270,12 +6308,12 @@ function buildTradeBatchLog({ portfolioState, strategy, evaluations = [], eligib
       openTrades: openTrades(portfolioState.trades || []).length,
     },
     portfolioFilter: portfolioFilterDiagnostics(evaluations, strategy),
-    selected: tradeBatchCandidateSummary(selected),
+    selected: tradeBatchCandidateSummary(selected, strategy),
     eligibleCandidates,
-    topCandidates: ranked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
+    topCandidates: ranked.slice(0, 8).map((item) => tradeBatchCandidateSummary(item, strategy)).filter(Boolean),
     revalidatedCandidates: compactCandidateLogRows(prevalidationFilter?.revalidatedCandidates, 8),
     topRejected: compactCandidateLogRows(prevalidationFilter?.revalidatedRejectedSample, 8),
-    riskBlocked: blocked.slice(0, 8).map(tradeBatchCandidateSummary).filter(Boolean),
+    riskBlocked: blocked.slice(0, 8).map((item) => tradeBatchCandidateSummary(item, strategy)).filter(Boolean),
     rotationReview: rotationReview || null,
     // Recorded so the log says which rule decided, rather than leaving a reader to work
     // out from a ROTATED_OPENED row whether the portfolio had the cash to just buy.
@@ -10048,7 +10086,9 @@ export {
   markCadenceStage,
   mergeCadence,
   minutesSinceIso,
+  feeConfig,
   netYieldAfterFees,
+  paperEntryEconomics,
   lastRunAtForStrategy,
   strategyCadenceIsDue,
   strategyEligibleCandidates,
