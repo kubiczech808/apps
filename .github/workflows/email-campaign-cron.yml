@@ -27,8 +27,8 @@ jobs:
       - name: Call application cron endpoint
         env:
           APP_DATABASE_NAME: ${{ secrets.APP_DATABASE_NAME }}
-          APP_DATABASE_USERNAME: ${{ secrets.APP_DATABASE_USERNAME }}
-          APP_DATABASE_PASSWORD: ${{ secrets.APP_DATABASE_PASSWORD }}
+          APP_DATABASE_USERNAME: ${{ secrets.MYSQL_EMAILING_DB_USERNAME }}
+          APP_DATABASE_PASSWORD: ${{ secrets.MYSQL_EMAILING_DB_PASSWORD }}
         run: |
           if [ -z "$APP_DATABASE_NAME" ] || [ -z "$APP_DATABASE_USERNAME" ] || [ -z "$APP_DATABASE_PASSWORD" ]; then
             echo "Missing database secrets; cannot derive cron token."

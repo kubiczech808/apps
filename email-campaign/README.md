@@ -42,8 +42,8 @@ Povinne MySQL/MariaDB secrets:
 - `APP_DATABASE_HOST`
 - `APP_DATABASE_PORT`
 - `APP_DATABASE_NAME`
-- `APP_DATABASE_USERNAME`
-- `APP_DATABASE_PASSWORD`
+- `MYSQL_EMAILING_DB_USERNAME`
+- `MYSQL_EMAILING_DB_PASSWORD`
 
 Aplikace bezi pouze nad produkcni MySQL/MariaDB databazi. Pokud secrets chybi nebo DB uzivatel nema prava k databazi, deploy nebo start aplikace skonci chybou misto nouzove lokalni DB kopie.
 
