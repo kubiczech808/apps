@@ -5982,7 +5982,9 @@ test("state segments: reading the hosted state never rebuilds it from the capped
   assert.match(source, /const DERIVED_STATE_SEGMENTS = new Set\(\[RESOLVED_RECENT_SEGMENT\]\);/);
   assert.match(source, /\.filter\(\(\[name\]\) => !DERIVED_STATE_SEGMENTS\.has\(name\)\)/,
     "the manifest-driven reader must skip derived segments");
-  assert.match(source, /Object\.keys\(manifest\)\.filter\(\(name\) => !DERIVED_STATE_SEGMENTS\.has\(name\)\)/,
+  // Matched across the filter chain rather than as one expression: the same reader also
+  // drops segments a pass carries over untouched, so the two filters sit on separate lines.
+  assert.match(source, /Object\.keys\(manifest\)[\s\S]{0,200}?!DERIVED_STATE_SEGMENTS\.has\(name\)/,
     "and must not then count them as segments it failed to address");
 
   // What the merge would have done, driven by the real function in manifest order.
@@ -6524,4 +6526,423 @@ test("paper capital adjustment: a reset baseline of null survives a second norma
   assert.notEqual(twice.portfolio.totalPnlSinceAdjustmentUsdc, twice.portfolio.equityUsdc);
   // And the percentage is measured, not zeroed by a divide-by-zero guard.
   assert.ok(twice.portfolio.totalPnlSinceAdjustmentPct > 0.27);
+});
+
+// Reported: a manual execution of one portfolio took 8m41s, all of it inside the single
+// "Run paper bot" step, with a stated ceiling of one minute for the whole thing. The cost
+// was not computation. Every network loop in the pass was `for (...) await fetch(...)`:
+// one Polymarket round trip is a third of a second of waiting and no work, and a pass
+// makes hundreds of them -- up to 420 slug lookups for resolution status alone, each of
+// which is up to two requests, plus one per open position and one per shortlisted
+// candidate. Sequentially that is minutes of an idle process.
+//
+// Overlapping them is only safe if it cannot reorder anything, because several callers
+// zip the results back against their input by index and one produces the list the
+// ranking runs on.
+test("performance: overlapping requests never reorders the results", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  // functionSource matches from `function <name>(`, so an async declaration arrives
+  // without its keyword; put it back or the awaits inside are a syntax error.
+  const mapWithConcurrency = new Function(
+    `async ${functionSource(source, "mapWithConcurrency")}\nreturn mapWithConcurrency;`,
+  )();
+
+  // Deliberately inverted latency: the last item finishes first. Completion order and
+  // input order are as different as they can be.
+  const items = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const completion = [];
+  let inFlight = 0;
+  let peak = 0;
+  const results = await mapWithConcurrency(items, async (value) => {
+    inFlight += 1;
+    peak = Math.max(peak, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, (items.length - value) * 4));
+    inFlight -= 1;
+    completion.push(value);
+    return value * 10;
+  }, 4);
+
+  assert.deepEqual(results, items.map((value) => value * 10), "results come back in input order");
+  assert.notDeepEqual(completion, items, "and the test is only meaningful because completion order differed");
+  assert.ok(peak > 1, "requests really do overlap");
+  assert.ok(peak <= 4, `the cap is honored, saw ${peak} in flight`);
+
+  // The index is passed through, so a caller can write results back positionally.
+  const indexes = await mapWithConcurrency(["a", "b", "c"], async (value, index) => `${index}:${value}`, 2);
+  assert.deepEqual(indexes, ["0:a", "1:b", "2:c"]);
+});
+
+test("performance: a slug is fetched once per pass, and a failure is not remembered", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  // The real cache and the real wrapper, with only the HTTP call replaced.
+  const calls = [];
+  let fail = false;
+  const build = new Function(
+    "fetchMarketBySlugUncached",
+    `const marketBySlugCache = new Map();\nasync ${functionSource(source, "fetchMarketBySlug")}\n`
+    + "return { fetchMarketBySlug, size: () => marketBySlugCache.size };",
+  );
+  const { fetchMarketBySlug, size } = build(async (slug) => {
+    calls.push(slug);
+    if (fail) throw new Error("gamma is down");
+    return { slug, question: `Q for ${slug}` };
+  });
+
+  // Four callers, two markets: the pattern a real pass makes when the resolution sync, the
+  // position marking and the candidate revalidation all touch the same markets.
+  const [a, b, c, d] = await Promise.all([
+    fetchMarketBySlug("alpha"),
+    fetchMarketBySlug("beta"),
+    fetchMarketBySlug("alpha"),
+    fetchMarketBySlug("beta"),
+  ]);
+  assert.deepEqual(calls, ["alpha", "beta"], "each market is looked up once, even concurrently");
+  assert.equal(a.question, c.question);
+  assert.equal(b.question, d.question);
+  assert.equal(size(), 2);
+
+  // A blank slug is not a market and must not occupy a cache slot.
+  assert.equal(await fetchMarketBySlug(""), null);
+  assert.equal(size(), 2);
+
+  // A transient failure must not become this pass's permanent answer for that market.
+  fail = true;
+  await assert.rejects(() => fetchMarketBySlug("gamma"), /gamma is down/);
+  assert.equal(size(), 2, "a rejected lookup is evicted");
+  fail = false;
+  assert.equal((await fetchMarketBySlug("gamma")).slug, "gamma", "so it can be retried");
+});
+
+test("performance: deciding the sort key once orders exactly as comparing twice did", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const build = (body) => new Function(
+    "evaluationUpdateTime", "evaluationKey", `${body}\nreturn latestUniqueExecutionEvaluations;`,
+  );
+  const evaluationUpdateTime = new Function(`${functionSource(source, "evaluationUpdateTime")}\nreturn evaluationUpdateTime;`)();
+  const evaluationKey = new Function(`${functionSource(source, "evaluationKey")}\nreturn evaluationKey;`)();
+  const fast = build(functionSource(source, "latestUniqueExecutionEvaluations"))(evaluationUpdateTime, evaluationKey);
+  // The shape this replaced: the timestamp recomputed on both sides of every comparison.
+  const slow = build(`function latestUniqueExecutionEvaluations(evaluations = []) {
+    const byKey = new Map();
+    const ordered = [...evaluations].sort((a, b) => evaluationUpdateTime(b) - evaluationUpdateTime(a));
+    for (const item of ordered) {
+      const key = evaluationKey(item);
+      if (!key || byKey.has(key)) continue;
+      byKey.set(key, item);
+    }
+    return [...byKey.values()];
+  }`)(evaluationUpdateTime, evaluationKey);
+
+  // Includes the cases that decide ordering: ties, rows dated by different fields, rows
+  // with no date at all, duplicate keys and unkeyable rows.
+  const rows = [];
+  for (let i = 0; i < 400; i += 1) {
+    const at = new Date(Date.UTC(2026, 7, 1 + (i % 17), i % 24)).toISOString();
+    const field = ["evaluatedAt", "lastSeenAt", "marketDataUpdatedAt", "updatedAt"][i % 4];
+    rows.push({ tokenId: String(i % 130), [field]: at, id: `row-${i}` });
+  }
+  rows.push({ tokenId: "7" }, { slug: "s", outcome: "Yes" }, { id: "" }, {});
+
+  const fromFast = fast(rows);
+  const fromSlow = slow(rows);
+  assert.deepEqual(
+    fromFast.map((item) => item.id ?? null),
+    fromSlow.map((item) => item.id ?? null),
+    "same rows kept, in the same order",
+  );
+  assert.ok(fromFast.length > 100, "the fixture really does exercise the dedupe");
+});
+
+// Reported after an earlier attempt at this: "preoptimalizovano" -- no suitable candidate
+// found although dozens were available. Resolved rows were the reason. They outnumber the
+// live catalogue several times over, they share a dedupe key with it, and the dedupe keeps
+// whichever row is newer -- so a market scanned again while its resolved twin sat in the
+// archive collapsed to the resolved twin, and a tradable candidate vanished. They were
+// never eligible in the first place: portfolioFilterResult rejects a resolved row twice.
+test("execution candidates: a resolved twin can no longer shadow a live market", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+  const observationIsResolved = new Function(`${functionSource(source, "observationIsResolved")}\nreturn observationIsResolved;`)();
+  const executionCandidateObservations = new Function(
+    "observationIsResolved",
+    `${functionSource(source, "executionCandidateObservations")}\nreturn executionCandidateObservations;`,
+  )(observationIsResolved);
+
+  const state = {
+    marketObservations: [
+      { tokenId: "1", status: "SCRAPED", marketDataUpdatedAt: "2026-08-20T09:00:00Z", id: "live" },
+      // Same token, settled, and checked more recently than the live row was scanned.
+      { tokenId: "1", status: "RESOLVED", marketDataUpdatedAt: "2026-08-20T10:00:00Z", id: "twin" },
+      { tokenId: "2", selectionStatus: "RESOLVED", id: "old" },
+      { tokenId: "3", status: "SCRAPED", id: "other" },
+    ],
+  };
+  const scanned = executionCandidateObservations(state);
+  assert.deepEqual(scanned.map((item) => item.id), ["live", "other"], "only unsettled rows are scanned");
+
+  // And the shadowing itself: with the twin present the newer resolved row won the key.
+  const evaluationUpdateTime = new Function(`${functionSource(source, "evaluationUpdateTime")}\nreturn evaluationUpdateTime;`)();
+  const evaluationKey = new Function(`${functionSource(source, "evaluationKey")}\nreturn evaluationKey;`)();
+  const latestUnique = new Function(
+    "evaluationUpdateTime", "evaluationKey",
+    `${functionSource(source, "latestUniqueExecutionEvaluations")}\nreturn latestUniqueExecutionEvaluations;`,
+  )(evaluationUpdateTime, evaluationKey);
+  assert.equal(
+    latestUnique(state.marketObservations).find((item) => item.tokenId === "1").id,
+    "twin",
+    "the unfiltered pool really did hand back the settled row",
+  );
+  assert.equal(
+    latestUnique(scanned).find((item) => item.tokenId === "1").id,
+    "live",
+    "and filtering first is what puts the tradable one back in the shortlist",
+  );
+});
+
+test("execution candidates: no resolved row has ever been eligible for any portfolio", async () => {
+  // The premise the filtering above rests on. If a resolved row could pass, dropping it
+  // would be a change of decision rather than of cost.
+  const strategy = {
+    id: "conservative",
+    label: "Conservative",
+    minProbability: 0.5,
+    minLiquidityUsdc: 0,
+    minNetYield: 0,
+    maxResolutionDays: 365,
+    probabilitySource: "polymarket",
+    marketType: "all",
+    excludedCandidateTokenIds: new Set(),
+  };
+  const settled = {
+    tokenId: "1",
+    status: "RESOLVED",
+    slug: "already-over",
+    outcome: "Yes",
+    marketPrice: 0.9,
+    liquidity: 100000,
+    volumeUsdc: 100000,
+    endDate: "2026-01-01T00:00:00Z",
+    finalOutcomePrice: 1,
+  };
+  const result = bot.portfolioFilterResult
+    ? bot.portfolioFilterResult(settled, strategy)
+    : null;
+  if (result) {
+    assert.equal(result.eligible, false);
+    assert.ok(
+      result.reasons.some((reason) => /not executable|is in the past/.test(reason)),
+      `expected a resolved row to be refused, got ${JSON.stringify(result.reasons)}`,
+    );
+  } else {
+    // Not exported: assert the rules exist in the source instead of skipping silently.
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+    assert.match(source, /base status \$\{status \|\| "UNKNOWN"\} is not executable/);
+    assert.match(source, /"event end date is in the past"/);
+  }
+});
+
+// The resolved archive is the largest thing this bot stores -- around 143 MB against
+// roughly 100 MB for everything else together -- and an execution pass has no business
+// with it: rows only enter it when the resolution sync settles a market, which an
+// execution pass does not run, and no resolved row can be a candidate. Downloading it and
+// uploading it back unchanged was most of a run's transfer budget spent reproducing a file
+// byte for byte.
+//
+// Carrying it over is only correct if the manifest entry survives verbatim and nothing is
+// written over the file. Getting either half wrong replaces tens of thousands of settled
+// markets with an empty array, so all three cases are pinned here.
+function splitUnderEnv(env, payload) {
+  const modulePath = new URL("../tools/paper-trading-bot.mjs", import.meta.url).href;
+  const script = `
+    import { splitStateIntoSegments, rememberStateSegmentManifest } from ${JSON.stringify(modulePath)};
+    const input = JSON.parse(process.argv[1]);
+    rememberStateSegmentManifest(input.manifest);
+    const { core, segments } = splitStateIntoSegments(input.state);
+    process.stdout.write(JSON.stringify({
+      manifest: core.stateSegments,
+      segmentNames: Object.keys(segments),
+    }));
+  `;
+  return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", script, JSON.stringify(payload)], {
+    encoding: "utf8",
+    env: { ...process.env, ...env },
+  }));
+}
+
+test("state segments: an execution pass hands the resolved archive back instead of rewriting it", () => {
+  // What a real read finds on the hosting: an archive of 24,000 settled markets and the
+  // capped page derived from it.
+  const manifest = {
+    observations: { file: "paper-state.observations.json", fields: ["marketObservations", "marketScan"] },
+    resolvedObservations: {
+      file: "paper-state.resolvedObservations.json",
+      fields: ["resolvedMarketObservations"],
+      counts: { resolvedMarketObservations: 24000 },
+      mergesInto: "marketObservations",
+    },
+    resolvedRecent: {
+      file: "paper-state.resolvedRecent.json",
+      fields: ["resolvedMarketObservations"],
+      counts: { resolvedMarketObservations: 3000 },
+      mergesInto: "marketObservations",
+      truncatedFrom: 24000,
+    },
+  };
+  // And what the pass holds: the active catalogue only, because it never fetched the rest.
+  const state = { marketObservations: [{ id: "a1", status: "SCRAPED" }, { id: "a2", status: "SCRAPED" }] };
+
+  const carried = splitUnderEnv({ PAPER_EXECUTION_ONLY: "true" }, { manifest, state });
+  assert.equal(
+    carried.segmentNames.includes("resolvedObservations"), false,
+    "the archive must not be written from a state that never read it",
+  );
+  assert.equal(carried.segmentNames.includes("resolvedRecent"), false, "nor the page derived from it");
+  assert.equal(carried.manifest.resolvedObservations.carriedOver, true);
+  assert.equal(carried.manifest.resolvedObservations.file, "paper-state.resolvedObservations.json");
+  assert.equal(
+    carried.manifest.resolvedObservations.counts.resolvedMarketObservations, 24000,
+    "the count stays the hosted file's own, not this pass's empty view of it",
+  );
+  assert.equal(carried.manifest.resolvedRecent.carriedOver, true);
+  assert.equal(carried.manifest.resolvedRecent.truncatedFrom, 24000);
+  // The active catalogue is still this pass's job and is still written.
+  assert.ok(carried.segmentNames.includes("observations"));
+
+  // A pass that does maintain the archive writes it, and says nothing about carrying over.
+  const full = splitUnderEnv({ PAPER_EXECUTION_ONLY: "false", PAPER_MANUAL_RUN_ONCE: "false" }, { manifest, state });
+  assert.ok(full.segmentNames.includes("resolvedObservations"), "a full pass writes the archive");
+  assert.ok(full.segmentNames.includes("resolvedRecent"));
+  assert.equal(full.manifest.resolvedObservations.carriedOver, undefined);
+  assert.equal(full.manifest.resolvedObservations.counts.resolvedMarketObservations, 0);
+});
+
+test("state segments: an execution pass that is holding resolved rows still publishes them", () => {
+  // The safety catch. Whatever put them there -- a merged local snapshot, a mode
+  // combination added later -- they are worth more than the saved transfer, and dropping
+  // them silently is the failure this whole mechanism risks.
+  const manifest = {
+    resolvedObservations: {
+      file: "paper-state.resolvedObservations.json",
+      fields: ["resolvedMarketObservations"],
+      counts: { resolvedMarketObservations: 24000 },
+    },
+    resolvedRecent: { file: "paper-state.resolvedRecent.json", fields: ["resolvedMarketObservations"] },
+  };
+  const state = {
+    marketObservations: [
+      { id: "a1", status: "SCRAPED" },
+      { id: "r1", status: "RESOLVED", resolvedAt: "2026-08-01T00:00:00Z" },
+    ],
+  };
+  const written = splitUnderEnv({ PAPER_EXECUTION_ONLY: "true" }, { manifest, state });
+  assert.ok(written.segmentNames.includes("resolvedObservations"), "a held resolved row is written, not carried over");
+  assert.equal(written.manifest.resolvedObservations.carriedOver, undefined);
+  assert.equal(written.manifest.resolvedObservations.counts.resolvedMarketObservations, 1);
+});
+
+test("state segments: a carried-over entry needs a real file name to be honored", () => {
+  // A manifest entry that does not name a publishable file cannot be handed back -- there
+  // would be nothing on the hosting for readers to find.
+  for (const broken of [{}, { file: "" }, { file: "../escape.json" }, { file: "not-json.txt" }]) {
+    const result = splitUnderEnv({ PAPER_EXECUTION_ONLY: "true" }, {
+      manifest: { resolvedObservations: broken, resolvedRecent: { file: "paper-state.resolvedRecent.json" } },
+      state: { marketObservations: [{ id: "a1", status: "SCRAPED" }] },
+    });
+    assert.ok(
+      result.segmentNames.includes("resolvedObservations"),
+      `a manifest entry of ${JSON.stringify(broken)} must fall back to writing the segment`,
+    );
+  }
+});
+
+test("publisher: a carried-over segment is skipped, a missing one is still fatal", async () => {
+  const { mkdtemp, writeFile: write } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "paper-publish-"));
+  const publisher = new URL("../tools/publish-paper-state.py", import.meta.url).pathname;
+
+  const core = (manifest) => JSON.stringify({ stateSegments: manifest });
+  const probe = `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(new URL("../tools", import.meta.url).pathname)})
+import importlib.util
+spec = importlib.util.spec_from_file_location("publisher", ${JSON.stringify(publisher)})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+from pathlib import Path
+try:
+    print(json.dumps([p.name for p in module.declared_segments(Path(sys.argv[1]))]))
+except SystemExit as error:
+    print(json.dumps({"error": str(error)}))
+`;
+  const run = (file) => {
+    const output = execFileSync("python3", ["-c", probe, file], { encoding: "utf8" });
+    return JSON.parse(output.trim().split("\n").pop());
+  };
+
+  // Carried over: the file is deliberately absent, and that is not an error.
+  const carriedPath = join(dir, "carried.json");
+  await write(carriedPath, core({
+    observations: { file: "seg.observations.json" },
+    resolvedObservations: { file: "seg.resolvedObservations.json", carriedOver: true },
+  }));
+  await write(join(dir, "seg.observations.json"), "{}");
+  assert.deepEqual(run(carriedPath), ["seg.observations.json"], "only what this run produced is uploaded");
+
+  // Not carried over and missing: the writer was interrupted, and publishing the core
+  // alone would orphan the catalogue.
+  const brokenPath = join(dir, "broken.json");
+  await write(brokenPath, core({ resolvedObservations: { file: "seg.resolvedObservations.json" } }));
+  const failure = run(brokenPath);
+  assert.match(String(failure.error), /was not generated/);
+});
+
+// What an execution pass is allowed to skip, and what it is not. The distinction is the
+// whole basis of the one-minute budget, so it is pinned rather than left to a comment: a
+// later edit that quietly moves the catalogue maintenance back into the order path would
+// put the minutes back with no test to notice.
+test("execution pass: skips catalogue maintenance and keeps every decision input", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../tools/paper-trading-bot.mjs", import.meta.url), "utf8");
+
+  // Both routes into executeManualPaperRunFromStoredCandidates are the same kind of pass:
+  // the scan's after-scrape dispatch, and the dashboard's per-portfolio button.
+  assert.match(source, /const EXECUTION_PASS = EXECUTION_ONLY \|\| MANUAL_RUN_ONCE;/);
+
+  // Skipped: maintenance of the record, none of which the decision reads.
+  assert.match(source, /scanOnly \|\| EXECUTION_PASS\s*\?\s*expirePastEvaluations/,
+    "the stored-evaluation resolution sync must not run on an execution pass");
+  assert.match(source, /if \(!scanOnly && !EXECUTION_PASS\) \{\s*state\.marketObservations = await timed\("observationResolutionSync"/,
+    "nor the stored-observation resolution sync");
+  assert.match(source, /if \(!EXECUTION_PASS\) \{\s*try \{\s*const observations = await timed\("marketScan"/,
+    "nor a fresh market scrape");
+  assert.match(source, /if \(!EXECUTION_PASS\) \{\s*portfolioState\.trades = await reviewClosedTradesWithAi/,
+    "nor the AI review of closed trades");
+  // And it must not claim the scheduled full stage it deliberately did not do.
+  assert.match(source, /if \(!REFRESH_ONLY && !EXECUTION_PASS && !EVALUATION_ONLY\) \{\s*markCadenceStage\(state, "full"\)/);
+
+  // Kept: expiry still runs, because it is what stops a finished market being offered.
+  const expiryLine = source.slice(source.indexOf("state.evaluations = (scanOnly"), source.indexOf("state.marketObservations = (state.marketObservations"));
+  assert.match(expiryLine, /expirePastEvaluations\(state\.evaluations \|\| \[\]\)/);
+  // Kept: positions are marked to market, which is what decides free capital, and every
+  // shortlisted candidate is requoted immediately before the order.
+  assert.match(source, /await timed\("refreshTrades", \(\) => mapWithConcurrency\(/);
+  assert.match(source, /await timed\("candidateRevalidation", \(\) =>\s*revalidateStoredExecutionShortlist\(/);
+  assert.ok(
+    source.indexOf('timed("candidateRevalidation"') > 0
+      && !/EXECUTION_PASS[^\n]*revalidateStoredExecutionShortlist/.test(source),
+    "revalidation is never conditional on the pass mode",
+  );
+
+  // Every phase reports its own duration, so a run that misses the budget says which part
+  // took it rather than leaving one number for the whole step.
+  assert.match(source, /action: "PASS_TIMING"/);
+  for (const phase of ["readState", "refreshTrades", "candidateShortlist", "candidateRevalidation", "writeState", "execution"]) {
+    assert.ok(source.includes(`"${phase}"`), `the ${phase} phase must be timed`);
+  }
 });

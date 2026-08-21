@@ -308,6 +308,22 @@ const REPORT_CADENCE_MINUTES = envNumber("PAPER_REPORT_CADENCE_MINUTES", 55);
 let scanOnly = SCAN_ONLY;
 let reportOnly = REPORT_ONLY;
 const MANUAL_RUN_ONCE = envBool("PAPER_MANUAL_RUN_ONCE", false);
+// A pass whose whole job is to place an order from candidates that were already found:
+// the after-scrape execution the scan dispatches, and the run behind the dashboard's
+// "run this portfolio" button. Both end in executeManualPaperRunFromStoredCandidates.
+//
+// It is named because the housekeeping around it is what made a single order take minutes.
+// Syncing the resolution status of 120 stored evaluations and 300 stored observations,
+// rescraping the market catalogue and re-reviewing closed trades with Gemini are all
+// maintenance of the record, not inputs to the decision -- the decision reads the stored
+// catalogue and then revalidates its own shortlist against live quotes before ordering.
+// The scheduled full pass does that maintenance; an execution pass does not need to
+// repeat it, and doing so put minutes between choosing a candidate and buying it.
+//
+// Everything the decision actually depends on still runs: open positions are marked to
+// market, capital and equity are recalculated, and every shortlisted candidate is
+// requoted immediately before the order.
+const EXECUTION_PASS = EXECUTION_ONLY || MANUAL_RUN_ONCE;
 const EVALUATION_ONLY = envBool("PAPER_EVALUATION_ONLY", false);
 const EVALUATION_TOKEN_ID = String(process.env.PAPER_EVALUATION_TOKEN_ID || "").trim();
 const EVALUATION_MARKET_SLUG = String(process.env.PAPER_EVALUATION_MARKET_SLUG || "").trim();
@@ -711,6 +727,100 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+// How many of a batch of independent HTTP requests may be in flight at once.
+//
+// Every network loop in this file used to be `for (const x of xs) await f(x)`, which
+// spends its whole life waiting: one round trip to Polymarket is ~0.3s of latency and
+// ~0 of work, and a single pass makes hundreds of them. Refreshing stored resolution
+// statuses alone is up to 420 slug lookups, each of which is up to two requests. At one
+// at a time that is minutes of pure waiting, and it was the bulk of a run's duration.
+//
+// A modest cap rather than none: the point is to stop idling, not to flood a public API
+// that would start rate-limiting and make the run slower and less reliable than before.
+const REQUEST_CONCURRENCY = Math.max(1, envNumber("PAPER_REQUEST_CONCURRENCY", 8));
+
+// Runs `worker` over `items` with at most `limit` in flight, and returns the results in
+// the order of `items` -- never completion order. Callers depend on that: several of them
+// zip the results back against the input array by index, and one builds the list every
+// later stage ranks. Overlapping the waiting must not reorder anything.
+async function mapWithConcurrency(items, worker, limit = REQUEST_CONCURRENCY) {
+  const list = Array.isArray(items) ? items : [...items];
+  const results = new Array(list.length);
+  const width = Math.max(1, Math.min(Math.floor(limit) || 1, list.length));
+  let next = 0;
+  const runner = async () => {
+    while (true) {
+      const index = next;
+      next += 1;
+      if (index >= list.length) return;
+      results[index] = await worker(list[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: width }, runner));
+  return results;
+}
+
+// Where a pass actually spent its time, printed once when it ends.
+//
+// "Run paper bot" is a single workflow step, so an 8-minute execution reported exactly one
+// number and every account of which part cost what was a guess. The budget for an
+// execution pass is a minute; a run that misses it should say which phase took it.
+const phaseDurationsMs = {};
+
+function recordPhase(name, startedAt) {
+  const elapsed = performance.now() - startedAt;
+  phaseDurationsMs[name] = Number(((phaseDurationsMs[name] || 0) + elapsed).toFixed(1));
+}
+
+async function timed(name, work) {
+  const startedAt = performance.now();
+  try {
+    return await work();
+  } finally {
+    recordPhase(name, startedAt);
+  }
+}
+
+// For phases that are pure computation. Deliberately not the async version: wrapping
+// synchronous work in a promise would introduce an await point where the code has none,
+// and the point of this helper is to measure the pass, not to change its shape.
+function timedSync(name, work) {
+  const startedAt = performance.now();
+  try {
+    return work();
+  } finally {
+    recordPhase(name, startedAt);
+  }
+}
+
+function phaseTimingSummary() {
+  const entries = Object.entries(phaseDurationsMs).sort((a, b) => b[1] - a[1]);
+  return {
+    totalMs: Number(entries.reduce((sum, [, ms]) => sum + ms, 0).toFixed(1)),
+    phasesMs: Object.fromEntries(entries),
+    marketLookupsCached: marketBySlugCache.size,
+    requestConcurrency: REQUEST_CONCURRENCY,
+  };
+}
+
+// One market lookup per slug per process.
+//
+// The same slug is asked for by several phases of a single pass -- stored evaluations and
+// stored observations sync resolution status, open trades are marked to market, and
+// shortlisted candidates are revalidated -- and within each phase the same market can
+// back more than one row. Every one of those was a fresh pair of HTTP requests to the
+// same URL. Caching the promise (not the result) also collapses concurrent callers into
+// one request, which matters now that the loops above run in parallel.
+//
+// A single pass therefore sees one consistent snapshot of any given market instead of
+// several taken seconds apart, which is a property this file wants anyway: two phases
+// disagreeing about the same market's price was never meaningful.
+const marketBySlugCache = new Map();
+
+function resetMarketBySlugCache() {
+  marketBySlugCache.clear();
+}
+
 function parseJsonField(value) {
   if (Array.isArray(value)) return value;
   if (typeof value === "string" && value !== "") {
@@ -790,6 +900,52 @@ const PUBLISHED_STATE_SEGMENT_NAMES = [...STATE_SEGMENT_NAMES, RESOLVED_RECENT_S
 // Published, never merged back. Named once here so every reader -- the local one that
 // walks names and the hosted one that walks the manifest -- excludes the same set.
 const DERIVED_STATE_SEGMENTS = new Set([RESOLVED_RECENT_SEGMENT]);
+
+// Segments an execution pass has no reason to touch.
+//
+// The resolved archive is the largest thing this bot stores by a wide margin -- around
+// 143 MB against roughly 100 MB for everything else together -- and it is history: rows
+// only enter it when a market settles, which is the resolution sync's job, and an
+// execution pass does not run that. Nor can it read them: portfolioFilterResult rejects
+// every resolved row, so executionCandidateObservations filters them out before the scan.
+//
+// Downloading it and uploading it back unchanged was therefore most of a run's transfer
+// budget spent to reproduce a file byte for byte. A carried-over segment is not fetched,
+// not rewritten, and keeps its manifest entry from the state that was read, so the hosted
+// file simply stays where it is and every reader still finds it.
+//
+// The recent page travels with it: it is derived from the archive at write time, so
+// rebuilding it without the archive in memory would publish an empty page over a full one.
+const EXECUTION_PASS_CARRIED_SEGMENTS = new Set([RESOLVED_OBSERVATION_SEGMENT]);
+
+function segmentIsCarriedOnThisPass(name) {
+  if (!EXECUTION_PASS) return false;
+  if (EXECUTION_PASS_CARRIED_SEGMENTS.has(name)) return true;
+  return name === RESOLVED_RECENT_SEGMENT && EXECUTION_PASS_CARRIED_SEGMENTS.has(RESOLVED_OBSERVATION_SEGMENT);
+}
+
+// The manifest of the state this process read, so a pass that skipped a segment can hand
+// its entry back unchanged instead of describing a file it never produced.
+let previousStateSegmentManifest = null;
+
+function rememberStateSegmentManifest(manifest) {
+  previousStateSegmentManifest = manifest && typeof manifest === "object" && !Array.isArray(manifest)
+    ? manifest
+    : null;
+}
+
+// A carried-over entry has to be a complete description of a file that already exists, and
+// it is only honest if this process really is holding nothing for that segment. Both
+// conditions are checked at write time rather than assumed from the pass mode, so a state
+// that somehow arrives with resolved rows in it -- a merged local snapshot, a mode
+// combination added later -- publishes them normally instead of silently dropping them.
+function carriedStateSegmentEntry(name) {
+  if (!segmentIsCarriedOnThisPass(name)) return null;
+  const entry = previousStateSegmentManifest?.[name];
+  if (!entry || typeof entry !== "object") return null;
+  if (!/^[A-Za-z0-9._-]+\.json$/.test(String(entry.file || ""))) return null;
+  return { ...entry, carriedOver: true };
+}
 
 // Newest first, by whichever date the row actually carries.
 function resolvedObservationTime(item) {
@@ -910,6 +1066,25 @@ function splitStateIntoSegments(state) {
     manifest[name] = { file: stateSegmentFileName(name), fields, counts };
   }
 
+  // A pass that never read the archive and holds no resolved rows publishes neither the
+  // archive nor the page derived from it: both entries come back from the manifest that
+  // was read, pointing at the files already on the hosting. Writing them instead would
+  // replace tens of thousands of settled markets with an empty array.
+  //
+  // The `resolvedObservations.length === 0` half of the condition is the safety catch. If
+  // anything did put resolved rows into this state, they are worth more than the saved
+  // transfer, so the segments are written the ordinary way.
+  const carriedArchive = resolvedObservations.length === 0
+    ? carriedStateSegmentEntry(RESOLVED_OBSERVATION_SEGMENT)
+    : null;
+  const carriedRecent = carriedArchive ? carriedStateSegmentEntry(RESOLVED_RECENT_SEGMENT) : null;
+  if (carriedArchive && carriedRecent) {
+    manifest[RESOLVED_OBSERVATION_SEGMENT] = carriedArchive;
+    manifest[RESOLVED_RECENT_SEGMENT] = carriedRecent;
+    core.stateSegments = manifest;
+    return { core, segments };
+  }
+
   segments[RESOLVED_OBSERVATION_SEGMENT] = {
     [RESOLVED_OBSERVATION_TRANSPORT_FIELD]: resolvedObservations,
   };
@@ -996,6 +1171,9 @@ function stateSegmentUrls(manifest) {
     // write would put a 3,000-row page back as the whole archive. The local reader was
     // already restricted by name; this one walks the manifest, and was not.
     .filter(([name]) => !DERIVED_STATE_SEGMENTS.has(name))
+    // Not fetched because this pass will hand the entry straight back; see
+    // EXECUTION_PASS_CARRIED_SEGMENTS.
+    .filter(([name]) => !segmentIsCarriedOnThisPass(name))
     .map(([name, entry]) => ({ name, file: String(entry?.file || "").trim() }))
     .filter(({ file }) => /^[A-Za-z0-9._-]+\.json$/.test(file))
     .map(({ name, file }) => ({ name, url: `${prefix}${file}` }));
@@ -1015,7 +1193,9 @@ function stateSegmentIsRebuildable(name) {
 
 function stateSegmentNamesFromManifest(manifest) {
   if (!manifest || typeof manifest !== "object") return [];
-  return Object.keys(manifest).filter((name) => !DERIVED_STATE_SEGMENTS.has(name));
+  return Object.keys(manifest)
+    .filter((name) => !DERIVED_STATE_SEGMENTS.has(name))
+    .filter((name) => !segmentIsCarriedOnThisPass(name));
 }
 
 // A checked-out or previously written state on disk is segmented the same way,
@@ -1039,9 +1219,13 @@ async function readLocalStateFile(path) {
 // purpose: bypassing json_decode is the whole point of splitting them out.
 async function readStateWithSegments(payload) {
   const manifest = payload?.stateSegments;
+  // Kept so the write can reuse the entries for segments this pass skipped rather than
+  // describing files it never produced.
+  rememberStateSegmentManifest(manifest);
   // Only the segments this reader has to reassemble. A derived segment is published for
   // readers that display part of another one and is deliberately not fetched here, so
-  // counting it as missing below would refuse to run on a perfectly complete state.
+  // counting it as missing below would refuse to run on a perfectly complete state. Nor
+  // is a carried-over one, for the same reason.
   const declared = manifest && typeof manifest === "object"
     ? stateSegmentNamesFromManifest(manifest)
     : [];
@@ -2508,7 +2692,9 @@ async function refreshStoredEvaluationResolutionStatuses(evaluations = []) {
   if (!refreshable.length) return evaluations;
 
   const next = [...evaluations];
-  for (const entry of refreshable) {
+  // Each entry writes only its own index, so overlapping the lookups changes nothing
+  // about the result -- only how long the whole batch takes.
+  await mapWithConcurrency(refreshable, async (entry) => {
     const checkedAt = nowIso();
     try {
       const market = await fetchMarketBySlug(entry.slug);
@@ -2516,7 +2702,7 @@ async function refreshStoredEvaluationResolutionStatuses(evaluations = []) {
         next[entry.index] = withEvaluationResolutionUpdate(entry.item, {
           marketUrlStatus: "not_found",
         }, "Polymarket market slug was not found during resolution sync", checkedAt);
-        continue;
+        return;
       }
       next[entry.index] = resolvedEvaluationFromMarket(entry.item, market, checkedAt);
     } catch (error) {
@@ -2526,7 +2712,7 @@ async function refreshStoredEvaluationResolutionStatuses(evaluations = []) {
         resolutionCheckError: error?.message || String(error || "Unknown resolution sync error"),
       };
     }
-  }
+  });
   return next;
 }
 
@@ -2621,7 +2807,7 @@ async function refreshStoredMarketObservationResolutionStatuses(observations = [
   if (!refreshable.length) return observations;
 
   const next = [...observations];
-  for (const entry of refreshable) {
+  await mapWithConcurrency(refreshable, async (entry) => {
     const checkedAt = nowIso();
     try {
       const market = await fetchMarketBySlug(entry.slug);
@@ -2629,7 +2815,7 @@ async function refreshStoredMarketObservationResolutionStatuses(observations = [
     } catch {
       next[entry.index] = { ...entry.item, resolutionCheckedAt: checkedAt };
     }
-  }
+  });
   return next;
 }
 
@@ -3525,8 +3711,7 @@ function outcomeIndexForTrade(market, trade) {
   return tokenIds.findIndex((tokenId) => tokenId === String(trade.tokenId || ""));
 }
 
-async function fetchMarketBySlug(slug) {
-  if (!slug) return null;
+async function fetchMarketBySlugUncached(slug) {
   for (const closed of ["true", "false"]) {
     const url = new URL("https://gamma-api.polymarket.com/markets");
     url.searchParams.set("slug", slug);
@@ -3535,6 +3720,27 @@ async function fetchMarketBySlug(slug) {
     if (Array.isArray(markets) && markets[0]) return markets[0];
   }
   return null;
+}
+
+// Deduplicated per process by marketBySlugCache. Callers only ever read the market they
+// get back -- nothing in this file assigns to a field of one -- so handing the same
+// object to several of them is safe.
+//
+// A rejected lookup is not cached: a transient failure must not become this pass's
+// permanent answer for that market.
+async function fetchMarketBySlug(slug) {
+  if (!slug) return null;
+  const key = String(slug);
+  const cached = marketBySlugCache.get(key);
+  if (cached) return cached;
+  const pending = fetchMarketBySlugUncached(key);
+  marketBySlugCache.set(key, pending);
+  try {
+    return await pending;
+  } catch (error) {
+    marketBySlugCache.delete(key);
+    throw error;
+  }
 }
 
 function shouldCheckEqualStopBeforePending({ equalRiskProtection = false, awaitingResolution = false, marketClosed = false } = {}) {
@@ -3869,11 +4075,10 @@ async function markOpenTrade(trade) {
 }
 
 async function refreshTrades(trades) {
-  const refreshed = [];
-  for (const trade of trades) {
-    refreshed.push(await markOpenTrade(trade));
-  }
-  return refreshed;
+  // mapWithConcurrency returns input order, so this is the same array the sequential
+  // loop built -- markOpenTrade reads the market and returns a new trade, and touches
+  // nothing another trade can see.
+  return mapWithConcurrency(trades, (trade) => markOpenTrade(trade));
 }
 
 function probabilityBucket(probability) {
@@ -6153,9 +6358,16 @@ function portfolioFilterDiagnostics(evaluations, strategy) {
 }
 
 function latestUniqueExecutionEvaluations(evaluations = []) {
+  // The timestamp is read once per row instead of twice per comparison. evaluationUpdateTime
+  // is four Date.parse calls, and a comparison sort over the catalogue makes on the order of
+  // n log n of them -- tens of millions of date parses to order rows that each have one
+  // fixed answer. Deciding the keys first and sorting on numbers is the same ordering by
+  // the same comparator, minus the repetition.
+  const keyed = (Array.isArray(evaluations) ? evaluations : [])
+    .map((item) => ({ item, at: evaluationUpdateTime(item) }));
+  keyed.sort((a, b) => b.at - a.at);
   const byKey = new Map();
-  const ordered = [...evaluations].sort((a, b) => evaluationUpdateTime(b) - evaluationUpdateTime(a));
-  for (const item of ordered) {
+  for (const { item } of keyed) {
     const key = evaluationKey(item);
     if (!key || byKey.has(key)) continue;
     byKey.set(key, item);
@@ -6163,16 +6375,65 @@ function latestUniqueExecutionEvaluations(evaluations = []) {
   return [...byKey.values()];
 }
 
+// Rows a resolved market left behind cannot be opened, and holding one in the candidate
+// pool actively costs a candidate.
+//
+// portfolioFilterResult rejects every one of them twice over -- a polymarket-probability
+// portfolio on "base status RESOLVED is not executable", an AI-probability one on "base
+// status RESOLVED is not ELIGIBLE", and both again on "event end date is in the past" --
+// so no resolved row has ever been eligible for any portfolio. What they did do is
+// outnumber the live catalogue several times over, and share a dedupe key with it: a
+// market that is scanned again while its resolved twin is still in the archive collapses
+// to whichever row carries the later timestamp, and if that is the resolved one, a
+// perfectly tradable candidate silently disappears from the shortlist.
+//
+// Dropping them therefore removes work that could only ever be discarded, and removes it
+// before it can shadow a candidate that could not.
+function executionCandidateObservations(state) {
+  const observations = Array.isArray(state.marketObservations) ? state.marketObservations : [];
+  return observations.filter((item) => !observationIsResolved(item));
+}
+
 function executionRowsForStrategy(state, strategy, baseRows = []) {
   const rows = Array.isArray(baseRows) ? baseRows : [];
   if (strategy.probabilitySource !== "polymarket") return latestUniqueExecutionEvaluations(rows);
+  return latestUniqueExecutionEvaluations([...cachedExecutionCandidatePool(state).scanned, ...rows]);
+}
+
+// The shortlist is built once per portfolio, and every portfolio starts from the same two
+// collections. Expiring the stored evaluations, filtering the catalogue and deduplicating
+// the union are all pure functions of those collections, so with seven portfolios the same
+// answer was being computed seven times over tens of thousands of rows.
+//
+// Keyed on the arrays' identity, so any pass that replaces either one -- a scan, a
+// resolution sync, an expiry -- gets a fresh answer rather than a stale cached one. Only
+// probabilitySource selects between the two pools, so that is the rest of the key.
+const executionCandidatePoolCache = new WeakMap();
+
+function cachedExecutionCandidatePool(state, strategy = null) {
+  const evaluations = Array.isArray(state.evaluations) ? state.evaluations : [];
   const observations = Array.isArray(state.marketObservations) ? state.marketObservations : [];
-  return latestUniqueExecutionEvaluations([...observations, ...rows]);
+  let entry = executionCandidatePoolCache.get(state);
+  if (!entry || entry.evaluations !== evaluations || entry.observations !== observations) {
+    entry = {
+      evaluations,
+      observations,
+      scanned: executionCandidateObservations(state),
+      baseRows: expirePastEvaluations(evaluations).map(ensureEvaluationErrorMetadata),
+      pools: new Map(),
+    };
+    executionCandidatePoolCache.set(state, entry);
+  }
+  if (!strategy) return entry;
+  const pool = strategy.probabilitySource === "polymarket" ? "polymarket" : "ai";
+  if (!entry.pools.has(pool)) {
+    entry.pools.set(pool, executionRowsForStrategy(state, strategy, entry.baseRows));
+  }
+  return { ...entry, unique: entry.pools.get(pool) };
 }
 
 function storedExecutionShortlist(state, strategy) {
-  const baseRows = expirePastEvaluations(state.evaluations || []).map(ensureEvaluationErrorMetadata);
-  const unique = executionRowsForStrategy(state, strategy, baseRows);
+  const { unique, scanned } = cachedExecutionCandidatePool(state, strategy);
   const rejected = [];
   const passed = [];
   const reasonCounts = {};
@@ -6199,6 +6460,9 @@ function storedExecutionShortlist(state, strategy) {
       source: "stored_execution_candidates",
       storedEvaluations: Array.isArray(state.evaluations) ? state.evaluations.length : 0,
       storedMarketObservations: Array.isArray(state.marketObservations) ? state.marketObservations.length : 0,
+      // Stated beside the stored total so the drop between them reads as the resolved
+      // archive being left out, rather than as candidates having gone missing.
+      scannedMarketObservations: scanned.length,
       uniqueEvaluations: unique.length,
       prefilterPassed: rows.length,
       prefilterRejected: Math.max(0, unique.length - rows.length),
@@ -6295,10 +6559,14 @@ async function revalidateStoredExecutionCandidate(item, learningProfile) {
 }
 
 async function revalidateStoredExecutionShortlist(shortlist, learningProfile, state = null) {
-  const raw = [];
-  for (const item of shortlist) {
-    raw.push(await revalidateStoredExecutionCandidate(item, learningProfile));
-  }
+  // This is the step between picking a candidate and placing the order, so its latency is
+  // the delay the user actually feels. Each candidate is an independent quote lookup and
+  // the results are ranked afterwards, so they are fetched together; input order is
+  // preserved, which keeps the ranking's tie-breaks identical to the sequential version.
+  const raw = await mapWithConcurrency(
+    shortlist,
+    (item) => revalidateStoredExecutionCandidate(item, learningProfile),
+  );
   // Execution verifies price, liquidity and diversification only. AI research
   // belongs to the background evaluation budget, never to order execution.
   return raw.map(normalizeEvaluationRisk);
@@ -9538,9 +9806,11 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
     const portfolioState = state.paperPortfolios?.[strategy.id];
     if (!portfolioState) continue;
 
-    const shortlist = storedExecutionShortlist(state, strategy);
+    const shortlist = timedSync("candidateShortlist", () => storedExecutionShortlist(state, strategy));
     const selectedForRevalidation = shortlist.rows.slice(0, MAX_EVALUATIONS_PER_RUN);
-    const revalidated = await revalidateStoredExecutionShortlist(selectedForRevalidation, state.learningProfile, state);
+    // The gap between "this is the candidate" and "the order is in" is exactly this call.
+    const revalidated = await timed("candidateRevalidation", () =>
+      revalidateStoredExecutionShortlist(selectedForRevalidation, state.learningProfile, state));
     const rankedEligible = sortEligibleForStrategy(
       revalidated.filter((item) => portfolioFilterResult(item, strategy).eligible),
       strategy,
@@ -9608,17 +9878,19 @@ async function executeManualPaperRunFromStoredCandidates(state, strategiesForRun
 }
 
 async function writeState(state) {
-  await mkdir(dirname(OUTPUT_PATH), { recursive: true });
-  // Normalize immediately before persistence. This protects the public state
-  // file from accidental growth when a scan sees many valid markets while
-  // retaining every market observation themselves.
-  const persisted = normalizeState(state);
-  const { core, segments } = splitStateIntoSegments(persisted);
-  await Promise.all([
-    writeFile(OUTPUT_PATH, `${JSON.stringify(core)}\n`, "utf8"),
-    ...Object.entries(segments).map(([name, payload]) =>
-      writeFile(stateSegmentPath(name), `${JSON.stringify(payload)}\n`, "utf8")),
-  ]);
+  await timed("writeState", async () => {
+    await mkdir(dirname(OUTPUT_PATH), { recursive: true });
+    // Normalize immediately before persistence. This protects the public state
+    // file from accidental growth when a scan sees many valid markets while
+    // retaining every market observation themselves.
+    const persisted = normalizeState(state);
+    const { core, segments } = splitStateIntoSegments(persisted);
+    await Promise.all([
+      writeFile(OUTPUT_PATH, `${JSON.stringify(core)}\n`, "utf8"),
+      ...Object.entries(segments).map(([name, payload]) =>
+        writeFile(stateSegmentPath(name), `${JSON.stringify(payload)}\n`, "utf8")),
+    ]);
+  });
 }
 
 function compactScanHistoryEntry(run) {
@@ -9666,7 +9938,7 @@ async function run() {
   await rm(SCAN_HISTORY_ENTRY_PATH, { force: true }).catch(() => {});
   await rm(SCAN_ERROR_MARKER_PATH, { force: true }).catch(() => {});
   await rm(PORTFOLIO_RUN_LOG_ENTRY_PATH, { force: true }).catch(() => {});
-  const state = await readState();
+  const state = await timed("readState", () => readState());
   if (PAPER_RESET_PORTFOLIO) {
     if (!PAPER_STRATEGY_ID) {
       throw new Error("PAPER_RESET_PORTFOLIO requires a valid PAPER_STRATEGY_ID.");
@@ -9764,9 +10036,14 @@ async function run() {
     .filter(Boolean));
   syncLegacyPaperAliases(state);
   state.aiUsage = aiUsageSnapshot(state);
-  state.evaluations = (scanOnly
+  // Expiry always runs -- it is what stops a finished market being offered as a candidate.
+  // The resolution sync beside it is a different job: it walks up to 120 stored
+  // evaluations, asking Polymarket what each one settled at, to keep the record complete.
+  // An execution pass skips it for the reason EXECUTION_PASS documents.
+  state.evaluations = (scanOnly || EXECUTION_PASS
     ? expirePastEvaluations(state.evaluations || [])
-    : await refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || [])))
+    : await timed("evaluationResolutionSync", () =>
+      refreshStoredEvaluationResolutionStatuses(expirePastEvaluations(state.evaluations || []))))
     .map(normalizeAiPendingEvaluation)
     .map(ensureEvaluationErrorMetadata);
   state.marketObservations = (state.marketObservations || []).map(normalizeMarketObservationEconomics);
@@ -9787,9 +10064,14 @@ async function run() {
   // This runs even if the current market scan does not include that contract.
   state.evaluations = repairStaleBinarySideQuotes(state.evaluations);
   let scanFailure = "";
-  if (!EXECUTION_ONLY) {
+  // An execution pass reads the catalogue the scans maintain rather than rescraping it.
+  // The after-scrape path always worked this way -- it runs because a scan has just
+  // finished -- and a portfolio started from the dashboard now does too: the catalogue is
+  // at most one scan interval old, and every candidate that reaches the order is requoted
+  // live by revalidateStoredExecutionShortlist regardless.
+  if (!EXECUTION_PASS) {
     try {
-      const observations = await refreshMarketObservations(state);
+      const observations = await timed("marketScan", () => refreshMarketObservations(state));
       state.evaluations = applyMarketObservationsToEvaluations(state.evaluations, observations);
     } catch (error) {
       state.marketScan = {
@@ -9806,8 +10088,11 @@ async function run() {
     scanFailure = String(normalizeMarketScan(state.marketScan).lastScanError || "");
     if (scanFailure) await writeScanErrorMarker(scanFailure);
   }
-  if (!scanOnly) {
-    state.marketObservations = await refreshStoredMarketObservationResolutionStatuses(state.marketObservations || []);
+  // Up to 300 slug lookups to settle historical rows. Housekeeping of the archive, and
+  // the largest single block of waiting in a pass that only wants to place an order.
+  if (!scanOnly && !EXECUTION_PASS) {
+    state.marketObservations = await timed("observationResolutionSync", () =>
+      refreshStoredMarketObservationResolutionStatuses(state.marketObservations || []));
   }
 
   if (scanOnly) {
@@ -9865,21 +10150,32 @@ async function run() {
   }
 
   recoverLedgerGaps(state);
-  for (const portfolioState of Object.values(state.paperPortfolios)) {
-    portfolioState.trades = await refreshTrades(portfolioState.trades);
-    if (!EXECUTION_ONLY) {
-      portfolioState.trades = await reviewClosedTradesWithAi(portfolioState.trades, state);
-    }
-  }
+  // Marking open positions to market is what decides how much capital a portfolio has
+  // free, so it runs on every pass including an execution one -- but the portfolios do not
+  // have to wait for each other. Each one only rewrites its own trades.
+  await timed("refreshTrades", () => mapWithConcurrency(
+    Object.values(state.paperPortfolios),
+    async (portfolioState) => {
+      portfolioState.trades = await refreshTrades(portfolioState.trades);
+      if (!EXECUTION_PASS) {
+        portfolioState.trades = await reviewClosedTradesWithAi(portfolioState.trades, state);
+      }
+    },
+    // Each portfolio fans out over its own trades, so the outer width stays small; the
+    // inner refreshTrades calls share the same per-slug cache and the same cap.
+    Math.max(2, Math.ceil(REQUEST_CONCURRENCY / 2)),
+  ));
   const allTrades = Object.values(state.paperPortfolios).flatMap((portfolioState) => portfolioState.trades || []);
   state.learningProfile = buildLearningProfile(allTrades, state.learningProfile);
   state.generatedAt = nowIso();
-  updatePortfolio(state);
-  updateCalculationReport(state);
+  timedSync("updatePortfolio", () => updatePortfolio(state));
+  timedSync("calculationReport", () => updateCalculationReport(state));
   // Trades were refreshed and the report recalculated, so this tick has done the
   // full portfolio pass. Mark it before the narrower manual modes below, which
-  // must not move the scheduled cadence clocks.
-  if (!REFRESH_ONLY && !EXECUTION_ONLY && !EVALUATION_ONLY) {
+  // must not move the scheduled cadence clocks -- an execution pass deliberately skips
+  // the catalogue maintenance, so claiming the full stage would postpone the pass that
+  // actually does it.
+  if (!REFRESH_ONLY && !EXECUTION_PASS && !EVALUATION_ONLY) {
     markCadenceStage(state, "full");
   }
 
@@ -9915,9 +10211,9 @@ async function run() {
       }, null, 2));
       return;
     }
-    await executeManualPaperRunFromStoredCandidates(state, strategiesForRun, {
+    await timed("execution", () => executeManualPaperRunFromStoredCandidates(state, strategiesForRun, {
       source: "after_scrape",
-    });
+    }));
     return;
   }
 
@@ -9936,7 +10232,7 @@ async function run() {
   }
 
   if (MANUAL_RUN_ONCE) {
-    await executeManualPaperRunFromStoredCandidates(state, strategiesForRun);
+    await timed("execution", () => executeManualPaperRunFromStoredCandidates(state, strategiesForRun));
     return;
   }
 
@@ -10102,7 +10398,13 @@ const invokedDirectly = process.argv[1]
   : false;
 
 if (invokedDirectly) {
-  run().catch((error) => {
+  const reportTiming = () => {
+    console.log(JSON.stringify({ action: "PASS_TIMING", executionPass: EXECUTION_PASS, ...phaseTimingSummary() }));
+  };
+  run().then(reportTiming).catch((error) => {
+    // Printed on the way out of a failure too: a pass that timed out or died late is
+    // exactly the one whose phase breakdown is worth having.
+    reportTiming();
     console.error(error?.stack || error?.message || String(error));
     process.exit(1);
   });
@@ -10167,6 +10469,9 @@ export {
   riskProfile,
   simulateMarketBuy,
   splitStateIntoSegments,
+  // The hook readStateWithSegments calls after fetching the core, so a test can put a
+  // manifest in front of the writer the same way a real read does.
+  rememberStateSegmentManifest,
   PUBLISHED_STATE_SEGMENT_NAMES,
   STATE_SEGMENT_NAMES,
   stateHasCurrentSchema,

@@ -38,6 +38,13 @@ def declared_segments(state_file: Path) -> list[Path]:
         file_name = (entry or {}).get("file") if isinstance(entry, dict) else None
         if not file_name:
             raise SystemExit(f"state segment '{name}' has no file name in the manifest")
+        # A segment the run neither read nor rewrote. The bot marks it so, and the file it
+        # names is the one already on the hosting -- uploading is not skipped as an
+        # optimisation here, there is simply nothing new to upload. The entry still has to
+        # stay in the manifest so readers keep finding the file.
+        if isinstance(entry, dict) and entry.get("carriedOver"):
+            print(f"state segment '{name}' ({file_name}) carried over unchanged; not re-uploaded")
+            continue
         path = state_file.parent / str(file_name)
         # A manifest that names a missing file means the writer was interrupted.
         # Publishing the core alone would orphan the catalogue, so stop here.
