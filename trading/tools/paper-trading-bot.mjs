@@ -2792,6 +2792,53 @@ function mergeStates(primary, secondary) {
       runLog: mergeUniqueById(portfolioSources.flatMap((source) => source.runLog || []), (item) => `${item.runAt || ""}:${item.strategyId || strategy.id}`, PORTFOLIO_RUN_LOG_LIMIT),
     };
   }
+  // Market scans and focused refreshes do not always load portfolio-config.json, so a
+  // browser-created portfolio is unknown to PAPER_STRATEGIES in those processes. It
+  // still belongs to the persisted state. Rebuilding merged.paperPortfolios from the
+  // known strategy list alone used to erase its entire history whenever such a process
+  // merged the hosted state with the checked-out seed file. Keep every unknown id and
+  // merge its append-only records just like a configured portfolio. Only an explicit
+  // archive/reset action is allowed to remove its active history.
+  const knownStrategyIds = new Set(Object.keys(PAPER_STRATEGIES));
+  const persistedPortfolioIds = new Set([
+    ...Object.keys(base.paperPortfolios || {}),
+    ...Object.keys(other.paperPortfolios || {}),
+  ]);
+  for (const id of persistedPortfolioIds) {
+    if (knownStrategyIds.has(id)) continue;
+    const basePortfolio = base.paperPortfolios?.[id];
+    const otherPortfolio = other.paperPortfolios?.[id];
+    if (!basePortfolio || typeof basePortfolio !== "object") {
+      if (otherPortfolio && typeof otherPortfolio === "object") merged.paperPortfolios[id] = otherPortfolio;
+      continue;
+    }
+    if (!otherPortfolio || typeof otherPortfolio !== "object") {
+      merged.paperPortfolios[id] = basePortfolio;
+      continue;
+    }
+
+    const tradesById = new Map();
+    for (const source of [otherPortfolio, basePortfolio]) {
+      for (const trade of source.trades || []) {
+        tradesById.set(trade.id, mergeTrade(tradesById.get(trade.id), trade));
+      }
+    }
+    const baseDecisionAt = Date.parse(basePortfolio.lastDecision?.runAt || "") || 0;
+    const otherDecisionAt = Date.parse(otherPortfolio.lastDecision?.runAt || "") || 0;
+    merged.paperPortfolios[id] = {
+      ...otherPortfolio,
+      ...basePortfolio,
+      trades: retainPaperTrades([...tradesById.values()]),
+      runLog: mergeUniqueById(
+        [...(basePortfolio.runLog || []), ...(otherPortfolio.runLog || [])],
+        (item) => `${item.runAt || ""}:${item.strategyId || id}`,
+        PORTFOLIO_RUN_LOG_LIMIT,
+      ),
+      lastDecision: baseDecisionAt >= otherDecisionAt
+        ? (basePortfolio.lastDecision || otherPortfolio.lastDecision || null)
+        : (otherPortfolio.lastDecision || basePortfolio.lastDecision || null),
+    };
+  }
   syncLegacyPaperAliases(merged);
   return merged;
 }

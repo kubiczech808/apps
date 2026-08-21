@@ -921,6 +921,37 @@ test("portfolio: a run that was never told about a created portfolio still must 
   assert.equal(kept.portfolio?.equityUsdc, 101.25);
 });
 
+test("portfolio: state merge keeps a created portfolio when a scan lacks its configuration", () => {
+  // Scheduled scans merge the hosted state with the checkout's seed state. The scan
+  // does not know browser-created strategies, so this is the exact path that must not
+  // silently rebuild their state from only the shipped portfolio ids.
+  const hosted = bot.normalizeState({
+    generatedAt: "2026-08-21T08:00:00.000Z",
+    paperPortfolios: {
+      custompreserved: {
+        id: "custompreserved",
+        label: "Custom preserved",
+        trades: [
+          { id: "custom-open", status: "OPEN", stakeUsdc: 5 },
+          { id: "custom-won", status: "WON", realizedPnlUsdc: 0.5, stakeUsdc: 5 },
+        ],
+        runLog: [{ runAt: "2026-08-21T07:55:00.000Z", strategyId: "custompreserved", action: "OPENED" }],
+        portfolio: { equityUsdc: 100.5 },
+      },
+    },
+  });
+  const seed = bot.normalizeState({
+    generatedAt: "2026-08-01T00:00:00.000Z",
+    paperPortfolios: { conservative: { trades: [], runLog: [] } },
+  });
+
+  const merged = bot.mergeStates(hosted, seed);
+  const preserved = merged.paperPortfolios.custompreserved;
+  assert.ok(preserved, "the created portfolio must survive the merge");
+  assert.equal(preserved.trades.length, 2, "open and settled rows must both survive");
+  assert.equal(preserved.runLog.length, 1, "its execution history must survive");
+});
+
 test("portfolio: normalization keeps the per-portfolio fixed stake", () => {
   // portfolio-config is the source of truth; equity and the global fraction must not resize it.
   const portfolioState = {
