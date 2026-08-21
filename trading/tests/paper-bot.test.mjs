@@ -6951,10 +6951,10 @@ test("execution pass: skips catalogue maintenance and keeps every decision input
   // Caught on a real pass: the statistics report must not be rebuilt by a pass that did
   // not read the whole catalogue. Its performance half comes from the resolved archive,
   // which an execution pass carries over untouched, so recalculating it from the active
-  // half alone drove sampleSize to 0 against 4,673 open observations and collapsed the
-  // category statistics to one row -- the empty-statistics symptom, reached from the other
-  // side. Carrying the previous report forward is exact: an execution pass changes none of
-  // the observations it is built from.
+  // half alone drove sampleSize to 0 against 4,673 open observations -- the
+  // empty-statistics symptom, reached from the other side. One full pass with this guard in
+  // place put it back to 53,413. Carrying the previous report forward is exact: an
+  // execution pass changes none of the observations it is built from.
   assert.match(source, /if \(!EXECUTION_PASS\) timedSync\("calculationReport", \(\) => updateCalculationReport\(state\)\);/,
     "only a pass that read the whole catalogue may recalculate the report");
   // And the report is what every statistics tab renders, so it has to stay in the core

@@ -10198,9 +10198,9 @@ async function run() {
   // comes from the resolved archive -- which an execution pass never reads, because it
   // carries that segment over untouched. Rebuilding the report from the active half alone
   // therefore does not produce the same report more cheaply; it produces a report whose
-  // resolved sample is zero. Measured on a real pass: sampleSize fell to 0 against 4,673
-  // open observations, and the category statistics collapsed to a single row. That is the
-  // empty-statistics symptom again, arrived at from the other direction.
+  // resolved sample is zero. Measured on real passes either side of this guard: sampleSize
+  // read 0 against 4,673 open observations before it, and 53,413 after one full pass. That
+  // is the empty-statistics symptom again, arrived at from the other direction.
   //
   // The pass that reads the whole catalogue is the pass that may recalculate it. Carrying
   // the previous report forward is exact, not an approximation: an execution pass does not
