@@ -3529,6 +3529,27 @@ function limitOrderFillDecision({ limitPrice, bestAsk, eventEnded }) {
   return { outcome: eventEnded ? "EXPIRED" : "WAITING" };
 }
 
+function apiBoolean(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  return ["true", "1", "yes"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+// Gamma's scheduled endDate is useful for planning but is not a settlement signal:
+// sports and delayed markets can remain active and accept orders after it passes.
+// A resting paper bid must stay on the book while Polymarket explicitly says that the
+// market is still active/accepting orders. The date remains a conservative fallback
+// only when the API gives no live-status signal at all.
+function limitOrderEventEnded(market = {}, remainingDays = null) {
+  if (apiBoolean(market.closed)) return true;
+
+  const marketIsActive = apiBoolean(market.active);
+  const acceptsOrders = apiBoolean(market.acceptingOrders ?? market.accepting_orders);
+  if (marketIsActive || acceptsOrders) return false;
+
+  return Number.isFinite(remainingDays) && remainingDays <= 0;
+}
+
 // A resting limit buy is not a position yet, so it is refreshed on its own terms
 // instead of falling into markOpenTrade()'s resolution/P&L logic below, which
 // assumes an already-executed fill.
@@ -3553,7 +3574,7 @@ async function markWaitingLimitOrder(trade) {
   const dateContext = marketDateContext({ ...market, resolutionEndDate: market.endDate || trade.resolutionEndDate || trade.endDate || null }, trade.openedAt || trade.date);
   const endDate = dateContext.endDate;
   const remainingDays = endDate ? daysToEnd(endDate) : null;
-  const eventEnded = Boolean(market.closed) || (remainingDays != null && remainingDays <= 0);
+  const eventEnded = limitOrderEventEnded(market, remainingDays);
   const base = {
     ...trade,
     question: market.question || trade.question,
@@ -10103,6 +10124,7 @@ export {
   maybeOpenScheduledTrade,
   markOpenTrade,
   markWaitingLimitOrder,
+  limitOrderEventEnded,
   limitOrderFillDecision,
   openPaperTradeForStrategy,
   paperTradeFromCandidate,

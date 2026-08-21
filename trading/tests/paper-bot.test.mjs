@@ -6290,6 +6290,27 @@ test("limit orders: filled when the ask reaches the resting price, discarded unf
   assert.equal(filledAtTheWire.outcome, "FILLED");
 });
 
+test("limit orders: an active Polymarket market keeps a resting bid alive after its scheduled end date", () => {
+  const stillTradable = {
+    active: true,
+    closed: false,
+    acceptingOrders: true,
+  };
+  assert.equal(
+    bot.limitOrderEventEnded(stillTradable, -0.2),
+    false,
+    "a delayed settlement must not expire a bid while Polymarket still accepts orders",
+  );
+  const decision = bot.limitOrderFillDecision({
+    limitPrice: 0.76,
+    bestAsk: 0.78,
+    eventEnded: bot.limitOrderEventEnded(stillTradable, -0.2),
+  });
+  assert.equal(decision.outcome, "WAITING");
+  assert.equal(bot.limitOrderEventEnded({ active: false, closed: true }, -0.2), true);
+  assert.equal(bot.limitOrderEventEnded({}, -0.2), true, "the end date remains the fallback when no live status exists");
+});
+
 // Reported: the trade count in Tag performance does not match the number of rows its own
 // link shows, so the statistics look as though they are computed on something other than
 // the data behind them.
