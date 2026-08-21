@@ -693,6 +693,7 @@ function defaultPortfolioConfig() {
         executionCronMinutes: 60,
         automationEnabled: true,
         autoRotatePositions: true,
+        useLimitOrders: false,
         stopLossEnabled: false,
         stopLossRiskMultiplier: 0,
         marketType: "all",
@@ -713,6 +714,7 @@ function defaultPortfolioConfig() {
         executionCronMinutes: 60,
         automationEnabled: true,
         autoRotatePositions: true,
+        useLimitOrders: false,
         stopLossEnabled: false,
         stopLossRiskMultiplier: 0,
         marketType: "all",
@@ -733,6 +735,7 @@ function defaultPortfolioConfig() {
         executionCronMinutes: 60,
         automationEnabled: true,
         autoRotatePositions: true,
+        useLimitOrders: false,
         stopLossEnabled: false,
         stopLossRiskMultiplier: 0,
         marketType: "multi",
@@ -753,6 +756,7 @@ function defaultPortfolioConfig() {
         executionCronMinutes: 0,
         automationEnabled: true,
         autoRotatePositions: false,
+        useLimitOrders: false,
         // The mechanism this portfolio is named for. It is now a parameter any paper
         // portfolio may turn on, but Equal is where it ships enabled.
         stopLossEnabled: true,
@@ -4122,8 +4126,8 @@ function syncRiskAllocationControl(availableCapital = null, sourceLabel = "avail
   });
 }
 
-function defaultLimitOrdersForMode() {
-  return isLiveMode();
+function defaultLimitOrdersForMode(mode = state.mode) {
+  return LIVE_MODES.has(normalizeMode(mode));
 }
 
 function storedLimitOrders() {
@@ -4151,17 +4155,17 @@ function saveLimitOrders(value) {
   }
 }
 
-function currentLimitOrders() {
-  return typeof state.limitOrders === "boolean" ? state.limitOrders : defaultLimitOrdersForMode();
+function currentLimitOrders(mode = state.mode) {
+  const configured = portfolioConfigForMode(mode).useLimitOrders;
+  return typeof configured === "boolean" ? configured : defaultLimitOrdersForMode(mode);
 }
 
 function refreshLimitOrders() {
   const key = limitOrdersStorageKey();
-  if (state.limitOrdersKey === key && typeof state.limitOrders === "boolean") {
-    syncLimitOrdersControl();
-    return;
-  }
-  state.limitOrders = portfolioConfigForMode(state.mode).useLimitOrders ?? storedLimitOrders() ?? defaultLimitOrdersForMode();
+  // Saved portfolio configuration is the source of truth. Local storage remains a
+  // harmless record for older browser sessions, but it must never override a saved
+  // mode or make the summary disagree with the executor.
+  state.limitOrders = currentLimitOrders(state.mode);
   state.limitOrdersKey = key;
   syncLimitOrdersControl();
 }
@@ -6826,6 +6830,7 @@ function livePortfolioRuleRows() {
   // the open tab is actually steered by.
   const mode = isFixedEntryMode() ? "live-5050" : "live";
   const config = portfolioConfigForMode(mode);
+  const useLimitOrders = config.useLimitOrders === true;
   const maxResolutionDays = resolutionDaysForMode(mode);
   const minLiquidityUsdc = normalizeOptionalMoney(config.minLiquidityUsdc);
   const minNetYield = normalizeMinimumNetYield(config.minNetYield);
@@ -6849,7 +6854,7 @@ function livePortfolioRuleRows() {
     // parameter that failed to display -- which is how it was reported.
     ["Order price", isFixedEntryMode()
       ? `every qualifying candidate is bid at ${percent(normalizeFixedEntryPrice(config.fixedEntryPrice))}`
-      : (currentLimitOrders()
+      : (useLimitOrders
         ? "taken from the book: rested at the best bid, not a configured price"
         : "taken from the book: bought at the market ask, not a configured price")],
     ...(isFixedEntryMode() ? [
@@ -6860,7 +6865,7 @@ function livePortfolioRuleRows() {
     ["Volume filter", minLiquidityUsdc == null ? "none" : `>= ${money(minLiquidityUsdc)}`],
     ["Minimum net profit", `>= ${percent(minNetYield)} after fees`],
     ["Rotation", automaticRotationIsEnabled(config) ? "On" : "Off"],
-    ["Order mode", currentLimitOrders() ? "Limit orders" : "Market orders"],
+    ["Order mode", useLimitOrders ? "Limit orders" : "Market orders"],
     ["Cross-live risk", systemConfig().crossLivePortfolioRiskDiversification !== false ? "Block correlated exposure" : "Allow correlated exposure"],
   ];
 }

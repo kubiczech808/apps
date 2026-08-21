@@ -1158,6 +1158,9 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => null,
                 'minNetYield' => 0.0,
                 'executionTrigger' => 'cron',
+                // Paper portfolios default to immediate simulated fills. Unlike live,
+                // their order mode is configurable and must be retained on save.
+                'useLimitOrders' => false,
                 'marketType' => 'all',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
@@ -1180,6 +1183,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => null,
                 'minNetYield' => 0.0,
                 'executionTrigger' => 'cron',
+                'useLimitOrders' => false,
                 'marketType' => 'all',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'ai',
@@ -1200,6 +1204,7 @@ function default_portfolio_config(): array
                 'minLiquidityUsdc' => 500000,
                 'minNetYield' => 0.0,
                 'executionTrigger' => 'cron',
+                'useLimitOrders' => false,
                 'marketType' => 'multi',
                 'requireMostProbableOutcome' => true,
                 'probabilitySource' => 'ai',
@@ -1225,6 +1230,7 @@ function default_portfolio_config(): array
                 // Equal defaults to a check after a completed market scan. Users may
                 // choose a scheduled cadence when they prefer a defined interval.
                 'executionTrigger' => 'after_scrape',
+                'useLimitOrders' => false,
                 'marketType' => 'all',
                 'requireMostProbableOutcome' => false,
                 'probabilitySource' => 'polymarket',
@@ -1619,6 +1625,10 @@ function normalize_strategy_config(array $input, array $defaults): array
         // Missing means the portfolio keeps its established behavior. Equal is the
         // only default-off portfolio; all other existing portfolios keep rotation on.
         'autoRotatePositions' => (bool) ($input['autoRotatePositions'] ?? $defaults['autoRotatePositions'] ?? true),
+        // This applies to every portfolio type. Previously it was normalized only for
+        // the primary live portfolio, so a paper setting silently disappeared after
+        // saving and the bot fell back to market orders.
+        'useLimitOrders' => (bool) ($input['useLimitOrders'] ?? $defaults['useLimitOrders'] ?? false),
         'marketType' => $marketType,
         // Kept while older workflows are still in circulation. The three-value
         // marketType field above is the source of truth.
@@ -1711,7 +1721,6 @@ function normalize_portfolio_config(array $input): array
     // Only paper portfolios can be archived. A live portfolio holds real positions and
     // open orders, and hiding those from the dashboard would hide real exposure.
     $config['live']['archived'] = false;
-    $config['live']['useLimitOrders'] = (bool) ($liveInput['useLimitOrders'] ?? $defaults['live']['useLimitOrders']);
     // 5050 carries three settings no other portfolio has. They are normalized here
     // rather than passed through, so a bad value cannot reach the executor and be
     // rejected by the exchange one bid at a time.
